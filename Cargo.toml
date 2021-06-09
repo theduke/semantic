@@ -1,0 +1,6 @@
+[workspace]
+members = [
+    "semantics_core",
+    "semantics",
+    "logfs",
+]
