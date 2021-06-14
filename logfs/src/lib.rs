@@ -105,16 +105,17 @@ impl State {
     }
 }
 
+#[derive(Clone)]
 pub struct LogFs {
     path: std::path::PathBuf,
-    key: aead::LessSafeKey,
+    key: Arc<aead::LessSafeKey>,
     state: Arc<RwLock<State>>,
 }
 
 type DataOffset = u64;
 
 impl LogFs {
-    pub fn open(path: impl Into<PathBuf>, key: &str) -> Result<Self, LogFsError> {
+    pub fn open(path: impl Into<PathBuf>, key: String) -> Result<Self, LogFsError> {
         let mut derived_key = [0u8; SHA512_OUTPUT_LEN];
         ring::pbkdf2::derive(
             ring::pbkdf2::PBKDF2_HMAC_SHA512,
@@ -132,6 +133,11 @@ impl LogFs {
         let aead_key = aead::LessSafeKey::new(unbound_key);
 
         let path = path.into();
+        if let Some(parent) = path.parent() {
+            if !parent.is_dir() {
+                std::fs::create_dir_all(parent)?;
+            }
+        }
 
         let f = std::fs::OpenOptions::new()
             .create(true)
@@ -184,7 +190,7 @@ impl LogFs {
 
         Ok(Self {
             path,
-            key: aead_key,
+            key: Arc::new(aead_key),
             state: Arc::new(RwLock::new(State {
                 tree,
                 next_sequence,
@@ -239,7 +245,11 @@ impl LogFs {
         nonce
     }
 
-    fn write_entry(key: &aead::LessSafeKey, state: &mut State, entry: JournalEntry) -> Result<(), LogFsError> {
+    fn write_entry(
+        key: &aead::LessSafeKey,
+        state: &mut State,
+        entry: JournalEntry,
+    ) -> Result<(), LogFsError> {
         let mut entry_data = bincode::serialize(&entry)?;
 
         let header = JournalEntryHeader {
@@ -249,8 +259,7 @@ impl LogFs {
 
         let nonce = Self::build_entry_nonce(entry.sequence_id);
         let aad = aead::Aad::from(&header_data);
-        key
-            .seal_in_place_append_tag(nonce, aad, &mut entry_data)
+        key.seal_in_place_append_tag(nonce, aad, &mut entry_data)
             .map_err(|_| LogFsError::new("Could not encrypt journal entry"))?;
 
         state.file.write_all(&header_data)?;
@@ -325,17 +334,45 @@ impl LogFs {
         Ok(Some(data.to_vec()))
     }
 
+    pub fn paths_range<R>(&self, range: R) -> Result<Vec<Path>, LogFsError>
+    where
+        R: std::ops::RangeBounds<Vec<u8>>,
+    {
+        let paths = self
+            .state
+            .read()
+            .unwrap()
+            .tree
+            .range(range)
+            .map(|x| x.0)
+            .cloned()
+            .collect();
+        Ok(paths)
+    }
+
+    pub fn paths_prefix(&self, prefix: &[u8]) -> Result<Vec<Path>, LogFsError> {
+        let paths = self
+            .state
+            .read()
+            .unwrap()
+            .tree
+            .range(prefix.to_vec()..)
+            .take_while(|(path, _v)| path.starts_with(prefix))
+            .map(|x| x.0)
+            .cloned()
+            .collect();
+        Ok(paths)
+    }
+
     pub fn remove(&self, path: impl AsRef<[u8]>) -> Result<(), LogFsError> {
         let path = path.as_ref();
 
         let mut state = self.state.write().unwrap();
 
         let sequence_id = state.increment_sequence();
-        let entry = JournalEntry{
+        let entry = JournalEntry {
             sequence_id,
-            action: JournalAction::FileDeleted{
-                path: path.into(),
-            }
+            action: JournalAction::FileDeleted { path: path.into() },
         };
         Self::write_entry(&self.key, &mut state, entry)?;
         state.file.flush()?;
@@ -361,7 +398,7 @@ mod tests {
             std::fs::remove_file(&path).unwrap();
         }
 
-        let log = LogFs::open(&path, TEST_PW).unwrap();
+        let log = LogFs::open(&path, TEST_PW.into()).unwrap();
 
         let key1 = "a/b/c";
         let content1 = b"hello there".to_vec();
@@ -376,14 +413,14 @@ mod tests {
 
         std::mem::drop(log);
 
-        let log2 = LogFs::open(&path, TEST_PW).unwrap();
+        let log2 = LogFs::open(&path, TEST_PW.into()).unwrap();
         assert_eq!(log2.get(key1).unwrap(), Some(content1.clone()));
         assert_eq!(log2.get(key2).unwrap(), Some(content2.clone()));
 
         log2.remove(key1).unwrap();
         std::mem::drop(log2);
 
-        let log3 = LogFs::open(&path, TEST_PW).unwrap();
+        let log3 = LogFs::open(&path, TEST_PW.into()).unwrap();
         assert_eq!(log3.get(key1).unwrap(), None);
         assert_eq!(log3.get(key2).unwrap(), Some(content2.clone()));
     }
