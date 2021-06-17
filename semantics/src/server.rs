@@ -1,15 +1,13 @@
 use std::{convert::Infallible, net::SocketAddr};
 
+use factordb::AnyError;
 use hyper::{
     server::conn::AddrStream,
     service::{make_service_fn, service_fn},
     Body, Request, Response, Server, StatusCode,
 };
 
-use semantics_core::{
-    api::{ApiError, ApiResponse, Query, Reply},
-    AnyError,
-};
+use semantics_core::api::{ApiError, ApiResponse, Query, Reply};
 
 use crate::app::App;
 
@@ -67,9 +65,7 @@ async fn handler_blob(app: &App, blob_path: &str) -> Response<Body> {
             .status(StatusCode::OK)
             .body(data.into())
             .unwrap(),
-        Ok(None) => {
-            not_found()
-        }
+        Ok(None) => not_found(),
         Err(err) => Response::builder()
             .status(StatusCode::INTERNAL_SERVER_ERROR)
             .body(format!("Error: {}", err).into_bytes().into())
@@ -98,6 +94,9 @@ async fn handler_api_query(app: &App, req: Request<Body>) -> Response<Body> {
 async fn api_query(app: &App, req: Request<Body>) -> Result<Reply, AnyError> {
     let body = hyper::body::to_bytes(req.into_body()).await?;
     let query: Query = serde_json::from_slice(&body)?;
-    let reply = app.run_api_query(query).await?;
+    let reply = app.run_api_query(query).await.map_err(|err| {
+        tracing::error!(?err, "api query failed");
+        err
+    })?;
     Ok(reply)
 }

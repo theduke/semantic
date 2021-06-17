@@ -1,7 +1,7 @@
 use std::sync::Arc;
 
+use factordb::AnyError;
 use futures::{future::BoxFuture, FutureExt};
-use semantics_core::AnyError;
 
 pub type BlobFuture<T> = BoxFuture<'static, Result<T, AnyError>>;
 

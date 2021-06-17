@@ -1,3 +1,6 @@
+use factordb::schema::AttributeDescriptor;
+use semantics_core::PluginDescriptor;
+
 mod app;
 mod blobstore;
 mod db;
@@ -17,21 +20,46 @@ fn main() {
         key: "hello".into(),
     };
 
-    let rt = tokio::runtime::Runtime::new().expect("Could not start runtime");
+    let cmd = std::env::args().skip(1).collect::<Vec<_>>();
 
-    let mode = std::env::var("SEMANTICS_MODE").unwrap_or("server".to_string());
+    match cmd.get(0).map(|x| x.as_str()).unwrap_or("server") {
+        "generate-ts-base" => {
+            let mut schema = semantics_core::base::SemanticPlugin::schema().db;
+            // let builtin = factordb::schema::builtin::builtin_db_schema();
+            schema
+                .attributes
+                .push(factordb::schema::builtin::AttrId::schema());
+            schema
+                .attributes
+                .push(factordb::schema::builtin::AttrIdent::schema());
 
-    let app = app::App::build(config, rt.handle().clone()).expect("Could not build app");
-
-    match mode.as_str() {
+            let ts = factor_tools::typescript::schema_to_typescript(&schema, None)
+                .expect("Could not generate typescript");
+            println!("{}", ts);
+        }
+        "generate-ts-builtin" => {
+            let schema = factordb::schema::builtin::builtin_db_schema();
+            let ts = factor_tools::typescript::schema_to_typescript(&schema, None)
+                .expect("Could not generate typescript");
+            println!("{}", ts);
+        }
         "server" => {
+            let rt = tokio::runtime::Runtime::new().expect("Could not start runtime");
+            let app = rt
+                .block_on(app::App::build(config, rt.handle().clone()))
+                .expect("Could not build app");
             rt.block_on(server::run_server(app));
         }
-        "gtk" => {
+        #[cfg(feature = "webkit")]
+        "webkit" => {
+            let rt = tokio::runtime::Runtime::new().expect("Could not start runtime");
+            let app = rt
+                .block_on(app::App::build(config, rt.handle().clone()))
+                .expect("Could not build app");
             app.run_webview_gtk().expect("Could not run GTK app");
         }
         other => {
-            eprintln!("Unknown mode: '{}'", other);
+            eprintln!("Unknown command '{}'", other);
             std::process::exit(1);
         }
     }

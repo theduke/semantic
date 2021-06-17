@@ -70,7 +70,7 @@ struct FileNode {
 #[repr(u32)]
 enum JournalAction {
     FileCreated(FileNode),
-    FileDeleted { path: Path },
+    FilesDeleted { paths: Vec<Path> },
 }
 
 #[derive(serde::Serialize, serde::Deserialize)]
@@ -84,7 +84,7 @@ struct JournalEntryHeader {
     size: u32,
 }
 
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 struct NodePointer {
     sequence_id: u64,
     offset: u64,
@@ -176,8 +176,10 @@ impl LogFs {
                         f.data_len as i64 + aead::CHACHA20_POLY1305.tag_len() as i64,
                     ))?;
                 }
-                JournalAction::FileDeleted { path } => {
-                    tree.remove(&path);
+                JournalAction::FilesDeleted { paths } => {
+                    for path in &paths {
+                        tree.remove(path);
+                    }
                 }
             }
 
@@ -372,7 +374,25 @@ impl LogFs {
         let sequence_id = state.increment_sequence();
         let entry = JournalEntry {
             sequence_id,
-            action: JournalAction::FileDeleted { path: path.into() },
+            action: JournalAction::FilesDeleted {
+                paths: vec![path.into()],
+            },
+        };
+        Self::write_entry(&self.key, &mut state, entry)?;
+        state.file.flush()?;
+
+        Ok(())
+    }
+
+    pub fn remove_prefix(&self, prefix: impl AsRef<[u8]>) -> Result<(), LogFsError> {
+        let paths = self.paths_prefix(prefix.as_ref())?;
+
+        let mut state = self.state.write().unwrap();
+
+        let sequence_id = state.increment_sequence();
+        let entry = JournalEntry {
+            sequence_id,
+            action: JournalAction::FilesDeleted { paths },
         };
         Self::write_entry(&self.key, &mut state, entry)?;
         state.file.flush()?;

@@ -1,7 +1,15 @@
 use std::{path::PathBuf, sync::Arc};
 
-use anyhow::anyhow;
-use semantics_core::{api, db::DynDb, AnyError};
+use factordb::{
+    query::{self, select::Item},
+    schema::AttrMapExt,
+    AnyError, Db,
+};
+use semantics_core::{
+    api,
+    base::{AttrBlobUri, AttrDownloadUrl},
+    PluginDescriptor,
+};
 
 use crate::blobstore::DynBlobStore;
 
@@ -12,24 +20,28 @@ pub struct AppConfig {
 
 #[derive(Clone)]
 pub struct App {
-    db: DynDb,
+    db: Db,
     blob: DynBlobStore,
     rt: tokio::runtime::Handle,
     http_client: reqwest::Client,
 }
 
 impl App {
-
     pub fn blob(&self) -> &DynBlobStore {
         &self.blob
     }
 
-    pub fn build(config: AppConfig, rt: tokio::runtime::Handle) -> Result<Self, AnyError> {
-        let db = crate::db::logdb::LogDb::open(config.data_path.clone(), config.key.clone())?;
-        let blob = db.log().clone();
+    pub async fn build(config: AppConfig, rt: tokio::runtime::Handle) -> Result<Self, AnyError> {
+        let log = logfs::LogFs::open(config.data_path.clone(), config.key.clone())?;
+        let blob = log.clone();
+
+        let db = crate::db::logdb::LogDbStore::new(log).build_db().await?;
+
+        let base_plugin = semantics_core::base::SemanticPlugin::build_upsert_migration();
+        db.migrate(base_plugin).await?;
 
         Ok(Self {
-            db: Arc::new(db),
+            db,
             blob: Arc::new(blob),
             rt,
             http_client: reqwest::Client::new(),
@@ -39,29 +51,13 @@ impl App {
     pub async fn run_api_query(&self, query: api::Query) -> Result<api::Reply, AnyError> {
         tracing::trace!(?query, "running api query");
         match query {
-            api::Query::Nodes(query) => self.db.nodes(query).await.map(api::Reply::Nodes),
-            api::Query::NodeMerge(node) => self
+            api::Query::Select(sel) => self.db.select(sel).await.map(api::Reply::Select),
+            api::Query::Mutate(update) => self
                 .db
-                .node_merge(node)
+                .batch(vec![update].into())
                 .await
-                .map(|_| api::Reply::NodeUpsert),
-            api::Query::NodeDelete(id) => self
-                .db
-                .node_delete(id)
-                .await
-                .map(|_| api::Reply::NodeDelete),
-            api::Query::Relations(q) => self.db.relations(q).await.map(api::Reply::Relations),
-            api::Query::RelationMerge(rel) => self
-                .db
-                .relation_merge(rel)
-                .await
-                .map(|_| api::Reply::RelationUpsert),
-            api::Query::RelationDelete(id) => self
-                .db
-                .relation_delete(id)
-                .await
-                .map(|_| api::Reply::RelationDelete),
-            api::Query::Batch(events) => self.db.batch(events).await.map(|_| api::Reply::Batch),
+                .map(|_| api::Reply::Update),
+            api::Query::Batch(batch) => self.db.batch(batch).await.map(|_| api::Reply::Batch),
             api::Query::HttpFetch(req) => {
                 let method = req.method.parse()?;
                 let mut builder = self.http_client.request(method, req.url);
@@ -111,12 +107,20 @@ impl App {
         }
     }
 
-    async fn import(
-        &self,
-        items: Vec<semantics_core::NodeItem>,
-        import_media: bool,
-    ) -> Result<(), AnyError> {
-        let batch = semantics_core::db::DbEvent::nodes_merge_batch(items.clone()).as_events();
+    async fn import(&self, items: Vec<Item>, import_media: bool) -> Result<(), AnyError> {
+        let merges = Item::flatten_list(items)
+            .into_iter()
+            .map(query::mutate::Merge::try_from_map)
+            .collect::<Result<Vec<_>, _>>()?;
+
+        let entity_ids: Vec<_> = merges.iter().map(|merge| merge.id).collect();
+
+        let actions = merges
+            .iter()
+            .map(|merge| query::mutate::Mutate::Merge(merge.clone()))
+            .collect();
+        let batch = query::mutate::BatchUpdate { actions };
+
         self.db.batch(batch).await?;
 
         if !import_media {
@@ -125,33 +129,21 @@ impl App {
 
         let client = reqwest::Client::new();
 
-        let mut nodes = Vec::new();
-        let mut relations = Vec::new();
-        for item in items {
-            item.flatten_into(&mut nodes, &mut relations);
-        }
-
-        for node in &mut nodes {
+        for id in entity_ids {
             // Re-load the node in case it was already present before.
-            let node = self.db.node_by_uri(node.uri.clone()).await?;
+            let data = self.db.entity(id).await?;
 
-            if node.data.get("semantics.io/fields/blob_url").is_some() {
-                tracing::trace!(?node.id, "skipping download_url fetch - blob_url already present");
+            if let Some(_blob_uri) = data.get_attr::<AttrBlobUri>() {
+                // TODO: check if blob exists.
+                tracing::trace!(%id, "skipping download_url fetch - blob_url already present");
                 continue;
             }
 
-            if let Some(url_value) = node.data.get("semantics.io/fields/download_url").cloned() {
-                let url = url_value.as_str().ok_or_else(|| {
-                    anyhow!(
-                        "Invalid type for download_url field - expected a string: {:?}",
-                        url_value
-                    )
-                })?;
-
-                tracing::trace!(?node.id, url, "downloading file for node");
+            if let Some(url) = data.get_attr::<AttrDownloadUrl>() {
+                tracing::trace!(%id, %url, "downloading file for node");
 
                 let data = client
-                    .get(url)
+                    .get(url.as_str())
                     .header(reqwest::header::USER_AGENT, "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.101 Safari/537.36")
                     .send()
                     .await?
@@ -159,14 +151,13 @@ impl App {
                     .bytes()
                     .await?;
 
-                let tmp_path = std::path::PathBuf::from(url);
-
+                let tmp_path = std::path::PathBuf::from(url.as_str());
                 let filename_opt = tmp_path
                     .file_name()
                     .and_then(|x| x.to_str())
                     .map(|x| x.to_string());
 
-                let mut path = format!("files/{}", node.uri);
+                let mut path = format!("files/{}", id);
                 if let Some(filename) = filename_opt {
                     path.push('/');
                     path.push_str(&filename);
@@ -174,16 +165,18 @@ impl App {
 
                 self.blob.put(&path, data.to_vec()).await?;
 
-                let patch =
-                    semantics_core::Patch::new().with_set("semantics.io/fields/blob_url", path);
+                let mut patch = factordb::data::value::ValueMap::new();
+                patch.insert_attr::<AttrBlobUri>(path);
+                let _new_node = self.db.merge(id, patch).await?;
 
-                let _new_node = self.db.node_patch(node.id, patch).await?;
+                tracing::debug!(?url, entity_id=%id, "imported file for entity");
             }
         }
 
         Ok(())
     }
 
+    #[cfg(feature = "webkit")]
     pub fn run_webview_gtk(self) -> Result<(), AnyError> {
         use gtk::{ContainerExt, WidgetExt};
         use webkit2gtk::{
