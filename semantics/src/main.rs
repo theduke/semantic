@@ -1,5 +1,5 @@
 use factordb::schema::AttributeDescriptor;
-use semantics_core::PluginDescriptor;
+use semantics_core::plugin::PluginDescriptor;
 
 mod app;
 mod blobstore;

@@ -8,7 +8,7 @@ use factordb::{
 use semantics_core::{
     api,
     base::{AttrBlobUri, AttrDownloadUrl},
-    PluginDescriptor,
+    plugin::PluginDescriptor,
 };
 
 use crate::blobstore::DynBlobStore;
@@ -56,7 +56,7 @@ impl App {
                 .db
                 .batch(vec![update].into())
                 .await
-                .map(|_| api::Reply::Update),
+                .map(|_| api::Reply::Mutate),
             api::Query::Batch(batch) => self.db.batch(batch).await.map(|_| api::Reply::Batch),
             api::Query::HttpFetch(req) => {
                 let method = req.method.parse()?;
@@ -103,6 +103,11 @@ impl App {
             } => {
                 let _items = self.import(items, import_media).await?;
                 Ok(api::Reply::Import)
+            }
+            api::Query::Schema => {
+                let base = semantics_core::base::SemanticPlugin::schema();
+                let reply = api::Reply::Schema(api::SemanticSchema { db: base.db });
+                Ok(reply)
             }
         }
     }

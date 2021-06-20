@@ -1,4 +1,6 @@
 mod file;
+use crate::plugin::{PluginDescriptor, PluginSchema};
+
 pub use self::file::*;
 
 mod notes;
@@ -15,28 +17,28 @@ use factordb::{
 // Common default attributes.
 
 #[derive(Attribute)]
-#[factor(namespace = "semantic")]
+#[factor(namespace = "semantic", title = "Title")]
 pub struct AttrTitle(String);
 
 #[derive(Attribute)]
-#[factor(namespace = "semantic")]
+#[factor(namespace = "semantic", title = "Url")]
 pub struct AttrUrl(url::Url);
 
 #[derive(Attribute)]
-#[factor(namespace = "semantic")]
+#[factor(namespace = "semantic", title = "Preview")]
 pub struct AttrPreviewImageUrl(url::Url);
 
 #[derive(Attribute)]
-#[factor(namespace = "semantic")]
+#[factor(namespace = "semantic", title = "Username")]
 pub struct AttrUsername(String);
 
 pub struct SemanticPlugin;
 
-impl crate::PluginDescriptor for SemanticPlugin {
-    const NAME: &'static str = "semantics/base";
+impl PluginDescriptor for SemanticPlugin {
+    const NAME: &'static str = "semantic/base";
 
-    fn schema() -> crate::PluginSchema {
-        crate::PluginSchema {
+    fn schema() -> PluginSchema {
+        PluginSchema {
             id: Id::nil(),
             name: Self::NAME.into(),
             description: None,

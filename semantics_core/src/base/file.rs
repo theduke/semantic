@@ -4,23 +4,23 @@ use serde::{Deserialize, Serialize};
 use super::{AttrPreviewImageUrl, AttrTitle, AttrUrl};
 
 #[derive(Attribute)]
-#[factor(namespace = "semantic")]
+#[factor(namespace = "semantic", title = "Blob")]
 pub struct AttrBlobUri(String);
 
 #[derive(Attribute)]
-#[factor(namespace = "semantic")]
+#[factor(namespace = "semantic", title = "MIME Type")]
 pub struct AttrMimeType(String);
 
 #[derive(Attribute)]
-#[factor(namespace = "semantic")]
+#[factor(namespace = "semantic", title = "Download URL")]
 pub struct AttrDownloadUrl(url::Url);
 
 #[derive(Attribute)]
-#[factor(namespace = "semantic")]
+#[factor(namespace = "semantic", title = "Size")]
 pub struct AttrFileSize(u64);
 
 #[derive(Attribute)]
-#[factor(namespace = "semantic")]
+#[factor(namespace = "semantic", title = "Duration")]
 pub struct AttrDuration(u64);
 
 #[derive(Serialize, Deserialize, Entity)]
@@ -31,23 +31,23 @@ pub struct File {
     pub id: Id,
 
     #[factor(attr = AttrTitle)]
-    #[serde(rename = "semantics/title")]
+    #[serde(rename = "semantic/title")]
     pub title: Option<String>,
 
     #[factor(attr = AttrUrl)]
-    #[serde(rename = "semantics/url")]
+    #[serde(rename = "semantic/url")]
     pub url: Option<url::Url>,
 
     #[factor(attr = AttrDownloadUrl)]
-    #[serde(rename = "semantics/downloadUrl")]
+    #[serde(rename = "semantic/download_url")]
     pub download_url: Option<url::Url>,
 
     #[factor(attr = AttrPreviewImageUrl)]
-    #[serde(rename = "semantics/previewImageUrl")]
+    #[serde(rename = "semantic/preview_image_url")]
     pub preview_image_url: Option<url::Url>,
 
     #[factor(attr = AttrBlobUri)]
-    #[serde(rename = "semantics/blob_uri")]
+    #[serde(rename = "semantic/blob_uri")]
     pub blob_uri: Option<String>,
 }
 
@@ -67,6 +67,6 @@ pub struct Video {
     pub file: File,
 
     #[factor(attr = AttrDuration)]
-    #[serde(rename = "semantics/duration")]
+    #[serde(rename = "semantic/duration")]
     pub duration: Option<u64>,
 }

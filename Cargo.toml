@@ -3,4 +3,19 @@ members = [
     "semantics_core",
     "semantics",
     "logfs",
+
+    "semantic_ui_core",
+    "semantic_ui",
+
+    "semantic_contrib",
 ]
+exclude = [
+    "brass",
+]
+
+[patch.crates-io]
+brass = {path = "../brass"}
+brass_bulma = {path = "../brass/brass_bulma"}
+
+factordb = { path = "../factordb/factordb"}
+factor_tools = { path = "../factordb/factor_tools" }

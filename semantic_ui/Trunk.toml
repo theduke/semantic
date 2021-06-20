@@ -1,0 +1,8 @@
+
+[build]
+dist = "target_wasm/ui"
+release = true
+
+[[proxy]]
+rewrite = "/blob/"
+backend = "http://localhost:3000/"

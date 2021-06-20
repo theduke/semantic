@@ -15,10 +15,10 @@ pub struct Note {
     pub id: Id,
 
     #[factor(attr = AttrTitle)]
-    #[serde(rename = "semantics/title")]
+    #[serde(rename = "semantic/title")]
     pub title: String,
 
     #[factor(attr = AttrNoteBody)]
-    #[serde(rename = "semantics/note_body")]
+    #[serde(rename = "semantic/note_body")]
     pub body: String,
 }

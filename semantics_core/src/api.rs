@@ -21,10 +21,17 @@ pub struct SimpleHttpResponse {
 }
 
 #[derive(serde::Serialize, serde::Deserialize, Clone, Debug)]
+pub struct SemanticSchema {
+    pub db: factordb::schema::DbSchema,
+}
+
+#[derive(serde::Serialize, serde::Deserialize, Clone, Debug)]
 pub enum Query {
     Select(factordb::query::select::Select),
     Mutate(factordb::query::mutate::Mutate),
     Batch(factordb::query::mutate::BatchUpdate),
+
+    Schema,
 
     Import {
         items: Vec<Item>,
@@ -44,8 +51,9 @@ pub struct QueryWithId {
 #[derive(serde::Serialize, serde::Deserialize, Clone, Debug)]
 pub enum Reply {
     Select(Page<Item>),
-    Update,
+    Mutate,
     Batch,
+    Schema(SemanticSchema),
 
     Import,
     HttpFetch(SimpleHttpResponse),
@@ -67,69 +75,84 @@ pub trait ApiClientExecutor {
     fn execute(&self, query: Query) -> Self::Future;
 }
 
-// #[derive(Clone)]
-// pub struct ApiClient<E: ApiClientExecutor> {
-//     exec: E,
-// }
+#[derive(Clone)]
+pub struct ApiClient<E: ApiClientExecutor> {
+    exec: E,
+}
 
-// impl<E: ApiClientExecutor> ApiClient<E> {
-//     pub fn new(exec: E) -> Self {
-//         Self { exec }
-//     }
+impl<E: ApiClientExecutor> ApiClient<E> {
+    pub fn new(exec: E) -> Self {
+        Self { exec }
+    }
 
-//     pub async fn nodes(&self, query: NodeQuery) -> Result<NodePage, AnyError> {
-//         match self.exec.execute(Query::Nodes(query)).await {
-//             Ok(Reply::Nodes(page)) => Ok(page),
-//             Ok(_other) => Err(anyhow::anyhow!("API returned invalid data")),
-//             Err(err) => Err(err),
-//         }
-//     }
+    pub async fn select(
+        &self,
+        select: factordb::query::select::Select,
+    ) -> Result<Page<Item>, AnyError> {
+        match self.exec.execute(Query::Select(select)).await {
+            Ok(Reply::Select(page)) => Ok(page),
+            Ok(_other) => Err(anyhow::anyhow!("API returned invalid data")),
+            Err(err) => Err(err),
+        }
+    }
 
-//     pub async fn node_merge(&self, node: Node) -> Result<(), AnyError> {
-//         match self.exec.execute(Query::NodeMerge(node)).await {
-//             Ok(Reply::NodeUpsert) => Ok(()),
-//             Ok(_other) => Err(anyhow::anyhow!("API returned invalid data")),
-//             Err(err) => Err(err),
-//         }
-//     }
+    pub async fn mutate(&self, mutate: factordb::query::mutate::Mutate) -> Result<(), AnyError> {
+        match self.exec.execute(Query::Mutate(mutate)).await {
+            Ok(Reply::Mutate) => Ok(()),
+            Ok(_other) => Err(anyhow::anyhow!("API returned invalid data")),
+            Err(err) => Err(err),
+        }
+    }
 
-//     pub async fn node_delete(&self, id: NodeId) -> Result<(), AnyError> {
-//         match self.exec.execute(Query::NodeDelete(id)).await {
-//             Ok(Reply::NodeDelete) => Ok(()),
-//             Ok(_other) => Err(anyhow::anyhow!("API returned invalid data")),
-//             Err(err) => Err(err),
-//         }
-//     }
+    pub async fn batch(&self, batch: factordb::query::mutate::BatchUpdate) -> Result<(), AnyError> {
+        match self.exec.execute(Query::Batch(batch)).await {
+            Ok(Reply::Batch) => Ok(()),
+            Ok(_other) => Err(anyhow::anyhow!("API returned invalid data")),
+            Err(err) => Err(err),
+        }
+    }
 
-//     pub async fn relations(&self, query: RelationQuery) -> Result<RelationPage, AnyError> {
-//         match self.exec.execute(Query::Relations(query)).await {
-//             Ok(Reply::Relations(page)) => Ok(page),
-//             Ok(_other) => Err(anyhow::anyhow!("API returned invalid data")),
-//             Err(err) => Err(err),
-//         }
-//     }
+    pub async fn schema(&self) -> Result<SemanticSchema, AnyError> {
+        match self.exec.execute(Query::Schema).await {
+            Ok(Reply::Schema(schema)) => Ok(schema),
+            Ok(_other) => Err(anyhow::anyhow!("API returned invalid data")),
+            Err(err) => Err(err),
+        }
+    }
 
-//     pub async fn relation_upsert(&self, relation: Relation) -> Result<(), AnyError> {
-//         match self.exec.execute(Query::RelationMerge(relation)).await {
-//             Ok(Reply::RelationUpsert) => Ok(()),
-//             Ok(_other) => Err(anyhow::anyhow!("API returned invalid data")),
-//             Err(err) => Err(err),
-//         }
-//     }
+    pub async fn import(&self, items: Vec<Item>, import_media: bool) -> Result<(), AnyError> {
+        match self
+            .exec
+            .execute(Query::Import {
+                items,
+                import_media,
+            })
+            .await
+        {
+            Ok(Reply::Import) => Ok(()),
+            Ok(_other) => Err(anyhow::anyhow!("API returned invalid data")),
+            Err(err) => Err(err),
+        }
+    }
 
-//     pub async fn relation_delete(&self, id: RelationId) -> Result<(), AnyError> {
-//         match self.exec.execute(Query::RelationDelete(id)).await {
-//             Ok(Reply::RelationDelete) => Ok(()),
-//             Ok(_other) => Err(anyhow::anyhow!("API returned invalid data")),
-//             Err(err) => Err(err),
-//         }
-//     }
-
-//     pub async fn batch(&self, events: Vec<DbEvent>) -> Result<(), AnyError> {
-//         match self.exec.execute(Query::Batch(events)).await {
-//             Ok(Reply::Batch) => Ok(()),
-//             Ok(_other) => Err(anyhow::anyhow!("API returned invalid data")),
-//             Err(err) => Err(err),
-//         }
-//     }
-// }
+    pub async fn http_fetch(
+        &self,
+        request: SimpleHttpRequest,
+    ) -> Result<SimpleHttpResponse, AnyError> {
+        match self.exec.execute(Query::HttpFetch(request)).await {
+            Ok(Reply::HttpFetch(mut response)) => {
+                let body = if let Some(body) = response.body {
+                    let decoded = base64::decode(&body)?;
+                    let s = String::from_utf8(decoded)?;
+                    Some(s)
+                } else {
+                    None
+                };
+                response.body = body;
+                Ok(response)
+            }
+            Ok(_other) => Err(anyhow::anyhow!("API returned invalid data")),
+            Err(err) => Err(err),
+        }
+    }
+}

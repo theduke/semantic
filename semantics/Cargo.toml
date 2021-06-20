@@ -35,7 +35,7 @@ gio = { version = "0.9.1", optional = true }
 glib = { version = "0.10.3", optional = true }
 
 logfs = { path = "../logfs" }
-factordb = { path = "../../factordb/factordb" }
-factor_tools = { path = "../../factordb/factor_tools" }
+factordb = "0.1"
+factor_tools = "0.1"
 
 semantics_core = { path = "../semantics_core" }
