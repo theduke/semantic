@@ -7,9 +7,9 @@ use factordb::{
     query::select::{ItemPage, Select},
     AnyError,
 };
-use semantic_ui_core::{EntityRenderOpts, Registry};
+use semantic_ui_core::{EntityRenderOpts, Registry, RenderContextExt};
 
-use crate::components::{loader::LoadState, RenderContextExt};
+use semantic_ui_core::loader::LoadState;
 
 pub struct BrowsePage {
     loader: LoadState<ItemPage>,
@@ -79,7 +79,7 @@ impl brass::Component for BrowsePage {
         let registry = ctx.registry().clone();
         div()
             .and(self.loader.render(move |page| {
-                render_page(page, &registry, ctx.callback(|_: web_sys::Event| Msg::Next))
+                render_page(page, &registry, ctx.callback_ignore_event(|| Msg::Next))
             }))
             .build()
     }

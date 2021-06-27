@@ -1,32 +1,24 @@
 use brass::{
     dom::{Attr, Event},
     vdom::{self, component, div, TagBuilder},
-    Callback, VNode,
+    VNode,
 };
+use semantic_ui_core::{router::Route, ContextExt};
 
 use crate::components as comps;
 
-use super::{import::import_page::ImportPage, ContextExt};
+use super::import::import_page::ImportPage;
 
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub enum Route {
-    Browse,
-    Import,
-    Entity(factordb::Ident),
-}
-
-pub struct Router {
-    callback: Callback<Route>,
-}
-
-impl Router {
-    pub fn new(callback: Callback<Route>) -> Self {
-        Self { callback }
-    }
-
-    pub fn goto(&self, route: Route) {
-        self.callback.send(route);
-    }
+pub fn history_push_route(route: &Route) {
+    let path = route.to_path();
+    let title = route.title();
+    let data = wasm_bindgen::JsValue::null();
+    web_sys::window()
+        .unwrap()
+        .history()
+        .unwrap()
+        .push_state_with_url(&data, title, Some(&path))
+        .unwrap();
 }
 
 pub fn router(route: &Route) -> VNode {
@@ -41,6 +33,16 @@ pub fn router(route: &Route) -> VNode {
                 ident: ident.clone(),
             },
         ),
+        Route::EntityCreateSelect => {
+            component::<comps::entity::entity_create_selector::EntityCreateSelectorPage>(())
+        }
+        Route::EntityCreate { entity_type } => {
+            component::<comps::entity::entity_create_page::EntityCreatePage>(
+                comps::entity::entity_create_page::EntityCreatePageProps {
+                    entity_type: entity_type.clone(),
+                },
+            )
+        }
     };
 
     div()
@@ -78,7 +80,7 @@ impl brass::Component for Link {
     fn render(&self, ctx: brass::RenderContext<Self>) -> VNode {
         vdom::a_with(&self.props.text)
             .class_opt(self.props.class.as_ref())
-            .on(Event::Click, ctx.callback(|_: web_sys::Event| ()))
+            .on(Event::Click, ctx.callback_ignore_event(|| ()))
             .build()
     }
 
@@ -109,6 +111,11 @@ fn navbar() -> TagBuilder {
             .and(LinkProps {
                 route: Route::Browse,
                 text: "Browse".to_string(),
+                class: Some("navbar-item".to_string()),
+            })
+            .and(LinkProps {
+                route: Route::EntityCreateSelect,
+                text: "Create".to_string(),
                 class: Some("navbar-item".to_string()),
             })
             .and(LinkProps {

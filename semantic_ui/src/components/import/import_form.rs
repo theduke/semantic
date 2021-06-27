@@ -65,7 +65,7 @@ impl brass::Component for ImportForm {
             .and(
                 brass_bulma::button_medium()
                     .attr_toggle_if(self.loading, Attr::Disabled)
-                    .and(if self.loading { "..." } else { "Import" })
+                    .and(if self.loading { "..." } else { "Load" })
                     .on(
                         brass::dom::Event::Click,
                         ctx.callback(|_ev: web_sys::Event| Msg::Submit),

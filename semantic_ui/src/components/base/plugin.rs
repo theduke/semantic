@@ -1,9 +1,8 @@
+use std::rc::Rc;
+
 use brass::vdom;
-use factordb::{
-    data::{DataMap, Value},
-    schema::{AttrMapExt, AttributeDescriptor},
-};
-use semantics_core::base::AttrPreviewImageUrl;
+use factordb::{data::{DataMap, Value}, schema::{AttrMapExt, AttributeDescriptor, EntityDescriptor}};
+use semantics_core::base::{self, AttrPreviewImageUrl};
 
 use crate::components::entity::{self, render_value};
 
@@ -26,6 +25,23 @@ impl semantic_ui_core::BrowserPlugin for BasePlugin {
             semantics_core::base::AttrBlobUri::QUALIFIED_NAME.to_string(),
             std::rc::Rc::new(render_blob_uri),
         );
+
+        registry.register_entity_renderer(semantic_ui_core::EntityRendererSpec{
+            name: "Create Note".to_string(),
+            entity_type: base::Note::QUALIFIED_NAME.to_string(),
+            mode: semantic_ui_core::EntityRenderMode::CreatePage,
+            renderer: Rc::new(crate::components::base::notes::note_create::note_create),
+            is_default: false,
+        });
+
+        registry.register_entity_renderer(semantic_ui_core::EntityRendererSpec{
+            name: "Update Note".to_string(),
+            entity_type: base::Note::QUALIFIED_NAME.to_string(),
+            mode: semantic_ui_core::EntityRenderMode::ViewPage,
+            renderer: Rc::new(crate::components::base::notes::note_update::note_update),
+            is_default: true,
+        });
+
     }
 
     fn can_import_url(&self, _url: &str) -> bool {

@@ -4,7 +4,6 @@ use semantic_ui_core::api::api;
 
 use crate::components::root::Root;
 
-mod base_plugin;
 mod components;
 
 #[wasm_bindgen(start)]

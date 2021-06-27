@@ -1,5 +1,9 @@
 pub mod browse_page;
 pub mod entity_page;
+pub mod entity_create_selector;
+pub mod entity_create_page;
+pub mod entity_deleter;
+pub mod entity_form;
 
 use brass::{
     vdom::{self, component, div, div_with, span_with, TagBuilder},
@@ -10,10 +14,10 @@ use factordb::{
     query::select::Item,
     schema::{
         builtin::{AttrId, AttrIdent, AttrType},
-        AttrMapExt, AttributeDescriptor, AttributeSchema, EntitySchema,
+        AttrMapExt, AttributeDescriptor, AttributeSchema,
     },
 };
-use semantic_ui_core::{EntityInfo, EntityRenderOpts, Registry};
+use semantic_ui_core::{EntityInfo, EntityRenderOpts, Registry, router::Route};
 use semantics_core::base::AttrTitle;
 use vdom::text;
 
@@ -25,7 +29,7 @@ pub fn entity_header(data: &DataMap, entity: Option<&EntityInfo>) -> TagBuilder 
 
     let title_content = if let Some(ident) = data.get_ident() {
         component::<super::router::Link>(super::router::LinkProps {
-            route: super::router::Route::Entity(ident),
+            route: Route::Entity(ident),
             text: title_text,
             class: None,
         })
@@ -106,7 +110,7 @@ pub fn render_value(value: &Value) -> VNode {
         }
         Value::Id(id) => {
             let link = super::router::LinkProps {
-                route: super::router::Route::Entity(id.clone().into()),
+                route: Route::Entity(id.clone().into()),
                 text: id.to_string(),
                 class: None,
             };
@@ -176,21 +180,21 @@ pub fn entity_fields_table(
     brass_bulma::table().and_iter(rows)
 }
 
-pub fn generic_entity_view(data: &DataMap, registry: &Registry, opts: &EntityRenderOpts) -> VNode {
-    let info = data.get_type().and_then(|ty| registry.entity_by_ident(&ty));
+pub fn generic_entity_view(item: &Item, registry: &Registry, opts: &EntityRenderOpts) -> VNode {
+    let info = item.data.get_type().and_then(|ty| registry.entity_by_ident(&ty));
 
     if let Some(renderer) = info.and_then(|info| registry.entity_item_renderer(&info.schema.ident))
     {
-        renderer(data, opts)
+        renderer(item, opts)
     } else {
-        let header = entity_header(data, info);
-        let fields = entity_fields_table(data, info, registry);
+        let header = entity_header(&item.data, info);
+        let fields = entity_fields_table(&item.data, info, registry);
         div().and(header).and(fields).build()
     }
 }
 
 pub fn entity_item(item: &Item, registry: &Registry, opts: &EntityRenderOpts) -> TagBuilder {
-    let data = generic_entity_view(&item.data, registry, opts);
+    let data = generic_entity_view(&item, registry, opts);
 
     let joins = if item.joins.is_empty() {
         VNode::Empty

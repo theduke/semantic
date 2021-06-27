@@ -40,4 +40,5 @@ features = [
   "RequestMode",
   "Response",
   "Window",
+  "History",
 ]

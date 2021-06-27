@@ -5,9 +5,9 @@ use brass::{
 use brass_bulma;
 
 use factordb::{query::select::ItemPage, AnyError};
-use semantic_ui_core::EntityRenderOpts;
+use semantic_ui_core::{ContextExt, EntityRenderOpts};
 
-use crate::components::{loader::LoadState, ContextExt};
+use semantic_ui_core::loader::LoadState;
 
 pub struct ImportPage {
     import_load: LoadState<ItemPage>,
@@ -118,7 +118,7 @@ impl brass::Component for ImportPage {
                     .attr_toggle_if(already_imported, Attr::Disabled)
                     .on(
                         Event::Click,
-                        _ctx.callback(|_: web_sys::Event| Msg::ImportAll),
+                        _ctx.callback_ignore_event(|| Msg::ImportAll),
                     ),
             );
             div().and(import_button).and(rendered_page).build()
@@ -126,7 +126,11 @@ impl brass::Component for ImportPage {
         let loader2 = self
             .persist_load
             .render(|_| brass_bulma::notification_success("Import succeeded.").build());
-        div().and((form_wrap, loader2, loader1)).build()
+
+
+        let header = brass_bulma::h2_with("Import");
+
+        div().and((header, form_wrap, loader2, loader1)).build()
     }
 
     fn on_property_change(

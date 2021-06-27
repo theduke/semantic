@@ -1,12 +1,12 @@
-use brass::{vdom::div, EffectGuard};
+use brass::vdom::div;
 use factordb::{
     query::{expr::Expr, select::Item},
-    schema::AttributeDescriptor,
+    schema::{AttrMapExt, AttributeDescriptor},
     AnyError,
 };
-use semantic_ui_core::EntityRenderOpts;
+use semantic_ui_core::{EntityRenderOpts, RenderContextExt};
 
-use crate::components::{loader::LoadState, RenderContextExt};
+use semantic_ui_core::loader::LoadState;
 
 pub struct EntityPageProps {
     pub ident: factordb::Ident,
@@ -15,7 +15,7 @@ pub struct EntityPageProps {
 pub struct EntityPage {
     ident: factordb::Ident,
     loader: LoadState<factordb::query::select::Item>,
-    _guard: EffectGuard,
+    deleting: bool,
 }
 
 pub enum Msg {
@@ -46,8 +46,8 @@ impl brass::Component for EntityPage {
 
         Self {
             ident: props.ident,
-            loader: LoadState::Loading,
-            _guard: guard,
+            loader: LoadState::Loading(Some(guard)),
+            deleting: false,
         }
     }
 
@@ -63,7 +63,19 @@ impl brass::Component for EntityPage {
         let item = self.loader.render(|item| {
             let reg = ctx.registry();
 
-            super::entity_item(item, &reg, &EntityRenderOpts { editable: true }).build()
+            let ty = item.data.get_type_name();
+            let renderer = ty.and_then(|ty| reg.entity_page_renderer(ty));
+
+            let content = if let Some(renderer) = renderer {
+                renderer(item, &EntityRenderOpts{
+                    editable: true,
+                })
+            } else {
+                super::entity_item(item, &reg, &EntityRenderOpts { editable: true }).build()
+            };
+
+            content
+            
         });
         div().and(item).build()
     }

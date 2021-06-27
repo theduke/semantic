@@ -1,10 +1,13 @@
 use brass::VNode;
 use factordb::{schema::AttributeDescriptor, AnyError};
+use semantic_ui_core::{
+    loader::LoadState,
+    router::{Route, Router},
+};
 
-use super::{loader::LoadState, router::Route};
+use super::router;
 
 pub struct Root {
-    _guard: brass::EffectGuard,
     status: LoadState<()>,
     route: Route,
 }
@@ -19,6 +22,10 @@ impl brass::Component for Root {
     type Msg = Msg;
 
     fn init(_props: Self::Properties, ctx: &mut brass::Context<Self::Msg>) -> Self {
+        // Read route from url.
+        let current_path = brass::util::url_path();
+        let route = Route::from_path(&&current_path).unwrap_or(Route::Browse);
+
         let guard = ctx.run_map(
             async move { crate::api().schema().await },
             Msg::SchemaLoaded,
@@ -26,13 +33,12 @@ impl brass::Component for Root {
 
         // Build router.
         let callback = ctx.callback_map(Msg::RouteChange);
-        let router = super::router::Router::new(callback);
+        let router = Router::new(callback);
         ctx.provide(router);
 
         Self {
-            status: LoadState::Loading,
-            _guard: guard,
-            route: Route::Browse,
+            status: LoadState::Loading(Some(guard)),
+            route,
         }
     }
 
@@ -42,7 +48,7 @@ impl brass::Component for Root {
                 Ok(schema) => {
                     let mut registry = semantic_ui_core::Registry::new(schema);
 
-                    registry.register_plugin(crate::base_plugin::BasePlugin);
+                    registry.register_plugin(crate::components::base::BasePlugin);
                     registry.register_plugin(semantic_contrib::ContribPlugin);
 
                     registry
@@ -50,13 +56,14 @@ impl brass::Component for Root {
                         .expect("no custom renderer for preview image");
 
                     ctx.provide(registry.into_shared());
-                    self.status.set_loaded(());
+                    self.status.set_success(());
                 }
                 Err(err) => {
                     self.status.set_failed(err);
                 }
             },
             Msg::RouteChange(route) => {
+                router::history_push_route(&route);
                 self.route = route;
             }
         }
