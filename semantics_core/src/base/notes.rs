@@ -4,10 +4,10 @@ use serde::{Deserialize, Serialize};
 use super::AttrTitle;
 
 #[derive(Attribute)]
-#[factor(namespace = "semantic")]
+#[factor(namespace = "semantic", title = "Note")]
 pub struct AttrNoteBody(String);
 
-#[derive(Serialize, Deserialize, Entity)]
+#[derive(Serialize, Deserialize, Entity, Clone)]
 #[factor(namespace = "semantic")]
 pub struct Note {
     #[factor(attr = AttrId)]
