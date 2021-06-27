@@ -1,0 +1,24 @@
+#!/usr/bin/env bash
+
+MALFORMED_FILES=""
+
+for FILE in $(git diff --name-only --staged); do
+  if [[ "$FILE" != "*.rs" ]]; then
+    continue
+  fi
+
+  rustfmt --edition 2018 --check "$FILE"
+  if [[ $? != 0 ]]; then
+    if [[ "$MALFORMED_FILES" == "" ]]; then
+      MALFORMED_FILES="$FILE"
+    else
+      MALFORMED_FILES="$MALFORMED_FILES, $FILE"
+    fi
+  fi
+done
+
+if [[ "$MALFORMED_FILES" != "" ]]; then
+  echo "Aborting commit due to unformatted files"
+  echo "Unformatted: $MALFORMED_FILES"
+  exit 1
+fi
