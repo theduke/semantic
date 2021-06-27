@@ -1,7 +1,0 @@
-
-[build]
-release = true
-
-[[proxy]]
-rewrite = "/blob/"
-backend = "http://localhost:3000/"
