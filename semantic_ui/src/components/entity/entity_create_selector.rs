@@ -1,5 +1,5 @@
 use brass::vdom;
-use semantic_ui_core::{ContextExt, router::Route};
+use semantic_ui_core::{router::Route, ContextExt};
 
 pub enum Msg {
     Create(String),
@@ -26,8 +26,7 @@ impl brass::Component for EntityCreateSelectorPage {
     fn update(&mut self, msg: Self::Msg, ctx: &mut brass::Context<Self::Msg>) {
         match msg {
             Msg::Create(entity_type) => {
-                ctx.router()
-                    .goto(Route::EntityCreate { entity_type });
+                ctx.router().goto(Route::EntityCreate { entity_type });
             }
         }
     }

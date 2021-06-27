@@ -1,4 +1,4 @@
-use brass::{Callback, vdom};
+use brass::{vdom, Callback};
 use factordb::{query::mutate::Mutate, AnyError};
 
 use semantic_ui_core::loader::LoadState;

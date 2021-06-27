@@ -116,17 +116,13 @@ impl brass::Component for ImportPage {
                 brass_bulma::button_medium()
                     .and(btn_label)
                     .attr_toggle_if(already_imported, Attr::Disabled)
-                    .on(
-                        Event::Click,
-                        _ctx.callback_ignore_event(|| Msg::ImportAll),
-                    ),
+                    .on(Event::Click, _ctx.callback_ignore_event(|| Msg::ImportAll)),
             );
             div().and(import_button).and(rendered_page).build()
         });
         let loader2 = self
             .persist_load
             .render(|_| brass_bulma::notification_success("Import succeeded.").build());
-
 
         let header = brass_bulma::h2_with("Import");
 

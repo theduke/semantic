@@ -2,10 +2,14 @@ use brass::{
     vdom::{self, component},
     Callback,
 };
-use factordb::{AnyError, data::value::to_value_map, schema::{AttrMapExt, EntityDescriptor}};
+use factordb::{
+    data::value::to_value_map,
+    schema::{AttrMapExt, EntityDescriptor},
+    AnyError,
+};
 use semantics_core::base::Note;
 
-use semantic_ui_core::{ContextExt, loader::LoadState};
+use semantic_ui_core::{loader::LoadState, ContextExt};
 
 use super::note_form::{NoteForm, NoteFormProps};
 

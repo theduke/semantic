@@ -67,15 +67,12 @@ impl brass::Component for EntityPage {
             let renderer = ty.and_then(|ty| reg.entity_page_renderer(ty));
 
             let content = if let Some(renderer) = renderer {
-                renderer(item, &EntityRenderOpts{
-                    editable: true,
-                })
+                renderer(item, &EntityRenderOpts { editable: true })
             } else {
                 super::entity_item(item, &reg, &EntityRenderOpts { editable: true }).build()
             };
 
             content
-            
         });
         div().and(item).build()
     }

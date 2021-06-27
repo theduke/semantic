@@ -1,9 +1,9 @@
 pub mod browse_page;
-pub mod entity_page;
-pub mod entity_create_selector;
 pub mod entity_create_page;
+pub mod entity_create_selector;
 pub mod entity_deleter;
 pub mod entity_form;
+pub mod entity_page;
 
 use brass::{
     vdom::{self, component, div, div_with, span_with, TagBuilder},
@@ -17,7 +17,7 @@ use factordb::{
         AttrMapExt, AttributeDescriptor, AttributeSchema,
     },
 };
-use semantic_ui_core::{EntityInfo, EntityRenderOpts, Registry, router::Route};
+use semantic_ui_core::{router::Route, EntityInfo, EntityRenderOpts, Registry};
 use semantics_core::base::AttrTitle;
 use vdom::text;
 
@@ -181,7 +181,10 @@ pub fn entity_fields_table(
 }
 
 pub fn generic_entity_view(item: &Item, registry: &Registry, opts: &EntityRenderOpts) -> VNode {
-    let info = item.data.get_type().and_then(|ty| registry.entity_by_ident(&ty));
+    let info = item
+        .data
+        .get_type()
+        .and_then(|ty| registry.entity_by_ident(&ty));
 
     if let Some(renderer) = info.and_then(|info| registry.entity_item_renderer(&info.schema.ident))
     {

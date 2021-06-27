@@ -2,15 +2,19 @@ use brass::{
     vdom::{self, component},
     Callback,
 };
-use factordb::{AnyError, data::value::{from_value_map, to_value_map}, schema::{AttrMapExt, EntityDescriptor}};
+use factordb::{
+    data::value::{from_value_map, to_value_map},
+    schema::{AttrMapExt, EntityDescriptor},
+    AnyError,
+};
 use semantics_core::base::Note;
 
-use semantic_ui_core::{ContextExt, loader::LoadState};
+use semantic_ui_core::{loader::LoadState, ContextExt};
 
 use super::note_form::{NoteForm, NoteFormProps};
 
 pub struct NoteUpateProps {
-    note: Note
+    note: Note,
 }
 
 pub enum Msg {
@@ -87,12 +91,7 @@ pub fn note_update(
     _opts: &semantic_ui_core::EntityRenderOpts,
 ) -> vdom::VNode {
     match from_value_map(item.data.clone()) {
-        Ok(note) => {
-
-            component::<NoteUpate>(NoteUpateProps {note})
-        }
-        Err(err) => {
-            vdom::div().and("Invalid Note").build()
-        }
+        Ok(note) => component::<NoteUpate>(NoteUpateProps { note }),
+        Err(err) => vdom::div().and("Invalid Note").build(),
     }
 }
