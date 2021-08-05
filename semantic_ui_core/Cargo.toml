@@ -1,0 +1,32 @@
+[package]
+name = "semantic_ui_core"
+version = "0.1.0"
+edition = "2018"
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[dependencies]
+brass = "0.1"
+brass_bulma = "0.1"
+factordb = { version = "0.1", default-features = false }
+js-sys = "0.3.51"
+pulldown-cmark = "0.8.0"
+
+semantics_core = { path = "../semantics_core" }
+serde_json = "1.0.64"
+tracing = "0.1.26"
+url = "2.2.2"
+wasm-bindgen = "0.2.74"
+wasm-bindgen-futures = "0.4.24"
+
+
+[dependencies.web-sys] 
+version = "0.3.51"
+features = [
+  "Headers",
+  "Request",
+  "RequestInit",
+  "RequestMode",
+  "Response",
+  "Window",
+]
