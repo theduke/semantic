@@ -73,7 +73,10 @@ impl brass::Component for EntityDeleter {
             None
         };
 
-        let actions = vdom::div().and(btn_submit).and_opt(btn_cancel);
+        let actions = vdom::div()
+            .class("buttons")
+            .and(btn_submit)
+            .and_opt(btn_cancel);
 
         vdom::div().and(title).and(actions).build()
     }
