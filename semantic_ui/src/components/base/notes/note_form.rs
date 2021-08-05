@@ -1,4 +1,4 @@
-use brass::{vdom::div, Callback};
+use brass::{Callback, vdom::{component, div}};
 use factordb::Id;
 use semantics_core::base::Note;
 
@@ -79,13 +79,23 @@ impl brass::Component for NoteForm {
             },
         };
 
+        let markdown = component::<semantic_ui_core::components::markdown::Markdown<String>>(semantic_ui_core::components::markdown::Props{
+            markdown: self.note.body.clone(),
+        });
+        let preview_content = div().and(markdown).style_raw("border: 1px solid black; border-radius: 10px; padding: 0.5rem;");
+        let preview = brass_bulma::Field{
+            label: "Preview".into(),
+            help: None,
+            control: preview_content,
+        };
+
         let submit_btn = brass_bulma::button().and("Submit").on(
             brass::dom::Event::Click,
             _ctx.callback_ignore_event(|| Msg::Submit),
         );
         let submit = brass_bulma::field().and(brass_bulma::control().and(submit_btn));
 
-        div().and(title).and(body).and(submit).build()
+        div().and((title, body, preview, submit)).build()
     }
 
     fn on_property_change(
