@@ -9,9 +9,6 @@ members = [
 
     "semantic_contrib",
 ]
-exclude = [
-    "brass",
-]
 
 [patch.crates-io]
 brass = {path = "../brass"}
