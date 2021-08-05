@@ -1,6 +1,5 @@
 target
 target_wasm/
 
-/semantic_ui_core
 semantic_contrib/
 .direnv.fish
