@@ -2,7 +2,6 @@ use std::{convert::Infallible, net::SocketAddr};
 
 use anyhow::{Context, Result};
 use factordb::AnyError;
-use futures::TryFutureExt;
 use hyper::{
     server::conn::AddrStream,
     service::{make_service_fn, service_fn},
@@ -10,7 +9,6 @@ use hyper::{
 };
 
 use semantics_core::api::{ApiError, ApiResponse, BackendConfig, Query, Reply};
-use serde::__private::de::TagOrContentFieldVisitor;
 
 use crate::app::App;
 
@@ -43,9 +41,12 @@ async fn handler(
     _addr: SocketAddr,
     req: Request<Body>,
 ) -> Result<Response<Body>, Infallible> {
+    tracing::trace!(method=?req.method(), path=%req.uri(), "handling request");
+
     let res = match req.uri().path() {
         "/api/query" if req.method() == Method::POST => handler_api_query(&app, req).await,
-        "/api/blob/upload" if req.method() == Method::POST => handler_blob_upload(&app, req).await,
+        "/api/upload-file" if req.method() == Method::OPTIONS => handler_file_upload_cors(),
+        "/api/upload-file" if req.method() == Method::POST => handler_file_upload(&app, req).await,
         path if req.method() == Method::GET && path.starts_with("/blob/") => {
             let blob_path = path.strip_prefix("/blob/").unwrap();
             handler_blob_read(&app, blob_path).await
@@ -54,6 +55,22 @@ async fn handler(
     };
 
     Ok(res)
+}
+
+fn handler_file_upload_cors() -> Response<Body> {
+    Response::builder()
+        .status(StatusCode::OK)
+        .header(hyper::header::ACCESS_CONTROL_ALLOW_ORIGIN, "*")
+        .header(hyper::header::ACCESS_CONTROL_ALLOW_METHODS, "POST")
+        .header(
+            hyper::header::ACCESS_CONTROL_ALLOW_HEADERS,
+            format!(
+                "{},content-type",
+                semantics_core::api::FileUploadMetadata::HEADER_NAME
+            ),
+        )
+        .body(Body::empty())
+        .unwrap()
 }
 
 fn not_found() -> Response<Body> {
@@ -70,20 +87,28 @@ fn internal_server_error(msg: impl Into<String>) -> Response<Body> {
         .unwrap()
 }
 
-async fn handler_blob_upload(app: &App, req: Request<Body>) -> Response<Body> {
-    let reply = match blob_upload(app, req).await {
+async fn handler_file_upload(app: &App, req: Request<Body>) -> Response<Body> {
+    tracing::trace!("handler_blob_upload");
+    let reply = match file_upload(app, req).await {
         Ok(item) => ApiResponse::Ok(item),
-        Err(err) => ApiResponse::Err(api_error(&err)),
+        Err(err) => {
+            tracing::warn!(?err, "file upload failed");
+            ApiResponse::Err(api_error(&err))
+        }
     };
+
+    tracing::info!(?reply, "blob upload reply");
 
     api_response(reply)
 }
 
-async fn blob_upload(
+async fn file_upload(
     app: &App,
     req: Request<Body>,
 ) -> Result<semantics_core::base::TypedFile, AnyError> {
     // FIXME: check authentication
+
+    tracing::trace!("file upload started");
 
     use semantics_core::api::FileUploadMetadata;
 
@@ -100,9 +125,12 @@ async fn blob_upload(
             }
         };
 
+    tracing::trace!("fetching file upload body");
     let body = hyper::body::to_bytes(req.into_body()).await?;
+    tracing::trace!(len=%body.len(), "file upload body retrieved");
 
     let item = app.create_file(meta, body.to_vec()).await?;
+    tracing::trace!(?item, "file created");
     Ok(item)
 }
 
@@ -147,6 +175,7 @@ where
         .status(StatusCode::OK)
         .header(hyper::header::ACCESS_CONTROL_ALLOW_ORIGIN, "*")
         .header(hyper::header::ACCESS_CONTROL_ALLOW_METHODS, "POST")
+        .header(hyper::header::ACCESS_CONTROL_ALLOW_HEADERS, "*")
         .body(Body::from(res_json))
         .unwrap()
 }

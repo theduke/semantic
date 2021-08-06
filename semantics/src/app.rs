@@ -3,9 +3,8 @@ use std::sync::{Arc, RwLock};
 
 use anyhow::Result;
 use factordb::{
-    data::value::to_value_map,
     query::{self, select::Item},
-    schema::AttrMapExt,
+    schema::{AttrMapExt, EntityContainer},
     AnyError, Db,
 };
 use semantics_core::{
@@ -214,7 +213,7 @@ impl App {
         let blob = self.require_blob()?;
         let db = self.require_db()?;
 
-        let magic_mime_guess = tree_magic_mini::from_u8(&data);
+        let mime_guess = infer::get(&data);
         let size = data.len() as u64;
 
         let id = factordb::Id::random();
@@ -225,18 +224,18 @@ impl App {
 
         let file = semantics_core::base::File {
             id,
-            title: None,
+            title: meta.title.clone().or_else(|| meta.filename.clone()),
             filename: meta.filename,
             url: None,
             download_url: None,
             preview_image_url: None,
             blob_uri: Some(blob_uri),
             size: Some(size),
-            mime_type: Some(magic_mime_guess.to_string()),
+            mime_type: mime_guess.map(|x| x.mime_type().to_string()),
         };
 
         // Build the data.
-        let item = match magic_mime_guess {
+        let item = match mime_guess.map(|x| x.mime_type()).unwrap_or_default() {
             mime if mime.starts_with("image/") => {
                 TypedFile::Image(semantics_core::base::Image { file })
             }
@@ -250,7 +249,7 @@ impl App {
             _other => TypedFile::File(file),
         };
 
-        let map = to_value_map(item.clone())?;
+        let map = item.clone().into_map()?;
         db.create(id, map).await?;
 
         tracing::trace!(entity=?item, "created file");
