@@ -79,6 +79,7 @@ impl brass::Component for NoteForm {
                     let value = brass::util::textarea_input_value(ev).unwrap();
                     Msg::Body(value)
                 }),
+                on_keydown: None,
             },
         };
 

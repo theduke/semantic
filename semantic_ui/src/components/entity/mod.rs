@@ -2,6 +2,7 @@ pub mod browse_page;
 pub mod entity_create_page;
 pub mod entity_create_selector;
 pub mod entity_deleter;
+pub mod entity_filter;
 pub mod entity_form;
 pub mod entity_page;
 

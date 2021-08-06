@@ -1,10 +1,13 @@
 use brass::{
     dom::Event::Click,
     vdom::{div, EventCallback},
-    EffectGuard, VNode,
+    Callback, EffectGuard, VNode,
 };
 use factordb::{
-    query::select::{ItemPage, Select},
+    query::{
+        expr::Expr,
+        select::{ItemPage, Select},
+    },
     AnyError,
 };
 use semantic_ui_core::{EntityRenderOpts, Registry, RenderContextExt};
@@ -15,12 +18,14 @@ pub struct BrowsePage {
     loader: LoadState<ItemPage>,
     query: Select,
     guard: Option<EffectGuard>,
+    filter_callback: Callback<Expr>,
 }
 
 pub struct BrowsePageProps {}
 
 pub enum Msg {
     Loaded(Result<ItemPage, AnyError>),
+    FilterUpdated(Expr),
     Next,
 }
 
@@ -35,6 +40,7 @@ impl BrowsePage {
 
         self.guard = Some(ctx.run_map(f, Msg::Loaded));
         self.loader.set_loading();
+        self.query = query;
     }
 }
 
@@ -47,6 +53,7 @@ impl brass::Component for BrowsePage {
             loader: LoadState::Idle,
             query: Select::new(),
             guard: None,
+            filter_callback: ctx.callback_map(Msg::FilterUpdated),
         };
         s.load(s.query.clone(), ctx);
         s
@@ -54,6 +61,10 @@ impl brass::Component for BrowsePage {
 
     fn update(&mut self, msg: Self::Msg, ctx: &mut brass::Context<Self::Msg>) {
         match msg {
+            Msg::FilterUpdated(expr) => {
+                let query = Select::new().with_filter(expr);
+                self.load(query, ctx);
+            }
             Msg::Loaded(res) => {
                 self.loader.set_result(res);
             }
@@ -77,11 +88,15 @@ impl brass::Component for BrowsePage {
 
     fn render(&self, ctx: brass::RenderContext<Self>) -> brass::VNode {
         let registry = ctx.registry().clone();
-        div()
-            .and(self.loader.render(move |page| {
-                render_page(page, &registry, ctx.callback_ignore_event(|| Msg::Next))
-            }))
-            .build()
+
+        let filter = super::entity_filter::EntityFilterForm {
+            on_submit: self.filter_callback.clone(),
+        };
+        let loader = self.loader.render(move |page| {
+            render_page(page, &registry, ctx.callback_ignore_event(|| Msg::Next))
+        });
+
+        div().and((filter, loader)).build()
     }
 
     fn on_property_change(
