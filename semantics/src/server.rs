@@ -7,7 +7,7 @@ use hyper::{
     Body, Request, Response, Server, StatusCode,
 };
 
-use semantics_core::api::{ApiError, ApiResponse, Query, Reply};
+use semantics_core::api::{ApiError, ApiResponse, BackendConfig, Query, Reply};
 
 use crate::app::App;
 
@@ -59,8 +59,21 @@ fn not_found() -> Response<Body> {
         .unwrap()
 }
 
+fn internal_server_error(msg: impl Into<String>) -> Response<Body> {
+    Response::builder()
+        .status(hyper::http::StatusCode::INTERNAL_SERVER_ERROR)
+        .body(Body::from(msg.into()))
+        .unwrap()
+}
+
 async fn handler_blob(app: &App, blob_path: &str) -> Response<Body> {
-    match app.blob().get(blob_path).await {
+    let blob = if let Some(b) = app.blob() {
+        b
+    } else {
+        return internal_server_error("Blobstore not initialized");
+    };
+
+    match blob.get(blob_path).await {
         Ok(Some(data)) => Response::builder()
             .status(StatusCode::OK)
             .body(data.into())
@@ -73,14 +86,14 @@ async fn handler_blob(app: &App, blob_path: &str) -> Response<Body> {
     }
 }
 
-async fn handler_api_query(app: &App, req: Request<Body>) -> Response<Body> {
-    let res = match api_query(app, req).await {
-        Ok(repl) => ApiResponse::Ok(repl),
-        Err(err) => ApiResponse::Err(ApiError {
-            message: err.to_string(),
-        }),
-    };
+fn api_response_err(err: &AnyError) -> ApiResponse {
+    ApiResponse::Err(ApiError {
+        message: err.to_string(),
+    })
+}
 
+fn api_response(res: ApiResponse) -> Response<Body> {
+    // TODO: no unwrap?
     let res_json = serde_json::to_vec(&res).unwrap();
 
     Response::builder()
@@ -91,12 +104,117 @@ async fn handler_api_query(app: &App, req: Request<Body>) -> Response<Body> {
         .unwrap()
 }
 
-async fn api_query(app: &App, req: Request<Body>) -> Result<Reply, AnyError> {
+#[derive(serde::Serialize, serde::Deserialize, Debug)]
+struct TokenClaims {
+    sub: String,
+    exp: u64,
+    // TODO: use hash of config instead.
+    config: BackendConfig,
+}
+
+impl TokenClaims {
+    fn encode(&self, key: &str) -> Result<String, jsonwebtoken::errors::Error> {
+        jsonwebtoken::encode(
+            &jsonwebtoken::Header::default(),
+            self,
+            &jsonwebtoken::EncodingKey::from_secret(key.as_bytes()),
+        )
+    }
+
+    fn decode(key: &str, token: &str) -> Result<Self, jsonwebtoken::errors::Error> {
+        let data = jsonwebtoken::decode::<Self>(
+            token,
+            &jsonwebtoken::DecodingKey::from_secret(key.as_bytes()),
+            &jsonwebtoken::Validation::default(),
+        )?;
+
+        Ok(data.claims)
+    }
+}
+
+async fn handler_api_query(app: &App, req: Request<Body>) -> Response<Body> {
+    match api_query(app, req).await {
+        Ok(res) => res,
+        Err(err) => api_response(api_response_err(&err)),
+    }
+}
+
+const TOKEN_COOKIE_NAME: &'static str = "token";
+
+fn get_auth_cookie_token(req: &Request<Body>) -> Option<String> {
+    req.headers()
+        .get_all("cookie")
+        .iter()
+        .find_map(|raw_value| {
+            let values = raw_value.to_str().ok()?;
+            let pair = values.split(';').find(|x| {
+                x.trim_start()
+                    .starts_with(&format!("{}=", TOKEN_COOKIE_NAME))
+            })?;
+            let value = pair.split('=').nth(1)?;
+            Some(value.trim().to_string())
+        })
+}
+
+fn validate_auth_token(app: &App, raw_token: &str) -> Result<TokenClaims, AnyError> {
+    let claims = TokenClaims::decode(&app.config().token_key, raw_token)?;
+
+    let config = app
+        .backend_config()
+        .ok_or_else(|| anyhow::anyhow!("Invalid token"))?;
+
+    if config != claims.config {
+        return Err(anyhow::anyhow!("Invalid token"));
+    }
+    Ok(claims)
+}
+
+async fn api_query(app: &App, req: Request<Body>) -> Result<Response<Body>, AnyError> {
+    let token = get_auth_cookie_token(&req)
+        .map(|token| validate_auth_token(app, &token))
+        .transpose()?;
+
     let body = hyper::body::to_bytes(req.into_body()).await?;
     let query: Query = serde_json::from_slice(&body)?;
-    let reply = app.run_api_query(query).await.map_err(|err| {
-        tracing::error!(?err, "api query failed");
-        err
-    })?;
-    Ok(reply)
+
+    if let Query::Initialize { config } = &query {
+        app.configure_backend(config.clone()).await?;
+        // TODO: no unwrap?
+        let res_json = serde_json::to_vec(&Reply::Initialize)?;
+
+        let exp = std::time::SystemTime::now()
+            .duration_since(std::time::SystemTime::UNIX_EPOCH)?
+            .as_secs();
+
+        let key = &app.config().token_key;
+
+        let new_token = TokenClaims {
+            sub: "semantic".into(),
+            exp,
+            config: config.clone(),
+        }
+        .encode(key)?;
+
+        let cookie = format!("{}={}; HttpOnly", TOKEN_COOKIE_NAME, new_token);
+
+        let res = Response::builder()
+            .status(StatusCode::OK)
+            .header(hyper::header::SET_COOKIE, cookie)
+            .header(hyper::header::ACCESS_CONTROL_ALLOW_ORIGIN, "*")
+            .header(hyper::header::ACCESS_CONTROL_ALLOW_METHODS, "POST")
+            .body(Body::from(res_json))
+            .unwrap();
+
+        return Ok(res);
+    };
+
+    let reply = app
+        .run_api_query(query, token.is_some())
+        .await
+        .map_err(|err| {
+            tracing::error!(?err, "api query failed");
+            err
+        })?;
+    let res = api_response(ApiResponse::Ok(reply));
+    Ok(res)
 }

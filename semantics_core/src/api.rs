@@ -25,8 +25,17 @@ pub struct SemanticSchema {
     pub db: factordb::schema::DbSchema,
 }
 
+#[derive(serde::Serialize, serde::Deserialize, PartialEq, Eq, Clone, Debug)]
+pub enum BackendConfig {
+    Crypto { data_path: String, key: String },
+}
+
 #[derive(serde::Serialize, serde::Deserialize, Clone, Debug)]
 pub enum Query {
+    Initialize {
+        config: BackendConfig,
+    },
+
     Select(factordb::query::select::Select),
     Mutate(factordb::query::mutate::Mutate),
     Batch(factordb::query::mutate::BatchUpdate),
@@ -50,6 +59,8 @@ pub struct QueryWithId {
 
 #[derive(serde::Serialize, serde::Deserialize, Clone, Debug)]
 pub enum Reply {
+    Initialize,
+
     Select(Page<Item>),
     Mutate,
     Batch,

@@ -12,17 +12,9 @@ fn main() {
     }
     tracing_subscriber::fmt::init();
 
-    let data_path = std::env::home_dir()
-        .expect("Could not determine home dir")
-        .join(".local/share/semantics");
-    let config = app::AppConfig {
-        data_path,
-        key: "hello".into(),
-    };
+    let args = std::env::args().skip(1).collect::<Vec<_>>();
 
-    let cmd = std::env::args().skip(1).collect::<Vec<_>>();
-
-    match cmd.get(0).map(|x| x.as_str()).unwrap_or("server") {
+    match args.get(0).map(|x| x.as_str()).unwrap_or("server") {
         "generate-ts-base" => {
             let mut schema = semantics_core::base::SemanticPlugin::schema().db;
             // let builtin = factordb::schema::builtin::builtin_db_schema();
@@ -44,6 +36,29 @@ fn main() {
             println!("{}", ts);
         }
         "server" => {
+            let no_backend = args.iter().any(|x| x == "--no-backend");
+
+            let backend_config = if no_backend {
+                None
+            } else {
+                let data_path = std::env::home_dir()
+                    .expect("Could not determine home dir")
+                    .join(".local/share/semantics")
+                    .to_str()
+                    .expect("invalid data path")
+                    .to_string();
+
+                Some(semantics_core::api::BackendConfig::Crypto {
+                    data_path,
+                    key: "hello".into(),
+                })
+            };
+
+            let config = app::AppConfig {
+                backend: backend_config,
+                token_key: "tokens".into(),
+            };
+
             let rt = tokio::runtime::Runtime::new().expect("Could not start runtime");
             let app = rt
                 .block_on(app::App::build(config, rt.handle().clone()))

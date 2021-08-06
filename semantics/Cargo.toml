@@ -39,3 +39,5 @@ factordb = "0.1"
 factor_tools = "0.1"
 
 semantics_core = { path = "../semantics_core" }
+jsonwebtoken = { version = "7.2.0" }
+serde = { version = "1.0.127", features = ["derive"] }

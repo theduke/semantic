@@ -1,4 +1,5 @@
-use std::{path::PathBuf, sync::Arc};
+use core::panic;
+use std::sync::{Arc, RwLock};
 
 use factordb::{
     query::{self, select::Item},
@@ -6,58 +7,147 @@ use factordb::{
     AnyError, Db,
 };
 use semantics_core::{
-    api,
+    api::{self, BackendConfig},
     base::{AttrBlobUri, AttrDownloadUrl},
     plugin::PluginDescriptor,
 };
 
 use crate::blobstore::DynBlobStore;
 
+#[derive(serde::Serialize, serde::Deserialize, Clone, Debug)]
 pub struct AppConfig {
-    pub data_path: PathBuf,
-    pub key: String,
+    pub backend: Option<BackendConfig>,
+    pub token_key: String,
+}
+
+struct AppState {
+    require_auth: bool,
+    config: BackendConfig,
+    db: Db,
+    blob: DynBlobStore,
 }
 
 #[derive(Clone)]
 pub struct App {
-    db: Db,
-    blob: DynBlobStore,
+    config: AppConfig,
+    state: Arc<RwLock<Option<AppState>>>,
     rt: tokio::runtime::Handle,
     http_client: reqwest::Client,
 }
 
 impl App {
-    pub fn blob(&self) -> &DynBlobStore {
-        &self.blob
+    /// Get a mutable reference to the app's config.
+    pub fn config(&self) -> &AppConfig {
+        &self.config
+    }
+
+    fn needs_authentication(&self) -> bool {
+        self.state
+            .read()
+            .unwrap()
+            .as_ref()
+            .map(|state| state.require_auth)
+            .unwrap_or(true)
+    }
+
+    pub fn blob(&self) -> Option<DynBlobStore> {
+        self.state
+            .read()
+            .unwrap()
+            .as_ref()
+            .map(|state| state.blob.clone())
+    }
+
+    pub fn require_blob(&self) -> Result<DynBlobStore, AnyError> {
+        self.blob()
+            .ok_or_else(|| anyhow::anyhow!("Blobstore not initialized"))
+    }
+
+    pub fn db(&self) -> Option<Db> {
+        self.state
+            .read()
+            .unwrap()
+            .as_ref()
+            .map(|state| state.db.clone())
+    }
+
+    pub fn require_db(&self) -> Result<Db, AnyError> {
+        self.db()
+            .ok_or_else(|| anyhow::anyhow!("Database not initialized"))
+    }
+
+    pub fn backend_config(&self) -> Option<BackendConfig> {
+        self.state
+            .read()
+            .unwrap()
+            .as_ref()
+            .map(|state| state.config.clone())
+    }
+
+    pub fn require_backend_config(&self) -> Result<BackendConfig, AnyError> {
+        self.backend_config()
+            .ok_or_else(|| anyhow::anyhow!("Database not initialized"))
+    }
+
+    pub async fn configure_backend(&self, config: BackendConfig) -> Result<(), AnyError> {
+        let state = match &config {
+            BackendConfig::Crypto { data_path, key } => {
+                let log = logfs::LogFs::open(data_path.clone(), key.clone())?;
+                let blob = Arc::new(log.clone());
+                let db = crate::db::logdb::LogDbStore::new(log).build_db().await?;
+                AppState {
+                    db,
+                    blob,
+                    config,
+                    require_auth: false,
+                }
+            }
+        };
+
+        let base_plugin = semantics_core::base::SemanticPlugin::build_upsert_migration();
+        state.db.migrate(base_plugin).await?;
+        *self.state.write().unwrap() = Some(state);
+        Ok(())
     }
 
     pub async fn build(config: AppConfig, rt: tokio::runtime::Handle) -> Result<Self, AnyError> {
-        let log = logfs::LogFs::open(config.data_path.clone(), config.key.clone())?;
-        let blob = log.clone();
-
-        let db = crate::db::logdb::LogDbStore::new(log).build_db().await?;
-
-        let base_plugin = semantics_core::base::SemanticPlugin::build_upsert_migration();
-        db.migrate(base_plugin).await?;
-
-        Ok(Self {
-            db,
-            blob: Arc::new(blob),
+        let s = Self {
+            config: config.clone(),
+            state: Arc::new(RwLock::new(None)),
             rt,
             http_client: reqwest::Client::new(),
-        })
+        };
+
+        if let Some(backend) = &config.backend {
+            s.configure_backend(backend.clone()).await?;
+        }
+
+        Ok(s)
     }
 
-    pub async fn run_api_query(&self, query: api::Query) -> Result<api::Reply, AnyError> {
+    pub async fn run_api_query(
+        &self,
+        query: api::Query,
+        is_authenticated: bool,
+    ) -> Result<api::Reply, AnyError> {
         tracing::trace!(?query, "running api query");
+
+        let db = self.require_db()?;
+
+        if self.needs_authentication() && !is_authenticated {
+            return Err(anyhow::anyhow!("Permission denied"));
+        }
+
         match query {
-            api::Query::Select(sel) => self.db.select(sel).await.map(api::Reply::Select),
-            api::Query::Mutate(update) => self
-                .db
+            api::Query::Initialize { config: _ } => {
+                panic!("Initialize API query must be handled by server");
+            }
+            api::Query::Select(sel) => db.select(sel).await.map(api::Reply::Select),
+            api::Query::Mutate(update) => db
                 .batch(vec![update].into())
                 .await
                 .map(|_| api::Reply::Mutate),
-            api::Query::Batch(batch) => self.db.batch(batch).await.map(|_| api::Reply::Batch),
+            api::Query::Batch(batch) => db.batch(batch).await.map(|_| api::Reply::Batch),
             api::Query::HttpFetch(req) => {
                 let method = req.method.parse()?;
                 let mut builder = self.http_client.request(method, req.url);
@@ -113,6 +203,9 @@ impl App {
     }
 
     async fn import(&self, items: Vec<Item>, import_media: bool) -> Result<(), AnyError> {
+        let db = self.require_db()?;
+        let blob = self.require_blob()?;
+
         let merges = Item::flatten_list(items)
             .into_iter()
             .map(query::mutate::Merge::try_from_map)
@@ -126,7 +219,7 @@ impl App {
             .collect();
         let batch = query::mutate::BatchUpdate { actions };
 
-        self.db.batch(batch).await?;
+        db.batch(batch).await?;
 
         if !import_media {
             return Ok(());
@@ -136,7 +229,7 @@ impl App {
 
         for id in entity_ids {
             // Re-load the node in case it was already present before.
-            let data = self.db.entity(id).await?;
+            let data = db.entity(id).await?;
 
             if let Some(_blob_uri) = data.get_attr::<AttrBlobUri>() {
                 // TODO: check if blob exists.
@@ -168,11 +261,11 @@ impl App {
                     path.push_str(&filename);
                 }
 
-                self.blob.put(&path, data.to_vec()).await?;
+                blob.put(&path, data.to_vec()).await?;
 
                 let mut patch = factordb::data::value::ValueMap::new();
                 patch.insert_attr::<AttrBlobUri>(path);
-                let _new_node = self.db.merge(id, patch).await?;
+                let _new_node = db.merge(id, patch).await?;
 
                 tracing::debug!(?url, entity_id=%id, "imported file for entity");
             }
