@@ -8,6 +8,7 @@ brass::enable_props!(EntityFilterForm => EntityFilterFormComp);
 
 pub enum Msg {
     SetSearch(String),
+    Reset,
     Submit,
 }
 
@@ -58,6 +59,10 @@ impl brass::Component for EntityFilterFormComp {
                 }
             }
             Msg::Submit => self.on_submit.send(self.build_expr()),
+            Msg::Reset => {
+                self.search.clear();
+                self.changed = true;
+            }
         }
     }
 
@@ -78,11 +83,13 @@ impl brass::Component for EntityFilterFormComp {
         let submit = brass_bulma::button()
             .and("Apply")
             .attr_toggle_if(!self.changed, brass::dom::Attr::Disabled)
-            .on(
-                brass::dom::Event::Click,
-                ctx.callback_ignore_event(|| Msg::Submit),
-            );
-        let buttons = brass_bulma::buttons().and(submit);
+            .on_click(ctx.callback_ignore_event(|| Msg::Submit));
+
+        let clear = brass_bulma::button()
+            .and("Clear")
+            .attr_toggle_if(!self.changed, brass::dom::Attr::Disabled)
+            .on_click(ctx.callback_ignore_event(|| Msg::Reset));
+        let buttons = brass_bulma::buttons().and((submit, clear));
 
         brass_bulma::box_().and((search, buttons)).build()
     }

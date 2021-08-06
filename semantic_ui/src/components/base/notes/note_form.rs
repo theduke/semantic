@@ -1,5 +1,5 @@
 use brass::{
-    vdom::{component, div},
+    vdom::{div, Render},
     Callback,
 };
 use factordb::Id;
@@ -83,11 +83,10 @@ impl brass::Component for NoteForm {
             },
         };
 
-        let markdown = component::<semantic_ui_core::components::markdown::Markdown<String>>(
-            semantic_ui_core::components::markdown::Props {
-                markdown: self.note.body.clone(),
-            },
-        );
+        let markdown = semantic_ui_core::components::markdown::Markdown {
+            markdown: self.note.body.clone(),
+        }
+        .render();
         let preview_content = div()
             .and(markdown)
             .style_raw("border: 1px solid black; border-radius: 10px; padding: 0.5rem;");

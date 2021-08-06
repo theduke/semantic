@@ -103,7 +103,10 @@ impl brass::Component for ImportPage {
             let rendered_page = super::super::entity::entity_page(
                 page,
                 &self.registry,
-                &EntityRenderOpts { editable: false },
+                &EntityRenderOpts {
+                    editable: false,
+                    preview: true,
+                },
             );
 
             let already_imported = self.persist_load.is_success();

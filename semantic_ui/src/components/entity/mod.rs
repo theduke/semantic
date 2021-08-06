@@ -5,9 +5,10 @@ pub mod entity_deleter;
 pub mod entity_filter;
 pub mod entity_form;
 pub mod entity_page;
+pub mod entity_view;
 
 use brass::{
-    vdom::{self, component, div, div_with, span_with, TagBuilder},
+    vdom::{self, component, div, div_with, span_with, Render, TagBuilder},
     VNode,
 };
 use factordb::{
@@ -22,11 +23,22 @@ use semantic_ui_core::{router::Route, EntityInfo, EntityRenderOpts, Registry};
 use semantics_core::base::AttrTitle;
 use vdom::text;
 
-pub fn entity_header(data: &DataMap, entity: Option<&EntityInfo>) -> TagBuilder {
-    let title_text = data
-        .get_attr::<semantics_core::base::AttrTitle>()
+pub fn entity_title(data: &DataMap) -> String {
+    data.get_attr::<semantics_core::base::AttrTitle>()
         .or_else(|| data.get_id().map(|x| x.to_string()))
-        .unwrap_or_else(|| "<No Title>".to_string());
+        .unwrap_or_else(|| "<No Title>".to_string())
+}
+
+pub fn entity_type_name(data: &DataMap, entity: Option<&EntityInfo>) -> Option<String> {
+    data.get_type().map(|x| {
+        entity
+            .and_then(|entity| entity.schema.title.clone())
+            .unwrap_or_else(|| x.to_string())
+    })
+}
+
+pub fn entity_header(data: &DataMap, entity: Option<&EntityInfo>) -> TagBuilder {
+    let title_text = entity_title(data);
 
     let title_content = if let Some(ident) = data.get_ident() {
         component::<super::router::Link>(super::router::LinkProps {
@@ -38,16 +50,14 @@ pub fn entity_header(data: &DataMap, entity: Option<&EntityInfo>) -> TagBuilder 
         vdom::text(title_text)
     };
 
-    let title = span_with(title_content).class("pr-2");
+    let title = brass_bulma::card_header_title(title_content).style_raw("flex-grow: 0;");
 
-    let type_name = data.get_type().map(|x| {
-        entity
-            .and_then(|entity| entity.schema.title.clone())
-            .unwrap_or_else(|| x.to_string())
-    });
+    let type_name = entity_type_name(data, entity);
     let ty = span_with(type_name);
 
-    div().class("mb-3").and((title, ty))
+    // div().class("mb-3").and((title, ty))
+
+    brass_bulma::card_header().and((title, ty))
 }
 
 pub fn attr_title(attr: &AttributeSchema) -> &str {
@@ -181,24 +191,25 @@ pub fn entity_fields_table(
     brass_bulma::table().and_iter(rows)
 }
 
-pub fn generic_entity_view(item: &Item, registry: &Registry, opts: &EntityRenderOpts) -> VNode {
+pub fn generic_entity_view(
+    item: &Item,
+    registry: &Registry,
+    opts: &EntityRenderOpts,
+) -> TagBuilder {
     let info = item
         .data
         .get_type()
         .and_then(|ty| registry.entity_by_ident(&ty));
 
-    if let Some(renderer) = info.and_then(|info| registry.entity_item_renderer(&info.schema.ident))
+    let header = entity_header(&item.data, info);
+
+    let content = if let Some(renderer) =
+        info.and_then(|info| registry.entity_content_renderer(&info.schema.ident))
     {
         renderer(item, opts)
     } else {
-        let header = entity_header(&item.data, info);
-        let fields = entity_fields_table(&item.data, info, registry);
-        div().and(header).and(fields).build()
-    }
-}
-
-pub fn entity_item(item: &Item, registry: &Registry, opts: &EntityRenderOpts) -> TagBuilder {
-    let data = generic_entity_view(&item, registry, opts);
+        entity_fields_table(&item.data, info, registry).build()
+    };
 
     let joins = if item.joins.is_empty() {
         VNode::Empty
@@ -207,7 +218,7 @@ pub fn entity_item(item: &Item, registry: &Registry, opts: &EntityRenderOpts) ->
             let items = join
                 .items
                 .iter()
-                .map(|join_item| entity_item(join_item, registry, opts));
+                .map(|join_item| generic_entity_item(join_item, registry, opts));
 
             div()
                 .class("mb-2 ml-4")
@@ -218,7 +229,38 @@ pub fn entity_item(item: &Item, registry: &Registry, opts: &EntityRenderOpts) ->
         div().and(vdom::hr()).and_iter(joins).build()
     };
 
-    div().class("box").and(data).and(div().and(joins))
+    let card_content = brass_bulma::card_content().and((content, joins));
+    brass_bulma::card()
+        .and_class("mb-4")
+        .and((header, card_content))
+}
+
+pub fn generic_entity_item(
+    item: &Item,
+    registry: &Registry,
+    opts: &EntityRenderOpts,
+) -> TagBuilder {
+    let data = generic_entity_view(&item, registry, opts);
+    data
+}
+
+pub fn entity_item(item: &Item, registry: &Registry, opts: &EntityRenderOpts) -> VNode {
+    let renderer = item
+        .data
+        .get_type()
+        .as_ref()
+        .and_then(|ty| ty.as_name())
+        .and_then(|name| registry.entity_item_renderer(name));
+
+    if let Some(renderer) = renderer {
+        renderer.as_ref()(item, opts)
+    } else {
+        entity_view::EntityView {
+            item: item.clone(),
+            options: opts.clone(),
+        }
+        .render()
+    }
 }
 
 pub fn entity_page(

@@ -15,6 +15,7 @@ pub struct Registry {
     entity_renderers: Vec<EntityRendererSpec>,
 
     attribute_renderers: HashMap<String, DynAttrRenderer>,
+    entity_content_renderers: HashMap<String, DynEntityRenderer>,
     entity_renderers_list: HashMap<String, DynEntityRenderer>,
     entity_renderers_page: HashMap<String, DynEntityRenderer>,
     entity_renderers_create: HashMap<String, DynEntityRenderer>,
@@ -40,8 +41,10 @@ pub struct EntityFieldAtrr {
 
 // pub type DynRenderer<T> = Box<dyn Fn(&T) -> brass::VNode>;
 
+#[derive(Clone)]
 pub struct EntityRenderOpts {
     pub editable: bool,
+    pub preview: bool,
 }
 pub type DynEntityRenderer =
     Rc<dyn Fn(&factordb::query::select::Item, &EntityRenderOpts) -> brass::VNode>;
@@ -57,6 +60,7 @@ pub struct EntityInfo {
 
 #[derive(Clone, Copy, Debug)]
 pub enum EntityRenderMode {
+    Content,
     View,
     ViewPage,
     Create,
@@ -114,11 +118,12 @@ impl Registry {
             plugins: Vec::new(),
             entity_renderers: Vec::new(),
 
-            entity_renderers_list: Default::default(),
-            entity_renderers_page: Default::default(),
-            entity_renderers_create: Default::default(),
-            entity_renderers_create_page: Default::default(),
-            attribute_renderers: Default::default(),
+            entity_content_renderers: HashMap::new(),
+            entity_renderers_list: HashMap::new(),
+            entity_renderers_page: HashMap::new(),
+            entity_renderers_create: HashMap::new(),
+            entity_renderers_create_page: HashMap::new(),
+            attribute_renderers: HashMap::new(),
         }
     }
 
@@ -141,6 +146,10 @@ impl Registry {
 
     pub fn register_entity_renderer(&mut self, spec: EntityRendererSpec) {
         match spec.mode {
+            EntityRenderMode::Content => {
+                self.entity_content_renderers
+                    .insert(spec.entity_type.clone(), spec.renderer.clone());
+            }
             EntityRenderMode::View => {
                 self.entity_renderers_list
                     .insert(spec.entity_type.clone(), spec.renderer.clone());
@@ -179,6 +188,10 @@ impl Registry {
 
     pub fn attr_renderer(&self, ty: &str) -> Option<&DynAttrRenderer> {
         self.attribute_renderers.get(ty)
+    }
+
+    pub fn entity_content_renderer(&self, ty: &str) -> Option<&DynEntityRenderer> {
+        self.entity_content_renderers.get(ty)
     }
 
     pub fn entity_item_renderer(&self, ty: &str) -> Option<&DynEntityRenderer> {

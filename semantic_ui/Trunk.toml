@@ -6,3 +6,7 @@ release = true
 [[proxy]]
 rewrite = "/blob/"
 backend = "http://localhost:3000/"
+
+[[proxy]]
+rewrite = "/api/"
+backend = "http://localhost:3000/"

@@ -1,10 +1,16 @@
 use brass::vdom::{div, Ref};
 
-pub struct Props<S> {
+pub struct Markdown<S> {
     pub markdown: S,
 }
 
-pub struct Markdown<S> {
+impl<S: AsRef<str> + Eq + 'static> brass::vdom::Render for Markdown<S> {
+    fn render(self) -> brass::VNode {
+        brass::vdom::component::<MarkdownComponent<S>>(self)
+    }
+}
+
+struct MarkdownComponent<S> {
     markdown: S,
     html: String,
     vref: Ref,
@@ -19,8 +25,8 @@ fn markdown_to_html(markdown: &str) -> String {
     output
 }
 
-impl<S: AsRef<str> + Eq + 'static> brass::Component for Markdown<S> {
-    type Properties = Props<S>;
+impl<S: AsRef<str> + Eq + 'static> brass::Component for MarkdownComponent<S> {
+    type Properties = Markdown<S>;
     type Msg = ();
 
     fn init(props: Self::Properties, _ctx: &mut brass::Context<Self::Msg>) -> Self {

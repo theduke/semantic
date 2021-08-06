@@ -115,7 +115,14 @@ fn render_page(page: &ItemPage, registry: &Registry, on_next: EventCallback) -> 
             .build();
     }
 
-    let items = super::entity_page(page, registry, &EntityRenderOpts { editable: false });
+    let items = super::entity_page(
+        page,
+        registry,
+        &EntityRenderOpts {
+            editable: false,
+            preview: true,
+        },
+    );
 
     let next = if page.next_cursor.is_some() {
         let btn = brass_bulma::button_medium().and("More").on(Click, on_next);

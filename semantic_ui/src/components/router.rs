@@ -1,5 +1,5 @@
 use brass::{
-    dom::{Attr, Event},
+    dom::Event,
     vdom::{self, component, div, TagBuilder},
     VNode,
 };
@@ -28,6 +28,7 @@ pub fn router(route: &Route) -> VNode {
             comps::entity::browse_page::BrowsePageProps {},
         ),
         Route::Import => component::<ImportPage>(()),
+        Route::Upload => comps::upload::upload_page(),
         Route::Entity(ident) => component::<comps::entity::entity_page::EntityPage>(
             comps::entity::entity_page::EntityPageProps {
                 ident: ident.clone(),
@@ -115,6 +116,11 @@ fn navbar() -> TagBuilder {
             .and(LinkProps {
                 route: Route::EntityCreateSelect,
                 text: "Create".to_string(),
+                class: Some("navbar-item".to_string()),
+            })
+            .and(LinkProps {
+                route: Route::Upload,
+                text: "Upload".to_string(),
                 class: Some("navbar-item".to_string()),
             })
             .and(LinkProps {

@@ -2,11 +2,7 @@ use brass::{
     vdom::{self, component},
     Callback,
 };
-use factordb::{
-    data::value::to_value_map,
-    schema::{AttrMapExt, EntityDescriptor},
-    AnyError,
-};
+use factordb::{schema::EntityContainer, AnyError};
 use semantics_core::base::Note;
 
 use semantic_ui_core::{loader::LoadState, ContextExt};
@@ -40,8 +36,7 @@ impl brass::Component for NoteCreate {
         match msg {
             Msg::Submit(item) => {
                 // TODO: no unwrap, move to helper method.
-                let mut data = to_value_map(item).unwrap();
-                data.insert_attr::<factordb::schema::builtin::AttrType>(Note::IDENT);
+                let data = item.into_map().unwrap();
 
                 let f = async move {
                     crate::api()

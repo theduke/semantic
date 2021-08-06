@@ -2,11 +2,7 @@ use brass::{
     vdom::{self, component},
     Callback,
 };
-use factordb::{
-    data::value::{from_value_map, to_value_map},
-    schema::{AttrMapExt, EntityDescriptor},
-    AnyError,
-};
+use factordb::{data::value::from_value_map, schema::EntityContainer, AnyError};
 use semantics_core::base::Note;
 
 use semantic_ui_core::{loader::LoadState, ContextExt};
@@ -44,8 +40,7 @@ impl brass::Component for NoteUpate {
         match msg {
             Msg::Submit(item) => {
                 // TODO: no unwrap, move to helper method.
-                let mut data = to_value_map(item).unwrap();
-                data.insert_attr::<factordb::schema::builtin::AttrType>(Note::IDENT);
+                let data = item.into_map().unwrap();
 
                 let f = async move {
                     crate::api()
@@ -92,6 +87,6 @@ pub fn note_update(
 ) -> vdom::VNode {
     match from_value_map(item.data.clone()) {
         Ok(note) => component::<NoteUpate>(NoteUpateProps { note }),
-        Err(err) => vdom::div().and("Invalid Note").build(),
+        Err(_err) => vdom::div().and("Invalid Note").build(),
     }
 }

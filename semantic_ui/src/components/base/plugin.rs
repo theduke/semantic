@@ -44,6 +44,22 @@ impl semantic_ui_core::BrowserPlugin for BasePlugin {
             renderer: Rc::new(crate::components::base::notes::note_update::note_update),
             is_default: true,
         });
+
+        registry.register_entity_renderer(semantic_ui_core::EntityRendererSpec {
+            name: "Image Content".to_string(),
+            entity_type: base::Image::QUALIFIED_NAME.to_string(),
+            mode: semantic_ui_core::EntityRenderMode::Content,
+            renderer: Rc::new(super::files::image::image_content),
+            is_default: true,
+        });
+
+        registry.register_entity_renderer(semantic_ui_core::EntityRendererSpec {
+            name: "Note Body".to_string(),
+            entity_type: base::Note::QUALIFIED_NAME.to_string(),
+            mode: semantic_ui_core::EntityRenderMode::Content,
+            renderer: Rc::new(super::notes::note_content),
+            is_default: true,
+        });
     }
 
     fn can_import_url(&self, _url: &str) -> bool {
@@ -75,12 +91,16 @@ fn render_attr_preview_image(value: &Value, _entity: Option<&DataMap>) -> brass:
     }
 }
 
+pub fn build_blob_url(uri: &str) -> String {
+    format!("http://localhost:3000/blob/{}", uri)
+}
+
 fn render_blob_uri(value: &Value, entity: Option<&DataMap>) -> brass::VNode {
     if let Value::String(blob_uri) = value {
         // FIXME: use actual server URL!
         // Blocked on trunk proxy working - need to upgrade to 0.11.
         // let url = format!("/blob/{}", blob_uri);
-        let url = format!("http://localhost:3000/blob/{}", blob_uri);
+        let url = build_blob_url(&blob_uri);
 
         let ext = blob_uri.rsplit_once('.').map(|x| x.1);
         match ext {

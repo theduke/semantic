@@ -1,7 +1,7 @@
 use std::pin::Pin;
 
 use factordb::AnyError;
-use semantics_core::api::ApiClient;
+use semantics_core::api::{ApiClient, FileUploadMetadata};
 use wasm_bindgen::{JsCast, JsValue};
 
 fn anyerr_from_js(value: wasm_bindgen::JsValue) -> AnyError {
@@ -23,6 +23,7 @@ impl BrowserExecutor {
         opts.mode(web_sys::RequestMode::Cors);
         opts.body(Some(&body));
 
+        // FIXME: generalize URL.
         let url = "http://localhost:3000/api/query".to_string();
         let request =
             web_sys::Request::new_with_str_and_init(&url, &opts).map_err(anyerr_from_js)?;
@@ -69,4 +70,50 @@ pub type BrowserApiClient = ApiClient<BrowserExecutor>;
 
 pub fn api() -> BrowserApiClient {
     BrowserApiClient::new(BrowserExecutor)
+}
+
+pub async fn upload_file(
+    file: web_sys::File,
+    meta: FileUploadMetadata,
+) -> Result<semantics_core::base::TypedFile, AnyError> {
+    let meta_header = serde_json::to_string(&meta)?;
+
+    let mut opts = web_sys::RequestInit::new();
+    opts.method("POST");
+    opts.mode(web_sys::RequestMode::Cors);
+    opts.body(Some(&file));
+
+    // FIXME: generalize URL.
+    let url = "http://localhost:3000/api/upload-file".to_string();
+    let request = web_sys::Request::new_with_str_and_init(&url, &opts).map_err(anyerr_from_js)?;
+    request
+        .headers()
+        .set(FileUploadMetadata::HEADER_NAME, &meta_header)
+        .unwrap();
+
+    let window = web_sys::window().unwrap();
+    tracing::trace!("Sending upload request");
+    let resp_value = wasm_bindgen_futures::JsFuture::from(window.fetch_with_request(&request))
+        .await
+        .map_err(anyerr_from_js)?;
+    tracing::trace!("fetch completed");
+
+    // `resp_value` is a `Response` object.
+    assert!(resp_value.is_instance_of::<web_sys::Response>());
+    let resp: web_sys::Response = resp_value.dyn_into().unwrap();
+
+    // Convert this other `Promise` into a rust `Future`.
+    let body_js = wasm_bindgen_futures::JsFuture::from(resp.text().map_err(anyerr_from_js)?)
+        .await
+        .map_err(anyerr_from_js)?
+        .dyn_into::<js_sys::JsString>()
+        .map_err(anyerr_from_js)?;
+    let body: String = body_js.into();
+
+    let response: semantics_core::api::ApiResponse<semantics_core::base::TypedFile> =
+        serde_json::from_slice(body.as_bytes())?;
+    match response {
+        semantics_core::api::ApiResponse::Ok(reply) => Ok(reply),
+        semantics_core::api::ApiResponse::Err(err) => Err(AnyError::msg(err.message)),
+    }
 }

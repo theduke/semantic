@@ -34,7 +34,13 @@ impl brass::Component for EntityCreatePage {
     fn render(&self, _ctx: brass::RenderContext<Self>) -> brass::VNode {
         if let Some(renderer) = &self.renderer {
             let map = Item::default();
-            renderer(&map, &semantic_ui_core::EntityRenderOpts { editable: true })
+            renderer(
+                &map,
+                &semantic_ui_core::EntityRenderOpts {
+                    editable: true,
+                    preview: false,
+                },
+            )
         } else {
             brass_bulma::notification_error(format!("Unknown entity type: '{}'", &self.entity_type))
                 .build()

@@ -1,4 +1,7 @@
-use factordb::{Attribute, Entity, Id};
+use factordb::{
+    schema::{EntityContainer, EntityDescriptor},
+    Attribute, Entity, Id,
+};
 use serde::{Deserialize, Serialize};
 
 use super::{AttrPreviewImageUrl, AttrTitle, AttrUrl};
@@ -88,9 +91,37 @@ pub struct Video {
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug)]
-#[serde(untagged)]
 pub enum TypedFile {
     Video(Video),
     Image(Image),
     File(File),
+}
+
+impl factordb::schema::EntityContainer for TypedFile {
+    fn id(&self) -> Id {
+        match self {
+            TypedFile::Video(e) => e.file.id,
+            TypedFile::Image(e) => e.file.id,
+            TypedFile::File(e) => e.id,
+        }
+    }
+
+    fn entity_type(&self) -> factordb::Ident {
+        match self {
+            TypedFile::Video(_) => Video::IDENT,
+            TypedFile::Image(_) => Image::IDENT,
+            TypedFile::File(_) => File::IDENT,
+        }
+    }
+
+    fn into_map(self) -> Result<factordb::data::DataMap, factordb::data::value::ValueSerializeError>
+    where
+        Self: serde::Serialize + Sized,
+    {
+        match self {
+            TypedFile::Video(e) => e.into_map(),
+            TypedFile::Image(e) => e.into_map(),
+            TypedFile::File(e) => e.into_map(),
+        }
+    }
 }

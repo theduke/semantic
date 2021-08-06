@@ -4,6 +4,7 @@ use brass::Callback;
 pub enum Route {
     Browse,
     Import,
+    Upload,
     Entity(factordb::Ident),
     EntityCreateSelect,
     EntityCreate { entity_type: String },
@@ -22,6 +23,7 @@ impl Route {
         match parts.as_slice() {
             ["browse"] => Some(Route::Browse),
             ["import"] => Some(Route::Import),
+            ["upload"] => Some(Route::Upload),
             ["entity", id] => Some(Route::Entity(id.to_string().into())),
             ["create"] => Some(Route::EntityCreateSelect),
             ["create", tail @ ..] => Some(Route::EntityCreate {
@@ -35,6 +37,7 @@ impl Route {
         match self {
             Route::Browse => "/browse".to_string(),
             Route::Import => "/import".to_string(),
+            Route::Upload => "/upload".to_string(),
             Route::Entity(ident) => format!("/entity/{}", ident.to_string()),
             Route::EntityCreateSelect => "/create".to_string(),
             Route::EntityCreate { entity_type } => format!("/create/{}", entity_type),
@@ -47,6 +50,7 @@ impl Route {
         match self {
             Route::Browse => "Browse - Semantic",
             Route::Import => "Import - Semantic",
+            Route::Upload => "Upload - Semantic",
             Route::Entity(_) => "Show - Semantic",
             Route::EntityCreateSelect => "Create - Semantic",
             Route::EntityCreate { entity_type: _ } => "Create - Semantic",
