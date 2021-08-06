@@ -1,13 +1,16 @@
 use std::{convert::Infallible, net::SocketAddr};
 
+use anyhow::{Context, Result};
 use factordb::AnyError;
+use futures::TryFutureExt;
 use hyper::{
     server::conn::AddrStream,
     service::{make_service_fn, service_fn},
-    Body, Request, Response, Server, StatusCode,
+    Body, Method, Request, Response, Server, StatusCode,
 };
 
 use semantics_core::api::{ApiError, ApiResponse, BackendConfig, Query, Reply};
+use serde::__private::de::TagOrContentFieldVisitor;
 
 use crate::app::App;
 
@@ -41,10 +44,11 @@ async fn handler(
     req: Request<Body>,
 ) -> Result<Response<Body>, Infallible> {
     let res = match req.uri().path() {
-        "/api/query" => handler_api_query(&app, req).await,
-        path if path.starts_with("/blob/") => {
+        "/api/query" if req.method() == Method::POST => handler_api_query(&app, req).await,
+        "/api/blob/upload" if req.method() == Method::POST => handler_blob_upload(&app, req).await,
+        path if req.method() == Method::GET && path.starts_with("/blob/") => {
             let blob_path = path.strip_prefix("/blob/").unwrap();
-            handler_blob(&app, blob_path).await
+            handler_blob_read(&app, blob_path).await
         }
         _other => not_found(),
     };
@@ -66,7 +70,43 @@ fn internal_server_error(msg: impl Into<String>) -> Response<Body> {
         .unwrap()
 }
 
-async fn handler_blob(app: &App, blob_path: &str) -> Response<Body> {
+async fn handler_blob_upload(app: &App, req: Request<Body>) -> Response<Body> {
+    let reply = match blob_upload(app, req).await {
+        Ok(item) => ApiResponse::Ok(item),
+        Err(err) => ApiResponse::Err(api_error(&err)),
+    };
+
+    api_response(reply)
+}
+
+async fn blob_upload(
+    app: &App,
+    req: Request<Body>,
+) -> Result<semantics_core::base::TypedFile, AnyError> {
+    // FIXME: check authentication
+
+    use semantics_core::api::FileUploadMetadata;
+
+    let meta: FileUploadMetadata =
+        if let Some(header) = req.headers().get(FileUploadMetadata::HEADER_NAME) {
+            let raw = header
+                .to_str()
+                .map_err(|_| anyhow::anyhow!("Invalid file metadata header"))?;
+            serde_json::from_str(raw).context("Invalid file metadata header")?
+        } else {
+            FileUploadMetadata {
+                filename: None,
+                title: None,
+            }
+        };
+
+    let body = hyper::body::to_bytes(req.into_body()).await?;
+
+    let item = app.create_file(meta, body.to_vec()).await?;
+    Ok(item)
+}
+
+async fn handler_blob_read(app: &App, blob_path: &str) -> Response<Body> {
     let blob = if let Some(b) = app.blob() {
         b
     } else {
@@ -86,13 +126,20 @@ async fn handler_blob(app: &App, blob_path: &str) -> Response<Body> {
     }
 }
 
-fn api_response_err(err: &AnyError) -> ApiResponse {
-    ApiResponse::Err(ApiError {
+fn api_error(err: &AnyError) -> ApiError {
+    ApiError {
         message: err.to_string(),
-    })
+    }
 }
 
-fn api_response(res: ApiResponse) -> Response<Body> {
+fn api_response_err(err: &AnyError) -> ApiResponse {
+    ApiResponse::Err(api_error(err))
+}
+
+fn api_response<T>(res: ApiResponse<T>) -> Response<Body>
+where
+    T: serde::Serialize,
+{
     // TODO: no unwrap?
     let res_json = serde_json::to_vec(&res).unwrap();
 

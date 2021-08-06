@@ -1,7 +1,9 @@
 use core::panic;
 use std::sync::{Arc, RwLock};
 
+use anyhow::Result;
 use factordb::{
+    data::value::to_value_map,
     query::{self, select::Item},
     schema::AttrMapExt,
     AnyError, Db,
@@ -202,6 +204,60 @@ impl App {
         }
     }
 
+    pub async fn create_file(
+        &self,
+        meta: api::FileUploadMetadata,
+        data: Vec<u8>,
+    ) -> Result<semantics_core::base::TypedFile, AnyError> {
+        use semantics_core::base::TypedFile;
+
+        let blob = self.require_blob()?;
+        let db = self.require_db()?;
+
+        let magic_mime_guess = tree_magic_mini::from_u8(&data);
+        let size = data.len() as u64;
+
+        let id = factordb::Id::random();
+        let blob_uri = format!("files/{}", id);
+
+        // FIXME: use unique create instead of put.
+        blob.put(&blob_uri, data).await?;
+
+        let file = semantics_core::base::File {
+            id,
+            title: None,
+            filename: meta.filename,
+            url: None,
+            download_url: None,
+            preview_image_url: None,
+            blob_uri: Some(blob_uri),
+            size: Some(size),
+            mime_type: Some(magic_mime_guess.to_string()),
+        };
+
+        // Build the data.
+        let item = match magic_mime_guess {
+            mime if mime.starts_with("image/") => {
+                TypedFile::Image(semantics_core::base::Image { file })
+            }
+            mime if mime.starts_with("video/") => TypedFile::Video(semantics_core::base::Video {
+                file,
+                duration: None,
+            }),
+            // mime if mime.starts_with("audio/") => {
+            //     todo!()
+            // }
+            _other => TypedFile::File(file),
+        };
+
+        let map = to_value_map(item.clone())?;
+        db.create(id, map).await?;
+
+        tracing::trace!(entity=?item, "created file");
+
+        Ok(item)
+    }
+
     async fn import(&self, items: Vec<Item>, import_media: bool) -> Result<(), AnyError> {
         let db = self.require_db()?;
         let blob = self.require_blob()?;
@@ -227,6 +283,7 @@ impl App {
 
         let client = reqwest::Client::new();
 
+        // NOTE: if the download fails, the file still ends up in the database.
         for id in entity_ids {
             // Re-load the node in case it was already present before.
             let data = db.entity(id).await?;
@@ -265,7 +322,7 @@ impl App {
 
                 let mut patch = factordb::data::value::ValueMap::new();
                 patch.insert_attr::<AttrBlobUri>(path);
-                let _new_node = db.merge(id, patch).await?;
+                db.merge(id, patch).await?;
 
                 tracing::debug!(?url, entity_id=%id, "imported file for entity");
             }

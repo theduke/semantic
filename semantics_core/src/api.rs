@@ -31,6 +31,16 @@ pub enum BackendConfig {
 }
 
 #[derive(serde::Serialize, serde::Deserialize, Clone, Debug)]
+pub struct FileUploadMetadata {
+    pub filename: Option<String>,
+    pub title: Option<String>,
+}
+
+impl FileUploadMetadata {
+    pub const HEADER_NAME: &'static str = "X-SEMANTIC-FILE-META";
+}
+
+#[derive(serde::Serialize, serde::Deserialize, Clone, Debug)]
 pub enum Query {
     Initialize {
         config: BackendConfig,
@@ -76,8 +86,8 @@ pub struct ApiError {
 }
 
 #[derive(serde::Serialize, serde::Deserialize, Clone, Debug)]
-pub enum ApiResponse {
-    Ok(Reply),
+pub enum ApiResponse<T = Reply> {
+    Ok(T),
     Err(ApiError),
 }
 

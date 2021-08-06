@@ -54,6 +54,7 @@ impl PluginDescriptor for SemanticPlugin {
                     AttrDuration::schema(),
                     AttrFileSize::schema(),
                     AttrDownloadUrl::schema(),
+                    AttrFileName::schema(),
                     // socialmedia
                     AttrSocialMediaPostContent::schema(),
                     // Notes.
