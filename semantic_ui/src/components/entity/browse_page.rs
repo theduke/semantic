@@ -94,6 +94,12 @@ impl brass::Component for BrowsePage {
 }
 
 fn render_page(page: &ItemPage, registry: &Registry, on_next: EventCallback) -> brass::VNode {
+    if page.items.is_empty() {
+        return div()
+            .and(brass_bulma::notification_warning("Nothing found"))
+            .build();
+    }
+
     let items = super::entity_page(page, registry, &EntityRenderOpts { editable: false });
 
     let next = if page.next_cursor.is_some() {
