@@ -99,12 +99,11 @@ impl brass::Component for Link {
 }
 
 fn navbar() -> TagBuilder {
-    let brand = div().class("navbar-brand").and(
-        vdom::a()
-            .class("navbar-item")
-            .attr(Attr::Href, "/")
-            .and("Semantic"),
-    );
+    let brand = div().class("navbar-brand").and(LinkProps {
+        route: Route::Browse,
+        text: "Semantic".into(),
+        class: Some("navbar-item".into()),
+    });
     let menu = div().class("navbar-menu is-active").and(
         div()
             .class("navbar-start")
