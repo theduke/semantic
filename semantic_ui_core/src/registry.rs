@@ -1,10 +1,6 @@
-use std::{collections::HashMap, pin::Pin, rc::Rc};
+use std::{collections::HashMap, rc::Rc};
 
-use factordb::{
-    query::select::ItemPage,
-    schema::{AttributeSchema, EntityAttribute, EntitySchema},
-    AnyError,
-};
+use factordb::schema::{AttributeSchema, EntityAttribute, EntitySchema};
 
 use crate::BrowserPlugin;
 

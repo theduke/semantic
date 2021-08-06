@@ -1,4 +1,7 @@
-use brass::{Callback, vdom::{component, div}};
+use brass::{
+    vdom::{component, div},
+    Callback,
+};
 use factordb::Id;
 use semantics_core::base::Note;
 
@@ -79,11 +82,15 @@ impl brass::Component for NoteForm {
             },
         };
 
-        let markdown = component::<semantic_ui_core::components::markdown::Markdown<String>>(semantic_ui_core::components::markdown::Props{
-            markdown: self.note.body.clone(),
-        });
-        let preview_content = div().and(markdown).style_raw("border: 1px solid black; border-radius: 10px; padding: 0.5rem;");
-        let preview = brass_bulma::Field{
+        let markdown = component::<semantic_ui_core::components::markdown::Markdown<String>>(
+            semantic_ui_core::components::markdown::Props {
+                markdown: self.note.body.clone(),
+            },
+        );
+        let preview_content = div()
+            .and(markdown)
+            .style_raw("border: 1px solid black; border-radius: 10px; padding: 0.5rem;");
+        let preview = brass_bulma::Field {
             label: "Preview".into(),
             help: None,
             control: preview_content,
