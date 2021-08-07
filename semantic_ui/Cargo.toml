@@ -17,7 +17,6 @@ wasm-bindgen-futures = "0.4.24"
 js-sys = "0.3.51"
 serde_json = "1.0.64"
 getrandom = { version = "0.2.3", features = ["js"] }
-uuid = { version = "0.8.2", features = ["wasm-bindgen"] }
 url = "2.2.2"
 
 brass = "0.1"

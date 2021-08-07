@@ -10,7 +10,7 @@ use semantic_ui_core::{loader::LoadState, ContextExt};
 use super::note_form::{NoteForm, NoteFormProps};
 
 pub struct NoteUpateProps {
-    note: Note,
+    pub note: Note,
 }
 
 pub enum Msg {
@@ -23,6 +23,8 @@ pub struct NoteUpate {
     loader: LoadState<()>,
     callback: Callback<Note>,
 }
+
+brass::enable_props!(NoteUpateProps => NoteUpate);
 
 impl brass::Component for NoteUpate {
     type Properties = NoteUpateProps;

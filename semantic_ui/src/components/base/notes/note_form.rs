@@ -80,6 +80,7 @@ impl brass::Component for NoteForm {
                     Msg::Body(value)
                 }),
                 on_keydown: None,
+                style_raw: Some("min-height: 400px;".into()),
             },
         };
 

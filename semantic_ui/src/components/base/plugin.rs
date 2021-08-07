@@ -37,13 +37,13 @@ impl semantic_ui_core::BrowserPlugin for BasePlugin {
             is_default: false,
         });
 
-        registry.register_entity_renderer(semantic_ui_core::EntityRendererSpec {
-            name: "Update Note".to_string(),
-            entity_type: base::Note::QUALIFIED_NAME.to_string(),
-            mode: semantic_ui_core::EntityRenderMode::ViewPage,
-            renderer: Rc::new(crate::components::base::notes::note_update::note_update),
-            is_default: true,
-        });
+        // registry.register_entity_renderer(semantic_ui_core::EntityRendererSpec {
+        //     name: "Update Note".to_string(),
+        //     entity_type: base::Note::QUALIFIED_NAME.to_string(),
+        //     mode: semantic_ui_core::EntityRenderMode::ViewPage,
+        //     renderer: Rc::new(crate::components::base::notes::note_update::note_update),
+        //     is_default: true,
+        // });
 
         registry.register_entity_renderer(semantic_ui_core::EntityRendererSpec {
             name: "Image Content".to_string(),
