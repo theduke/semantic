@@ -258,12 +258,13 @@ pub fn entity_item(item: &Item, registry: &Registry, opts: &EntityRenderOpts) ->
         entity_view::EntityView {
             item: item.clone(),
             options: opts.clone(),
+            on_delete: None,
         }
         .render()
     }
 }
 
-pub fn entity_page(
+pub fn entity_list(
     page: &factordb::query::select::ItemPage,
     registry: &Registry,
     opts: &EntityRenderOpts,

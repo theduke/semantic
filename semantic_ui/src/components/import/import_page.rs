@@ -100,7 +100,7 @@ impl brass::Component for ImportPage {
         };
         let form_wrap = div_with(form).class("box");
         let loader1 = self.import_load.render(|page| {
-            let rendered_page = super::super::entity::entity_page(
+            let rendered_page = super::super::entity::entity_list(
                 page,
                 &self.registry,
                 &EntityRenderOpts {

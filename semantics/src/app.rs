@@ -85,10 +85,10 @@ impl App {
             .map(|state| state.config.clone())
     }
 
-    pub fn require_backend_config(&self) -> Result<BackendConfig, AnyError> {
-        self.backend_config()
-            .ok_or_else(|| anyhow::anyhow!("Database not initialized"))
-    }
+    // pub fn require_backend_config(&self) -> Result<BackendConfig, AnyError> {
+    //     self.backend_config()
+    //         .ok_or_else(|| anyhow::anyhow!("Database not initialized"))
+    // }
 
     pub async fn configure_backend(&self, config: BackendConfig) -> Result<(), AnyError> {
         let state = match &config {
@@ -126,6 +126,14 @@ impl App {
         Ok(s)
     }
 
+    pub async fn entity_mutate(&self, mutate: query::mutate::Mutate) -> Result<(), AnyError> {
+        self.entity_batch(vec![mutate].into()).await
+    }
+
+    async fn entity_batch(&self, batch: query::mutate::BatchUpdate) -> Result<(), AnyError> {
+        self.require_db()?.batch(batch).await
+    }
+
     pub async fn run_api_query(
         &self,
         query: api::Query,
@@ -144,11 +152,10 @@ impl App {
                 panic!("Initialize API query must be handled by server");
             }
             api::Query::Select(sel) => db.select(sel).await.map(api::Reply::Select),
-            api::Query::Mutate(update) => db
-                .batch(vec![update].into())
-                .await
-                .map(|_| api::Reply::Mutate),
-            api::Query::Batch(batch) => db.batch(batch).await.map(|_| api::Reply::Batch),
+            api::Query::Mutate(update) => {
+                self.entity_mutate(update).await.map(|_| api::Reply::Mutate)
+            }
+            api::Query::Batch(batch) => self.entity_batch(batch).await.map(|_| api::Reply::Batch),
             api::Query::HttpFetch(req) => {
                 let method = req.method.parse()?;
                 let mut builder = self.http_client.request(method, req.url);

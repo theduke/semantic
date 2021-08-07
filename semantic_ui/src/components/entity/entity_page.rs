@@ -66,24 +66,15 @@ impl brass::Component for EntityPage {
             let ty = item.data.get_type_name();
             let renderer = ty.and_then(|ty| reg.entity_page_renderer(ty));
 
+            let options = EntityRenderOpts {
+                editable: true,
+                preview: false,
+            };
+
             let content = if let Some(renderer) = renderer {
-                renderer(
-                    item,
-                    &EntityRenderOpts {
-                        editable: true,
-                        preview: false,
-                    },
-                )
+                renderer(item, &options)
             } else {
-                super::generic_entity_item(
-                    item,
-                    &reg,
-                    &EntityRenderOpts {
-                        editable: true,
-                        preview: false,
-                    },
-                )
-                .build()
+                super::entity_item(item, &reg, &options)
             };
 
             content

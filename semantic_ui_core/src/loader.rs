@@ -73,3 +73,12 @@ impl<T> LoadState<T> {
         }
     }
 }
+
+impl<T, E: std::fmt::Display> From<Result<T, E>> for LoadState<T> {
+    fn from(res: Result<T, E>) -> Self {
+        match res {
+            Ok(data) => LoadState::Success(data),
+            Err(err) => LoadState::Failed(err.to_string()),
+        }
+    }
+}

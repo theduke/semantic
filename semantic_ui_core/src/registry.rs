@@ -41,7 +41,7 @@ pub struct EntityFieldAtrr {
 
 // pub type DynRenderer<T> = Box<dyn Fn(&T) -> brass::VNode>;
 
-#[derive(Clone)]
+#[derive(PartialEq, Eq, Clone)]
 pub struct EntityRenderOpts {
     pub editable: bool,
     pub preview: bool,
