@@ -28,7 +28,7 @@ impl LogDbStore {
     }
 
     fn event_path(id: EventId) -> Vec<u8> {
-        format!("_e/{}", id).into_bytes()
+        format!("_e/{:0>20}", id).into_bytes()
     }
 
     async fn iter_events(
