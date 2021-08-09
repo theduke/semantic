@@ -309,6 +309,17 @@ impl LogFs {
         Ok(())
     }
 
+    pub fn rename(&self, from: &[u8], to: impl Into<Vec<u8>>) -> Result<(), LogFsError> {
+        // FIXME: make this (semi)atomic with a lock! Just a stub helper for now.
+        let data = self
+            .get(from)?
+            .ok_or_else(|| LogFsError::new("Path not found"))?;
+        self.insert(to, data)?;
+        self.remove(from)?;
+
+        Ok(())
+    }
+
     pub fn get(&self, path: impl AsRef<[u8]>) -> Result<Option<Vec<u8>>, LogFsError> {
         let pointer = match self.state.read().unwrap().tree.get(path.as_ref()).cloned() {
             Some(data) => data,
