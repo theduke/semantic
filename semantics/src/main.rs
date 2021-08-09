@@ -41,12 +41,20 @@ fn main() {
             let backend_config = if no_backend {
                 None
             } else {
-                let data_path = std::env::home_dir()
-                    .expect("Could not determine home dir")
-                    .join(".local/share/semantics")
-                    .to_str()
-                    .expect("invalid data path")
-                    .to_string();
+                let data_path_arg = args
+                    .iter()
+                    .find(|x| x.starts_with("--data-path"))
+                    .and_then(|x| x.split_once('='))
+                    .map(|x| x.1.to_string());
+
+                let data_path = data_path_arg.unwrap_or_else(|| {
+                    std::env::home_dir()
+                        .expect("Could not determine home dir")
+                        .join(".local/share/semantics")
+                        .to_str()
+                        .expect("invalid data path")
+                        .to_string()
+                });
 
                 Some(semantics_core::api::BackendConfig::Crypto {
                     data_path,
