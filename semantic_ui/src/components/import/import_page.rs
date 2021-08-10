@@ -119,7 +119,7 @@ impl brass::Component for ImportPage {
                 brass_bulma::button_medium()
                     .and(btn_label)
                     .attr_toggle_if(already_imported, Attr::Disabled)
-                    .on(Event::Click, _ctx.callback_ignore_event(|| Msg::ImportAll)),
+                    .on(Event::Click, _ctx.on_simple(|| Msg::ImportAll)),
             );
             div().and(import_button).and(rendered_page).build()
         });

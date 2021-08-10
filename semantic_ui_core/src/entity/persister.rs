@@ -6,13 +6,15 @@ use factordb::query::select::Item;
 use crate::{loader::LoadState, ContextExt};
 
 pub struct FormValid {
-    item: Item,
-    mutation: factordb::query::mutate::BatchUpdate,
+    pub item: Item,
+    pub mutation: factordb::query::mutate::BatchUpdate,
 }
 
 pub struct EntityFormProps {
     pub item: Option<Item>,
     pub on_valid: Callback<FormValid>,
+    pub is_loading: bool,
+    pub error: Option<String>,
 }
 
 pub type DynEntityFormRenderer = Rc<dyn Fn(&EntityFormProps) -> brass::VNode>;
@@ -25,10 +27,10 @@ pub enum Msg {
 }
 
 pub struct EntityPersisterProps {
-    item: Option<Item>,
-    renderer: DynEntityFormRenderer,
-    on_complete: Callback<Item>,
-    on_cancel: Option<Callback<()>>,
+    pub item: Option<Item>,
+    pub renderer: DynEntityFormRenderer,
+    pub on_complete: Callback<Item>,
+    pub on_cancel: Option<Callback<()>>,
 }
 
 pub struct EntityPersister {
@@ -85,34 +87,36 @@ impl brass::Component for EntityPersister {
         let form = (self.props.renderer)(&EntityFormProps {
             item: self.props.item.clone(),
             on_valid: self.callback.clone(),
+            is_loading: self.loader.is_loading(),
+            error: self.loader.as_error().map(|x| x.to_string()),
         });
 
         let is_loading = self.loader.is_loading();
 
-        let submit = brass_bulma::button_medium()
-            .and("Submit")
-            .attr_toggle_if(is_loading, brass::dom::Attr::Disabled)
-            .on(
-                brass::dom::Event::Click,
-                _ctx.callback_ignore_event(|| Msg::Submit),
-            );
+        // let submit = brass_bulma::button_medium()
+        //     .and("Submit")
+        //     .attr_toggle_if(is_loading, brass::dom::Attr::Disabled)
+        //     .on(
+        //         brass::dom::Event::Click,
+        //         _ctx.on_simple(|| Msg::Submit),
+        //     );
 
-        let cancel = if self.props.on_cancel.is_some() {
-            brass_bulma::button_medium()
-                .and("Cancel")
-                .attr_toggle_if(is_loading, brass::dom::Attr::Disabled)
-                .on(
-                    brass::dom::Event::Click,
-                    _ctx.callback_ignore_event(|| Msg::Cancel),
-                )
-                .build()
-        } else {
-            vdom::VNode::Empty
-        };
+        // let cancel = if self.props.on_cancel.is_some() {
+        //     brass_bulma::button_medium()
+        //         .and("Cancel")
+        //         .attr_toggle_if(is_loading, brass::dom::Attr::Disabled)
+        //         .on(
+        //             brass::dom::Event::Click,
+        //             _ctx.on_simple(|| Msg::Cancel),
+        //         )
+        //         .build()
+        // } else {
+        //     vdom::VNode::Empty
+        // };
 
-        let actions = vdom::div_with((submit, cancel));
+        // let actions = vdom::div_with((submit, cancel));
 
-        brass::vdom::div().and((form, actions)).build()
+        brass::vdom::div().and(form).build()
     }
 
     fn on_property_change(
@@ -120,6 +124,6 @@ impl brass::Component for EntityPersister {
         _props: Self::Properties,
         _ctx: &mut brass::Context<Self::Msg>,
     ) -> brass::ShouldRender {
-        false
+        true
     }
 }

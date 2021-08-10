@@ -104,7 +104,7 @@ impl brass::Component for BrowsePage {
         let loader = self.loader.render(move |page| {
             render_page(
                 page,
-                ctx.callback_ignore_event(|| Msg::Next),
+                ctx.on_simple(|| Msg::Next),
                 self.on_delete_callback.clone(),
             )
         });

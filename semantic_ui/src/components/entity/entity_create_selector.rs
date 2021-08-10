@@ -42,7 +42,7 @@ impl brass::Component for EntityCreateSelectorPage {
                 let btn = brass_bulma::button_medium()
                     .on(
                         brass::dom::Event::Click,
-                        ctx.callback_ignore_event(move || Msg::Create(type_ident.clone())),
+                        ctx.on_simple(move || Msg::Create(type_ident.clone())),
                     )
                     .and(title);
                 vdom::div().and(btn)

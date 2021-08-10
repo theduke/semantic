@@ -72,6 +72,14 @@ impl<T> LoadState<T> {
             None
         }
     }
+
+    pub fn as_error(&self) -> Option<&str> {
+        if let Self::Failed(err) = self {
+            Some(err.as_str())
+        } else {
+            None
+        }
+    }
 }
 
 impl<T, E: std::fmt::Display> From<Result<T, E>> for LoadState<T> {

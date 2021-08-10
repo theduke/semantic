@@ -59,16 +59,14 @@ impl brass::Component for EntityDeleter {
         let btn_submit = brass_bulma::button_medium()
             .and("Delete")
             .and_class(brass_bulma::Color::Danger.as_class())
-            .on(
-                brass::dom::Event::Click,
-                ctx.callback_ignore_event(|| Msg::Submit),
-            );
+            .on(brass::dom::Event::Click, ctx.on_simple(|| Msg::Submit));
 
         let btn_cancel = if self.props.on_cancel.is_some() {
-            Some(brass_bulma::button_medium().and("Cancel").on(
-                brass::dom::Event::Click,
-                ctx.callback_ignore_event(|| Msg::Cancel),
-            ))
+            Some(
+                brass_bulma::button_medium()
+                    .and("Cancel")
+                    .on(brass::dom::Event::Click, ctx.on_simple(|| Msg::Cancel)),
+            )
         } else {
             None
         };

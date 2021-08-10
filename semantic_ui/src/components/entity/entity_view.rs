@@ -126,7 +126,7 @@ impl brass::Component for EntityViewComponent {
         // Header.
         let title = brass_bulma::card_header_title(&self.title)
             .style_raw("flex-grow: 0; cursor: pointer;")
-            .on_click(ctx.callback_ignore_event(|| Msg::Open));
+            .on_click(ctx.on_simple(|| Msg::Open));
         let ty = self
             .type_name
             .as_ref()
@@ -143,7 +143,7 @@ impl brass::Component for EntityViewComponent {
         if self.options.editable {
             let delete_btn = brass_bulma::button()
                 .and(brass_bulma::icon_fa("fas fa-trash"))
-                .on_click(ctx.callback_ignore_event(|| Msg::DeleteStart));
+                .on_click(ctx.on_simple(|| Msg::DeleteStart));
             action_buttons.push(delete_btn.render());
         }
         let actions = brass_bulma::buttons().and_iter(action_buttons);
@@ -153,7 +153,7 @@ impl brass::Component for EntityViewComponent {
             content: "hello",
             is_hoverable: true,
             is_active: self.actions_active,
-            on_toggle: ctx.callback_ignore_event(|| Msg::ToggleActions),
+            on_toggle: ctx.on_simple(|| Msg::ToggleActions),
         };
         let hover_actions = div().and(actions_dropdown).style_raw("margin-left: auto;");
 
@@ -170,7 +170,7 @@ impl brass::Component for EntityViewComponent {
                         loader.is_loading() || loader.is_success(),
                         brass::dom::Attr::Disabled,
                     )
-                    .on_click(ctx.callback_ignore_event(|| Msg::DeleteConfirm));
+                    .on_click(ctx.on_simple(|| Msg::DeleteConfirm));
 
                 let state = loader.render(|_| brass_bulma::notification_error("Deleted!").build());
 

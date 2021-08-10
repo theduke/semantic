@@ -27,6 +27,7 @@ semantics_core = { path = "../semantics_core" }
 semantic_ui_core = { path = "../semantic_ui_core" }
 semantic_contrib = { path = "../semantic_contrib" }
 anyhow = { version = "1.0.41", features = ["backtrace"] }
+uuid = { version = "0.8.2", features = ["wasm-bindgen", "v4"] }
 
 [dependencies.web-sys] 
 version = "0.3.51"

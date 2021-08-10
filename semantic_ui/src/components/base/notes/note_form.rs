@@ -27,7 +27,7 @@ impl brass::Component for NoteForm {
 
     fn init(props: Self::Properties, _ctx: &mut brass::Context<Self::Msg>) -> Self {
         let note = props.note.unwrap_or_else(|| Note {
-            id: Id::random(),
+            id: Id::from_uuid(uuid::Uuid::new_v4()),
             title: String::new(),
             body: String::new(),
         });
@@ -61,7 +61,7 @@ impl brass::Component for NoteForm {
                 color: brass_bulma::Color::Default,
                 placeholder: None,
                 value: self.note.title.clone(),
-                on_input: _ctx.callback(|ev: web_sys::Event| {
+                on_input: _ctx.on(|ev: web_sys::Event| {
                     let value = brass::util::input_event_value(ev).unwrap();
                     Msg::Title(value)
                 }),
@@ -75,7 +75,7 @@ impl brass::Component for NoteForm {
                 color: brass_bulma::Color::Default,
                 placeholder: None,
                 value: self.note.body.clone(),
-                on_input: _ctx.callback(|ev: web_sys::Event| {
+                on_input: _ctx.on(|ev: web_sys::Event| {
                     let value = brass::util::textarea_input_value(ev).unwrap();
                     Msg::Body(value)
                 }),
@@ -97,10 +97,9 @@ impl brass::Component for NoteForm {
             control: preview_content,
         };
 
-        let submit_btn = brass_bulma::button().and("Submit").on(
-            brass::dom::Event::Click,
-            _ctx.callback_ignore_event(|| Msg::Submit),
-        );
+        let submit_btn = brass_bulma::button()
+            .and("Submit")
+            .on(brass::dom::Event::Click, _ctx.on_simple(|| Msg::Submit));
         let submit = brass_bulma::field().and(brass_bulma::control().and(submit_btn));
 
         div().and((title, body, preview, submit)).build()

@@ -100,7 +100,7 @@ impl brass::Component for FileUploader {
         let file_input = brass_bulma::FileInput {
             label: "Choose files...".into(),
             multi: true,
-            on_change: ctx.callback(|ev: web_sys::Event| {
+            on_change: ctx.on(|ev: web_sys::Event| {
                 let input = brass::util::input_event_target(ev).unwrap();
 
                 let files = input
@@ -125,14 +125,14 @@ impl brass::Component for FileUploader {
                 self.files.is_empty() || self.loading,
                 brass::dom::Attr::Disabled,
             )
-            .on_click(ctx.callback_ignore_event(|| Msg::Upload));
+            .on_click(ctx.on_simple(|| Msg::Upload));
         let btn_clear = brass_bulma::button()
             .and("Clear")
             .attr_toggle_if(
                 self.files.is_empty() || self.loading,
                 brass::dom::Attr::Disabled,
             )
-            .on_click(ctx.callback_ignore_event(|| Msg::Clear));
+            .on_click(ctx.on_simple(|| Msg::Clear));
         let buttons = brass_bulma::buttons().and((btn_upload, btn_clear));
 
         let file_list = if self.files.is_empty() {

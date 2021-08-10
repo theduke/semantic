@@ -81,7 +81,7 @@ impl brass::Component for Link {
     fn render(&self, ctx: brass::RenderContext<Self>) -> VNode {
         vdom::a_with(&self.props.text)
             .class_opt(self.props.class.as_ref())
-            .on(Event::Click, ctx.callback_ignore_event(|| ()))
+            .on(Event::Click, ctx.on_simple(|| ()))
             .build()
     }
 

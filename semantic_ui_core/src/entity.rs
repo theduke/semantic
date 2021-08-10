@@ -1,3 +1,4 @@
+pub mod create_page;
 pub mod persister;
 
 use std::rc::Rc;

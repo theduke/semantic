@@ -56,7 +56,7 @@ impl brass::Component for ImportForm {
                     color: brass_bulma::Color::Default,
                     placeholder: None,
                     value: self.url.clone(),
-                    on_input: ctx.callback(|ev: web_sys::Event| {
+                    on_input: ctx.on(|ev: web_sys::Event| {
                         let value = brass::util::input_event_value(ev).unwrap();
                         Msg::Changed(value)
                     }),
@@ -68,7 +68,7 @@ impl brass::Component for ImportForm {
                     .and(if self.loading { "..." } else { "Load" })
                     .on(
                         brass::dom::Event::Click,
-                        ctx.callback(|_ev: web_sys::Event| Msg::Submit),
+                        ctx.on(|_ev: web_sys::Event| Msg::Submit),
                     ),
             )
             .build()

@@ -75,20 +75,19 @@ impl brass::Component for EntityFilterFormComp {
                 color: brass_bulma::Color::Default,
                 placeholder: None,
                 value: self.search.clone(),
-                on_input: ctx
-                    .callback_opt(|ev| brass::util::input_event_value(ev).map(Msg::SetSearch)),
+                on_input: ctx.on_opt(|ev| brass::util::input_event_value(ev).map(Msg::SetSearch)),
             },
         };
 
         let submit = brass_bulma::button()
             .and("Apply")
             .attr_toggle_if(!self.changed, brass::dom::Attr::Disabled)
-            .on_click(ctx.callback_ignore_event(|| Msg::Submit));
+            .on_click(ctx.on_simple(|| Msg::Submit));
 
         let clear = brass_bulma::button()
             .and("Clear")
             .attr_toggle_if(!self.changed, brass::dom::Attr::Disabled)
-            .on_click(ctx.callback_ignore_event(|| Msg::Reset));
+            .on_click(ctx.on_simple(|| Msg::Reset));
         let buttons = brass_bulma::buttons().and((submit, clear));
 
         brass_bulma::box_().and((search, buttons)).build()

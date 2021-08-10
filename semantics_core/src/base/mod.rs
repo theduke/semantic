@@ -9,6 +9,9 @@ pub use self::notes::*;
 mod socialmedia;
 pub use self::socialmedia::*;
 
+mod habit;
+pub use self::habit::*;
+
 use factordb::{
     schema::{builtin::AttrIdent, AttributeDescriptor, EntityDescriptor},
     Attribute, Id,
@@ -19,6 +22,10 @@ use factordb::{
 #[derive(Attribute)]
 #[factor(namespace = "semantic", title = "Title")]
 pub struct AttrTitle(String);
+
+#[derive(Attribute)]
+#[factor(namespace = "semantic", title = "Description")]
+pub struct AttrDescription(String);
 
 #[derive(Attribute)]
 #[factor(namespace = "semantic", title = "Url")]
@@ -45,6 +52,7 @@ impl PluginDescriptor for SemanticPlugin {
             db: factordb::schema::DbSchema {
                 attributes: vec![
                     AttrTitle::schema(),
+                    AttrDescription::schema(),
                     AttrUrl::schema(),
                     AttrPreviewImageUrl::schema(),
                     AttrUsername::schema(),
@@ -59,6 +67,11 @@ impl PluginDescriptor for SemanticPlugin {
                     AttrSocialMediaPostContent::schema(),
                     // Notes.
                     notes::AttrNoteBody::schema(),
+                    // Habit.
+                    habit::AttrHabitOccurenceComment::schema(),
+                    habit::AttrHabitOccurenceParentId::schema(),
+                    habit::AttrHabitOccurenceTime::schema(),
+                    habit::HabitMode::schema(),
                 ],
                 entities: vec![
                     // File
@@ -69,6 +82,9 @@ impl PluginDescriptor for SemanticPlugin {
                     SocialMediaPost::schema(),
                     // Notes
                     notes::Note::schema(),
+                    // Habits
+                    habit::Habit::schema(),
+                    habit::HabitOccurence::schema(),
                 ],
             },
         }

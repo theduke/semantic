@@ -60,6 +60,16 @@ impl semantic_ui_core::BrowserPlugin for BasePlugin {
             renderer: Rc::new(super::notes::note_content),
             is_default: true,
         });
+
+        // Habits.
+
+        registry.register_entity_renderer(semantic_ui_core::EntityRendererSpec {
+            name: "Create Habit".to_string(),
+            entity_type: base::Habit::QUALIFIED_NAME.to_string(),
+            mode: semantic_ui_core::EntityRenderMode::CreatePage,
+            renderer: Rc::new(crate::components::base::habits::habit_create::habit_create),
+            is_default: false,
+        });
     }
 
     fn can_import_url(&self, _url: &str) -> bool {
