@@ -9,7 +9,10 @@ use axum::{
 use factordb::AnyError;
 use hyper::{Body, Method, Request, Response, StatusCode};
 
-use semantics_core::api::{ApiError, ApiResponse, BackendConfig, Query, Reply};
+use semantics_core::{
+    api::{self, ApiError, ApiResponse, BackendConfig, Query, Reply},
+    plugin::PluginDescriptor,
+};
 
 use crate::app::App;
 
@@ -257,44 +260,110 @@ async fn api_query(app: &App, req: Request<Body>) -> Result<Response<Body>, AnyE
     let body = hyper::body::to_bytes(req.into_body()).await?;
     let query: Query = serde_json::from_slice(&body)?;
 
-    if let Query::Initialize { config } = &query {
-        app.configure_backend(config.clone()).await?;
-        // TODO: no unwrap?
-        let res_json = serde_json::to_vec(&Reply::Initialize)?;
+    tracing::trace!(?query, "running api query");
 
-        let exp = std::time::SystemTime::now()
-            .duration_since(std::time::SystemTime::UNIX_EPOCH)?
-            .as_secs();
+    // Handle queries that don't need authentication.
 
-        let key = &app.config().token_key;
-
-        let new_token = TokenClaims {
-            sub: "semantic".into(),
-            exp,
-            config: config.clone(),
+    if app.needs_authentication() && !token.is_some() {
+        match &query {
+            Query::ServerStatus | Query::Initialize { config: _ } => {}
+            _ => {
+                return Err(anyhow::anyhow!("Permission denied"));
+            }
         }
-        .encode(key)?;
+    }
 
-        let cookie = format!("{}={}; HttpOnly", TOKEN_COOKIE_NAME, new_token);
+    let res = match query {
+        api::Query::ServerStatus => Ok(api::Reply::ServerStatus(api::ServerStatus {
+            backend_initialized: app.db().is_some(),
+        })),
+        api::Query::Initialize { config } => {
+            app.configure_backend(config.clone()).await?;
+            let exp = std::time::SystemTime::now()
+                .duration_since(std::time::SystemTime::UNIX_EPOCH)?
+                .as_secs();
 
-        let res = Response::builder()
-            .status(StatusCode::OK)
-            .header(hyper::header::SET_COOKIE, cookie)
-            .header(hyper::header::ACCESS_CONTROL_ALLOW_ORIGIN, "*")
-            .header(hyper::header::ACCESS_CONTROL_ALLOW_METHODS, "POST")
-            .body(Body::from(res_json))
-            .unwrap();
+            let key = &app.config().token_key;
 
-        return Ok(res);
+            let new_token = TokenClaims {
+                sub: "semantic".into(),
+                exp,
+                config: config.clone(),
+            }
+            .encode(key)?;
+
+            let cookie = format!("{}={}; HttpOnly", TOKEN_COOKIE_NAME, new_token);
+
+            let res_json = serde_json::to_vec(&api::ApiResponse::Ok(api::Reply::Initialize))?;
+            let res = Response::builder()
+                .status(StatusCode::OK)
+                .header(hyper::header::SET_COOKIE, cookie)
+                .header(hyper::header::ACCESS_CONTROL_ALLOW_ORIGIN, "*")
+                .header(hyper::header::ACCESS_CONTROL_ALLOW_METHODS, "POST")
+                .body(Body::from(res_json))
+                .unwrap();
+            return Ok(res);
+        }
+        api::Query::Select(sel) => app.require_db()?.select(sel).await.map(api::Reply::Select),
+        api::Query::Mutate(update) => app.entity_mutate(update).await.map(|_| api::Reply::Mutate),
+        api::Query::Batch(batch) => app.entity_batch(batch).await.map(|_| api::Reply::Batch),
+        api::Query::HttpFetch(req) => {
+            let method = req.method.parse()?;
+            let mut builder = app.http_client().request(method, req.url);
+            if let Some(body) = req.body {
+                builder = builder.body(body);
+            }
+
+            if !req.headers.is_empty() {
+                for (key, value) in req.headers {
+                    builder = builder.header(&key, value);
+                }
+            }
+
+            let res = builder.send().await?;
+
+            let headers = res
+                .headers()
+                .into_iter()
+                .filter_map(|(key, value)| {
+                    Some((key.to_string(), value.to_str().ok().map(|x| x.to_string())?))
+                })
+                .collect();
+
+            let status = res.status().as_u16();
+            let body_bytes = res.bytes().await?;
+            let body = if body_bytes.is_empty() {
+                None
+            } else {
+                Some(base64::encode(body_bytes))
+            };
+
+            Ok(api::Reply::HttpFetch(
+                semantics_core::api::SimpleHttpResponse {
+                    status,
+                    headers,
+                    body,
+                },
+            ))
+        }
+        api::Query::Import {
+            items,
+            import_media,
+        } => {
+            let _items = app.import(items, import_media).await?;
+            Ok(api::Reply::Import)
+        }
+        api::Query::Schema => {
+            let base = semantics_core::base::SemanticPlugin::schema();
+            let reply = api::Reply::Schema(api::SemanticSchema { db: base.db });
+            Ok(reply)
+        }
     };
 
-    let reply = app
-        .run_api_query(query, token.is_some())
-        .await
-        .map_err(|err| {
-            tracing::error!(?err, "api query failed");
-            err
-        })?;
+    let reply = res.map_err(|err| {
+        tracing::error!(?err, "api query failed");
+        err
+    })?;
     let res = api_response(ApiResponse::Ok(reply));
     Ok(res)
 }

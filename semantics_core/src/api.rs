@@ -27,7 +27,10 @@ pub struct SemanticSchema {
 
 #[derive(serde::Serialize, serde::Deserialize, PartialEq, Eq, Clone, Debug)]
 pub enum BackendConfig {
-    Crypto { data_path: String, key: String },
+    Crypto {
+        data_path: Option<String>,
+        key: String,
+    },
 }
 
 #[derive(serde::Serialize, serde::Deserialize, Clone, Debug)]
@@ -120,6 +123,15 @@ impl<E: ApiClientExecutor> ApiClient<E> {
             Err(err) => Err(err),
         }
     }
+
+    pub async fn initialize(&self, config: BackendConfig) -> Result<(), AnyError> {
+        match self.exec.execute(Query::Initialize { config }).await {
+            Ok(Reply::Initialize) => Ok(()),
+            Ok(_other) => Err(anyhow::anyhow!("API returned invalid data")),
+            Err(err) => Err(err),
+        }
+    }
+
     pub async fn select(
         &self,
         select: factordb::query::select::Select,

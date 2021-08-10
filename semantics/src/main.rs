@@ -57,7 +57,7 @@ fn main() {
                 });
 
                 Some(semantics_core::api::BackendConfig::Crypto {
-                    data_path,
+                    data_path: Some(data_path),
                     key: "hello".into(),
                 })
             };

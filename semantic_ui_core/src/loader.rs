@@ -3,7 +3,7 @@ use brass::{
     VNode,
 };
 
-fn spinner() -> TagBuilder {
+pub fn spinner() -> TagBuilder {
     vdom::span_with("Loading...")
 }
 
@@ -46,7 +46,7 @@ impl<T> LoadState<T> {
         *self = Self::Failed(err.to_string())
     }
 
-    pub fn render(&self, f: impl Fn(&T) -> VNode) -> VNode {
+    pub fn render(&self, f: impl FnOnce(&T) -> VNode) -> VNode {
         match self {
             LoadState::Idle => VNode::Empty,
             LoadState::Loading(_) => spinner().build(),
@@ -63,6 +63,11 @@ impl<T> LoadState<T> {
     /// Returns `true` if the load_state is [`Loading`].
     pub fn is_loading(&self) -> bool {
         matches!(self, Self::Loading(_))
+    }
+
+    /// Returns `true` if the load_state is [`Failed`].
+    pub fn is_failed(&self) -> bool {
+        matches!(self, Self::Failed(_))
     }
 
     pub fn as_success(&self) -> Option<&T> {

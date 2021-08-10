@@ -1,4 +1,3 @@
-use core::panic;
 use std::sync::{Arc, RwLock};
 
 use anyhow::Result;
@@ -43,7 +42,11 @@ impl App {
         &self.config
     }
 
-    fn needs_authentication(&self) -> bool {
+    pub fn http_client(&self) -> &reqwest::Client {
+        &self.http_client
+    }
+
+    pub fn needs_authentication(&self) -> bool {
         self.state
             .read()
             .unwrap()
@@ -90,10 +93,27 @@ impl App {
     //     self.backend_config()
     //         .ok_or_else(|| anyhow::anyhow!("Database not initialized"))
     // }
+    //
+
+    fn default_data_path() -> Result<String, AnyError> {
+        let path = dirs::data_dir()
+            .ok_or_else(|| anyhow::anyhow!("Could not determine default data directory"))?
+            .join("semantic");
+
+        path.to_str()
+            .map(|x| x.to_string())
+            .ok_or_else(|| anyhow::anyhow!("Non-UTF-8 data directory"))
+    }
 
     pub async fn configure_backend(&self, config: BackendConfig) -> Result<(), AnyError> {
         let state = match &config {
             BackendConfig::Crypto { data_path, key } => {
+                let data_path = if let Some(p) = data_path {
+                    p.clone()
+                } else {
+                    Self::default_data_path()?
+                };
+
                 let log = logfs::LogFs::open(data_path.clone(), key.clone())?;
                 let blob = Arc::new(log.clone());
                 let db = crate::db::logdb::LogDbStore::new(log).build_db().await?;
@@ -132,87 +152,8 @@ impl App {
         self.entity_batch(vec![mutate].into()).await
     }
 
-    async fn entity_batch(&self, batch: query::mutate::BatchUpdate) -> Result<(), AnyError> {
+    pub async fn entity_batch(&self, batch: query::mutate::BatchUpdate) -> Result<(), AnyError> {
         self.require_db()?.batch(batch).await
-    }
-
-    pub async fn run_api_query(
-        &self,
-        query: api::Query,
-        is_authenticated: bool,
-    ) -> Result<api::Reply, AnyError> {
-        tracing::trace!(?query, "running api query");
-
-        let db = self.require_db()?;
-
-        if self.needs_authentication() && !is_authenticated {
-            return Err(anyhow::anyhow!("Permission denied"));
-        }
-
-        match query {
-            api::Query::ServerStatus => Ok(api::Reply::ServerStatus(api::ServerStatus {
-                backend_initialized: self.db().is_some(),
-            })),
-            api::Query::Initialize { config: _ } => {
-                panic!("Initialize API query must be handled by server");
-            }
-            api::Query::Select(sel) => db.select(sel).await.map(api::Reply::Select),
-            api::Query::Mutate(update) => {
-                self.entity_mutate(update).await.map(|_| api::Reply::Mutate)
-            }
-            api::Query::Batch(batch) => self.entity_batch(batch).await.map(|_| api::Reply::Batch),
-            api::Query::HttpFetch(req) => {
-                let method = req.method.parse()?;
-                let mut builder = self.http_client.request(method, req.url);
-                if let Some(body) = req.body {
-                    builder = builder.body(body);
-                }
-
-                if !req.headers.is_empty() {
-                    for (key, value) in req.headers {
-                        builder = builder.header(&key, value);
-                    }
-                }
-
-                let res = builder.send().await?;
-
-                let headers = res
-                    .headers()
-                    .into_iter()
-                    .filter_map(|(key, value)| {
-                        Some((key.to_string(), value.to_str().ok().map(|x| x.to_string())?))
-                    })
-                    .collect();
-
-                let status = res.status().as_u16();
-                let body_bytes = res.bytes().await?;
-                let body = if body_bytes.is_empty() {
-                    None
-                } else {
-                    Some(base64::encode(body_bytes))
-                };
-
-                Ok(api::Reply::HttpFetch(
-                    semantics_core::api::SimpleHttpResponse {
-                        status,
-                        headers,
-                        body,
-                    },
-                ))
-            }
-            api::Query::Import {
-                items,
-                import_media,
-            } => {
-                let _items = self.import(items, import_media).await?;
-                Ok(api::Reply::Import)
-            }
-            api::Query::Schema => {
-                let base = semantics_core::base::SemanticPlugin::schema();
-                let reply = api::Reply::Schema(api::SemanticSchema { db: base.db });
-                Ok(reply)
-            }
-        }
     }
 
     pub async fn create_file(
@@ -269,7 +210,7 @@ impl App {
         Ok(item)
     }
 
-    async fn import(&self, items: Vec<Item>, import_media: bool) -> Result<(), AnyError> {
+    pub async fn import(&self, items: Vec<Item>, import_media: bool) -> Result<(), AnyError> {
         let db = self.require_db()?;
         let blob = self.require_blob()?;
 

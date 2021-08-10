@@ -85,7 +85,7 @@ impl brass::Component for HabitFormComp {
                 placeholder: None,
                 value: self.habit.description.clone().unwrap_or_default(),
                 on_input: ctx.on(|ev: web_sys::Event| {
-                    let val = brass::util::input_event_value(ev).unwrap();
+                    let val = brass::util::textarea_input_value(ev).unwrap();
                     Msg::Description(val)
                 }),
                 on_keydown: None,
@@ -98,7 +98,6 @@ impl brass::Component for HabitFormComp {
             help: None,
             control: brass_bulma::Select {
                 value: Some(self.habit.mode),
-                on_input: self.mode_callback.clone(),
                 options: Rc::new(vec![
                     brass_bulma::SelectOption {
                         label: "Neutral".into(),
@@ -113,6 +112,7 @@ impl brass::Component for HabitFormComp {
                         value: HabitMode::Positive,
                     },
                 ]),
+                on_select: self.mode_callback.clone(),
             },
         };
 

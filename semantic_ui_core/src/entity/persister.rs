@@ -91,7 +91,7 @@ impl brass::Component for EntityPersister {
             error: self.loader.as_error().map(|x| x.to_string()),
         });
 
-        let is_loading = self.loader.is_loading();
+        // let is_loading = self.loader.is_loading();
 
         // let submit = brass_bulma::button_medium()
         //     .and("Submit")
@@ -121,9 +121,10 @@ impl brass::Component for EntityPersister {
 
     fn on_property_change(
         &mut self,
-        _props: Self::Properties,
+        props: Self::Properties,
         _ctx: &mut brass::Context<Self::Msg>,
     ) -> brass::ShouldRender {
+        self.props = props;
         true
     }
 }

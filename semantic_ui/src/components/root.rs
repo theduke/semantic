@@ -1,4 +1,4 @@
-use brass::VNode;
+use brass::vdom::{self, Render};
 use factordb::{schema::AttributeDescriptor, AnyError};
 use semantic_ui_core::{
     loader::LoadState,
@@ -7,14 +7,25 @@ use semantic_ui_core::{
 
 use super::router;
 
-pub struct Root {
-    status: LoadState<()>,
-    route: Route,
+#[derive(Clone, Copy, Debug)]
+enum Phase {
+    CheckingBackend,
+    BackendSetup,
+    Active,
 }
 
 pub enum Msg {
+    StatusLoaded(Result<semantics_core::api::ServerStatus, AnyError>),
     SchemaLoaded(Result<semantics_core::api::SemanticSchema, AnyError>),
+    Initialize(semantics_core::api::BackendConfig),
+    InitializeLoaded(Result<semantics_core::api::SemanticSchema, AnyError>),
     RouteChange(Route),
+}
+
+pub struct Root {
+    status: LoadState<()>,
+    phase: Phase,
+    route: Route,
 }
 
 impl brass::Component for Root {
@@ -26,10 +37,23 @@ impl brass::Component for Root {
         let current_path = brass::util::url_path();
         let route = Route::from_path(&&current_path).unwrap_or(Route::Browse);
 
-        let guard = ctx.run_map(
-            async move { crate::api().schema().await },
-            Msg::SchemaLoaded,
-        );
+        let guard = ctx.run(async move {
+            let api = crate::api();
+
+            let status = match api.server_status().await {
+                Ok(s) => s,
+                Err(err) => {
+                    return Msg::StatusLoaded(Err(err));
+                }
+            };
+
+            if !status.backend_initialized {
+                return Msg::StatusLoaded(Ok(status));
+            }
+
+            let schema_res = crate::api().schema().await;
+            Msg::SchemaLoaded(schema_res)
+        });
 
         // Build router.
         let callback = ctx.callback_map(Msg::RouteChange);
@@ -38,12 +62,41 @@ impl brass::Component for Root {
 
         Self {
             status: LoadState::Loading(Some(guard)),
+            phase: Phase::CheckingBackend,
             route,
         }
     }
 
     fn update(&mut self, msg: Self::Msg, ctx: &mut brass::Context<Self::Msg>) {
         match msg {
+            Msg::StatusLoaded(res) => match res {
+                Ok(status) => {
+                    assert!(
+                        status.backend_initialized == false,
+                        "internal error: Msg::StatusLoaded must only be sent if backend is not initialized",
+                    );
+                    self.phase = Phase::BackendSetup;
+                    self.status.set_success(());
+                }
+                Err(err) => {
+                    self.status.set_failed(err);
+                }
+            },
+            Msg::Initialize(config) => {
+                let f = async move {
+                    let api = crate::api();
+                    api.initialize(config).await?;
+                    api.schema().await
+                };
+                let guard = ctx.run_map(f, Msg::InitializeLoaded);
+                self.status.set_loading_guarded(guard);
+            }
+            Msg::InitializeLoaded(res) => match res {
+                Ok(schema) => self.update(Msg::SchemaLoaded(Ok(schema)), ctx),
+                Err(err) => {
+                    self.status.set_failed(err);
+                }
+            },
             Msg::SchemaLoaded(res) => match res {
                 Ok(schema) => {
                     let mut registry = semantic_ui_core::Registry::new(schema);
@@ -57,6 +110,7 @@ impl brass::Component for Root {
 
                     ctx.provide(registry.into_shared());
                     self.status.set_success(());
+                    self.phase = Phase::Active;
                 }
                 Err(err) => {
                     self.status.set_failed(err);
@@ -69,13 +123,22 @@ impl brass::Component for Root {
         }
     }
 
-    fn render(&self, _ctx: brass::RenderContext<Self>) -> brass::VNode {
-        let content = if self.status.is_success() {
-            super::router::router(&self.route)
-        } else {
-            self.status.render(|_| VNode::Empty)
-        };
-        content
+    fn render(&self, mut _ctx: brass::RenderContext<Self>) -> brass::VNode {
+        tracing::trace!(?self.phase);
+        match self.phase {
+            Phase::CheckingBackend => semantic_ui_core::loader::spinner().build(),
+            Phase::BackendSetup => self.status.render(move |_| {
+                let title = brass_bulma::h2_with("Login");
+
+                let form = super::backend_setup::BackendSetupForm {
+                    on_submit: _ctx.callback_map(Msg::Initialize),
+                }
+                .render();
+
+                brass_bulma::box_().and((title, form)).build()
+            }),
+            Phase::Active => super::router::router(&self.route),
+        }
     }
 
     fn on_property_change(
