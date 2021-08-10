@@ -150,6 +150,9 @@ impl App {
         }
 
         match query {
+            api::Query::ServerStatus => Ok(api::Reply::ServerStatus(api::ServerStatus {
+                backend_initialized: self.db().is_some(),
+            })),
             api::Query::Initialize { config: _ } => {
                 panic!("Initialize API query must be handled by server");
             }

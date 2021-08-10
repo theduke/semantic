@@ -42,6 +42,7 @@ impl FileUploadMetadata {
 
 #[derive(serde::Serialize, serde::Deserialize, Clone, Debug)]
 pub enum Query {
+    ServerStatus,
     Initialize {
         config: BackendConfig,
     },
@@ -68,7 +69,13 @@ pub struct QueryWithId {
 }
 
 #[derive(serde::Serialize, serde::Deserialize, Clone, Debug)]
+pub struct ServerStatus {
+    pub backend_initialized: bool,
+}
+
+#[derive(serde::Serialize, serde::Deserialize, Clone, Debug)]
 pub enum Reply {
+    ServerStatus(ServerStatus),
     Initialize,
 
     Select(Page<Item>),
@@ -106,6 +113,13 @@ impl<E: ApiClientExecutor> ApiClient<E> {
         Self { exec }
     }
 
+    pub async fn server_status(&self) -> Result<ServerStatus, AnyError> {
+        match self.exec.execute(Query::ServerStatus).await {
+            Ok(Reply::ServerStatus(status)) => Ok(status),
+            Ok(_other) => Err(anyhow::anyhow!("API returned invalid data")),
+            Err(err) => Err(err),
+        }
+    }
     pub async fn select(
         &self,
         select: factordb::query::select::Select,
