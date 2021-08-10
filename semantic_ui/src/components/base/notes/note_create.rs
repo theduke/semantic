@@ -49,7 +49,7 @@ impl brass::Component for NoteCreate {
             }
             Msg::Loaded(res) => {
                 if res.is_ok() {
-                    ctx.router().goto(semantic_ui_core::router::Route::Browse);
+                    ctx.router().goto(semantic_ui_core::routing::Route::Browse);
                 } else {
                     self.loader.set_result(res);
                 }

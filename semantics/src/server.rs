@@ -10,7 +10,7 @@ use factordb::AnyError;
 use hyper::{Body, Method, Request, Response, StatusCode};
 
 use semantics_core::{
-    api::{self, ApiError, ApiResponse, BackendConfig, Query, Reply},
+    api::{self, ApiError, ApiResponse, BackendConfig, Query},
     plugin::PluginDescriptor,
 };
 
@@ -303,6 +303,10 @@ async fn api_query(app: &App, req: Request<Body>) -> Result<Response<Body>, AnyE
                 .body(Body::from(res_json))
                 .unwrap();
             return Ok(res);
+        }
+        api::Query::CloseBackend => {
+            app.close_backend().await?;
+            Ok(api::Reply::CloseBackend)
         }
         api::Query::Select(sel) => app.require_db()?.select(sel).await.map(api::Reply::Select),
         api::Query::Mutate(update) => app.entity_mutate(update).await.map(|_| api::Reply::Mutate),

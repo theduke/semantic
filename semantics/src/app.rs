@@ -1,6 +1,5 @@
 use std::sync::{Arc, RwLock};
 
-use anyhow::Result;
 use factordb::{
     query::{self, select::Item},
     schema::{AttrMapExt, EntityContainer},
@@ -142,7 +141,7 @@ impl App {
             .take()
             .ok_or_else(|| anyhow::anyhow!("Backend is not initialized"))?;
 
-        // TODO: should probably have dedicated shutdown methods for 
+        // TODO: should probably have dedicated shutdown methods for
         // db/blobstore here.
 
         Ok(())
@@ -284,6 +283,7 @@ impl App {
                     path.push('/');
                     path.push_str(&filename);
                 }
+                let size = data.len();
 
                 blob.put(&path, data.to_vec()).await?;
 
@@ -291,7 +291,7 @@ impl App {
                 patch.insert_attr::<AttrBlobUri>(path);
                 db.merge(id, patch).await?;
 
-                tracing::debug!(?url, entity_id=%id, "imported file for entity");
+                tracing::debug!(?url, entity_id=%id, %size, "imported file for entity");
             }
         }
 

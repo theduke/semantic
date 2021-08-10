@@ -1,5 +1,5 @@
 use brass::vdom;
-use semantic_ui_core::{router::Route, ContextExt};
+use semantic_ui_core::{routing::Route, ContextExt};
 
 pub enum Msg {
     Create(String),

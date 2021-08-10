@@ -86,7 +86,7 @@ impl brass::Component for EntityViewComponent {
             Msg::Open => {
                 if let Some(id) = self.item.data.get_id() {
                     ctx.router()
-                        .goto(semantic_ui_core::router::Route::Entity(id.into()));
+                        .goto(semantic_ui_core::routing::Route::Entity(id.into()));
                 }
             }
             Msg::DeleteStart => {
@@ -113,7 +113,7 @@ impl brass::Component for EntityViewComponent {
                         callback.send(self.item.clone());
                         return;
                     } else {
-                        ctx.router().goto(semantic_ui_core::router::Route::Browse);
+                        ctx.router().goto(semantic_ui_core::routing::Route::Browse);
                     }
                 } else {
                     self.active_action = Some(Action::Delete(res.into()));

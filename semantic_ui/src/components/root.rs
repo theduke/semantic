@@ -2,7 +2,7 @@ use brass::vdom::{self, Render};
 use factordb::{schema::AttributeDescriptor, AnyError};
 use semantic_ui_core::{
     loader::LoadState,
-    router::{Route, Router},
+    routing::{Route, Router},
 };
 
 use super::router;
@@ -12,6 +12,7 @@ enum Phase {
     CheckingBackend,
     BackendSetup,
     Active,
+    LoggingOut,
 }
 
 pub enum Msg {
@@ -19,6 +20,7 @@ pub enum Msg {
     SchemaLoaded(Result<semantics_core::api::SemanticSchema, AnyError>),
     Initialize(semantics_core::api::BackendConfig),
     InitializeLoaded(Result<semantics_core::api::SemanticSchema, AnyError>),
+    LogoutLoaded(Result<(), AnyError>),
     RouteChange(Route),
 }
 
@@ -117,16 +119,37 @@ impl brass::Component for Root {
                 }
             },
             Msg::RouteChange(route) => {
-                router::history_push_route(&route);
-                self.route = route;
+                if matches!(route, Route::Logout) {
+                    self.phase = Phase::LoggingOut;
+
+                    let guard = ctx.run_map(
+                        async move { crate::api().close_backend().await },
+                        Msg::LogoutLoaded,
+                    );
+                    self.status.set_loading_guarded(guard);
+                } else {
+                    router::history_push_route(&route);
+                    self.route = route;
+                }
             }
+            Msg::LogoutLoaded(res) => match res {
+                Ok(_) => {
+                    ctx.remove::<semantic_ui_core::Registry>();
+                    self.phase = Phase::BackendSetup;
+                }
+                Err(err) => {
+                    self.status.set_failed(err);
+                }
+            },
         }
     }
 
     fn render(&self, mut _ctx: brass::RenderContext<Self>) -> brass::VNode {
         tracing::trace!(?self.phase);
         match self.phase {
-            Phase::CheckingBackend => semantic_ui_core::loader::spinner().build(),
+            Phase::CheckingBackend | Phase::LoggingOut => {
+                semantic_ui_core::loader::spinner().build()
+            }
             Phase::BackendSetup => self.status.render(move |_| {
                 let title = brass_bulma::h2_with("Login");
 

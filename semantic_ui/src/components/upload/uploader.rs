@@ -144,7 +144,7 @@ impl brass::Component for FileUploader {
                     div_with(item.status.render(|file| {
                         brass::vdom::component::<crate::components::router::Link>(
                             crate::components::router::LinkProps {
-                                route: semantic_ui_core::router::Route::Entity(file.id().into()),
+                                route: semantic_ui_core::routing::Route::Entity(file.id().into()),
                                 text: "Show File".into(),
                                 class: Some("button is-success".into()),
                             },

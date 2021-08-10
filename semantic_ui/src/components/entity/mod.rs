@@ -19,7 +19,7 @@ use factordb::{
         AttrMapExt, AttributeDescriptor, AttributeSchema,
     },
 };
-use semantic_ui_core::{router::Route, EntityInfo, EntityRenderOpts, Registry};
+use semantic_ui_core::{routing::Route, EntityInfo, EntityRenderOpts, Registry};
 use semantics_core::base::AttrTitle;
 use vdom::text;
 

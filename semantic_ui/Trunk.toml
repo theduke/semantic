@@ -3,6 +3,9 @@
 dist = "target_wasm/ui"
 release = true
 
+[watch]
+watch = ["../semantic_ui_core"]
+
 [[proxy]]
 rewrite = "/blob/"
 backend = "http://localhost:3000/"

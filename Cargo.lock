@@ -1895,7 +1895,6 @@ dependencies = [
  "semantics_core",
  "serde",
  "serde_json",
- "sha2",
  "tokio",
  "tower-http",
  "tracing",

@@ -3,7 +3,7 @@ use brass::{
     vdom::{self, component, div, TagBuilder},
     VNode,
 };
-use semantic_ui_core::{router::Route, ContextExt};
+use semantic_ui_core::{routing::Route, ContextExt};
 
 use crate::components as comps;
 
@@ -27,6 +27,7 @@ pub fn router(route: &Route) -> VNode {
         Route::Browse => component::<comps::entity::browse_page::BrowsePage>(
             comps::entity::browse_page::BrowsePageProps {},
         ),
+        Route::Logout => VNode::Empty,
         Route::Import => component::<ImportPage>(()),
         Route::Upload => comps::upload::upload_page(),
         Route::Entity(ident) => component::<comps::entity::entity_page::EntityPage>(
@@ -105,110 +106,41 @@ fn navbar() -> TagBuilder {
         text: "Semantic".into(),
         class: Some("navbar-item".into()),
     });
-    let menu = div().class("navbar-menu is-active").and(
-        div()
-            .class("navbar-start")
-            .and(LinkProps {
-                route: Route::Browse,
-                text: "Browse".to_string(),
-                class: Some("navbar-item".to_string()),
-            })
-            .and(LinkProps {
-                route: Route::EntityCreateSelect,
-                text: "Create".to_string(),
-                class: Some("navbar-item".to_string()),
-            })
-            .and(LinkProps {
-                route: Route::Upload,
-                text: "Upload".to_string(),
-                class: Some("navbar-item".to_string()),
-            })
-            .and(LinkProps {
-                route: Route::Import,
-                text: "Import".to_string(),
-                class: Some("navbar-item".to_string()),
-            }),
-    );
 
-    let end = div().class("navbar-brand");
+    let items = div()
+        .class("navbar-start")
+        .and(LinkProps {
+            route: Route::Browse,
+            text: "Browse".to_string(),
+            class: Some("navbar-item".to_string()),
+        })
+        .and(LinkProps {
+            route: Route::EntityCreateSelect,
+            text: "Create".to_string(),
+            class: Some("navbar-item".to_string()),
+        })
+        .and(LinkProps {
+            route: Route::Upload,
+            text: "Upload".to_string(),
+            class: Some("navbar-item".to_string()),
+        })
+        .and(LinkProps {
+            route: Route::Import,
+            text: "Import".to_string(),
+            class: Some("navbar-item".to_string()),
+        });
 
-    div().class("navbar").and(brand).and(menu).and(end)
-    // <nav className="navbar" role="navigation" aria-label="main navigation">
-    //   <div className="navbar-brand">
-    //     <a className="navbar-item" href="https://bulma.io">
-    //       <img
-    //         src="https://bulma.io/images/bulma-logo.png"
-    //         width="112"
-    //         height="28"
-    //       />
-    //     </a>
+    let logout = LinkProps {
+        route: Route::Logout,
+        text: "Logout".into(),
+        class: Some("button is-light is-small".into()),
+    };
+    let actions = brass_bulma::buttons().and(logout);
+    let end = div()
+        .class("navbar-end")
+        .and(div().class("navbar-item").and(actions));
 
-    //     <a
-    //       role="button"
-    //       className="navbar-burger"
-    //       aria-label="menu"
-    //       aria-expanded="false"
-    //       data-target="navbarBasicExample"
-    //     >
-    //       <span aria-hidden="true"></span>
-    //       <span aria-hidden="true"></span>
-    //       <span aria-hidden="true"></span>
-    //     </a>
-    //   </div>
+    let menu = div().class("navbar-menu is-active").and((items, end));
 
-    //   <div id="navbarBasicExample" className="navbar-menu is-active">
-    //     <div className="navbar-start">
-    //       <Link to="/" className="navbar-item">
-    //         Nodes
-    //       </Link>
-
-    //       <Link to="/create" className="navbar-item">
-    //         Create
-    //       </Link>
-
-    //       <Link to="/import" className="navbar-item">
-    //         Import
-    //       </Link>
-
-    //       {/* <a className="navbar-item">
-    //       Documentation
-    //     </a>
-
-    //     <div className="navbar-item has-dropdown is-hoverable">
-    //       <a className="navbar-link">
-    //         More
-    //       </a>
-
-    //       <div className="navbar-dropdown">
-    //         <a className="navbar-item">
-    //           About
-    //         </a>
-    //         <a className="navbar-item">
-    //           Jobs
-    //         </a>
-    //         <a className="navbar-item">
-    //           Contact
-    //         </a>
-    //         <hr className="navbar-divider" />
-    //         <a className="navbar-item">
-    //           Report an issue
-    //         </a>
-    //       </div>
-    //     </div> */}
-    //     </div>
-
-    //     <div className="navbar-end">
-    //       {/* <div className="navbar-item">
-    //       <div className="buttons">
-    //         <a className="button is-primary">
-    //           <strong>Sign up</strong>
-    //         </a>
-    //         <a className="button is-light">
-    //           Log in
-    //         </a>
-    //       </div>
-    //     </div> */}
-    //     </div>
-    //   </div>
-    // </nav>
+    div().class("navbar").and((brand, menu))
 }

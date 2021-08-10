@@ -49,6 +49,7 @@ pub enum Query {
     Initialize {
         config: BackendConfig,
     },
+    CloseBackend,
 
     Select(factordb::query::select::Select),
     Mutate(factordb::query::mutate::Mutate),
@@ -80,6 +81,7 @@ pub struct ServerStatus {
 pub enum Reply {
     ServerStatus(ServerStatus),
     Initialize,
+    CloseBackend,
 
     Select(Page<Item>),
     Mutate,
@@ -127,6 +129,14 @@ impl<E: ApiClientExecutor> ApiClient<E> {
     pub async fn initialize(&self, config: BackendConfig) -> Result<(), AnyError> {
         match self.exec.execute(Query::Initialize { config }).await {
             Ok(Reply::Initialize) => Ok(()),
+            Ok(_other) => Err(anyhow::anyhow!("API returned invalid data")),
+            Err(err) => Err(err),
+        }
+    }
+
+    pub async fn close_backend(&self) -> Result<(), AnyError> {
+        match self.exec.execute(Query::CloseBackend).await {
+            Ok(Reply::CloseBackend) => Ok(()),
             Ok(_other) => Err(anyhow::anyhow!("API returned invalid data")),
             Err(err) => Err(err),
         }

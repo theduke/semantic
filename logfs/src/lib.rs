@@ -125,11 +125,8 @@ impl LogFs {
             &mut derived_key,
         );
 
-        let unbound_key = aead::UnboundKey::new(
-            &aead::CHACHA20_POLY1305,
-            &derived_key,
-        )
-        .map_err(|_| LogFsError::new("Invalid key"))?;
+        let unbound_key = aead::UnboundKey::new(&aead::CHACHA20_POLY1305, &derived_key)
+            .map_err(|_| LogFsError::new("Invalid key"))?;
         let aead_key = aead::LessSafeKey::new(unbound_key);
 
         let path = path.into();

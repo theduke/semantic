@@ -5,6 +5,7 @@ pub enum Route {
     Browse,
     Import,
     Upload,
+    Logout,
     Entity(factordb::Ident),
     EntityCreateSelect,
     EntityCreate { entity_type: String },
@@ -21,6 +22,7 @@ impl Route {
         let parts = path.split('/').collect::<Vec<_>>();
 
         match parts.as_slice() {
+            ["logout"] => Some(Route::Logout),
             ["browse"] => Some(Route::Browse),
             ["import"] => Some(Route::Import),
             ["upload"] => Some(Route::Upload),
@@ -35,6 +37,7 @@ impl Route {
 
     pub fn to_path(&self) -> String {
         match self {
+            Route::Logout => "/logout".into(),
             Route::Browse => "/browse".to_string(),
             Route::Import => "/import".to_string(),
             Route::Upload => "/upload".to_string(),
@@ -48,6 +51,7 @@ impl Route {
         // TODO: this sucks.
         // Specific components will have to set the path.
         match self {
+            Route::Logout => "Logout - Semantic",
             Route::Browse => "Browse - Semantic",
             Route::Import => "Import - Semantic",
             Route::Upload => "Upload - Semantic",

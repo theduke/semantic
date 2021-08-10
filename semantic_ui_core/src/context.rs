@@ -1,13 +1,13 @@
-use crate::router;
+use crate::routing;
 
 pub trait ContextExt {
-    fn router(&self) -> &router::Router;
+    fn router(&self) -> &routing::Router;
     fn registry(&self) -> &crate::SharedRegistry;
     fn api(&self) -> &crate::api::BrowserApiClient;
 }
 
 impl<'a, M> ContextExt for brass::Context<'a, M> {
-    fn router(&self) -> &router::Router {
+    fn router(&self) -> &routing::Router {
         self.get().expect("Router not in global context")
     }
 
@@ -21,12 +21,12 @@ impl<'a, M> ContextExt for brass::Context<'a, M> {
 }
 
 pub trait RenderContextExt {
-    fn router(&self) -> &router::Router;
+    fn router(&self) -> &routing::Router;
     fn registry(&self) -> &crate::SharedRegistry;
 }
 
 impl<'a, C: brass::Component> RenderContextExt for brass::RenderContext<'a, C> {
-    fn router(&self) -> &router::Router {
+    fn router(&self) -> &routing::Router {
         self.get().expect("Router not in global context")
     }
 

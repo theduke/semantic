@@ -4,7 +4,7 @@ pub mod entity;
 pub mod loader;
 pub mod plugin;
 pub mod registry;
-pub mod router;
+pub mod routing;
 
 mod context;
 pub use self::context::{ContextExt, RenderContextExt};
