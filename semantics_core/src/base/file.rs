@@ -1,7 +1,4 @@
-use factordb::{
-    schema::{EntityContainer, EntityDescriptor},
-    Attribute, Entity, Id,
-};
+use factordb::{schema::EntityDescriptor, Attribute, Entity, Id};
 use serde::{Deserialize, Serialize};
 
 use super::{AttrPreviewImageUrl, AttrTitle, AttrUrl};

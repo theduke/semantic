@@ -1,6 +1,6 @@
 use std::rc::Rc;
 
-use brass::{vdom, Callback};
+use brass::Callback;
 use factordb::query::select::Item;
 
 use crate::{loader::LoadState, ContextExt};
