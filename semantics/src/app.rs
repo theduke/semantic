@@ -13,12 +13,13 @@ use semantics_core::{
     plugin::PluginDescriptor,
 };
 
-use crate::blobstore::DynBlobStore;
+use crate::{blobstore::DynBlobStore, server};
 
 #[derive(serde::Serialize, serde::Deserialize, Clone, Debug)]
 pub struct AppConfig {
     pub backend: Option<BackendConfig>,
     pub token_key: String,
+    pub server: Option<server::ServerConfig>,
 }
 
 struct AppState {
@@ -96,6 +97,7 @@ impl App {
                 let log = logfs::LogFs::open(data_path.clone(), key.clone())?;
                 let blob = Arc::new(log.clone());
                 let db = crate::db::logdb::LogDbStore::new(log).build_db().await?;
+
                 AppState {
                     db,
                     blob,
@@ -525,5 +527,14 @@ impl App {
         gtk::main();
 
         Ok(())
+    }
+
+    pub async fn run_server(self) -> Result<(), AnyError> {
+        let config = self
+            .config
+            .server
+            .clone()
+            .ok_or_else(|| anyhow::anyhow!("No server config provided"))?;
+        crate::server::run_server(self, config).await
     }
 }

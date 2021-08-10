@@ -1,63 +1,57 @@
-use std::{convert::Infallible, net::SocketAddr};
+use std::net::SocketAddr;
 
 use anyhow::{Context, Result};
-use factordb::AnyError;
-use hyper::{
-    server::conn::AddrStream,
-    service::{make_service_fn, service_fn},
-    Body, Method, Request, Response, Server, StatusCode,
+use axum::{
+    extract::{self, Extension},
+    prelude::RoutingDsl,
+    AddExtensionLayer,
 };
+use factordb::AnyError;
+use hyper::{Body, Method, Request, Response, StatusCode};
 
 use semantics_core::api::{ApiError, ApiResponse, BackendConfig, Query, Reply};
 
 use crate::app::App;
 
-pub async fn run_server(app: App) {
-    // A `MakeService` that produces a `Service` to handle each connection.
-    let make_service = make_service_fn(move |conn: &AddrStream| {
-        let app = app.clone();
+#[derive(serde::Serialize, serde::Deserialize, Clone, Debug)]
+pub struct ServerConfig {
+    /// The interface to bind to.
+    ///
+    /// Examples:
+    /// - 127.0.0.1:3000
+    /// - 0.0.0.0:8080
+    /// - ::1:3000
+    pub interface: String,
+}
 
-        let addr = conn.remote_addr();
-        let service = service_fn(move |req| handler(app.clone(), addr, req));
+type AppState = extract::Extension<App>;
 
-        // Return the service to hyper.
-        async move { Ok::<_, Infallible>(service) }
-    });
+pub async fn run_server(app: App, config: ServerConfig) -> Result<(), AnyError> {
+    use axum::prelude::{get, post, route};
 
     // Run the server like above...
-    let addr = SocketAddr::from(([127, 0, 0, 1], 3000));
+    let addr: SocketAddr = config.interface.parse().context(format!(
+        "Invalid server interface specification '{}'",
+        config.interface
+    ))?;
+
+    let app = route("/api/query", post(handler_api_query))
+        .route("/api/upload-file", post(handler_blob_upload))
+        .nest("/blob", get(handler_blob_read))
+        .layer(AddExtensionLayer::new(app))
+        .layer(tower_http::trace::TraceLayer::new_for_http());
 
     tracing::info!(interface=%addr, "starting web server");
 
-    let server = Server::bind(&addr).serve(make_service);
+    let server = axum::Server::bind(&addr).serve(app.into_make_service());
 
-    if let Err(e) = server.await {
-        eprintln!("server error: {}", e);
-    }
+    server.await.map_err(|error| {
+        tracing::error!(?error, "Server failed");
+        error.into()
+    })
 }
 
-async fn handler(
-    app: App,
-    _addr: SocketAddr,
-    req: Request<Body>,
-) -> Result<Response<Body>, Infallible> {
-    tracing::trace!(method=?req.method(), path=%req.uri(), "handling request");
-
-    let res = match req.uri().path() {
-        "/api/query" if req.method() == Method::POST => handler_api_query(&app, req).await,
-        "/api/upload-file" if req.method() == Method::OPTIONS => handler_file_upload_cors(),
-        "/api/upload-file" if req.method() == Method::POST => handler_file_upload(&app, req).await,
-        path if req.method() == Method::GET && path.starts_with("/blob/") => {
-            let blob_path = path.strip_prefix("/blob/").unwrap();
-            handler_blob_read(&app, blob_path).await
-        }
-        _other => not_found(),
-    };
-
-    Ok(res)
-}
-
-fn handler_file_upload_cors() -> Response<Body> {
+fn cors_response() -> Response<Body> {
     Response::builder()
         .status(StatusCode::OK)
         .header(hyper::header::ACCESS_CONTROL_ALLOW_ORIGIN, "*")
@@ -87,9 +81,13 @@ fn internal_server_error(msg: impl Into<String>) -> Response<Body> {
         .unwrap()
 }
 
-async fn handler_file_upload(app: &App, req: Request<Body>) -> Response<Body> {
+async fn handler_blob_upload(Extension(app): AppState, req: Request<Body>) -> Response<Body> {
+    if req.method() == Method::OPTIONS {
+        return cors_response();
+    }
+
     tracing::trace!("handler_blob_upload");
-    let reply = match file_upload(app, req).await {
+    let reply = match file_upload(&app, req).await {
         Ok(item) => ApiResponse::Ok(item),
         Err(err) => {
             tracing::warn!(?err, "file upload failed");
@@ -134,7 +132,13 @@ async fn file_upload(
     Ok(item)
 }
 
-async fn handler_blob_read(app: &App, blob_path: &str) -> Response<Body> {
+async fn handler_blob_read(Extension(app): AppState, req: Request<Body>) -> Response<Body> {
+    if req.method() == Method::OPTIONS {
+        return cors_response();
+    }
+
+    let blob_path = req.uri().path().strip_prefix("/blob/").unwrap_or_default();
+
     let blob = if let Some(b) = app.blob() {
         b
     } else {
@@ -208,8 +212,8 @@ impl TokenClaims {
     }
 }
 
-async fn handler_api_query(app: &App, req: Request<Body>) -> Response<Body> {
-    match api_query(app, req).await {
+async fn handler_api_query(Extension(app): AppState, req: Request<Body>) -> Response<Body> {
+    match api_query(&app, req).await {
         Ok(res) => res,
         Err(err) => api_response(api_response_err(&err)),
     }

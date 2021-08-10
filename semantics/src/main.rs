@@ -48,7 +48,7 @@ fn main() {
                     .map(|x| x.1.to_string());
 
                 let data_path = data_path_arg.unwrap_or_else(|| {
-                    std::env::home_dir()
+                    dirs::home_dir()
                         .expect("Could not determine home dir")
                         .join(".local/share/semantics")
                         .to_str()
@@ -65,13 +65,16 @@ fn main() {
             let config = app::AppConfig {
                 backend: backend_config,
                 token_key: "tokens".into(),
+                server: Some(server::ServerConfig {
+                    interface: "127.0.0.1:3000".into(),
+                }),
             };
 
             let rt = tokio::runtime::Runtime::new().expect("Could not start runtime");
             let app = rt
                 .block_on(app::App::build(config, rt.handle().clone()))
                 .expect("Could not build app");
-            rt.block_on(server::run_server(app));
+            rt.block_on(app.run_server()).expect("Server failed");
         }
         #[cfg(feature = "webkit")]
         "webkit" => {
