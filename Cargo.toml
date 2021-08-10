@@ -13,6 +13,8 @@ members = [
 [patch.crates-io]
 brass = {path = "../brass"}
 brass_bulma = {path = "../brass/brass_bulma"}
-
 factordb = { path = "../factordb/factordb"}
 factor_tools = { path = "../factordb/factor_tools" }
+# FIXME: remove once axum 0.2 is published
+# Needed for changed semantics for file path handling with `.nest()`
+axum = { git = "https://github.com/tokio-rs/axum.git" }

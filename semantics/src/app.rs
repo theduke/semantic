@@ -133,6 +133,21 @@ impl App {
         Ok(())
     }
 
+    pub async fn close_backend(&self) -> Result<(), AnyError> {
+        let mut lock = self
+            .state
+            .write()
+            .map_err(|_| anyhow::anyhow!("Could not lock state"))?;
+        let _state = lock
+            .take()
+            .ok_or_else(|| anyhow::anyhow!("Backend is not initialized"))?;
+
+        // TODO: should probably have dedicated shutdown methods for 
+        // db/blobstore here.
+
+        Ok(())
+    }
+
     pub async fn build(config: AppConfig, rt: tokio::runtime::Handle) -> Result<Self, AnyError> {
         let s = Self {
             config: config.clone(),

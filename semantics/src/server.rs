@@ -40,7 +40,7 @@ pub async fn run_server(app: App, config: ServerConfig) -> Result<(), AnyError> 
 
     let app = route("/api/query", post(handler_api_query))
         .route("/api/upload-file", post(handler_blob_upload))
-        .nest("/blob", get(handler_blob_read))
+        .nest("/blob/files", get(handler_blob_read))
         .layer(AddExtensionLayer::new(app))
         .layer(tower_http::trace::TraceLayer::new_for_http());
 
