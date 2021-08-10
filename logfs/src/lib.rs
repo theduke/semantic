@@ -5,7 +5,7 @@ use std::{
     sync::{Arc, RwLock},
 };
 
-use ring::{aead, digest::SHA512_OUTPUT_LEN};
+use ring::{aead, digest::SHA256_OUTPUT_LEN};
 use sha2::Digest;
 
 #[derive(Debug)]
@@ -116,7 +116,7 @@ type DataOffset = u64;
 
 impl LogFs {
     pub fn open(path: impl Into<PathBuf>, key: String) -> Result<Self, LogFsError> {
-        let mut derived_key = [0u8; SHA512_OUTPUT_LEN];
+        let mut derived_key = [0u8; SHA256_OUTPUT_LEN];
         ring::pbkdf2::derive(
             ring::pbkdf2::PBKDF2_HMAC_SHA512,
             std::num::NonZeroU32::new(100_000).unwrap(),
@@ -127,7 +127,7 @@ impl LogFs {
 
         let unbound_key = aead::UnboundKey::new(
             &aead::CHACHA20_POLY1305,
-            b"00000000000000000000000000000000",
+            &derived_key,
         )
         .map_err(|_| LogFsError::new("Invalid key"))?;
         let aead_key = aead::LessSafeKey::new(unbound_key);
