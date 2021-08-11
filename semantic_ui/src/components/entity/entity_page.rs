@@ -30,7 +30,7 @@ impl brass::Component for EntityPage {
         let query = factordb::query::select::Select::new()
             .with_limit(1)
             .with_filter(Expr::eq(
-                Expr::Ident(factordb::schema::builtin::AttrId::IDENT),
+                Expr::Attr(factordb::schema::builtin::AttrId::IDENT),
                 Expr::Literal(props.ident.clone().into()),
             ));
 

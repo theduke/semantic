@@ -13,15 +13,19 @@ pub struct ImportPage {
     import_load: LoadState<ItemPage>,
     persist_load: LoadState<()>,
 
-    submit: brass::Callback<url::Url>,
+    on_preview: brass::Callback<url::Url>,
+    on_import: brass::Callback<url::Url>,
 
     registry: semantic_ui_core::SharedRegistry,
 
+    auto_import: bool,
     guard: Option<brass::EffectGuard>,
 }
 
+#[derive(Debug)]
 pub enum Msg {
-    FormSubmit(url::Url),
+    FormSubmitPreview(url::Url),
+    FormSubmitImport(url::Url),
     ImporterLoaded(Result<ItemPage, AnyError>),
     ImportAll,
     ImportLoaded(Result<(), AnyError>),
@@ -42,14 +46,17 @@ impl brass::Component for ImportPage {
             import_load: LoadState::Idle,
             persist_load: LoadState::Idle,
             registry: ctx.registry().clone(),
-            submit: ctx.callback_map(Msg::FormSubmit),
+            on_preview: ctx.callback_map(Msg::FormSubmitPreview),
+            on_import: ctx.callback_map(Msg::FormSubmitImport),
+            auto_import: false,
             guard: None,
         }
     }
 
     fn update(&mut self, msg: Self::Msg, ctx: &mut brass::Context<Self::Msg>) {
+        tracing::trace!(?msg);
         match msg {
-            Msg::FormSubmit(url) => {
+            Msg::FormSubmitPreview(url) => {
                 if self.import_load.is_loading() {
                     return;
                 }
@@ -67,9 +74,15 @@ impl brass::Component for ImportPage {
                     }
                 }
             }
+            Msg::FormSubmitImport(url) => {
+                self.auto_import = true;
+                self.update(Msg::FormSubmitPreview(url), ctx);
+            }
             Msg::ImporterLoaded(res) => {
-                tracing::trace!(?res, "import result");
                 self.import_load.set_result(res);
+                if self.auto_import {
+                    self.update(Msg::ImportAll, ctx);
+                }
             }
             Msg::ImportAll => {
                 if self.is_loading() {
@@ -96,7 +109,8 @@ impl brass::Component for ImportPage {
     fn render(&self, _ctx: brass::RenderContext<Self>) -> brass::VNode {
         let form = super::import_form::ImportFormProps {
             loading: self.import_load.is_loading(),
-            on_submit: self.submit.clone(),
+            on_preview: self.on_preview.clone(),
+            on_import: self.on_import.clone(),
         };
         let form_wrap = div_with(form).class("box");
         let loader1 = self.import_load.render(|page| {
@@ -110,26 +124,32 @@ impl brass::Component for ImportPage {
             );
 
             let already_imported = self.persist_load.is_success();
+            tracing::trace!(?already_imported);
             let btn_label = if self.persist_load.is_loading() {
                 "..."
             } else {
                 "Import All"
             };
-            let import_button = div().class("mb-2").and(
-                brass_bulma::button_medium()
-                    .and(btn_label)
-                    .attr_toggle_if(already_imported, Attr::Disabled)
-                    .on(Event::Click, _ctx.on_simple(|| Msg::ImportAll)),
-            );
-            div().and(import_button).and(rendered_page).build()
+            let import_toggle = if already_imported {
+                brass_bulma::notification(
+                    brass_bulma::Color::Success,
+                    format!("Imported {} entities.", page.items.len()),
+                )
+            } else {
+                div().class("mb-2").and(
+                    brass_bulma::button_large()
+                        .and(btn_label)
+                        .attr_toggle_if(self.persist_load.is_loading(), Attr::Disabled)
+                        .on(Event::Click, _ctx.on_simple(|| Msg::ImportAll)),
+                )
+            };
+            div().and((import_toggle, rendered_page)).build()
         });
-        let loader2 = self
-            .persist_load
-            .render(|_| brass_bulma::notification_success("Import succeeded.").build());
 
         let header = brass_bulma::h2_with("Import");
+        tracing::trace!(?loader1);
 
-        div().and((header, form_wrap, loader2, loader1)).build()
+        div().and((header, form_wrap, loader1)).build()
     }
 
     fn on_property_change(

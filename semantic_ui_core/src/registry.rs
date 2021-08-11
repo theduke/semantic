@@ -175,6 +175,11 @@ impl Registry {
         self.attributes.get(ty)
     }
 
+    /// Get a reference to the registries entities.
+    pub fn entities(&self) -> &HashMap<String, EntityInfo> {
+        &self.entities
+    }
+
     pub fn entity(&self, ty: &str) -> Option<&EntityInfo> {
         self.entities.get(ty)
     }

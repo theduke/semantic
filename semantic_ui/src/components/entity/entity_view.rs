@@ -18,6 +18,7 @@ pub struct EntityView {
 
 enum Msg {
     ToggleActions,
+    ToggleShowTable,
     Open,
     DeleteStart,
     DeleteConfirm,
@@ -39,6 +40,8 @@ struct EntityViewComponent {
     type_name: Option<String>,
     content_renderer: Option<DynEntityRenderer>,
     info: Option<EntityInfo>,
+
+    show_table: bool,
 
     active_action: Option<Action>,
 }
@@ -74,6 +77,7 @@ impl brass::Component for EntityViewComponent {
             actions_active: false,
             content_renderer,
             info: info.cloned(),
+            show_table: false,
             active_action: None,
         }
     }
@@ -119,6 +123,9 @@ impl brass::Component for EntityViewComponent {
                     self.active_action = Some(Action::Delete(res.into()));
                 }
             }
+            Msg::ToggleShowTable => {
+                self.show_table = !self.show_table;
+            }
         }
     }
 
@@ -139,6 +146,16 @@ impl brass::Component for EntityViewComponent {
             .unwrap_or(VNode::Empty);
 
         let mut action_buttons = Vec::new();
+
+        let show_table_action = brass_bulma::button_small()
+            .and_class_if(
+                self.show_table || self.content_renderer.is_none(),
+                "is-active",
+            )
+            .and(brass_bulma::icon_fa("fas fa-table"))
+            .on_click(ctx.on_simple(|| Msg::ToggleShowTable))
+            .render();
+        action_buttons.push(show_table_action);
 
         if self.options.editable {
             let delete_btn = brass_bulma::button()
@@ -179,10 +196,10 @@ impl brass::Component for EntityViewComponent {
             None => VNode::Empty,
         };
 
-        let content = if let Some(renderer) = &self.content_renderer {
-            renderer(&self.item, &self.options)
-        } else {
-            super::entity_fields_table(&self.item.data, self.info.as_ref(), ctx.registry()).build()
+        let content = match &self.content_renderer {
+            Some(renderer) if !self.show_table => renderer(&self.item, &self.options),
+            _ => super::entity_fields_table(&self.item.data, self.info.as_ref(), ctx.registry())
+                .build(),
         };
 
         let card_content = brass_bulma::card_content().and((active_action, content));

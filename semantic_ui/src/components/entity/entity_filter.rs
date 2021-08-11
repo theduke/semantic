@@ -44,7 +44,7 @@ impl EntityFilterFormComp {
                 .map(|val| factordb::Value::from(val.clone()))
                 .collect();
             let se = Expr::in_(
-                Expr::Ident(factordb::schema::builtin::AttrType::IDENT),
+                Expr::Attr(factordb::schema::builtin::AttrType::IDENT),
                 factordb::Value::List(values),
             );
             e = e.and_with(se);
