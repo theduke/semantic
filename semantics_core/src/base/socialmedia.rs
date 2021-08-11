@@ -19,7 +19,8 @@ pub struct SocialMediaPost {
     pub id: Id,
     #[factor(attr = AttrIdent)]
     #[serde(rename = "factor/ident")]
-    pub ident: Option<Ident>,
+    pub ident: Option<String>,
+
     #[factor(attr = AttrTitle)]
     #[serde(rename = "semantic/title")]
     pub title: Option<String>,

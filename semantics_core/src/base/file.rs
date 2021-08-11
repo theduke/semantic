@@ -1,4 +1,7 @@
-use factordb::{schema::EntityDescriptor, Attribute, Entity, Id};
+use factordb::{
+    schema::{builtin::AttrIdent, EntityDescriptor},
+    Attribute, Entity, Id, Ident,
+};
 use serde::{Deserialize, Serialize};
 
 use super::{AttrPreviewImageUrl, AttrTitle, AttrUrl};
@@ -33,6 +36,10 @@ pub struct File {
     #[factor(attr = AttrId)]
     #[serde(rename = "factor/id")]
     pub id: Id,
+
+    #[factor(attr = AttrIdent)]
+    #[serde(rename = "factor/ident")]
+    pub ident: Option<String>,
 
     #[factor(attr = AttrTitle)]
     #[serde(rename = "semantic/title")]
