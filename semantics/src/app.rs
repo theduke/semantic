@@ -2,7 +2,7 @@ use std::sync::{Arc, RwLock};
 
 use factordb::{
     query::{self, select::Item},
-    schema::{AttrMapExt, EntityContainer},
+    schema::{AttrMapExt, AttributeDescriptor, EntityContainer, EntityDescriptor},
     AnyError, Db,
 };
 use semantics_core::{
@@ -160,6 +160,28 @@ impl App {
         }
 
         Ok(s)
+    }
+
+    pub async fn load_schema(&self) -> Result<semantics_core::plugin::PluginSchema, AnyError> {
+        let mut schema = semantics_core::base::SemanticPlugin::schema();
+        // Fix up the schema with real IDs.
+
+        let db = self.require_db()?;
+
+        let reg = { db.backend().registry().read().unwrap().clone() };
+
+        for entity in &mut schema.db.entities {
+            if let Some(reg) = reg.entity_by_name(&entity.ident) {
+                entity.id = reg.schema.id;
+            }
+        }
+        for attr in &mut schema.db.attributes {
+            if let Some(reg) = reg.attr_by_name(&attr.ident) {
+                attr.id = reg.schema.id;
+            }
+        }
+
+        Ok(schema)
     }
 
     pub async fn entity_mutate(&self, mutate: query::mutate::Mutate) -> Result<(), AnyError> {

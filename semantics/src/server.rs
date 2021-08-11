@@ -358,8 +358,8 @@ async fn api_query(app: &App, req: Request<Body>) -> Result<Response<Body>, AnyE
             Ok(api::Reply::Import)
         }
         api::Query::Schema => {
-            let base = semantics_core::base::SemanticPlugin::schema();
-            let reply = api::Reply::Schema(api::SemanticSchema { db: base.db });
+            let schema = app.load_schema().await?;
+            let reply = api::Reply::Schema(api::SemanticSchema { db: schema.db });
             Ok(reply)
         }
     };
