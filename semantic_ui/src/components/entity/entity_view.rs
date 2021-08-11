@@ -152,6 +152,8 @@ impl brass::Component for EntityViewComponent {
                 self.show_table || self.content_renderer.is_none(),
                 "is-active",
             )
+            .attr_toggle_if(self.content_renderer.is_none(), brass::dom::Attr::Disabled)
+            .style_raw("margin: 0")
             .and(brass_bulma::icon_fa("fas fa-table"))
             .on_click(ctx.on_simple(|| Msg::ToggleShowTable))
             .render();
@@ -163,7 +165,7 @@ impl brass::Component for EntityViewComponent {
                 .on_click(ctx.on_simple(|| Msg::DeleteStart));
             action_buttons.push(delete_btn.render());
         }
-        let actions = brass_bulma::buttons().and_iter(action_buttons);
+        let actions = brass_bulma::buttons().style_raw("margin: 0;").and_iter(action_buttons);
 
         let actions_dropdown = brass_bulma::Dropdown {
             trigger: brass_bulma::icon_fa("fas fa-cog"),
