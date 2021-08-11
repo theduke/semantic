@@ -1,10 +1,13 @@
 use brass::{dom::Attr, vdom::div};
+use url::Url;
 
 pub struct ImportForm {
     loading: bool,
+    can_submit: bool,
     on_preview: brass::Callback<url::Url>,
     on_import: brass::Callback<url::Url>,
     url: String,
+    parsed_url: Option<Url>,
 }
 
 pub struct ImportFormProps {
@@ -28,7 +31,9 @@ impl brass::Component for ImportForm {
     fn init(props: Self::Properties, _ctx: &mut brass::Context<Self::Msg>) -> Self {
         Self {
             loading: props.loading,
+            can_submit: false,
             url: String::new(),
+            parsed_url: None,
             on_preview: props.on_preview,
             on_import: props.on_import,
         }
@@ -37,20 +42,24 @@ impl brass::Component for ImportForm {
     fn update(&mut self, msg: Self::Msg, _ctx: &mut brass::Context<Self::Msg>) {
         match msg {
             Msg::Changed(url) => {
-                self.url = url;
+                if url != self.url {
+                    if let Ok(parsed) = url.trim().parse() {
+                        self.parsed_url = Some(parsed);
+                        self.can_submit = true;
+                    }
+                    self.url = url;
+                }
             }
             Msg::Preview => {
-                if !self.loading {
-                    let clean = self.url.trim();
-                    if let Ok(url) = clean.parse() {
-                        self.on_preview.send(url);
-                    }
+                if let Some(url) = &self.parsed_url {
+                    self.on_preview.send(url.clone());
+                    self.can_submit = false;
                 }
             }
             Msg::Import => {
-                let clean = self.url.trim();
-                if let Ok(url) = clean.parse() {
-                    self.on_import.send(url);
+                if let Some(url) = &self.parsed_url {
+                    self.on_import.send(url.clone());
+                    self.can_submit = false;
                 }
             }
         }
@@ -73,7 +82,7 @@ impl brass::Component for ImportForm {
         };
 
         let btn_preview = brass_bulma::button_medium()
-            .attr_toggle_if(self.loading, Attr::Disabled)
+            .attr_toggle_if(self.loading || !self.can_submit, Attr::Disabled)
             .and(if self.loading { "..." } else { "Preview" })
             .on(
                 brass::dom::Event::Click,
@@ -81,8 +90,10 @@ impl brass::Component for ImportForm {
             );
 
         let btn_import = brass_bulma::button_medium()
-            .attr_toggle_if(self.loading, Attr::Disabled)
+            .attr_toggle_if(self.loading || !self.can_submit, Attr::Disabled)
             .and(if self.loading { "..." } else { "Import" })
+            .and_class("is-primary")
+            .attr(Attr::Title, "Import without previewing first")
             .on(
                 brass::dom::Event::Click,
                 ctx.on(|_ev: web_sys::Event| Msg::Import),
