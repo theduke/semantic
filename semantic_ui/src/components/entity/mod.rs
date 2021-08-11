@@ -191,6 +191,23 @@ pub fn entity_fields_table(
     brass_bulma::table().and_iter(rows)
 }
 
+pub fn entity_joins(item: &Item, opts: &EntityRenderOpts, registry: &Registry) -> VNode {
+    let joins = item.joins.iter().map(|join| {
+        let items = join
+            .items
+            .iter()
+            .map(|join_item| generic_entity_item(join_item, registry, opts));
+
+        div()
+            .class("mb-4 ml-5")
+            .and(vdom::hr())
+            .and(div_with(vdom::b().and(&join.name)).class("mb-2"))
+            .and_iter(items)
+    });
+
+    div().and(vdom::hr()).and_iter(joins).build()
+}
+
 pub fn generic_entity_view(
     item: &Item,
     registry: &Registry,
@@ -214,19 +231,7 @@ pub fn generic_entity_view(
     let joins = if item.joins.is_empty() {
         VNode::Empty
     } else {
-        let joins = item.joins.iter().map(|join| {
-            let items = join
-                .items
-                .iter()
-                .map(|join_item| generic_entity_item(join_item, registry, opts));
-
-            div()
-                .class("mb-2 ml-4")
-                .and(div_with(&join.name).class("mb-2"))
-                .and_iter(items)
-        });
-
-        div().and(vdom::hr()).and_iter(joins).build()
+        entity_joins(item, opts, registry)
     };
 
     let card_content = brass_bulma::card_content().and((content, joins));
@@ -255,7 +260,7 @@ pub fn entity_item(item: &Item, registry: &Registry, opts: &EntityRenderOpts) ->
     if let Some(renderer) = renderer {
         renderer.as_ref()(item, opts)
     } else {
-        entity_view::EntityView {
+        entity_view::EntityBox {
             item: item.clone(),
             options: opts.clone(),
             on_delete: None,

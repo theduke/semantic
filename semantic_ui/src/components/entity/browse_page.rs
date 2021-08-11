@@ -135,7 +135,7 @@ fn render_page(page: &ItemPage, on_next: EventCallback, on_delete: Callback<Item
     let items = page
         .items
         .iter()
-        .map(|item| super::entity_view::EntityView {
+        .map(|item| super::entity_view::EntityBox {
             item: item.clone(),
             options: opts.clone(),
             on_delete: Some(on_delete.clone()),
