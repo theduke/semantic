@@ -56,9 +56,17 @@ fn main() {
                         .to_string()
                 });
 
+                let key = args
+                    .iter()
+                    .find(|x| x.starts_with("--key="))
+                    .and_then(|x| x.split_once('='))
+                    .map(|x| x.1.to_string())
+                    // FIXME: obviously just for debugging, remove this.
+                    .unwrap_or("random key".to_string());
+
                 Some(semantics_core::api::BackendConfig::Crypto {
                     data_path: Some(data_path),
-                    key: "hello".into(),
+                    key,
                 })
             };
 
