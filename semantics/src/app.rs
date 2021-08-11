@@ -1,9 +1,13 @@
-use std::sync::{Arc, RwLock};
+use std::{
+    collections::HashMap,
+    sync::{Arc, RwLock},
+};
 
 use factordb::{
+    data::DataMap,
     query::{self, select::Item},
     schema::{AttrMapExt, AttributeDescriptor, EntityContainer, EntityDescriptor},
-    AnyError, Db,
+    AnyError, Db, Id,
 };
 use semantics_core::{
     api::{self, BackendConfig},
@@ -213,6 +217,7 @@ impl App {
 
         let file = semantics_core::base::File {
             id,
+            ident: None,
             title: meta.title.clone().or_else(|| meta.filename.clone()),
             filename: meta.filename,
             url: None,
@@ -246,11 +251,57 @@ impl App {
         Ok(item)
     }
 
+    /// Find the given items in the database based on their [`Ident`], and then
+    /// fix up all attributes so they match the existing ids instead of the
+    /// newly specified ones.
+    async fn entity_id_ident_fixup(
+        db: &Db,
+        mut items: Vec<DataMap>,
+    ) -> Result<Vec<DataMap>, AnyError> {
+        let mut map = HashMap::new();
+        // FIXME: use a single query.
+        for item in &mut items {
+            if let Some(ident) = item.get_attr::<factordb::schema::builtin::AttrIdent>() {
+                if let Ok(old_entity) = db.entity(ident.clone()).await {
+                    let current_type = old_entity.get_type();
+                    let new_type = item.get_type();
+
+                    if current_type != new_type {
+                        return Err(anyhow::anyhow!(
+                                "Could not import entity '{:?}' - entity already exists with a different type (existing: {:?}, new: {:?})",
+                                ident, current_type, new_type));
+                    }
+
+                    let current_id = item.get_id();
+                    let old_id = old_entity.get_id().unwrap();
+
+                    if let Some(current) = current_id {
+                        map.insert(current, old_id);
+                    }
+                }
+            }
+        }
+
+        // Now replace all ids in any attribute with the fixed up , existing id.
+        for item in &mut items {
+            for value in &mut item.0.values_mut() {
+                if let factordb::Value::Id(id) = value {
+                    if let Some(actual_id) = map.get(&id) {
+                        *id = *actual_id;
+                    }
+                }
+            }
+        }
+
+        Ok(items)
+    }
+
     pub async fn import(&self, items: Vec<Item>, import_media: bool) -> Result<(), AnyError> {
         let db = self.require_db()?;
         let blob = self.require_blob()?;
 
-        let merges = Item::flatten_list(items)
+        let entities = Self::entity_id_ident_fixup(&db, Item::flatten_list(items)).await?;
+        let merges = entities
             .into_iter()
             .map(query::mutate::Merge::try_from_map)
             .collect::<Result<Vec<_>, _>>()?;
