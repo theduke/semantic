@@ -5,6 +5,7 @@ pub mod entity_deleter;
 pub mod entity_filter;
 pub mod entity_form;
 pub mod entity_page;
+pub mod entity_search_autocomplete;
 pub mod entity_view;
 
 use brass::{

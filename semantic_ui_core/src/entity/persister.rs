@@ -12,7 +12,7 @@ pub struct FormValid {
 
 pub struct EntityFormProps {
     pub item: Option<Item>,
-    pub on_valid: Callback<FormValid>,
+    pub on_submit: Callback<FormValid>,
     pub is_loading: bool,
     pub error: Option<String>,
 }
@@ -20,47 +20,50 @@ pub struct EntityFormProps {
 pub type DynEntityFormRenderer = Rc<dyn Fn(&EntityFormProps) -> brass::VNode>;
 
 pub enum Msg {
-    Valid(FormValid),
-    Submit,
+    // Valid(FormValid),
+    Submit(FormValid),
     Cancel,
     Loaded(Result<(), factordb::AnyError>),
 }
 
-pub struct EntityPersisterProps {
+pub struct EntityPersister {
     pub item: Option<Item>,
     pub renderer: DynEntityFormRenderer,
     pub on_complete: Callback<Item>,
     pub on_cancel: Option<Callback<()>>,
 }
 
-pub struct EntityPersister {
-    props: EntityPersisterProps,
+struct State {
+    props: EntityPersister,
     valid_data: Option<FormValid>,
     callback: Callback<FormValid>,
     loader: LoadState<()>,
 }
 
-impl brass::Component for EntityPersister {
-    type Properties = EntityPersisterProps;
+brass::enable_props!(EntityPersister => State);
+
+impl brass::Component for State {
+    type Properties = EntityPersister;
     type Msg = Msg;
 
     fn init(props: Self::Properties, ctx: &mut brass::Context<Self::Msg>) -> Self {
         Self {
             props,
             valid_data: None,
-            callback: ctx.callback_map(Msg::Valid),
+            callback: ctx.callback_map(|data| Msg::Submit(data)),
             loader: LoadState::Idle,
         }
     }
 
     fn update(&mut self, msg: Self::Msg, ctx: &mut brass::Context<Self::Msg>) {
         match msg {
-            Msg::Valid(valid) => {
+            // Msg::Valid(valid) => {
+            //     self.valid_data = Some(valid);
+            // }
+            Msg::Submit(valid) => {
                 self.valid_data = Some(valid);
-            }
-            Msg::Submit => {
                 if let Some(data) = &self.valid_data {
-                    let api = ctx.api().clone();
+                    let api = crate::api::api();
                     let mutation = data.mutation.clone();
                     let f = async move { api.batch(mutation).await };
                     let guard = ctx.run_map(f, Msg::Loaded);
@@ -86,7 +89,7 @@ impl brass::Component for EntityPersister {
     fn render(&self, _ctx: brass::RenderContext<Self>) -> brass::VNode {
         let form = (self.props.renderer)(&EntityFormProps {
             item: self.props.item.clone(),
-            on_valid: self.callback.clone(),
+            on_submit: self.callback.clone(),
             is_loading: self.loader.is_loading(),
             error: self.loader.as_error().map(|x| x.to_string()),
         });

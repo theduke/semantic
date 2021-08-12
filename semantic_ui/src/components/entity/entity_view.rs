@@ -1,6 +1,6 @@
 use brass::{
     dom::Attr,
-    vdom::{self, div, div_with, EventCallback, Render},
+    vdom::{div, div_with, EventCallback, Render},
     Callback, VNode,
 };
 use factordb::{query::select::Item, schema::AttrMapExt, AnyError};
@@ -17,6 +17,35 @@ pub struct EntityView {
     pub on_open: Option<Callback<()>>,
     pub actions: Vec<EntityActionButton>,
     pub content: VNode,
+}
+
+impl EntityView {
+    pub fn build(
+        item: &Item,
+        opts: &EntityRenderOpts,
+        registry: &semantic_ui_core::Registry,
+    ) -> Self {
+        let info = registry.entity_by_item(item);
+
+        let title = super::entity_title(&item.data);
+        let type_name = super::entity_type_name(&item.data, info);
+
+        let content = if let Some(renderer) =
+            info.and_then(|info| registry.entity_content_renderer(&info.schema.ident))
+        {
+            renderer(item, opts)
+        } else {
+            super::entity_fields_table(&item.data, info, registry).build()
+        };
+
+        Self {
+            title,
+            type_name,
+            on_open: None,
+            actions: Vec::new(),
+            content,
+        }
+    }
 }
 
 impl Render for EntityView {
@@ -46,8 +75,7 @@ impl Render for EntityView {
             .style_raw("margin: 0;")
             .and_iter(self.actions);
 
-        let header = brass_bulma::card_header()
-            .and((title, ty, actions));
+        let header = brass_bulma::card_header().and((title, ty, actions));
 
         let card_content = brass_bulma::card_content().and(self.content);
         brass_bulma::card()
@@ -227,7 +255,7 @@ impl brass::Component for State {
                 is_disabled: false,
                 on: ctx.callback_map(|_: ()| Msg::OpenSourceUrl),
             })
-        } 
+        }
 
         actions.push(EntityActionButton {
             icon: "fas fa-table".into(),
@@ -273,13 +301,14 @@ impl brass::Component for State {
         let joins = entity_joins(&self.item, &self.options, registry);
         let content = div_with((active_action, content, joins)).build();
 
-        EntityView{
+        EntityView {
             title: self.title.clone(),
             type_name: self.type_name.clone(),
-            on_open: Some(ctx.callback_map(|_:()| Msg::Open)),
+            on_open: Some(ctx.callback_map(|_: ()| Msg::Open)),
             actions,
             content,
-        }.render()
+        }
+        .render()
     }
 
     fn on_property_change(

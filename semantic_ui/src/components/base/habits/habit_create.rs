@@ -29,7 +29,7 @@ pub fn habit_create(_item: &Item, _opts: &EntityRenderOpts) -> VNode {
                     description: None,
                     mode: semantics_core::base::HabitMode::Neutral,
                 },
-                on_submit: props.on_valid.clone().map(|habit: Habit| {
+                on_submit: props.on_submit.clone().map(|habit: Habit| {
                     let id = habit.id;
                     let item = Item::new(habit.into_map().unwrap());
 

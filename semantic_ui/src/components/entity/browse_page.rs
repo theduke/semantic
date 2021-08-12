@@ -132,14 +132,11 @@ fn render_page(page: &ItemPage, on_next: EventCallback, on_delete: Callback<Item
         editable: false,
         preview: true,
     };
-    let items = page
-        .items
-        .iter()
-        .map(|item| super::entity_view::EntityBox {
-            item: item.clone(),
-            options: opts.clone(),
-            on_delete: Some(on_delete.clone()),
-        });
+    let items = page.items.iter().map(|item| super::entity_view::EntityBox {
+        item: item.clone(),
+        options: opts.clone(),
+        on_delete: Some(on_delete.clone()),
+    });
 
     let next = if page.next_cursor.is_some() {
         let btn = brass_bulma::button_medium().and("More").on(Click, on_next);

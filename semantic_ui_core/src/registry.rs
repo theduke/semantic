@@ -1,6 +1,6 @@
 use std::{collections::HashMap, rc::Rc};
 
-use factordb::schema::{AttributeSchema, EntityAttribute, EntitySchema};
+use factordb::schema::{AttrMapExt, AttributeSchema, EntityAttribute, EntitySchema};
 
 use crate::BrowserPlugin;
 
@@ -189,6 +189,22 @@ impl Registry {
             factordb::Ident::Id(_id) => todo!(),
             factordb::Ident::Name(name) => self.entity(name),
         }
+    }
+
+    /// Convenience helper to get the `[EntityInfo]` for some data.
+    /// Returns [`None`] if the data does not have a "factor/type" attribute or
+    /// if no info is registered.
+    pub fn entity_by_data(&self, data: &factordb::data::DataMap) -> Option<&EntityInfo> {
+        data.get_type().and_then(|ty| self.entity_by_ident(&ty))
+    }
+
+    /// Convenience helper to get the `[EntityInfo]` for an [`Item`].
+    /// Returns [`None`] if the data does not have a "factor/type" attribute or
+    /// if no info is registered.
+    pub fn entity_by_item(&self, item: &factordb::query::select::Item) -> Option<&EntityInfo> {
+        item.data
+            .get_type()
+            .and_then(|ty| self.entity_by_ident(&ty))
     }
 
     pub fn attr_renderer(&self, ty: &str) -> Option<&DynAttrRenderer> {

@@ -1,8 +1,10 @@
 use brass::{vdom::component, Callback};
 use brass_bulma::box_;
-use factordb::query::select::Item;
+use factordb::{query::select::Item, schema::AttrMapExt};
 
-use super::persister::{DynEntityFormRenderer, EntityPersister, EntityPersisterProps};
+use crate::ContextExt;
+
+use super::persister::{DynEntityFormRenderer, EntityPersister};
 
 pub struct CreatePage {
     pub render: DynEntityFormRenderer,
@@ -33,20 +35,26 @@ impl brass::Component for CreatePageComp {
         }
     }
 
-    fn update(&mut self, msg: Self::Msg, _ctx: &mut brass::Context<Self::Msg>) {
+    fn update(&mut self, msg: Self::Msg, ctx: &mut brass::Context<Self::Msg>) {
         match msg {
-            Msg::Created(_) => todo!(),
-            Msg::Canceled => todo!(),
+            Msg::Created(item) => {
+                if let Some(ident) = item.data.get_ident() {
+                    ctx.router().goto(crate::routing::Route::Entity(ident));
+                }
+            }
+            Msg::Canceled => {
+                ctx.router().goto(crate::routing::Route::EntityCreateSelect);
+            }
         }
     }
 
     fn render(&self, _ctx: brass::RenderContext<Self>) -> brass::VNode {
-        let persister = component::<EntityPersister>(EntityPersisterProps {
+        let persister = EntityPersister {
             item: None,
             renderer: self.render.clone(),
             on_complete: self.on_complete.clone(),
             on_cancel: Some(self.on_cancel.clone()),
-        });
+        };
 
         box_()
             .and(brass_bulma::h2_with("Create"))

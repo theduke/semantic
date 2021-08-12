@@ -53,6 +53,8 @@ impl semantic_ui_core::BrowserPlugin for BasePlugin {
             is_default: true,
         });
 
+        // Notes.
+
         registry.register_entity_renderer(semantic_ui_core::EntityRendererSpec {
             name: "Note Body".to_string(),
             entity_type: base::Note::QUALIFIED_NAME.to_string(),
@@ -68,6 +70,28 @@ impl semantic_ui_core::BrowserPlugin for BasePlugin {
             entity_type: base::Habit::QUALIFIED_NAME.to_string(),
             mode: semantic_ui_core::EntityRenderMode::CreatePage,
             renderer: Rc::new(crate::components::base::habits::habit_create::habit_create),
+            is_default: false,
+        });
+
+        // Collections.
+
+        // Content.
+        registry.register_entity_renderer(semantic_ui_core::EntityRendererSpec {
+            name: "Collection View".to_string(),
+            entity_type: base::Collection::QUALIFIED_NAME.to_string(),
+            mode: semantic_ui_core::EntityRenderMode::Content,
+            renderer: Rc::new(super::collections::collection_content),
+            is_default: true,
+        });
+
+        // Create page.
+        registry.register_entity_renderer(semantic_ui_core::EntityRendererSpec {
+            name: "Create Collection".to_string(),
+            entity_type: base::Collection::QUALIFIED_NAME.to_string(),
+            mode: semantic_ui_core::EntityRenderMode::CreatePage,
+            renderer: Rc::new(
+                crate::components::base::collections::collection_create::collection_create,
+            ),
             is_default: false,
         });
     }

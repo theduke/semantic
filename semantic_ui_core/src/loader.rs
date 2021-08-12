@@ -7,7 +7,7 @@ pub fn spinner() -> TagBuilder {
     vdom::span_with("Loading...")
 }
 
-fn error_msg(msg: &str) -> TagBuilder {
+pub fn error_msg(msg: &str) -> TagBuilder {
     vdom::p_with(msg).class("notification is-danger")
 }
 

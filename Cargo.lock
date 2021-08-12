@@ -1860,6 +1860,7 @@ dependencies = [
  "brass",
  "brass_bulma",
  "factordb",
+ "futures",
  "js-sys",
  "pulldown-cmark",
  "semantics_core",
