@@ -297,6 +297,22 @@ impl brass::Component for State {
             on: ctx.callback_map(|_: ()| Msg::ToggleShowTable),
         });
 
+        actions.push(EntityActionButton {
+            icon: "fas fa-list".into(),
+            label: "Manage Collections".into(),
+            is_active: false,
+            is_disabled: false,
+            on: ctx.callback_map(|_: ()| Msg::ToggleCollectionManager),
+        });
+
+        actions.push(EntityActionButton {
+            icon: "fas fa-tags".into(),
+            label: "Manage Tags".into(),
+            is_active: false,
+            is_disabled: false,
+            on: ctx.callback_map(|_: ()| Msg::ToggleTagManager),
+        });
+
         if self.options.editable {
             let is_deleting = self.is_deleting();
             actions.push(EntityActionButton {
@@ -305,22 +321,6 @@ impl brass::Component for State {
                 is_active: is_deleting,
                 is_disabled: is_deleting,
                 on: ctx.callback_map(|_: ()| Msg::DeleteStart),
-            });
-
-            actions.push(EntityActionButton {
-                icon: "fas fa-list".into(),
-                label: "Manage Collections".into(),
-                is_active: false,
-                is_disabled: false,
-                on: ctx.callback_map(|_: ()| Msg::ToggleCollectionManager),
-            });
-
-            actions.push(EntityActionButton {
-                icon: "fas fa-tags".into(),
-                label: "Manage Tags".into(),
-                is_active: false,
-                is_disabled: false,
-                on: ctx.callback_map(|_: ()| Msg::ToggleTagManager),
             });
         }
 

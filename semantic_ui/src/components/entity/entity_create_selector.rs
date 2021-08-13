@@ -45,9 +45,12 @@ impl brass::Component for EntityCreateSelectorPage {
                         ctx.on_simple(move || Msg::Create(type_ident.clone())),
                     )
                     .and(title);
-                vdom::div().and(btn)
+                vdom::div().and(btn).class("mr-2")
             });
-            vdom::div().and_iter(items).build()
+            vdom::div()
+                .class("is-flex is-flex-wrap")
+                .and_iter(items)
+                .build()
         };
 
         vdom::div()
