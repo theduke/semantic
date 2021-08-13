@@ -74,7 +74,7 @@ impl brass::PropComponent for ImagePreviewModalComp {
     fn render(
         &self,
         props: &Self::Properties,
-        ctx: brass::RenderContext<brass::PropWrapper<Self>>,
+        mut ctx: brass::RenderContext<brass::PropWrapper<Self>>,
     ) -> VNode {
         let img = vdom::img(props.url.clone())
             .style_raw("max-height: 200px; cursor: pointer;")
@@ -88,7 +88,7 @@ impl brass::PropComponent for ImagePreviewModalComp {
                 .style_raw("display: flex; width: 100%; height: 100%;")
                 .and(full_img);
 
-            brass_bulma::modal(content, ctx.on_simple(|| Msg::Close)).build()
+            brass_bulma::modal(content, ctx.callback_map(|_| Msg::Close)).build()
         } else {
             VNode::Empty
         };

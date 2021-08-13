@@ -1,13 +1,17 @@
 pub mod collection_create;
 pub mod collection_form;
 mod collection_item_loader;
+mod collection_picker;
 pub mod collection_update;
+
+mod entity_collection_manager;
+pub use entity_collection_manager::EntityCollectionManager;
 
 use brass::{
     vdom::{self, Func, Render, Renderer},
     Shared, VNode,
 };
-use factordb::schema::{AttrMapExt, AttributeDescriptor};
+use factordb::schema::AttributeDescriptor;
 use semantic_ui_core::components::Loader;
 use semantics_core::base::{AttrCollectionItem, Collection, CollectionWithItems};
 

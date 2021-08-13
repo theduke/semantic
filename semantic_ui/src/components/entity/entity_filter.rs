@@ -1,6 +1,5 @@
 use std::collections::HashSet;
 
-use brass::vdom::Render;
 use factordb::{query::expr::Expr, schema::AttributeDescriptor};
 use semantic_ui_core::ContextExt;
 
@@ -127,8 +126,7 @@ impl brass::Component for EntityFilterFormComp {
                 options: &self.entity_type_options,
                 selected: &self.entity_types,
                 on_select: ctx.callback_map(Msg::TypeToggled),
-            }
-            .render(),
+            },
         };
 
         let submit = brass_bulma::button()
@@ -142,7 +140,11 @@ impl brass::Component for EntityFilterFormComp {
             .on_click(ctx.on_simple(|| Msg::Reset));
         let buttons = brass_bulma::buttons().and((submit, clear));
 
-        brass_bulma::box_().and((search, types, buttons)).build()
+        brass_bulma::box_()
+            .and(search)
+            .and(types)
+            .and(buttons)
+            .build()
     }
 
     fn on_property_change(

@@ -20,12 +20,17 @@ struct FileItem {
     // progress: u32,
 }
 
-pub struct FileUploader {
+pub struct FileUploader;
+
+struct State {
     files: Vec<FileItem>,
+    collection_name: Option<String>,
     loading: bool,
 }
 
-impl FileUploader {
+brass::enable_props!(FileUploader => State);
+
+impl State {
     fn add_file(&mut self, file: web_sys::File) {
         self.files.push(FileItem {
             index: self.files.len(),
@@ -60,14 +65,15 @@ impl FileUploader {
     }
 }
 
-impl brass::Component for FileUploader {
-    type Properties = ();
+impl brass::Component for State {
+    type Properties = FileUploader;
 
     type Msg = Msg;
 
     fn init(_props: Self::Properties, _ctx: &mut brass::Context<Self::Msg>) -> Self {
         Self {
             files: Vec::new(),
+            collection_name: None,
             loading: false,
         }
     }

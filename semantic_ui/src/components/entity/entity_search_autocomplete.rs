@@ -15,6 +15,8 @@ use semantics_core::base::AttrTitle;
 use super::entity_title;
 
 pub struct EntitySearchAutocomplete {
+    pub placeholder: Option<String>,
+    pub filter: Option<Expr>,
     pub on_select: Callback<Item>,
     pub ignored_ids: Option<HashSet<factordb::Id>>,
 }
@@ -52,6 +54,12 @@ impl PropComponent for State {
         match msg {
             Msg::Term(value) => {
                 let expr = Expr::contains(Expr::attr::<AttrTitle>(), value.trim());
+                let expr = if let Some(filter) = &props.filter {
+                    expr.and_with(filter.clone())
+                } else {
+                    expr
+                };
+
                 let query = Select::new().with_filter(expr).with_limit(10);
 
                 let guard =
@@ -82,6 +90,8 @@ impl PropComponent for State {
                     .and_then(|page| page.items.get(index))
                 {
                     props.on_select.send(item.clone());
+                    self.term = String::new();
+                    self.loader = LoadState::Idle;
                 }
             }
         }
@@ -95,7 +105,7 @@ impl PropComponent for State {
         let input = brass_bulma::Input {
             _type: "text".into(),
             color: brass_bulma::Color::Default,
-            placeholder: None,
+            placeholder: props.placeholder.clone(),
             value: self.term.clone(),
             on_input: ctx
                 .on_opt(|ev: web_sys::Event| brass::util::input_event_value(ev).map(Msg::Term)),

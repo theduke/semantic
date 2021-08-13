@@ -78,6 +78,13 @@ impl<T> LoadState<T> {
         }
     }
 
+    pub fn as_success_mut(&mut self) -> Option<&mut T> {
+        if let Self::Success(v) = self {
+            Some(v)
+        } else {
+            None
+        }
+    }
     pub fn as_error(&self) -> Option<&str> {
         if let Self::Failed(err) = self {
             Some(err.as_str())

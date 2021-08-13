@@ -2,7 +2,7 @@ use std::collections::HashSet;
 
 use brass::{
     dom::Attr,
-    vdom::{self, div_with, EventCallback, Render},
+    vdom::{self, div_with, EventCallback},
     Callback, PropComponent, Shared, VNode,
 };
 use factordb::{query::select::Item, schema::AttrMapExt};
@@ -125,6 +125,7 @@ impl PropComponent for CollectionFormComp {
                         .iter()
                         .filter_map(|item| item.data.get_id())
                         .collect(),
+                    extra: Default::default(),
                 };
                 props.on_submit.send(col);
                 self.is_changed = false;
@@ -206,6 +207,8 @@ impl PropComponent for CollectionFormComp {
                 }
 
                 let autocomplete = EntitySearchAutocomplete {
+                    placeholder: None,
+                    filter: None,
                     on_select: ctx.callback_map(Msg::AddItem),
                     ignored_ids: Some(ignored),
                 };

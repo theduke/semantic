@@ -1,12 +1,14 @@
 use serde::{Deserialize, Serialize};
 
 use factordb::{
+    data::DataMap,
     query::{
         expr::Expr,
+        mutate::Mutate,
         select::{Item, Select},
     },
-    schema::{builtin::AttrIdent, AttrMapExt},
-    Attribute, Entity, Id,
+    schema::{builtin::AttrIdent, AttrMapExt, AttributeDescriptor, EntityContainer},
+    AnyError, Attribute, Entity, Id,
 };
 
 use super::{AttrDescription, AttrTitle, AttrUrl};
@@ -41,6 +43,41 @@ pub struct Collection {
     #[factor(attr = AttrCollectionItem)]
     #[serde(rename = "semantic/collection_items")]
     pub item_ids: Vec<Id>,
+
+    #[factor(ignore)]
+    #[serde(flatten)]
+    pub extra: DataMap,
+}
+
+impl Collection {
+    /// Build a select query that returns all collections that contain the given
+    /// entity.
+    pub fn query_collections_with_entity(id: Id) -> Select {
+        let expr = Expr::in_(id, Expr::attr::<AttrCollectionItem>());
+        Select::new().with_filter(expr)
+    }
+
+    /// Build a mutation for adding an item from a colleciton.
+    pub fn mutate_add_item(collection_id: Id, entity_id: Id) -> Mutate {
+        let mut map = DataMap::new();
+        map.insert(
+            AttrCollectionItem::QUALIFIED_NAME.into(),
+            vec![entity_id].into(),
+        );
+
+        Mutate::merge(collection_id, map)
+    }
+
+    pub fn mutate_remove_item(mut col: Collection, entity_id: Id) -> Result<Mutate, AnyError> {
+        // FIXME: use a Patch to remove the specific item id instead of
+        // overwriting. Needs Patch support implemented in factordb.
+
+        let id = col.id;
+        col.item_ids.retain(|id| id != &entity_id);
+        let map = col.into_map()?;
+
+        Ok(Mutate::merge(id, map))
+    }
 }
 
 /// A [Collection] with it's entities loaded.
@@ -60,6 +97,7 @@ impl CollectionWithItems {
                 title: String::new(),
                 description: None,
                 item_ids: Vec::new(),
+                extra: Default::default(),
             },
             items: Vec::new(),
         }

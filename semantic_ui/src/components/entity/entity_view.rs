@@ -3,11 +3,13 @@ use brass::{
     vdom::{div, div_with, EventCallback, Render},
     Callback, VNode,
 };
-use factordb::{query::select::Item, schema::AttrMapExt, AnyError};
+use factordb::{query::select::Item, schema::AttrMapExt, AnyError, Id};
 use semantic_ui_core::{
     loader::LoadState, ContextExt, DynEntityRenderer, EntityInfo, EntityRenderOpts,
     RenderContextExt,
 };
+
+use crate::components::base::collections::EntityCollectionManager;
 
 use super::{entity_joins, entity_title};
 
@@ -94,6 +96,7 @@ pub struct EntityBox {
 enum Msg {
     ToggleActions,
     ToggleShowTable,
+    ToggleCollectionManager,
     OpenSourceUrl,
     Open,
     DeleteStart,
@@ -104,6 +107,7 @@ enum Msg {
 
 enum Action {
     Delete(LoadState<()>),
+    ManageCollections,
 }
 
 pub struct EntityActionButton {
@@ -129,6 +133,7 @@ impl brass::vdom::Render for EntityActionButton {
 
 struct State {
     item: Item,
+    entity_id: Option<Id>,
     options: EntityRenderOpts,
     on_delete: Option<Callback<Item>>,
 
@@ -175,6 +180,7 @@ impl brass::Component for State {
             .cloned();
 
         Self {
+            entity_id: item.data.get_id(),
             item,
             options,
             on_delete: props.on_delete,
@@ -241,6 +247,18 @@ impl brass::Component for State {
             Msg::ToggleShowTable => {
                 self.show_table = !self.show_table;
             }
+            Msg::ToggleCollectionManager => {
+                if self
+                    .active_action
+                    .as_ref()
+                    .map(|x| matches!(x, Action::ManageCollections))
+                    .unwrap_or_default()
+                {
+                    self.active_action = None;
+                } else {
+                    self.active_action = Some(Action::ManageCollections);
+                }
+            }
         }
     }
 
@@ -274,6 +292,14 @@ impl brass::Component for State {
                 is_disabled: is_deleting,
                 on: ctx.callback_map(|_: ()| Msg::DeleteStart),
             });
+
+            actions.push(EntityActionButton {
+                icon: "fas fa-list".into(),
+                label: "Manage Collections".into(),
+                is_active: false,
+                is_disabled: false,
+                on: ctx.callback_map(|_: ()| Msg::ToggleCollectionManager),
+            });
         }
 
         let active_action = match &self.active_action {
@@ -287,6 +313,16 @@ impl brass::Component for State {
                 let state = loader.render(|_| brass_bulma::notification_error("Deleted!").build());
 
                 div_with((confirm, state)).build()
+            }
+            Some(Action::ManageCollections) => {
+                if let Some(id) = self.entity_id {
+                    let manager = EntityCollectionManager { entity_id: id };
+                    let content = brass_bulma::box_().and(manager);
+                    brass_bulma::modal(content, ctx.callback_map(|_| Msg::ToggleCollectionManager))
+                        .build()
+                } else {
+                    VNode::Empty
+                }
             }
             None => VNode::Empty,
         };

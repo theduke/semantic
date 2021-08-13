@@ -1,6 +1,10 @@
 use std::rc::Rc;
 
-use brass::{vdom::div, Callback};
+use brass::{
+    vdom::{self, div, Render},
+    Callback, VNode,
+};
+use semantic_ui_core::components::form::{self, Field, InputField};
 use semantics_core::base::{Habit, HabitMode};
 
 pub struct HabitForm {
@@ -132,4 +136,43 @@ impl brass::Component for HabitFormComp {
         // FIXME: this will lead to broken components...
         false
     }
+}
+
+pub struct HabitForm2 {
+    pub habit: Habit,
+    pub on_submit: Callback<Habit>,
+}
+
+pub fn habit_form(habit: Habit, on_submit: Callback<Habit>) -> VNode {
+    form::Form {
+        on_submit,
+        initial_values: habit,
+        render: Rc::new(|mut state| {
+            vdom::div()
+                .and(state.field(InputField::<Habit> {
+                    name: "title".to_string(),
+                    get: |h| &h.title,
+                    set: |v, h| {
+                        h.title = v;
+                    },
+                    validate: None,
+                    label: "Title".to_string(),
+                    help: None,
+                    placeholder: None,
+                }))
+                .and(state.field(InputField::<Habit> {
+                    name: "description".to_string(),
+                    get: |h| &h.title,
+                    set: |v, h| {
+                        h.title = v;
+                    },
+                    validate: None,
+                    label: "Description".to_string(),
+                    help: None,
+                    placeholder: None,
+                }))
+                .build()
+        }),
+    }
+    .render()
 }
