@@ -9,7 +9,7 @@ use semantic_ui_core::{
     RenderContextExt,
 };
 
-use crate::components::base::{collections::EntityCollectionManager, tags::TagManager};
+use crate::components::base::{collections::EntityCollectionManager, tags::EntityTagManager};
 
 use super::{entity_joins, entity_title};
 
@@ -348,7 +348,7 @@ impl brass::Component for State {
             }
             Some(Action::ManageTags) => {
                 if let Some(id) = self.entity_id {
-                    let manager = TagManager { entity_id: id };
+                    let manager = EntityTagManager { entity_id: id };
                     let content = brass_bulma::box_().and(manager);
                     brass_bulma::modal(content, ctx.callback_map(|_| Msg::ToggleTagManager)).build()
                 } else {
