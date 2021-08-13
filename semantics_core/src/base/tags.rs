@@ -60,7 +60,7 @@ impl Tag {
     /// Build a [`Mutate`] that adds a tag to an entity.
     pub fn mutate_add_tag(entity_id: Id, tag_id: Id) -> Mutate {
         Mutate::merge(
-            tag_id,
+            entity_id,
             DataMap::new().with_insert(AttrTags::QUALIFIED_NAME, vec![tag_id]),
         )
     }

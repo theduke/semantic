@@ -208,6 +208,8 @@ impl PropComponent for CollectionFormComp {
 
                 let autocomplete = EntitySearchAutocomplete {
                     placeholder: None,
+                    renderer: None,
+                    attribute: None,
                     filter: None,
                     on_select: ctx.callback_map(Msg::AddItem),
                     ignored_ids: Some(ignored),

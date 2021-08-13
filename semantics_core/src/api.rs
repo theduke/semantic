@@ -142,6 +142,18 @@ impl<E: ApiClientExecutor> ApiClient<E> {
         }
     }
 
+    pub async fn entity(&self, id: factordb::Id) -> Result<factordb::data::DataMap, AnyError> {
+        use factordb::query::expr::Expr;
+        let filter = Expr::eq(Expr::Attr("factor/id".into()), id);
+        let mut page = self
+            .select(factordb::query::select::Select::new().with_filter(filter))
+            .await?;
+        page.items
+            .pop()
+            .map(|x| x.data)
+            .ok_or_else(|| anyhow::anyhow!("Not found"))
+    }
+
     pub async fn select(
         &self,
         select: factordb::query::select::Select,

@@ -170,6 +170,8 @@ impl brass::PropComponent for State {
 
             let finder = EntitySearchAutocomplete {
                 placeholder: Some("Collection title...".into()),
+                attribute: None,
+                renderer: None,
                 filter: Some(Expr::eq(
                     Expr::attr::<AttrType>(),
                     Collection::QUALIFIED_NAME,

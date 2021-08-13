@@ -1,12 +1,15 @@
 use std::collections::HashSet;
 
-use brass::{vdom, Callback, PropComponent};
+use brass::{
+    vdom::{self, RefRenderer},
+    Callback, PropComponent,
+};
 use factordb::{
     query::{
         expr::Expr,
         select::{Item, Page, Select},
     },
-    schema::AttrMapExt,
+    schema::{AttrMapExt, AttributeDescriptor},
     AnyError,
 };
 use semantic_ui_core::loader::LoadState;
@@ -17,6 +20,8 @@ use super::entity_title;
 pub struct EntitySearchAutocomplete {
     pub placeholder: Option<String>,
     pub filter: Option<Expr>,
+    pub attribute: Option<String>,
+    pub renderer: Option<RefRenderer<Item>>,
     pub on_select: Callback<Item>,
     pub ignored_ids: Option<HashSet<factordb::Id>>,
 }
@@ -53,7 +58,11 @@ impl PropComponent for State {
     ) {
         match msg {
             Msg::Term(value) => {
-                let expr = Expr::contains(Expr::attr::<AttrTitle>(), value.trim());
+                let attr = props
+                    .attribute
+                    .clone()
+                    .unwrap_or_else(|| AttrTitle::QUALIFIED_NAME.to_string());
+                let expr = Expr::contains(Expr::Attr(attr.into()), value.trim());
                 let expr = if let Some(filter) = &props.filter {
                     expr.and_with(filter.clone())
                 } else {
@@ -118,9 +127,14 @@ impl PropComponent for State {
                 brass_bulma::notification_warning("Nothing found...").build()
             } else {
                 let items = page.items.iter().enumerate().map(|(index, item)| {
-                    let title = entity_title(&item.data);
+                    let content = props
+                        .renderer
+                        .as_ref()
+                        .map(|r| r.render(&item))
+                        .unwrap_or_else(|| vdom::text(entity_title(&item.data)));
+
                     brass_bulma::button()
-                        .and(title)
+                        .and(content)
                         .on_click(ctx.on_simple(move || Msg::Select(index)))
                 });
 

@@ -5,16 +5,19 @@ use factordb::{
     data::value::from_value_map,
     query::{
         expr::Expr,
-        select::{Item, Page},
+        select::{Item, Page, Select},
     },
-    schema::{builtin::AttrType, EntityDescriptor},
+    schema::{
+        builtin::{AttrId, AttrType},
+        AttrMapExt, AttributeDescriptor, EntityDescriptor,
+    },
     AnyError, Id,
 };
 use semantic_ui_core::{
     components::small_title,
     loader::{error_msg, LoadState},
 };
-use semantics_core::base::Tag;
+use semantics_core::base::{AttrTagName, AttrTags, Tag};
 
 use crate::components::entity::entity_search_autocomplete::EntitySearchAutocomplete;
 
@@ -49,8 +52,15 @@ impl brass::PropComponent for State {
         let entity_id = props.entity_id;
         let guard = ctx.run_map(
             async move {
-                let select = Tag::query_entities_with_tag(entity_id);
-                let page = crate::api().select(select).await?.convert_data::<Tag>()?;
+                let api = crate::api();
+                let entity = api.entity(entity_id).await?;
+                let tag_ids = entity.get_attr_vec::<AttrTags>();
+
+                let filter = Expr::in_(Expr::attr::<AttrId>(), tag_ids);
+                let page = api
+                    .select(Select::new().with_filter(filter).with_limit(1000))
+                    .await?
+                    .convert_data::<Tag>()?;
                 Ok(page)
             },
             Msg::CurrentLoaded,
@@ -110,7 +120,7 @@ impl brass::PropComponent for State {
                 let guard = ctx.run_map(
                     async move {
                         let tag: Tag = from_value_map(item.data)?;
-                        let mutate = Tag::mutate_add_tag(tag.id, entity_id);
+                        let mutate = Tag::mutate_add_tag(entity_id, tag.id);
                         crate::api().mutate(mutate).await?;
                         Ok(tag)
                     },
@@ -174,7 +184,15 @@ impl brass::PropComponent for State {
 
             let finder = EntitySearchAutocomplete {
                 placeholder: Some("Collection title...".into()),
+                attribute: Some(AttrTagName::QUALIFIED_NAME.into()),
                 filter: Some(Expr::eq(Expr::attr::<AttrType>(), Tag::QUALIFIED_NAME)),
+                renderer: Some(vdom::RefRenderer::Static(|item| {
+                    let name = item
+                        .data
+                        .get_attr::<AttrTagName>()
+                        .unwrap_or_else(|| "<??>".to_string());
+                    vdom::text(name)
+                })),
                 on_select: ctx.callback_map(Msg::Add),
                 ignored_ids: Some(ignored),
             };
