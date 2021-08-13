@@ -1,4 +1,5 @@
 use factordb::{
+    data::DataMap,
     schema::{builtin::AttrIdent, EntityDescriptor},
     Attribute, Entity, Id, Ident,
 };
@@ -72,6 +73,10 @@ pub struct File {
     #[factor(attr = AttrBlobUri)]
     #[serde(rename = "semantic/blob_uri")]
     pub blob_uri: Option<String>,
+
+    #[factor(ignore)]
+    #[serde(flatten)]
+    pub extra: DataMap,
 }
 
 #[derive(Serialize, Deserialize, Entity, Clone, Debug)]

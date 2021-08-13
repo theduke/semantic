@@ -1,4 +1,4 @@
-use factordb::{Attribute, Entity, Id};
+use factordb::{data::DataMap, Attribute, Entity, Id};
 use serde::{Deserialize, Serialize};
 
 use super::AttrTitle;
@@ -21,4 +21,8 @@ pub struct Note {
     #[factor(attr = AttrNoteBody)]
     #[serde(rename = "semantic/note_body")]
     pub body: String,
+
+    #[factor(ignore)]
+    #[serde(flatten)]
+    pub extra: DataMap,
 }

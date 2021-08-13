@@ -9,7 +9,7 @@ use semantic_ui_core::{
     RenderContextExt,
 };
 
-use crate::components::base::collections::EntityCollectionManager;
+use crate::components::base::{collections::EntityCollectionManager, tags::TagManager};
 
 use super::{entity_joins, entity_title};
 
@@ -97,6 +97,7 @@ enum Msg {
     ToggleActions,
     ToggleShowTable,
     ToggleCollectionManager,
+    ToggleTagManager,
     OpenSourceUrl,
     Open,
     DeleteStart,
@@ -108,6 +109,7 @@ enum Msg {
 enum Action {
     Delete(LoadState<()>),
     ManageCollections,
+    ManageTags,
 }
 
 pub struct EntityActionButton {
@@ -259,6 +261,18 @@ impl brass::Component for State {
                     self.active_action = Some(Action::ManageCollections);
                 }
             }
+            Msg::ToggleTagManager => {
+                if self
+                    .active_action
+                    .as_ref()
+                    .map(|x| matches!(x, Action::ManageTags))
+                    .unwrap_or_default()
+                {
+                    self.active_action = None;
+                } else {
+                    self.active_action = Some(Action::ManageTags);
+                }
+            }
         }
     }
 
@@ -300,6 +314,14 @@ impl brass::Component for State {
                 is_disabled: false,
                 on: ctx.callback_map(|_: ()| Msg::ToggleCollectionManager),
             });
+
+            actions.push(EntityActionButton {
+                icon: "fas fa-tags".into(),
+                label: "Manage Tags".into(),
+                is_active: false,
+                is_disabled: false,
+                on: ctx.callback_map(|_: ()| Msg::ToggleTagManager),
+            });
         }
 
         let active_action = match &self.active_action {
@@ -320,6 +342,15 @@ impl brass::Component for State {
                     let content = brass_bulma::box_().and(manager);
                     brass_bulma::modal(content, ctx.callback_map(|_| Msg::ToggleCollectionManager))
                         .build()
+                } else {
+                    VNode::Empty
+                }
+            }
+            Some(Action::ManageTags) => {
+                if let Some(id) = self.entity_id {
+                    let manager = TagManager { entity_id: id };
+                    let content = brass_bulma::box_().and(manager);
+                    brass_bulma::modal(content, ctx.callback_map(|_| Msg::ToggleTagManager)).build()
                 } else {
                     VNode::Empty
                 }

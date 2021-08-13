@@ -15,6 +15,9 @@ pub use self::habit::*;
 mod collection;
 pub use self::collection::*;
 
+mod tags;
+pub use self::tags::*;
+
 use factordb::{
     schema::{builtin::AttrIdent, AttributeDescriptor, EntityDescriptor},
     Attribute, Id,
@@ -77,6 +80,10 @@ impl PluginDescriptor for SemanticPlugin {
                     habit::HabitMode::schema(),
                     // Collection.
                     collection::AttrCollectionItem::schema(),
+                    // Tags.
+                    tags::AttrTagName::schema(),
+                    tags::AttrTagParent::schema(),
+                    tags::AttrTags::schema(),
                 ],
                 entities: vec![
                     // File
@@ -92,6 +99,8 @@ impl PluginDescriptor for SemanticPlugin {
                     habit::HabitOccurence::schema(),
                     // collection
                     collection::Collection::schema(),
+                    // tags
+                    tags::Tag::schema(),
                 ],
             },
         }

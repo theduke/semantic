@@ -68,15 +68,15 @@ impl Collection {
         Mutate::merge(collection_id, map)
     }
 
-    pub fn mutate_remove_item(mut col: Collection, entity_id: Id) -> Result<Mutate, AnyError> {
+    pub fn mutate_remove_item(col: &Collection, entity_id: Id) -> Result<Mutate, AnyError> {
         // FIXME: use a Patch to remove the specific item id instead of
         // overwriting. Needs Patch support implemented in factordb.
 
-        let id = col.id;
-        col.item_ids.retain(|id| id != &entity_id);
-        let map = col.into_map()?;
-
-        Ok(Mutate::merge(id, map))
+        let mut item_ids = col.item_ids.clone();
+        item_ids.retain(|item_id| item_id != &entity_id);
+        let mut map = DataMap::new();
+        map.insert(AttrCollectionItem::QUALIFIED_NAME.into(), item_ids.into());
+        Ok(Mutate::merge(col.id, map))
     }
 }
 

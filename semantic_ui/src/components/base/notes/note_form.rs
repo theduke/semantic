@@ -30,6 +30,7 @@ impl brass::Component for NoteForm {
             id: Id::from_uuid(uuid::Uuid::new_v4()),
             title: String::new(),
             body: String::new(),
+            extra: Default::default(),
         });
 
         Self {

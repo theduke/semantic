@@ -3,6 +3,7 @@ pub mod files;
 pub mod habits;
 pub mod notes;
 mod play;
+pub mod tags;
 
 mod plugin;
 pub use plugin::BasePlugin;

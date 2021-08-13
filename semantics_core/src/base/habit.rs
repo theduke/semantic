@@ -1,5 +1,5 @@
 use factordb::{
-    data::{Timestamp, ValueType},
+    data::{DataMap, Timestamp, ValueType},
     schema::AttributeDescriptor,
     Attribute, Entity, Id,
 };
@@ -80,6 +80,10 @@ pub struct Habit {
     #[factor(attr = HabitMode)]
     #[serde(rename = "semantic/description")]
     pub mode: HabitMode,
+
+    #[factor(ignore)]
+    #[serde(flatten)]
+    pub extra: DataMap,
 }
 
 #[derive(Serialize, Deserialize, Entity, Clone, Debug)]

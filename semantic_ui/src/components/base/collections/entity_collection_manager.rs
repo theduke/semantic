@@ -74,11 +74,11 @@ impl brass::PropComponent for State {
             Msg::CurrentLoaded(res) => {
                 self.current_collections_loader.set_result(res);
             }
-            Msg::Remove(mut col) => {
+            Msg::Remove(col) => {
                 let entity_id = props.entity_id;
                 let guard = ctx.run_map(
                     async move {
-                        let mutate = Collection::mutate_remove_item(col.clone(), entity_id)?;
+                        let mutate = Collection::mutate_remove_item(&col, entity_id)?;
                         crate::api().mutate(mutate).await?;
                         Ok(col)
                     },

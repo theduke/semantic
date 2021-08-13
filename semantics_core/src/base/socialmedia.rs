@@ -1,4 +1,4 @@
-use factordb::{Attribute, Entity, Id, Ident};
+use factordb::{data::DataMap, Attribute, Entity, Id, Ident};
 use serde::{Deserialize, Serialize};
 
 use super::{AttrIdent, AttrTitle, AttrUrl, AttrUsername};
@@ -34,4 +34,8 @@ pub struct SocialMediaPost {
     #[factor(attr = AttrSocialMediaPostContent)]
     #[serde(rename = "semantic/social_media_post_content")]
     pub content_ids: Vec<Id>,
+
+    #[factor(ignore)]
+    #[serde(flatten)]
+    pub extra: DataMap,
 }
