@@ -9,6 +9,7 @@ pub enum Route {
     Entity(factordb::Ident),
     EntityCreateSelect,
     EntityCreate { entity_type: String },
+    Tags,
 }
 
 impl Route {
@@ -31,6 +32,7 @@ impl Route {
             ["create", tail @ ..] => Some(Route::EntityCreate {
                 entity_type: tail.join("/"),
             }),
+            ["tags"] => Some(Route::Tags),
             _other => None,
         }
     }
@@ -41,6 +43,7 @@ impl Route {
             Route::Browse => "/browse".to_string(),
             Route::Import => "/import".to_string(),
             Route::Upload => "/upload".to_string(),
+            Route::Tags => "/tags".to_string(),
             Route::Entity(ident) => format!("/entity/{}", ident.to_string()),
             Route::EntityCreateSelect => "/create".to_string(),
             Route::EntityCreate { entity_type } => format!("/create/{}", entity_type),
@@ -55,6 +58,7 @@ impl Route {
             Route::Browse => "Browse - Semantic",
             Route::Import => "Import - Semantic",
             Route::Upload => "Upload - Semantic",
+            Route::Tags => "Tags - Semantic",
             Route::Entity(_) => "Show - Semantic",
             Route::EntityCreateSelect => "Create - Semantic",
             Route::EntityCreate { entity_type: _ } => "Create - Semantic",

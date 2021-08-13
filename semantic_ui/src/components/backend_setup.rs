@@ -77,7 +77,10 @@ impl brass::Component for BackendSetupFormComp {
         let path = brass_bulma::FieldHorizontal {
             label: "Data Path".into(),
             help: Some(brass_bulma::Help {
-                message: "File system data path. Leave empty to use the default location.".into(),
+                message: vdom::text(
+                    "File system data path. Leave empty to use the default location.",
+                )
+                .into(),
                 color: brass_bulma::Color::Default,
             }),
             control: brass_bulma::Input {

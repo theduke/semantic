@@ -1,13 +1,13 @@
 use brass::{
     dom::Event,
-    vdom::{self, component, div, TagBuilder},
+    vdom::{self, component, div, Render, TagBuilder},
     VNode,
 };
 use semantic_ui_core::{routing::Route, ContextExt};
 
 use crate::components as comps;
 
-use super::import::import_page::ImportPage;
+use super::{base::tags::TagManager, import::import_page::ImportPage};
 
 pub fn history_push_route(route: &Route) {
     let path = route.to_path();
@@ -45,6 +45,7 @@ pub fn router(route: &Route) -> VNode {
                 },
             )
         }
+        Route::Tags => TagManager {}.render(),
     };
 
     div()
@@ -127,6 +128,11 @@ fn navbar() -> TagBuilder {
         .and(LinkProps {
             route: Route::Import,
             text: "Import".to_string(),
+            class: Some("navbar-item".to_string()),
+        })
+        .and(LinkProps {
+            route: Route::Tags,
+            text: "Tags".to_string(),
             class: Some("navbar-item".to_string()),
         });
 

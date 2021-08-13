@@ -226,6 +226,7 @@ impl App {
             blob_uri: Some(blob_uri),
             size: Some(size),
             mime_type: mime_guess.map(|x| x.mime_type().to_string()),
+            extra: Default::default(),
         };
 
         // Build the data.
