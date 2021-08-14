@@ -2,7 +2,7 @@ use std::collections::HashSet;
 
 use brass::{
     vdom::{self, RefRenderer},
-    Callback, PropComponent,
+    Callback, PropComponent, Str,
 };
 use factordb::{
     query::{
@@ -18,7 +18,7 @@ use semantics_core::base::AttrTitle;
 use super::entity_title;
 
 pub struct EntitySearchAutocomplete {
-    pub placeholder: Option<String>,
+    pub placeholder: Option<Str>,
     pub filter: Option<Expr>,
     pub attribute: Option<String>,
     pub renderer: Option<RefRenderer<Item>>,
@@ -33,7 +33,7 @@ enum Msg {
 }
 
 struct State {
-    term: String,
+    term: Str,
     loader: LoadState<Page<Item>>,
 }
 
@@ -45,7 +45,7 @@ impl PropComponent for State {
 
     fn init(_props: &Self::Properties, _ctx: &mut brass::Context<Self::Msg>) -> Self {
         Self {
-            term: String::new(),
+            term: Str::new(),
             loader: LoadState::Idle,
         }
     }
@@ -99,7 +99,7 @@ impl PropComponent for State {
                     .and_then(|page| page.items.get(index))
                 {
                     props.on_select.send(item.clone());
-                    self.term = String::new();
+                    self.term = Str::new();
                     self.loader = LoadState::Idle;
                 }
             }
@@ -114,7 +114,7 @@ impl PropComponent for State {
         let input = brass_bulma::Input {
             _type: "text".into(),
             color: brass_bulma::Color::Default,
-            placeholder: props.placeholder.clone(),
+            placeholder: props.placeholder.clone().into(),
             value: self.term.clone(),
             on_input: ctx
                 .on_opt(|ev: web_sys::Event| brass::util::input_event_value(ev).map(Msg::Term)),

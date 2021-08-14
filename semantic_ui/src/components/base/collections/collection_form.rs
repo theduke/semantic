@@ -161,7 +161,7 @@ impl PropComponent for CollectionFormComp {
                     _type: "text".into(),
                     color: brass_bulma::Color::Default,
                     placeholder: None,
-                    value: self.title.clone(),
+                    value: self.title.clone().into(),
                     on_input: ctx.on_opt(|ev| brass::util::input_event_value(ev).map(Msg::Title)),
                 },
             };

@@ -1,7 +1,7 @@
 use std::{collections::HashSet, rc::Rc};
 
 use brass::{
-    vdom::{self, Render},
+    vdom::{self, s, Render},
     Callback, VNode,
 };
 use semantic_ui_core::components::form::{
@@ -44,13 +44,13 @@ pub fn tag_form(
 
             vdom::div()
                 .and(state.field(InputField::<Tag> {
-                    name: "name".to_string(),
+                    name: s("name"),
                     get: |h| &h.name,
                     set: |v, h| {
                         h.name = v;
                     },
                     validate: Some(name_validator),
-                    label: "Title".to_string(),
+                    label: s("Title"),
                     help: None,
                     placeholder: None,
                 }))

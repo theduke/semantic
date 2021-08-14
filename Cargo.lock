@@ -188,6 +188,7 @@ dependencies = [
 name = "brass"
 version = "0.1.0"
 dependencies = [
+ "fnv",
  "futures",
  "futures-core",
  "js-sys",

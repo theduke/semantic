@@ -1,7 +1,7 @@
 use std::rc::Rc;
 
 use brass::{
-    vdom::{self, Render},
+    vdom::{self, s, Render},
     Callback, VNode,
 };
 use semantic_ui_core::components::form::{self, InputField, SelectField};
@@ -15,37 +15,37 @@ pub fn habit_form(habit: Habit, on_submit: Callback<Habit>) -> VNode {
             vdom::div()
                 // Title.
                 .and(state.field(InputField::<Habit> {
-                    name: "title".to_string(),
+                    name: s("title"),
                     get: |h| &h.title,
                     set: |v, h| {
                         h.title = v;
                     },
                     validate: None,
-                    label: "Title".to_string(),
+                    label: s("Title"),
                     help: None,
                     placeholder: None,
                 }))
                 // Description
                 .and(state.field(InputField::<Habit> {
-                    name: "description".to_string(),
+                    name: s("description"),
                     get: |h| &h.title,
                     set: |v, h| {
                         h.title = v;
                     },
                     validate: None,
-                    label: "Description".to_string(),
+                    label: s("Description"),
                     help: None,
                     placeholder: None,
                 }))
                 // Mode
                 .and(state.field(SelectField::<Habit, HabitMode> {
-                    name: "mode".to_string(),
+                    name: s("mode"),
                     get: |h| &h.mode,
                     set: |v, h| {
                         h.mode = v;
                     },
                     validate: None,
-                    label: "Description".to_string(),
+                    label: s("Description"),
                     help: None,
                     // FIXME: don't clone...
                     options: Rc::new(vec![

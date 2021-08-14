@@ -61,7 +61,7 @@ impl brass::Component for NoteForm {
                 _type: "text",
                 color: brass_bulma::Color::Default,
                 placeholder: None,
-                value: self.note.title.clone(),
+                value: self.note.title.clone().into(),
                 on_input: _ctx.on(|ev: web_sys::Event| {
                     let value = brass::util::input_event_value(ev).unwrap();
                     Msg::Title(value)
@@ -75,7 +75,7 @@ impl brass::Component for NoteForm {
             control: brass_bulma::Textarea {
                 color: brass_bulma::Color::Default,
                 placeholder: None,
-                value: self.note.body.clone(),
+                value: self.note.body.clone().into(),
                 on_input: _ctx.on(|ev: web_sys::Event| {
                     let value = brass::util::textarea_input_value(ev).unwrap();
                     Msg::Body(value)

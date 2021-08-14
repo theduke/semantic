@@ -1,4 +1,4 @@
-use brass::{dom::Attr, vdom::div};
+use brass::{dom::Attr, vdom::div, Str};
 use url::Url;
 
 pub struct ImportForm {
@@ -6,7 +6,7 @@ pub struct ImportForm {
     can_submit: bool,
     on_preview: brass::Callback<url::Url>,
     on_import: brass::Callback<url::Url>,
-    url: String,
+    url: Str,
     parsed_url: Option<Url>,
 }
 
@@ -32,7 +32,7 @@ impl brass::Component for ImportForm {
         Self {
             loading: props.loading,
             can_submit: false,
-            url: String::new(),
+            url: Str::new(),
             parsed_url: None,
             on_preview: props.on_preview,
             on_import: props.on_import,
@@ -47,7 +47,7 @@ impl brass::Component for ImportForm {
                         self.parsed_url = Some(parsed);
                         self.can_submit = true;
                     }
-                    self.url = url;
+                    self.url = Str::shared(url);
                 }
             }
             Msg::Preview => {

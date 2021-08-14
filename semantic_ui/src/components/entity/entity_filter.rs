@@ -1,5 +1,6 @@
 use std::collections::HashSet;
 
+use brass::vdom::s;
 use factordb::{query::expr::Expr, schema::AttributeDescriptor};
 use semantic_ui_core::ContextExt;
 
@@ -68,7 +69,8 @@ impl brass::Component for EntityFilterFormComp {
                     .schema
                     .title
                     .clone()
-                    .unwrap_or_else(|| info.schema.ident.clone()),
+                    .unwrap_or_else(|| info.schema.ident.clone())
+                    .into(),
             })
             .collect();
 
@@ -108,13 +110,13 @@ impl brass::Component for EntityFilterFormComp {
 
     fn render(&self, mut ctx: brass::RenderContext<Self>) -> brass::VNode {
         let search = brass_bulma::FieldHorizontal {
-            label: "Search".to_string(),
+            label: s("Search"),
             help: None,
             control: brass_bulma::Input {
                 _type: "text",
                 color: brass_bulma::Color::Default,
                 placeholder: None,
-                value: self.search.clone(),
+                value: self.search.clone().into(),
                 on_input: ctx.on_opt(|ev| brass::util::input_event_value(ev).map(Msg::SetSearch)),
             },
         };

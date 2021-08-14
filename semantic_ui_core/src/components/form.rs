@@ -2,7 +2,7 @@ use std::{borrow::Borrow, cell::RefCell, collections::HashMap, rc::Rc};
 
 use brass::{
     vdom::{self, Render},
-    Callback, PropComponent, Shared, VNode,
+    Callback, PropComponent, Shared, Str, VNode,
 };
 
 pub trait Validator<V> {
@@ -84,13 +84,13 @@ impl<V> AndValidator<V> {
 }
 
 pub struct FieldState {
-    pub name: String,
+    pub name: Str,
     pub touched: bool,
     pub errors: Result<(), Vec<String>>,
 }
 
 pub struct Field<F: 'static, T: 'static> {
-    pub name: String,
+    pub name: Str,
     pub get: fn(&F) -> &T,
     pub set: fn(T, &mut F),
     pub render: Rc<dyn Fn(&T, &FieldState, Callback<T>) -> VNode>,
@@ -170,7 +170,7 @@ struct FormComponent<V> {
 
 struct FormState<V> {
     values: RefCell<V>,
-    fields: RefCell<HashMap<String, FieldData<V>>>,
+    fields: RefCell<HashMap<Str, FieldData<V>>>,
     callback: Callback<Msg>,
     is_valid: bool,
 }
@@ -255,7 +255,7 @@ impl<'a, V: 'static> FormRef<'a, V> {
 type AnyBox = Box<dyn std::any::Any>;
 
 enum Msg {
-    Changed { name: String, value: AnyBox },
+    Changed { name: Str, value: AnyBox },
     Submit,
 }
 
@@ -336,14 +336,14 @@ fn color_from_state(state: &FieldState) -> brass_bulma::Color {
 }
 
 pub struct InputField<F> {
-    pub name: String,
+    pub name: Str,
     pub get: fn(&F) -> &String,
     pub set: fn(String, &mut F),
     pub validate: Option<Box<dyn Validator<String>>>,
 
-    pub label: String,
-    pub help: Option<String>,
-    pub placeholder: Option<String>,
+    pub label: Str,
+    pub help: Option<Str>,
+    pub placeholder: Option<Str>,
 }
 
 impl<F> Into<Field<F, String>> for InputField<F> {
@@ -383,7 +383,7 @@ impl<F> Into<Field<F, String>> for InputField<F> {
                         _type: "text".into(),
                         color,
                         placeholder: placeholder.clone(),
-                        value: value.clone(),
+                        value: value.clone().into(),
                         on_input: callback
                             .on(|ev| brass::util::input_event_value(ev).unwrap_or_default()),
                     },
@@ -396,13 +396,13 @@ impl<F> Into<Field<F, String>> for InputField<F> {
 }
 
 pub struct SelectField<F, T> {
-    pub name: String,
+    pub name: Str,
     pub get: fn(&F) -> &T,
     pub set: fn(T, &mut F),
     pub validate: Option<Box<dyn Validator<T>>>,
 
-    pub label: String,
-    pub help: Option<String>,
+    pub label: Str,
+    pub help: Option<Str>,
     pub options: Rc<Vec<brass_bulma::SelectOption<T>>>,
 }
 

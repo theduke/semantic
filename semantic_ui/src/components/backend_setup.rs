@@ -68,7 +68,7 @@ impl brass::Component for BackendSetupFormComp {
                 _type: "password".into(),
                 color: brass_bulma::Color::Default,
                 placeholder: None,
-                value: self.key.clone(),
+                value: self.key.clone().into(),
                 on_input: ctx
                     .on_opt(|ev: web_sys::Event| brass::util::input_event_value(ev).map(Msg::Key)),
             },
@@ -87,7 +87,7 @@ impl brass::Component for BackendSetupFormComp {
                 _type: "text".into(),
                 color: brass_bulma::Color::Default,
                 placeholder: None,
-                value: self.data_path.clone(),
+                value: self.data_path.clone().into(),
                 on_input: ctx.on_opt(|ev: web_sys::Event| {
                     brass::util::input_event_value(ev).map(Msg::DataPath)
                 }),
