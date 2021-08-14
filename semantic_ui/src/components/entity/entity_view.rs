@@ -1,6 +1,6 @@
 use brass::{
     dom::Attr,
-    vdom::{div, div_with, EventCallback, Render},
+    vdom::{div, div_with, Render},
     Callback, VNode,
 };
 use factordb::{query::select::Item, schema::AttrMapExt, AnyError, Id};
@@ -57,7 +57,7 @@ impl Render for EntityView {
             let t = brass_bulma::card_header_title(self.title)
                 .style_raw("flex-grow: 0; cursor: pointer;");
             if let Some(on) = self.on_open {
-                t.on_click(EventCallback::callback(|_| (), on))
+                t.on_click(on.on(|_| ()))
             } else {
                 t
             }
@@ -128,7 +128,7 @@ impl brass::vdom::Render for EntityActionButton {
             .attr_toggle_if(self.is_disabled, Attr::Disabled)
             .style_raw("margin: 0")
             .and(brass_bulma::icon_fa(self.icon))
-            .on_click(EventCallback::callback(|_| (), self.on))
+            .on_click(self.on.on(|_| ()))
             .build()
     }
 }

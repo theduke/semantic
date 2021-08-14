@@ -23,7 +23,7 @@ impl brass::Component for BackendSetupFormComp {
     type Properties = BackendSetupForm;
     type Msg = Msg;
 
-    fn init(props: Self::Properties, ctx: &mut brass::Context<Self::Msg>) -> Self {
+    fn init(props: Self::Properties, _ctx: &mut brass::Context<Self::Msg>) -> Self {
         Self {
             on_submit: props.on_submit,
             data_path: String::new(),
@@ -31,7 +31,7 @@ impl brass::Component for BackendSetupFormComp {
         }
     }
 
-    fn update(&mut self, msg: Self::Msg, ctx: &mut brass::Context<Self::Msg>) {
+    fn update(&mut self, msg: Self::Msg, _ctx: &mut brass::Context<Self::Msg>) {
         match msg {
             Msg::DataPath(path) => {
                 self.data_path = path;

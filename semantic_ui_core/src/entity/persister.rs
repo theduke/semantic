@@ -3,7 +3,7 @@ use std::rc::Rc;
 use brass::Callback;
 use factordb::query::select::Item;
 
-use crate::{loader::LoadState, ContextExt};
+use crate::loader::LoadState;
 
 pub struct FormValid {
     pub item: Item,

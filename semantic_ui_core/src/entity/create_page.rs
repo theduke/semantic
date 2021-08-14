@@ -1,4 +1,4 @@
-use brass::{vdom::component, Callback};
+use brass::Callback;
 use brass_bulma::box_;
 use factordb::{query::select::Item, schema::AttrMapExt};
 

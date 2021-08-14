@@ -9,10 +9,7 @@ use axum::{
 use factordb::AnyError;
 use hyper::{Body, Method, Request, Response, StatusCode};
 
-use semantics_core::{
-    api::{self, ApiError, ApiResponse, BackendConfig, Query},
-    plugin::PluginDescriptor,
-};
+use semantics_core::api::{self, ApiError, ApiResponse, BackendConfig, Query};
 
 use crate::app::App;
 

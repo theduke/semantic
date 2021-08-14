@@ -2,14 +2,14 @@ mod entity_tag_manager;
 use std::rc::Rc;
 
 use brass::{
-    vdom::{self, EventCallback, Render},
-    Callback, Shared, VNode,
+    vdom::{self, Render},
+    Callback, VNode,
 };
 pub use entity_tag_manager::EntityTagManager;
 
 mod tag_manager;
 use factordb::{
-    data::value::{from_value_map, to_value_map},
+    data::value::from_value_map,
     query::{mutate::Mutate, select::Item},
     schema::EntityContainer,
     Id,

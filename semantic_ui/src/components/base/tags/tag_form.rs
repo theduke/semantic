@@ -1,7 +1,7 @@
 use std::{collections::HashSet, rc::Rc};
 
 use brass::{
-    vdom::{self, EventCallback, Render},
+    vdom::{self, Render},
     Callback, VNode,
 };
 use semantic_ui_core::components::form::{
@@ -59,7 +59,7 @@ pub fn tag_form(
                         brass_bulma::button()
                             .and_class("is-primary")
                             .and("Create")
-                            .on_click(EventCallback::callback(|_| (), state.submit())),
+                            .on_click(state.submit().on(|_| ())),
                     ),
                 )
                 .build()

@@ -51,7 +51,7 @@ impl State {
         }
     }
 
-    fn goto(&mut self, index: Index, ctx: &mut brass::Context<Msg>) {
+    fn goto(&mut self, index: Index, _ctx: &mut brass::Context<Msg>) {
         debug_assert!(index + 1 < self.page.items.len());
         self.index = index;
     }
@@ -61,7 +61,7 @@ impl brass::PropComponent for State {
     type Properties = Player;
     type Msg = Msg;
 
-    fn init(props: &Self::Properties, ctx: &mut brass::Context<Self::Msg>) -> Self {
+    fn init(_props: &Self::Properties, _ctx: &mut brass::Context<Self::Msg>) -> Self {
         Self {
             loader: LoadState::Idle,
             page: Page::new(),
@@ -74,11 +74,11 @@ impl brass::PropComponent for State {
     fn update(
         &mut self,
         msg: Self::Msg,
-        props: &Self::Properties,
+        _props: &Self::Properties,
         ctx: &mut brass::Context<Self::Msg>,
     ) {
         match msg {
-            Msg::FilterSubmit(expr) => {}
+            Msg::FilterSubmit(_expr) => {}
             Msg::PageLoaded(res) => match res {
                 Ok(page) => {
                     let is_first = self.page.items.is_empty();
@@ -102,7 +102,7 @@ impl brass::PropComponent for State {
 
     fn render(
         &self,
-        props: &Self::Properties,
+        _props: &Self::Properties,
         mut ctx: brass::RenderContext<brass::PropWrapper<Self>>,
     ) -> brass::VNode {
         let filter = EntityFilterForm {

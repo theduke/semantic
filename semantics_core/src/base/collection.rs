@@ -7,7 +7,7 @@ use factordb::{
         mutate::Mutate,
         select::{Item, Select},
     },
-    schema::{builtin::AttrIdent, AttrMapExt, AttributeDescriptor, EntityContainer},
+    schema::{builtin::AttrIdent, AttrMapExt, AttributeDescriptor},
     AnyError, Attribute, Entity, Id,
 };
 

@@ -6,8 +6,8 @@ use std::{
 use factordb::{
     data::DataMap,
     query::{self, select::Item},
-    schema::{AttrMapExt, AttributeDescriptor, EntityContainer, EntityDescriptor},
-    AnyError, Db, Id,
+    schema::{AttrMapExt, EntityContainer},
+    AnyError, Db,
 };
 use semantics_core::{
     api::{self, BackendConfig},

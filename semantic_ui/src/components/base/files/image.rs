@@ -1,6 +1,6 @@
 use brass::{
-    vdom::{self, div_with, span_with, Render},
-    PropComponent, VNode,
+    vdom::{self, span_with, Render},
+    VNode,
 };
 use factordb::{query::select::Item, schema::AttrMapExt};
 use semantic_ui_core::EntityRenderOpts;

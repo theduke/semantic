@@ -17,30 +17,30 @@ use semantic_ui_core::{
 };
 use semantics_core::base::Habit;
 
-use super::habit_form::HabitForm;
+use super::habit_form::habit_form;
 
 pub fn habit_create(_item: &Item, _opts: &EntityRenderOpts) -> VNode {
     CreatePage {
         render: Rc::new(|props: &EntityFormProps| {
-            HabitForm {
-                habit: semantics_core::base::Habit {
-                    id: factordb::Id::nil(),
-                    title: String::new(),
-                    description: None,
-                    mode: semantics_core::base::HabitMode::Neutral,
-                    extra: Default::default(),
-                },
-                on_submit: props.on_submit.clone().map(|habit: Habit| {
-                    let id = habit.id;
-                    let item = Item::new(habit.into_map().unwrap());
+            let habit = semantics_core::base::Habit {
+                id: factordb::Id::nil(),
+                title: String::new(),
+                description: None,
+                mode: semantics_core::base::HabitMode::Neutral,
+                extra: Default::default(),
+            };
 
-                    FormValid {
-                        mutation: BatchUpdate::with_action(Mutate::create(id, item.data.clone())),
-                        item,
-                    }
-                }),
-            }
-            .render()
+            let on_submit = props.on_submit.clone().map(|habit: Habit| {
+                let id = habit.id;
+                let item = Item::new(habit.into_map().unwrap());
+
+                FormValid {
+                    mutation: BatchUpdate::with_action(Mutate::create(id, item.data.clone())),
+                    item,
+                }
+            });
+
+            habit_form(habit, on_submit)
         }),
     }
     .render()

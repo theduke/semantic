@@ -2,7 +2,7 @@ use std::collections::HashSet;
 
 use brass::{
     dom::Attr,
-    vdom::{self, div_with, EventCallback},
+    vdom::{self, div_with},
     Callback, PropComponent, Shared, VNode,
 };
 use factordb::{query::select::Item, schema::AttrMapExt};
@@ -63,7 +63,7 @@ fn render_items(items: &[Item], registry: &Registry, on_remove: Callback<usize>)
             let btn_remove = brass_bulma::button()
                 .and(brass_bulma::icon_fa("fas fa-minus-circle"))
                 .attr(Attr::Title, "Remove")
-                .on_click(EventCallback::callback(move |_| index, on_remove.clone()));
+                .on_click(on_remove.clone().on_simple(move || index));
             let actions = vdom::div().class("ml-4").and(btn_remove);
 
             vdom::div()

@@ -1,6 +1,6 @@
-use std::{borrow::BorrowMut, collections::HashMap, rc::Rc};
+use std::{collections::HashMap, rc::Rc};
 
-use brass::{vdom, Shared, VNode};
+use brass::{vdom, VNode};
 use factordb::{AnyError, Id};
 use semantic_ui_core::{components::small_title, loader::LoadState};
 use semantics_core::base::Tag;

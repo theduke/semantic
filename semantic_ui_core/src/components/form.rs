@@ -1,7 +1,7 @@
 use std::{borrow::Borrow, cell::RefCell, collections::HashMap, rc::Rc};
 
 use brass::{
-    vdom::{self, EventCallback, Render},
+    vdom::{self, Render},
     Callback, PropComponent, Shared, VNode,
 };
 
@@ -384,10 +384,71 @@ impl<F> Into<Field<F, String>> for InputField<F> {
                         color,
                         placeholder: placeholder.clone(),
                         value: value.clone(),
-                        on_input: EventCallback::callback(
-                            |ev| brass::util::input_event_value(ev).unwrap_or_default(),
-                            callback,
-                        ),
+                        on_input: callback
+                            .on(|ev| brass::util::input_event_value(ev).unwrap_or_default()),
+                    },
+                }
+                .render()
+            }),
+            validate: self.validate,
+        }
+    }
+}
+
+pub struct SelectField<F, T> {
+    pub name: String,
+    pub get: fn(&F) -> &T,
+    pub set: fn(T, &mut F),
+    pub validate: Option<Box<dyn Validator<T>>>,
+
+    pub label: String,
+    pub help: Option<String>,
+    pub options: Rc<Vec<brass_bulma::SelectOption<T>>>,
+}
+
+impl<F, T> Into<Field<F, T>> for SelectField<F, T>
+where
+    T: Clone + Eq + Default,
+{
+    fn into(self) -> Field<F, T> {
+        let help = self.help;
+        let label = self.label;
+        let options = self.options;
+
+        Field {
+            name: self.name,
+            get: self.get,
+            set: self.set,
+            render: Rc::new(move |value, state, callback| {
+                let color = color_from_state(state);
+
+                let options: Rc<Vec<brass_bulma::SelectOption<T>>> = options.clone();
+
+                let help = if !state.touched || state.errors.is_ok() {
+                    help.clone().map(|message| brass_bulma::Help {
+                        message: vdom::text(message),
+                        color,
+                    })
+                } else if let Err(errors) = &state.errors {
+                    let items = errors.iter().map(|err| vdom::li_with(err));
+                    let message = vdom::ul().and_iter(items).build();
+
+                    Some(brass_bulma::Help {
+                        message,
+                        color: brass_bulma::Color::Danger,
+                    })
+                } else {
+                    None
+                };
+
+                brass_bulma::FieldHorizontal {
+                    label: label.clone(),
+                    help,
+                    control: brass_bulma::Select {
+                        value: Some(value.clone()),
+                        // TODO: don't clone all the time!
+                        options,
+                        on_select: callback.map(|opt: Option<T>| opt.unwrap_or_default()),
                     },
                 }
                 .render()

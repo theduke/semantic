@@ -1,4 +1,4 @@
-use brass::vdom::{self, Render};
+use brass::vdom::Render;
 use factordb::{schema::AttributeDescriptor, AnyError};
 use semantic_ui_core::{
     loader::LoadState,

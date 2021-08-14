@@ -37,6 +37,12 @@ pub enum HabitMode {
     Neutral,
 }
 
+impl Default for HabitMode {
+    fn default() -> Self {
+        Self::Neutral
+    }
+}
+
 impl AttributeDescriptor for HabitMode {
     const NAMESPACE: &'static str = "semantic";
     const PLAIN_NAME: &'static str = "habit_mode";

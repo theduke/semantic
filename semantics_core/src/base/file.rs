@@ -1,7 +1,7 @@
 use factordb::{
     data::DataMap,
     schema::{builtin::AttrIdent, EntityDescriptor},
-    Attribute, Entity, Id, Ident,
+    Attribute, Entity, Id,
 };
 use serde::{Deserialize, Serialize};
 

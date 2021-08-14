@@ -8,7 +8,7 @@ use factordb::{
         expr::Expr,
         select::{Item, ItemPage, Select},
     },
-    schema::AttrMapExt,
+    schema::{AttrMapExt, EntityDescriptor},
     AnyError,
 };
 use semantic_ui_core::EntityRenderOpts;
@@ -34,6 +34,13 @@ pub enum Msg {
 }
 
 impl BrowsePage {
+    fn base_filter() -> Expr {
+        Expr::not(Expr::in_(
+            Expr::attr::<factordb::schema::builtin::AttrType>(),
+            vec![semantics_core::base::Tag::QUALIFIED_NAME],
+        ))
+    }
+
     fn load(&mut self, query: Select, ctx: &mut brass::Context<Msg>) {
         if self.loader.is_loading() {
             // TODO: queue? abort old?
@@ -55,7 +62,7 @@ impl brass::Component for BrowsePage {
     fn init(_props: Self::Properties, ctx: &mut brass::Context<Self::Msg>) -> Self {
         let mut s = Self {
             loader: LoadState::Idle,
-            query: Select::new(),
+            query: Select::new().with_filter(Self::base_filter()),
             guard: None,
             filter_callback: ctx.callback_map(Msg::FilterUpdated),
             on_delete_callback: ctx.callback_map(Msg::ItemDeleted),
