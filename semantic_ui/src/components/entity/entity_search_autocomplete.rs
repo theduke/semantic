@@ -1,7 +1,7 @@
 use std::collections::HashSet;
 
 use brass::{
-    vdom::{self, RefRenderer},
+    vdom::{self, s, RefRenderer},
     Callback, PropComponent, Str,
 };
 use factordb::{
@@ -112,7 +112,7 @@ impl PropComponent for State {
         ctx: brass::RenderContext<brass::PropWrapper<Self>>,
     ) -> brass::VNode {
         let input = brass_bulma::Input {
-            _type: "text".into(),
+            _type: "text",
             color: brass_bulma::Color::Default,
             placeholder: props.placeholder.clone().into(),
             value: self.term.clone(),
@@ -124,7 +124,7 @@ impl PropComponent for State {
 
         let items = self.loader.render(|page| {
             if page.items.is_empty() {
-                brass_bulma::notification_warning("Nothing found...").build()
+                brass_bulma::notification_warning(s("Nothing found...")).build()
             } else {
                 let items = page.items.iter().enumerate().map(|(index, item)| {
                     let content = props

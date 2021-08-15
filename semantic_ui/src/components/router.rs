@@ -1,7 +1,7 @@
 use brass::{
     dom::Event,
-    vdom::{self, component, div, Render, TagBuilder},
-    VNode,
+    vdom::{self, component, div, s, Render, TagBuilder},
+    Str, VNode,
 };
 use semantic_ui_core::{routing::Route, ContextExt};
 
@@ -46,19 +46,42 @@ pub fn router(route: &Route) -> VNode {
             )
         }
         Route::Tags => TagManager {}.render(),
+        Route::Play => {
+            // Special casing for play because of overflow: hidden;
+            // TODO: the router should probably just use the raw output, without
+            // wrapping in in a .container below...
+            let content = comps::base::play::StandalonePlayer { expr: None }.render();
+
+            return div()
+                .style_raw("height: 100%; display: flex; flex-direction: column;")
+                .and(nav)
+                .and(
+                    div()
+                        .class("container")
+                        .style_raw("width: 100%; flex-grow: 1; overflow: hidden;")
+                        .and(content),
+                )
+                .build();
+        }
     };
 
     div()
+        .style_raw("height: 100%; display: flex; flex-direction: column;")
         .and(nav)
-        .and(div().class("container").and(content))
+        .and(
+            div()
+                .class("container")
+                .style_raw("width: 100%; flex-grow: 1;")
+                .and(content),
+        )
         .build()
 }
 
 #[derive(PartialEq, Eq)]
 pub struct LinkProps {
     pub route: Route,
-    pub text: String,
-    pub class: Option<String>,
+    pub text: Str,
+    pub class: Option<Str>,
 }
 
 pub struct Link {
@@ -81,8 +104,8 @@ impl brass::Component for Link {
     }
 
     fn render(&self, ctx: brass::RenderContext<Self>) -> VNode {
-        vdom::a_with(&self.props.text)
-            .class_opt(self.props.class.as_ref())
+        vdom::a_with(self.props.text.clone())
+            .class_opt(self.props.class.clone())
             .on(Event::Click, ctx.on_simple(|| ()))
             .build()
     }
@@ -104,7 +127,7 @@ impl brass::Component for Link {
 fn navbar() -> TagBuilder {
     let brand = div().class("navbar-brand").and(LinkProps {
         route: Route::Browse,
-        text: "Semantic".into(),
+        text: s("Semantic"),
         class: Some("navbar-item".into()),
     });
 
@@ -112,41 +135,46 @@ fn navbar() -> TagBuilder {
         .class("navbar-start")
         .and(LinkProps {
             route: Route::Browse,
-            text: "Browse".to_string(),
-            class: Some("navbar-item".to_string()),
+            text: s("Browse"),
+            class: Some(s("navbar-item")),
         })
         .and(LinkProps {
             route: Route::EntityCreateSelect,
-            text: "Create".to_string(),
-            class: Some("navbar-item".to_string()),
+            text: s("Create"),
+            class: Some(s("navbar-item")),
         })
         .and(LinkProps {
             route: Route::Upload,
-            text: "Upload".to_string(),
-            class: Some("navbar-item".to_string()),
+            text: s("Upload"),
+            class: Some(s("navbar-item")),
         })
         .and(LinkProps {
             route: Route::Import,
-            text: "Import".to_string(),
-            class: Some("navbar-item".to_string()),
+            text: s("Import"),
+            class: Some(s("navbar-item")),
         })
         .and(LinkProps {
             route: Route::Tags,
-            text: "Tags".to_string(),
-            class: Some("navbar-item".to_string()),
+            text: s("Tags"),
+            class: Some(s("navbar-item")),
+        })
+        .and(LinkProps {
+            route: Route::Play,
+            text: s("Play"),
+            class: Some(s("navbar-item")),
         });
 
     let logout = LinkProps {
         route: Route::Logout,
         text: "Logout".into(),
-        class: Some("button is-light is-small".into()),
+        class: Some(s("button is-light is-small")),
     };
     let actions = brass_bulma::buttons().and(logout);
     let end = div()
         .class("navbar-end")
-        .and(div().class("navbar-item").and(actions));
+        .and(div().class(s("navbar-item")).and(actions));
 
-    let menu = div().class("navbar-menu is-active").and((items, end));
+    let menu = div().class(s("navbar-menu is-active")).and((items, end));
 
-    div().class("navbar").and((brand, menu))
+    div().class(s("navbar")).and((brand, menu))
 }

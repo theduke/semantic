@@ -44,7 +44,7 @@ pub fn entity_header(data: &DataMap, entity: Option<&EntityInfo>) -> TagBuilder 
     let title_content = if let Some(ident) = data.get_ident() {
         component::<super::router::Link>(super::router::LinkProps {
             route: Route::Entity(ident),
-            text: title_text,
+            text: title_text.into(),
             class: None,
         })
     } else {
@@ -123,7 +123,7 @@ pub fn render_value(value: &Value) -> VNode {
         Value::Id(id) => {
             let link = super::router::LinkProps {
                 route: Route::Entity(id.clone().into()),
-                text: id.to_string(),
+                text: id.to_string().into(),
                 class: None,
             };
             vdom::component::<super::router::Link>(link)
@@ -144,10 +144,8 @@ pub fn attr_value(
     registry: &Registry,
 ) -> VNode {
     if let Some(renderer) = registry.attr_renderer(&attr.ident) {
-        tracing::trace!("USING CUSTOM RENDERER");
         renderer(value, data)
     } else {
-        tracing::trace!(?attr.ident, "no custom renderer, using generic");
         attr_value_generic(attr, value)
     }
 }
@@ -172,7 +170,6 @@ pub fn entity_fields_table(
             }
         })
         .map(|(key, value)| {
-            tracing::trace!(%key, attr=?registry.attr(&key), "getting attr key");
             let (title, val) = if let Some(field) = info.and_then(|info| info.fields.get(key)) {
                 let title = attr_title(&field.attr);
                 let value = attr_value(&field.attr, value, Some(entity), registry);

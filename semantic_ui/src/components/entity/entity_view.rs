@@ -1,7 +1,7 @@
 use brass::{
     dom::Attr,
-    vdom::{div, div_with, Render},
-    Callback, VNode,
+    vdom::{div, div_with, s, Render},
+    Callback, Str, VNode,
 };
 use factordb::{query::select::Item, schema::AttrMapExt, AnyError, Id};
 use semantic_ui_core::{
@@ -55,7 +55,7 @@ impl Render for EntityView {
         // Header.
         let title = {
             let t = brass_bulma::card_header_title(self.title)
-                .style_raw("flex-grow: 0; cursor: pointer;");
+                .style_raw(s("flex-grow: 0; cursor: pointer;"));
             if let Some(on) = self.on_open {
                 t.on_click(on.on(|_| ()))
             } else {
@@ -68,13 +68,13 @@ impl Render for EntityView {
             .map(|name| {
                 div()
                     .and(name)
-                    .class("is-flex is-align-items-center mr-3")
+                    .class(s("is-flex is-align-items-center mr-3"))
                     .build()
             })
             .unwrap_or(VNode::Empty);
 
         let actions = brass_bulma::buttons()
-            .style_raw("margin: 0;")
+            .style_raw(s("margin: 0;"))
             .and_iter(self.actions);
 
         let header = brass_bulma::card_header().and((title, ty, actions));
@@ -113,8 +113,8 @@ enum Action {
 }
 
 pub struct EntityActionButton {
-    icon: String,
-    label: String,
+    icon: Str,
+    label: Str,
     is_active: bool,
     is_disabled: bool,
     on: Callback<()>,
@@ -126,7 +126,7 @@ impl brass::vdom::Render for EntityActionButton {
             .and_class_if(self.is_active, "is-active")
             .attr(Attr::Title, self.label)
             .attr_toggle_if(self.is_disabled, Attr::Disabled)
-            .style_raw("margin: 0")
+            .style_raw(s("margin: 0"))
             .and(brass_bulma::icon_fa(self.icon))
             .on_click(self.on.on(|_| ()))
             .build()
@@ -281,8 +281,8 @@ impl brass::Component for State {
 
         if self.item.data.has_attr::<semantics_core::base::AttrUrl>() {
             actions.push(EntityActionButton {
-                icon: "fas fa-globe".into(),
-                label: "Go to URL".into(),
+                icon: s("fas fa-globe"),
+                label: s("Go to URL"),
                 is_active: false,
                 is_disabled: false,
                 on: ctx.callback_map(|_: ()| Msg::OpenSourceUrl),
@@ -290,24 +290,24 @@ impl brass::Component for State {
         }
 
         actions.push(EntityActionButton {
-            icon: "fas fa-table".into(),
-            label: "Show Table".into(),
+            icon: s("fas fa-table"),
+            label: s("Show Table"),
             is_active: self.show_table || self.content_renderer.is_none(),
             is_disabled: self.content_renderer.is_none(),
             on: ctx.callback_map(|_: ()| Msg::ToggleShowTable),
         });
 
         actions.push(EntityActionButton {
-            icon: "fas fa-list".into(),
-            label: "Manage Collections".into(),
+            icon: s("fas fa-list"),
+            label: s("Manage Collections"),
             is_active: false,
             is_disabled: false,
             on: ctx.callback_map(|_: ()| Msg::ToggleCollectionManager),
         });
 
         actions.push(EntityActionButton {
-            icon: "fas fa-tags".into(),
-            label: "Manage Tags".into(),
+            icon: s("fas fa-tags"),
+            label: s("Manage Tags"),
             is_active: false,
             is_disabled: false,
             on: ctx.callback_map(|_: ()| Msg::ToggleTagManager),
@@ -316,8 +316,8 @@ impl brass::Component for State {
         if self.options.editable {
             let is_deleting = self.is_deleting();
             actions.push(EntityActionButton {
-                icon: "fas fa-trash".into(),
-                label: "Delete".into(),
+                icon: s("fas fa-trash"),
+                label: s("Delete"),
                 is_active: is_deleting,
                 is_disabled: is_deleting,
                 on: ctx.callback_map(|_: ()| Msg::DeleteStart),
@@ -328,7 +328,7 @@ impl brass::Component for State {
             Some(Action::Delete(loader)) => {
                 let confirm = brass_bulma::button()
                     .and_class(brass_bulma::Color::Danger.as_class())
-                    .and("Really Delete")
+                    .and(s("Really Delete"))
                     .attr_toggle_if(loader.is_loading() || loader.is_success(), Attr::Disabled)
                     .on_click(ctx.on_simple(|| Msg::DeleteConfirm));
 

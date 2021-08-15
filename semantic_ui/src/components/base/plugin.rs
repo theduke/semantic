@@ -5,7 +5,9 @@ use factordb::{
     data::{DataMap, Value},
     schema::{AttrMapExt, AttributeDescriptor, EntityDescriptor},
 };
+use semantic_ui_core::registry::RegisteredMediaRenderer;
 use semantics_core::base::{self, AttrPreviewImageUrl};
+use wasm_bindgen::convert::IntoWasmAbi;
 
 use crate::components::entity::{self, render_value};
 
@@ -45,12 +47,28 @@ impl semantic_ui_core::BrowserPlugin for BasePlugin {
         //     is_default: true,
         // });
 
+        // Files
+
         registry.register_entity_renderer(semantic_ui_core::EntityRendererSpec {
             name: "Image Content".to_string(),
             entity_type: base::Image::QUALIFIED_NAME.to_string(),
             mode: semantic_ui_core::EntityRenderMode::Content,
             renderer: Rc::new(super::files::image::image_content),
             is_default: true,
+        });
+
+        registry.register_entity_renderer(semantic_ui_core::EntityRendererSpec {
+            name: "Video Content".to_string(),
+            entity_type: base::Video::QUALIFIED_NAME.to_string(),
+            mode: semantic_ui_core::EntityRenderMode::Content,
+            renderer: Rc::new(super::files::video::video_content),
+            is_default: true,
+        });
+
+        registry.register_media_renderer(RegisteredMediaRenderer {
+            entity_type: base::Video::QUALIFIED_NAME.into(),
+            render: Rc::new(super::files::video::video_media),
+            supports_playback: true,
         });
 
         // Notes.

@@ -2,7 +2,7 @@ pub mod collections;
 pub mod files;
 pub mod habits;
 pub mod notes;
-mod play;
+pub mod play;
 pub mod tags;
 
 mod plugin;

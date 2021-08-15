@@ -1,4 +1,7 @@
-use brass::{vdom, Callback};
+use brass::{
+    vdom::{self, s, Render},
+    Callback,
+};
 
 pub struct BackendSetupForm {
     pub on_submit: Callback<semantics_core::api::BackendConfig>,
@@ -62,10 +65,10 @@ impl brass::Component for BackendSetupFormComp {
 
     fn render(&self, ctx: brass::RenderContext<Self>) -> brass::VNode {
         let key = brass_bulma::FieldHorizontal {
-            label: "Password".into(),
+            label: s("Password"),
             help: None,
             control: brass_bulma::Input {
-                _type: "password".into(),
+                _type: "password",
                 color: brass_bulma::Color::Default,
                 placeholder: None,
                 value: self.key.clone().into(),
@@ -77,14 +80,12 @@ impl brass::Component for BackendSetupFormComp {
         let path = brass_bulma::FieldHorizontal {
             label: "Data Path".into(),
             help: Some(brass_bulma::Help {
-                message: vdom::text(
-                    "File system data path. Leave empty to use the default location.",
-                )
-                .into(),
+                message: s("File system data path. Leave empty to use the default location.")
+                    .render(),
                 color: brass_bulma::Color::Default,
             }),
             control: brass_bulma::Input {
-                _type: "text".into(),
+                _type: "text",
                 color: brass_bulma::Color::Default,
                 placeholder: None,
                 value: self.data_path.clone().into(),
@@ -95,7 +96,7 @@ impl brass::Component for BackendSetupFormComp {
         };
 
         let submit = brass_bulma::button()
-            .and("Submit")
+            .and(s("Submit"))
             .on_click(ctx.on_simple(|| Msg::Submit));
         let actions = brass_bulma::buttons().and(submit);
 

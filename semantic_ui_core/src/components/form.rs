@@ -446,6 +446,7 @@ where
                     help,
                     control: brass_bulma::Select {
                         value: Some(value.clone()),
+                        empty_option_label: None,
                         // TODO: don't clone all the time!
                         options,
                         on_select: callback.map(|opt: Option<T>| opt.unwrap_or_default()),

@@ -145,7 +145,6 @@ impl brass::Component for Root {
     }
 
     fn render(&self, mut _ctx: brass::RenderContext<Self>) -> brass::VNode {
-        tracing::trace!(?self.phase);
         match self.phase {
             Phase::CheckingBackend | Phase::LoggingOut => {
                 semantic_ui_core::loader::spinner().build()

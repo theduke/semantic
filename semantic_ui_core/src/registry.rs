@@ -1,25 +1,30 @@
-use std::{collections::HashMap, rc::Rc};
+use std::rc::Rc;
 
-use factordb::schema::{AttrMapExt, AttributeSchema, EntityAttribute, EntitySchema};
+use factordb::{
+    schema::{AttrMapExt, AttributeSchema, EntityAttribute, EntitySchema},
+    AnyError,
+};
+use fnv::FnvHashMap;
 
 use crate::BrowserPlugin;
 
 pub struct Registry {
     schema: semantics_core::api::SemanticSchema,
 
-    attributes: HashMap<String, AttributeSchema>,
-    entities: HashMap<String, EntityInfo>,
+    attributes: FnvHashMap<String, AttributeSchema>,
+    entities: FnvHashMap<String, EntityInfo>,
 
     plugins: Vec<Box<dyn BrowserPlugin>>,
 
     entity_renderers: Vec<EntityRendererSpec>,
 
-    attribute_renderers: HashMap<String, DynAttrRenderer>,
-    entity_content_renderers: HashMap<String, DynEntityRenderer>,
-    entity_renderers_list: HashMap<String, DynEntityRenderer>,
-    entity_renderers_page: HashMap<String, DynEntityRenderer>,
-    entity_renderers_create: HashMap<String, DynEntityRenderer>,
-    entity_renderers_create_page: HashMap<String, DynEntityRenderer>,
+    attribute_renderers: FnvHashMap<String, DynAttrRenderer>,
+    entity_content_renderers: FnvHashMap<String, DynEntityRenderer>,
+    entity_renderers_list: FnvHashMap<String, DynEntityRenderer>,
+    entity_renderers_page: FnvHashMap<String, DynEntityRenderer>,
+    entity_renderers_create: FnvHashMap<String, DynEntityRenderer>,
+    entity_renderers_create_page: FnvHashMap<String, DynEntityRenderer>,
+    entity_renderer_media: FnvHashMap<String, RegisteredMediaRenderer>,
 }
 
 #[derive(Clone)]
@@ -49,13 +54,48 @@ pub struct EntityRenderOpts {
 pub type DynEntityRenderer =
     Rc<dyn Fn(&factordb::query::select::Item, &EntityRenderOpts) -> brass::VNode>;
 
+pub enum MediaRenderEvent {
+    Finished(Result<(), AnyError>),
+    Paused,
+    Resumed,
+}
+
+#[derive(Clone)]
+pub struct MediaRenderOpts {
+    // Settings.
+    /// If true, the media should be playing.
+    /// This also means it should auto-play on first render.
+    /// If false, playback should be paused.
+    pub playing: bool,
+    /// If true, all audio output should be muted.
+    pub muted: bool,
+    // Callbacks.
+    /// Callback that is to be invoked when the media item has stopped playing.
+    /// An `Ok(())` is expected if the playback finished correctly.
+    /// An `Err(_)` is expected if the playback failed, for example if a video
+    /// could not be loaded.
+    pub callback: brass::Callback<MediaRenderEvent>,
+}
+
+pub type DynMediaRenderer =
+    Rc<dyn Fn(&factordb::query::select::Item, &MediaRenderOpts) -> brass::VNode>;
+
+#[derive(Clone)]
+pub struct RegisteredMediaRenderer {
+    pub entity_type: String,
+    pub render: DynMediaRenderer,
+    /// If true, the given media item can be played, like video or audio.
+    /// If false, it is static, like an image.
+    pub supports_playback: bool,
+}
+
 pub type DynAttrRenderer =
     Rc<dyn Fn(&factordb::data::Value, Option<&factordb::data::DataMap>) -> brass::VNode>;
 
 #[derive(Clone, Debug)]
 pub struct EntityInfo {
     pub schema: EntitySchema,
-    pub fields: HashMap<String, EntityFieldAtrr>,
+    pub fields: FnvHashMap<String, EntityFieldAtrr>,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -118,12 +158,13 @@ impl Registry {
             plugins: Vec::new(),
             entity_renderers: Vec::new(),
 
-            entity_content_renderers: HashMap::new(),
-            entity_renderers_list: HashMap::new(),
-            entity_renderers_page: HashMap::new(),
-            entity_renderers_create: HashMap::new(),
-            entity_renderers_create_page: HashMap::new(),
-            attribute_renderers: HashMap::new(),
+            entity_content_renderers: FnvHashMap::default(),
+            entity_renderers_list: FnvHashMap::default(),
+            entity_renderers_page: FnvHashMap::default(),
+            entity_renderers_create: FnvHashMap::default(),
+            entity_renderers_create_page: FnvHashMap::default(),
+            entity_renderer_media: FnvHashMap::default(),
+            attribute_renderers: FnvHashMap::default(),
         }
     }
 
@@ -171,12 +212,21 @@ impl Registry {
         self.entity_renderers.push(spec);
     }
 
+    pub fn register_media_renderer(&mut self, render: RegisteredMediaRenderer) {
+        self.entity_renderer_media
+            .insert(render.entity_type.clone(), render);
+    }
+
+    pub fn get_media_renderer(&self, entity_type: &str) -> Option<&RegisteredMediaRenderer> {
+        self.entity_renderer_media.get(entity_type)
+    }
+
     pub fn attr(&self, ty: &str) -> Option<&AttributeSchema> {
         self.attributes.get(ty)
     }
 
     /// Get a reference to the registries entities.
-    pub fn entities(&self) -> &HashMap<String, EntityInfo> {
+    pub fn entities(&self) -> &FnvHashMap<String, EntityInfo> {
         &self.entities
     }
 

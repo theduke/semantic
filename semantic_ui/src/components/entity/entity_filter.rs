@@ -92,7 +92,6 @@ impl brass::Component for EntityFilterFormComp {
                 }
             }
             Msg::TypeToggled(ty) => {
-                tracing::trace!(?ty, "types toggled");
                 if !self.entity_types.remove(&ty) {
                     self.entity_types.insert(ty);
                     self.changed = true;
@@ -122,7 +121,7 @@ impl brass::Component for EntityFilterFormComp {
         };
 
         let types = brass_bulma::FieldHorizontal {
-            label: "Type".into(),
+            label: s("Type"),
             help: None,
             control: brass_bulma::TagSelect {
                 options: &self.entity_type_options,
@@ -132,12 +131,12 @@ impl brass::Component for EntityFilterFormComp {
         };
 
         let submit = brass_bulma::button()
-            .and("Apply")
+            .and(s("Apply"))
             .attr_toggle_if(!self.changed, brass::dom::Attr::Disabled)
             .on_click(ctx.on_simple(|| Msg::Submit));
 
         let clear = brass_bulma::button()
-            .and("Clear")
+            .and(s("Clear"))
             .attr_toggle_if(!self.changed, brass::dom::Attr::Disabled)
             .on_click(ctx.on_simple(|| Msg::Reset));
         let buttons = brass_bulma::buttons().and((submit, clear));

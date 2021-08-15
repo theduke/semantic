@@ -21,7 +21,9 @@ pub fn image_content(item: &Item, opts: &EntityRenderOpts) -> VNode {
         if opts.preview {
             ImagePreviewModal { url: url.clone() }.render()
         } else {
-            vdom::img(url).build()
+            vdom::img(url)
+                .style_raw("max-height: 100%; max-width: 100%; object-fit: contain;")
+                .build()
         }
     } else {
         span_with("Image without url").build()
