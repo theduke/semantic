@@ -26,6 +26,9 @@ pub struct ServerConfig {
 
 type AppState = extract::Extension<App>;
 
+#[cfg(not(debug_assertions))]
+static ASSETS: include_dir::Dir = include_dir::include_dir!("../target_wasm/ui");
+
 pub async fn run_server(app: App, config: ServerConfig) -> Result<(), AnyError> {
     use axum::prelude::{get, post, route};
 
@@ -35,12 +38,61 @@ pub async fn run_server(app: App, config: ServerConfig) -> Result<(), AnyError> 
         config.interface
     ))?;
 
+    #[cfg(debug_assertions)]
+    let (assets, index) = {
+        let manifest_dir_raw =
+            std::env::var("CARGO_MANIFEST_DIR").expect("Could not find CARGO_MANIFEST_DIR env var");
+        let path = std::path::PathBuf::from(manifest_dir_raw)
+            .parent()
+            .expect("CARGO_MANIFEST_DIR has no parent")
+            .join("target_wasm/ui");
+        let dir = tower_http::services::ServeDir::new(&path);
+        let assets = axum::service::get(dir).handle_error(|error: std::io::Error| {
+            Ok::<_, std::convert::Infallible>((
+                StatusCode::INTERNAL_SERVER_ERROR,
+                format!("Unhandled internal error: {}", error),
+            ))
+        });
+
+        let index = axum::service::get(tower_http::services::fs::ServeFile::new(
+            path.join("index.html"),
+        ))
+        .handle_error(|error: std::io::Error| {
+            Ok::<_, std::convert::Infallible>((
+                StatusCode::INTERNAL_SERVER_ERROR,
+                format!("Unhandled internal error: {}", error),
+            ))
+        });
+
+        (assets, index)
+    };
+
+    #[cfg(not(debug_assertions))]
+    let (assets, index) = {
+        let assets = get(serve_included_dir);
+        let index = get(|_req: Request<Body>| async {
+            let data = ASSETS
+                .get_file("index.html")
+                .expect("index.html not embedded")
+                .contents()
+                .to_vec();
+            Response::builder()
+                .header(axum::http::header::CONTENT_TYPE, "text/html")
+                .body(Body::from(data))
+                .unwrap()
+        });
+
+        (assets, index)
+    };
+
     let app = route("/api/query", post(handler_api_query))
         .route(
             "/api/upload-file",
             post(handler_blob_upload).options(cors_handler),
         )
         .nest("/blob/files", get(handler_blob_read))
+        .nest("/assets", assets)
+        .route("/", index)
         .layer(AddExtensionLayer::new(app))
         .layer(tower_http::trace::TraceLayer::new_for_http());
 
@@ -52,6 +104,26 @@ pub async fn run_server(app: App, config: ServerConfig) -> Result<(), AnyError> 
         tracing::error!(?error, "Server failed");
         error.into()
     })
+}
+
+#[cfg(not(debug_assertions))]
+async fn serve_included_dir(req: Request<Body>) -> Response<Body> {
+    let path = req
+        .uri()
+        .path()
+        .trim_start_matches('/')
+        .replace("assets/", "");
+    if let Some(file) = ASSETS.get_file(&path) {
+        let content_type = mime_guess::from_path(&path)
+            .first_or_octet_stream()
+            .to_string();
+        let res = Response::builder()
+            .status(StatusCode::OK)
+            .header(axum::http::header::CONTENT_TYPE, content_type);
+        res.body(Body::from(file.contents())).unwrap()
+    } else {
+        not_found()
+    }
 }
 
 async fn cors_handler() -> Response<Body> {
