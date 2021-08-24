@@ -85,9 +85,7 @@ async fn handler_assets(
     assets.request(req.uri().path())
 }
 
-async fn handler_index(
-    Extension(assets): extract::Extension<assets::Assets>,
-) -> Response<Body> {
+async fn handler_index(Extension(assets): extract::Extension<assets::Assets>) -> Response<Body> {
     assets.request("index.html")
 }
 
