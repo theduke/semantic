@@ -20,8 +20,8 @@ use factordb::{
         AttrMapExt, AttributeDescriptor, AttributeSchema,
     },
 };
-use semantic_ui_core::{routing::Route, EntityInfo, EntityRenderOpts, Registry};
 use semantic_core::base::AttrTitle;
+use semantic_ui_core::{routing::Route, EntityInfo, EntityRenderOpts, Registry};
 use vdom::text;
 
 pub fn entity_title(data: &DataMap) -> String {

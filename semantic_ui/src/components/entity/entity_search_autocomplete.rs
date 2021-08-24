@@ -12,8 +12,8 @@ use factordb::{
     schema::{AttrMapExt, AttributeDescriptor},
     AnyError,
 };
-use semantic_ui_core::loader::LoadState;
 use semantic_core::base::AttrTitle;
+use semantic_ui_core::loader::LoadState;
 
 use super::entity_title;
 

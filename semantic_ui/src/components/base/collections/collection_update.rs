@@ -1,8 +1,8 @@
 use anyhow::Result;
 use brass::{vdom::Render, Shared};
 use factordb::{query::select::Item, schema::EntityContainer, AnyError};
-use semantic_ui_core::loader::LoadState;
 use semantic_core::base::{Collection, CollectionWithItems};
+use semantic_ui_core::loader::LoadState;
 
 use super::collection_form::CollectionForm;
 

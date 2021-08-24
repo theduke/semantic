@@ -7,8 +7,8 @@ use brass::{
     VNode,
 };
 use factordb::{query::select::Item, schema::AttrMapExt};
-use semantic_ui_core::{registry::MediaRenderOpts, EntityRenderOpts};
 use semantic_core::base::{AttrBlobUri, AttrDownloadUrl};
+use semantic_ui_core::{registry::MediaRenderOpts, EntityRenderOpts};
 
 use crate::components::base::plugin::build_blob_url;
 

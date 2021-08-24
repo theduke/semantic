@@ -5,8 +5,8 @@ use factordb::{
     data::{DataMap, Value},
     schema::{AttrMapExt, AttributeDescriptor, EntityDescriptor},
 };
-use semantic_ui_core::registry::RegisteredMediaRenderer;
 use semantic_core::base::{self, AttrPreviewImageUrl};
+use semantic_ui_core::registry::RegisteredMediaRenderer;
 use wasm_bindgen::convert::IntoWasmAbi;
 
 use crate::components::entity::{self, render_value};

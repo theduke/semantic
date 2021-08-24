@@ -8,6 +8,7 @@ use factordb::{
     },
     schema::EntityContainer,
 };
+use semantic_core::base::{Collection, CollectionWithItems};
 use semantic_ui_core::{
     entity::{
         create_page::CreatePage,
@@ -15,7 +16,6 @@ use semantic_ui_core::{
     },
     EntityRenderOpts,
 };
-use semantic_core::base::{Collection, CollectionWithItems};
 
 use super::collection_form::CollectionForm;
 

@@ -4,8 +4,8 @@ use brass::{
     vdom::{self, s, Render},
     Callback, VNode,
 };
-use semantic_ui_core::components::form::{self, InputField, SelectField};
 use semantic_core::base::{Habit, HabitMode};
+use semantic_ui_core::components::form::{self, InputField, SelectField};
 
 pub fn habit_form(habit: Habit, on_submit: Callback<Habit>) -> VNode {
     form::Form {

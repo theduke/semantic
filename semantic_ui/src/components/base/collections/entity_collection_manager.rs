@@ -10,11 +10,11 @@ use factordb::{
     schema::{builtin::AttrType, EntityDescriptor},
     AnyError, Id,
 };
+use semantic_core::base::Collection;
 use semantic_ui_core::{
     components::small_title,
     loader::{error_msg, LoadState},
 };
-use semantic_core::base::Collection;
 
 use crate::components::entity::entity_search_autocomplete::EntitySearchAutocomplete;
 

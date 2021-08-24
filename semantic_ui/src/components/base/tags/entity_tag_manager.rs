@@ -13,11 +13,11 @@ use factordb::{
     },
     AnyError, Id,
 };
+use semantic_core::base::{AttrTagName, AttrTags, Tag};
 use semantic_ui_core::{
     components::small_title,
     loader::{error_msg, LoadState},
 };
-use semantic_core::base::{AttrTagName, AttrTags, Tag};
 
 use crate::components::entity::entity_search_autocomplete::EntitySearchAutocomplete;
 

@@ -8,6 +8,7 @@ use factordb::{
     },
     schema::EntityContainer,
 };
+use semantic_core::base::Habit;
 use semantic_ui_core::{
     entity::{
         create_page::CreatePage,
@@ -15,7 +16,6 @@ use semantic_ui_core::{
     },
     EntityRenderOpts,
 };
-use semantic_core::base::Habit;
 
 use super::habit_form::habit_form;
 

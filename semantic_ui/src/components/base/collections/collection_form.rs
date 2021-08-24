@@ -6,8 +6,8 @@ use brass::{
     Callback, PropComponent, Shared, VNode,
 };
 use factordb::{query::select::Item, schema::AttrMapExt};
-use semantic_ui_core::{ContextExt, Registry, SharedRegistry};
 use semantic_core::base::{Collection, CollectionWithItems};
+use semantic_ui_core::{ContextExt, Registry, SharedRegistry};
 
 use crate::components::entity::{
     entity_search_autocomplete::EntitySearchAutocomplete, entity_view::EntityView,
