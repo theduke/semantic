@@ -1,0 +1,89 @@
+use brass::{
+    dom::{Attr, Event},
+    vdom,
+};
+use semantic_ui_core::registry::{MediaRenderEvent, MediaRenderOpts};
+use wasm_bindgen::JsCast;
+
+use super::VideoInfo;
+
+pub struct VideoPlayer {
+    pub info: VideoInfo,
+    pub options: MediaRenderOpts,
+}
+
+enum Msg {}
+
+struct State {
+    ref_: brass::vdom::Ref,
+}
+
+brass::enable_props!(wrapped VideoPlayer => State);
+
+impl brass::PropComponent for State {
+    type Properties = VideoPlayer;
+    type Msg = Msg;
+
+    fn init(_props: &Self::Properties, _ctx: &mut brass::Context<Self::Msg>) -> Self {
+        Self {
+            ref_: brass::vdom::Ref::new(),
+        }
+    }
+
+    fn update(
+        &mut self,
+        msg: Self::Msg,
+        _props: &Self::Properties,
+        _ctx: &mut brass::Context<Self::Msg>,
+    ) {
+        match msg {}
+    }
+
+    fn render(
+        &self,
+        props: &Self::Properties,
+        _ctx: brass::RenderContext<brass::PropWrapper<Self>>,
+    ) -> brass::VNode {
+        let source = vdom::tag(brass::dom::Tag::Source).attr(Attr::Src, &props.info.url);
+        let video = vdom::tag(brass::dom::Tag::Video)
+            .attr_toggle(Attr::Controls)
+            .attr_toggle_if(props.options.muted, Attr::Muted)
+            .attr_toggle_if(props.options.playing, Attr::AutoPlay)
+            .on(
+                Event::Ended,
+                props.options.callback.clone().on_simple(|| {
+                    tracing::trace!("Video ended");
+                    MediaRenderEvent::Finished(Ok(()))
+                }),
+            )
+            .on(
+                Event::Error,
+                props.options.callback.clone().on_simple(|| {
+                    MediaRenderEvent::Finished(Err(anyhow::anyhow!("Could not load video")))
+                }),
+            )
+            .and(source)
+            .build_ref(&self.ref_);
+
+        video
+    }
+
+    fn on_render(&mut self, props: &Self::Properties, first_render: bool) {
+        if !first_render {
+            self.ref_
+                .get()
+                .and_then(|elem| elem.dyn_into::<web_sys::HtmlVideoElement>().ok())
+                .map(|elem| {
+                    let res = if props.options.playing {
+                        elem.play().map(|_| ())
+                    } else {
+                        elem.pause().map(|_| ())
+                    };
+
+                    if let Err(_err) = res {
+                        tracing::error!("Could not control video element");
+                    }
+                });
+        }
+    }
+}
