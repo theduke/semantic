@@ -1,4 +1,7 @@
-use factordb::{backend::log::EventId, AnyError};
+use factordb::{
+    backend::log::{EventId, LogConverter, LogEvent},
+    AnyError,
+};
 use futures::{future::ready, FutureExt, StreamExt};
 use logfs::LogFs;
 
@@ -7,19 +10,19 @@ use logfs::LogFs;
 #[derive(Clone)]
 pub struct LogDbStore {
     log: LogFs,
+    converter: factordb::backend::log::convert_json::JsonConverter,
 }
 
 impl LogDbStore {
     pub fn new(log: LogFs) -> Self {
-        Self { log }
+        Self {
+            log,
+            converter: factordb::backend::log::convert_json::JsonConverter,
+        }
     }
 
     async fn build_backend(self) -> Result<factordb::backend::log::LogDb, AnyError> {
-        factordb::backend::log::LogDb::open(
-            self,
-            factordb::backend::log::convert_json::JsonConverter,
-        )
-        .await
+        factordb::backend::log::LogDb::open(self).await
     }
 
     pub async fn build_db(self) -> Result<factordb::Db, AnyError> {
@@ -35,7 +38,7 @@ impl LogDbStore {
         &self,
         _from: EventId,
         _until: EventId,
-    ) -> Result<futures::stream::BoxStream<'_, Result<Vec<u8>, AnyError>>, AnyError> {
+    ) -> Result<futures::stream::BoxStream<'_, Result<LogEvent, AnyError>>, AnyError> {
         // let start = Self::event_path(from);
         // let end = Self::event_path(until);
 
@@ -47,9 +50,12 @@ impl LogDbStore {
             .paths_prefix(b"_e/")?
             .into_iter()
             .map(move |path| {
-                s.get(path)?.ok_or_else(|| {
+                let data = s.get(path)?.ok_or_else(|| {
                     anyhow::anyhow!("Error while iterating events: event key not found")
-                })
+                })?;
+
+                let event = self.converter.deserialize(data)?;
+                Ok(event)
             });
         let stream = futures::stream::iter(blobs).boxed();
         Ok(stream)
@@ -67,7 +73,7 @@ impl factordb::backend::log::LogStore for LogDbStore {
         from: EventId,
         until: EventId,
     ) -> futures::future::BoxFuture<
-        Result<futures::stream::BoxStream<Result<Vec<u8>, AnyError>>, AnyError>,
+        Result<futures::stream::BoxStream<Result<LogEvent, AnyError>>, AnyError>,
     > {
         self.iter_events(from, until).boxed()
     }
@@ -75,21 +81,25 @@ impl factordb::backend::log::LogStore for LogDbStore {
     fn read_event(
         &self,
         id: EventId,
-    ) -> futures::future::BoxFuture<Result<Option<Vec<u8>>, AnyError>> {
-        let res = self.log.get(Self::event_path(id)).map_err(AnyError::from);
+    ) -> futures::future::BoxFuture<Result<Option<LogEvent>, AnyError>> {
+        let converter = self.converter.clone();
+        let res = self
+            .log
+            .get(Self::event_path(id))
+            .map_err(AnyError::from)
+            .and_then(move |data| {
+                data.map(|data| converter.deserialize(data).map_err(Into::into))
+                    .transpose()
+            });
         ready(res).boxed()
     }
 
-    fn write_event(
-        &mut self,
-        id: EventId,
-        event: Vec<u8>,
-    ) -> futures::future::BoxFuture<Result<EventId, AnyError>> {
-        let res = self
-            .log
-            .insert(Self::event_path(id), event)
-            .map(|_| id)
-            .map_err(AnyError::from);
+    fn write_event(&mut self, event: LogEvent) -> futures::future::BoxFuture<Result<(), AnyError>> {
+        let res = self.converter.serialize(&event).and_then(|data| {
+            self.log
+                .insert(Self::event_path(event.id()), data)
+                .map_err(AnyError::from)
+        });
         ready(res).boxed()
     }
 
