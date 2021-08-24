@@ -18,7 +18,7 @@ pub fn note_content(
             Err(_err) => vdom::div().and("Invalid Note").build(),
         }
     } else {
-        let note = if let Some(body) = item.data.get_attr::<semantics_core::base::AttrNoteBody>() {
+        let note = if let Some(body) = item.data.get_attr::<semantic_core::base::AttrNoteBody>() {
             Markdown {
                 markdown: body.clone(),
             }

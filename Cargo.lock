@@ -1898,10 +1898,26 @@ dependencies = [
  "chrono",
  "factordb",
  "scraper",
+ "semantic_core",
  "semantic_ui_core",
- "semantics_core",
  "tracing",
  "url",
+]
+
+[[package]]
+name = "semantic_core"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "base64 0.13.0",
+ "chrono",
+ "factordb",
+ "futures",
+ "json-patch",
+ "serde",
+ "serde_json",
+ "url",
+ "uuid",
 ]
 
 [[package]]
@@ -1917,8 +1933,8 @@ dependencies = [
  "js-sys",
  "rand 0.8.4",
  "semantic_contrib",
+ "semantic_core",
  "semantic_ui_core",
- "semantics_core",
  "serde_json",
  "tracing",
  "tracing-wasm",
@@ -1940,7 +1956,7 @@ dependencies = [
  "futures",
  "js-sys",
  "pulldown-cmark",
- "semantics_core",
+ "semantic_core",
  "serde_json",
  "tracing",
  "url",
@@ -1971,7 +1987,7 @@ dependencies = [
  "logfs",
  "mime_guess",
  "reqwest",
- "semantics_core",
+ "semantic_core",
  "serde",
  "serde_json",
  "tokio",
@@ -1980,22 +1996,6 @@ dependencies = [
  "tracing",
  "tracing-subscriber",
  "webkit2gtk",
-]
-
-[[package]]
-name = "semantics_core"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "base64 0.13.0",
- "chrono",
- "factordb",
- "futures",
- "json-patch",
- "serde",
- "serde_json",
- "url",
- "uuid",
 ]
 
 [[package]]

@@ -15,18 +15,18 @@ use semantic_ui_core::{
     },
     EntityRenderOpts,
 };
-use semantics_core::base::Habit;
+use semantic_core::base::Habit;
 
 use super::habit_form::habit_form;
 
 pub fn habit_create(_item: &Item, _opts: &EntityRenderOpts) -> VNode {
     CreatePage {
         render: Rc::new(|props: &EntityFormProps| {
-            let habit = semantics_core::base::Habit {
+            let habit = semantic_core::base::Habit {
                 id: factordb::Id::nil(),
                 title: String::new(),
                 description: None,
-                mode: semantics_core::base::HabitMode::Neutral,
+                mode: semantic_core::base::HabitMode::Neutral,
                 extra: Default::default(),
             };
 

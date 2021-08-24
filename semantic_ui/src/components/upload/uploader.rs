@@ -1,7 +1,7 @@
 use brass::vdom::{div, div_with};
 use factordb::{schema::EntityContainer, AnyError};
 use semantic_ui_core::{api, loader::LoadState};
-use semantics_core::{api::FileUploadMetadata, base::TypedFile};
+use semantic_core::{api::FileUploadMetadata, base::TypedFile};
 
 pub enum Msg {
     FilesAdded(Vec<web_sys::File>),

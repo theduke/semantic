@@ -7,7 +7,7 @@ use brass::{
 use semantic_ui_core::components::form::{
     self, AndValidator, FormRef, InputField, StringRequired, Validator,
 };
-use semantics_core::base::Tag;
+use semantic_core::base::Tag;
 
 #[derive(Clone, Debug)]
 pub struct ExistingTagValidator {

@@ -16,10 +16,10 @@ enum Phase {
 }
 
 pub enum Msg {
-    StatusLoaded(Result<semantics_core::api::ServerStatus, AnyError>),
-    SchemaLoaded(Result<semantics_core::api::SemanticSchema, AnyError>),
-    Initialize(semantics_core::api::BackendConfig),
-    InitializeLoaded(Result<semantics_core::api::SemanticSchema, AnyError>),
+    StatusLoaded(Result<semantic_core::api::ServerStatus, AnyError>),
+    SchemaLoaded(Result<semantic_core::api::SemanticSchema, AnyError>),
+    Initialize(semantic_core::api::BackendConfig),
+    InitializeLoaded(Result<semantic_core::api::SemanticSchema, AnyError>),
     LogoutLoaded(Result<(), AnyError>),
     RouteChange(Route),
 }
@@ -107,7 +107,7 @@ impl brass::Component for Root {
                     registry.register_plugin(semantic_contrib::ContribPlugin);
 
                     registry
-                        .attr_renderer(&semantics_core::base::AttrPreviewImageUrl::QUALIFIED_NAME)
+                        .attr_renderer(&semantic_core::base::AttrPreviewImageUrl::QUALIFIED_NAME)
                         .expect("no custom renderer for preview image");
 
                     ctx.provide(registry.into_shared());

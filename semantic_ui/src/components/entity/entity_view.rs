@@ -208,7 +208,7 @@ impl brass::Component for State {
                 }
             }
             Msg::OpenSourceUrl => {
-                if let Some(url) = self.item.data.get_attr::<semantics_core::base::AttrUrl>() {
+                if let Some(url) = self.item.data.get_attr::<semantic_core::base::AttrUrl>() {
                     let _ = brass::util::window()
                         .open_with_url_and_target(url.as_str(), "_blank")
                         .map_err(|_err| {
@@ -279,7 +279,7 @@ impl brass::Component for State {
     fn render(&self, mut ctx: brass::RenderContext<Self>) -> brass::VNode {
         let mut actions = Vec::new();
 
-        if self.item.data.has_attr::<semantics_core::base::AttrUrl>() {
+        if self.item.data.has_attr::<semantic_core::base::AttrUrl>() {
             actions.push(EntityActionButton {
                 icon: s("fas fa-globe"),
                 label: s("Go to URL"),

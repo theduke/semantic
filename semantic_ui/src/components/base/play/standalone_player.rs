@@ -53,8 +53,8 @@ impl State {
         Expr::in_(
             Expr::attr::<AttrType>(),
             vec![
-                semantics_core::base::Image::QUALIFIED_NAME,
-                semantics_core::base::Video::QUALIFIED_NAME,
+                semantic_core::base::Image::QUALIFIED_NAME,
+                semantic_core::base::Video::QUALIFIED_NAME,
             ],
         )
     }

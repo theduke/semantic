@@ -13,7 +13,7 @@ use brass::{
 };
 use factordb::schema::AttributeDescriptor;
 use semantic_ui_core::components::Loader;
-use semantics_core::base::{AttrCollectionItem, Collection, CollectionWithItems};
+use semantic_core::base::{AttrCollectionItem, Collection, CollectionWithItems};
 
 use self::collection_update::CollectionUpdate;
 

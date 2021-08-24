@@ -14,7 +14,7 @@ use semantic_ui_core::{
     components::small_title,
     loader::{error_msg, LoadState},
 };
-use semantics_core::base::Collection;
+use semantic_core::base::Collection;
 
 use crate::components::entity::entity_search_autocomplete::EntitySearchAutocomplete;
 

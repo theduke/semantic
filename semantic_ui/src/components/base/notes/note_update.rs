@@ -3,7 +3,7 @@ use brass::{
     Callback,
 };
 use factordb::{data::value::from_value_map, schema::EntityContainer, AnyError};
-use semantics_core::base::Note;
+use semantic_core::base::Note;
 
 use semantic_ui_core::{loader::LoadState, ContextExt};
 

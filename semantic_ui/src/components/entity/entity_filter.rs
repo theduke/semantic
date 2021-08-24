@@ -33,7 +33,7 @@ impl EntityFilterFormComp {
 
         let search = self.search.trim();
         if !search.is_empty() {
-            let se = Expr::contains(Expr::attr::<semantics_core::base::AttrTitle>(), search);
+            let se = Expr::contains(Expr::attr::<semantic_core::base::AttrTitle>(), search);
             e = e.and_with(se);
         }
 

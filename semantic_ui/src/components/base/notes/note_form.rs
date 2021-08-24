@@ -3,7 +3,7 @@ use brass::{
     Callback,
 };
 use factordb::Id;
-use semantics_core::base::Note;
+use semantic_core::base::Note;
 
 pub struct NoteFormProps {
     pub note: Option<Note>,

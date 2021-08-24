@@ -1,5 +1,5 @@
 use factordb::schema::AttributeDescriptor;
-use semantics_core::plugin::PluginDescriptor;
+use semantic_core::plugin::PluginDescriptor;
 
 mod app;
 mod blobstore;
@@ -16,7 +16,7 @@ fn main() {
 
     match args.get(0).map(|x| x.as_str()).unwrap_or("server") {
         "generate-ts-base" => {
-            let mut schema = semantics_core::base::SemanticPlugin::schema().db;
+            let mut schema = semantic_core::base::SemanticPlugin::schema().db;
             // let builtin = factordb::schema::builtin::builtin_db_schema();
             schema
                 .attributes
@@ -64,7 +64,7 @@ fn main() {
                     // FIXME: obviously just for debugging, remove this.
                     .unwrap_or("random key".to_string());
 
-                Some(semantics_core::api::BackendConfig::Crypto {
+                Some(semantic_core::api::BackendConfig::Crypto {
                     data_path: Some(data_path),
                     key,
                 })

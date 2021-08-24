@@ -1,7 +1,7 @@
 use std::pin::Pin;
 
 use factordb::AnyError;
-use semantics_core::api::{ApiClient, FileUploadMetadata};
+use semantic_core::api::{ApiClient, FileUploadMetadata};
 use wasm_bindgen::{JsCast, JsValue};
 
 fn anyerr_from_js(value: wasm_bindgen::JsValue) -> AnyError {
@@ -14,8 +14,8 @@ pub struct BrowserExecutor;
 impl BrowserExecutor {
     async fn execute(
         self,
-        query: semantics_core::api::Query,
-    ) -> Result<semantics_core::api::Reply, AnyError> {
+        query: semantic_core::api::Query,
+    ) -> Result<semantic_core::api::Reply, AnyError> {
         let body: JsValue = serde_json::to_string(&query)?.into();
 
         let mut opts = web_sys::RequestInit::new();
@@ -49,19 +49,19 @@ impl BrowserExecutor {
             .map_err(anyerr_from_js)?;
         let body: String = body_js.into();
 
-        let response: semantics_core::api::ApiResponse = serde_json::from_slice(body.as_bytes())?;
+        let response: semantic_core::api::ApiResponse = serde_json::from_slice(body.as_bytes())?;
         match response {
-            semantics_core::api::ApiResponse::Ok(reply) => Ok(reply),
-            semantics_core::api::ApiResponse::Err(err) => Err(AnyError::msg(err.message)),
+            semantic_core::api::ApiResponse::Ok(reply) => Ok(reply),
+            semantic_core::api::ApiResponse::Err(err) => Err(AnyError::msg(err.message)),
         }
     }
 }
 
-impl semantics_core::api::ApiClientExecutor for BrowserExecutor {
+impl semantic_core::api::ApiClientExecutor for BrowserExecutor {
     type Future =
-        Pin<Box<dyn std::future::Future<Output = Result<semantics_core::api::Reply, AnyError>>>>;
+        Pin<Box<dyn std::future::Future<Output = Result<semantic_core::api::Reply, AnyError>>>>;
 
-    fn execute(&self, query: semantics_core::api::Query) -> Self::Future {
+    fn execute(&self, query: semantic_core::api::Query) -> Self::Future {
         Box::pin(self.clone().execute(query))
     }
 }
@@ -75,7 +75,7 @@ pub fn api() -> BrowserApiClient {
 pub async fn upload_file(
     file: web_sys::File,
     meta: FileUploadMetadata,
-) -> Result<semantics_core::base::TypedFile, AnyError> {
+) -> Result<semantic_core::base::TypedFile, AnyError> {
     let meta_header = serde_json::to_string(&meta)?;
 
     let mut opts = web_sys::RequestInit::new();
@@ -110,10 +110,10 @@ pub async fn upload_file(
         .map_err(anyerr_from_js)?;
     let body: String = body_js.into();
 
-    let response: semantics_core::api::ApiResponse<semantics_core::base::TypedFile> =
+    let response: semantic_core::api::ApiResponse<semantic_core::base::TypedFile> =
         serde_json::from_slice(body.as_bytes())?;
     match response {
-        semantics_core::api::ApiResponse::Ok(reply) => Ok(reply),
-        semantics_core::api::ApiResponse::Err(err) => Err(AnyError::msg(err.message)),
+        semantic_core::api::ApiResponse::Ok(reply) => Ok(reply),
+        semantic_core::api::ApiResponse::Err(err) => Err(AnyError::msg(err.message)),
     }
 }

@@ -3,7 +3,7 @@ use std::{collections::HashMap, rc::Rc};
 use brass::{vdom, VNode};
 use factordb::{AnyError, Id};
 use semantic_ui_core::{components::small_title, loader::LoadState};
-use semantics_core::base::Tag;
+use semantic_core::base::Tag;
 
 use super::tag_form::ExistingTagValidator;
 

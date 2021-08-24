@@ -5,7 +5,7 @@ use brass::{
     Callback, VNode,
 };
 use semantic_ui_core::components::form::{self, InputField, SelectField};
-use semantics_core::base::{Habit, HabitMode};
+use semantic_core::base::{Habit, HabitMode};
 
 pub fn habit_form(habit: Habit, on_submit: Callback<Habit>) -> VNode {
     form::Form {

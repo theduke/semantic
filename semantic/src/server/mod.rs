@@ -10,7 +10,7 @@ use axum::{
 use factordb::AnyError;
 use hyper::{Body, Method, Request, Response, StatusCode};
 
-use semantics_core::api::{self, ApiError, ApiResponse, BackendConfig, Query};
+use semantic_core::api::{self, ApiError, ApiResponse, BackendConfig, Query};
 
 use crate::app::App;
 
@@ -102,7 +102,7 @@ fn cors_response() -> Response<Body> {
             hyper::header::ACCESS_CONTROL_ALLOW_HEADERS,
             format!(
                 "{},content-type",
-                semantics_core::api::FileUploadMetadata::HEADER_NAME
+                semantic_core::api::FileUploadMetadata::HEADER_NAME
             ),
         )
         .body(Body::empty())
@@ -145,12 +145,12 @@ async fn handler_blob_upload(Extension(app): AppState, req: Request<Body>) -> Re
 async fn file_upload(
     app: &App,
     req: Request<Body>,
-) -> Result<semantics_core::base::TypedFile, AnyError> {
+) -> Result<semantic_core::base::TypedFile, AnyError> {
     // FIXME: check authentication
 
     tracing::trace!("file upload started");
 
-    use semantics_core::api::FileUploadMetadata;
+    use semantic_core::api::FileUploadMetadata;
 
     let meta: FileUploadMetadata =
         if let Some(header) = req.headers().get(FileUploadMetadata::HEADER_NAME) {
@@ -382,7 +382,7 @@ async fn api_query(app: &App, req: Request<Body>) -> Result<Response<Body>, AnyE
             };
 
             Ok(api::Reply::HttpFetch(
-                semantics_core::api::SimpleHttpResponse {
+                semantic_core::api::SimpleHttpResponse {
                     status,
                     headers,
                     body,

@@ -21,11 +21,11 @@ use factordb::{
     },
 };
 use semantic_ui_core::{routing::Route, EntityInfo, EntityRenderOpts, Registry};
-use semantics_core::base::AttrTitle;
+use semantic_core::base::AttrTitle;
 use vdom::text;
 
 pub fn entity_title(data: &DataMap) -> String {
-    data.get_attr::<semantics_core::base::AttrTitle>()
+    data.get_attr::<semantic_core::base::AttrTitle>()
         .or_else(|| data.get_id().map(|x| x.to_string()))
         .unwrap_or_else(|| "<No Title>".to_string())
 }

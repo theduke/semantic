@@ -7,7 +7,7 @@ use brass::{
 };
 use factordb::{query::select::Item, schema::AttrMapExt};
 use semantic_ui_core::{ContextExt, Registry, SharedRegistry};
-use semantics_core::base::{Collection, CollectionWithItems};
+use semantic_core::base::{Collection, CollectionWithItems};
 
 use crate::components::entity::{
     entity_search_autocomplete::EntitySearchAutocomplete, entity_view::EntityView,

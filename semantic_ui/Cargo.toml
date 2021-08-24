@@ -23,7 +23,7 @@ brass = "0.1"
 brass_bulma = "0.1"
 factordb = { version = "0.1", default-features = false }
 
-semantics_core = { path = "../semantics_core" }
+semantic_core = { path = "../semantic_core" }
 semantic_ui_core = { path = "../semantic_ui_core" }
 semantic_contrib = { path = "../semantic_contrib" }
 anyhow = { version = "1.0.41", features = ["backtrace"] }

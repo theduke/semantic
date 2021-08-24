@@ -15,7 +15,7 @@ use semantic_ui_core::{
     },
     EntityRenderOpts,
 };
-use semantics_core::base::{Collection, CollectionWithItems};
+use semantic_core::base::{Collection, CollectionWithItems};
 
 use super::collection_form::CollectionForm;
 

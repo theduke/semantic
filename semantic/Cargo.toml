@@ -39,7 +39,7 @@ logfs = { path = "../logfs" }
 factordb = "0.1"
 factor_tools = "0.1"
 
-semantics_core = { path = "../semantics_core" }
+semantic_core = { path = "../semantic_core" }
 jsonwebtoken = { version = "7.2.0" }
 serde = { version = "1.0.127", features = ["derive"] }
 axum = "0.2.0"

@@ -4,7 +4,7 @@ use brass::{
 };
 use factordb::{query::select::Item, schema::AttrMapExt};
 use semantic_ui_core::EntityRenderOpts;
-use semantics_core::base::{AttrBlobUri, AttrDownloadUrl};
+use semantic_core::base::{AttrBlobUri, AttrDownloadUrl};
 
 use crate::components::base::plugin::build_blob_url;
 

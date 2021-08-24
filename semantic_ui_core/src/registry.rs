@@ -9,7 +9,7 @@ use fnv::FnvHashMap;
 use crate::BrowserPlugin;
 
 pub struct Registry {
-    schema: semantics_core::api::SemanticSchema,
+    schema: semantic_core::api::SemanticSchema,
 
     attributes: FnvHashMap<String, AttributeSchema>,
     entities: FnvHashMap<String, EntityInfo>,
@@ -116,7 +116,7 @@ pub struct EntityRendererSpec {
 }
 
 impl Registry {
-    pub fn new(schema: semantics_core::api::SemanticSchema) -> Self {
+    pub fn new(schema: semantic_core::api::SemanticSchema) -> Self {
         let entities = schema
             .db
             .entities
@@ -172,7 +172,7 @@ impl Registry {
         SharedRegistry(Rc::new(self))
     }
 
-    pub fn schema(&self) -> &semantics_core::api::SemanticSchema {
+    pub fn schema(&self) -> &semantic_core::api::SemanticSchema {
         &self.schema
     }
 

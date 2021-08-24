@@ -13,7 +13,7 @@ use factordb::{
     AnyError,
 };
 use semantic_ui_core::loader::LoadState;
-use semantics_core::base::AttrTitle;
+use semantic_core::base::AttrTitle;
 
 use super::entity_title;
 

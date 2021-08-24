@@ -15,7 +15,7 @@ use factordb::{
     Id,
 };
 use semantic_ui_core::entity::persister::{EntityFormProps, EntityPersister, FormValid};
-use semantics_core::base::Tag;
+use semantic_core::base::Tag;
 pub use tag_manager::TagManager;
 
 mod tag_form;

@@ -14,7 +14,7 @@ futures = "0.3.16"
 js-sys = "0.3.51"
 pulldown-cmark = "0.8.0"
 
-semantics_core = { path = "../semantics_core" }
+semantic_core = { path = "../semantic_core" }
 serde_json = "1.0.64"
 tracing = "0.1.26"
 url = "2.2.2"

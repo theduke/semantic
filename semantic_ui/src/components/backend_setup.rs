@@ -4,7 +4,7 @@ use brass::{
 };
 
 pub struct BackendSetupForm {
-    pub on_submit: Callback<semantics_core::api::BackendConfig>,
+    pub on_submit: Callback<semantic_core::api::BackendConfig>,
 }
 
 enum Msg {
@@ -14,7 +14,7 @@ enum Msg {
 }
 
 struct BackendSetupFormComp {
-    on_submit: Callback<semantics_core::api::BackendConfig>,
+    on_submit: Callback<semantic_core::api::BackendConfig>,
 
     data_path: String,
     key: String,
@@ -57,7 +57,7 @@ impl brass::Component for BackendSetupFormComp {
                 };
                 let key = self.key.clone();
 
-                let config = semantics_core::api::BackendConfig::Crypto { data_path, key };
+                let config = semantic_core::api::BackendConfig::Crypto { data_path, key };
                 self.on_submit.send(config);
             }
         }

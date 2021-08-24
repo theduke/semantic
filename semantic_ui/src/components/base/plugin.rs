@@ -6,7 +6,7 @@ use factordb::{
     schema::{AttrMapExt, AttributeDescriptor, EntityDescriptor},
 };
 use semantic_ui_core::registry::RegisteredMediaRenderer;
-use semantics_core::base::{self, AttrPreviewImageUrl};
+use semantic_core::base::{self, AttrPreviewImageUrl};
 use wasm_bindgen::convert::IntoWasmAbi;
 
 use crate::components::entity::{self, render_value};
@@ -22,12 +22,12 @@ impl semantic_ui_core::BrowserPlugin for BasePlugin {
 
     fn register(&self, registry: &mut semantic_ui_core::Registry) {
         registry.register_attr_renderer(
-            semantics_core::base::AttrPreviewImageUrl::QUALIFIED_NAME.to_string(),
+            semantic_core::base::AttrPreviewImageUrl::QUALIFIED_NAME.to_string(),
             std::rc::Rc::new(render_attr_preview_image),
         );
 
         registry.register_attr_renderer(
-            semantics_core::base::AttrBlobUri::QUALIFIED_NAME.to_string(),
+            semantic_core::base::AttrBlobUri::QUALIFIED_NAME.to_string(),
             std::rc::Rc::new(render_blob_uri),
         );
 

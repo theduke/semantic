@@ -37,7 +37,7 @@ impl BrowsePage {
     fn base_filter() -> Expr {
         Expr::not(Expr::in_(
             Expr::attr::<factordb::schema::builtin::AttrType>(),
-            vec![semantics_core::base::Tag::QUALIFIED_NAME],
+            vec![semantic_core::base::Tag::QUALIFIED_NAME],
         ))
     }
 

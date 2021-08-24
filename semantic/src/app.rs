@@ -9,7 +9,7 @@ use factordb::{
     schema::{AttrMapExt, EntityContainer},
     AnyError, Db,
 };
-use semantics_core::{
+use semantic_core::{
     api::{self, BackendConfig},
     base::{AttrBlobUri, AttrDownloadUrl},
     plugin::PluginDescriptor,
@@ -130,7 +130,7 @@ impl App {
             }
         };
 
-        let base_plugin = semantics_core::base::SemanticPlugin::build_upsert_migration();
+        let base_plugin = semantic_core::base::SemanticPlugin::build_upsert_migration();
         state.db.migrate(base_plugin).await?;
         *self.state.write().unwrap() = Some(state);
         Ok(())
@@ -166,8 +166,8 @@ impl App {
         Ok(s)
     }
 
-    pub async fn load_schema(&self) -> Result<semantics_core::plugin::PluginSchema, AnyError> {
-        let mut schema = semantics_core::base::SemanticPlugin::schema();
+    pub async fn load_schema(&self) -> Result<semantic_core::plugin::PluginSchema, AnyError> {
+        let mut schema = semantic_core::base::SemanticPlugin::schema();
         // Fix up the schema with real IDs.
 
         let db = self.require_db()?;
@@ -200,8 +200,8 @@ impl App {
         &self,
         meta: api::FileUploadMetadata,
         data: Vec<u8>,
-    ) -> Result<semantics_core::base::TypedFile, AnyError> {
-        use semantics_core::base::TypedFile;
+    ) -> Result<semantic_core::base::TypedFile, AnyError> {
+        use semantic_core::base::TypedFile;
 
         let blob = self.require_blob()?;
         let db = self.require_db()?;
@@ -215,7 +215,7 @@ impl App {
         // FIXME: use unique create instead of put.
         blob.put(&blob_uri, data).await?;
 
-        let file = semantics_core::base::File {
+        let file = semantic_core::base::File {
             id,
             ident: None,
             title: meta.title.clone().or_else(|| meta.filename.clone()),
@@ -232,9 +232,9 @@ impl App {
         // Build the data.
         let item = match mime_guess.map(|x| x.mime_type()).unwrap_or_default() {
             mime if mime.starts_with("image/") => {
-                TypedFile::Image(semantics_core::base::Image { file })
+                TypedFile::Image(semantic_core::base::Image { file })
             }
-            mime if mime.starts_with("video/") => TypedFile::Video(semantics_core::base::Video {
+            mime if mime.starts_with("video/") => TypedFile::Video(semantic_core::base::Video {
                 file,
                 duration: None,
             }),

@@ -8,7 +8,7 @@ use brass::{
 };
 use factordb::{query::select::Item, schema::AttrMapExt};
 use semantic_ui_core::{registry::MediaRenderOpts, EntityRenderOpts};
-use semantics_core::base::{AttrBlobUri, AttrDownloadUrl};
+use semantic_core::base::{AttrBlobUri, AttrDownloadUrl};
 
 use crate::components::base::plugin::build_blob_url;
 
@@ -30,7 +30,7 @@ impl VideoInfo {
                     .map(|x| x.to_string())
             })?;
 
-        let mime_type = item.data.get_attr::<semantics_core::base::AttrMimeType>();
+        let mime_type = item.data.get_attr::<semantic_core::base::AttrMimeType>();
 
         let supports_browser = url.ends_with(".mp4")
             || url.ends_with(".webm")
