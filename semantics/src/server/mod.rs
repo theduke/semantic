@@ -1,9 +1,10 @@
+mod assets;
+
 use std::net::SocketAddr;
 
 use anyhow::{Context, Result};
 use axum::{
     extract::{self, Extension},
-    prelude::RoutingDsl,
     AddExtensionLayer,
 };
 use factordb::AnyError;
@@ -26,11 +27,8 @@ pub struct ServerConfig {
 
 type AppState = extract::Extension<App>;
 
-#[cfg(not(debug_assertions))]
-static ASSETS: include_dir::Dir = include_dir::include_dir!("../target_wasm/ui");
-
 pub async fn run_server(app: App, config: ServerConfig) -> Result<(), AnyError> {
-    use axum::prelude::{get, post, route};
+    use axum::handler::{get, post};
 
     // Run the server like above...
     let addr: SocketAddr = config.interface.parse().context(format!(
@@ -39,61 +37,35 @@ pub async fn run_server(app: App, config: ServerConfig) -> Result<(), AnyError> 
     ))?;
 
     #[cfg(debug_assertions)]
-    let (assets, index) = {
+    let asset_source = {
         let manifest_dir_raw =
             std::env::var("CARGO_MANIFEST_DIR").expect("Could not find CARGO_MANIFEST_DIR env var");
         let path = std::path::PathBuf::from(manifest_dir_raw)
             .parent()
             .expect("CARGO_MANIFEST_DIR has no parent")
             .join("target_wasm/ui");
-        let dir = tower_http::services::ServeDir::new(&path);
-        let assets = axum::service::get(dir).handle_error(|error: std::io::Error| {
-            Ok::<_, std::convert::Infallible>((
-                StatusCode::INTERNAL_SERVER_ERROR,
-                format!("Unhandled internal error: {}", error),
-            ))
-        });
-
-        let index = axum::service::get(tower_http::services::fs::ServeFile::new(
-            path.join("index.html"),
-        ))
-        .handle_error(|error: std::io::Error| {
-            Ok::<_, std::convert::Infallible>((
-                StatusCode::INTERNAL_SERVER_ERROR,
-                format!("Unhandled internal error: {}", error),
-            ))
-        });
-
-        (assets, index)
+        assets::FsAssetSource::new(path)
     };
 
     #[cfg(not(debug_assertions))]
-    let (assets, index) = {
-        let assets = get(serve_included_dir);
-        let index = get(|_req: Request<Body>| async {
-            let data = ASSETS
-                .get_file("index.html")
-                .expect("index.html not embedded")
-                .contents()
-                .to_vec();
-            Response::builder()
-                .header(axum::http::header::CONTENT_TYPE, "text/html")
-                .body(Body::from(data))
-                .unwrap()
-        });
-
-        (assets, index)
+    let asset_source = {
+        static ASSETS: include_dir::Dir = include_dir::include_dir!("../target_wasm/ui");
+        assets::StaticAssetSource::new(ASSETS.clone())
     };
 
-    let app = route("/api/query", post(handler_api_query))
+    let assets = assets::Assets::new(asset_source);
+
+    let app = axum::Router::new()
+        .route("/api/query", post(handler_api_query))
         .route(
             "/api/upload-file",
             post(handler_blob_upload).options(cors_handler),
         )
         .nest("/blob/files", get(handler_blob_read))
-        .nest("/assets", assets)
-        .route("/", index)
+        .nest("/assets", get(handler_assets))
+        .or(get(handler_index))
         .layer(AddExtensionLayer::new(app))
+        .layer(AddExtensionLayer::new(assets))
         .layer(tower_http::trace::TraceLayer::new_for_http());
 
     tracing::info!(interface=%addr, "starting web server");
@@ -106,24 +78,17 @@ pub async fn run_server(app: App, config: ServerConfig) -> Result<(), AnyError> 
     })
 }
 
-#[cfg(not(debug_assertions))]
-async fn serve_included_dir(req: Request<Body>) -> Response<Body> {
-    let path = req
-        .uri()
-        .path()
-        .trim_start_matches('/')
-        .replace("assets/", "");
-    if let Some(file) = ASSETS.get_file(&path) {
-        let content_type = mime_guess::from_path(&path)
-            .first_or_octet_stream()
-            .to_string();
-        let res = Response::builder()
-            .status(StatusCode::OK)
-            .header(axum::http::header::CONTENT_TYPE, content_type);
-        res.body(Body::from(file.contents())).unwrap()
-    } else {
-        not_found()
-    }
+async fn handler_assets(
+    Extension(assets): extract::Extension<assets::Assets>,
+    req: Request<Body>,
+) -> Response<Body> {
+    assets.request(req.uri().path())
+}
+
+async fn handler_index(
+    Extension(assets): extract::Extension<assets::Assets>,
+) -> Response<Body> {
+    assets.request("index.html")
 }
 
 async fn cors_handler() -> Response<Body> {
