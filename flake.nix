@@ -106,7 +106,7 @@
             RUST_BACKTRACE = "1";
             # Use lld linker for speedup.
             RUSTFLAGS = "-C link-arg=-fuse-ld=lld";
-            RUST_LOG = "semantics=trace";
+            RUST_LOG = "semantic=trace";
 
             # Needed for https / ssl support
             GIO_MODULE_DIR = "${pkgs.glib-networking}/lib/gio/modules/";

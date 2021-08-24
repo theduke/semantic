@@ -8,7 +8,12 @@ mod server;
 
 fn main() {
     if std::env::var("RUST_LOG").is_err() {
-        std::env::set_var("RUST_LOG", "semantics=trace");
+        #[cfg(not(debug_assertions))]
+        let default = "semantic=info";
+        #[cfg(debug_assertions)]
+        let default = "semantic=trace,logfs=trace,factordb=debug,semantic_core=trace";
+
+        std::env::set_var("RUST_LOG", default);
     }
     tracing_subscriber::fmt::init();
 

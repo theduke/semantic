@@ -1891,6 +1891,39 @@ dependencies = [
 ]
 
 [[package]]
+name = "semantic"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "axum",
+ "base64 0.13.0",
+ "dirs",
+ "factor_tools",
+ "factordb",
+ "futures",
+ "gio",
+ "glib",
+ "gtk",
+ "hyper",
+ "include_dir",
+ "infer",
+ "javascriptcore-rs",
+ "jsonwebtoken",
+ "logfs",
+ "mime_guess",
+ "reqwest",
+ "semantic_core",
+ "serde",
+ "serde_json",
+ "tokio",
+ "tower",
+ "tower-http",
+ "tracing",
+ "tracing-subscriber",
+ "webkit2gtk",
+]
+
+[[package]]
 name = "semantic_contrib"
 version = "0.1.0"
 dependencies = [
@@ -1963,39 +1996,6 @@ dependencies = [
  "wasm-bindgen",
  "wasm-bindgen-futures",
  "web-sys",
-]
-
-[[package]]
-name = "semantics"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "axum",
- "base64 0.13.0",
- "dirs",
- "factor_tools",
- "factordb",
- "futures",
- "gio",
- "glib",
- "gtk",
- "hyper",
- "include_dir",
- "infer",
- "javascriptcore-rs",
- "jsonwebtoken",
- "logfs",
- "mime_guess",
- "reqwest",
- "semantic_core",
- "serde",
- "serde_json",
- "tokio",
- "tower",
- "tower-http",
- "tracing",
- "tracing-subscriber",
- "webkit2gtk",
 ]
 
 [[package]]
