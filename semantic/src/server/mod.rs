@@ -179,7 +179,15 @@ async fn handler_blob_read(Extension(app): AppState, req: Request<Body>) -> Resp
         return cors_response();
     }
 
-    let blob_path = req.uri().path().strip_prefix("/blob/").unwrap_or_default();
+    let raw_path = req.uri().path();
+
+    let real_path = if raw_path.starts_with("/blob/files/") {
+        raw_path.trim_start_matches("/blob/").to_string()
+    } else if raw_path.starts_with("/files") {
+        raw_path.trim_start_matches('/').to_string()
+    } else {
+        format!("files{}", raw_path)
+    };
 
     let blob = if let Some(b) = app.blob() {
         b
@@ -187,16 +195,22 @@ async fn handler_blob_read(Extension(app): AppState, req: Request<Body>) -> Resp
         return internal_server_error("Blobstore not initialized");
     };
 
-    match blob.get(blob_path).await {
-        Ok(Some(data)) => Response::builder()
-            .status(StatusCode::OK)
-            .body(data.into())
-            .unwrap(),
+    match blob.get(&real_path).await {
+        Ok(Some(data)) => {
+            tracing::trace!(%real_path, "serving file");
+            Response::builder()
+                .status(StatusCode::OK)
+                .body(data.into())
+                .unwrap()
+        }
         Ok(None) => not_found(),
-        Err(err) => Response::builder()
-            .status(StatusCode::INTERNAL_SERVER_ERROR)
-            .body(format!("Error: {}", err).into_bytes().into())
-            .unwrap(),
+        Err(err) => {
+            tracing::error!(error=?err, "Could not serve file");
+            Response::builder()
+                .status(StatusCode::INTERNAL_SERVER_ERROR)
+                .body(format!("Error: {}", err).into_bytes().into())
+                .unwrap()
+        }
     }
 }
 
