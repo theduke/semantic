@@ -139,7 +139,7 @@ async fn handler_blob_upload(Extension(app): AppState, req: Request<Body>) -> Re
 
     tracing::info!(?reply, "blob upload reply");
 
-    api_response(reply)
+    api_response(reply, Vec::new())
 }
 
 async fn file_upload(
@@ -224,20 +224,27 @@ fn api_response_err(err: &AnyError) -> ApiResponse {
     ApiResponse::Err(api_error(err))
 }
 
-fn api_response<T>(res: ApiResponse<T>) -> Response<Body>
+fn api_response<T>(
+    res: ApiResponse<T>,
+    extra_headers: Vec<(hyper::header::HeaderName, hyper::http::HeaderValue)>,
+) -> Response<Body>
 where
     T: serde::Serialize,
 {
     // TODO: no unwrap?
     let res_json = serde_json::to_vec(&res).unwrap();
 
-    Response::builder()
+    let mut res = Response::builder()
         .status(StatusCode::OK)
         .header(hyper::header::ACCESS_CONTROL_ALLOW_ORIGIN, "*")
         .header(hyper::header::ACCESS_CONTROL_ALLOW_METHODS, "POST")
-        .header(hyper::header::ACCESS_CONTROL_ALLOW_HEADERS, "*")
-        .body(Body::from(res_json))
-        .unwrap()
+        .header(hyper::header::ACCESS_CONTROL_ALLOW_HEADERS, "*");
+
+    for (key, value) in extra_headers {
+        res = res.header(key, value);
+    }
+
+    res.body(Body::from(res_json)).unwrap()
 }
 
 #[derive(serde::Serialize, serde::Deserialize, Debug)]
@@ -271,11 +278,27 @@ impl TokenClaims {
 async fn handler_api_query(Extension(app): AppState, req: Request<Body>) -> Response<Body> {
     match api_query(&app, req).await {
         Ok(res) => res,
-        Err(err) => api_response(api_response_err(&err)),
+        Err(err) => api_response(api_response_err(&err), Vec::new()),
     }
 }
 
 const TOKEN_COOKIE_NAME: &'static str = "token";
+
+fn build_token_cookie(
+    value: &str,
+    delete: bool,
+) -> Result<hyper::http::HeaderValue, hyper::http::header::InvalidHeaderValue> {
+    let s = if delete {
+        format!(
+            "{}=; HttpOnly; expires=Thu, 01 Jan 1970 00:00:00 GMT;",
+            TOKEN_COOKIE_NAME
+        )
+    } else {
+        format!("{}={}; HttpOnly;", TOKEN_COOKIE_NAME, value)
+    };
+
+    hyper::header::HeaderValue::from_str(&s)
+}
 
 fn get_auth_cookie_token(req: &Request<Body>) -> Option<String> {
     req.headers()
@@ -326,6 +349,8 @@ async fn api_query(app: &App, req: Request<Body>) -> Result<Response<Body>, AnyE
         }
     }
 
+    let mut extra_headers = Vec::new();
+
     let res = match query {
         api::Query::ServerStatus => Ok(api::Reply::ServerStatus(api::ServerStatus {
             backend_initialized: app.db().is_some(),
@@ -345,7 +370,7 @@ async fn api_query(app: &App, req: Request<Body>) -> Result<Response<Body>, AnyE
             }
             .encode(key)?;
 
-            let cookie = format!("{}={}; HttpOnly", TOKEN_COOKIE_NAME, new_token);
+            let cookie = build_token_cookie(&new_token, false)?;
 
             let res_json = serde_json::to_vec(&api::ApiResponse::Ok(api::Reply::Initialize))?;
             let res = Response::builder()
@@ -359,6 +384,7 @@ async fn api_query(app: &App, req: Request<Body>) -> Result<Response<Body>, AnyE
         }
         api::Query::CloseBackend => {
             app.close_backend().await?;
+            extra_headers.push((hyper::header::SET_COOKIE, build_token_cookie("", true)?));
             Ok(api::Reply::CloseBackend)
         }
         api::Query::Select(sel) => app.require_db()?.select(sel).await.map(api::Reply::Select),
@@ -421,6 +447,6 @@ async fn api_query(app: &App, req: Request<Body>) -> Result<Response<Body>, AnyE
         tracing::error!(?err, "api query failed");
         err
     })?;
-    let res = api_response(ApiResponse::Ok(reply));
+    let res = api_response(ApiResponse::Ok(reply), extra_headers);
     Ok(res)
 }
