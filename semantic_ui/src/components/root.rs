@@ -45,6 +45,8 @@ impl brass::Component for Root {
             let status = match api.server_status().await {
                 Ok(s) => s,
                 Err(err) => {
+                    if err.to_string().contains("ExpiredSignature") {
+                    }
                     return Msg::StatusLoaded(Err(err));
                 }
             };
@@ -147,7 +149,7 @@ impl brass::Component for Root {
     fn render(&self, mut _ctx: brass::RenderContext<Self>) -> brass::VNode {
         match self.phase {
             Phase::CheckingBackend | Phase::LoggingOut => {
-                semantic_ui_core::loader::spinner().build()
+                self.status.render(|_| brass::VNode::Empty)
             }
             Phase::BackendSetup => self.status.render(move |_| {
                 let title = brass_bulma::h2_with("Login");
@@ -168,6 +170,6 @@ impl brass::Component for Root {
         _props: Self::Properties,
         _ctx: &mut brass::Context<Self::Msg>,
     ) -> brass::ShouldRender {
-        false
+        true
     }
 }
