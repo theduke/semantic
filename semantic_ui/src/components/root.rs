@@ -45,8 +45,7 @@ impl brass::Component for Root {
             let status = match api.server_status().await {
                 Ok(s) => s,
                 Err(err) => {
-                    if err.to_string().contains("ExpiredSignature") {
-                    }
+                    if err.to_string().contains("ExpiredSignature") {}
                     return Msg::StatusLoaded(Err(err));
                 }
             };
