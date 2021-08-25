@@ -1,10 +1,11 @@
 use rand::seq::SliceRandom;
 use std::rc::Rc;
+use wasm_bindgen::JsCast;
 
 use brass::{
     dom::Attr,
     vdom::{self, s, Render},
-    PropComponent, Shared,
+    Callback, PropComponent, Shared,
 };
 use brass_bulma::{Help, SelectOption};
 use factordb::{
@@ -16,6 +17,7 @@ use semantic_ui_core::loader::LoadState;
 
 pub struct StandalonePlayer {
     pub expr: Option<Expr>,
+    pub keyboard_controls: bool,
 }
 
 enum Msg {
@@ -29,6 +31,7 @@ enum Msg {
     ToggleMuted,
     ToggleSettings,
     IntervalChanged(Option<std::time::Duration>),
+    KeyPress(String),
 
     OnIndexChanged(usize),
 }
@@ -44,6 +47,9 @@ struct State {
     index: usize,
     autoplay_interval: Option<std::time::Duration>,
     settings_active: bool,
+
+    keydown_callback: Callback<web_sys::KeyboardEvent>,
+    keydown_subscription: Option<brass::util::EventSubscription>,
 }
 
 brass::enable_props!(wrapped StandalonePlayer => State);
@@ -79,6 +85,9 @@ impl PropComponent for State {
     type Msg = Msg;
 
     fn init(props: &Self::Properties, ctx: &mut brass::Context<Self::Msg>) -> Self {
+        let keydown_callback =
+            ctx.callback_map(|ev: web_sys::KeyboardEvent| Msg::KeyPress(ev.key()));
+
         let mut s = Self {
             loader: LoadState::Idle,
             expr: props.expr.clone().unwrap_or_else(|| Self::default_expr()),
@@ -89,6 +98,8 @@ impl PropComponent for State {
             shuffle: false,
             autoplay_interval: Some(std::time::Duration::from_secs(5)),
             settings_active: false,
+            keydown_callback,
+            keydown_subscription: None,
         };
 
         s.load(s.expr.clone(), ctx);
@@ -185,6 +196,23 @@ impl PropComponent for State {
             Msg::ToggleMuted => {
                 self.muted = !self.muted;
             }
+            Msg::KeyPress(key) => match key.as_str() {
+                "ArrowLeft" => {
+                    self.update(Msg::Prev, props, ctx);
+                }
+                "ArrowRight" => {
+                    self.update(Msg::Next, props, ctx);
+                }
+                " " => {
+                    self.update(Msg::TogglePlay, props, ctx);
+                }
+                "m" => {
+                    self.update(Msg::ToggleMuted, props, ctx);
+                }
+                _other => {
+                    ctx.skip_render();
+                }
+            },
         }
     }
 
@@ -311,5 +339,16 @@ impl PropComponent for State {
             .and(settings)
             .and(player)
             .build()
+    }
+
+    fn on_render(&mut self, props: &Self::Properties, first_render: bool) {
+        if first_render && props.keyboard_controls {
+            let target = brass::util::document();
+            self.keydown_subscription = Some(brass::util::EventSubscription::subscribe(
+                target.dyn_into().unwrap(),
+                brass::dom::Event::KeyDown,
+                self.keydown_callback.clone(),
+            ));
+        }
     }
 }

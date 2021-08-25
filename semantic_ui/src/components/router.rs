@@ -50,7 +50,11 @@ pub fn router(route: &Route) -> VNode {
             // Special casing for play because of overflow: hidden;
             // TODO: the router should probably just use the raw output, without
             // wrapping in in a .container below...
-            let content = comps::base::play::StandalonePlayer { expr: None }.render();
+            let content = comps::base::play::StandalonePlayer {
+                expr: None,
+                keyboard_controls: true,
+            }
+            .render();
 
             return div()
                 .style_raw("height: 100%; display: flex; flex-direction: column;")
