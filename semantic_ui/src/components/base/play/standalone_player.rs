@@ -261,7 +261,6 @@ impl PropComponent for State {
             } else {
                 "fas fa-volume"
             })))
-            .and_class_if(self.cycle, "is-info")
             .attr(Attr::Title, s(if self.muted { "Unmute" } else { "Mute" }))
             .on_click(ctx.on_simple(|| Msg::ToggleMuted));
         let btn_settings = brass_bulma::button()
