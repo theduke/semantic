@@ -1,6 +1,6 @@
 mod assets;
 
-use std::net::SocketAddr;
+use std::{net::SocketAddr, ops::Add};
 
 use anyhow::{Context, Result};
 use axum::{
@@ -359,6 +359,7 @@ async fn api_query(app: &App, req: Request<Body>) -> Result<Response<Body>, AnyE
             app.configure_backend(config.clone()).await?;
             let exp = std::time::SystemTime::now()
                 .duration_since(std::time::SystemTime::UNIX_EPOCH)?
+                .add(std::time::Duration::from_secs(60 * 60 * 2))
                 .as_secs();
 
             let key = &app.config().token_key;
