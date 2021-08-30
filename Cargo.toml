@@ -1,13 +1,13 @@
 [workspace]
 members = [
-    "semantic_core",
-    "semantic",
-    "logfs",
+    "crates/core",
+    "crates/semantic",
+    "crates/logfs",
 
-    "semantic_ui_core",
-    "semantic_ui",
+    "crates/ui_core",
+    "crates/ui",
 
-    "semantic_contrib",
+    "crates/contrib",
 ]
 
 [patch.crates-io]

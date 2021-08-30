@@ -43,13 +43,15 @@ pub async fn run_server(app: App, config: ServerConfig) -> Result<(), AnyError> 
         let path = std::path::PathBuf::from(manifest_dir_raw)
             .parent()
             .expect("CARGO_MANIFEST_DIR has no parent")
-            .join("target_wasm/ui");
+            .parent()
+            .expect("CARGO_MANIFEST_DIR has no parent")
+            .join("target/ui");
         assets::FsAssetSource::new(path)
     };
 
     #[cfg(not(debug_assertions))]
     let asset_source = {
-        static ASSETS: include_dir::Dir = include_dir::include_dir!("../target_wasm/ui");
+        static ASSETS: include_dir::Dir = include_dir::include_dir!("../../target/ui");
         assets::StaticAssetSource::new(ASSETS.clone())
     };
 

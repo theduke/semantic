@@ -1,5 +1,3 @@
 target
-target_wasm/
-
-semantic_contrib/
+crates/semantic_contrib/
 .direnv.fish
