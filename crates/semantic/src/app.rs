@@ -3,6 +3,7 @@ use std::{
     sync::{Arc, RwLock},
 };
 
+use anyhow::Context;
 use factordb::{
     data::DataMap,
     query::{self, select::Item},
@@ -117,7 +118,8 @@ impl App {
                     Self::default_data_path()?
                 };
 
-                let log = logfs::LogFs::open(data_path.clone(), key.clone())?;
+                let log = logfs::LogFs::open(data_path.clone(), key.clone())
+                    .context(format!("Could not open logfs at '{:?}'", data_path))?;
                 let blob = Arc::new(log.clone());
                 let db = crate::db::logdb::LogDbStore::new(log).build_db().await?;
 

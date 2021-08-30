@@ -55,7 +55,7 @@ fn main() {
                 let data_path = data_path_arg.unwrap_or_else(|| {
                     dirs::home_dir()
                         .expect("Could not determine home dir")
-                        .join(".local/share/semantics")
+                        .join(".local/share/semantics/db.data")
                         .to_str()
                         .expect("invalid data path")
                         .to_string()
