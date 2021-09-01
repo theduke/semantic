@@ -107,9 +107,9 @@ impl<T> ApiResponse<T> {
     pub fn from_res(res: Result<T, AnyError>) -> Self {
         match res {
             Ok(data) => Self::Ok(data),
-            Err(err) => Self::Err(ApiError{
+            Err(err) => Self::Err(ApiError {
                 message: err.to_string(),
-            })
+            }),
         }
     }
 }

@@ -375,74 +375,26 @@ async fn api_query(app: &App, req: Request<Body>) -> Result<Response<Body>, AnyE
 
             let cookie = build_token_cookie(&new_token, false)?;
 
-            let res_json = serde_json::to_vec(&api::ApiResponse::Ok(api::Reply::Initialize))?;
-            let res = Response::builder()
-                .status(StatusCode::OK)
-                .header(hyper::header::SET_COOKIE, cookie)
-                .header(hyper::header::ACCESS_CONTROL_ALLOW_ORIGIN, "*")
-                .header(hyper::header::ACCESS_CONTROL_ALLOW_METHODS, "POST")
-                .body(Body::from(res_json))
-                .unwrap();
-            return Ok(res);
+            extra_headers.push((hyper::header::SET_COOKIE, cookie));
+            extra_headers.push((
+                hyper::header::ACCESS_CONTROL_ALLOW_ORIGIN,
+                "*".parse().unwrap(),
+            ));
+            extra_headers.push((
+                hyper::header::ACCESS_CONTROL_ALLOW_METHODS,
+                "POST".parse().unwrap(),
+            ));
+            Ok(api::Reply::Initialize)
         }
         api::Query::CloseBackend => {
             app.close_backend().await?;
             extra_headers.push((hyper::header::SET_COOKIE, build_token_cookie("", true)?));
             Ok(api::Reply::CloseBackend)
         }
-        api::Query::Select(sel) => app.require_db()?.select(sel).await.map(api::Reply::Select),
-        api::Query::Mutate(update) => app.entity_mutate(update).await.map(|_| api::Reply::Mutate),
-        api::Query::Batch(batch) => app.entity_batch(batch).await.map(|_| api::Reply::Batch),
-        api::Query::HttpFetch(req) => {
-            let method = req.method.parse()?;
-            let mut builder = app.http_client().request(method, req.url);
-            if let Some(body) = req.body {
-                builder = builder.body(body);
-            }
-
-            if !req.headers.is_empty() {
-                for (key, value) in req.headers {
-                    builder = builder.header(&key, value);
-                }
-            }
-
-            let res = builder.send().await?;
-
-            let headers = res
-                .headers()
-                .into_iter()
-                .filter_map(|(key, value)| {
-                    Some((key.to_string(), value.to_str().ok().map(|x| x.to_string())?))
-                })
-                .collect();
-
-            let status = res.status().as_u16();
-            let body_bytes = res.bytes().await?;
-            let body = if body_bytes.is_empty() {
-                None
-            } else {
-                Some(base64::encode(body_bytes))
-            };
-
-            Ok(api::Reply::HttpFetch(
-                semantic_core::api::SimpleHttpResponse {
-                    status,
-                    headers,
-                    body,
-                },
-            ))
-        }
-        api::Query::Import {
-            items,
-            import_media,
-        } => {
-            let _items = app.import(items, import_media).await?;
-            Ok(api::Reply::Import)
-        }
-        api::Query::Schema => {
-            let schema = app.load_schema().await?;
-            let reply = api::Reply::Schema(api::SemanticSchema { db: schema.db });
-            Ok(reply)
+        other => {
+            // No special server-related logic required, so we use the default
+            // run_query.
+            app.run_query(other).await
         }
     };
 

@@ -414,7 +414,10 @@ impl App {
 
                 let app2 = app.clone();
                 app.rt.spawn(async move {
-                    let res = app2.blob.get(&path).await;
+                    let res = match app2.blob() {
+                        Some(blob) => blob.get(&path).await,
+                        None => Err(anyhow::anyhow!("Blobstore not ready")),
+                    };
                     sender.send(res).expect("Could not send file load result");
                 });
 
@@ -493,7 +496,7 @@ impl App {
 
                 let app2 = app.clone();
                 app.rt.spawn(async move {
-                    let res = app2.run_api_query(query.query).await;
+                    let res = app2.run_query(query.query).await;
                     tracing::trace!(?res, "callback response");
                     sender.send(res).expect("Could not send api query result");
                 });
@@ -571,5 +574,84 @@ impl App {
             .clone()
             .ok_or_else(|| anyhow::anyhow!("No server config provided"))?;
         crate::server::run_server(self, config).await
+    }
+
+    pub async fn run_query(
+        &self,
+        query: semantic_core::api::Query,
+    ) -> Result<semantic_core::api::Reply, AnyError> {
+        let res = match query {
+            api::Query::ServerStatus => Ok(api::Reply::ServerStatus(api::ServerStatus {
+                backend_initialized: self.db().is_some(),
+            })),
+            api::Query::Initialize { config } => {
+                self.configure_backend(config.clone()).await?;
+                Ok(api::Reply::Initialize)
+            }
+            api::Query::CloseBackend => {
+                self.close_backend().await?;
+                Ok(api::Reply::CloseBackend)
+            }
+            api::Query::Select(sel) => self.require_db()?.select(sel).await.map(api::Reply::Select),
+            api::Query::Mutate(update) => {
+                self.entity_mutate(update).await.map(|_| api::Reply::Mutate)
+            }
+            api::Query::Batch(batch) => self.entity_batch(batch).await.map(|_| api::Reply::Batch),
+            api::Query::HttpFetch(req) => {
+                let method = req.method.parse()?;
+                let mut builder = self.http_client().request(method, req.url);
+                if let Some(body) = req.body {
+                    builder = builder.body(body);
+                }
+
+                if !req.headers.is_empty() {
+                    for (key, value) in req.headers {
+                        builder = builder.header(&key, value);
+                    }
+                }
+
+                let res = builder.send().await?;
+
+                let headers = res
+                    .headers()
+                    .into_iter()
+                    .filter_map(|(key, value)| {
+                        Some((key.to_string(), value.to_str().ok().map(|x| x.to_string())?))
+                    })
+                    .collect();
+
+                let status = res.status().as_u16();
+                let body_bytes = res.bytes().await?;
+                let body = if body_bytes.is_empty() {
+                    None
+                } else {
+                    Some(base64::encode(body_bytes))
+                };
+
+                Ok(api::Reply::HttpFetch(
+                    semantic_core::api::SimpleHttpResponse {
+                        status,
+                        headers,
+                        body,
+                    },
+                ))
+            }
+            api::Query::Import {
+                items,
+                import_media,
+            } => {
+                let _items = self.import(items, import_media).await?;
+                Ok(api::Reply::Import)
+            }
+            api::Query::Schema => {
+                let schema = self.load_schema().await?;
+                let reply = api::Reply::Schema(api::SemanticSchema { db: schema.db });
+                Ok(reply)
+            }
+        };
+        res.map_err(|err| {
+            tracing::error!(?err, "api query failed");
+            err
+        })
     }
 }
