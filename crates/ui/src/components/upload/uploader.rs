@@ -102,7 +102,7 @@ impl brass::Component for State {
         }
     }
 
-    fn render(&self, ctx: brass::RenderContext<Self>) -> brass::VNode {
+    fn render(&self, mut ctx: brass::RenderContext<Self>) -> brass::VNode {
         let file_input = brass_bulma::FileInput {
             label: "Choose files...".into(),
             multi: true,
@@ -139,7 +139,10 @@ impl brass::Component for State {
                 brass::dom::Attr::Disabled,
             )
             .on_click(ctx.on_simple(|| Msg::Clear));
-        let buttons = brass_bulma::buttons().and((btn_upload, btn_clear));
+        let paster = super::clipboard_reader::ClipboardReader {
+            on_paste: ctx.callback_map(Msg::FilesAdded),
+        };
+        let buttons = brass_bulma::buttons().and((btn_upload, btn_clear, paster));
 
         let file_list = if self.files.is_empty() {
             brass_bulma::notification(brass_bulma::Color::Default, "Select files to upload.")

@@ -15,7 +15,8 @@ parser = argparse.ArgumentParser(description = 'Semantic build helper')
 subparsers = parser.add_subparsers(dest='command')
 
 cmd_build_release = subparsers.add_parser('build-release')
-cmd_build_release = subparsers.add_parser('build')
+cmd_build = subparsers.add_parser('build')
+cmd_ui = subparsers.add_parser('ui')
 
 args = parser.parse_args()
 
@@ -33,11 +34,25 @@ def build_ui(release: bool):
     if release:
         args.append('--release')
     args.append(os.path.join(ROOT_DIR, "crates/ui/index.html"))
-    subprocess.run(args, check=True, env = {**os.environ, 'RUSTFLAGS': '', 'CARGO_TARGET_DIR': WASM_TARGET})
+    subprocess.run(args, check=True, env = {**os.environ, 'RUSTFLAGS': '--cfg=web_sys_unstable_apis', 'CARGO_TARGET_DIR': WASM_TARGET})
+
+def serve_ui():
+    args = [
+        'trunk',
+        'serve',
+        '--public-url',
+        '/assets',
+        '--dist',
+        UI_TARGET,
+    ];
+    args.append(os.path.join(ROOT_DIR, "crates/ui/index.html"))
+    subprocess.run(args, check=True, env = {**os.environ, 'RUSTFLAGS': '--cfg=web_sys_unstable_apis', 'CARGO_TARGET_DIR': WASM_TARGET})
 
 if cmd == 'build-release':
     build_ui(True)
 elif cmd == 'build':
     build_ui(False)
+elif cmd == 'ui':
+    serve_ui()
 else:
     raise "Unknown command " + cmd

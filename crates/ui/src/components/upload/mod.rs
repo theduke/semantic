@@ -1,5 +1,6 @@
 use brass::vdom::div;
 
+mod clipboard_reader;
 pub mod upload_page;
 pub mod uploader;
 

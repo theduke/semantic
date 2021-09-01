@@ -105,7 +105,7 @@
             LD_LIBRARY_PATH = "${pkgs.openssl.out}/lib:${pkgs.gtk3}/lib:${pkgs.webkitgtk}/lib:${pkgs.glib.out}/lib:${pkgs.stdenv.cc.cc.lib}/lib64:${pkgs.glib-networking}/lib";
             RUST_BACKTRACE = "1";
             # Use lld linker for speedup.
-            RUSTFLAGS = "-C link-arg=-fuse-ld=lld";
+            RUSTFLAGS = "-C link-arg=-fuse-ld=lld --cfg=web_sys_unstable_apis";
             RUST_LOG = "semantic=trace";
 
             # Needed for https / ssl support

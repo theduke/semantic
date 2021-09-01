@@ -49,4 +49,7 @@ features = [
   "HtmlVideoElement",
   "HtmlAudioElement",
   "HtmlMediaElement",
+  # Clipboard stuff.
+  "ClipboardEvent",
+  "DataTransfer",
 ]

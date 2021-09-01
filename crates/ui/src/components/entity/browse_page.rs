@@ -1,6 +1,6 @@
 use brass::{
     dom::Event::Click,
-    vdom::{self, div, EventCallback},
+    vdom::{div, EventCallback},
     Callback, EffectGuard, VNode,
 };
 use factordb::{
