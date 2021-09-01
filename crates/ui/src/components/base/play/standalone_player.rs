@@ -311,7 +311,13 @@ impl PropComponent for State {
                 },
             };
 
-            brass_bulma::box_().and_class("mb-4").and(interval)
+            let filter = crate::components::entity::entity_filter::EntityFilterForm {
+                on_submit: ctx.callback_map(Msg::FilterChanged),
+            };
+
+            brass_bulma::box_()
+                .and_class("mb-4")
+                .and((interval, filter))
         } else {
             vdom::div()
         };
