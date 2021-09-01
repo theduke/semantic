@@ -1,3 +1,4 @@
+use sha2::Digest;
 use std::{
     collections::HashMap,
     sync::{Arc, RwLock},
@@ -211,6 +212,14 @@ impl App {
         let mime_guess = infer::get(&data);
         let size = data.len() as u64;
 
+        // TODO: the blob store should also be computing the hash, so probably
+        // just want to use that one.
+        let raw_hash = sha2::Sha256::digest(&data);
+        let hash = semantic_core::base::UniversalHash::new(
+            semantic_core::base::UniversalHash::SHA256,
+            &format!("{:x}", raw_hash),
+        );
+
         let id = factordb::Id::random();
         let blob_uri = format!("files/{}", id);
 
@@ -228,6 +237,7 @@ impl App {
             blob_uri: Some(blob_uri),
             size: Some(size),
             mime_type: mime_guess.map(|x| x.mime_type().to_string()),
+            hash: Some(hash),
             extra: Default::default(),
         };
 

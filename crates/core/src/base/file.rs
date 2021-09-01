@@ -7,6 +7,51 @@ use serde::{Deserialize, Serialize};
 
 use super::{AttrPreviewImageUrl, AttrTitle, AttrUrl};
 
+/// A hash, prefixed by the hash type.
+/// eg: 'sha1:XXXXXXXXXX'
+#[derive(Serialize, Deserialize, Clone, PartialEq, Eq, Hash, Debug)]
+pub struct UniversalHash(String);
+
+impl UniversalHash {
+    pub const MD5: &'static str = "md5";
+    pub const SHA256: &'static str = "sha256";
+
+    // TODO: should probably use a Result with a custom error type here...
+    pub fn try_from_string(hash: impl Into<String>) -> Option<Self> {
+        let hash = hash.into();
+        if hash.split_once(':').is_none() {
+            None
+        } else {
+            Some(Self(hash))
+        }
+    }
+
+    pub fn new(kind: &str, hash: &str) -> Self {
+        Self(format!("{}:{}", kind, hash))
+    }
+
+    /// Get the kind of the hash, eg 'sha1'.
+    pub fn kind(&self) -> Option<&str> {
+        self.0.split_once(':').map(|x| x.0)
+    }
+
+    /// Get the actual hash value, without the kind prefix.
+    pub fn hash(&self) -> Option<&str> {
+        self.0.split_once(':').map(|x| x.1)
+    }
+
+    /// Get a pair of (hash_type, hash).
+    pub fn split(&self) -> Option<(&str, &str)> {
+        self.0.split_once(':')
+    }
+}
+
+impl factordb::data::value::ValueTypeDescriptor for UniversalHash {
+    fn value_type() -> factordb::data::ValueType {
+        factordb::data::ValueType::String
+    }
+}
+
 #[derive(Attribute)]
 #[factor(namespace = "semantic", title = "Blob")]
 pub struct AttrBlobUri(String);
@@ -14,6 +59,10 @@ pub struct AttrBlobUri(String);
 #[derive(Attribute)]
 #[factor(namespace = "semantic", title = "MIME Type")]
 pub struct AttrMimeType(String);
+
+#[derive(Attribute)]
+#[factor(namespace = "semantic", name = "hash", title = "Content Hash")]
+pub struct AttrHash(UniversalHash);
 
 #[derive(Attribute)]
 #[factor(namespace = "semantic", title = "Download URL")]
@@ -57,6 +106,10 @@ pub struct File {
     #[factor(attr = AttrMimeType)]
     #[serde(rename = "semantic/mime_type")]
     pub mime_type: Option<String>,
+
+    #[factor(attr = AttrHash)]
+    #[serde(rename = "semantic/hash")]
+    pub hash: Option<UniversalHash>,
 
     #[factor(attr = AttrUrl)]
     #[serde(rename = "semantic/url")]

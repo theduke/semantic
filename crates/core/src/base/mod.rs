@@ -65,6 +65,7 @@ impl PluginDescriptor for SemanticPlugin {
                     // file
                     AttrBlobUri::schema(),
                     AttrMimeType::schema(),
+                    AttrHash::schema(),
                     AttrDuration::schema(),
                     AttrFileSize::schema(),
                     AttrDownloadUrl::schema(),

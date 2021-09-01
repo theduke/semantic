@@ -8,6 +8,7 @@ edition = "2018"
 
 [features]
 webkit = ["webkit2gtk", "javascriptcore-rs", "gtk", "gio", "glib"]
+# default = ["webkit"]
 
 [dependencies]
 base64 = "0.13.0"
@@ -48,3 +49,4 @@ tower = "0.4.8"
 
 logfs = { path = "../logfs" }
 semantic_core = { path = "../core" }
+sha2 = "0.9.6"
