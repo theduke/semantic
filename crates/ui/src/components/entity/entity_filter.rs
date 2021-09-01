@@ -1,14 +1,50 @@
 use std::collections::HashSet;
 
-use brass::vdom::s;
+use brass::{
+    vdom::{self, s},
+    PropWrapper,
+};
 use factordb::{query::expr::Expr, schema::AttributeDescriptor};
 use semantic_ui_core::ContextExt;
 
-pub struct EntityFilterForm {
-    pub on_submit: brass::Callback<Expr>,
+#[derive(Default)]
+pub struct EntityFilter {
+    pub search_term: Option<String>,
+    pub entity_types: Option<HashSet<String>>,
 }
 
-brass::enable_props!(EntityFilterForm => EntityFilterFormComp);
+impl EntityFilter {
+    pub fn build_expr(&self) -> Expr {
+        let mut e = Expr::Literal(factordb::data::Value::Bool(true));
+
+        if let Some(term) = &self.search_term {
+            let se = Expr::contains(Expr::attr::<semantic_core::base::AttrTitle>(), term.clone());
+            e = e.and_with(se);
+        }
+
+        if let Some(types) = &self.entity_types {
+            if !types.is_empty() {
+                let values = types
+                    .iter()
+                    .map(|val| factordb::Value::from(val.clone()))
+                    .collect();
+                let se = Expr::in_(
+                    Expr::Attr(factordb::schema::builtin::AttrType::IDENT),
+                    factordb::Value::List(values),
+                );
+                e = e.and_with(se);
+            }
+        }
+
+        e
+    }
+}
+
+pub struct EntityFilterForm {
+    pub on_submit: brass::Callback<EntityFilter>,
+}
+
+brass::enable_props!(wrapped EntityFilterForm => EntityFilterFormComp);
 
 pub enum Msg {
     SetSearch(String),
@@ -18,9 +54,8 @@ pub enum Msg {
 }
 
 pub struct EntityFilterFormComp {
-    on_submit: brass::Callback<Expr>,
-
     changed: bool,
+
     search: String,
 
     entity_type_options: Vec<brass_bulma::SelectOption<String>>,
@@ -28,37 +63,36 @@ pub struct EntityFilterFormComp {
 }
 
 impl EntityFilterFormComp {
-    fn build_expr(&self) -> Expr {
+    fn build(&self) -> EntityFilter {
         let mut e = Expr::Literal(factordb::data::Value::Bool(true));
 
-        let search = self.search.trim();
-        if !search.is_empty() {
-            let se = Expr::contains(Expr::attr::<semantic_core::base::AttrTitle>(), search);
-            e = e.and_with(se);
-        }
+        let search_term = {
+            let v = self.search.trim();
+            if !v.is_empty() {
+                Some(v.to_string())
+            } else {
+                None
+            }
+        };
 
-        if !self.entity_types.is_empty() {
-            let values = self
-                .entity_types
-                .iter()
-                .map(|val| factordb::Value::from(val.clone()))
-                .collect();
-            let se = Expr::in_(
-                Expr::Attr(factordb::schema::builtin::AttrType::IDENT),
-                factordb::Value::List(values),
-            );
-            e = e.and_with(se);
-        }
+        let entity_types = if !self.entity_types.is_empty() {
+            Some(self.entity_types.clone())
+        } else {
+            None
+        };
 
-        e
+        EntityFilter{
+            search_term,
+            entity_types,
+        }
     }
 }
 
-impl brass::Component for EntityFilterFormComp {
+impl brass::PropComponent for EntityFilterFormComp {
     type Properties = EntityFilterForm;
     type Msg = Msg;
 
-    fn init(props: Self::Properties, ctx: &mut brass::Context<Self::Msg>) -> Self {
+    fn init(_props: &Self::Properties, ctx: &mut brass::Context<Self::Msg>) -> Self {
         let registry = ctx.registry();
         let type_options = registry
             .entities()
@@ -75,7 +109,6 @@ impl brass::Component for EntityFilterFormComp {
             .collect();
 
         Self {
-            on_submit: props.on_submit,
             changed: false,
             search: String::new(),
             entity_type_options: type_options,
@@ -83,10 +116,15 @@ impl brass::Component for EntityFilterFormComp {
         }
     }
 
-    fn update(&mut self, msg: Self::Msg, _ctx: &mut brass::Context<Self::Msg>) {
+    fn update(
+        &mut self,
+        msg: Self::Msg,
+        props: &Self::Properties,
+        _ctx: &mut brass::Context<Self::Msg>,
+    ) {
         match msg {
             Msg::SetSearch(value) => {
-                if value != self.search {
+                if value.trim() != self.search.trim() {
                     self.search = value;
                     self.changed = true;
                 }
@@ -97,17 +135,23 @@ impl brass::Component for EntityFilterFormComp {
                     self.changed = true;
                 }
             }
-            Msg::Submit => self.on_submit.send(self.build_expr()),
+            Msg::Submit => props.on_submit.send(self.build()),
             Msg::Reset => {
                 self.search.clear();
                 self.entity_types.clear();
                 self.changed = false;
-                self.on_submit.send(self.build_expr());
+                props.on_submit.send(self.build());
             }
         }
     }
 
-    fn render(&self, mut ctx: brass::RenderContext<Self>) -> brass::VNode {
+    fn render(
+        &self,
+        _props: &Self::Properties,
+        mut ctx: brass::RenderContext<PropWrapper<Self>>,
+    ) -> brass::VNode {
+        let title = vdom::div().class("subtitle is-5").and("Filter");
+
         let search = brass_bulma::FieldHorizontal {
             label: s("Search"),
             help: None,
@@ -141,7 +185,8 @@ impl brass::Component for EntityFilterFormComp {
             .on_click(ctx.on_simple(|| Msg::Reset));
         let buttons = brass_bulma::buttons().and((submit, clear));
 
-        brass_bulma::box_()
+        vdom::div()
+            .and(title)
             .and(search)
             .and(types)
             .and(buttons)
@@ -150,9 +195,10 @@ impl brass::Component for EntityFilterFormComp {
 
     fn on_property_change(
         &mut self,
-        _props: Self::Properties,
+        old_props: &Self::Properties,
+        new_props: &Self::Properties,
         _ctx: &mut brass::Context<Self::Msg>,
     ) -> brass::ShouldRender {
-        false
+        true
     }
 }

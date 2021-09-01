@@ -15,13 +15,15 @@ use factordb::{
 };
 use semantic_ui_core::{loader::LoadState, ContextExt};
 
+use crate::components::entity::entity_filter::EntityFilter;
+
 pub struct StandalonePlayer {
     pub expr: Option<Expr>,
     pub keyboard_controls: bool,
 }
 
 enum Msg {
-    FilterChanged(Expr),
+    FilterChanged(EntityFilter),
     Loaded(Result<Vec<Item>, AnyError>),
     Next,
     Prev,
@@ -124,7 +126,9 @@ impl PropComponent for State {
                 });
                 self.loader.set_result(res);
             }
-            Msg::FilterChanged(expr) => {
+            Msg::FilterChanged(filter) => {
+                let expr = filter.build_expr();
+
                 self.expr = if let Some(base) = &props.expr {
                     base.clone().and_with(expr)
                 } else {
@@ -276,7 +280,6 @@ impl PropComponent for State {
                 .and((btn_shuffle, btn_cycle, btn_mute, btn_settings));
 
         let settings = if self.settings_active {
-            tracing::trace!(?self.autoplay_interval, "current autoplay");
             let interval = brass_bulma::FieldHorizontal {
                 label: s("Duration"),
                 help: Some(Help {

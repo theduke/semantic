@@ -12,14 +12,15 @@ use factordb::{
     AnyError,
 };
 use semantic_ui_core::{ContextExt, EntityRenderOpts};
-
 use semantic_ui_core::loader::LoadState;
+
+use super::entity_filter::EntityFilter;
 
 pub struct BrowsePage {
     loader: LoadState<ItemPage>,
     query: Select,
     guard: Option<EffectGuard>,
-    filter_callback: Callback<Expr>,
+    filter_callback: Callback<EntityFilter>,
 
     on_delete_callback: Callback<Item>,
 }
@@ -28,7 +29,7 @@ pub struct BrowsePageProps {}
 
 pub enum Msg {
     Loaded(Result<ItemPage, AnyError>),
-    FilterUpdated(Expr),
+    FilterUpdated(EntityFilter),
     Next,
     ItemDeleted(Item),
 }
@@ -74,8 +75,8 @@ impl brass::Component for BrowsePage {
 
     fn update(&mut self, msg: Self::Msg, ctx: &mut brass::Context<Self::Msg>) {
         match msg {
-            Msg::FilterUpdated(expr) => {
-                let query = Select::new().with_filter(expr);
+            Msg::FilterUpdated(filter) => {
+                let query = Select::new().with_filter(filter.build_expr());
                 self.load(query, ctx);
             }
             Msg::Loaded(res) => {
