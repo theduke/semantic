@@ -25,12 +25,24 @@ pub struct SemanticSchema {
     pub db: factordb::schema::DbSchema,
 }
 
+#[derive(serde::Serialize, serde::Deserialize, PartialEq, Eq, Clone)]
+pub struct BackendCryptoConfig {
+    pub data_path: Option<String>,
+    pub key: String,
+}
+
+impl std::fmt::Debug for BackendCryptoConfig {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("BackendCryptoConfig")
+            .field("data_path", &self.data_path)
+            .field("key", &"*****")
+            .finish()
+    }
+}
+
 #[derive(serde::Serialize, serde::Deserialize, PartialEq, Eq, Clone, Debug)]
 pub enum BackendConfig {
-    Crypto {
-        data_path: Option<String>,
-        key: String,
-    },
+    Crypto(BackendCryptoConfig),
 }
 
 #[derive(serde::Serialize, serde::Deserialize, Clone, Debug)]

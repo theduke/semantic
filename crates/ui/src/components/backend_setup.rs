@@ -57,7 +57,9 @@ impl brass::Component for BackendSetupFormComp {
                 };
                 let key = self.key.clone();
 
-                let config = semantic_core::api::BackendConfig::Crypto { data_path, key };
+                let config = semantic_core::api::BackendConfig::Crypto(
+                    semantic_core::api::BackendCryptoConfig { data_path, key },
+                );
                 self.on_submit.send(config);
             }
         }

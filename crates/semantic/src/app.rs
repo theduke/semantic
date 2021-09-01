@@ -112,14 +112,14 @@ impl App {
 
     pub async fn configure_backend(&self, config: BackendConfig) -> Result<(), AnyError> {
         let state = match &config {
-            BackendConfig::Crypto { data_path, key } => {
-                let data_path = if let Some(p) = data_path {
+            BackendConfig::Crypto(crypto) => {
+                let data_path = if let Some(p) = &crypto.data_path {
                     p.clone()
                 } else {
                     Self::default_data_path()?
                 };
 
-                let log = logfs::LogFs::open(data_path.clone(), key.clone())
+                let log = logfs::LogFs::open(data_path.clone(), crypto.key.clone())
                     .context(format!("Could not open logfs at '{:?}'", data_path))?;
                 let blob = Arc::new(log.clone());
                 let db = crate::db::logdb::LogDbStore::new(log).build_db().await?;

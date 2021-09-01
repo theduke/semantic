@@ -35,10 +35,12 @@ fn build_config(args: &[String]) -> app::AppConfig {
             // FIXME: obviously just for debugging, remove this.
             .unwrap_or("random key".to_string());
 
-        Some(semantic_core::api::BackendConfig::Crypto {
-            data_path: Some(data_path),
-            key,
-        })
+        Some(semantic_core::api::BackendConfig::Crypto(
+            semantic_core::api::BackendCryptoConfig {
+                data_path: Some(data_path),
+                key,
+            },
+        ))
     };
 
     app::AppConfig {
