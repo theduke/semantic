@@ -64,7 +64,7 @@ impl brass::Component for ImportPage {
                 match self.registry.find_importer(url.as_str()) {
                     Some(plugin) => {
                         self.import_load.set_loading();
-                        let f = plugin.import(url, &crate::api());
+                        let f = plugin.import(url, ctx.api());
 
                         self.guard = Some(ctx.run_map(f, Msg::ImporterLoaded));
                     }
@@ -91,8 +91,8 @@ impl brass::Component for ImportPage {
                 if let LoadState::Success(page) = &self.import_load {
                     let items = page.items.clone();
                     // TODO: toggle for item import.
+                    let api = ctx.api().clone();
                     let f = async move {
-                        let api = crate::api();
                         api.import(items, true).await?;
                         Ok(())
                     };

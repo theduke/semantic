@@ -44,9 +44,9 @@ impl brass::Component for NoteUpate {
                 // TODO: no unwrap, move to helper method.
                 let data = item.into_map().unwrap();
 
+                let api = ctx.api().clone();
                 let f = async move {
-                    crate::api()
-                        .mutate(factordb::query::mutate::Mutate::merge_from_map(data).unwrap())
+                    api.mutate(factordb::query::mutate::Mutate::merge_from_map(data).unwrap())
                         .await
                 };
 

@@ -17,6 +17,7 @@ use semantic_core::base::{AttrTagName, AttrTags, Tag};
 use semantic_ui_core::{
     components::small_title,
     loader::{error_msg, LoadState},
+    ContextExt,
 };
 
 use crate::components::entity::entity_search_autocomplete::EntitySearchAutocomplete;
@@ -50,9 +51,9 @@ impl brass::PropComponent for State {
 
     fn init(props: &Self::Properties, ctx: &mut brass::Context<Self::Msg>) -> Self {
         let entity_id = props.entity_id;
+        let api = ctx.api().clone();
         let guard = ctx.run_map(
             async move {
-                let api = crate::api();
                 let entity = api.entity(entity_id).await?;
                 let tag_ids = entity.get_attr_vec::<AttrTags>();
 
@@ -89,11 +90,12 @@ impl brass::PropComponent for State {
                 if let Some(current_tags) = self.current_tags_loader.as_success() {
                     let current_tag_ids: Vec<_> = current_tags.items.iter().map(|t| t.id).collect();
 
+                    let api = ctx.api().clone();
                     let guard = ctx.run_map(
                         async move {
                             let mutate =
                                 Tag::mutate_remove_tag(entity_id, &current_tag_ids, tag.id);
-                            crate::api().mutate(mutate).await?;
+                            api.mutate(mutate).await?;
                             Ok(tag)
                         },
                         Msg::RemoveLoaded,
@@ -117,11 +119,12 @@ impl brass::PropComponent for State {
                     return;
                 }
                 let entity_id = props.entity_id;
+                let api = ctx.api().clone();
                 let guard = ctx.run_map(
                     async move {
                         let tag: Tag = from_value_map(item.data)?;
                         let mutate = Tag::mutate_add_tag(entity_id, tag.id);
-                        crate::api().mutate(mutate).await?;
+                        api.mutate(mutate).await?;
                         Ok(tag)
                     },
                     Msg::AddLoaded,

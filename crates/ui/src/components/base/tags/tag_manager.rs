@@ -3,7 +3,7 @@ use std::{collections::HashMap, rc::Rc};
 use brass::{vdom, VNode};
 use factordb::{AnyError, Id};
 use semantic_core::base::Tag;
-use semantic_ui_core::{components::small_title, loader::LoadState};
+use semantic_ui_core::{components::small_title, loader::LoadState, ContextExt};
 
 use super::tag_form::ExistingTagValidator;
 
@@ -73,12 +73,10 @@ impl brass::Component for State {
     type Msg = Msg;
 
     fn init(_props: Self::Properties, ctx: &mut brass::Context<Self::Msg>) -> Self {
+        let api = ctx.api().clone();
         let guard = ctx.run_map(
-            async {
-                let page = crate::api()
-                    .select(Tag::query_all())
-                    .await?
-                    .convert_data::<Tag>()?;
+            async move {
+                let page = api.select(Tag::query_all()).await?.convert_data::<Tag>()?;
                 let existing_names = page.items.iter().map(|t| t.name.clone()).collect();
                 let existing_validator = ExistingTagValidator {
                     tags: existing_names,

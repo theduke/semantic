@@ -1,7 +1,7 @@
 use brass::{vdom, Callback};
 use factordb::{query::mutate::Mutate, AnyError};
 
-use semantic_ui_core::loader::LoadState;
+use semantic_ui_core::{loader::LoadState, ContextExt};
 
 pub struct EntityDeleterProps {
     pub id: factordb::Id,
@@ -37,7 +37,8 @@ impl brass::Component for EntityDeleter {
         match msg {
             Msg::Submit => {
                 let id = self.props.id;
-                let f = async move { crate::api().mutate(Mutate::delete(id)).await };
+                let api = ctx.api().clone();
+                let f = async move { api.mutate(Mutate::delete(id)).await };
                 let guard = ctx.run_map(f, Msg::Loaded);
                 self.loader.set_loading_guarded(guard);
             }

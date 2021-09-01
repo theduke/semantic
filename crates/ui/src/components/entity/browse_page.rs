@@ -11,7 +11,7 @@ use factordb::{
     schema::{AttrMapExt, EntityDescriptor},
     AnyError,
 };
-use semantic_ui_core::EntityRenderOpts;
+use semantic_ui_core::{ContextExt, EntityRenderOpts};
 
 use semantic_ui_core::loader::LoadState;
 
@@ -47,7 +47,8 @@ impl BrowsePage {
             return;
         }
         let query2 = query.clone();
-        let f = async move { crate::api().select(query2).await };
+        let api = ctx.api().clone();
+        let f = async move { api.select(query2).await };
 
         self.guard = Some(ctx.run_map(f, Msg::Loaded));
         self.loader.set_loading();

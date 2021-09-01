@@ -2,7 +2,7 @@ use anyhow::Result;
 use brass::{vdom::Render, Shared};
 use factordb::{query::select::Item, schema::EntityContainer, AnyError};
 use semantic_core::base::{Collection, CollectionWithItems};
-use semantic_ui_core::loader::LoadState;
+use semantic_ui_core::{loader::LoadState, ContextExt};
 
 use super::collection_form::CollectionForm;
 
@@ -31,10 +31,11 @@ impl brass::PropComponent for State {
         let loader =
             match factordb::data::value::from_value_map::<_, Collection>(props.item.data.clone()) {
                 Ok(col) => {
+                    let api = ctx.api().clone();
                     let guard = ctx.run_map(
                         async move {
                             let query = CollectionWithItems::build_query(&col);
-                            let page = crate::api().select(query).await?;
+                            let page = api.select(query).await?;
                             let col = CollectionWithItems {
                                 collection: col,
                                 items: page.items,
@@ -66,13 +67,13 @@ impl brass::PropComponent for State {
             }
             Msg::Submit(col) => {
                 if let Ok(data) = col.into_map() {
+                    let api = ctx.api().clone();
                     let guard = ctx.run_map(
                         async move {
-                            crate::api()
-                                .mutate(
-                                    factordb::query::mutate::Mutate::merge_from_map(data).unwrap(),
-                                )
-                                .await
+                            api.mutate(
+                                factordb::query::mutate::Mutate::merge_from_map(data).unwrap(),
+                            )
+                            .await
                         },
                         Msg::SubmitLoaded,
                     );

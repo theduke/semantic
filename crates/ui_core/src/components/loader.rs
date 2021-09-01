@@ -6,9 +6,11 @@ use futures::future::LocalBoxFuture;
 
 use crate::loader::LoadState;
 
+pub type LoaderFunc<I, O> = Func<I, LocalBoxFuture<'static, Result<O, AnyError>>>;
+
 pub struct Loader<I, O> {
     pub input: I,
-    pub load: Func<I, LocalBoxFuture<'static, Result<O, AnyError>>>,
+    pub load: LoaderFunc<I, O>,
     pub render: brass::vdom::Renderer<Shared<O>>,
 }
 

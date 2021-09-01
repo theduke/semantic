@@ -221,9 +221,9 @@ impl brass::Component for State {
             }
             Msg::DeleteConfirm => {
                 if let Some(id) = self.item.data.get_id() {
+                    let api = ctx.api().clone();
                     let future = async move {
-                        crate::api()
-                            .mutate(factordb::query::mutate::Mutate::delete(id))
+                        api.mutate(factordb::query::mutate::Mutate::delete(id))
                             .await
                     };
                     let guard = ctx.run_map(future, Msg::DeleteLoaded);

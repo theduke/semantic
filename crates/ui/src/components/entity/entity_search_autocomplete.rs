@@ -13,7 +13,7 @@ use factordb::{
     AnyError,
 };
 use semantic_core::base::AttrTitle;
-use semantic_ui_core::loader::LoadState;
+use semantic_ui_core::{loader::LoadState, ContextExt};
 
 use super::entity_title;
 
@@ -71,8 +71,8 @@ impl PropComponent for State {
 
                 let query = Select::new().with_filter(expr).with_limit(10);
 
-                let guard =
-                    ctx.run_map(async move { crate::api().select(query).await }, Msg::Loaded);
+                let api = ctx.api().clone();
+                let guard = ctx.run_map(async move { api.select(query).await }, Msg::Loaded);
                 self.loader.set_loading_guarded(guard);
             }
             Msg::Loaded(res) => {

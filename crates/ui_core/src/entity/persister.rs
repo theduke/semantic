@@ -3,7 +3,7 @@ use std::rc::Rc;
 use brass::Callback;
 use factordb::query::select::Item;
 
-use crate::loader::LoadState;
+use crate::{loader::LoadState, ContextExt};
 
 pub struct FormValid {
     pub item: Item,
@@ -63,7 +63,7 @@ impl brass::Component for State {
             Msg::Submit(valid) => {
                 self.valid_data = Some(valid);
                 if let Some(data) = &self.valid_data {
-                    let api = crate::api::api();
+                    let api = ctx.api().clone();
                     let mutation = data.mutation.clone();
                     let f = async move { api.batch(mutation).await };
                     let guard = ctx.run_map(f, Msg::Loaded);

@@ -7,13 +7,14 @@ use factordb::{
 };
 use semantic_core::base::{self, AttrPreviewImageUrl};
 use semantic_ui_core::registry::RegisteredMediaRenderer;
-use wasm_bindgen::convert::IntoWasmAbi;
 
 use crate::components::entity::{self, render_value};
 
 pub struct BasePlugin;
 
 impl semantic_ui_core::BrowserPlugin for BasePlugin {
+    fn init_ui_context(&self, ctx: &brass::Context<()>) {}
+
     fn spec(&self) -> semantic_ui_core::BrowserPluginSpec {
         semantic_ui_core::BrowserPluginSpec {
             name: "base".to_string(),

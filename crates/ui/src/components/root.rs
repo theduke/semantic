@@ -3,6 +3,7 @@ use factordb::{schema::AttributeDescriptor, AnyError};
 use semantic_ui_core::{
     loader::LoadState,
     routing::{Route, Router},
+    ContextExt,
 };
 
 use super::router;
@@ -35,13 +36,16 @@ impl brass::Component for Root {
     type Msg = Msg;
 
     fn init(_props: Self::Properties, ctx: &mut brass::Context<Self::Msg>) -> Self {
+        let api = semantic_ui_core::api::new_api(None);
+        ctx.provide(api);
+
         // Read route from url.
         let current_path = brass::util::url_path();
         let route = Route::from_path(&&current_path).unwrap_or(Route::Browse);
 
-        let guard = ctx.run(async move {
-            let api = crate::api();
+        let api = ctx.api().clone();
 
+        let guard = ctx.run(async move {
             let status = match api.server_status().await {
                 Ok(s) => s,
                 Err(err) => {
@@ -54,7 +58,7 @@ impl brass::Component for Root {
                 return Msg::StatusLoaded(Ok(status));
             }
 
-            let schema_res = crate::api().schema().await;
+            let schema_res = api.schema().await;
             Msg::SchemaLoaded(schema_res)
         });
 
@@ -86,8 +90,8 @@ impl brass::Component for Root {
                 }
             },
             Msg::Initialize(config) => {
+                let api = ctx.api().clone();
                 let f = async move {
-                    let api = crate::api();
                     api.initialize(config).await?;
                     api.schema().await
                 };
@@ -123,10 +127,9 @@ impl brass::Component for Root {
                 if matches!(route, Route::Logout) {
                     self.phase = Phase::LoggingOut;
 
-                    let guard = ctx.run_map(
-                        async move { crate::api().close_backend().await },
-                        Msg::LogoutLoaded,
-                    );
+                    let api = ctx.api().clone();
+                    let guard =
+                        ctx.run_map(async move { api.close_backend().await }, Msg::LogoutLoaded);
                     self.status.set_loading_guarded(guard);
                 } else {
                     router::history_push_route(&route);

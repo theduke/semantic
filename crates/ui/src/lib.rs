@@ -1,7 +1,5 @@
 use wasm_bindgen::{prelude::*, JsCast};
 
-use semantic_ui_core::api::api;
-
 use crate::components::root::Root;
 
 mod components;

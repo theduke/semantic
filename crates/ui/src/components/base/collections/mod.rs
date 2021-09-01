@@ -8,25 +8,27 @@ mod entity_collection_manager;
 pub use entity_collection_manager::EntityCollectionManager;
 
 use brass::{
-    vdom::{self, Func, Render, Renderer},
+    vdom::{self, Render, Renderer},
     Shared, VNode,
 };
 use factordb::schema::AttributeDescriptor;
 use semantic_core::base::{AttrCollectionItem, Collection, CollectionWithItems};
-use semantic_ui_core::components::Loader;
+use semantic_ui_core::components::{Loader, LoaderFunc};
 
 use self::collection_update::CollectionUpdate;
 
 pub fn collection_items_loader(
     col: &Collection,
     render: Renderer<Shared<CollectionWithItems>>,
+    api: semantic_ui_core::api::BrowserApiClient,
 ) -> VNode {
     Loader::<Collection, CollectionWithItems> {
         input: col.clone(),
-        load: Func::Static(|col| {
+        load: LoaderFunc::dynamic(move |col| {
+            let api = api.clone();
             Box::pin(async move {
                 let query = CollectionWithItems::build_query(&col);
-                let page = crate::api().select(query).await?;
+                let page = api.select(query).await?;
                 let col = CollectionWithItems::from_query_result(col, page.items);
                 Ok(col)
             })

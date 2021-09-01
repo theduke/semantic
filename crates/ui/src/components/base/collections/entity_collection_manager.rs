@@ -14,6 +14,7 @@ use semantic_core::base::Collection;
 use semantic_ui_core::{
     components::small_title,
     loader::{error_msg, LoadState},
+    ContextExt,
 };
 
 use crate::components::entity::entity_search_autocomplete::EntitySearchAutocomplete;
@@ -45,13 +46,11 @@ impl brass::PropComponent for State {
 
     fn init(props: &Self::Properties, ctx: &mut brass::Context<Self::Msg>) -> Self {
         let entity_id = props.entity_id;
+        let api = ctx.api().clone();
         let guard = ctx.run_map(
             async move {
                 let select = Collection::query_collections_with_entity(entity_id);
-                let page = crate::api()
-                    .select(select)
-                    .await?
-                    .convert_data::<Collection>()?;
+                let page = api.select(select).await?.convert_data::<Collection>()?;
                 Ok(page)
             },
             Msg::CurrentLoaded,
@@ -76,10 +75,11 @@ impl brass::PropComponent for State {
             }
             Msg::Remove(col) => {
                 let entity_id = props.entity_id;
+                let api = ctx.api().clone();
                 let guard = ctx.run_map(
                     async move {
                         let mutate = Collection::mutate_remove_item(&col, entity_id)?;
-                        crate::api().mutate(mutate).await?;
+                        api.mutate(mutate).await?;
                         Ok(col)
                     },
                     Msg::RemoveLoaded,
@@ -102,11 +102,12 @@ impl brass::PropComponent for State {
                     return;
                 }
                 let entity_id = props.entity_id;
+                let api = ctx.api().clone();
                 let guard = ctx.run_map(
                     async move {
                         let col: Collection = from_value_map(item.data)?;
                         let mutate = Collection::mutate_add_item(col.id, entity_id);
-                        crate::api().mutate(mutate).await?;
+                        api.mutate(mutate).await?;
                         Ok(col)
                     },
                     Msg::AddLoaded,

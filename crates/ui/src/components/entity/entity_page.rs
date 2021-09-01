@@ -4,7 +4,7 @@ use factordb::{
     schema::{AttrMapExt, AttributeDescriptor},
     AnyError,
 };
-use semantic_ui_core::{EntityRenderOpts, RenderContextExt};
+use semantic_ui_core::{ContextExt, EntityRenderOpts, RenderContextExt};
 
 use semantic_ui_core::loader::LoadState;
 
@@ -34,7 +34,8 @@ impl brass::Component for EntityPage {
                 Expr::Literal(props.ident.clone().into()),
             ));
 
-        let f = async move { crate::api().select(query).await };
+        let api = ctx.api().clone();
+        let f = async move { api.select(query).await };
         let guard = ctx.run_map(f, |res| {
             let res = res.and_then(|mut page| {
                 page.items

@@ -8,8 +8,10 @@ fn anyerr_from_js(value: wasm_bindgen::JsValue) -> AnyError {
     AnyError::msg(format!("{:?}", value))
 }
 
-#[derive(Clone, Copy, Debug)]
-pub struct BrowserExecutor;
+#[derive(Clone, Debug)]
+pub struct BrowserExecutor {
+    endpoint: String,
+}
 
 impl BrowserExecutor {
     async fn execute(
@@ -23,10 +25,8 @@ impl BrowserExecutor {
         opts.mode(web_sys::RequestMode::Cors);
         opts.body(Some(&body));
 
-        // FIXME: generalize URL.
-        let url = "http://localhost:3000/api/query".to_string();
-        let request =
-            web_sys::Request::new_with_str_and_init(&url, &opts).map_err(anyerr_from_js)?;
+        let request = web_sys::Request::new_with_str_and_init(&self.endpoint, &opts)
+            .map_err(anyerr_from_js)?;
 
         // request
         //     .headers()
@@ -68,8 +68,10 @@ impl semantic_core::api::ApiClientExecutor for BrowserExecutor {
 
 pub type BrowserApiClient = ApiClient<BrowserExecutor>;
 
-pub fn api() -> BrowserApiClient {
-    BrowserApiClient::new(BrowserExecutor)
+pub fn new_api(endpoint: Option<String>) -> BrowserApiClient {
+    BrowserApiClient::new(BrowserExecutor {
+        endpoint: endpoint.unwrap_or_else(|| "/api/query".to_string()),
+    })
 }
 
 pub async fn upload_file(

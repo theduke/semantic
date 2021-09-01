@@ -1,11 +1,10 @@
-mod entity_tag_manager;
-use std::rc::Rc;
+mod tag_form;
+pub use tag_form::tag_form;
 
-use brass::{
-    vdom::{self, Render},
-    Callback, VNode,
-};
+mod entity_tag_manager;
 pub use entity_tag_manager::EntityTagManager;
+
+use std::rc::Rc;
 
 mod tag_manager;
 use factordb::{
@@ -14,12 +13,15 @@ use factordb::{
     schema::EntityContainer,
     Id,
 };
+
+use brass::{
+    vdom::{self, Render},
+    Callback, VNode,
+};
+
 use semantic_core::base::Tag;
 use semantic_ui_core::entity::persister::{EntityFormProps, EntityPersister, FormValid};
 pub use tag_manager::TagManager;
-
-mod tag_form;
-pub use tag_form::tag_form;
 
 use self::tag_form::ExistingTagValidator;
 

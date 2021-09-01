@@ -13,7 +13,7 @@ use factordb::{
     schema::{builtin::AttrType, EntityDescriptor},
     AnyError,
 };
-use semantic_ui_core::loader::LoadState;
+use semantic_ui_core::{loader::LoadState, ContextExt};
 
 pub struct StandalonePlayer {
     pub expr: Option<Expr>,
@@ -66,12 +66,13 @@ impl State {
     }
 
     fn load(&mut self, expr: Expr, ctx: &mut brass::Context<Msg>) {
+        let api = ctx.api().clone();
         let guard = ctx.run_map(
             async move {
                 let select = factordb::query::select::Select::new()
                     .with_filter(expr)
                     .with_limit(1000);
-                let page = crate::api().select(select).await?;
+                let page = api.select(select).await?;
                 Ok(page.items)
             },
             Msg::Loaded,
