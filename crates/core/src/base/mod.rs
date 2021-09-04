@@ -103,6 +103,7 @@ impl PluginDescriptor for SemanticPlugin {
                     // tags
                     tags::Tag::schema(),
                 ],
+                indexes: vec![],
             },
         }
     }
