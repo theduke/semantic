@@ -120,9 +120,16 @@ impl App {
                 };
 
                 let log = logfs::LogFs::open(data_path.clone(), crypto.key.clone())
+                    .map_err(|err| {
+                        tracing::error!(?err, "Could not open logfs");
+                        err
+                    })
                     .context(format!("Could not open logfs at '{:?}'", data_path))?;
                 let blob = Arc::new(log.clone());
-                let db = crate::db::logdb::LogDbStore::new(log).build_db().await?;
+                let db = crate::db::logdb::LogDbStore::new(log).build_db().await.map_err(|err| {
+                        tracing::error!(?err, "Could not open logfs");
+                        err
+                })?;
 
                 AppState {
                     db,
