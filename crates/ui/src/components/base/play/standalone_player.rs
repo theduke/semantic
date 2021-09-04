@@ -283,7 +283,7 @@ impl PropComponent for State {
             let interval = brass_bulma::FieldHorizontal {
                 label: s("Duration"),
                 help: Some(Help {
-                    message: s("Time that static media (like images) is displayed").render(),
+                    message: s("Time that static media (like images) is displayed. Dynamic content like video or audio will play until finished.").render(),
                     color: brass_bulma::Color::Default,
                 }),
                 control: brass_bulma::Select {
@@ -317,7 +317,7 @@ impl PropComponent for State {
 
             brass_bulma::box_()
                 .and_class("mb-4")
-                .and((interval, filter))
+                .and((interval, vdom::hr(), filter))
         } else {
             vdom::div()
         };
