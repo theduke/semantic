@@ -1,4 +1,4 @@
-use brass::vdom::{div, div_with};
+use brass::vdom::{self, div, div_with, s};
 use factordb::{schema::EntityContainer, AnyError};
 use semantic_core::{api::FileUploadMetadata, base::TypedFile};
 use semantic_ui_core::{api, loader::LoadState};
@@ -104,7 +104,7 @@ impl brass::Component for State {
 
     fn render(&self, mut ctx: brass::RenderContext<Self>) -> brass::VNode {
         let file_input = brass_bulma::FileInput {
-            label: "Choose files...".into(),
+            label: s("Select files..."),
             multi: true,
             on_change: ctx.on(|ev: web_sys::Event| {
                 let input = brass::util::input_event_target(ev).unwrap();
@@ -123,10 +123,17 @@ impl brass::Component for State {
             }),
         };
 
-        let selector = div().and(file_input).class("mb-3");
+        let paster = super::clipboard_reader::ClipboardReader {
+            on_paste: ctx.callback_map(Msg::FilesAdded),
+        };
+        let paster = vdom::div().class("mt-2 mb-2").and(paster);
+
+        let selector = div()
+            .class(s("mb-3"))
+            .and((file_input, paster));
 
         let btn_upload = brass_bulma::button()
-            .and("Upload")
+            .and(s("Upload"))
             .attr_toggle_if(
                 self.files.is_empty() || self.loading,
                 brass::dom::Attr::Disabled,
@@ -139,13 +146,10 @@ impl brass::Component for State {
                 brass::dom::Attr::Disabled,
             )
             .on_click(ctx.on_simple(|| Msg::Clear));
-        let paster = super::clipboard_reader::ClipboardReader {
-            on_paste: ctx.callback_map(Msg::FilesAdded),
-        };
-        let buttons = brass_bulma::buttons().and((btn_upload, btn_clear, paster));
+        let buttons = brass_bulma::buttons().and((btn_upload, btn_clear));
 
         let file_list = if self.files.is_empty() {
-            brass_bulma::notification(brass_bulma::Color::Default, "Select files to upload.")
+            brass_bulma::notification(brass_bulma::Color::Default, s("Select files to upload."))
         } else {
             let items = self.files.iter().map(|item| {
                 brass_bulma::box_().and((
@@ -154,15 +158,15 @@ impl brass::Component for State {
                         brass::vdom::component::<crate::components::router::Link>(
                             crate::components::router::LinkProps {
                                 route: semantic_ui_core::routing::Route::Entity(file.id().into()),
-                                text: "Show File".into(),
-                                class: Some("button is-success".into()),
+                                text: s("Show File"),
+                                class: Some(s("button is-success")),
                             },
                         )
                     })),
                 ))
             });
 
-            div().class("mt-4").and_iter(items)
+            div().class(s("mt-4")).and_iter(items)
         };
 
         div().and((selector, buttons, file_list)).build()
