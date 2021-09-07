@@ -188,6 +188,22 @@ impl<E: ApiClientExecutor> ApiClient<E> {
         }
     }
 
+    pub async fn select_entities<
+        T,
+    >(
+        &self,
+        select: factordb::query::select::Select,
+    ) -> Result<Page<T>, AnyError> where T: factordb::schema::EntityContainer + serde::de::DeserializeOwned {
+        match self.exec.execute(Query::Select(select)).await {
+            Ok(Reply::Select(page)) => {
+                let page2 = page.convert_data()?;
+                Ok(page2)
+            }
+            Ok(_other) => Err(anyhow::anyhow!("API returned invalid data")),
+            Err(err) => Err(err),
+        }
+    }
+
     pub async fn mutate(&self, mutate: factordb::query::mutate::Mutate) -> Result<(), AnyError> {
         match self.exec.execute(Query::Mutate(mutate)).await {
             Ok(Reply::Mutate) => Ok(()),
