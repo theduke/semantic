@@ -1,0 +1,19 @@
+@charset "utf-8";
+
+$fa-font-path: "/assets/webfonts";
+
+@import "./fontawesome-free-5.15.4-web/scss/fontawesome.scss";
+@import "./fontawesome-free-5.15.4-web/scss/regular.scss";
+@import "./fontawesome-free-5.15.4-web/scss/solid.scss";
+
+@import "./bulma-0.9.3/bulma.sass";
+// @use "./bulma-0.9.3/bulma.sass" with (
+//   $navbar-breakpoint: 1,
+// );
+
+// @use "./fontawesome-free-5.15.4-web/css/all.min.css";
+
+
+html, body, #app {
+    height: 100%;
+}
