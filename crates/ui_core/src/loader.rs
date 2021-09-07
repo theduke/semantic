@@ -18,6 +18,18 @@ pub enum LoadState<T> {
     Failed(String),
 }
 
+impl<T: Clone> Clone for LoadState<T> {
+    /// Clone, but ignore a potential `[EffectGuard]` inside [`Self::Loading`].
+    fn clone(&self) -> Self {
+        match self {
+            Self::Idle => Self::Idle,
+            Self::Loading(_) => Self::Loading(None),
+            Self::Success(arg0) => Self::Success(arg0.clone()),
+            Self::Failed(arg0) => Self::Failed(arg0.clone()),
+        }
+    }
+}
+
 impl<T> LoadState<T> {
     pub fn set_idle(&mut self) {
         *self = Self::Idle
@@ -48,7 +60,7 @@ impl<T> LoadState<T> {
 
     pub fn render(&self, f: impl FnOnce(&T) -> VNode) -> VNode {
         match self {
-            LoadState::Idle => VNode::Empty,
+            LoadState::Idle => vdom::span().build(),
             LoadState::Loading(_) => spinner().build(),
             LoadState::Success(data) => f(data),
             LoadState::Failed(err) => error_msg(&err).build(),

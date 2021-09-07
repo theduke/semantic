@@ -4,9 +4,12 @@ pub use tag_form::tag_form;
 mod entity_tag_manager;
 pub use entity_tag_manager::EntityTagManager;
 
+mod tag_manager;
+mod tag_selector;
+pub use tag_selector::tag_select;
+
 use std::rc::Rc;
 
-mod tag_manager;
 use factordb::{
     data::value::from_value_map,
     query::{mutate::Mutate, select::Item},
@@ -63,3 +66,5 @@ pub fn tag_create(
     }
     .render()
 }
+
+

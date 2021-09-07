@@ -6,7 +6,8 @@ use futures::future::LocalBoxFuture;
 
 use crate::loader::LoadState;
 
-pub type LoaderFunc<I, O> = Func<I, LocalBoxFuture<'static, Result<O, AnyError>>>;
+pub type LoaderFuture<O> = LocalBoxFuture<'static, Result<O, AnyError>>;
+pub type LoaderFunc<I, O> = Func<I, LoaderFuture<O>>;
 
 pub struct Loader<I, O> {
     pub input: I,

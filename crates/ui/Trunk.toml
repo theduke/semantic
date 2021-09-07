@@ -4,7 +4,7 @@ dist = "target_wasm/ui"
 release = true
 
 [watch]
-watch = ["./", "../semantic_ui_core"]
+watch = ["./", "../ui_core"]
 
 [[proxy]]
 rewrite = "/blob/"

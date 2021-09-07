@@ -2,15 +2,17 @@ use std::collections::HashSet;
 
 use brass::{
     vdom::{self, s},
-    PropWrapper,
+    PropWrapper, Shared,
 };
 use factordb::{query::expr::Expr, schema::AttributeDescriptor};
+use semantic_core::base::Tag;
 use semantic_ui_core::ContextExt;
 
 #[derive(Default)]
 pub struct EntityFilter {
     pub search_term: Option<String>,
     pub entity_types: Option<HashSet<String>>,
+    pub tags: Vec<Tag>,
 }
 
 impl EntityFilter {
@@ -44,28 +46,28 @@ pub struct EntityFilterForm {
     pub on_submit: brass::Callback<EntityFilter>,
 }
 
-brass::enable_props!(wrapped EntityFilterForm => EntityFilterFormComp);
+brass::enable_props!(wrapped EntityFilterForm => State);
 
 pub enum Msg {
     SetSearch(String),
     TypeToggled(String),
+    TagsChanged(Vec<Tag>),
     Reset,
     Submit,
 }
 
-pub struct EntityFilterFormComp {
+struct State {
     changed: bool,
 
     search: String,
 
     entity_type_options: Vec<brass_bulma::SelectOption<String>>,
     entity_types: HashSet<String>,
+    tags: Shared<Vec<Tag>>,
 }
 
-impl EntityFilterFormComp {
+impl State {
     fn build(&self) -> EntityFilter {
-        let mut e = Expr::Literal(factordb::data::Value::Bool(true));
-
         let search_term = {
             let v = self.search.trim();
             if !v.is_empty() {
@@ -81,14 +83,15 @@ impl EntityFilterFormComp {
             None
         };
 
-        EntityFilter{
+        EntityFilter {
             search_term,
             entity_types,
+            tags: self.tags.as_ref().clone(),
         }
     }
 }
 
-impl brass::PropComponent for EntityFilterFormComp {
+impl brass::PropComponent for State {
     type Properties = EntityFilterForm;
     type Msg = Msg;
 
@@ -113,6 +116,7 @@ impl brass::PropComponent for EntityFilterFormComp {
             search: String::new(),
             entity_type_options: type_options,
             entity_types: HashSet::new(),
+            tags: Vec::new().into(),
         }
     }
 
@@ -134,6 +138,9 @@ impl brass::PropComponent for EntityFilterFormComp {
                     self.entity_types.insert(ty);
                     self.changed = true;
                 }
+            }
+            Msg::TagsChanged(tags) => {
+                self.tags = tags.into();
             }
             Msg::Submit => props.on_submit.send(self.build()),
             Msg::Reset => {
@@ -174,6 +181,16 @@ impl brass::PropComponent for EntityFilterFormComp {
             },
         };
 
+        let tag_select = crate::components::base::tags::tag_select(
+            self.tags.clone(),
+            ctx.callback_map(Msg::TagsChanged),
+        );
+        let tags = brass_bulma::FieldHorizontal {
+            label: s("Tags"),
+            help: None,
+            control: tag_select,
+        };
+
         let submit = brass_bulma::button()
             .and(s("Apply"))
             .attr_toggle_if(!self.changed, brass::dom::Attr::Disabled)
@@ -186,17 +203,14 @@ impl brass::PropComponent for EntityFilterFormComp {
         let buttons = brass_bulma::buttons().and((submit, clear));
 
         vdom::div()
-            .and(title)
-            .and(search)
-            .and(types)
-            .and(buttons)
+            .and((title, search, types, tags, buttons))
             .build()
     }
 
     fn on_property_change(
         &mut self,
-        old_props: &Self::Properties,
-        new_props: &Self::Properties,
+        _old_props: &Self::Properties,
+        _new_props: &Self::Properties,
         _ctx: &mut brass::Context<Self::Msg>,
     ) -> brass::ShouldRender {
         true

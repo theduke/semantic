@@ -110,6 +110,8 @@ impl brass::Component for BrowsePage {
         let filter = super::entity_filter::EntityFilterForm {
             on_submit: self.filter_callback.clone(),
         };
+        let filter = brass_bulma::box_().and(filter);
+
         let loader = self.loader.render(move |page| {
             render_page(
                 page,
