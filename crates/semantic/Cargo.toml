@@ -8,7 +8,7 @@ edition = "2018"
 
 [features]
 webkit = ["webkit2gtk", "javascriptcore-rs", "gtk", "gio", "glib"]
-# default = ["webkit"]
+default = []
 
 [dependencies]
 base64 = "0.13.0"
@@ -30,11 +30,11 @@ reqwest = { version =  "0.11.3", default-features = false, features = ["gzip", "
 hyper = { version =  "0.14.9", features = ["server", "http1"] }
 
 # webkit-gtk
-webkit2gtk = { version =  "0.11.0", features = [ "v2_4", "v2_6",  "v2_16", "v2_22", "v2_26"] , optional = true }
-javascriptcore-rs = { version =  "0.10.0", optional = true }
-gtk = { version = "0.9.2", optional = true }
-gio = { version = "0.9.1", optional = true }
-glib = { version = "0.10.3", optional = true }
+webkit2gtk = { version =  "0.14.0", features = [ "v2_4", "v2_6",  "v2_16", "v2_22", "v2_26"] , optional = true }
+javascriptcore-rs = { version =  "0.14.0", optional = true }
+gtk = { version = "0.14.0", optional = true }
+gio = { version = "0.14.0", optional = true }
+glib = { version = "0.14.0", optional = true }
 
 factordb = "0.1"
 factor_tools = "0.1"
