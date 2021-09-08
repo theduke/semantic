@@ -49,6 +49,8 @@ pub enum BackendConfig {
 pub struct FileUploadMetadata {
     pub filename: Option<String>,
     pub title: Option<String>,
+    /// Id of the collection to which the uploaded files should be added.
+    pub collection_id: Option<factordb::Id>,
 }
 
 impl FileUploadMetadata {

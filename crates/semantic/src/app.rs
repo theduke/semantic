@@ -7,7 +7,7 @@ use std::{
 use anyhow::Context;
 use factordb::{
     data::DataMap,
-    query::{self, select::Item},
+    query::{self, mutate::Mutate, select::Item},
     schema::{AttrMapExt, EntityContainer},
     AnyError, Db,
 };
@@ -126,10 +126,13 @@ impl App {
                     })
                     .context(format!("Could not open logfs at '{:?}'", data_path))?;
                 let blob = Arc::new(log.clone());
-                let db = crate::db::logdb::LogDbStore::new(log).build_db().await.map_err(|err| {
+                let db = crate::db::logdb::LogDbStore::new(log)
+                    .build_db()
+                    .await
+                    .map_err(|err| {
                         tracing::error!(?err, "Could not open logfs");
                         err
-                })?;
+                    })?;
 
                 AppState {
                     db,
@@ -216,6 +219,17 @@ impl App {
         let blob = self.require_blob()?;
         let db = self.require_db()?;
 
+        let collection = if let Some(id) = meta.collection_id {
+            let col: semantic_core::base::Collection = db
+                .entity(id)
+                .await
+                .context("Could not find collection")?
+                .try_into_entity()?;
+            Some(col)
+        } else {
+            None
+        };
+
         let mime_guess = infer::get(&data);
         let size = data.len() as u64;
 
@@ -264,7 +278,17 @@ impl App {
         };
 
         let map = item.clone().into_map()?;
-        db.create(id, map).await?;
+
+        let mut batch = query::mutate::BatchUpdate::with_action(Mutate::create(id, map));
+
+        if let Some(col) = collection {
+            // File should be added to a collection, so add the db operation.
+            batch
+                .actions
+                .push(semantic_core::base::Collection::mutate_add_item(col.id, id));
+        }
+
+        db.batch(batch).await?;
 
         tracing::trace!(entity=?item, "created file");
 
@@ -504,7 +528,7 @@ impl App {
                     .expect("Could not get context");
 
                 let value = js_result
-                    .get_value()
+                    .js_value()
                     .and_then(|v| v.to_string(&ctx))
                     .expect("Expected a string");
                 let query: api::QueryWithId = serde_json::from_str(&value).unwrap();
