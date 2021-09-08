@@ -51,10 +51,19 @@ impl Tag {
         Select::new().with_filter(filter).with_limit(10_000)
     }
 
+    /// Build an expression that selects entities with the given tag
+    pub fn filter_entity_has_tag(tag_id: Id) -> Expr {
+        Expr::in_(tag_id, Expr::attr::<AttrTags>())
+    }
+
+    /// Build an expression that selects entities with the given tag
+    pub fn filter_entity_has_any_tag(tag_ids: Vec<Id>) -> Expr {
+        Expr::contains(tag_ids, AttrTags::expr())
+    }
+
     /// Build a select query returning all tags for a given entity.
     pub fn query_entities_with_tag(tag_id: Id) -> Select {
-        let filter = Expr::in_(tag_id, Expr::attr::<AttrTags>());
-        Select::new().with_filter(filter)
+        Select::new().with_filter(Self::filter_entity_has_tag(tag_id))
     }
 
     /// Build a [`Mutate`] that adds a tag to an entity.
