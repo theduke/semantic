@@ -7,7 +7,10 @@ use factordb::{
         mutate::Mutate,
         select::{Item, Select},
     },
-    schema::{builtin::AttrIdent, AttrMapExt, AttributeDescriptor},
+    schema::{
+        builtin::{self, AttrIdent},
+        AttrMapExt, AttributeDescriptor, EntityDescriptor,
+    },
     AnyError, Attribute, Entity, Id,
 };
 
@@ -57,7 +60,12 @@ impl Collection {
         Select::new().with_filter(expr)
     }
 
-    /// Build a mutation for adding an item from a colleciton.
+    pub fn query_all_collections() -> Select {
+        let expr = Expr::eq(builtin::AttrType::expr(), Collection::QUALIFIED_NAME);
+        Select::new().with_filter(expr).with_limit(1000)
+    }
+
+    /// Build a mutation for adding an item to a colleciton.
     pub fn mutate_add_item(collection_id: Id, entity_id: Id) -> Mutate {
         let mut map = DataMap::new();
         map.insert(
@@ -132,7 +140,7 @@ impl CollectionWithItems {
     /// Build a query that retrieves the entities in a collection.
     pub fn build_query(collection: &Collection) -> Select {
         let expr = Expr::in_(
-            Expr::attr::<factordb::schema::builtin::AttrId>(),
+            Expr::attr::<builtin::AttrId>(),
             Expr::literal(collection.item_ids.clone()),
         );
         Select::new().with_filter(expr)
