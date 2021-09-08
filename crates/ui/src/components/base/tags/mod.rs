@@ -66,5 +66,3 @@ pub fn tag_create(
     }
     .render()
 }
-
-

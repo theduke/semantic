@@ -11,8 +11,7 @@ use factordb::{
     schema::{AttrMapExt, EntityDescriptor},
     AnyError,
 };
-use semantic_ui_core::{ContextExt, EntityRenderOpts};
-use semantic_ui_core::loader::LoadState;
+use semantic_ui_core::{loader::LoadState, ContextExt, EntityRenderOpts};
 
 use super::entity_filter::EntityFilter;
 

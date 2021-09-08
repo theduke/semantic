@@ -1,7 +1,6 @@
 use std::{collections::HashSet, marker::PhantomData};
 
-use brass::{Shared, Str, vdom};
-
+use brass::{vdom, Shared, Str};
 
 pub struct Option<T> {
     pub value: T,
@@ -30,14 +29,19 @@ impl<T: Clone + 'static> brass::PropComponent for State<T> {
     type Msg = Msg;
 
     fn init(_props: &Self::Properties, _ctx: &mut brass::Context<Self::Msg>) -> Self {
-        Self{
+        Self {
             search: String::new(),
             selected: HashSet::new(),
             _marker: PhantomData,
         }
     }
 
-    fn update(&mut self, msg: Self::Msg, props: &Self::Properties, _ctx: &mut brass::Context<Self::Msg>) {
+    fn update(
+        &mut self,
+        msg: Self::Msg,
+        props: &Self::Properties,
+        _ctx: &mut brass::Context<Self::Msg>,
+    ) {
         match msg {
             Msg::Search(term) => {
                 self.search = term;
@@ -48,7 +52,11 @@ impl<T: Clone + 'static> brass::PropComponent for State<T> {
         }
     }
 
-    fn render(&self, _props: &Self::Properties, _ctx: brass::RenderContext<brass::PropWrapper<Self>>) -> brass::VNode {
+    fn render(
+        &self,
+        _props: &Self::Properties,
+        _ctx: brass::RenderContext<brass::PropWrapper<Self>>,
+    ) -> brass::VNode {
         vdom::div().build()
     }
 }

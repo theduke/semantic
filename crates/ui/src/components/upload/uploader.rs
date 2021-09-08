@@ -1,5 +1,5 @@
 use brass::vdom::{self, div, div_with, s};
-use factordb::{AnyError, query::select::Item, schema::EntityContainer};
+use factordb::{query::select::Item, schema::EntityContainer, AnyError};
 use semantic_core::{
     api::FileUploadMetadata,
     base::{Collection, TypedFile},
@@ -213,7 +213,7 @@ impl brass::Component for State {
         let btn_clear = brass_bulma::button()
             .and("Clear")
             .attr_toggle_if(
-                (self.uploaded_files.is_empty() && self.files.is_empty())  || self.loading,
+                (self.uploaded_files.is_empty() && self.files.is_empty()) || self.loading,
                 brass::dom::Attr::Disabled,
             )
             .on_click(ctx.on_simple(|| Msg::Clear));
@@ -252,7 +252,13 @@ impl brass::Component for State {
         };
 
         div()
-            .and((selector, collection_finder, buttons, file_list, uploaded_files))
+            .and((
+                selector,
+                collection_finder,
+                buttons,
+                file_list,
+                uploaded_files,
+            ))
             .build()
     }
 
