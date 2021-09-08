@@ -1,7 +1,10 @@
 pub mod collection_create;
 pub mod collection_form;
 mod collection_item_loader;
+
 mod collection_picker;
+pub use collection_picker::collection_picker;
+
 pub mod collection_update;
 
 mod entity_collection_manager;

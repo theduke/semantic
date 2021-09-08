@@ -2,7 +2,7 @@ use std::collections::HashSet;
 
 use brass::{
     dom::Attr,
-    vdom::{self, div_with},
+    vdom::{self, div_with, s},
     Callback, PropComponent, Shared, VNode,
 };
 use factordb::{query::select::Item, schema::AttrMapExt};
@@ -27,8 +27,9 @@ enum AddItemMode {
     AddNew,
 }
 
-struct CollectionFormComp {
+struct State {
     title: String,
+    description: String,
     items: Vec<Item>,
     registry: SharedRegistry,
     view: AddItemMode,
@@ -36,10 +37,11 @@ struct CollectionFormComp {
     is_changed: bool,
 }
 
-brass::enable_props!(wrapped CollectionForm => CollectionFormComp);
+brass::enable_props!(wrapped CollectionForm => State);
 
 enum Msg {
     Title(String),
+    Description(String),
     AddItem(Item),
     RemoveItem(usize),
     ToggleMode(AddItemMode),
@@ -58,23 +60,23 @@ fn render_items(items: &[Item], registry: &Registry, on_remove: Callback<usize>)
         .enumerate()
         .map(|(index, item)| {
             let view = EntityView::build(item, &opts, registry);
-            let view_wrap = vdom::div().class("is-flex-grow-1").and(view);
+            let view_wrap = vdom::div().class(s("is-flex-grow-1")).and(view);
 
             let btn_remove = brass_bulma::button()
-                .and(brass_bulma::icon_fa("fas fa-minus-circle"))
-                .attr(Attr::Title, "Remove")
+                .and(brass_bulma::icon_fa(s("fas fa-minus-circle")))
+                .attr(Attr::Title, s("Remove"))
                 .on_click(on_remove.clone().on_simple(move || index));
-            let actions = vdom::div().class("ml-4").and(btn_remove);
+            let actions = vdom::div().class(s("ml-4")).and(btn_remove);
 
             vdom::div()
-                .class("is-flex")
+                .class(s("is-flex"))
                 .and((view_wrap, actions))
                 .build()
         })
         .collect()
 }
 
-impl PropComponent for CollectionFormComp {
+impl PropComponent for State {
     type Properties = CollectionForm;
     type Msg = Msg;
 
@@ -83,6 +85,12 @@ impl PropComponent for CollectionFormComp {
 
         Self {
             title: props.item.collection.title.clone(),
+            description: props
+                .item
+                .collection
+                .description
+                .clone()
+                .unwrap_or_default(),
             items,
             registry: ctx.registry().clone(),
             metadata_edit: props.auto_edit_metadata,
@@ -105,6 +113,13 @@ impl PropComponent for CollectionFormComp {
                     self.is_changed = true;
                 }
             }
+            Msg::Description(value) => {
+                let changed = value != self.description && !value.trim().is_empty();
+                self.description = value;
+                if changed {
+                    self.is_changed = true;
+                }
+            }
             Msg::Submit => {
                 let col = &props.item.collection;
 
@@ -119,7 +134,11 @@ impl PropComponent for CollectionFormComp {
                     ident: col.ident.clone(),
                     url: col.url.clone(),
                     title: self.title.clone(),
-                    description: col.description.clone(),
+                    description: if self.description.is_empty() {
+                        None
+                    } else {
+                        Some(self.description.clone())
+                    },
                     item_ids: self
                         .items
                         .iter()
@@ -153,9 +172,9 @@ impl PropComponent for CollectionFormComp {
         props: &Self::Properties,
         mut ctx: brass::RenderContext<brass::PropWrapper<Self>>,
     ) -> brass::VNode {
-        let meta_edit_content = if self.metadata_edit {
+        let header_content = if self.metadata_edit {
             let title = brass_bulma::FieldHorizontal {
-                label: "Title".into(),
+                label: s("Title"),
                 help: None,
                 control: brass_bulma::Input {
                     _type: "text".into(),
@@ -166,32 +185,62 @@ impl PropComponent for CollectionFormComp {
                 },
             };
 
-            div_with(title)
+            let description = brass_bulma::FieldHorizontal {
+                label: s("Description"),
+                help: None,
+                control: brass_bulma::Textarea {
+                    color: brass_bulma::Color::Default,
+                    placeholder: None,
+                    value: self.description.clone().into(),
+                    on_input: ctx
+                        .on_opt(|ev| brass::util::textarea_input_value(ev).map(Msg::Description)),
+                    on_keydown: None,
+                    style_raw: None,
+                },
+            };
+
+            div_with((title, description))
         } else {
-            brass_bulma::button()
-                .and("Edit Metadata")
-                .on_click(ctx.on_simple(|| Msg::ToggleEditMetadata))
+            let description = if self.description.is_empty() {
+                vdom::span()
+            } else {
+                vdom::div()
+                    .class(s("message is-flex"))
+                    .attr(Attr::Title, s("Description"))
+                    .and(vdom::div().class(s("message-body")).and(&self.description))
+            };
+
+            let toggle_edit_meta = brass_bulma::button()
+                .and(s("Edit Metadata"))
+                .on_click(ctx.on_simple(|| Msg::ToggleEditMetadata));
+
+            vdom::div()
+                .class(s("mb-3"))
+                .and((description, toggle_edit_meta))
         };
 
-        let meta_edit = vdom::div_with(meta_edit_content);
+        let meta_edit = vdom::div_with(header_content);
 
         let item_list = if self.items.is_empty() {
-            brass_bulma::notification_warning("Collection is empty").build()
+            brass_bulma::notification_warning(s("Collection is empty")).build()
         } else {
             let items_rendered = render_items(
                 &self.items,
                 &self.registry,
                 ctx.callback_map(Msg::RemoveItem),
             );
-            vdom::div().class("mb-4").and_iter(items_rendered).build()
+            vdom::div()
+                .class(s("mb-4"))
+                .and_iter(items_rendered)
+                .build()
         };
 
         let item_action = match self.view {
             AddItemMode::Browse => {
                 let btn_add_existing = brass_bulma::button()
-                    .and(brass_bulma::icon_fa("fas fa-search-plus"))
-                    .and(vdom::span_with("Add"))
-                    .attr(Attr::Title, "Add existing entity")
+                    .and(brass_bulma::icon_fa(s("fas fa-search-plus")))
+                    .and(vdom::span_with(s("Add")))
+                    .attr(Attr::Title, s("Add existing entity"))
                     .on_click(ctx.on_simple(|| Msg::ToggleMode(AddItemMode::AddExisting)));
                 brass_bulma::buttons().and(btn_add_existing).build()
             }
@@ -215,7 +264,7 @@ impl PropComponent for CollectionFormComp {
                     ignored_ids: Some(ignored),
                 };
                 brass_bulma::box_()
-                    .and((vdom::div().and("Find"), autocomplete))
+                    .and((vdom::div().and(s("Find")), autocomplete))
                     .build()
             }
             AddItemMode::AddNew => {
@@ -223,11 +272,11 @@ impl PropComponent for CollectionFormComp {
             }
         };
 
-        let item_action_wrap = vdom::div().class("mb-4").and(item_action);
+        let item_action_wrap = vdom::div().class(s("mb-4")).and(item_action);
 
         let items = vdom::div().and((
             vdom::hr(),
-            vdom::div().and(vdom::b().and("Items")).class("mb-4"),
+            vdom::div().and(vdom::b().and(s("Items"))).class(s("mb-4")),
             item_list,
             item_action_wrap,
             vdom::hr(),
@@ -240,7 +289,11 @@ impl PropComponent for CollectionFormComp {
 
         let submit = brass_bulma::button()
             .and_class("is-primary")
-            .and(if props.is_loading { "..." } else { "Save" })
+            .and(if props.is_loading {
+                s("...")
+            } else {
+                s("Save")
+            })
             .attr_toggle_if(props.is_loading || !self.is_changed, Attr::Disabled)
             .on_click(ctx.on_simple(|| Msg::Submit));
         let actions = brass_bulma::buttons().and(submit);

@@ -38,6 +38,11 @@ impl EntityFilter {
             }
         }
 
+        if !self.tags.is_empty() {
+            let ids = self.tags.iter().map(|t| t.id).collect();
+            e = e.and_with(Tag::filter_entity_has_any_tag(ids));
+        }
+
         e
     }
 }
@@ -139,8 +144,11 @@ impl brass::PropComponent for State {
                     self.changed = true;
                 }
             }
-            Msg::TagsChanged(tags) => {
-                self.tags = tags.into();
+            Msg::TagsChanged(new_tags) => {
+                if &new_tags != self.tags.as_ref() {
+                    self.changed = true;
+                }
+                self.tags = new_tags.into();
             }
             Msg::Submit => props.on_submit.send(self.build()),
             Msg::Reset => {

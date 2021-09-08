@@ -331,10 +331,15 @@ impl brass::Component for State {
                     .and(s("Really Delete"))
                     .attr_toggle_if(loader.is_loading() || loader.is_success(), Attr::Disabled)
                     .on_click(ctx.on_simple(|| Msg::DeleteConfirm));
+                let cancel = brass_bulma::button()
+                    .and(s("Cancel"))
+                    .on_click(ctx.on_simple(|| Msg::DeleteCancel));
+
+                let buttons = brass_bulma::buttons().and((confirm, cancel));
 
                 let state = loader.render(|_| brass_bulma::notification_error("Deleted!").build());
 
-                div_with((confirm, state)).build()
+                div_with((buttons, state)).build()
             }
             Some(Action::ManageCollections) => {
                 if let Some(id) = self.entity_id {

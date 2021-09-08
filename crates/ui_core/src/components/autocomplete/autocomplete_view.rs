@@ -29,7 +29,7 @@ impl<T: Clone + 'static> brass::PropComponent for State<T> {
     type Properties = AutocompleteView<T>;
     type Msg = Msg;
 
-    fn init(props: &Self::Properties, ctx: &mut brass::Context<Self::Msg>) -> Self {
+    fn init(_props: &Self::Properties, _ctx: &mut brass::Context<Self::Msg>) -> Self {
         Self{
             search: String::new(),
             selected: HashSet::new(),
@@ -37,7 +37,7 @@ impl<T: Clone + 'static> brass::PropComponent for State<T> {
         }
     }
 
-    fn update(&mut self, msg: Self::Msg, props: &Self::Properties, ctx: &mut brass::Context<Self::Msg>) {
+    fn update(&mut self, msg: Self::Msg, props: &Self::Properties, _ctx: &mut brass::Context<Self::Msg>) {
         match msg {
             Msg::Search(term) => {
                 self.search = term;
@@ -48,7 +48,7 @@ impl<T: Clone + 'static> brass::PropComponent for State<T> {
         }
     }
 
-    fn render(&self, props: &Self::Properties, ctx: brass::RenderContext<brass::PropWrapper<Self>>) -> brass::VNode {
+    fn render(&self, _props: &Self::Properties, _ctx: brass::RenderContext<brass::PropWrapper<Self>>) -> brass::VNode {
         vdom::div().build()
     }
 }

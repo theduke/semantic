@@ -3,7 +3,7 @@ use brass::EffectGuard;
 pub struct DelayedSpinner {}
 
 struct State {
-    guard: EffectGuard,
+    _guard: EffectGuard,
     visible: bool,
 }
 
@@ -17,10 +17,10 @@ impl brass::PropComponent for State {
     type Properties = DelayedSpinner;
     type Msg = Msg;
 
-    fn init(props: &Self::Properties, ctx: &mut brass::Context<Self::Msg>) -> Self {
+    fn init(_props: &Self::Properties, ctx: &mut brass::Context<Self::Msg>) -> Self {
         let guard = ctx.timeout(Msg::DelayReached, std::time::Duration::from_millis(500));
         Self {
-            guard,
+            _guard: guard,
             visible: false,
         }
     }
@@ -28,8 +28,8 @@ impl brass::PropComponent for State {
     fn update(
         &mut self,
         msg: Self::Msg,
-        props: &Self::Properties,
-        ctx: &mut brass::Context<Self::Msg>,
+        _props: &Self::Properties,
+        _ctx: &mut brass::Context<Self::Msg>,
     ) {
         match msg {
             Msg::DelayReached => {
@@ -40,8 +40,8 @@ impl brass::PropComponent for State {
 
     fn render(
         &self,
-        props: &Self::Properties,
-        ctx: brass::RenderContext<brass::PropWrapper<Self>>,
+        _props: &Self::Properties,
+        _ctx: brass::RenderContext<brass::PropWrapper<Self>>,
     ) -> brass::VNode {
         crate::loader::spinner().build()
     }

@@ -80,15 +80,15 @@ impl State {
         }
     }
 
-    fn prev(&mut self, props: &PlayerViewer, ctx: &mut brass::Context<Msg>) {
-        if self.index == 0 {
-            if props.cycle {
-                self.goto(props.items.len() - 1, props, ctx);
-            }
-        } else {
-            self.goto(self.index - 1, props, ctx);
-        }
-    }
+    // fn prev(&mut self, props: &PlayerViewer, ctx: &mut brass::Context<Msg>) {
+    //     if self.index == 0 {
+    //         if props.cycle {
+    //             self.goto(props.items.len() - 1, props, ctx);
+    //         }
+    //     } else {
+    //         self.goto(self.index - 1, props, ctx);
+    //     }
+    // }
 
     fn start(
         &mut self,

@@ -1,6 +1,6 @@
 mod assets;
 
-use std::{net::SocketAddr, ops::Add};
+use std::{net::SocketAddr, ops::Add, str::FromStr};
 
 use anyhow::{Context, Result};
 use axum::{
@@ -8,7 +8,7 @@ use axum::{
     AddExtensionLayer,
 };
 use factordb::AnyError;
-use hyper::{Body, Method, Request, Response, StatusCode};
+use hyper::{header, Body, Method, Request, Response, StatusCode};
 
 use semantic_core::api::{self, ApiError, ApiResponse, BackendConfig, Query};
 
@@ -113,10 +113,10 @@ async fn cors_handler() -> Response<Body> {
 fn cors_response() -> Response<Body> {
     Response::builder()
         .status(StatusCode::OK)
-        .header(hyper::header::ACCESS_CONTROL_ALLOW_ORIGIN, "*")
-        .header(hyper::header::ACCESS_CONTROL_ALLOW_METHODS, "POST")
+        .header(header::ACCESS_CONTROL_ALLOW_ORIGIN, "*")
+        .header(header::ACCESS_CONTROL_ALLOW_METHODS, "POST")
         .header(
-            hyper::header::ACCESS_CONTROL_ALLOW_HEADERS,
+            header::ACCESS_CONTROL_ALLOW_HEADERS,
             format!(
                 "{},content-type",
                 semantic_core::api::FileUploadMetadata::HEADER_NAME
@@ -179,6 +179,7 @@ async fn file_upload(
             FileUploadMetadata {
                 filename: None,
                 title: None,
+                collection_id: None,
             }
         };
 
@@ -243,7 +244,7 @@ fn api_response_err(err: &AnyError) -> ApiResponse {
 
 fn api_response<T>(
     res: ApiResponse<T>,
-    extra_headers: Vec<(hyper::header::HeaderName, hyper::http::HeaderValue)>,
+    extra_headers: Vec<(header::HeaderName, hyper::http::HeaderValue)>,
 ) -> Response<Body>
 where
     T: serde::Serialize,
@@ -253,9 +254,9 @@ where
 
     let mut res = Response::builder()
         .status(StatusCode::OK)
-        .header(hyper::header::ACCESS_CONTROL_ALLOW_ORIGIN, "*")
-        .header(hyper::header::ACCESS_CONTROL_ALLOW_METHODS, "POST")
-        .header(hyper::header::ACCESS_CONTROL_ALLOW_HEADERS, "*");
+        .header(header::ACCESS_CONTROL_ALLOW_ORIGIN, "*")
+        .header(header::ACCESS_CONTROL_ALLOW_METHODS, "POST")
+        .header(header::ACCESS_CONTROL_ALLOW_HEADERS, "*");
 
     for (key, value) in extra_headers {
         res = res.header(key, value);
@@ -314,7 +315,7 @@ fn build_token_cookie(
         format!("{}={}; HttpOnly;", TOKEN_COOKIE_NAME, value)
     };
 
-    hyper::header::HeaderValue::from_str(&s)
+    header::HeaderValue::from_str(&s)
 }
 
 fn get_auth_cookie_token(req: &Request<Body>) -> Option<String> {
@@ -390,20 +391,17 @@ async fn api_query(app: &App, req: Request<Body>) -> Result<Response<Body>, AnyE
 
             let cookie = build_token_cookie(&new_token, false)?;
 
-            extra_headers.push((hyper::header::SET_COOKIE, cookie));
+            extra_headers.push((header::SET_COOKIE, cookie));
+            extra_headers.push((header::ACCESS_CONTROL_ALLOW_ORIGIN, "*".parse().unwrap()));
             extra_headers.push((
-                hyper::header::ACCESS_CONTROL_ALLOW_ORIGIN,
-                "*".parse().unwrap(),
-            ));
-            extra_headers.push((
-                hyper::header::ACCESS_CONTROL_ALLOW_METHODS,
+                header::ACCESS_CONTROL_ALLOW_METHODS,
                 "POST".parse().unwrap(),
             ));
             Ok(api::Reply::Initialize)
         }
         api::Query::CloseBackend => {
             app.close_backend().await?;
-            extra_headers.push((hyper::header::SET_COOKIE, build_token_cookie("", true)?));
+            extra_headers.push((header::SET_COOKIE, build_token_cookie("", true)?));
             Ok(api::Reply::CloseBackend)
         }
         other => {

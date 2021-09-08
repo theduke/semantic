@@ -13,7 +13,7 @@ use crate::components::entity::{self, render_value};
 pub struct BasePlugin;
 
 impl semantic_ui_core::BrowserPlugin for BasePlugin {
-    fn init_ui_context(&self, ctx: &brass::Context<()>) {}
+    fn init_ui_context(&self, _ctx: &brass::Context<()>) {}
 
     fn spec(&self) -> semantic_ui_core::BrowserPluginSpec {
         semantic_ui_core::BrowserPluginSpec {
