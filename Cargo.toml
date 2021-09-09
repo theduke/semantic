@@ -10,6 +10,10 @@ members = [
     "crates/contrib",
 ]
 
+exclude = [
+    "crates/xtask",
+]
+
 [patch.crates-io]
 brass = {path = "../brass"}
 brass_bulma = {path = "../brass/brass_bulma"}
