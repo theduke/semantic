@@ -50,3 +50,5 @@ tower = "0.4.8"
 logfs = { path = "../logfs" }
 semantic_core = { path = "../core" }
 sha2 = "0.9.6"
+structopt = "0.3.23"
+uuid = { version = "0.8.2", features = ["v4"] }

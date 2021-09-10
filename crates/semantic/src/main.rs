@@ -1,54 +1,6 @@
-use factordb::schema::AttributeDescriptor;
-use semantic_core::plugin::PluginDescriptor;
+use structopt::StructOpt;
 
-mod app;
-mod blobstore;
-mod db;
-mod server;
-
-fn build_config(args: &[String]) -> app::AppConfig {
-    let no_backend = args.iter().any(|x| x == "--no-backend");
-
-    let backend_config = if no_backend {
-        None
-    } else {
-        let data_path_arg = args
-            .iter()
-            .find(|x| x.starts_with("--data-path"))
-            .and_then(|x| x.split_once('='))
-            .map(|x| x.1.to_string());
-
-        let data_path = data_path_arg.unwrap_or_else(|| {
-            dirs::home_dir()
-                .expect("Could not determine home dir")
-                .join(".local/share/semantics/db.data")
-                .to_str()
-                .expect("invalid data path")
-                .to_string()
-        });
-
-        let key = args
-            .iter()
-            .find(|x| x.starts_with("--key="))
-            .and_then(|x| x.split_once('='))
-            .map(|x| x.1.to_string())
-            // FIXME: obviously just for debugging, remove this.
-            .unwrap_or("random key".to_string());
-
-        Some(semantic_core::api::BackendConfig::Crypto(
-            semantic_core::api::BackendCryptoConfig {
-                data_path: Some(data_path),
-                key,
-            },
-        ))
-    };
-
-    app::AppConfig {
-        backend: backend_config,
-        token_key: "tokens".into(),
-        server: None,
-    }
-}
+use semantic::app;
 
 fn main() {
     if std::env::var("RUST_LOG").is_err() {
@@ -61,34 +13,34 @@ fn main() {
     }
     tracing_subscriber::fmt::init();
 
-    let args = std::env::args().skip(1).collect::<Vec<_>>();
+    let args = CliArgs::from_args();
 
-    match args.get(0).map(|x| x.as_str()).unwrap_or("server") {
-        "generate-ts-base" => {
-            let mut schema = semantic_core::base::SemanticPlugin::schema().db;
-            // let builtin = factordb::schema::builtin::builtin_db_schema();
-            schema
-                .attributes
-                .push(factordb::schema::builtin::AttrId::schema());
-            schema
-                .attributes
-                .push(factordb::schema::builtin::AttrIdent::schema());
+    match args.command {
+        CliCommand::Server(subargs) => {
+            let backend = if subargs.no_backend {
+                None
+            } else {
+                Some(semantic_core::api::BackendConfig::Crypto(
+                    semantic_core::api::BackendCryptoConfig {
+                        data_path: match subargs.data_path {
+                            Some(p) => Some(p),
+                            None => Some(
+                                app::App::default_data_path()
+                                    .expect("Could not determine default data path"),
+                            ),
+                        },
+                        key: subargs.key,
+                    },
+                ))
+            };
 
-            let ts = factor_tools::typescript::schema_to_typescript(&schema, None)
-                .expect("Could not generate typescript");
-            println!("{}", ts);
-        }
-        "generate-ts-builtin" => {
-            let schema = factordb::schema::builtin::builtin_db_schema();
-            let ts = factor_tools::typescript::schema_to_typescript(&schema, None)
-                .expect("Could not generate typescript");
-            println!("{}", ts);
-        }
-        "server" => {
-            let mut config = build_config(&args);
-            config.server = Some(server::ServerConfig {
-                interface: "127.0.0.1:3000".into(),
-            });
+            let config = app::AppConfig {
+                backend,
+                token_key: subargs.token_key.unwrap_or_else(app::App::random_token_key),
+                server: Some(app::ServerConfig {
+                    interface: subargs.interface.unwrap_or(format!("127.0.0.1:3000")),
+                }),
+            };
 
             let rt = tokio::runtime::Runtime::new().expect("Could not start runtime");
             let app = rt
@@ -97,17 +49,55 @@ fn main() {
             rt.block_on(app.run_server()).expect("Server failed");
         }
         #[cfg(feature = "webkit")]
-        "webkit" => {
-            let config = build_config(&args);
+        CliCommand::Gtk => {
+            let config = app::AppConfig {
+                backend: None,
+                token_key: uuid::Uuid::new_v4().to_string(),
+                server: None,
+            };
             let rt = tokio::runtime::Runtime::new().expect("Could not start runtime");
             let app = rt
                 .block_on(app::App::build(config, rt.handle().clone()))
                 .expect("Could not build app");
             app.run_webview_gtk().expect("Could not run GTK app");
         }
-        other => {
-            eprintln!("Unknown command '{}'", other);
-            std::process::exit(1);
-        }
     }
 }
+
+/// Semantic CLI
+#[derive(StructOpt)]
+struct CliArgs {
+    #[structopt(subcommand)]
+    command: CliCommand,
+}
+
+#[derive(StructOpt)]
+enum CliCommand {
+    Server(CommandServer),
+    #[cfg(feature = "webkit")]
+    Webkit(CommandWebkit),
+}
+
+/// Run the semantic server backend.
+#[derive(StructOpt)]
+struct CommandServer {
+    #[structopt(long)]
+    data_path: Option<String>,
+    #[structopt(long, short)]
+    key: String,
+    #[structopt(long)]
+    no_backend: bool,
+    /// The interface to listen on.
+    /// eg: `0.0.0.0:3000`
+    #[structopt(long)]
+    interface: Option<String>,
+    /// The key used for JWT token encryption.
+    #[structopt(long)]
+    token_key: Option<String>,
+}
+
+/// Run a semantic UI inside webkit.
+#[cfg(feature = "webkit")]
+#[derive(StructOpt)]
+#[structopt(about = "Semantic CLI")]
+struct CommandWebkit {}

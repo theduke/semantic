@@ -1,8 +1,5 @@
 use sha2::Digest;
-use std::{
-    collections::HashMap,
-    sync::{Arc, RwLock},
-};
+use std::{collections::HashMap, path::PathBuf, sync::{Arc, RwLock}};
 
 use anyhow::Context;
 use factordb::{
@@ -17,13 +14,24 @@ use semantic_core::{
     plugin::PluginDescriptor,
 };
 
-use crate::{blobstore::DynBlobStore, server};
+use crate::blobstore::DynBlobStore;
+
+#[derive(serde::Serialize, serde::Deserialize, Clone, Debug)]
+pub struct ServerConfig {
+    /// The interface to bind to.
+    ///
+    /// Examples:
+    /// - 127.0.0.1:3000
+    /// - 0.0.0.0:8080
+    /// - ::1:3000
+    pub interface: String,
+}
 
 #[derive(serde::Serialize, serde::Deserialize, Clone, Debug)]
 pub struct AppConfig {
     pub backend: Option<BackendConfig>,
     pub token_key: String,
-    pub server: Option<server::ServerConfig>,
+    pub server: Option<ServerConfig>,
 }
 
 struct AppState {
@@ -49,6 +57,22 @@ impl App {
 
     pub fn http_client(&self) -> &reqwest::Client {
         &self.http_client
+    }
+
+    pub fn default_data_dir() -> Result<PathBuf, AnyError> {
+        let home = dirs::home_dir()
+            .context("Could not determine user home directory")?;
+
+        let path = home
+            .join(".local")
+            .join("share")
+            .join("semantics")
+            .join("db.data");
+        Ok(path)
+    }
+
+    pub fn random_token_key() -> String {
+        uuid::Uuid::new_v4().to_string()
     }
 
     pub fn needs_authentication(&self) -> bool {
@@ -100,7 +124,7 @@ impl App {
     // }
     //
 
-    fn default_data_path() -> Result<String, AnyError> {
+    pub fn default_data_path() -> Result<String, AnyError> {
         let path = dirs::data_dir()
             .ok_or_else(|| anyhow::anyhow!("Could not determine default data directory"))?
             .join("semantic");

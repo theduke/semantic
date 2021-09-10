@@ -12,18 +12,7 @@ use hyper::{header, Body, Method, Request, Response, StatusCode};
 
 use semantic_core::api::{self, ApiError, ApiResponse, BackendConfig, Query};
 
-use crate::app::App;
-
-#[derive(serde::Serialize, serde::Deserialize, Clone, Debug)]
-pub struct ServerConfig {
-    /// The interface to bind to.
-    ///
-    /// Examples:
-    /// - 127.0.0.1:3000
-    /// - 0.0.0.0:8080
-    /// - ::1:3000
-    pub interface: String,
-}
+use crate::app::{App, ServerConfig};
 
 type AppState = extract::Extension<App>;
 

@@ -69,14 +69,25 @@ fn cmd_watch() -> Result<(), DynError> {
         }
     });
 
-    let data_path = format!(
-        "--data-path={}",
-        root_path()?.join("data").join("db.data").to_str().unwrap()
-    );
+    let data_path = root_path()?
+        .join("data")
+        .join("db.data")
+        .to_str()
+        .unwrap()
+        .to_string();
 
     let mut cmd = Command::new("cargo");
-    cmd.current_dir(root_path()?)
-        .args(&["run", "--bin", "semantic", "--", "server", &data_path]);
+    cmd.current_dir(root_path()?).args(&[
+        "run",
+        "--bin",
+        "semantic",
+        "--",
+        "server",
+        "--data-path",
+        &data_path,
+        "--key",
+        "testkey",
+    ]);
 
     if std::env::var("RUST_LOG").is_err() {
         cmd.env(

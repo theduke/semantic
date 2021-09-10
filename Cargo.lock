@@ -2008,11 +2008,13 @@ dependencies = [
  "serde",
  "serde_json",
  "sha2",
+ "structopt",
  "tokio",
  "tower",
  "tower-http",
  "tracing",
  "tracing-subscriber",
+ "uuid",
  "webkit2gtk",
 ]
 
