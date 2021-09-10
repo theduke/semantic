@@ -320,7 +320,7 @@ impl<V: Clone + 'static> PropComponent for FormComponent<V> {
     fn render(
         &self,
         props: &Self::Properties,
-        _ctx: brass::RenderContext<brass::PropWrapper<Self>>,
+        _ctx: &mut brass::RenderContext<brass::PropWrapper<Self>>,
     ) -> VNode {
         let mut state = self.state.borrow_mut();
         (props.render)(FormRef { state: &mut state })

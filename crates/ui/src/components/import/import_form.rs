@@ -65,7 +65,7 @@ impl brass::Component for ImportForm {
         }
     }
 
-    fn render(&self, ctx: brass::RenderContext<Self>) -> brass::VNode {
+    fn render(&self, ctx: &mut brass::RenderContext<Self>) -> brass::VNode {
         let url = brass_bulma::Field {
             label: "Url".into(),
             help: None,

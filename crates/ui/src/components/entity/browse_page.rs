@@ -105,7 +105,7 @@ impl brass::Component for BrowsePage {
         }
     }
 
-    fn render(&self, ctx: brass::RenderContext<Self>) -> brass::VNode {
+    fn render(&self, ctx: &mut brass::RenderContext<Self>) -> brass::VNode {
         let filter = super::entity_filter::EntityFilterForm {
             on_submit: self.filter_callback.clone(),
         };

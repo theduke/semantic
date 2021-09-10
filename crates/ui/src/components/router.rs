@@ -107,7 +107,7 @@ impl brass::Component for Link {
         ctx.router().goto(self.props.route.clone());
     }
 
-    fn render(&self, ctx: brass::RenderContext<Self>) -> VNode {
+    fn render(&self, ctx: &mut brass::RenderContext<Self>) -> VNode {
         vdom::a_with(self.props.text.clone())
             .class_opt(self.props.class.clone())
             .on(Event::Click, ctx.on_simple(|| ()))

@@ -221,7 +221,7 @@ impl brass::PropComponent for State {
     fn render(
         &self,
         props: &Self::Properties,
-        _ctx: brass::RenderContext<brass::PropWrapper<Self>>,
+        _ctx: &mut brass::RenderContext<brass::PropWrapper<Self>>,
     ) -> brass::VNode {
         // let btn_play = brass_bulma::button()
         //     .and(brass_bulma::icon_fa("fas fa-play"))

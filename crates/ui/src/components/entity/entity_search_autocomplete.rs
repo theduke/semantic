@@ -109,7 +109,7 @@ impl PropComponent for State {
     fn render(
         &self,
         props: &Self::Properties,
-        ctx: brass::RenderContext<brass::PropWrapper<Self>>,
+        ctx: &mut brass::RenderContext<brass::PropWrapper<Self>>,
     ) -> brass::VNode {
         let input = brass_bulma::Input {
             _type: "text",

@@ -31,7 +31,7 @@ impl brass::Component for EntityCreateSelectorPage {
         }
     }
 
-    fn render(&self, ctx: brass::RenderContext<Self>) -> brass::VNode {
+    fn render(&self, ctx: &mut brass::RenderContext<Self>) -> brass::VNode {
         let content = if self.entities.is_empty() {
             brass_bulma::notification_warning("No creatable entity types found.").build()
         } else {

@@ -48,7 +48,7 @@ impl brass::Component for CreatePageComp {
         }
     }
 
-    fn render(&self, _ctx: brass::RenderContext<Self>) -> brass::VNode {
+    fn render(&self, _ctx: &mut brass::RenderContext<Self>) -> brass::VNode {
         let persister = EntityPersister {
             item: None,
             renderer: self.render.clone(),

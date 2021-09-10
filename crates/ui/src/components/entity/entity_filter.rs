@@ -163,7 +163,7 @@ impl brass::PropComponent for State {
     fn render(
         &self,
         _props: &Self::Properties,
-        mut ctx: brass::RenderContext<PropWrapper<Self>>,
+        mut ctx: &mut brass::RenderContext<PropWrapper<Self>>,
     ) -> brass::VNode {
         let title = vdom::div().class("subtitle is-5").and("Filter");
 

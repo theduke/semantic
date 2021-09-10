@@ -42,7 +42,7 @@ impl brass::PropComponent for State {
     fn render(
         &self,
         props: &Self::Properties,
-        _ctx: brass::RenderContext<brass::PropWrapper<Self>>,
+        _ctx: &mut brass::RenderContext<brass::PropWrapper<Self>>,
     ) -> brass::VNode {
         let source = vdom::tag(brass::dom::Tag::Source).attr(Attr::Src, &props.info.url);
         let video = vdom::tag(brass::dom::Tag::Video)

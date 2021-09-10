@@ -135,7 +135,7 @@ impl brass::Component for State {
         }
     }
 
-    fn render(&self, mut ctx: brass::RenderContext<Self>) -> brass::VNode {
+    fn render(&self, mut ctx: &mut brass::RenderContext<Self>) -> brass::VNode {
         let file_input = brass_bulma::FileInput {
             label: s("Select files..."),
             multi: true,

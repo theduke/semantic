@@ -86,7 +86,7 @@ impl brass::Component for State {
         }
     }
 
-    fn render(&self, _ctx: brass::RenderContext<Self>) -> brass::VNode {
+    fn render(&self, _ctx: &mut brass::RenderContext<Self>) -> brass::VNode {
         let form = (self.props.renderer)(&EntityFormProps {
             item: self.props.item.clone(),
             on_submit: self.callback.clone(),

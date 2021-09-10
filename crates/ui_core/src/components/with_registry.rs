@@ -29,7 +29,7 @@ impl brass::PropComponent for State {
     fn render(
         &self,
         props: &Self::Properties,
-        ctx: brass::RenderContext<brass::PropWrapper<Self>>,
+        ctx: &mut brass::RenderContext<brass::PropWrapper<Self>>,
     ) -> brass::VNode {
         props.render.render(ctx.registry())
     }

@@ -170,7 +170,7 @@ impl PropComponent for State {
     fn render(
         &self,
         props: &Self::Properties,
-        mut ctx: brass::RenderContext<brass::PropWrapper<Self>>,
+        mut ctx: &mut brass::RenderContext<brass::PropWrapper<Self>>,
     ) -> brass::VNode {
         let header_content = if self.metadata_edit {
             let title = brass_bulma::FieldHorizontal {

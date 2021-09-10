@@ -54,7 +54,7 @@ impl brass::Component for EntityDeleter {
         }
     }
 
-    fn render(&self, ctx: brass::RenderContext<Self>) -> brass::VNode {
+    fn render(&self, ctx: &mut brass::RenderContext<Self>) -> brass::VNode {
         let title = brass_bulma::h5_with(format!("Delete {}", self.props.title));
 
         let btn_submit = brass_bulma::button_medium()

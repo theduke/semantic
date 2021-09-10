@@ -65,7 +65,7 @@ impl brass::Component for BackendSetupFormComp {
         }
     }
 
-    fn render(&self, ctx: brass::RenderContext<Self>) -> brass::VNode {
+    fn render(&self, ctx: &mut brass::RenderContext<Self>) -> brass::VNode {
         let key = brass_bulma::FieldHorizontal {
             label: s("Password"),
             help: None,

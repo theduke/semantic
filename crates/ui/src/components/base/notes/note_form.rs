@@ -53,7 +53,7 @@ impl brass::Component for NoteForm {
         }
     }
 
-    fn render(&self, _ctx: brass::RenderContext<Self>) -> brass::VNode {
+    fn render(&self, _ctx: &mut brass::RenderContext<Self>) -> brass::VNode {
         let title = brass_bulma::Field {
             label: "Title".into(),
             help: None,

@@ -31,7 +31,7 @@ impl brass::Component for EntityCreatePage {
         match msg {}
     }
 
-    fn render(&self, _ctx: brass::RenderContext<Self>) -> brass::VNode {
+    fn render(&self, _ctx: &mut brass::RenderContext<Self>) -> brass::VNode {
         if let Some(renderer) = &self.renderer {
             let map = Item::default();
             renderer(

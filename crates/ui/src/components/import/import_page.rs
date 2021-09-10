@@ -106,7 +106,7 @@ impl brass::Component for ImportPage {
         }
     }
 
-    fn render(&self, _ctx: brass::RenderContext<Self>) -> brass::VNode {
+    fn render(&self, _ctx: &mut brass::RenderContext<Self>) -> brass::VNode {
         let form = super::import_form::ImportFormProps {
             loading: self.import_load.is_loading(),
             on_preview: self.on_preview.clone(),

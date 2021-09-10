@@ -63,7 +63,7 @@ impl brass::Component for NoteUpate {
         }
     }
 
-    fn render(&self, _ctx: brass::RenderContext<Self>) -> brass::VNode {
+    fn render(&self, _ctx: &mut brass::RenderContext<Self>) -> brass::VNode {
         let form = vdom::component::<NoteForm>(NoteFormProps {
             note: Some(self.note.clone()),
             on_submit: self.callback.clone(),

@@ -76,7 +76,7 @@ impl brass::PropComponent for ImagePreviewModalComp {
     fn render(
         &self,
         props: &Self::Properties,
-        mut ctx: brass::RenderContext<brass::PropWrapper<Self>>,
+        mut ctx: &mut brass::RenderContext<brass::PropWrapper<Self>>,
     ) -> VNode {
         let img = vdom::img(props.url.clone())
             .style_raw("max-height: 200px; cursor: pointer;")

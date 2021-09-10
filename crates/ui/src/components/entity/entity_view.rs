@@ -276,7 +276,7 @@ impl brass::Component for State {
         }
     }
 
-    fn render(&self, mut ctx: brass::RenderContext<Self>) -> brass::VNode {
+    fn render(&self, mut ctx: &mut brass::RenderContext<Self>) -> brass::VNode {
         let mut actions = Vec::new();
 
         if self.item.data.has_attr::<semantic_core::base::AttrUrl>() {

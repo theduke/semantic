@@ -148,7 +148,7 @@ impl brass::Component for Root {
         }
     }
 
-    fn render(&self, mut _ctx: brass::RenderContext<Self>) -> brass::VNode {
+    fn render(&self, mut _ctx: &mut brass::RenderContext<Self>) -> brass::VNode {
         match self.phase {
             Phase::CheckingBackend | Phase::LoggingOut => {
                 self.status.render(|_| brass::VNode::Empty)

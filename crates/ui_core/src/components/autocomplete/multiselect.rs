@@ -127,7 +127,7 @@ impl<T: Clone + 'static> brass::PropComponent for State<T> {
     fn render(
         &self,
         props: &Self::Properties,
-        mut ctx: brass::RenderContext<brass::PropWrapper<Self>>,
+        mut ctx: &mut brass::RenderContext<brass::PropWrapper<Self>>,
     ) -> brass::VNode {
         (props.render)(MultiSelectRender {
             status: &props.load_status,

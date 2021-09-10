@@ -43,7 +43,7 @@ impl<S: AsRef<str> + Eq + 'static> brass::Component for MarkdownComponent<S> {
         }
     }
 
-    fn render(&self, _ctx: brass::RenderContext<Self>) -> brass::VNode {
+    fn render(&self, _ctx: &mut brass::RenderContext<Self>) -> brass::VNode {
         div().class("content").build_ref(&self.vref)
     }
 

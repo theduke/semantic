@@ -69,7 +69,7 @@ where
     fn render(
         &self,
         props: &Self::Properties,
-        _ctx: brass::RenderContext<brass::PropWrapper<Self>>,
+        _ctx: &mut brass::RenderContext<brass::PropWrapper<Self>>,
     ) -> brass::VNode {
         self.status
             .render(|output| props.render.render(output.clone()))

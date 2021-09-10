@@ -41,7 +41,7 @@ impl brass::PropComponent for State {
     fn render(
         &self,
         _props: &Self::Properties,
-        _ctx: brass::RenderContext<brass::PropWrapper<Self>>,
+        _ctx: &mut brass::RenderContext<brass::PropWrapper<Self>>,
     ) -> brass::VNode {
         crate::loader::spinner().build()
     }

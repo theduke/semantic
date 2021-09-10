@@ -131,7 +131,7 @@ impl brass::PropComponent for State {
     fn render(
         &self,
         props: &Self::Properties,
-        mut ctx: brass::RenderContext<brass::PropWrapper<Self>>,
+        mut ctx: &mut brass::RenderContext<brass::PropWrapper<Self>>,
     ) -> brass::VNode {
         self.current_collections_loader.render(|cols| {
             let remove_loading = self.remove_loader.is_loading();
