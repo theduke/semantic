@@ -10,36 +10,34 @@ pub mod collection_update;
 mod entity_collection_manager;
 pub use entity_collection_manager::EntityCollectionManager;
 
-use brass::{
-    vdom::{self, Render, Renderer},
-    Shared, VNode,
-};
+use brass::vdom::{self, Render};
 use factordb::schema::AttributeDescriptor;
-use semantic_core::base::{AttrCollectionItem, Collection, CollectionWithItems};
-use semantic_ui_core::components::{Loader, LoaderFunc};
+use semantic_core::base::AttrCollectionItem;
 
 use self::collection_update::CollectionUpdate;
 
-pub fn collection_items_loader(
-    col: &Collection,
-    render: Renderer<Shared<CollectionWithItems>>,
-    api: semantic_ui_core::api::BrowserApiClient,
-) -> VNode {
-    Loader::<Collection, CollectionWithItems> {
-        input: col.clone(),
-        load: LoaderFunc::dynamic(move |col| {
-            let api = api.clone();
-            Box::pin(async move {
-                let query = CollectionWithItems::build_query(&col);
-                let page = api.select(query).await?;
-                let col = CollectionWithItems::from_query_result(col, page.items);
-                Ok(col)
-            })
-        }),
-        render,
-    }
-    .render()
-}
+// use semantic_core::base::{AttrCollectionItem, Collection, CollectionWithItems};
+// use semantic_ui_core::components::{Loader, LoaderFunc};
+// pub fn collection_items_loader(
+//     col: &Collection,
+//     render: Renderer<Shared<CollectionWithItems>>,
+//     api: semantic_ui_core::api::BrowserApiClient,
+// ) -> VNode {
+//     Loader::<Collection, CollectionWithItems> {
+//         input: col.clone(),
+//         load: LoaderFunc::dynamic(move |col| {
+//             let api = api.clone();
+//             Box::pin(async move {
+//                 let query = CollectionWithItems::build_query(&col);
+//                 let page = api.select(query).await?;
+//                 let col = CollectionWithItems::from_query_result(col, page.items);
+//                 Ok(col)
+//             })
+//         }),
+//         render,
+//     }
+//     .render()
+// }
 
 pub fn collection_content(
     item: &factordb::query::select::Item,

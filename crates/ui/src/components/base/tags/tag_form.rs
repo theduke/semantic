@@ -1,9 +1,6 @@
 use std::{collections::HashSet, rc::Rc};
 
-use brass::{
-    vdom::{self, s, Render},
-    Callback, VNode,
-};
+use brass::{Callback, VNode, vdom::{self, Render, event::ClickEvent, s}};
 use semantic_core::base::Tag;
 use semantic_ui_core::components::form::{
     self, AndValidator, FormRef, InputField, StringRequired, Validator,
@@ -59,7 +56,7 @@ pub fn tag_form(
                         brass_bulma::button()
                             .and_class("is-primary")
                             .and("Create")
-                            .on_click(state.submit().on(|_| ())),
+                            .on_callback(|_: ClickEvent| (), &state.submit()),
                     ),
                 )
                 .build()

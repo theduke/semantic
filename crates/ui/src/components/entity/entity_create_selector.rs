@@ -40,10 +40,7 @@ impl brass::Component for EntityCreateSelectorPage {
                 let type_ident = entity.schema.ident.clone();
 
                 let btn = brass_bulma::button_medium()
-                    .on(
-                        brass::dom::Event::Click,
-                        ctx.on_simple(move || Msg::Create(type_ident.clone())),
-                    )
+                    .on_click(ctx, move || Msg::Create(type_ident.clone()))
                     .and(title);
                 vdom::div().and(btn).class("mr-2")
             });

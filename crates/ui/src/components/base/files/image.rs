@@ -1,5 +1,5 @@
 use brass::{
-    vdom::{self, span_with, Render},
+    vdom::{self, event::ClickEvent, span_with, Render},
     VNode,
 };
 use factordb::{query::select::Item, schema::AttrMapExt};
@@ -76,11 +76,11 @@ impl brass::PropComponent for ImagePreviewModalComp {
     fn render(
         &self,
         props: &Self::Properties,
-        mut ctx: &mut brass::RenderContext<brass::PropWrapper<Self>>,
+        ctx: &mut brass::RenderContext<brass::PropWrapper<Self>>,
     ) -> VNode {
         let img = vdom::img(props.url.clone())
             .style_raw("max-height: 200px; cursor: pointer;")
-            .on_click(ctx.on_simple(|| Msg::Open));
+            .on(ctx, |_: ClickEvent| Msg::Open);
         let img_div = vdom::div_with(img);
 
         let modal = if self.is_open {
@@ -90,7 +90,7 @@ impl brass::PropComponent for ImagePreviewModalComp {
                 .style_raw("display: flex; width: 100%; height: 100%;")
                 .and(full_img);
 
-            brass_bulma::modal(content, ctx.callback_map(|_| Msg::Close)).build()
+            brass_bulma::modal(content, &ctx.callback_map(|_| Msg::Close)).build()
         } else {
             VNode::Empty
         };

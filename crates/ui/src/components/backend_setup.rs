@@ -74,8 +74,7 @@ impl brass::Component for BackendSetupFormComp {
                 color: brass_bulma::Color::Default,
                 placeholder: None,
                 value: self.key.clone().into(),
-                on_input: ctx
-                    .on_opt(|ev: web_sys::Event| brass::util::input_event_value(ev).map(Msg::Key)),
+                on_input: ctx.callback_map(Msg::Key),
             },
         };
 
@@ -91,15 +90,13 @@ impl brass::Component for BackendSetupFormComp {
                 color: brass_bulma::Color::Default,
                 placeholder: None,
                 value: self.data_path.clone().into(),
-                on_input: ctx.on_opt(|ev: web_sys::Event| {
-                    brass::util::input_event_value(ev).map(Msg::DataPath)
-                }),
+                on_input: ctx.callback_map(Msg::DataPath),
             },
         };
 
         let submit = brass_bulma::button()
             .and(s("Submit"))
-            .on_click(ctx.on_simple(|| Msg::Submit));
+            .on_click(ctx, || Msg::Submit);
         let actions = brass_bulma::buttons().and(submit);
 
         vdom::div().and((key, path, actions)).build()

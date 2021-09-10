@@ -3,7 +3,11 @@ use std::rc::Rc;
 use crate::loader::LoadState;
 use brass::{
     dom::Attr,
-    vdom::{self, s},
+    vdom::{
+        self,
+        event::{ClickEvent, InputEvent},
+        s,
+    },
     Callback, Shared, Str, VNode,
 };
 
@@ -127,7 +131,7 @@ impl<T: Clone + 'static> brass::PropComponent for State<T> {
     fn render(
         &self,
         props: &Self::Properties,
-        mut ctx: &mut brass::RenderContext<brass::PropWrapper<Self>>,
+        ctx: &mut brass::RenderContext<brass::PropWrapper<Self>>,
     ) -> brass::VNode {
         (props.render)(MultiSelectRender {
             status: &props.load_status,
@@ -173,11 +177,9 @@ pub fn multiselect_render_tags<'a, T>(
             .class(s("input"))
             .attr(Attr::Placeholder, s("Search..."))
             .attr(Attr::Value, args.search_term)
-            .on(
-                brass::dom::Event::Input,
-                args.callback.clone().on_opt(|ev: web_sys::Event| {
-                    brass::util::input_event_value(ev).map(MultiSelectMsg::Search)
-                }),
+            .on_callback(
+                |ev: InputEvent| ev.value().map(MultiSelectMsg::Search),
+                &args.callback,
             );
         vdom::p()
             .class(s("control has-icons-left"))
@@ -189,7 +191,7 @@ pub fn multiselect_render_tags<'a, T>(
         let submit = if let Some(label) = args.submit_label {
             brass_bulma::button_medium()
                 .and(label)
-                .on_click(args.callback.clone().on_simple(|| MultiSelectMsg::Submit))
+                .on_callback(|_: ClickEvent| MultiSelectMsg::Submit, &args.callback)
                 .build()
         } else {
             VNode::Empty
@@ -198,7 +200,7 @@ pub fn multiselect_render_tags<'a, T>(
         let cancel = if let Some(label) = args.cancel_label {
             brass_bulma::button_medium()
                 .and(label)
-                .on_click(args.callback.clone().on_simple(|| MultiSelectMsg::Cancel))
+                .on_callback(|_: ClickEvent| MultiSelectMsg::Cancel, &args.callback)
                 .build()
         } else {
             VNode::Empty
@@ -210,7 +212,8 @@ pub fn multiselect_render_tags<'a, T>(
     let items = args.selected.iter().enumerate().map(|(index, item)| {
         brass_bulma::tag_with_delete(
             get_name(item).into(),
-            args.callback
+            &args
+                .callback
                 .clone()
                 .map(move |_| MultiSelectMsg::Remove(index)),
         )
@@ -226,10 +229,9 @@ pub fn multiselect_render_tags<'a, T>(
 
     let option_values = args.available.iter().enumerate().map(|(index, item)| {
         brass_bulma::bulma_tag(get_name(item).into())
-            .on_click(
-                args.callback
-                    .clone()
-                    .on_simple(move || MultiSelectMsg::Select(index)),
+            .on_callback(
+                move |_: ClickEvent| MultiSelectMsg::Select(index),
+                &args.callback,
             )
             .style_raw(s("cursor:pointer;"))
     });

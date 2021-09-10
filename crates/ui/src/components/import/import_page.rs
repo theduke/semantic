@@ -1,5 +1,5 @@
 use brass::{
-    dom::{Attr, Event},
+    dom::Attr,
     vdom::{div, div_with},
 };
 use brass_bulma;
@@ -106,7 +106,7 @@ impl brass::Component for ImportPage {
         }
     }
 
-    fn render(&self, _ctx: &mut brass::RenderContext<Self>) -> brass::VNode {
+    fn render(&self, ctx: &mut brass::RenderContext<Self>) -> brass::VNode {
         let form = super::import_form::ImportFormProps {
             loading: self.import_load.is_loading(),
             on_preview: self.on_preview.clone(),
@@ -140,7 +140,7 @@ impl brass::Component for ImportPage {
                     brass_bulma::button_large()
                         .and(btn_label)
                         .attr_toggle_if(self.persist_load.is_loading(), Attr::Disabled)
-                        .on(Event::Click, _ctx.on_simple(|| Msg::ImportAll)),
+                        .on_click(ctx, || Msg::ImportAll),
                 )
             };
             div().and((import_toggle, rendered_page)).build()

@@ -1,5 +1,4 @@
 use brass::{
-    dom::Event,
     vdom::{self, component, div, s, Render, TagBuilder},
     Str, VNode,
 };
@@ -110,7 +109,7 @@ impl brass::Component for Link {
     fn render(&self, ctx: &mut brass::RenderContext<Self>) -> VNode {
         vdom::a_with(self.props.text.clone())
             .class_opt(self.props.class.clone())
-            .on(Event::Click, ctx.on_simple(|| ()))
+            .on_click(ctx, || ())
             .build()
     }
 

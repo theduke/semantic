@@ -1,4 +1,4 @@
-use brass::vdom::{self, div, div_with, s};
+use brass::vdom::{self, div, div_with, event::ChangeEvent, s};
 use factordb::{query::select::Item, schema::EntityContainer, AnyError};
 use semantic_core::{
     api::FileUploadMetadata,
@@ -135,12 +135,12 @@ impl brass::Component for State {
         }
     }
 
-    fn render(&self, mut ctx: &mut brass::RenderContext<Self>) -> brass::VNode {
+    fn render(&self, ctx: &mut brass::RenderContext<Self>) -> brass::VNode {
         let file_input = brass_bulma::FileInput {
             label: s("Select files..."),
             multi: true,
-            on_change: ctx.on(|ev: web_sys::Event| {
-                let input = brass::util::input_event_target(ev).unwrap();
+            on_change: ctx.callback_map(|ev: ChangeEvent| {
+                let input = brass::util::input_event_target(ev.0).unwrap();
 
                 let files = input
                     .files()
@@ -178,7 +178,7 @@ impl brass::Component for State {
                 .and(
                     brass_bulma::button()
                         .and(s("Cancel"))
-                        .on_click(ctx.on_simple(|| Msg::CollectionSelectToggle)),
+                        .on_click(ctx, || Msg::CollectionSelectToggle),
                 )
         } else {
             if let Some(col) = &self.collection {
@@ -191,13 +191,13 @@ impl brass::Component for State {
                     .and(
                         brass_bulma::button()
                             .and(s("Clear"))
-                            .on_click(ctx.on_simple(|| Msg::CollectionClear)),
+                            .on_click(ctx, || Msg::CollectionClear),
                     )
             } else {
                 vdom::div().and(
                     brass_bulma::button()
                         .and(s("Upload to collection"))
-                        .on_click(ctx.on_simple(|| Msg::CollectionSelectToggle)),
+                        .on_click(ctx, || Msg::CollectionSelectToggle),
                 )
             }
         };
@@ -209,14 +209,14 @@ impl brass::Component for State {
                 self.files.is_empty() || self.loading,
                 brass::dom::Attr::Disabled,
             )
-            .on_click(ctx.on_simple(|| Msg::Upload));
+            .on_click(ctx, || Msg::Upload);
         let btn_clear = brass_bulma::button()
             .and("Clear")
             .attr_toggle_if(
                 (self.uploaded_files.is_empty() && self.files.is_empty()) || self.loading,
                 brass::dom::Attr::Disabled,
             )
-            .on_click(ctx.on_simple(|| Msg::Clear));
+            .on_click(ctx, || Msg::Clear);
         let buttons = brass_bulma::buttons().and((btn_upload, btn_clear));
 
         let file_list = if self.files.is_empty() {

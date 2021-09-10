@@ -89,7 +89,7 @@ impl brass::PropComponent for State {
     fn render(
         &self,
         _props: &Self::Properties,
-        mut ctx: &mut brass::RenderContext<brass::PropWrapper<Self>>,
+        ctx: &mut brass::RenderContext<brass::PropWrapper<Self>>,
     ) -> brass::VNode {
         self.init_loader.render(|col| {
             CollectionForm {

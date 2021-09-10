@@ -116,8 +116,7 @@ impl PropComponent for State {
             color: brass_bulma::Color::Default,
             placeholder: props.placeholder.clone().into(),
             value: self.term.clone(),
-            on_input: ctx
-                .on_opt(|ev: web_sys::Event| brass::util::input_event_value(ev).map(Msg::Term)),
+            on_input: ctx.callback_map(Msg::Term),
         };
 
         let input_field = vdom::div().and(input).class("mb-4");
@@ -135,7 +134,7 @@ impl PropComponent for State {
 
                     brass_bulma::button()
                         .and(content)
-                        .on_click(ctx.on_simple(move || Msg::Select(index)))
+                        .on_click(ctx, move || Msg::Select(index))
                 });
 
                 vdom::div().and_iter(items).build()

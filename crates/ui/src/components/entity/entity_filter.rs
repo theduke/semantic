@@ -163,7 +163,7 @@ impl brass::PropComponent for State {
     fn render(
         &self,
         _props: &Self::Properties,
-        mut ctx: &mut brass::RenderContext<PropWrapper<Self>>,
+        ctx: &mut brass::RenderContext<PropWrapper<Self>>,
     ) -> brass::VNode {
         let title = vdom::div().class("subtitle is-5").and("Filter");
 
@@ -175,7 +175,7 @@ impl brass::PropComponent for State {
                 color: brass_bulma::Color::Default,
                 placeholder: None,
                 value: self.search.clone().into(),
-                on_input: ctx.on_opt(|ev| brass::util::input_event_value(ev).map(Msg::SetSearch)),
+                on_input: ctx.callback_map(Msg::SetSearch),
             },
         };
 
@@ -202,12 +202,12 @@ impl brass::PropComponent for State {
         let submit = brass_bulma::button()
             .and(s("Apply"))
             .attr_toggle_if(!self.changed, brass::dom::Attr::Disabled)
-            .on_click(ctx.on_simple(|| Msg::Submit));
+            .on_click(ctx, || Msg::Submit);
 
         let clear = brass_bulma::button()
             .and(s("Clear"))
             .attr_toggle_if(!self.changed, brass::dom::Attr::Disabled)
-            .on_click(ctx.on_simple(|| Msg::Reset));
+            .on_click(ctx, || Msg::Reset);
         let buttons = brass_bulma::buttons().and((submit, clear));
 
         vdom::div()

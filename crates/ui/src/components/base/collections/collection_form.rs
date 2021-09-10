@@ -1,10 +1,6 @@
 use std::collections::HashSet;
 
-use brass::{
-    dom::Attr,
-    vdom::{self, div_with, s},
-    Callback, PropComponent, Shared, VNode,
-};
+use brass::{Callback, PropComponent, Shared, VNode, dom::Attr, vdom::{self, div_with, event::ClickEvent, s}};
 use factordb::{query::select::Item, schema::AttrMapExt};
 use semantic_core::base::{Collection, CollectionWithItems};
 use semantic_ui_core::{ContextExt, Registry, SharedRegistry};
@@ -65,7 +61,7 @@ fn render_items(items: &[Item], registry: &Registry, on_remove: Callback<usize>)
             let btn_remove = brass_bulma::button()
                 .and(brass_bulma::icon_fa(s("fas fa-minus-circle")))
                 .attr(Attr::Title, s("Remove"))
-                .on_click(on_remove.clone().on_simple(move || index));
+                .on_callback(move |_: ClickEvent| index, &on_remove);
             let actions = vdom::div().class(s("ml-4")).and(btn_remove);
 
             vdom::div()
@@ -170,7 +166,7 @@ impl PropComponent for State {
     fn render(
         &self,
         props: &Self::Properties,
-        mut ctx: &mut brass::RenderContext<brass::PropWrapper<Self>>,
+        ctx: &mut brass::RenderContext<brass::PropWrapper<Self>>,
     ) -> brass::VNode {
         let header_content = if self.metadata_edit {
             let title = brass_bulma::FieldHorizontal {
@@ -181,7 +177,7 @@ impl PropComponent for State {
                     color: brass_bulma::Color::Default,
                     placeholder: None,
                     value: self.title.clone().into(),
-                    on_input: ctx.on_opt(|ev| brass::util::input_event_value(ev).map(Msg::Title)),
+                    on_input: ctx.callback_map(Msg::Title),
                 },
             };
 
@@ -192,8 +188,7 @@ impl PropComponent for State {
                     color: brass_bulma::Color::Default,
                     placeholder: None,
                     value: self.description.clone().into(),
-                    on_input: ctx
-                        .on_opt(|ev| brass::util::textarea_input_value(ev).map(Msg::Description)),
+                    on_input: ctx.callback_map(Msg::Description),
                     on_keydown: None,
                     style_raw: None,
                 },
@@ -212,7 +207,7 @@ impl PropComponent for State {
 
             let toggle_edit_meta = brass_bulma::button()
                 .and(s("Edit Metadata"))
-                .on_click(ctx.on_simple(|| Msg::ToggleEditMetadata));
+                .on(ctx, |_: ClickEvent| Msg::ToggleEditMetadata);
 
             vdom::div()
                 .class(s("mb-3"))
@@ -241,7 +236,7 @@ impl PropComponent for State {
                     .and(brass_bulma::icon_fa(s("fas fa-search-plus")))
                     .and(vdom::span_with(s("Add")))
                     .attr(Attr::Title, s("Add existing entity"))
-                    .on_click(ctx.on_simple(|| Msg::ToggleMode(AddItemMode::AddExisting)));
+                    .on(ctx, |_: ClickEvent| Msg::ToggleMode(AddItemMode::AddExisting));
                 brass_bulma::buttons().and(btn_add_existing).build()
             }
             AddItemMode::AddExisting => {
@@ -295,7 +290,7 @@ impl PropComponent for State {
                 s("Save")
             })
             .attr_toggle_if(props.is_loading || !self.is_changed, Attr::Disabled)
-            .on_click(ctx.on_simple(|| Msg::Submit));
+            .on(ctx, |_: ClickEvent| Msg::Submit);
         let actions = brass_bulma::buttons().and(submit);
 
         vdom::div()

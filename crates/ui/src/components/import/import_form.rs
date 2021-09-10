@@ -74,30 +74,21 @@ impl brass::Component for ImportForm {
                 color: brass_bulma::Color::Default,
                 placeholder: None,
                 value: self.url.clone(),
-                on_input: ctx.on(|ev: web_sys::Event| {
-                    let value = brass::util::input_event_value(ev).unwrap();
-                    Msg::Changed(value)
-                }),
+                on_input: ctx.callback_map(Msg::Changed),
             },
         };
 
         let btn_preview = brass_bulma::button_medium()
             .attr_toggle_if(self.loading || !self.can_submit, Attr::Disabled)
             .and(if self.loading { "..." } else { "Preview" })
-            .on(
-                brass::dom::Event::Click,
-                ctx.on(|_ev: web_sys::Event| Msg::Preview),
-            );
+            .on_click(ctx, || Msg::Preview);
 
         let btn_import = brass_bulma::button_medium()
             .attr_toggle_if(self.loading || !self.can_submit, Attr::Disabled)
             .and(if self.loading { "..." } else { "Import" })
             .and_class("is-primary")
             .attr(Attr::Title, "Import without previewing first")
-            .on(
-                brass::dom::Event::Click,
-                ctx.on(|_ev: web_sys::Event| Msg::Import),
-            );
+            .on_click(ctx, || Msg::Import);
 
         let actions = brass_bulma::buttons().and((btn_preview, btn_import));
 

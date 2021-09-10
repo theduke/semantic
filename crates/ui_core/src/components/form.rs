@@ -384,8 +384,7 @@ impl<F> Into<Field<F, String>> for InputField<F> {
                         color,
                         placeholder: placeholder.clone(),
                         value: value.clone().into(),
-                        on_input: callback
-                            .on(|ev| brass::util::input_event_value(ev).unwrap_or_default()),
+                        on_input: callback,
                     },
                 }
                 .render()

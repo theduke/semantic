@@ -224,7 +224,7 @@ impl PropComponent for State {
     fn render(
         &self,
         _props: &Self::Properties,
-        mut ctx: &mut brass::RenderContext<brass::PropWrapper<Self>>,
+        ctx: &mut brass::RenderContext<brass::PropWrapper<Self>>,
     ) -> brass::VNode {
         let btn_play = brass_bulma::button()
             .attr(
@@ -236,15 +236,15 @@ impl PropComponent for State {
             } else {
                 s("fas fa-play")
             }))
-            .on_click(ctx.on_simple(|| Msg::TogglePlay));
+            .on_click(ctx, || Msg::TogglePlay);
         let btn_prev = brass_bulma::button()
             .and(brass_bulma::icon_fa("fas fa-chevron-circle-left"))
             .attr(Attr::Title, "Back")
-            .on_click(ctx.on_simple(|| Msg::Prev));
+            .on_click(ctx, || Msg::Prev);
         let btn_next = brass_bulma::button()
             .and(brass_bulma::icon_fa("fas fa-chevron-circle-right"))
             .attr(Attr::Title, "Forward")
-            .on_click(ctx.on_simple(|| Msg::Next));
+            .on_click(ctx, || Msg::Next);
 
         let controls = vdom::div()
             .class(s("mr-4"))
@@ -254,12 +254,12 @@ impl PropComponent for State {
             .and(brass_bulma::icon_fa(s("fas fa-random")))
             .and_class_if(self.shuffle, "is-info")
             .attr(Attr::Title, s("Shuffle"))
-            .on_click(ctx.on_simple(|| Msg::ToggleShuffle));
+            .on_click(ctx, || Msg::ToggleShuffle);
         let btn_cycle = brass_bulma::button()
             .and(brass_bulma::icon_fa(s("fas fa-undo")))
             .and_class_if(self.cycle, "is-info")
             .attr(Attr::Title, s("Loop"))
-            .on_click(ctx.on_simple(|| Msg::ToggleLoop));
+            .on_click(ctx, || Msg::ToggleLoop);
         let btn_mute = brass_bulma::button()
             .and(brass_bulma::icon_fa(s(if self.muted {
                 "fas fa-volume-slash"
@@ -267,12 +267,12 @@ impl PropComponent for State {
                 "fas fa-volume"
             })))
             .attr(Attr::Title, s(if self.muted { "Unmute" } else { "Mute" }))
-            .on_click(ctx.on_simple(|| Msg::ToggleMuted));
+            .on_click(ctx, || Msg::ToggleMuted);
         let btn_settings = brass_bulma::button()
             .and(brass_bulma::icon_fa(s("fas fa-cog")))
             .and_class_if(self.settings_active, "is-info")
             .attr(Attr::Title, s("Settings"))
-            .on_click(ctx.on_simple(|| Msg::ToggleSettings));
+            .on_click(ctx, || Msg::ToggleSettings);
 
         let bar_settings =
             vdom::div()

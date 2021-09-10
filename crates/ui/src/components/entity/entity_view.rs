@@ -1,8 +1,4 @@
-use brass::{
-    dom::Attr,
-    vdom::{div, div_with, s, Render},
-    Callback, Str, VNode,
-};
+use brass::{Callback, Str, VNode, dom::Attr, vdom::{Render, div, div_with, event::ClickEvent, s}};
 use factordb::{query::select::Item, schema::AttrMapExt, AnyError, Id};
 use semantic_ui_core::{
     loader::LoadState, ContextExt, DynEntityRenderer, EntityInfo, EntityRenderOpts,
@@ -57,7 +53,7 @@ impl Render for EntityView {
             let t = brass_bulma::card_header_title(self.title)
                 .style_raw(s("flex-grow: 0; cursor: pointer;"));
             if let Some(on) = self.on_open {
-                t.on_click(on.on(|_| ()))
+                t.on_callback(|_: ClickEvent| (), &on)
             } else {
                 t
             }
@@ -128,7 +124,7 @@ impl brass::vdom::Render for EntityActionButton {
             .attr_toggle_if(self.is_disabled, Attr::Disabled)
             .style_raw(s("margin: 0"))
             .and(brass_bulma::icon_fa(self.icon))
-            .on_click(self.on.on(|_| ()))
+            .on_callback(|_: ClickEvent| (),  &self.on)
             .build()
     }
 }
@@ -276,7 +272,7 @@ impl brass::Component for State {
         }
     }
 
-    fn render(&self, mut ctx: &mut brass::RenderContext<Self>) -> brass::VNode {
+    fn render(&self, ctx: &mut brass::RenderContext<Self>) -> brass::VNode {
         let mut actions = Vec::new();
 
         if self.item.data.has_attr::<semantic_core::base::AttrUrl>() {
@@ -330,10 +326,10 @@ impl brass::Component for State {
                     .and_class(brass_bulma::Color::Danger.as_class())
                     .and(s("Really Delete"))
                     .attr_toggle_if(loader.is_loading() || loader.is_success(), Attr::Disabled)
-                    .on_click(ctx.on_simple(|| Msg::DeleteConfirm));
+                    .on_click(ctx, || Msg::DeleteConfirm);
                 let cancel = brass_bulma::button()
                     .and(s("Cancel"))
-                    .on_click(ctx.on_simple(|| Msg::DeleteCancel));
+                    .on_click(ctx, || Msg::DeleteCancel);
 
                 let buttons = brass_bulma::buttons().and((confirm, cancel));
 
@@ -345,7 +341,7 @@ impl brass::Component for State {
                 if let Some(id) = self.entity_id {
                     let manager = EntityCollectionManager { entity_id: id };
                     let content = brass_bulma::box_().and(manager);
-                    brass_bulma::modal(content, ctx.callback_map(|_| Msg::ToggleCollectionManager))
+                    brass_bulma::modal(content, &ctx.callback_map(|_| Msg::ToggleCollectionManager))
                         .build()
                 } else {
                     VNode::Empty
@@ -355,7 +351,7 @@ impl brass::Component for State {
                 if let Some(id) = self.entity_id {
                     let manager = EntityTagManager { entity_id: id };
                     let content = brass_bulma::box_().and(manager);
-                    brass_bulma::modal(content, ctx.callback_map(|_| Msg::ToggleTagManager)).build()
+                    brass_bulma::modal(content, &ctx.callback_map(|_| Msg::ToggleTagManager)).build()
                 } else {
                     VNode::Empty
                 }

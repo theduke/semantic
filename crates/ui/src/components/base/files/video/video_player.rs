@@ -42,25 +42,38 @@ impl brass::PropComponent for State {
     fn render(
         &self,
         props: &Self::Properties,
-        _ctx: &mut brass::RenderContext<brass::PropWrapper<Self>>,
+        ctx: &mut brass::RenderContext<brass::PropWrapper<Self>>,
     ) -> brass::VNode {
         let source = vdom::tag(brass::dom::Tag::Source).attr(Attr::Src, &props.info.url);
+
+        let callback_ended = props
+            .options
+            .callback
+            .clone()
+            .map(|_| MediaRenderEvent::Finished(Ok(())));
+
+        let callback_error = props
+            .options
+            .callback
+            .clone()
+            .map(|_| MediaRenderEvent::Finished(Err(anyhow::anyhow!("Could not load video"))));
+
         let video = vdom::tag(brass::dom::Tag::Video)
             .attr_toggle(Attr::Controls)
             .attr_toggle_if(props.options.muted, Attr::Muted)
             .attr_toggle_if(props.options.playing, Attr::AutoPlay)
-            .on(
-                Event::Ended,
-                props.options.callback.clone().on_simple(|| {
-                    tracing::trace!("Video ended");
-                    MediaRenderEvent::Finished(Ok(()))
-                }),
-            )
-            .on(
+            // FIXME: refactor to on_callback
+            .on_event_opt(ctx, Event::Ended, move |_| {
+                callback_ended.send(());
+                None
+            })
+            .on_event_opt(
+                ctx,
                 Event::Error,
-                props.options.callback.clone().on_simple(|| {
-                    MediaRenderEvent::Finished(Err(anyhow::anyhow!("Could not load video")))
-                }),
+                move |_|  {
+                    callback_error.send(());
+                    None
+                }
             )
             .and(source)
             .build_ref(&self.ref_);

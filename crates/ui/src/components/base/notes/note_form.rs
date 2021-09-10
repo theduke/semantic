@@ -1,5 +1,5 @@
 use brass::{
-    vdom::{div, Render},
+    vdom::{div, event::ClickEvent, Render},
     Callback,
 };
 use factordb::Id;
@@ -53,7 +53,7 @@ impl brass::Component for NoteForm {
         }
     }
 
-    fn render(&self, _ctx: &mut brass::RenderContext<Self>) -> brass::VNode {
+    fn render(&self, ctx: &mut brass::RenderContext<Self>) -> brass::VNode {
         let title = brass_bulma::Field {
             label: "Title".into(),
             help: None,
@@ -62,10 +62,7 @@ impl brass::Component for NoteForm {
                 color: brass_bulma::Color::Default,
                 placeholder: None,
                 value: self.note.title.clone().into(),
-                on_input: _ctx.on(|ev: web_sys::Event| {
-                    let value = brass::util::input_event_value(ev).unwrap();
-                    Msg::Title(value)
-                }),
+                on_input: ctx.callback_map(Msg::Title),
             },
         };
 
@@ -76,10 +73,7 @@ impl brass::Component for NoteForm {
                 color: brass_bulma::Color::Default,
                 placeholder: None,
                 value: self.note.body.clone().into(),
-                on_input: _ctx.on(|ev: web_sys::Event| {
-                    let value = brass::util::textarea_input_value(ev).unwrap();
-                    Msg::Body(value)
-                }),
+                on_input: ctx.callback_map(Msg::Body),
                 on_keydown: None,
                 style_raw: Some("min-height: 400px;".into()),
             },
@@ -100,7 +94,7 @@ impl brass::Component for NoteForm {
 
         let submit_btn = brass_bulma::button()
             .and("Submit")
-            .on(brass::dom::Event::Click, _ctx.on_simple(|| Msg::Submit));
+            .on(ctx, |_: ClickEvent| Msg::Submit);
         let submit = brass_bulma::field().and(brass_bulma::control().and(submit_btn));
 
         div().and((title, body, preview, submit)).build()

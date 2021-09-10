@@ -1,6 +1,5 @@
 use brass::{
-    dom::Event::Click,
-    vdom::{div, EventCallback},
+    vdom::{div, event::ClickEvent},
     Callback, EffectGuard, VNode,
 };
 use factordb::{
@@ -111,13 +110,9 @@ impl brass::Component for BrowsePage {
         };
         let filter = brass_bulma::box_().and(filter);
 
-        let loader = self.loader.render(move |page| {
-            render_page(
-                page,
-                ctx.on_simple(|| Msg::Next),
-                self.on_delete_callback.clone(),
-            )
-        });
+        let loader = self
+            .loader
+            .render(move |page| render_page(page, ctx.callback()));
 
         div().and((filter, loader)).build()
     }
@@ -131,7 +126,7 @@ impl brass::Component for BrowsePage {
     }
 }
 
-fn render_page(page: &ItemPage, on_next: EventCallback, on_delete: Callback<Item>) -> brass::VNode {
+fn render_page(page: &ItemPage, cb: Callback<Msg>) -> brass::VNode {
     if page.items.is_empty() {
         return div()
             .and(brass_bulma::notification_warning("Nothing found"))
@@ -145,11 +140,13 @@ fn render_page(page: &ItemPage, on_next: EventCallback, on_delete: Callback<Item
     let items = page.items.iter().map(|item| super::entity_view::EntityBox {
         item: item.clone(),
         options: opts.clone(),
-        on_delete: Some(on_delete.clone()),
+        on_delete: Some(cb.clone().map(Msg::ItemDeleted)),
     });
 
     let next = if page.next_cursor.is_some() {
-        let btn = brass_bulma::button_medium().and("More").on(Click, on_next);
+        let btn = brass_bulma::button_medium()
+            .and("More")
+            .on_callback(|_: ClickEvent| Msg::Next, &cb);
         div().and(btn).build()
     } else {
         VNode::Empty

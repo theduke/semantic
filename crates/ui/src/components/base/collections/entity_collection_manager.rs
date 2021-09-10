@@ -1,6 +1,6 @@
 use std::collections::HashSet;
 
-use brass::vdom;
+use brass::vdom::{self, event::ClickEvent};
 use factordb::{
     data::value::from_value_map,
     query::{
@@ -131,7 +131,7 @@ impl brass::PropComponent for State {
     fn render(
         &self,
         props: &Self::Properties,
-        mut ctx: &mut brass::RenderContext<brass::PropWrapper<Self>>,
+        ctx: &mut brass::RenderContext<brass::PropWrapper<Self>>,
     ) -> brass::VNode {
         self.current_collections_loader.render(|cols| {
             let remove_loading = self.remove_loader.is_loading();
@@ -149,7 +149,7 @@ impl brass::PropComponent for State {
                         .and(brass_bulma::icon_fa("fas fa-minus-circle"))
                         .style_raw("pl-4")
                         .attr_toggle_if(remove_loading, brass::dom::Attr::Disabled)
-                        .on_click(ctx.on_simple(move || Msg::Remove(collection2.clone())));
+                        .on(ctx, move |_: ClickEvent| Msg::Remove(collection2.clone()));
                     vdom::div().class("mb-2").and(title).and(toggle)
                 });
 
