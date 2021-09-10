@@ -1,5 +1,5 @@
 use brass::{
-    vdom::{self, TagBuilder},
+    vdom::{self, Render, TagBuilder},
     VNode,
 };
 
@@ -61,7 +61,7 @@ impl<T> LoadState<T> {
     pub fn render(&self, f: impl FnOnce(&T) -> VNode) -> VNode {
         match self {
             LoadState::Idle => vdom::span().build(),
-            LoadState::Loading(_) => spinner().build(),
+            LoadState::Loading(_) => crate::components::DelayedSpinner {}.render(),
             LoadState::Success(data) => f(data),
             LoadState::Failed(err) => error_msg(&err).build(),
         }
