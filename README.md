@@ -2,10 +2,11 @@
 
 ## Development
 
-* Start backend server:
-  `cargo run`
-* Start UI development server:
-  ```
-  cd semantic_ui
-  RUSTFLAGS="" CARGO_TARGET_DIR=../target_wasm trunk serve --release --dist ../target_wasm/ui
-  ```
+The project provides helper scripts for common tasks:
+
+* `cargo xtask run`
+  Run a development server that also auto-rebuilds the wasm UI.
+* `cargo xtask install`
+  Install the `semantic` binary locally.
+* `cargo xtask build-ui`
+  Build the wasm UI in release mode
