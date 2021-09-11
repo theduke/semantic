@@ -375,6 +375,9 @@ async fn api_query(app: &App, req: Request<Body>) -> Result<Response<Body>, AnyE
             let new_token = TokenClaims {
                 sub: "semantic".into(),
                 exp,
+                // NOTE: removing secrets from the config with purge_secrets.
+                // This must not be removed since it would leak passwords etc in
+                // the token.
                 config: options.db.clone().purge_secrets(),
             }
             .encode(key)?;

@@ -1,11 +1,12 @@
 use sha2::Digest;
 use std::{
     collections::HashMap,
+    panic::catch_unwind,
     path::PathBuf,
     sync::{Arc, RwLock},
 };
 
-use anyhow::Context;
+use anyhow::{anyhow, Context};
 use factordb::{
     data::DataMap,
     query::{self, mutate::Mutate, select::Item},
@@ -41,6 +42,9 @@ pub struct AppConfig {
 struct AppState {
     require_auth: bool,
     backend_config: api::BackendConfig,
+    /// Records when the backend was opened.
+    /// Required for idle backend auto-closing.
+    backend_opened_at: std::time::Instant,
     db: Db,
     blob: DynBlobStore,
 }
@@ -54,6 +58,8 @@ pub struct App {
 }
 
 impl App {
+    const WORKER_INTERVAL: std::time::Duration = std::time::Duration::from_secs(10);
+
     /// Get a mutable reference to the app's config.
     pub fn config(&self) -> &AppConfig {
         &self.config
@@ -97,7 +103,7 @@ impl App {
 
     pub fn require_blob(&self) -> Result<DynBlobStore, AnyError> {
         self.blob()
-            .ok_or_else(|| anyhow::anyhow!("Blobstore not initialized"))
+            .ok_or_else(|| anyhow!("Blobstore not initialized"))
     }
 
     pub fn db(&self) -> Option<Db> {
@@ -109,8 +115,7 @@ impl App {
     }
 
     pub fn require_db(&self) -> Result<Db, AnyError> {
-        self.db()
-            .ok_or_else(|| anyhow::anyhow!("Database not initialized"))
+        self.db().ok_or_else(|| anyhow!("Database not initialized"))
     }
 
     pub fn backend_config(&self) -> Option<api::BackendConfig> {
@@ -129,12 +134,12 @@ impl App {
 
     pub fn default_data_path() -> Result<String, AnyError> {
         let path = dirs::data_dir()
-            .ok_or_else(|| anyhow::anyhow!("Could not determine default data directory"))?
+            .ok_or_else(|| anyhow!("Could not determine default data directory"))?
             .join("semantic");
 
         path.to_str()
             .map(|x| x.to_string())
-            .ok_or_else(|| anyhow::anyhow!("Non-UTF-8 data directory"))
+            .ok_or_else(|| anyhow!("Non-UTF-8 data directory"))
     }
 
     pub async fn configure_backend(&self, config: api::BackendConfig) -> Result<(), AnyError> {
@@ -165,6 +170,7 @@ impl App {
                     db,
                     blob,
                     backend_config: config,
+                    backend_opened_at: std::time::Instant::now(),
                     require_auth: false,
                 }
             }
@@ -180,10 +186,10 @@ impl App {
         let mut lock = self
             .state
             .write()
-            .map_err(|_| anyhow::anyhow!("Could not lock state"))?;
+            .map_err(|_| anyhow!("Could not lock state"))?;
         let _state = lock
             .take()
-            .ok_or_else(|| anyhow::anyhow!("Backend is not initialized"))?;
+            .ok_or_else(|| anyhow!("Backend is not initialized"))?;
 
         // TODO: should probably have dedicated shutdown methods for
         // db/blobstore here.
@@ -203,7 +209,66 @@ impl App {
             s.configure_backend(backend.clone()).await?;
         }
 
+        tokio::spawn(s.clone().run_worker());
+
         Ok(s)
+    }
+
+    /// Runs a long-running task that periodically does maintenance work.
+    async fn run_worker(self) {
+        tracing::trace!("Started app worker");
+
+        loop {
+            match tokio::spawn(self.clone().run_worker_tick()).await {
+                Ok(_) => tracing::trace!("App worker completed succesfully"),
+                Err(error) => {
+                    tracing::error!(?error, "worker tick failed");
+                }
+            }
+
+            tokio::time::sleep(Self::WORKER_INTERVAL).await;
+        }
+    }
+
+    /// Run a periodic maintenance check.
+    async fn run_worker_tick(self) -> Result<(), AnyError> {
+        let should_close_backend = {
+            let state_opt = self
+                .state
+                .read()
+                .map_err(|_| anyhow!("Could not lock state"))?;
+
+            state_opt
+                .as_ref()
+                .map(|state| {
+                    if let Some(timeout) = state.backend_config.idle_timeout {
+                        let time_since_opened =
+                            std::time::Instant::now().duration_since(state.backend_opened_at);
+                        let should_close =
+                            time_since_opened > std::time::Duration::from_secs(timeout);
+                        should_close
+                    } else {
+                        false
+                    }
+                })
+                .unwrap_or_default()
+        };
+
+        if should_close_backend {
+            tracing::info!("Closing backend due to IDLE TIMEOUT");
+            match self.close_backend().await {
+                Ok(_) => tracing::info!("Backend was closed due to idle timeout"),
+                Err(error) => {
+                    tracing::error!(?error, "Backend idle close failed. Closing application.");
+                    // If closing the backend fails, the application is just
+                    // aborted.  This is done for safety, since the idle close
+                    // timeout should be guaranteed to work.
+                    std::process::exit(1);
+                }
+            }
+        }
+
+        Ok(())
     }
 
     pub async fn load_schema(&self) -> Result<semantic_core::plugin::PluginSchema, AnyError> {
@@ -338,7 +403,7 @@ impl App {
                     let new_type = item.get_type();
 
                     if current_type != new_type {
-                        return Err(anyhow::anyhow!(
+                        return Err(anyhow!(
                                 "Could not import entity '{:?}' - entity already exists with a different type (existing: {:?}, new: {:?})",
                                 ident, current_type, new_type));
                     }
@@ -484,7 +549,7 @@ impl App {
                 app.rt.spawn(async move {
                     let res = match app2.blob() {
                         Some(blob) => blob.get(&path).await,
-                        None => Err(anyhow::anyhow!("Blobstore not ready")),
+                        None => Err(anyhow!("Blobstore not ready")),
                     };
                     sender.send(res).expect("Could not send file load result");
                 });
@@ -640,7 +705,7 @@ impl App {
             .config
             .server
             .clone()
-            .ok_or_else(|| anyhow::anyhow!("No server config provided"))?;
+            .ok_or_else(|| anyhow!("No server config provided"))?;
         crate::server::run_server(self, config).await
     }
 
