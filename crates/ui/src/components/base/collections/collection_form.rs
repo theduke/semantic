@@ -1,6 +1,10 @@
 use std::collections::HashSet;
 
-use brass::{Callback, PropComponent, Shared, VNode, dom::Attr, vdom::{self, div_with, event::ClickEvent, s}};
+use brass::{
+    dom::Attr,
+    vdom::{self, div_with, event::ClickEvent, s},
+    Callback, PropComponent, Shared, VNode,
+};
 use factordb::{query::select::Item, schema::AttrMapExt};
 use semantic_core::base::{Collection, CollectionWithItems};
 use semantic_ui_core::{ContextExt, Registry, SharedRegistry};
@@ -236,7 +240,9 @@ impl PropComponent for State {
                     .and(brass_bulma::icon_fa(s("fas fa-search-plus")))
                     .and(vdom::span_with(s("Add")))
                     .attr(Attr::Title, s("Add existing entity"))
-                    .on(ctx, |_: ClickEvent| Msg::ToggleMode(AddItemMode::AddExisting));
+                    .on(ctx, |_: ClickEvent| {
+                        Msg::ToggleMode(AddItemMode::AddExisting)
+                    });
                 brass_bulma::buttons().and(btn_add_existing).build()
             }
             AddItemMode::AddExisting => {

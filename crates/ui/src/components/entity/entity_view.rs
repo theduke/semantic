@@ -1,4 +1,8 @@
-use brass::{Callback, Str, VNode, dom::Attr, vdom::{Render, div, div_with, event::ClickEvent, s}};
+use brass::{
+    dom::Attr,
+    vdom::{div, div_with, event::ClickEvent, s, Render},
+    Callback, Str, VNode,
+};
 use factordb::{query::select::Item, schema::AttrMapExt, AnyError, Id};
 use semantic_ui_core::{
     loader::LoadState, ContextExt, DynEntityRenderer, EntityInfo, EntityRenderOpts,
@@ -124,7 +128,7 @@ impl brass::vdom::Render for EntityActionButton {
             .attr_toggle_if(self.is_disabled, Attr::Disabled)
             .style_raw(s("margin: 0"))
             .and(brass_bulma::icon_fa(self.icon))
-            .on_callback(|_: ClickEvent| (),  &self.on)
+            .on_callback(|_: ClickEvent| (), &self.on)
             .build()
     }
 }
@@ -351,7 +355,8 @@ impl brass::Component for State {
                 if let Some(id) = self.entity_id {
                     let manager = EntityTagManager { entity_id: id };
                     let content = brass_bulma::box_().and(manager);
-                    brass_bulma::modal(content, &ctx.callback_map(|_| Msg::ToggleTagManager)).build()
+                    brass_bulma::modal(content, &ctx.callback_map(|_| Msg::ToggleTagManager))
+                        .build()
                 } else {
                     VNode::Empty
                 }

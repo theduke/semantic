@@ -67,14 +67,10 @@ impl brass::PropComponent for State {
                 callback_ended.send(());
                 None
             })
-            .on_event_opt(
-                ctx,
-                Event::Error,
-                move |_|  {
-                    callback_error.send(());
-                    None
-                }
-            )
+            .on_event_opt(ctx, Event::Error, move |_| {
+                callback_error.send(());
+                None
+            })
             .and(source)
             .build_ref(&self.ref_);
 

@@ -121,7 +121,7 @@ impl brass::Component for State {
             }
             Msg::UploadResult { index, result } => {
                 self.loading = false;
-                 match result {
+                match result {
                     Ok(typed_file) => {
                         self.files.drain(index..index + 1);
                         if let Ok(map) = typed_file.into_map() {

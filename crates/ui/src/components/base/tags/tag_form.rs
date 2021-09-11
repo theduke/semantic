@@ -1,6 +1,9 @@
 use std::{collections::HashSet, rc::Rc};
 
-use brass::{Callback, VNode, vdom::{self, Render, event::ClickEvent, s}};
+use brass::{
+    vdom::{self, event::ClickEvent, s, Render},
+    Callback, VNode,
+};
 use semantic_core::base::Tag;
 use semantic_ui_core::components::form::{
     self, AndValidator, FormRef, InputField, StringRequired, Validator,

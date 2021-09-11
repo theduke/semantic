@@ -111,7 +111,6 @@ impl<T> LoadState<T> {
             None
         }
     }
-
 }
 
 impl<T, E: std::fmt::Display> From<Result<T, E>> for LoadState<T> {
