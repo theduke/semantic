@@ -1,6 +1,6 @@
 mod assets;
 
-use std::{net::SocketAddr, ops::Add, str::FromStr};
+use std::{net::SocketAddr, ops::Add};
 
 use anyhow::{Context, Result};
 use axum::{
@@ -10,7 +10,7 @@ use axum::{
 use factordb::AnyError;
 use hyper::{header, Body, Method, Request, Response, StatusCode};
 
-use semantic_core::api::{self, ApiError, ApiResponse, BackendConfig, Query};
+use semantic_core::api::{self, ApiError, ApiResponse, DbConfig, Query};
 
 use crate::app::{App, ServerConfig};
 
@@ -77,8 +77,9 @@ async fn handler_assets(
 }
 
 async fn handler_index(Extension(assets): extract::Extension<assets::Assets>) -> Response<Body> {
-    let mut res = assets.request("index.html");
+    let res = assets.request("index.html");
 
+    // COMMENTED OUT due to image loading issues in chrome.
     // Add Cross-Origin headers.
     // Both for security, and to enable better performance.now() precision.
     // See https://developer.mozilla.org/en-US/docs/Web/HTTP/Headers/Cross-Origin-Embedder-Policy
@@ -259,7 +260,7 @@ struct TokenClaims {
     sub: String,
     exp: u64,
     // TODO: use hash of config instead.
-    config: BackendConfig,
+    config: DbConfig,
 }
 
 impl TokenClaims {
@@ -329,7 +330,7 @@ fn validate_auth_token(app: &App, raw_token: &str) -> Result<TokenClaims, AnyErr
         .backend_config()
         .ok_or_else(|| anyhow::anyhow!("Invalid token"))?;
 
-    if config != claims.config {
+    if config.db != claims.config {
         return Err(anyhow::anyhow!("Invalid token"));
     }
     Ok(claims)
@@ -349,7 +350,7 @@ async fn api_query(app: &App, req: Request<Body>) -> Result<Response<Body>, AnyE
 
     if app.needs_authentication() && !token.is_some() {
         match &query {
-            Query::ServerStatus | Query::Initialize { config: _ } => {}
+            Query::ServerStatus | Query::Initialize(_) => {}
             _ => {
                 return Err(anyhow::anyhow!("Permission denied"));
             }
@@ -362,8 +363,8 @@ async fn api_query(app: &App, req: Request<Body>) -> Result<Response<Body>, AnyE
         api::Query::ServerStatus => Ok(api::Reply::ServerStatus(api::ServerStatus {
             backend_initialized: app.db().is_some(),
         })),
-        api::Query::Initialize { config } => {
-            app.configure_backend(config.clone()).await?;
+        api::Query::Initialize(options) => {
+            app.configure_backend(options.clone()).await?;
             let exp = std::time::SystemTime::now()
                 .duration_since(std::time::SystemTime::UNIX_EPOCH)?
                 .add(std::time::Duration::from_secs(60 * 60 * 2))
@@ -374,7 +375,7 @@ async fn api_query(app: &App, req: Request<Body>) -> Result<Response<Body>, AnyE
             let new_token = TokenClaims {
                 sub: "semantic".into(),
                 exp,
-                config: config.clone(),
+                config: options.db.clone().purge_secrets(),
             }
             .encode(key)?;
 

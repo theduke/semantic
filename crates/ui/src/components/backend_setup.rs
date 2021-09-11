@@ -2,9 +2,10 @@ use brass::{
     vdom::{self, s, Render},
     Callback,
 };
+use semantic_core::api;
 
 pub struct BackendSetupForm {
-    pub on_submit: Callback<semantic_core::api::BackendConfig>,
+    pub on_submit: Callback<api::BackendConfig>,
 }
 
 enum Msg {
@@ -14,7 +15,7 @@ enum Msg {
 }
 
 struct BackendSetupFormComp {
-    on_submit: Callback<semantic_core::api::BackendConfig>,
+    on_submit: Callback<api::BackendConfig>,
 
     data_path: String,
     key: String,
@@ -57,10 +58,13 @@ impl brass::Component for BackendSetupFormComp {
                 };
                 let key = self.key.clone();
 
-                let config = semantic_core::api::BackendConfig::Crypto(
-                    semantic_core::api::BackendCryptoConfig { data_path, key },
-                );
-                self.on_submit.send(config);
+                let config = api::DbConfig::Crypto(api::BackendCryptoConfig { data_path, key });
+                let init = api::BackendConfig {
+                    db: config,
+                    // TODO: make configurable
+                    idle_timeout: Some(60 * 10),
+                };
+                self.on_submit.send(init);
             }
         }
     }

@@ -1,5 +1,9 @@
 use sha2::Digest;
-use std::{collections::HashMap, path::PathBuf, sync::{Arc, RwLock}};
+use std::{
+    collections::HashMap,
+    path::PathBuf,
+    sync::{Arc, RwLock},
+};
 
 use anyhow::Context;
 use factordb::{
@@ -9,7 +13,7 @@ use factordb::{
     AnyError, Db,
 };
 use semantic_core::{
-    api::{self, BackendConfig},
+    api::{self, DbConfig},
     base::{AttrBlobUri, AttrDownloadUrl},
     plugin::PluginDescriptor,
 };
@@ -29,14 +33,14 @@ pub struct ServerConfig {
 
 #[derive(serde::Serialize, serde::Deserialize, Clone, Debug)]
 pub struct AppConfig {
-    pub backend: Option<BackendConfig>,
+    pub backend: Option<api::BackendConfig>,
     pub token_key: String,
     pub server: Option<ServerConfig>,
 }
 
 struct AppState {
     require_auth: bool,
-    config: BackendConfig,
+    backend_config: api::BackendConfig,
     db: Db,
     blob: DynBlobStore,
 }
@@ -60,8 +64,7 @@ impl App {
     }
 
     pub fn default_data_dir() -> Result<PathBuf, AnyError> {
-        let home = dirs::home_dir()
-            .context("Could not determine user home directory")?;
+        let home = dirs::home_dir().context("Could not determine user home directory")?;
 
         let path = home
             .join(".local")
@@ -110,12 +113,12 @@ impl App {
             .ok_or_else(|| anyhow::anyhow!("Database not initialized"))
     }
 
-    pub fn backend_config(&self) -> Option<BackendConfig> {
+    pub fn backend_config(&self) -> Option<api::BackendConfig> {
         self.state
             .read()
             .unwrap()
             .as_ref()
-            .map(|state| state.config.clone())
+            .map(|state| state.backend_config.clone())
     }
 
     // pub fn require_backend_config(&self) -> Result<BackendConfig, AnyError> {
@@ -134,9 +137,9 @@ impl App {
             .ok_or_else(|| anyhow::anyhow!("Non-UTF-8 data directory"))
     }
 
-    pub async fn configure_backend(&self, config: BackendConfig) -> Result<(), AnyError> {
-        let state = match &config {
-            BackendConfig::Crypto(crypto) => {
+    pub async fn configure_backend(&self, config: api::BackendConfig) -> Result<(), AnyError> {
+        let state = match &config.db {
+            DbConfig::Crypto(crypto) => {
                 let data_path = if let Some(p) = &crypto.data_path {
                     p.clone()
                 } else {
@@ -161,7 +164,7 @@ impl App {
                 AppState {
                     db,
                     blob,
-                    config,
+                    backend_config: config,
                     require_auth: false,
                 }
             }
@@ -649,8 +652,8 @@ impl App {
             api::Query::ServerStatus => Ok(api::Reply::ServerStatus(api::ServerStatus {
                 backend_initialized: self.db().is_some(),
             })),
-            api::Query::Initialize { config } => {
-                self.configure_backend(config.clone()).await?;
+            api::Query::Initialize(options) => {
+                self.configure_backend(options).await?;
                 Ok(api::Reply::Initialize)
             }
             api::Query::CloseBackend => {

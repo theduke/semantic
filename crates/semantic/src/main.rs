@@ -1,3 +1,4 @@
+use semantic_core::api;
 use structopt::StructOpt;
 
 use semantic::app;
@@ -17,10 +18,10 @@ fn main() {
 
     match args.command {
         CliCommand::Server(subargs) => {
-            let backend = if subargs.no_backend {
+            let db_config = if subargs.no_backend {
                 None
             } else {
-                Some(semantic_core::api::BackendConfig::Crypto(
+                Some(semantic_core::api::DbConfig::Crypto(
                     semantic_core::api::BackendCryptoConfig {
                         data_path: subargs.data_path,
                         key: subargs.key.expect("Must specify --key"),
@@ -28,8 +29,14 @@ fn main() {
                 ))
             };
 
+            let backend_config = db_config.map(|db| api::BackendConfig {
+                db,
+                // TODO: make configurable
+                idle_timeout: None,
+            });
+
             let config = app::AppConfig {
-                backend,
+                backend: backend_config,
                 token_key: subargs.token_key.unwrap_or_else(app::App::random_token_key),
                 server: Some(app::ServerConfig {
                     interface: subargs.interface.unwrap_or(format!("127.0.0.1:3000")),

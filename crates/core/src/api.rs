@@ -41,8 +41,26 @@ impl std::fmt::Debug for BackendCryptoConfig {
 }
 
 #[derive(serde::Serialize, serde::Deserialize, PartialEq, Eq, Clone, Debug)]
-pub enum BackendConfig {
+pub enum DbConfig {
     Crypto(BackendCryptoConfig),
+}
+
+impl DbConfig {
+    /// Remove all sensitive information like passwords.
+    pub fn purge_secrets(self) -> Self {
+        match self {
+            Self::Crypto(c) => Self::Crypto(BackendCryptoConfig {
+                data_path: c.data_path,
+                key: String::new(),
+            }),
+        }
+    }
+}
+
+#[derive(serde::Serialize, serde::Deserialize, Clone, Debug)]
+pub struct BackendConfig {
+    pub db: DbConfig,
+    pub idle_timeout: Option<Seconds>,
 }
 
 #[derive(serde::Serialize, serde::Deserialize, Clone, Debug)]
@@ -57,12 +75,12 @@ impl FileUploadMetadata {
     pub const HEADER_NAME: &'static str = "X-SEMANTIC-FILE-META";
 }
 
+pub type Seconds = u64;
+
 #[derive(serde::Serialize, serde::Deserialize, Clone, Debug)]
 pub enum Query {
     ServerStatus,
-    Initialize {
-        config: BackendConfig,
-    },
+    Initialize(BackendConfig),
     CloseBackend,
 
     Select(factordb::query::select::Select),
@@ -151,8 +169,8 @@ impl<E: ApiClientExecutor> ApiClient<E> {
         }
     }
 
-    pub async fn initialize(&self, config: BackendConfig) -> Result<(), AnyError> {
-        match self.exec.execute(Query::Initialize { config }).await {
+    pub async fn initialize(&self, options: BackendConfig) -> Result<(), AnyError> {
+        match self.exec.execute(Query::Initialize(options)).await {
             Ok(Reply::Initialize) => Ok(()),
             Ok(_other) => Err(anyhow::anyhow!("API returned invalid data")),
             Err(err) => Err(err),
