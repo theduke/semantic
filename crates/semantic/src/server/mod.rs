@@ -83,14 +83,14 @@ async fn handler_index(Extension(assets): extract::Extension<assets::Assets>) ->
     // Both for security, and to enable better performance.now() precision.
     // See https://developer.mozilla.org/en-US/docs/Web/HTTP/Headers/Cross-Origin-Embedder-Policy
     // and https://developer.mozilla.org/en-US/docs/Web/HTTP/Cross-Origin_Resource_Policy_(CORP).
-    res.headers_mut().append(
-        header::HeaderName::from_str("Cross-Origin-Resource-Policy").unwrap(),
-        "same-origin".parse().unwrap(),
-    );
-    res.headers_mut().append(
-        header::HeaderName::from_str("Cross-Origin-Embedder-Policy").unwrap(),
-        "require-corp".parse().unwrap(),
-    );
+    // res.headers_mut().append(
+    //     header::HeaderName::from_str("Cross-Origin-Resource-Policy").unwrap(),
+    //     "same-origin".parse().unwrap(),
+    // );
+    // res.headers_mut().append(
+    //     header::HeaderName::from_str("Cross-Origin-Embedder-Policy").unwrap(),
+    //     "require-corp".parse().unwrap(),
+    // );
 
     res
 }
