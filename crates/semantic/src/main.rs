@@ -22,14 +22,8 @@ fn main() {
             } else {
                 Some(semantic_core::api::BackendConfig::Crypto(
                     semantic_core::api::BackendCryptoConfig {
-                        data_path: match subargs.data_path {
-                            Some(p) => Some(p),
-                            None => Some(
-                                app::App::default_data_path()
-                                    .expect("Could not determine default data path"),
-                            ),
-                        },
-                        key: subargs.key,
+                        data_path: subargs.data_path,
+                        key: subargs.key.expect("Must specify --key"),
                     },
                 ))
             };
@@ -84,7 +78,7 @@ struct CommandServer {
     #[structopt(long)]
     data_path: Option<String>,
     #[structopt(long, short)]
-    key: String,
+    key: Option<String>,
     #[structopt(long)]
     no_backend: bool,
     /// The interface to listen on.
