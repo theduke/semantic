@@ -67,6 +67,13 @@ impl<T> LoadState<T> {
         }
     }
 
+    /// Returns `true` if the load state is [`Idle`].
+    ///
+    /// [`Idle`]: LoadState::Idle
+    pub fn is_idle(&self) -> bool {
+        matches!(self, Self::Idle)
+    }
+
     /// Returns `true` if the load_state is [`Success`].
     pub fn is_success(&self) -> bool {
         matches!(self, Self::Success(..))
@@ -104,6 +111,7 @@ impl<T> LoadState<T> {
             None
         }
     }
+
 }
 
 impl<T, E: std::fmt::Display> From<Result<T, E>> for LoadState<T> {

@@ -1,4 +1,8 @@
-use brass::vdom::{self, div, div_with, event::ChangeEvent, s};
+use brass::{
+    dom::Attr,
+    vdom::{self, div, event::ChangeEvent, s},
+    RenderContext, VNode,
+};
 use factordb::{query::select::Item, schema::EntityContainer, AnyError};
 use semantic_core::{
     api::FileUploadMetadata,
@@ -8,6 +12,8 @@ use semantic_ui_core::{api, loader::LoadState, RenderContextExt};
 
 use crate::components::base::collections::collection_picker;
 
+type Index = usize;
+
 pub enum Msg {
     FilesAdded(Vec<web_sys::File>),
     Upload,
@@ -15,6 +21,7 @@ pub enum Msg {
     CollectionClear,
     CollectionSelectToggle,
     CollectionSelected(Collection),
+    RemoveFile(Index),
     UploadResult {
         index: usize,
         result: Result<TypedFile, AnyError>,
@@ -22,9 +29,12 @@ pub enum Msg {
 }
 
 struct FileItem {
-    index: usize,
+    index: Index,
     file: web_sys::File,
+    filename: String,
     status: LoadState<()>,
+    size: u64,
+    mime_type: String,
     // progress: u32,
 }
 
@@ -44,6 +54,9 @@ impl State {
     fn add_file(&mut self, file: web_sys::File) {
         self.files.push(FileItem {
             index: self.files.len(),
+            filename: file.name(),
+            size: file.size().ceil() as u64,
+            mime_type: file.type_(),
             file,
             status: LoadState::Idle,
             // progress: 0,
@@ -54,7 +67,7 @@ impl State {
         if self.loading {
             return;
         }
-        let next_file = if let Some(f) = self.files.iter_mut().find(|f| !f.status.is_success()) {
+        let next_file = if let Some(f) = self.files.iter_mut().find(|f| f.status.is_idle()) {
             f
         } else {
             return;
@@ -108,10 +121,10 @@ impl brass::Component for State {
             }
             Msg::UploadResult { index, result } => {
                 self.loading = false;
-                match result {
+                 match result {
                     Ok(typed_file) => {
                         self.files.drain(index..index + 1);
-                        if let Ok(map) = typed_file.clone().into_map() {
+                        if let Ok(map) = typed_file.into_map() {
                             self.uploaded_files.push(Item::new(map));
                         }
                     }
@@ -120,7 +133,7 @@ impl brass::Component for State {
                             file.status.set_failed(err);
                         }
                     }
-                }
+                };
             }
             Msg::CollectionClear => {
                 self.collection = None;
@@ -131,6 +144,11 @@ impl brass::Component for State {
             Msg::CollectionSelected(col) => {
                 self.collection = Some(col);
                 self.collection_finder_active = false;
+            }
+            Msg::RemoveFile(index) => {
+                if index < self.files.len() {
+                    self.files.remove(index);
+                }
             }
         }
     }
@@ -219,16 +237,19 @@ impl brass::Component for State {
             .on_click(ctx, || Msg::Clear);
         let buttons = brass_bulma::buttons().and((btn_upload, btn_clear));
 
-        let file_list = if self.files.is_empty() {
+        let queue_items = if self.files.is_empty() {
             brass_bulma::notification(brass_bulma::Color::Default, s("Select files to upload."))
+                .build()
         } else {
-            let items = self
-                .files
-                .iter()
-                .map(|item| brass_bulma::box_().and(div_with(item.file.name())));
+            let items = self.files.iter().map(|item| render_file_item(ctx, item));
 
-            div().class(s("mt-4")).and_iter(items)
+            div().class(s("mt-4")).and_iter(items).build()
         };
+
+        let queue = vdom::div()
+            .class(s("mt-4"))
+            .and(brass_bulma::subtitle_4(s("Queue")))
+            .and(queue_items);
 
         let uploaded_files = if self.uploaded_files.is_empty() {
             vdom::div()
@@ -252,13 +273,7 @@ impl brass::Component for State {
         };
 
         div()
-            .and((
-                selector,
-                collection_finder,
-                buttons,
-                file_list,
-                uploaded_files,
-            ))
+            .and((selector, collection_finder, buttons, queue, uploaded_files))
             .build()
     }
 
@@ -269,4 +284,25 @@ impl brass::Component for State {
     ) -> brass::ShouldRender {
         return false;
     }
+}
+
+fn render_file_item(ctx: &mut RenderContext<State>, item: &FileItem) -> VNode {
+    let index = item.index;
+    let btn_remove = brass_bulma::button()
+        .and(s("Remove"))
+        .attr_toggle_if(item.status.is_loading(), Attr::Disabled)
+        .on_click(ctx, move || Msg::RemoveFile(index));
+
+    let info = vdom::div()
+        .style_raw(s("display: flex; gap: 2rem;"))
+        .and(vdom::span_with(&item.filename))
+        .and(vdom::span_with((s("Size: "), item.size.to_string())))
+        .and(vdom::span_with((s("Type: "), &item.mime_type)))
+        .and(btn_remove);
+
+    let error = item
+        .status
+        .as_error()
+        .map(|err| brass_bulma::notification_error(err).and_class("mt-3"));
+    brass_bulma::box_().and(info).and_opt(error).build()
 }
