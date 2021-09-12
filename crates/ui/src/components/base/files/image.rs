@@ -84,13 +84,21 @@ impl brass::PropComponent for ImagePreviewModalComp {
         let img_div = vdom::div_with(img);
 
         let modal = if self.is_open {
-            let full_img = vdom::img(props.url.clone())
-                .style_raw("max-height: 100%; max-widht: 100%; object-fit: contain;");
-            let content = vdom::div()
-                .style_raw("display: flex; width: 100%; height: 100%;")
-                .and(full_img);
-
-            brass_bulma::modal(content, &ctx.callback_map(|_| Msg::Close)).build()
+            let url = props.url.clone();
+            brass_bulma::Modal {
+                render: (move |_: ()| {
+                    let full_img = vdom::img(url.clone())
+                        .style_raw("max-height: 100%; max-widht: 100%; object-fit: contain;");
+                    vdom::div()
+                        .style_raw("display: flex; width: 100%; height: 100%;")
+                        .and(full_img)
+                        .build()
+                })
+                .into(),
+                on_close: ctx.callback_map(|_| Msg::Close),
+                handle_escape: true,
+            }
+            .render()
         } else {
             VNode::Empty
         };

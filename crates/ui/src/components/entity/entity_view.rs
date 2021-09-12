@@ -343,20 +343,30 @@ impl brass::Component for State {
             }
             Some(Action::ManageCollections) => {
                 if let Some(id) = self.entity_id {
-                    let manager = EntityCollectionManager { entity_id: id };
-                    let content = brass_bulma::box_().and(manager);
-                    brass_bulma::modal(content, &ctx.callback_map(|_| Msg::ToggleCollectionManager))
-                        .build()
+                    brass_bulma::Modal {
+                        render: brass::vdom::Func::dynamic(move |_: ()| {
+                            let manager = EntityCollectionManager { entity_id: id };
+                            brass_bulma::box_().and(manager).build()
+                        }),
+                        on_close: ctx.callback_map(|_| Msg::ToggleCollectionManager),
+                        handle_escape: true,
+                    }
+                    .render()
                 } else {
                     VNode::Empty
                 }
             }
             Some(Action::ManageTags) => {
                 if let Some(id) = self.entity_id {
-                    let manager = EntityTagManager { entity_id: id };
-                    let content = brass_bulma::box_().and(manager);
-                    brass_bulma::modal(content, &ctx.callback_map(|_| Msg::ToggleTagManager))
-                        .build()
+                    brass_bulma::Modal {
+                        render: brass::vdom::Func::dynamic(move |_: ()| {
+                            let manager = EntityTagManager { entity_id: id };
+                            brass_bulma::box_().and(manager).build()
+                        }),
+                        on_close: ctx.callback_map(|_| Msg::ToggleTagManager),
+                        handle_escape: true,
+                    }
+                    .render()
                 } else {
                     VNode::Empty
                 }
