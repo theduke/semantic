@@ -1,7 +1,6 @@
 use sha2::Digest;
 use std::{
     collections::HashMap,
-    panic::catch_unwind,
     path::PathBuf,
     sync::{Arc, RwLock},
 };
@@ -22,25 +21,12 @@ use semantic_core::{
 use crate::blobstore::DynBlobStore;
 
 #[derive(serde::Serialize, serde::Deserialize, Clone, Debug)]
-pub struct ServerConfig {
-    /// The interface to bind to.
-    ///
-    /// Examples:
-    /// - 127.0.0.1:3000
-    /// - 0.0.0.0:8080
-    /// - ::1:3000
-    pub interface: String,
-}
-
-#[derive(serde::Serialize, serde::Deserialize, Clone, Debug)]
 pub struct AppConfig {
     pub backend: Option<api::BackendConfig>,
     pub token_key: String,
-    pub server: Option<ServerConfig>,
 }
 
 struct AppState {
-    require_auth: bool,
     backend_config: api::BackendConfig,
     /// Records when the backend was opened.
     /// Required for idle backend auto-closing.
@@ -82,15 +68,6 @@ impl App {
 
     pub fn random_token_key() -> String {
         uuid::Uuid::new_v4().to_string()
-    }
-
-    pub fn needs_authentication(&self) -> bool {
-        self.state
-            .read()
-            .unwrap()
-            .as_ref()
-            .map(|state| state.require_auth)
-            .unwrap_or(true)
     }
 
     pub fn blob(&self) -> Option<DynBlobStore> {
@@ -171,7 +148,6 @@ impl App {
                     blob,
                     backend_config: config,
                     backend_opened_at: std::time::Instant::now(),
-                    require_auth: false,
                 }
             }
         };
@@ -698,15 +674,6 @@ impl App {
         gtk::main();
 
         Ok(())
-    }
-
-    pub async fn run_server(self) -> Result<(), AnyError> {
-        let config = self
-            .config
-            .server
-            .clone()
-            .ok_or_else(|| anyhow!("No server config provided"))?;
-        crate::server::run_server(self, config).await
     }
 
     pub async fn run_query(

@@ -1,7 +1,7 @@
 use semantic_core::api;
 use structopt::StructOpt;
 
-use semantic::app;
+use semantic::{app, server};
 
 fn main() {
     if std::env::var("RUST_LOG").is_err() {
@@ -35,19 +35,20 @@ fn main() {
                 idle_timeout: None,
             });
 
-            let config = app::AppConfig {
+            let app_config = app::AppConfig {
                 backend: backend_config,
                 token_key: subargs.token_key.unwrap_or_else(app::App::random_token_key),
-                server: Some(app::ServerConfig {
-                    interface: subargs.interface.unwrap_or(format!("127.0.0.1:3000")),
-                }),
+            };
+            let config = server::ServerConfig {
+                // Enable authentication when no backend is provided.
+                require_auth: app_config.backend.is_none(),
+                app: app_config,
+                interface: subargs.interface.unwrap_or(format!("127.0.0.1:3000")),
             };
 
             let rt = tokio::runtime::Runtime::new().expect("Could not start runtime");
-            let app = rt
-                .block_on(app::App::build(config, rt.handle().clone()))
-                .expect("Could not build app");
-            rt.block_on(app.run_server()).expect("Server failed");
+            rt.block_on(server::run_server(config, rt.handle().clone()))
+                .expect("Server failed");
         }
         #[cfg(feature = "webkit")]
         CliCommand::Gtk => {

@@ -1,22 +1,54 @@
 mod assets;
 
-use std::{net::SocketAddr, ops::Add};
+use std::{net::SocketAddr, ops::Add, sync::Arc};
 
 use anyhow::{Context, Result};
 use axum::{
     extract::{self, Extension},
-    AddExtensionLayer,
+    http, AddExtensionLayer,
 };
 use factordb::AnyError;
 use hyper::{header, Body, Method, Request, Response, StatusCode};
 
 use semantic_core::api::{self, ApiError, ApiResponse, DbConfig, Query};
 
-use crate::app::{App, ServerConfig};
+use crate::app::{App, AppConfig};
 
-type AppState = extract::Extension<App>;
+#[derive(serde::Serialize, serde::Deserialize, Clone, Debug)]
+pub struct ServerConfig {
+    /// General Semantic config.
+    pub app: AppConfig,
 
-pub async fn run_server(app: App, config: ServerConfig) -> Result<(), AnyError> {
+    /// The interface to bind to.
+    ///
+    /// Examples:
+    /// - 127.0.0.1:3000
+    /// - 0.0.0.0:8080
+    /// - ::1:3000
+    pub interface: String,
+
+    /// If true, all interaction via the server requires a login or an access
+    /// token.
+    pub require_auth: bool,
+}
+
+struct ServerState {
+    config: ServerConfig,
+    app: App,
+}
+
+impl ServerState {
+    fn needs_auth(&self) -> bool {
+        self.config.require_auth
+    }
+}
+
+type ServerContext = Extension<Arc<ServerState>>;
+
+pub async fn run_server(
+    config: ServerConfig,
+    runtime: tokio::runtime::Handle,
+) -> Result<(), AnyError> {
     use axum::handler::{get, post};
 
     // Run the server like above...
@@ -24,6 +56,10 @@ pub async fn run_server(app: App, config: ServerConfig) -> Result<(), AnyError> 
         "Invalid server interface specification '{}'",
         config.interface
     ))?;
+
+    let app = App::build(config.app.clone(), runtime).await?;
+
+    let state = Arc::new(ServerState { config, app });
 
     #[cfg(debug_assertions)]
     let asset_source = {
@@ -55,7 +91,7 @@ pub async fn run_server(app: App, config: ServerConfig) -> Result<(), AnyError> 
         .nest("/blob/files", get(handler_blob_read))
         .nest("/assets", get(handler_assets))
         .or(get(handler_index))
-        .layer(AddExtensionLayer::new(app))
+        .layer(AddExtensionLayer::new(state))
         .layer(AddExtensionLayer::new(assets))
         .layer(tower_http::trace::TraceLayer::new_for_http());
 
@@ -130,13 +166,20 @@ fn internal_server_error(msg: impl Into<String>) -> Response<Body> {
         .unwrap()
 }
 
-async fn handler_blob_upload(Extension(app): AppState, req: Request<Body>) -> Response<Body> {
+async fn handler_blob_upload(
+    Extension(state): ServerContext,
+    req: Request<Body>,
+) -> Response<Body> {
+    if let Err(err) = request_auth_check(&state, &req) {
+        return api_response(api_response_err(&err), vec![]);
+    }
+
     if req.method() == Method::OPTIONS {
         return cors_response();
     }
 
     tracing::trace!("handler_blob_upload");
-    let reply = match file_upload(&app, req).await {
+    let reply = match file_upload(&state, req).await {
         Ok(item) => ApiResponse::Ok(item),
         Err(err) => {
             tracing::warn!(?err, "file upload failed");
@@ -150,10 +193,10 @@ async fn handler_blob_upload(Extension(app): AppState, req: Request<Body>) -> Re
 }
 
 async fn file_upload(
-    app: &App,
+    state: &ServerState,
     req: Request<Body>,
 ) -> Result<semantic_core::base::TypedFile, AnyError> {
-    // FIXME: check authentication
+    request_validate_auth_cookie(state, &req)?;
 
     tracing::trace!("file upload started");
 
@@ -177,12 +220,16 @@ async fn file_upload(
     let body = hyper::body::to_bytes(req.into_body()).await?;
     tracing::trace!(len=%body.len(), "file upload body retrieved");
 
-    let item = app.create_file(meta, body.to_vec()).await?;
+    let item = state.app.create_file(meta, body.to_vec()).await?;
     tracing::trace!(?item, "file created");
     Ok(item)
 }
 
-async fn handler_blob_read(Extension(app): AppState, req: Request<Body>) -> Response<Body> {
+async fn handler_blob_read(Extension(state): ServerContext, req: Request<Body>) -> Response<Body> {
+    if let Err(res) = request_validate_auth_cookie_http(&state, &req) {
+        return res;
+    }
+
     if req.method() == Method::OPTIONS {
         return cors_response();
     }
@@ -197,7 +244,7 @@ async fn handler_blob_read(Extension(app): AppState, req: Request<Body>) -> Resp
         format!("files{}", raw_path)
     };
 
-    let blob = if let Some(b) = app.blob() {
+    let blob = if let Some(b) = state.app.blob() {
         b
     } else {
         return internal_server_error("Blobstore not initialized");
@@ -283,8 +330,8 @@ impl TokenClaims {
     }
 }
 
-async fn handler_api_query(Extension(app): AppState, req: Request<Body>) -> Response<Body> {
-    match api_query(&app, req).await {
+async fn handler_api_query(Extension(state): ServerContext, req: Request<Body>) -> Response<Body> {
+    match api_query(&state, req).await {
         Ok(res) => res,
         Err(err) => api_response(api_response_err(&err), Vec::new()),
     }
@@ -330,34 +377,83 @@ fn validate_auth_token(app: &App, raw_token: &str) -> Result<TokenClaims, AnyErr
         .backend_config()
         .ok_or_else(|| anyhow::anyhow!("Invalid token"))?;
 
-    if config.db != claims.config {
+    if config.db.clone().purge_secrets() != claims.config {
         return Err(anyhow::anyhow!("Invalid token"));
     }
     Ok(claims)
 }
 
-async fn api_query(app: &App, req: Request<Body>) -> Result<Response<Body>, AnyError> {
-    let token = get_auth_cookie_token(&req)
-        .map(|token| validate_auth_token(app, &token))
-        .transpose()?;
+fn request_validate_auth_cookie(
+    state: &ServerState,
+    req: &Request<Body>,
+) -> Result<Option<TokenClaims>, AnyError> {
+    get_auth_cookie_token(req)
+        .map(|raw| validate_auth_token(&state.app, &raw))
+        .transpose()
+}
+
+/// Validate a request for authentication cookies.
+/// On error, returns a response that resets the auth cookie if required.
+fn request_validate_auth_cookie_http(
+    state: &ServerState,
+    req: &Request<Body>,
+) -> Result<Option<TokenClaims>, Response<Body>> {
+    request_validate_auth_cookie(state, req).map_err(|_err| {
+        let reset_header = build_token_cookie("", true).unwrap();
+
+        Response::builder()
+            .status(StatusCode::UNAUTHORIZED)
+            .header(http::header::SET_COOKIE, reset_header)
+            .body(Body::from("Unauthorized".to_string()))
+            .unwrap()
+    })
+}
+
+fn request_auth_check(
+    state: &ServerState,
+    req: &Request<Body>,
+) -> Result<Option<TokenClaims>, AnyError> {
+    if state.needs_auth() {
+        match request_validate_auth_cookie(state, req)? {
+            Some(claims) => Ok(Some(claims)),
+            None => Err(anyhow::anyhow!("Unauthorized")),
+        }
+    } else {
+        Ok(None)
+    }
+}
+
+async fn api_query(state: &ServerState, req: Request<Body>) -> Result<Response<Body>, AnyError> {
+    let token_claims = match request_validate_auth_cookie(state, &req) {
+        Ok(claims) => claims,
+        Err(err) => {
+            // Reset auth cookie on invalid request.
+            return Ok(api_response(
+                api_response_err(&err),
+                vec![(header::SET_COOKIE, build_token_cookie("", true)?)],
+            ));
+        }
+    };
 
     let body = hyper::body::to_bytes(req.into_body()).await?;
     let query: Query = serde_json::from_slice(&body)?;
+
+    match &query {
+        Query::ServerStatus | Query::Initialize(_) => {}
+        _ => {
+            if state.needs_auth() && token_claims.is_none() {
+                return Err(anyhow::anyhow!("Unauthorized"));
+            }
+        }
+    }
 
     tracing::trace!(?query, "running api query");
 
     // Handle queries that don't need authentication.
 
-    if app.needs_authentication() && !token.is_some() {
-        match &query {
-            Query::ServerStatus | Query::Initialize(_) => {}
-            _ => {
-                return Err(anyhow::anyhow!("Permission denied"));
-            }
-        }
-    }
-
     let mut extra_headers = Vec::new();
+
+    let app = &state.app;
 
     let res = match query {
         api::Query::ServerStatus => Ok(api::Reply::ServerStatus(api::ServerStatus {
@@ -367,7 +463,7 @@ async fn api_query(app: &App, req: Request<Body>) -> Result<Response<Body>, AnyE
             app.configure_backend(options.clone()).await?;
             let exp = std::time::SystemTime::now()
                 .duration_since(std::time::SystemTime::UNIX_EPOCH)?
-                .add(std::time::Duration::from_secs(60 * 60 * 2))
+                .add(std::time::Duration::from_secs(60 * 60 * 24))
                 .as_secs();
 
             let key = &app.config().token_key;
