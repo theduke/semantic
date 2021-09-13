@@ -32,6 +32,7 @@ enum Msg {
     ToggleLoop,
     ToggleMuted,
     ToggleSettings,
+    ToggleFullscreen,
     IntervalChanged(Option<std::time::Duration>),
     KeyPress(String),
 
@@ -48,10 +49,15 @@ struct State {
     shuffle: bool,
     index: usize,
     autoplay_interval: Option<std::time::Duration>,
+    fullscreen: bool,
     settings_active: bool,
 
     keydown_callback: Callback<web_sys::KeyboardEvent>,
     keydown_subscription: Option<brass::util::EventSubscription>,
+
+    /// Dom reference to the player div.
+    /// Used for fullscreen support.
+    player_ref: brass::vdom::Ref,
 }
 
 brass::enable_props!(wrapped StandalonePlayer => State);
@@ -100,9 +106,11 @@ impl PropComponent for State {
             cycle: true,
             shuffle: false,
             autoplay_interval: Some(std::time::Duration::from_secs(5)),
+            fullscreen: false,
             settings_active: false,
             keydown_callback,
             keydown_subscription: None,
+            player_ref: brass::vdom::Ref::new(),
         };
 
         s.load(s.expr.clone(), ctx);
@@ -201,6 +209,14 @@ impl PropComponent for State {
             Msg::ToggleMuted => {
                 self.muted = !self.muted;
             }
+            Msg::ToggleFullscreen => {
+                if let Some(elem) = self.player_ref.get() {
+                    if let Err(_error) = elem.request_fullscreen() {
+                        tracing::error!("Could not launch fullscreen mode");
+                    }
+                }
+            }
+
             Msg::KeyPress(key) => match key.as_str() {
                 "ArrowLeft" => {
                     self.update(Msg::Prev, props, ctx);
@@ -268,16 +284,25 @@ impl PropComponent for State {
             })))
             .attr(Attr::Title, s(if self.muted { "Unmute" } else { "Mute" }))
             .on_click(ctx, || Msg::ToggleMuted);
+
+        let btn_fullscreen = brass_bulma::button()
+            .and(brass_bulma::icon_fa(s("fas fa-expand-arrows-alt")))
+            .attr(Attr::Title, s("Fullscreen"))
+            .on_click(ctx, || Msg::ToggleFullscreen);
+
         let btn_settings = brass_bulma::button()
             .and(brass_bulma::icon_fa(s("fas fa-cog")))
             .and_class_if(self.settings_active, "is-info")
             .attr(Attr::Title, s("Settings"))
             .on_click(ctx, || Msg::ToggleSettings);
 
-        let bar_settings =
-            vdom::div()
-                .class(s("mb-4"))
-                .and((btn_shuffle, btn_cycle, btn_mute, btn_settings));
+        let bar_settings = vdom::div().class(s("mb-4")).and((
+            btn_shuffle,
+            btn_cycle,
+            btn_mute,
+            btn_fullscreen,
+            btn_settings,
+        ));
 
         let settings = if self.settings_active {
             let interval = brass_bulma::FieldHorizontal {
@@ -339,6 +364,10 @@ impl PropComponent for State {
             }
             .render()
         });
+        let player_wrap = vdom::div()
+            .style_raw(s("flex-grow: 1; height: 100%; widht: 100%;"))
+            .and(player)
+            .build_ref(&self.player_ref);
 
         vdom::div()
             .style_raw(s(
@@ -346,7 +375,7 @@ impl PropComponent for State {
             ))
             .and(bar)
             .and(settings)
-            .and(player)
+            .and(player_wrap)
             .build()
     }
 
