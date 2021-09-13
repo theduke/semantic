@@ -127,7 +127,7 @@ fn cmd_install() -> Result<(), DynError> {
 
 fn task_build_ui(release: bool) -> Result<(), DynError> {
     eprintln!("Building UI (release: {})...", release);
-    let mut cmd = build_trunk_command("build")?;
+    let mut cmd = build_trunk_command("build", false)?;
     if release {
         cmd.arg("--release");
     }
@@ -138,20 +138,26 @@ fn task_build_ui(release: bool) -> Result<(), DynError> {
 
 fn trunk_watch_ui() -> Result<(), DynError> {
     eprintln!("Watching UI...");
-    let mut cmd = build_trunk_command("watch")?;
+    let mut cmd = build_trunk_command("watch", false)?;
     (&mut cmd).spawn_success()?;
     Ok(())
 }
 
-fn build_trunk_command(action: &str) -> Result<Command, DynError> {
+fn build_trunk_command(action: &str, debug_symbols: bool) -> Result<Command, DynError> {
     let wasm_target = root_path()?.join("target/wasm");
     let mut cmd = Command::new("trunk");
+
+    let mut rustflags = vec!["--cfg=web_sys_unstable_apis"];
+    if !debug_symbols {
+        rustflags.push("-Cdebuginfo=0");
+    }
+
     cmd.current_dir(ui_path()?)
         .arg(action)
         .args(&["--public-url", "/assets"])
         .arg("--dist")
         .arg(ui_dist_path()?)
-        .env("RUSTFLAGS", "--cfg=web_sys_unstable_apis")
+        .env("RUSTFLAGS", rustflags.join(" "))
         .env("CARGO_TARGET_DIR", wasm_target);
     Ok(cmd)
 }
