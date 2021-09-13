@@ -114,24 +114,6 @@ impl semantic_ui_core::BrowserPlugin for BasePlugin {
             is_default: false,
         });
     }
-
-    fn can_import_url(&self, _url: &str) -> bool {
-        false
-    }
-
-    fn import(
-        &self,
-        _url: url::Url,
-        _api: &semantic_ui_core::api::BrowserApiClient,
-    ) -> std::pin::Pin<
-        Box<
-            dyn std::future::Future<
-                    Output = Result<factordb::query::select::ItemPage, factordb::AnyError>,
-                > + 'static,
-        >,
-    > {
-        unimplemented!()
-    }
 }
 
 fn render_attr_preview_image(value: &Value, _entity: Option<&DataMap>) -> brass::VNode {

@@ -2,6 +2,12 @@ use brass::{dom::Attr, vdom::div, Str};
 use url::Url;
 
 pub struct ImportForm {
+    pub loading: bool,
+    pub on_preview: brass::Callback<url::Url>,
+    pub on_import: brass::Callback<url::Url>,
+}
+
+struct State {
     loading: bool,
     can_submit: bool,
     on_preview: brass::Callback<url::Url>,
@@ -10,13 +16,7 @@ pub struct ImportForm {
     parsed_url: Option<Url>,
 }
 
-pub struct ImportFormProps {
-    pub loading: bool,
-    pub on_preview: brass::Callback<url::Url>,
-    pub on_import: brass::Callback<url::Url>,
-}
-
-brass::enable_props!(ImportFormProps => ImportForm);
+brass::enable_props!(ImportForm => State);
 
 pub enum Msg {
     Changed(String),
@@ -24,8 +24,8 @@ pub enum Msg {
     Import,
 }
 
-impl brass::Component for ImportForm {
-    type Properties = ImportFormProps;
+impl brass::Component for State {
+    type Properties = ImportForm;
     type Msg = Msg;
 
     fn init(props: Self::Properties, _ctx: &mut brass::Context<Self::Msg>) -> Self {

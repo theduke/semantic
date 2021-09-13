@@ -210,10 +210,17 @@ impl PropComponent for State {
                 self.muted = !self.muted;
             }
             Msg::ToggleFullscreen => {
-                if let Some(elem) = self.player_ref.get() {
-                    if let Err(_error) = elem.request_fullscreen() {
-                        tracing::error!("Could not launch fullscreen mode");
+                if !self.fullscreen {
+                    if let Some(elem) = self.player_ref.get() {
+                        if let Err(_error) = elem.request_fullscreen() {
+                            tracing::error!("Could not launch fullscreen mode");
+                        } else {
+                            self.fullscreen = true;
+                        }
                     }
+                } else {
+                    self.fullscreen = false;
+                    brass::util::document().exit_fullscreen();
                 }
             }
 

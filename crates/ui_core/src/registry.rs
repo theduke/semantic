@@ -1,12 +1,13 @@
-use std::rc::Rc;
+use std::{collections::HashMap, rc::Rc, sync::Arc};
 
 use factordb::{
     schema::{AttrMapExt, AttributeSchema, EntityAttribute, EntitySchema},
     AnyError,
 };
 use fnv::FnvHashMap;
+use semantic_core::plugin::{ImportMatches, ImportOutput, ImporterMatch};
 
-use crate::BrowserPlugin;
+use crate::{api::BrowserApiClient, BrowserPlugin};
 
 pub struct Registry {
     schema: semantic_core::api::SemanticSchema,
@@ -14,7 +15,7 @@ pub struct Registry {
     attributes: FnvHashMap<String, AttributeSchema>,
     entities: FnvHashMap<String, EntityInfo>,
 
-    plugins: Vec<Box<dyn BrowserPlugin>>,
+    plugins: HashMap<String, Arc<dyn BrowserPlugin>>,
 
     entity_renderers: Vec<EntityRendererSpec>,
 
@@ -25,94 +26,6 @@ pub struct Registry {
     entity_renderers_create: FnvHashMap<String, DynEntityRenderer>,
     entity_renderers_create_page: FnvHashMap<String, DynEntityRenderer>,
     entity_renderer_media: FnvHashMap<String, RegisteredMediaRenderer>,
-}
-
-#[derive(Clone)]
-pub struct SharedRegistry(Rc<Registry>);
-
-impl std::ops::Deref for SharedRegistry {
-    type Target = Registry;
-
-    fn deref(&self) -> &Self::Target {
-        &self.0
-    }
-}
-
-#[derive(Clone, Debug)]
-pub struct EntityFieldAtrr {
-    pub field: EntityAttribute,
-    pub attr: AttributeSchema,
-}
-
-// pub type DynRenderer<T> = Box<dyn Fn(&T) -> brass::VNode>;
-
-#[derive(PartialEq, Eq, Clone)]
-pub struct EntityRenderOpts {
-    pub editable: bool,
-    pub preview: bool,
-}
-pub type DynEntityRenderer =
-    Rc<dyn Fn(&factordb::query::select::Item, &EntityRenderOpts) -> brass::VNode>;
-
-pub enum MediaRenderEvent {
-    Finished(Result<(), AnyError>),
-    Paused,
-    Resumed,
-}
-
-#[derive(Clone)]
-pub struct MediaRenderOpts {
-    // Settings.
-    /// If true, the media should be playing.
-    /// This also means it should auto-play on first render.
-    /// If false, playback should be paused.
-    pub playing: bool,
-    /// If true, all audio output should be muted.
-    pub muted: bool,
-    // Callbacks.
-    /// Callback that is to be invoked when the media item has stopped playing.
-    /// An `Ok(())` is expected if the playback finished correctly.
-    /// An `Err(_)` is expected if the playback failed, for example if a video
-    /// could not be loaded.
-    pub callback: brass::Callback<MediaRenderEvent>,
-}
-
-pub type DynMediaRenderer =
-    Rc<dyn Fn(&factordb::query::select::Item, &MediaRenderOpts) -> brass::VNode>;
-
-#[derive(Clone)]
-pub struct RegisteredMediaRenderer {
-    pub entity_type: String,
-    pub render: DynMediaRenderer,
-    /// If true, the given media item can be played, like video or audio.
-    /// If false, it is static, like an image.
-    pub supports_playback: bool,
-}
-
-pub type DynAttrRenderer =
-    Rc<dyn Fn(&factordb::data::Value, Option<&factordb::data::DataMap>) -> brass::VNode>;
-
-#[derive(Clone, Debug)]
-pub struct EntityInfo {
-    pub schema: EntitySchema,
-    pub fields: FnvHashMap<String, EntityFieldAtrr>,
-}
-
-#[derive(Clone, Copy, Debug)]
-pub enum EntityRenderMode {
-    Content,
-    View,
-    ViewPage,
-    Create,
-    CreatePage,
-}
-
-pub struct EntityRendererSpec {
-    pub name: String,
-    pub entity_type: String,
-    pub mode: EntityRenderMode,
-    pub renderer: DynEntityRenderer,
-    pub is_default: bool,
 }
 
 impl Registry {
@@ -155,7 +68,7 @@ impl Registry {
             schema,
             entities,
             attributes,
-            plugins: Vec::new(),
+            plugins: HashMap::new(),
             entity_renderers: Vec::new(),
 
             entity_content_renderers: FnvHashMap::default(),
@@ -178,7 +91,7 @@ impl Registry {
 
     pub fn register_plugin(&mut self, plugin: impl BrowserPlugin + 'static) {
         plugin.register(self);
-        self.plugins.push(Box::new(plugin));
+        self.plugins.insert(plugin.spec().name, Arc::new(plugin));
     }
 
     pub fn register_attr_renderer(&mut self, ty: String, renderer: DynAttrRenderer) {
@@ -288,10 +201,130 @@ impl Registry {
             .collect()
     }
 
-    pub fn find_importer(&self, url: &str) -> Option<&dyn BrowserPlugin> {
-        self.plugins
-            .iter()
-            .find(|p| p.can_import_url(url))
-            .map(|p| p.as_ref())
+    pub fn find_importer(&self, url: &url::Url) -> ImportMatches {
+        let matches = self
+            .plugins
+            .values()
+            .filter_map(|p| {
+                p.import_match(url).map(|support| ImporterMatch {
+                    plugin: p.spec().name,
+                    support,
+                })
+            })
+            .collect();
+        let mut m = ImportMatches { matches };
+        m.sort();
+
+        m
     }
+
+    pub fn import(
+        &self,
+        url: url::Url,
+        plugin_name: Option<String>,
+        api: &BrowserApiClient,
+    ) -> std::pin::Pin<
+        Box<dyn std::future::Future<Output = Result<Option<ImportOutput>, AnyError>> + 'static>,
+    > {
+        let plugin = plugin_name
+            .or_else(|| self.find_importer(&url).best().map(|m| m.plugin.clone()))
+            .and_then(|n| self.plugins.get(&n).cloned());
+
+        if let Some(plugin) = plugin {
+            let api = api.clone();
+            plugin.import(url, &api)
+        } else {
+            Box::pin(futures::future::ready(Err(AnyError::msg(
+                "Could not import: no suitable importer found",
+            ))))
+        }
+    }
+}
+
+#[derive(Clone)]
+pub struct SharedRegistry(Rc<Registry>);
+
+impl std::ops::Deref for SharedRegistry {
+    type Target = Registry;
+
+    fn deref(&self) -> &Self::Target {
+        &self.0
+    }
+}
+
+#[derive(Clone, Debug)]
+pub struct EntityFieldAtrr {
+    pub field: EntityAttribute,
+    pub attr: AttributeSchema,
+}
+
+// pub type DynRenderer<T> = Box<dyn Fn(&T) -> brass::VNode>;
+
+#[derive(PartialEq, Eq, Clone)]
+pub struct EntityRenderOpts {
+    pub editable: bool,
+    pub preview: bool,
+}
+pub type DynEntityRenderer =
+    Rc<dyn Fn(&factordb::query::select::Item, &EntityRenderOpts) -> brass::VNode>;
+
+pub enum MediaRenderEvent {
+    Finished(Result<(), AnyError>),
+    Paused,
+    Resumed,
+}
+
+#[derive(Clone)]
+pub struct MediaRenderOpts {
+    // Settings.
+    /// If true, the media should be playing.
+    /// This also means it should auto-play on first render.
+    /// If false, playback should be paused.
+    pub playing: bool,
+    /// If true, all audio output should be muted.
+    pub muted: bool,
+    // Callbacks.
+    /// Callback that is to be invoked when the media item has stopped playing.
+    /// An `Ok(())` is expected if the playback finished correctly.
+    /// An `Err(_)` is expected if the playback failed, for example if a video
+    /// could not be loaded.
+    pub callback: brass::Callback<MediaRenderEvent>,
+}
+
+pub type DynMediaRenderer =
+    Rc<dyn Fn(&factordb::query::select::Item, &MediaRenderOpts) -> brass::VNode>;
+
+#[derive(Clone)]
+pub struct RegisteredMediaRenderer {
+    pub entity_type: String,
+    pub render: DynMediaRenderer,
+    /// If true, the given media item can be played, like video or audio.
+    /// If false, it is static, like an image.
+    pub supports_playback: bool,
+}
+
+pub type DynAttrRenderer =
+    Rc<dyn Fn(&factordb::data::Value, Option<&factordb::data::DataMap>) -> brass::VNode>;
+
+#[derive(Clone, Debug)]
+pub struct EntityInfo {
+    pub schema: EntitySchema,
+    pub fields: FnvHashMap<String, EntityFieldAtrr>,
+}
+
+#[derive(Clone, Copy, Debug)]
+pub enum EntityRenderMode {
+    Content,
+    View,
+    ViewPage,
+    Create,
+    CreatePage,
+}
+
+pub struct EntityRendererSpec {
+    pub name: String,
+    pub entity_type: String,
+    pub mode: EntityRenderMode,
+    pub renderer: DynEntityRenderer,
+    pub is_default: bool,
 }

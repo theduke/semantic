@@ -1,6 +1,5 @@
-use std::pin::Pin;
-
-use factordb::{query::select::ItemPage, AnyError};
+use factordb::AnyError;
+use semantic_core::plugin::{ImportOutput, ImportSupport};
 
 use crate::Registry;
 
@@ -8,7 +7,7 @@ pub struct BrowserPluginSpec {
     pub name: String,
 }
 
-pub trait BrowserPlugin {
+pub trait BrowserPlugin: Sync + Send {
     /// Allows initializing the context of the UI.
     /// The primary use case here is registering global context for the UI.
     // Silence warning for unused `ctx` arg because it would mess up IDE
@@ -20,11 +19,19 @@ pub trait BrowserPlugin {
 
     fn register(&self, registry: &mut Registry);
 
-    fn can_import_url(&self, url: &str) -> bool;
+    #[allow(unused_variables)]
+    fn import_match(&self, url: &url::Url) -> Option<ImportSupport> {
+        None
+    }
 
+    #[allow(unused_variables)]
     fn import(
         &self,
         url: url::Url,
         api: &crate::api::BrowserApiClient,
-    ) -> Pin<Box<dyn std::future::Future<Output = Result<ItemPage, AnyError>> + 'static>>;
+    ) -> std::pin::Pin<
+        Box<dyn std::future::Future<Output = Result<Option<ImportOutput>, AnyError>> + 'static>,
+    > {
+        Box::pin(futures::future::ready(Ok(None)))
+    }
 }

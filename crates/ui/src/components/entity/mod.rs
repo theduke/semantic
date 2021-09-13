@@ -267,14 +267,7 @@ pub fn entity_item(item: &Item, registry: &Registry, opts: &EntityRenderOpts) ->
     }
 }
 
-pub fn entity_list(
-    page: &factordb::query::select::ItemPage,
-    registry: &Registry,
-    opts: &EntityRenderOpts,
-) -> TagBuilder {
-    let items = page
-        .items
-        .iter()
-        .map(|item| entity_item(item, registry, opts));
+pub fn entity_list(items: &[Item], registry: &Registry, opts: &EntityRenderOpts) -> TagBuilder {
+    let items = items.iter().map(|item| entity_item(item, registry, opts));
     div().and_iter(items)
 }
