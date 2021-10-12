@@ -30,7 +30,7 @@ struct AppState {
     backend_config: api::BackendConfig,
     /// Records when the backend was opened.
     /// Required for idle backend auto-closing.
-    backend_opened_at: std::time::Instant,
+    last_activity_at: std::time::Instant,
     db: Db,
     blob: DynBlobStore,
 }
@@ -147,7 +147,7 @@ impl App {
                     db,
                     blob,
                     backend_config: config,
-                    backend_opened_at: std::time::Instant::now(),
+                    last_activity_at: std::time::Instant::now(),
                 }
             }
         };
@@ -219,7 +219,7 @@ impl App {
                 .map(|state| {
                     if let Some(timeout) = state.backend_config.idle_timeout {
                         let time_since_opened =
-                            std::time::Instant::now().duration_since(state.backend_opened_at);
+                            std::time::Instant::now().duration_since(state.last_activity_at);
                         let should_close =
                             time_since_opened > std::time::Duration::from_secs(timeout);
                         should_close
@@ -676,10 +676,18 @@ impl App {
         Ok(())
     }
 
+    fn update_last_activity_time(&self) {
+        if let Some(state) = self.state.write().unwrap().as_mut() {
+            state.last_activity_at = std::time::Instant::now();
+        }
+    }
+
     pub async fn run_query(
         &self,
         query: semantic_core::api::Query,
     ) -> Result<semantic_core::api::Reply, AnyError> {
+        self.update_last_activity_time();
+
         let res = match query {
             api::Query::ServerStatus => Ok(api::Reply::ServerStatus(api::ServerStatus {
                 backend_initialized: self.db().is_some(),
