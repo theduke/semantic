@@ -7,7 +7,7 @@ use semantic_core::base::Note;
 
 use semantic_ui_core::{loader::LoadState, ContextExt};
 
-use super::note_form::{NoteForm, NoteFormProps};
+use super::note_form::NoteForm;
 
 pub struct NoteCreateProps {}
 
@@ -58,10 +58,12 @@ impl brass::Component for NoteCreate {
     }
 
     fn render(&self, _ctx: &mut brass::RenderContext<Self>) -> brass::VNode {
-        let form = vdom::component::<NoteForm>(NoteFormProps {
+        let form = NoteForm {
             note: None,
             on_submit: self.callback.clone(),
-        });
+            on_change: None,
+            loading: false,
+        };
         let loader = self
             .loader
             .render(|_| brass_bulma::notification_success("Entity created").build());

@@ -7,7 +7,7 @@ use semantic_core::base::Note;
 
 use semantic_ui_core::{loader::LoadState, ContextExt};
 
-use super::note_form::{NoteForm, NoteFormProps};
+use super::note_form::NoteForm;
 
 pub struct NoteUpateProps {
     pub note: Note,
@@ -55,7 +55,7 @@ impl brass::Component for NoteUpate {
             }
             Msg::Loaded(res) => {
                 if res.is_ok() {
-                    ctx.router().goto(semantic_ui_core::routing::Route::Browse);
+                    // ctx.router().goto(semantic_ui_core::routing::Route::Browse);
                 } else {
                     self.loader.set_result(res);
                 }
@@ -64,14 +64,16 @@ impl brass::Component for NoteUpate {
     }
 
     fn render(&self, _ctx: &mut brass::RenderContext<Self>) -> brass::VNode {
-        let form = vdom::component::<NoteForm>(NoteFormProps {
+        let form = NoteForm {
             note: Some(self.note.clone()),
             on_submit: self.callback.clone(),
-        });
+            on_change: Some(self.callback.clone()),
+            loading: self.loader.is_loading(),
+        };
         let loader = self
             .loader
             .render(|_| brass_bulma::notification_success("Note saved").build());
-        vdom::div().and((loader, form)).build()
+        vdom::div().and((form, loader)).build()
     }
 
     fn on_property_change(
@@ -79,7 +81,7 @@ impl brass::Component for NoteUpate {
         _props: Self::Properties,
         _ctx: &mut brass::Context<Self::Msg>,
     ) -> brass::ShouldRender {
-        false
+        true
     }
 }
 

@@ -109,7 +109,7 @@ impl brass::Component for Root {
                     let mut registry = semantic_ui_core::Registry::new(schema);
 
                     registry.register_plugin(crate::components::base::BasePlugin);
-                    registry.register_plugin(semantic_contrib::ContribPlugin);
+                    // registry.register_plugin(semantic_contrib::ContribPlugin);
 
                     registry
                         .attr_renderer(&semantic_core::base::AttrPreviewImageUrl::QUALIFIED_NAME)

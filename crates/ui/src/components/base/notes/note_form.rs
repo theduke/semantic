@@ -1,32 +1,47 @@
 use brass::{
+    dom::Attr,
     vdom::{div, event::ClickEvent, Render},
     Callback,
 };
 use factordb::Id;
 use semantic_core::base::Note;
 
-pub struct NoteFormProps {
+pub struct NoteForm {
     pub note: Option<Note>,
     pub on_submit: Callback<Note>,
+    pub on_change: Option<Callback<Note>>,
+    pub loading: bool,
 }
 
-pub enum Msg {
+enum Msg {
     Title(String),
     Body(String),
+    Debounced,
     Submit,
 }
 
-pub struct NoteForm {
+brass::enable_props!(wrapped NoteForm => State);
+
+struct State {
     note: Note,
-    on_submit: Callback<Note>,
+    debounce_guard: Option<brass::EffectGuard>,
 }
 
-impl brass::Component for NoteForm {
-    type Properties = NoteFormProps;
+impl State {
+    fn on_change(&mut self, props: &NoteForm, ctx: &mut brass::Context<Msg>) {
+        if props.on_change.is_some() {
+            self.debounce_guard =
+                Some(ctx.timeout(Msg::Debounced, std::time::Duration::from_secs(1)));
+        }
+    }
+}
+
+impl brass::PropComponent for State {
+    type Properties = NoteForm;
     type Msg = Msg;
 
-    fn init(props: Self::Properties, _ctx: &mut brass::Context<Self::Msg>) -> Self {
-        let note = props.note.unwrap_or_else(|| Note {
+    fn init(props: &Self::Properties, ctx: &mut brass::Context<Self::Msg>) -> Self {
+        let note = props.note.clone().unwrap_or_else(|| Note {
             id: Id::from_uuid(uuid::Uuid::new_v4()),
             title: String::new(),
             body: String::new(),
@@ -35,25 +50,57 @@ impl brass::Component for NoteForm {
 
         Self {
             note,
-            on_submit: props.on_submit,
+            debounce_guard: None,
         }
     }
 
-    fn update(&mut self, msg: Self::Msg, _ctx: &mut brass::Context<Self::Msg>) {
+    fn update(
+        &mut self,
+        msg: Self::Msg,
+        props: &Self::Properties,
+        ctx: &mut brass::Context<Self::Msg>,
+    ) {
         match msg {
             Msg::Title(title) => {
+                if props.loading {
+                    return;
+                }
+                let has_changed = title.trim() != self.note.title.trim();
                 self.note.title = title;
+                if has_changed {
+                    self.on_change(props, ctx);
+                }
             }
             Msg::Body(body) => {
+                if props.loading {
+                    return;
+                }
+                let has_changed = body.trim() != self.note.body.trim();
                 self.note.body = body;
+                if has_changed {
+                    self.on_change(props, ctx);
+                }
+            }
+            Msg::Debounced => {
+                if let Some(cb) = &props.on_change {
+                    cb.send(self.note.clone());
+                }
             }
             Msg::Submit => {
-                self.on_submit.send(self.note.clone());
+                if props.loading {
+                    return;
+                }
+                self.debounce_guard = None;
+                props.on_submit.send(self.note.clone());
             }
         }
     }
 
-    fn render(&self, ctx: &mut brass::RenderContext<Self>) -> brass::VNode {
+    fn render(
+        &self,
+        props: &Self::Properties,
+        ctx: &mut brass::RenderContext<brass::PropWrapper<Self>>,
+    ) -> brass::VNode {
         let title = brass_bulma::Field {
             label: "Title".into(),
             help: None,
@@ -94,26 +141,10 @@ impl brass::Component for NoteForm {
 
         let submit_btn = brass_bulma::button()
             .and("Submit")
+            .attr_toggle_if(props.loading, Attr::Disabled)
             .on(ctx, |_: ClickEvent| Msg::Submit);
         let submit = brass_bulma::field().and(brass_bulma::control().and(submit_btn));
 
         div().and((title, body, preview, submit)).build()
-    }
-
-    fn on_property_change(
-        &mut self,
-        props: Self::Properties,
-        ctx: &mut brass::Context<Self::Msg>,
-    ) -> brass::ShouldRender {
-        if let Some(note) = &props.note {
-            if note.id != self.note.id {
-                *self = Self::init(props, ctx);
-                true
-            } else {
-                false
-            }
-        } else {
-            false
-        }
     }
 }
