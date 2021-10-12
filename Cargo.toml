@@ -7,11 +7,13 @@ members = [
     "crates/ui_core",
     "crates/ui",
 
-    "crates/contrib",
+    # "crates/contrib",
 ]
 
 exclude = [
     "crates/xtask",
+    "crates/plugin_python",
+    "crates/plugin_gluon",
 ]
 
 [patch.crates-io]

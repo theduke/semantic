@@ -4,10 +4,10 @@
   inputs = {
     # nixpkgs.url = github:NixOS/nixpkgs/nixos-unstable;
     flakeutils.url = "github:numtide/flake-utils";
-    naersk.url = "github:nmattia/naersk";
+    # naersk.url = "github:nmattia/naersk";
   };
 
-  outputs = { self, nixpkgs, flakeutils, naersk }: 
+  outputs = { self, nixpkgs, flakeutils /*, naersk */ }: 
     flakeutils.lib.eachDefaultSystem (system:
       let
         pkgs = nixpkgs.legacyPackages."${system}";
@@ -82,14 +82,16 @@
             src = self;
             buildInputs = with pkgs; [
               pkgconfig
+              sassc
+              wasm-pack
+              cargo-watch
             ];
             propagatedBuildInputs = with pkgs; [
               openssl
               gtk3
               glib
               webkitgtk
-              trunk
-              wasm-bindgen-cli
+              gnumake
 
               glib-networking
             ] ++ (with gst_all_1; [
