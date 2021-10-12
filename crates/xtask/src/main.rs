@@ -6,8 +6,10 @@ Semantic development CLI
 Commands:
 * build-ui
   Build the UI in release mode.
-* watch
-  Run a development server and watch/auto-rebuild the UI.
+* watch-server
+  Run a development server
+* watch-ui
+  Run a development server
 * install
   Install the `semantic` binary locally via `cargo install`.
 * install-git-hooks
@@ -26,8 +28,11 @@ fn main() -> Result<(), DynError> {
         &["git-pre-commit"] => cmd_git_pre_commit(),
         &["install-git-hooks"] => cmd_install_git_hooks(),
         &["build-ui"] => task_build_ui(true),
-        &["watch"] => cmd_watch(),
+        &["build-ui", "--dev"] => task_build_ui(false),
+        &["watch-server"] => cmd_watch(),
+        &["watch-ui"] => cmd_watch_ui(),
         &["install"] => cmd_install(),
+        &["build-wasm-js"] => gen_javascript(),
         &["help"] => {
             eprintln!("{}", USAGE);
             Ok(())
@@ -62,12 +67,12 @@ fn cmd_git_pre_commit() -> Result<(), DynError> {
 }
 
 fn cmd_watch() -> Result<(), DynError> {
-    std::thread::spawn(|| {
-        if let Err(err) = trunk_watch_ui() {
-            eprintln!("UI WATCHER FAILED: {:?}", err);
-            std::process::exit(1);
-        }
-    });
+    // std::thread::spawn(|| {
+    //     if let Err(err) = trunk_watch_ui() {
+    //         eprintln!("UI WATCHER FAILED: {:?}", err);
+    //         std::process::exit(1);
+    //     }
+    // });
 
     let data_path = root_path()?
         .join("data")
@@ -102,7 +107,7 @@ fn cmd_watch() -> Result<(), DynError> {
             "-C link-arg=-fuse-ld=lld --cfg=web_sys_unstable_apis",
         );
     }
-    (&mut cmd).spawn_success()?;
+    (&mut cmd).run()?;
 
     Ok(())
 }
@@ -120,46 +125,64 @@ fn cmd_install() -> Result<(), DynError> {
     Command::new("cargo")
         .args(&["install", "--path", "crates/semantic"])
         .current_dir(root_path()?)
-        .spawn_success()?;
+        .run()?;
     eprintln!("Installed!");
     Ok(())
 }
 
+fn build_styles() -> Result<(), DynError> {
+    eprintln!("Building styles...");
+    Command::new("sassc")
+        .arg(ui_path()?.join("assets").join("styles.scss"))
+        .arg(ui_dist_path()?.join("styles.css"))
+        .run()?;
+    eprintln!("Styles built");
+    Ok(())
+}
+
 fn task_build_ui(release: bool) -> Result<(), DynError> {
-    eprintln!("Building UI (release: {})...", release);
-    let mut cmd = build_trunk_command("build", false)?;
-    if release {
-        cmd.arg("--release");
+    std::fs::remove_dir_all(ui_dist_path()?)?;
+
+    let rustflags = vec!["--cfg=web_sys_unstable_apis", "-Cdebuginfo=0"];
+
+    let mut cmd = Command::new("wasm-pack");
+    cmd.env("RUSTFLAGS", rustflags.join(" "))
+        .env("CARGO_TARGET_DIR", wasm_target_path()?)
+        .args(&["build", "--target", "web"])
+        .arg("--out-dir")
+        .arg(ui_dist_path()?)
+        .arg(ui_path()?);
+    if !release {
+        cmd.arg("--dev");
     }
-    (&mut cmd).spawn_success()?;
+    (&mut cmd).run()?;
+
+    build_styles()?;
+
+    std::fs::copy(ui_path()?.join("index.html"), ui_dist_path()?.join("index.html"))?;
+
+    let font_dir = ui_dist_path()?.join("webfonts");
+    std::fs::create_dir_all(&font_dir)?;
+    for res in std::fs::read_dir(ui_path()?.join("assets/fontawesome-free-5.15.4-web/webfonts"))? {
+        let entry = res?;
+        let target = font_dir.join(entry.file_name());
+        std::fs::copy(entry.path(), target)?;
+    }
+
     eprintln!("UI built");
     Ok(())
 }
 
-fn trunk_watch_ui() -> Result<(), DynError> {
-    eprintln!("Watching UI...");
-    let mut cmd = build_trunk_command("watch", false)?;
-    (&mut cmd).spawn_success()?;
-    Ok(())
+fn cmd_watch_ui() -> Result<(), DynError> {
+    Command::new("cargo")
+        .args(&["watch", "--shell", "cargo xtask build-ui --dev"])
+        .run()
 }
 
-fn build_trunk_command(action: &str, debug_symbols: bool) -> Result<Command, DynError> {
-    let wasm_target = root_path()?.join("target/wasm");
-    let mut cmd = Command::new("trunk");
-
-    let mut rustflags = vec!["--cfg=web_sys_unstable_apis"];
-    if !debug_symbols {
-        rustflags.push("-Cdebuginfo=0");
-    }
-
-    cmd.current_dir(ui_path()?)
-        .arg(action)
-        .args(&["--public-url", "/assets"])
-        .arg("--dist")
-        .arg(ui_dist_path()?)
-        .env("RUSTFLAGS", rustflags.join(" "))
-        .env("CARGO_TARGET_DIR", wasm_target);
-    Ok(cmd)
+fn gen_javascript() -> Result<(), DynError> {
+    let mut gen = witx_bindgen_gen_spidermonkey::SpiderMonkeyWasm::new("foo.js", "");
+    gen.import_spidermonkey(true);
+    Ok(())
 }
 
 fn root_path() -> Result<PathBuf, DynError> {
@@ -175,16 +198,20 @@ fn ui_dist_path() -> Result<PathBuf, DynError> {
     root_path().map(|p| p.join("target").join("ui"))
 }
 
+fn wasm_target_path() -> Result<PathBuf, DynError> {
+    root_path().map(|p| p.join("target/wasm"))
+}
+
 fn ui_path() -> Result<PathBuf, DynError> {
     root_path().map(|p| p.join("crates").join("ui"))
 }
 
 trait CommandExt {
-    fn spawn_success(&mut self) -> Result<(), DynError>;
+    fn run(&mut self) -> Result<(), DynError>;
 }
 
 impl CommandExt for &mut Command {
-    fn spawn_success(&mut self) -> Result<(), DynError> {
+    fn run(&mut self) -> Result<(), DynError> {
         self.spawn()?.wait()?.ensure_success()?;
         Ok(())
     }

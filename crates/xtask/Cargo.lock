@@ -41,6 +41,24 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "5ebd3504ad6116843b8375ad70df74e7bfe83cac77a1f3fe73200c844d43bfe0"
 
 [[package]]
+name = "id-arena"
+version = "2.2.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "25a2bc672d1148e28034f176e01fffebb08b35768468cc954630da77a1449005"
+
+[[package]]
+name = "lazy_static"
+version = "1.4.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "e2abad23fbc42b3700f2f279844dc832adb2b2eb069b2df918f455c4e18cc646"
+
+[[package]]
+name = "leb128"
+version = "0.2.5"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "884e2677b40cc8c339eaefcb701c32ef1fd2493d71118dc0ca4b6a736c93bd67"
+
+[[package]]
 name = "log"
 version = "0.4.14"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -50,8 +68,46 @@ dependencies = [
 ]
 
 [[package]]
+name = "wasm-encoder"
+version = "0.6.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "2caacc74c68c74f0008c4055cdf509c43e623775eaf73323bb818dcf666ed9bd"
+dependencies = [
+ "leb128",
+]
+
+[[package]]
+name = "witx-bindgen-gen-core"
+version = "0.1.0"
+source = "git+https://github.com/bytecodealliance/witx-bindgen.git#0fea5183d121fdf736585ab9d291b3cc08487cd0"
+dependencies = [
+ "anyhow",
+ "witx2",
+]
+
+[[package]]
+name = "witx-bindgen-gen-spidermonkey"
+version = "0.1.0"
+source = "git+https://github.com/bytecodealliance/witx-bindgen.git#0fea5183d121fdf736585ab9d291b3cc08487cd0"
+dependencies = [
+ "lazy_static",
+ "wasm-encoder",
+ "witx-bindgen-gen-core",
+]
+
+[[package]]
+name = "witx2"
+version = "0.1.0"
+source = "git+https://github.com/bytecodealliance/witx-bindgen.git#0fea5183d121fdf736585ab9d291b3cc08487cd0"
+dependencies = [
+ "anyhow",
+ "id-arena",
+]
+
+[[package]]
 name = "xtask"
 version = "0.1.0"
 dependencies = [
  "devx-pre-commit",
+ "witx-bindgen-gen-spidermonkey",
 ]
