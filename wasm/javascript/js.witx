@@ -1,0 +1,3 @@
+
+
+_hostcall_string: function(command: string, payload: string) -> expected<string, string>

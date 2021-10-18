@@ -18,7 +18,12 @@ pub use self::collection::*;
 mod tags;
 pub use self::tags::*;
 
+mod health;
+pub use self::health::*;
+
 use factordb::{
+    data::Timestamp,
+    query::migrate::Migration,
     schema::{builtin::AttrIdent, AttributeDescriptor, EntityDescriptor},
     Attribute, Id,
 };
@@ -42,6 +47,10 @@ pub struct AttrUrl(url::Url);
 pub struct AttrPreviewImageUrl(url::Url);
 
 #[derive(Attribute)]
+#[factor(namespace = "semantic", title = "Datetime", name = "datetime")]
+pub struct AttrDateTime(Timestamp);
+
+#[derive(Attribute)]
 #[factor(namespace = "semantic", title = "Username")]
 pub struct AttrUsername(String);
 
@@ -49,13 +58,56 @@ pub struct SemanticPlugin;
 
 impl PluginDescriptor for SemanticPlugin {
     const NAME: &'static str = "semantic/base";
+    const IDENT: factordb::Ident = factordb::Ident::new_static(Self::NAME);
+
+    fn migrations() -> Vec<factordb::query::migrate::Migration> {
+        let first = Migration::with_name("semantic/base/v1".to_string())
+            .attr_create(AttrTitle::schema())
+            .attr_create(AttrDateTime::schema())
+            .attr_create(AttrDescription::schema())
+            .attr_create(AttrUrl::schema())
+            .attr_create(AttrPreviewImageUrl::schema())
+            .attr_create(AttrUsername::schema())
+            .attr_create(AttrBlobUri::schema())
+            .attr_create(AttrMimeType::schema())
+            .attr_create(AttrHash::schema())
+            .attr_create(AttrDuration::schema())
+            .attr_create(AttrFileSize::schema())
+            .attr_create(AttrDownloadUrl::schema())
+            .attr_create(AttrFileName::schema())
+            .attr_create(AttrSocialMediaPostContent::schema())
+            .attr_create(notes::AttrNoteBody::schema())
+            .attr_create(habit::AttrHabitOccurenceComment::schema())
+            .attr_create(habit::AttrHabitOccurenceParentId::schema())
+            .attr_create(habit::AttrHabitOccurenceTime::schema())
+            .attr_create(habit::HabitMode::schema())
+            .attr_create(collection::AttrCollectionItem::schema())
+            .attr_create(tags::AttrTagName::schema())
+            .attr_create(tags::AttrTagParent::schema())
+            .attr_create(tags::AttrTags::schema())
+            .entity_create(File::schema())
+            .entity_create(Image::schema())
+            .entity_create(Video::schema())
+            .entity_create(SocialMediaPost::schema())
+            .entity_create(notes::Note::schema())
+            .entity_create(habit::Habit::schema())
+            .entity_create(habit::HabitOccurence::schema())
+            .entity_create(collection::Collection::schema())
+            .entity_create(tags::Tag::schema());
+
+        let health_create = Migration::with_name("semantic/base/health-create".to_string())
+            .attr_create(AttrWeight::schema())
+            .entity_create(health::WeightLogEntry::schema());
+
+        vec![first, health_create]
+    }
 
     fn schema() -> PluginSchema {
         PluginSchema {
-            id: Id::nil(),
             name: Self::NAME.into(),
             description: None,
-            db: factordb::schema::DbSchema {
+            import_matchers: Vec::new(),
+            db: Some(factordb::schema::DbSchema {
                 attributes: vec![
                     AttrTitle::schema(),
                     AttrDescription::schema(),
@@ -104,7 +156,7 @@ impl PluginDescriptor for SemanticPlugin {
                     tags::Tag::schema(),
                 ],
                 indexes: vec![],
-            },
+            }),
         }
     }
 }

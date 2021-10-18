@@ -4,8 +4,9 @@ use std::{
     path::PathBuf,
     sync::{Arc, RwLock},
 };
+use tokio::task::spawn_blocking;
 
-use anyhow::{anyhow, Context};
+use anyhow::{anyhow, bail, Context};
 use factordb::{
     data::DataMap,
     query::{self, mutate::Mutate, select::Item},
@@ -15,15 +16,19 @@ use factordb::{
 use semantic_core::{
     api::{self, DbConfig},
     base::{AttrBlobUri, AttrDownloadUrl},
-    plugin::PluginDescriptor,
+    plugin::{ImportOutput, PluginDescriptor},
 };
 
-use crate::blobstore::DynBlobStore;
+use crate::{blobstore::DynBlobStore, plugin::deno::DenoPluginHost};
+
+pub use crate::plugin::deno::DenoConfig;
 
 #[derive(serde::Serialize, serde::Deserialize, Clone, Debug)]
 pub struct AppConfig {
     pub backend: Option<api::BackendConfig>,
     pub token_key: String,
+
+    pub deno: Option<DenoConfig>,
 }
 
 struct AppState {
@@ -33,6 +38,7 @@ struct AppState {
     last_activity_at: std::time::Instant,
     db: Db,
     blob: DynBlobStore,
+    deno: Option<DenoPluginHost>,
 }
 
 #[derive(Clone)]
@@ -58,11 +64,7 @@ impl App {
     pub fn default_data_dir() -> Result<PathBuf, AnyError> {
         let home = dirs::home_dir().context("Could not determine user home directory")?;
 
-        let path = home
-            .join(".local")
-            .join("share")
-            .join("semantics")
-            .join("db.data");
+        let path = home.join(".local").join("share").join("semantic");
         Ok(path)
     }
 
@@ -143,17 +145,68 @@ impl App {
                         err
                     })?;
 
+                let deno = if let Some(c) = &self.config.deno {
+                    Some(DenoPluginHost::start(c.clone()).await?)
+                } else {
+                    None
+                };
+
                 AppState {
                     db,
                     blob,
                     backend_config: config,
+                    deno,
                     last_activity_at: std::time::Instant::now(),
                 }
             }
         };
 
-        let base_plugin = semantic_core::base::SemanticPlugin::build_upsert_migration();
-        state.db.migrate(base_plugin).await?;
+        // TODO: proper plugin initialization.
+
+        let old_migrations = state.db.backend().migrations().await?;
+
+        if false
+        /*old_migrations.is_empty()*/
+        {
+            // no existing migrations, so upsert.
+            // let base_plugin = semantic_core::base::SemanticPlugin::build_upsert_migration();
+            // state.db.migrate(base_plugin).await?;
+            todo!();
+        } else {
+            // Run missing migrations.
+
+            let migrations = semantic_core::base::SemanticPlugin::migrations();
+
+            let mut to_migrate = Vec::new();
+
+            // Validate.
+            for (index, migration) in migrations.iter().enumerate() {
+                if let Some(name) = &migration.name {
+                    let old_mig = old_migrations.iter().find(|n| n.name == migration.name);
+                    if let Some(_old) = old_mig {
+                        // TODO: validate that migration has not changed!
+
+                        if !to_migrate.is_empty() {
+                            bail!("Invalid migration '{}': invalid ordering: old migration comes after missing migration", name);
+                        }
+                    } else {
+                        to_migrate.push(migration);
+                    }
+                } else {
+                    bail!(
+                        "Plugin {} has an invalid migration (number {}): migrations must have a name",
+                        semantic_core::base::SemanticPlugin::NAME,
+                        index
+                    );
+                }
+            }
+
+            for migration in to_migrate {
+                tracing::trace!(name= ?migration.name, "Running migration");
+                state.db.migrate(migration.clone()).await?;
+            }
+        }
+
         *self.state.write().unwrap() = Some(state);
         Ok(())
     }
@@ -249,18 +302,22 @@ impl App {
 
     pub async fn load_schema(&self) -> Result<semantic_core::plugin::PluginSchema, AnyError> {
         let mut schema = semantic_core::base::SemanticPlugin::schema();
+        let db_schema = schema
+            .db
+            .as_mut()
+            .context("base plugin is missing db schema")?;
         // Fix up the schema with real IDs.
 
         let db = self.require_db()?;
 
         let reg = { db.backend().registry().read().unwrap().clone() };
 
-        for entity in &mut schema.db.entities {
+        for entity in &mut db_schema.entities {
             if let Some(reg) = reg.entity_by_name(&entity.ident) {
                 entity.id = reg.schema.id;
             }
         }
-        for attr in &mut schema.db.attributes {
+        for attr in &mut db_schema.attributes {
             if let Some(reg) = reg.attr_by_name(&attr.ident) {
                 attr.id = reg.schema.id;
             }
@@ -408,6 +465,39 @@ impl App {
         Ok(items)
     }
 
+    pub async fn fetch_url(
+        &self,
+        url: url::Url,
+        import: bool,
+        import_media: bool,
+    ) -> Result<Option<ImportOutput>, AnyError> {
+        let deno_opt = self
+            .state
+            .read()
+            .unwrap()
+            .as_ref()
+            .and_then(|s| s.deno.clone());
+        let deno = if let Some(d) = deno_opt {
+            d
+        } else {
+            return Ok(None);
+        };
+
+        let output_opt = deno.import(&url).await?;
+
+        let output = if let Some(o) = output_opt {
+            o
+        } else {
+            return Ok(None);
+        };
+
+        if import {
+            // TODO: return updated items from the DB instead of the original import.
+            self.import(output.items.clone(), import_media).await?;
+        }
+        Ok(Some(output))
+    }
+
     pub async fn import(&self, items: Vec<Item>, import_media: bool) -> Result<(), AnyError> {
         let db = self.require_db()?;
         let blob = self.require_blob()?;
@@ -446,37 +536,39 @@ impl App {
             }
 
             if let Some(url) = data.get_attr::<AttrDownloadUrl>() {
-                tracing::trace!(%id, %url, "downloading file for node");
+                if import_media {
+                    tracing::trace!(%id, %url, "downloading file for node");
 
-                let data = client
-                    .get(url.as_str())
-                    .header(reqwest::header::USER_AGENT, "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.101 Safari/537.36")
-                    .send()
-                    .await?
-                    .error_for_status()?
-                    .bytes()
-                    .await?;
+                    let data = client
+                        .get(url.as_str())
+                        .header(reqwest::header::USER_AGENT, "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.101 Safari/537.36")
+                        .send()
+                        .await?
+                        .error_for_status()?
+                        .bytes()
+                        .await?;
 
-                let tmp_path = std::path::PathBuf::from(url.as_str());
-                let filename_opt = tmp_path
-                    .file_name()
-                    .and_then(|x| x.to_str())
-                    .map(|x| x.to_string());
+                    let tmp_path = std::path::PathBuf::from(url.as_str());
+                    let filename_opt = tmp_path
+                        .file_name()
+                        .and_then(|x| x.to_str())
+                        .map(|x| x.to_string());
 
-                let mut path = format!("files/{}", id);
-                if let Some(filename) = filename_opt {
-                    path.push('/');
-                    path.push_str(&filename);
+                    let mut path = format!("files/{}", id);
+                    if let Some(filename) = filename_opt {
+                        path.push('/');
+                        path.push_str(&filename);
+                    }
+                    let size = data.len();
+
+                    blob.put(&path, data.to_vec()).await?;
+
+                    let mut patch = factordb::data::value::ValueMap::new();
+                    patch.insert_attr::<AttrBlobUri>(path);
+                    db.merge(id, patch).await?;
+
+                    tracing::debug!(?url, entity_id=%id, %size, "imported file for entity");
                 }
-                let size = data.len();
-
-                blob.put(&path, data.to_vec()).await?;
-
-                let mut patch = factordb::data::value::ValueMap::new();
-                patch.insert_attr::<AttrBlobUri>(path);
-                db.merge(id, patch).await?;
-
-                tracing::debug!(?url, entity_id=%id, %size, "imported file for entity");
             }
         }
 
@@ -682,6 +774,7 @@ impl App {
         }
     }
 
+    #[tracing::instrument(level = "trace", skip(self), err)]
     pub async fn run_query(
         &self,
         query: semantic_core::api::Query,
@@ -752,9 +845,17 @@ impl App {
                 Ok(api::Reply::Import)
             }
             api::Query::Schema => {
-                let schema = self.load_schema().await?;
-                let reply = api::Reply::Schema(api::SemanticSchema { db: schema.db });
+                let db = self.load_schema().await?.db.unwrap_or_default();
+                let reply = api::Reply::Schema(api::SemanticSchema { db });
                 Ok(reply)
+            }
+            api::Query::FetchUrl {
+                url,
+                import_media,
+                import,
+            } => {
+                let output = self.fetch_url(url, import, import_media).await?;
+                Ok(api::Reply::FetchUrl(output))
             }
         };
         res.map_err(|err| {

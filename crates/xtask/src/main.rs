@@ -29,8 +29,8 @@ fn main() -> Result<(), DynError> {
         &["install-git-hooks"] => cmd_install_git_hooks(),
         &["build-ui"] => task_build_ui(true),
         &["build-ui", "--dev"] => task_build_ui(false),
-        &["watch-server"] => cmd_watch(),
-        &["watch-ui"] => cmd_watch_ui(),
+        &["watch-server"] => cmd_watch_server(),
+        &["watch-ui"] => trunk_watch_ui(),
         &["install"] => cmd_install(),
         &["build-wasm-js"] => gen_javascript(),
         &["help"] => {
@@ -66,7 +66,7 @@ fn cmd_git_pre_commit() -> Result<(), DynError> {
     Ok(())
 }
 
-fn cmd_watch() -> Result<(), DynError> {
+fn cmd_watch_server() -> Result<(), DynError> {
     // std::thread::spawn(|| {
     //     if let Err(err) = trunk_watch_ui() {
     //         eprintln!("UI WATCHER FAILED: {:?}", err);
@@ -82,17 +82,20 @@ fn cmd_watch() -> Result<(), DynError> {
         .to_string();
 
     let mut cmd = Command::new("cargo");
-    cmd.current_dir(root_path()?).args(&[
-        "run",
-        "--bin",
-        "semantic",
-        "--",
-        "server",
-        "--data-path",
-        &data_path,
-        "--key",
-        "testkey",
-    ]);
+    cmd.current_dir(root_path()?)
+        .args(&[
+            "run",
+            "--bin",
+            "semantic",
+            "--",
+            "server",
+            "--data-path",
+            &data_path,
+            "--key",
+            "testkey",
+        ])
+        .arg("--deno-plugin-dir")
+        .arg(root_path()?.join("lib").join("contrib"));
 
     if std::env::var("RUST_LOG").is_err() {
         cmd.env(
@@ -141,7 +144,10 @@ fn build_styles() -> Result<(), DynError> {
 }
 
 fn task_build_ui(release: bool) -> Result<(), DynError> {
-    std::fs::remove_dir_all(ui_dist_path()?)?;
+    let target_dir = ui_dist_path()?;
+    if !target_dir.is_dir() {
+        std::fs::create_dir_all(&target_dir)?;
+    }
 
     let rustflags = vec!["--cfg=web_sys_unstable_apis", "-Cdebuginfo=0"];
 
@@ -150,7 +156,7 @@ fn task_build_ui(release: bool) -> Result<(), DynError> {
         .env("CARGO_TARGET_DIR", wasm_target_path()?)
         .args(&["build", "--target", "web"])
         .arg("--out-dir")
-        .arg(ui_dist_path()?)
+        .arg(&target_dir)
         .arg(ui_path()?);
     if !release {
         cmd.arg("--dev");
@@ -159,7 +165,10 @@ fn task_build_ui(release: bool) -> Result<(), DynError> {
 
     build_styles()?;
 
-    std::fs::copy(ui_path()?.join("index.html"), ui_dist_path()?.join("index.html"))?;
+    std::fs::copy(
+        ui_path()?.join("index.html"),
+        ui_dist_path()?.join("index.html"),
+    )?;
 
     let font_dir = ui_dist_path()?.join("webfonts");
     std::fs::create_dir_all(&font_dir)?;
@@ -173,7 +182,7 @@ fn task_build_ui(release: bool) -> Result<(), DynError> {
     Ok(())
 }
 
-fn cmd_watch_ui() -> Result<(), DynError> {
+fn trunk_watch_ui() -> Result<(), DynError> {
     Command::new("cargo")
         .args(&["watch", "--shell", "cargo xtask build-ui --dev"])
         .run()

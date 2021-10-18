@@ -2,3 +2,4 @@ target
 crates/contrib/
 .direnv.fish
 /data
+/lib/contrib

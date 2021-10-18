@@ -8,6 +8,7 @@ members = [
     "crates/ui",
 
     # "crates/contrib",
+    "crates/brass2",
 ]
 
 exclude = [

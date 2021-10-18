@@ -1,6 +1,7 @@
 use factordb::{
     query::{migrate, select::Item},
-    Id, Ident,
+    schema::DbSchema,
+    Ident,
 };
 use url::Url;
 
@@ -8,11 +9,11 @@ use url::Url;
 #[derive(serde::Serialize, serde::Deserialize, Clone, PartialEq, Eq, Debug)]
 pub enum ImportSupport {
     /// Importer has dedicated (specific) support for the url.
-    Dedicated { priority: u64 },
+    Dedicated,
     /// Importer has generic support for the url.
     Generic { priority: u64 },
     /// Importer might support the url, but needs to do a more expensive check.
-    MaybeSupported { priority: u64 },
+    MaybeSupported,
 }
 
 impl PartialOrd for ImportSupport {
@@ -26,10 +27,7 @@ impl Ord for ImportSupport {
         use std::cmp::Ordering;
 
         match (self, other) {
-            (
-                ImportSupport::Dedicated { priority: a },
-                ImportSupport::Dedicated { priority: b },
-            ) => a.cmp(b),
+            (ImportSupport::Dedicated, ImportSupport::Dedicated) => std::cmp::Ordering::Equal,
             (ImportSupport::Dedicated { .. }, ImportSupport::Generic { .. }) => Ordering::Greater,
             (ImportSupport::Dedicated { .. }, ImportSupport::MaybeSupported { .. }) => {
                 Ordering::Greater
@@ -45,22 +43,21 @@ impl Ord for ImportSupport {
                 Ordering::Less
             }
             (ImportSupport::MaybeSupported { .. }, ImportSupport::Generic { .. }) => Ordering::Less,
-            (
-                ImportSupport::MaybeSupported { priority: a },
-                ImportSupport::MaybeSupported { priority: b },
-            ) => a.cmp(b),
+            (ImportSupport::MaybeSupported, ImportSupport::MaybeSupported) => {
+                std::cmp::Ordering::Equal
+            }
         }
     }
 }
 
 #[derive(serde::Serialize, serde::Deserialize, Clone, Debug)]
-pub struct ImporterMatch {
+pub struct ImportMatch {
     pub plugin: String,
     pub support: ImportSupport,
 }
 
 pub struct ImportMatches {
-    pub matches: Vec<ImporterMatch>,
+    pub matches: Vec<ImportMatch>,
 }
 
 impl ImportMatches {
@@ -68,7 +65,7 @@ impl ImportMatches {
         self.matches.sort_by(|a, b| a.support.cmp(&b.support))
     }
 
-    pub fn best(&self) -> Option<&ImporterMatch> {
+    pub fn best(&self) -> Option<&ImportMatch> {
         self.matches.first()
     }
 }
@@ -84,18 +81,86 @@ pub struct ImportOutput {
     pub plugin: String,
 
     /// Potentially nested items.
+    #[serde(default)]
     pub items: Vec<Item>,
     /// The url where more items can be retrieved.
     pub load_more_url: Option<url::Url>,
+    #[serde(default)]
     pub related_urls: Vec<ImportRelatedUrl>,
 }
 
 #[derive(serde::Serialize, serde::Deserialize, Clone, Debug, PartialEq, Eq)]
 pub struct PluginSchema {
-    pub id: Id,
     pub name: String,
     pub description: Option<String>,
-    pub db: factordb::schema::DbSchema,
+    pub db: Option<factordb::schema::DbSchema>,
+    #[serde(default)]
+    pub import_matchers: Vec<ImportMatcherRule>,
+}
+
+impl PluginSchema {
+    pub fn find_import_match(&self, url: &Url) -> Option<ImportMatch> {
+        let support = self
+            .import_matchers
+            .iter()
+            .filter_map(|rule| {
+                if rule.matcher.is_match(url) {
+                    Some(rule.support.clone())
+                } else {
+                    None
+                }
+            })
+            .max()?;
+
+        Some(ImportMatch {
+            plugin: self.name.clone(),
+            support,
+        })
+    }
+}
+
+// Describes what URLs a plugin can import.
+#[derive(serde::Serialize, serde::Deserialize, Clone, Debug, PartialEq, Eq)]
+pub enum ImportMatcher {
+    /// Potentially supports all urls.
+    /// Should be rarely used, eg for generic fallback importers that support
+    /// all web pages
+    All,
+    /// Support for specific domains.
+    Domains { domains: Vec<String> },
+    // TODO: regex?
+}
+
+impl ImportMatcher {
+    pub fn is_match(&self, url: &Url) -> bool {
+        match self {
+            Self::All => true,
+            Self::Domains { domains } => domains
+                .iter()
+                .any(|domain| Some(domain.as_str()) == url.domain()),
+        }
+    }
+}
+
+#[derive(serde::Serialize, serde::Deserialize, Clone, Debug, PartialEq, Eq)]
+pub struct ImportMatcherRule {
+    pub matcher: ImportMatcher,
+    pub support: ImportSupport,
+}
+
+#[derive(serde::Serialize, serde::Deserialize, Clone, Debug, PartialEq, Eq)]
+pub struct JavascriptRuntimeSpec {
+    pub code: String,
+}
+
+#[derive(serde::Serialize, serde::Deserialize, Clone, Debug, PartialEq, Eq)]
+pub enum PluginRuntimeSpec {
+    Javascript(JavascriptRuntimeSpec),
+}
+
+#[derive(serde::Serialize, serde::Deserialize, Clone, Debug, PartialEq, Eq)]
+pub struct PluginSpec {
+    pub runtime: PluginRuntimeSpec,
 }
 
 pub trait PluginDescriptor {
@@ -104,18 +169,25 @@ pub trait PluginDescriptor {
 
     fn schema() -> PluginSchema;
 
-    fn build_upsert_migration() -> migrate::Migration {
-        let schema = Self::schema();
+    fn migrations() -> Vec<migrate::Migration>;
+}
 
-        let attrs = schema.db.attributes.into_iter().map(|attr| {
-            migrate::SchemaAction::AttributeUpsert(migrate::AttributeUpsert { schema: attr })
-        });
-        let entities = schema.db.entities.into_iter().map(|attr| {
-            migrate::SchemaAction::EntityUpsert(migrate::EntityUpsert { schema: attr })
-        });
+pub fn build_upsert_migration(schema: &DbSchema) -> migrate::Migration {
+    let attrs = schema.attributes.iter().map(|attr| {
+        migrate::SchemaAction::AttributeUpsert(migrate::AttributeUpsert {
+            schema: attr.clone(),
+        })
+    });
+    let entities = schema.entities.iter().map(|entity| {
+        migrate::SchemaAction::EntityUpsert(migrate::EntityUpsert {
+            schema: entity.clone(),
+        })
+    });
 
-        let actions = attrs.chain(entities).collect();
+    let actions = attrs.chain(entities).collect();
 
-        migrate::Migration { actions }
+    migrate::Migration {
+        name: None,
+        actions,
     }
 }

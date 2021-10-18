@@ -65,7 +65,9 @@ impl brass::Component for ImportPage {
 
                 self.import_load.set_loading();
 
-                let f = ctx.registry().import(url, None, ctx.api());
+                let api = ctx.api().clone();
+                let auto_import = self.auto_import;
+                let f = async move { api.fetch_url(url.clone(), auto_import, true).await };
                 self.guard = Some(ctx.run_map(f, Msg::ImporterLoaded));
             }
             Msg::FormSubmitImport(url) => {

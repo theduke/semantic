@@ -5,6 +5,8 @@ use factordb::{
     AnyError,
 };
 
+use crate::plugin::ImportOutput;
+
 #[derive(serde::Serialize, serde::Deserialize, Clone, Debug)]
 pub struct SimpleHttpRequest {
     pub url: String,
@@ -93,6 +95,11 @@ pub enum Query {
         items: Vec<Item>,
         import_media: bool,
     },
+    FetchUrl {
+        url: url::Url,
+        import: bool,
+        import_media: bool,
+    },
 
     /// Execute an HTTP request.
     HttpFetch(SimpleHttpRequest),
@@ -121,6 +128,7 @@ pub enum Reply {
     Schema(SemanticSchema),
 
     Import,
+    FetchUrl(Option<ImportOutput>),
     HttpFetch(SimpleHttpResponse),
 }
 
@@ -259,6 +267,27 @@ impl<E: ApiClientExecutor> ApiClient<E> {
             .await
         {
             Ok(Reply::Import) => Ok(()),
+            Ok(_other) => Err(anyhow::anyhow!("API returned invalid data")),
+            Err(err) => Err(err),
+        }
+    }
+
+    pub async fn fetch_url(
+        &self,
+        url: url::Url,
+        import: bool,
+        import_media: bool,
+    ) -> Result<Option<ImportOutput>, AnyError> {
+        match self
+            .exec
+            .execute(Query::FetchUrl {
+                import,
+                url,
+                import_media,
+            })
+            .await
+        {
+            Ok(Reply::FetchUrl(output)) => Ok(output),
             Ok(_other) => Err(anyhow::anyhow!("API returned invalid data")),
             Err(err) => Err(err),
         }

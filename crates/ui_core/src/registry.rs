@@ -5,7 +5,7 @@ use factordb::{
     AnyError,
 };
 use fnv::FnvHashMap;
-use semantic_core::plugin::{ImportMatches, ImportOutput, ImporterMatch};
+use semantic_core::plugin::{ImportMatch, ImportMatches, ImportOutput};
 
 use crate::{api::BrowserApiClient, BrowserPlugin};
 
@@ -206,7 +206,7 @@ impl Registry {
             .plugins
             .values()
             .filter_map(|p| {
-                p.import_match(url).map(|support| ImporterMatch {
+                p.import_match(url).map(|support| ImportMatch {
                     plugin: p.spec().name,
                     support,
                 })

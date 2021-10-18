@@ -1,7 +1,9 @@
-use semantic_core::api;
+use semantic_core::{api, base::SemanticPlugin, plugin::PluginDescriptor};
+use std::{io::Write, path::PathBuf};
 use structopt::StructOpt;
 
 use semantic::{app, server};
+use tracing_subscriber::prelude::__tracing_subscriber_SubscriberExt;
 
 fn main() {
     if std::env::var("RUST_LOG").is_err() {
@@ -12,12 +14,19 @@ fn main() {
 
         std::env::set_var("RUST_LOG", default);
     }
-    tracing_subscriber::fmt::init();
+
+    // Initialize logger.
+    // tracing_subscriber::fmt::init();
+    let subscriber =
+        tracing_subscriber::Registry::default().with(tracing_tree::HierarchicalLayer::new(2));
+    tracing::subscriber::set_global_default(subscriber).unwrap();
 
     let args = CliArgs::from_args();
 
     match args.command {
         CliCommand::Server(subargs) => {
+            let data_dir = app::App::default_data_dir().unwrap();
+
             let db_config = if subargs.no_backend {
                 None
             } else {
@@ -38,6 +47,10 @@ fn main() {
             let app_config = app::AppConfig {
                 backend: backend_config,
                 token_key: subargs.token_key.unwrap_or_else(app::App::random_token_key),
+                deno: Some(app::DenoConfig {
+                    data_dir: data_dir.join("deno"),
+                    plugin_dir: subargs.deno_plugin_dir.map(PathBuf::from),
+                }),
             };
             let config = server::ServerConfig {
                 // Enable authentication when no backend is provided.
@@ -63,6 +76,16 @@ fn main() {
                 .expect("Could not build app");
             app.run_webview_gtk().expect("Could not run GTK app");
         }
+        CliCommand::GenerateTypescript(_) => {
+            let builtin = factordb::schema::builtin::builtin_db_schema();
+            let base = SemanticPlugin::schema().db.unwrap();
+
+            let schema = builtin.merge(base);
+
+            let ts = factor_tools::typescript::schema_to_typescript(&schema, None).unwrap();
+
+            write!(std::io::stdout(), "{}", ts).unwrap();
+        }
     }
 }
 
@@ -78,7 +101,11 @@ enum CliCommand {
     Server(CommandServer),
     #[cfg(feature = "webkit")]
     Webkit(CommandWebkit),
+    GenerateTypescript(GenerateTypescript),
 }
+
+#[derive(StructOpt)]
+struct GenerateTypescript {}
 
 /// Run the semantic server backend.
 #[derive(StructOpt)]
@@ -87,6 +114,10 @@ struct CommandServer {
     data_path: Option<String>,
     #[structopt(long, short)]
     key: Option<String>,
+
+    #[structopt(long)]
+    deno_plugin_dir: Option<String>,
+
     #[structopt(long)]
     no_backend: bool,
     /// The interface to listen on.
