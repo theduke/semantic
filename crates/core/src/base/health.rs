@@ -1,11 +1,6 @@
 use serde::{Deserialize, Serialize};
 
-use factordb::{
-    data::{DataMap, Timestamp},
-    query::{expr::Expr, mutate::Mutate, select::Select},
-    schema::{builtin::AttrType, AttributeDescriptor, EntityDescriptor},
-    Attribute, Entity, Id,
-};
+use factordb::{data::Timestamp, Attribute, Entity, Id};
 
 use super::AttrDateTime;
 

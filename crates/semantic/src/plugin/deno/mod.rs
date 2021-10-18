@@ -37,19 +37,19 @@ impl DenoConfig {
 
 #[derive(Clone, Debug)]
 struct PluginData {
-    plugin_file: PathBuf,
+    // plugin_file: PathBuf,
     schema: PluginSchema,
-    code: String,
+    // code: String,
 }
 
 struct State {
-    config: DenoConfig,
+    // config: DenoConfig,
     plugins: HashMap<String, PluginData>,
     workers: HashMap<String, Arc<Mutex<Worker>>>,
 }
 
 struct Worker {
-    child: tokio::process::Child,
+    _child: tokio::process::Child,
     stdin: tokio::process::ChildStdin,
     // stdout: tokio::process::ChildStdout,
     stderr: BufReader<tokio::process::ChildStderr>,
@@ -75,7 +75,7 @@ impl Worker {
         let stderr = child.stderr.take().context("Child does not have stderr")?;
 
         let w = Self {
-            child,
+            _child: child,
             stdin,
             // stdout,
             stderr: BufReader::new(stderr),
@@ -163,7 +163,7 @@ impl DenoPluginHost {
             state: Arc::new(RwLock::new(State {
                 plugins,
                 workers,
-                config,
+                // config,
             })),
         };
 
@@ -241,9 +241,9 @@ impl DenoPluginHost {
                 let (worker, schema) = Self::boot_plugin_worker(&config.data_dir, &code).await?;
 
                 let data = PluginData {
-                    plugin_file: path,
+                    // plugin_file: path,
                     schema,
-                    code,
+                    // code,
                 };
                 tracing::trace!(?data, "loaded deno plugin");
                 plugins.push((data, worker));

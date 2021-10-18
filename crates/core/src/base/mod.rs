@@ -25,7 +25,7 @@ use factordb::{
     data::Timestamp,
     query::migrate::Migration,
     schema::{builtin::AttrIdent, AttributeDescriptor, EntityDescriptor},
-    Attribute, Id,
+    Attribute,
 };
 
 // Common default attributes.

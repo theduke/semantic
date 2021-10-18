@@ -4,7 +4,6 @@ use std::{
     path::PathBuf,
     sync::{Arc, RwLock},
 };
-use tokio::task::spawn_blocking;
 
 use anyhow::{anyhow, bail, Context};
 use factordb::{
@@ -45,7 +44,7 @@ struct AppState {
 pub struct App {
     config: AppConfig,
     state: Arc<RwLock<Option<AppState>>>,
-    rt: tokio::runtime::Handle,
+    _rt: tokio::runtime::Handle,
     http_client: reqwest::Client,
 }
 
@@ -230,7 +229,7 @@ impl App {
         let s = Self {
             config: config.clone(),
             state: Arc::new(RwLock::new(None)),
-            rt,
+            _rt: rt,
             http_client: reqwest::Client::new(),
         };
 
