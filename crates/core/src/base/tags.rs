@@ -1,11 +1,6 @@
 use serde::{Deserialize, Serialize};
 
-use factordb::{
-    data::DataMap,
-    query::{expr::Expr, mutate::Mutate, select::Select},
-    schema::{builtin::AttrType, AttributeDescriptor, EntityDescriptor},
-    Attribute, Entity, Id,
-};
+use factordb::{Attribute, Entity, Id, data::{DataMap, value::patch::Patch}, query::{expr::Expr, mutate::Mutate, select::Select}, schema::{builtin::AttrType, AttributeDescriptor, EntityDescriptor}};
 
 use super::AttrDescription;
 
@@ -68,19 +63,23 @@ impl Tag {
 
     /// Build a [`Mutate`] that adds a tag to an entity.
     pub fn mutate_add_tag(entity_id: Id, tag_id: Id) -> Mutate {
-        Mutate::merge(
+        Mutate::patch(
             entity_id,
-            DataMap::new().with_insert(AttrTags::QUALIFIED_NAME, vec![tag_id]),
+            Patch::new().add(AttrTags::QUALIFIED_NAME, tag_id)
         )
     }
 
     /// Build a [`Mutate`] that removes a tag from an entity.
-    pub fn mutate_remove_tag(entity_id: Id, current_tags: &[Id], tag_id: Id) -> Mutate {
-        // FIXME: use a Patch to remove the specific item id instead of
-        // overwriting. Needs Patch support implemented in factordb.
+    pub fn mutate_remove_tag(entity_id: Id, tag_id: Id) -> Mutate {
+        Mutate::patch(
+            entity_id,
+            Patch::new().remove_with_old(AttrTags::QUALIFIED_NAME, tag_id)
+        )
+    }
 
-        let mut tag_ids = current_tags.to_vec();
-        tag_ids.retain(|item_id| item_id != &tag_id);
+
+    /// Build a [`Mutate`] that removes a tag from an entity.
+    pub fn mutate_set_tags(entity_id: Id, tag_ids: Vec<Id>) -> Mutate {
         let mut map = DataMap::new();
         map.insert(AttrTags::QUALIFIED_NAME.into(), tag_ids.into());
         Mutate::merge(entity_id, map)

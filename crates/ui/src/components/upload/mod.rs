@@ -1,11 +1,10 @@
-use brass::vdom::div;
+use brass::dom::{TagBuilder, builder::div};
+use semantic_ui_core::components::util::title_2;
 
 mod clipboard_reader;
-pub mod upload_page;
 pub mod uploader;
 
-pub fn upload_page() -> brass::VNode {
+pub fn upload_page() -> TagBuilder {
     div()
-        .and((brass_bulma::h2_with("Upload"), uploader::FileUploader))
-        .build()
+        .and((title_2().and("Upload"), uploader::FileUploader))
 }

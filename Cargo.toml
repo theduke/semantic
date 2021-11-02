@@ -8,7 +8,6 @@ members = [
     "crates/ui",
 
     # "crates/contrib",
-    "crates/brass2",
 ]
 
 exclude = [
@@ -18,7 +17,7 @@ exclude = [
 ]
 
 [patch.crates-io]
-brass = {path = "../brass"}
-brass_bulma = {path = "../brass/brass_bulma"}
+brass = {path = "../brass/brass"}
+# brass_bulma = {path = "../brass/brass_bulma"}
 factordb = { path = "../factordb/factordb"}
 factor_tools = { path = "../factordb/factor_tools" }

@@ -1,41 +1,33 @@
-use crate::routing;
+use std::{rc::Rc, sync::RwLock};
 
-pub trait ContextExt {
-    fn router(&self) -> &routing::Router;
-    fn registry(&self) -> &crate::SharedRegistry;
-    fn api(&self) -> &crate::api::BrowserApiClient;
+pub struct Context {
+    registry: RwLock<crate::SharedRegistry>,
+    api: crate::api::BrowserApiClient,
+    router: crate::routing::Router,
 }
 
-impl<'a, M> ContextExt for brass::Context<'a, M> {
-    fn router(&self) -> &routing::Router {
-        self.get().expect("Router not in global context")
-    }
+thread_local!(
+static CONTEXT: Rc<Context> = Rc::new(Context {
+    registry: RwLock::new(crate::Registry::new(Default::default()).into_shared()),
+    api: crate::api::new_api(None),
+    router: crate::routing::Router::new(),
+}));
 
-    fn registry(&self) -> &crate::SharedRegistry {
-        self.get().expect("Registry not in global context")
-    }
-
-    fn api(&self) -> &crate::api::BrowserApiClient {
-        self.get().expect("API not in global context")
-    }
+pub fn api() -> crate::api::BrowserApiClient {
+    CONTEXT.with(|c| c.api.clone())
 }
 
-pub trait RenderContextExt {
-    fn router(&self) -> &routing::Router;
-    fn registry(&self) -> &crate::SharedRegistry;
-    fn api(&self) -> &crate::api::BrowserApiClient;
+pub fn registry() -> crate::SharedRegistry {
+    // FIXME: drop unsafe
+    CONTEXT.with(|c| c.registry.read().unwrap().clone())
 }
 
-impl<'a, C: brass::Component> RenderContextExt for brass::RenderContext<'a, C> {
-    fn router(&self) -> &routing::Router {
-        self.get().expect("Router not in global context")
-    }
+pub fn set_registry(registry: crate::Registry) {
+    CONTEXT.with(|c| {
+        *c.registry.write().unwrap() = registry.into_shared();
+    })
+}
 
-    fn registry(&self) -> &crate::SharedRegistry {
-        self.get().expect("Registry not in global context")
-    }
-
-    fn api(&self) -> &crate::api::BrowserApiClient {
-        self.get().expect("API not in global context")
-    }
+pub fn router() -> crate::routing::Router {
+    CONTEXT.with(|c| c.router.clone())
 }

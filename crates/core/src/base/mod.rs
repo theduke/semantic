@@ -21,6 +21,8 @@ pub use self::tags::*;
 mod health;
 pub use self::health::*;
 
+use factordb::data::DataMap;
+use factordb::schema::AttrMapExt;
 use factordb::{
     data::Timestamp,
     query::migrate::Migration,
@@ -33,6 +35,12 @@ use factordb::{
 #[derive(Attribute)]
 #[factor(namespace = "semantic", title = "Title")]
 pub struct AttrTitle(String);
+
+pub fn entity_title(data: &DataMap) -> String {
+    data.get_attr::<AttrTitle>()
+        .or_else(|| data.get_id().map(|x| x.to_string()))
+        .unwrap_or_else(|| "<No Title>".to_string())
+}
 
 #[derive(Attribute)]
 #[factor(namespace = "semantic", title = "Description")]

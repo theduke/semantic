@@ -28,14 +28,11 @@ impl BrowserExecutor {
         let request = web_sys::Request::new_with_str_and_init(&self.endpoint, &opts)
             .map_err(anyerr_from_js)?;
 
-        // request
-        //     .headers()
-        //     .set("Accept", "application/vnd.github.v3+json");
 
         let window = web_sys::window().unwrap();
-        let resp_value = wasm_bindgen_futures::JsFuture::from(window.fetch_with_request(&request))
-            .await
-            .map_err(anyerr_from_js)?;
+        let fut1 = wasm_bindgen_futures::JsFuture::from(window.fetch_with_request(&request));
+        let out = fut1.await;
+        let resp_value = out.map_err(anyerr_from_js)?;
 
         // `resp_value` is a `Response` object.
         assert!(resp_value.is_instance_of::<web_sys::Response>());
@@ -94,11 +91,9 @@ pub async fn upload_file(
         .unwrap();
 
     let window = web_sys::window().unwrap();
-    tracing::trace!("Sending upload request");
     let resp_value = wasm_bindgen_futures::JsFuture::from(window.fetch_with_request(&request))
         .await
         .map_err(anyerr_from_js)?;
-    tracing::trace!("fetch completed");
 
     // `resp_value` is a `Response` object.
     assert!(resp_value.is_instance_of::<web_sys::Response>());

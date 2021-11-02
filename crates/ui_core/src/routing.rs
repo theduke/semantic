@@ -1,4 +1,11 @@
-use brass::Callback;
+use brass::{
+    dom::{builder::tag, ClickEvent, TagBuilder},
+    signal::signal::{Mutable, Signal},
+};
+use factordb::Ident;
+use wasm_bindgen::JsValue;
+
+use crate::context::router;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Route {
@@ -29,7 +36,9 @@ impl Route {
             ["import"] => Some(Route::Import),
             ["upload"] => Some(Route::Upload),
             ["play"] => Some(Route::Play),
-            ["entity", id] => Some(Route::Entity(id.to_string().into())),
+            ["entity", id] => {
+                Some(Route::Entity(Ident::from_str(id)))
+            }
             ["create"] => Some(Route::EntityCreateSelect),
             ["create", tail @ ..] => Some(Route::EntityCreate {
                 entity_type: tail.join("/"),
@@ -70,16 +79,41 @@ impl Route {
     }
 }
 
+#[derive(Clone)]
 pub struct Router {
-    callback: brass::Callback<Route>,
+    route: Mutable<Route>,
 }
 
 impl Router {
-    pub fn new(callback: Callback<Route>) -> Self {
-        Self { callback }
+    pub fn new() -> Self {
+        Self {
+            route: Mutable::new(Route::Browse),
+        }
     }
 
     pub fn goto(&self, route: Route) {
-        self.callback.send(route);
+        let path = route.to_path();
+        let title = route.title();
+
+        self.route.set(route);
+        if let Some(history) = web_sys::window().and_then(|w| w.history().ok()) {
+            history
+                .push_state_with_url(&JsValue::NULL, title, Some(&path))
+                .ok();
+        }
     }
+
+    pub fn route(&self) -> &Mutable<Route> {
+        &self.route
+    }
+
+    pub fn signal(&self) -> impl Signal<Item = Route> {
+        self.route.signal_cloned()
+    }
+}
+
+pub fn link(route: Route, label: &str) -> TagBuilder {
+    tag(brass::dom::Tag::A)
+        .and(label)
+        .on(move |_: ClickEvent| router().goto(route.clone()))
 }

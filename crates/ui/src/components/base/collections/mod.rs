@@ -1,61 +1,61 @@
-pub mod collection_create;
-pub mod collection_form;
-mod collection_item_loader;
+// pub mod collection_create;
+// pub mod collection_form;
+// mod collection_item_loader;
 
-mod collection_picker;
-pub use collection_picker::collection_picker;
+// mod collection_picker;
+// pub use collection_picker::collection_picker;
 
-pub mod collection_update;
+// pub mod collection_update;
 
-mod entity_collection_manager;
-pub use entity_collection_manager::EntityCollectionManager;
+// mod entity_collection_manager;
+// pub use entity_collection_manager::EntityCollectionManager;
 
-use brass::vdom::{self, Render};
-use factordb::schema::AttributeDescriptor;
-use semantic_core::base::AttrCollectionItem;
+// use brass::vdom::{self, Render};
+// use factordb::schema::AttributeDescriptor;
+// use semantic_core::base::AttrCollectionItem;
 
-use self::collection_update::CollectionUpdate;
+// use self::collection_update::CollectionUpdate;
 
-// use semantic_core::base::{AttrCollectionItem, Collection, CollectionWithItems};
-// use semantic_ui_core::components::{Loader, LoaderFunc};
-// pub fn collection_items_loader(
-//     col: &Collection,
-//     render: Renderer<Shared<CollectionWithItems>>,
-//     api: semantic_ui_core::api::BrowserApiClient,
-// ) -> VNode {
-//     Loader::<Collection, CollectionWithItems> {
-//         input: col.clone(),
-//         load: LoaderFunc::dynamic(move |col| {
-//             let api = api.clone();
-//             Box::pin(async move {
-//                 let query = CollectionWithItems::build_query(&col);
-//                 let page = api.select(query).await?;
-//                 let col = CollectionWithItems::from_query_result(col, page.items);
-//                 Ok(col)
-//             })
-//         }),
-//         render,
+// // use semantic_core::base::{AttrCollectionItem, Collection, CollectionWithItems};
+// // use semantic_ui_core::components::{Loader, LoaderFunc};
+// // pub fn collection_items_loader(
+// //     col: &Collection,
+// //     render: Renderer<Shared<CollectionWithItems>>,
+// //     api: semantic_ui_core::api::BrowserApiClient,
+// // ) -> VNode {
+// //     Loader::<Collection, CollectionWithItems> {
+// //         input: col.clone(),
+// //         load: LoaderFunc::dynamic(move |col| {
+// //             let api = api.clone();
+// //             Box::pin(async move {
+// //                 let query = CollectionWithItems::build_query(&col);
+// //                 let page = api.select(query).await?;
+// //                 let col = CollectionWithItems::from_query_result(col, page.items);
+// //                 Ok(col)
+// //             })
+// //         }),
+// //         render,
+// //     }
+// //     .render()
+// // }
+
+// pub fn collection_content(
+//     item: &factordb::query::select::Item,
+//     opts: &semantic_ui_core::EntityRenderOpts,
+// ) -> brass::VNode {
+//     if opts.preview {
+//         let item_count = item
+//             .data
+//             .get(AttrCollectionItem::QUALIFIED_NAME)
+//             .and_then(|val| val.as_list())
+//             .map(|l| l.len().to_string())
+//             .unwrap_or("?".to_string());
+//         vdom::p_with(format!("Collection with {} item(s).", item_count)).build()
+//     } else {
+//         if opts.editable {
+//             CollectionUpdate { item: item.clone() }.render()
+//         } else {
+//             CollectionUpdate { item: item.clone() }.render()
+//         }
 //     }
-//     .render()
 // }
-
-pub fn collection_content(
-    item: &factordb::query::select::Item,
-    opts: &semantic_ui_core::EntityRenderOpts,
-) -> brass::VNode {
-    if opts.preview {
-        let item_count = item
-            .data
-            .get(AttrCollectionItem::QUALIFIED_NAME)
-            .and_then(|val| val.as_list())
-            .map(|l| l.len().to_string())
-            .unwrap_or("?".to_string());
-        vdom::p_with(format!("Collection with {} item(s).", item_count)).build()
-    } else {
-        if opts.editable {
-            CollectionUpdate { item: item.clone() }.render()
-        } else {
-            CollectionUpdate { item: item.clone() }.render()
-        }
-    }
-}

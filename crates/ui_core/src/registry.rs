@@ -1,3 +1,4 @@
+
 use std::{collections::HashMap, rc::Rc, sync::Arc};
 
 use factordb::{
@@ -266,7 +267,7 @@ pub struct EntityRenderOpts {
     pub preview: bool,
 }
 pub type DynEntityRenderer =
-    Rc<dyn Fn(&factordb::query::select::Item, &EntityRenderOpts) -> brass::VNode>;
+    Rc<dyn Fn(&factordb::query::select::Item, &EntityRenderOpts) -> brass::dom::TagBuilder>;
 
 pub enum MediaRenderEvent {
     Finished(Result<(), AnyError>),
@@ -274,7 +275,6 @@ pub enum MediaRenderEvent {
     Resumed,
 }
 
-#[derive(Clone)]
 pub struct MediaRenderOpts {
     // Settings.
     /// If true, the media should be playing.
@@ -288,11 +288,11 @@ pub struct MediaRenderOpts {
     /// An `Ok(())` is expected if the playback finished correctly.
     /// An `Err(_)` is expected if the playback failed, for example if a video
     /// could not be loaded.
-    pub callback: brass::Callback<MediaRenderEvent>,
+    pub callback: Box<dyn Fn(MediaRenderEvent)>,
 }
 
 pub type DynMediaRenderer =
-    Rc<dyn Fn(&factordb::query::select::Item, &MediaRenderOpts) -> brass::VNode>;
+    Rc<dyn Fn(&factordb::query::select::Item, &MediaRenderOpts) -> brass::dom::TagBuilder>;
 
 #[derive(Clone)]
 pub struct RegisteredMediaRenderer {
@@ -304,7 +304,7 @@ pub struct RegisteredMediaRenderer {
 }
 
 pub type DynAttrRenderer =
-    Rc<dyn Fn(&factordb::data::Value, Option<&factordb::data::DataMap>) -> brass::VNode>;
+    Rc<dyn Fn(&factordb::data::Value, Option<&factordb::data::DataMap>) -> brass::dom::TagBuilder>;
 
 #[derive(Clone, Debug)]
 pub struct EntityInfo {

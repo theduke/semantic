@@ -1,459 +1,435 @@
-use std::{borrow::Borrow, cell::RefCell, collections::HashMap, rc::Rc};
+use std::{cell::RefCell, collections::HashSet, hash::Hash, rc::Rc};
 
 use brass::{
-    vdom::{self, Render},
-    Callback, PropComponent, Shared, Str, VNode,
+    dom::{DomEvent, TagBuilder},
+    effect::{spawn_guarded, EffectGuard},
+    signal::signal::{Mutable, Signal, SignalExt},
 };
+use factordb::AnyError;
+use futures::{future::LocalBoxFuture, Future};
 
-pub trait Validator<V> {
-    fn validate(&self, value: &V) -> Result<(), Vec<String>>;
+use crate::validate::Validator;
 
-    fn boxed(self) -> Box<dyn Validator<V>>
-    where
-        Self: Sized + 'static,
-    {
-        Box::new(self)
-    }
+pub type FormLoadFuture = LocalBoxFuture<'static, Result<(), AnyError>>;
+
+pub struct Form<V: 'static> {
+    values: V,
+    validator: Option<Box<dyn Validator<V>>>,
+    on_valid: Option<Box<dyn Fn(&V)>>,
+    on_submit: Option<Box<dyn Fn(&V)>>,
+    on_submit_async: Option<Box<dyn Fn(&V) -> FormLoadFuture>>,
 }
 
-pub struct StringRequired;
-
-impl Validator<String> for StringRequired {
-    fn validate(&self, value: &String) -> Result<(), Vec<String>> {
-        if value.trim().is_empty() {
-            Err(vec!["Field is required".into()])
-        } else {
-            Ok(())
-        }
-    }
-}
-
-impl<T, V> Validator<T> for Shared<V>
-where
-    V: Validator<T>,
-{
-    fn validate(&self, value: &T) -> Result<(), Vec<String>> {
-        let borrow = self.borrow();
-        let inner: &V = &*borrow;
-        inner.validate(value)
-    }
-}
-
-impl<T, V> Validator<T> for Rc<V>
-where
-    V: Validator<T>,
-{
-    fn validate(&self, value: &T) -> Result<(), Vec<String>> {
-        let borrow = self.borrow();
-        let inner: &V = &*borrow;
-        inner.validate(value)
-    }
-}
-
-pub struct AndValidator<V> {
-    validators: Vec<Box<dyn Validator<V>>>,
-}
-
-impl<V> Validator<V> for AndValidator<V> {
-    fn validate(&self, value: &V) -> Result<(), Vec<String>> {
-        let mut all_errors = Vec::new();
-        for val in &self.validators {
-            if let Err(errors) = val.validate(value) {
-                all_errors.extend(errors);
-            }
-        }
-        if all_errors.is_empty() {
-            Ok(())
-        } else {
-            Err(all_errors)
-        }
-    }
-}
-
-impl<V> AndValidator<V> {
-    pub fn new(val: impl Validator<V> + 'static) -> Self {
+impl<V: 'static> Form<V> {
+    pub fn new(values: V) -> Self {
         Self {
-            validators: vec![val.boxed()],
+            values,
+            validator: None,
+            on_valid: None,
+            on_submit: None,
+            on_submit_async: None,
         }
     }
 
-    pub fn and(mut self, other: impl Validator<V> + 'static) -> Self {
-        self.validators.push(other.boxed());
+    pub fn on_submit(mut self, f: impl Fn(&V) + 'static) -> Self {
+        self.on_submit_async = None;
+        self.on_submit = Some(Box::new(f));
         self
     }
+
+    pub fn on_submit_async(mut self, f: impl Fn(&V) -> FormLoadFuture + 'static) -> Self {
+        self.on_submit = None;
+        self.on_submit_async = Some(Box::new(f));
+        self
+    }
+
+    pub fn render(self, f: impl FnOnce(FormHandle<V>) -> TagBuilder) -> TagBuilder {
+        let h = FormHandle(Rc::new(RefCell::new(FormState {
+            form: self,
+            fields: Vec::new(),
+            status: Mutable::new(FormStatus {
+                is_valid: false,
+                is_loading: false,
+                errors: Ok(()),
+                submit_error: None,
+            }),
+            load_guard: None,
+        })));
+
+        f(h)
+    }
 }
 
-pub struct FieldState {
-    pub name: Str,
+#[derive(Clone)]
+pub struct FormStatus {
+    pub is_valid: bool,
+    pub is_loading: bool,
+    pub errors: Result<(), Vec<String>>,
+
+    pub submit_error: Option<String>,
+}
+
+struct FormState<V: 'static> {
+    form: Form<V>,
+    fields: Vec<Mutable<FieldStatus>>,
+    status: Mutable<FormStatus>,
+    load_guard: Option<EffectGuard>,
+}
+
+pub struct FormHandle<V: 'static>(Rc<RefCell<FormState<V>>>);
+
+impl<V> Clone for FormHandle<V> {
+    fn clone(&self) -> Self {
+        Self(self.0.clone())
+    }
+}
+
+// TODO: the error handling and validatoin logic needs work.
+// Need to determine when to re-run global validation and how to update the
+// status accordingly.
+impl<V> FormHandle<V> {
+    pub fn field_validated<F, VAL>(
+        &self,
+        get: fn(&mut V) -> &mut F,
+        validator: VAL,
+    ) -> FieldHandle<V, F>
+    where
+        VAL: Validator<F> + 'static,
+    {
+        self.make_field(get, Some(Rc::new(validator)))
+    }
+
+    pub fn field<F>(&self, get: fn(&mut V) -> &mut F) -> FieldHandle<V, F> {
+        self.make_field(get, None)
+    }
+
+    fn make_field<F>(
+        &self,
+        get: fn(&mut V) -> &mut F,
+        validator: Option<Rc<dyn Validator<F>>>,
+    ) -> FieldHandle<V, F> {
+        let mut state = self.0.borrow_mut();
+        let index = state.fields.len();
+        let field_state = FieldStatus {
+            touched: false,
+            changed: false,
+            errors: Ok(()),
+        };
+
+        let mutable = Mutable::new(field_state.clone());
+        state.fields.push(mutable.clone());
+
+        FieldHandle {
+            index,
+            form: self.clone(),
+            mutable,
+            validator,
+            get,
+        }
+    }
+
+    pub fn signal_status(&self) -> impl Signal<Item = FormStatus> + 'static {
+        self.0.borrow().status.signal_cloned()
+    }
+
+    pub fn signal_valid(&self) -> impl Signal<Item = bool> + 'static {
+        self.0.borrow().status.signal_ref(|s| s.is_valid)
+    }
+
+    pub fn signal_loading(&self) -> impl Signal<Item = bool> + 'static {
+        self.0.borrow().status.signal_ref(|s| s.is_loading)
+    }
+
+    pub fn signal_not_submittable(&self) -> impl Signal<Item = bool> + 'static {
+        self.0
+            .borrow()
+            .status
+            .signal_ref(|s| s.is_loading || !s.is_valid)
+    }
+
+    pub fn signal_errors(&self) -> impl Signal<Item = Option<Vec<String>>> + 'static {
+        self.0.borrow().status.signal_ref(|s| {
+            if let Err(err) = &s.errors {
+                Some(err.clone())
+            } else {
+                None
+            }
+        })
+    }
+
+    fn modify_value<F: PartialEq>(
+        &self,
+        field_index: usize,
+        getter: fn(&mut V) -> &mut F,
+        modifier: impl FnOnce(&mut F) -> bool,
+        validator: Option<&dyn Validator<F>>,
+    ) {
+        let mut state = self.0.borrow_mut();
+
+        let (is_changed, errors) = {
+            let value = getter(&mut state.form.values);
+            let is_changed = modifier(value);
+
+            let errors = validator
+                .map(|val| val.validate(getter(&mut state.form.values)))
+                .unwrap_or(Ok(()));
+            (is_changed, errors)
+        };
+
+        if is_changed {
+            Self::on_value_change(&mut *state, field_index, is_changed, errors);
+        }
+    }
+
+    fn set_value_eq<F: PartialEq>(
+        &self,
+        field_index: usize,
+        getter: fn(&mut V) -> &mut F,
+        value: F,
+        validator: Option<&dyn Validator<F>>,
+    ) {
+        let errors = validator.map(|val| val.validate(&value)).unwrap_or(Ok(()));
+
+        let mut state = self.0.borrow_mut();
+        let is_changed = { getter(&mut state.form.values) != &value };
+        *getter(&mut state.form.values) = value;
+
+        if is_changed {
+            Self::on_value_change(&mut *state, field_index, is_changed, errors);
+        }
+    }
+
+    fn on_value_change(
+        state: &mut FormState<V>,
+        field_index: usize,
+        is_changed: bool,
+        errors: Result<(), Vec<String>>,
+    ) {
+        let has_errors = errors.is_err();
+        if let Some(field) = state.fields.get_mut(field_index) {
+            field.replace_with(move |status| FieldStatus {
+                touched: true,
+                changed: status.changed || is_changed,
+                errors,
+            });
+        } else {
+            panic!("Invalid form field access");
+        }
+
+        // Update validations.
+        let mut status = state.status.lock_mut();
+        if has_errors {
+            status.is_valid = false;
+        } else if !status.is_valid {
+            // Check that all fields are valid.
+            let all_fields_valid = state.fields.iter().enumerate().all(|(index, field)| {
+                if index == field_index {
+                    !has_errors
+                } else {
+                    field.lock_ref().errors.is_ok()
+                }
+            });
+
+            if !all_fields_valid {
+                status.is_valid = false;
+            } else {
+                // Check global validators.
+
+                if let Some(val) = &state.form.validator {
+                    status.errors = val.validate(&state.form.values);
+                }
+
+                status.is_valid = status.errors.is_ok();
+            }
+        }
+
+        tracing::trace!(?status.is_valid, "on_value_change");
+
+        if status.is_valid {
+            if let Some(callback) = &state.form.on_valid {
+                callback(&state.form.values);
+            }
+        }
+    }
+
+    pub fn submit(&self) {
+        let mut state = self.0.borrow_mut();
+
+        let mut status = state.status.lock_mut();
+        if status.is_valid {
+            if let Some(callback) = &state.form.on_submit {
+                callback(&state.form.values)
+            } else if let Some(callback) = &state.form.on_submit_async {
+                status.is_loading = true;
+                // NOTE: Need to manually drop for borrow checker.
+                std::mem::drop(status);
+
+                let handle = self.clone();
+
+                let f = callback(&state.form.values);
+                let f = async move {
+                    match f.await {
+                        Ok(_) => {}
+                        Err(err) => {
+                            handle
+                                .0
+                                .borrow()
+                                .status
+                                .replace_with(move |old| FormStatus {
+                                    is_valid: false,
+                                    is_loading: false,
+                                    errors: old.errors.clone(),
+                                    submit_error: Some(err.to_string()),
+                                });
+                        }
+                    }
+                };
+                state.load_guard = Some(spawn_guarded(f));
+            }
+        }
+    }
+
+    pub fn reset(&self, values: V) {
+        let mut state = self.0.borrow_mut();
+
+        {
+            let mut status = state.status.lock_mut();
+            if status.is_loading {
+                return;
+            }
+
+            *status = FormStatus {
+                is_valid: false,
+                is_loading: false,
+                errors: Ok(()),
+                submit_error: None,
+            };
+        }
+
+        state.form.values = values;
+
+        for field in &state.fields {
+            field.replace(FieldStatus {
+                touched: false,
+                changed: false,
+                errors: Ok(()),
+            });
+        }
+    }
+
+    pub fn reset_default(&self)
+    where
+        V: Default,
+    {
+        self.reset(V::default());
+    }
+}
+
+#[derive(Clone, Debug)]
+pub struct FieldStatus {
     pub touched: bool,
+    pub changed: bool,
     pub errors: Result<(), Vec<String>>,
 }
 
-pub struct Field<F: 'static, T: 'static> {
-    pub name: Str,
-    pub get: fn(&F) -> &T,
-    pub set: fn(T, &mut F),
-    pub render: Rc<dyn Fn(&T, &FieldState, Callback<T>) -> VNode>,
-    pub validate: Option<Box<dyn Validator<T>>>,
+pub struct FieldHandle<V: 'static, F> {
+    index: usize,
+    form: FormHandle<V>,
+    mutable: Mutable<FieldStatus>,
+    validator: Option<Rc<dyn Validator<F>>>,
+    get: fn(&mut V) -> &mut F,
 }
 
-// impl<'a, F, T: 'static> Render for Field<'a, F, T> {
-//     fn render(self) -> VNode {
-//         let values_borrow = self.form.state.values.borrow();
-//         let value = (self.get)(&values_borrow);
-//         let set = self.set;
-
-//         let mut fields = self.form.state.fields.borrow_mut();
-
-//         if !fields.contains_key(&self.name) {
-//             let validator = self.validate;
-//             let errors = validator
-//                 .as_ref()
-//                 .map(|val| val.validate(value))
-//                 .unwrap_or(Ok(()));
-
-//             fields.insert(
-//                 self.name.clone(),
-//                 FieldData {
-//                     state: FieldState {
-//                         name: self.name.clone(),
-//                         touched: false,
-//                         errors,
-//                     },
-//                     on_change: Rc::new(move |values, dyn_value| {
-//                         let real_value: T = *dyn_value.downcast::<T>().unwrap();
-//                         let res = validator
-//                             .as_ref()
-//                             .map(|v| v.validate(&real_value))
-//                             .unwrap_or(Ok(()));
-//                         (set)(real_value, values);
-//                         res
-//                     }),
-//                 },
-//             );
-//         }
-//         let name = self.name.clone();
-//         let callback = self
-//             .form
-//             .state
-//             .callback
-//             .clone()
-//             .map(move |value: T| Msg::Changed {
-//                 name: name.clone(),
-//                 value: Box::new(value),
-//             });
-//         let data = fields.get(&self.name).unwrap();
-//         (self.render)(value, &data.state, callback)
-//     }
-// }
-
-pub struct Form<V: 'static> {
-    pub initial_values: V,
-    pub render: Rc<dyn Fn(FormRef<V>) -> VNode + 'static>,
-    pub on_submit: Callback<V>,
-}
-
-impl<V: Clone + 'static> Render for Form<V> {
-    fn render(self) -> VNode {
-        FormComponent::build(self)
-    }
-}
-
-struct FieldData<V> {
-    state: FieldState,
-    on_change: Rc<dyn Fn(&mut V, AnyBox) -> Result<(), Vec<String>>>,
-}
-
-struct FormComponent<V> {
-    state: RefCell<FormState<V>>,
-}
-
-struct FormState<V> {
-    values: RefCell<V>,
-    fields: RefCell<HashMap<Str, FieldData<V>>>,
-    callback: Callback<Msg>,
-    is_valid: bool,
-}
-
-pub struct FormRef<'a, V> {
-    state: &'a mut FormState<V>,
-}
-
-impl<'a, V> FormRef<'a, V> {
-    pub fn submit(&self) -> Callback<()> {
-        self.state.callback.clone().map(|_: ()| Msg::Submit)
-    }
-}
-
-impl<'a, V: 'static> FormRef<'a, V> {
-    pub fn field<T: 'static>(&mut self, field: impl Into<Field<V, T>>) -> VNode {
-        let field = field.into();
-
-        let values_borrow = self.state.values.borrow();
-        let value = (field.get)(&values_borrow);
-        let set = field.set;
-
-        let mut fields = self.state.fields.borrow_mut();
-
-        if let Some(fdata) = fields.get_mut(&field.name) {
-            // TODO: figure out how to prevent this extra work on each render...
-            let validator = field.validate;
-            fdata.on_change = Rc::new(move |values, dyn_value| {
-                let real_value: T = *dyn_value.downcast::<T>().unwrap();
-                let res = validator
-                    .as_ref()
-                    .map(|v| v.validate(&real_value))
-                    .unwrap_or(Ok(()));
-                (set)(real_value, values);
-                res
-            });
-        } else {
-            let validator = field.validate;
-            let errors = validator
-                .as_ref()
-                .map(|val| val.validate(value))
-                .unwrap_or(Ok(()));
-
-            if errors.is_err() {
-                self.state.is_valid = false;
-            }
-
-            fields.insert(
-                field.name.clone(),
-                FieldData {
-                    state: FieldState {
-                        name: field.name.clone(),
-                        touched: false,
-                        errors,
-                    },
-                    on_change: Rc::new(move |values, dyn_value| {
-                        let real_value: T = *dyn_value.downcast::<T>().unwrap();
-                        let res = validator
-                            .as_ref()
-                            .map(|v| v.validate(&real_value))
-                            .unwrap_or(Ok(()));
-                        (set)(real_value, values);
-                        res
-                    }),
-                },
-            );
-        }
-        let name = field.name.clone();
-        let callback = self
-            .state
-            .callback
-            .clone()
-            .map(move |value: T| Msg::Changed {
-                name: name.clone(),
-                value: Box::new(value),
-            });
-        let data = fields.get(&field.name).unwrap();
-        (field.render)(value, &data.state, callback)
-    }
-}
-
-type AnyBox = Box<dyn std::any::Any>;
-
-enum Msg {
-    Changed { name: Str, value: AnyBox },
-    Submit,
-}
-
-impl<V: Clone + 'static> PropComponent for FormComponent<V> {
-    type Properties = Form<V>;
-    type Msg = Msg;
-
-    fn init(props: &Self::Properties, ctx: &mut brass::Context<Self::Msg>) -> Self {
+impl<V: 'static, F> Clone for FieldHandle<V, F> {
+    fn clone(&self) -> Self {
         Self {
-            state: RefCell::new(FormState {
-                values: RefCell::new(props.initial_values.clone()),
-                fields: RefCell::new(HashMap::new()),
-                callback: ctx.callback(),
-                is_valid: true,
-            }),
+            index: self.index,
+            form: self.form.clone(),
+            mutable: self.mutable.clone(),
+            validator: self.validator.clone(),
+            get: self.get.clone(),
         }
     }
+}
 
-    fn update(
-        &mut self,
-        msg: Self::Msg,
-        props: &Self::Properties,
-        _ctx: &mut brass::Context<Self::Msg>,
-    ) {
-        match msg {
-            Msg::Changed { name, value } => {
-                let mut state = self.state.borrow_mut();
-                let mut fields = state.fields.borrow_mut();
+impl<V: 'static, F: 'static> FieldHandle<V, F> {
+    pub fn signal_value(&self) -> impl Signal<Item = F> + 'static
+    where
+        F: Clone,
+    {
+        let form = self.form.clone();
+        let get = self.get;
+        self.mutable.signal_ref(move |_| {
+            let mut state = form.0.borrow_mut();
+            get(&mut state.form.values).clone()
+        })
+    }
 
-                let is_valid = if let Some(data) = fields.get_mut(&name) {
-                    data.state.touched = true;
-                    let mut values = state.values.borrow_mut();
-                    data.state.errors = (data.on_change)(&mut *values, value);
+    pub fn for_each(&self, mut f: impl FnMut(&FieldStatus)) -> impl Future<Output = ()> {
+        self.mutable
+            .signal_ref(move |status| f(status))
+            .for_each(|_| async {})
+    }
 
-                    data.state.errors.is_err()
-                } else {
-                    tracing::error!(?name, "Unknown field in form");
-                    true
-                };
+    pub fn signal_touched(&self) -> impl Signal<Item = bool> + 'static {
+        self.mutable.signal_ref(|x| x.touched)
+    }
 
-                drop(fields);
-                state.is_valid = is_valid;
+    pub fn signal_changed(&self) -> impl Signal<Item = bool> + 'static {
+        self.mutable.signal_ref(|x| x.changed)
+    }
+
+    pub fn signal_is_valid(&self) -> impl Signal<Item = bool> + 'static {
+        self.mutable.signal_ref(|x| x.errors.is_ok())
+    }
+
+    pub fn signal_errors(&self) -> impl Signal<Item = Option<Vec<String>>> + 'static {
+        self.mutable.signal_ref(|x| match &x.errors {
+            Ok(_) => None,
+            Err(errs) => Some(errs.clone()),
+        })
+    }
+
+    pub fn set(&self, value: F)
+    where
+        F: PartialEq,
+    {
+        self.form.set_value_eq(
+            self.index,
+            self.get,
+            value,
+            self.validator.as_ref().map(|x| &**x),
+        );
+    }
+
+    pub fn on<E: DomEvent>(self, handler: impl Fn(E) -> Option<F>) -> impl Fn(E)
+    where
+        F: PartialEq,
+    {
+        move |e: E| {
+            if let Some(value) = handler(e) {
+                self.set(value);
             }
-            Msg::Submit => {
-                tracing::info!("FORM SUBMITTED");
-                let state = self.state.borrow_mut();
-                let mut is_valid = true;
-                for field in state.fields.borrow_mut().values_mut() {
-                    field.state.touched = true;
-                    if field.state.errors.is_err() {
-                        is_valid = false;
-                    }
-                }
-
-                if is_valid {
-                    props.on_submit.send(state.values.borrow().clone());
-                }
-            }
-        }
-    }
-
-    fn render(
-        &self,
-        props: &Self::Properties,
-        _ctx: &mut brass::RenderContext<brass::PropWrapper<Self>>,
-    ) -> VNode {
-        let mut state = self.state.borrow_mut();
-        (props.render)(FormRef { state: &mut state })
-    }
-}
-
-fn color_from_state(state: &FieldState) -> brass_bulma::Color {
-    if !state.touched || state.errors.is_ok() {
-        brass_bulma::Color::Default
-    } else {
-        brass_bulma::Color::Danger
-    }
-}
-
-pub struct InputField<F> {
-    pub name: Str,
-    pub get: fn(&F) -> &String,
-    pub set: fn(String, &mut F),
-    pub validate: Option<Box<dyn Validator<String>>>,
-
-    pub label: Str,
-    pub help: Option<Str>,
-    pub placeholder: Option<Str>,
-}
-
-impl<F> Into<Field<F, String>> for InputField<F> {
-    fn into(self) -> Field<F, String> {
-        let help = self.help;
-        let placeholder = self.placeholder;
-        let label = self.label;
-
-        Field {
-            name: self.name,
-            get: self.get,
-            set: self.set,
-            render: Rc::new(move |value, state, callback| {
-                let color = color_from_state(state);
-
-                let help = if !state.touched || state.errors.is_ok() {
-                    help.clone().map(|message| brass_bulma::Help {
-                        message: vdom::text(message),
-                        color,
-                    })
-                } else if let Err(errors) = &state.errors {
-                    let items = errors.iter().map(|err| vdom::li_with(err));
-                    let message = vdom::ul().and_iter(items).build();
-
-                    Some(brass_bulma::Help {
-                        message,
-                        color: brass_bulma::Color::Danger,
-                    })
-                } else {
-                    None
-                };
-
-                brass_bulma::FieldHorizontal {
-                    label: label.clone(),
-                    help,
-                    control: brass_bulma::Input {
-                        _type: "text".into(),
-                        color,
-                        placeholder: placeholder.clone(),
-                        value: value.clone().into(),
-                        on_input: callback,
-                    },
-                }
-                .render()
-            }),
-            validate: self.validate,
         }
     }
 }
 
-pub struct SelectField<F, T> {
-    pub name: Str,
-    pub get: fn(&F) -> &T,
-    pub set: fn(T, &mut F),
-    pub validate: Option<Box<dyn Validator<T>>>,
+impl<V: 'static, F: Hash + Eq + 'static> FieldHandle<V, HashSet<F>> {
+    pub fn add(&self, value: F) {
+        self.form.modify_value(
+            self.index,
+            self.get,
+            move |values| values.insert(value),
+            self.validator.as_ref().map(|x| &**x),
+        );
+    }
 
-    pub label: Str,
-    pub help: Option<Str>,
-    pub options: Rc<Vec<brass_bulma::SelectOption<T>>>,
-}
-
-impl<F, T> Into<Field<F, T>> for SelectField<F, T>
-where
-    T: Clone + Eq + Default,
-{
-    fn into(self) -> Field<F, T> {
-        let help = self.help;
-        let label = self.label;
-        let options = self.options;
-
-        Field {
-            name: self.name,
-            get: self.get,
-            set: self.set,
-            render: Rc::new(move |value, state, callback| {
-                let color = color_from_state(state);
-
-                let options: Rc<Vec<brass_bulma::SelectOption<T>>> = options.clone();
-
-                let help = if !state.touched || state.errors.is_ok() {
-                    help.clone().map(|message| brass_bulma::Help {
-                        message: vdom::text(message),
-                        color,
-                    })
-                } else if let Err(errors) = &state.errors {
-                    let items = errors.iter().map(|err| vdom::li_with(err));
-                    let message = vdom::ul().and_iter(items).build();
-
-                    Some(brass_bulma::Help {
-                        message,
-                        color: brass_bulma::Color::Danger,
-                    })
-                } else {
-                    None
-                };
-
-                brass_bulma::FieldHorizontal {
-                    label: label.clone(),
-                    help,
-                    control: brass_bulma::Select {
-                        value: Some(value.clone()),
-                        empty_option_label: None,
-                        // TODO: don't clone all the time!
-                        options,
-                        on_select: callback.map(|opt: Option<T>| opt.unwrap_or_default()),
-                    },
-                }
-                .render()
-            }),
-            validate: self.validate,
-        }
+    pub fn remove(&self, value: F) {
+        self.form.modify_value(
+            self.index,
+            self.get.clone(),
+            move |values| values.remove(&value),
+            self.validator.as_ref().map(|x| &**x),
+        );
     }
 }

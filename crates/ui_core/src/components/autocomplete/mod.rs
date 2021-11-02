@@ -1,2 +1,4 @@
-mod autocomplete_view;
+
+pub mod entity_picker;
 pub mod multiselect;
+

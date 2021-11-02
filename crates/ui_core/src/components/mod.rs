@@ -1,24 +1,29 @@
 pub mod form;
-mod loader;
-pub mod markdown;
+pub mod util;
 
+pub mod loader;
 pub mod autocomplete;
 
-mod spinner;
-pub use self::spinner::DelayedSpinner;
+pub mod entity;
+// pub mod markdown;
+// pub mod form;
 
-mod with_api;
-pub use with_api::WithApi;
 
-mod with_registry;
-pub use with_registry::WithRegistry;
+// mod spinner;
+// pub use self::spinner::DelayedSpinner;
 
-use brass::{vdom, VNode};
-pub use loader::{Loader, LoaderFunc, LoaderFuture};
+// mod with_api;
+// pub use with_api::WithApi;
 
-pub fn small_title(content: impl Into<String>) -> VNode {
-    vdom::div()
-        .class("mb-4")
-        .and(vdom::b().and(content.into()))
-        .build()
-}
+// mod with_registry;
+// pub use with_registry::WithRegistry;
+
+// use brass::{vdom, VNode};
+// pub use loader::{Loader, LoaderFunc, LoaderFuture};
+
+// pub fn small_title(content: impl Into<String>) -> VNode {
+//     vdom::div()
+//         .class("mb-4")
+//         .and(vdom::b().and(content.into()))
+//         .build()
+// }

@@ -1,7 +1,7 @@
 use serde::{Deserialize, Serialize};
 
 use factordb::{
-    data::DataMap,
+    data::{value::patch::Patch, DataMap},
     query::{
         expr::Expr,
         mutate::Mutate,
@@ -65,26 +65,25 @@ impl Collection {
         Select::new().with_filter(expr).with_limit(1000)
     }
 
-    /// Build a mutation for adding an item to a colleciton.
-    pub fn mutate_add_item(collection_id: Id, entity_id: Id) -> Mutate {
-        let mut map = DataMap::new();
-        map.insert(
-            AttrCollectionItem::QUALIFIED_NAME.into(),
-            vec![entity_id].into(),
-        );
-
-        Mutate::merge(collection_id, map)
+    pub fn search_collections(term: String, limit: u64) -> Select {
+        let expr = Expr::eq(builtin::AttrType::expr(), Collection::QUALIFIED_NAME)
+            .and_with(Expr::contains(AttrTitle::expr(), term));
+        Select::new().with_filter(expr).with_limit(limit)
     }
 
-    pub fn mutate_remove_item(col: &Collection, entity_id: Id) -> Result<Mutate, AnyError> {
-        // FIXME: use a Patch to remove the specific item id instead of
-        // overwriting. Needs Patch support implemented in factordb.
+    /// Build a mutation for adding an item to a colleciton.
+    pub fn mutate_add_item(collection: Id, entity: Id) -> Mutate {
+        Mutate::patch(
+            collection,
+            Patch::new().add(AttrCollectionItem::QUALIFIED_NAME, entity),
+        )
+    }
 
-        let mut item_ids = col.item_ids.clone();
-        item_ids.retain(|item_id| item_id != &entity_id);
-        let mut map = DataMap::new();
-        map.insert(AttrCollectionItem::QUALIFIED_NAME.into(), item_ids.into());
-        Ok(Mutate::merge(col.id, map))
+    pub fn mutate_remove_item(collection: Id, entity: Id) -> Mutate {
+        Mutate::patch(
+            collection,
+            Patch::new().remove_with_old(AttrCollectionItem::QUALIFIED_NAME, entity),
+        )
     }
 }
 

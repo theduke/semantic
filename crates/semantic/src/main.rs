@@ -63,6 +63,16 @@ fn main() {
             rt.block_on(server::run_server(config, rt.handle().clone()))
                 .expect("Server failed");
         }
+        CliCommand::GenerateTypescript(_) => {
+            let builtin = factordb::schema::builtin::builtin_db_schema();
+            let base = SemanticPlugin::schema().db.unwrap();
+
+            let schema = builtin.merge(base);
+
+            let ts = factor_tools::typescript::schema_to_typescript(&schema, None).unwrap();
+
+            write!(std::io::stdout(), "{}", ts).unwrap();
+        }
         #[cfg(feature = "webkit")]
         CliCommand::Gtk => {
             let config = app::AppConfig {
@@ -75,16 +85,6 @@ fn main() {
                 .block_on(app::App::build(config, rt.handle().clone()))
                 .expect("Could not build app");
             app.run_webview_gtk().expect("Could not run GTK app");
-        }
-        CliCommand::GenerateTypescript(_) => {
-            let builtin = factordb::schema::builtin::builtin_db_schema();
-            let base = SemanticPlugin::schema().db.unwrap();
-
-            let schema = builtin.merge(base);
-
-            let ts = factor_tools::typescript::schema_to_typescript(&schema, None).unwrap();
-
-            write!(std::io::stdout(), "{}", ts).unwrap();
         }
     }
 }

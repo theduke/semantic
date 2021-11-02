@@ -1,6 +1,14 @@
 use brass::{
-    vdom::{div, event::ClickEvent},
-    Callback, EffectGuard, VNode,
+    component::{msg::MsgComponent, Context, Handle},
+    dom::{
+        builder::{button, div, span},
+        ClickEvent, Render, TagBuilder,
+    },
+    effect::EffectGuard,
+    signal::{
+        signal::{Mutable, MutableSignal, Signal, SignalExt},
+        signal_vec::{MutableSignalVec, MutableVec, SignalVec, SignalVecExt},
+    },
 };
 use factordb::{
     query::{
@@ -8,26 +16,36 @@ use factordb::{
         select::{Item, ItemPage, Select},
     },
     schema::{AttrMapExt, EntityDescriptor},
-    AnyError,
+    AnyError, Id,
 };
-use semantic_ui_core::{loader::LoadState, ContextExt, EntityRenderOpts};
 
-use super::entity_filter::EntityFilter;
+use semantic_ui_core::{
+    components::{
+        entity::{entity_box::EntityBox, entity_filter::entity_filter},
+        loader::{LoadState, Loader},
+        util::{box_, notification_warning, title_2},
+    },
+    context, EntityRenderOpts,
+};
+
+// use super::entity_filter::EntityFilter;
 
 pub struct BrowsePage {
-    loader: LoadState<ItemPage>,
+    loader: Loader<()>,
     query: Select,
     guard: Option<EffectGuard>,
-    filter_callback: Callback<EntityFilter>,
-
-    on_delete_callback: Callback<Item>,
+    // filter_callback: Callback<EntityFilter>,
+    // on_delete_callback: Callback<Item>,
+    items: MutableVec<Item>,
+    is_empty: Mutable<bool>,
+    next_cursor: Mutable<Option<Id>>,
 }
 
 pub struct BrowsePageProps {}
 
 pub enum Msg {
     Loaded(Result<ItemPage, AnyError>),
-    FilterUpdated(EntityFilter),
+    FilterUpdated(Expr),
     Next,
     ItemDeleted(Item),
 }
@@ -40,117 +58,154 @@ impl BrowsePage {
         ))
     }
 
-    fn load(&mut self, query: Select, ctx: &mut brass::Context<Msg>) {
+    fn load(&mut self, query: Select, ctx: &Context<Self>) {
         if self.loader.is_loading() {
             // TODO: queue? abort old?
             return;
         }
         let query2 = query.clone();
-        let api = ctx.api().clone();
+        let api = context::api();
         let f = async move { api.select(query2).await };
 
-        self.guard = Some(ctx.run_map(f, Msg::Loaded));
-        self.loader.set_loading();
+        let guard = ctx.spawn_map(f, Msg::Loaded);
+        self.loader.set_loading(guard);
         self.query = query;
     }
 }
 
-impl brass::Component for BrowsePage {
+impl MsgComponent for BrowsePage {
     type Properties = BrowsePageProps;
     type Msg = Msg;
 
-    fn init(_props: Self::Properties, ctx: &mut brass::Context<Self::Msg>) -> Self {
+    fn init(_props: Self::Properties, ctx: Context<Self>) -> Self {
         let mut s = Self {
-            loader: LoadState::Idle,
+            loader: Loader::new_idle(),
             query: Select::new().with_filter(Self::base_filter()),
             guard: None,
-            filter_callback: ctx.callback_map(Msg::FilterUpdated),
-            on_delete_callback: ctx.callback_map(Msg::ItemDeleted),
+            items: MutableVec::new(),
+            is_empty: Mutable::new(true),
+            next_cursor: Mutable::new(None),
+            // filter_callback: ctx.callback_map(Msg::FilterUpdated),
+            // on_delete_callback: ctx.callback_map(Msg::ItemDeleted),
         };
-        s.load(s.query.clone(), ctx);
+        s.load(s.query.clone(), &ctx);
         s
     }
 
-    fn update(&mut self, msg: Self::Msg, ctx: &mut brass::Context<Self::Msg>) {
+    fn update(&mut self, msg: Self::Msg, ctx: Context<Self>) {
         match msg {
             Msg::FilterUpdated(filter) => {
-                let query = Select::new().with_filter(filter.build_expr());
-                self.load(query, ctx);
+                let query = Select::new().with_filter(filter);
+                self.load(query, &ctx);
             }
             Msg::Loaded(res) => {
-                self.loader.set_result(res);
+                if let Some(page) = self.loader.set_result_take(res) {
+                    self.is_empty.set(page.items.is_empty());
+                    self.items.lock_mut().replace_cloned(page.items);
+                    self.next_cursor.set(page.next_cursor)
+                }
             }
             Msg::Next => {
-                let cursor = self
-                    .loader
-                    .as_success()
-                    .and_then(|page| page.next_cursor.as_ref())
-                    .cloned();
-
-                if let Some(cursor) = cursor {
+                if let Some(cursor) = self.next_cursor.get() {
                     let q = Select {
                         cursor: Some(cursor),
                         ..self.query.clone()
                     };
-                    self.load(q, ctx);
+                    self.load(q, &ctx);
                 }
             }
             Msg::ItemDeleted(deleted_item) => {
-                if let LoadState::Success(page) = &mut self.loader {
-                    page.items
-                        .retain(|item| item.data.get_id() != deleted_item.data.get_id());
-                }
+                self.items
+                    .lock_mut()
+                    .retain(|item| item.data.get_id() != deleted_item.data.get_id());
             }
         }
     }
 
-    fn render(&self, ctx: &mut brass::RenderContext<Self>) -> brass::VNode {
-        let filter = super::entity_filter::EntityFilterForm {
-            on_submit: self.filter_callback.clone(),
-        };
-        let filter = brass_bulma::box_().and(filter);
+    fn render(&mut self, ctx: Context<Self>) -> TagBuilder {
+        let loader = self.loader.signal_render(move |_| span());
 
-        let loader = self
-            .loader
-            .render(move |page| render_page(page, ctx.callback()));
+        let empty_marker = self.is_empty.signal().map(|is_empty| {
+            if is_empty {
+                Some(notification_warning().and("Nothing found..."))
+            } else {
+                None
+            }
+        });
 
-        div().and((filter, loader)).build()
-    }
+        let handle = ctx.handle();
+        let next = self.next_cursor.signal().map(move |cursor| {
+            if cursor.is_some() {
+                Some(
+                    div().and(
+                        button()
+                            .and("More")
+                            .on(handle.on(|_: ClickEvent| Msg::Next)),
+                    ),
+                )
+            } else {
+                None
+            }
+        });
 
-    fn on_property_change(
-        &mut self,
-        _props: Self::Properties,
-        _ctx: &mut brass::Context<Self::Msg>,
-    ) -> brass::ShouldRender {
-        false
+        let handle = ctx.handle();
+        div()
+            .and(title_2().and("Browse"))
+            .and(box_().and(entity_filter(move |query| {
+                handle.send(Msg::FilterUpdated(query));
+            })))
+            .child_signal(loader)
+            .children_signal(self.items.signal_vec_cloned(), |item| {
+                EntityBox {
+                    item: item.clone(),
+                    options: EntityRenderOpts {
+                        editable: false,
+                        preview: true,
+                    },
+                    on_delete: None,
+                }
+                .render()
+                .build()
+            })
+            .child_signal_opt(empty_marker)
+            .child_signal_opt(next)
+        // .and((filter, loader)).build()
     }
 }
 
-fn render_page(page: &ItemPage, cb: Callback<Msg>) -> brass::VNode {
-    if page.items.is_empty() {
-        return div()
-            .and(brass_bulma::notification_warning("Nothing found"))
-            .build();
+impl brass::dom::Apply for BrowsePageProps {
+    fn apply(self, tag: &mut TagBuilder) {
+        tag.add_component::<BrowsePage>(self)
     }
-
-    let opts = EntityRenderOpts {
-        editable: false,
-        preview: true,
-    };
-    let items = page.items.iter().map(|item| super::entity_view::EntityBox {
-        item: item.clone(),
-        options: opts.clone(),
-        on_delete: Some(cb.clone().map(Msg::ItemDeleted)),
-    });
-
-    let next = if page.next_cursor.is_some() {
-        let btn = brass_bulma::button_medium()
-            .and("More")
-            .on_callback(|_: ClickEvent| Msg::Next, &cb);
-        div().and(btn).build()
-    } else {
-        VNode::Empty
-    };
-
-    div().and_iter(items).and(next).build()
 }
+
+// fn render_page(
+//     items: impl SignalVec<Item = Item> + Unpin + 'static,
+//     cursor: impl Signal<Item = Option<Id>> + Unpin + 'static,
+//     handle: Handle<BrowsePage>,
+// ) -> TagBuilder {
+
+//     div()
+//         .children_signal(items, |_item| div().and("Item").build())
+//         .child_signal(next)
+
+//     // let opts = EntityRenderOpts {
+//     //     editable: false,
+//     //     preview: true,
+//     // };
+//     // let items = page.items.iter().map(|item| {
+//     //     // super::entity_view::EntityBox {
+//     //     //     item: item.clone(),
+//     //     //     options: opts.clone(),
+//     //     //     on_delete: Some(cb.clone().map(Msg::ItemDeleted)),
+//     //     // };
+//     //     div().and("Entity")
+//     // });
+//     // let next = if page.next_cursor.is_some() {
+//     //     // let btn = brass_bulma::button_medium()
+//     //     let btn = button().and("More").on(ctx.on(|_: ClickEvent| Msg::Next));
+//     //     div().and(btn).build()
+//     // } else {
+//     //     VNode::Empty
+//     // };
+// }

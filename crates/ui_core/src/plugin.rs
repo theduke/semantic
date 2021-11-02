@@ -8,12 +8,12 @@ pub struct BrowserPluginSpec {
 }
 
 pub trait BrowserPlugin: Sync + Send {
-    /// Allows initializing the context of the UI.
-    /// The primary use case here is registering global context for the UI.
-    // Silence warning for unused `ctx` arg because it would mess up IDE
-    // code generation.
-    #[allow(unused_variables)]
-    fn init_ui_context(&self, ctx: &brass::Context<()>) {}
+    // /// Allows initializing the context of the UI.
+    // /// The primary use case here is registering global context for the UI.
+    // // Silence warning for unused `ctx` arg because it would mess up IDE
+    // // code generation.
+    // #[allow(unused_variables)]
+    // fn init_ui_context(&self, ctx: &brass::Context<()>) {}
 
     fn spec(&self) -> BrowserPluginSpec;
 

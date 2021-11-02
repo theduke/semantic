@@ -23,7 +23,12 @@ impl<T: Clone> Clone for LoadState<T> {
     fn clone(&self) -> Self {
         match self {
             Self::Idle => Self::Idle,
-            Self::Loading(_) => Self::Loading(None),
+            Self::Loading(guard) => {
+                // FIXME: figure out how to handle guard cloning
+                // the guard implements drop so Mutable.set() will drop the guard
+                // if the handle is dropped, need to use some shared guard
+                Self::Loading(guard.take())
+            }
             Self::Success(arg0) => Self::Success(arg0.clone()),
             Self::Failed(arg0) => Self::Failed(arg0.clone()),
         }

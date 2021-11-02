@@ -6,8 +6,8 @@ edition = "2018"
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [dependencies]
-brass = "0.1"
-brass_bulma = "0.1"
+brass = { version = "0.1" }
+# brass_bulma = "0.1"
 factordb = { version = "0.1", default-features = false }
 fnv = "1.0.7"
 futures = "0.3.16"
@@ -21,6 +21,7 @@ wasm-bindgen = "0.2.74"
 wasm-bindgen-futures = "0.4.24"
 
 semantic_core = { path = "../core" }
+once_cell = "1.8.0"
 
 
 [dependencies.web-sys] 
@@ -32,4 +33,5 @@ features = [
   "RequestMode",
   "Response",
   "Window",
+  "File",
 ]

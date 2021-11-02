@@ -18,3 +18,5 @@ url = { version = "2.2.2", features = ["serde"] }
 
 factordb = "0.1"
 base64 = "0.13.0"
+tracing = "0.1.29"
+typescript-type-def = "0.3.1"

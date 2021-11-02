@@ -29,8 +29,10 @@ fn main() -> Result<(), DynError> {
         &["install-git-hooks"] => cmd_install_git_hooks(),
         &["build-ui"] => task_build_ui(true),
         &["build-ui", "--dev"] => task_build_ui(false),
-        &["watch-server"] => cmd_watch_server(),
-        &["watch-ui"] => trunk_watch_ui(),
+        &["watch-server"] => cmd_watch_server(true),
+        &["watch-server", "--no-backend"] => cmd_watch_server(false),
+        &["watch-ui"] => trunk_watch_ui(false),
+        &["watch-ui", "--release"] => trunk_watch_ui(true),
         &["install"] => cmd_install(),
         &["build-wasm-js"] => gen_javascript(),
         &["help"] => {
@@ -66,7 +68,7 @@ fn cmd_git_pre_commit() -> Result<(), DynError> {
     Ok(())
 }
 
-fn cmd_watch_server() -> Result<(), DynError> {
+fn cmd_watch_server(default_backend: bool) -> Result<(), DynError> {
     // std::thread::spawn(|| {
     //     if let Err(err) = trunk_watch_ui() {
     //         eprintln!("UI WATCHER FAILED: {:?}", err);
@@ -83,19 +85,15 @@ fn cmd_watch_server() -> Result<(), DynError> {
 
     let mut cmd = Command::new("cargo");
     cmd.current_dir(root_path()?)
-        .args(&[
-            "run",
-            "--bin",
-            "semantic",
-            "--",
-            "server",
-            "--data-path",
-            &data_path,
-            "--key",
-            "testkey",
-        ])
+        .args(&["run", "--bin", "semantic", "--", "server"])
         .arg("--deno-plugin-dir")
         .arg(root_path()?.join("lib").join("contrib"));
+
+    if default_backend {
+        cmd.args(&["--data-path", &data_path, "--key", "testkey"]);
+    } else {
+        cmd.arg("--no-backend");
+    }
 
     if std::env::var("RUST_LOG").is_err() {
         cmd.env(
@@ -149,7 +147,7 @@ fn task_build_ui(release: bool) -> Result<(), DynError> {
         std::fs::create_dir_all(&target_dir)?;
     }
 
-    let rustflags = vec!["--cfg=web_sys_unstable_apis", "-Cdebuginfo=0"];
+    let rustflags = vec!["--cfg=web_sys_unstable_apis" /*, "-Cdebuginfo=0"*/];
 
     let mut cmd = Command::new("wasm-pack");
     cmd.env("RUSTFLAGS", rustflags.join(" "))
@@ -182,10 +180,13 @@ fn task_build_ui(release: bool) -> Result<(), DynError> {
     Ok(())
 }
 
-fn trunk_watch_ui() -> Result<(), DynError> {
-    Command::new("cargo")
-        .args(&["watch", "--shell", "cargo xtask build-ui --dev"])
-        .run()
+fn trunk_watch_ui(release: bool) -> Result<(), DynError> {
+    let cmd = if release {
+        "cargo xtask build-ui"
+    } else {
+        "cargo xtask build-ui --dev"
+    };
+    Command::new("cargo").args(&["watch", "--shell", cmd]).run()
 }
 
 fn gen_javascript() -> Result<(), DynError> {

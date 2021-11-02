@@ -22,7 +22,7 @@ pub struct SimpleHttpResponse {
     pub body: Option<String>,
 }
 
-#[derive(serde::Serialize, serde::Deserialize, Clone, Debug)]
+#[derive(serde::Serialize, serde::Deserialize, Default, Clone, Debug)]
 pub struct SemanticSchema {
     pub db: factordb::schema::DbSchema,
 }
@@ -119,7 +119,7 @@ pub struct ServerStatus {
 #[derive(serde::Serialize, serde::Deserialize, Clone, Debug)]
 pub enum Reply {
     ServerStatus(ServerStatus),
-    Initialize,
+    Initialize(SemanticSchema),
     CloseBackend,
 
     Select(Page<Item>),
@@ -170,16 +170,21 @@ impl<E: ApiClientExecutor> ApiClient<E> {
     }
 
     pub async fn server_status(&self) -> Result<ServerStatus, AnyError> {
-        match self.exec.execute(Query::ServerStatus).await {
-            Ok(Reply::ServerStatus(status)) => Ok(status),
+        tracing::trace!("executing server status");
+        let res = self.exec.execute(Query::ServerStatus).await;
+        tracing::trace!("got server_status res");
+        match res {
+            Ok(Reply::ServerStatus(status)) => {
+                Ok(status)
+            },
             Ok(_other) => Err(anyhow::anyhow!("API returned invalid data")),
             Err(err) => Err(err),
         }
     }
 
-    pub async fn initialize(&self, options: BackendConfig) -> Result<(), AnyError> {
+    pub async fn initialize(&self, options: BackendConfig) -> Result<SemanticSchema, AnyError> {
         match self.exec.execute(Query::Initialize(options)).await {
-            Ok(Reply::Initialize) => Ok(()),
+            Ok(Reply::Initialize(schema)) => Ok(schema),
             Ok(_other) => Err(anyhow::anyhow!("API returned invalid data")),
             Err(err) => Err(err),
         }

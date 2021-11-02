@@ -1,99 +1,87 @@
-use brass::{
-    dom::Attr,
-    vdom::{div, div_with},
-};
-use brass_bulma;
-
+use brass::dom::{builder::div, TagBuilder};
 use factordb::AnyError;
 use semantic_core::plugin::ImportOutput;
-use semantic_ui_core::{ContextExt, EntityRenderOpts};
+use semantic_ui_core::{
+    components::{
+        entity::entity_list,
+        loader::{LoadState, Loader},
+        util::{box_, notification_error, notification_success, title_2, ButtonBuilder},
+    },
+    context, EntityRenderOpts,
+};
 
-use semantic_ui_core::loader::LoadState;
+use super::import_form::Values;
 
-pub struct ImportPage {
-    import_load: LoadState<Option<ImportOutput>>,
-    persist_load: LoadState<()>,
+pub struct ImportPage {}
 
-    on_preview: brass::Callback<url::Url>,
-    on_import: brass::Callback<url::Url>,
-
-    registry: semantic_ui_core::SharedRegistry,
-
-    auto_import: bool,
-    guard: Option<brass::EffectGuard>,
+impl brass::dom::Render for ImportPage {
+    fn render(self) -> TagBuilder {
+        brass::component::build_component::<State>(self)
+    }
 }
 
-#[derive(Debug)]
+struct State {
+    preview_load: Loader<Option<ImportOutput>>,
+    persist_load: Loader<()>,
+    is_preview: bool,
+}
+
 pub enum Msg {
-    FormSubmitPreview(url::Url),
-    FormSubmitImport(url::Url),
-    ImporterLoaded(Result<Option<ImportOutput>, AnyError>),
+    FormSubmit(Values),
     ImportAll,
     ImportLoaded(Result<(), AnyError>),
 }
 
-impl ImportPage {
+impl State {
     fn is_loading(&self) -> bool {
-        self.import_load.is_loading() || self.persist_load.is_loading()
+        self.preview_load.is_loading() || self.persist_load.is_loading()
     }
 }
 
-impl brass::Component for ImportPage {
-    type Properties = ();
+impl brass::component::msg::MsgComponent for State {
+    type Properties = ImportPage;
     type Msg = Msg;
 
-    fn init(_props: Self::Properties, ctx: &mut brass::Context<Self::Msg>) -> Self {
+    fn init(_props: Self::Properties, _ctx: brass::component::Context<'_, Self>) -> Self {
         Self {
-            import_load: LoadState::Idle,
-            persist_load: LoadState::Idle,
-            registry: ctx.registry().clone(),
-            on_preview: ctx.callback_map(Msg::FormSubmitPreview),
-            on_import: ctx.callback_map(Msg::FormSubmitImport),
-            auto_import: false,
-            guard: None,
+            preview_load: Loader::new_idle(),
+            persist_load: Loader::new_idle(),
+            is_preview: false,
         }
     }
 
-    fn update(&mut self, msg: Self::Msg, ctx: &mut brass::Context<Self::Msg>) {
-        tracing::trace!(?msg);
+    fn update(&mut self, msg: Self::Msg, ctx: brass::component::Context<Self>) {
         match msg {
-            Msg::FormSubmitPreview(url) => {
-                if self.import_load.is_loading() {
+            Msg::FormSubmit(values) => {
+                if self.persist_load.is_loading() || self.preview_load.is_loading() {
                     return;
                 }
-                self.persist_load.set_idle();
+                if let Ok(url) = url::Url::parse(&values.url) {
+                    self.persist_load.set_idle();
+                    self.is_preview = values.preview;
 
-                self.import_load.set_loading();
-
-                let api = ctx.api().clone();
-                let auto_import = self.auto_import;
-                let f = async move { api.fetch_url(url.clone(), auto_import, true).await };
-                self.guard = Some(ctx.run_map(f, Msg::ImporterLoaded));
-            }
-            Msg::FormSubmitImport(url) => {
-                self.auto_import = true;
-                self.update(Msg::FormSubmitPreview(url), ctx);
-            }
-            Msg::ImporterLoaded(res) => {
-                self.import_load.set_result(res);
-                if self.auto_import {
-                    self.update(Msg::ImportAll, ctx);
+                    let api = context::api();
+                    let f = async move {
+                        api.fetch_url(url.clone(), !values.preview, values.import_media)
+                            .await
+                    };
+                    self.preview_load.spawn(f);
                 }
             }
             Msg::ImportAll => {
-                if self.is_loading() {
+                if self.is_loading() || !self.is_preview {
                     return;
                 }
-                if let LoadState::Success(Some(output)) = &self.import_load {
+                if let LoadState::Success(Some(output)) = &*self.preview_load.get().lock_ref() {
                     let items = output.items.clone();
                     // TODO: toggle for item import.
-                    let api = ctx.api().clone();
+                    let api = context::api();
                     let f = async move {
                         api.import(items, true).await?;
                         Ok(())
                     };
-                    self.guard = Some(ctx.run_map(f, Msg::ImportLoaded));
-                    self.persist_load.set_loading();
+                    let guard = ctx.spawn_map(f, Msg::ImportLoaded);
+                    self.persist_load.set_loading(guard);
                 }
             }
             Msg::ImportLoaded(res) => {
@@ -102,65 +90,57 @@ impl brass::Component for ImportPage {
         }
     }
 
-    fn render(&self, ctx: &mut brass::RenderContext<Self>) -> brass::VNode {
-        let form = super::import_form::ImportForm {
-            loading: self.import_load.is_loading(),
-            on_preview: self.on_preview.clone(),
-            on_import: self.on_import.clone(),
-        };
-        let form_wrap = div_with(form).class("box");
-        let loader1 = self.import_load.render(|opt_res| {
+    fn render(&mut self, ctx: brass::component::Context<Self>) -> TagBuilder {
+        let handle = ctx.handle();
+        let form = super::import_form::import_form(move |values| {
+            handle.send(Msg::FormSubmit(values.clone()));
+        });
+
+        let form_wrap = box_().and(form);
+
+        let handle = ctx.handle();
+        let persist_load = self.persist_load.clone();
+        let loader1 = self.preview_load.signal_render(move |opt_res| {
             if let Some(output) = opt_res {
-                let rendered_page = super::super::entity::entity_list(
+                let rendered_page = entity_list(
                     &output.items,
-                    &self.registry,
+                    &context::registry(),
                     &EntityRenderOpts {
                         editable: false,
                         preview: true,
                     },
                 );
 
-                let already_imported = self.persist_load.is_success();
-                tracing::trace!(?already_imported);
-                let btn_label = if self.persist_load.is_loading() {
-                    "..."
-                } else {
-                    "Import All"
-                };
-                let import_toggle = if already_imported {
-                    brass_bulma::notification(
-                        brass_bulma::Color::Success,
-                        format!("Imported {} entities.", output.items.len()),
-                    )
-                } else {
-                    div().class("mb-2").and(
-                        brass_bulma::button_large()
-                            .and(btn_label)
-                            .attr_toggle_if(self.persist_load.is_loading(), Attr::Disabled)
-                            .on_click(ctx, || Msg::ImportAll),
-                    )
-                };
-                div().and((import_toggle, rendered_page)).build()
+                let handle = handle.clone();
+                let persist_loader =
+                    persist_load
+                        .signal_render_state(move |state| match state {
+                            LoadState::Idle => ButtonBuilder::new()
+                                .size_large()
+                                .label("Import All")
+                                .on(handle.callback(|| Msg::ImportAll))
+                                .build(),
+                            LoadState::Loading(_) => ButtonBuilder::new()
+                                .size_large()
+                                .label("Import All")
+                                .loading()
+                                .build(),
+                            LoadState::Success(_) => {
+                                notification_success().and("Import successful.")
+                            }
+                            LoadState::Failed(err) => {
+                                notification_error().and("Could not import: ").and(err)
+                            }
+                        });
+
+                div().child_signal(persist_loader).and(rendered_page)
             } else {
-                brass_bulma::notification_error("No suitable importer found").build()
+                notification_error().and("No suitable importer found")
             }
         });
 
-        let header = brass_bulma::h2_with("Import");
-        tracing::trace!(?loader1);
+        let header = title_2().and("Import");
 
-        div().and((header, form_wrap, loader1)).build()
-    }
-
-    fn on_property_change(
-        &mut self,
-        _props: Self::Properties,
-        _ctx: &mut brass::Context<Self::Msg>,
-    ) -> brass::ShouldRender {
-        false
-    }
-
-    fn build(props: Self::Properties) -> brass::VNode {
-        brass::vdom::component::<Self>(props)
+        div().and((header, form_wrap)).child_signal(loader1)
     }
 }

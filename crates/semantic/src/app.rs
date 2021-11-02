@@ -12,11 +12,7 @@ use factordb::{
     schema::{AttrMapExt, EntityContainer},
     AnyError, Db,
 };
-use semantic_core::{
-    api::{self, DbConfig},
-    base::{AttrBlobUri, AttrDownloadUrl},
-    plugin::{ImportOutput, PluginDescriptor},
-};
+use semantic_core::{api::{self, DbConfig, SemanticSchema}, base::{AttrBlobUri, AttrDownloadUrl}, plugin::{ImportOutput, PluginDescriptor}};
 
 use crate::{blobstore::DynBlobStore, plugin::deno::DenoPluginHost};
 
@@ -786,7 +782,10 @@ impl App {
             })),
             api::Query::Initialize(options) => {
                 self.configure_backend(options).await?;
-                Ok(api::Reply::Initialize)
+
+                let db = self.load_schema().await?.db.unwrap_or_default();
+                let schema = api::SemanticSchema { db };
+                Ok(api::Reply::Initialize(schema))
             }
             api::Query::CloseBackend => {
                 self.close_backend().await?;

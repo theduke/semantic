@@ -486,7 +486,11 @@ async fn api_query(state: &ServerState, req: Request<Body>) -> Result<Response<B
                 header::ACCESS_CONTROL_ALLOW_METHODS,
                 "POST".parse().unwrap(),
             ));
-            Ok(api::Reply::Initialize)
+
+            let db = app.load_schema().await?.db.unwrap_or_default();
+            let schema = api::SemanticSchema { db };
+
+            Ok(api::Reply::Initialize(schema))
         }
         api::Query::CloseBackend => {
             app.close_backend().await?;
