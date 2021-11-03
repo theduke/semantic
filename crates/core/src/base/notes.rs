@@ -1,4 +1,9 @@
-use factordb::{data::DataMap, Attribute, Entity, Id};
+use anyhow::bail;
+use factordb::{
+    data::{value::patch::Patch, DataMap},
+    schema::AttributeDescriptor,
+    AnyError, Attribute, Entity, Id,
+};
 use serde::{Deserialize, Serialize};
 
 use super::AttrTitle;
@@ -25,4 +30,21 @@ pub struct Note {
     #[factor(ignore)]
     #[serde(flatten)]
     pub extra: DataMap,
+}
+
+impl Note {
+    pub fn build_patch(old: &Self, new: &Self) -> Result<Patch, AnyError> {
+        if old.id != new.id {
+            bail!("Note ID mismatch");
+        }
+        let mut patch = Patch::new();
+        if old.title != new.title {
+            patch = patch.replace(AttrTitle::QUALIFIED_NAME, new.title.clone());
+        }
+        if old.body != new.body {
+            patch = patch.replace(AttrNoteBody::QUALIFIED_NAME, new.body.clone());
+        }
+
+        Ok(patch)
+    }
 }
