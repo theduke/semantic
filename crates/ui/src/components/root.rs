@@ -52,6 +52,10 @@ fn render_route(route: Route) -> TagBuilder {
             .render();
         }
         Route::Tags => semantic_ui_core::base::tags::tag_manager(),
+        Route::Plugin(route) => (route.render)(),
+        Route::PluginManager => super::plugins::plugin_manager(),
+        Route::PluginCreate => super::plugins::plugin_source_create_page(),
+        Route::PluginTest => super::plugins::plugin_test_page(),
     };
 
     container().style_raw("min-width: 800px;").and(content)

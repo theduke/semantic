@@ -272,7 +272,18 @@ impl<V> FormHandle<V> {
                 let f = callback(&state.form.values);
                 let f = async move {
                     match f.await {
-                        Ok(_) => {}
+                        Ok(_) => {
+                            handle
+                                .0
+                                .borrow()
+                                .status
+                                .replace_with(move |old| FormStatus {
+                                    is_valid: true,
+                                    is_loading: false,
+                                    errors: old.errors.clone(),
+                                    submit_error: None,
+                                });
+                        }
                         Err(err) => {
                             handle
                                 .0

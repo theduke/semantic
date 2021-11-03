@@ -1,8 +1,16 @@
 use std::{collections::HashMap, sync::Arc};
 
 use anyhow::{anyhow, bail};
-use factordb::{query::migrate::Migration, AnyError, Db};
-use semantic_core::plugin::{DynPlugin, ImportOutput, Plugin, PluginSchema};
+use factordb::{
+    query::{migrate::Migration, mutate::Mutate},
+    schema::{AttrMapExt, EntityDescriptor},
+    AnyError, Db,
+};
+use semantic_core::{
+    api::PluginTestFetch,
+    core::PluginSource,
+    plugin::{DynPlugin, ImportOutput, Plugin, PluginSchema},
+};
 use tokio::sync::RwLock;
 
 use super::deno;
@@ -32,6 +40,89 @@ impl PluginManager {
 
         state.deno = Some(host);
         Ok(())
+    }
+
+    pub async fn load_db_plugins(&self) -> Result<(), AnyError> {
+        let page = self
+            .0
+            .db
+            .select(PluginSource::query_all().with_limit(1000))
+            .await?
+            .convert_data::<PluginSource>()?;
+
+        if page.next_cursor.is_some() {
+            todo!("Handle additional pages");
+        }
+
+        for source in page.items {
+            tracing::trace!(plugin=%source.ident, "initializing database plugin");
+            let plugin = self.build_source_plugin(&source).await?;
+            if let Err(err) = self.register_plugin(plugin).await {
+                tracing::error!(plugin=%source.ident, error=?err, "Could not restore database plugin");
+            }
+        }
+
+        Ok(())
+    }
+
+    pub async fn create_source(&self, source: PluginSource) -> Result<PluginSource, AnyError> {
+        let plugin = self.build_source_plugin(&source).await?;
+        let source = PluginSource {
+            id: source.id.non_nil_or_randomize(),
+            ..source
+        };
+        self.0.db.create_entity(source.clone()).await?;
+        self.register_plugin(plugin).await?;
+
+        Ok(source)
+    }
+
+    pub async fn delete_plugin(&self, name: String) -> Result<(), AnyError> {
+        let mut state = self.0.mutable.write().await;
+
+        if let Some(plugin) = state.plugins.remove(&name) {}
+
+        let source = self.0.db.entity(name).await?;
+        let source_ty = source
+            .get_type_name()
+            .ok_or_else(|| anyhow!("Plugin not found"))?;
+        if source_ty != PluginSource::QUALIFIED_NAME {
+            bail!("Plugin not found");
+        }
+        let id = source.get_id().ok_or_else(|| anyhow!("Plugin not found"))?;
+        self.0.db.batch(Mutate::delete(id).into()).await?;
+
+        Ok(())
+    }
+
+    async fn build_source_plugin(&self, source: &PluginSource) -> Result<DynPlugin, AnyError> {
+        match source.runtime.as_ref().map(|s| s.as_str()) {
+            Some("deno") => {}
+            Some(other) => {
+                bail!("Unsupported plugin runtime: {}", other);
+            }
+            None => {
+                bail!("Plugins must have a runtime");
+            }
+        }
+
+        let code = source
+            .code
+            .clone()
+            .ok_or_else(|| anyhow!("Plugin must have source code"))?;
+
+        let deno = { self.0.mutable.read().await.deno.clone() }
+            .ok_or_else(|| anyhow!("Deno runtime not available"))?;
+
+        let plugin = deno
+            .register_plugin(deno::PluginSource { path: None, code })
+            .await?;
+
+        if plugin.name() != source.ident {
+            bail!("PluginSource ident does not match the plugin name specified in the schema");
+        }
+
+        Ok(plugin)
     }
 
     pub async fn register_plugin(&self, plugin: DynPlugin) -> Result<(), AnyError> {
@@ -123,6 +214,27 @@ impl PluginManager {
 
         plugin.fetch_url(url).await
     }
+
+    pub async fn test_fetch(
+        &self,
+        spec: PluginTestFetch,
+    ) -> Result<Option<ImportOutput>, AnyError> {
+        if spec.runtime != "deno" {
+            bail!("Unsupported runtime '{}'", spec.runtime);
+        }
+
+        let deno = {
+            self.0
+                .mutable
+                .read()
+                .await
+                .deno
+                .clone()
+                .ok_or_else(|| anyhow!("Deno runtime not available"))?
+        };
+
+        deno.test_fetch(&spec.code, spec.url).await
+    }
 }
 
 struct State {
@@ -154,9 +266,4 @@ fn build_plugin_migration_name(
     // Doing so would break all plugins with migrations and require a
     // database purge!
     Ok(format!("plugin/{}/{}", plugin.name(), flat_name))
-}
-
-pub struct FetchResult {
-    pub plugin_name: String,
-    pub output: ImportOutput,
 }

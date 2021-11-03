@@ -104,9 +104,10 @@ impl Boot {
                 // Read current route.
 
                 let current_path = web_sys::window().unwrap().location().pathname().unwrap();
-                let route = Route::from_path(&&current_path).unwrap_or(Route::Browse);
+                let router = context::router();
+                let route = router.parse_path(&&current_path).unwrap_or(Route::Browse);
                 // TODO: initialze url path listener.
-                context::router().goto(route);
+                router.goto(route);
 
                 self.status.set(phase);
             }

@@ -1,5 +1,5 @@
 use factordb::{
-    query::migrate::Migration,
+    query::{expr::Expr, migrate::Migration, select::Select},
     schema::{builtin::AttrIdent, AttributeDescriptor, EntityDescriptor},
     Attribute, Entity, Id,
 };
@@ -23,7 +23,7 @@ pub struct PluginSource {
     pub id: Id,
 
     #[factor(attr = AttrIdent)]
-    #[serde(rename = "semantic/ident")]
+    #[serde(rename = "factor/ident")]
     pub ident: String,
 
     #[factor(attr = AttrPluginRuntime)]
@@ -33,6 +33,12 @@ pub struct PluginSource {
     #[factor(attr = AttrPluginCode)]
     #[serde(rename = "semantic/plugin_code")]
     pub code: Option<String>,
+}
+
+impl PluginSource {
+    pub fn query_all() -> Select {
+        Select::new().with_filter(Expr::is_entity::<PluginSource>())
+    }
 }
 
 pub struct SemanticCorePlugin;

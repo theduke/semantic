@@ -19,10 +19,7 @@ use semantic_core::{
     plugin::{ImportOutput, PluginDescriptor},
 };
 
-use crate::{
-    blobstore::DynBlobStore,
-    plugin::{deno::DenoPluginHost, PluginManager},
-};
+use crate::{blobstore::DynBlobStore, plugin::PluginManager};
 
 pub use crate::plugin::deno::DenoConfig;
 
@@ -171,6 +168,8 @@ impl App {
                 if let Some(c) = &self.config.deno {
                     plugins.initialize_deno(c.clone()).await?;
                 };
+
+                plugins.load_db_plugins().await?;
 
                 // Load plugins.
 
@@ -807,6 +806,18 @@ impl App {
             } => {
                 let output = self.fetch_url(url, import, import_media).await?;
                 Ok(api::Reply::FetchUrl(output))
+            }
+            api::Query::PluginSourceCreate(source) => {
+                let source = self.require_plugins()?.create_source(source).await?;
+                Ok(api::Reply::PluginSourceCreate(source))
+            }
+            api::Query::PluginDelete { name } => {
+                self.require_plugins()?.delete_plugin(name).await?;
+                Ok(api::Reply::PluginDelete)
+            }
+            api::Query::PluginTestFetch(spec) => {
+                let out = self.require_plugins()?.test_fetch(spec).await?;
+                Ok(api::Reply::PluginTestFetch(out))
             }
         };
         res.map_err(|err| {

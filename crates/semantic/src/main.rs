@@ -14,8 +14,6 @@ fn main() {
         std::env::set_var("RUST_LOG", default);
     }
 
-    dbg!(std::env::var("RUST_LOG"));
-
     // Initialize logger.
     // TODO: tracing-tree disabled until it supports tracing_subscriber 0.3
     // let subscriber =

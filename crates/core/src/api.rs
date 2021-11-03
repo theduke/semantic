@@ -6,10 +6,10 @@ use factordb::{
         select::{Item, Page},
     },
     schema::EntityContainer,
-    AnyError,
+    AnyError, Ident,
 };
 
-use crate::plugin::ImportOutput;
+use crate::{core::PluginSource, plugin::ImportOutput};
 
 #[derive(serde::Serialize, serde::Deserialize, Clone, Debug)]
 pub struct SimpleHttpRequest {
@@ -84,6 +84,13 @@ impl FileUploadMetadata {
 pub type Seconds = u64;
 
 #[derive(serde::Serialize, serde::Deserialize, Clone, Debug)]
+pub struct PluginTestFetch {
+    pub runtime: String,
+    pub code: String,
+    pub url: url::Url,
+}
+
+#[derive(serde::Serialize, serde::Deserialize, Clone, Debug)]
 pub enum Query {
     ServerStatus,
     Initialize(BackendConfig),
@@ -94,6 +101,12 @@ pub enum Query {
     Batch(factordb::query::mutate::BatchUpdate),
 
     Schema,
+
+    PluginSourceCreate(PluginSource),
+    PluginDelete {
+        name: String,
+    },
+    PluginTestFetch(PluginTestFetch),
 
     Import {
         items: Vec<Item>,
@@ -130,6 +143,10 @@ pub enum Reply {
     Mutate,
     Batch,
     Schema(SemanticSchema),
+
+    PluginSourceCreate(PluginSource),
+    PluginDelete,
+    PluginTestFetch(Option<ImportOutput>),
 
     Import,
     FetchUrl(Option<ImportOutput>),
@@ -268,6 +285,36 @@ impl<E: ApiClientExecutor> ApiClient<E> {
     pub async fn schema(&self) -> Result<SemanticSchema, AnyError> {
         match self.exec.execute(Query::Schema).await {
             Ok(Reply::Schema(schema)) => Ok(schema),
+            Ok(_other) => Err(anyhow::anyhow!("API returned invalid data")),
+            Err(err) => Err(err),
+        }
+    }
+
+    pub async fn plugin_source_create(
+        &self,
+        source: PluginSource,
+    ) -> Result<PluginSource, AnyError> {
+        match self.exec.execute(Query::PluginSourceCreate(source)).await {
+            Ok(Reply::PluginSourceCreate(source)) => Ok(source),
+            Ok(_other) => Err(anyhow::anyhow!("API returned invalid data")),
+            Err(err) => Err(err),
+        }
+    }
+
+    pub async fn plugin_delete(&self, name: String) -> Result<(), AnyError> {
+        match self.exec.execute(Query::PluginDelete { name }).await {
+            Ok(Reply::PluginDelete) => Ok(()),
+            Ok(_other) => Err(anyhow::anyhow!("API returned invalid data")),
+            Err(err) => Err(err),
+        }
+    }
+
+    pub async fn plugin_test_fetch(
+        &self,
+        spec: PluginTestFetch,
+    ) -> Result<Option<ImportOutput>, AnyError> {
+        match self.exec.execute(Query::PluginTestFetch(spec)).await {
+            Ok(Reply::PluginTestFetch(out)) => Ok(out),
             Ok(_other) => Err(anyhow::anyhow!("API returned invalid data")),
             Err(err) => Err(err),
         }

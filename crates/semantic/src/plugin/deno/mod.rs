@@ -6,7 +6,7 @@ use std::{
 
 use anyhow::Context;
 use factordb::AnyError;
-use semantic_core::plugin::{ImportOutput, PluginSchema};
+use semantic_core::plugin::{DynPlugin, ImportOutput, PluginSchema};
 use sha2::Digest;
 use tokio::{
     io::{AsyncBufReadExt, AsyncWriteExt, BufReader},
@@ -37,8 +37,8 @@ impl DenoConfig {
 
 #[derive(Clone, Debug)]
 pub struct PluginSource {
-    path: Option<PathBuf>,
-    code: String,
+    pub path: Option<PathBuf>,
+    pub code: String,
 }
 
 #[derive(Clone, Debug)]
@@ -60,6 +60,10 @@ impl semantic_core::plugin::Plugin for DenoPlugin {
 
     fn schema(&self) -> PluginSchema {
         self.data.schema.clone()
+    }
+
+    fn stop(&self) -> Result<(), AnyError> {
+        self.host.stop_plugin(&self.data.schema.name)
     }
 
     fn migrations(&self) -> Vec<factordb::query::migrate::Migration> {
@@ -205,7 +209,7 @@ impl DenoPluginHost {
         Ok(())
     }
 
-    pub async fn register_plugin(&self, source: PluginSource) -> Result<(), AnyError> {
+    pub async fn register_plugin(&self, source: PluginSource) -> Result<DynPlugin, AnyError> {
         tracing::trace!(?source.path, "Loading deno plugin");
         let data_dir = { self.state.read().unwrap().config.data_dir.clone() };
 
@@ -216,7 +220,30 @@ impl DenoPluginHost {
         state
             .workers
             .insert(data.schema.name.clone(), Arc::new(Mutex::new(worker)));
-        state.plugins.insert(data.schema.name.clone(), data);
+        state.plugins.insert(data.schema.name.clone(), data.clone());
+
+        Ok(Arc::new(DenoPlugin {
+            data,
+            host: self.clone(),
+        }))
+    }
+
+    pub async fn test_fetch(
+        &self,
+        code: &str,
+        url: url::Url,
+    ) -> Result<Option<ImportOutput>, AnyError> {
+        let data_dir = { self.state.read().unwrap().config.data_dir.clone() };
+        let (mut worker, _schema) = Self::boot_plugin_worker(&data_dir, code).await?;
+
+        worker.send_import(&url).await
+    }
+
+    fn stop_plugin(&self, name: &str) -> Result<(), AnyError> {
+        let mut state = self.state.write().unwrap();
+
+        state.plugins.remove(name);
+        state.workers.remove(name);
 
         Ok(())
     }

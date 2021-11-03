@@ -7,3 +7,5 @@ mod upload;
 
 pub mod entity;
 pub mod player;
+
+pub mod plugins;

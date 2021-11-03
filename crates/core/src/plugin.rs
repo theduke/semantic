@@ -184,6 +184,10 @@ pub trait Plugin {
     fn fetch_url(&self, url: Url) -> BoxFuture<'static, Result<Option<ImportOutput>, AnyError>> {
         Box::pin(async move { Ok(None) })
     }
+
+    fn stop(&self) -> Result<(), AnyError> {
+        Ok(())
+    }
 }
 
 pub type DynPlugin = std::sync::Arc<dyn Plugin + Send + Sync>;

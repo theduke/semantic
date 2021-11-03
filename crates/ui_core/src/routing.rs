@@ -1,3 +1,5 @@
+use std::{cell::RefCell, rc::Rc};
+
 use brass::{
     dom::{builder::tag, ClickEvent, TagBuilder},
     signal::signal::{Mutable, Signal},
@@ -5,9 +7,30 @@ use brass::{
 use factordb::Ident;
 use wasm_bindgen::JsValue;
 
-use crate::context::router;
+use crate::{context::router, SharedRenderer0};
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+pub trait PluginRouter {
+    fn parse_path(&self, path: &[&str]) -> Option<PluginRoute>;
+}
+
+#[derive(Clone)]
+pub struct PluginRoute {
+    pub path: String,
+    pub title: String,
+    pub render: SharedRenderer0,
+}
+
+impl std::fmt::Debug for PluginRoute {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("PluginRoute")
+            .field("path", &self.path)
+            .field("title", &self.title)
+            .field("render", &())
+            .finish()
+    }
+}
+
+#[derive(Clone, Debug)]
 pub enum Route {
     Browse,
     Import,
@@ -18,10 +41,69 @@ pub enum Route {
     EntityCreate { entity_type: String },
     Play,
     Tags,
+
+    PluginManager,
+    PluginCreate,
+    PluginTest,
+
+    Plugin(PluginRoute),
 }
 
 impl Route {
-    pub fn from_path(path: &str) -> Option<Self> {
+    pub fn to_path(&self) -> String {
+        match self {
+            Route::Logout => "/logout".into(),
+            Route::Browse => "/browse".to_string(),
+            Route::Import => "/import".to_string(),
+            Route::Upload => "/upload".to_string(),
+            Route::Tags => "/tags".to_string(),
+            Route::Play => "/play".to_string(),
+            Route::Entity(ident) => format!("/entity/{}", ident.to_string()),
+            Route::Create => "/create".to_string(),
+            Route::EntityCreate { entity_type } => format!("/create/{}", entity_type),
+            Route::PluginManager => "/plugins".to_string(),
+            Route::PluginCreate => "/plugins/create".to_string(),
+            Route::PluginTest => "/plugins/test".to_string(),
+            Route::Plugin(p) => p.path.clone(),
+        }
+    }
+
+    pub fn title(&self) -> String {
+        // TODO: this sucks.
+        // Specific components will have to set the path.
+        match self {
+            Route::Logout => "Logout".to_string(),
+            Route::Browse => "Browse".to_string(),
+            Route::Import => "Import".to_string(),
+            Route::Upload => "Upload".to_string(),
+            Route::Tags => "Tags".to_string(),
+            Route::Entity(_) => "Show".to_string(),
+            Route::Create => "Create".to_string(),
+            Route::EntityCreate { entity_type: _ } => "Create".to_string(),
+            Route::Play => "Play - Semnatic".to_string(),
+            Route::Plugin(p) => p.title.clone(),
+            Route::PluginManager => "Manage Plugins".to_string(),
+            Route::PluginCreate => "Create Plugin".to_string(),
+            Route::PluginTest => "Test Plugin".to_string(),
+        }
+    }
+}
+
+#[derive(Clone)]
+pub struct Router {
+    route: Mutable<Route>,
+    routers: Rc<RefCell<Vec<Box<dyn PluginRouter>>>>,
+}
+
+impl Router {
+    pub fn new() -> Self {
+        Self {
+            route: Mutable::new(Route::Browse),
+            routers: Rc::new(RefCell::new(Vec::new())),
+        }
+    }
+
+    pub fn parse_path(&self, path: &str) -> Option<Route> {
         // Skip first slash.
         let path = if path.starts_with('/') {
             &path[1..]
@@ -42,50 +124,17 @@ impl Route {
                 entity_type: tail.join("/"),
             }),
             ["tags"] => Some(Route::Tags),
-            _other => None,
-        }
-    }
-
-    pub fn to_path(&self) -> String {
-        match self {
-            Route::Logout => "/logout".into(),
-            Route::Browse => "/browse".to_string(),
-            Route::Import => "/import".to_string(),
-            Route::Upload => "/upload".to_string(),
-            Route::Tags => "/tags".to_string(),
-            Route::Play => "/play".to_string(),
-            Route::Entity(ident) => format!("/entity/{}", ident.to_string()),
-            Route::Create => "/create".to_string(),
-            Route::EntityCreate { entity_type } => format!("/create/{}", entity_type),
-        }
-    }
-
-    pub fn title(&self) -> &'static str {
-        // TODO: this sucks.
-        // Specific components will have to set the path.
-        match self {
-            Route::Logout => "Logout - Semantic",
-            Route::Browse => "Browse - Semantic",
-            Route::Import => "Import - Semantic",
-            Route::Upload => "Upload - Semantic",
-            Route::Tags => "Tags - Semantic",
-            Route::Entity(_) => "Show - Semantic",
-            Route::Create => "Create - Semantic",
-            Route::EntityCreate { entity_type: _ } => "Create - Semantic",
-            Route::Play => "Play - Semnatic",
-        }
-    }
-}
-
-#[derive(Clone)]
-pub struct Router {
-    route: Mutable<Route>,
-}
-
-impl Router {
-    pub fn new() -> Self {
-        Self {
-            route: Mutable::new(Route::Browse),
+            ["plugins"] => Some(Route::PluginManager),
+            ["plugins", "create"] => Some(Route::PluginCreate),
+            ["plugins", "test"] => Some(Route::PluginTest),
+            _other => {
+                let route = self
+                    .routers
+                    .borrow()
+                    .iter()
+                    .find_map(|router| router.parse_path(&parts))?;
+                Some(Route::Plugin(route))
+            }
         }
     }
 
@@ -96,7 +145,7 @@ impl Router {
         self.route.set(route);
         if let Some(history) = web_sys::window().and_then(|w| w.history().ok()) {
             history
-                .push_state_with_url(&JsValue::NULL, title, Some(&path))
+                .push_state_with_url(&JsValue::NULL, &title, Some(&path))
                 .ok();
         }
     }

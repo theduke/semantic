@@ -86,8 +86,9 @@ fn cmd_watch_server(default_backend: bool) -> Result<(), DynError> {
     let mut cmd = Command::new("cargo");
     cmd.current_dir(root_path()?)
         .args(&["run", "--bin", "semantic", "--", "server"])
-        .arg("--deno-plugin-dir")
-        .arg(root_path()?.join("lib").join("contrib"));
+        // .arg("--deno-plugin-dir")
+        // .arg(root_path()?.join("lib").join("contrib"))
+        ;
 
     if default_backend {
         cmd.args(&["--data-path", &data_path, "--key", "testkey"]);
