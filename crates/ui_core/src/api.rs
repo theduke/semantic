@@ -82,7 +82,7 @@ pub async fn upload_file(
     opts.body(Some(&file));
 
     // FIXME: generalize URL.
-    let url = "http://localhost:3000/api/upload-file".to_string();
+    let url = "/api/upload-file".to_string();
     let request = web_sys::Request::new_with_str_and_init(&url, &opts).map_err(anyerr_from_js)?;
     request
         .headers()

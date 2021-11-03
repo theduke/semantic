@@ -138,7 +138,7 @@ fn render_attr_preview_image(value: &Value, _entity: Option<&DataMap>) -> TagBui
 }
 
 pub fn build_blob_url(uri: &str) -> String {
-    format!("http://localhost:3000/blob/{}", uri)
+    format!("/blob/{}", uri)
 }
 
 fn render_blob_uri(value: &Value, entity: Option<&DataMap>) -> TagBuilder {
