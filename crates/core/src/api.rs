@@ -1,7 +1,11 @@
 use std::collections::HashMap;
 
 use factordb::{
-    query::select::{Item, Page},
+    query::{
+        mutate::Mutate,
+        select::{Item, Page},
+    },
+    schema::EntityContainer,
     AnyError,
 };
 
@@ -174,9 +178,7 @@ impl<E: ApiClientExecutor> ApiClient<E> {
         let res = self.exec.execute(Query::ServerStatus).await;
         tracing::trace!("got server_status res");
         match res {
-            Ok(Reply::ServerStatus(status)) => {
-                Ok(status)
-            },
+            Ok(Reply::ServerStatus(status)) => Ok(status),
             Ok(_other) => Err(anyhow::anyhow!("API returned invalid data")),
             Err(err) => Err(err),
         }
@@ -244,6 +246,15 @@ impl<E: ApiClientExecutor> ApiClient<E> {
             Ok(_other) => Err(anyhow::anyhow!("API returned invalid data")),
             Err(err) => Err(err),
         }
+    }
+
+    pub async fn entity_create<V: EntityContainer + serde::Serialize>(
+        &self,
+        entity: V,
+    ) -> Result<(), AnyError> {
+        let id = entity.id();
+        let data = entity.into_map()?;
+        self.mutate(Mutate::create(id, data)).await
     }
 
     pub async fn batch(&self, batch: factordb::query::mutate::BatchUpdate) -> Result<(), AnyError> {
