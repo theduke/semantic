@@ -93,6 +93,7 @@ impl Plugin for SemanticBasePlugin {
                     AttrBlobUri::schema(),
                     AttrMimeType::schema(),
                     AttrHash::schema(),
+                    AttrOriginalHash::schema(),
                     AttrDuration::schema(),
                     AttrFileSize::schema(),
                     AttrDownloadUrl::schema(),
@@ -146,16 +147,13 @@ impl Plugin for SemanticBasePlugin {
             .attr_create(AttrBlobUri::schema())
             .attr_create(AttrMimeType::schema())
             .attr_create(AttrHash::schema())
+            .attr_create(AttrOriginalHash::schema())
             .attr_create(AttrDuration::schema())
             .attr_create(AttrFileSize::schema())
             .attr_create(AttrDownloadUrl::schema())
             .attr_create(AttrFileName::schema())
             .attr_create(AttrSocialMediaPostContent::schema())
             .attr_create(notes::AttrNoteBody::schema())
-            .attr_create(habit::AttrHabitOccurenceComment::schema())
-            .attr_create(habit::AttrHabitOccurenceParentId::schema())
-            .attr_create(habit::AttrHabitOccurenceTime::schema())
-            .attr_create(habit::HabitMode::schema())
             .attr_create(collection::AttrCollectionItem::schema())
             .attr_create(tags::AttrTagName::schema())
             .attr_create(tags::AttrTagParent::schema())
@@ -165,15 +163,16 @@ impl Plugin for SemanticBasePlugin {
             .entity_create(Video::schema())
             .entity_create(SocialMediaPost::schema())
             .entity_create(notes::Note::schema())
-            .entity_create(habit::Habit::schema())
-            .entity_create(habit::HabitOccurence::schema())
             .entity_create(collection::Collection::schema())
             .entity_create(tags::Tag::schema());
 
-        let health_create = Migration::with_name("semantic/base/health-create".to_string())
-            .attr_create(AttrWeight::schema())
-            .entity_create(health::WeightLogEntry::schema());
+        // .attr_create(habit::AttrHabitOccurenceComment::schema())
+        // .attr_create(habit::AttrHabitOccurenceParentId::schema())
+        // .attr_create(habit::AttrHabitOccurenceTime::schema())
+        // .entity_create(habit::Habit::schema())
+        // .entity_create(habit::HabitOccurence::schema())
+        // .attr_create(habit::HabitMode::schema())
 
-        vec![first, health_create]
+        vec![first]
     }
 }

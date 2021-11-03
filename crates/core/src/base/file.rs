@@ -65,6 +65,14 @@ pub struct AttrMimeType(String);
 pub struct AttrHash(UniversalHash);
 
 #[derive(Attribute)]
+#[factor(
+    namespace = "semantic",
+    name = "original_hash",
+    title = "Original Content Hash"
+)]
+pub struct AttrOriginalHash(UniversalHash);
+
+#[derive(Attribute)]
 #[factor(namespace = "semantic", title = "Download URL")]
 pub struct AttrDownloadUrl(url::Url);
 
@@ -110,6 +118,10 @@ pub struct File {
     #[factor(attr = AttrHash)]
     #[serde(rename = "semantic/hash")]
     pub hash: Option<UniversalHash>,
+
+    #[factor(attr = AttrOriginalHash)]
+    #[serde(rename = "semantic/original_hash")]
+    pub original_hash: Option<UniversalHash>,
 
     #[factor(attr = AttrUrl)]
     #[serde(rename = "semantic/url")]

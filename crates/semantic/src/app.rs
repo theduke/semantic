@@ -322,10 +322,34 @@ impl App {
             &format!("{:x}", raw_hash),
         );
 
+        // Try to optimise.
+        // TODO: add setting to disable optimisations.
+        let (hash, original_hash, data) = match mime_guess {
+            Some(t) if t.mime_type().starts_with("image/") => {
+                tracing::trace!("starting media optimisation");
+                match crate::util::media::optimize_image_data(&data) {
+                    Ok(new_data) => {
+                        tracing::trace!(old_size=%data.len(), new_size=new_data.len(), "optimised image data");
+                        let new_hash_raw = sha2::Sha256::digest(&new_data);
+                        let new_hash = semantic_core::base::UniversalHash::new(
+                            semantic_core::base::UniversalHash::SHA256,
+                            &format!("{:x}", new_hash_raw),
+                        );
+
+                        (Some(new_hash), Some(hash), new_data)
+                    }
+                    Err(err) => {
+                        tracing::warn!(?err, "Failed to optimize image data");
+                        (Some(hash), None, data)
+                    }
+                }
+            }
+            _ => (Some(hash), None, data),
+        };
+
         let id = factordb::Id::random();
         let blob_uri = format!("files/{}", id);
 
-        // FIXME: use unique create instead of put.
         blob.put(&blob_uri, data).await?;
 
         let file = semantic_core::base::File {
@@ -339,7 +363,8 @@ impl App {
             blob_uri: Some(blob_uri),
             size: Some(size),
             mime_type: mime_guess.map(|x| x.mime_type().to_string()),
-            hash: Some(hash),
+            hash,
+            original_hash,
             extra: Default::default(),
         };
 

@@ -1,4 +1,4 @@
-mod media;
+pub mod media;
 
 pub fn json_from_slice<T: serde::de::DeserializeOwned>(
     slice: &[u8],
