@@ -11,7 +11,7 @@ use semantic_ui_core::{
 pub struct Values {
     pub url: String,
     pub import_media: bool,
-    pub preview: bool,
+    pub import: bool,
 }
 
 impl Default for Values {
@@ -19,33 +19,29 @@ impl Default for Values {
         Self {
             url: Default::default(),
             import_media: true,
-            preview: true,
+            import: false,
         }
     }
 }
 
 pub fn import_form(on_submit: impl Fn(&Values) + 'static) -> TagBuilder {
-    Form::new(Values {
-        url: String::new(),
-        import_media: false,
-        preview: true,
-    })
-    .on_submit(on_submit)
-    .render(|handle| {
-        FormBuilder::new(handle.clone())
-            .and(form_field_input(
-                "Url",
-                handle.field_validated(|v| &mut v.url, StringUrl),
-            ))
-            .and(form_field_checkbox(
-                "Import Media",
-                handle.field(|v| &mut v.import_media),
-            ))
-            .and(form_field_checkbox(
-                "Preview",
-                handle.field(|v| &mut v.preview),
-            ))
-            .with_buttons(|b| b.submit("Load").reset_default("Reset"))
-            .build()
-    })
+    Form::new(Values::default())
+        .on_submit(on_submit)
+        .render(|handle| {
+            FormBuilder::new(handle.clone())
+                .and(form_field_input(
+                    "Url",
+                    handle.field_validated(|v| &mut v.url, StringUrl),
+                ))
+                .and(form_field_checkbox(
+                    "Import Media",
+                    handle.field(|v| &mut v.import_media),
+                ))
+                .and(form_field_checkbox(
+                    "Import (persist)",
+                    handle.field(|v| &mut v.import),
+                ))
+                .with_buttons(|b| b.submit("Load").reset_default("Reset"))
+                .build()
+        })
 }

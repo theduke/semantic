@@ -58,11 +58,11 @@ impl brass::component::msg::MsgComponent for State {
                 }
                 if let Ok(url) = url::Url::parse(&values.url) {
                     self.persist_load.set_idle();
-                    self.is_preview = values.preview;
+                    self.is_preview = !values.import;
 
                     let api = context::api();
                     let f = async move {
-                        api.fetch_url(url.clone(), !values.preview, values.import_media)
+                        api.fetch_url(url.clone(), values.import, values.import_media)
                             .await
                     };
                     self.preview_load.spawn(f);
