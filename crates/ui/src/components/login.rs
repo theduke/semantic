@@ -1,11 +1,11 @@
 use std::rc::Rc;
 
-use brass::dom::TagBuilder;
+use brass::dom::{builder::div, TagBuilder};
 use semantic_core::api::{BackendConfig, BackendCryptoConfig, DbConfig, SemanticSchema};
 use semantic_ui_core::{
     components::{
         form,
-        util::{form_field_input, FormBuilder},
+        util::{form_field_input, form_field_password, title_2, FormBuilder},
     },
     context,
     validate::StringRequired,
@@ -19,7 +19,7 @@ struct Values {
 pub fn login(on_success: impl Fn(SemanticSchema) + 'static) -> TagBuilder {
     let on_success: Rc<dyn Fn(SemanticSchema)> = Rc::new(on_success);
 
-    form::Form::new(Values {
+    let form = form::Form::new(Values {
         data_path: String::new(),
         key: String::new(),
     })
@@ -50,10 +50,15 @@ pub fn login(on_success: impl Fn(SemanticSchema) + 'static) -> TagBuilder {
                 "Data Path",
                 handle.field_validated(|v| &mut v.data_path, StringRequired),
             ))
-            .and(form_field_input(
+            .and(form_field_password(
                 "Key",
                 handle.field_validated(|v| &mut v.key, StringRequired),
             ))
             .buttons_submit("Log in")
-    })
+    });
+
+    div()
+        .class("container")
+        .and(title_2().and("Semantic"))
+        .and(form)
 }
