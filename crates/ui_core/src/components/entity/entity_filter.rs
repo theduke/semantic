@@ -10,23 +10,16 @@ use crate::{
         util::{form_field_input, form_field_tag_select, FormBuilder, SelectOption},
     },
     context,
-    validate::StringRequired,
 };
 
-#[derive(Default)]
+#[derive(Clone)]
 pub struct EntityFilter {
-    pub search_term: Option<String>,
-    pub entity_types: Option<HashSet<String>>,
-    pub tags: Vec<Tag>,
-}
-
-struct Values {
     search: String,
     entity_types: HashSet<String>,
     tags: Vec<Tag>,
 }
 
-impl Values {
+impl EntityFilter {
     pub fn build_expr(&self) -> Expr {
         let mut e = Expr::Literal(factordb::data::Value::Bool(true));
 
@@ -61,14 +54,14 @@ impl Values {
     }
 }
 
-pub fn entity_filter(on_submit: impl Fn(Expr) + 'static) -> TagBuilder {
-    form::Form::new(Values {
+pub fn entity_filter(on_submit: impl Fn(EntityFilter) + 'static) -> TagBuilder {
+    form::Form::new(EntityFilter {
         search: String::new(),
         entity_types: HashSet::new(),
         tags: Vec::new(),
     })
     .on_submit(move |values| {
-        on_submit(values.build_expr());
+        on_submit(values.clone());
     })
     .render(|handle| {
         let search = form_field_input("Search", handle.field(|v| &mut v.search));

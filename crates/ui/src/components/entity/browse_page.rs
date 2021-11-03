@@ -152,7 +152,7 @@ impl MsgComponent for BrowsePage {
         div()
             .and(title_2().and("Browse"))
             .and(box_().and(entity_filter(move |query| {
-                handle.send(Msg::FilterUpdated(query));
+                handle.send(Msg::FilterUpdated(query.build_expr()));
             })))
             .child_signal(loader)
             .children_signal(self.items.signal_vec_cloned(), |item| {

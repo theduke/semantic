@@ -12,7 +12,6 @@ pub mod components;
 
 pub type SharedRenderer0 = std::rc::Rc<dyn Fn() -> TagBuilder>;
 
-
 use brass::dom::TagBuilder;
 
 pub use self::{

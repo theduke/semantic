@@ -1,13 +1,12 @@
 pub mod form;
 pub mod util;
 
-pub mod loader;
 pub mod autocomplete;
+pub mod loader;
 
 pub mod entity;
 // pub mod markdown;
 // pub mod form;
-
 
 // mod spinner;
 // pub use self::spinner::DelayedSpinner;

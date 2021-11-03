@@ -14,7 +14,7 @@ pub enum Route {
     Upload,
     Logout,
     Entity(factordb::Ident),
-    EntityCreateSelect,
+    Create,
     EntityCreate { entity_type: String },
     Play,
     Tags,
@@ -36,10 +36,8 @@ impl Route {
             ["import"] => Some(Route::Import),
             ["upload"] => Some(Route::Upload),
             ["play"] => Some(Route::Play),
-            ["entity", id] => {
-                Some(Route::Entity(Ident::from_str(id)))
-            }
-            ["create"] => Some(Route::EntityCreateSelect),
+            ["entity", id] => Some(Route::Entity(Ident::from_str(id))),
+            ["create"] => Some(Route::Create),
             ["create", tail @ ..] => Some(Route::EntityCreate {
                 entity_type: tail.join("/"),
             }),
@@ -57,7 +55,7 @@ impl Route {
             Route::Tags => "/tags".to_string(),
             Route::Play => "/play".to_string(),
             Route::Entity(ident) => format!("/entity/{}", ident.to_string()),
-            Route::EntityCreateSelect => "/create".to_string(),
+            Route::Create => "/create".to_string(),
             Route::EntityCreate { entity_type } => format!("/create/{}", entity_type),
         }
     }
@@ -72,7 +70,7 @@ impl Route {
             Route::Upload => "Upload - Semantic",
             Route::Tags => "Tags - Semantic",
             Route::Entity(_) => "Show - Semantic",
-            Route::EntityCreateSelect => "Create - Semantic",
+            Route::Create => "Create - Semantic",
             Route::EntityCreate { entity_type: _ } => "Create - Semantic",
             Route::Play => "Play - Semnatic",
         }

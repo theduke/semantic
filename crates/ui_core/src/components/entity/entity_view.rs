@@ -7,7 +7,12 @@ use brass::{
 };
 use factordb::{query::select::Item, schema::AttrMapExt};
 
-use crate::{EntityRenderOpts, Registry, components::util::{BtnSize, Cls, button, buttons, card, card_content, card_header, card_header_title, icon_fa}};
+use crate::{
+    components::util::{
+        button, buttons, card, card_content, card_header, card_header_title, icon_fa, BtnSize, Cls,
+    },
+    EntityRenderOpts, Registry,
+};
 
 pub struct EntityView<'a> {
     pub title: DomStr<'a>,

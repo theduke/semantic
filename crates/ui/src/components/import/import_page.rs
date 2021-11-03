@@ -112,26 +112,22 @@ impl brass::component::msg::MsgComponent for State {
                 );
 
                 let handle = handle.clone();
-                let persist_loader =
-                    persist_load
-                        .signal_render_state(move |state| match state {
-                            LoadState::Idle => ButtonBuilder::new()
-                                .size_large()
-                                .label("Import All")
-                                .on(handle.callback(|| Msg::ImportAll))
-                                .build(),
-                            LoadState::Loading(_) => ButtonBuilder::new()
-                                .size_large()
-                                .label("Import All")
-                                .loading()
-                                .build(),
-                            LoadState::Success(_) => {
-                                notification_success().and("Import successful.")
-                            }
-                            LoadState::Failed(err) => {
-                                notification_error().and("Could not import: ").and(err)
-                            }
-                        });
+                let persist_loader = persist_load.signal_render_state(move |state| match state {
+                    LoadState::Idle => ButtonBuilder::new()
+                        .size_large()
+                        .label("Import All")
+                        .on(handle.callback(|| Msg::ImportAll))
+                        .build(),
+                    LoadState::Loading(_) => ButtonBuilder::new()
+                        .size_large()
+                        .label("Import All")
+                        .loading()
+                        .build(),
+                    LoadState::Success(_) => notification_success().and("Import successful."),
+                    LoadState::Failed(err) => {
+                        notification_error().and("Could not import: ").and(err)
+                    }
+                });
 
                 div().child_signal(persist_loader).and(rendered_page)
             } else {

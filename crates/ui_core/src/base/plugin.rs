@@ -1,10 +1,20 @@
 use std::rc::Rc;
 
-use brass::dom::{builder::div, Tag, TagBuilder};
-use factordb::{Value, data::DataMap, schema::{AttrMapExt, AttributeDescriptor, EntityDescriptor}};
+use brass::dom::{builder::div, Attr, Tag, TagBuilder};
+use factordb::{
+    data::DataMap,
+    schema::{AttrMapExt, AttributeDescriptor, EntityDescriptor},
+    Value,
+};
 use semantic_core::base::{self, AttrPreviewImageUrl};
 
-use crate::{BrowserPlugin, BrowserPluginSpec, EntityRenderMode, EntityRendererSpec, Registry, components::entity::{render_image, render_value, render_video}};
+use crate::{
+    components::entity::{render_image, render_value, render_video},
+    registry::RegisteredMediaRenderer,
+    BrowserPlugin, BrowserPluginSpec, EntityRenderMode, EntityRendererSpec, Registry,
+};
+
+use super::collection::{collection_create, collection_create_page};
 
 pub struct BasePlugin;
 
@@ -28,21 +38,23 @@ impl BrowserPlugin for BasePlugin {
             std::rc::Rc::new(render_blob_uri),
         );
 
-        // registry.register_entity_renderer(EntityRendererSpec {
-        //     name: "Create Note".to_string(),
-        //     entity_type: base::Note::QUALIFIED_NAME.to_string(),
-        //     mode: semantic_ui_core::EntityRenderMode::CreatePage,
-        //     renderer: Rc::new(crate::components::base::notes::note_create::note_create),
-        //     is_default: false,
-        // });
+        // Note
 
-        // registry.register_entity_renderer(semantic_ui_core::EntityRendererSpec {
-        //     name: "Update Note".to_string(),
-        //     entity_type: base::Note::QUALIFIED_NAME.to_string(),
-        //     mode: semantic_ui_core::EntityRenderMode::ViewPage,
-        //     renderer: Rc::new(crate::components::base::notes::note_update::note_update),
-        //     is_default: true,
-        // });
+        registry.register_entity_renderer(EntityRendererSpec {
+            name: "Create Note".to_string(),
+            entity_type: base::Note::QUALIFIED_NAME.to_string(),
+            mode: EntityRenderMode::CreatePage,
+            renderer: Rc::new(super::note::note_create_page),
+            is_default: false,
+        });
+
+        registry.register_entity_renderer(EntityRendererSpec {
+            name: "Note View".to_string(),
+            entity_type: base::Note::QUALIFIED_NAME.to_string(),
+            mode: EntityRenderMode::Content,
+            renderer: Rc::new(super::note::note_content),
+            is_default: true,
+        });
 
         // Files
 
@@ -50,23 +62,23 @@ impl BrowserPlugin for BasePlugin {
             name: "Image Content".to_string(),
             entity_type: base::Image::QUALIFIED_NAME.to_string(),
             mode: EntityRenderMode::Content,
-            renderer: Rc::new(super::file::image_content),
+            renderer: Rc::new(super::file::image::image_content),
             is_default: true,
         });
 
-        // registry.register_entity_renderer(semantic_ui_core::EntityRendererSpec {
-        //     name: "Video Content".to_string(),
-        //     entity_type: base::Video::QUALIFIED_NAME.to_string(),
-        //     mode: semantic_ui_core::EntityRenderMode::Content,
-        //     renderer: Rc::new(super::files::video::video_content),
-        //     is_default: true,
-        // });
+        registry.register_entity_renderer(EntityRendererSpec {
+            name: "Video Content".to_string(),
+            entity_type: base::Video::QUALIFIED_NAME.to_string(),
+            mode: EntityRenderMode::Content,
+            renderer: Rc::new(super::file::video::video_content),
+            is_default: true,
+        });
 
-        // registry.register_media_renderer(RegisteredMediaRenderer {
-        //     entity_type: base::Video::QUALIFIED_NAME.into(),
-        //     render: Rc::new(super::files::video::video_media),
-        //     supports_playback: true,
-        // });
+        registry.register_media_renderer(RegisteredMediaRenderer {
+            entity_type: base::Video::QUALIFIED_NAME.into(),
+            render: Rc::new(super::file::video::video_media),
+            supports_playback: true,
+        });
 
         // // Notes.
 
@@ -91,30 +103,33 @@ impl BrowserPlugin for BasePlugin {
         // // Collections.
 
         // // Content.
-        // registry.register_entity_renderer(semantic_ui_core::EntityRendererSpec {
-        //     name: "Collection View".to_string(),
-        //     entity_type: base::Collection::QUALIFIED_NAME.to_string(),
-        //     mode: semantic_ui_core::EntityRenderMode::Content,
-        //     renderer: Rc::new(super::collections::collection_content),
-        //     is_default: true,
-        // });
+        registry.register_entity_renderer(EntityRendererSpec {
+            name: "Collection View".to_string(),
+            entity_type: base::Collection::QUALIFIED_NAME.to_string(),
+            mode: EntityRenderMode::Content,
+            renderer: Rc::new(super::collection::collection_content),
+            is_default: true,
+        });
 
         // // Create page.
-        // registry.register_entity_renderer(semantic_ui_core::EntityRendererSpec {
-        //     name: "Create Collection".to_string(),
-        //     entity_type: base::Collection::QUALIFIED_NAME.to_string(),
-        //     mode: semantic_ui_core::EntityRenderMode::CreatePage,
-        //     renderer: Rc::new(
-        //         crate::components::base::collections::collection_create::collection_create,
-        //     ),
-        //     is_default: false,
-        // });
+        registry.register_entity_renderer(EntityRendererSpec {
+            name: "Create Collection".to_string(),
+            entity_type: base::Collection::QUALIFIED_NAME.to_string(),
+            mode: EntityRenderMode::CreatePage,
+            renderer: Rc::new(collection_create_page),
+            is_default: false,
+        });
     }
 }
 
 fn render_attr_preview_image(value: &Value, _entity: Option<&DataMap>) -> TagBuilder {
-    if let Value::String(v) = value {
-        div().and(Tag::Image.new().style_raw("max-height: 200px;"))
+    if let Some(url) = value.as_str().filter(|v| v.starts_with("http")) {
+        div().and(
+            Tag::Image
+                .new()
+                .attr(Attr::Src, url)
+                .style_raw("max-height: 200px;"),
+        )
     } else {
         let mut wrap = div();
         render_value(value, &mut wrap);

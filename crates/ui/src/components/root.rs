@@ -1,4 +1,7 @@
-use brass::{dom::{Render, TagBuilder, builder::div}, signal::signal::SignalExt};
+use brass::{
+    dom::{builder::div, Render, TagBuilder},
+    signal::signal::SignalExt,
+};
 use semantic_ui_core::{
     components::{
         entity::entity_page,
@@ -9,11 +12,16 @@ use semantic_ui_core::{
 
 use brass::component::Component;
 
+use crate::components::player::StandalonePlayer;
+
 pub fn root() -> TagBuilder {
     let s = semantic_ui_core::context::router()
         .signal()
         .map(render_route);
-    div().and(navbar()).child_signal(s)
+    div()
+        .style_raw("display: flex; flex-direction: column; height: 100%; width: 100%;")
+        .and(navbar())
+        .child_signal(s)
 }
 
 fn render_route(route: Route) -> TagBuilder {
@@ -24,7 +32,7 @@ fn render_route(route: Route) -> TagBuilder {
         Route::Browse => crate::components::entity::browse_page::BrowsePage::build(
             crate::components::entity::browse_page::BrowsePageProps {},
         ),
-        Route::Import => super::import::import_page::ImportPage{}.render(),
+        Route::Import => super::import::import_page::ImportPage {}.render(),
         Route::Upload => super::upload::upload_page(),
         Route::Logout => todo!(),
         Route::Entity(ident) => {
@@ -33,15 +41,20 @@ fn render_route(route: Route) -> TagBuilder {
             let id = ident.as_id().unwrap();
             entity_page(id)
         }
-        Route::EntityCreateSelect => todo!(),
-        Route::EntityCreate { entity_type: _ } => todo!(),
-        Route::Play => todo!(),
-        Route::Tags => {
-            semantic_ui_core::base::tags::tag_manager()
+        Route::Create => super::entity::create_page(),
+        Route::EntityCreate { entity_type } => super::entity::entity_create_page(&entity_type),
+        Route::Play => {
+            // Do not show container for player.
+            return StandalonePlayer {
+                filter: None,
+                keyboard_controls: true,
+            }
+            .render();
         }
+        Route::Tags => semantic_ui_core::base::tags::tag_manager(),
     };
 
-    container().and(content)
+    container().style_raw("min-width: 800px;").and(content)
 }
 
 fn navbar() -> TagBuilder {
@@ -52,9 +65,7 @@ fn navbar() -> TagBuilder {
     let items = div()
         .class("navbar-start")
         .and(link(Route::Browse, "Browse").class("navbar-item"))
-        .and(link(Route::EntityCreateSelect, "Create").class("navbar-item"))
-        .and(link(Route::Upload, "Upload").class("navbar-item"))
-        .and(link(Route::Import, "Import").class("navbar-item"))
+        .and(link(Route::Create, "Create").class("navbar-item"))
         .and(link(Route::Tags, "Tags").class("navbar-item"))
         .and(link(Route::Play, "Play").class("navbar-item"));
 

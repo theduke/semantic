@@ -48,10 +48,7 @@ pub fn login(on_success: impl Fn(SemanticSchema) + 'static) -> TagBuilder {
         FormBuilder::new(handle.clone())
             .and(form_field_input(
                 "Data Path",
-                handle.field_validated(
-                    |v| &mut v.data_path,
-                    StringRequired,
-                ),
+                handle.field_validated(|v| &mut v.data_path, StringRequired),
             ))
             .and(form_field_input(
                 "Key",

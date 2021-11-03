@@ -41,7 +41,6 @@ impl Validator<String> for StringUrl {
     }
 }
 
-
 impl<T, V> Validator<T> for Rc<V>
 where
     V: Validator<T>,

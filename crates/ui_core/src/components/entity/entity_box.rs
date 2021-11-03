@@ -6,7 +6,13 @@ use brass::{
 };
 use factordb::{query::select::Item, schema::AttrMapExt};
 
-use crate::{EntityRenderOpts, base::{collection::entity_collection_manager, tags::entity_tag_manager}, components::util::modal::modal, context, routing::Route};
+use crate::{
+    base::{collection::entity_collection_manager, tags::entity_tag_manager},
+    components::util::modal::modal,
+    context,
+    routing::Route,
+    EntityRenderOpts, SharedRenderer0,
+};
 
 use super::{
     entity_deleter::EntityDeleter,
@@ -25,6 +31,12 @@ impl Render for EntityBox {
     }
 }
 
+pub struct Action {
+    pub icon: DomStr<'static>,
+    pub label: DomStr<'static>,
+    pub render: SharedRenderer0,
+}
+
 enum Msg {
     ToggleActions,
     Deleted,
@@ -38,24 +50,24 @@ enum Msg {
 }
 
 #[derive(Clone)]
-enum Action {
+enum ActiveAction {
     Delete,
     ManageCollections,
     ManageTags,
 }
 
 struct State {
-    item: Item,
+    item: Mutable<Item>,
     // entity_id: Option<Id>,
     options: EntityRenderOpts,
     on_delete: Option<Box<dyn Fn(Item)>>,
     show_table: Mutable<bool>,
-    action: Mutable<Option<Action>>,
+    action: Mutable<Option<ActiveAction>>,
 }
 
 impl State {
     fn is_deleting(&self) -> bool {
-        matches!(&*self.action.lock_ref(), Some(Action::Delete))
+        matches!(&*self.action.lock_ref(), Some(ActiveAction::Delete))
     }
 }
 
@@ -65,7 +77,7 @@ impl MsgComponent for State {
 
     fn init(props: Self::Properties, _ctx: Context<'_, Self>) -> Self {
         Self {
-            item: props.item,
+            item: Mutable::new(props.item),
             on_delete: props.on_delete,
             options: props.options,
             show_table: Mutable::new(false),
@@ -79,12 +91,17 @@ impl MsgComponent for State {
                 todo!()
             }
             Msg::Open => {
-                if let Some(id) = self.item.data.get_id() {
+                if let Some(id) = self.item.lock_ref().data.get_id() {
                     context::router().goto(Route::Entity(id.into()));
                 }
             }
             Msg::OpenSourceUrl => {
-                if let Some(url) = self.item.data.get_attr::<semantic_core::base::AttrUrl>() {
+                if let Some(url) = self
+                    .item
+                    .lock_ref()
+                    .data
+                    .get_attr::<semantic_core::base::AttrUrl>()
+                {
                     let _ = brass::web::window()
                         .open_with_url_and_target(url.as_str(), "_blank")
                         .map_err(|_err| {
@@ -93,33 +110,33 @@ impl MsgComponent for State {
                 }
             }
             Msg::DeleteStart => {
-                self.action.set(Some(Action::Delete));
+                self.action.set(Some(ActiveAction::Delete));
             }
             Msg::ToggleShowTable => {
                 self.show_table.replace_with(|old| !*old);
             }
             Msg::ToggleCollectionManager => {
                 self.action.replace_with(|old| {
-                    if matches!(old, Some(Action::ManageCollections)) {
+                    if matches!(old, Some(ActiveAction::ManageCollections)) {
                         None
                     } else {
-                        Some(Action::ManageCollections)
+                        Some(ActiveAction::ManageCollections)
                     }
                 });
             }
             Msg::ToggleTagManager => {
                 tracing::trace!("toggling tag manager");
                 self.action.replace_with(|old| {
-                    if matches!(old, Some(Action::ManageTags)) {
+                    if matches!(old, Some(ActiveAction::ManageTags)) {
                         None
                     } else {
-                        Some(Action::ManageTags)
+                        Some(ActiveAction::ManageTags)
                     }
                 });
             }
             Msg::Deleted => {
                 if let Some(f) = &self.on_delete {
-                    f(self.item.clone());
+                    f(self.item.lock_ref().clone());
                 }
             }
             Msg::ClearAction => {
@@ -129,138 +146,152 @@ impl MsgComponent for State {
     }
 
     fn render(&mut self, ctx: Context<'_, Self>) -> TagBuilder {
-        let registry = context::registry();
-        let ty_ident = self.item.data.get_type();
-        let entity = ty_ident
-            .as_ref()
-            .and_then(|ty| registry.entity_by_ident(ty))
-            .cloned();
-        let ty = entity.as_ref().map(|e| &e.schema.ident);
-        let content_renderer = ty
-            .as_ref()
-            .and_then(|ty| registry.entity_content_renderer(ty));
-        let type_name = super::entity_type_name(&self.item.data, entity.as_ref()).map(DomStr::from);
+        let mutable_item = self.item.clone();
 
-        let mut actions = Vec::new();
+        let handle = ctx.handle();
+        let options = self.options.clone();
+        let show_table = self.show_table.clone();
+        let action = self.action.clone();
 
-        if self.item.data.has_attr::<semantic_core::base::AttrUrl>() {
+        let content_signal = self.item.signal_ref(move |item| {
+            let registry = context::registry();
+            let ty_ident = item.data.get_type();
+            let entity = ty_ident
+                .as_ref()
+                .and_then(|ty| registry.entity_by_ident(ty))
+                .cloned();
+            let ty = entity.as_ref().map(|e| &e.schema.ident);
+            let content_renderer = ty
+                .as_ref()
+                .and_then(|ty| registry.entity_content_renderer(ty));
+            let type_name = super::entity_type_name(&item.data, entity.as_ref()).map(DomStr::from);
+
+            let mut actions = Vec::new();
+
+            if item.data.has_attr::<semantic_core::base::AttrUrl>() {
+                actions.push(EntityActionButton {
+                    // TODO: want to use fas, not fa!
+                    icon: "fa-globe".into(),
+                    label: "Go to URL".into(),
+                    is_active: None,
+                    is_disabled: false,
+                    on: Box::new(handle.callback(|| Msg::Open)),
+                })
+            }
+
             actions.push(EntityActionButton {
                 // TODO: want to use fas, not fa!
-                icon: "fa-globe".into(),
-                label: "Go to URL".into(),
+                icon: "fa-table".into(),
+                label: "Show Table".into(),
+                is_active: Some(Box::pin(show_table.signal_cloned())),
+                is_disabled: content_renderer.is_none(),
+                on: Box::new(handle.callback(|| Msg::ToggleShowTable)),
+            });
+
+            actions.push(EntityActionButton {
+                // TODO: want to use fas, not fa!
+                icon: "fa-list".into(),
+                label: "Manage Collections".into(),
                 is_active: None,
                 is_disabled: false,
-                on: Box::new(ctx.callback_msg(|| Msg::Open)),
-            })
-        }
+                on: Box::new(handle.callback(|| Msg::ToggleCollectionManager)),
+            });
 
-        actions.push(EntityActionButton {
-            // TODO: want to use fas, not fa!
-            icon: "fa-table".into(),
-            label: "Show Table".into(),
-            is_active: Some(Box::pin(self.show_table.signal_cloned())),
-            is_disabled: content_renderer.is_none(),
-            on: Box::new(ctx.callback_msg(|| Msg::ToggleShowTable)),
-        });
-
-        actions.push(EntityActionButton {
-            // TODO: want to use fas, not fa!
-            icon: "fa-list".into(),
-            label: "Manage Collections".into(),
-            is_active: None,
-            is_disabled: false,
-            on: Box::new(ctx.callback_msg(|| Msg::ToggleCollectionManager)),
-        });
-
-        actions.push(EntityActionButton {
-            // TODO: want to use fas, not fa!
-            icon: "fa-tags".into(),
-            label: "Manage Tags".into(),
-            is_active: None,
-            is_disabled: false,
-            on: Box::new(ctx.callback_msg(|| Msg::ToggleTagManager)),
-        });
-
-        if self.options.editable {
-            let is_deleting = self.is_deleting();
             actions.push(EntityActionButton {
                 // TODO: want to use fas, not fa!
-                icon: "fa-trash".into(),
-                label: "Delete".into(),
+                icon: "fa-tags".into(),
+                label: "Manage Tags".into(),
                 is_active: None,
-                is_disabled: is_deleting,
-                on: Box::new(ctx.callback_msg(|| Msg::DeleteStart)),
+                is_disabled: false,
+                on: Box::new(handle.callback(|| Msg::ToggleTagManager)),
             });
-        }
 
-        let item = self.item.clone();
-        let handle = ctx.handle();
-        let active_action_signal = self.action.signal_ref(move |action| {
-            match &*action {
-                Some(Action::Delete) => {
-                    EntityDeleter {
-                        item: item.clone(),
+            if options.editable {
+                // let is_deleting = self.is_deleting();
+                actions.push(EntityActionButton {
+                    // TODO: want to use fas, not fa!
+                    icon: "fa-trash".into(),
+                    label: "Delete".into(),
+                    is_active: None,
+                    is_disabled: false,
+                    on: Box::new(handle.callback(|| Msg::DeleteStart)),
+                });
+            }
+
+            // let mutable_item = self.item.clone();
+
+            let id = item.data.get_id();
+
+            let registry = registry.clone();
+            let mutable_item = mutable_item.clone();
+
+            let handle2 = handle.clone();
+            let active_action_signal = action.signal_ref(move |action| {
+                let handle = handle2.clone();
+                match &*action {
+                    Some(ActiveAction::Delete) => EntityDeleter {
+                        item: mutable_item.lock_ref().clone(),
                         on_delete: Box::new(handle.callback(|| Msg::Deleted)),
                         on_cancel: Box::new(handle.callback(|| Msg::ClearAction)),
                     }
-                    .render()
-                }
-                Some(Action::ManageCollections) => {
-                    if let Some(id) = item.data.get_id() {
-                        let content = entity_collection_manager(id);
-                        modal(content, handle.callback(|| Msg::ToggleTagManager), true)
-                    } else {
-                        div()
+                    .render(),
+                    Some(ActiveAction::ManageCollections) => {
+                        if let Some(id) = &id {
+                            let content = entity_collection_manager(*id);
+                            modal(content, handle.callback(|| Msg::ToggleTagManager), true)
+                        } else {
+                            div()
+                        }
                     }
-                }
-                Some(Action::ManageTags) => {
-                    if let Some(_id) = item.data.get_id() {
-                        let content = entity_tag_manager(&item);
-                        modal(content, handle.callback(|| Msg::ToggleTagManager), true)
-                    } else {
-                        div()
+                    Some(ActiveAction::ManageTags) => {
+                        if let Some(_id) = &id {
+                            let content = entity_tag_manager(&mutable_item.lock_ref().clone());
+                            modal(content, handle.callback(|| Msg::ToggleTagManager), true)
+                        } else {
+                            div()
+                        }
                     }
+                    None => div(),
                 }
-                None => div(),
+            });
+
+            let mut content = div().child_signal(active_action_signal);
+
+            match content_renderer {
+                Some(renderer) => {
+                    tracing::trace!("Using content renderer");
+                    let item = item.clone();
+                    let renderer = renderer.clone();
+                    let opts = options.clone();
+                    let registry = registry.clone();
+                    let signal = show_table.signal_cloned().map(move |table| {
+                        if table {
+                            super::entity_fields_table(&item.data, entity.as_ref(), &registry)
+                        } else {
+                            renderer(&item, &opts)
+                        }
+                    });
+                    content.add_child_signal(signal);
+                }
+                None => {
+                    content.add_child(super::entity_fields_table(
+                        &item.data,
+                        entity.as_ref(),
+                        &registry,
+                    ));
+                }
+            };
+
+            EntityView {
+                title: super::entity_title(&item.data).into(),
+                type_name,
+                on_open: Some(Box::new(handle.callback(|| Msg::Open))),
+                actions,
+                content,
             }
+            .render()
         });
 
-        let mut content = div().child_signal(active_action_signal);
-
-        match content_renderer {
-            Some(renderer) => {
-                tracing::trace!("Using content renderer");
-                let item = self.item.clone();
-                let renderer = renderer.clone();
-                let opts = self.options.clone();
-                let registry = registry.clone();
-                let signal = self.show_table.signal_cloned().map(move |table| {
-                    if table {
-                        super::entity_fields_table(&item.data, entity.as_ref(), &registry)
-                    } else {
-                        renderer(&item, &opts)
-                    }
-                });
-                content.add_child_signal(signal);
-            }
-            None => {
-                content.add_child(super::entity_fields_table(
-                    &self.item.data,
-                    entity.as_ref(),
-                    &registry,
-                ));
-            }
-        };
-
-        // let joins = entity_joins(&self.item, &self.options, registry);
-
-        EntityView {
-            title: super::entity_title(&self.item.data).into(),
-            type_name,
-            on_open: Some(Box::new(ctx.callback_msg(|| Msg::Open))),
-            actions,
-            content,
-        }
-        .render()
+        div().child_signal(content_signal)
     }
 }

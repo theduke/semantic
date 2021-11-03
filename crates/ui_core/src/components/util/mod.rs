@@ -1,6 +1,6 @@
 pub mod modal;
 
-use std::{collections::HashSet, hash::Hash, sync::atomic::AtomicBool};
+use std::{collections::HashSet, hash::Hash, sync::atomic::AtomicBool, thread::current};
 
 use brass::{
     dom::{
@@ -9,10 +9,7 @@ use brass::{
         TagBuilder, WithSignal,
     },
     signal::signal::{Signal, SignalExt},
-    web::{
-        create_text, elem_add_class_js, elem_remove_class_js, empty_string,
-        set_text_data,
-    },
+    web::{create_text, elem_add_class_js, elem_remove_class_js, empty_string, set_text_data},
     DomStr,
 };
 
@@ -28,6 +25,7 @@ brass::make_str_enum! {
         Title  = "title",
         Subtitle  = "subtitle",
         Input = "input",
+        TextArea = "textarea",
         Field = "field",
         Label = "label",
         Control = "control",
@@ -43,6 +41,7 @@ brass::make_str_enum! {
         CardHeader = "card-header",
         CardHeaderTitle = "card-header-title",
         CardContent = "card-content",
+        Content = "content",
         Delete = "delete",
         Stub = "stub",
 
@@ -73,6 +72,7 @@ brass::make_str_enum! {
         IsAlignItemsCenter = "is-align-items-center",
         IsClickable = "is-clickable",
         IsActive = "is-active",
+        IsHidden = "is-hidden",
 
         Mr1 = "mr-1",
         Mr2 = "mr-2",
@@ -222,20 +222,24 @@ pub fn table() -> TagBuilder {
     Tag::Table.new()
 }
 
-fn field() -> TagBuilder {
+pub fn field() -> TagBuilder {
     div().class(Cls::Field)
 }
 
-fn label() -> TagBuilder {
+pub fn label() -> TagBuilder {
     tag(Tag::Label).class(Cls::Label)
 }
 
-fn control() -> TagBuilder {
+pub fn control() -> TagBuilder {
     div().class(Cls::Control)
 }
 
 fn input() -> TagBuilder {
     tag(Tag::Input).class(Cls::Input)
+}
+
+fn textarea() -> TagBuilder {
+    tag(Tag::TextArea).class(Cls::TextArea)
 }
 
 pub fn button() -> TagBuilder {
@@ -554,12 +558,15 @@ impl Render for FormFieldBuilder {
     }
 }
 
-pub fn form_field_input<V>(name: &str, handle: FieldHandle<V, String>) -> TagBuilder {
-    let mut inp = input().attr_signal(Attr::Value, handle.signal_value());
+pub fn form_field<V>(
+    name: &str,
+    handle: FieldHandle<V, String>,
+    mut content: TagBuilder,
+) -> TagBuilder {
     let help = tag(Tag::P).class(Cls::Help);
 
     {
-        let input_elem = inp.elem().clone();
+        let content_elem = content.elem().clone();
         let help_elem = help.elem().clone();
         let help_text = create_text(empty_string().into());
         help_elem.append_child(&help_text).unwrap();
@@ -569,12 +576,12 @@ pub fn form_field_input<V>(name: &str, handle: FieldHandle<V, String>) -> TagBui
         let f = handle.for_each(move |status| {
             if let Err(errors) = &status.errors {
                 if have_success {
-                    elem_remove_class_js(&input_elem, Color::Success.as_js_string());
+                    elem_remove_class_js(&content_elem, Color::Success.as_js_string());
                     have_success = false;
                 }
 
                 if !have_errors && status.touched {
-                    elem_add_class_js(&input_elem, Color::Danger.as_js_string());
+                    elem_add_class_js(&content_elem, Color::Danger.as_js_string());
                     elem_add_class_js(&help_elem, Color::Danger.as_js_string());
                     have_errors = true;
                 }
@@ -582,24 +589,74 @@ pub fn form_field_input<V>(name: &str, handle: FieldHandle<V, String>) -> TagBui
                 let text = errors.join("\n");
                 set_text_data(&help_text, &text.into());
             } else if have_errors {
-                elem_remove_class_js(&input_elem, Color::Danger.as_js_string());
+                elem_remove_class_js(&content_elem, Color::Danger.as_js_string());
                 elem_remove_class_js(&help_elem, Color::Danger.as_js_string());
 
-                elem_add_class_js(&input_elem, Color::Success.as_js_string());
+                elem_add_class_js(&content_elem, Color::Success.as_js_string());
                 have_success = true;
                 have_errors = false;
 
                 set_text_data(&help_text, &empty_string().into());
             }
         });
-        inp.register_future(f);
+        content.register_future(f);
     }
-
-    inp = inp.on(handle.on(|ev: InputEvent| ev.value()));
 
     field()
         .and(label().and(name))
-        .and(control().and((inp, help)))
+        .and(control().and((content, help)))
+}
+
+pub fn form_field_input<V>(name: &str, handle: FieldHandle<V, String>) -> TagBuilder {
+    let inp = input()
+        .attr_signal(Attr::Value, handle.signal_value())
+        .on(handle.clone().on(|ev: InputEvent| ev.value()));
+
+    form_field(name, handle, inp)
+}
+
+/// A textarea form field.
+///
+/// min_rows specifies the rows="xx" attribute
+/// If auto_grow is true, the area will automatically expand to the length of
+/// the content.
+pub fn form_field_textarea<V>(
+    name: &str,
+    handle: FieldHandle<V, String>,
+    min_rows: usize,
+    auto_grow: bool,
+) -> TagBuilder {
+    let area = textarea();
+    let area_elem = area.elem().clone();
+
+    let area = area
+        .attr(Attr::Rows, &min_rows.to_string())
+        .and(handle.get_value());
+
+    let area = if !auto_grow {
+        area.on(handle.clone().on(|e: InputEvent| e.value()))
+    } else {
+        let mut current_rows = min_rows;
+        area.on(handle.clone().on(move |ev: InputEvent| {
+            let value = ev.value();
+
+            let desired_rows = value
+                .as_ref()
+                .map(|v| v.lines().count().max(min_rows))
+                .unwrap_or(min_rows);
+            tracing::trace!(?desired_rows, ?current_rows);
+            if current_rows != desired_rows {
+                area_elem
+                    .set_attribute("rows", &desired_rows.to_string())
+                    .unwrap();
+                current_rows = desired_rows;
+            }
+
+            value
+        }))
+    };
+
+    form_field(name, handle, area)
 }
 
 pub struct SelectOption<V> {

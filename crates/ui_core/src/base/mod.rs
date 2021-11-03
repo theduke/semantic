@@ -1,7 +1,8 @@
-mod plugin;
 mod file;
+mod plugin;
 
-pub mod tags;
 pub mod collection;
+pub mod note;
+pub mod tags;
 
 pub use plugin::BasePlugin;

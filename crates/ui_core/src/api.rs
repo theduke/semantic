@@ -28,7 +28,6 @@ impl BrowserExecutor {
         let request = web_sys::Request::new_with_str_and_init(&self.endpoint, &opts)
             .map_err(anyerr_from_js)?;
 
-
         let window = web_sys::window().unwrap();
         let fut1 = wasm_bindgen_futures::JsFuture::from(window.fetch_with_request(&request));
         let out = fut1.await;

@@ -1,10 +1,13 @@
-use brass::{dom::{builder::div, Attr, ClickEvent, Tag, TagBuilder}, signal::signal::{Mutable, SignalExt}};
+use brass::{
+    dom::{builder::div, Attr, ClickEvent, Tag, TagBuilder},
+    signal::signal::{Mutable, SignalExt},
+};
 use factordb::{query::select::Item, schema::AttrMapExt};
 use semantic_core::base::{AttrBlobUri, AttrDownloadUrl};
 
 use crate::{components::util::modal::modal, EntityRenderOpts};
 
-use super::plugin::build_blob_url;
+use super::super::plugin::build_blob_url;
 
 pub fn image_content(item: &Item, opts: &EntityRenderOpts) -> TagBuilder {
     tracing::trace!("rendering image content");
@@ -31,7 +34,6 @@ pub fn image_content(item: &Item, opts: &EntityRenderOpts) -> TagBuilder {
 }
 
 fn image_with_preview_modal(url: String) -> TagBuilder {
-
     let is_visible = Mutable::new(false);
 
     let is_visible2 = is_visible.clone();

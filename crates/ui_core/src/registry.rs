@@ -1,4 +1,3 @@
-
 use std::{collections::HashMap, rc::Rc, sync::Arc};
 
 use factordb::{
@@ -6,6 +5,7 @@ use factordb::{
     AnyError,
 };
 use fnv::FnvHashMap;
+use futures::future::LocalBoxFuture;
 use semantic_core::plugin::{ImportMatch, ImportMatches, ImportOutput};
 
 use crate::{api::BrowserApiClient, BrowserPlugin};
@@ -288,11 +288,15 @@ pub struct MediaRenderOpts {
     /// An `Ok(())` is expected if the playback finished correctly.
     /// An `Err(_)` is expected if the playback failed, for example if a video
     /// could not be loaded.
-    pub callback: Box<dyn Fn(MediaRenderEvent)>,
+    pub callback: Rc<dyn Fn(MediaRenderEvent)>,
 }
 
-pub type DynMediaRenderer =
-    Rc<dyn Fn(&factordb::query::select::Item, &MediaRenderOpts) -> brass::dom::TagBuilder>;
+pub type DynMediaRenderer = Rc<
+    dyn Fn(
+        &factordb::query::select::Item,
+        &MediaRenderOpts,
+    ) -> (brass::dom::TagBuilder, Option<DynMediaHandle>),
+>;
 
 #[derive(Clone)]
 pub struct RegisteredMediaRenderer {
@@ -328,3 +332,13 @@ pub struct EntityRendererSpec {
     pub renderer: DynEntityRenderer,
     pub is_default: bool,
 }
+
+pub type MediaFuture<T> = LocalBoxFuture<'static, Result<T, AnyError>>;
+
+pub trait MediaHandle {
+    fn play(&self);
+    fn pause(&self);
+    fn set_muted(&self, muted: bool);
+}
+
+pub type DynMediaHandle = Rc<dyn MediaHandle>;

@@ -260,6 +260,9 @@ impl<V> FormHandle<V> {
             if let Some(callback) = &state.form.on_submit {
                 callback(&state.form.values)
             } else if let Some(callback) = &state.form.on_submit_async {
+                if status.is_loading {
+                    return;
+                }
                 status.is_loading = true;
                 // NOTE: Need to manually drop for borrow checker.
                 std::mem::drop(status);
@@ -365,6 +368,13 @@ impl<V: 'static, F: 'static> FieldHandle<V, F> {
         })
     }
 
+    pub fn get_value(&self) -> F
+    where
+        F: Clone,
+    {
+        (self.get)(&mut self.form.0.borrow_mut().form.values).clone()
+    }
+
     pub fn for_each(&self, mut f: impl FnMut(&FieldStatus)) -> impl Future<Output = ()> {
         self.mutable
             .signal_ref(move |status| f(status))
@@ -402,7 +412,7 @@ impl<V: 'static, F: 'static> FieldHandle<V, F> {
         );
     }
 
-    pub fn on<E: DomEvent>(self, handler: impl Fn(E) -> Option<F>) -> impl Fn(E)
+    pub fn on<E: DomEvent>(self, mut handler: impl FnMut(E) -> Option<F>) -> impl FnMut(E)
     where
         F: PartialEq,
     {

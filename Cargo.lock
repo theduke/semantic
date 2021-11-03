@@ -1823,6 +1823,7 @@ dependencies = [
 name = "semantic_ui_core"
 version = "0.1.0"
 dependencies = [
+ "anyhow",
  "brass",
  "factordb",
  "fnv",
