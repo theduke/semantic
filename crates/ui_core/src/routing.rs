@@ -1,7 +1,7 @@
 use std::{cell::RefCell, rc::Rc};
 
 use brass::{
-    dom::{builder::tag, ClickEvent, TagBuilder},
+    dom::{builder::tag, Apply, ClickEvent, TagBuilder},
     signal::signal::{Mutable, Signal},
 };
 use factordb::Ident;
@@ -32,6 +32,8 @@ impl std::fmt::Debug for PluginRoute {
 
 #[derive(Clone, Debug)]
 pub enum Route {
+    Settings,
+
     Browse,
     Import,
     Upload,
@@ -65,6 +67,7 @@ impl Route {
             Route::PluginCreate => "/plugins/create".to_string(),
             Route::PluginTest => "/plugins/test".to_string(),
             Route::Plugin(p) => p.path.clone(),
+            Route::Settings => "/manage".to_string(),
         }
     }
 
@@ -85,6 +88,7 @@ impl Route {
             Route::PluginManager => "Manage Plugins".to_string(),
             Route::PluginCreate => "Create Plugin".to_string(),
             Route::PluginTest => "Test Plugin".to_string(),
+            Route::Settings => "Settings".to_string(),
         }
     }
 }
@@ -113,6 +117,7 @@ impl Router {
         let parts = path.split('/').collect::<Vec<_>>();
 
         match parts.as_slice() {
+            ["settings"] => Some(Route::Settings),
             ["logout"] => Some(Route::Logout),
             ["browse"] => Some(Route::Browse),
             ["import"] => Some(Route::Import),
@@ -159,7 +164,7 @@ impl Router {
     }
 }
 
-pub fn link(route: Route, label: &str) -> TagBuilder {
+pub fn link(route: Route, label: impl Apply) -> TagBuilder {
     tag(brass::dom::Tag::A)
         .and(label)
         .on(move |_: ClickEvent| router().goto(route.clone()))

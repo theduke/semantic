@@ -5,7 +5,7 @@ use brass::{
 use semantic_ui_core::{
     components::{
         entity::entity_page,
-        util::{buttons, container, Cls},
+        util::{buttons, container, icon_fa, Cls},
     },
     routing::{link, Route},
 };
@@ -56,6 +56,7 @@ fn render_route(route: Route) -> TagBuilder {
         Route::PluginManager => super::plugins::plugin_manager(),
         Route::PluginCreate => super::plugins::plugin_source_create_page(),
         Route::PluginTest => super::plugins::plugin_test_page(),
+        Route::Settings => super::settings::settings_page(),
     };
 
     container().style_raw("min-width: 800px;").and(content)
@@ -74,8 +75,9 @@ fn navbar() -> TagBuilder {
         .and(link(Route::Play, "Play").class("navbar-item"));
 
     let logout = link(Route::Logout, "Logout").class("navbar-item");
+    let settings = link(Route::Settings, icon_fa("fa-cog")).class("navbar-item");
 
-    let actions = buttons().and(logout);
+    let actions = buttons().and(settings).and(logout);
     let end = div()
         .class("navbar-end")
         .and(div().class("navbar-item").and(actions));
