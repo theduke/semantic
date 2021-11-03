@@ -243,8 +243,6 @@ impl<V> FormHandle<V> {
             }
         }
 
-        tracing::trace!(?status.is_valid, "on_value_change");
-
         if status.is_valid {
             if let Some(callback) = &state.form.on_valid {
                 callback(&state.form.values);
