@@ -8,7 +8,7 @@ use factordb::{
         select::{Item, Select},
     },
     schema::{
-        builtin::{self, AttrIdent},
+        builtin::{self, AttrId, AttrIdent},
         AttrMapExt, AttributeDescriptor, EntityDescriptor,
     },
     AnyError, Attribute, Entity, Id,
@@ -58,6 +58,12 @@ impl Collection {
     pub fn query_collections_with_entity(id: Id) -> Select {
         let expr = Expr::in_(id, Expr::attr::<AttrCollectionItem>());
         Select::new().with_filter(expr)
+    }
+
+    pub fn query_collection_items(col: &Self) -> Select {
+        Select::new()
+            .with_limit(1000)
+            .with_filter(Expr::in_(AttrId::expr(), col.item_ids.clone()))
     }
 
     pub fn query_all_collections() -> Select {
