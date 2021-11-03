@@ -12,6 +12,7 @@ use brass::{
     web::{create_text, elem_add_class_js, elem_remove_class_js, empty_string, set_text_data},
     DomStr,
 };
+use wasm_bindgen::JsCast;
 
 use super::form::{FieldHandle, FormHandle};
 
@@ -462,8 +463,12 @@ pub fn checkbox(
             tag(Tag::Input)
                 .attr(Attr::Type, Cls::Checkbox)
                 .attr_signal_toggle(Attr::Checked, signal)
-                .on(move |ev: CheckboxInputEvent| {
-                    if let Some(flag) = ev.value() {
+                .on(move |ev: ChangeEvent| {
+                    let checked = ev
+                        .current_target()
+                        .and_then(|t| t.dyn_into::<web_sys::HtmlInputElement>().ok())
+                        .map(|i| i.checked());
+                    if let Some(flag) = checked {
                         on_change(flag);
                     }
                 }),
@@ -615,6 +620,15 @@ pub fn form_field_input<V>(name: &str, handle: FieldHandle<V, String>) -> TagBui
     form_field(name, handle, inp)
 }
 
+pub fn form_field_password<V>(name: &str, handle: FieldHandle<V, String>) -> TagBuilder {
+    let inp = input()
+        .attr(Attr::Type, "password")
+        .attr_signal(Attr::Value, handle.signal_value())
+        .on(handle.clone().on(|ev: InputEvent| ev.value()));
+
+    form_field(name, handle, inp)
+}
+
 /// A textarea form field.
 ///
 /// min_rows specifies the rows="xx" attribute
@@ -718,6 +732,7 @@ pub fn form_field_checkbox<V>(name: &str, handle: FieldHandle<V, bool>) -> TagBu
         (name, WithSignal(help)),
         handle.signal_value(),
         move |flag| {
+            tracing::trace!(?flag, "checkbox value change");
             handle.set(flag);
         },
     )))
