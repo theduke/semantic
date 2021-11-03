@@ -1,6 +1,11 @@
 use serde::{Deserialize, Serialize};
 
-use factordb::{Attribute, Entity, Id, data::{DataMap, value::patch::Patch}, query::{expr::Expr, mutate::Mutate, select::Select}, schema::{builtin::AttrType, AttributeDescriptor, EntityDescriptor}};
+use factordb::{
+    data::{value::patch::Patch, DataMap},
+    query::{expr::Expr, mutate::Mutate, select::Select},
+    schema::{builtin::AttrType, AttributeDescriptor, EntityDescriptor},
+    Attribute, Entity, Id,
+};
 
 use super::AttrDescription;
 
@@ -65,7 +70,7 @@ impl Tag {
     pub fn mutate_add_tag(entity_id: Id, tag_id: Id) -> Mutate {
         Mutate::patch(
             entity_id,
-            Patch::new().add(AttrTags::QUALIFIED_NAME, tag_id)
+            Patch::new().add(AttrTags::QUALIFIED_NAME, tag_id),
         )
     }
 
@@ -73,10 +78,9 @@ impl Tag {
     pub fn mutate_remove_tag(entity_id: Id, tag_id: Id) -> Mutate {
         Mutate::patch(
             entity_id,
-            Patch::new().remove_with_old(AttrTags::QUALIFIED_NAME, tag_id)
+            Patch::new().remove_with_old(AttrTags::QUALIFIED_NAME, tag_id),
         )
     }
-
 
     /// Build a [`Mutate`] that removes a tag from an entity.
     pub fn mutate_set_tags(entity_id: Id, tag_ids: Vec<Id>) -> Mutate {

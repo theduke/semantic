@@ -12,7 +12,11 @@ use factordb::{
     schema::{AttrMapExt, EntityContainer},
     AnyError, Db,
 };
-use semantic_core::{api::{self, DbConfig, SemanticSchema}, base::{AttrBlobUri, AttrDownloadUrl}, plugin::{ImportOutput, PluginDescriptor}};
+use semantic_core::{
+    api::{self, DbConfig, SemanticSchema},
+    base::{AttrBlobUri, AttrDownloadUrl},
+    plugin::{ImportOutput, PluginDescriptor},
+};
 
 use crate::{blobstore::DynBlobStore, plugin::deno::DenoPluginHost};
 

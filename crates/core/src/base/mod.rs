@@ -21,12 +21,10 @@ pub use self::tags::*;
 mod health;
 pub use self::health::*;
 
-use factordb::data::DataMap;
-use factordb::schema::AttrMapExt;
 use factordb::{
-    data::Timestamp,
+    data::{DataMap, Timestamp},
     query::migrate::Migration,
-    schema::{builtin::AttrIdent, AttributeDescriptor, EntityDescriptor},
+    schema::{builtin::AttrIdent, AttrMapExt, AttributeDescriptor, EntityDescriptor},
     Attribute,
 };
 
