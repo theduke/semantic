@@ -1,16 +1,15 @@
-use std::{cell::RefCell, rc::Rc};
+use std::rc::Rc;
 
 use brass::{
     dom::{builder::div, TagBuilder},
     signal::signal::{Mutable, SignalExt},
 };
 use factordb::{
-    data::value::patch::Patch,
     query::{mutate::Mutate, select::Item},
-    schema::{AttributeDescriptor, EntityContainer},
+    schema::EntityContainer,
     Id,
 };
-use semantic_core::base::{AttrNoteBody, AttrTitle, Note};
+use semantic_core::base::Note;
 
 use crate::{
     components::{

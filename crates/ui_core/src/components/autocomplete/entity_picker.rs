@@ -2,7 +2,7 @@ use std::rc::Rc;
 
 use brass::{
     dom::{builder::div, Attr, InputEvent, Tag, TagBuilder},
-    signal::{signal::Mutable, signal_vec::MutableVec},
+    signal::signal::Mutable,
 };
 use factordb::{
     query::{

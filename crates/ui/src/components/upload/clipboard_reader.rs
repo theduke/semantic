@@ -1,5 +1,5 @@
 use brass::{dom::TagBuilder, effect::EventSubscription};
-use semantic_ui_core::components::util::{box_, notification_default};
+use semantic_ui_core::components::util::notification_default;
 
 // Clipboard API resources:
 // * https://web.dev/async-clipboard/: has examples and explanations

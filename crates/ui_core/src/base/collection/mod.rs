@@ -1,6 +1,6 @@
 mod collection_select;
 
-use std::{error::Error, rc::Rc};
+use std::rc::Rc;
 
 use brass::{
     dom::{builder::div, Attr, Render, Tag, TagBuilder},
@@ -38,7 +38,7 @@ use crate::{
     },
     context::{self, api, router},
     routing::Route,
-    EntityRenderMode, EntityRenderOpts,
+    EntityRenderOpts,
 };
 
 pub fn collection_create(on_created: impl Fn(Collection) + 'static) -> TagBuilder {

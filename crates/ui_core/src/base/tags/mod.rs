@@ -1,9 +1,6 @@
 mod tag_form;
 use factordb::{
-    query::{
-        expr::Expr,
-        select::{Item, Select},
-    },
+    query::{expr::Expr, select::Select},
     schema::{builtin::AttrId, AttrMapExt},
     AnyError, Id,
 };
@@ -34,7 +31,7 @@ pub async fn load_entity_tags(id: Id) -> Result<Vec<Tag>, AnyError> {
     Ok(page.items)
 }
 
-async fn entity_set_tags(entity_id: Id, tags: Vec<Id>) -> Result<(), AnyError> {
+pub async fn entity_set_tags(entity_id: Id, tags: Vec<Id>) -> Result<(), AnyError> {
     crate::context::api()
         .mutate(Tag::mutate_set_tags(entity_id, tags))
         .await?;

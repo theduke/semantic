@@ -11,7 +11,7 @@ use semantic_ui_core::{
     components::{
         entity::entity_filter::{entity_filter, EntityFilter},
         loader::Loader,
-        util::{box_, button, icon_fa, icon_fas, Cls},
+        util::{box_, button, icon_fas, Cls},
     },
     context,
 };

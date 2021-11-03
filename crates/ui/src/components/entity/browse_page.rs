@@ -1,13 +1,13 @@
 use brass::{
-    component::{msg::MsgComponent, Context, Handle},
+    component::{msg::MsgComponent, Context},
     dom::{
         builder::{button, div, span},
         ClickEvent, Render, TagBuilder,
     },
     effect::EffectGuard,
     signal::{
-        signal::{Mutable, MutableSignal, Signal, SignalExt},
-        signal_vec::{MutableSignalVec, MutableVec, SignalVec, SignalVecExt},
+        signal::{Mutable, SignalExt},
+        signal_vec::MutableVec,
     },
 };
 use factordb::{
@@ -22,7 +22,7 @@ use factordb::{
 use semantic_ui_core::{
     components::{
         entity::{entity_box::EntityBox, entity_filter::entity_filter},
-        loader::{LoadState, Loader},
+        loader::Loader,
         util::{box_, notification_warning, title_2},
     },
     context, EntityRenderOpts,
@@ -33,7 +33,7 @@ use semantic_ui_core::{
 pub struct BrowsePage {
     loader: Loader<()>,
     query: Select,
-    guard: Option<EffectGuard>,
+    _guard: Option<EffectGuard>,
     // filter_callback: Callback<EntityFilter>,
     // on_delete_callback: Callback<Item>,
     items: MutableVec<Item>,
@@ -81,7 +81,7 @@ impl MsgComponent for BrowsePage {
         let mut s = Self {
             loader: Loader::new_idle(),
             query: Select::new().with_filter(Self::base_filter()),
-            guard: None,
+            _guard: None,
             items: MutableVec::new(),
             is_empty: Mutable::new(true),
             next_cursor: Mutable::new(None),

@@ -1,12 +1,12 @@
 pub mod modal;
 
-use std::{collections::HashSet, hash::Hash, sync::atomic::AtomicBool, thread::current};
+use std::{collections::HashSet, hash::Hash, sync::atomic::AtomicBool};
 
 use brass::{
     dom::{
         builder::{div, p, span, tag},
-        Apply, Attr, ChangeEvent, CheckboxInputEvent, ClickEvent, Event, InputEvent, Render, Tag,
-        TagBuilder, WithSignal,
+        Apply, Attr, ChangeEvent, ClickEvent, Event, InputEvent, Render, Tag, TagBuilder,
+        WithSignal,
     },
     signal::signal::{Signal, SignalExt},
     web::{create_text, elem_add_class_js, elem_remove_class_js, empty_string, set_text_data},

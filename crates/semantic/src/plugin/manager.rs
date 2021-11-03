@@ -80,7 +80,11 @@ impl PluginManager {
     pub async fn delete_plugin(&self, name: String) -> Result<(), AnyError> {
         let mut state = self.0.mutable.write().await;
 
-        if let Some(plugin) = state.plugins.remove(&name) {}
+        if let Some(plugin) = state.plugins.remove(&name) {
+            if let Err(err) = plugin.plugin.stop() {
+                tracing::warn!(?err, plugin=%name, "Could not properly stop plugin");
+            }
+        }
 
         let source = self.0.db.entity(name).await?;
         let source_ty = source

@@ -14,7 +14,7 @@ use crate::{
     BrowserPlugin, BrowserPluginSpec, EntityRenderMode, EntityRendererSpec, Registry,
 };
 
-use super::collection::{collection_create, collection_create_page};
+use super::collection::collection_create_page;
 
 pub struct BasePlugin;
 

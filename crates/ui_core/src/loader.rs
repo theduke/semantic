@@ -4,7 +4,7 @@ use brass::{
 };
 
 pub fn spinner() -> TagBuilder {
-    vdom::span_with("Loading...")
+    super::util::button().class("is-loading")
 }
 
 pub fn error_msg(msg: &str) -> TagBuilder {

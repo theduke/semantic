@@ -19,7 +19,7 @@ use factordb::{
 use semantic_core::{
     api::PluginTestFetch,
     core::{AttrPluginCode, PluginSource},
-    plugin::{ImportOutput, Plugin},
+    plugin::ImportOutput,
 };
 use semantic_ui_core::{
     components::{
