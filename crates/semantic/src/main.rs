@@ -3,7 +3,6 @@ use std::{io::Write, path::PathBuf};
 use structopt::StructOpt;
 
 use semantic::{app, server};
-use tracing_subscriber::prelude::__tracing_subscriber_SubscriberExt;
 
 fn main() {
     if std::env::var("RUST_LOG").is_err() {
@@ -16,10 +15,11 @@ fn main() {
     }
 
     // Initialize logger.
-    // tracing_subscriber::fmt::init();
-    let subscriber =
-        tracing_subscriber::Registry::default().with(tracing_tree::HierarchicalLayer::new(2));
-    tracing::subscriber::set_global_default(subscriber).unwrap();
+    // TODO: tracing-tree disabled until it supports tracing_subscriber 0.3
+    // let subscriber =
+    //     tracing_subscriber::Registry::default().with(tracing_tree::HierarchicalLayer::new(2));
+    // tracing::subscriber::set_global_default(subscriber).unwrap();
+    tracing_subscriber::fmt::init();
 
     let args = CliArgs::from_args();
 
