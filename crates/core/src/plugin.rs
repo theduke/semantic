@@ -1,8 +1,9 @@
 use factordb::{
     query::{migrate, select::Item},
     schema::DbSchema,
-    Ident,
+    AnyError, Ident,
 };
+use futures::future::BoxFuture;
 use url::Url;
 
 /// Describes how an importer can handle a url.
@@ -78,13 +79,11 @@ pub struct ImportRelatedUrl {
 
 #[derive(serde::Serialize, serde::Deserialize, Clone, Debug)]
 pub struct ImportOutput {
-    pub plugin: String,
-
     /// Potentially nested items.
     #[serde(default)]
     pub items: Vec<Item>,
     /// The url where more items can be retrieved.
-    pub load_more_url: Option<url::Url>,
+    pub load_more_url: Option<Url>,
     #[serde(default)]
     pub related_urls: Vec<ImportRelatedUrl>,
 }
@@ -99,9 +98,8 @@ pub struct PluginSchema {
 }
 
 impl PluginSchema {
-    pub fn find_import_match(&self, url: &Url) -> Option<ImportMatch> {
-        let support = self
-            .import_matchers
+    pub fn find_import_match(&self, url: &Url) -> Option<ImportSupport> {
+        self.import_matchers
             .iter()
             .filter_map(|rule| {
                 if rule.matcher.is_match(url) {
@@ -110,12 +108,7 @@ impl PluginSchema {
                     None
                 }
             })
-            .max()?;
-
-        Some(ImportMatch {
-            plugin: self.name.clone(),
-            support,
-        })
+            .max()
     }
 }
 
@@ -163,15 +156,42 @@ pub struct PluginSpec {
     pub runtime: PluginRuntimeSpec,
 }
 
+/// Static definition of a plugin.
+///
+/// Provides various plugin metadata.
 pub trait PluginDescriptor {
     const NAME: &'static str;
     const IDENT: Ident = Ident::new_static(Self::NAME);
 
-    fn schema() -> PluginSchema;
-
-    fn migrations() -> Vec<migrate::Migration>;
+    fn new() -> DynPlugin;
 }
 
+/// A backend plugin that runs in the semantic backend.
+///
+/// Can be backed by different plugin runtimes.
+pub trait Plugin {
+    fn name(&self) -> &str;
+    fn schema(&self) -> PluginSchema;
+    fn migrations(&self) -> Vec<migrate::Migration>;
+
+    /// Quickly check if a URL is supported.
+    #[allow(unused_variables)]
+    fn fetch_url_support(&self, url: &Url) -> Option<ImportSupport> {
+        None
+    }
+
+    #[allow(unused_variables)]
+    fn fetch_url(&self, url: Url) -> BoxFuture<'static, Result<Option<ImportOutput>, AnyError>> {
+        Box::pin(async move { Ok(None) })
+    }
+}
+
+pub type DynPlugin = std::sync::Arc<dyn Plugin + Send + Sync>;
+
+/// Build an upsert migration based on a database schema.
+///
+/// This is useful for test environments where you just want to create the
+/// schema without having to run the individual migrations.
 pub fn build_upsert_migration(schema: &DbSchema) -> migrate::Migration {
     let attrs = schema.attributes.iter().map(|attr| {
         migrate::SchemaAction::AttributeUpsert(migrate::AttributeUpsert {

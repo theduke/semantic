@@ -70,28 +70,27 @@ impl Boot {
 
         boot.on_phase(BootPhase::LoadingStatus(guard));
 
-        div()
-            .child_signal(boot.status.clone().signal_ref(move |phase| {
-                match phase {
-                    BootPhase::Init => span(),
-                    BootPhase::LoadingStatus(_) => {
-                        // TODO: use DelayedSpinner
-                        spinner()
-                    }
-                    BootPhase::StatusFailed(err) => error_msg(&err.to_string()),
-                    BootPhase::SchemaFailed(err) => error_msg(&err.to_string()),
-                    BootPhase::SchemaLoaded(_) => {
-                        tracing::trace!("schema loaded");
-                        super::root::root()
-                    }
-                    BootPhase::Login => {
-                        let boot = boot.clone();
-                        super::login::login(Box::new(move |schema| {
-                            boot.on_phase(BootPhase::SchemaLoaded(schema));
-                        }))
-                    }
+        div().child_signal(boot.status.clone().signal_ref(move |phase| {
+            match phase {
+                BootPhase::Init => span(),
+                BootPhase::LoadingStatus(_) => {
+                    // TODO: use DelayedSpinner
+                    spinner()
                 }
-            }))
+                BootPhase::StatusFailed(err) => error_msg(&err.to_string()),
+                BootPhase::SchemaFailed(err) => error_msg(&err.to_string()),
+                BootPhase::SchemaLoaded(_) => {
+                    tracing::trace!("schema loaded");
+                    super::root::root()
+                }
+                BootPhase::Login => {
+                    let boot = boot.clone();
+                    super::login::login(Box::new(move |schema| {
+                        boot.on_phase(BootPhase::SchemaLoaded(schema));
+                    }))
+                }
+            }
+        }))
     }
 
     fn on_phase(&self, phase: BootPhase) {

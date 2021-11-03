@@ -5,7 +5,7 @@ use std::{
     sync::{Arc, RwLock},
 };
 
-use anyhow::{anyhow, bail, Context};
+use anyhow::{anyhow, Context};
 use factordb::{
     data::DataMap,
     query::{self, mutate::Mutate, select::Item},
@@ -14,11 +14,15 @@ use factordb::{
 };
 use semantic_core::{
     api::{self, DbConfig, SemanticSchema},
-    base::{AttrBlobUri, AttrDownloadUrl},
+    base::{AttrBlobUri, AttrDownloadUrl, SemanticBasePlugin},
+    core::SemanticCorePlugin,
     plugin::{ImportOutput, PluginDescriptor},
 };
 
-use crate::{blobstore::DynBlobStore, plugin::deno::DenoPluginHost};
+use crate::{
+    blobstore::DynBlobStore,
+    plugin::{deno::DenoPluginHost, PluginManager},
+};
 
 pub use crate::plugin::deno::DenoConfig;
 
@@ -37,7 +41,7 @@ struct AppState {
     last_activity_at: std::time::Instant,
     db: Db,
     blob: DynBlobStore,
-    deno: Option<DenoPluginHost>,
+    plugins: PluginManager,
 }
 
 #[derive(Clone)]
@@ -96,6 +100,19 @@ impl App {
         self.db().ok_or_else(|| anyhow!("Database not initialized"))
     }
 
+    pub fn plugins(&self) -> Option<PluginManager> {
+        self.state
+            .read()
+            .unwrap()
+            .as_ref()
+            .map(|state| state.plugins.clone())
+    }
+
+    pub fn require_plugins(&self) -> Result<PluginManager, AnyError> {
+        self.plugins()
+            .ok_or_else(|| anyhow!("PluginManager not initialized"))
+    }
+
     pub fn backend_config(&self) -> Option<api::BackendConfig> {
         self.state
             .read()
@@ -121,6 +138,8 @@ impl App {
     }
 
     pub async fn configure_backend(&self, config: api::BackendConfig) -> Result<(), AnyError> {
+        tracing::info!(?config, "configuring backend");
+        tracing::debug!(?config, "configuring backend");
         let state = match &config.db {
             DbConfig::Crypto(crypto) => {
                 let data_path = if let Some(p) = &crypto.data_path {
@@ -144,67 +163,26 @@ impl App {
                         err
                     })?;
 
-                let deno = if let Some(c) = &self.config.deno {
-                    Some(DenoPluginHost::start(c.clone()).await?)
-                } else {
-                    None
+                let plugins = PluginManager::new(db.clone());
+
+                plugins.register_plugin(SemanticCorePlugin::new()).await?;
+                plugins.register_plugin(SemanticBasePlugin::new()).await?;
+
+                if let Some(c) = &self.config.deno {
+                    plugins.initialize_deno(c.clone()).await?;
                 };
+
+                // Load plugins.
 
                 AppState {
                     db,
                     blob,
                     backend_config: config,
-                    deno,
                     last_activity_at: std::time::Instant::now(),
+                    plugins,
                 }
             }
         };
-
-        // TODO: proper plugin initialization.
-
-        let old_migrations = state.db.backend().migrations().await?;
-
-        if false
-        /*old_migrations.is_empty()*/
-        {
-            // no existing migrations, so upsert.
-            // let base_plugin = semantic_core::base::SemanticPlugin::build_upsert_migration();
-            // state.db.migrate(base_plugin).await?;
-            todo!();
-        } else {
-            // Run missing migrations.
-
-            let migrations = semantic_core::base::SemanticPlugin::migrations();
-
-            let mut to_migrate = Vec::new();
-
-            // Validate.
-            for (index, migration) in migrations.iter().enumerate() {
-                if let Some(name) = &migration.name {
-                    let old_mig = old_migrations.iter().find(|n| n.name == migration.name);
-                    if let Some(_old) = old_mig {
-                        // TODO: validate that migration has not changed!
-
-                        if !to_migrate.is_empty() {
-                            bail!("Invalid migration '{}': invalid ordering: old migration comes after missing migration", name);
-                        }
-                    } else {
-                        to_migrate.push(migration);
-                    }
-                } else {
-                    bail!(
-                        "Plugin {} has an invalid migration (number {}): migrations must have a name",
-                        semantic_core::base::SemanticPlugin::NAME,
-                        index
-                    );
-                }
-            }
-
-            for migration in to_migrate {
-                tracing::trace!(name= ?migration.name, "Running migration");
-                state.db.migrate(migration.clone()).await?;
-            }
-        }
 
         *self.state.write().unwrap() = Some(state);
         Ok(())
@@ -299,30 +277,10 @@ impl App {
         Ok(())
     }
 
-    pub async fn load_schema(&self) -> Result<semantic_core::plugin::PluginSchema, AnyError> {
-        let mut schema = semantic_core::base::SemanticPlugin::schema();
-        let db_schema = schema
-            .db
-            .as_mut()
-            .context("base plugin is missing db schema")?;
-        // Fix up the schema with real IDs.
+    pub fn load_schema(&self) -> Result<SemanticSchema, AnyError> {
+        let db = self.require_db()?.schema()?;
 
-        let db = self.require_db()?;
-
-        let reg = { db.backend().registry().read().unwrap().clone() };
-
-        for entity in &mut db_schema.entities {
-            if let Some(reg) = reg.entity_by_name(&entity.ident) {
-                entity.id = reg.schema.id;
-            }
-        }
-        for attr in &mut db_schema.attributes {
-            if let Some(reg) = reg.attr_by_name(&attr.ident) {
-                attr.id = reg.schema.id;
-            }
-        }
-
-        Ok(schema)
+        Ok(SemanticSchema { db })
     }
 
     pub async fn entity_mutate(&self, mutate: query::mutate::Mutate) -> Result<(), AnyError> {
@@ -470,22 +428,14 @@ impl App {
         import: bool,
         import_media: bool,
     ) -> Result<Option<ImportOutput>, AnyError> {
-        let deno_opt = self
-            .state
-            .read()
-            .unwrap()
-            .as_ref()
-            .and_then(|s| s.deno.clone());
-        let deno = if let Some(d) = deno_opt {
-            d
+        let output_opt = if let Some(plugins) = self.plugins() {
+            plugins.fetch_url(url.clone()).await?
         } else {
             return Ok(None);
         };
 
-        let output_opt = deno.import(&url).await?;
-
-        let output = if let Some(o) = output_opt {
-            o
+        let output = if let Some(output) = output_opt {
+            output
         } else {
             return Ok(None);
         };
@@ -787,8 +737,7 @@ impl App {
             api::Query::Initialize(options) => {
                 self.configure_backend(options).await?;
 
-                let db = self.load_schema().await?.db.unwrap_or_default();
-                let schema = api::SemanticSchema { db };
+                let schema = self.load_schema()?;
                 Ok(api::Reply::Initialize(schema))
             }
             api::Query::CloseBackend => {
@@ -847,8 +796,8 @@ impl App {
                 Ok(api::Reply::Import)
             }
             api::Query::Schema => {
-                let db = self.load_schema().await?.db.unwrap_or_default();
-                let reply = api::Reply::Schema(api::SemanticSchema { db });
+                let schema = self.load_schema()?;
+                let reply = api::Reply::Schema(schema);
                 Ok(reply)
             }
             api::Query::FetchUrl {

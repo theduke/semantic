@@ -1,4 +1,4 @@
-use semantic_core::{api, base::SemanticPlugin, plugin::PluginDescriptor};
+use semantic_core::{api, base::SemanticBasePlugin, plugin::PluginDescriptor};
 use std::{io::Write, path::PathBuf};
 use structopt::StructOpt;
 
@@ -13,6 +13,8 @@ fn main() {
 
         std::env::set_var("RUST_LOG", default);
     }
+
+    dbg!(std::env::var("RUST_LOG"));
 
     // Initialize logger.
     // TODO: tracing-tree disabled until it supports tracing_subscriber 0.3
@@ -65,7 +67,7 @@ fn main() {
         }
         CliCommand::GenerateTypescript(_) => {
             let builtin = factordb::schema::builtin::builtin_db_schema();
-            let base = SemanticPlugin::schema().db.unwrap();
+            let base = SemanticBasePlugin::new().schema().db.unwrap();
 
             let schema = builtin.merge(base);
 

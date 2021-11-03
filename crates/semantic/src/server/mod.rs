@@ -82,7 +82,7 @@ pub async fn run_server(
 
     let assets = assets::Assets::new(asset_source);
 
-    let app = axum::Router::new()
+    let router = axum::Router::new()
         .route("/api/query", post(handler_api_query))
         .route(
             "/api/upload-file",
@@ -97,7 +97,7 @@ pub async fn run_server(
 
     tracing::info!(interface=%addr, "starting web server");
 
-    let server = axum::Server::bind(&addr).serve(app.into_make_service());
+    let server = axum::Server::bind(&addr).serve(router.into_make_service());
 
     server.await.map_err(|error| {
         tracing::error!(?error, "Server failed");
@@ -487,8 +487,7 @@ async fn api_query(state: &ServerState, req: Request<Body>) -> Result<Response<B
                 "POST".parse().unwrap(),
             ));
 
-            let db = app.load_schema().await?.db.unwrap_or_default();
-            let schema = api::SemanticSchema { db };
+            let schema = app.load_schema()?;
 
             Ok(api::Reply::Initialize(schema))
         }

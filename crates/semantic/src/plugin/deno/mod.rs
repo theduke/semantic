@@ -6,7 +6,7 @@ use std::{
 
 use anyhow::Context;
 use factordb::AnyError;
-use semantic_core::plugin::{ImportMatch, ImportOutput, PluginSchema};
+use semantic_core::plugin::{ImportOutput, PluginSchema};
 use sha2::Digest;
 use tokio::{
     io::{AsyncBufReadExt, AsyncWriteExt, BufReader},
@@ -36,14 +36,55 @@ impl DenoConfig {
 }
 
 #[derive(Clone, Debug)]
+pub struct PluginSource {
+    path: Option<PathBuf>,
+    code: String,
+}
+
+#[derive(Clone, Debug)]
 struct PluginData {
+    source: PluginSource,
     // plugin_file: PathBuf,
     schema: PluginSchema,
-    // code: String,
+}
+
+pub struct DenoPlugin {
+    data: PluginData,
+    host: DenoPluginHost,
+}
+
+impl semantic_core::plugin::Plugin for DenoPlugin {
+    fn name(&self) -> &str {
+        &self.data.schema.name
+    }
+
+    fn schema(&self) -> PluginSchema {
+        self.data.schema.clone()
+    }
+
+    fn migrations(&self) -> Vec<factordb::query::migrate::Migration> {
+        // TODO: support migations.
+        Vec::new()
+    }
+
+    fn fetch_url_support(&self, url: &url::Url) -> Option<semantic_core::plugin::ImportSupport> {
+        self.data.schema.find_import_match(url)
+    }
+
+    fn fetch_url(
+        &self,
+        url: url::Url,
+    ) -> futures::future::BoxFuture<'static, Result<Option<ImportOutput>, AnyError>> {
+        Box::pin(
+            self.host
+                .clone()
+                .fetch_url(self.data.schema.name.clone(), url),
+        )
+    }
 }
 
 struct State {
-    // config: DenoConfig,
+    config: DenoConfig,
     plugins: HashMap<String, PluginData>,
     workers: HashMap<String, Arc<Mutex<Worker>>>,
 }
@@ -141,33 +182,43 @@ impl DenoPluginHost {
         }
         config.ensure_bridge_dir()?;
 
-        let mut plugins = HashMap::new();
-        let mut workers = HashMap::new();
-
-        match config.plugin_dir.as_ref() {
-            Some(dir) => match Self::load_dir(dir, &config).await {
-                Ok(items) => {
-                    for (data, worker) in items {
-                        workers.insert(data.schema.name.clone(), Arc::new(Mutex::new(worker)));
-                        plugins.insert(data.schema.name.clone(), data);
-                    }
-                }
-                Err(err) => {
-                    tracing::error!(?err, "Could not load deno plugins",);
-                }
-            },
-            None => {}
-        };
-
         let host = Self {
             state: Arc::new(RwLock::new(State {
-                plugins,
-                workers,
+                config: config.clone(),
+                plugins: HashMap::new(),
+                workers: HashMap::new(),
                 // config,
             })),
         };
 
+        if let Some(dir) = config.plugin_dir.as_ref() {
+            host.initialize_plugin_dir(dir.clone()).await?;
+        }
+
         Ok(host)
+    }
+
+    pub async fn initialize_plugin_dir(&self, path: PathBuf) -> Result<(), AnyError> {
+        for source in Self::load_plugins_directory(&path).await? {
+            self.register_plugin(source).await?;
+        }
+        Ok(())
+    }
+
+    pub async fn register_plugin(&self, source: PluginSource) -> Result<(), AnyError> {
+        tracing::trace!(?source.path, "Loading deno plugin");
+        let data_dir = { self.state.read().unwrap().config.data_dir.clone() };
+
+        let (worker, schema) = Self::boot_plugin_worker(&data_dir, &source.code).await?;
+        let data = PluginData { source, schema };
+
+        let mut state = self.state.write().unwrap();
+        state
+            .workers
+            .insert(data.schema.name.clone(), Arc::new(Mutex::new(worker)));
+        state.plugins.insert(data.schema.name.clone(), data);
+
+        Ok(())
     }
 
     pub fn plugins(&self) -> Vec<PluginSchema> {
@@ -180,49 +231,28 @@ impl DenoPluginHost {
             .collect()
     }
 
-    fn find_importer(&self, url: &url::Url) -> Option<(PluginData, ImportMatch)> {
-        self.state
-            .read()
-            .unwrap()
-            .plugins
-            .values()
-            .filter_map(|plugin| {
-                let m = plugin.schema.find_import_match(url)?;
-                Some((plugin.clone(), m))
-            })
-            .max_by(|a, b| a.1.support.cmp(&b.1.support))
-    }
-
-    pub async fn import(&self, url: &url::Url) -> Result<Option<ImportOutput>, AnyError> {
-        let (plugin, _match) = if let Some(imp) = self.find_importer(url) {
-            imp
-        } else {
-            return Ok(None);
-        };
-
+    pub async fn fetch_url(
+        self,
+        plugin_name: String,
+        url: url::Url,
+    ) -> Result<Option<ImportOutput>, AnyError> {
         let worker_lock = {
             self.state
                 .read()
                 .unwrap()
                 .workers
-                .get(&plugin.schema.name)
-                .context(format!(
-                    "No worker for plugin {} exists",
-                    plugin.schema.name
-                ))?
+                .get(&plugin_name)
+                .context(format!("No worker for plugin {} exists", plugin_name,))?
                 .clone()
             // TODO: start new worker if none is present...
         };
         // TODO: timeout / multiple workers per plugin / concurrent workers
         let mut worker = worker_lock.lock().await;
 
-        worker.send_import(url).await
+        worker.send_import(&url).await
     }
 
-    async fn load_dir(
-        plugin_dir: &PathBuf,
-        config: &DenoConfig,
-    ) -> Result<Vec<(PluginData, Worker)>, AnyError> {
+    async fn load_plugins_directory(plugin_dir: &Path) -> Result<Vec<PluginSource>, AnyError> {
         let mut plugins = Vec::new();
 
         for res in std::fs::read_dir(plugin_dir)? {
@@ -238,15 +268,11 @@ impl DenoPluginHost {
             if entry.file_type()?.is_file() && is_typescript {
                 let code = std::fs::read_to_string(&path)?;
 
-                let (worker, schema) = Self::boot_plugin_worker(&config.data_dir, &code).await?;
-
-                let data = PluginData {
-                    // plugin_file: path,
-                    schema,
-                    // code,
+                let source = PluginSource {
+                    path: Some(path),
+                    code,
                 };
-                tracing::trace!(?data, "loaded deno plugin");
-                plugins.push((data, worker));
+                plugins.push(source);
             }
         }
 
@@ -407,8 +433,7 @@ mod tests {
             let mut worker = Worker::boot(&bridge).await.unwrap();
 
             worker.send_ping().await.unwrap();
-            let schema = worker.send_init(&plugin).await.unwrap();
-            dbg!(&schema);
+            let _schema = worker.send_init(&plugin).await.unwrap();
 
             let url: url::Url = "http://test.com/abc".parse().unwrap();
             let output = worker
@@ -416,7 +441,6 @@ mod tests {
                 .await
                 .unwrap()
                 .expect("epected a result");
-            dbg!(&output);
             assert_eq!(output.items.len(), 1);
         });
 
