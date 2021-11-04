@@ -194,6 +194,8 @@ impl PluginManager {
     }
 
     pub async fn fetch_url(&self, url: url::Url) -> Result<Option<ImportOutput>, AnyError> {
+        tracing::trace!(%url, "finding plugin to fetch url");
+
         // Find the most suited plugin.
         let plugin_opt = {
             self.0
@@ -216,6 +218,7 @@ impl PluginManager {
             return Ok(None);
         };
 
+        tracing::trace!(plugin=%plugin.name(), %url, "fetching url with plugin");
         plugin.fetch_url(url).await
     }
 

@@ -14,7 +14,10 @@ use factordb::{
 };
 use semantic_core::{
     api::{self, DbConfig, SemanticSchema},
-    base::{AttrBlobUri, AttrDownloadUrl, SemanticBasePlugin},
+    base::{
+        AttrBlobUri, AttrDownloadUrl, AttrHash, AttrMimeType, AttrOriginalHash, SemanticBasePlugin,
+        UniversalHash,
+    },
     core::SemanticCorePlugin,
     plugin::{ImportOutput, PluginDescriptor},
 };
@@ -290,7 +293,38 @@ impl App {
         self.require_db()?.batch(batch).await
     }
 
-    pub async fn create_file(
+    fn optimise_file_data(data: Vec<u8>) -> (Vec<u8>, UniversalHash, Option<UniversalHash>) {
+        let mime_guess = infer::get(&data);
+        let raw_hash = sha2::Sha256::digest(&data);
+        let hash = semantic_core::base::UniversalHash::new(
+            semantic_core::base::UniversalHash::SHA256,
+            &format!("{:x}", raw_hash),
+        );
+        match mime_guess {
+            Some(t) if t.mime_type().starts_with("image/") => {
+                tracing::trace!("starting media optimisation");
+                match crate::util::media::optimize_image_data(&data) {
+                    Ok(new_data) => {
+                        tracing::trace!(old_size=%data.len(), new_size=new_data.len(), "optimised image data");
+                        let new_hash_raw = sha2::Sha256::digest(&new_data);
+                        let new_hash = semantic_core::base::UniversalHash::new(
+                            semantic_core::base::UniversalHash::SHA256,
+                            &format!("{:x}", new_hash_raw),
+                        );
+
+                        (new_data, hash, Some(new_hash))
+                    }
+                    Err(err) => {
+                        tracing::warn!(?err, "Failed to optimize image data");
+                        (data, hash, None)
+                    }
+                }
+            }
+            _ => (data, hash, None),
+        }
+    }
+
+    pub async fn upload_file(
         &self,
         meta: api::FileUploadMetadata,
         data: Vec<u8>,
@@ -312,40 +346,11 @@ impl App {
         };
 
         let mime_guess = infer::get(&data);
-        let size = data.len() as u64;
-
-        // TODO: the blob store should also be computing the hash, so probably
-        // just want to use that one.
-        let raw_hash = sha2::Sha256::digest(&data);
-        let hash = semantic_core::base::UniversalHash::new(
-            semantic_core::base::UniversalHash::SHA256,
-            &format!("{:x}", raw_hash),
-        );
 
         // Try to optimise.
         // TODO: add setting to disable optimisations.
-        let (hash, original_hash, data) = match mime_guess {
-            Some(t) if t.mime_type().starts_with("image/") => {
-                tracing::trace!("starting media optimisation");
-                match crate::util::media::optimize_image_data(&data) {
-                    Ok(new_data) => {
-                        tracing::trace!(old_size=%data.len(), new_size=new_data.len(), "optimised image data");
-                        let new_hash_raw = sha2::Sha256::digest(&new_data);
-                        let new_hash = semantic_core::base::UniversalHash::new(
-                            semantic_core::base::UniversalHash::SHA256,
-                            &format!("{:x}", new_hash_raw),
-                        );
-
-                        (Some(new_hash), Some(hash), new_data)
-                    }
-                    Err(err) => {
-                        tracing::warn!(?err, "Failed to optimize image data");
-                        (Some(hash), None, data)
-                    }
-                }
-            }
-            _ => (Some(hash), None, data),
-        };
+        let (data, hash, original_hash) = Self::optimise_file_data(data);
+        let size = data.len() as u64;
 
         let id = factordb::Id::random();
         let blob_uri = format!("files/{}", id);
@@ -363,7 +368,7 @@ impl App {
             blob_uri: Some(blob_uri),
             size: Some(size),
             mime_type: mime_guess.map(|x| x.mime_type().to_string()),
-            hash,
+            hash: Some(hash),
             original_hash,
             extra: Default::default(),
         };
@@ -472,6 +477,8 @@ impl App {
     }
 
     pub async fn import(&self, items: Vec<Item>, import_media: bool) -> Result<(), AnyError> {
+        tracing::trace!("starting import");
+
         let db = self.require_db()?;
         let blob = self.require_blob()?;
 
@@ -499,51 +506,80 @@ impl App {
 
         // NOTE: if the download fails, the file still ends up in the database.
         for id in entity_ids {
-            // Re-load the node in case it was already present before.
-            let data = db.entity(id).await?;
-
-            if let Some(_blob_uri) = data.get_attr::<AttrBlobUri>() {
-                // TODO: check if blob exists.
-                tracing::trace!(%id, "skipping download_url fetch - blob_url already present");
-                continue;
-            }
-
-            if let Some(url) = data.get_attr::<AttrDownloadUrl>() {
-                if import_media {
-                    tracing::trace!(%id, %url, "downloading file for node");
-
-                    let data = client
-                        .get(url.as_str())
-                        .header(reqwest::header::USER_AGENT, "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.101 Safari/537.36")
-                        .send()
-                        .await?
-                        .error_for_status()?
-                        .bytes()
-                        .await?;
-
-                    let tmp_path = std::path::PathBuf::from(url.as_str());
-                    let filename_opt = tmp_path
-                        .file_name()
-                        .and_then(|x| x.to_str())
-                        .map(|x| x.to_string());
-
-                    let mut path = format!("files/{}", id);
-                    if let Some(filename) = filename_opt {
-                        path.push('/');
-                        path.push_str(&filename);
-                    }
-                    let size = data.len();
-
-                    blob.put(&path, data.to_vec()).await?;
-
-                    let mut patch = factordb::data::value::ValueMap::new();
-                    patch.insert_attr::<AttrBlobUri>(path);
-                    db.merge(id, patch).await?;
-
-                    tracing::debug!(?url, entity_id=%id, %size, "imported file for entity");
-                }
-            }
+            tokio::spawn(
+                self.clone()
+                    .download_entity_blob_content(id, client.clone()),
+            );
         }
+
+        tracing::trace!("import complete");
+
+        Ok(())
+    }
+
+    async fn download_entity_blob_content(
+        self,
+        id: factordb::Id,
+        client: reqwest::Client,
+    ) -> Result<(), AnyError> {
+        let db = self.require_db()?;
+
+        let data = db.entity(id).await?;
+
+        if let Some(_blob_uri) = data.get_attr::<AttrBlobUri>() {
+            // TODO: check if blob exists.
+            tracing::trace!(%id, "skipping download_url fetch - blob_url already present");
+            return Ok(());
+        }
+
+        let download_url = if let Some(url) = data.get_attr::<AttrDownloadUrl>() {
+            url
+        } else {
+            return Ok(());
+        };
+        tracing::trace!(%id, %download_url, "downloading file for entity");
+
+        let data = client
+                .get(download_url.as_str())
+                .header(reqwest::header::USER_AGENT, "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.101 Safari/537.36")
+                .send()
+                .await?
+                .error_for_status()?
+                .bytes()
+                .await?;
+
+        let mime_guess = infer::get(&data);
+        let (data, hash, original_hash) = Self::optimise_file_data(data.to_vec());
+
+        let tmp_path = std::path::PathBuf::from(download_url.as_str());
+        let filename_opt = tmp_path
+            .file_name()
+            .and_then(|x| x.to_str())
+            .map(|x| x.to_string());
+
+        let mut path = format!("files/{}", id);
+        if let Some(filename) = filename_opt {
+            path.push('/');
+            path.push_str(&filename);
+        }
+
+        let size = data.len();
+
+        self.require_blob()?.put(&path, data.to_vec()).await?;
+
+        let mut patch = factordb::data::value::ValueMap::new();
+        patch.insert_attr::<AttrBlobUri>(path);
+        patch.insert_attr::<AttrHash>(hash);
+        if let Some(original) = original_hash {
+            patch.insert_attr::<AttrOriginalHash>(original);
+        }
+        if let Some(mime) = mime_guess {
+            // TODO: handle mismatch between expected and actual mime type!
+            patch.insert_attr::<AttrMimeType>(mime.mime_type().to_string());
+        }
+        db.merge(id, patch).await?;
+
+        tracing::debug!(%download_url, entity_id=%id, %size, "imported file for entity");
 
         Ok(())
     }

@@ -21,6 +21,9 @@ async function run() {
 }
 
 async function tryHandleLine(line: string) {
+	if (line === '') {
+		return;
+	}
   let response: any;
   try {
     const reply = await handleLine(line);
@@ -29,15 +32,22 @@ async function tryHandleLine(line: string) {
     response = {Err: err.toString()};
   }
 
-  const output = JSON.stringify(response) + '\n';
+  console.log({sendingResponse: response});
+  let output = JSON.stringify(response);
+  if (output.search('\n') !== -1) {
+    throw new Error('json response would contain newlines');
+  }
+  output += '\n';
 
-  await Deno.stderr.write(new TextEncoder().encode(output));
+  Deno.stderr.writeSync(new TextEncoder().encode(output));
+  console.log('reply written');
 }
 
 async function handleLine(line: string) {
   const command: PluginCommand = JSON.parse(line);
 
   let reply: PluginReply;
+  console.log({runningCommand: command});
   if (command === "Ping") {
     reply = "Ping";
   } else if ("Init" in command) {

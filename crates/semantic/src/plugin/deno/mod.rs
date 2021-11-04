@@ -130,6 +130,7 @@ impl Worker {
     }
 
     async fn send_command(&mut self, command: PluginCommand) -> Result<PluginReply, AnyError> {
+        tracing::trace!(?command, "Sending command to plugin");
         // FIXME: taint and destroy workers if they fail internally so they can
         // be re-created. Probably want a WorkerManager that handles this.
         let mut cmd_raw = serde_json::to_vec(&command)?;
@@ -137,7 +138,9 @@ impl Worker {
         self.stdin.write_all(&cmd_raw).await?;
 
         let mut buffer = Vec::new();
+        tracing::trace!("waiting for plugin reply");
         self.stderr.read_until(b'\n', &mut buffer).await?;
+        tracing::trace!("plugin reply received");
 
         crate::util::json_from_slice::<Result<PluginReply, String>>(&buffer)?
             .map_err(|err| AnyError::msg(err))
@@ -258,11 +261,13 @@ impl DenoPluginHost {
             .collect()
     }
 
+    #[tracing::instrument(skip(self))]
     pub async fn fetch_url(
         self,
         plugin_name: String,
         url: url::Url,
     ) -> Result<Option<ImportOutput>, AnyError> {
+        tracing::trace!("starting deno fetch");
         let worker_lock = {
             self.state
                 .read()
@@ -276,6 +281,7 @@ impl DenoPluginHost {
         // TODO: timeout / multiple workers per plugin / concurrent workers
         let mut worker = worker_lock.lock().await;
 
+        tracing::trace!("sending fetch request to worker");
         worker.send_import(&url).await
     }
 

@@ -3,7 +3,7 @@ use std::{
     process::{Command, Stdio},
 };
 
-use anyhow::Context;
+use anyhow::{bail, Context};
 use factordb::AnyError;
 
 pub fn optimize_image_data(data: &[u8]) -> Result<Vec<u8>, AnyError> {
@@ -50,6 +50,11 @@ fn oxipng(data: &[u8]) -> Result<Vec<u8>, AnyError> {
         .join()
         .map_err(|err| anyhow::anyhow!("Reader failed {:?}", err))??;
 
+    let status = child.wait()?;
+    if !status.success() {
+        bail!("oxipng failed");
+    }
+
     Ok(output)
 }
 
@@ -83,6 +88,11 @@ fn jpegtran(data: &[u8]) -> Result<Vec<u8>, AnyError> {
     let output = reader
         .join()
         .map_err(|err| anyhow::anyhow!("Reader failed {:?}", err))??;
+
+    let status = child.wait()?;
+    if !status.success() {
+        bail!("oxipng failed");
+    }
 
     Ok(output)
 }

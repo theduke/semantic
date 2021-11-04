@@ -1,7 +1,7 @@
 use factordb::{
     data::DataMap,
     schema::{builtin::AttrIdent, EntityDescriptor},
-    Attribute, Entity, Id,
+    Attribute, Entity, Id, Value,
 };
 use serde::{Deserialize, Serialize};
 
@@ -43,6 +43,12 @@ impl UniversalHash {
     /// Get a pair of (hash_type, hash).
     pub fn split(&self) -> Option<(&str, &str)> {
         self.0.split_once(':')
+    }
+}
+
+impl From<UniversalHash> for Value {
+    fn from(h: UniversalHash) -> Self {
+        Value::String(h.0)
     }
 }
 

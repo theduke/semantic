@@ -220,7 +220,7 @@ async fn file_upload(
     let body = hyper::body::to_bytes(req.into_body()).await?;
     tracing::trace!(len=%body.len(), "file upload body retrieved");
 
-    let item = state.app.create_file(meta, body.to_vec()).await?;
+    let item = state.app.upload_file(meta, body.to_vec()).await?;
     tracing::trace!(?item, "file created");
     Ok(item)
 }
