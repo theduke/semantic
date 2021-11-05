@@ -1816,6 +1816,7 @@ dependencies = [
  "brass",
  "console_error_panic_hook",
  "factordb",
+ "futures",
  "getrandom",
  "js-sys",
  "rand",

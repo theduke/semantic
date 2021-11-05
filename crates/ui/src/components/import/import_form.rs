@@ -1,7 +1,7 @@
 use brass::dom::TagBuilder;
 use semantic_ui_core::{
     components::{
-        form::Form,
+        form::{Form, FormLoadFuture},
         util::{form_field_checkbox, form_field_input, FormBuilder},
     },
     validate::StringUrl,
@@ -24,9 +24,9 @@ impl Default for Values {
     }
 }
 
-pub fn import_form(on_submit: impl Fn(&Values) + 'static) -> TagBuilder {
+pub fn import_form(on_submit_async: impl Fn(&Values) -> FormLoadFuture + 'static) -> TagBuilder {
     Form::new(Values::default())
-        .on_submit(on_submit)
+        .on_submit_async(on_submit_async)
         .render(|handle| {
             FormBuilder::new(handle.clone())
                 .and(form_field_input(

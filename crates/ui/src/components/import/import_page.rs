@@ -1,108 +1,81 @@
-use brass::dom::{builder::div, TagBuilder};
-use factordb::AnyError;
+use brass::dom::{builder::div, Render, TagBuilder};
 use semantic_core::plugin::ImportOutput;
 use semantic_ui_core::{
     components::{
-        entity::entity_list,
-        loader::{LoadState, Loader},
-        util::{box_, notification_error, notification_success, title_2, ButtonBuilder},
+        entity::{entity_box::EntityBox, entity_list},
+        loader::Loader,
+        util::{buttons, notification_success, notification_warning, title_2, ButtonBuilder, Cls},
     },
-    context, EntityRenderOpts,
+    context::{self, api},
+    EntityRenderOpts,
 };
 
-use super::import_form::Values;
+use url::Url;
 
-pub struct ImportPage {}
-
-impl brass::dom::Render for ImportPage {
-    fn render(self) -> TagBuilder {
-        brass::component::build_component::<State>(self)
-    }
+#[derive(Clone)]
+struct Inner {
+    url: Url,
+    is_imported: bool,
+    import_media: bool,
+    output: Option<ImportOutput>,
 }
 
-struct State {
-    preview_load: Loader<Option<ImportOutput>>,
-    persist_load: Loader<()>,
-    is_preview: bool,
-}
+pub fn import_page() -> TagBuilder {
+    let loader = Loader::<Inner>::new_idle();
 
-pub enum Msg {
-    FormSubmit(Values),
-    ImportAll,
-    ImportLoaded(Result<(), AnyError>),
-}
+    let loader2 = loader.clone();
+    let form = super::import_form::import_form(move |values| {
+        let values = values.clone();
+        let mut loader = loader2.clone();
+        Box::pin(async move {
+            let url = url::Url::parse(&values.url)?;
+            let out = api()
+                .fetch_url(url.clone(), values.import, values.import_media)
+                .await?;
 
-impl State {
-    fn is_loading(&self) -> bool {
-        self.preview_load.is_loading() || self.persist_load.is_loading()
-    }
-}
+            loader.set_result(Ok(Inner {
+                output: out,
+                url,
+                is_imported: values.import,
+                import_media: values.import_media,
+            }));
 
-impl brass::component::msg::MsgComponent for State {
-    type Properties = ImportPage;
-    type Msg = Msg;
+            Ok(())
+        })
+    });
 
-    fn init(_props: Self::Properties, _ctx: brass::component::Context<'_, Self>) -> Self {
-        Self {
-            preview_load: Loader::new_idle(),
-            persist_load: Loader::new_idle(),
-            is_preview: false,
-        }
-    }
+    let content = loader
+        .clone()
+        .signal_render(move |inner| match &inner.output {
+            None => notification_warning().and("Nothing found."),
+            Some(output) if output.items.is_empty() => notification_warning().and("Nothing found."),
+            Some(output) if !inner.is_imported => {
+                let inner = inner.clone();
+                let loader = loader.clone();
 
-    fn update(&mut self, msg: Self::Msg, ctx: brass::component::Context<Self>) {
-        match msg {
-            Msg::FormSubmit(values) => {
-                if self.persist_load.is_loading() || self.preview_load.is_loading() {
-                    return;
-                }
-                if let Ok(url) = url::Url::parse(&values.url) {
-                    self.persist_load.set_idle();
-                    self.is_preview = !values.import;
+                let import_btn = ButtonBuilder::new()
+                    .size_medium()
+                    .label("Import all")
+                    .on(move || {
+                        let inner = inner.clone();
+                        loader.spawn(async move {
+                            let output = api()
+                                .clone()
+                                .fetch_url(inner.url.clone(), true, inner.import_media)
+                                .await?;
+                            Ok(Inner {
+                                output,
+                                url: inner.url,
+                                is_imported: true,
+                                import_media: inner.import_media,
+                            })
+                        });
+                    })
+                    .build();
 
-                    let api = context::api();
-                    let f = async move {
-                        api.fetch_url(url.clone(), values.import, values.import_media)
-                            .await
-                    };
-                    self.preview_load.spawn(f);
-                }
-            }
-            Msg::ImportAll => {
-                if self.is_loading() || !self.is_preview {
-                    return;
-                }
-                if let LoadState::Success(Some(output)) = &*self.preview_load.get().lock_ref() {
-                    let items = output.items.clone();
-                    // TODO: toggle for item import.
-                    let api = context::api();
-                    let f = async move {
-                        api.import(items, true).await?;
-                        Ok(())
-                    };
-                    let guard = ctx.spawn_map(f, Msg::ImportLoaded);
-                    self.persist_load.set_loading(guard);
-                }
-            }
-            Msg::ImportLoaded(res) => {
-                self.persist_load.set_result(res);
-            }
-        }
-    }
+                let actions = buttons().class("mb-4").and(import_btn);
 
-    fn render(&mut self, ctx: brass::component::Context<Self>) -> TagBuilder {
-        let handle = ctx.handle();
-        let form = super::import_form::import_form(move |values| {
-            handle.send(Msg::FormSubmit(values.clone()));
-        });
-
-        let form_wrap = box_().and(form);
-
-        let handle = ctx.handle();
-        let persist_load = self.persist_load.clone();
-        let loader1 = self.preview_load.signal_render(move |opt_res| {
-            if let Some(output) = opt_res {
-                let rendered_page = entity_list(
+                let list = entity_list(
                     &output.items,
                     &context::registry(),
                     &EntityRenderOpts {
@@ -111,32 +84,25 @@ impl brass::component::msg::MsgComponent for State {
                     },
                 );
 
-                let handle = handle.clone();
-                let persist_loader = persist_load.signal_render_state(move |state| match state {
-                    LoadState::Idle => ButtonBuilder::new()
-                        .size_large()
-                        .label("Import All")
-                        .on(handle.callback(|| Msg::ImportAll))
-                        .build(),
-                    LoadState::Loading(_) => ButtonBuilder::new()
-                        .size_large()
-                        .label("Import All")
-                        .loading()
-                        .build(),
-                    LoadState::Success(_) => notification_success().and("Import successful."),
-                    LoadState::Failed(err) => {
-                        notification_error().and("Could not import: ").and(err)
-                    }
-                });
-
-                div().child_signal(persist_loader).and(rendered_page)
-            } else {
-                notification_error().and("No suitable importer found")
+                div().and(actions).and(list)
             }
+            Some(output) => div()
+                .and(notification_success().and(format!("Imported {} items", output.items.len())))
+                .and_iter(output.items.iter().map(|item| {
+                    EntityBox {
+                        item: item.clone(),
+                        options: EntityRenderOpts {
+                            editable: false,
+                            preview: true,
+                        },
+                        on_delete: None,
+                    }
+                    .render()
+                })),
         });
 
-        let header = title_2().and("Import");
-
-        div().and((header, form_wrap)).child_signal(loader1)
-    }
+    div()
+        .and(title_2().and("Import"))
+        .and(form.class("mb-4").class(Cls::Box))
+        .child_signal(content)
 }
