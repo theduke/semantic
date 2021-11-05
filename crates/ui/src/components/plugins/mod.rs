@@ -106,12 +106,19 @@ fn plugin_source_deleter(
 }
 
 pub fn plugin_manager() -> TagBuilder {
-    let actions = buttons().and(
-        ButtonBuilder::new()
-            .label("Create Plugin")
-            .on(|| context::router().goto(Route::PluginCreate))
-            .build(),
-    );
+    let actions = buttons()
+        .and(
+            ButtonBuilder::new()
+                .label("Create Plugin")
+                .on(|| context::router().goto(Route::PluginCreate))
+                .build(),
+        )
+        .and(
+            ButtonBuilder::new()
+                .label("Test Plugin Code")
+                .on(|| context::router().goto(Route::PluginTest))
+                .build(),
+        );
 
     let list = load(load_all_sources(), |page| {
         if page.items.is_empty() {
