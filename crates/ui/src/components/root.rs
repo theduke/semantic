@@ -32,7 +32,7 @@ fn render_route(route: Route) -> TagBuilder {
         Route::Browse => crate::components::entity::browse_page::BrowsePage::build(
             crate::components::entity::browse_page::BrowsePageProps {},
         ),
-        Route::Import => super::import::import_page::import_page(),
+        Route::Import => super::import::import_page::ImportPage {}.render(),
         Route::Upload => super::upload::upload_page(),
         Route::Logout => todo!(),
         Route::Entity(ident) => {

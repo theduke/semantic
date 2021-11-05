@@ -1,7 +1,7 @@
 use brass::dom::TagBuilder;
 use semantic_ui_core::{
     components::{
-        form::{Form, FormLoadFuture},
+        form::{Form, FormHandle, FormLoadFuture},
         util::{form_field_checkbox, form_field_input, FormBuilder},
     },
     validate::StringUrl,
@@ -24,24 +24,24 @@ impl Default for Values {
     }
 }
 
-pub fn import_form(on_submit_async: impl Fn(&Values) -> FormLoadFuture + 'static) -> TagBuilder {
+pub fn import_form_new() -> Form<Values> {
     Form::new(Values::default())
-        .on_submit_async(on_submit_async)
-        .render(|handle| {
-            FormBuilder::new(handle.clone())
-                .and(form_field_input(
-                    "Url",
-                    handle.field_validated(|v| &mut v.url, StringUrl),
-                ))
-                .and(form_field_checkbox(
-                    "Import Media",
-                    handle.field(|v| &mut v.import_media),
-                ))
-                .and(form_field_checkbox(
-                    "Import (persist)",
-                    handle.field(|v| &mut v.import),
-                ))
-                .with_buttons(|b| b.submit("Load").reset_default("Reset"))
-                .build()
-        })
+}
+
+pub fn import_form_render(handle: FormHandle<Values>) -> TagBuilder {
+    FormBuilder::new(handle.clone())
+        .and(form_field_input(
+            "Url",
+            handle.field_validated(|v| &mut v.url, StringUrl),
+        ))
+        .and(form_field_checkbox(
+            "Import Media",
+            handle.field(|v| &mut v.import_media),
+        ))
+        .and(form_field_checkbox(
+            "Import (persist)",
+            handle.field(|v| &mut v.import),
+        ))
+        .with_buttons(|b| b.submit("Load").reset_default("Reset"))
+        .build()
 }
