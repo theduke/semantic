@@ -11,8 +11,10 @@ use brass::{
 use factordb::AnyError;
 use futures::Future;
 
+use super::util::ButtonBuilder;
+
 pub fn spinner() -> TagBuilder {
-    div().and("Loading...")
+    ButtonBuilder::new().loading().build()
 }
 
 pub fn error_msg(msg: &str) -> TagBuilder {
