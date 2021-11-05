@@ -1,15 +1,27 @@
 
 // FIXME: generate interfaces from Rust types
 
-export interface JoinItem<T = Record<string, any>> {
+export interface JoinItem<T = DataMap> {
   name: string,
   items: Item<T>[],
 }
 
-export interface Item<T = Record<string, any>> {
+export type DataMap = Record<string, any>;
+
+export interface Item<T = DataMap> {
   data: T,
   joins: JoinItem,
+}
 
+export interface ImportItem<T = DataMap> {
+  data: T,
+  joins: ImportJoinItem[],
+  import_requires_fetch: boolean;
+}
+
+export interface ImportJoinItem<T = DataMap> {
+  name: string,
+  items: ImportItem<T>[],
 }
 
 export interface ImportRelatedUrl {
@@ -18,8 +30,7 @@ export interface ImportRelatedUrl {
 }
 
 export interface ImportOutput {
-  plugin: string,
-  items: Item[],
+  items: ImportItem[],
   load_more_url?: string,
   related_urls: ImportRelatedUrl[],
 }
@@ -28,13 +39,23 @@ export interface DbSchema {
 
 }
 
-export type ImportMatch = 'All' | {Domains: [string]};
+export type ImportMatcher = 'All' | {Domains: {domains: string[]}};
+
+export type ImportSupport
+  = 'Dedicated'
+  | { Generic: {priority: number} }
+  | 'MaybeSupported';
+
+export type ImportMatcherRule = {
+  matcher: ImportMatcher;
+  support: ImportSupport;
+};
 
 export interface PluginSchema {
   name: string;
   description: string | null;
   db: DbSchema|null;
-  import_matches: ImportMatch[];
+  import_matchers: ImportMatcherRule[];
 }
 
 export interface Plugin {

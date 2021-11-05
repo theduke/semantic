@@ -1,5 +1,9 @@
 use factordb::{
-    query::{migrate, select::Item},
+    data::DataMap,
+    query::{
+        migrate,
+        select::{Item, JoinItem},
+    },
     schema::DbSchema,
     AnyError, Ident,
 };
@@ -78,10 +82,71 @@ pub struct ImportRelatedUrl {
 }
 
 #[derive(serde::Serialize, serde::Deserialize, Clone, Debug)]
+pub struct ImportItem {
+    pub data: DataMap,
+    #[serde(default = "Vec::new")]
+    pub joins: Vec<ImportItemJoin>,
+    /// If true, this item requires a seperate plugin fetch for a proper import.
+    /// This is useful when a plugin fetch returns nested items.
+    pub import_requires_fetch: bool,
+}
+
+#[derive(serde::Serialize, serde::Deserialize, Clone, Debug)]
+pub struct ImportItemJoin {
+    pub name: String,
+    pub items: Vec<ImportItem>,
+}
+
+pub struct ImportOutputFlat {
+    pub require_fetch: Vec<DataMap>,
+    pub ready: Vec<DataMap>,
+}
+
+impl ImportItem {
+    fn flatten_into(self, out: &mut ImportOutputFlat) {
+        if self.import_requires_fetch {
+            out.require_fetch.push(self.data);
+        } else {
+            out.ready.push(self.data);
+            for join in self.joins {
+                for item in join.items {
+                    item.flatten_into(out);
+                }
+            }
+        }
+    }
+
+    pub fn flatten(items: Vec<Self>) -> ImportOutputFlat {
+        let mut out = ImportOutputFlat {
+            require_fetch: Vec::new(),
+            ready: Vec::new(),
+        };
+        for item in items {
+            item.flatten_into(&mut out);
+        }
+        out
+    }
+
+    pub fn into_db_item(self) -> Item {
+        Item {
+            data: self.data,
+            joins: self
+                .joins
+                .into_iter()
+                .map(|join| JoinItem {
+                    name: join.name,
+                    items: join.items.into_iter().map(|i| i.into_db_item()).collect(),
+                })
+                .collect(),
+        }
+    }
+}
+
+#[derive(serde::Serialize, serde::Deserialize, Clone, Debug)]
 pub struct ImportOutput {
     /// Potentially nested items.
     #[serde(default)]
-    pub items: Vec<Item>,
+    pub items: Vec<ImportItem>,
     /// The url where more items can be retrieved.
     pub load_more_url: Option<Url>,
     #[serde(default)]

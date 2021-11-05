@@ -194,7 +194,7 @@ impl PluginManager {
         Ok(())
     }
 
-    pub async fn fetch_url(&self, url: url::Url) -> Result<Option<ImportOutput>, AnyError> {
+    pub async fn fetch_url(&self, url: url::Url) -> Result<ImportOutput, AnyError> {
         tracing::trace!(%url, "finding plugin to fetch url");
 
         // Find the most suited plugin.
@@ -213,14 +213,14 @@ impl PluginManager {
                 .map(|x| x.0)
         };
 
-        let plugin = if let Some(p) = plugin_opt {
-            p
-        } else {
-            return Ok(None);
-        };
-
+        let plugin =
+            plugin_opt.ok_or_else(|| anyhow!("No suitable importer found for url '{}'", url))?;
         tracing::trace!(plugin=%plugin.name(), %url, "fetching url with plugin");
-        plugin.fetch_url(url).await
+        let output = plugin
+            .fetch_url(url.clone())
+            .await?
+            .ok_or_else(|| anyhow!("No suitable importer found for url '{}'", url))?;
+        Ok(output)
     }
 
     pub async fn test_fetch(
