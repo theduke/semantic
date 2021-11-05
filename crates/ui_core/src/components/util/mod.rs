@@ -563,7 +563,7 @@ impl Render for FormFieldBuilder {
     }
 }
 
-pub fn form_field<V>(
+pub fn form_field<V: Clone>(
     name: &str,
     handle: FieldHandle<V, String>,
     mut content: TagBuilder,
@@ -612,7 +612,7 @@ pub fn form_field<V>(
         .and(control().and((content, help)))
 }
 
-pub fn form_field_input<V>(name: &str, handle: FieldHandle<V, String>) -> TagBuilder {
+pub fn form_field_input<V: Clone>(name: &str, handle: FieldHandle<V, String>) -> TagBuilder {
     let inp = input()
         .attr_signal(Attr::Value, handle.signal_value())
         .on(handle.clone().on(|ev: InputEvent| ev.value()));
@@ -620,7 +620,7 @@ pub fn form_field_input<V>(name: &str, handle: FieldHandle<V, String>) -> TagBui
     form_field(name, handle, inp)
 }
 
-pub fn form_field_password<V>(name: &str, handle: FieldHandle<V, String>) -> TagBuilder {
+pub fn form_field_password<V: Clone>(name: &str, handle: FieldHandle<V, String>) -> TagBuilder {
     let inp = input()
         .attr(Attr::Type, "password")
         .attr_signal(Attr::Value, handle.signal_value())
@@ -634,7 +634,7 @@ pub fn form_field_password<V>(name: &str, handle: FieldHandle<V, String>) -> Tag
 /// min_rows specifies the rows="xx" attribute
 /// If auto_grow is true, the area will automatically expand to the length of
 /// the content.
-pub fn form_field_textarea<V>(
+pub fn form_field_textarea<V: Clone>(
     name: &str,
     handle: FieldHandle<V, String>,
     min_rows: usize,
@@ -678,7 +678,7 @@ pub struct SelectOption<V> {
     pub value: V,
 }
 
-pub fn form_field_tag_select<V, F>(
+pub fn form_field_tag_select<V: Clone, F>(
     name: &str,
     options: Vec<SelectOption<F>>,
     handle: FieldHandle<V, HashSet<F>>,
@@ -722,7 +722,7 @@ where
         .and(control().and(div().class(Cls::Tags).and_iter(tags)))
 }
 
-pub fn form_field_checkbox<V>(name: &str, handle: FieldHandle<V, bool>) -> TagBuilder {
+pub fn form_field_checkbox<V: Clone>(name: &str, handle: FieldHandle<V, bool>) -> TagBuilder {
     let help = handle.signal_errors().map(|errors| {
         let errors = errors?;
         Some(notification_with_errors(errors))
@@ -738,7 +738,7 @@ pub fn form_field_checkbox<V>(name: &str, handle: FieldHandle<V, bool>) -> TagBu
     )))
 }
 
-pub fn form_button_submit<V>(label: &str, handle: FormHandle<V>) -> TagBuilder {
+pub fn form_button_submit<V: Clone>(label: &str, handle: FormHandle<V>) -> TagBuilder {
     button()
         .class(Color::Link)
         .and(label)
@@ -749,7 +749,10 @@ pub fn form_button_submit<V>(label: &str, handle: FormHandle<V>) -> TagBuilder {
         })
 }
 
-pub fn form_button_reset_default<V: Default>(label: &str, handle: FormHandle<V>) -> TagBuilder {
+pub fn form_button_reset_default<V: Clone + Default>(
+    label: &str,
+    handle: FormHandle<V>,
+) -> TagBuilder {
     button()
         .and(label)
         .attr_signal_toggle(Attr::Disabled, handle.signal_loading())
@@ -758,12 +761,12 @@ pub fn form_button_reset_default<V: Default>(label: &str, handle: FormHandle<V>)
         })
 }
 
-pub struct FormButtonBuilder<'a, V: 'static> {
+pub struct FormButtonBuilder<'a, V: Clone + 'static> {
     handle: &'a FormHandle<V>,
     control: TagBuilder,
 }
 
-impl<'a, V> FormButtonBuilder<'a, V> {
+impl<'a, V: Clone> FormButtonBuilder<'a, V> {
     pub fn new(handle: &'a FormHandle<V>) -> Self {
         Self {
             handle,
@@ -791,7 +794,7 @@ impl<'a, V> FormButtonBuilder<'a, V> {
     }
 }
 
-pub fn form_errors<V>(handle: &FormHandle<V>) -> TagBuilder {
+pub fn form_errors<V: Clone>(handle: &FormHandle<V>) -> TagBuilder {
     // TODO: probably want to use a MutableVec instead to avoid replacing the
     // errors.
     div()
@@ -813,7 +816,7 @@ pub struct FormBuilder<V: 'static> {
     pub tag: TagBuilder,
 }
 
-impl<V: 'static> FormBuilder<V> {
+impl<V: Clone + 'static> FormBuilder<V> {
     pub fn new(handle: FormHandle<V>) -> Self {
         let mut form = tag(Tag::Form);
         let handle2 = handle.clone();

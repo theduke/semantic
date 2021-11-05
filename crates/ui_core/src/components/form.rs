@@ -16,7 +16,7 @@ pub struct Form<V: 'static> {
     values: V,
     validator: Option<Box<dyn Validator<V>>>,
     on_valid: Option<Box<dyn Fn(&V)>>,
-    on_submit: Option<Box<dyn Fn(&V)>>,
+    on_submit: Option<Rc<dyn Fn(&V)>>,
     on_submit_async: Option<Box<dyn Fn(&V) -> FormLoadFuture>>,
 }
 
@@ -33,7 +33,7 @@ impl<V: 'static> Form<V> {
 
     pub fn on_submit(mut self, f: impl Fn(&V) + 'static) -> Self {
         self.on_submit_async = None;
-        self.on_submit = Some(Box::new(f));
+        self.on_submit = Some(Rc::new(f));
         self
     }
 
@@ -43,8 +43,8 @@ impl<V: 'static> Form<V> {
         self
     }
 
-    pub fn render(self, f: impl FnOnce(FormHandle<V>) -> TagBuilder) -> TagBuilder {
-        let h = FormHandle(Rc::new(RefCell::new(FormState {
+    pub fn build(self) -> FormHandle<V> {
+        FormHandle(Rc::new(RefCell::new(FormState {
             form: self,
             fields: Vec::new(),
             status: Mutable::new(FormStatus {
@@ -54,9 +54,11 @@ impl<V: 'static> Form<V> {
                 submit_error: None,
             }),
             load_guard: None,
-        })));
+        })))
+    }
 
-        f(h)
+    pub fn render(self, f: impl FnOnce(FormHandle<V>) -> TagBuilder) -> TagBuilder {
+        f(self.build())
     }
 }
 
@@ -87,7 +89,7 @@ impl<V> Clone for FormHandle<V> {
 // TODO: the error handling and validatoin logic needs work.
 // Need to determine when to re-run global validation and how to update the
 // status accordingly.
-impl<V> FormHandle<V> {
+impl<V: Clone> FormHandle<V> {
     pub fn field_validated<F, VAL>(
         &self,
         get: fn(&mut V) -> &mut F,
@@ -250,13 +252,35 @@ impl<V> FormHandle<V> {
         }
     }
 
+    pub fn set_loading(&self) {
+        self.0.borrow_mut().status.replace_with(|old| FormStatus {
+            is_valid: old.is_valid,
+            is_loading: true,
+            errors: old.errors.clone(),
+            submit_error: None,
+        });
+    }
+
+    pub fn set_loaded(&self) {
+        self.0.borrow_mut().status.replace_with(|old| FormStatus {
+            is_valid: old.is_valid,
+            is_loading: false,
+            errors: old.errors.clone(),
+            submit_error: None,
+        });
+    }
+
     pub fn submit(&self) {
         let mut state = self.0.borrow_mut();
 
         let mut status = state.status.lock_mut();
         if status.is_valid {
             if let Some(callback) = &state.form.on_submit {
-                callback(&state.form.values)
+                let values = state.form.values.clone();
+                let cb = callback.clone();
+                std::mem::drop(status);
+                std::mem::drop(state);
+                cb(&values)
             } else if let Some(callback) = &state.form.on_submit_async {
                 if status.is_loading {
                     return;
@@ -344,7 +368,7 @@ pub struct FieldStatus {
     pub errors: Result<(), Vec<String>>,
 }
 
-pub struct FieldHandle<V: 'static, F> {
+pub struct FieldHandle<V: Clone + 'static, F> {
     index: usize,
     form: FormHandle<V>,
     mutable: Mutable<FieldStatus>,
@@ -352,7 +376,7 @@ pub struct FieldHandle<V: 'static, F> {
     get: fn(&mut V) -> &mut F,
 }
 
-impl<V: 'static, F> Clone for FieldHandle<V, F> {
+impl<V: Clone + 'static, F> Clone for FieldHandle<V, F> {
     fn clone(&self) -> Self {
         Self {
             index: self.index,
@@ -364,7 +388,7 @@ impl<V: 'static, F> Clone for FieldHandle<V, F> {
     }
 }
 
-impl<V: 'static, F: 'static> FieldHandle<V, F> {
+impl<V: Clone + 'static, F: 'static> FieldHandle<V, F> {
     pub fn signal_value(&self) -> impl Signal<Item = F> + 'static
     where
         F: Clone,
@@ -433,7 +457,7 @@ impl<V: 'static, F: 'static> FieldHandle<V, F> {
     }
 }
 
-impl<V: 'static, F: Hash + Eq + 'static> FieldHandle<V, HashSet<F>> {
+impl<V: Clone + 'static, F: Hash + Eq + 'static> FieldHandle<V, HashSet<F>> {
     pub fn add(&self, value: F) {
         self.form.modify_value(
             self.index,

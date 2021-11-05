@@ -10,6 +10,7 @@ use crate::{
     validate::StringRequired,
 };
 
+#[derive(Clone)]
 struct Values {
     title: String,
     description: String,

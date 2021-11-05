@@ -27,6 +27,7 @@ impl Validator<String> for ExistingTagValidator {
     }
 }
 
+#[derive(Clone)]
 struct Values {
     name: String,
 }

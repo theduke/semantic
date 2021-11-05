@@ -11,6 +11,7 @@ use semantic_ui_core::{
     validate::StringRequired,
 };
 
+#[derive(Clone)]
 struct Values {
     data_path: String,
     key: String,
