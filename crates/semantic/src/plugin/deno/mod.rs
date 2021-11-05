@@ -4,7 +4,7 @@ use std::{
     sync::{Arc, RwLock},
 };
 
-use anyhow::Context;
+use anyhow::{anyhow, Context};
 use factordb::AnyError;
 use semantic_core::plugin::{DynPlugin, ImportOutput, PluginSchema};
 use sha2::Digest;
@@ -104,6 +104,10 @@ impl Worker {
     // bridge_path is the path to the bridge.ts file.
     async fn boot(bridge_path: &Path) -> Result<Self, AnyError> {
         let mut child = tokio::process::Command::new("deno")
+            // WARNING: Deno is written in Rust and writes logs to stderr when
+            // RUST_LOG is set, which breaks the stderr communication.
+            // Setting RUST_LOG to empty ensures that deno does not log.
+            .env("RUST_LOG", "")
             .arg("run")
             // FIXME: use restrictive permissions
             .arg("-A")
@@ -138,12 +142,19 @@ impl Worker {
         self.stdin.write_all(&cmd_raw).await?;
 
         let mut buffer = Vec::new();
+
         tracing::trace!("waiting for plugin reply");
-        self.stderr.read_until(b'\n', &mut buffer).await?;
+        loop {
+            self.stderr.read_until(b'\n', &mut buffer).await?;
+            if !buffer.is_empty() {
+                break;
+            }
+        }
         tracing::trace!("plugin reply received");
 
-        crate::util::json_from_slice::<Result<PluginReply, String>>(&buffer)?
-            .map_err(|err| AnyError::msg(err))
+        crate::util::json_from_slice::<Result<PluginReply, String>>(&buffer)
+            .context("Plugin sent invalid JSON reply")?
+            .map_err(|err| anyhow!("Plugin failed: {}", err))
     }
 
     async fn send_init(&mut self, plugin_path: &Path) -> Result<PluginSchema, AnyError> {
