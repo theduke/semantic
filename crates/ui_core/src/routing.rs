@@ -20,6 +20,14 @@ pub struct PluginRoute {
     pub render: SharedRenderer0,
 }
 
+impl PartialEq for PluginRoute {
+    fn eq(&self, other: &Self) -> bool {
+        self.path == other.path && self.title == other.title
+    }
+}
+
+impl Eq for PluginRoute {}
+
 impl std::fmt::Debug for PluginRoute {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("PluginRoute")
@@ -30,7 +38,7 @@ impl std::fmt::Debug for PluginRoute {
     }
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Route {
     Settings,
 
@@ -95,14 +103,19 @@ impl Route {
 
 #[derive(Clone)]
 pub struct Router {
-    route: Mutable<Route>,
+    // NOTE: the Mutable contains an inner Rc<RefCell<_>> to allow updating the
+    // route without triggering a re-render.
+    route: Rc<RefCell<Route>>,
+    signal: Mutable<Rc<RefCell<Route>>>,
     routers: Rc<RefCell<Vec<Box<dyn PluginRouter>>>>,
 }
 
 impl Router {
     pub fn new() -> Self {
+        let route = Rc::new(RefCell::new(Route::Browse));
         Self {
-            route: Mutable::new(Route::Browse),
+            route: route.clone(),
+            signal: Mutable::new(route),
             routers: Rc::new(RefCell::new(Vec::new())),
         }
     }
@@ -146,8 +159,16 @@ impl Router {
     pub fn goto(&self, route: Route) {
         let path = route.to_path();
         let title = route.title();
+        {
+            let mut current = self.route.borrow_mut();
+            if &*current == &route {
+                // Do nothing if route has not changed.
+                return;
+            }
+            *current = route;
+        }
 
-        self.route.set(route);
+        self.signal.set(self.route.clone());
         if let Some(history) = web_sys::window().and_then(|w| w.history().ok()) {
             history
                 .push_state_with_url(&JsValue::NULL, &title, Some(&path))
@@ -155,12 +176,16 @@ impl Router {
         }
     }
 
-    pub fn route(&self) -> &Mutable<Route> {
-        &self.route
+    /// Update the current route without triggering a re-render.
+    pub fn set_route_without_navigation(&self, route: Route) {
+        *self.route.borrow_mut() = route;
     }
 
     pub fn signal(&self) -> impl Signal<Item = Route> {
-        self.route.signal_cloned()
+        self.signal.signal_ref(|r| {
+            let rr: &Route = &*r.borrow();
+            rr.clone()
+        })
     }
 }
 
