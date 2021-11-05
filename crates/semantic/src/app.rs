@@ -480,7 +480,6 @@ impl App {
         tracing::trace!("starting import");
 
         let db = self.require_db()?;
-        let blob = self.require_blob()?;
 
         let entities = Self::entity_id_ident_fixup(&db, Item::flatten_list(items)).await?;
         let merges = entities

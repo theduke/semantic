@@ -1,5 +1,5 @@
 mod file;
-use crate::plugin::{ImportOutput, Plugin, PluginDescriptor, PluginSchema};
+use crate::plugin::{Plugin, PluginDescriptor, PluginSchema};
 
 pub use self::file::*;
 
@@ -25,9 +25,8 @@ use factordb::{
     data::{DataMap, Timestamp},
     query::migrate::Migration,
     schema::{builtin::AttrIdent, AttrMapExt, AttributeDescriptor, EntityDescriptor},
-    AnyError, Attribute,
+    Attribute,
 };
-use futures::future::BoxFuture;
 
 // Common default attributes.
 

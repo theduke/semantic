@@ -53,7 +53,8 @@ struct State {
     fullscreen: bool,
     settings_active: Mutable<bool>,
 
-    keydown_subscription: Option<EventSubscription>,
+    // Never read, but must be kept alive.
+    _keydown_subscription: Option<EventSubscription>,
     player: PlayerHandle,
 
     dom_player: Option<Element>,
@@ -77,7 +78,7 @@ impl State {
             async move {
                 let select = factordb::query::select::Select::new()
                     .with_filter(expr)
-                    .with_limit(1000);
+                    .with_limit(10_000);
                 let page = api.select(select).await?;
                 Ok(page.items)
             },
@@ -92,7 +93,7 @@ impl MsgComponent for State {
     type Msg = Msg;
 
     fn init(props: Self::Properties, ctx: Context<Self>) -> Self {
-        let keydown_subscription = if props.keyboard_controls {
+        let _keydown_subscription = if props.keyboard_controls {
             let handle = ctx.handle();
 
             Some(brass::effect::EventSubscription::subscribe(
@@ -113,7 +114,7 @@ impl MsgComponent for State {
             base_filter: props.filter,
             fullscreen: false,
             settings_active: Mutable::new(false),
-            keydown_subscription,
+            _keydown_subscription,
             dom_player: None,
             player,
             rendered_player: Some(rendered_player),

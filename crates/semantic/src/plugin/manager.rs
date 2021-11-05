@@ -1,6 +1,6 @@
 use std::{collections::HashMap, sync::Arc};
 
-use anyhow::{anyhow, bail};
+use anyhow::{anyhow, bail, Context};
 use factordb::{
     query::{migrate::Migration, mutate::Mutate},
     schema::{AttrMapExt, EntityDescriptor},
@@ -120,7 +120,8 @@ impl PluginManager {
 
         let plugin = deno
             .register_plugin(deno::PluginSource { path: None, code })
-            .await?;
+            .await
+            .context("Deno failed to initialize plugin")?;
 
         if plugin.name() != source.ident {
             bail!("PluginSource ident does not match the plugin name specified in the schema");

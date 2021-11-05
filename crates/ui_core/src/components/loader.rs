@@ -177,8 +177,13 @@ impl<T, E: std::fmt::Display> From<Result<T, E>> for LoadState<T> {
     }
 }
 
-#[derive(Clone)]
 pub struct Loader<T>(Mutable<LoadState<T>>);
+
+impl<T> Clone for Loader<T> {
+    fn clone(&self) -> Self {
+        Self(self.0.clone())
+    }
+}
 
 impl<T> Loader<T> {
     pub fn new_idle() -> Self {

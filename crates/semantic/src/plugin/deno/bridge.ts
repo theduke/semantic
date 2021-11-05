@@ -33,11 +33,7 @@ async function tryHandleLine(line: string) {
   }
 
   console.log({sendingResponse: response});
-  let output = JSON.stringify(response);
-  if (output.search('\n') !== -1) {
-    throw new Error('json response would contain newlines');
-  }
-  output += '\n';
+  let output = JSON.stringify(response) + '\n';
 
   Deno.stderr.writeSync(new TextEncoder().encode(output));
   console.log('reply written');

@@ -6,7 +6,7 @@ use factordb::{
         select::{Item, Page},
     },
     schema::EntityContainer,
-    AnyError, Ident,
+    AnyError,
 };
 
 use crate::{core::PluginSource, plugin::ImportOutput};

@@ -794,16 +794,18 @@ impl<'a, V> FormButtonBuilder<'a, V> {
 pub fn form_errors<V>(handle: &FormHandle<V>) -> TagBuilder {
     // TODO: probably want to use a MutableVec instead to avoid replacing the
     // errors.
-    div().child_signal_opt(handle.signal_status().map(|status| {
-        if let Err(errors) = status.errors {
-            let text = errors.join("\n");
-            Some(notification_error().and(text))
-        } else if let Some(err) = status.submit_error {
-            Some(notification_error().and(err.to_string()))
-        } else {
-            None
-        }
-    }))
+    div()
+        .style_raw("margin-top: 3rem;")
+        .child_signal_opt(handle.signal_status().map(|status| {
+            if let Err(errors) = status.errors {
+                let text = errors.join("\n");
+                Some(notification_error().and(text))
+            } else if let Some(err) = status.submit_error {
+                Some(notification_error().and(err.to_string()))
+            } else {
+                None
+            }
+        }))
 }
 
 pub struct FormBuilder<V: 'static> {

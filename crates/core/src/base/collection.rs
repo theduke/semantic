@@ -11,7 +11,7 @@ use factordb::{
         builtin::{self, AttrId, AttrIdent},
         AttrMapExt, AttributeDescriptor, EntityDescriptor,
     },
-    AnyError, Attribute, Entity, Id,
+    Attribute, Entity, Id,
 };
 
 use super::{AttrDescription, AttrTitle, AttrUrl};
