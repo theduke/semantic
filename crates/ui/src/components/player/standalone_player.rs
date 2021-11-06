@@ -288,7 +288,7 @@ impl MsgComponent for State {
             .attr(Attr::Title, "Settings")
             .on(ctx.on(|_: ClickEvent| Msg::ToggleSettings));
 
-        let bar_settings = div().class("mb-4").and((
+        let bar_settings = div().style_raw("justify-self: end;").and((
             btn_shuffle,
             btn_cycle,
             btn_mute,
@@ -326,9 +326,10 @@ impl MsgComponent for State {
         }));
 
         let bar = div()
-            .style_raw("display: flex; margin-bottom: 1rem; align-items: flex-start; flex-grow: 0;")
-            .and((controls, bar_settings))
-            .child_signal_opt(item_info);
+            .style_raw("display: flex; margin-bottom: 1rem; align-items: flex-start; flex-grow: 0; justify-content: space-around;")
+            .and(controls)
+            .child_signal_opt(item_info)
+            .and(bar_settings);
 
         let player_wrap = div()
             .style_raw("flex-grow: 1; overflow: hidden;")

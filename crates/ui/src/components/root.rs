@@ -87,6 +87,6 @@ fn navbar() -> TagBuilder {
 
     div()
         .class("navbar")
-        .style_raw("border-bottom: 2px solid black; border-radius: 10px; margin-bottom: 1rem;")
+        .style_raw("border-bottom: 2px solid black; border-radius: 10px; margin-bottom: 0.5rem;")
         .and((brand, menu))
 }
