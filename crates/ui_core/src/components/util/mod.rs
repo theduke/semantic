@@ -74,6 +74,7 @@ brass::make_str_enum! {
         IsClickable = "is-clickable",
         IsActive = "is-active",
         IsHidden = "is-hidden",
+        IsStatic = "is-static",
 
         Mr1 = "mr-1",
         Mr2 = "mr-2",

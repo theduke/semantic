@@ -10,7 +10,6 @@ use crate::{components::util::modal::modal, EntityRenderOpts};
 use super::super::plugin::build_blob_url;
 
 pub fn image_content(item: &Item, opts: &EntityRenderOpts) -> TagBuilder {
-    tracing::trace!("rendering image content");
     let url = if let Some(blob_uri) = item.data.get_attr::<AttrBlobUri>() {
         Some(build_blob_url(&blob_uri))
     } else if let Some(url) = item.data.get_attr::<AttrDownloadUrl>() {

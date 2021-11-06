@@ -2,7 +2,7 @@ use brass::{
     component::{msg::MsgComponent, Context},
     dom::{
         builder::{div, span},
-        Attr, ClickEvent, Render, Tag, TagBuilder,
+        Attr, ClickEvent, Event, Render, Tag, TagBuilder,
     },
     effect::EventSubscription,
     signal::signal::{Mutable, SignalExt},
@@ -42,6 +42,7 @@ enum Msg {
     ToggleSettings,
     ToggleFullscreen,
     KeyPress(String),
+    OnFullscreenChange { is_fullscreen: bool },
 }
 
 struct State {
@@ -85,6 +86,25 @@ impl State {
             Msg::Loaded,
         );
         self.loader.set_loading(guard);
+    }
+
+    fn toggle_fullscreen(&mut self) {
+        if !self.fullscreen {
+            if let Some(elem) = &self.dom_player {
+                if let Err(_error) = elem.request_fullscreen() {
+                    tracing::error!("Could not launch fullscreen mode");
+                } else {
+                    self.fullscreen = true;
+                }
+            }
+        } else {
+            self.fullscreen = false;
+            web_sys::window()
+                .unwrap()
+                .document()
+                .unwrap()
+                .exit_fullscreen();
+        }
     }
 }
 
@@ -150,39 +170,35 @@ impl MsgComponent for State {
                 self.settings_active.replace_with(|old| !*old);
             }
             Msg::ToggleFullscreen => {
-                if !self.fullscreen {
-                    if let Some(elem) = &self.dom_player {
-                        if let Err(_error) = elem.request_fullscreen() {
-                            tracing::error!("Could not launch fullscreen mode");
-                        } else {
-                            self.fullscreen = true;
-                        }
-                    }
-                } else {
-                    self.fullscreen = false;
-                    web_sys::window()
-                        .unwrap()
-                        .document()
-                        .unwrap()
-                        .exit_fullscreen();
-                }
+                self.toggle_fullscreen();
             }
 
             Msg::KeyPress(key) => match key.as_str() {
-                "ArrowLeft" => {
+                "ArrowLeft" | "KeyH" | "KeyK" => {
                     self.player.prev();
                 }
-                "ArrowRight" => {
+                "ArrowRight" | "KeyL" | "KeyJ" => {
                     self.player.next();
                 }
-                " " => {
+                "Space" => {
                     self.player.toggle_paused();
                 }
-                "m" => {
+                "KeyM" => {
                     self.player.toggle_muted();
                 }
-                _other => {}
+                "KeyF" => {
+                    self.toggle_fullscreen();
+                }
+                "KeyS" => {
+                    self.player.shuffle();
+                }
+                _other => {
+                    tracing::trace!(?_other, "unhandled keypress");
+                }
             },
+            Msg::OnFullscreenChange { is_fullscreen } => {
+                self.fullscreen = is_fullscreen;
+            }
         }
     }
 
@@ -212,11 +228,13 @@ impl MsgComponent for State {
         let btn_prev = button()
             .and(icon_fas("fa-chevron-circle-left"))
             .attr(Attr::Title, "Back")
+            .attr_signal_toggle(Attr::Disabled, player.signal_no_previous())
             .on(move |_: ClickEvent| player.prev());
 
         let player = self.player.clone();
         let btn_next = button()
             .and(icon_fas("fa-chevron-circle-right"))
+            .attr_signal_toggle(Attr::Disabled, player.signal_no_next())
             .attr(Attr::Title, "Forward")
             .on(move |_: ClickEvent| player.next());
 
@@ -241,11 +259,17 @@ impl MsgComponent for State {
                 Tag::I
                     .new()
                     .class(Cls::Fas)
+                    .attr_signal(
+                        Attr::Title,
+                        player
+                            .signal_muted()
+                            .map(|flag| if flag { "Unmute" } else { "Mute" }),
+                    )
                     .class_signal(player.signal_muted().map(|flag| {
                         if flag {
-                            "fa-volume-slash"
+                            "fa-volume-off"
                         } else {
-                            "va-volume"
+                            "fa-volume-up"
                         }
                     })),
             )
@@ -272,6 +296,24 @@ impl MsgComponent for State {
             btn_settings,
         ));
 
+        let item_info = self.player.signal_item().map(|item| {
+            item.map(|item| {
+                let pos_text = format!("{} / {}", item.index + 1, item.total_count);
+                let pos = div()
+                    .class("mr-4")
+                    .and(div().class(Cls::Button).class(Cls::IsStatic).and(pos_text));
+
+                let title = div()
+                    .class(Cls::Button)
+                    .class(Cls::IsStatic)
+                    .and(item.title);
+                div()
+                    .style_raw("display: flex; margin-left: 2rem;")
+                    .and(pos)
+                    .and(title)
+            })
+        });
+
         let handle = ctx.handle();
         let settings = div().child_signal_opt(self.settings_active.signal().map(move |flag| {
             if !flag {
@@ -284,12 +326,20 @@ impl MsgComponent for State {
         }));
 
         let bar = div()
-            .style_raw("display: flex; margin-bottom: 1rem;")
-            .and((controls, bar_settings));
+            .style_raw("display: flex; margin-bottom: 1rem; align-items: flex-start; flex-grow: 0;")
+            .and((controls, bar_settings))
+            .child_signal_opt(item_info);
 
         let player_wrap = div()
-            .style_raw("flex-grow: 1; height: 100%; width: 100%;")
+            .style_raw("flex-grow: 1; overflow: hidden;")
             .class_signal_toggle(Cls::IsHidden, self.loader.signal_loading())
+            .on_event(
+                Event::FullScreenChange,
+                ctx.on_opt(|_ev: web_sys::Event| {
+                    let is_fullscreen = brass::web::document_fullscreen_element().is_some();
+                    Some(Msg::OnFullscreenChange { is_fullscreen })
+                }),
+            )
             .and(self.rendered_player.take());
 
         let loader = self.loader.signal_render(|_| span());

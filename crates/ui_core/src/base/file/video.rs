@@ -93,8 +93,9 @@ impl MediaHandle for VideoPlayerHandle {
     }
 
     fn pause(&self) {
+        tracing::trace!("calling pause!");
         if let Err(err) = self.elem.pause() {
-            tracing::error!(?err, "Could not start video playback");
+            tracing::error!(?err, "Could not pause video playback");
         }
     }
 
@@ -119,6 +120,7 @@ pub fn video_player(info: VideoInfo, options: &MediaRenderOpts) -> (TagBuilder, 
 
     let video = Tag::Video
         .new()
+        .style_raw("max-width: 100%; max-height: 100%; object-fit: contain;")
         .attr_toggle(Attr::Controls)
         .attr_toggle_if(options.muted, Attr::Muted)
         .attr_toggle_if(options.playing, Attr::AutoPlay)

@@ -4,10 +4,11 @@ use brass::{
     component::{build_component, msg::MsgComponent, Context, Handle},
     dom::{builder::div, Render, TagBuilder},
     effect::{set_timeout, TimeoutGuard},
-    signal::signal::{Mutable, Signal},
+    signal::signal::{Mutable, Signal, SignalExt},
 };
 use factordb::{query::select::Item, schema::AttrMapExt};
 use rand::prelude::SliceRandom;
+use semantic_core::base::entity_title;
 use semantic_ui_core::{
     components::{entity::entity_view::EntityView, util::notification_warning},
     context,
@@ -26,6 +27,8 @@ struct Props {
 pub struct ActiveItem {
     pub item: Item,
     pub index: Index,
+    pub total_count: usize,
+    pub title: String,
 }
 
 enum Msg {
@@ -49,12 +52,19 @@ enum Msg {
 
 type Index = usize;
 
+#[derive(Clone, Copy)]
+pub struct Position {
+    pub index: usize,
+    pub total: usize,
+}
+
 struct SharedStateData {
     playing: Mutable<bool>,
     cycle: Mutable<bool>,
     muted: Mutable<bool>,
     autoplay_interval: Mutable<Option<std::time::Duration>>,
     active_item: Mutable<Option<ActiveItem>>,
+    position: Mutable<Position>,
 }
 
 type SharedState = Rc<SharedStateData>;
@@ -87,7 +97,6 @@ impl State {
 
     fn next(&mut self, ctx: &Context<Self>) {
         let index = self.get_index();
-        tracing::trace!(?index, "NEXT");
         if index + 1 > self.items.len() {
             if self.shared.cycle.get() {
                 self.goto(0, ctx)
@@ -141,7 +150,6 @@ impl State {
     }
 
     fn goto(&mut self, index: Index, ctx: &Context<Self>) {
-        tracing::trace!(?index, "GOTO");
         let item = if let Some(item) = self.items.get(index) {
             item
         } else {
@@ -162,7 +170,9 @@ impl State {
         let is_playing = self.shared.playing.get();
         let is_muted = self.shared.muted.get();
 
-        let (content, handle) = if let Some(media_render) = self.registry.get_media_renderer(ty) {
+        let (content, media_handle) = if let Some(media_render) =
+            self.registry.get_media_renderer(ty)
+        {
             let handle = ctx.handle();
             let index = index;
 
@@ -196,8 +206,10 @@ impl State {
             (content, None)
         };
 
+        self.current_handle = media_handle.clone();
+
         self.timeout_guard.take();
-        if is_playing && handle.is_none() {
+        if is_playing && media_handle.is_none() {
             if let Some(duration) = self.shared.autoplay_interval.get() {
                 let callback = ctx.callback_msg(|| Msg::AutoplayTimeout);
                 let guard = set_timeout(duration, callback);
@@ -205,9 +217,15 @@ impl State {
             }
         }
 
+        self.shared.position.set(Position {
+            index,
+            total: self.items.len(),
+        });
         self.shared.active_item.set(Some(ActiveItem {
             item: item.clone(),
             index,
+            total_count: self.items.len(),
+            title: entity_title(&item.data),
         }));
 
         self.dom_item.set(RefCell::new(Some(content)));
@@ -319,7 +337,6 @@ impl MsgComponent for State {
             .style_raw("height: 100%; width: 100%; overflow: hidden; display: flex; justify-content: center; align-items: center; flex-grow: 1;")
             .child_signal_opt(self.dom_item.signal_ref(|opt| {
                 let content = opt.borrow_mut().take();
-                tracing::trace!(is_some=content.is_some(), "showing content");
                 content
             }))
     }
@@ -397,6 +414,26 @@ impl PlayerHandle {
     pub fn signal_item(&self) -> impl Signal<Item = Option<ActiveItem>> {
         self.0.shared.active_item.signal_cloned()
     }
+
+    pub fn signal_position(&self) -> impl Signal<Item = Position> {
+        self.0.shared.position.signal()
+    }
+
+    pub fn signal_has_previous(&self) -> impl Signal<Item = bool> {
+        self.0.shared.position.signal().map(|x| x.index > 0)
+    }
+
+    pub fn signal_no_previous(&self) -> impl Signal<Item = bool> {
+        self.0.shared.position.signal().map(|x| x.index < 1)
+    }
+
+    pub fn signal_has_next(&self) -> impl Signal<Item = bool> {
+        self.0.shared.position.signal().map(|x| x.index < x.total)
+    }
+
+    pub fn signal_no_next(&self) -> impl Signal<Item = bool> {
+        self.0.shared.position.signal().map(|x| x.index >= x.total)
+    }
 }
 
 pub struct PlayerViewer {
@@ -410,9 +447,10 @@ impl PlayerViewer {
         let shared = Rc::new(SharedStateData {
             playing: Mutable::new(true),
             cycle: Mutable::new(true),
-            muted: Mutable::new(true),
+            muted: Mutable::new(false),
             autoplay_interval: Mutable::new(Some(Duration::from_secs(5))),
             active_item: Mutable::new(None),
+            position: Mutable::new(Position { index: 0, total: 0 }),
         });
         let content = build_component::<State>(Props {
             shared: shared.clone(),
