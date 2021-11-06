@@ -32,7 +32,7 @@ fn render_route(route: Route) -> TagBuilder {
         ),
         Route::Import => super::import::import_page::ImportPage {}.render(),
         Route::Upload => super::upload::upload_page(),
-        Route::Logout => todo!(),
+        Route::Logout => super::login::logout(),
         Route::Entity(ident) => {
             // FIXME: handle ident!
             tracing::trace!(?ident, "ident");

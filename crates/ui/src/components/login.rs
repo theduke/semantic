@@ -5,7 +5,8 @@ use semantic_core::api::{BackendConfig, BackendCryptoConfig, DbConfig, SemanticS
 use semantic_ui_core::{
     components::{
         form,
-        util::{form_field_input, form_field_password, title_2, FormBuilder},
+        loader::Loader,
+        util::{form_field_input, form_field_password, subtitle_4, title_2, FormBuilder},
     },
     context,
     validate::StringRequired,
@@ -62,4 +63,16 @@ pub fn login(on_success: impl Fn(SemanticSchema) + 'static) -> TagBuilder {
         .class("container")
         .and(title_2().and("Semantic"))
         .and(form)
+}
+
+pub fn logout() -> TagBuilder {
+    let load = Loader::new_spawn(async {
+        context::api().close_backend().await?;
+        web_sys::window().unwrap().location().reload().unwrap();
+        Ok(())
+    })
+    .signal_render(|_| div());
+    div()
+        .and(subtitle_4().and("Logging out..."))
+        .child_signal(load)
 }
