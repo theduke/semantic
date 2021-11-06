@@ -1,8 +1,8 @@
 use brass::{
     component::{msg::MsgComponent, Context},
     dom::{
-        builder::{button, div, span},
-        ClickEvent, Render, TagBuilder,
+        builder::{div, span},
+        Render, TagBuilder,
     },
     effect::EffectGuard,
     signal::{
@@ -16,14 +16,14 @@ use factordb::{
         select::{Item, ItemPage, Select},
     },
     schema::{AttrMapExt, EntityDescriptor},
-    AnyError, Id,
+    AnyError,
 };
 
 use semantic_ui_core::{
     components::{
         entity::{entity_box::EntityBox, entity_filter::entity_filter},
         loader::Loader,
-        util::{box_, notification_warning, title_2},
+        util::{box_, buttons, notification_warning, title_2, ButtonBuilder},
     },
     context, EntityRenderOpts,
 };
@@ -37,8 +37,11 @@ pub struct BrowsePage {
     // filter_callback: Callback<EntityFilter>,
     // on_delete_callback: Callback<Item>,
     items: MutableVec<Item>,
-    is_empty: Mutable<bool>,
-    next_cursor: Mutable<Option<Id>>,
+    item_count: Mutable<usize>,
+
+    // TODO: make page size configurable
+    limit: u64,
+    page: Mutable<u64>,
 }
 
 pub struct BrowsePageProps {}
@@ -47,6 +50,7 @@ pub enum Msg {
     Loaded(Result<ItemPage, AnyError>),
     FilterUpdated(Expr),
     Next,
+    Prev,
     ItemDeleted(Item),
 }
 
@@ -78,13 +82,17 @@ impl MsgComponent for BrowsePage {
     type Msg = Msg;
 
     fn init(_props: Self::Properties, ctx: Context<Self>) -> Self {
+        let limit = 50;
         let mut s = Self {
             loader: Loader::new_idle(),
-            query: Select::new().with_filter(Self::base_filter()),
+            query: Select::new()
+                .with_filter(Self::base_filter())
+                .with_limit(limit),
             _guard: None,
             items: MutableVec::new(),
-            is_empty: Mutable::new(true),
-            next_cursor: Mutable::new(None),
+            item_count: Mutable::new(0),
+            page: Mutable::new(1),
+            limit,
             // filter_callback: ctx.callback_map(Msg::FilterUpdated),
             // on_delete_callback: ctx.callback_map(Msg::ItemDeleted),
         };
@@ -95,20 +103,31 @@ impl MsgComponent for BrowsePage {
     fn update(&mut self, msg: Self::Msg, ctx: Context<Self>) {
         match msg {
             Msg::FilterUpdated(filter) => {
-                let query = Select::new().with_filter(filter);
+                let query = Select::new().with_filter(filter).with_limit(self.limit);
                 self.load(query, &ctx);
             }
             Msg::Loaded(res) => {
                 if let Some(page) = self.loader.set_result_take(res) {
-                    self.is_empty.set(page.items.is_empty());
+                    self.item_count.set(page.items.len());
                     self.items.lock_mut().replace_cloned(page.items);
-                    self.next_cursor.set(page.next_cursor)
                 }
             }
             Msg::Next => {
-                if let Some(cursor) = self.next_cursor.get() {
+                let page = self.page.get();
+                self.page.set(page + 1);
+                let q = Select {
+                    offset: self.limit * page,
+                    ..self.query.clone()
+                };
+                self.load(q, &ctx);
+            }
+            Msg::Prev => {
+                let page = self.page.get();
+                if page > 1 {
+                    let new_page = page - 1;
+                    self.page.set(new_page);
                     let q = Select {
-                        cursor: Some(cursor),
+                        offset: self.limit * (new_page - 1),
                         ..self.query.clone()
                     };
                     self.load(q, &ctx);
@@ -125,8 +144,8 @@ impl MsgComponent for BrowsePage {
     fn render(&mut self, ctx: Context<Self>) -> TagBuilder {
         let loader = self.loader.signal_render(move |_| span());
 
-        let empty_marker = self.is_empty.signal().map(|is_empty| {
-            if is_empty {
+        let empty_marker = self.item_count.signal().map(|item_count| {
+            if item_count == 0 {
                 Some(notification_warning().and("Nothing found..."))
             } else {
                 None
@@ -134,42 +153,65 @@ impl MsgComponent for BrowsePage {
         });
 
         let handle = ctx.handle();
-        let next = self.next_cursor.signal().map(move |cursor| {
-            if cursor.is_some() {
+        // TODO: do not clone...
+        let page_mut = self.page.clone();
+        // TODO: make reactive?
+        let limit = self.limit as usize;
+        let pager = self.item_count.signal().map(move |item_count| {
+            let page = page_mut.get();
+
+            let next = if item_count >= limit {
                 Some(
-                    div().and(
-                        button()
-                            .and("More")
-                            .on(handle.on(|_: ClickEvent| Msg::Next)),
-                    ),
+                    ButtonBuilder::new()
+                        .size_large()
+                        .label("Next")
+                        .on(handle.callback(|| Msg::Next))
+                        .build(),
                 )
             } else {
                 None
-            }
+            };
+
+            let prev = if page > 1 {
+                Some(
+                    ButtonBuilder::new()
+                        .size_large()
+                        .label("Back")
+                        .on(handle.callback(|| Msg::Prev))
+                        .build(),
+                )
+            } else {
+                None
+            };
+
+            buttons()
+                .style_raw("display: flex; justify-content: center;")
+                .and(prev)
+                .and(next)
         });
 
         let handle = ctx.handle();
+        let handle2 = handle.clone();
         div()
             .and(title_2().and("Browse"))
             .and(box_().and(entity_filter(move |query| {
                 handle.send(Msg::FilterUpdated(query.build_expr()));
             })))
             .child_signal(loader)
-            .children_signal(self.items.signal_vec_cloned(), |item| {
+            .children_signal(self.items.signal_vec_cloned(), move |item| {
                 EntityBox {
                     item: item.clone(),
                     options: EntityRenderOpts {
                         editable: false,
                         preview: true,
                     },
-                    on_delete: None,
+                    on_delete: Some(Box::new(handle2.on(Msg::ItemDeleted))),
                 }
                 .render()
                 .build()
             })
             .child_signal_opt(empty_marker)
-            .child_signal_opt(next)
-        // .and((filter, loader)).build()
+            .child_signal(pager)
     }
 }
 
