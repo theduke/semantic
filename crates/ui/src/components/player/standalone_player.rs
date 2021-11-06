@@ -79,7 +79,7 @@ impl State {
             async move {
                 let select = factordb::query::select::Select::new()
                     .with_filter(expr)
-                    .with_limit(10_000);
+                    .with_limit(50_000);
                 let page = api.select(select).await?;
                 Ok(page.items)
             },
