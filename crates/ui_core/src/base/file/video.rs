@@ -63,7 +63,7 @@ pub fn video_content(item: &Item, opts: &EntityRenderOpts) -> TagBuilder {
         let video = Tag::Video.new().attr_toggle(Attr::Controls).and(source);
 
         if opts.preview {
-            video.style_raw("max-height: 200px; object-fit: contain;")
+            video.style_raw("max-width: 200px; max-height: 200px; object-fit: contain;")
         } else {
             video
         }
