@@ -1,22 +1,29 @@
+use std::collections::HashMap;
+
 use brass::{
     component::{msg::MsgComponent, Component, Context},
-    dom::{
-        builder::{div, span},
-        Render, Tag, TagBuilder,
-    },
-    effect::EffectGuard,
-    signal::signal::Mutable,
+    dom::{builder::div, Render, TagBuilder},
 };
-use factordb::{query::select::Item, schema::AttrMapExt, AnyError, Id};
-use semantic_core::{base::AttrUrl, plugin::ImportOutput};
+use factordb::{
+    query::{
+        expr::Expr,
+        select::{Item, Select},
+    },
+    schema::{AttrMapExt, AttributeDescriptor},
+    AnyError, Id,
+};
+use semantic_core::{
+    base::AttrUrl,
+    plugin::{ImportItem, ImportOutput},
+};
 use semantic_ui_core::{
     components::{
         entity::{entity_box::EntityBox, entity_view::EntityView},
         form::FormHandle,
-        loader::spinner,
+        loader::{LoadState, Loader},
         util::{
-            buttons, notification_error, notification_success, subtitle_4, title_2, ButtonBuilder,
-            Cls,
+            buttons, notification_error, notification_success, notification_warning, title_2,
+            ButtonBuilder, Cls,
         },
     },
     context::{self, api},
@@ -38,37 +45,76 @@ type Index = usize;
 
 enum Msg {
     FormSubmit(Values),
-    FetchLoaded(Result<ImportOutput, AnyError>),
+    FetchLoaded(Result<(ImportOutput, Vec<PreviewItem>), AnyError>),
     ImportLoaded(Result<Vec<Item>, AnyError>),
     ImportItem(Index),
     ImportItemLoaded {
         res: Result<Vec<Item>, AnyError>,
         url: Url,
-        old: PreviewView,
     },
-    PreviewClearImported,
+    Clear,
     ImportAll,
 }
 
 #[derive(Clone)]
-struct PreviewView {
+struct Preview {
     output: ImportOutput,
-    item_error: Option<String>,
-    imported_items: Vec<Item>,
+    items: Vec<PreviewItem>,
 }
 
-enum View {
-    Idle,
-    Loading(EffectGuard),
-    Preview(PreviewView),
-    Imported(Vec<Item>),
-    Error(String),
+#[derive(Clone)]
+struct PreviewItem {
+    index: Index,
+    item: ImportItem,
+    url: Option<Url>,
+    existing_id: Option<Id>,
+    loader: Loader<Item>,
 }
 
 struct State {
     values: Values,
     form: FormHandle<Values>,
-    view: Mutable<View>,
+
+    preview: Loader<Preview>,
+    full_import: Loader<Vec<Item>>,
+}
+
+async fn build_preview_items(items: Vec<ImportItem>) -> Result<Vec<PreviewItem>, AnyError> {
+    let old_urls: Vec<_> = items
+        .iter()
+        .filter_map(|item| item.data.get_attr::<AttrUrl>())
+        .map(|url| url.to_string())
+        .collect();
+    let filter = Expr::in_(AttrUrl::expr(), old_urls);
+    let old_page = api()
+        .select(
+            Select::new()
+                .with_limit(items.len() as u64)
+                .with_filter(filter),
+        )
+        .await?;
+    let mut old_map: HashMap<Url, Id> = old_page
+        .items
+        .into_iter()
+        .filter_map(|item| Some((item.data.get_attr::<AttrUrl>()?, item.data.get_id()?)))
+        .collect();
+
+    let items = items
+        .into_iter()
+        .enumerate()
+        .map(|(index, item)| {
+            let url = item.data.get_attr::<AttrUrl>();
+            PreviewItem {
+                index,
+                existing_id: url.as_ref().and_then(|url| old_map.remove(url)),
+                url,
+                item,
+                loader: Loader::new_idle(),
+            }
+        })
+        .collect();
+
+    Ok(items)
 }
 
 impl MsgComponent for State {
@@ -84,7 +130,8 @@ impl MsgComponent for State {
                     handle.send(Msg::FormSubmit(values.clone()));
                 })
                 .build(),
-            view: Mutable::new(View::Idle),
+            preview: Loader::new_idle(),
+            full_import: Loader::new_idle(),
         }
     }
 
@@ -97,82 +144,78 @@ impl MsgComponent for State {
                     return;
                 };
 
-                let guard = if values.import {
+                if values.import {
                     let import_media = values.import_media;
-                    ctx.spawn_map(
+                    let guard = ctx.spawn_map(
                         async move { api().import(url, import_media).await },
                         Msg::ImportLoaded,
-                    )
+                    );
+                    self.full_import.set_loading(guard);
+                    self.preview.set_idle();
                 } else {
-                    ctx.spawn_map(async move { api().fetch_url(url).await }, Msg::FetchLoaded)
+                    let guard = ctx.spawn_map(
+                        async move {
+                            let mut out = api().fetch_url(url).await?;
+                            let items = build_preview_items(std::mem::take(&mut out.items)).await?;
+
+                            Ok((out, items))
+                        },
+                        Msg::FetchLoaded,
+                    );
+                    self.full_import.set_idle();
+                    self.preview.set_loading(guard);
                 };
 
-                self.form.set_loading();
-                self.view.set(View::Loading(guard));
                 self.values = values;
+                self.form.set_loading();
             }
             Msg::FetchLoaded(res) => {
                 self.form.set_loaded();
 
+                self.preview.set_idle();
+
                 match res {
-                    Ok(output) => {
-                        self.view.set(View::Preview(PreviewView {
-                            output,
-                            item_error: None,
-                            imported_items: Vec::new(),
-                        }));
+                    Ok((output, items)) => {
+                        let preview = Preview { output, items };
+                        self.preview.set_result(Ok(preview));
                     }
                     Err(err) => {
-                        self.view.set(View::Error(err.to_string()));
+                        self.preview.set_err(err);
                     }
                 }
             }
             Msg::ImportLoaded(res) => {
                 self.form.set_loaded();
-
-                match res {
-                    Ok(items) => {
-                        self.view.set(View::Imported(items));
-                    }
-                    Err(err) => {
-                        self.view.set(View::Error(err.to_string()));
-                    }
-                }
+                self.full_import.set_result(res);
+                self.preview.set_idle();
             }
             Msg::ImportAll => {
                 if let Ok(url) = self.values.url.parse() {
                     let import_media = self.values.import_media;
-                    self.view.set(View::Loading(ctx.spawn_map(
+                    let guard = ctx.spawn_map(
                         async move { api().import(url, import_media).await },
                         Msg::ImportLoaded,
-                    )));
+                    );
+                    self.full_import.set_loading(guard);
+                    self.preview.set_idle();
                 }
             }
             Msg::ImportItem(index) => {
-                let mut preview = {
-                    match &*self.view.lock_ref() {
-                        View::Preview(p) => p.clone(),
-                        _ => {
-                            return;
-                        }
-                    }
+                let item = match &*self.preview.get().lock_ref() {
+                    LoadState::Success(preview) => preview.items.get(index).cloned(),
+                    _ => None,
                 };
-
-                let item = if index < preview.output.items.len() {
-                    preview.output.items.remove(index)
+                let item = if let Some(x) = item {
+                    x
                 } else {
-                    tracing::warn!(%index, len=%preview.imported_items.len(), "Invalid index");
                     return;
                 };
 
-                let url = item.data.get_attr::<AttrUrl>();
-
-                if url.is_none() {
-                    tracing::warn!("no url!");
+                let url = if let Some(x) = item.item.data.get_attr::<AttrUrl>() {
+                    x
+                } else {
                     return;
-                }
-
-                let url = url.unwrap();
+                };
 
                 let import_media = self.values.import_media;
 
@@ -180,42 +223,43 @@ impl MsgComponent for State {
                 let guard = ctx.spawn(async move {
                     let res = api().import(url2, import_media).await;
 
-                    Msg::ImportItemLoaded {
-                        url,
-                        res,
-                        old: preview,
-                    }
+                    Msg::ImportItemLoaded { url, res }
                 });
-                self.view.set(View::Loading(guard));
+                item.loader.set_loading(guard);
             }
-            Msg::ImportItemLoaded { res, url, mut old } => {
-                match res {
-                    Ok(new_items) => {
-                        let item = new_items.into_iter().find(|item| {
-                            item.data
-                                .get_attr::<AttrUrl>()
-                                .map(|u| &u == &url)
-                                .unwrap_or_default()
-                        });
-                        if let Some(item) = item {
-                            old.imported_items.push(item);
-                        }
-                        old.item_error = None;
-                    }
-                    Err(err) => {
-                        old.item_error = Some(err.to_string());
-                    }
-                }
+            Msg::ImportItemLoaded { res, url } => match &mut *self.preview.get().lock_mut() {
+                LoadState::Success(ref mut preview) => {
+                    let item_opt = preview
+                        .items
+                        .iter_mut()
+                        .find(|item| item.url.as_ref() == Some(&url));
 
-                self.view.set(View::Preview(old));
-            }
-            Msg::PreviewClearImported => match &mut *self.view.lock_mut() {
-                View::Preview(p) => {
-                    p.imported_items.clear();
-                    p.item_error = None;
+                    let item = if let Some(x) = item_opt {
+                        x
+                    } else {
+                        return;
+                    };
+
+                    match res {
+                        Ok(items) => {
+                            let new_item = items.into_iter().find(|new_item| {
+                                new_item.data.get_attr::<AttrUrl>().as_ref() == Some(&url)
+                            });
+                            if let Some(new) = new_item {
+                                item.loader.set_result(Ok(new));
+                            } else {
+                                item.loader.set_err("Could not import item.");
+                            }
+                        }
+                        Err(err) => item.loader.set_err(err),
+                    }
                 }
                 _ => {}
             },
+            Msg::Clear => {
+                self.preview.set_idle();
+                self.full_import.set_idle();
+            }
         }
     }
 
@@ -224,67 +268,43 @@ impl MsgComponent for State {
 
         let handle = ctx.handle();
 
-        let content =
-            self.view.signal_ref(move |view| match view {
-                View::Idle => div(),
-                View::Loading(_) => spinner(),
-                View::Preview(PreviewView {
-                    output,
-                    item_error,
-                    imported_items: items,
-                }) => {
+        let preview = self.preview.signal_render(move |preview| {
+            if preview.items.is_empty() {
+                return notification_warning().and("Nothing found");
+            }
+
+            let actions = {
+                let import_btn = ButtonBuilder::new()
+                    .size_medium()
+                    .label("Import all")
+                    .on(handle.callback(|| Msg::ImportAll))
+                    .build();
+
+                let clear_btn = ButtonBuilder::new()
+                    .size_medium()
+                    .label("Clear")
+                    .on(handle.callback(|| Msg::Clear))
+                    .build();
+
+                buttons().class("mb-4").and(import_btn).and(clear_btn)
+            };
+
+            let handle = handle.clone();
+
+            let mut items = div();
+
+            for item2 in preview.items.clone() {
+                let handle = handle.clone();
+
+                let item = item2.clone();
+                let view = item2.loader.signal_render_state(move |state| {
+                    let registry = context::registry();
                     let handle = handle.clone();
 
-                    let actions = if items.is_empty() {
-                        let import_btn = ButtonBuilder::new()
-                            .size_medium()
-                            .label("Import all")
-                            .on(handle.callback(|| Msg::ImportAll))
-                            .build();
-
-                        let clear_btn = ButtonBuilder::new()
-                            .size_medium()
-                            .label("Clear imported")
-                            .on(handle.callback(|| Msg::PreviewClearImported))
-                            .build();
-
-                        Some(buttons().class("mb-4").and(import_btn).and(clear_btn))
-                    } else {
-                        None
-                    };
-
-                    let item_notification = match item_error.as_ref() {
-                        Some(err) => notification_error().and(err.as_str()),
-                        None if !items.is_empty() => {
-                            notification_success().and(format!("Imported {} items.", items.len()))
-                        }
-                        None => span(),
-                    };
-
-                    let item_views = items.iter().map(|item| EntityBox {
-                        item: item.clone(),
-                        options: EntityRenderOpts {
-                            editable: false,
-                            preview: true,
-                        },
-                        on_delete: None,
-                    });
-                    let item_list = div().and(item_notification).and_iter(item_views).and(
-                        if items.is_empty() {
-                            None
-                        } else {
-                            Some(Tag::Hr.new().class("mb-4"))
-                        },
-                    );
-
-                    let registry = context::registry();
-                    let preview_items: Vec<_> = output
-                        .items
-                        .iter()
-                        .enumerate()
-                        .map(|(index, item)| {
+                    match state {
+                        LoadState::Idle => {
                             let mut view = EntityView::from_item(
-                                &item.clone().into_db_item(),
+                                &item.item.clone().into_db_item(),
                                 &registry,
                                 &EntityRenderOpts {
                                     editable: false,
@@ -293,7 +313,8 @@ impl MsgComponent for State {
                             );
 
                             let handle = handle.clone();
-                            let import_btn = if let Some(_url) = item.data.get_attr::<AttrUrl>() {
+                            let import_btn = if item.url.is_some() {
+                                let index = item.index;
                                 Some(
                                     ButtonBuilder::new()
                                         .label("Import")
@@ -304,149 +325,93 @@ impl MsgComponent for State {
                                 None
                             };
 
+                            let exists_warning = item
+                                .existing_id
+                                .as_ref()
+                                .map(|_| notification_warning().and("Item is already imported"));
+
+                            view.content = div()
+                                .and(buttons().class("mb-3").and(import_btn))
+                                .and(exists_warning)
+                                .and(view.content);
+
+                            view.render()
+                        }
+                        LoadState::Loading(_) => {
+                            let mut view = EntityView::from_item(
+                                &item.item.clone().into_db_item(),
+                                &registry,
+                                &EntityRenderOpts {
+                                    editable: false,
+                                    preview: true,
+                                },
+                            );
+
+                            let import_btn = ButtonBuilder::new().label("Import").loading().build();
+
                             view.content = div()
                                 .and(buttons().class("mb-3").and(import_btn))
                                 .and(view.content);
 
                             view.render()
-                        })
-                        .collect();
-
-                    let related_urls = if output.related_urls.is_empty() {
-                        None
-                    } else {
-                        Some(div())
-                    };
-
-                    div()
-                        .and(actions)
-                        .and(item_list)
-                        .and(
-                            div()
-                                .and(subtitle_4().and("Preview"))
-                                .and_iter(preview_items),
-                        )
-                        .and(related_urls)
-                }
-                View::Imported(items) => div()
-                    .and(notification_success().and(format!("Imported {} items.", items.len())))
-                    .and_iter(items.iter().map(|item| {
-                        EntityBox {
-                            item: item.clone(),
-                            options: EntityRenderOpts {
-                                editable: false,
-                                preview: true,
-                            },
-                            on_delete: None,
                         }
-                        .render()
-                    })),
-                View::Error(err) => notification_error().and(err.as_str()),
-            });
+                        LoadState::Success(item) => {
+                            let box_ = EntityBox {
+                                item: item.clone(),
+                                options: EntityRenderOpts {
+                                    editable: false,
+                                    preview: true,
+                                },
+                                on_delete: None,
+                            };
+
+                            div()
+                                .style_raw("border-right: 10px solid green; padding-right: 10px;")
+                                .and(box_.render())
+                        }
+                        LoadState::Failed(err) => {
+                            let mut view = EntityView::from_item(
+                                &item.item.clone().into_db_item(),
+                                &registry,
+                                &EntityRenderOpts {
+                                    editable: false,
+                                    preview: true,
+                                },
+                            );
+
+                            view.content =
+                                div().and(notification_error().and(err)).and(view.content);
+
+                            view.render()
+                        }
+                    }
+                });
+                items.add_child_signal(view);
+            }
+
+            div().and(actions).and(items)
+        });
+
+        let full = self.full_import.signal_render(|items| {
+            div()
+                .and(notification_success().and(format!("Imported {} items.", items.len())))
+                .and_iter(items.iter().map(|item| {
+                    EntityBox {
+                        item: item.clone(),
+                        options: EntityRenderOpts {
+                            editable: false,
+                            preview: true,
+                        },
+                        on_delete: None,
+                    }
+                    .render()
+                }))
+        });
 
         div()
             .and(title_2().and("Import"))
             .and(form.class("mb-4").class(Cls::Box))
-            .child_signal(content)
+            .child_signal(preview)
+            .child_signal(full)
     }
 }
-
-// #[derive(Clone)]
-// struct Inner {
-//     url: Url,
-//     is_imported: bool,
-//     import_media: bool,
-//     output: Option<ImportOutput>,
-// }
-
-// pub fn import_page() -> TagBuilder {
-//     let loader = Loader::<Inner>::new_idle();
-
-//     let loader2 = loader.clone();
-//     let form = super::import_form::import_form(move |values| {
-//         let values = values.clone();
-//         let mut loader = loader2.clone();
-//         Box::pin(async move {
-//             let url = url::Url::parse(&values.url)?;
-//             let out = api()
-//                 .fetch_url(url.clone(), values.import, values.import_media)
-//                 .await?;
-
-//             loader.set_result(Ok(Inner {
-//                 output: out,
-//                 url,
-//                 is_imported: values.import,
-//                 import_media: values.import_media,
-//             }));
-
-//             Ok(())
-//         })
-//     });
-
-//     let content = loader
-//         .clone()
-//         .signal_render(move |inner| match &inner.output {
-//             None => notification_warning().and("Nothing found."),
-//             Some(output) if output.items.is_empty() => notification_warning().and("Nothing found."),
-//             Some(output) if !inner.is_imported => {
-//                 let inner = inner.clone();
-//                 let loader = loader.clone();
-
-//                 let import_btn = ButtonBuilder::new()
-//                     .size_medium()
-//                     .label("Import all")
-//                     .on(move || {
-//                         let inner = inner.clone();
-//                         loader.spawn(async move {
-//                             let output = api()
-//                                 .clone()
-//                                 .fetch_url(inner.url.clone(), true, inner.import_media)
-//                                 .await?;
-//                             Ok(Inner {
-//                                 output,
-//                                 url: inner.url,
-//                                 is_imported: true,
-//                                 import_media: inner.import_media,
-//                             })
-//                         });
-//                     })
-//                     .build();
-
-//                 let actions = buttons().class("mb-4").and(import_btn);
-
-//                 let items: Vec<_> = output
-//                     .items
-//                     .iter()
-//                     .map(|item| item.clone().into_db_item())
-//                     .collect();
-//                 let list = entity_list(
-//                     &items,
-//                     &context::registry(),
-//                     &EntityRenderOpts {
-//                         editable: false,
-//                         preview: true,
-//                     },
-//                 );
-
-//                 div().and(actions).and(list)
-//             }
-//             Some(output) => div()
-//                 .and(notification_success().and(format!("Imported {} items", output.items.len())))
-//                 .and_iter(output.items.iter().map(|item| {
-//                     EntityBox {
-//                         item: item.clone().into_db_item(),
-//                         options: EntityRenderOpts {
-//                             editable: false,
-//                             preview: true,
-//                         },
-//                         on_delete: None,
-//                     }
-//                     .render()
-//                 })),
-//         });
-
-//     div()
-//         .and(title_2().and("Import"))
-//         .and(form.class("mb-4").class(Cls::Box))
-//         .child_signal(content)
-// }
