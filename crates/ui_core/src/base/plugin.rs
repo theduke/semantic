@@ -123,14 +123,17 @@ impl BrowserPlugin for BasePlugin {
 }
 
 fn render_attr_preview_image(value: &Value, _entity: Option<&DataMap>) -> TagBuilder {
+    tracing::trace!(?value, "rendering preview image");
     if let Some(url) = value.as_str().filter(|v| v.starts_with("http")) {
         div().and(
-            Tag::Image
+            Tag::Img
                 .new()
                 .attr(Attr::Src, url)
+                .attr(Attr::Alt, "Preview Image")
                 .style_raw("max-height: 200px;"),
         )
     } else {
+        tracing::trace!(?value, "preview image does not start with http");
         let mut wrap = div();
         render_value(value, &mut wrap);
         wrap
