@@ -25,8 +25,6 @@ pub fn root() -> TagBuilder {
 }
 
 fn render_route(route: Route) -> TagBuilder {
-    tracing::trace!(?route, "showing route");
-
     let content = match route {
         // Special initialization routes
         Route::Browse => crate::components::entity::browse_page::BrowsePage::build(
@@ -87,5 +85,8 @@ fn navbar() -> TagBuilder {
         .class(Cls::IsActive)
         .and((items, end));
 
-    div().class("navbar").and((brand, menu))
+    div()
+        .class("navbar")
+        .style_raw("border-bottom: 2px solid black; border-radius: 10px; margin-bottom: 1rem;")
+        .and((brand, menu))
 }
