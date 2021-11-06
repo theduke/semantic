@@ -2,13 +2,14 @@ use std::{collections::HashMap, sync::Arc};
 
 use anyhow::{anyhow, bail, Context};
 use factordb::{
+    data::value::patch::Patch,
     query::{migrate::Migration, mutate::Mutate},
-    schema::{AttrMapExt, EntityDescriptor},
-    AnyError, Db,
+    schema::{AttrMapExt, AttributeDescriptor, EntityDescriptor},
+    AnyError, Db, Id,
 };
 use semantic_core::{
     api::PluginTestFetch,
-    core::PluginSource,
+    core::{AttrPluginCode, PluginSource},
     plugin::{DynPlugin, ImportOutput, Plugin, PluginSchema},
 };
 use tokio::sync::RwLock;
@@ -36,7 +37,9 @@ impl PluginManager {
             bail!("Deno is already initialized");
         }
 
-        let host = deno::DenoPluginHost::start(config).await?;
+        let schema = self.0.db.schema()?;
+
+        let host = deno::DenoPluginHost::start(config, schema).await?;
 
         state.deno = Some(host);
         Ok(())
@@ -56,9 +59,26 @@ impl PluginManager {
 
         for source in page.items {
             tracing::trace!(plugin=%source.ident, "initializing database plugin");
-            let plugin = self.build_source_plugin(&source).await?;
-            if let Err(err) = self.register_plugin(plugin).await {
-                tracing::error!(plugin=%source.ident, error=?err, "Could not restore database plugin");
+            match self.build_source_plugin(&source).await {
+                Ok(plugin) => {
+                    if let Err(err) = self.register_plugin(plugin).await {
+                        tracing::error!(plugin=%source.ident, error=?err, "Could not restore database plugin");
+                    }
+                }
+                Err(error) => {
+                    tracing::error!(plugin=%source.ident, ?error, "Could not build plugin");
+                }
+            }
+        }
+
+        Ok(())
+    }
+
+    pub async fn plugin_source_validate(&self, source: PluginSource) -> Result<(), AnyError> {
+        match source.runtime.as_ref().map(|x| x.as_str()) {
+            Some("deno") => {}
+            _ => {
+                bail!("Unknown/missing plugin runtime")
             }
         }
 
@@ -74,6 +94,33 @@ impl PluginManager {
         self.0.db.create_entity(source.clone()).await?;
         self.register_plugin(plugin).await?;
 
+        Ok(source)
+    }
+
+    pub async fn plugin_source_replace(
+        &self,
+        id: Id,
+        code: String,
+    ) -> Result<PluginSource, AnyError> {
+        let data = self.0.db.entity(id).await?;
+        let mut source: PluginSource = data.try_into_entity()?;
+        source.code = Some(code.clone());
+
+        if let Some(old) = self.0.mutable.write().await.plugins.remove(&source.ident) {
+            old.plugin.stop()?;
+        }
+
+        let plugin = self.build_source_plugin(&source).await?;
+
+        self.0
+            .db
+            .patch(
+                id,
+                Patch::new().replace(AttrPluginCode::QUALIFIED_NAME, code),
+            )
+            .await?;
+
+        self.register_plugin(plugin).await?;
         Ok(source)
     }
 
@@ -119,7 +166,7 @@ impl PluginManager {
             .ok_or_else(|| anyhow!("Deno runtime not available"))?;
 
         let plugin = deno
-            .register_plugin(deno::PluginSource { path: None, code })
+            .register_plugin(deno::PluginSource { path: None, code }, true)
             .await
             .context("Deno failed to initialize plugin")?;
 
@@ -145,6 +192,8 @@ impl PluginManager {
 
         let db = &self.0.db;
         let existing_migrations = db.backend().migrations().await?;
+
+        // TODO: validate whole plugin schema.
 
         // Run migrations.
         let migrations = plugin.migrations();
@@ -241,7 +290,7 @@ impl PluginManager {
                 .ok_or_else(|| anyhow!("Deno runtime not available"))?
         };
 
-        deno.test_fetch(&spec.code, spec.url).await
+        deno.test_fetch(&spec.code, spec.url, true).await
     }
 }
 

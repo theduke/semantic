@@ -4,8 +4,8 @@ use std::{
     sync::{Arc, RwLock},
 };
 
-use anyhow::{anyhow, Context};
-use factordb::AnyError;
+use anyhow::{anyhow, bail, Context};
+use factordb::{schema::DbSchema, AnyError};
 use semantic_core::plugin::{DynPlugin, ImportOutput, PluginSchema};
 use sha2::Digest;
 use tokio::{
@@ -14,6 +14,7 @@ use tokio::{
 };
 
 const BRIDGE_CODE: &'static str = include_str!("./bridge.ts");
+const PLUGIN_BASE_CODE: &'static str = include_str!("./plugin.ts");
 
 #[derive(serde::Serialize, serde::Deserialize, Clone, Debug)]
 pub struct DenoConfig {
@@ -28,6 +29,34 @@ impl DenoConfig {
 
     fn ensure_bridge_dir(&self) -> Result<PathBuf, AnyError> {
         let p = self.bridge_path();
+        if !p.is_dir() {
+            std::fs::create_dir_all(&p)?;
+        }
+        Ok(p)
+    }
+
+    fn lib_path(&self) -> PathBuf {
+        self.data_dir.join("lib")
+    }
+
+    fn ensure_lib_dir(&self) -> Result<PathBuf, AnyError> {
+        let p = self.lib_path();
+        if !p.is_dir() {
+            std::fs::create_dir_all(&p)?;
+        }
+        Ok(p)
+    }
+
+    fn semantic_lib_file(&self) -> PathBuf {
+        self.lib_path().join("semantic.ts")
+    }
+
+    fn schema_lib_file(&self) -> PathBuf {
+        self.lib_path().join("schema.ts")
+    }
+
+    fn ensure_temp_dir(&self) -> Result<PathBuf, AnyError> {
+        let p = self.data_dir.join("tmp");
         if !p.is_dir() {
             std::fs::create_dir_all(&p)?;
         }
@@ -194,11 +223,19 @@ pub struct DenoPluginHost {
 }
 
 impl DenoPluginHost {
-    pub async fn start(config: DenoConfig) -> Result<Self, AnyError> {
+    pub async fn start(config: DenoConfig, schema: DbSchema) -> Result<Self, AnyError> {
         if !config.data_dir.is_dir() {
             std::fs::create_dir_all(&config.data_dir)?;
         }
         config.ensure_bridge_dir()?;
+        config.ensure_lib_dir()?;
+
+        // Write out include files for typescript plugins.
+        std::fs::write(config.semantic_lib_file(), PLUGIN_BASE_CODE)?;
+        std::fs::write(
+            config.schema_lib_file(),
+            crate::util::generate_db_schema_typescript_definitions(&schema)?,
+        )?;
 
         let host = Self {
             state: Arc::new(RwLock::new(State {
@@ -209,25 +246,76 @@ impl DenoPluginHost {
             })),
         };
 
-        if let Some(dir) = config.plugin_dir.as_ref() {
-            host.initialize_plugin_dir(dir.clone()).await?;
-        }
+        // if let Some(dir) = config.plugin_dir.as_ref() {
+        // host.initialize_plugin_dir(dir.clone()).await?;
+        // }
 
         Ok(host)
     }
 
     pub async fn initialize_plugin_dir(&self, path: PathBuf) -> Result<(), AnyError> {
         for source in Self::load_plugins_directory(&path).await? {
-            self.register_plugin(source).await?;
+            self.register_plugin(source, false).await?;
         }
         Ok(())
     }
 
-    pub async fn register_plugin(&self, source: PluginSource) -> Result<DynPlugin, AnyError> {
-        tracing::trace!(?source.path, "Loading deno plugin");
-        let data_dir = { self.state.read().unwrap().config.data_dir.clone() };
+    // FIXME: unify code with equivalent in Self::boot_plugin_worker
+    pub async fn validate_typescript_plugin(&self, code: String) -> Result<(), AnyError> {
+        let config = { self.state.read().unwrap().config.clone() };
+        let plugin_path = config
+            .semantic_lib_file()
+            .to_str()
+            .ok_or_else(|| anyhow!("Non-utf8 file path"))?
+            .to_string();
+        let schema_path = config
+            .schema_lib_file()
+            .to_str()
+            .ok_or_else(|| anyhow!("Non-utf8 file path"))?
+            .to_string();
 
-        let (worker, schema) = Self::boot_plugin_worker(&data_dir, &source.code).await?;
+        let code = code
+            .replace("@semantic/semantic.ts", &plugin_path)
+            .replace("@semantic/schema.ts", &schema_path);
+
+        let code_path = config
+            .ensure_temp_dir()?
+            .join(format!("{}.ts", uuid::Uuid::new_v4()));
+        std::fs::write(&code_path, &code)?;
+
+        let out = tokio::process::Command::new("deno")
+            // WARNING: Deno is written in Rust and writes logs to stderr when
+            // RUST_LOG is set, which breaks the stderr communication.
+            // Setting RUST_LOG to empty ensures that deno does not log.
+            .env("RUST_LOG", "")
+            .arg("bundle")
+            .arg("-A")
+            .arg(&code_path)
+            .output()
+            .await?;
+
+        if !out.status.success() {
+            let stdout = String::from_utf8_lossy(&out.stdout);
+            let stderr = String::from_utf8_lossy(&out.stderr);
+
+            bail!(
+                "Could not validate typescript plugin:\n\n{}\n\n{}",
+                stdout,
+                stderr
+            );
+        }
+        Ok(())
+    }
+
+    pub async fn register_plugin(
+        &self,
+        source: PluginSource,
+        validate: bool,
+    ) -> Result<DynPlugin, AnyError> {
+        tracing::trace!(?source.path, "Loading deno plugin");
+        let config = { self.state.read().unwrap().config.clone() };
+
+        let (worker, schema) = Self::boot_plugin_worker(&config, &source.code, validate).await?;
         let data = PluginData { source, schema };
 
         let mut state = self.state.write().unwrap();
@@ -246,9 +334,10 @@ impl DenoPluginHost {
         &self,
         code: &str,
         url: url::Url,
+        validate: bool,
     ) -> Result<Option<ImportOutput>, AnyError> {
-        let data_dir = { self.state.read().unwrap().config.data_dir.clone() };
-        let (mut worker, _schema) = Self::boot_plugin_worker(&data_dir, code).await?;
+        let config = { self.state.read().unwrap().config.clone() };
+        let (mut worker, _schema) = Self::boot_plugin_worker(&config, code, validate).await?;
 
         worker.send_import(&url).await
     }
@@ -324,11 +413,12 @@ impl DenoPluginHost {
     }
 
     async fn boot_plugin_worker(
-        data_dir: &Path,
+        config: &DenoConfig,
         code: &str,
+        validate: bool,
     ) -> Result<(Worker, PluginSchema), AnyError> {
         // Ensure bridge.
-        let script_dir = data_dir.join("scripts");
+        let script_dir = config.data_dir.join("scripts");
         if !script_dir.is_dir() {
             std::fs::create_dir_all(&script_dir)?;
         }
@@ -337,7 +427,47 @@ impl DenoPluginHost {
 
         let filename = format!("{:x}.ts", sha2::Sha256::digest(code.as_bytes()));
         let worker_script_path = script_dir.join(filename);
+
+        // Fix up code.
+        let plugin_include_path = config
+            .semantic_lib_file()
+            .to_str()
+            .ok_or_else(|| anyhow!("Non-utf8 file path"))?
+            .to_string();
+        let schema_include_path = config
+            .schema_lib_file()
+            .to_str()
+            .ok_or_else(|| anyhow!("Non-utf8 file path"))?
+            .to_string();
+
+        let code = code
+            .replace("@semantic/semantic.ts", &plugin_include_path)
+            .replace("@semantic/schema.ts", &schema_include_path);
         std::fs::write(&worker_script_path, code)?;
+
+        if validate {
+            tracing::trace!("Validating plugin code with deno");
+            let out = tokio::process::Command::new("deno")
+                // WARNING: Deno is written in Rust and writes logs to stderr when
+                // RUST_LOG is set, which breaks the stderr communication.
+                // Setting RUST_LOG to empty ensures that deno does not log.
+                .env("RUST_LOG", "")
+                .arg("bundle")
+                .arg(&worker_script_path)
+                .output()
+                .await?;
+
+            if !out.status.success() {
+                let stdout = String::from_utf8_lossy(&out.stdout);
+                let stderr = String::from_utf8_lossy(&out.stderr);
+
+                bail!(
+                    "Could not validate typescript plugin:\n\n{}\n\n{}",
+                    stdout,
+                    stderr
+                );
+            }
+        }
 
         let mut worker = Worker::boot(&bridge_script_path).await?;
         worker.send_ping().await?;

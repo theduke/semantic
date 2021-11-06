@@ -883,6 +883,19 @@ impl App {
                 let out = self.require_plugins()?.test_fetch(spec).await?;
                 Ok(api::Reply::PluginTestFetch(out))
             }
+            api::Query::PluginSourceUpgrade { id, code } => {
+                let source = self
+                    .require_plugins()?
+                    .plugin_source_replace(id, code)
+                    .await?;
+                Ok(api::Reply::PluginSourceUpgrade(source))
+            }
+            api::Query::PluginSourceValidate(source) => {
+                self.require_plugins()?
+                    .plugin_source_validate(source)
+                    .await?;
+                Ok(api::Reply::PluginSourceValidate)
+            }
         };
         res.map_err(|err| {
             tracing::error!(?err, "api query failed");

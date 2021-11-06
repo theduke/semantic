@@ -6,7 +6,7 @@ use factordb::{
         select::{Item, Page},
     },
     schema::EntityContainer,
-    AnyError,
+    AnyError, Id,
 };
 use url::Url;
 
@@ -104,6 +104,11 @@ pub enum Query {
     Schema,
 
     PluginSourceCreate(PluginSource),
+    PluginSourceUpgrade {
+        id: Id,
+        code: String,
+    },
+    PluginSourceValidate(PluginSource),
     PluginDelete {
         name: String,
     },
@@ -144,6 +149,8 @@ pub enum Reply {
     Schema(SemanticSchema),
 
     PluginSourceCreate(PluginSource),
+    PluginSourceUpgrade(PluginSource),
+    PluginSourceValidate,
     PluginDelete,
     PluginTestFetch(Option<ImportOutput>),
 
@@ -295,6 +302,30 @@ impl<E: ApiClientExecutor> ApiClient<E> {
     ) -> Result<PluginSource, AnyError> {
         match self.exec.execute(Query::PluginSourceCreate(source)).await {
             Ok(Reply::PluginSourceCreate(source)) => Ok(source),
+            Ok(_other) => Err(anyhow::anyhow!("API returned invalid data")),
+            Err(err) => Err(err),
+        }
+    }
+
+    pub async fn plugin_source_validate(&self, source: PluginSource) -> Result<(), AnyError> {
+        match self.exec.execute(Query::PluginSourceValidate(source)).await {
+            Ok(Reply::PluginSourceValidate) => Ok(()),
+            Ok(_other) => Err(anyhow::anyhow!("API returned invalid data")),
+            Err(err) => Err(err),
+        }
+    }
+
+    pub async fn plugin_source_upgrade(
+        &self,
+        id: Id,
+        code: String,
+    ) -> Result<PluginSource, AnyError> {
+        match self
+            .exec
+            .execute(Query::PluginSourceUpgrade { id, code })
+            .await
+        {
+            Ok(Reply::PluginSourceUpgrade(source)) => Ok(source),
             Ok(_other) => Err(anyhow::anyhow!("API returned invalid data")),
             Err(err) => Err(err),
         }

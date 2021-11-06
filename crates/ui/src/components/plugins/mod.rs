@@ -13,7 +13,7 @@ use brass::{
 use factordb::{
     data::value::patch::Patch,
     query::select::Page,
-    schema::{builtin::AttrIdent, AttributeDescriptor},
+    schema::{builtin::AttrIdent, AttrMapExt, AttributeDescriptor},
     AnyError, Id,
 };
 use semantic_core::{
@@ -26,13 +26,13 @@ use semantic_ui_core::{
         form::{self, FormLoadFuture},
         loader::{load, spinner, LoadState, Loader},
         util::{
-            buttons, form_field_input, form_field_textarea, notification_default,
-            notification_error, notification_warning, subtitle_4, title_2, ButtonBuilder,
+            box_, buttons, form_field_input, form_field_textarea, notification_default,
+            notification_error, notification_warning, subtitle_4, title_2, ButtonBuilder, Cls,
             FormBuilder,
         },
     },
     context,
-    routing::Route,
+    routing::{link, Route},
     validate::{StringRequired, StringUrl},
 };
 
@@ -133,8 +133,17 @@ pub fn plugin_manager() -> TagBuilder {
 
                     let source = source.clone();
 
-                    div()
-                        .and(subtitle_4().and(&source.ident))
+                    let actions = buttons()
+                        .class("mb-4")
+                        .and(
+                            link(
+                                Route::PluginUpdate {
+                                    id: source.id.to_string(),
+                                },
+                                "Edit",
+                            )
+                            .class(Cls::Button),
+                        )
                         .and(
                             ButtonBuilder::new()
                                 .label("Delete")
@@ -142,7 +151,11 @@ pub fn plugin_manager() -> TagBuilder {
                                     deleting2.replace_with(|x| !*x);
                                 })
                                 .build(),
-                        )
+                        );
+
+                    box_()
+                        .and(subtitle_4().and(&source.ident))
+                        .and(actions)
                         .child_signal(deleting.signal().map(move |is_deleting| {
                             let deleting = deleting.clone();
                             if is_deleting {
@@ -155,6 +168,7 @@ pub fn plugin_manager() -> TagBuilder {
                                         deleting.set(false);
                                     },
                                 )
+                                .class("mt-4")
                             } else {
                                 span()
                             }
@@ -249,6 +263,42 @@ pub fn plugin_source_create_page() -> TagBuilder {
     div()
         .and(title_2().and("Create Plugin"))
         .and(plugin_source_create())
+}
+
+fn plugin_source_update(source: PluginSource) -> TagBuilder {
+    plugin_source_form(source.clone(), false, move |values| {
+        let source = source.clone();
+        // values.apply(&mut source);
+
+        Box::pin(async move {
+            context::api()
+                .plugin_source_upgrade(source.id, values.code)
+                .await?;
+            context::router().goto(Route::PluginManager);
+            Ok(())
+        })
+    })
+}
+
+pub fn plugin_source_update_page(id_raw: String) -> TagBuilder {
+    load(
+        async move {
+            let plain_id = id_raw
+                .parse()
+                .map_err(|_| anyhow::anyhow!("Invalid plugin id."))?;
+            let id = Id::from_uuid(plain_id);
+            let source = context::api()
+                .entity(id)
+                .await?
+                .try_into_entity::<PluginSource>()?;
+            Ok(source)
+        },
+        |source| {
+            div()
+                .and(title_2().and(format!("Edit {}", source.ident)))
+                .and(plugin_source_update(source.clone()))
+        },
+    )
 }
 
 pub fn plugin_test_page() -> TagBuilder {

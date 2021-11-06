@@ -271,7 +271,7 @@ async fn handler_blob_read(Extension(state): ServerContext, req: Request<Body>) 
 
 fn api_error(err: &AnyError) -> ApiError {
     ApiError {
-        message: err.to_string(),
+        message: format!("{:?}", err),
     }
 }
 

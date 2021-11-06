@@ -55,6 +55,7 @@ fn render_route(route: Route) -> TagBuilder {
         Route::PluginCreate => super::plugins::plugin_source_create_page(),
         Route::PluginTest => super::plugins::plugin_test_page(),
         Route::Settings => super::settings::settings_page(),
+        Route::PluginUpdate { id } => super::plugins::plugin_source_update_page(id),
     };
 
     container().style_raw("min-width: 800px;").and(content)

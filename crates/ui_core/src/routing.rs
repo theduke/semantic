@@ -54,6 +54,7 @@ pub enum Route {
 
     PluginManager,
     PluginCreate,
+    PluginUpdate { id: String },
     PluginTest,
 
     Plugin(PluginRoute),
@@ -73,6 +74,7 @@ impl Route {
             Route::EntityCreate { entity_type } => format!("/create/{}", entity_type),
             Route::PluginManager => "/plugins".to_string(),
             Route::PluginCreate => "/plugins/create".to_string(),
+            Route::PluginUpdate { id } => format!("plugins/{}/edit", id),
             Route::PluginTest => "/plugins/test".to_string(),
             Route::Plugin(p) => p.path.clone(),
             Route::Settings => "/manage".to_string(),
@@ -95,6 +97,7 @@ impl Route {
             Route::Plugin(p) => p.title.clone(),
             Route::PluginManager => "Manage Plugins".to_string(),
             Route::PluginCreate => "Create Plugin".to_string(),
+            Route::PluginUpdate { .. } => "Update Plugin".to_string(),
             Route::PluginTest => "Test Plugin".to_string(),
             Route::Settings => "Settings".to_string(),
         }
@@ -144,6 +147,7 @@ impl Router {
             ["tags"] => Some(Route::Tags),
             ["plugins"] => Some(Route::PluginManager),
             ["plugins", "create"] => Some(Route::PluginCreate),
+            ["plugins", id, "edit"] => Some(Route::PluginUpdate { id: id.to_string() }),
             ["plugins", "test"] => Some(Route::PluginTest),
             _other => {
                 let route = self
