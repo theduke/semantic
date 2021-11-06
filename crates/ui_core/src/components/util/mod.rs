@@ -114,10 +114,10 @@ brass::make_str_enum! {
 
 brass::make_str_enum! {
     BtnSize {
-        Small = "small",
-        Normal = "normal",
-        Medium = "medium",
-        Large = "large",
+        Small = "is-small",
+        Normal = "is-normal",
+        Medium = "is-medium",
+        Large = "is-large",
     }
 }
 
