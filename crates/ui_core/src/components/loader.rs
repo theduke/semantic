@@ -237,7 +237,7 @@ impl<T> Loader<T> {
         self.0.set(LoadState::Loading(Some(guard)));
     }
 
-    pub fn set_loading(&mut self, guard: EffectGuard) {
+    pub fn set_loading(&self, guard: EffectGuard) {
         self.0.set(LoadState::Loading(Some(guard)));
     }
 
@@ -247,6 +247,10 @@ impl<T> Loader<T> {
 
     pub fn set_result(&mut self, res: Result<T, AnyError>) {
         self.0.set(LoadState::from_res(res));
+    }
+
+    pub fn set_err(&mut self, err: impl Display) {
+        self.0.set(LoadState::Failed(err.to_string()));
     }
 
     pub fn signal_loading(&self) -> impl Signal<Item = bool> + 'static
