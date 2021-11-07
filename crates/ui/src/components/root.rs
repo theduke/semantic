@@ -70,7 +70,6 @@ fn navbar() -> TagBuilder {
         .class("navbar-start")
         .and(link(Route::Browse, "Browse").class("navbar-item"))
         .and(link(Route::Create, "Create").class("navbar-item"))
-        .and(link(Route::Tags, "Tags").class("navbar-item"))
         .and(link(Route::Play, "Play").class("navbar-item"));
 
     let logout = link(Route::Logout, "Logout").class("navbar-item");
@@ -83,7 +82,7 @@ fn navbar() -> TagBuilder {
 
     let menu = div()
         .class("navbar-menu")
-        .class(Cls::IsActive)
+        // .class(Cls::IsActive)
         .and((items, end));
 
     div()
