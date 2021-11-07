@@ -2,9 +2,12 @@ use brass::{
     component::{msg::MsgComponent, Context, Handle},
     dom::{
         builder::{div, span},
-        ChangeEvent, ClickEvent, Render, Tag, TagBuilder,
+        ChangeEvent, ClickEvent, Render, TagBuilder,
     },
-    signal::{signal::Mutable, signal_vec::MutableVec},
+    signal::{
+        signal::{Mutable, SignalExt},
+        signal_vec::MutableVec,
+    },
 };
 use factordb::{
     query::{expr::Expr, select::Item},
@@ -19,19 +22,17 @@ use semantic_ui_core::{
     components::{
         autocomplete::entity_picker::entity_picker,
         entity::entity_view::EntityView,
-        loader::{LoadState, Loader},
+        loader::Loader,
         util::{
-            box_, button, buttons, file_input, notification_default, notification_error,
-            subtitle_4, ButtonBuilder, Cls,
+            box_, button, buttons, file_input, notification_default, subtitle_4, ButtonBuilder, Cls,
         },
     },
     context,
 };
+use uuid::Uuid;
 use wasm_bindgen::JsCast;
 
 // use crate::components::base::collections::collection_picker;
-
-type Index = usize;
 
 pub enum Msg {
     FilesAdded(Vec<web_sys::File>),
@@ -41,19 +42,19 @@ pub enum Msg {
     CollectionSelectStart,
     CollectionSelectCancel,
     CollectionSelected(Collection),
-    RemoveFile(Index),
+    RemoveFile(Uuid),
     UploadResult {
-        index: usize,
+        id: Uuid,
         result: Result<TypedFile, AnyError>,
     },
 }
 
 #[derive(Clone)]
 struct FileItem {
-    index: Index,
+    id: Uuid,
     file: web_sys::File,
     filename: String,
-    status: LoadState<()>,
+    status: Loader<()>,
     size: u64,
     mime_type: String,
     // progress: u32,
@@ -86,6 +87,7 @@ struct State {
     files: MutableVec<FileItem>,
     uploaded_files: MutableVec<Item>,
     collection: Mutable<CollectionTarget>,
+    queue_length: Mutable<usize>,
 
     loader: Loader<()>,
 }
@@ -94,12 +96,12 @@ impl State {
     fn add_file(&mut self, file: web_sys::File) {
         let mut files = self.files.lock_mut();
         files.push_cloned(FileItem {
-            index: files.len(),
+            id: Uuid::new_v4(),
             filename: file.name(),
             size: file.size().ceil() as u64,
             mime_type: file.type_(),
             file,
-            status: LoadState::Idle,
+            status: Loader::new_idle(),
             // progress: 0,
         });
     }
@@ -109,7 +111,7 @@ impl State {
             return;
         }
 
-        let mut next_file = if let Some(f) = self
+        let next_file = if let Some(f) = self
             .files
             .lock_ref()
             .iter()
@@ -129,13 +131,9 @@ impl State {
                 collection_id: self.collection.lock_ref().get_collection_id(),
             },
         );
-        let index = next_file.index;
-        let guard = ctx.spawn_map(f, move |res| Msg::UploadResult { index, result: res });
-
-        next_file.status.set_loading_guarded(guard);
-        let mut files = self.files.lock_mut();
-        files.insert_cloned(index, next_file);
-        files.remove(index + 1);
+        let id = next_file.id;
+        let guard = ctx.spawn_map(f, move |res| Msg::UploadResult { id, result: res });
+        next_file.status.set_loading(guard);
     }
 }
 
@@ -146,6 +144,7 @@ impl MsgComponent for State {
     fn init(_props: Self::Properties, _ctx: Context<Self>) -> Self {
         Self {
             files: MutableVec::new(),
+            queue_length: Mutable::new(0),
             uploaded_files: MutableVec::new(),
             collection: Mutable::new(CollectionTarget::None),
             loader: Loader::new_idle(),
@@ -162,26 +161,35 @@ impl MsgComponent for State {
             }
             Msg::Clear => {
                 self.uploaded_files.lock_mut().clear();
+                self.queue_length.set(0);
 
                 if !self.loader.is_loading() {
                     self.files.lock_mut().clear();
                 }
             }
-            Msg::UploadResult { index, result } => {
+            Msg::UploadResult { id, result } => {
                 self.loader.set_idle();
                 match result {
                     Ok(typed_file) => {
-                        self.files.lock_mut().drain(index..index + 1);
-                        if let Ok(map) = typed_file.into_map() {
-                            self.uploaded_files.lock_mut().push_cloned(Item::new(map));
+                        {
+                            let mut lock = self.files.lock_mut();
+                            if let Some(index) = lock.iter().position(|f| f.id == id) {
+                                lock.remove(index);
+                            }
+                            self.queue_length.set(lock.len());
+
+                            if let Ok(map) = typed_file.into_map() {
+                                self.uploaded_files.lock_mut().push_cloned(Item::new(map));
+                            }
                         }
+
+                        self.upload(&ctx);
                     }
                     Err(err) => {
-                        if let Some(mut file) = self.files.lock_ref().get(index).cloned() {
-                            file.status.set_failed(err);
-                            let mut files = self.files.lock_mut();
-                            files.insert_cloned(index, file);
-                            files.remove(index + 1);
+                        if let Some(mut file) =
+                            self.files.lock_ref().iter().find(|f| f.id == id).cloned()
+                        {
+                            file.status.set_result(Err(err));
                         }
                     }
                 };
@@ -198,11 +206,10 @@ impl MsgComponent for State {
             Msg::CollectionSelected(col) => {
                 self.collection.set(CollectionTarget::Selected(col));
             }
-            Msg::RemoveFile(index) => {
+            Msg::RemoveFile(id) => {
                 let mut files = self.files.lock_mut();
-                if index < files.len() {
-                    files.remove(index);
-                }
+                files.retain(|f| f.id != id);
+                self.queue_length.set(files.len());
             }
         }
     }
@@ -249,61 +256,68 @@ impl MsgComponent for State {
                 let entity_filter = Expr::eq(AttrType::expr(), Collection::QUALIFIED_NAME);
                 box_()
                     .and(subtitle_4().and("Select Collection"))
-                    .and(entity_picker(
-                        entity_filter,
-                        handle.on_opt(|item: Item| {
-                            Collection::try_from_map(item.data)
-                                .ok()
-                                .map(Msg::CollectionSelected)
-                        }),
-                    ))
                     .and(
-                        ButtonBuilder::new()
-                            .label("Cancel")
-                            .on(handle.callback(|| Msg::CollectionSelectCancel))
-                            .build(),
+                        entity_picker(
+                            entity_filter,
+                            handle.on_opt(|item: Item| {
+                                Collection::try_from_map(item.data)
+                                    .ok()
+                                    .map(Msg::CollectionSelected)
+                            }),
+                        )
+                        .class("mb-4"),
+                    )
+                    .and(
+                        div().and(
+                            ButtonBuilder::new()
+                                .label("Cancel")
+                                .on(handle.callback(|| Msg::CollectionSelectCancel))
+                                .build(),
+                        ),
                     )
             }
-            CollectionTarget::Selected(col) => div()
+            CollectionTarget::Selected(col) => box_()
+                .and(subtitle_4().and("Selected collection"))
                 .and(
-                    Tag::B
-                        .new()
-                        .class("pr-3")
-                        .and(format!("Uploading to collection: {}", col.title)),
+                    div()
+                        .class("mb-2")
+                        .and(ButtonBuilder::new().label(&col.title).static_().build()),
                 )
                 .and(
-                    button()
-                        .and("Clear")
-                        .on(handle.on(|_: ClickEvent| Msg::CollectionSelectCancel)),
+                    div().and(
+                        button()
+                            .and("Clear")
+                            .on(handle.on(|_: ClickEvent| Msg::CollectionClear)),
+                    ),
                 ),
         });
         let collection_finder = div().child_signal(collection_finder_content).class("mb-3");
 
         let btn_upload = ButtonBuilder::new()
             .label("Upload")
-            // TODO: disable button if no files available.
+            .signal_disabled(self.queue_length.signal().map(|x| x < 1))
             .signal_loading(self.loader.signal_loading())
             .on(ctx.callback_msg(|| Msg::Upload))
             .build();
 
         let btn_clear = ButtonBuilder::new()
             .label("Clear")
-            // TODO: disabled state!
-            // .attr_toggle_if(
-            //     (self.uploaded_files.is_empty() && self.files.is_empty()) || self.loading,
-            //     brass::dom::Attr::Disabled,
-            // )
+            .signal_disabled(self.queue_length.signal().map(|x| x < 1))
             .on(ctx.callback_msg(|| Msg::Clear))
             .build();
 
         let buttons = buttons().and((btn_upload, btn_clear));
 
         let handle = ctx.handle();
-        let file_queue = div().class("mt-4").children_signal_with_fallback(
-            self.files.signal_vec_cloned(),
-            move |file| render_file_item(&handle, file).build(),
-            notification_default().and("Select files to upload."),
-        );
+        let file_queue = div()
+            .class("mt-4")
+            .and(subtitle_4().and("Queue"))
+            .and(buttons)
+            .children_signal_with_fallback(
+                self.files.signal_vec_cloned(),
+                move |file| render_file_item(&handle, file).build(),
+                notification_default().and("Select files to upload."),
+            );
 
         let registry = context::registry();
         let uploaded_items = div()
@@ -326,21 +340,15 @@ impl MsgComponent for State {
                 notification_default().and("Nothing uploaded yet."),
             );
 
-        div().and((
-            selector,
-            collection_finder,
-            buttons,
-            file_queue,
-            uploaded_items,
-        ))
+        div().and((selector, collection_finder, file_queue, uploaded_items))
     }
 }
 
 fn render_file_item(ctx: &Handle<State>, item: &FileItem) -> TagBuilder {
-    let index = item.index;
+    let id = item.id;
     let btn_remove = ButtonBuilder::new()
         .label("Remove")
-        .on(ctx.callback(move || Msg::RemoveFile(index)))
+        .on(ctx.callback(move || Msg::RemoveFile(id)))
         .build();
 
     let info = div()
@@ -350,9 +358,7 @@ fn render_file_item(ctx: &Handle<State>, item: &FileItem) -> TagBuilder {
         .and(span().and("Type: ").and(&item.mime_type))
         .and(btn_remove);
 
-    let error = item
-        .status
-        .as_error()
-        .map(|err| notification_error().and(err.to_string()).class("mt-3"));
-    box_().and(info).and(error)
+    let load = item.status.signal_render(|_| div());
+
+    box_().and(info).child_signal(load)
 }
