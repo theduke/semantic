@@ -7,7 +7,7 @@ use semantic_core::base::Tag;
 use crate::{
     components::{
         form::{self, FormLoadFuture},
-        util::{form_field_input, FormBuilder},
+        util::{form_field_input, FormRenderer},
     },
     validate::{AndValidator, StringRequired, Validator},
 };
@@ -55,7 +55,7 @@ pub fn tag_form(
             ),
         );
 
-        FormBuilder::new(handle.clone())
+        FormRenderer::new(handle.clone())
             .and(name)
             .buttons_submit("Save")
     })

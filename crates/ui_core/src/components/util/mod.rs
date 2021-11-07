@@ -840,12 +840,12 @@ pub fn form_errors<V: Clone>(handle: &FormHandle<V>) -> TagBuilder {
         }))
 }
 
-pub struct FormBuilder<V: 'static> {
+pub struct FormRenderer<V: 'static> {
     pub handle: FormHandle<V>,
     pub tag: TagBuilder,
 }
 
-impl<V: Clone + 'static> FormBuilder<V> {
+impl<V: Clone + 'static> FormRenderer<V> {
     pub fn new(handle: FormHandle<V>) -> Self {
         let mut form = tag(Tag::Form);
         let handle2 = handle.clone();

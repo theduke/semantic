@@ -28,7 +28,7 @@ use semantic_ui_core::{
         util::{
             box_, buttons, form_field_input, form_field_textarea, notification_default,
             notification_error, notification_warning, subtitle_4, title_2, ButtonBuilder, Cls,
-            FormBuilder,
+            FormRenderer,
         },
     },
     context,
@@ -218,7 +218,7 @@ fn plugin_source_form(
     })
     .on_submit_async(move |values| on_submit_async(values.clone()))
     .render(move |handle| {
-        let mut builder = FormBuilder::new(handle.clone());
+        let mut builder = FormRenderer::new(handle.clone());
 
         if is_new {
             let name = form_field_input(
@@ -343,7 +343,7 @@ pub fn plugin_test_page() -> TagBuilder {
 
         let url = form_field_input("Url", handle.field_validated(|v| &mut v.url, StringUrl));
 
-        let form = FormBuilder::new(handle.clone())
+        let form = FormRenderer::new(handle.clone())
             .and(code)
             .and(url)
             .buttons_submit("Test");

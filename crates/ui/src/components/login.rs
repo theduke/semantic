@@ -6,7 +6,7 @@ use semantic_ui_core::{
     components::{
         form,
         loader::Loader,
-        util::{form_field_input, form_field_password, subtitle_4, title_2, FormBuilder},
+        util::{form_field_input, form_field_password, subtitle_4, title_2, FormRenderer},
     },
     context,
     validate::StringRequired,
@@ -47,7 +47,7 @@ pub fn login(on_success: impl Fn(SemanticSchema) + 'static) -> TagBuilder {
         })
     })
     .render(|handle| {
-        FormBuilder::new(handle.clone())
+        FormRenderer::new(handle.clone())
             .and(form_field_input(
                 "Data Path",
                 handle.field_validated(|v| &mut v.data_path, StringRequired),

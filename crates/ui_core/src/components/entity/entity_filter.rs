@@ -7,7 +7,7 @@ use semantic_core::base::Tag;
 use crate::{
     components::{
         form,
-        util::{form_field_input, form_field_tag_select, FormBuilder, SelectOption},
+        util::{form_field_input, form_field_tag_select, FormRenderer, SelectOption},
     },
     context,
 };
@@ -82,7 +82,7 @@ pub fn entity_filter(on_submit: impl Fn(EntityFilter) + 'static) -> TagBuilder {
         let types =
             form_field_tag_select("Type", type_options, handle.field(|v| &mut v.entity_types));
 
-        FormBuilder::new(handle.clone())
+        FormRenderer::new(handle.clone())
             .and(search)
             .and(types)
             .buttons_submit("Apply")

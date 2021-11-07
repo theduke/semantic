@@ -2,7 +2,7 @@ use brass::dom::TagBuilder;
 use semantic_ui_core::{
     components::{
         form::{Form, FormHandle, FormLoadFuture},
-        util::{form_field_checkbox, form_field_input, FormBuilder},
+        util::{form_field_checkbox, form_field_input, FormRenderer},
     },
     validate::StringUrl,
 };
@@ -29,7 +29,7 @@ pub fn import_form_new() -> Form<Values> {
 }
 
 pub fn import_form_render(handle: FormHandle<Values>) -> TagBuilder {
-    FormBuilder::new(handle.clone())
+    FormRenderer::new(handle.clone())
         .and(form_field_input(
             "Url",
             handle.field_validated(|v| &mut v.url, StringUrl),

@@ -16,7 +16,7 @@ use crate::{
         form::{self, FormLoadFuture},
         util::{
             form_field_input, form_field_textarea, notification_error, title_2, ButtonBuilder, Cls,
-            FormBuilder,
+            FormRenderer,
         },
     },
     context::{api, router},
@@ -59,7 +59,7 @@ pub fn note_form(
             true,
         );
 
-        FormBuilder::new(handle.clone())
+        FormRenderer::new(handle.clone())
             .and(title)
             .and(body)
             .buttons_submit("Save")

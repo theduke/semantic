@@ -5,7 +5,7 @@ use semantic_core::base::Collection;
 use crate::{
     components::{
         form::{self, FormLoadFuture},
-        util::{form_field_input, FormBuilder},
+        util::{form_field_input, FormRenderer},
     },
     validate::StringRequired,
 };
@@ -43,7 +43,7 @@ pub fn collection_metadata_form(
 
         let description = form_field_input("Description", handle.field(|v| &mut v.description));
 
-        FormBuilder::new(handle.clone())
+        FormRenderer::new(handle.clone())
             .and(title)
             .and(description)
             .buttons_submit("Save")
