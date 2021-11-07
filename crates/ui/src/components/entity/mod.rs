@@ -75,6 +75,7 @@ pub fn create_page() -> TagBuilder {
                 .and(
                     ButtonBuilder::new()
                         .size_medium()
+                        .icon("fas fa-globe")
                         .label("Import")
                         .on(|| {
                             context::router().goto(Route::Import { url: None });
@@ -84,6 +85,7 @@ pub fn create_page() -> TagBuilder {
                 .and(
                     ButtonBuilder::new()
                         .size_medium()
+                        .icon("fas fa-upload")
                         .label("Upload")
                         .on(|| {
                             context::router().goto(Route::Upload);
