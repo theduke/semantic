@@ -312,6 +312,9 @@ impl ButtonBuilder {
         self
     }
 
+    pub fn size_small(self) -> Self {
+        self.size(BtnSize::Small)
+    }
     pub fn size_medium(self) -> Self {
         self.size(BtnSize::Medium)
     }
