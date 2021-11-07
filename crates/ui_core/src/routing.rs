@@ -14,6 +14,8 @@ pub trait PluginRouter {
     fn parse_path(&self, path: &[&str]) -> Option<PluginRoute>;
 }
 
+pub type DynPluginRouter = Box<dyn PluginRouter>;
+
 #[derive(Clone)]
 pub struct PluginRoute {
     pub path: String,
@@ -43,6 +45,7 @@ impl std::fmt::Debug for PluginRoute {
 pub enum Route {
     Settings,
 
+    Apps,
     Browse,
     Import { url: Option<Url> },
     Upload,
@@ -88,6 +91,7 @@ impl Route {
             Route::PluginTest => "/plugins/test".to_string(),
             Route::Plugin(p) => p.path.clone(),
             Route::Settings => "/settings".to_string(),
+            Route::Apps => "/apps".to_string(),
         }
     }
 
@@ -110,6 +114,7 @@ impl Route {
             Route::PluginUpdate { .. } => "Update Plugin".to_string(),
             Route::PluginTest => "Test Plugin".to_string(),
             Route::Settings => "Settings".to_string(),
+            Route::Apps => "Apps".to_string(),
         }
     }
 }
@@ -133,12 +138,17 @@ impl Router {
         }
     }
 
+    pub fn register_router(&self, router: DynPluginRouter) {
+        self.routers.borrow_mut().push(router);
+    }
+
     pub fn parse_url(&self, url: Url) -> Option<Route> {
         let parts = url.path().split('/').skip(1).collect::<Vec<_>>();
 
         tracing::trace!(?parts, "url parts");
 
         match parts.as_slice() {
+            ["apps"] => Some(Route::Apps),
             ["settings"] => Some(Route::Settings),
             ["logout"] => Some(Route::Logout),
             ["browse"] => Some(Route::Browse),
@@ -163,14 +173,12 @@ impl Router {
             ["plugins", "create"] => Some(Route::PluginCreate),
             ["plugins", id, "edit"] => Some(Route::PluginUpdate { id: id.to_string() }),
             ["plugins", "test"] => Some(Route::PluginTest),
-            _other => {
-                let route = self
-                    .routers
-                    .borrow()
-                    .iter()
-                    .find_map(|router| router.parse_path(&parts))?;
-                Some(Route::Plugin(route))
-            }
+            _other => self
+                .routers
+                .borrow()
+                .iter()
+                .find_map(|router| router.parse_path(&parts))
+                .map(Route::Plugin),
         }
     }
 

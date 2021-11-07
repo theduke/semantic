@@ -1,4 +1,4 @@
-use std::rc::Rc;
+use std::{rc::Rc, sync::Arc};
 
 use brass::{
     dom::{
@@ -13,6 +13,7 @@ use semantic_core::api::SemanticSchema;
 use semantic_ui_core::{
     components::loader::{error_msg, spinner},
     context,
+    plugin::DynBrowserPlugin,
     routing::Route,
     Registry,
 };
@@ -100,13 +101,28 @@ impl Boot {
         tracing::trace!("boot phase change");
         match phase {
             BootPhase::SchemaLoaded(ref schema) => {
+                let router = context::router();
+
                 // Initialize registry.
                 let mut reg = Registry::new(schema.clone());
-                reg.register_plugin(semantic_ui_core::base::BasePlugin);
+
+                // TODO: move this code somewhere more sensible. (registry?)
+                let plugins: Vec<DynBrowserPlugin> = vec![
+                    Arc::new(semantic_ui_core::base::BasePlugin),
+                    Arc::new(semantic_health::HealthPlugin),
+                ];
+
+                for plugin in plugins {
+                    reg.register_plugin(plugin.clone());
+
+                    if let Some(plugin_router) = plugin.router() {
+                        router.register_router(plugin_router);
+                    }
+                }
+
                 semantic_ui_core::context::set_registry(reg);
                 // Read current route.
 
-                let router = context::router();
                 let route = web_sys::window()
                     .and_then(|w| w.location().href().ok())
                     .and_then(|href| Url::parse(&href).ok())

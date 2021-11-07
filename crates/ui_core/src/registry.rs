@@ -1,4 +1,4 @@
-use std::{collections::HashMap, rc::Rc, sync::Arc};
+use std::{collections::HashMap, rc::Rc};
 
 use factordb::{
     schema::{AttrMapExt, AttributeSchema, EntityAttribute, EntitySchema},
@@ -7,7 +7,10 @@ use factordb::{
 use fnv::FnvHashMap;
 use futures::future::LocalBoxFuture;
 
-use crate::BrowserPlugin;
+use crate::{
+    plugin::{DynBrowserPlugin, PluginMainRoute},
+    BrowserPlugin,
+};
 
 pub struct Registry {
     schema: semantic_core::api::SemanticSchema,
@@ -15,7 +18,7 @@ pub struct Registry {
     attributes: FnvHashMap<String, AttributeSchema>,
     entities: FnvHashMap<String, EntityInfo>,
 
-    plugins: HashMap<String, Arc<dyn BrowserPlugin>>,
+    plugins: HashMap<String, DynBrowserPlugin>,
 
     entity_renderers: Vec<EntityRendererSpec>,
 
@@ -89,9 +92,16 @@ impl Registry {
         &self.schema
     }
 
-    pub fn register_plugin(&mut self, plugin: impl BrowserPlugin + 'static) {
+    pub fn register_plugin(&mut self, plugin: DynBrowserPlugin) {
         plugin.register(self);
-        self.plugins.insert(plugin.spec().name, Arc::new(plugin));
+        self.plugins.insert(plugin.spec().name, plugin);
+    }
+
+    pub fn plugin_main_routes(&self) -> Vec<PluginMainRoute> {
+        self.plugins
+            .values()
+            .filter_map(|p| p.spec().main_route)
+            .collect()
     }
 
     pub fn register_attr_renderer(&mut self, ty: String, renderer: DynAttrRenderer) {

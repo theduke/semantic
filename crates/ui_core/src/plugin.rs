@@ -1,7 +1,30 @@
-use crate::Registry;
+use std::sync::Arc;
+
+use crate::{
+    routing::{DynPluginRouter, PluginRoute},
+    Registry,
+};
+
+pub struct PluginMainRoute {
+    pub name: String,
+    pub route: PluginRoute,
+}
 
 pub struct BrowserPluginSpec {
     pub name: String,
+    pub main_route: Option<PluginMainRoute>,
+}
+
+pub type DynBrowserPlugin = Arc<dyn BrowserPlugin>;
+
+impl BrowserPlugin for DynBrowserPlugin {
+    fn spec(&self) -> BrowserPluginSpec {
+        self.as_ref().spec()
+    }
+
+    fn register(&self, registry: &mut Registry) {
+        self.as_ref().register(registry)
+    }
 }
 
 pub trait BrowserPlugin: Sync + Send {
@@ -15,6 +38,10 @@ pub trait BrowserPlugin: Sync + Send {
     fn spec(&self) -> BrowserPluginSpec;
 
     fn register(&self, registry: &mut Registry);
+
+    fn router(&self) -> Option<DynPluginRouter> {
+        None
+    }
 
     // #[allow(unused_variables)]
     // fn import_match(&self, url: &url::Url) -> Option<UrlSupport> {

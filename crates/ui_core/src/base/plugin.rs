@@ -24,6 +24,7 @@ impl BrowserPlugin for BasePlugin {
     fn spec(&self) -> BrowserPluginSpec {
         BrowserPluginSpec {
             name: "base".to_string(),
+            main_route: None,
         }
     }
 

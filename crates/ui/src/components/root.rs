@@ -56,6 +56,7 @@ fn render_route(route: Route) -> TagBuilder {
         Route::PluginTest => super::plugins::plugin_test_page(),
         Route::Settings => super::settings::settings_page(),
         Route::PluginUpdate { id } => super::plugins::plugin_source_update_page(id),
+        Route::Apps => super::plugins::plugin_main_routes(),
     };
 
     container().style_raw("min-width: 800px;").and(content)
@@ -70,7 +71,8 @@ fn navbar() -> TagBuilder {
         .class("navbar-start")
         .and(link(Route::Browse, "Browse").class("navbar-item"))
         .and(link(Route::Create, "Create").class("navbar-item"))
-        .and(link(Route::Play, "Play").class("navbar-item"));
+        .and(link(Route::Play, "Play").class("navbar-item"))
+        .and(link(Route::Apps, "Apps").class("navbar-item"));
 
     let logout = link(Route::Logout, "Logout").class("navbar-item");
     let settings = link(Route::Settings, icon_fa("fa-cog")).class("navbar-item");

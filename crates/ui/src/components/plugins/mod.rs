@@ -31,7 +31,7 @@ use semantic_ui_core::{
             FormRenderer,
         },
     },
-    context,
+    context::{self, registry},
     routing::{link, Route},
     validate::{StringRequired, StringUrl},
 };
@@ -370,4 +370,14 @@ pub fn plugin_test_page() -> TagBuilder {
             .and(form)
             .and(output)
     })
+}
+
+pub fn plugin_main_routes() -> TagBuilder {
+    div().and(title_2().and("Plugins")).and(
+        div()
+            .style_raw("display: flex; flex-direction: column; gap: 1rem;")
+            .and_iter(registry().plugin_main_routes().into_iter().map(|route| {
+                div().and(link(Route::Plugin(route.route), route.name).class(Cls::Button))
+            })),
+    )
 }
