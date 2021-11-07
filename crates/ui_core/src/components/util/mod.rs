@@ -298,7 +298,7 @@ impl ButtonBuilder {
     }
 
     pub fn label<'a>(mut self, label: impl Into<DomStr<'a>>) -> Self {
-        self.tag.add_child_text(label.into());
+        self.tag.add_child(span().child_text(label));
         self
     }
 
@@ -320,6 +320,11 @@ impl ButtonBuilder {
         self.size(BtnSize::Large)
     }
 
+    pub fn static_(mut self) -> Self {
+        self.tag.add_class(Cls::IsStatic);
+        self
+    }
+
     pub fn loading(mut self) -> Self {
         self.tag.add_class(Cls::IsLoading);
         self
@@ -332,6 +337,11 @@ impl ButtonBuilder {
 
     pub fn signal_disabled(mut self, s: impl Signal<Item = bool> + 'static) -> Self {
         self.tag.add_attr_signal_toggle(Attr::Disabled, s);
+        self
+    }
+
+    pub fn icon<'a>(mut self, icon_classes: &str) -> Self {
+        self.tag.add_child(icon(icon_classes));
         self
     }
 
@@ -433,6 +443,12 @@ pub fn card() -> TagBuilder {
 }
 
 // Icon
+
+fn icon<'a>(classes: &str) -> TagBuilder {
+    span()
+        .class(Cls::Icon)
+        .and(Tag::I.new().classes_raw(classes))
+}
 
 pub fn icon_fa<'a>(cls: impl Into<DomStr<'a>>) -> TagBuilder {
     let cls = cls.into();
@@ -616,7 +632,12 @@ pub fn form_field<V: Clone>(
 pub fn form_field_input<V: Clone>(name: &str, handle: FieldHandle<V, String>) -> TagBuilder {
     let inp = input()
         .attr_signal(Attr::Value, handle.signal_value())
-        .on(handle.clone().on(|ev: InputEvent| ev.value()));
+        .on(handle.clone().on(|ev: InputEvent| {
+            tracing::trace!("field input");
+            ev.stop_immediate_propagation();
+            ev.prevent_default();
+            ev.value()
+        }));
 
     form_field(name, handle, inp)
 }
@@ -625,7 +646,10 @@ pub fn form_field_password<V: Clone>(name: &str, handle: FieldHandle<V, String>)
     let inp = input()
         .attr(Attr::Type, "password")
         .attr_signal(Attr::Value, handle.signal_value())
-        .on(handle.clone().on(|ev: InputEvent| ev.value()));
+        .on(handle.clone().on(|ev: InputEvent| {
+            ev.stop_propagation();
+            ev.value()
+        }));
 
     form_field(name, handle, inp)
 }
@@ -649,10 +673,14 @@ pub fn form_field_textarea<V: Clone>(
         .and(handle.get_value());
 
     let area = if !auto_grow {
-        area.on(handle.clone().on(|e: InputEvent| e.value()))
+        area.on(handle.clone().on(|e: InputEvent| {
+            e.stop_propagation();
+            e.value()
+        }))
     } else {
         let mut current_rows = min_rows;
         area.on(handle.clone().on(move |ev: InputEvent| {
+            ev.stop_propagation();
             let value = ev.value();
 
             let desired_rows = value
