@@ -41,6 +41,28 @@ impl Validator<String> for StringUrl {
     }
 }
 
+pub struct StringFloat;
+
+impl Validator<String> for StringFloat {
+    fn validate(&self, value: &String) -> Result<(), Vec<String>> {
+        let _: f64 = value
+            .parse()
+            .map_err(|_err| vec![format!("Invalid number")])?;
+        Ok(())
+    }
+}
+
+pub struct StringDateTime;
+
+impl Validator<String> for StringDateTime {
+    fn validate(&self, value: &String) -> Result<(), Vec<String>> {
+        chrono::NaiveDateTime::parse_from_str(value, "%Y-%m-%d %H:%M").map_err(|_| {
+            vec!["Expected a valid date + time (format: 2020-10-10 HH::MM)".to_string()]
+        })?;
+        Ok(())
+    }
+}
+
 impl<T, V> Validator<T> for Rc<V>
 where
     V: Validator<T>,
