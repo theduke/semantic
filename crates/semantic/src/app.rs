@@ -167,6 +167,9 @@ impl App {
 
                 plugins.register_plugin(SemanticCorePlugin::new()).await?;
                 plugins.register_plugin(SemanticBasePlugin::new()).await?;
+                plugins
+                    .register_plugin(semantic_health::HealthPlugin::new())
+                    .await?;
 
                 if let Some(c) = &self.config.deno {
                     plugins.initialize_deno(c.clone()).await?;

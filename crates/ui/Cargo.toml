@@ -21,6 +21,7 @@ url = "2.2.2"
 anyhow = { version = "1.0.41", features = ["backtrace"] }
 uuid = { version = "0.8.2", features = ["wasm-bindgen", "v4"] }
 rand = "0.8.4"
+futures = "0.3.17"
 
 brass = { version =  "0.1" }
 # brass_bulma = "0.1"
@@ -29,7 +30,8 @@ factordb = { version = "0.1", default-features = false }
 
 semantic_core = { path = "../core" }
 semantic_ui_core = { path = "../ui_core" }
-futures = "0.3.17"
+
+semantic_health = { path = "../plugins/health" }
 # semantic_contrib = { path = "../contrib" }
 
 [dependencies.web-sys] 

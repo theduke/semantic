@@ -1,0 +1,21 @@
+[package]
+name = "semantic_health"
+version = "0.1.0"
+edition = "2021"
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[features]
+default = ["ui"]
+
+ui = ["semantic_ui_core"]
+
+
+[dependencies]
+brass = "0.1"
+semantic_core = { version = "0.1", path = "../../core" }
+factordb = { version = "0.1", default-features = false }
+serde = { version = "1.0.130", features = ["derive"] }
+
+semantic_ui_core = { version = "0.1", optional = true, path = "../../ui_core" }
+chrono = "0.4.19"

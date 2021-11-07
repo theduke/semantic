@@ -8,6 +8,8 @@ members = [
     "crates/ui",
 
     # "crates/contrib",
+
+    "crates/plugins/health",
 ]
 
 exclude = [

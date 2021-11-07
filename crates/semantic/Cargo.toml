@@ -55,3 +55,5 @@ uuid = { version = "0.8.2", features = ["v4"] }
 url = "2.2.2"
 # tracing-tree = "0.1.10"
 serde_path_to_error = "0.1.5"
+
+semantic_health = { version = "0.1", path = "../plugins/health", default-features = false }
