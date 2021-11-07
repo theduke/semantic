@@ -1,21 +1,14 @@
 use brass::{
-    component::{msg::MsgComponent, Context},
-    dom::{
-        builder::{div, span},
-        Render, TagBuilder,
-    },
+    component::{msg::MsgComponent, Context, Handle},
+    dom::{builder::div, TagBuilder},
     effect::EffectGuard,
-    signal::{
-        signal::{Mutable, SignalExt},
-        signal_vec::MutableVec,
-    },
 };
 use factordb::{
     query::{
         expr::Expr,
         select::{Item, ItemPage, Select},
     },
-    schema::{AttrMapExt, EntityDescriptor},
+    schema::EntityDescriptor,
     AnyError,
 };
 
@@ -28,30 +21,32 @@ use semantic_ui_core::{
     context, EntityRenderOpts,
 };
 
+pub struct BrowsePageProps {}
+
 // use super::entity_filter::EntityFilter;
 
+struct LoadedPage {
+    items: Vec<Item>,
+    page: usize,
+    limit: usize,
+}
+
 pub struct BrowsePage {
-    loader: Loader<()>,
     query: Select,
+
+    loader: Loader<LoadedPage>,
     _guard: Option<EffectGuard>,
-    // filter_callback: Callback<EntityFilter>,
-    // on_delete_callback: Callback<Item>,
-    items: MutableVec<Item>,
-    item_count: Mutable<usize>,
 
     // TODO: make page size configurable
     limit: u64,
-    page: Mutable<u64>,
+    page: usize,
 }
-
-pub struct BrowsePageProps {}
 
 pub enum Msg {
     Loaded(Result<ItemPage, AnyError>),
     FilterUpdated(Expr),
     Next,
     Prev,
-    ItemDeleted(Item),
 }
 
 impl BrowsePage {
@@ -89,9 +84,7 @@ impl MsgComponent for BrowsePage {
                 .with_filter(Self::base_filter())
                 .with_limit(limit),
             _guard: None,
-            items: MutableVec::new(),
-            item_count: Mutable::new(0),
-            page: Mutable::new(1),
+            page: 1,
             limit,
             // filter_callback: ctx.callback_map(Msg::FilterUpdated),
             // on_delete_callback: ctx.callback_map(Msg::ItemDeleted),
@@ -107,112 +100,108 @@ impl MsgComponent for BrowsePage {
                 self.load(query, &ctx);
             }
             Msg::Loaded(res) => {
-                if let Some(page) = self.loader.set_result_take(res) {
-                    self.item_count.set(page.items.len());
-                    self.items.lock_mut().replace_cloned(page.items);
-                }
+                let res = res.map(|page| LoadedPage {
+                    items: page.items,
+                    page: self.page,
+                    limit: self.limit as usize,
+                });
+                self.loader.set_result(res);
             }
             Msg::Next => {
-                let page = self.page.get();
-                self.page.set(page + 1);
+                if self.loader.is_loading() {
+                    return;
+                }
+                let page = self.page;
+                self.page += 1;
                 let q = Select {
-                    offset: self.limit * page,
+                    offset: self.limit * page as u64,
                     ..self.query.clone()
                 };
                 self.load(q, &ctx);
             }
             Msg::Prev => {
-                let page = self.page.get();
+                if self.loader.is_loading() {
+                    return;
+                }
+                let page = self.page;
                 if page > 1 {
                     let new_page = page - 1;
-                    self.page.set(new_page);
+                    self.page = new_page;
                     let q = Select {
-                        offset: self.limit * (new_page - 1),
+                        offset: self.limit * (new_page as u64 - 1),
                         ..self.query.clone()
                     };
                     self.load(q, &ctx);
                 }
             }
-            Msg::ItemDeleted(deleted_item) => {
-                self.items
-                    .lock_mut()
-                    .retain(|item| item.data.get_id() != deleted_item.data.get_id());
-            }
         }
     }
 
     fn render(&mut self, ctx: Context<Self>) -> TagBuilder {
-        let loader = self.loader.signal_render(move |_| span());
-
-        let empty_marker = self.item_count.signal().map(|item_count| {
-            if item_count == 0 {
-                Some(notification_warning().and("Nothing found..."))
-            } else {
-                None
-            }
-        });
-
         let handle = ctx.handle();
-        // TODO: do not clone...
-        let page_mut = self.page.clone();
-        // TODO: make reactive?
-        let limit = self.limit as usize;
-        let pager = self.item_count.signal().map(move |item_count| {
-            let page = page_mut.get();
-
-            let next = if item_count >= limit {
-                Some(
-                    ButtonBuilder::new()
-                        .size_large()
-                        .label("Next")
-                        .on(handle.callback(|| Msg::Next))
-                        .build(),
-                )
+        let content = self.loader.signal_render(move |page| {
+            if page.items.is_empty() {
+                notification_warning().and("Nothing found...")
             } else {
-                None
-            };
-
-            let prev = if page > 1 {
-                Some(
-                    ButtonBuilder::new()
-                        .size_large()
-                        .label("Back")
-                        .on(handle.callback(|| Msg::Prev))
-                        .build(),
-                )
-            } else {
-                None
-            };
-
-            buttons()
-                .style_raw("display: flex; justify-content: center;")
-                .and(prev)
-                .and(next)
-        });
-
-        let handle = ctx.handle();
-        let handle2 = handle.clone();
-        div()
-            .and(title_2().and("Browse"))
-            .and(box_().and(entity_filter(move |query| {
-                handle.send(Msg::FilterUpdated(query.build_expr()));
-            })))
-            .child_signal(loader)
-            .children_signal(self.items.signal_vec_cloned(), move |item| {
-                EntityBox {
+                let items = page.items.iter().map(|item| EntityBox {
                     item: item.clone(),
                     options: EntityRenderOpts {
                         editable: false,
                         preview: true,
                     },
-                    on_delete: Some(Box::new(handle2.on(Msg::ItemDeleted))),
-                }
-                .render()
-                .build()
-            })
-            .child_signal_opt(empty_marker)
-            .child_signal(pager)
+                    on_delete: None,
+                });
+
+                let pager = render_pager(page.items.len(), page.page, page.limit, &handle);
+
+                div().and_iter(items).and(pager)
+            }
+        });
+
+        let handle = ctx.handle();
+        div()
+            .and(title_2().and("Browse"))
+            .and(box_().and(entity_filter(move |query| {
+                handle.send(Msg::FilterUpdated(query.build_expr()));
+            })))
+            .child_signal(content)
     }
+}
+
+fn render_pager(
+    item_count: usize,
+    page: usize,
+    limit: usize,
+    handle: &Handle<BrowsePage>,
+) -> TagBuilder {
+    let next = if item_count >= limit {
+        Some(
+            ButtonBuilder::new()
+                .size_large()
+                .label("Next")
+                .on(handle.callback(|| Msg::Next))
+                .build(),
+        )
+    } else {
+        None
+    };
+
+    let prev = if page > 1 {
+        Some(
+            ButtonBuilder::new()
+                .size_large()
+                .label("Back")
+                .on(handle.callback(|| Msg::Prev))
+                .build(),
+        )
+    } else {
+        None
+    };
+
+    buttons()
+        .style_raw("display: flex; justify-content: center;")
+        .and(prev)
+        .and(next)
 }
 
 impl brass::dom::Apply for BrowsePageProps {
@@ -220,34 +209,3 @@ impl brass::dom::Apply for BrowsePageProps {
         tag.add_component::<BrowsePage>(self)
     }
 }
-
-// fn render_page(
-//     items: impl SignalVec<Item = Item> + Unpin + 'static,
-//     cursor: impl Signal<Item = Option<Id>> + Unpin + 'static,
-//     handle: Handle<BrowsePage>,
-// ) -> TagBuilder {
-
-//     div()
-//         .children_signal(items, |_item| div().and("Item").build())
-//         .child_signal(next)
-
-//     // let opts = EntityRenderOpts {
-//     //     editable: false,
-//     //     preview: true,
-//     // };
-//     // let items = page.items.iter().map(|item| {
-//     //     // super::entity_view::EntityBox {
-//     //     //     item: item.clone(),
-//     //     //     options: opts.clone(),
-//     //     //     on_delete: Some(cb.clone().map(Msg::ItemDeleted)),
-//     //     // };
-//     //     div().and("Entity")
-//     // });
-//     // let next = if page.next_cursor.is_some() {
-//     //     // let btn = brass_bulma::button_medium()
-//     //     let btn = button().and("More").on(ctx.on(|_: ClickEvent| Msg::Next));
-//     //     div().and(btn).build()
-//     // } else {
-//     //     VNode::Empty
-//     // };
-// }
