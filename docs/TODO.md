@@ -5,9 +5,6 @@
 
 ## core/base
 
-* Imports
-  * Generic file URL importer
-
 ## UI
 
 * Uploader
@@ -18,3 +15,10 @@
   - Add a "play" button that plays collection in player
 * Player
   * Dynamic queue/playlist where files can be added with the filter
+* Importer
+  - show next and related links
+  - update url 
+* Browser
+  - update url
+* Entity Collection Manager:
+  - allow opening collections

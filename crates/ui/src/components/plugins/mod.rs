@@ -19,7 +19,7 @@ use factordb::{
 use semantic_core::{
     api::PluginTestFetch,
     core::{AttrPluginCode, PluginSource},
-    plugin::ImportOutput,
+    plugin::FetchUrlOutput,
 };
 use semantic_ui_core::{
     components::{
@@ -308,7 +308,7 @@ pub fn plugin_test_page() -> TagBuilder {
         url: String,
     }
 
-    let result: Loader<Option<ImportOutput>> = Loader::new_idle();
+    let result: Loader<Option<FetchUrlOutput>> = Loader::new_idle();
     let result2 = result.clone();
 
     form::Form::new(Values {

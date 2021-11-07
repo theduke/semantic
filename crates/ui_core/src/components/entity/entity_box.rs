@@ -65,12 +65,6 @@ struct State {
     action: Mutable<Option<ActiveAction>>,
 }
 
-impl State {
-    fn is_deleting(&self) -> bool {
-        matches!(&*self.action.lock_ref(), Some(ActiveAction::Delete))
-    }
-}
-
 impl MsgComponent for State {
     type Properties = EntityBox;
     type Msg = Msg;

@@ -10,7 +10,10 @@ use factordb::{
 };
 use url::Url;
 
-use crate::{core::PluginSource, plugin::ImportOutput};
+use crate::{
+    core::PluginSource,
+    plugin::{FetchUrlJob, FetchUrlOutput, ImportJob, ImportOutput},
+};
 
 #[derive(serde::Serialize, serde::Deserialize, Clone, Debug)]
 pub struct SimpleHttpRequest {
@@ -114,13 +117,8 @@ pub enum Query {
     },
     PluginTestFetch(PluginTestFetch),
 
-    Import {
-        url: Url,
-        import_media: bool,
-    },
-    FetchUrl {
-        url: Url,
-    },
+    Import(ImportJob),
+    FetchUrl(FetchUrlJob),
 
     /// Execute an HTTP request.
     HttpFetch(SimpleHttpRequest),
@@ -152,10 +150,10 @@ pub enum Reply {
     PluginSourceUpgrade(PluginSource),
     PluginSourceValidate,
     PluginDelete,
-    PluginTestFetch(Option<ImportOutput>),
+    PluginTestFetch(Option<FetchUrlOutput>),
 
-    Import { items: Vec<Item> },
-    FetchUrl(ImportOutput),
+    Import(ImportOutput),
+    FetchUrl(FetchUrlOutput),
     HttpFetch(SimpleHttpResponse),
 }
 
@@ -342,7 +340,7 @@ impl<E: ApiClientExecutor> ApiClient<E> {
     pub async fn plugin_test_fetch(
         &self,
         spec: PluginTestFetch,
-    ) -> Result<Option<ImportOutput>, AnyError> {
+    ) -> Result<Option<FetchUrlOutput>, AnyError> {
         match self.exec.execute(Query::PluginTestFetch(spec)).await {
             Ok(Reply::PluginTestFetch(out)) => Ok(out),
             Ok(_other) => Err(anyhow::anyhow!("API returned invalid data")),
@@ -350,17 +348,17 @@ impl<E: ApiClientExecutor> ApiClient<E> {
         }
     }
 
-    pub async fn import(&self, url: Url, import_media: bool) -> Result<Vec<Item>, AnyError> {
-        match self.exec.execute(Query::Import { url, import_media }).await {
-            Ok(Reply::Import { items }) => Ok(items),
+    pub async fn fetch_url(&self, job: FetchUrlJob) -> Result<FetchUrlOutput, AnyError> {
+        match self.exec.execute(Query::FetchUrl(job)).await {
+            Ok(Reply::FetchUrl(output)) => Ok(output),
             Ok(_other) => Err(anyhow::anyhow!("API returned invalid data")),
             Err(err) => Err(err),
         }
     }
 
-    pub async fn fetch_url(&self, url: Url) -> Result<ImportOutput, AnyError> {
-        match self.exec.execute(Query::FetchUrl { url }).await {
-            Ok(Reply::FetchUrl(output)) => Ok(output),
+    pub async fn import(&self, job: ImportJob) -> Result<ImportOutput, AnyError> {
+        match self.exec.execute(Query::Import(job)).await {
+            Ok(Reply::Import(output)) => Ok(output),
             Ok(_other) => Err(anyhow::anyhow!("API returned invalid data")),
             Err(err) => Err(err),
         }

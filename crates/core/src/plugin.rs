@@ -1,9 +1,5 @@
 use factordb::{
-    data::DataMap,
-    query::{
-        migrate,
-        select::{Item, JoinItem},
-    },
+    query::{migrate, select::Item},
     schema::DbSchema,
     AnyError, Ident,
 };
@@ -12,7 +8,7 @@ use url::Url;
 
 /// Describes how an importer can handle a url.
 #[derive(serde::Serialize, serde::Deserialize, Clone, PartialEq, Eq, Debug)]
-pub enum ImportSupport {
+pub enum UrlSupport {
     /// Importer has dedicated (specific) support for the url.
     Dedicated,
     /// Importer has generic support for the url.
@@ -21,136 +17,84 @@ pub enum ImportSupport {
     MaybeSupported,
 }
 
-impl PartialOrd for ImportSupport {
+impl PartialOrd for UrlSupport {
     fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
         Some(self.cmp(other))
     }
 }
 
-impl Ord for ImportSupport {
+impl Ord for UrlSupport {
     fn cmp(&self, other: &Self) -> std::cmp::Ordering {
         use std::cmp::Ordering;
 
         match (self, other) {
-            (ImportSupport::Dedicated, ImportSupport::Dedicated) => std::cmp::Ordering::Equal,
-            (ImportSupport::Dedicated { .. }, ImportSupport::Generic { .. }) => Ordering::Greater,
-            (ImportSupport::Dedicated { .. }, ImportSupport::MaybeSupported { .. }) => {
-                Ordering::Greater
-            }
-            (ImportSupport::Generic { .. }, ImportSupport::Dedicated { .. }) => Ordering::Less,
-            (ImportSupport::Generic { priority: a }, ImportSupport::Generic { priority: b }) => {
-                a.cmp(b)
-            }
-            (ImportSupport::Generic { .. }, ImportSupport::MaybeSupported { .. }) => {
-                Ordering::Equal
-            }
-            (ImportSupport::MaybeSupported { .. }, ImportSupport::Dedicated { .. }) => {
-                Ordering::Less
-            }
-            (ImportSupport::MaybeSupported { .. }, ImportSupport::Generic { .. }) => Ordering::Less,
-            (ImportSupport::MaybeSupported, ImportSupport::MaybeSupported) => {
-                std::cmp::Ordering::Equal
-            }
+            (UrlSupport::Dedicated, UrlSupport::Dedicated) => std::cmp::Ordering::Equal,
+            (UrlSupport::Dedicated { .. }, UrlSupport::Generic { .. }) => Ordering::Greater,
+            (UrlSupport::Dedicated { .. }, UrlSupport::MaybeSupported { .. }) => Ordering::Greater,
+            (UrlSupport::Generic { .. }, UrlSupport::Dedicated { .. }) => Ordering::Less,
+            (UrlSupport::Generic { priority: a }, UrlSupport::Generic { priority: b }) => a.cmp(b),
+            (UrlSupport::Generic { .. }, UrlSupport::MaybeSupported { .. }) => Ordering::Equal,
+            (UrlSupport::MaybeSupported { .. }, UrlSupport::Dedicated { .. }) => Ordering::Less,
+            (UrlSupport::MaybeSupported { .. }, UrlSupport::Generic { .. }) => Ordering::Less,
+            (UrlSupport::MaybeSupported, UrlSupport::MaybeSupported) => std::cmp::Ordering::Equal,
         }
     }
 }
 
 #[derive(serde::Serialize, serde::Deserialize, Clone, Debug)]
-pub struct ImportMatch {
+pub struct UrlSupportMatch {
     pub plugin: String,
-    pub support: ImportSupport,
+    pub support: UrlSupport,
 }
 
-pub struct ImportMatches {
-    pub matches: Vec<ImportMatch>,
+pub struct UrlSupportMatches {
+    pub matches: Vec<UrlSupportMatch>,
 }
 
-impl ImportMatches {
+impl UrlSupportMatches {
     pub fn sort(&mut self) {
         self.matches.sort_by(|a, b| a.support.cmp(&b.support))
     }
 
-    pub fn best(&self) -> Option<&ImportMatch> {
+    pub fn best(&self) -> Option<&UrlSupportMatch> {
         self.matches.first()
     }
 }
 
 #[derive(serde::Serialize, serde::Deserialize, Clone, Debug)]
-pub struct ImportRelatedUrl {
+pub struct RelatedUrl {
     pub label: String,
     pub url: Url,
 }
 
 #[derive(serde::Serialize, serde::Deserialize, Clone, Debug)]
-pub struct ImportItem {
-    pub data: DataMap,
-    #[serde(default = "Vec::new")]
-    pub joins: Vec<ImportItemJoin>,
-    /// If true, this item requires a seperate plugin fetch for a proper import.
-    /// This is useful when a plugin fetch returns nested items.
-    pub import_requires_fetch: bool,
+pub struct FetchUrlJob {
+    pub url: Url,
 }
 
 #[derive(serde::Serialize, serde::Deserialize, Clone, Debug)]
-pub struct ImportItemJoin {
-    pub name: String,
-    pub items: Vec<ImportItem>,
+pub struct FetchUrlOutput {
+    /// Potentially nested items.
+    #[serde(default)]
+    pub items: Vec<Item>,
+    /// The url where more items can be retrieved.
+    pub load_more_url: Option<RelatedUrl>,
+    #[serde(default)]
+    pub related_urls: Vec<RelatedUrl>,
+
+    #[serde(default)]
+    pub related_items: Vec<Item>,
 }
 
-pub struct ImportOutputFlat {
-    pub require_fetch: Vec<DataMap>,
-    pub ready: Vec<DataMap>,
-}
-
-impl ImportItem {
-    fn flatten_into(self, out: &mut ImportOutputFlat) {
-        if self.import_requires_fetch {
-            out.require_fetch.push(self.data);
-        } else {
-            out.ready.push(self.data);
-            for join in self.joins {
-                for item in join.items {
-                    item.flatten_into(out);
-                }
-            }
-        }
-    }
-
-    pub fn flatten(items: Vec<Self>) -> ImportOutputFlat {
-        let mut out = ImportOutputFlat {
-            require_fetch: Vec::new(),
-            ready: Vec::new(),
-        };
-        for item in items {
-            item.flatten_into(&mut out);
-        }
-        out
-    }
-
-    pub fn into_db_item(self) -> Item {
-        Item {
-            data: self.data,
-            joins: self
-                .joins
-                .into_iter()
-                .map(|join| JoinItem {
-                    name: join.name,
-                    items: join.items.into_iter().map(|i| i.into_db_item()).collect(),
-                })
-                .collect(),
-        }
-    }
+#[derive(serde::Serialize, serde::Deserialize, Clone, Debug)]
+pub struct ImportJob {
+    pub url: Url,
+    pub import_media: bool,
 }
 
 #[derive(serde::Serialize, serde::Deserialize, Clone, Debug)]
 pub struct ImportOutput {
-    /// Potentially nested items.
-    #[serde(default)]
-    pub items: Vec<ImportItem>,
-    /// The url where more items can be retrieved.
-    pub load_more_url: Option<Url>,
-    #[serde(default)]
-    pub related_urls: Vec<ImportRelatedUrl>,
+    pub items: Vec<Item>,
 }
 
 #[derive(serde::Serialize, serde::Deserialize, Clone, Debug, PartialEq, Eq)]
@@ -163,7 +107,7 @@ pub struct PluginSchema {
 }
 
 impl PluginSchema {
-    pub fn find_import_match(&self, url: &Url) -> Option<ImportSupport> {
+    pub fn find_import_match(&self, url: &Url) -> Option<UrlSupport> {
         self.import_matchers
             .iter()
             .filter_map(|rule| {
@@ -203,7 +147,7 @@ impl ImportMatcher {
 #[derive(serde::Serialize, serde::Deserialize, Clone, Debug, PartialEq, Eq)]
 pub struct ImportMatcherRule {
     pub matcher: ImportMatcher,
-    pub support: ImportSupport,
+    pub support: UrlSupport,
 }
 
 #[derive(serde::Serialize, serde::Deserialize, Clone, Debug, PartialEq, Eq)]
@@ -241,12 +185,20 @@ pub trait Plugin {
 
     /// Quickly check if a URL is supported.
     #[allow(unused_variables)]
-    fn fetch_url_support(&self, url: &Url) -> Option<ImportSupport> {
+    fn fetch_url_support(&self, url: &Url) -> Option<UrlSupport> {
         None
     }
 
     #[allow(unused_variables)]
-    fn fetch_url(&self, url: Url) -> BoxFuture<'static, Result<Option<ImportOutput>, AnyError>> {
+    fn fetch_url(
+        &self,
+        job: FetchUrlJob,
+    ) -> BoxFuture<'static, Result<Option<FetchUrlOutput>, AnyError>> {
+        Box::pin(async move { Ok(None) })
+    }
+
+    #[allow(unused_variables)]
+    fn import(&self, job: ImportJob) -> BoxFuture<'static, Result<Option<ImportOutput>, AnyError>> {
         Box::pin(async move { Ok(None) })
     }
 

@@ -1,6 +1,3 @@
-use factordb::AnyError;
-use semantic_core::plugin::{ImportOutput, ImportSupport};
-
 use crate::Registry;
 
 pub struct BrowserPluginSpec {
@@ -19,19 +16,19 @@ pub trait BrowserPlugin: Sync + Send {
 
     fn register(&self, registry: &mut Registry);
 
-    #[allow(unused_variables)]
-    fn import_match(&self, url: &url::Url) -> Option<ImportSupport> {
-        None
-    }
+    // #[allow(unused_variables)]
+    // fn import_match(&self, url: &url::Url) -> Option<UrlSupport> {
+    //     None
+    // }
 
-    #[allow(unused_variables)]
-    fn import(
-        &self,
-        url: url::Url,
-        api: &crate::api::BrowserApiClient,
-    ) -> std::pin::Pin<
-        Box<dyn std::future::Future<Output = Result<Option<ImportOutput>, AnyError>> + 'static>,
-    > {
-        Box::pin(futures::future::ready(Ok(None)))
-    }
+    // #[allow(unused_variables)]
+    // fn import(
+    //     &self,
+    //     url: url::Url,
+    //     api: &crate::api::BrowserApiClient,
+    // ) -> std::pin::Pin<
+    //     Box<dyn std::future::Future<Output = Result<Option<FetchUrlOutput>, AnyError>> + 'static>,
+    // > {
+    //     Box::pin(futures::future::ready(Ok(None)))
+    // }
 }

@@ -2,7 +2,10 @@ use std::collections::HashMap;
 
 use brass::{
     component::{msg::MsgComponent, Component, Context},
-    dom::{builder::div, Render, TagBuilder},
+    dom::{
+        builder::{button, div},
+        Render, TagBuilder,
+    },
 };
 use factordb::{
     query::{
@@ -14,7 +17,7 @@ use factordb::{
 };
 use semantic_core::{
     base::AttrUrl,
-    plugin::{ImportItem, ImportOutput},
+    plugin::{FetchUrlJob, FetchUrlOutput, ImportJob, ImportOutput},
 };
 use semantic_ui_core::{
     components::{
@@ -22,18 +25,21 @@ use semantic_ui_core::{
         form::FormHandle,
         loader::{LoadState, Loader},
         util::{
-            buttons, notification_error, notification_success, notification_warning, title_2,
-            ButtonBuilder, Cls,
+            box_, buttons, notification_error, notification_success, notification_warning,
+            subtitle_4, title_2, ButtonBuilder, Cls,
         },
     },
-    context::{self, api},
+    context::{self, api, router},
+    routing::Route,
     EntityRenderOpts,
 };
 use url::Url;
 
 use super::import_form::{import_form_new, import_form_render, Values};
 
-pub struct ImportPage {}
+pub struct ImportPage {
+    pub url: Option<Url>,
+}
 
 impl Render for ImportPage {
     fn render(self) -> TagBuilder {
@@ -45,27 +51,28 @@ type Index = usize;
 
 enum Msg {
     FormSubmit(Values),
-    FetchLoaded(Result<(ImportOutput, Vec<PreviewItem>), AnyError>),
-    ImportLoaded(Result<Vec<Item>, AnyError>),
+    FetchLoaded(Result<(FetchUrlOutput, Vec<PreviewItem>), AnyError>),
+    ImportLoaded(Result<ImportOutput, AnyError>),
     ImportItem(Index),
     ImportItemLoaded {
         res: Result<Vec<Item>, AnyError>,
         url: Url,
     },
+    OpenRelatedUrl(Url),
     Clear,
     ImportAll,
 }
 
 #[derive(Clone)]
 struct Preview {
-    output: ImportOutput,
+    output: FetchUrlOutput,
     items: Vec<PreviewItem>,
 }
 
 #[derive(Clone)]
 struct PreviewItem {
     index: Index,
-    item: ImportItem,
+    item: Item,
     url: Option<Url>,
     existing_id: Option<Id>,
     loader: Loader<Item>,
@@ -79,7 +86,7 @@ struct State {
     full_import: Loader<Vec<Item>>,
 }
 
-async fn build_preview_items(items: Vec<ImportItem>) -> Result<Vec<PreviewItem>, AnyError> {
+async fn build_preview_items(items: Vec<Item>) -> Result<Vec<PreviewItem>, AnyError> {
     let old_urls: Vec<_> = items
         .iter()
         .filter_map(|item| item.data.get_attr::<AttrUrl>())
@@ -121,9 +128,9 @@ impl MsgComponent for State {
     type Properties = ImportPage;
     type Msg = Msg;
 
-    fn init(_props: Self::Properties, ctx: Context<Self>) -> Self {
+    fn init(props: Self::Properties, ctx: Context<Self>) -> Self {
         let handle = ctx.handle();
-        Self {
+        let mut s = Self {
             values: Values::default(),
             form: import_form_new()
                 .on_submit(move |values| {
@@ -132,7 +139,21 @@ impl MsgComponent for State {
                 .build(),
             preview: Loader::new_idle(),
             full_import: Loader::new_idle(),
+        };
+
+        if let Some(url) = props.url {
+            // TODO: extract to helper method.
+            s.update(
+                Msg::FormSubmit(Values {
+                    url: url.to_string(),
+                    import_media: true,
+                    import: false,
+                }),
+                ctx,
+            )
         }
+
+        s
     }
 
     fn update(&mut self, msg: Self::Msg, ctx: Context<Self>) {
@@ -144,10 +165,14 @@ impl MsgComponent for State {
                     return;
                 };
 
+                router().set_route_without_navigation(Route::Import {
+                    url: Some(url.clone()),
+                });
+
                 if values.import {
                     let import_media = values.import_media;
                     let guard = ctx.spawn_map(
-                        async move { api().import(url, import_media).await },
+                        async move { api().import(ImportJob { url, import_media }).await },
                         Msg::ImportLoaded,
                     );
                     self.full_import.set_loading(guard);
@@ -155,7 +180,7 @@ impl MsgComponent for State {
                 } else {
                     let guard = ctx.spawn_map(
                         async move {
-                            let mut out = api().fetch_url(url).await?;
+                            let mut out = api().fetch_url(FetchUrlJob { url }).await?;
                             let items = build_preview_items(std::mem::take(&mut out.items)).await?;
 
                             Ok((out, items))
@@ -186,14 +211,14 @@ impl MsgComponent for State {
             }
             Msg::ImportLoaded(res) => {
                 self.form.set_loaded();
-                self.full_import.set_result(res);
+                self.full_import.set_result(res.map(|out| out.items));
                 self.preview.set_idle();
             }
             Msg::ImportAll => {
                 if let Ok(url) = self.values.url.parse() {
                     let import_media = self.values.import_media;
                     let guard = ctx.spawn_map(
-                        async move { api().import(url, import_media).await },
+                        async move { api().import(ImportJob { url, import_media }).await },
                         Msg::ImportLoaded,
                     );
                     self.full_import.set_loading(guard);
@@ -221,9 +246,17 @@ impl MsgComponent for State {
 
                 let url2 = url.clone();
                 let guard = ctx.spawn(async move {
-                    let res = api().import(url2, import_media).await;
+                    let res = api()
+                        .import(ImportJob {
+                            url: url2,
+                            import_media,
+                        })
+                        .await;
 
-                    Msg::ImportItemLoaded { url, res }
+                    Msg::ImportItemLoaded {
+                        url,
+                        res: res.map(|out| out.items),
+                    }
                 });
                 item.loader.set_loading(guard);
             }
@@ -259,6 +292,17 @@ impl MsgComponent for State {
             Msg::Clear => {
                 self.preview.set_idle();
                 self.full_import.set_idle();
+            }
+            Msg::OpenRelatedUrl(url) => {
+                // TODO: refactor above FormSubmit handler into a helper function
+                self.update(
+                    Msg::FormSubmit(Values {
+                        url: url.to_string(),
+                        import_media: self.values.import_media,
+                        import: false,
+                    }),
+                    ctx,
+                );
             }
         }
     }
@@ -304,7 +348,7 @@ impl MsgComponent for State {
                     match state {
                         LoadState::Idle => {
                             let mut view = EntityView::from_item(
-                                &item.item.clone().into_db_item(),
+                                &item.item.clone(),
                                 &registry,
                                 &EntityRenderOpts {
                                     editable: false,
@@ -339,7 +383,7 @@ impl MsgComponent for State {
                         }
                         LoadState::Loading(_) => {
                             let mut view = EntityView::from_item(
-                                &item.item.clone().into_db_item(),
+                                &item.item.clone(),
                                 &registry,
                                 &EntityRenderOpts {
                                     editable: false,
@@ -371,7 +415,7 @@ impl MsgComponent for State {
                         }
                         LoadState::Failed(err) => {
                             let mut view = EntityView::from_item(
-                                &item.item.clone().into_db_item(),
+                                &item.item.clone(),
                                 &registry,
                                 &EntityRenderOpts {
                                     editable: false,
@@ -389,7 +433,47 @@ impl MsgComponent for State {
                 items.add_child_signal(view);
             }
 
-            div().and(actions).and(items)
+            let load_more = if let Some(link) = &preview.output.load_more_url {
+                let url = link.url.clone();
+                let elem = div()
+                    .class("mb-4")
+                    .style_raw("display: flex; justify-content: center")
+                    .and(
+                        ButtonBuilder::new()
+                            .label(&link.label)
+                            .size_large()
+                            .on(handle.callback(move || Msg::OpenRelatedUrl(url.clone())))
+                            .build(),
+                    );
+                Some(elem)
+            } else {
+                None
+            };
+
+            let related_urls = if preview.output.related_urls.is_empty() {
+                None
+            } else {
+                let handle = handle.clone();
+                let links = preview.output.related_urls.iter().map(move |link| {
+                    let handle = handle.clone();
+                    let url = link.url.clone();
+                    ButtonBuilder::new()
+                        .label(&link.label)
+                        .on(handle.callback(move || Msg::OpenRelatedUrl(url.clone())))
+                        .build()
+                });
+                Some(
+                    box_()
+                        .and(subtitle_4().and("Links"))
+                        .and(buttons().and_iter(links)),
+                )
+            };
+
+            div()
+                .and(actions)
+                .and(items)
+                .and(load_more)
+                .and(related_urls)
         });
 
         let full = self.full_import.signal_render(|items| {

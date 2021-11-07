@@ -30,7 +30,7 @@ fn render_route(route: Route) -> TagBuilder {
         Route::Browse => crate::components::entity::browse_page::BrowsePage::build(
             crate::components::entity::browse_page::BrowsePageProps {},
         ),
-        Route::Import => super::import::import_page::ImportPage {}.render(),
+        Route::Import { url } => super::import::import_page::ImportPage { url }.render(),
         Route::Upload => super::upload::upload_page(),
         Route::Logout => super::login::logout(),
         Route::Entity(ident) => {
@@ -88,6 +88,6 @@ fn navbar() -> TagBuilder {
 
     div()
         .class("navbar")
-        .style_raw("border-bottom: 2px solid black; border-radius: 10px; margin-bottom: 0.5rem;")
+        .style_raw("border-bottom: 2px solid black; border-radius: 10px; margin-bottom: 1rem;")
         .and((brand, menu))
 }

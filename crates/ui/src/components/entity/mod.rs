@@ -77,7 +77,7 @@ pub fn create_page() -> TagBuilder {
                         .size_medium()
                         .label("Import")
                         .on(|| {
-                            context::router().goto(Route::Import);
+                            context::router().goto(Route::Import { url: None });
                         })
                         .build(),
                 )

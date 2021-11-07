@@ -10,7 +10,9 @@ use factordb::{
 use semantic_core::{
     api::PluginTestFetch,
     core::{AttrPluginCode, PluginSource},
-    plugin::{DynPlugin, ImportOutput, Plugin, PluginSchema},
+    plugin::{
+        DynPlugin, FetchUrlJob, FetchUrlOutput, ImportJob, ImportOutput, Plugin, PluginSchema,
+    },
 };
 use tokio::sync::RwLock;
 
@@ -243,7 +245,8 @@ impl PluginManager {
         Ok(())
     }
 
-    pub async fn fetch_url(&self, url: url::Url) -> Result<ImportOutput, AnyError> {
+    pub async fn fetch_url(&self, job: FetchUrlJob) -> Result<FetchUrlOutput, AnyError> {
+        let url = job.url.clone();
         tracing::trace!(%url, "finding plugin to fetch url");
 
         // Find the most suited plugin.
@@ -266,7 +269,37 @@ impl PluginManager {
             plugin_opt.ok_or_else(|| anyhow!("No suitable importer found for url '{}'", url))?;
         tracing::trace!(plugin=%plugin.name(), %url, "fetching url with plugin");
         let output = plugin
-            .fetch_url(url.clone())
+            .fetch_url(job)
+            .await?
+            .ok_or_else(|| anyhow!("No suitable importer found for url '{}'", url))?;
+        Ok(output)
+    }
+
+    pub async fn import(&self, job: ImportJob) -> Result<ImportOutput, AnyError> {
+        let url = job.url.clone();
+        tracing::trace!(%url, "finding plugin to fetch url");
+
+        // Find the most suited plugin.
+        let plugin_opt = {
+            self.0
+                .mutable
+                .read()
+                .await
+                .plugins
+                .values()
+                .filter_map(|item| {
+                    let m = item.schema.find_import_match(&url)?;
+                    Some((item.plugin.clone(), m))
+                })
+                .max_by(|a, b| a.1.cmp(&b.1))
+                .map(|x| x.0)
+        };
+
+        let plugin =
+            plugin_opt.ok_or_else(|| anyhow!("No suitable importer found for url '{}'", url))?;
+        tracing::trace!(plugin=%plugin.name(), %url, "fetching url with plugin");
+        let output = plugin
+            .import(job)
             .await?
             .ok_or_else(|| anyhow!("No suitable importer found for url '{}'", url))?;
         Ok(output)
@@ -275,7 +308,7 @@ impl PluginManager {
     pub async fn test_fetch(
         &self,
         spec: PluginTestFetch,
-    ) -> Result<Option<ImportOutput>, AnyError> {
+    ) -> Result<Option<FetchUrlOutput>, AnyError> {
         if spec.runtime != "deno" {
             bail!("Unsupported runtime '{}'", spec.runtime);
         }

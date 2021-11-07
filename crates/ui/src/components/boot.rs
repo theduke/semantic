@@ -16,6 +16,7 @@ use semantic_ui_core::{
     routing::Route,
     Registry,
 };
+use url::Url;
 
 enum BootPhase {
     Init,
@@ -105,9 +106,13 @@ impl Boot {
                 semantic_ui_core::context::set_registry(reg);
                 // Read current route.
 
-                let current_path = web_sys::window().unwrap().location().pathname().unwrap();
                 let router = context::router();
-                let route = router.parse_path(&&current_path).unwrap_or(Route::Browse);
+                let route = web_sys::window()
+                    .and_then(|w| w.location().href().ok())
+                    .and_then(|href| Url::parse(&href).ok())
+                    .and_then(|url| router.parse_url(url))
+                    .unwrap_or(Route::Browse);
+
                 // TODO: initialze url path listener.
                 router.goto(route);
 

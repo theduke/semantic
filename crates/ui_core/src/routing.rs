@@ -5,6 +5,7 @@ use brass::{
     signal::signal::{Mutable, Signal},
 };
 use factordb::Ident;
+use url::Url;
 use wasm_bindgen::JsValue;
 
 use crate::{context::router, SharedRenderer0};
@@ -43,7 +44,7 @@ pub enum Route {
     Settings,
 
     Browse,
-    Import,
+    Import { url: Option<Url> },
     Upload,
     Logout,
     Entity(factordb::Ident),
@@ -65,7 +66,16 @@ impl Route {
         match self {
             Route::Logout => "/logout".into(),
             Route::Browse => "/browse".to_string(),
-            Route::Import => "/import".to_string(),
+            Route::Import { url: target } => {
+                if let Some(target) = target {
+                    let query = form_urlencoded::Serializer::new(String::new())
+                        .append_pair("url", &target.to_string())
+                        .finish();
+                    format!("/import?{}", query)
+                } else {
+                    "/import".to_string()
+                }
+            }
             Route::Upload => "/upload".to_string(),
             Route::Tags => "/tags".to_string(),
             Route::Play => "/play".to_string(),
@@ -87,7 +97,7 @@ impl Route {
         match self {
             Route::Logout => "Logout".to_string(),
             Route::Browse => "Browse".to_string(),
-            Route::Import => "Import".to_string(),
+            Route::Import { .. } => "Import".to_string(),
             Route::Upload => "Upload".to_string(),
             Route::Tags => "Tags".to_string(),
             Route::Entity(_) => "Show".to_string(),
@@ -109,7 +119,7 @@ pub struct Router {
     // NOTE: the Mutable contains an inner Rc<RefCell<_>> to allow updating the
     // route without triggering a re-render.
     route: Rc<RefCell<Route>>,
-    signal: Mutable<Rc<RefCell<Route>>>,
+    signal: Mutable<usize>,
     routers: Rc<RefCell<Vec<Box<dyn PluginRouter>>>>,
 }
 
@@ -118,25 +128,29 @@ impl Router {
         let route = Rc::new(RefCell::new(Route::Browse));
         Self {
             route: route.clone(),
-            signal: Mutable::new(route),
+            signal: Mutable::new(0),
             routers: Rc::new(RefCell::new(Vec::new())),
         }
     }
 
-    pub fn parse_path(&self, path: &str) -> Option<Route> {
-        // Skip first slash.
-        let path = if path.starts_with('/') {
-            &path[1..]
-        } else {
-            path
-        };
-        let parts = path.split('/').collect::<Vec<_>>();
+    pub fn parse_url(&self, url: Url) -> Option<Route> {
+        let parts = url.path().split('/').skip(1).collect::<Vec<_>>();
+
+        tracing::trace!(?parts, "url parts");
 
         match parts.as_slice() {
             ["settings"] => Some(Route::Settings),
             ["logout"] => Some(Route::Logout),
             ["browse"] => Some(Route::Browse),
-            ["import"] => Some(Route::Import),
+            ["import"] => {
+                let target = url
+                    .query_pairs()
+                    .find(|(name, _)| name == "url")
+                    .and_then(|(_name, value)| Url::parse(&value).ok());
+                tracing::trace!(?target, "url parse import");
+
+                Some(Route::Import { url: target })
+            }
             ["upload"] => Some(Route::Upload),
             ["play"] => Some(Route::Play),
             ["entity", id] => Some(Route::Entity(Ident::from_str(id))),
@@ -161,33 +175,32 @@ impl Router {
     }
 
     pub fn goto(&self, route: Route) {
-        let path = route.to_path();
-        let title = route.title();
         {
-            let mut current = self.route.borrow_mut();
+            let current = self.route.borrow_mut();
             if &*current == &route {
                 // Do nothing if route has not changed.
                 return;
             }
-            *current = route;
         }
 
-        self.signal.set(self.route.clone());
-        if let Some(history) = web_sys::window().and_then(|w| w.history().ok()) {
-            history
-                .push_state_with_url(&JsValue::NULL, &title, Some(&path))
-                .ok();
-        }
+        self.set_route_without_navigation(route);
+        self.signal.set(0);
     }
 
     /// Update the current route without triggering a re-render.
     pub fn set_route_without_navigation(&self, route: Route) {
+        if let Some(history) = web_sys::window().and_then(|w| w.history().ok()) {
+            history
+                .push_state_with_url(&JsValue::NULL, &route.title(), Some(&route.to_path()))
+                .ok();
+        }
         *self.route.borrow_mut() = route;
     }
 
     pub fn signal(&self) -> impl Signal<Item = Route> {
-        self.signal.signal_ref(|r| {
-            let rr: &Route = &*r.borrow();
+        let route = self.route.clone();
+        self.signal.signal_ref(move |_| {
+            let rr: &Route = &*route.borrow();
             rr.clone()
         })
     }

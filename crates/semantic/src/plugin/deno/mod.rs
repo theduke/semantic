@@ -6,7 +6,9 @@ use std::{
 
 use anyhow::{anyhow, bail, Context};
 use factordb::{schema::DbSchema, AnyError};
-use semantic_core::plugin::{DynPlugin, ImportOutput, PluginSchema};
+use semantic_core::plugin::{
+    DynPlugin, FetchUrlJob, FetchUrlOutput, ImportJob, ImportOutput, PluginSchema,
+};
 use sha2::Digest;
 use tokio::{
     io::{AsyncBufReadExt, AsyncWriteExt, BufReader},
@@ -100,19 +102,26 @@ impl semantic_core::plugin::Plugin for DenoPlugin {
         Vec::new()
     }
 
-    fn fetch_url_support(&self, url: &url::Url) -> Option<semantic_core::plugin::ImportSupport> {
+    fn fetch_url_support(&self, url: &url::Url) -> Option<semantic_core::plugin::UrlSupport> {
         self.data.schema.find_import_match(url)
     }
 
     fn fetch_url(
         &self,
-        url: url::Url,
-    ) -> futures::future::BoxFuture<'static, Result<Option<ImportOutput>, AnyError>> {
+        job: FetchUrlJob,
+    ) -> futures::future::BoxFuture<'static, Result<Option<FetchUrlOutput>, AnyError>> {
         Box::pin(
             self.host
                 .clone()
-                .fetch_url(self.data.schema.name.clone(), url),
+                .fetch_url(self.data.schema.name.clone(), job),
         )
+    }
+
+    fn import(
+        &self,
+        job: ImportJob,
+    ) -> futures::future::BoxFuture<'static, Result<Option<ImportOutput>, AnyError>> {
+        Box::pin(self.host.clone().import(self.data.schema.name.clone(), job))
     }
 }
 
@@ -204,11 +213,22 @@ impl Worker {
         }
     }
 
-    async fn send_import(&mut self, url: &url::Url) -> Result<Option<ImportOutput>, AnyError> {
+    async fn send_fetch_url(
+        &mut self,
+        job: &FetchUrlJob,
+    ) -> Result<Option<FetchUrlOutput>, AnyError> {
         match self
-            .send_command(PluginCommand::Import {
-                url: url.to_string(),
-            })
+            .send_command(PluginCommand::FetchUrl(job.clone()))
+            .await?
+        {
+            PluginReply::FetchUrl { output } => Ok(output),
+            _other => Err(anyhow::anyhow!("Plugin sent invalid response")),
+        }
+    }
+
+    async fn send_import(&mut self, job: &ImportJob) -> Result<Option<ImportOutput>, AnyError> {
+        match self
+            .send_command(PluginCommand::Import(job.clone()))
             .await?
         {
             PluginReply::Import { output } => Ok(output),
@@ -335,11 +355,13 @@ impl DenoPluginHost {
         code: &str,
         url: url::Url,
         validate: bool,
-    ) -> Result<Option<ImportOutput>, AnyError> {
+    ) -> Result<Option<FetchUrlOutput>, AnyError> {
         let config = { self.state.read().unwrap().config.clone() };
         let (mut worker, _schema) = Self::boot_plugin_worker(&config, code, validate).await?;
 
-        worker.send_import(&url).await
+        worker
+            .send_fetch_url(&FetchUrlJob { url: url.clone() })
+            .await
     }
 
     fn stop_plugin(&self, name: &str) -> Result<(), AnyError> {
@@ -365,7 +387,31 @@ impl DenoPluginHost {
     pub async fn fetch_url(
         self,
         plugin_name: String,
-        url: url::Url,
+        job: FetchUrlJob,
+    ) -> Result<Option<FetchUrlOutput>, AnyError> {
+        tracing::trace!("starting deno fetch");
+        let worker_lock = {
+            self.state
+                .read()
+                .unwrap()
+                .workers
+                .get(&plugin_name)
+                .context(format!("No worker for plugin {} exists", plugin_name,))?
+                .clone()
+            // TODO: start new worker if none is present...
+        };
+        // TODO: timeout / multiple workers per plugin / concurrent workers
+        let mut worker = worker_lock.lock().await;
+
+        tracing::trace!("sending fetch request to worker");
+        worker.send_fetch_url(&job).await
+    }
+
+    #[tracing::instrument(skip(self))]
+    pub async fn import(
+        self,
+        plugin_name: String,
+        job: ImportJob,
     ) -> Result<Option<ImportOutput>, AnyError> {
         tracing::trace!("starting deno fetch");
         let worker_lock = {
@@ -382,7 +428,7 @@ impl DenoPluginHost {
         let mut worker = worker_lock.lock().await;
 
         tracing::trace!("sending fetch request to worker");
-        worker.send_import(&url).await
+        worker.send_import(&job).await
     }
 
     async fn load_plugins_directory(plugin_dir: &Path) -> Result<Vec<PluginSource>, AnyError> {
@@ -566,16 +612,16 @@ enum PluginCommand {
         plugin_path: String,
     },
     Ping,
-    /// Import a url.
-    Import {
-        url: String,
-    },
+    /// Fetch a URL.
+    FetchUrl(FetchUrlJob),
+    Import(ImportJob),
 }
 
 #[derive(serde::Deserialize, Debug)]
 enum PluginReply {
     Init { schema: PluginSchema },
     Ping,
+    FetchUrl { output: Option<FetchUrlOutput> },
     Import { output: Option<ImportOutput> },
 }
 
@@ -611,7 +657,7 @@ mod tests {
 
             let url: url::Url = "http://test.com/abc".parse().unwrap();
             let output = worker
-                .send_import(&url)
+                .send_fetch_url(&FetchUrlJob { url })
                 .await
                 .unwrap()
                 .expect("epected a result");

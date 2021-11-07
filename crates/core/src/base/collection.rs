@@ -53,6 +53,8 @@ pub struct Collection {
 }
 
 impl Collection {
+    pub const ITEMS_JOIN: &'static str = "items";
+
     /// Build a select query that returns all collections that contain the given
     /// entity.
     pub fn query_collections_with_entity(id: Id) -> Select {

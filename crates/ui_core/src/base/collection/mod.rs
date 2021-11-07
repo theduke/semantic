@@ -32,6 +32,7 @@ use semantic_core::base::Collection;
 use crate::{
     base::collection::collection_item_manager::CollectionItemManager,
     components::{
+        entity::entity_list,
         form::FormLoadFuture,
         loader::load,
         util::{notification_warning, ButtonBuilder},
@@ -101,9 +102,24 @@ fn collection_meta_edit(col: Collection, on_saved: impl Fn(Collection) + 'static
     })
 }
 
-pub fn collection_view(col: Collection, opts: &EntityRenderOpts) -> TagBuilder {
+pub fn collection_view(
+    col: Collection,
+    items: Option<&[Item]>,
+    opts: &EntityRenderOpts,
+) -> TagBuilder {
     if opts.preview {
-        return div().and(format!("Collection with {} items.", col.item_ids.len()));
+        if let Some(items) = items {
+            return entity_list(
+                items,
+                &context::registry(),
+                &EntityRenderOpts {
+                    editable: false,
+                    preview: true,
+                },
+            );
+        } else {
+            return div().and(format!("Collection with {} items.", col.item_ids.len()));
+        }
     }
 
     let meta = if opts.editable {
@@ -145,7 +161,12 @@ pub fn collection_view(col: Collection, opts: &EntityRenderOpts) -> TagBuilder {
 
 pub fn collection_content(item: &Item, opts: &EntityRenderOpts) -> TagBuilder {
     if let Ok(col) = Collection::try_from_map(item.data.clone()) {
-        collection_view(col, opts)
+        let items = item
+            .joins
+            .iter()
+            .find(|j| j.name == Collection::ITEMS_JOIN)
+            .map(|j| j.items.as_slice());
+        collection_view(col, items, opts)
     } else {
         notification_warning().and("Item is not a collection")
     }

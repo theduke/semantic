@@ -6,9 +6,8 @@ use factordb::{
 };
 use fnv::FnvHashMap;
 use futures::future::LocalBoxFuture;
-use semantic_core::plugin::{ImportMatch, ImportMatches, ImportOutput};
 
-use crate::{api::BrowserApiClient, BrowserPlugin};
+use crate::BrowserPlugin;
 
 pub struct Registry {
     schema: semantic_core::api::SemanticSchema,
@@ -202,44 +201,44 @@ impl Registry {
             .collect()
     }
 
-    pub fn find_importer(&self, url: &url::Url) -> ImportMatches {
-        let matches = self
-            .plugins
-            .values()
-            .filter_map(|p| {
-                p.import_match(url).map(|support| ImportMatch {
-                    plugin: p.spec().name,
-                    support,
-                })
-            })
-            .collect();
-        let mut m = ImportMatches { matches };
-        m.sort();
+    // pub fn find_importer(&self, url: &url::Url) -> UrlSupportMatches {
+    //     let matches = self
+    //         .plugins
+    //         .values()
+    //         .filter_map(|p| {
+    //             p.import_match(url).map(|support| UrlSupportMatch {
+    //                 plugin: p.spec().name,
+    //                 support,
+    //             })
+    //         })
+    //         .collect();
+    //     let mut m = UrlSupportMatches { matches };
+    //     m.sort();
 
-        m
-    }
+    //     m
+    // }
 
-    pub fn import(
-        &self,
-        url: url::Url,
-        plugin_name: Option<String>,
-        api: &BrowserApiClient,
-    ) -> std::pin::Pin<
-        Box<dyn std::future::Future<Output = Result<Option<ImportOutput>, AnyError>> + 'static>,
-    > {
-        let plugin = plugin_name
-            .or_else(|| self.find_importer(&url).best().map(|m| m.plugin.clone()))
-            .and_then(|n| self.plugins.get(&n).cloned());
+    // pub fn import(
+    //     &self,
+    //     url: url::Url,
+    //     plugin_name: Option<String>,
+    //     api: &BrowserApiClient,
+    // ) -> std::pin::Pin<
+    //     Box<dyn std::future::Future<Output = Result<Option<FetchUrlOutput>, AnyError>> + 'static>,
+    // > {
+    //     let plugin = plugin_name
+    //         .or_else(|| self.find_importer(&url).best().map(|m| m.plugin.clone()))
+    //         .and_then(|n| self.plugins.get(&n).cloned());
 
-        if let Some(plugin) = plugin {
-            let api = api.clone();
-            plugin.import(url, &api)
-        } else {
-            Box::pin(futures::future::ready(Err(AnyError::msg(
-                "Could not import: no suitable importer found",
-            ))))
-        }
-    }
+    //     if let Some(plugin) = plugin {
+    //         let api = api.clone();
+    //         plugin.import(url, &api)
+    //     } else {
+    //         Box::pin(futures::future::ready(Err(AnyError::msg(
+    //             "Could not import: no suitable importer found",
+    //         ))))
+    //     }
+    // }
 }
 
 #[derive(Clone)]

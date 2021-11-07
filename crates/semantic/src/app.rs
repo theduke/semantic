@@ -4,9 +4,8 @@ use std::{
     path::PathBuf,
     sync::{Arc, RwLock},
 };
-use url::Url;
 
-use anyhow::{anyhow, bail, Context};
+use anyhow::{anyhow, Context};
 use factordb::{
     data::DataMap,
     query::{self, mutate::Mutate, select::Item},
@@ -16,11 +15,11 @@ use factordb::{
 use semantic_core::{
     api::{self, DbConfig, SemanticSchema},
     base::{
-        AttrBlobUri, AttrDownloadUrl, AttrHash, AttrMimeType, AttrOriginalHash, AttrUrl,
-        SemanticBasePlugin, UniversalHash,
+        AttrBlobUri, AttrDownloadUrl, AttrHash, AttrMimeType, AttrOriginalHash, SemanticBasePlugin,
+        UniversalHash,
     },
     core::SemanticCorePlugin,
-    plugin::{ImportItem, ImportOutput, PluginDescriptor},
+    plugin::{FetchUrlJob, FetchUrlOutput, ImportJob, ImportOutput, PluginDescriptor},
 };
 
 use crate::{blobstore::DynBlobStore, plugin::PluginManager};
@@ -452,45 +451,17 @@ impl App {
         Ok(items)
     }
 
-    pub async fn fetch_url(&self, url: Url) -> Result<ImportOutput, AnyError> {
-        self.require_plugins()?.fetch_url(url.clone()).await
+    pub async fn fetch_url(&self, job: FetchUrlJob) -> Result<FetchUrlOutput, AnyError> {
+        self.require_plugins()?.fetch_url(job).await
     }
 
-    pub async fn import(&self, url: Url, import_media: bool) -> Result<Vec<Item>, AnyError> {
+    pub async fn import(&self, job: ImportJob) -> Result<ImportOutput, AnyError> {
         tracing::trace!("starting import");
 
-        let output = self.fetch_url(url).await?;
+        let output = self.require_plugins()?.import(job.clone()).await?;
+        let items = Item::flatten_list(output.items);
 
         let db = self.require_db()?;
-
-        let flat = ImportItem::flatten(output.items);
-
-        let mut items = flat.ready;
-
-        if !flat.require_fetch.is_empty() {
-            let plugins = self.require_plugins()?;
-
-            for data in flat.require_fetch {
-                let _id = data
-                    .get_id()
-                    .ok_or_else(|| anyhow!("Item to be imported does not have an ID"))?;
-                let url = data.get_attr::<AttrUrl>().ok_or_else(|| {
-                    anyhow!("Nested item requires separate fetch, but does not have a URL")
-                })?;
-                let out = plugins.fetch_url(url).await?;
-                if out.items.len() != 1 {
-                    bail!("Nested item fetch did not return any data");
-                }
-
-                let flat = ImportItem::flatten(out.items);
-                items.extend(flat.ready);
-
-                if !flat.require_fetch.is_empty() {
-                    bail!("Nested import fetch again has nested fetches, which is not supported");
-                }
-            }
-        }
-
         let entities = Self::entity_id_ident_fixup(&db, items).await?;
         let merges = entities
             .clone()
@@ -508,7 +479,7 @@ impl App {
 
         db.batch(batch).await?;
 
-        if import_media {
+        if job.import_media {
             let client = reqwest::Client::new();
 
             // NOTE: if the download fails, the file still ends up in the database.
@@ -524,7 +495,7 @@ impl App {
 
         let items = entities.into_iter().map(Item::new).collect();
 
-        Ok(items)
+        Ok(ImportOutput { items })
     }
 
     async fn download_entity_blob_content(
@@ -858,17 +829,17 @@ impl App {
                     },
                 ))
             }
-            api::Query::Import { url, import_media } => {
-                let items = self.import(url, import_media).await?;
-                Ok(api::Reply::Import { items })
+            api::Query::Import(job) => {
+                let out = self.import(job).await?;
+                Ok(api::Reply::Import(out))
             }
             api::Query::Schema => {
                 let schema = self.load_schema()?;
                 let reply = api::Reply::Schema(schema);
                 Ok(reply)
             }
-            api::Query::FetchUrl { url } => {
-                let output = self.fetch_url(url).await?;
+            api::Query::FetchUrl(job) => {
+                let output = self.fetch_url(job).await?;
                 Ok(api::Reply::FetchUrl(output))
             }
             api::Query::PluginSourceCreate(source) => {
