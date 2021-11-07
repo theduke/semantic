@@ -10,6 +10,9 @@ use brass::{
 };
 use factordb::AnyError;
 use futures::Future;
+use wasm_bindgen::JsCast;
+use wasm_bindgen_futures::spawn_local;
+use web_sys::HtmlElement;
 
 use super::util::ButtonBuilder;
 
@@ -260,6 +263,35 @@ impl<T> Loader<T> {
         self.0.signal_ref(|s| s.is_loading())
     }
 
+    pub fn signal_render_focus_on_err(
+        &self,
+        render: impl Fn(&T) -> TagBuilder + 'static,
+    ) -> TagBuilder
+    where
+        T: 'static,
+    {
+        let mut wrapper = div();
+        let elem = std::rc::Rc::new(wrapper.elem().clone().dyn_into::<HtmlElement>().unwrap());
+
+        wrapper.add_child_signal(self.0.signal_ref(move |state| {
+            if state.is_failed() {
+                let elem = elem.clone();
+                // Spawn a future so the focus runs on the next microtask tick,
+                // after the element has been added to the dom.
+                spawn_local(async move {
+                    if let Err(_err) = elem.focus() {
+                        tracing::warn!("Could not focus loader element");
+                    }
+                });
+            }
+
+            let content = state.render(&render);
+            content
+        }));
+
+        wrapper
+    }
+
     // FIXME: this method makes it easy to accidentally drop the loader, which
     // can cause rendering issues.
     // Find a better API design.
@@ -277,6 +309,16 @@ impl<T> Loader<T> {
         &self,
         render: impl Fn(&LoadState<T>) -> TagBuilder,
     ) -> impl Signal<Item = TagBuilder> {
+        self.0.signal_ref(move |state| render(state))
+    }
+
+    // FIXME: this method makes it easy to accidentally drop the loader, which
+    // can cause rendering issues.
+    // Find a better API design.
+    pub fn signal_render_state_opt(
+        &self,
+        render: impl Fn(&LoadState<T>) -> Option<TagBuilder>,
+    ) -> impl Signal<Item = Option<TagBuilder>> {
         self.0.signal_ref(move |state| render(state))
     }
 
