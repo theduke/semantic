@@ -87,7 +87,7 @@ impl Route {
             Route::PluginUpdate { id } => format!("plugins/{}/edit", id),
             Route::PluginTest => "/plugins/test".to_string(),
             Route::Plugin(p) => p.path.clone(),
-            Route::Settings => "/manage".to_string(),
+            Route::Settings => "/settings".to_string(),
         }
     }
 
