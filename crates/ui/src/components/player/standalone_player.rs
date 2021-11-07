@@ -173,29 +173,40 @@ impl MsgComponent for State {
                 self.toggle_fullscreen();
             }
 
-            Msg::KeyPress(key) => match key.as_str() {
-                "ArrowLeft" | "KeyH" | "KeyK" => {
-                    self.player.prev();
+            Msg::KeyPress(key) => {
+                if self.settings_active.get() {
+                    if key == "Escape" {
+                        self.settings_active.set(false);
+                    }
+                    return;
                 }
-                "ArrowRight" | "KeyL" | "KeyJ" => {
-                    self.player.next();
+                match key.as_str() {
+                    "ArrowLeft" | "KeyH" | "KeyK" => {
+                        self.player.prev();
+                    }
+                    "ArrowRight" | "KeyL" | "KeyJ" => {
+                        self.player.next();
+                    }
+                    "Space" => {
+                        self.player.toggle_paused();
+                    }
+                    "KeyM" => {
+                        self.player.toggle_muted();
+                    }
+                    "KeyF" => {
+                        self.toggle_fullscreen();
+                    }
+                    "KeyS" => {
+                        self.player.shuffle();
+                    }
+                    "KeyC" => {
+                        self.settings_active.replace_with(|old| !*old);
+                    }
+                    _other => {
+                        tracing::trace!(?_other, "unhandled keypress");
+                    }
                 }
-                "Space" => {
-                    self.player.toggle_paused();
-                }
-                "KeyM" => {
-                    self.player.toggle_muted();
-                }
-                "KeyF" => {
-                    self.toggle_fullscreen();
-                }
-                "KeyS" => {
-                    self.player.shuffle();
-                }
-                _other => {
-                    tracing::trace!(?_other, "unhandled keypress");
-                }
-            },
+            }
             Msg::OnFullscreenChange { is_fullscreen } => {
                 self.fullscreen = is_fullscreen;
             }
@@ -238,7 +249,23 @@ impl MsgComponent for State {
             .attr(Attr::Title, "Forward")
             .on(move |_: ClickEvent| player.next());
 
-        let controls = div().class("mr-4").and((btn_play, btn_prev, btn_next));
+        let position_info = self.player.signal_item().map(|item| {
+            item.map(|item| {
+                let pos_text = format!("{} / {}", item.index + 1, item.total_count);
+                let pos = div()
+                    .class("mr-4")
+                    .and(div().class(Cls::Button).class(Cls::IsStatic).and(pos_text));
+
+                pos
+            })
+        });
+
+        let controls = div()
+            .class("ml-4")
+            .class("mr-4")
+            .class(Cls::Buttons)
+            .and((btn_play, btn_prev, btn_next))
+            .child_signal_opt(position_info);
 
         let player = self.player.clone();
         let btn_shuffle = button()
@@ -283,12 +310,12 @@ impl MsgComponent for State {
             .on(ctx.on(|_: ClickEvent| Msg::ToggleFullscreen));
 
         let btn_settings = button()
-            .and(icon_fas("fa-cog"))
+            .and(icon_fas("fa-search"))
             .class_signal_toggle("is-info", self.settings_active.signal())
-            .attr(Attr::Title, "Settings")
+            .attr(Attr::Title, "Filter")
             .on(ctx.on(|_: ClickEvent| Msg::ToggleSettings));
 
-        let bar_settings = div().style_raw("justify-self: end;").and((
+        let bar_settings = div().class("mr-4").class(Cls::Buttons).and((
             btn_shuffle,
             btn_cycle,
             btn_mute,
@@ -298,18 +325,13 @@ impl MsgComponent for State {
 
         let item_info = self.player.signal_item().map(|item| {
             item.map(|item| {
-                let pos_text = format!("{} / {}", item.index + 1, item.total_count);
-                let pos = div()
-                    .class("mr-4")
-                    .and(div().class(Cls::Button).class(Cls::IsStatic).and(pos_text));
-
                 let title = div()
                     .class(Cls::Button)
                     .class(Cls::IsStatic)
                     .and(item.title);
+
                 div()
-                    .style_raw("display: flex; margin-left: 2rem;")
-                    .and(pos)
+                    .style_raw("flex-shrink: 1; margin: 0 2rem;")
                     .and(title)
             })
         });
@@ -326,7 +348,7 @@ impl MsgComponent for State {
         }));
 
         let bar = div()
-            .style_raw("display: flex; margin-bottom: 1rem; align-items: flex-start; flex-grow: 0; justify-content: space-around;")
+            .style_raw("display: flex; margin-bottom: 1rem; align-items: flex-start; flex-grow: 0; justify-content: space-between;")
             .and(controls)
             .child_signal_opt(item_info)
             .and(bar_settings);
