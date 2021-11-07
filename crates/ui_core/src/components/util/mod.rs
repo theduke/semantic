@@ -315,6 +315,7 @@ impl ButtonBuilder {
     pub fn size_small(self) -> Self {
         self.size(BtnSize::Small)
     }
+
     pub fn size_medium(self) -> Self {
         self.size(BtnSize::Medium)
     }
@@ -896,4 +897,25 @@ impl<V: Clone + 'static> FormRenderer<V> {
     pub fn build(self) -> TagBuilder {
         self.tag
     }
+}
+
+/// Renders the given content, and focuses on the the content as soon as it is
+/// rendered.
+pub fn focus(content: TagBuilder) -> TagBuilder {
+    let wrapper = div().and(content);
+
+    // Note: unwrap is ok because div is a HtmlElement.
+    let elem = wrapper
+        .elem()
+        .clone()
+        .dyn_into::<web_sys::HtmlElement>()
+        .unwrap();
+
+    wasm_bindgen_futures::spawn_local(async move {
+        if let Err(_err) = elem.focus() {
+            tracing::warn!("Could not focus loader element");
+        }
+    });
+
+    wrapper
 }
