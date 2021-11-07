@@ -221,7 +221,7 @@ pub fn subtitle_4() -> TagBuilder {
 }
 
 pub fn table() -> TagBuilder {
-    Tag::Table.new()
+    Tag::Table.new().class(Cls::Table)
 }
 
 pub fn field() -> TagBuilder {
