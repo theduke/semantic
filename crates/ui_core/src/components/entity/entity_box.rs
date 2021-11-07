@@ -5,6 +5,7 @@ use brass::{
     DomStr,
 };
 use factordb::{query::select::Item, schema::AttrMapExt};
+use web_sys::Element;
 
 use crate::{
     base::{collection::entity_collection_manager, tags::entity_tag_manager},
@@ -49,7 +50,7 @@ enum Msg {
     DeleteStart,
 }
 
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 enum ActiveAction {
     Delete,
     ManageCollections,
@@ -63,6 +64,8 @@ struct State {
     on_delete: Option<Box<dyn Fn(Item)>>,
     show_table: Mutable<bool>,
     action: Mutable<Option<ActiveAction>>,
+
+    root_div: Option<Element>,
 }
 
 impl MsgComponent for State {
@@ -76,6 +79,7 @@ impl MsgComponent for State {
             options: props.options,
             show_table: Mutable::new(false),
             action: Mutable::new(None),
+            root_div: None,
         }
     }
 
@@ -131,6 +135,12 @@ impl MsgComponent for State {
             Msg::Deleted => {
                 if let Some(f) = &self.on_delete {
                     f(self.item.lock_ref().clone());
+                } else if let Some(root) = self.root_div.take() {
+                    // If no on_delete callback is given, just remove the node
+                    // from the dom.
+                    // TODO: use an animation!
+                    root.parent_element()
+                        .map(|parent| parent.remove_child(&root).ok());
                 }
             }
             Msg::ClearAction => {
@@ -221,35 +231,40 @@ impl MsgComponent for State {
 
             let handle2 = handle.clone();
             let active_action_signal = action.signal_ref(move |action| {
-                let handle = handle2.clone();
-                match &*action {
-                    Some(ActiveAction::Delete) => EntityDeleter {
-                        item: mutable_item.lock_ref().clone(),
-                        on_delete: Box::new(handle.callback(|| Msg::Deleted)),
-                        on_cancel: Box::new(handle.callback(|| Msg::ClearAction)),
-                    }
-                    .render(),
-                    Some(ActiveAction::ManageCollections) => {
-                        if let Some(id) = &id {
-                            let content = entity_collection_manager(*id);
-                            modal(content, handle.callback(|| Msg::ToggleTagManager), true)
-                        } else {
-                            div()
+                tracing::trace!(?action, "rendering action");
+                if let Some(action) = action {
+                    let handle = handle2.clone();
+                    let content = match action {
+                        ActiveAction::Delete => EntityDeleter {
+                            item: mutable_item.lock_ref().clone(),
+                            on_delete: Box::new(handle.callback(|| Msg::Deleted)),
+                            on_cancel: Box::new(handle.callback(|| Msg::ClearAction)),
                         }
-                    }
-                    Some(ActiveAction::ManageTags) => {
-                        if let Some(_id) = &id {
-                            let content = entity_tag_manager(&mutable_item.lock_ref().clone());
-                            modal(content, handle.callback(|| Msg::ToggleTagManager), true)
-                        } else {
-                            div()
+                        .render(),
+                        ActiveAction::ManageCollections => {
+                            if let Some(id) = &id {
+                                let content = entity_collection_manager(*id);
+                                modal(content, handle.callback(|| Msg::ClearAction), true)
+                            } else {
+                                div()
+                            }
                         }
-                    }
-                    None => div(),
+                        ActiveAction::ManageTags => {
+                            if let Some(_id) = &id {
+                                let content = entity_tag_manager(&mutable_item.lock_ref().clone());
+                                modal(content, handle.callback(|| Msg::ClearAction), true)
+                            } else {
+                                div()
+                            }
+                        }
+                    };
+                    Some(content)
+                } else {
+                    None
                 }
             });
 
-            let mut content = div().child_signal(active_action_signal);
+            let mut content = div().child_signal_opt(active_action_signal);
 
             match content_renderer {
                 Some(renderer) => {
@@ -286,6 +301,10 @@ impl MsgComponent for State {
             .render()
         });
 
-        div().child_signal(content_signal)
+        let root = div().child_signal(content_signal);
+
+        self.root_div = Some(root.elem().clone());
+
+        root
     }
 }
