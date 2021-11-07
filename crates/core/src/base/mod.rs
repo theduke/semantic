@@ -18,9 +18,6 @@ pub use self::collection::*;
 mod tags;
 pub use self::tags::*;
 
-mod health;
-pub use self::health::*;
-
 use factordb::{
     data::{DataMap, Timestamp},
     query::migrate::Migration,
@@ -33,6 +30,10 @@ use factordb::{
 #[derive(Attribute)]
 #[factor(namespace = "semantic", title = "Title")]
 pub struct AttrTitle(String);
+
+#[derive(Attribute)]
+#[factor(namespace = "semantic", title = "Comment")]
+pub struct AttrComment(String);
 
 pub fn entity_title(data: &DataMap) -> String {
     data.get_attr::<AttrTitle>()
@@ -84,6 +85,7 @@ impl Plugin for SemanticBasePlugin {
             db: Some(factordb::schema::DbSchema {
                 attributes: vec![
                     AttrTitle::schema(),
+                    AttrComment::schema(),
                     AttrDescription::schema(),
                     AttrUrl::schema(),
                     AttrPreviewImageUrl::schema(),
@@ -165,13 +167,9 @@ impl Plugin for SemanticBasePlugin {
             .entity_create(collection::Collection::schema())
             .entity_create(tags::Tag::schema());
 
-        // .attr_create(habit::AttrHabitOccurenceComment::schema())
-        // .attr_create(habit::AttrHabitOccurenceParentId::schema())
-        // .attr_create(habit::AttrHabitOccurenceTime::schema())
-        // .entity_create(habit::Habit::schema())
-        // .entity_create(habit::HabitOccurence::schema())
-        // .attr_create(habit::HabitMode::schema())
+        let create_comment = Migration::with_name("create_comment_attribute".to_string())
+            .attr_create(AttrComment::schema());
 
-        vec![first]
+        vec![first, create_comment]
     }
 }
