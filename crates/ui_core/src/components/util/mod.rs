@@ -830,7 +830,7 @@ pub fn form_errors<V: Clone>(handle: &FormHandle<V>) -> TagBuilder {
     // TODO: probably want to use a MutableVec instead to avoid replacing the
     // errors.
     div()
-        .style_raw("margin-top: 3rem;")
+        .style_raw("margin: 3rem 0;")
         .child_signal_opt(handle.signal_status().map(|status| {
             if let Err(errors) = status.errors {
                 let text = errors.join("\n");
