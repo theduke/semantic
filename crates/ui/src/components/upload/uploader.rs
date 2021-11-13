@@ -154,7 +154,9 @@ impl MsgComponent for State {
     fn update(&mut self, msg: Self::Msg, ctx: Context<Self>) {
         match msg {
             Msg::FilesAdded(files) => {
+                let len = files.len();
                 files.into_iter().for_each(|f| self.add_file(f));
+                self.queue_length.replace_with(|old| *old + len);
             }
             Msg::Upload => {
                 self.upload(&ctx);
