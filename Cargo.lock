@@ -1204,12 +1204,19 @@ dependencies = [
 name = "logfs"
 version = "0.1.0"
 dependencies = [
+ "backtrace",
  "bincode",
+ "bitflags",
+ "generic-array",
+ "md5",
+ "parking_lot",
+ "rand",
  "ring",
  "serde",
  "sha2",
  "structopt",
  "tracing",
+ "zeroize",
 ]
 
 [[package]]
@@ -1226,6 +1233,12 @@ name = "matches"
 version = "0.1.9"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "a3e378b66a060d48947b590737b30a1be76706c8dd7b8ba0f2fe3989c68a853f"
+
+[[package]]
+name = "md5"
+version = "0.7.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "490cc448043f947bae3cbee9c203358d62dbee0db12107a74be5c30ccfd09771"
 
 [[package]]
 name = "memchr"
@@ -2759,3 +2772,9 @@ checksum = "0120db82e8a1e0b9fb3345a539c478767c0048d842860994d96113d5b667bd69"
 dependencies = [
  "winapi",
 ]
+
+[[package]]
+name = "zeroize"
+version = "1.4.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "d68d9dcec5f9b43a30d38c49f91dfedfaac384cb8f085faca366c26207dd1619"
