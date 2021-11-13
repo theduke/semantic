@@ -30,8 +30,8 @@ impl LogDbStore {
         Ok(factordb::Db::new(be))
     }
 
-    fn event_path(id: EventId) -> Vec<u8> {
-        format!("_e/{:0>20}", id).into_bytes()
+    fn event_path(id: EventId) -> String {
+        format!("_e/{:0>20}", id)
     }
 
     async fn iter_events(
@@ -47,7 +47,7 @@ impl LogDbStore {
             .log
             // FIXME: currently ignoring start/end because logfs range seems broken - does not
             // iterate properly.
-            .paths_prefix(b"_e/")?
+            .paths_prefix("_e/")?
             .into_iter()
             .map(move |path| {
                 let data = s.get(path)?.ok_or_else(|| {

@@ -6,7 +6,10 @@ use semantic_ui_core::{
     components::{
         form,
         loader::Loader,
-        util::{form_field_input, form_field_password, subtitle_4, title_2, FormRenderer},
+        util::{
+            form_field_checkbox, form_field_input, form_field_password, subtitle_4, title_2,
+            FormRenderer,
+        },
     },
     context,
     validate::StringRequired,
@@ -16,6 +19,7 @@ use semantic_ui_core::{
 struct Values {
     data_path: String,
     key: String,
+    raw: bool,
 }
 
 pub fn login(on_success: impl Fn(SemanticSchema) + 'static) -> TagBuilder {
@@ -24,10 +28,12 @@ pub fn login(on_success: impl Fn(SemanticSchema) + 'static) -> TagBuilder {
     let form = form::Form::new(Values {
         data_path: String::new(),
         key: String::new(),
+        raw: false,
     })
     .on_submit_async(move |values| {
         let key = values.key.clone();
         let data_path = values.data_path.clone();
+        let raw = values.raw;
         let on_success = on_success.clone();
 
         Box::pin(async move {
@@ -36,6 +42,9 @@ pub fn login(on_success: impl Fn(SemanticSchema) + 'static) -> TagBuilder {
                     db: DbConfig::Crypto(BackendCryptoConfig {
                         data_path: Some(data_path),
                         key,
+                        raw,
+                        key_iterations: None,
+                        salt: None,
                     }),
                     idle_timeout: None,
                 })
@@ -55,6 +64,10 @@ pub fn login(on_success: impl Fn(SemanticSchema) + 'static) -> TagBuilder {
             .and(form_field_password(
                 "Key",
                 handle.field_validated(|v| &mut v.key, StringRequired),
+            ))
+            .and(form_field_checkbox(
+                "Raw mode",
+                handle.field(|v| &mut v.raw),
             ))
             .buttons_submit("Log in")
     });

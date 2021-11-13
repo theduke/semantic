@@ -250,15 +250,14 @@ async fn handler_blob_read(Extension(state): ServerContext, req: Request<Body>) 
         return internal_server_error("Blobstore not initialized");
     };
 
-    match blob.get(&real_path).await {
-        Ok(Some(data)) => {
+    match blob.get_stream(&real_path).await {
+        Ok(stream) => {
             tracing::trace!(%real_path, "serving file");
             Response::builder()
                 .status(StatusCode::OK)
-                .body(data.into())
+                .body(hyper::Body::wrap_stream(stream))
                 .unwrap()
         }
-        Ok(None) => not_found(),
         Err(err) => {
             tracing::error!(error=?err, "Could not serve file");
             Response::builder()

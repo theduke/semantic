@@ -91,7 +91,7 @@ fn cmd_watch_server(default_backend: bool) -> Result<(), DynError> {
         ;
 
     if default_backend {
-        cmd.args(&["--data-path", &data_path, "--key", "testkey"]);
+        cmd.args(&["--data-path", &data_path, "--key", "testkey", "--key-iterations", "1"]);
     } else {
         cmd.arg("--no-backend");
     }

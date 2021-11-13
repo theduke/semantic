@@ -1,6 +1,7 @@
 use sha2::Digest;
 use std::{
     collections::HashMap,
+    num::NonZeroU32,
     path::PathBuf,
     sync::{Arc, RwLock},
 };
@@ -148,7 +149,32 @@ impl App {
                     Self::default_data_path()?
                 };
 
-                let log = logfs::LogFs::open(data_path.clone(), crypto.key.clone())
+                let log_config = logfs::LogConfig {
+                    path: data_path.clone().into(),
+                    raw_mode: crypto.raw,
+                    allow_create: !crypto.raw,
+                    crypto: Some(logfs::CryptoConfig {
+                        key: crypto.key.clone().into(),
+                        salt: crypto
+                            .salt
+                            .clone()
+                            .map(|x| x.into_bytes())
+                            .unwrap_or(b"semantic".to_vec())
+                            .into(),
+                        iterations: if let Some(iters) = crypto.key_iterations {
+                            NonZeroU32::new(iters).ok_or_else(|| {
+                                anyhow!(
+                                    "Invalid number of key iterations: must be a positive number"
+                                )
+                            })?
+                        } else {
+                            NonZeroU32::new(3_000_000).unwrap()
+                        },
+                    }),
+                    default_chunk_size: 8_000_000,
+                };
+
+                let log = logfs::LogFs::<logfs::Journal2>::open(log_config)
                     .map_err(|err| {
                         tracing::error!(?err, "Could not open logfs");
                         err

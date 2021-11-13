@@ -34,6 +34,9 @@ fn main() {
                     semantic_core::api::BackendCryptoConfig {
                         data_path: subargs.data_path,
                         key: subargs.key.expect("Must specify --key"),
+                        raw: false,
+                        key_iterations: subargs.key_iterations,
+                        salt: subargs.salt,
                     },
                 ))
             };
@@ -114,6 +117,10 @@ struct CommandServer {
     data_path: Option<String>,
     #[structopt(long, short)]
     key: Option<String>,
+    #[structopt(long)]
+    key_iterations: Option<u32>,
+    #[structopt(long)]
+    salt: Option<String>,
 
     #[structopt(long)]
     deno_plugin_dir: Option<String>,

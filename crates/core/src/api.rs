@@ -39,6 +39,9 @@ pub struct SemanticSchema {
 pub struct BackendCryptoConfig {
     pub data_path: Option<String>,
     pub key: String,
+    pub key_iterations: Option<u32>,
+    pub salt: Option<String>,
+    pub raw: bool,
 }
 
 impl std::fmt::Debug for BackendCryptoConfig {
@@ -61,7 +64,10 @@ impl DbConfig {
         match self {
             Self::Crypto(c) => Self::Crypto(BackendCryptoConfig {
                 data_path: c.data_path,
+                salt: None,
+                key_iterations: None,
                 key: String::new(),
+                raw: false,
             }),
         }
     }
