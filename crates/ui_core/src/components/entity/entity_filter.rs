@@ -55,7 +55,7 @@ impl EntityFilter {
 }
 
 pub fn entity_filter(on_submit: impl Fn(EntityFilter) + 'static) -> TagBuilder {
-    form::Form::new(EntityFilter {
+    let form = form::Form::new(EntityFilter {
         search: String::new(),
         entity_types: HashSet::new(),
         tags: Vec::new(),
@@ -63,28 +63,27 @@ pub fn entity_filter(on_submit: impl Fn(EntityFilter) + 'static) -> TagBuilder {
     .on_submit(move |values| {
         on_submit(values.clone());
     })
-    .render(|handle| {
-        let search = form_field_input("Search", handle.field(|v| &mut v.search));
+    .build();
 
-        let type_options = context::registry()
-            .entities()
-            .values()
-            .map(|info| SelectOption {
-                value: info.schema.ident.clone(),
-                label: info
-                    .schema
-                    .title
-                    .clone()
-                    .unwrap_or_else(|| info.schema.ident.clone())
-                    .into(),
-            })
-            .collect();
-        let types =
-            form_field_tag_select("Type", type_options, handle.field(|v| &mut v.entity_types));
+    let search = form_field_input("Search", form.field(|v| &mut v.search));
 
-        FormRenderer::new(handle.clone())
-            .and(search)
-            .and(types)
-            .buttons_submit("Apply")
-    })
+    let type_options = context::registry()
+        .entities()
+        .values()
+        .map(|info| SelectOption {
+            value: info.schema.ident.clone(),
+            label: info
+                .schema
+                .title
+                .clone()
+                .unwrap_or_else(|| info.schema.ident.clone())
+                .into(),
+        })
+        .collect();
+    let types = form_field_tag_select("Type", type_options, form.field(|v| &mut v.entity_types));
+
+    FormRenderer::new(form)
+        .and(search)
+        .and(types)
+        .buttons_submit("Apply")
 }
