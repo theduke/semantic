@@ -97,7 +97,8 @@ impl State {
 
     fn next(&mut self, ctx: &Context<Self>) {
         let index = self.get_index();
-        if index + 1 > self.items.len() {
+
+        if index + 1 >= self.items.len() {
             if self.shared.cycle.get() {
                 self.goto(0, ctx)
             } else {
@@ -153,7 +154,10 @@ impl State {
         let item = if let Some(item) = self.items.get(index) {
             item
         } else {
-            tracing::error!("Internal media player error: tried to show index that does not exist");
+            tracing::error!(
+                index,
+                "Internal media player error: tried to show index that does not exist"
+            );
             return;
         };
 
