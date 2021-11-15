@@ -1,7 +1,7 @@
 use std::rc::Rc;
 
 use brass::dom::{Render, TagBuilder};
-use factordb::AnyError;
+use factordb::{AnyError, Id};
 use futures::future::LocalBoxFuture;
 use semantic_core::base::Tag;
 
@@ -18,7 +18,7 @@ async fn load_all_tags() -> Result<Vec<Tag>, AnyError> {
 }
 
 pub struct TagSelect {
-    pub initial_selection: Vec<Tag>,
+    pub initial_selection: Vec<Id>,
     pub on_submit: Option<Rc<dyn Fn(&Vec<Tag>)>>,
     pub on_change: Option<Rc<dyn Fn(Vec<Tag>)>>,
     pub on_add_async: Option<Rc<dyn Fn(Tag) -> LocalBoxFuture<'static, Result<Tag, AnyError>>>>,
@@ -31,11 +31,18 @@ impl Render for TagSelect {
     fn render(self) -> TagBuilder {
         load(load_all_tags(), move |tags| {
             let all_tags = Rc::new(tags.clone());
+
+            let initial_selection = self
+                .initial_selection
+                .iter()
+                .filter_map(|id| tags.iter().find(|t| t.id == *id).cloned())
+                .collect();
+
             MultiSelect::<Tag> {
                 heading: "Select Tags".to_string(),
                 get_id: |t| t.id.to_string(),
                 options: tags.clone(),
-                initial_selection: self.initial_selection.clone(),
+                initial_selection,
                 multi: true,
                 search: Some(Box::new(move |term| {
                     let all_tags = all_tags.clone();
@@ -69,4 +76,21 @@ impl Render for TagSelect {
             .render()
         })
     }
+}
+
+pub fn form_field_tags<V: Clone>(
+    handle: crate::components::form::FieldHandle<V, Vec<Tag>>,
+) -> TagBuilder {
+    let handle2 = handle.clone();
+    let sel = TagSelect {
+        initial_selection: handle.get_value().into_iter().map(|t| t.id).collect(),
+        on_submit: None,
+        on_change: Some(Rc::new(move |values| {
+            handle2.set(values);
+        })),
+        on_add_async: None,
+        on_remove_async: None,
+        on_change_async: None,
+    };
+    crate::components::util::form_field("Tags", handle, sel.render())
 }

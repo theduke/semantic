@@ -14,7 +14,7 @@ mod tag_manager;
 pub use tag_manager::tag_manager;
 
 mod tag_select;
-pub use tag_select::TagSelect;
+pub use tag_select::{form_field_tags, TagSelect};
 
 mod entity_tag_manager;
 pub use entity_tag_manager::entity_tag_manager;
