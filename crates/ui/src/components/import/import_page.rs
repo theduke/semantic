@@ -2,10 +2,7 @@ use std::collections::HashMap;
 
 use brass::{
     component::{msg::MsgComponent, Component, Context},
-    dom::{
-        builder::{button, div},
-        Render, TagBuilder,
-    },
+    dom::{builder::div, Render, TagBuilder},
 };
 use factordb::{
     query::{

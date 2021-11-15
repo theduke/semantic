@@ -1,7 +1,8 @@
 use brass::dom::TagBuilder;
+
 use semantic_ui_core::{
     components::{
-        form::{Form, FormHandle, FormLoadFuture},
+        form::{Form, FormHandle},
         util::{form_field_checkbox, form_field_input, FormRenderer},
     },
     validate::StringUrl,
