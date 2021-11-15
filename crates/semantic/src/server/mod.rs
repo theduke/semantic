@@ -25,7 +25,7 @@ pub struct ServerConfig {
     /// - 127.0.0.1:3000
     /// - 0.0.0.0:8080
     /// - ::1:3000
-    pub interface: String,
+    pub address: String,
 
     /// If true, all interaction via the server requires a login or an access
     /// token.
@@ -52,9 +52,9 @@ pub async fn run_server(
     use axum::handler::{get, post};
 
     // Run the server like above...
-    let addr: SocketAddr = config.interface.parse().context(format!(
+    let addr: SocketAddr = config.address.parse().context(format!(
         "Invalid server interface specification '{}'",
-        config.interface
+        config.address
     ))?;
 
     let app = App::build(config.app.clone(), runtime).await?;

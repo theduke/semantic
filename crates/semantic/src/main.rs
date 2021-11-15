@@ -59,7 +59,7 @@ fn main() {
                 // Enable authentication when no backend is provided.
                 require_auth: app_config.backend.is_none(),
                 app: app_config,
-                interface: subargs.interface.unwrap_or(format!("127.0.0.1:3000")),
+                address: subargs.address.unwrap_or(format!("127.0.0.1:3000")),
             };
 
             let rt = tokio::runtime::Runtime::new().expect("Could not start runtime");
