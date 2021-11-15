@@ -39,13 +39,16 @@ impl TagNode {
     }
 
     fn build(tag: Tag, child_map: &mut HashMap<Id, Vec<Tag>>) -> Self {
-        let children = child_map
+        let children: Vec<_> = child_map
             .remove(&tag.id)
             .unwrap_or_default()
             .into_iter()
             .map(|child| Self::build(child, child_map))
             .collect();
-        Self { tag, children }
+
+        let mut s = Self { tag, children };
+        s.sort_children();
+        s
     }
 
     fn render_level(items: &[TagNode], depth: usize) -> TagBuilder {
@@ -56,6 +59,10 @@ impl TagNode {
         let tag = button().and(&self.tag.name);
         let children = Self::render_level(&self.children, depth + 1);
         div().class("mb-2").and((tag, children))
+    }
+
+    fn sort_children(&mut self) {
+        self.children.sort_by(|a, b| a.tag.name.cmp(&b.tag.name));
     }
 }
 
@@ -91,6 +98,7 @@ pub fn tag_manager() -> TagBuilder {
                         tag,
                         children: Vec::new(),
                     });
+                    data.tree.sort_by(|a, b| a.tag.name.cmp(&b.tag.name));
                     // FIXME: extend validator.
                 },
                 data.validator.clone(),
