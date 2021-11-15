@@ -1,10 +1,11 @@
 use std::collections::HashSet;
 
-use brass::dom::TagBuilder;
-use factordb::{query::expr::Expr, schema::AttributeDescriptor};
+use brass::dom::{builder::div, TagBuilder};
+use factordb::{query::expr::Expr, schema::AttributeDescriptor, Id};
 use semantic_core::base::Tag;
 
 use crate::{
+    base::tags::load_all_tags,
     components::{
         form,
         util::{form_field_input, form_field_tag_select, FormRenderer, SelectOption},
@@ -16,7 +17,7 @@ use crate::{
 pub struct EntityFilter {
     search: String,
     entity_types: HashSet<String>,
-    tags: Vec<Tag>,
+    tags: HashSet<Id>,
 }
 
 impl EntityFilter {
@@ -46,8 +47,9 @@ impl EntityFilter {
         }
 
         if !self.tags.is_empty() {
-            let ids = self.tags.iter().map(|t| t.id).collect();
-            e = e.and_with(Tag::filter_entity_has_any_tag(ids));
+            e = e.and_with(Tag::filter_entity_has_any_tag(
+                self.tags.iter().cloned().collect(),
+            ));
         }
 
         e
@@ -58,7 +60,7 @@ pub fn entity_filter(on_submit: impl Fn(EntityFilter) + 'static) -> TagBuilder {
     let form = form::Form::new(EntityFilter {
         search: String::new(),
         entity_types: HashSet::new(),
-        tags: Vec::new(),
+        tags: HashSet::new(),
     })
     .on_submit(move |values| {
         on_submit(values.clone());
@@ -82,8 +84,26 @@ pub fn entity_filter(on_submit: impl Fn(EntityFilter) + 'static) -> TagBuilder {
         .collect();
     let types = form_field_tag_select("Type", type_options, form.field(|v| &mut v.entity_types));
 
+    let form2 = form.clone();
+    let tags = brass::dom::ApplyFuture(async move {
+        match load_all_tags().await {
+            Ok(tags) => {
+                let options = tags
+                    .into_iter()
+                    .map(|t| SelectOption {
+                        label: t.name.clone(),
+                        value: t.id,
+                    })
+                    .collect();
+                form_field_tag_select("Tags", options, form2.field(|v| &mut v.tags))
+            }
+            Err(_err) => div(),
+        }
+    });
+
     FormRenderer::new(form)
         .and(search)
         .and(types)
+        .and(tags)
         .buttons_submit("Apply")
 }

@@ -31,6 +31,13 @@ pub async fn load_entity_tags(id: Id) -> Result<Vec<Tag>, AnyError> {
     Ok(page.items)
 }
 
+pub async fn load_all_tags() -> Result<Vec<Tag>, AnyError> {
+    let page = crate::context::api()
+        .select_entities(Tag::query_all())
+        .await?;
+    Ok(page.items)
+}
+
 pub async fn entity_set_tags(entity_id: Id, tags: Vec<Id>) -> Result<(), AnyError> {
     crate::context::api()
         .mutate(Tag::mutate_set_tags(entity_id, tags))
