@@ -17,6 +17,8 @@ pub use entity_collection_manager::entity_collection_manager;
 mod collection_form;
 use collection_form::collection_metadata_form;
 
+mod collection_item_tagger;
+
 mod collection_item_manager;
 
 use factordb::{
@@ -35,7 +37,7 @@ use crate::{
         entity::entity_list,
         form::FormLoadFuture,
         loader::load,
-        util::{notification_warning, ButtonBuilder},
+        util::{modal::modal, notification_warning, ButtonBuilder},
     },
     context::{self, api, router},
     routing::Route,
@@ -126,7 +128,7 @@ pub fn collection_view(
         let editing = Mutable::new(false);
         let col = col.clone();
 
-        div().child_signal(editing.signal().map(move |is_editing| {
+        let meta_form = editing.signal().map(move |is_editing| {
             if is_editing {
                 let editing = editing.clone();
                 collection_meta_edit(col.clone(), move |_col| {
@@ -143,17 +145,56 @@ pub fn collection_view(
                     ),
                 )
             }
-        }))
+        });
+
+        div().child_signal(meta_form)
     } else {
         collection_meta(&col)
     };
 
     let items = load(load_collection_items(col.clone()), move |page| {
-        CollectionItemManager {
+        let item_tagging = Mutable::new(false);
+
+        let items2 = page.items.clone();
+        let item_tagger = item_tagging.clone().signal_ref(move |flag| {
+            if *flag {
+                let toggle = item_tagging.clone();
+                let content = collection_item_tagger::CollectionItemTagger {
+                    items: items2.clone(),
+                    on_complete: Rc::new(move || {
+                        toggle.set(false);
+                    }),
+                }
+                .render();
+
+                let toggle = item_tagging.clone();
+                modal(
+                    content,
+                    move || {
+                        toggle.set(false);
+                    },
+                    true,
+                )
+            } else {
+                let toggle = item_tagging.clone();
+                div().class("mb-2").and(
+                    ButtonBuilder::new()
+                        .label("Tag Items")
+                        .on(move || {
+                            toggle.set(true);
+                        })
+                        .build(),
+                )
+            }
+        });
+
+        let manager = CollectionItemManager {
             collection_id: col.id,
             items: MutableVec::new_with_values(page.items.clone()),
         }
-        .render()
+        .render();
+
+        div().child_signal(item_tagger).and(manager)
     });
 
     div().and(meta).and(Tag::Hr.new()).and(items)
