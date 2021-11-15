@@ -1,7 +1,8 @@
 use brass::{
     component::{msg::MsgComponent, Context, Handle},
-    dom::{builder::div, TagBuilder},
+    dom::{builder::div, Attr, TagBuilder},
     effect::EffectGuard,
+    signal::signal::Mutable,
 };
 use factordb::{
     query::{
@@ -16,7 +17,7 @@ use semantic_ui_core::{
     components::{
         entity::{entity_box::EntityBox, entity_filter::entity_filter},
         loader::Loader,
-        util::{box_, buttons, notification_warning, title_2, ButtonBuilder},
+        util::{box_, buttons, notification_warning, title_2, BtnSize, ButtonBuilder, Color},
     },
     context, EntityRenderOpts,
 };
@@ -37,6 +38,8 @@ pub struct BrowsePage {
     loader: Loader<LoadedPage>,
     _guard: Option<EffectGuard>,
 
+    filter_visible: Mutable<bool>,
+
     // TODO: make page size configurable
     limit: u64,
     page: usize,
@@ -45,6 +48,7 @@ pub struct BrowsePage {
 pub enum Msg {
     Loaded(Result<ItemPage, AnyError>),
     FilterUpdated(Expr),
+    ToggleFilter,
     Next,
     Prev,
 }
@@ -86,6 +90,7 @@ impl MsgComponent for BrowsePage {
             _guard: None,
             page: 1,
             limit,
+            filter_visible: Mutable::new(false),
             // filter_callback: ctx.callback_map(Msg::FilterUpdated),
             // on_delete_callback: ctx.callback_map(Msg::ItemDeleted),
         };
@@ -134,10 +139,33 @@ impl MsgComponent for BrowsePage {
                     self.load(q, &ctx);
                 }
             }
+            Msg::ToggleFilter => {
+                self.filter_visible.replace_with(|x| !*x);
+                tracing::trace!(visible = self.filter_visible.get(), "filter visible");
+            }
         }
     }
 
     fn render(&mut self, ctx: Context<Self>) -> TagBuilder {
+        let action_bar = box_().and(
+            ButtonBuilder::new()
+                .icon("fas fa-search")
+                .on(ctx.callback_msg(|| Msg::ToggleFilter))
+                .build()
+                .class_signal_toggle(Color::Info, self.filter_visible.signal()),
+        );
+
+        let handle = ctx.handle();
+        let filter = box_()
+            .style_signal(
+                brass::dom::Style::Display,
+                self.filter_visible
+                    .signal_ref(|flag| if *flag { "block" } else { "none" }),
+            )
+            .and(entity_filter(move |query| {
+                handle.send(Msg::FilterUpdated(query.build_expr()));
+            }));
+
         let handle = ctx.handle();
         let content = self.loader.signal_render(move |page| {
             if page.items.is_empty() {
@@ -158,12 +186,10 @@ impl MsgComponent for BrowsePage {
             }
         });
 
-        let handle = ctx.handle();
         div()
             .and(title_2().and("Browse"))
-            .and(box_().and(entity_filter(move |query| {
-                handle.send(Msg::FilterUpdated(query.build_expr()));
-            })))
+            .and(action_bar)
+            .and(filter)
             .child_signal(content)
     }
 }

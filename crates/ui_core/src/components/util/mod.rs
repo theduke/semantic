@@ -339,6 +339,11 @@ impl ButtonBuilder {
         self
     }
 
+    pub fn signal_active(mut self, s: impl Signal<Item = bool> + 'static) -> Self {
+        self.tag.add_class_signal_toggle(Cls::IsActive, s);
+        self
+    }
+
     pub fn signal_disabled(mut self, s: impl Signal<Item = bool> + 'static) -> Self {
         self.tag.add_attr_signal_toggle(Attr::Disabled, s);
         self
