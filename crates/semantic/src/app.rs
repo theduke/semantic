@@ -152,7 +152,7 @@ impl App {
                 let log_config = logfs::LogConfig {
                     path: data_path.clone().into(),
                     raw_mode: crypto.raw,
-                    allow_create: !crypto.raw,
+                    allow_create: true,
                     crypto: Some(logfs::CryptoConfig {
                         key: crypto.key.clone().into(),
                         salt: crypto
