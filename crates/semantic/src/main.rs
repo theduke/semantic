@@ -113,26 +113,26 @@ struct GenerateTypescript {}
 /// Run the semantic server backend.
 #[derive(StructOpt)]
 struct CommandServer {
-    #[structopt(long)]
+    #[structopt(long, env = "SEMANTIC_DATA_PATH")]
     data_path: Option<String>,
-    #[structopt(long, short)]
+    #[structopt(long, short, env = "SEMANTIC_KEY")]
     key: Option<String>,
-    #[structopt(long)]
+    #[structopt(long, env = "SEMANTIC_KEY_ITERATIONS")]
     key_iterations: Option<u32>,
-    #[structopt(long)]
+    #[structopt(long, env = "SEMANTIC_SALT")]
     salt: Option<String>,
 
-    #[structopt(long)]
+    #[structopt(long, env = "SEMANTIC_DENO_PLUGIN_DIR")]
     deno_plugin_dir: Option<String>,
 
     #[structopt(long)]
     no_backend: bool,
     /// The interface to listen on.
     /// eg: `0.0.0.0:3000`
-    #[structopt(long)]
-    interface: Option<String>,
+    #[structopt(long, env = "SEMANTIC_ADDRESS")]
+    address: Option<String>,
     /// The key used for JWT token encryption.
-    #[structopt(long)]
+    #[structopt(long, env = "SEMANTIC_TOKEN_KEY")]
     token_key: Option<String>,
 }
 
