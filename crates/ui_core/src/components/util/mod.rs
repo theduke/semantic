@@ -589,9 +589,9 @@ impl Render for FormFieldBuilder {
     }
 }
 
-pub fn form_field<V: Clone>(
+pub fn form_field<V: Clone, F: 'static>(
     name: &str,
-    handle: FieldHandle<V, String>,
+    handle: FieldHandle<V, F>,
     mut content: TagBuilder,
 ) -> TagBuilder {
     let help = tag(Tag::P).class(Cls::Help);
@@ -726,6 +726,11 @@ where
     F: Clone + Hash + Eq + 'static,
 {
     let mut tags = Vec::new();
+
+    if options.is_empty() {
+        tags.push(Tag::P.new().and("No options available."));
+    }
+
     for option in options {
         let tag = span()
             .class(Cls::Tag)
