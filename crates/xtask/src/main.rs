@@ -33,6 +33,7 @@ fn main() -> Result<(), DynError> {
         &["watch-server", "--no-backend"] => cmd_watch_server(false),
         &["watch-ui"] => trunk_watch_ui(false),
         &["watch-ui", "--release"] => trunk_watch_ui(true),
+        &["build"] => cmd_build(),
         &["install"] => cmd_install(),
         &["build-wasm-js"] => gen_javascript(),
         &["help"] => {
@@ -91,7 +92,6 @@ fn cmd_watch_server(default_backend: bool) -> Result<(), DynError> {
         ;
 
     if default_backend {
-        cmd.args(&["--data-path", &data_path, "--key", "testkey", "--key-iterations", "1"]);
         cmd.args(&["--data-path", &data_path, "--key", "semantic", "--key-iterations", "1"]);
     } else {
         cmd.arg("--no-backend");
@@ -120,6 +120,18 @@ fn cmd_install_git_hooks() -> Result<(), DynError> {
     eprintln!("Installing git hooks...");
     devx_pre_commit::install_self_as_hook(&devx_pre_commit::locate_project_root()?)?;
     eprintln!("Git hooks installed!");
+    Ok(())
+}
+
+fn cmd_build() -> Result<(), DynError> {
+    eprintln!("Building ui...");
+    task_build_ui(true)?;
+    eprintln!("Building crate...");
+    Command::new("cargo")
+        .args(&["build", "--path", "crates/semantic", "--release"])
+        .current_dir(root_path()?)
+        .run()?;
+    eprintln!("Built!");
     Ok(())
 }
 
