@@ -12,9 +12,17 @@ use crate::{
     validate::{AndValidator, StringRequired, Validator},
 };
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Default)]
 pub struct ExistingTagValidator {
     pub tags: HashSet<String>,
+}
+
+impl ExistingTagValidator {
+    pub fn from_tags(tags: impl IntoIterator<Item = impl AsRef<str>>) -> Self {
+        Self {
+            tags: tags.into_iter().map(|x| x.as_ref().to_string()).collect(),
+        }
+    }
 }
 
 impl Validator<String> for ExistingTagValidator {

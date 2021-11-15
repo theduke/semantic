@@ -1,15 +1,21 @@
 use std::{collections::HashMap, rc::Rc};
 
 use brass::{
-    dom::{builder::div, TagBuilder},
+    component::{msg::MsgComponent, Component},
+    dom::{builder::div, Render, TagBuilder},
     signal::signal::Mutable,
 };
-use factordb::Id;
+use factordb::{
+    query::select::{Item, Page},
+    schema::EntityContainer,
+    Id,
+};
 use semantic_core::base::Tag;
 
 use crate::components::{
+    entity::entity_deleter::EntityDeleter,
     loader::load,
-    util::{box_, button, notification_warning, subtitle_4, title_2},
+    util::{box_, button, notification_warning, subtitle_4, title_2, ButtonBuilder},
 };
 
 use super::tag_form::ExistingTagValidator;
@@ -51,14 +57,57 @@ impl TagNode {
         s
     }
 
-    fn render_level(items: &[TagNode], depth: usize) -> TagBuilder {
-        div().and_iter(items.iter().map(|node| node.render(depth)))
+    fn render_level(items: &[TagNode], depth: usize, on_delete: Rc<dyn Fn(Id)>) -> TagBuilder {
+        div().and_iter(
+            items
+                .iter()
+                .map(|node| node.render(depth, on_delete.clone())),
+        )
     }
 
-    fn render(&self, depth: usize) -> TagBuilder {
+    fn render(&self, depth: usize, on_delete: Rc<dyn Fn(Id)>) -> TagBuilder {
+        let deleting = Mutable::new(false);
+
+        let children = Self::render_level(&self.children, depth + 1, on_delete.clone());
+
+        let tag = self.tag.clone();
+        let deleter = deleting.clone().signal_ref(move |flag| {
+            if *flag {
+                let item = Item::new(tag.clone().into_map().unwrap());
+
+                let deleting = deleting.clone();
+                let on_delete = on_delete.clone();
+                let id = tag.id;
+                let d = EntityDeleter {
+                    item,
+                    on_delete: Box::new(move || {
+                        on_delete(id);
+                    }),
+                    on_cancel: Box::new(move || {
+                        deleting.set(false);
+                    }),
+                }
+                .render();
+
+                div().class("mt-2").class("mb-2").and(d)
+            } else {
+                let deleting = deleting.clone();
+                ButtonBuilder::new()
+                    .color(crate::components::util::Color::Danger)
+                    .icon("fas fa-trash")
+                    .size_small()
+                    .on(move || {
+                        deleting.set(true);
+                    })
+                    .build()
+                    .class("ml-2")
+            }
+        });
+
         let tag = button().and(&self.tag.name);
-        let children = Self::render_level(&self.children, depth + 1);
-        div().class("mb-2").and((tag, children))
+        let row = div().and(tag).child_signal(deleter);
+
+        div().class("mb-2").and(row).and(children)
     }
 
     fn sort_children(&mut self) {
@@ -66,9 +115,66 @@ impl TagNode {
     }
 }
 
+enum Msg {
+    TagCreated(Tag),
+    TagDeleted(Id),
+}
+
 struct State {
-    tree: Vec<TagNode>,
     validator: Rc<ExistingTagValidator>,
+    tree: Mutable<Vec<TagNode>>,
+}
+
+impl MsgComponent for State {
+    type Properties = Page<Tag>;
+    type Msg = Msg;
+
+    fn init(props: Self::Properties, _ctx: brass::component::Context<Self>) -> Self {
+        let val = ExistingTagValidator::from_tags(props.items.iter().map(|x| &x.name));
+        let mut tree = TagNode::build_tree(props.items);
+        tree.sort_by(|a, b| a.tag.name.cmp(&b.tag.name));
+
+        Self {
+            tree: Mutable::new(tree),
+            validator: Rc::new(val),
+        }
+    }
+
+    fn update(&mut self, msg: Self::Msg, _ctx: brass::component::Context<Self>) {
+        match msg {
+            Msg::TagCreated(tag) => {
+                let mut lock = self.tree.lock_mut();
+                lock.push(TagNode {
+                    tag,
+                    children: Vec::new(),
+                });
+                lock.sort_by(|a, b| a.tag.name.cmp(&b.tag.name));
+            }
+            Msg::TagDeleted(id) => {
+                let mut lock = self.tree.lock_mut();
+                lock.retain(|x| x.tag.id != id);
+            }
+        }
+    }
+
+    fn render(&mut self, ctx: brass::component::Context<Self>) -> TagBuilder {
+        let on_created = ctx.on(Msg::TagCreated);
+        let form = super::tag_create(on_created, self.validator.clone());
+        let form_wrap = box_().and((subtitle_4().and("New Tag"), form));
+
+        let on_delete = Rc::new(ctx.on(Msg::TagDeleted));
+
+        div()
+            .and(title_2().and("Tags"))
+            .and(form_wrap)
+            .child_signal(self.tree.signal_ref(move |tree| {
+                if tree.is_empty() {
+                    notification_warning().and("No tags found.")
+                } else {
+                    TagNode::render_level(tree, 0, on_delete.clone())
+                }
+            }))
+    }
 }
 
 pub fn tag_manager() -> TagBuilder {
@@ -77,43 +183,7 @@ pub fn tag_manager() -> TagBuilder {
             .select(Tag::query_all())
             .await?
             .convert_data::<Tag>()?;
-        let existing_names = page.items.iter().map(|t| t.name.clone()).collect();
-        let validator = Rc::new(ExistingTagValidator {
-            tags: existing_names,
-        });
-
-        let tree = TagNode::build_tree(page.items);
-        Ok(Mutable::new(State { tree, validator }))
+        Ok(page)
     };
-
-    load(f, |state| {
-        let state2 = state.clone();
-
-        let content = state.signal_ref(move |data| {
-            let state = state2.clone();
-            let form = super::tag_create(
-                move |tag| {
-                    let mut data = state.lock_mut();
-                    data.tree.push(TagNode {
-                        tag,
-                        children: Vec::new(),
-                    });
-                    data.tree.sort_by(|a, b| a.tag.name.cmp(&b.tag.name));
-                    // FIXME: extend validator.
-                },
-                data.validator.clone(),
-            );
-            let form_wrap = box_().and((subtitle_4().and("New Tag"), form));
-
-            let tree = if data.tree.is_empty() {
-                notification_warning().and("No tags found.")
-            } else {
-                TagNode::render_level(&data.tree, 0)
-            };
-
-            div().and(form_wrap).and(tree)
-        });
-
-        div().and(title_2().and("Tags")).child_signal(content)
-    })
+    load(f, |page| State::build(page.clone()))
 }
