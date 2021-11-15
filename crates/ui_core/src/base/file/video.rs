@@ -2,7 +2,7 @@ use wasm_bindgen::JsCast;
 
 use brass::dom::{Attr, Event, Tag, TagBuilder};
 use factordb::{query::select::Item, schema::AttrMapExt};
-use semantic_core::base::{AttrBlobUri, AttrDownloadUrl};
+use semantic_core::base::{AttrBlobUri, AttrDownloadUrl, AttrPreviewImageUrl};
 
 use crate::{
     base::plugin::build_blob_url,
@@ -15,6 +15,7 @@ pub struct VideoInfo {
     pub url: String,
     pub mime_type: Option<String>,
     pub supports_browser: bool,
+    pub preview_image_url: Option<url::Url>,
 }
 
 impl VideoInfo {
@@ -38,10 +39,13 @@ impl VideoInfo {
                 .map(|ty| ty == "video/mp4" || ty == "video/webm")
                 .unwrap_or_default();
 
+        let preview_image_url = item.data.get_attr::<AttrPreviewImageUrl>();
+
         Some(VideoInfo {
             url,
             mime_type,
             supports_browser,
+            preview_image_url,
         })
     }
 
