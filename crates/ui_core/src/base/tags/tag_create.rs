@@ -17,7 +17,7 @@ pub fn tag_create(
     validator: Rc<ExistingTagValidator>,
 ) -> TagBuilder {
     let tag = Tag {
-        id: Id::random(),
+        id: Id::nil(),
         name: String::new(),
         description: None,
         parent_id: None,
@@ -31,6 +31,8 @@ pub fn tag_create(
             let on_created = on_created.clone();
 
             Box::pin(async move {
+                let mut tag = tag.clone();
+                tag.id = Id::random();
                 context::api()
                     .batch(BatchUpdate::with_action(Mutate::create(
                         tag.id,
