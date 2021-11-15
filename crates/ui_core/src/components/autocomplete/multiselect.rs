@@ -2,7 +2,7 @@ use std::rc::Rc;
 
 use brass::{
     component::{msg::MsgComponent, Context, Handle},
-    dom::{Attr, ClickEvent, InputEvent, Render, Tag, TagBuilder},
+    dom::{Attr, InputEvent, Render, Tag, TagBuilder},
     signal::{
         signal::{Mutable, SignalExt},
         signal_vec::MutableVec,
@@ -10,13 +10,12 @@ use brass::{
 };
 use factordb::AnyError;
 use futures::future::LocalBoxFuture;
+use wasm_bindgen::JsCast;
 
 use crate::{
     components::{
         loader::{spinner, Loader},
-        util::{
-            box_, bulma_tag, buttons, notification_default, tag_with_delete, tags, ButtonBuilder,
-        },
+        util::{box_, buttons, notification_default, tag_with_delete, tags, ButtonBuilder},
     },
     SharedRenderer0,
 };
@@ -39,6 +38,8 @@ pub enum MultiSelectMsg<T> {
     Cancel,
 
     SetAvailable(Vec<T>),
+
+    SearchElemChanged(web_sys::HtmlElement),
 }
 
 pub struct MultiSelectRender<'a, T: Clone + 'static> {
@@ -52,7 +53,7 @@ pub struct MultiSelectRender<'a, T: Clone + 'static> {
     pub available: &'a MutableVec<(ItemId, T)>,
     /// Fallback content to show if nothing is available.
     pub available_fallback: &'a Option<SharedRenderer0>,
-    pub search_term: &'a str,
+    pub search_term: &'a Mutable<String>,
     pub submit_label: Option<&'a str>,
     pub cancel_label: Option<&'a str>,
     pub status: &'a Loader<()>,
@@ -92,6 +93,7 @@ impl<T: Clone + 'static> Render for MultiSelect<T> {
 
 pub struct State<T: Clone + 'static> {
     search: Option<Box<dyn Fn(String) -> LocalBoxFuture<'static, Result<Vec<T>, AnyError>>>>,
+
     get_id: fn(&T) -> String,
     load_more: Option<Box<dyn Fn(usize)>>,
     on_change: Option<Rc<dyn Fn(Vec<T>)>>,
@@ -111,6 +113,7 @@ pub struct State<T: Clone + 'static> {
     search_term: Mutable<String>,
 
     loader: Loader<()>,
+    search_elem: Option<web_sys::HtmlElement>,
 }
 
 // brass::enable_props!(wrapped TagSelector => State);
@@ -157,6 +160,7 @@ impl<T: Clone + 'static> MsgComponent for State<T> {
             selected_fallback: props.selected_fallback,
             available_fallback: props.available_fallback,
             get_id,
+            search_elem: None,
         }
     }
 
@@ -165,13 +169,8 @@ impl<T: Clone + 'static> MsgComponent for State<T> {
             MultiSelectMsg::Select(id) => {
                 let mut available = self.available.lock_mut();
 
-                tracing::trace!(?id, available_len=?available.len(), "Msg::Select");
-
-                let (_, value) = if let Some(index) = available.iter().position(|(id2, _)| {
-                    tracing::trace!(?id, ?id2, "compare");
-                    &id == id2
-                }) {
-                    available.remove(index)
+                let value = if let Some(index) = available.iter().position(|(id2, _)| &id == id2) {
+                    available.remove(index).1
                 } else {
                     return;
                 };
@@ -213,6 +212,8 @@ impl<T: Clone + 'static> MsgComponent for State<T> {
                     self.selected.lock_mut().push_cloned((id, value));
                 }
 
+                self.search_term.set(String::new());
+
                 if let Some(on) = &self.on_change {
                     on(self
                         .selected
@@ -221,6 +222,11 @@ impl<T: Clone + 'static> MsgComponent for State<T> {
                         .iter()
                         .map(|(_, v)| v.clone())
                         .collect());
+                }
+
+                // Re-focus the search widget.
+                if let Some(elem) = &self.search_elem {
+                    elem.focus().ok();
                 }
             }
             MultiSelectMsg::Remove(id) => {
@@ -268,6 +274,11 @@ impl<T: Clone + 'static> MsgComponent for State<T> {
 
                 if let Some(on) = &self.on_change {
                     on(selected.as_slice().iter().map(|(_, v)| v.clone()).collect());
+                }
+
+                // Re-focus the search widget.
+                if let Some(elem) = &self.search_elem {
+                    elem.focus().ok();
                 }
             }
             MultiSelectMsg::Search(term) => {
@@ -333,6 +344,9 @@ impl<T: Clone + 'static> MsgComponent for State<T> {
                         .collect(),
                 );
             }
+            MultiSelectMsg::SearchElemChanged(elem) => {
+                self.search_elem = Some(elem);
+            }
         }
     }
 
@@ -341,7 +355,7 @@ impl<T: Clone + 'static> MsgComponent for State<T> {
             status: &self.loader,
             selected: &self.selected,
             available: &self.available,
-            search_term: self.search_term.lock_ref().as_str(),
+            search_term: &self.search_term,
             submit_label: self.on_submit.as_ref().map(|x| x.label.as_str()),
             cancel_label: self.on_cancel.as_ref().map(|x| x.label.as_str()),
 
@@ -362,13 +376,21 @@ pub fn multiselect_render_tags<'a, T: Clone>(
             .new()
             .class("input")
             .attr(Attr::Placeholder, "Search...")
-            .attr(Attr::Value, args.search_term)
+            .attr_signal(Attr::Value, args.search_term.signal_cloned())
             .on(handle.on_opt(|ev: InputEvent| ev.value().map(MultiSelectMsg::Search)));
-        Tag::P
+
+        let input_elem = input
+            .elem()
+            .dyn_ref::<web_sys::HtmlElement>()
+            .unwrap()
+            .clone();
+
+        let mut p = Tag::P
             .new()
             .class("control")
             .class("has-icons-left")
             .and(input)
+            .class("mb-2")
             .and(
                 Tag::Span
                     .new()
@@ -376,7 +398,14 @@ pub fn multiselect_render_tags<'a, T: Clone>(
                     .class("is-small")
                     .class("is-left")
                     .and(Tag::I.new().class("fas").class("fa-search")),
-            )
+            );
+
+        let handle = handle.clone();
+        p.register_future(async move {
+            input_elem.focus().ok();
+            handle.send(MultiSelectMsg::SearchElemChanged(input_elem));
+        });
+        p
     };
 
     let actions = {
@@ -444,23 +473,25 @@ pub fn multiselect_render_tags<'a, T: Clone>(
         .as_ref()
         .map(|x| x())
         .unwrap_or_else(|| notification_default().and("Nothing found. Try searching."));
-    let available = tags().children_signal_with_fallback(
+    let available = buttons().children_signal_with_fallback(
         args.available.signal_vec_cloned(),
         move |(id, item)| {
             let id = id.clone();
-            bulma_tag()
-                .and(get_name(item))
-                .on(handle.on(move |_: ClickEvent| MultiSelectMsg::Select(id.clone())))
+            ButtonBuilder::new()
+                .size_small()
+                .label(get_name(item))
+                .on(handle.callback(move || MultiSelectMsg::Select(id.clone())))
+                .build()
                 .build()
         },
         fallback,
     );
 
     box_()
-        .and(search)
-        .and(actions)
         .and(selected)
+        .and(actions)
         .and(Tag::Hr.new())
+        .and(search)
         .child_signal_opt(loader_signal)
         .and(available)
 }
