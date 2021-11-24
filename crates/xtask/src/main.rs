@@ -33,6 +33,7 @@ fn main() -> Result<(), DynError> {
         &["watch-server", "--no-backend"] => cmd_watch_server(false),
         &["watch-ui"] => trunk_watch_ui(false),
         &["watch-ui", "--release"] => trunk_watch_ui(true),
+        &["build-server"] => cmd_build_server(),
         &["build"] => cmd_build(),
         &["install"] => cmd_install(),
         &["build-wasm-js"] => gen_javascript(),
@@ -92,15 +93,21 @@ fn cmd_watch_server(default_backend: bool) -> Result<(), DynError> {
         ;
 
     if default_backend {
-        cmd.args(&["--data-path", &data_path, "--key", "semantic", "--key-iterations", "1"]);
+        cmd.args(&[
+            "--data-path",
+            &data_path,
+            "--key",
+            "semantic",
+            "--key-iterations",
+            "1",
+        ]);
     } else {
         cmd.arg("--no-backend");
     }
 
     if std::env::var("RUST_LOG").is_err() {
         cmd.env(
-            "RUST_LOG",
-            // "semantic=trace,semantic_core=trace,factordb=info",
+            "RUST_LOG", // "semantic=trace,semantic_core=trace,factordb=info",
             "trace",
         );
     }
@@ -123,15 +130,20 @@ fn cmd_install_git_hooks() -> Result<(), DynError> {
     Ok(())
 }
 
-fn cmd_build() -> Result<(), DynError> {
-    eprintln!("Building ui...");
-    task_build_ui(true)?;
-    eprintln!("Building crate...");
+fn cmd_build_server() -> Result<(), DynError> {
+    eprintln!("Building semantic...");
     Command::new("cargo")
-        .args(&["build", "--path", "crates/semantic", "--release"])
+        .args(&["build", "-p", "semantic", "--release"])
         .current_dir(root_path()?)
         .run()?;
     eprintln!("Built!");
+    Ok(())
+}
+
+fn cmd_build() -> Result<(), DynError> {
+    eprintln!("Building ui...");
+    task_build_ui(true)?;
+    cmd_build_server()?;
     Ok(())
 }
 
@@ -139,6 +151,7 @@ fn cmd_install() -> Result<(), DynError> {
     eprintln!("Installing...");
     task_build_ui(true)?;
     Command::new("cargo")
+        .env("SEMANTIC_UI_DIR", ui_dist_path()?)
         .args(&["install", "--path", "crates/semantic"])
         .current_dir(root_path()?)
         .run()?;
@@ -157,15 +170,17 @@ fn build_styles() -> Result<(), DynError> {
 }
 
 fn task_build_ui(release: bool) -> Result<(), DynError> {
-    let target_dir = ui_dist_path()?;
+    eprintln!("Building ui...");
+    let target_dir = ui_dist_path().unwrap();
     if !target_dir.is_dir() {
-        std::fs::create_dir_all(&target_dir)?;
+        std::fs::create_dir_all(&target_dir).unwrap();
     }
 
     let rustflags = vec!["--cfg=web_sys_unstable_apis" /*, "-Cdebuginfo=0"*/];
 
     let mut cmd = Command::new("wasm-pack");
     cmd.env("RUSTFLAGS", rustflags.join(" "))
+        .current_dir(ui_path()?)
         .env("CARGO_TARGET_DIR", wasm_target_path()?)
         .args(&["build", "--target", "web"])
         .arg("--out-dir")
@@ -174,15 +189,19 @@ fn task_build_ui(release: bool) -> Result<(), DynError> {
     if !release {
         cmd.arg("--dev");
     }
+    eprintln!("Building ui crate...\n{:?}", cmd);
     (&mut cmd).run()?;
 
+    eprintln!("Building styles...");
     build_styles()?;
 
+    eprintln!("Copying index.html...");
     std::fs::copy(
         ui_path()?.join("index.html"),
         ui_dist_path()?.join("index.html"),
     )?;
 
+    eprintln!("Copying webfonts...");
     let font_dir = ui_dist_path()?.join("webfonts");
     std::fs::create_dir_all(&font_dir)?;
     for res in std::fs::read_dir(ui_path()?.join("assets/fontawesome-free-5.15.4-web/webfonts"))? {
@@ -205,18 +224,21 @@ fn trunk_watch_ui(release: bool) -> Result<(), DynError> {
 }
 
 fn gen_javascript() -> Result<(), DynError> {
-    let mut gen = witx_bindgen_gen_spidermonkey::SpiderMonkeyWasm::new("foo.js", "");
-    gen.import_spidermonkey(true);
+    // let mut gen = witx_bindgen_gen_spidermonkey::SpiderMonkeyWasm::new("foo.js", "");
+    // gen.import_spidermonkey(true);
     Ok(())
 }
 
 fn root_path() -> Result<PathBuf, DynError> {
-    let manifest = std::env::var("CARGO_MANIFEST_DIR")?;
-    let path = PathBuf::from(manifest);
-    path.parent()
-        .and_then(|x| x.parent())
-        .map(|x| x.to_path_buf())
-        .ok_or_else(|| "Could not find project root".into())
+    if let Ok(manifest) = std::env::var("CARGO_MANIFEST_DIR") {
+        let path = PathBuf::from(manifest);
+        path.parent()
+            .and_then(|x| x.parent())
+            .map(|x| x.to_path_buf())
+            .ok_or_else(|| "Could not find project root".into())
+    } else {
+        Ok(std::env::current_dir()?)
+    }
 }
 
 fn ui_dist_path() -> Result<PathBuf, DynError> {
