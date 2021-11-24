@@ -18,9 +18,14 @@ pub use self::collection::*;
 mod tags;
 pub use self::tags::*;
 
+use factordb::data::ValueType;
+use factordb::schema::EntityAttribute;
+use factordb::schema::EntitySchema;
+use factordb::Id;
+use factordb::Value;
 use factordb::{
     data::{DataMap, Timestamp},
-    query::migrate::Migration,
+    query::migrate::{self, Migration},
     schema::{builtin::AttrIdent, AttrMapExt, AttributeDescriptor, EntityDescriptor},
     Attribute,
 };
@@ -61,6 +66,47 @@ pub struct AttrDateTime(Timestamp);
 #[factor(namespace = "semantic", title = "Username")]
 pub struct AttrUsername(String);
 
+#[derive(serde::Serialize, serde::Deserialize, Clone)]
+pub enum TextFormat {
+    #[serde(rename = "plain")]
+    Plain,
+    #[serde(rename = "markdown")]
+    Markdown,
+}
+
+impl TextFormat {
+    fn to_str(&self) -> &'static str {
+        match self {
+            TextFormat::Plain => "plain",
+            TextFormat::Markdown => "markdown",
+        }
+    }
+}
+
+impl AttributeDescriptor for TextFormat {
+    const NAMESPACE: &'static str = "semantic";
+    const PLAIN_NAME: &'static str = "text_format";
+    const QUALIFIED_NAME: &'static str = "semantic/text_format";
+    const IDENT: factordb::Ident = factordb::Ident::new_static(Self::QUALIFIED_NAME);
+    type Type = TextFormat;
+
+    fn schema() -> factordb::schema::AttributeSchema {
+        factordb::schema::AttributeSchema {
+            id: factordb::Id::nil(),
+            ident: Self::QUALIFIED_NAME.to_string(),
+            title: Some("Text Format".to_string()),
+            description: None,
+            value_type: ValueType::Union(vec![
+                ValueType::Const(Value::String("plain".to_string())),
+                ValueType::Const(Value::String("markdown".to_string())),
+            ]),
+            unique: false,
+            index: false,
+            strict: false,
+        }
+    }
+}
+
 pub struct SemanticBasePlugin;
 
 impl PluginDescriptor for SemanticBasePlugin {
@@ -90,6 +136,7 @@ impl Plugin for SemanticBasePlugin {
                     AttrUrl::schema(),
                     AttrPreviewImageUrl::schema(),
                     AttrUsername::schema(),
+                    TextFormat::schema(),
                     // file
                     AttrBlobUri::schema(),
                     AttrMimeType::schema(),
@@ -137,7 +184,7 @@ impl Plugin for SemanticBasePlugin {
         }
     }
 
-    fn migrations(&self) -> Vec<factordb::query::migrate::Migration> {
+    fn migrations(&self) -> Vec<migrate::Migration> {
         let first = Migration::with_name("semantic/base/v1".to_string())
             .attr_create(AttrTitle::schema())
             .attr_create(AttrDateTime::schema())
@@ -163,13 +210,48 @@ impl Plugin for SemanticBasePlugin {
             .entity_create(Image::schema())
             .entity_create(Video::schema())
             .entity_create(SocialMediaPost::schema())
-            .entity_create(notes::Note::schema())
+            .entity_create(EntitySchema {
+                id: Id::nil(),
+                ident: Note::QUALIFIED_NAME.to_string(),
+                title: Some("Note".to_string()),
+                description: None,
+                attributes: vec![
+                    EntityAttribute {
+                        attribute: AttrTitle::IDENT,
+                        cardinality: factordb::schema::Cardinality::Required,
+                    },
+                    EntityAttribute {
+                        attribute: AttrNoteBody::IDENT,
+                        cardinality: factordb::schema::Cardinality::Required,
+                    },
+                ],
+                extends: vec![],
+                strict: false,
+            })
             .entity_create(collection::Collection::schema())
             .entity_create(tags::Tag::schema());
 
         let create_comment = Migration::with_name("create_comment_attribute".to_string())
             .attr_create(AttrComment::schema());
 
-        vec![first, create_comment]
+        let create_note_body_format = Migration::with_name("create_text_format".to_string())
+            .attr_create(TextFormat::schema());
+
+        let add_text_format_to_note = Migration::with_name("add_text_format_to_note".to_string())
+            .action(migrate::SchemaAction::EntityAttributeAdd(
+                migrate::EntityAttributeAdd {
+                    entity: Note::IDENT.to_string(),
+                    attribute: TextFormat::IDENT.to_string(),
+                    cardinality: factordb::schema::Cardinality::Required,
+                    default_value: Some(TextFormat::Markdown.to_str().into()),
+                },
+            ));
+
+        vec![
+            first,
+            create_comment,
+            create_note_body_format,
+            add_text_format_to_note,
+        ]
     }
 }

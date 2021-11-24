@@ -6,7 +6,7 @@ use factordb::{
 };
 use serde::{Deserialize, Serialize};
 
-use super::AttrTitle;
+use super::{AttrTitle, TextFormat};
 
 #[derive(Attribute)]
 #[factor(namespace = "semantic", title = "Note")]
@@ -26,6 +26,10 @@ pub struct Note {
     #[factor(attr = AttrNoteBody)]
     #[serde(rename = "semantic/note_body")]
     pub body: String,
+
+    #[factor(attr = TextFormat)]
+    #[serde(rename = "semantic/text_format")]
+    pub format: TextFormat,
 
     #[factor(ignore)]
     #[serde(flatten)]
