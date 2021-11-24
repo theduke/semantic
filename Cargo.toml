@@ -16,10 +16,12 @@ exclude = [
     "crates/xtask",
     "crates/plugin_python",
     "crates/plugin_gluon",
+
+    "brass",
+    "factordb",
 ]
 
 [patch.crates-io]
-brass = {path = "../brass/brass"}
-# brass_bulma = {path = "../brass/brass_bulma"}
-factordb = { path = "../factordb/factordb"}
-factor_tools = { path = "../factordb/factor_tools" }
+brass = { git = "https://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@github.com/theduke/brass.git", branch = "main" }
+factordb = { version = "0.1", git = "https://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@github.com/theduke/factordb.git", branch = "main" }
+factor_tools = { version = "0.1", git = "https://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@github.com/theduke/factordb.git", branch = "main" }
