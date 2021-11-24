@@ -81,7 +81,7 @@ pub fn login(on_success: impl Fn(SemanticSchema) + 'static) -> TagBuilder {
 pub fn logout() -> TagBuilder {
     let load = Loader::new_spawn(async {
         context::api().close_backend().await?;
-        web_sys::window().unwrap().location().reload().unwrap();
+        web_sys::window().unwrap().location().replace("/").ok();
         Ok(())
     })
     .signal_render(|_| div());
