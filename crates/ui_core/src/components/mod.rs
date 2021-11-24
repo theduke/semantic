@@ -5,7 +5,7 @@ pub mod autocomplete;
 pub mod loader;
 
 pub mod entity;
-// pub mod markdown;
+pub mod markdown;
 // pub mod form;
 
 // mod spinner;
