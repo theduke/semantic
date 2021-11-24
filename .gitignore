@@ -3,3 +3,4 @@ crates/contrib/
 .direnv.fish
 /data
 /lib/contrib
+/result
