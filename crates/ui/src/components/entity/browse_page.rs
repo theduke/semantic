@@ -1,6 +1,6 @@
 use brass::{
     component::{msg::MsgComponent, Context, Handle},
-    dom::{builder::div, Attr, TagBuilder},
+    dom::{builder::div, TagBuilder},
     effect::EffectGuard,
     signal::signal::Mutable,
 };
@@ -17,7 +17,7 @@ use semantic_ui_core::{
     components::{
         entity::{entity_box::EntityBox, entity_filter::entity_filter},
         loader::Loader,
-        util::{box_, buttons, notification_warning, title_2, BtnSize, ButtonBuilder, Color},
+        util::{box_, buttons, notification_warning, title_2, ButtonBuilder, Color},
     },
     context, EntityRenderOpts,
 };

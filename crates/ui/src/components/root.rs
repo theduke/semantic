@@ -5,7 +5,7 @@ use brass::{
 use semantic_ui_core::{
     components::{
         entity::entity_page,
-        util::{buttons, container, icon_fa, Cls},
+        util::{buttons, container, icon_fa},
     },
     routing::{link, Route},
 };
