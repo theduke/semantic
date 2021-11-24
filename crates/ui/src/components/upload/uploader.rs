@@ -21,13 +21,13 @@ use semantic_core::{
 use semantic_ui_core::{
     components::{
         autocomplete::entity_picker::entity_picker,
-        entity::entity_view::EntityView,
+        entity::entity_box::EntityBox,
         loader::Loader,
         util::{
             box_, button, buttons, file_input, notification_default, subtitle_4, ButtonBuilder, Cls,
         },
     },
-    context,
+    EntityRenderOpts,
 };
 use uuid::Uuid;
 use wasm_bindgen::JsCast;
@@ -321,21 +321,20 @@ impl MsgComponent for State {
                 notification_default().and("Select files to upload."),
             );
 
-        let registry = context::registry();
         let uploaded_items = div()
             .class("mt-4")
             .and(subtitle_4().and("Uploaded Files"))
             .children_signal_with_fallback(
                 self.uploaded_files.signal_vec_cloned(),
                 move |item| {
-                    EntityView::from_item(
-                        item,
-                        &registry,
-                        &semantic_ui_core::EntityRenderOpts {
+                    EntityBox {
+                        item: item.clone(),
+                        options: EntityRenderOpts {
                             editable: false,
                             preview: true,
                         },
-                    )
+                        on_delete: None,
+                    }
                     .render()
                     .build()
                 },
