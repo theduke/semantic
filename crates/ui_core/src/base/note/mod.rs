@@ -9,11 +9,12 @@ use factordb::{
     schema::EntityContainer,
     Id,
 };
-use semantic_core::base::Note;
+use semantic_core::base::{Note, TextFormat};
 
 use crate::{
     components::{
         form::{self, FormLoadFuture},
+        markdown::markdown_view,
         util::{
             form_field_input, form_field_textarea, notification_error, title_2, ButtonBuilder, Cls,
             FormRenderer,
@@ -72,6 +73,7 @@ pub fn note_create(on_created: impl Fn(Note) + 'static) -> TagBuilder {
         id: Id::random(),
         title: String::new(),
         body: String::new(),
+        format: TextFormat::Markdown,
         extra: Default::default(),
     };
     note_form(note.clone(), move |values| {
@@ -121,7 +123,7 @@ pub fn note_create_page(_item: &Item, _opts: &EntityRenderOpts) -> TagBuilder {
 pub fn note_view_immutable(note: &Note) -> TagBuilder {
     div()
         .and(title_2().and(&note.title))
-        .and(div().class(Cls::Content).and(&note.body))
+        .and(div().class(Cls::Content).and(markdown_view(&note.body)))
 }
 
 pub fn note_view(note: Note, opts: &EntityRenderOpts) -> TagBuilder {
