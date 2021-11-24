@@ -52,7 +52,6 @@ include_dir = "0.6.1"
 tower = "0.4.8"
 
 logfs = { path = "../logfs" }
-semantic_core = { path = "../core" }
 sha2 = "0.9.6"
 structopt = "0.3.23"
 uuid = { version = "0.8.2", features = ["v4"] }
@@ -60,6 +59,8 @@ url = "2.2.2"
 # tracing-tree = "0.1.10"
 serde_path_to_error = "0.1.5"
 
-semantic_health = { version = "0.1", path = "../plugins/health", default-features = false }
 oxipng = { version = "5.0.0", optional = true }
 mozjpeg = { version = "0.9.1", optional = true }
+
+semantic_core = { path = "../core" }
+semantic_health = { version = "0.1", path = "../plugins/health", default-features = false }
