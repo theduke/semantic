@@ -31,6 +31,8 @@ pub struct ActiveItem {
     pub title: String,
 }
 
+// TODO: remove allow
+#[allow(dead_code)]
 enum Msg {
     Next,
     Prev,
@@ -359,21 +361,21 @@ impl PlayerHandle {
         self.0.handle.send(Msg::ReplaceItems(items));
     }
 
-    pub fn append_items(&self, items: Vec<Item>) {
-        self.0.handle.send(Msg::AppendItems(items));
-    }
+    // pub fn append_items(&self, items: Vec<Item>) {
+    //     self.0.handle.send(Msg::AppendItems(items));
+    // }
 
     pub fn shuffle(&self) {
         self.0.handle.send(Msg::Shuffle);
     }
 
-    pub fn start(&self) {
-        self.0.handle.send(Msg::Play);
-    }
+    // pub fn start(&self) {
+    //     self.0.handle.send(Msg::Play);
+    // }
 
-    pub fn pause(&self) {
-        self.0.handle.send(Msg::Pause);
-    }
+    // pub fn pause(&self) {
+    //     self.0.handle.send(Msg::Pause);
+    // }
 
     pub fn toggle_paused(&self) {
         self.0.handle.send(Msg::TogglePaused);
@@ -387,9 +389,9 @@ impl PlayerHandle {
         self.0.handle.send(Msg::Prev);
     }
 
-    pub fn set_muted(&self, flag: bool) {
-        self.0.handle.send(Msg::Mute(flag));
-    }
+    // pub fn set_muted(&self, flag: bool) {
+    //     self.0.handle.send(Msg::Mute(flag));
+    // }
 
     pub fn toggle_muted(&self) {
         self.0.handle.send(Msg::ToggleMute);
@@ -411,29 +413,29 @@ impl PlayerHandle {
         self.0.shared.cycle.signal()
     }
 
-    pub fn signal_interval(&self) -> impl Signal<Item = Option<Duration>> {
-        self.0.shared.autoplay_interval.signal()
-    }
+    // pub fn signal_interval(&self) -> impl Signal<Item = Option<Duration>> {
+    //     self.0.shared.autoplay_interval.signal()
+    // }
 
     pub fn signal_item(&self) -> impl Signal<Item = Option<ActiveItem>> {
         self.0.shared.active_item.signal_cloned()
     }
 
-    pub fn signal_position(&self) -> impl Signal<Item = Position> {
-        self.0.shared.position.signal()
-    }
+    // pub fn signal_position(&self) -> impl Signal<Item = Position> {
+    //     self.0.shared.position.signal()
+    // }
 
-    pub fn signal_has_previous(&self) -> impl Signal<Item = bool> {
-        self.0.shared.position.signal().map(|x| x.index > 0)
-    }
+    // pub fn signal_has_previous(&self) -> impl Signal<Item = bool> {
+    //     self.0.shared.position.signal().map(|x| x.index > 0)
+    // }
 
     pub fn signal_no_previous(&self) -> impl Signal<Item = bool> {
         self.0.shared.position.signal().map(|x| x.index < 1)
     }
 
-    pub fn signal_has_next(&self) -> impl Signal<Item = bool> {
-        self.0.shared.position.signal().map(|x| x.index < x.total)
-    }
+    // pub fn signal_has_next(&self) -> impl Signal<Item = bool> {
+    //     self.0.shared.position.signal().map(|x| x.index < x.total)
+    // }
 
     pub fn signal_no_next(&self) -> impl Signal<Item = bool> {
         self.0.shared.position.signal().map(|x| x.index >= x.total)

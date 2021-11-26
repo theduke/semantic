@@ -5,7 +5,6 @@ use factordb::{query::select::Item, schema::AttrMapExt};
 use semantic_core::base::{AttrBlobUri, AttrDownloadUrl, AttrPreviewImageUrl};
 
 use crate::{
-    base::plugin::build_blob_url,
     components::util::notification_warning,
     registry::{DynMediaHandle, MediaHandle, MediaRenderEvent, MediaRenderOpts},
     EntityRenderOpts,

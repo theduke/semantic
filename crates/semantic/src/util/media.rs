@@ -3,9 +3,9 @@ use std::{
     process::{Command, Stdio},
 };
 
-use anyhow::{anyhow, bail, Context};
+use anyhow::{bail, Context};
 use factordb::AnyError;
-use futures::{future::Either, FutureExt, StreamExt, TryFutureExt, TryStreamExt};
+use futures::{FutureExt, StreamExt};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
 pub fn optimize_image_data(data: &[u8]) -> Result<Vec<u8>, AnyError> {

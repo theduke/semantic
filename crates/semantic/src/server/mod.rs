@@ -270,7 +270,6 @@ async fn handler_blob_read(Extension(state): ServerContext, req: Request<Body>) 
 }
 
 async fn serve_video(app: &App, file_path: &str) -> Result<Response<Body>, AnyError> {
-
     let blob = app.require_blob()?;
 
     let mut stream = blob.get_stream(&file_path).await?;
