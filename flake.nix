@@ -50,7 +50,7 @@
         ui = pkgs.rustPlatform.buildRustPackage {
           pname = "semantic-ui";
           version = VERSION;
-          src = ./.;
+          src = self;
 
           CARGO_NET_GIT_FETCH_WITH_CLI = "true";
 
@@ -58,9 +58,7 @@
             lockFile = ./Cargo.lock; 
             outputHashes = {
               "brass-0.1.0" = "1r33089kgfr48727fcz9cm3l3vi69m1y9dm3svrng5dwzvcnv4hz";
-              "factor_macros-0.1.0" = "17l033diygcssg50cqrjp2rfmk1rccpz8369sfzjy8p229skpr1s";
-              # "factor_macros-0.1" = "17l033diygcssg50cqrjp2rfmk1rccpz8369sfzjy8p229skpr1s";
-              # "factordb.1.0" = "17l033diygcssg50cqrjp2rfmk1rccpz8369sfzjy8p229skpr1s";
+              "factor_macros-0.1.0" = "sha256-cNPAqutOvi0cvGXAoO4Gk4NWnTlQMaNK+Vm4sAa22BU=";
             };
           };
           nativeBuildInputs = [ 
@@ -70,7 +68,7 @@
             pkgs.which 
           ] ++ uiBuildInputs;
           buildPhase = ''
-            xtask build-ui
+            xtask build-ui --dev
             mkdir -p $out
             cp -r target/ui/* $out/
           '';
@@ -87,6 +85,7 @@
           # for Typescript plugin runtime.
           deno
         ];
+
 
       in
       rec {
@@ -113,7 +112,7 @@
             lockFile = ./Cargo.lock; 
             outputHashes = {
               "brass-0.1.0" = "1r33089kgfr48727fcz9cm3l3vi69m1y9dm3svrng5dwzvcnv4hz";
-              "factor_macros-0.1.0" = "17l033diygcssg50cqrjp2rfmk1rccpz8369sfzjy8p229skpr1s";
+              "factor_macros-0.1.0" = "sha256-cNPAqutOvi0cvGXAoO4Gk4NWnTlQMaNK+Vm4sAa22BU=";
               # "factor_macros-0.1" = "17l033diygcssg50cqrjp2rfmk1rccpz8369sfzjy8p229skpr1s";
               # "factordb.1.0" = "17l033diygcssg50cqrjp2rfmk1rccpz8369sfzjy8p229skpr1s";
             };
@@ -124,12 +123,13 @@
 
           buildPhase = ''
             mkdir -p target/ui
-            cp -r ${ui}/* target/ui/
-            xtask build-server
+            cp -r ${ui} target/ui
+            xtask build-server --dev
             mkdir -p $out/bin
             cp target/release/semantic $out/bin/
           '';
           checkPhase = "echo skipping checks";
+          installPhase = "echo skipping checks";
         };
 
         defaultPackage = packages.semantic;
@@ -140,13 +140,35 @@
         };
         defaultApp = apps.semantic;
 
-        appimage = pkgs.stdenv.mkDerivation {
-          pname = "semantics";
+        packages.appimage = pkgs.stdenv.mkDerivation {
+          pname = "semantic";
           version = VERSION;
 
-          checkPhase = "echo skipping checks...";
-          installPhase = "echo skipping install...";
+          ARCH = "x86_64"; # required by appimagetool
 
+          src = pkgs.buildEnv {
+            name = "semantic";
+            paths = [
+              packages.semantic
+              pkgs.oxipng
+              pkgs.mozjpeg
+              pkgs.appimagekit
+            ];
+          };
+
+          builder = builtins.toFile "build.sh" ''
+            source $stdenv/setup
+
+            mkdir build
+            cp -rL "$src/bin/oxipng" build
+            cp -rL "$src/bin/jpegtran" build
+            cp -rL "$src/bin/semantic" build
+            cp ${./lib/appimage/semantic.desktop} build
+            cp ${./lib/appimage/appicon.png} build
+
+            mkdir $out
+            appimagetool ./build $out/semantic.AppImage
+          '';
         };
 
         devShell = pkgs.stdenv.mkDerivation {
@@ -161,22 +183,22 @@
             openssl
             gtk3
             glib
-            webkitgtk
             gnumake
 
-            glib-networking
-          ] ++ (with gst_all_1; [
+            # glib-networking
+            # webkitgtk
+          ] /* ++ (with gst_all_1; [
             gst_all_1.gstreamer
             gst_all_1.gst-plugins-base
             gst_all_1.gst-plugins-good
             gst_all_1.gst-plugins-bad
-          ]);
+          ])*/;
           runtimeDependencies = runtimeDeps;
           buildPhase = "";
           installPhase = "";
 
           # Allow `cargo run` etc to find ssl lib.
-          LD_LIBRARY_PATH = "${pkgs.openssl.out}/lib:${pkgs.gtk3}/lib:${pkgs.webkitgtk}/lib:${pkgs.glib.out}/lib:${pkgs.stdenv.cc.cc.lib}/lib64:${pkgs.glib-networking}/lib";
+          # LD_LIBRARY_PATH = "${pkgs.openssl.out}/lib:${pkgs.gtk3}/lib:${pkgs.webkitgtk}/lib:${pkgs.glib.out}/lib:${pkgs.stdenv.cc.cc.lib}/lib64:${pkgs.glib-networking}/lib";
           RUST_BACKTRACE = "1";
           # Use lld linker for speedup.
           RUSTFLAGS = "-C link-arg=-fuse-ld=lld --cfg=web_sys_unstable_apis";
@@ -185,7 +207,7 @@
           # Needed for https / ssl support
           GIO_MODULE_DIR = "${pkgs.glib-networking}/lib/gio/modules/";
 
-          CARGO_NET_GIT_FETCH_WITH_CLI=true;
+          CARGO_NET_GIT_FETCH_WITH_CLI = "true";
 
           # Needed because font rendering in webviewis messed up with wayland 
           # backend.

@@ -33,7 +33,10 @@ fn main() -> Result<(), DynError> {
         &["watch-server", "--no-backend"] => cmd_watch_server(false),
         &["watch-ui"] => trunk_watch_ui(false),
         &["watch-ui", "--release"] => trunk_watch_ui(true),
-        &["build-server"] => cmd_build_server(),
+        &["build-server"] => cmd_build_server(true),
+        &["build-server", "--dev"] => cmd_build_server(false),
+        &["build-appimage"] => cmd_build_appimage(),
+        &["build-portable"] => cmd_build_portable(),
         &["build"] => cmd_build(),
         &["install"] => cmd_install(),
         &["build-wasm-js"] => gen_javascript(),
@@ -130,12 +133,14 @@ fn cmd_install_git_hooks() -> Result<(), DynError> {
     Ok(())
 }
 
-fn cmd_build_server() -> Result<(), DynError> {
+fn cmd_build_server(release: bool) -> Result<(), DynError> {
     eprintln!("Building semantic...");
-    Command::new("cargo")
-        .args(&["build", "-p", "semantic", "--release"])
-        .current_dir(root_path()?)
-        .run()?;
+    let mut cmd = Command::new("cargo");
+    cmd.args(&["build", "-p", "semantic"]);
+    if release {
+        cmd.arg("--release");
+    }
+    cmd.current_dir(root_path()?).run()?;
     eprintln!("Built!");
     Ok(())
 }
@@ -143,7 +148,38 @@ fn cmd_build_server() -> Result<(), DynError> {
 fn cmd_build() -> Result<(), DynError> {
     eprintln!("Building ui...");
     task_build_ui(true)?;
-    cmd_build_server()?;
+    cmd_build_server(true)?;
+    Ok(())
+}
+
+fn cmd_build_appimage() -> Result<(), DynError> {
+    cmd_build()?;
+
+    let build_dir = root_path()?.join("target").join("appimage");
+    let src = build_dir.join("build");
+    if src.is_dir() {
+        std::fs::remove_dir_all(&src)?;
+    }
+    let asset_dir = root_path()?.join("lib/appimage");
+    std::fs::create_dir_all(&src)?;
+
+    std::fs::copy(root_path()?.join("target/release/semantic"), src.join("semantic")).unwrap();
+    std::fs::copy(asset_dir.join("appicon.png"), src.join("appicon.png")).unwrap();
+    std::fs::copy(asset_dir.join("semantic.desktop"), src.join("semantic.desktop")).unwrap();
+
+    Command::new("appimagetool")
+        .arg(&src)
+        .arg(build_dir.join("semantic.AppImage"))
+        .run()?;
+    Ok(())
+}
+
+fn cmd_build_portable() -> Result<(), DynError> {
+    Command::new("docker")
+        .args(dbg!(&[
+              "run", "--rm", "-v", &format!("{}:/host", root_path()?.display()), "ubuntu", "bash", "-c", "/host/lib/docker/build.sh"
+        ]))
+        .run()?;
     Ok(())
 }
 

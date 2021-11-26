@@ -1,0 +1,8 @@
+[Desktop Entry]
+Categories=
+Comment=Semantic
+Exec=semantic
+Name=Semantic
+Terminal=true
+Icon=appicon
+Type=Application
