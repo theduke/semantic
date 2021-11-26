@@ -390,6 +390,8 @@ impl App {
 
         blob.put(&blob_uri, data).await?;
 
+        // FIXME: prevent duplicates.
+
         let file = semantic_core::base::File {
             id,
             ident: None,
