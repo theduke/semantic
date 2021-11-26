@@ -64,3 +64,4 @@ mozjpeg = { version = "0.9.1", optional = true }
 
 semantic_core = { path = "../core" }
 semantic_health = { version = "0.1", path = "../plugins/health", default-features = false }
+tokio-util = { version = "0.6.9", features = ["io"] }

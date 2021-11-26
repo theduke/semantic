@@ -2,12 +2,13 @@ mod assets;
 
 use std::{net::SocketAddr, ops::Add, sync::Arc};
 
-use anyhow::{Context, Result};
+use anyhow::{anyhow, bail, Context, Result};
 use axum::{
     extract::{self, Extension},
     http, AddExtensionLayer,
 };
 use factordb::AnyError;
+use futures::StreamExt;
 use hyper::{header, Body, Method, Request, Response, StatusCode};
 
 use semantic_core::api::{self, ApiError, ApiResponse, DbConfig, Query};
@@ -89,6 +90,7 @@ pub async fn run_server(
             post(handler_blob_upload).options(cors_handler),
         )
         .nest("/blob/files", get(handler_blob_read))
+        .nest("/blob/video", get(handler_blob_video))
         .nest("/assets", get(handler_assets))
         .or(get(handler_index))
         .layer(AddExtensionLayer::new(state))
@@ -206,7 +208,7 @@ async fn file_upload(
         if let Some(header) = req.headers().get(FileUploadMetadata::HEADER_NAME) {
             let raw = header
                 .to_str()
-                .map_err(|_| anyhow::anyhow!("Invalid file metadata header"))?;
+                .map_err(|_| anyhow!("Invalid file metadata header"))?;
             serde_json::from_str(raw).context("Invalid file metadata header")?
         } else {
             FileUploadMetadata {
@@ -229,7 +231,6 @@ async fn handler_blob_read(Extension(state): ServerContext, req: Request<Body>) 
     if let Err(res) = request_validate_auth_cookie_http(&state, &req) {
         return res;
     }
-
     if req.method() == Method::OPTIONS {
         return cors_response();
     }
@@ -266,6 +267,79 @@ async fn handler_blob_read(Extension(state): ServerContext, req: Request<Body>) 
                 .unwrap()
         }
     }
+}
+
+async fn serve_video(app: &App, file_path: &str) -> Result<Response<Body>, AnyError> {
+
+    let blob = app.require_blob()?;
+
+    let mut stream = blob.get_stream(&file_path).await?;
+
+    // Read first chunk so the mime type can be guessed.
+    let first = stream.next().await.ok_or_else(|| anyhow!("Empty file"))??;
+
+    let mime = infer::get(&first).ok_or_else(|| anyhow!("Could not detect mime type of video"))?;
+
+    // Re-assemble full content by chaining the first chunk to the
+    // stream.
+    let stream = futures::stream::once(futures::future::ready(Ok(first))).chain(stream);
+
+    match mime.mime_type() {
+        "video/mp4" | "video/webm" => {
+            // Video can be served to browser as is.
+
+            let res = Response::builder()
+                .status(StatusCode::OK)
+                .header(header::CONTENT_TYPE, mime.mime_type())
+                .body(hyper::Body::wrap_stream(stream))
+                .unwrap();
+            Ok(res)
+        }
+        other if other.starts_with("video/") => {
+            // Video is incompatible with browser, so try to convert it on the
+            // fly.
+            let body = crate::util::media::ffmpeg_convert_video(stream).await?;
+            let res = Response::builder()
+                .status(StatusCode::OK)
+                .header(header::CONTENT_TYPE, "video/webm")
+                .body(body)
+                .unwrap();
+            Ok(res)
+        }
+        _other => {
+            bail!("File is not a video");
+        }
+    }
+}
+
+async fn handler_blob_video(Extension(state): ServerContext, req: Request<Body>) -> Response<Body> {
+    if let Err(res) = request_validate_auth_cookie_http(&state, &req) {
+        return res;
+    }
+    if req.method() == Method::OPTIONS {
+        return cors_response();
+    }
+
+    let raw_path = req.uri().path();
+
+    let path = if raw_path.starts_with("/blob/video/") {
+        raw_path.replacen("/blob/video/", "", 1)
+    } else if raw_path.starts_with("/video/") {
+        raw_path.replacen("/video/", "", 1)
+    } else {
+        raw_path.to_string()
+    };
+    let file_path = path.trim_start_matches('/');
+
+    serve_video(&state.app, &file_path)
+        .await
+        .unwrap_or_else(|error| {
+            tracing::error!(%file_path, ?error, "could not serve video");
+            Response::builder()
+                .status(StatusCode::INTERNAL_SERVER_ERROR)
+                .body(format!("Error: {}", error).into_bytes().into())
+                .unwrap()
+        })
 }
 
 fn api_error(err: &AnyError) -> ApiError {
@@ -374,10 +448,10 @@ fn validate_auth_token(app: &App, raw_token: &str) -> Result<TokenClaims, AnyErr
 
     let config = app
         .backend_config()
-        .ok_or_else(|| anyhow::anyhow!("Invalid token"))?;
+        .ok_or_else(|| anyhow!("Invalid token"))?;
 
     if config.db.clone().purge_secrets() != claims.config {
-        return Err(anyhow::anyhow!("Invalid token"));
+        return Err(anyhow!("Invalid token"));
     }
     Ok(claims)
 }
@@ -415,7 +489,7 @@ fn request_auth_check(
     if state.needs_auth() {
         match request_validate_auth_cookie(state, req)? {
             Some(claims) => Ok(Some(claims)),
-            None => Err(anyhow::anyhow!("Unauthorized")),
+            None => Err(anyhow!("Unauthorized")),
         }
     } else {
         Ok(None)
@@ -441,7 +515,7 @@ async fn api_query(state: &ServerState, req: Request<Body>) -> Result<Response<B
         Query::ServerStatus | Query::Initialize(_) => {}
         _ => {
             if state.needs_auth() && token_claims.is_none() {
-                return Err(anyhow::anyhow!("Unauthorized"));
+                return Err(anyhow!("Unauthorized"));
             }
         }
     }

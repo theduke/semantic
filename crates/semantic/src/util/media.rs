@@ -3,8 +3,10 @@ use std::{
     process::{Command, Stdio},
 };
 
-use anyhow::{bail, Context};
+use anyhow::{anyhow, bail, Context};
 use factordb::AnyError;
+use futures::{future::Either, FutureExt, StreamExt, TryFutureExt, TryStreamExt};
+use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
 pub fn optimize_image_data(data: &[u8]) -> Result<Vec<u8>, AnyError> {
     let kind = infer::get(data).context("Could not determine mime type")?;
@@ -151,4 +153,169 @@ fn mozjpeg_jpegtran(data: &[u8]) -> Result<Vec<u8>, AnyError> {
     }
 
     Ok(output)
+}
+
+pub async fn ffmpeg_convert_video(
+    input: impl futures::Stream<Item = Result<Vec<u8>, AnyError>> + Unpin + Send + 'static,
+) -> Result<hyper::Body, AnyError> {
+    let mut proc = tokio::process::Command::new("ffmpeg")
+        .args(&[
+            // Less verbose output.
+            // Only show errors.
+            "-hide_banner",
+            "-loglevel",
+            "error",
+            // read from stdin
+            "-i",
+            "pipe:",
+            // Convert to libvpx-vp9
+            "-c:v",
+            "libvpx-vp9",
+            // Constant rate factor.
+            // See https://trac.ffmpeg.org/wiki/Encode/VP9 - Constant Quality
+            // for background info.
+            "-crf",
+            "30",
+            // Bitrate. 0 means auto, but this must be specified or the webm encode
+            // will pick a very low default.
+            "-b:v",
+            "0",
+            // Set output format.
+            "-f",
+            "webm",
+            // Write to stdoud.
+            "pipe:",
+        ])
+        .stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .spawn()?;
+
+    let stdout = proc.stdout.take().unwrap();
+
+    // Start a task that writes the stream to ffmpeg.
+    // TODO: log errors when the sender task fails.
+    // TODO: investigate if custom termination of the sender task is required.
+    let writer_handle = tokio::task::spawn(async move {
+        let mut input = input;
+        let mut stdin = proc.stdin.take().unwrap();
+
+        while let Some(res) = input.next().await {
+            let chunk = res?;
+            stdin.write_all(&chunk).await?;
+        }
+
+        stdin.flush().await?;
+        std::mem::drop(stdin);
+
+        match proc.wait().await {
+            Ok(status) => {
+                if !status.success() {
+                    let mut error_msg = String::new();
+                    if proc
+                        .stderr
+                        .take()
+                        .unwrap()
+                        .read_to_string(&mut error_msg)
+                        .await
+                        .is_err()
+                    {
+                        error_msg = "Unknown error".to_string();
+                    }
+
+                    Err(AnyError::msg(error_msg))
+                } else {
+                    Ok(())
+                }
+            }
+            Err(err) => {
+                let mut error_msg = String::new();
+                if proc
+                    .stderr
+                    .take()
+                    .unwrap()
+                    .read_to_string(&mut error_msg)
+                    .await
+                    .is_err()
+                {
+                    error_msg = "Unknown error".to_string();
+                }
+                Err(err).context(format!("ffmpeg failed: {}", error_msg))
+            }
+        }
+    });
+
+    // Read the first chunk right now.
+    // This ensures that ffmpeg has started converting the video and won't
+    // fail immediately.
+    let mut stdout_stream = tokio_util::io::ReaderStream::new(stdout).fuse();
+    let mut writer_join = writer_handle.fuse();
+
+    let first_chunk = futures::select_biased! {
+
+    join_res = &mut writer_join => {
+            join_res.context("ffmpeg stdin writer task failed")??;
+            stdout_stream.next().await.ok_or_else(|| AnyError::msg("ffmpeg did not return any chunks"))??
+    }
+    chunk_res = stdout_stream.next() => {
+            match chunk_res {
+                None => {
+                    bail!("ffmpeg returned empty output");
+                }
+                Some(res) => {
+                    res?
+                }
+            }
+        }
+
+    };
+
+    let (sender, body) = hyper::Body::channel();
+
+    // Start a task that reads the ffmpeg stdout and writes it to the hyper body.
+    tokio::task::spawn(async move {
+        let mut sender = sender;
+
+        // Now send the first chunk.
+        if let Err(error) = sender.send_data(first_chunk).await {
+            tracing::warn!(?error, "could not send video chunk to hyper body");
+            return;
+        }
+
+        loop {
+            futures::select! {
+                join_res = &mut writer_join => {
+                    let res = join_res.map_err(AnyError::from).and_then(|x| x);
+                    if let Err(error) = res {
+                        tracing::warn!(?error, "ffmpeg failed");
+                        sender.abort();
+                        break;
+                    }
+                }
+                chunk_res = stdout_stream.next() => {
+                    match chunk_res {
+                        None => {
+                            break;
+                        }
+                        Some(Ok(chunk)) => {
+                            if let Err(error) = sender.send_data(chunk).await {
+                                tracing::warn!(?error, "could not send video chunk to hyper body");
+                                sender.abort();
+                                break;
+                            }
+                        }
+                        Some(Err(error)) => {
+                            tracing::warn!(?error, "ffmpeg stdout read failed");
+                            sender.abort();
+                            break;
+                        }
+
+                    }
+
+                }
+            }
+        }
+    });
+
+    Ok(body)
 }
