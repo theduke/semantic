@@ -133,6 +133,10 @@ impl App {
             .ok_or_else(|| anyhow!("Could not determine default data directory"))?
             .join("semantic");
 
+        if !path.is_dir() {
+            std::fs::create_dir_all(&path)?;
+        }
+
         path.to_str()
             .map(|x| x.to_string())
             .ok_or_else(|| anyhow!("Non-UTF-8 data directory"))
@@ -144,9 +148,9 @@ impl App {
         let state = match &config.db {
             DbConfig::Crypto(crypto) => {
                 let data_path = if let Some(p) = &crypto.data_path {
-                    p.clone()
+                    PathBuf::from(p.clone())
                 } else {
-                    Self::default_data_path()?
+                    PathBuf::from(Self::default_data_path()?).join("db")
                 };
 
                 let log_config = logfs::LogConfig {
