@@ -163,9 +163,17 @@ fn cmd_build_appimage() -> Result<(), DynError> {
     let asset_dir = root_path()?.join("lib/appimage");
     std::fs::create_dir_all(&src)?;
 
-    std::fs::copy(root_path()?.join("target/release/semantic"), src.join("semantic")).unwrap();
+    std::fs::copy(
+        root_path()?.join("target/release/semantic"),
+        src.join("semantic"),
+    )
+    .unwrap();
     std::fs::copy(asset_dir.join("appicon.png"), src.join("appicon.png")).unwrap();
-    std::fs::copy(asset_dir.join("semantic.desktop"), src.join("semantic.desktop")).unwrap();
+    std::fs::copy(
+        asset_dir.join("semantic.desktop"),
+        src.join("semantic.desktop"),
+    )
+    .unwrap();
 
     Command::new("appimagetool")
         .arg(&src)
@@ -177,7 +185,14 @@ fn cmd_build_appimage() -> Result<(), DynError> {
 fn cmd_build_portable() -> Result<(), DynError> {
     Command::new("docker")
         .args(dbg!(&[
-              "run", "--rm", "-v", &format!("{}:/host", root_path()?.display()), "ubuntu", "bash", "-c", "/host/lib/docker/build.sh"
+            "run",
+            "--rm",
+            "-v",
+            &format!("{}:/host", root_path()?.display()),
+            "ubuntu",
+            "bash",
+            "-c",
+            "/host/lib/docker/build.sh"
         ]))
         .run()?;
     Ok(())
@@ -256,7 +271,28 @@ fn trunk_watch_ui(release: bool) -> Result<(), DynError> {
     } else {
         "cargo xtask build-ui --dev"
     };
-    Command::new("cargo").args(&["watch", "--shell", cmd]).run()
+    Command::new("cargo")
+        .current_dir(root_path()?)
+        .args(&[
+            "watch",
+            "--ignore",
+            "crates/semantic/*",
+            "--ignore",
+            "crates/logfs/*",
+            "--ignore",
+            "crates/xtask/*",
+            "--ignore",
+            "target/*",
+            "--ignore",
+            "data/*",
+            "--ignore",
+            "docs/*",
+            "--ignore",
+            "lib/*",
+            "--shell",
+            cmd,
+        ])
+        .run()
 }
 
 fn gen_javascript() -> Result<(), DynError> {
