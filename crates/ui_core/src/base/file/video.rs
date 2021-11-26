@@ -14,7 +14,6 @@ use crate::{
 pub struct VideoInfo {
     pub url: String,
     pub mime_type: Option<String>,
-    pub supports_browser: bool,
     pub preview_image_url: Option<url::Url>,
 }
 
@@ -23,7 +22,7 @@ impl VideoInfo {
         let url = item
             .data
             .get_attr::<AttrBlobUri>()
-            .map(|url| build_blob_url(&url))
+            .map(|uri| format!("/blob/video/{}", uri))
             .or_else(|| {
                 item.data
                     .get_attr::<AttrDownloadUrl>()
@@ -32,25 +31,13 @@ impl VideoInfo {
 
         let mime_type = item.data.get_attr::<semantic_core::base::AttrMimeType>();
 
-        let supports_browser = url.ends_with(".mp4")
-            || url.ends_with(".webm")
-            || mime_type
-                .as_ref()
-                .map(|ty| ty == "video/mp4" || ty == "video/webm")
-                .unwrap_or_default();
-
         let preview_image_url = item.data.get_attr::<AttrPreviewImageUrl>();
 
         Some(VideoInfo {
             url,
             mime_type,
-            supports_browser,
             preview_image_url,
         })
-    }
-
-    pub fn from_item_for_browser(item: &Item) -> Option<Self> {
-        Self::from_item(item).filter(|v| v.supports_browser)
     }
 }
 
@@ -62,22 +49,22 @@ pub fn video_content(item: &Item, opts: &EntityRenderOpts) -> TagBuilder {
         return notification_warning().and("Video can't be played.");
     };
 
-    if info.supports_browser {
-        let source = Tag::Source.new().attr(Attr::Src, info.url);
-        let video = Tag::Video.new().attr_toggle(Attr::Controls).and(source);
+    let source = Tag::Source.new().attr(Attr::Src, info.url);
+    let video = Tag::Video.new().attr_toggle(Attr::Controls).and(source);
 
-        if opts.preview {
-            video.style_raw("max-width: 200px; max-height: 200px; object-fit: contain;")
-        } else {
-            video
-        }
+    if opts.preview {
+        video
+            .style_raw("max-width: 200px; max-height: 200px; object-fit: contain;")
+            // Disable preload in previews since some browsers trigger
+            // huge downloads (Firefox).
+            .attr(Attr::Preload, "none")
     } else {
-        notification_warning().and("Video can't be played.")
+        video
     }
 }
 
 pub fn video_media(item: &Item, opts: &MediaRenderOpts) -> (TagBuilder, Option<DynMediaHandle>) {
-    if let Some(info) = VideoInfo::from_item_for_browser(item) {
+    if let Some(info) = VideoInfo::from_item(item) {
         let (tag, handle) = video_player(info, opts);
         (tag, Some(handle))
     } else {
