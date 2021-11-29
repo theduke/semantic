@@ -329,6 +329,7 @@ impl MsgComponent for State {
                 move |item| {
                     EntityBox {
                         item: item.clone(),
+                        show_link: true,
                         options: EntityRenderOpts {
                             editable: false,
                             preview: true,

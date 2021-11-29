@@ -403,6 +403,7 @@ impl MsgComponent for State {
                                     editable: false,
                                     preview: true,
                                 },
+                                show_link: true,
                                 on_delete: None,
                             };
 
@@ -479,6 +480,7 @@ impl MsgComponent for State {
                 .and_iter(items.iter().map(|item| {
                     EntityBox {
                         item: item.clone(),
+                        show_link: true,
                         options: EntityRenderOpts {
                             editable: false,
                             preview: true,

@@ -27,6 +27,12 @@ use self::{entity_box::EntityBox, entity_view::EntityView};
 
 use super::{loader::Loader, util::table};
 
+fn entity_href(item: &Item) -> Option<String> {
+    item.data
+        .get_id()
+        .map(|id| Route::Entity(id.into()).to_path())
+}
+
 pub fn entity_loader(id: Id, render: impl Fn(&Item) -> TagBuilder + 'static) -> TagBuilder {
     let loader = Loader::new_spawn(async move {
         let data = context::api().entity(id).await?;
@@ -49,6 +55,7 @@ pub fn entity_page(id: Id) -> TagBuilder {
             on_delete: Some(Box::new(|_item| {
                 context::router().goto(Route::Browse);
             })),
+            show_link: false,
         }
         .render()
     })

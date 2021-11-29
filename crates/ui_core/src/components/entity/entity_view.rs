@@ -1,11 +1,11 @@
 use std::pin::Pin;
 
 use brass::{
-    dom::{builder::div, Attr, ClickEvent, Render, TagBuilder},
+    dom::{builder::div, Attr, ClickEvent, Render, Tag, TagBuilder},
     signal::signal::Signal,
     DomStr,
 };
-use factordb::{query::select::Item, schema::AttrMapExt};
+use factordb::{query::select::Item, schema::AttrMapExt, Id};
 
 use crate::{
     components::util::{
@@ -15,6 +15,7 @@ use crate::{
 };
 
 pub struct EntityView<'a> {
+    pub link_path: Option<String>,
     pub title: DomStr<'a>,
     pub type_name: Option<DomStr<'a>>,
     pub on_open: Option<Box<dyn Fn()>>,
@@ -42,6 +43,7 @@ impl<'a> EntityView<'a> {
         };
 
         Self {
+            link_path: super::entity_href(item),
             title,
             type_name,
             on_open: None,
@@ -56,11 +58,30 @@ impl<'a> Render for EntityView<'a> {
         // Header.
 
         let title = {
-            let t = card_header_title()
-                .and(self.title)
-                .style_raw("flex-grow: 0; cursor: pointer;");
+            let t = card_header_title().style_raw("flex-grow: 0; cursor: pointer;");
+            let t = if let Some(path) = self.link_path {
+                let a = Tag::A
+                    .new()
+                    .style_raw("color: inherit;")
+                    .attr(Attr::Href, path)
+                    .and(self.title);
+                let a = if self.on_open.is_some() {
+                    a.on(|e: ClickEvent| {
+                        e.prevent_default();
+                    })
+                } else {
+                    a
+                };
+                t.and(a)
+            } else {
+                t.and(self.title)
+            };
+
             if let Some(on) = self.on_open {
-                t.on(move |_: ClickEvent| on())
+                t.on(move |e: ClickEvent| {
+                    e.prevent_default();
+                    on();
+                })
             } else {
                 t
             }

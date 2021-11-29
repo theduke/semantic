@@ -173,6 +173,7 @@ impl MsgComponent for BrowsePage {
             } else {
                 let items = page.items.iter().map(|item| EntityBox {
                     item: item.clone(),
+                    show_link: true,
                     options: EntityRenderOpts {
                         editable: false,
                         preview: true,

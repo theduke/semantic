@@ -24,6 +24,7 @@ pub struct EntityBox {
     pub item: Item,
     pub options: EntityRenderOpts,
     pub on_delete: Option<Box<dyn Fn(Item)>>,
+    pub show_link: bool,
 }
 
 impl Render for EntityBox {
@@ -292,6 +293,7 @@ impl MsgComponent for State {
             };
 
             EntityView {
+                link_path: super::entity_href(item),
                 title: super::entity_title(&item.data).into(),
                 type_name,
                 on_open: Some(Box::new(handle.callback(|| Msg::Open))),
