@@ -75,8 +75,8 @@ function build_semantic() {
 }
 
 function build_portable() {
-  # install_rust_build_deps
-  # install_runtime_deps
+  install_rust_build_deps
+  install_runtime_deps
 
   build_semantic
 
