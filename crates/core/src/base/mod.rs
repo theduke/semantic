@@ -18,16 +18,14 @@ pub use self::collection::*;
 mod tags;
 pub use self::tags::*;
 
-use factordb::data::ValueType;
-use factordb::schema::EntityAttribute;
-use factordb::schema::EntitySchema;
-use factordb::Id;
-use factordb::Value;
 use factordb::{
-    data::{DataMap, Timestamp},
+    data::{DataMap, Timestamp, ValueType},
     query::migrate::{self, Migration},
-    schema::{builtin::AttrIdent, AttrMapExt, AttributeDescriptor, EntityDescriptor},
-    Attribute,
+    schema::{
+        builtin::AttrIdent, AttrMapExt, AttributeDescriptor, EntityAttribute, EntityDescriptor,
+        EntitySchema,
+    },
+    Attribute, Id, Value,
 };
 
 // Common default attributes.
