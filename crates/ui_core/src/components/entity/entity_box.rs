@@ -1,6 +1,6 @@
 use brass::{
     component::{msg::MsgComponent, Context},
-    dom::{builder::div, Render, TagBuilder},
+    dom::{builder::div, Render, TagBuilder, View},
     signal::signal::{Mutable, SignalExt},
     DomStr,
 };
@@ -28,7 +28,7 @@ pub struct EntityBox {
 }
 
 impl Render for EntityBox {
-    fn render(self) -> TagBuilder {
+    fn render(self) -> View {
         brass::component::build_component::<State>(self)
     }
 }
@@ -231,7 +231,7 @@ impl MsgComponent for State {
             let mutable_item = mutable_item.clone();
 
             let handle2 = handle.clone();
-            let active_action_signal = action.signal_ref(move |action| {
+            let active_action_signal = action.signal_ref(move |action| -> View {
                 tracing::trace!(?action, "rendering action");
                 if let Some(action) = action {
                     let handle = handle2.clone();
@@ -245,27 +245,27 @@ impl MsgComponent for State {
                         ActiveAction::ManageCollections => {
                             if let Some(id) = &id {
                                 let content = entity_collection_manager(*id);
-                                modal(content, handle.callback(|| Msg::ClearAction), true)
+                                modal(content, handle.callback(|| Msg::ClearAction), true).into()
                             } else {
-                                div()
+                                div().into()
                             }
                         }
                         ActiveAction::ManageTags => {
                             if let Some(_id) = &id {
                                 let content = entity_tag_manager(&mutable_item.lock_ref().clone());
-                                modal(content, handle.callback(|| Msg::ClearAction), true)
+                                modal(content, handle.callback(|| Msg::ClearAction), true).into()
                             } else {
-                                div()
+                                div().into()
                             }
                         }
                     };
-                    Some(content)
+                    content
                 } else {
-                    None
+                    View::Empty
                 }
             });
 
-            let mut content = div().child_signal_opt(active_action_signal);
+            let mut content = div().child_signal(active_action_signal);
 
             match content_renderer {
                 Some(renderer) => {

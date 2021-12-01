@@ -3,7 +3,7 @@ use std::fmt::Display;
 use brass::{
     dom::{
         builder::{div, p, span},
-        Attr, TagBuilder,
+        Attr, TagBuilder, View,
     },
     effect::{spawn_guarded, EffectGuard},
     signal::signal::{Mutable, Signal},
@@ -78,14 +78,14 @@ impl<T> LoadState<T> {
         *self = Self::Failed(err.to_string())
     }
 
-    pub fn render(&self, f: impl FnOnce(&T) -> TagBuilder) -> TagBuilder {
+    pub fn render(&self, f: impl FnOnce(&T) -> View) -> View {
         match self {
-            LoadState::Idle => span(),
+            LoadState::Idle => View::Empty,
             // TODO: restore DelayedSpinner
             // LoadState::Loading(_) => crate::components::DelayedSpinner {}.render(),
-            LoadState::Loading(_) => spinner(),
+            LoadState::Loading(_) => spinner().into(),
             LoadState::Success(data) => f(data),
-            LoadState::Failed(err) => error_msg(&err),
+            LoadState::Failed(err) => error_msg(&err).into(),
         }
     }
 
@@ -263,10 +263,7 @@ impl<T> Loader<T> {
         self.0.signal_ref(|s| s.is_loading())
     }
 
-    pub fn signal_render_focus_on_err(
-        &self,
-        render: impl Fn(&T) -> TagBuilder + 'static,
-    ) -> TagBuilder
+    pub fn signal_render_focus_on_err(&self, render: impl Fn(&T) -> View + 'static) -> TagBuilder
     where
         T: 'static,
     {
@@ -295,10 +292,7 @@ impl<T> Loader<T> {
     // FIXME: this method makes it easy to accidentally drop the loader, which
     // can cause rendering issues.
     // Find a better API design.
-    pub fn signal_render(
-        &self,
-        render: impl Fn(&T) -> TagBuilder,
-    ) -> impl Signal<Item = TagBuilder> {
+    pub fn signal_render(&self, render: impl Fn(&T) -> View) -> impl Signal<Item = View> {
         self.0.signal_ref(move |state| state.render(&render))
     }
 
@@ -307,8 +301,8 @@ impl<T> Loader<T> {
     // Find a better API design.
     pub fn signal_render_state(
         &self,
-        render: impl Fn(&LoadState<T>) -> TagBuilder,
-    ) -> impl Signal<Item = TagBuilder> {
+        render: impl Fn(&LoadState<T>) -> View,
+    ) -> impl Signal<Item = View> {
         self.0.signal_ref(move |state| render(state))
     }
 
@@ -343,7 +337,7 @@ impl Loader<()> {
 
 pub fn load<T: 'static>(
     f: impl Future<Output = Result<T, AnyError>> + 'static,
-    render: impl Fn(&T) -> TagBuilder + 'static,
+    render: impl Fn(&T) -> View + 'static,
 ) -> TagBuilder {
     let loader = Loader::new_spawn(f);
     div()

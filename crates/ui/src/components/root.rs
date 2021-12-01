@@ -1,5 +1,5 @@
 use brass::{
-    dom::{builder::div, Render, TagBuilder},
+    dom::{builder::div, Render, TagBuilder, View},
     signal::signal::SignalExt,
 };
 use semantic_ui_core::{
@@ -24,23 +24,25 @@ pub fn root() -> TagBuilder {
         .child_signal(s)
 }
 
-fn render_route(route: Route) -> TagBuilder {
+fn render_route(route: Route) -> View {
     let content = match route {
         // Special initialization routes
         Route::Browse => crate::components::entity::browse_page::BrowsePage::build(
             crate::components::entity::browse_page::BrowsePageProps {},
         ),
         Route::Import { url } => super::import::import_page::ImportPage { url }.render(),
-        Route::Upload => super::upload::upload_page(),
-        Route::Logout => super::login::logout(),
+        Route::Upload => super::upload::upload_page().into_view(),
+        Route::Logout => super::login::logout().into_view(),
         Route::Entity(ident) => {
             // FIXME: handle ident!
             tracing::trace!(?ident, "ident");
             let id = ident.as_id().unwrap();
-            entity_page(id)
+            entity_page(id).into_view()
         }
-        Route::Create => super::entity::create_page(),
-        Route::EntityCreate { entity_type } => super::entity::entity_create_page(&entity_type),
+        Route::Create => super::entity::create_page().into_view(),
+        Route::EntityCreate { entity_type } => {
+            super::entity::entity_create_page(&entity_type).into_view()
+        }
         Route::Play => {
             // Do not show container for player.
             return StandalonePlayer {
@@ -49,17 +51,20 @@ fn render_route(route: Route) -> TagBuilder {
             }
             .render();
         }
-        Route::Tags => semantic_ui_core::base::tags::tag_manager(),
-        Route::Plugin(route) => (route.render)(),
-        Route::PluginManager => super::plugins::plugin_manager(),
-        Route::PluginCreate => super::plugins::plugin_source_create_page(),
-        Route::PluginTest => super::plugins::plugin_test_page(),
-        Route::Settings => super::settings::settings_page(),
-        Route::PluginUpdate { id } => super::plugins::plugin_source_update_page(id),
-        Route::Apps => super::plugins::plugin_main_routes(),
+        Route::Tags => semantic_ui_core::base::tags::tag_manager().into_view(),
+        Route::Plugin(route) => (route.render)().into_view(),
+        Route::PluginManager => super::plugins::plugin_manager().into_view(),
+        Route::PluginCreate => super::plugins::plugin_source_create_page().into_view(),
+        Route::PluginTest => super::plugins::plugin_test_page().into_view(),
+        Route::Settings => super::settings::settings_page().into_view(),
+        Route::PluginUpdate { id } => super::plugins::plugin_source_update_page(id).into_view(),
+        Route::Apps => super::plugins::plugin_main_routes().into_view(),
     };
 
-    container().style_raw("min-width: 800px;").and(content)
+    container()
+        .style_raw("min-width: 800px;")
+        .and(content)
+        .into_view()
 }
 
 fn navbar() -> TagBuilder {

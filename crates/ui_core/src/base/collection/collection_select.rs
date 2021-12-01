@@ -1,6 +1,6 @@
 use std::rc::Rc;
 
-use brass::dom::{Render, TagBuilder};
+use brass::dom::{Render, View};
 use factordb::AnyError;
 use futures::future::LocalBoxFuture;
 use semantic_core::base::Collection;
@@ -16,7 +16,7 @@ pub struct CollectionSelect {
 }
 
 impl Render for CollectionSelect {
-    fn render(self) -> TagBuilder {
+    fn render(self) -> View {
         MultiSelect::<Collection> {
             heading: "Select Collections".to_string(),
             get_id: |t| t.id.to_string(),

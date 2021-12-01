@@ -2,7 +2,7 @@ use brass::{
     component::{msg::MsgComponent, Context},
     dom::{
         builder::{div, span},
-        Attr, ClickEvent, Render, TagBuilder,
+        Attr, ClickEvent, Render, TagBuilder, View,
     },
     signal::{signal::Mutable, signal_vec::MutableVec},
 };
@@ -35,7 +35,7 @@ pub struct CollectionItemManager {
 }
 
 impl Render for CollectionItemManager {
-    fn render(self) -> TagBuilder {
+    fn render(self) -> View {
         brass::component::build_component::<State>(self)
     }
 }
@@ -139,7 +139,7 @@ impl MsgComponent for State {
         let handle = ctx.handle();
         let registry = context::registry();
 
-        let error = self.loader.signal_render(|_| span());
+        let error = self.loader.signal_render(|_| View::Empty);
 
         let items = div().children_signal(self.items.signal_vec_cloned(), move |item| {
             let on_remove = handle.on(Msg::Remove);

@@ -1,6 +1,6 @@
 use std::rc::Rc;
 
-use brass::dom::{builder::div, TagBuilder};
+use brass::dom::{builder::div, TagBuilder, View};
 use semantic_core::api::{BackendConfig, BackendCryptoConfig, DbConfig, SemanticSchema};
 use semantic_ui_core::{
     components::{
@@ -84,7 +84,7 @@ pub fn logout() -> TagBuilder {
         web_sys::window().unwrap().location().replace("/").ok();
         Ok(())
     })
-    .signal_render(|_| div());
+    .signal_render(|_| View::Empty);
     div()
         .and(subtitle_4().and("Logging out..."))
         .child_signal(load)

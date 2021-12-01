@@ -169,7 +169,7 @@ impl MsgComponent for BrowsePage {
         let handle = ctx.handle();
         let content = self.loader.signal_render(move |page| {
             if page.items.is_empty() {
-                notification_warning().and("Nothing found...")
+                notification_warning().and("Nothing found...").into_view()
             } else {
                 let items = page.items.iter().map(|item| EntityBox {
                     item: item.clone(),
@@ -183,7 +183,7 @@ impl MsgComponent for BrowsePage {
 
                 let pager = render_pager(page.items.len(), page.page, page.limit, &handle);
 
-                div().and_iter(items).and(pager)
+                div().and_iter(items).and(pager).into_view()
             }
         });
 

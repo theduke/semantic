@@ -3,7 +3,7 @@ use std::{rc::Rc, sync::Arc};
 use brass::{
     dom::{
         builder::{div, span},
-        TagBuilder,
+        TagBuilder, View,
     },
     effect::{spawn_guarded, EffectGuard},
     signal::signal::Mutable,
@@ -34,7 +34,7 @@ pub struct Boot {
 }
 
 impl Boot {
-    pub fn render() -> TagBuilder {
+    pub fn render() -> View {
         let boot = Boot {
             status: Rc::new(Mutable::new(BootPhase::Init)),
         };
@@ -95,6 +95,7 @@ impl Boot {
                     }
                 }
             }))
+            .into()
     }
 
     fn on_phase(&self, phase: BootPhase) {

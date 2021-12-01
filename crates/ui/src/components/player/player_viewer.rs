@@ -2,7 +2,7 @@ use std::{cell::RefCell, ops::Not, rc::Rc, time::Duration};
 
 use brass::{
     component::{build_component, msg::MsgComponent, Context, Handle},
-    dom::{builder::div, Render, TagBuilder},
+    dom::{builder::div, Render, TagBuilder, View},
     effect::{set_timeout, TimeoutGuard},
     signal::signal::{Mutable, Signal, SignalExt},
 };
@@ -85,7 +85,7 @@ struct State {
     // The RefCell<Option<>> is a stupid workaround because
     // TagBuilder can't be cloned, and a Mutable<> signal with .child_signal
     // requires cloning. Refactor once brass is improved.
-    dom_item: Mutable<RefCell<Option<TagBuilder>>>,
+    dom_item: Mutable<RefCell<View>>,
 }
 
 impl State {
@@ -182,14 +182,15 @@ impl State {
             let handle = ctx.handle();
             let index = index;
 
-            (media_render.render)(
+            let (tag, x) = (media_render.render)(
                 item,
                 &MediaRenderOpts {
                     playing: is_playing,
                     muted: is_muted,
                     callback: Rc::new(move |event| handle.send(Msg::ItemEvent { index, event })),
                 },
-            )
+            );
+            (tag.into_view(), x)
         } else if let Some(regular_renderer) = self.registry.entity_content_renderer(ty) {
             let content = regular_renderer(
                 item,
@@ -197,7 +198,8 @@ impl State {
                     editable: false,
                     preview: false,
                 },
-            );
+            )
+            .into_view();
             (content, None)
         } else {
             let content = EntityView::from_item(
@@ -234,7 +236,7 @@ impl State {
             title: entity_title(&item.data),
         }));
 
-        self.dom_item.set(RefCell::new(Some(content)));
+        self.dom_item.set(RefCell::new(content));
     }
 
     fn set_muted(&mut self, muted: bool) {
@@ -257,7 +259,7 @@ impl MsgComponent for State {
             timeout_guard: None,
             current_handle: None,
             current_is_finished: false,
-            dom_item: Mutable::new(RefCell::new(None)),
+            dom_item: Mutable::new(RefCell::new(View::Empty)),
         };
 
         s.goto(0, &ctx);
@@ -316,9 +318,9 @@ impl MsgComponent for State {
                 if self.items.len() > 0 {
                     self.goto(0, &ctx);
                 } else {
-                    self.dom_item.set(RefCell::new(Some(
-                        notification_warning().and("Nothing found"),
-                    )));
+                    self.dom_item.set(RefCell::new(
+                        notification_warning().and("Nothing found").into_view(),
+                    ));
                 }
             }
             Msg::AppendItems(items) => {
@@ -341,8 +343,8 @@ impl MsgComponent for State {
     fn render(&mut self, _ctx: Context<Self>) -> TagBuilder {
         div()
             .style_raw("height: 100%; width: 100%; overflow: hidden; display: flex; justify-content: center; align-items: center; flex-grow: 1;")
-            .child_signal_opt(self.dom_item.signal_ref(|opt| {
-                let content = opt.borrow_mut().take();
+            .child_signal(self.dom_item.signal_ref(|cell| {
+                let content = std::mem::take(&mut *cell.borrow_mut());
                 content
             }))
     }
@@ -448,7 +450,7 @@ pub struct PlayerViewer {
 }
 
 impl PlayerViewer {
-    pub fn build(self) -> (TagBuilder, PlayerHandle) {
+    pub fn build(self) -> (View, PlayerHandle) {
         let handle = Rc::new(RefCell::new(None));
         let shared = Rc::new(SharedStateData {
             playing: Mutable::new(true),

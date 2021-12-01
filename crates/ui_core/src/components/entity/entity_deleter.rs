@@ -1,6 +1,6 @@
 use brass::{
     component::msg::MsgComponent,
-    dom::{builder::div, ClickEvent, TagBuilder},
+    dom::{builder::div, ClickEvent, TagBuilder, View},
     signal::signal::Mutable,
 };
 use factordb::{
@@ -25,7 +25,7 @@ pub struct EntityDeleter {
 }
 
 impl brass::dom::Render for EntityDeleter {
-    fn render(self) -> TagBuilder {
+    fn render(self) -> View {
         brass::component::build_component::<State>(self)
     }
 }

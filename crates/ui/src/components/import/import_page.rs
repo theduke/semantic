@@ -2,7 +2,7 @@ use std::collections::HashMap;
 
 use brass::{
     component::{msg::MsgComponent, Component, Context},
-    dom::{builder::div, Render, TagBuilder},
+    dom::{builder::div, Render, TagBuilder, View},
 };
 use factordb::{
     query::{
@@ -39,7 +39,7 @@ pub struct ImportPage {
 }
 
 impl Render for ImportPage {
-    fn render(self) -> TagBuilder {
+    fn render(self) -> View {
         State::build(self)
     }
 }
@@ -309,9 +309,9 @@ impl MsgComponent for State {
 
         let handle = ctx.handle();
 
-        let preview = self.preview.signal_render(move |preview| {
+        let preview = self.preview.signal_render(move |preview| -> View {
             if preview.items.is_empty() {
-                return notification_warning().and("Nothing found");
+                return notification_warning().and("Nothing found").into();
             }
 
             let actions = {
@@ -410,6 +410,7 @@ impl MsgComponent for State {
                             div()
                                 .style_raw("border-right: 10px solid green; padding-right: 10px;")
                                 .and(box_.render())
+                                .into()
                         }
                         LoadState::Failed(err) => {
                             let mut view = EntityView::from_item(
@@ -472,6 +473,7 @@ impl MsgComponent for State {
                 .and(items)
                 .and(load_more)
                 .and(related_urls)
+                .into()
         });
 
         let full = self.full_import.signal_render(|items| {
@@ -489,6 +491,7 @@ impl MsgComponent for State {
                     }
                     .render()
                 }))
+                .into()
         });
 
         div()

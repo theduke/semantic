@@ -42,7 +42,9 @@ impl HealthRouter {
         PluginRoute {
             path: "/health/weight".to_string(),
             title: "Weight".to_string(),
-            render: std::rc::Rc::new(|| manager::WeightlogManager {}.render()),
+            render: std::rc::Rc::new(|| {
+                TagBuilder::from_node(manager::WeightlogManager {}.render().into_node().unwrap())
+            }),
         }
     }
 }

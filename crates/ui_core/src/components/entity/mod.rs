@@ -5,7 +5,7 @@ pub mod entity_deleter;
 pub mod entity_filter;
 pub mod entity_view;
 
-use brass::dom::{builder::div, Apply, Attr, Render, Tag, TagBuilder};
+use brass::dom::{builder::div, Apply, Attr, Render, Tag, TagBuilder, View};
 use factordb::{
     data::{DataMap, Value},
     query::select::Item,
@@ -33,7 +33,7 @@ fn entity_href(item: &Item) -> Option<String> {
         .map(|id| Route::Entity(id.into()).to_path())
 }
 
-pub fn entity_loader(id: Id, render: impl Fn(&Item) -> TagBuilder + 'static) -> TagBuilder {
+pub fn entity_loader(id: Id, render: impl Fn(&Item) -> View + 'static) -> TagBuilder {
     let loader = Loader::new_spawn(async move {
         let data = context::api().entity(id).await?;
         Ok(Item::new(data))

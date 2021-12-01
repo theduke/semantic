@@ -2,7 +2,7 @@ use std::rc::Rc;
 
 use brass::{
     component::{msg::MsgComponent, Context, Handle},
-    dom::{Attr, InputEvent, Render, Tag, TagBuilder},
+    dom::{Attr, InputEvent, Render, Tag, TagBuilder, View},
     signal::{
         signal::{Mutable, SignalExt},
         signal_vec::MutableVec,
@@ -86,7 +86,7 @@ pub struct MultiSelect<T: Clone + 'static> {
 }
 
 impl<T: Clone + 'static> Render for MultiSelect<T> {
-    fn render(self) -> TagBuilder {
+    fn render(self) -> View {
         brass::component::build_component::<State<T>>(self)
     }
 }
@@ -460,9 +460,9 @@ pub fn multiselect_render_tags<'a, T: Clone>(
     let loader_signal = args.status.signal_loading().map(|loading| {
         if loading {
             // TODO: delayed spinner
-            Some(spinner())
+            spinner().into_view()
         } else {
-            None
+            View::Empty
         }
     });
 
@@ -492,6 +492,6 @@ pub fn multiselect_render_tags<'a, T: Clone>(
         .and(actions)
         .and(Tag::Hr.new())
         .and(search)
-        .child_signal_opt(loader_signal)
+        .child_signal(loader_signal)
         .and(available)
 }

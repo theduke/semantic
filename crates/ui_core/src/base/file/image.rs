@@ -1,5 +1,5 @@
 use brass::{
-    dom::{builder::div, Attr, ClickEvent, Tag, TagBuilder},
+    dom::{builder::div, Attr, ClickEvent, Tag, TagBuilder, View},
     signal::signal::{Mutable, SignalExt},
 };
 use factordb::{query::select::Item, schema::AttrMapExt};
@@ -44,7 +44,7 @@ fn image_with_preview_modal(url: String) -> TagBuilder {
             is_visible2.set(true);
         });
 
-    let modal = is_visible.signal_cloned().map(move |flag| {
+    let modal = is_visible.signal_cloned().map(move |flag| -> View {
         if flag {
             let full_img = Tag::Img
                 .new()
@@ -62,11 +62,11 @@ fn image_with_preview_modal(url: String) -> TagBuilder {
                 },
                 true,
             );
-            Some(content)
+            content.into()
         } else {
-            None
+            View::Empty
         }
     });
 
-    div().and(img).child_signal_opt(modal)
+    div().and(img).child_signal(modal)
 }

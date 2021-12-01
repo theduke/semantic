@@ -3,7 +3,7 @@ use std::rc::Rc;
 use brass::{
     dom::{
         builder::{div, span},
-        Tag, TagBuilder,
+        Tag, TagBuilder, View,
     },
     signal::{
         signal::{Mutable, SignalExt},
@@ -53,52 +53,58 @@ fn plugin_source_deleter(
     let on_cancel = Rc::new(on_cancel);
     let on_deleted = Rc::new(on_deleted);
 
-    let signal = loader2.signal_render_state(move |state| match state {
-        LoadState::Idle => {
-            let loader = loader.clone();
-            let plugin_name = source.ident.clone();
-            let on_cancel = on_cancel.clone();
-            let on_deleted = on_deleted.clone();
+    let signal = loader2.signal_render_state(move |state| -> View {
+        match state {
+            LoadState::Idle => {
+                let loader = loader.clone();
+                let plugin_name = source.ident.clone();
+                let on_cancel = on_cancel.clone();
+                let on_deleted = on_deleted.clone();
 
-            notification_warning()
-                .and(format!("Really delete plugin {}", source.ident))
-                .and(
-                    ButtonBuilder::new()
-                        .color(semantic_ui_core::components::util::Color::Danger)
-                        .label("Delete")
-                        .on(move || {
-                            let plugin_name = plugin_name.clone();
-                            let on_deleted = on_deleted.clone();
-                            loader.spawn(async move {
-                                context::api().plugin_delete(plugin_name).await?;
-                                on_deleted();
-                                Ok(())
-                            });
-                        })
-                        .build(),
-                )
-                .and(
-                    ButtonBuilder::new()
-                        .label("Cancel")
-                        .on(move || {
-                            on_cancel();
-                        })
-                        .build(),
-                )
-        }
-        LoadState::Loading(_) => spinner(),
-        LoadState::Success(_) => div(),
-        LoadState::Failed(err) => {
-            let on_cancel = on_cancel.clone();
+                notification_warning()
+                    .and(format!("Really delete plugin {}", source.ident))
+                    .and(
+                        ButtonBuilder::new()
+                            .color(semantic_ui_core::components::util::Color::Danger)
+                            .label("Delete")
+                            .on(move || {
+                                let plugin_name = plugin_name.clone();
+                                let on_deleted = on_deleted.clone();
+                                loader.spawn(async move {
+                                    context::api().plugin_delete(plugin_name).await?;
+                                    on_deleted();
+                                    Ok(())
+                                });
+                            })
+                            .build(),
+                    )
+                    .and(
+                        ButtonBuilder::new()
+                            .label("Cancel")
+                            .on(move || {
+                                on_cancel();
+                            })
+                            .build(),
+                    )
+                    .into()
+            }
+            LoadState::Loading(_) => spinner().into(),
+            LoadState::Success(_) => View::Empty,
+            LoadState::Failed(err) => {
+                let on_cancel = on_cancel.clone();
 
-            notification_error().and(err.to_string()).and(
-                ButtonBuilder::new()
-                    .label("Cancel")
-                    .on(move || {
-                        on_cancel();
-                    })
-                    .build(),
-            )
+                notification_error()
+                    .and(err.to_string())
+                    .and(
+                        ButtonBuilder::new()
+                            .label("Cancel")
+                            .on(move || {
+                                on_cancel();
+                            })
+                            .build(),
+                    )
+                    .into()
+            }
         }
     });
 
@@ -122,60 +128,64 @@ pub fn plugin_manager() -> TagBuilder {
 
     let list = load(load_all_sources(), |page| {
         if page.items.is_empty() {
-            notification_warning().and("No plugins found.")
+            notification_warning().and("No plugins found.").into_view()
         } else {
             let items = MutableVec::new_with_values(page.items.clone());
 
             div()
-                .children_signal(items.signal_vec_cloned(), |source| {
-                    let deleting = Mutable::new(false);
-                    let deleting2 = deleting.clone();
+                .children_signal(
+                    items.signal_vec_cloned(),
+                    |source: &PluginSource| -> brass::dom::Node {
+                        let deleting = Mutable::new(false);
+                        let deleting2 = deleting.clone();
 
-                    let source = source.clone();
+                        let source = source.clone();
 
-                    let actions = buttons()
-                        .class("mb-4")
-                        .and(
-                            link(
-                                Route::PluginUpdate {
-                                    id: source.id.to_string(),
-                                },
-                                "Edit",
-                            )
-                            .class(Cls::Button),
-                        )
-                        .and(
-                            ButtonBuilder::new()
-                                .label("Delete")
-                                .on(move || {
-                                    deleting2.replace_with(|x| !*x);
-                                })
-                                .build(),
-                        );
-
-                    box_()
-                        .and(subtitle_4().and(&source.ident))
-                        .and(actions)
-                        .child_signal(deleting.signal().map(move |is_deleting| {
-                            let deleting = deleting.clone();
-                            if is_deleting {
-                                plugin_source_deleter(
-                                    source.clone(),
-                                    || {
-                                        context::router().goto(Route::PluginManager);
+                        let actions = buttons()
+                            .class("mb-4")
+                            .and(
+                                link(
+                                    Route::PluginUpdate {
+                                        id: source.id.to_string(),
                                     },
-                                    move || {
-                                        deleting.set(false);
-                                    },
+                                    "Edit",
                                 )
-                                .class("mt-4")
-                            } else {
-                                span()
-                            }
-                        }))
-                        .build()
-                })
+                                .class(Cls::Button),
+                            )
+                            .and(
+                                ButtonBuilder::new()
+                                    .label("Delete")
+                                    .on(move || {
+                                        deleting2.replace_with(|x| !*x);
+                                    })
+                                    .build(),
+                            );
+
+                        box_()
+                            .and(subtitle_4().and(&source.ident))
+                            .and(actions)
+                            .child_signal(deleting.signal().map(move |is_deleting| {
+                                let deleting = deleting.clone();
+                                if is_deleting {
+                                    plugin_source_deleter(
+                                        source.clone(),
+                                        || {
+                                            context::router().goto(Route::PluginManager);
+                                        },
+                                        move || {
+                                            deleting.set(false);
+                                        },
+                                    )
+                                    .class("mt-4")
+                                } else {
+                                    span()
+                                }
+                            }))
+                            .build()
+                    },
+                )
                 .bind(items)
+                .into_view()
         }
     });
 
@@ -297,6 +307,7 @@ pub fn plugin_source_update_page(id_raw: String) -> TagBuilder {
             div()
                 .and(title_2().and(format!("Edit {}", source.ident)))
                 .and(plugin_source_update(source.clone()))
+                .into_view()
         },
     )
 }
@@ -350,12 +361,17 @@ pub fn plugin_test_page() -> TagBuilder {
 
         let output_signal = result2.signal_render(|opt| {
             if let Some(out) = opt {
-                Tag::Pre.new().and(
-                    serde_json::to_string_pretty(&out)
-                        .unwrap_or_else(|_| "Invalid JSON".to_string()),
-                )
+                Tag::Pre
+                    .new()
+                    .and(
+                        serde_json::to_string_pretty(&out)
+                            .unwrap_or_else(|_| "Invalid JSON".to_string()),
+                    )
+                    .into()
             } else {
-                notification_warning().and("Plugin did not return any import results.")
+                notification_warning()
+                    .and("Plugin did not return any import results.")
+                    .into()
             }
         });
         let output = div()

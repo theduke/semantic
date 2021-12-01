@@ -1,16 +1,18 @@
 use std::rc::Rc;
 
-use brass::dom::{Render, TagBuilder};
+use brass::dom::{Render, View};
 use factordb::{query::select::Item, schema::AttrMapExt};
 use semantic_core::base::AttrTags;
 
 use crate::components::util::notification_error;
 
-pub fn entity_tag_manager(entity: &Item) -> TagBuilder {
+pub fn entity_tag_manager(entity: &Item) -> View {
     let id = if let Some(id) = entity.data.get_id() {
         id
     } else {
-        return notification_error().and("Entity does not have an id");
+        return notification_error()
+            .and("Entity does not have an id")
+            .into();
     };
 
     let item_tag_ids = entity.data.get_attr_vec::<AttrTags>().unwrap_or_default();

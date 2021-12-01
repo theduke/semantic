@@ -1,7 +1,7 @@
 use std::pin::Pin;
 
 use brass::{
-    dom::{builder::div, Attr, ClickEvent, Render, Tag, TagBuilder},
+    dom::{builder::div, Attr, ClickEvent, Render, Tag, TagBuilder, View},
     signal::signal::Signal,
     DomStr,
 };
@@ -54,7 +54,7 @@ impl<'a> EntityView<'a> {
 }
 
 impl<'a> Render for EntityView<'a> {
-    fn render(self) -> TagBuilder {
+    fn render(self) -> View {
         // Header.
 
         let title = {
@@ -99,7 +99,7 @@ impl<'a> Render for EntityView<'a> {
 
         let card_content = card_content().and(self.content);
 
-        card().class("mb-4").and((header, card_content))
+        card().class("mb-4").and((header, card_content)).into()
     }
 }
 
@@ -112,7 +112,7 @@ pub struct EntityActionButton<'a> {
 }
 
 impl<'a> Render for EntityActionButton<'a> {
-    fn render(self) -> TagBuilder {
+    fn render(self) -> View {
         let on = self.on;
         let mut btn = button()
             .class(BtnSize::Small)
@@ -124,6 +124,6 @@ impl<'a> Render for EntityActionButton<'a> {
         if let Some(is_active) = self.is_active {
             btn = btn.class_signal_toggle(Cls::IsActive, is_active);
         }
-        btn
+        btn.into()
     }
 }

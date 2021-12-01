@@ -2,7 +2,7 @@ use std::rc::Rc;
 
 use brass::{
     component::{msg::MsgComponent, Component},
-    dom::{builder::div, Render},
+    dom::{builder::div, Render, View},
 };
 use factordb::{
     data::value::patch::{Patch, PatchOp},
@@ -26,7 +26,7 @@ pub struct CollectionItemTagger {
 }
 
 impl Render for CollectionItemTagger {
-    fn render(self) -> brass::dom::TagBuilder {
+    fn render(self) -> View {
         State::build(self)
     }
 }
@@ -134,8 +134,9 @@ impl MsgComponent for State {
                         on_remove_async: None,
                         on_change_async: None,
                     })
+                    .into_view()
             }
-            LoadState::Loading(_) => spinner(),
+            LoadState::Loading(_) => spinner().into_view(),
             LoadState::Success(_) => unimplemented!(),
             LoadState::Failed(_) => unimplemented!(),
         });

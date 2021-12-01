@@ -2,7 +2,7 @@ use brass::{
     component::{msg::MsgComponent, Context},
     dom::{
         builder::{div, span},
-        Attr, ClickEvent, Event, Render, Tag, TagBuilder,
+        Attr, ClickEvent, Event, Render, Tag, TagBuilder, View,
     },
     effect::EventSubscription,
     signal::signal::{Mutable, SignalExt},
@@ -31,7 +31,7 @@ pub struct StandalonePlayer {
 }
 
 impl Render for StandalonePlayer {
-    fn render(self) -> TagBuilder {
+    fn render(self) -> View {
         brass::component::build_component::<State>(self)
     }
 }
@@ -59,7 +59,7 @@ struct State {
     player: PlayerHandle,
 
     dom_player: Option<Element>,
-    rendered_player: Option<TagBuilder>,
+    rendered_player: View,
 }
 
 impl State {
@@ -137,7 +137,7 @@ impl MsgComponent for State {
             _keydown_subscription,
             dom_player: None,
             player,
-            rendered_player: Some(rendered_player),
+            rendered_player,
         };
 
         s.load(s.expr.clone(), ctx);
@@ -249,15 +249,16 @@ impl MsgComponent for State {
             .attr(Attr::Title, "Forward")
             .on(move |_: ClickEvent| player.next());
 
-        let position_info = self.player.signal_item().map(|item| {
+        let position_info = self.player.signal_item().map(|item| -> View {
             item.map(|item| {
                 let pos_text = format!("{} / {}", item.index + 1, item.total_count);
                 let pos = div()
                     .class("mr-4")
                     .and(div().class(Cls::Button).class(Cls::IsStatic).and(pos_text));
 
-                pos
+                pos.into_view()
             })
+            .unwrap_or(View::Empty)
         });
 
         let controls = div()
@@ -265,7 +266,7 @@ impl MsgComponent for State {
             .class("mr-4")
             .class(Cls::Buttons)
             .and((btn_play, btn_prev, btn_next))
-            .child_signal_opt(position_info);
+            .child_signal(position_info);
 
         let player = self.player.clone();
         let btn_shuffle = button()
@@ -323,7 +324,7 @@ impl MsgComponent for State {
             btn_settings,
         ));
 
-        let item_info = self.player.signal_item().map(|item| {
+        let item_info = self.player.signal_item().map(|item| -> View {
             item.map(|item| {
                 let title = div()
                     .class(Cls::Button)
@@ -333,24 +334,26 @@ impl MsgComponent for State {
                 div()
                     .style_raw("flex-shrink: 1; margin: 0 2rem;")
                     .and(title)
+                    .into_view()
             })
+            .unwrap_or(View::Empty)
         });
 
         let handle = ctx.handle();
-        let settings = div().child_signal_opt(self.settings_active.signal().map(move |flag| {
+        let settings = div().child_signal(self.settings_active.signal().map(move |flag| -> View {
             if !flag {
-                None
+                View::Empty
             } else {
                 let filter = entity_filter(handle.on(Msg::FilterChanged));
                 let content = box_().class("mb-4").and((Tag::Hr.new(), filter));
-                Some(content)
+                content.into()
             }
         }));
 
         let bar = div()
             .style_raw("display: flex; margin-bottom: 1rem; align-items: flex-start; flex-grow: 0; justify-content: space-between;")
             .and(controls)
-            .child_signal_opt(item_info)
+            .child_signal(item_info)
             .and(bar_settings);
 
         let player_wrap = div()
@@ -363,9 +366,9 @@ impl MsgComponent for State {
                     Some(Msg::OnFullscreenChange { is_fullscreen })
                 }),
             )
-            .and(self.rendered_player.take());
+            .and(std::mem::take(&mut self.rendered_player));
 
-        let loader = self.loader.signal_render(|_| span());
+        let loader = self.loader.signal_render(|_| View::Empty);
 
         self.dom_player = Some(player_wrap.elem().clone());
 

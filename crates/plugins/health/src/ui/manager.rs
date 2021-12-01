@@ -1,6 +1,6 @@
 use brass::{
     component::{msg::MsgComponent, Component},
-    dom::{builder::div, Tag, TagBuilder},
+    dom::{builder::div, Tag, TagBuilder, View},
     signal::{signal::Mutable, signal_vec::MutableVec},
 };
 use factordb::{query::mutate::Mutate, Id};
@@ -19,7 +19,7 @@ use crate::WeightLogEntry;
 pub struct WeightlogManager {}
 
 impl brass::dom::Render for WeightlogManager {
-    fn render(self) -> TagBuilder {
+    fn render(self) -> View {
         State::build(self)
     }
 }
@@ -96,28 +96,30 @@ impl MsgComponent for State {
 
     fn render(&mut self, ctx: brass::component::Context<Self>) -> TagBuilder {
         let handle = ctx.handle();
-        let delete_error = self.delete_loader.signal_render_state_opt(move |state| {
-            if let LoadState::Failed(err) = state {
-                let err = notification_error()
-                    .and(Tag::P.new().and("Could not delete entry."))
-                    .and(Tag::P.new().and(err.as_str()))
-                    .and(
-                        div().and(
-                            ButtonBuilder::new()
-                                .label("Ok")
-                                .on(handle.callback(|| Msg::DeleteErrorDismiss))
-                                .build(),
-                        ),
-                    );
+        let delete_error = self
+            .delete_loader
+            .signal_render_state(move |state| -> View {
+                if let LoadState::Failed(err) = state {
+                    let err = notification_error()
+                        .and(Tag::P.new().and("Could not delete entry."))
+                        .and(Tag::P.new().and(err.as_str()))
+                        .and(
+                            div().and(
+                                ButtonBuilder::new()
+                                    .label("Ok")
+                                    .on(handle.callback(|| Msg::DeleteErrorDismiss))
+                                    .build(),
+                            ),
+                        );
 
-                Some(focus(err))
-            } else {
-                None
-            }
-        });
+                    focus(err).into()
+                } else {
+                    View::Empty
+                }
+            });
 
         let handle = ctx.handle();
-        let items = self.entries.signal_render(move |items| {
+        let items = self.entries.signal_render(move |items| -> View {
             let handle = handle.clone();
             table()
                 .and(
@@ -158,6 +160,7 @@ impl MsgComponent for State {
                             .and("No weight entries yet."),
                     ),
                 )
+                .into()
         });
 
         let actions = buttons().and(
@@ -171,17 +174,17 @@ impl MsgComponent for State {
         let handle = ctx.handle();
         let form = self.creating.signal_ref(move |is_creating| {
             if !*is_creating {
-                return None;
+                View::Empty
+            } else {
+                super::weightlog_create(handle.on(Msg::Created)).into()
             }
-
-            Some(super::weightlog_create(handle.on(Msg::Created)))
         });
 
         div()
             .and(title_2().and("Weight"))
             .and(actions)
-            .child_signal_opt(form)
-            .child_signal_opt(delete_error)
+            .child_signal(form)
+            .child_signal(delete_error)
             .child_signal(items)
     }
 }

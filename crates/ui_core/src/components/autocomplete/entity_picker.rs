@@ -1,7 +1,7 @@
 use std::rc::Rc;
 
 use brass::{
-    dom::{builder::div, Attr, InputEvent, Tag, TagBuilder},
+    dom::{builder::div, Attr, InputEvent, Tag, TagBuilder, View},
     signal::signal::Mutable,
 };
 use factordb::{
@@ -58,7 +58,7 @@ pub fn entity_picker(filter: Expr, on_select: impl Fn(Item) + 'static) -> TagBui
         .attr_signal(Attr::Value, value.signal_cloned())
         .on(on_change);
 
-    let items = loader.signal_render(move |items| {
+    let items = loader.signal_render(move |items| -> View {
         let on_select = on_select.clone();
         let options = items.iter().map(move |item| {
             let name = entity_title(&item.data);
@@ -73,7 +73,7 @@ pub fn entity_picker(filter: Expr, on_select: impl Fn(Item) + 'static) -> TagBui
                 })
                 .build()
         });
-        Tag::Ul.new().and_iter(options)
+        Tag::Ul.new().and_iter(options).into()
     });
 
     div().and(div().and(input)).child_signal(items)

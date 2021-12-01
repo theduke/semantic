@@ -5,7 +5,7 @@ use std::{collections::HashSet, hash::Hash, sync::atomic::AtomicBool};
 use brass::{
     dom::{
         builder::{div, p, span, tag},
-        Apply, Attr, ChangeEvent, ClickEvent, Event, InputEvent, Render, Tag, TagBuilder,
+        Apply, Attr, ChangeEvent, ClickEvent, Event, InputEvent, Render, Tag, TagBuilder, View,
         WithSignal,
     },
     signal::signal::{Signal, SignalExt},
@@ -550,8 +550,8 @@ impl InputBuilder {
 }
 
 impl Render for InputBuilder {
-    fn render(self) -> TagBuilder {
-        self.tag
+    fn render(self) -> View {
+        self.tag.into()
     }
 }
 
@@ -584,8 +584,8 @@ impl FormFieldBuilder {
 }
 
 impl Render for FormFieldBuilder {
-    fn render(self) -> TagBuilder {
-        self.tag
+    fn render(self) -> View {
+        self.tag.into()
     }
 }
 
@@ -766,9 +766,9 @@ where
 }
 
 pub fn form_field_checkbox<V: Clone>(name: &str, handle: FieldHandle<V, bool>) -> TagBuilder {
-    let help = handle.signal_errors().map(|errors| {
-        let errors = errors?;
-        Some(notification_with_errors(errors))
+    let help = handle.signal_errors().map(|errors| match errors {
+        Some(errors) => notification_with_errors(errors).into(),
+        None => View::Empty,
     });
 
     field().and(control().and(checkbox(
@@ -842,14 +842,14 @@ pub fn form_errors<V: Clone>(handle: &FormHandle<V>) -> TagBuilder {
     // errors.
     div()
         .style_raw("margin: 3rem 0;")
-        .child_signal_opt(handle.signal_status().map(|status| {
+        .child_signal(handle.signal_status().map(|status| {
             if let Err(errors) = status.errors {
                 let text = errors.join("\n");
-                Some(notification_error().and(text))
+                notification_error().and(text).into()
             } else if let Some(err) = status.submit_error {
-                Some(notification_error().and(err.to_string()))
+                notification_error().and(err.to_string()).into()
             } else {
-                None
+                View::Empty
             }
         }))
 }

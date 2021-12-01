@@ -1,6 +1,6 @@
 use std::rc::Rc;
 
-use brass::dom::{Render, TagBuilder};
+use brass::dom::{Render, TagBuilder, View};
 use factordb::{AnyError, Id};
 use futures::future::LocalBoxFuture;
 use semantic_core::base::Tag;
@@ -28,7 +28,7 @@ pub struct TagSelect {
 }
 
 impl Render for TagSelect {
-    fn render(self) -> TagBuilder {
+    fn render(self) -> View {
         load(load_all_tags(), move |tags| {
             let all_tags = Rc::new(tags.clone());
 
@@ -75,6 +75,7 @@ impl Render for TagSelect {
             }
             .render()
         })
+        .into()
     }
 }
 
@@ -92,5 +93,6 @@ pub fn form_field_tags<V: Clone>(
         on_remove_async: None,
         on_change_async: None,
     };
-    crate::components::util::form_field("Tags", handle, sel.render())
+    let builder = TagBuilder::from_node(sel.render().into_node().unwrap());
+    crate::components::util::form_field("Tags", handle, builder)
 }

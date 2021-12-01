@@ -2,7 +2,7 @@ use brass::{
     component::{msg::MsgComponent, Context, Handle},
     dom::{
         builder::{div, span},
-        ChangeEvent, ClickEvent, Render, TagBuilder,
+        ChangeEvent, ClickEvent, Render, TagBuilder, View,
     },
     signal::{
         signal::{Mutable, SignalExt},
@@ -63,7 +63,7 @@ struct FileItem {
 pub struct FileUploader;
 
 impl Render for FileUploader {
-    fn render(self) -> TagBuilder {
+    fn render(self) -> View {
         brass::component::build_component::<State>(self)
     }
 }
@@ -337,7 +337,8 @@ impl MsgComponent for State {
                         on_delete: None,
                     }
                     .render()
-                    .build()
+                    .into_node()
+                    .unwrap()
                 },
                 notification_default().and("Nothing uploaded yet."),
             );
@@ -360,7 +361,7 @@ fn render_file_item(ctx: &Handle<State>, item: &FileItem) -> TagBuilder {
         .and(span().and("Type: ").and(&item.mime_type))
         .and(btn_remove);
 
-    let load = item.status.signal_render(|_| div());
+    let load = item.status.signal_render(|_| View::Empty);
 
     box_().and(info).child_signal(load)
 }

@@ -3,7 +3,7 @@ mod collection_select;
 use std::rc::Rc;
 
 use brass::{
-    dom::{builder::div, Attr, Render, Tag, TagBuilder},
+    dom::{builder::div, Attr, Render, Tag, TagBuilder, View},
     signal::{
         signal::{Mutable, SignalExt},
         signal_vec::MutableVec,
@@ -156,7 +156,7 @@ pub fn collection_view(
         let item_tagging = Mutable::new(false);
 
         let items2 = page.items.clone();
-        let item_tagger = item_tagging.clone().signal_ref(move |flag| {
+        let item_tagger = item_tagging.clone().signal_ref(move |flag| -> View {
             if *flag {
                 let toggle = item_tagging.clone();
                 let content = collection_item_tagger::CollectionItemTagger {
@@ -175,16 +175,20 @@ pub fn collection_view(
                     },
                     true,
                 )
+                .into()
             } else {
                 let toggle = item_tagging.clone();
-                div().class("mb-2").and(
-                    ButtonBuilder::new()
-                        .label("Tag Items")
-                        .on(move || {
-                            toggle.set(true);
-                        })
-                        .build(),
-                )
+                div()
+                    .class("mb-2")
+                    .and(
+                        ButtonBuilder::new()
+                            .label("Tag Items")
+                            .on(move || {
+                                toggle.set(true);
+                            })
+                            .build(),
+                    )
+                    .into()
             }
         });
 
@@ -194,7 +198,7 @@ pub fn collection_view(
         }
         .render();
 
-        div().child_signal(item_tagger).and(manager)
+        div().child_signal(item_tagger).and(manager).into()
     });
 
     div().and(meta).and(Tag::Hr.new()).and(items)
