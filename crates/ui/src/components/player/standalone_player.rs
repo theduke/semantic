@@ -1,9 +1,6 @@
 use brass::{
     component::{msg::MsgComponent, Context},
-    dom::{
-        builder::{div, span},
-        Attr, ClickEvent, Event, Render, Tag, TagBuilder, View,
-    },
+    dom::{builder::div, Attr, ClickEvent, Event, Render, Tag, TagBuilder, View},
     effect::EventSubscription,
     signal::signal::{Mutable, SignalExt},
 };

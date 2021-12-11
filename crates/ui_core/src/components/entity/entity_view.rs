@@ -5,7 +5,7 @@ use brass::{
     signal::signal::Signal,
     DomStr,
 };
-use factordb::{query::select::Item, schema::AttrMapExt, Id};
+use factordb::{query::select::Item, schema::AttrMapExt};
 
 use crate::{
     components::util::{

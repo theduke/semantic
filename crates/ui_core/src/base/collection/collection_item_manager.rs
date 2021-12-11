@@ -1,9 +1,6 @@
 use brass::{
     component::{msg::MsgComponent, Context},
-    dom::{
-        builder::{div, span},
-        Attr, ClickEvent, Render, TagBuilder, View,
-    },
+    dom::{builder::div, Attr, ClickEvent, Render, TagBuilder, View},
     signal::{signal::Mutable, signal_vec::MutableVec},
 };
 use factordb::{
