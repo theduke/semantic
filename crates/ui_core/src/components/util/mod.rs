@@ -45,6 +45,7 @@ brass::make_str_enum! {
         Content = "content",
         Delete = "delete",
         Stub = "stub",
+        Select = "select",
 
         File = "file",
         FileIcon = "file-icon",
@@ -617,8 +618,10 @@ pub fn form_field<V: Clone, F: 'static>(
                     have_errors = true;
                 }
 
-                let text = errors.join("\n");
-                set_text_data(&help_text, &text.into());
+                if status.touched {
+                    let text = errors.join("\n");
+                    set_text_data(&help_text, &text.into());
+                }
             } else if have_errors {
                 elem_remove_class_js(&content_elem, Color::Danger.as_js_string());
                 elem_remove_class_js(&help_elem, Color::Danger.as_js_string());
@@ -714,6 +717,76 @@ pub fn form_field_textarea<V: Clone>(
 pub struct SelectOption<V> {
     pub label: String,
     pub value: V,
+}
+
+pub fn form_field_select<V: Clone, F: Clone>(
+    name: &str,
+    options: Vec<SelectOption<F>>,
+    handle: FieldHandle<V, F>,
+) -> TagBuilder
+where
+    V: 'static,
+    F: Clone + Eq + 'static,
+{
+    let opts = options.iter().enumerate().map(|(index, opt)| {
+        Tag::Option
+            .new()
+            .attr(Attr::Value, index.to_string())
+            .child_text(&opt.label)
+    });
+
+    let handle2 = handle.clone();
+    let sel = Tag::Select.new().and_iter(opts).on(move |e: ChangeEvent| {
+        let opt = e
+            .value()
+            .and_then(|v| v.parse::<usize>().ok())
+            .and_then(|index| options.get(index));
+        if let Some(opt) = opt {
+            handle2.set(opt.value.clone());
+        }
+    });
+    let content = div().class(Cls::Select).child(sel);
+
+    form_field(name, handle, content)
+
+    // let mut tags = Vec::new();
+
+    // if options.is_empty() {
+    //     tags.push(Tag::P.new().and("No options available."));
+    // }
+
+    // for option in options {
+    //     let tag = span()
+    //         .class(Cls::Tag)
+    //         .class(Cls::IsClickable)
+    //         .and(option.label);
+
+    //     let value = option.value;
+    //     let elem = tag.elem().clone();
+
+    //     // Boxing here works around borrow checker issue that detects function
+    //     // as FnMut.
+    //     let handle = handle.clone();
+    //     let is_active = AtomicBool::new(false);
+    //     let f = move |_: ClickEvent| {
+    //         if is_active.load(std::sync::atomic::Ordering::SeqCst) {
+    //             handle.remove(value.clone());
+    //             elem_remove_class_js(&elem, Color::Primary.as_js_string());
+
+    //             is_active.store(false, std::sync::atomic::Ordering::SeqCst);
+    //         } else {
+    //             handle.add(value.clone());
+    //             elem_add_class_js(&elem, Color::Primary.as_js_string());
+    //             is_active.store(true, std::sync::atomic::Ordering::SeqCst);
+    //         }
+    //     };
+
+    //     tags.push(tag.on(f));
+    // }
+
+    // field()
+    //     .and(label().and(name))
+    //     .and(control().and(div().class(Cls::Tags).and_iter(tags)))
 }
 
 pub fn form_field_tag_select<V: Clone, F>(
@@ -845,7 +918,7 @@ pub fn form_errors<V: Clone>(handle: &FormHandle<V>) -> TagBuilder {
         .child_signal(handle.signal_status().map(|status| {
             if let Err(errors) = status.errors {
                 let text = errors.join("\n");
-                notification_error().and(text).into()
+                focus(notification_error().and(text)).into()
             } else if let Some(err) = status.submit_error {
                 notification_error().and(err.to_string()).into()
             } else {
