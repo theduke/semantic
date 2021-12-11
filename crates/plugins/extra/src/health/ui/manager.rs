@@ -14,7 +14,7 @@ use semantic_ui_core::{
     context::api,
 };
 
-use crate::WeightLogEntry;
+use super::WeightLogEntry;
 
 pub struct WeightlogManager {}
 

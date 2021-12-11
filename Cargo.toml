@@ -9,7 +9,7 @@ members = [
 
     # "crates/contrib",
 
-    "crates/plugins/health",
+    "crates/plugins/extra",
 ]
 
 exclude = [

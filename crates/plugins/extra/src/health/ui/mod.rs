@@ -2,7 +2,7 @@ mod manager;
 
 use brass::dom::{Render, TagBuilder};
 use chrono::TimeZone;
-use factordb::{data::Timestamp, AnyError, Id};
+use factordb::{data::Timestamp, schema::EntityDescriptor, AnyError, Id};
 use semantic_core::plugin::PluginDescriptor;
 use semantic_ui_core::{
     components::{
@@ -15,7 +15,7 @@ use semantic_ui_core::{
     BrowserPlugin,
 };
 
-use crate::WeightLogEntry;
+use super::WeightLogEntry;
 
 impl BrowserPlugin for super::HealthPlugin {
     fn spec(&self) -> semantic_ui_core::BrowserPluginSpec {
@@ -28,7 +28,9 @@ impl BrowserPlugin for super::HealthPlugin {
         }
     }
 
-    fn register(&self, _registry: &mut semantic_ui_core::Registry) {}
+    fn register(&self, registry: &mut semantic_ui_core::Registry) {
+        registry.ignore_entity_type(WeightLogEntry::QUALIFIED_NAME.to_string());
+    }
 
     fn router(&self) -> Option<semantic_ui_core::routing::DynPluginRouter> {
         Some(Box::new(HealthRouter))

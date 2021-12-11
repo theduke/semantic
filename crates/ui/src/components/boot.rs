@@ -3,7 +3,7 @@ use std::{rc::Rc, sync::Arc};
 use brass::{
     dom::{
         builder::{div, span},
-        TagBuilder, View,
+        View,
     },
     effect::{spawn_guarded, EffectGuard},
     signal::signal::Mutable,
@@ -110,7 +110,8 @@ impl Boot {
                 // TODO: move this code somewhere more sensible. (registry?)
                 let plugins: Vec<DynBrowserPlugin> = vec![
                     Arc::new(semantic_ui_core::base::BasePlugin),
-                    Arc::new(semantic_health::HealthPlugin),
+                    Arc::new(semantic_extra::health::HealthPlugin),
+                    // Arc::new(semantic_extra::habits::HabitsPlugin),
                 ];
 
                 for plugin in plugins {

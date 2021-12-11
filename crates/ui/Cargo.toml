@@ -31,7 +31,7 @@ factordb = { version = "0.1", default-features = false }
 semantic_core = { path = "../core" }
 semantic_ui_core = { path = "../ui_core" }
 
-semantic_health = { path = "../plugins/health" }
+semantic_extra = { path = "../plugins/extra" }
 # semantic_contrib = { path = "../contrib" }
 
 [dependencies.web-sys] 
