@@ -1,4 +1,4 @@
-use std::{borrow::Borrow, rc::Rc};
+use std::{borrow::Borrow, marker::PhantomData, rc::Rc};
 
 pub trait Validator<V> {
     fn validate(&self, value: &V) -> Result<(), Vec<String>>;
@@ -15,6 +15,24 @@ pub trait Validator<V> {
         Self: Sized + 'static,
     {
         AndValidator::new(self).and(other)
+    }
+}
+
+pub struct PassingValidator<V> {
+    _marker: PhantomData<V>,
+}
+
+impl<V> PassingValidator<V> {
+    pub fn new() -> Self {
+        Self {
+            _marker: PhantomData,
+        }
+    }
+}
+
+impl<V> Validator<V> for PassingValidator<V> {
+    fn validate(&self, _value: &V) -> Result<(), Vec<String>> {
+        Ok(())
     }
 }
 
