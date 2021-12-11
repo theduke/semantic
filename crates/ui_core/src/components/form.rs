@@ -8,7 +8,7 @@ use brass::{
 use factordb::AnyError;
 use futures::{future::LocalBoxFuture, Future};
 
-use crate::validate::Validator;
+use crate::validate::{PassingValidator, Validator};
 
 pub type FormLoadFuture = LocalBoxFuture<'static, Result<(), AnyError>>;
 
@@ -73,7 +73,7 @@ pub struct FormStatus {
 
 struct FormState<V: 'static> {
     form: Form<V>,
-    fields: Vec<Mutable<FieldStatus>>,
+    fields: Vec<Rc<FieldData<V>>>,
     status: Mutable<FormStatus>,
     load_guard: Option<EffectGuard>,
 }
@@ -90,7 +90,7 @@ impl<V> Clone for FormHandle<V> {
 // Need to determine when to re-run global validation and how to update the
 // status accordingly.
 impl<V: Clone> FormHandle<V> {
-    pub fn field_validated<F, VAL>(
+    pub fn field_validated<F: 'static, VAL: Validator<F> + 'static>(
         &self,
         get: fn(&mut V) -> &mut F,
         validator: VAL,
@@ -98,34 +98,42 @@ impl<V: Clone> FormHandle<V> {
     where
         VAL: Validator<F> + 'static,
     {
-        self.make_field(get, Some(Rc::new(validator)))
+        self.make_field(get, validator)
     }
 
-    pub fn field<F>(&self, get: fn(&mut V) -> &mut F) -> FieldHandle<V, F> {
-        self.make_field(get, None)
+    pub fn field<F: 'static>(&self, get: fn(&mut V) -> &mut F) -> FieldHandle<V, F> {
+        self.make_field(get, PassingValidator::<F>::new())
     }
 
     fn make_field<F>(
         &self,
         get: fn(&mut V) -> &mut F,
-        validator: Option<Rc<dyn Validator<F>>>,
-    ) -> FieldHandle<V, F> {
+        validator: impl Validator<F> + 'static,
+    ) -> FieldHandle<V, F>
+    where
+        F: 'static,
+        V: 'static,
+    {
         let mut state = self.0.borrow_mut();
         let index = state.fields.len();
-        let field_state = FieldStatus {
+        let field_status = Mutable::new(FieldStatus {
             touched: false,
             changed: false,
             errors: Ok(()),
-        };
+        });
 
-        let mutable = Mutable::new(field_state.clone());
-        state.fields.push(mutable.clone());
+        let get2 = get.clone();
+        let data = Rc::new(FieldData {
+            index,
+            status: field_status.clone(),
+            validate: Box::new(move |values| validator.validate(get2(values))),
+        });
+
+        state.fields.push(data.clone());
 
         FieldHandle {
-            index,
             form: self.clone(),
-            mutable,
-            validator,
+            data: data.clone(),
             get,
         }
     }
@@ -143,10 +151,7 @@ impl<V: Clone> FormHandle<V> {
     }
 
     pub fn signal_not_submittable(&self) -> impl Signal<Item = bool> + 'static {
-        self.0
-            .borrow()
-            .status
-            .signal_ref(|s| s.is_loading || !s.is_valid)
+        self.0.borrow().status.signal_ref(|s| s.is_loading)
     }
 
     pub fn signal_errors(&self) -> impl Signal<Item = Option<Vec<String>>> + 'static {
@@ -164,22 +169,16 @@ impl<V: Clone> FormHandle<V> {
         field_index: usize,
         getter: fn(&mut V) -> &mut F,
         modifier: impl FnOnce(&mut F) -> bool,
-        validator: Option<&dyn Validator<F>>,
     ) {
         let mut state = self.0.borrow_mut();
 
-        let (is_changed, errors) = {
+        let is_changed = {
             let value = getter(&mut state.form.values);
-            let is_changed = modifier(value);
-
-            let errors = validator
-                .map(|val| val.validate(getter(&mut state.form.values)))
-                .unwrap_or(Ok(()));
-            (is_changed, errors)
+            modifier(value)
         };
 
         if is_changed {
-            Self::on_value_change(&mut *state, field_index, is_changed, errors);
+            Self::on_value_change(&mut *state, field_index, is_changed);
         }
     }
 
@@ -188,64 +187,64 @@ impl<V: Clone> FormHandle<V> {
         field_index: usize,
         getter: fn(&mut V) -> &mut F,
         value: F,
-        validator: Option<&dyn Validator<F>>,
     ) {
-        let errors = validator.map(|val| val.validate(&value)).unwrap_or(Ok(()));
-
         let mut state = self.0.borrow_mut();
         let is_changed = { getter(&mut state.form.values) != &value };
         *getter(&mut state.form.values) = value;
 
         if is_changed {
-            Self::on_value_change(&mut *state, field_index, is_changed, errors);
+            Self::on_value_change(&mut *state, field_index, is_changed);
         }
     }
 
-    fn on_value_change(
-        state: &mut FormState<V>,
-        field_index: usize,
-        is_changed: bool,
-        errors: Result<(), Vec<String>>,
-    ) {
-        let has_errors = errors.is_err();
-        if let Some(field) = state.fields.get_mut(field_index) {
-            field.replace_with(move |status| FieldStatus {
+    fn validate(state: &mut FormState<V>, touch_all: bool) -> bool {
+        // Update validations.
+        let mut status = state.status.lock_mut();
+
+        let mut all_fields_valid = true;
+        for field in &state.fields {
+            let mut field_status = field.status.lock_mut();
+
+            if !field_status.touched {
+                let res = (field.validate)(&mut state.form.values);
+                if res.is_err() {
+                    all_fields_valid = false;
+                }
+                field_status.errors = res;
+                if touch_all {
+                    field_status.touched = true;
+                }
+            } else {
+                if !field_status.errors.is_ok() {
+                    all_fields_valid = false;
+                }
+            }
+        }
+
+        if all_fields_valid {
+            if let Some(val) = &state.form.validator {
+                status.errors = val.validate(&state.form.values);
+            }
+        }
+
+        status.is_valid = all_fields_valid && status.errors.is_ok();
+        status.is_valid
+    }
+
+    fn on_value_change(state: &mut FormState<V>, field_index: usize, is_changed: bool) {
+        if let Some(field) = state.fields.get(field_index) {
+            let errors = (field.validate)(&mut state.form.values);
+
+            field.status.replace_with(move |status| FieldStatus {
                 touched: true,
                 changed: status.changed || is_changed,
                 errors,
             });
         } else {
             panic!("Invalid form field access");
-        }
+        };
 
-        // Update validations.
-        let mut status = state.status.lock_mut();
-        if has_errors {
-            status.is_valid = false;
-        } else if !status.is_valid {
-            // Check that all fields are valid.
-            let all_fields_valid = state.fields.iter().enumerate().all(|(index, field)| {
-                if index == field_index {
-                    !has_errors
-                } else {
-                    field.lock_ref().errors.is_ok()
-                }
-            });
-
-            if !all_fields_valid {
-                status.is_valid = false;
-            } else {
-                // Check global validators.
-
-                if let Some(val) = &state.form.validator {
-                    status.errors = val.validate(&state.form.values);
-                }
-
-                status.is_valid = status.errors.is_ok();
-            }
-        }
-
-        if status.is_valid {
+        if Self::validate(state, false) {
             if let Some(callback) = &state.form.on_valid {
                 callback(&state.form.values);
             }
@@ -272,8 +271,13 @@ impl<V: Clone> FormHandle<V> {
 
     pub fn submit(&self) {
         let mut state = self.0.borrow_mut();
+        Self::validate(&mut state, true);
 
         let mut status = state.status.lock_mut();
+        if status.is_loading {
+            return;
+        }
+
         if status.is_valid {
             if let Some(callback) = &state.form.on_submit {
                 let values = state.form.values.clone();
@@ -345,7 +349,7 @@ impl<V: Clone> FormHandle<V> {
         state.form.values = values;
 
         for field in &state.fields {
-            field.replace(FieldStatus {
+            field.status.replace(FieldStatus {
                 touched: false,
                 changed: false,
                 errors: Ok(()),
@@ -368,21 +372,23 @@ pub struct FieldStatus {
     pub errors: Result<(), Vec<String>>,
 }
 
-pub struct FieldHandle<V: Clone + 'static, F> {
+struct FieldData<V> {
     index: usize,
+    status: Mutable<FieldStatus>,
+    validate: Box<dyn Fn(&mut V) -> Result<(), Vec<String>>>,
+}
+
+pub struct FieldHandle<V: Clone + 'static, F> {
     form: FormHandle<V>,
-    mutable: Mutable<FieldStatus>,
-    validator: Option<Rc<dyn Validator<F>>>,
+    data: Rc<FieldData<V>>,
     get: fn(&mut V) -> &mut F,
 }
 
 impl<V: Clone + 'static, F> Clone for FieldHandle<V, F> {
     fn clone(&self) -> Self {
         Self {
-            index: self.index,
             form: self.form.clone(),
-            mutable: self.mutable.clone(),
-            validator: self.validator.clone(),
+            data: self.data.clone(),
             get: self.get.clone(),
         }
     }
@@ -395,7 +401,7 @@ impl<V: Clone + 'static, F: 'static> FieldHandle<V, F> {
     {
         let form = self.form.clone();
         let get = self.get;
-        self.mutable.signal_ref(move |_| {
+        self.data.status.signal_ref(move |_| {
             let mut state = form.0.borrow_mut();
             get(&mut state.form.values).clone()
         })
@@ -409,25 +415,26 @@ impl<V: Clone + 'static, F: 'static> FieldHandle<V, F> {
     }
 
     pub fn for_each(&self, mut f: impl FnMut(&FieldStatus)) -> impl Future<Output = ()> {
-        self.mutable
+        self.data
+            .status
             .signal_ref(move |status| f(status))
             .for_each(|_| async {})
     }
 
     pub fn signal_touched(&self) -> impl Signal<Item = bool> + 'static {
-        self.mutable.signal_ref(|x| x.touched)
+        self.data.status.signal_ref(|x| x.touched)
     }
 
     pub fn signal_changed(&self) -> impl Signal<Item = bool> + 'static {
-        self.mutable.signal_ref(|x| x.changed)
+        self.data.status.signal_ref(|x| x.changed)
     }
 
     pub fn signal_is_valid(&self) -> impl Signal<Item = bool> + 'static {
-        self.mutable.signal_ref(|x| x.errors.is_ok())
+        self.data.status.signal_ref(|x| x.errors.is_ok())
     }
 
     pub fn signal_errors(&self) -> impl Signal<Item = Option<Vec<String>>> + 'static {
-        self.mutable.signal_ref(|x| match &x.errors {
+        self.data.status.signal_ref(|x| match &x.errors {
             Ok(_) => None,
             Err(errs) => Some(errs.clone()),
         })
@@ -437,12 +444,7 @@ impl<V: Clone + 'static, F: 'static> FieldHandle<V, F> {
     where
         F: PartialEq,
     {
-        self.form.set_value_eq(
-            self.index,
-            self.get,
-            value,
-            self.validator.as_ref().map(|x| &**x),
-        );
+        self.form.set_value_eq(self.data.index, self.get, value);
     }
 
     pub fn on<E: DomEvent>(self, mut handler: impl FnMut(E) -> Option<F>) -> impl FnMut(E)
@@ -459,20 +461,16 @@ impl<V: Clone + 'static, F: 'static> FieldHandle<V, F> {
 
 impl<V: Clone + 'static, F: Hash + Eq + 'static> FieldHandle<V, HashSet<F>> {
     pub fn add(&self, value: F) {
-        self.form.modify_value(
-            self.index,
-            self.get,
-            move |values| values.insert(value),
-            self.validator.as_ref().map(|x| &**x),
-        );
+        self.form
+            .modify_value(self.data.index, self.get, move |values| {
+                values.insert(value)
+            });
     }
 
     pub fn remove(&self, value: F) {
-        self.form.modify_value(
-            self.index,
-            self.get.clone(),
-            move |values| values.remove(&value),
-            self.validator.as_ref().map(|x| &**x),
-        );
+        self.form
+            .modify_value(self.data.index, self.get.clone(), move |values| {
+                values.remove(&value)
+            });
     }
 }
