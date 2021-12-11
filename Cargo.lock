@@ -229,7 +229,7 @@ dependencies = [
 [[package]]
 name = "brass"
 version = "0.1.0"
-source = "git+https://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@github.com/theduke/brass.git?branch=main#fe3ebe85074e46a2053dbdef8e2a95932b0c3e6e"
+source = "git+https://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@github.com/theduke/brass.git?branch=main#25822726fcb70538a2cc2cb7776b245fedd7d11e"
 dependencies = [
  "brass_macros",
  "futures",
@@ -246,7 +246,7 @@ dependencies = [
 [[package]]
 name = "brass_macros"
 version = "0.1.0"
-source = "git+https://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@github.com/theduke/brass.git?branch=main#fe3ebe85074e46a2053dbdef8e2a95932b0c3e6e"
+source = "git+https://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@github.com/theduke/brass.git?branch=main#25822726fcb70538a2cc2cb7776b245fedd7d11e"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -605,7 +605,7 @@ dependencies = [
 [[package]]
 name = "factor_macros"
 version = "0.1.0"
-source = "git+https://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@github.com/theduke/factordb.git?branch=main#f8b39030bd2c1eb44059e2227606a350a6a0942b"
+source = "git+https://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@github.com/theduke/factordb.git?branch=main#47cf7fc2dd0c52a19eac0395ec448e5bfc1ca3d9"
 dependencies = [
  "Inflector",
  "proc-macro2",
@@ -616,7 +616,7 @@ dependencies = [
 [[package]]
 name = "factor_tools"
 version = "0.1.0"
-source = "git+https://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@github.com/theduke/factordb.git?branch=main#f8b39030bd2c1eb44059e2227606a350a6a0942b"
+source = "git+https://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@github.com/theduke/factordb.git?branch=main#47cf7fc2dd0c52a19eac0395ec448e5bfc1ca3d9"
 dependencies = [
  "Inflector",
  "anyhow",
@@ -626,7 +626,7 @@ dependencies = [
 [[package]]
 name = "factordb"
 version = "0.1.0"
-source = "git+https://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@github.com/theduke/factordb.git?branch=main#f8b39030bd2c1eb44059e2227606a350a6a0942b"
+source = "git+https://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@github.com/theduke/factordb.git?branch=main#47cf7fc2dd0c52a19eac0395ec448e5bfc1ca3d9"
 dependencies = [
  "anyhow",
  "chrono",

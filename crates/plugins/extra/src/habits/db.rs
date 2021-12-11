@@ -139,9 +139,14 @@ pub struct HabitOccurence {
 
 impl HabitOccurence {
     pub fn query_for_habit(id: Id) -> Select {
-        Select::new().with_filter(
-            Expr::is_entity::<HabitOccurence>()
-                .and_with(Expr::eq(AttrHabitOccurenceParentId::expr(), id)),
-        )
+        Select::new()
+            .with_filter(
+                Expr::is_entity::<HabitOccurence>()
+                    .and_with(Expr::eq(AttrHabitOccurenceParentId::expr(), id)),
+            )
+            .with_sort(
+                AttrHabitOccurenceTime::expr(),
+                factordb::query::select::Order::Desc,
+            )
     }
 }

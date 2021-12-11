@@ -1,7 +1,8 @@
 use brass::{
     component::{msg::MsgComponent, Component},
-    dom::{builder::div, Render, Tag, View},
-    signal::signal_vec::MutableVec,
+    dom::{builder::div, Attr, Render, Style, Tag, TagBuilder, View},
+    effect::{set_interval, IntervalGuard},
+    signal::signal::Mutable,
 };
 use factordb::{query::select::Page, AnyError};
 use semantic_ui_core::{
@@ -9,7 +10,7 @@ use semantic_ui_core::{
         loader::Loader,
         util::{notification_default, notification_error, ButtonBuilder, Color},
     },
-    context, datetime_to_locale_string_js,
+    context, now,
 };
 
 use crate::habits::{Habit, HabitMode, HabitOccurence};
@@ -27,7 +28,7 @@ impl Render for HabitView {
 
 enum Msg {
     Trigger,
-    TriggerLoad(Result<HabitOccurence, AnyError>),
+    TriggerLoaded(Result<HabitOccurence, AnyError>),
     OccurencesLoaded(Result<Page<HabitOccurence>, AnyError>),
 }
 
@@ -35,7 +36,34 @@ struct State {
     habit: Habit,
     trigger_loading: Loader<()>,
     list_loader: Loader<()>,
-    occurences: MutableVec<HabitOccurence>,
+    occurences: Mutable<Page<HabitOccurence>>,
+
+    timer_guard: Option<IntervalGuard>,
+    timer: Mutable<String>,
+}
+
+impl State {
+    fn start_timer(&mut self, last_ocurrence: HabitOccurence) {
+        fn build_timer(oc: &HabitOccurence) -> String {
+            let secs = now()
+                .to_datetime()
+                .signed_duration_since(oc.time.to_datetime())
+                .num_seconds();
+            format!(
+                "{:02}:{:02}:{:02}",
+                secs / (60 * 60),
+                secs / 60 % 60,
+                secs % 60
+            )
+        }
+
+        self.timer.set(build_timer(&last_ocurrence));
+
+        let timer = self.timer.clone();
+        self.timer_guard = Some(set_interval(std::time::Duration::from_secs(1), move || {
+            timer.set(build_timer(&last_ocurrence));
+        }));
+    }
 }
 
 impl MsgComponent for State {
@@ -48,7 +76,7 @@ impl MsgComponent for State {
             Loader::new_loading(_ctx.spawn_map(
                 async move {
                     context::api()
-                        .select_entities(HabitOccurence::query_for_habit(id))
+                        .select_entities(HabitOccurence::query_for_habit(id).with_limit(1000))
                         .await
                 },
                 Msg::OccurencesLoaded,
@@ -56,11 +84,14 @@ impl MsgComponent for State {
         } else {
             Loader::new_idle()
         };
+
         Self {
             habit: props.habit,
             trigger_loading: Loader::new_idle(),
             list_loader,
-            occurences: MutableVec::new(),
+            occurences: Mutable::new(Page::new()),
+            timer_guard: None,
+            timer: Mutable::new(String::new()),
         }
     }
 
@@ -77,14 +108,15 @@ impl MsgComponent for State {
                         .entity_create(occurence.clone())
                         .await
                         .map(move |_| occurence);
-                    Msg::TriggerLoad(res)
+                    Msg::TriggerLoaded(res)
                 });
                 self.trigger_loading.set_loading(guard);
             }
-            Msg::TriggerLoad(res) => match res {
+            Msg::TriggerLoaded(res) => match res {
                 Ok(oc) => {
                     self.trigger_loading.set_success(());
-                    self.occurences.lock_mut().insert_cloned(0, oc);
+                    self.start_timer(oc.clone());
+                    self.occurences.lock_mut().items.push(oc);
                 }
                 Err(err) => {
                     self.trigger_loading.set_err(err);
@@ -93,10 +125,14 @@ impl MsgComponent for State {
             Msg::OccurencesLoaded(res) => {
                 match res {
                     Ok(page) => {
+                        if let Some(latest) = page.items.first() {
+                            self.start_timer(latest.clone());
+                        }
+
                         // TODO: append to current page instead of replacing?
                         // (to respect new entries already added on current page)
                         self.list_loader.set_success(());
-                        self.occurences.lock_mut().extend(page.items);
+                        self.occurences.lock_mut().items.extend(page.items);
                     }
                     Err(err) => {
                         self.list_loader.set_err(err);
@@ -113,35 +149,119 @@ impl MsgComponent for State {
             HabitMode::Neutral => (Color::Primary, "far fa-dot-circle"),
         };
 
+        let title = if self.habit.title.trim().is_empty() {
+            format!("Habit {}", self.habit.id)
+        } else {
+            self.habit.title.clone()
+        };
+
+        let habit = self.habit.clone();
+
+        let toggle_button = ButtonBuilder::new()
+            .size_large()
+            .icon(icon)
+            .signal_loading(self.trigger_loading.signal_loading())
+            .color(color)
+            .on(ctx.callback_msg(|| Msg::Trigger))
+            .build();
+
         div()
-            .and(div().class("mb-2").and(Tag::B.new().and(&self.habit.title)))
+            .and(div().class("mb-2").and(Tag::B.new().text(title)))
             .and(
-                div().and(
-                    ButtonBuilder::new()
-                        .size_large()
-                        .icon(icon)
-                        .signal_loading(self.trigger_loading.signal_loading())
-                        .color(color)
-                        .on(ctx.callback_msg(|| Msg::Trigger))
-                        .build(),
-                ),
+                div()
+                    .class("is-flex")
+                    .and(div().class("mr-4").and(toggle_button))
+                    .signal(self.timer.signal_ref(|time| {
+                        div()
+                            .style_raw("align-items: center; font-size: 2rem;")
+                            .and(time)
+                    })),
             )
             .signal(self.trigger_loading.get().signal_ref(|s| {
                 s.as_error()
                     .map(|err| notification_error().class("mt-4").and(err).into_view())
                     .unwrap_or(View::Empty)
             }))
-            .and(div().class("mt-4").class("mb-4").signal_vec_with_fallback(
-                self.occurences.signal_vec_cloned(),
-                |oc| {
-                    let dt = oc.time.to_datetime();
-                    div()
-                        .class("mb-2")
-                        .and(datetime_to_locale_string_js(&dt))
-                        .build()
-                },
-                notification_default().and("No records yet."),
-            ))
+            .and(
+                div().class("mt-4").class("mb-4").signal(
+                    self.occurences
+                        .signal_ref(move |page| render_graph(&habit, &page.items)),
+                ),
+            )
             .signal(self.list_loader.signal_render_loading())
     }
+}
+
+fn render_graph(_habit: &Habit, items: &[HabitOccurence]) -> TagBuilder {
+    if items.is_empty() {
+        return notification_default().and("No records yet.");
+    }
+
+    let mut items = items.iter().collect::<Vec<_>>();
+    items.sort_by(|a, b| a.time.cmp(&b.time));
+
+    let mut date_counter = Vec::<(chrono::NaiveDate, usize)>::new();
+
+    // NOTE: items are assumed to be sorted by time (asc) already.
+
+    for item in items.iter() {
+        let date = item.time.to_datetime().date().naive_utc();
+
+        match date_counter.last_mut() {
+            Some((cur_date, counter)) if cur_date == &date => {
+                *counter = *counter + 1;
+            }
+            _ => {
+                date_counter.push((date, 1));
+            }
+        }
+    }
+
+    // let min_date = items.first().unwrap().time.to_datetime().date().naive_utc();
+    // let max_date =
+    //     items.last().unwrap().time.to_datetime().date().naive_utc() + chrono::Duration::days(1);
+
+    let max_count = date_counter
+        .iter()
+        .map(|(_, x)| *x)
+        .max()
+        .unwrap_or_default();
+    let max_x = max_count + (5 - max_count % 5);
+
+    let mut x_labels = Vec::new();
+    for x in (0..=max_x).rev() {
+        if x == 0 || x == max_x || ((x < max_x - 5) && x % 5 == 0) {
+            x_labels.push(div().and(x.to_string()));
+        }
+    }
+
+    let x_axis = div()
+        .class("is-flex")
+        .class("is-justify-content-space-between")
+        .class("is-flex-direction-column")
+        .class("mr-3")
+        .and_iter(x_labels);
+
+    let bars = date_counter.into_iter().map(|(date, count)| {
+        div()
+            .style(Style::Width, "20px")
+            .style(Style::Height, format!("{}%", count * 100 / max_x))
+            .style(Style::BackgroundColor, "red")
+            .attr(
+                Attr::Title,
+                format!("Count: {count} - Date: {}", date.format("%Y-%m-%d")),
+            )
+    });
+
+    let bar_wrap = div()
+        .class("is-flex")
+        .class("is-flex-grow-1")
+        .class("is-align-items-end")
+        .and_iter(bars);
+
+    div()
+        .style(Style::Height, "400px")
+        .class("is-flex")
+        .child(x_axis)
+        .child(bar_wrap)
 }
