@@ -108,7 +108,7 @@ fn plugin_source_deleter(
         }
     });
 
-    div().child_signal(signal)
+    div().signal(signal)
 }
 
 pub fn plugin_manager() -> TagBuilder {
@@ -133,7 +133,7 @@ pub fn plugin_manager() -> TagBuilder {
             let items = MutableVec::new_with_values(page.items.clone());
 
             div()
-                .children_signal(
+                .signal_vec(
                     items.signal_vec_cloned(),
                     |source: &PluginSource| -> brass::dom::Node {
                         let deleting = Mutable::new(false);
@@ -164,7 +164,7 @@ pub fn plugin_manager() -> TagBuilder {
                         box_()
                             .and(subtitle_4().and(&source.ident))
                             .and(actions)
-                            .child_signal(deleting.signal().map(move |is_deleting| {
+                            .signal(deleting.signal().map(move |is_deleting| {
                                 let deleting = deleting.clone();
                                 if is_deleting {
                                     plugin_source_deleter(
@@ -374,9 +374,7 @@ pub fn plugin_test_page() -> TagBuilder {
                     .into()
             }
         });
-        let output = div()
-            .style_raw("margin-top: 2rem;")
-            .child_signal(output_signal);
+        let output = div().style_raw("margin-top: 2rem;").signal(output_signal);
 
         div()
             .and(title_2().and("Test Plugin"))

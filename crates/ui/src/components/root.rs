@@ -21,7 +21,7 @@ pub fn root() -> TagBuilder {
     div()
         .style_raw("display: flex; flex-direction: column; height: 100%; width: 100%;")
         .and(navbar())
-        .child_signal(s)
+        .signal(s)
 }
 
 fn render_route(route: Route) -> View {

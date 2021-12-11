@@ -265,7 +265,7 @@ impl MsgComponent for State {
                 }
             });
 
-            let mut content = div().child_signal(active_action_signal);
+            let mut content = div().signal(active_action_signal);
 
             match content_renderer {
                 Some(renderer) => {
@@ -281,7 +281,7 @@ impl MsgComponent for State {
                             renderer(&item, &opts)
                         }
                     });
-                    content.add_child_signal(signal);
+                    content.add_signal(signal);
                 }
                 None => {
                     content.add_child(super::entity_fields_table(
@@ -303,7 +303,7 @@ impl MsgComponent for State {
             .render()
         });
 
-        let root = div().child_signal(content_signal);
+        let root = div().signal(content_signal);
 
         self.root_div = Some(root.elem().clone());
 

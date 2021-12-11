@@ -76,5 +76,5 @@ pub fn entity_picker(filter: Expr, on_select: impl Fn(Item) + 'static) -> TagBui
         Tag::Ul.new().and_iter(options).into()
     });
 
-    div().and(div().and(input)).child_signal(items)
+    div().and(div().and(input)).signal(items)
 }

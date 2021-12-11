@@ -429,7 +429,7 @@ impl MsgComponent for State {
                         }
                     }
                 });
-                items.add_child_signal(view);
+                items.add_signal(view);
             }
 
             let load_more = if let Some(link) = &preview.output.load_more_url {
@@ -497,7 +497,7 @@ impl MsgComponent for State {
         div()
             .and(title_2().and("Import"))
             .and(form.class("mb-4").class(Cls::Box))
-            .child_signal(preview)
-            .child_signal(full)
+            .signal(preview)
+            .signal(full)
     }
 }

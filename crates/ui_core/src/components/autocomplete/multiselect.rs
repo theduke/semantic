@@ -444,7 +444,7 @@ pub fn multiselect_render_tags<'a, T: Clone>(
         .map(|x| x())
         .unwrap_or_else(|| notification_default().and("Nothing selected yet"));
 
-    let selected = tags().children_signal_with_fallback(
+    let selected = tags().signal_vec_with_fallback(
         args.selected.signal_vec_cloned(),
         move |(id, item)| {
             let id = id.clone();
@@ -473,7 +473,7 @@ pub fn multiselect_render_tags<'a, T: Clone>(
         .as_ref()
         .map(|x| x())
         .unwrap_or_else(|| notification_default().and("Nothing found. Try searching."));
-    let available = buttons().children_signal_with_fallback(
+    let available = buttons().signal_vec_with_fallback(
         args.available.signal_vec_cloned(),
         move |(id, item)| {
             let id = id.clone();
@@ -492,6 +492,6 @@ pub fn multiselect_render_tags<'a, T: Clone>(
         .and(actions)
         .and(Tag::Hr.new())
         .and(search)
-        .child_signal(loader_signal)
+        .signal(loader_signal)
         .and(available)
 }

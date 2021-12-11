@@ -25,7 +25,7 @@ pub fn markdown_view(markdown: &str) -> TagBuilder {
 }
 
 pub fn markdown_view_mutable(markdown: &Mutable<String>) -> TagBuilder {
-    div().child_signal(markdown.signal_ref(move |markdown| {
+    div().signal(markdown.signal_ref(move |markdown| {
         let html = markdown_to_html(&markdown);
         let root = div();
         root.elem().set_inner_html(&html);

@@ -41,7 +41,7 @@ pub fn entity_loader(id: Id, render: impl Fn(&Item) -> View + 'static) -> TagBui
     let inner = loader.signal_render(render);
     // FIXME: need to manually retain the loader for now. remove when loader
     // is refactored.
-    div().bind(loader).child_signal(inner)
+    div().bind(loader).signal(inner)
 }
 
 pub fn entity_page(id: Id) -> TagBuilder {
@@ -226,10 +226,7 @@ pub fn entity_fields_table(
                 title = key.as_str();
             };
 
-            Tag::Tr
-                .new()
-                .child(Tag::Th.new().child_text(title))
-                .child(td_val)
+            Tag::Tr.new().child(Tag::Th.new().text(title)).child(td_val)
         });
 
     table().and_iter(rows)

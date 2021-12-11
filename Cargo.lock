@@ -229,7 +229,7 @@ dependencies = [
 [[package]]
 name = "brass"
 version = "0.1.0"
-source = "git+https://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@github.com/theduke/brass.git?branch=main#f06241f3f6b07d611a8dff73d758f5b3f76f8ee3"
+source = "git+https://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@github.com/theduke/brass.git?branch=main#fe3ebe85074e46a2053dbdef8e2a95932b0c3e6e"
 dependencies = [
  "brass_macros",
  "futures",
@@ -246,7 +246,7 @@ dependencies = [
 [[package]]
 name = "brass_macros"
 version = "0.1.0"
-source = "git+https://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@github.com/theduke/brass.git?branch=main#f06241f3f6b07d611a8dff73d758f5b3f76f8ee3"
+source = "git+https://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@github.com/theduke/brass.git?branch=main#fe3ebe85074e46a2053dbdef8e2a95932b0c3e6e"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -605,7 +605,7 @@ dependencies = [
 [[package]]
 name = "factor_macros"
 version = "0.1.0"
-source = "git+https://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@github.com/theduke/factordb.git?branch=main#d15bccc58211818a296aa48ef258a1b1ce246bd9"
+source = "git+https://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@github.com/theduke/factordb.git?branch=main#f8b39030bd2c1eb44059e2227606a350a6a0942b"
 dependencies = [
  "Inflector",
  "proc-macro2",
@@ -616,7 +616,7 @@ dependencies = [
 [[package]]
 name = "factor_tools"
 version = "0.1.0"
-source = "git+https://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@github.com/theduke/factordb.git?branch=main#d15bccc58211818a296aa48ef258a1b1ce246bd9"
+source = "git+https://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@github.com/theduke/factordb.git?branch=main#f8b39030bd2c1eb44059e2227606a350a6a0942b"
 dependencies = [
  "Inflector",
  "anyhow",
@@ -626,7 +626,7 @@ dependencies = [
 [[package]]
 name = "factordb"
 version = "0.1.0"
-source = "git+https://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@github.com/theduke/factordb.git?branch=main#d15bccc58211818a296aa48ef258a1b1ce246bd9"
+source = "git+https://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@github.com/theduke/factordb.git?branch=main#f8b39030bd2c1eb44059e2227606a350a6a0942b"
 dependencies = [
  "anyhow",
  "chrono",
@@ -1808,9 +1808,9 @@ checksum = "8b870d8c151b6f2fb93e84a13146138f05d02ed11c7e7c54f8826aaaf7c9f184"
 
 [[package]]
 name = "pkg-config"
-version = "0.3.23"
+version = "0.3.24"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "d1a3ea4f0dd7f1f3e512cf97bf100819aa547f36a6eccac8dbaae839eb92363e"
+checksum = "58893f751c9b0412871a09abd62ecd2a00298c6c83befa223ef98c52aef40cbe"
 
 [[package]]
 name = "png"

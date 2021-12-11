@@ -85,7 +85,5 @@ pub fn logout() -> TagBuilder {
         Ok(())
     })
     .signal_render(|_| View::Empty);
-    div()
-        .and(subtitle_4().and("Logging out..."))
-        .child_signal(load)
+    div().and(subtitle_4().and("Logging out...")).signal(load)
 }

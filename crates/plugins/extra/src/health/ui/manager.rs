@@ -132,7 +132,7 @@ impl MsgComponent for State {
                     ),
                 )
                 .and(
-                    Tag::Tbody.new().children_signal_with_fallback(
+                    Tag::Tbody.new().signal_vec_with_fallback(
                         items.signal_vec_cloned(),
                         move |item| {
                             let id = item.id;
@@ -183,8 +183,8 @@ impl MsgComponent for State {
         div()
             .and(title_2().and("Weight"))
             .and(actions)
-            .child_signal(form)
-            .child_signal(delete_error)
-            .child_signal(items)
+            .signal(form)
+            .signal(delete_error)
+            .signal(items)
     }
 }

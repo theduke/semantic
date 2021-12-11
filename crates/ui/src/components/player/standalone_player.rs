@@ -263,7 +263,7 @@ impl MsgComponent for State {
             .class("mr-4")
             .class(Cls::Buttons)
             .and((btn_play, btn_prev, btn_next))
-            .child_signal(position_info);
+            .signal(position_info);
 
         let player = self.player.clone();
         let btn_shuffle = button()
@@ -337,7 +337,7 @@ impl MsgComponent for State {
         });
 
         let handle = ctx.handle();
-        let settings = div().child_signal(self.settings_active.signal().map(move |flag| -> View {
+        let settings = div().signal(self.settings_active.signal().map(move |flag| -> View {
             if !flag {
                 View::Empty
             } else {
@@ -350,7 +350,7 @@ impl MsgComponent for State {
         let bar = div()
             .style_raw("display: flex; margin-bottom: 1rem; align-items: flex-start; flex-grow: 0; justify-content: space-between;")
             .and(controls)
-            .child_signal(item_info)
+            .signal(item_info)
             .and(bar_settings);
 
         let player_wrap = div()
@@ -375,7 +375,7 @@ impl MsgComponent for State {
             )
             .and(bar)
             .and(settings)
-            .child_signal(loader)
+            .signal(loader)
             .and(player_wrap)
     }
 }

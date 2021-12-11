@@ -132,7 +132,7 @@ pub fn note_view(note: Note, opts: &EntityRenderOpts) -> TagBuilder {
     if opts.editable {
         let editing = Mutable::new(false);
 
-        div().child_signal(editing.signal().map(move |is_editing| {
+        div().signal(editing.signal().map(move |is_editing| {
             if is_editing {
                 let editing = editing.clone();
                 let mutable_note = mutable_note.clone();

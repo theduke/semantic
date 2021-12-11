@@ -147,7 +147,7 @@ pub fn collection_view(
             }
         });
 
-        div().child_signal(meta_form)
+        div().signal(meta_form)
     } else {
         collection_meta(&col)
     };
@@ -198,7 +198,7 @@ pub fn collection_view(
         }
         .render();
 
-        div().child_signal(item_tagger).and(manager).into()
+        div().signal(item_tagger).and(manager).into()
     });
 
     div().and(meta).and(Tag::Hr.new()).and(items)

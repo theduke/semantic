@@ -278,7 +278,7 @@ impl<T> Loader<T> {
         let mut wrapper = div();
         let elem = std::rc::Rc::new(wrapper.elem().clone().dyn_into::<HtmlElement>().unwrap());
 
-        wrapper.add_child_signal(self.0.signal_ref(move |state| {
+        wrapper.add_signal(self.0.signal_ref(move |state| {
             if state.is_failed() {
                 let elem = elem.clone();
                 // Spawn a future so the focus runs on the next microtask tick,
@@ -362,7 +362,5 @@ pub fn load<T: 'static>(
     render: impl Fn(&T) -> View + 'static,
 ) -> TagBuilder {
     let loader = Loader::new_spawn(f);
-    div()
-        .child_signal(loader.signal_render(render))
-        .bind(loader)
+    div().signal(loader.signal_render(render)).bind(loader)
 }

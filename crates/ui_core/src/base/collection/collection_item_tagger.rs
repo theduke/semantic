@@ -140,6 +140,6 @@ impl MsgComponent for State {
             LoadState::Success(_) => unimplemented!(),
             LoadState::Failed(_) => unimplemented!(),
         });
-        div().child_signal(sig)
+        div().signal(sig)
     }
 }

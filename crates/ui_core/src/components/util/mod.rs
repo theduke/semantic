@@ -177,7 +177,7 @@ impl NotificationBuilder {
 
     pub fn msg<'a>(mut self, color: Color, msg: impl Into<DomStr<'a>>) -> Self {
         self.tag.add_class(color);
-        self.tag.add_child(Tag::P.new().child_text(msg));
+        self.tag.add_child(Tag::P.new().text(msg));
         self
     }
 
@@ -299,7 +299,7 @@ impl ButtonBuilder {
     }
 
     pub fn label<'a>(mut self, label: impl Into<DomStr<'a>>) -> Self {
-        self.tag.add_child(span().child_text(label));
+        self.tag.add_child(span().text(label));
         self
     }
 
@@ -562,7 +562,7 @@ pub struct FormFieldBuilder {
 
 impl FormFieldBuilder {
     pub fn new(label: DomStr<'_>) -> Self {
-        let label = tag(Tag::Label).class(Cls::Label).child_text(label);
+        let label = tag(Tag::Label).class(Cls::Label).text(label);
         Self {
             tag: div().class(Cls::Field).and(label),
         }
@@ -732,7 +732,7 @@ where
         Tag::Option
             .new()
             .attr(Attr::Value, index.to_string())
-            .child_text(&opt.label)
+            .text(&opt.label)
     });
 
     let handle2 = handle.clone();
@@ -915,7 +915,7 @@ pub fn form_errors<V: Clone>(handle: &FormHandle<V>) -> TagBuilder {
     // errors.
     div()
         .style_raw("margin: 3rem 0;")
-        .child_signal(handle.signal_status().map(|status| {
+        .signal(handle.signal_status().map(|status| {
             if let Err(errors) = status.errors {
                 let text = errors.join("\n");
                 focus(notification_error().and(text)).into()

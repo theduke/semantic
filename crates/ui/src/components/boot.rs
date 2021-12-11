@@ -74,7 +74,7 @@ impl Boot {
 
         div()
             .style_raw("height: 100%;")
-            .child_signal(boot.status.clone().signal_ref(move |phase| {
+            .signal(boot.status.clone().signal_ref(move |phase| {
                 match phase {
                     BootPhase::Init => span(),
                     BootPhase::LoadingStatus(_) => {

@@ -293,7 +293,7 @@ impl MsgComponent for State {
                     ),
                 ),
         });
-        let collection_finder = div().child_signal(collection_finder_content).class("mb-3");
+        let collection_finder = div().signal(collection_finder_content).class("mb-3");
 
         let btn_upload = ButtonBuilder::new()
             .label("Upload")
@@ -315,7 +315,7 @@ impl MsgComponent for State {
             .class("mt-4")
             .and(subtitle_4().and("Queue"))
             .and(buttons)
-            .children_signal_with_fallback(
+            .signal_vec_with_fallback(
                 self.files.signal_vec_cloned(),
                 move |file| render_file_item(&handle, file).build(),
                 notification_default().and("Select files to upload."),
@@ -324,7 +324,7 @@ impl MsgComponent for State {
         let uploaded_items = div()
             .class("mt-4")
             .and(subtitle_4().and("Uploaded Files"))
-            .children_signal_with_fallback(
+            .signal_vec_with_fallback(
                 self.uploaded_files.signal_vec_cloned(),
                 move |item| {
                     EntityBox {
@@ -363,5 +363,5 @@ fn render_file_item(ctx: &Handle<State>, item: &FileItem) -> TagBuilder {
 
     let load = item.status.signal_render(|_| View::Empty);
 
-    box_().and(info).child_signal(load)
+    box_().and(info).signal(load)
 }

@@ -9,7 +9,7 @@ use semantic_ui_core::{
         loader::Loader,
         util::{notification_default, notification_error, ButtonBuilder, Color},
     },
-    context,
+    context, datetime_to_locale_string_js,
 };
 
 use crate::habits::{Habit, HabitMode, HabitOccurence};
@@ -126,25 +126,22 @@ impl MsgComponent for State {
                         .build(),
                 ),
             )
-            .child_signal(self.trigger_loading.get().signal_ref(|s| {
+            .signal(self.trigger_loading.get().signal_ref(|s| {
                 s.as_error()
                     .map(|err| notification_error().class("mt-4").and(err).into_view())
                     .unwrap_or(View::Empty)
             }))
-            .and(
-                div()
-                    .class("mt-4")
-                    .class("mb-4")
-                    .children_signal_with_fallback(
-                        self.occurences.signal_vec_cloned(),
-                        |oc| {
-                            tracing::trace!(dt=?oc.time.to_datetime(), ds=%oc.time.as_millis());
-                            let dt = oc.time.to_datetime();
-                            div().class("mb-2").and(dt.to_rfc3339()).build()
-                        },
-                        notification_default().and("No records yet."),
-                    ),
-            )
-            .child_signal(self.list_loader.signal_render_loading())
+            .and(div().class("mt-4").class("mb-4").signal_vec_with_fallback(
+                self.occurences.signal_vec_cloned(),
+                |oc| {
+                    let dt = oc.time.to_datetime();
+                    div()
+                        .class("mb-2")
+                        .and(datetime_to_locale_string_js(&dt))
+                        .build()
+                },
+                notification_default().and("No records yet."),
+            ))
+            .signal(self.list_loader.signal_render_loading())
     }
 }

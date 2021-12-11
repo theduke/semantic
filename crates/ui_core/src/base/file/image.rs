@@ -68,5 +68,5 @@ fn image_with_preview_modal(url: String) -> TagBuilder {
         }
     });
 
-    div().and(img).child_signal(modal)
+    div().and(img).signal(modal)
 }

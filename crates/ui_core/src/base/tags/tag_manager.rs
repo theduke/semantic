@@ -105,7 +105,7 @@ impl TagNode {
         });
 
         let tag = button().and(&self.tag.name);
-        let row = div().and(tag).child_signal(deleter);
+        let row = div().and(tag).signal(deleter);
 
         div().class("mb-2").and(row).and(children)
     }
@@ -167,7 +167,7 @@ impl MsgComponent for State {
         div()
             .and(title_2().and("Tags"))
             .and(form_wrap)
-            .child_signal(self.tree.signal_ref(move |tree| {
+            .signal(self.tree.signal_ref(move |tree| {
                 if tree.is_empty() {
                     notification_warning().and("No tags found.")
                 } else {

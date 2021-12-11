@@ -83,7 +83,7 @@ struct State {
 
     // TODO: Remove hack
     // The RefCell<Option<>> is a stupid workaround because
-    // TagBuilder can't be cloned, and a Mutable<> signal with .child_signal
+    // TagBuilder can't be cloned, and a Mutable<> signal with .signal
     // requires cloning. Refactor once brass is improved.
     dom_item: Mutable<RefCell<View>>,
 }
@@ -343,7 +343,7 @@ impl MsgComponent for State {
     fn render(&mut self, _ctx: Context<Self>) -> TagBuilder {
         div()
             .style_raw("height: 100%; width: 100%; overflow: hidden; display: flex; justify-content: center; align-items: center; flex-grow: 1;")
-            .child_signal(self.dom_item.signal_ref(|cell| {
+            .signal(self.dom_item.signal_ref(|cell| {
                 let content = std::mem::take(&mut *cell.borrow_mut());
                 content
             }))

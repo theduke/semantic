@@ -64,10 +64,10 @@ impl MsgComponent for State {
                 "New Habit",
                 "button is-large",
             )))
-            .child_signal(self.page.signal_render(|page| {
+            .signal(self.page.signal_render(|page| {
                 if page.items.is_empty() {
                     notification_warning()
-                        .child_text("No habits found. Why don't you create a new one?")
+                        .text("No habits found. Why don't you create a new one?")
                         .into_view()
                 } else {
                     let items = page.items.iter().map(|habit| {

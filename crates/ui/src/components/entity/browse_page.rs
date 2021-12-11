@@ -196,7 +196,7 @@ impl MsgComponent for BrowsePage {
             .and(title_2().and("Browse"))
             .and(action_bar)
             .and(filter)
-            .child_signal(content)
+            .signal(content)
     }
 }
 

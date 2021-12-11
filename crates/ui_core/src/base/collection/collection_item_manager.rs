@@ -138,7 +138,7 @@ impl MsgComponent for State {
 
         let error = self.loader.signal_render(|_| View::Empty);
 
-        let items = div().children_signal(self.items.signal_vec_cloned(), move |item| {
+        let items = div().signal_vec(self.items.signal_vec_cloned(), move |item| {
             let on_remove = handle.on(Msg::Remove);
             render_item(&item, &registry, on_remove).build()
         });
@@ -161,7 +161,7 @@ impl MsgComponent for State {
             }
         });
 
-        div().child_signal(error).and(items).child_signal(adder)
+        div().signal(error).and(items).signal(adder)
     }
 }
 

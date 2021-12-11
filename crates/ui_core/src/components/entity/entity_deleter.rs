@@ -102,7 +102,7 @@ impl MsgComponent for State {
                     .build(),
             });
 
-            div().child_signal(signal)
+            div().signal(signal)
         } else {
             notification_warning().and((
                 div().and("Can't delete entity without an ID."),
