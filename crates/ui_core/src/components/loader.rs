@@ -195,6 +195,10 @@ impl<T> Loader<T> {
         Self(Mutable::new(LoadState::Idle))
     }
 
+    pub fn new_loading(guard: EffectGuard) -> Self {
+        Self(Mutable::new(LoadState::Loading(Some(guard))))
+    }
+
     pub fn is_loading(&self) -> bool {
         self.0.lock_ref().is_loading()
     }
@@ -252,6 +256,10 @@ impl<T> Loader<T> {
         self.0.set(LoadState::from_res(res));
     }
 
+    pub fn set_success(&mut self, data: T) {
+        self.0.set(LoadState::Success(data));
+    }
+
     pub fn set_err(&mut self, err: impl Display) {
         self.0.set(LoadState::Failed(err.to_string()));
     }
@@ -294,6 +302,20 @@ impl<T> Loader<T> {
     // Find a better API design.
     pub fn signal_render(&self, render: impl Fn(&T) -> View) -> impl Signal<Item = View> {
         self.0.signal_ref(move |state| state.render(&render))
+    }
+
+    /// Render only the loading state with a spinner. Empty output otherwise.
+    // FIXME: this method makes it easy to accidentally drop the loader, which
+    // can cause rendering issues.
+    // Find a better API design.
+    pub fn signal_render_loading(&self) -> impl Signal<Item = View> {
+        self.0.signal_ref(move |state| {
+            if state.is_loading() {
+                spinner().into_view()
+            } else {
+                View::Empty
+            }
+        })
     }
 
     // FIXME: this method makes it easy to accidentally drop the loader, which
