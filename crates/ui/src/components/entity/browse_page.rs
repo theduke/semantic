@@ -9,7 +9,6 @@ use factordb::{
         expr::Expr,
         select::{Item, ItemPage, Select},
     },
-    schema::EntityDescriptor,
     AnyError,
 };
 
@@ -55,9 +54,15 @@ pub enum Msg {
 
 impl BrowsePage {
     fn base_filter() -> Expr {
+        let ignored: Vec<_> = context::registry()
+            .ignored_entity_types()
+            .iter()
+            .cloned()
+            .collect();
+
         Expr::not(Expr::in_(
             Expr::attr::<factordb::schema::builtin::AttrType>(),
-            vec![semantic_core::base::Tag::QUALIFIED_NAME],
+            ignored,
         ))
     }
 

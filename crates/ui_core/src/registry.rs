@@ -4,7 +4,7 @@ use factordb::{
     schema::{AttrMapExt, AttributeSchema, EntityAttribute, EntitySchema},
     AnyError,
 };
-use fnv::FnvHashMap;
+use fnv::{FnvHashMap, FnvHashSet};
 use futures::future::LocalBoxFuture;
 
 use crate::{
@@ -29,6 +29,8 @@ pub struct Registry {
     entity_renderers_create: FnvHashMap<String, DynEntityRenderer>,
     entity_renderers_create_page: FnvHashMap<String, DynEntityRenderer>,
     entity_renderer_media: FnvHashMap<String, RegisteredMediaRenderer>,
+
+    ignored_entity_types: FnvHashSet<String>,
 }
 
 impl Registry {
@@ -81,6 +83,8 @@ impl Registry {
             entity_renderers_create_page: FnvHashMap::default(),
             entity_renderer_media: FnvHashMap::default(),
             attribute_renderers: FnvHashMap::default(),
+
+            ignored_entity_types: FnvHashSet::default(),
         }
     }
 
@@ -153,6 +157,12 @@ impl Registry {
         &self.entities
     }
 
+    pub fn entities_without_ignored(&self) -> impl Iterator<Item = &EntityInfo> {
+        self.entities
+            .values()
+            .filter(|e| !self.ignored_entity_types.contains(&e.schema.ident))
+    }
+
     pub fn entity(&self, ty: &str) -> Option<&EntityInfo> {
         self.entities.get(ty)
     }
@@ -211,44 +221,16 @@ impl Registry {
             .collect()
     }
 
-    // pub fn find_importer(&self, url: &url::Url) -> UrlSupportMatches {
-    //     let matches = self
-    //         .plugins
-    //         .values()
-    //         .filter_map(|p| {
-    //             p.import_match(url).map(|support| UrlSupportMatch {
-    //                 plugin: p.spec().name,
-    //                 support,
-    //             })
-    //         })
-    //         .collect();
-    //     let mut m = UrlSupportMatches { matches };
-    //     m.sort();
+    /// Set the given entity type as ignored.
+    ///
+    /// This will exclude the entity type from list queries, type filters, ...
+    pub fn ignore_entity_type(&mut self, ty: String) {
+        self.ignored_entity_types.insert(ty);
+    }
 
-    //     m
-    // }
-
-    // pub fn import(
-    //     &self,
-    //     url: url::Url,
-    //     plugin_name: Option<String>,
-    //     api: &BrowserApiClient,
-    // ) -> std::pin::Pin<
-    //     Box<dyn std::future::Future<Output = Result<Option<FetchUrlOutput>, AnyError>> + 'static>,
-    // > {
-    //     let plugin = plugin_name
-    //         .or_else(|| self.find_importer(&url).best().map(|m| m.plugin.clone()))
-    //         .and_then(|n| self.plugins.get(&n).cloned());
-
-    //     if let Some(plugin) = plugin {
-    //         let api = api.clone();
-    //         plugin.import(url, &api)
-    //     } else {
-    //         Box::pin(futures::future::ready(Err(AnyError::msg(
-    //             "Could not import: no suitable importer found",
-    //         ))))
-    //     }
-    // }
+    pub fn ignored_entity_types(&self) -> &FnvHashSet<String> {
+        &self.ignored_entity_types
+    }
 }
 
 #[derive(Clone)]

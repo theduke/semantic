@@ -120,6 +120,9 @@ impl BrowserPlugin for BasePlugin {
             renderer: Rc::new(collection_create_page),
             is_default: false,
         });
+
+        registry.ignore_entity_type(semantic_core::base::Tag::QUALIFIED_NAME.to_string());
+        registry.ignore_entity_type(semantic_core::core::PluginSource::QUALIFIED_NAME.to_string());
     }
 }
 

@@ -70,8 +70,7 @@ pub fn entity_filter(on_submit: impl Fn(EntityFilter) + 'static) -> TagBuilder {
     let search = form_field_input("Search", form.field(|v| &mut v.search));
 
     let type_options = context::registry()
-        .entities()
-        .values()
+        .entities_without_ignored()
         .map(|info| SelectOption {
             value: info.schema.ident.clone(),
             label: info
