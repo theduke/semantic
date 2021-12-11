@@ -9,9 +9,6 @@ pub use self::notes::*;
 mod socialmedia;
 pub use self::socialmedia::*;
 
-mod habit;
-pub use self::habit::*;
-
 mod collection;
 pub use self::collection::*;
 
@@ -148,11 +145,6 @@ impl Plugin for SemanticBasePlugin {
                     AttrSocialMediaPostContent::schema(),
                     // Notes.
                     notes::AttrNoteBody::schema(),
-                    // Habit.
-                    habit::AttrHabitOccurenceComment::schema(),
-                    habit::AttrHabitOccurenceParentId::schema(),
-                    habit::AttrHabitOccurenceTime::schema(),
-                    habit::HabitMode::schema(),
                     // Collection.
                     collection::AttrCollectionItem::schema(),
                     // Tags.
@@ -169,9 +161,6 @@ impl Plugin for SemanticBasePlugin {
                     SocialMediaPost::schema(),
                     // Notes
                     notes::Note::schema(),
-                    // Habits
-                    habit::Habit::schema(),
-                    habit::HabitOccurence::schema(),
                     // collection
                     collection::Collection::schema(),
                     // tags
