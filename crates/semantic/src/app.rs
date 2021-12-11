@@ -200,6 +200,9 @@ impl App {
                 plugins
                     .register_plugin(semantic_extra::health::HealthPlugin::new())
                     .await?;
+                plugins
+                    .register_plugin(semantic_extra::habits::HabitsPlugin::new())
+                    .await?;
 
                 if let Some(c) = &self.config.deno {
                     plugins.initialize_deno(c.clone()).await?;

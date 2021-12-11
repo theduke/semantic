@@ -111,7 +111,7 @@ impl Boot {
                 let plugins: Vec<DynBrowserPlugin> = vec![
                     Arc::new(semantic_ui_core::base::BasePlugin),
                     Arc::new(semantic_extra::health::HealthPlugin),
-                    // Arc::new(semantic_extra::habits::HabitsPlugin),
+                    Arc::new(semantic_extra::habits::HabitsPlugin),
                 ];
 
                 for plugin in plugins {

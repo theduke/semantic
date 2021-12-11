@@ -1,2 +1,2 @@
-// pub mod habits;
+pub mod habits;
 pub mod health;
