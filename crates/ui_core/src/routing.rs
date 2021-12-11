@@ -219,3 +219,10 @@ pub fn link(route: Route, label: impl Apply) -> TagBuilder {
         .and(label)
         .on(move |_: ClickEvent| router().goto(route.clone()))
 }
+
+pub fn link_with_class(route: Route, label: impl Apply, class: &str) -> TagBuilder {
+    tag(brass::dom::Tag::A)
+        .and(label)
+        .classes_raw(class)
+        .on(move |_: ClickEvent| router().goto(route.clone()))
+}
