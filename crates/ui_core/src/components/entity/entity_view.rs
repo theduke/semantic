@@ -6,6 +6,7 @@ use brass::{
     DomStr,
 };
 use factordb::{query::select::Item, schema::AttrMapExt};
+use semantic_core::base::entity_title;
 
 use crate::{
     components::util::{
@@ -35,7 +36,7 @@ impl<'a> EntityView<'a> {
             .as_ref()
             .and_then(|ty| registry.entity_content_renderer(ty));
         let type_name = super::entity_type_name(&item.data, entity.as_ref()).map(DomStr::from);
-        let title = DomStr::from(super::entity_title(&item.data));
+        let title = DomStr::from(entity_title(&item.data));
 
         let content = match content_renderer {
             Some(r) => r(&item, opts),

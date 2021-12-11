@@ -5,6 +5,7 @@ use brass::{
     DomStr,
 };
 use factordb::{query::select::Item, schema::AttrMapExt};
+use semantic_core::base::entity_title;
 use web_sys::Element;
 
 use crate::{
@@ -294,7 +295,7 @@ impl MsgComponent for State {
 
             EntityView {
                 link_path: super::entity_href(item),
-                title: super::entity_title(&item.data).into(),
+                title: entity_title(&item.data).into(),
                 type_name,
                 on_open: Some(Box::new(handle.callback(|| Msg::Open))),
                 actions,

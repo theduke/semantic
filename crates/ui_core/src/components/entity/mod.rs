@@ -61,12 +61,6 @@ pub fn entity_page(id: Id) -> TagBuilder {
     })
 }
 
-pub fn entity_title(data: &DataMap) -> String {
-    data.get_attr::<semantic_core::base::AttrTitle>()
-        .or_else(|| data.get_id().map(|x| x.to_string()))
-        .unwrap_or_else(|| "<No Title>".to_string())
-}
-
 pub fn entity_type_name(data: &DataMap, entity: Option<&EntityInfo>) -> Option<String> {
     data.get_type().map(|x| {
         entity

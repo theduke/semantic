@@ -38,7 +38,14 @@ pub struct AttrComment(String);
 pub fn entity_title(data: &DataMap) -> String {
     data.get_attr::<AttrTitle>()
         .or_else(|| data.get_id().map(|x| x.to_string()))
-        .unwrap_or_else(|| "<No Title>".to_string())
+        .and_then(|x| if x.trim().is_empty() { None } else { Some(x) })
+        .unwrap_or_else(|| {
+            if let Some(id) = data.get_id() {
+                id.to_string()
+            } else {
+                "<No Title>".to_string()
+            }
+        })
 }
 
 #[derive(Attribute)]
