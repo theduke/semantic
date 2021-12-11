@@ -1,7 +1,7 @@
 use std::{collections::HashMap, rc::Rc};
 
 use factordb::{
-    schema::{AttrMapExt, AttributeSchema, EntityAttribute, EntitySchema},
+    schema::{AttrMapExt, AttributeSchema, EntityAttribute, EntityDescriptor, EntitySchema},
     AnyError,
 };
 use fnv::{FnvHashMap, FnvHashSet};
@@ -84,7 +84,12 @@ impl Registry {
             entity_renderer_media: FnvHashMap::default(),
             attribute_renderers: FnvHashMap::default(),
 
-            ignored_entity_types: FnvHashSet::default(),
+            ignored_entity_types: FnvHashSet::from_iter(vec![
+                // Ignore the factor builtin base types.
+                factordb::schema::builtin::EntitySchemaType::QUALIFIED_NAME.to_string(),
+                factordb::schema::builtin::AttributeSchemaType::QUALIFIED_NAME.to_string(),
+                factordb::schema::builtin::IndexSchemaType::QUALIFIED_NAME.to_string(),
+            ]),
         }
     }
 
