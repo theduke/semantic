@@ -1,4 +1,4 @@
-use anyhow::{anyhow, bail};
+use anyhow::bail;
 use brass::{
     component::{msg::MsgComponent, Context, Handle},
     dom::{

@@ -1,6 +1,5 @@
 use std::pin::Pin;
 
-use anyhow::anyhow;
 use factordb::AnyError;
 use semantic_core::api::{ApiClient, FileUploadMetadata};
 use wasm_bindgen::{JsCast, JsValue};
