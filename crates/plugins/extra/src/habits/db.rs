@@ -1,8 +1,5 @@
-use factordb::{
-    data::{DataMap, Timestamp, ValueType},
-    query::{expr::Expr, select::Select},
-    schema::AttributeDescriptor,
-    Attribute, Entity, Id,
+use factordb::prelude::{
+    Attribute, AttributeDescriptor, DataMap, Entity, Expr, Id, Select, Timestamp, ValueType,
 };
 use serde::{Deserialize, Serialize};
 

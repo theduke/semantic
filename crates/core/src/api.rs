@@ -1,13 +1,8 @@
 use std::collections::HashMap;
 
 use factordb::{
-    data::Timestamp,
-    query::{
-        mutate::Mutate,
-        select::{Item, Page},
-    },
-    schema::EntityContainer,
-    AnyError, Id,
+    prelude::{EntityContainer, Id, Item, Mutate, Page, Timestamp},
+    AnyError,
 };
 use url::Url;
 
