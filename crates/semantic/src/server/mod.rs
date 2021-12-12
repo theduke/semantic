@@ -7,9 +7,9 @@ use axum::{
     extract::{self, Extension},
     http, AddExtensionLayer,
 };
-use factordb::AnyError;
+use factordb::{schema::EntityContainer, AnyError, Id};
 use futures::StreamExt;
-use headers::Header;
+use headers::{Header, HeaderMapExt};
 use hyper::{header, Body, Method, Request, Response, StatusCode};
 
 use semantic_core::api::{self, ApiError, ApiResponse, DbConfig, Query};
@@ -54,7 +54,7 @@ pub async fn run_server(
     config: ServerConfig,
     runtime: tokio::runtime::Handle,
 ) -> Result<(), AnyError> {
-    use axum::handler::{get, post};
+    use axum::routing::{get, post};
 
     // Run the server like above...
     let addr: SocketAddr = config.address.parse().context(format!(
@@ -93,10 +93,10 @@ pub async fn run_server(
             "/api/upload-file",
             post(handler_blob_upload).options(cors_handler),
         )
-        .nest("/blob/files", get(handler_blob_read))
+        .nest("/blob/file", get(handler_file_read))
         .nest("/blob/video", get(handler_blob_video))
         .nest("/assets", get(handler_assets))
-        .or(get(handler_index))
+        .fallback(get(handler_index))
         .layer(AddExtensionLayer::new(state))
         .layer(AddExtensionLayer::new(assets))
         .layer(tower_http::trace::TraceLayer::new_for_http());
