@@ -15,7 +15,8 @@ use factordb::{
 use semantic_core::{
     api::{self, DbConfig, SemanticSchema},
     base::{
-        AttrBlobUri, AttrDownloadUrl, AttrHash, AttrMimeType, AttrOriginalHash, SemanticBasePlugin,
+        AttrBlobUri, AttrDownloadUrl, AttrFileSize, AttrHash, AttrMimeType, AttrOriginalHash,
+        SemanticBasePlugin,
     },
     core::SemanticCorePlugin,
     plugin::{FetchUrlJob, FetchUrlOutput, ImportJob, ImportOutput, PluginDescriptor},
@@ -543,6 +544,7 @@ impl App {
         client: reqwest::Client,
     ) -> Result<(), AnyError> {
         let db = self.require_db()?;
+        let blob = self.require_blob()?;
 
         let data = db.entity(id).await?;
 
@@ -571,29 +573,50 @@ impl App {
 
         let mime_guess = infer::get(&data);
         let (data, hash, original_hash) = crate::util::media::optimise_file_data(data.to_vec());
-
-        let tmp_path = std::path::PathBuf::from(download_url.as_str());
-        let filename_opt = tmp_path
-            .file_name()
-            .and_then(|x| x.to_str())
-            .map(|x| x.to_string());
-
-        let mut path = format!("files/{}", id);
-        if let Some(filename) = filename_opt {
-            path.push('/');
-            path.push_str(&filename);
-        }
-
         let size = data.len();
 
-        self.require_blob()?.put(&path, data.to_vec()).await?;
+        let mut blob_uri: Option<String> = None;
+
+        // Prevent duplicate blobs by re-using existing file blobs.
+        if let Some(data) =
+            semantic_core::base::File::find_by_hash_or_original(&db, &hash, original_hash.as_ref())
+                .await?
+        {
+            if let Some(path) = data.get_attr::<AttrBlobUri>() {
+                // Make sure blob exists.
+
+                if blob.get_meta(&path).await?.is_some() {
+                    tracing::debug!(blob_path=%path, "re-using existing blob for import");
+                    blob_uri = Some(path);
+                }
+            }
+        }
+        let blob_path = if let Some(x) = blob_uri {
+            x
+        } else {
+            let tmp_path = std::path::PathBuf::from(download_url.as_str());
+            let filename_opt = tmp_path
+                .file_name()
+                .and_then(|x| x.to_str())
+                .map(|x| x.to_string());
+
+            let mut path = format!("files/{}", id);
+            if let Some(filename) = filename_opt {
+                path.push('/');
+                path.push_str(&filename);
+            }
+
+            blob.put(&path, data.to_vec()).await?;
+            path
+        };
 
         let mut patch = factordb::data::value::ValueMap::new();
-        patch.insert_attr::<AttrBlobUri>(path);
+        patch.insert_attr::<AttrBlobUri>(blob_path);
         patch.insert_attr::<AttrHash>(hash);
         if let Some(original) = original_hash {
             patch.insert_attr::<AttrOriginalHash>(original);
         }
+        patch.insert_attr::<AttrFileSize>(size as u64);
         if let Some(mime) = mime_guess {
             // TODO: handle mismatch between expected and actual mime type!
             patch.insert_attr::<AttrMimeType>(mime.mime_type().to_string());
