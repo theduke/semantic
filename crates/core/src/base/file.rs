@@ -210,6 +210,11 @@ impl File {
     }
 
     pub fn blob_uri_from_map(map: &DataMap) -> Option<String> {
+        // Ensure that blob path is set.
+        if !(map.has_attr::<AttrBlobUri>() || map.has_attr::<AttrBlobUriWeb>()) {
+            return None;
+        }
+
         let id = map.get_id()?;
         let filename = map.get_attr::<AttrFileName>();
 
@@ -254,6 +259,11 @@ impl Video {
     }
 
     pub fn video_uri_from_map(map: &DataMap) -> Option<String> {
+        // Ensure that blob path is set.
+        if !(map.has_attr::<AttrBlobUri>() || map.has_attr::<AttrBlobUriWeb>()) {
+            return None;
+        }
+
         let id = map.get_id()?;
         let filename = map.get_attr::<AttrFileName>();
 
