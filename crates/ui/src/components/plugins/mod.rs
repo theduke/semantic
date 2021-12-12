@@ -196,6 +196,7 @@ pub fn plugin_manager() -> TagBuilder {
 struct FormValues {
     pub name: String,
     pub code: String,
+    pub comment: String,
 }
 
 impl FormValues {
@@ -225,6 +226,7 @@ fn plugin_source_form(
     form::Form::new(FormValues {
         name: source.ident,
         code: source.code.unwrap_or_default(),
+        comment: source.comment.unwrap_or_default(),
     })
     .on_submit_async(move |values| on_submit_async(values.clone()))
     .render(move |handle| {
@@ -245,7 +247,9 @@ fn plugin_source_form(
             true,
         );
 
-        builder.and(code).buttons_submit("Save")
+        let comment = form_field_textarea("Comment", handle.field(|v| &mut v.comment), 5, false);
+
+        builder.and(code).and(comment).buttons_submit("Save")
     })
 }
 
@@ -255,6 +259,7 @@ fn plugin_source_create() -> TagBuilder {
         ident: String::new(),
         runtime: Some("deno".to_string()),
         code: None,
+        comment: None,
     };
 
     plugin_source_form(source.clone(), true, move |values| {
@@ -277,12 +282,15 @@ pub fn plugin_source_create_page() -> TagBuilder {
 
 fn plugin_source_update(source: PluginSource) -> TagBuilder {
     plugin_source_form(source.clone(), false, move |values| {
-        let source = source.clone();
-        // values.apply(&mut source);
-
         Box::pin(async move {
+            let comment = if values.comment.trim().is_empty() {
+                None
+            } else {
+                Some(values.comment.trim().to_string())
+            };
+
             context::api()
-                .plugin_source_upgrade(source.id, values.code)
+                .plugin_source_upgrade(source.id, values.code, comment)
                 .await?;
             context::router().goto(Route::PluginManager);
             Ok(())

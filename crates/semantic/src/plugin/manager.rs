@@ -9,6 +9,7 @@ use factordb::{
 };
 use semantic_core::{
     api::PluginTestFetch,
+    base::AttrComment,
     core::{AttrPluginCode, PluginSource},
     plugin::{
         DynPlugin, FetchUrlJob, FetchUrlOutput, ImportJob, ImportOutput, Plugin, PluginSchema,
@@ -103,26 +104,43 @@ impl PluginManager {
         &self,
         id: Id,
         code: String,
+        comment: Option<String>,
     ) -> Result<PluginSource, AnyError> {
         let data = self.0.db.entity(id).await?;
         let mut source: PluginSource = data.try_into_entity()?;
-        source.code = Some(code.clone());
 
-        if let Some(old) = self.0.mutable.write().await.plugins.remove(&source.ident) {
-            old.plugin.stop()?;
+        let mut patch = Patch::new();
+
+        let plugin = if source.code.as_ref() != Some(&code) {
+            // Source code has changed.
+            // Validate and replace the plugin.
+
+            if let Some(old) = self.0.mutable.write().await.plugins.remove(&source.ident) {
+                old.plugin.stop()?;
+            }
+
+            patch = patch.replace(AttrPluginCode::QUALIFIED_NAME, code.clone());
+
+            source.code = Some(code);
+
+            let plugin = self.build_source_plugin(&source).await?;
+            Some(plugin)
+        } else {
+            None
+        };
+
+        if comment.as_ref() != source.comment.as_ref() {
+            patch = patch.replace(AttrComment::QUALIFIED_NAME, comment.clone());
+            source.comment = comment;
         }
 
-        let plugin = self.build_source_plugin(&source).await?;
+        if !patch.0.is_empty() {
+            self.0.db.patch(id, patch.clone()).await?;
+        }
 
-        self.0
-            .db
-            .patch(
-                id,
-                Patch::new().replace(AttrPluginCode::QUALIFIED_NAME, code),
-            )
-            .await?;
-
-        self.register_plugin(plugin).await?;
+        if let Some(plugin) = plugin {
+            self.register_plugin(plugin).await?;
+        }
         Ok(source)
     }
 

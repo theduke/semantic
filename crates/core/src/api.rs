@@ -165,9 +165,11 @@ pub enum Query {
     Schema,
 
     PluginSourceCreate(PluginSource),
+    // TODO: use a better type.
     PluginSourceUpgrade {
         id: Id,
         code: String,
+        comment: Option<String>,
     },
     PluginSourceValidate(PluginSource),
     PluginDelete {
@@ -386,10 +388,11 @@ impl<E: ApiClientExecutor> ApiClient<E> {
         &self,
         id: Id,
         code: String,
+        comment: Option<String>,
     ) -> Result<PluginSource, AnyError> {
         match self
             .exec
-            .execute(Query::PluginSourceUpgrade { id, code })
+            .execute(Query::PluginSourceUpgrade { id, code, comment })
             .await
         {
             Ok(Reply::PluginSourceUpgrade(source)) => Ok(source),

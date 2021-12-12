@@ -1,11 +1,18 @@
 use factordb::{
-    query::{expr::Expr, migrate::Migration, select::Select},
-    schema::{builtin::AttrIdent, AttributeDescriptor, EntityDescriptor},
+    query::{
+        expr::Expr,
+        migrate::{self, Migration},
+        select::Select,
+    },
+    schema::{builtin::AttrIdent, AttributeDescriptor, EntityAttribute, EntityDescriptor},
     Attribute, Entity, Id,
 };
 use serde::{Deserialize, Serialize};
 
-use crate::plugin::{Plugin, PluginDescriptor, PluginSchema};
+use crate::{
+    base::AttrComment,
+    plugin::{Plugin, PluginDescriptor, PluginSchema},
+};
 
 #[derive(Attribute)]
 #[factor(namespace = "semantic", name = "plugin_code")]
@@ -33,6 +40,10 @@ pub struct PluginSource {
     #[factor(attr = AttrPluginCode)]
     #[serde(rename = "semantic/plugin_code")]
     pub code: Option<String>,
+
+    #[factor(attr = AttrComment)]
+    #[serde(rename = "semantic/comment")]
+    pub comment: Option<String>,
 }
 
 impl PluginSource {
@@ -57,15 +68,6 @@ impl Plugin for SemanticCorePlugin {
         Self::NAME
     }
 
-    fn migrations(&self) -> Vec<factordb::query::migrate::Migration> {
-        let first = Migration::with_name("semantic/core/v1".to_string())
-            .attr_create(AttrPluginCode::schema())
-            .attr_create(AttrPluginRuntime::schema())
-            .entity_create(PluginSource::schema());
-
-        vec![first]
-    }
-
     fn schema(&self) -> PluginSchema {
         PluginSchema {
             name: Self::NAME.into(),
@@ -77,5 +79,45 @@ impl Plugin for SemanticCorePlugin {
                 indexes: vec![],
             }),
         }
+    }
+
+    fn migrations(&self) -> Vec<factordb::query::migrate::Migration> {
+        let create = Migration::with_name("semantic/core/v1".to_string())
+            .attr_create(AttrPluginCode::schema())
+            .attr_create(AttrPluginRuntime::schema())
+            .entity_create(factordb::schema::EntitySchema {
+                id: Id::nil(),
+                ident: PluginSource::QUALIFIED_NAME.to_string(),
+                title: Some("Plugin Source".to_string()),
+                description: None,
+                attributes: vec![
+                    EntityAttribute {
+                        attribute: AttrIdent::IDENT,
+                        cardinality: factordb::schema::Cardinality::Required,
+                    },
+                    EntityAttribute {
+                        attribute: AttrPluginRuntime::IDENT,
+                        cardinality: factordb::schema::Cardinality::Optional,
+                    },
+                    EntityAttribute {
+                        attribute: AttrPluginCode::IDENT,
+                        cardinality: factordb::schema::Cardinality::Optional,
+                    },
+                ],
+                extends: vec![],
+                strict: false,
+            });
+
+        let add_comment = Migration::with_name("add_comment_attr_to_pluginsource".to_string())
+            .action(migrate::SchemaAction::EntityAttributeAdd(
+                migrate::EntityAttributeAdd {
+                    entity: PluginSource::IDENT.to_string(),
+                    attribute: AttrComment::IDENT.to_string(),
+                    cardinality: factordb::schema::Cardinality::Optional,
+                    default_value: None,
+                },
+            ));
+
+        vec![create, add_comment]
     }
 }

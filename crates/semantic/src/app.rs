@@ -928,10 +928,10 @@ impl App {
                 let out = self.require_plugins()?.test_fetch(spec).await?;
                 Ok(api::Reply::PluginTestFetch(out))
             }
-            api::Query::PluginSourceUpgrade { id, code } => {
+            api::Query::PluginSourceUpgrade { id, code, comment } => {
                 let source = self
                     .require_plugins()?
-                    .plugin_source_replace(id, code)
+                    .plugin_source_replace(id, code, comment)
                     .await?;
                 Ok(api::Reply::PluginSourceUpgrade(source))
             }
