@@ -4,16 +4,22 @@ const USAGE: &'static str = r#"
 Semantic development CLI
 
 Commands:
-* build-ui
-  Build the UI in release mode.
-* watch-server
-  Run a development server
-* watch-ui
-  Run a development server
-* install
-  Install the `semantic` binary locally via `cargo install`.
+* git-pre-commit
 * install-git-hooks
-  Install a pre-commit hook that runst `rustfmt` on Git staged changes only.
+* build-ui
+* build-ui
+* watch-server
+* watch-server
+* watch-ui
+* watch-ui
+* build-server
+* build-server
+* build-appimage
+* build-portable
+* build
+* install
+* build-wasm-js
+* help
 "#;
 
 type DynError = Box<dyn std::error::Error>;
