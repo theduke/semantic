@@ -306,7 +306,8 @@ async fn serve_file(app: &App, req: &Request<Body>) -> Result<Response<Body>, An
     let blob_path_opt = match format {
         Format::File => file.blob_uri.clone(),
         Format::Video => file.blob_uri.clone().filter(|_| {
-            dbg!(file.mime_type.as_ref())
+            file.mime_type
+                .as_ref()
                 .map(|x| crate::util::media::video_mime_supports_browser(&x))
                 .unwrap_or_default()
         }),
