@@ -1,3 +1,4 @@
+use anyhow::{anyhow, bail};
 use brass::{
     component::{msg::MsgComponent, Context, Handle},
     dom::{
@@ -106,9 +107,9 @@ impl State {
         });
     }
 
-    fn upload(&mut self, ctx: &Context<Self>) {
+    fn upload(&mut self, ctx: &Context<Self>) -> Result<(), AnyError> {
         if self.loader.is_loading() {
-            return;
+            bail!("Upload already in progress");
         }
 
         let next_file = if let Some(f) = self
@@ -120,13 +121,13 @@ impl State {
         {
             f
         } else {
-            return;
+            return Ok(());
         };
 
         let f = semantic_ui_core::api::upload_file(
             next_file.file.clone(),
             FileUploadMetadata {
-                filename: Some(next_file.file.name()),
+                filename: Some(next_file.filename),
                 title: None,
                 collection_id: self.collection.lock_ref().get_collection_id(),
             },
@@ -134,6 +135,8 @@ impl State {
         let id = next_file.id;
         let guard = ctx.spawn_map(f, move |res| Msg::UploadResult { id, result: res });
         next_file.status.set_loading(guard);
+
+        Ok(())
     }
 }
 
@@ -159,7 +162,9 @@ impl MsgComponent for State {
                 self.queue_length.replace_with(|old| *old + len);
             }
             Msg::Upload => {
-                self.upload(&ctx);
+                if let Err(error) = self.upload(&ctx) {
+                    tracing::error!(?error, "Could not start upload");
+                }
             }
             Msg::Clear => {
                 self.uploaded_files.lock_mut().clear();
@@ -185,7 +190,9 @@ impl MsgComponent for State {
                             }
                         }
 
-                        self.upload(&ctx);
+                        if let Err(error) = self.upload(&ctx) {
+                            tracing::error!(?error, "Could not start upload");
+                        }
                     }
                     Err(err) => {
                         if let Some(mut file) =

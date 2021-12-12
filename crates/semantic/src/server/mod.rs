@@ -204,19 +204,22 @@ async fn file_upload(
 
     use semantic_core::api::FileUploadMetadata;
 
-    let meta: FileUploadMetadata =
-        if let Some(header) = req.headers().get(FileUploadMetadata::HEADER_NAME) {
-            let raw = header
-                .to_str()
-                .map_err(|_| anyhow!("Invalid file metadata header"))?;
-            serde_json::from_str(raw).context("Invalid file metadata header")?
-        } else {
-            FileUploadMetadata {
-                filename: None,
-                title: None,
-                collection_id: None,
-            }
-        };
+    let meta: FileUploadMetadata = if let Some(header) =
+        req.headers().get(FileUploadMetadata::HEADER_NAME)
+    {
+        let raw = header
+            .to_str()
+            .context("Invalid (non-utf8) file metadata header")?;
+        let decoded = base64::decode(raw)
+            .context("Invalid file metadata header: not a valid base64 string")?;
+        serde_json::from_slice(&decoded).context("Invalid file metadata header: invalid json")?
+    } else {
+        FileUploadMetadata {
+            filename: None,
+            title: None,
+            collection_id: None,
+        }
+    };
 
     tracing::trace!("fetching file upload body");
     let body = hyper::body::to_bytes(req.into_body()).await?;

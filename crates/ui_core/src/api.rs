@@ -1,5 +1,6 @@
 use std::pin::Pin;
 
+use anyhow::anyhow;
 use factordb::AnyError;
 use semantic_core::api::{ApiClient, FileUploadMetadata};
 use wasm_bindgen::{JsCast, JsValue};
@@ -74,7 +75,9 @@ pub async fn upload_file(
     file: web_sys::File,
     meta: FileUploadMetadata,
 ) -> Result<semantic_core::base::TypedFile, AnyError> {
-    let meta_header = serde_json::to_string(&meta)?;
+    let meta_header = brass::web::window()
+        .btoa(&serde_json::to_string(&meta)?)
+        .map_err(|error| anyhow!("Could not base64-encode metadata: {:?}", error))?;
 
     let mut opts = web_sys::RequestInit::new();
     opts.method("POST");
