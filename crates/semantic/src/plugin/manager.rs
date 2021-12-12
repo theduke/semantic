@@ -215,7 +215,24 @@ impl PluginManager {
                 .find(|n| n.name == migration.name);
             if let Some(old_migration) = old_mig {
                 if old_migration != &migration {
-                    bail!("Invalid migration '{}' (index {}): Migration was already applied, but has changed", name, index);
+                    let mut changes = Vec::new();
+
+                    tracing::error!(
+                        ?old_migration,
+                        ?migration,
+                        "already applied migration has changed"
+                    );
+
+                    for (old, new) in old_migration.actions.iter().zip(migration.actions.iter()) {
+                        if old != new {
+                            changes
+                                .push(format!("Changed Action: \n\nOLD: {:#?}\n\n{:#?}", old, new));
+                        }
+                    }
+
+                    let changes_text = changes.join("\n\n");
+
+                    bail!("Invalid migration '{}' (index {}): Migration was already applied, but has changed\n\nCHANGES:\n{}", name, index, changes_text);
                 }
 
                 if !new_migrations.is_empty() {
