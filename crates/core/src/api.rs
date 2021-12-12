@@ -225,6 +225,7 @@ pub enum Reply {
 #[derive(serde::Serialize, serde::Deserialize, Clone, Debug)]
 pub struct ApiError {
     pub message: String,
+    pub code: Option<String>,
 }
 
 #[derive(serde::Serialize, serde::Deserialize, Clone, Debug)]
@@ -239,6 +240,7 @@ impl<T> ApiResponse<T> {
             Ok(data) => Self::Ok(data),
             Err(err) => Self::Err(ApiError {
                 message: err.to_string(),
+                code: None,
             }),
         }
     }

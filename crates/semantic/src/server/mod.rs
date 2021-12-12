@@ -399,7 +399,8 @@ async fn handler_file_read(Extension(state): ServerContext, req: Request<Body>) 
 
 fn api_error(err: &AnyError) -> ApiError {
     ApiError {
-        message: format!("{:?}", err),
+        message: err.to_string(),
+        code: None,
     }
 }
 
