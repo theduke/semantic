@@ -61,7 +61,7 @@ impl BlobStore for logfs::LogFs {
                     match res {
                         Ok(data) => {
                             if let Err(err) = tx.blocking_send(Ok(data)) {
-                                tracing::warn!(?err, "Could not finish sending logfs blob data");
+                                tracing::warn!(%err, "Could not finish sending logfs blob data");
                                 break;
                             }
                         }
