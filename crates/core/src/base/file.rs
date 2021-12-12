@@ -1,7 +1,8 @@
 use factordb::{
     data::DataMap,
-    schema::{builtin::AttrIdent, AttrMapExt, EntityDescriptor},
-    Attribute, Entity, Id, Value,
+    query::{expr::Expr, select::Select},
+    schema::{builtin::AttrIdent, AttrMapExt, AttributeDescriptor, EntityDescriptor},
+    AnyError, Attribute, Db, Entity, Id, Value,
 };
 use serde::{Deserialize, Serialize};
 
@@ -43,6 +44,10 @@ impl UniversalHash {
     /// Get a pair of (hash_type, hash).
     pub fn split(&self) -> Option<(&str, &str)> {
         self.0.split_once(':')
+    }
+
+    pub fn as_str(&self) -> &str {
+        &self.0
     }
 }
 
@@ -159,6 +164,42 @@ pub struct File {
 }
 
 impl File {
+    pub fn query_by_hash_or_original(
+        hash: &UniversalHash,
+        original: Option<&UniversalHash>,
+    ) -> Select {
+        // TODO: use an "extends entity type" query once implemented in factor.
+        let is_file = Expr::is_entity::<File>()
+            .or_with(Expr::is_entity::<Image>())
+            .or_with(Expr::is_entity::<Video>());
+        let is_hash = Expr::eq(AttrHash::expr(), hash.as_str());
+
+        let filter = is_file.and_with(is_hash);
+
+        let filter = if let Some(original) = original {
+            Expr::or(
+                filter,
+                Expr::eq(AttrOriginalHash::expr(), original.as_str()),
+            )
+        } else {
+            filter
+        };
+
+        Select::new().with_filter(filter).with_limit(1)
+    }
+
+    pub async fn find_by_hash_or_original(
+        db: &Db,
+        hash: &UniversalHash,
+        original: Option<&UniversalHash>,
+    ) -> Result<Option<DataMap>, AnyError> {
+        let page = db
+            .select(Self::query_by_hash_or_original(hash, original))
+            .await?;
+        let data = page.items.first().map(|item| item.data.clone());
+        Ok(data)
+    }
+
     pub fn build_blob_uri(file_id: Id, filename: Option<&str>) -> String {
         let mut uri = format!("/blob/file/{file_id}");
         if let Some(name) = filename {

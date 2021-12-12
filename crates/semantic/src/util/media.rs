@@ -8,6 +8,8 @@ use factordb::AnyError;
 use futures::{FutureExt, StreamExt};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
+use semantic_core::base::UniversalHash;
+
 pub fn video_mime_supports_browser(mime: &str) -> bool {
     match mime {
         "video/mp4" | "video/webm" => true,
@@ -15,8 +17,37 @@ pub fn video_mime_supports_browser(mime: &str) -> bool {
     }
 }
 
-pub fn build_file_web_blob_uri(file: &semantic_core::base::File, extension: &str) -> String {
-    format!("__converted/web/{}.{extension}", file.id)
+pub fn optimise_file_data(data: Vec<u8>) -> (Vec<u8>, UniversalHash, Option<UniversalHash>) {
+    use sha2::Digest;
+
+    let mime_guess = infer::get(&data);
+    let raw_hash = sha2::Sha256::digest(&data);
+    let hash = semantic_core::base::UniversalHash::new(
+        semantic_core::base::UniversalHash::SHA256,
+        &format!("{:x}", raw_hash),
+    );
+    match mime_guess {
+        Some(t) if t.mime_type().starts_with("image/") => {
+            tracing::trace!("starting media optimisation");
+            match crate::util::media::optimize_image_data(&data) {
+                Ok(new_data) => {
+                    tracing::trace!(old_size=%data.len(), new_size=new_data.len(), "optimised image data");
+                    let new_hash_raw = sha2::Sha256::digest(&new_data);
+                    let new_hash = semantic_core::base::UniversalHash::new(
+                        semantic_core::base::UniversalHash::SHA256,
+                        &format!("{:x}", new_hash_raw),
+                    );
+
+                    (new_data, hash, Some(new_hash))
+                }
+                Err(err) => {
+                    tracing::warn!(?err, "Failed to optimize image data");
+                    (data, hash, None)
+                }
+            }
+        }
+        _ => (data, hash, None),
+    }
 }
 
 pub fn optimize_image_data(data: &[u8]) -> Result<Vec<u8>, AnyError> {

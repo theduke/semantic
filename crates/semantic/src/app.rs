@@ -1,4 +1,3 @@
-use sha2::Digest;
 use std::{
     collections::HashMap,
     num::NonZeroU32,
@@ -17,7 +16,6 @@ use semantic_core::{
     api::{self, DbConfig, SemanticSchema},
     base::{
         AttrBlobUri, AttrDownloadUrl, AttrHash, AttrMimeType, AttrOriginalHash, SemanticBasePlugin,
-        UniversalHash,
     },
     core::SemanticCorePlugin,
     plugin::{FetchUrlJob, FetchUrlOutput, ImportJob, ImportOutput, PluginDescriptor},
@@ -344,37 +342,6 @@ impl App {
         self.require_db()?.batch(batch).await
     }
 
-    fn optimise_file_data(data: Vec<u8>) -> (Vec<u8>, UniversalHash, Option<UniversalHash>) {
-        let mime_guess = infer::get(&data);
-        let raw_hash = sha2::Sha256::digest(&data);
-        let hash = semantic_core::base::UniversalHash::new(
-            semantic_core::base::UniversalHash::SHA256,
-            &format!("{:x}", raw_hash),
-        );
-        match mime_guess {
-            Some(t) if t.mime_type().starts_with("image/") => {
-                tracing::trace!("starting media optimisation");
-                match crate::util::media::optimize_image_data(&data) {
-                    Ok(new_data) => {
-                        tracing::trace!(old_size=%data.len(), new_size=new_data.len(), "optimised image data");
-                        let new_hash_raw = sha2::Sha256::digest(&new_data);
-                        let new_hash = semantic_core::base::UniversalHash::new(
-                            semantic_core::base::UniversalHash::SHA256,
-                            &format!("{:x}", new_hash_raw),
-                        );
-
-                        (new_data, hash, Some(new_hash))
-                    }
-                    Err(err) => {
-                        tracing::warn!(?err, "Failed to optimize image data");
-                        (data, hash, None)
-                    }
-                }
-            }
-            _ => (data, hash, None),
-        }
-    }
-
     pub async fn upload_file(
         &self,
         meta: api::FileUploadMetadata,
@@ -400,7 +367,25 @@ impl App {
 
         // Try to optimise.
         // TODO: add setting to disable optimisations.
-        let (data, hash, original_hash) = Self::optimise_file_data(data);
+        let (data, hash, original_hash) = crate::util::media::optimise_file_data(data);
+
+        // Prevent duplicates.
+
+        if let Some(old_file) =
+            semantic_core::base::File::find_by_hash_or_original(&db, &hash, original_hash.as_ref())
+                .await?
+        {
+            if let Some(blob_path) = old_file.get_attr::<AttrBlobUri>() {
+                // Make sure the blob still exists.
+                if blob.get_meta(&blob_path).await?.is_some() {
+                    // TODO: also check the hash is correct?
+
+                    // TODO: maybe still add to the collection and return ok?
+                    bail!("Could not upload: file with the same hash already exists");
+                }
+            }
+        }
+
         let size = data.len() as u64;
 
         let id = factordb::Id::random();
@@ -574,6 +559,7 @@ impl App {
         };
         tracing::trace!(%id, %download_url, "downloading file for entity");
 
+        // FIXME: persist large files directly without buffering in memory.
         let data = client
                 .get(download_url.as_str())
                 .header(reqwest::header::USER_AGENT, "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.101 Safari/537.36")
@@ -584,7 +570,7 @@ impl App {
                 .await?;
 
         let mime_guess = infer::get(&data);
-        let (data, hash, original_hash) = Self::optimise_file_data(data.to_vec());
+        let (data, hash, original_hash) = crate::util::media::optimise_file_data(data.to_vec());
 
         let tmp_path = std::path::PathBuf::from(download_url.as_str());
         let filename_opt = tmp_path
@@ -818,13 +804,13 @@ impl App {
         }
     }
 
-    pub async fn convert_file(&self, job: api::ConvertFile) -> Result<api::Job, AnyError> {
-        let db = self.require_db()?;
-        let file = semantic_core::base::File::try_from_map(db.entity(job.file_id).await?)?;
+    pub async fn convert_file(&self, _job: api::ConvertFile) -> Result<api::Job, AnyError> {
+        // let db = self.require_db()?;
+        // let file = semantic_core::base::File::try_from_map(db.entity(job.file_id).await?)?;
 
-        if job.target_format != "web" {
-            bail!("Invalid target format '{}'", job.target_format);
-        }
+        // if job.target_format != "web" {
+        //     bail!("Invalid target format '{}'", job.target_format);
+        // }
 
         todo!()
     }
