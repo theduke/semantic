@@ -18,7 +18,6 @@ use semantic_ui_core::{
 
 struct Props {
     shared: SharedState,
-    items: Vec<Item>,
 
     handle: Rc<RefCell<Option<Handle<State>>>>,
 }
@@ -61,6 +60,7 @@ pub struct Position {
 }
 
 struct SharedStateData {
+    items: RefCell<Vec<Item>>,
     playing: Mutable<bool>,
     cycle: Mutable<bool>,
     muted: Mutable<bool>,
@@ -74,8 +74,6 @@ type SharedState = Rc<SharedStateData>;
 struct State {
     shared: SharedState,
     registry: SharedRegistry,
-
-    items: Vec<Item>,
 
     timeout_guard: Option<TimeoutGuard>,
     current_handle: Option<DynMediaHandle>,
@@ -100,7 +98,7 @@ impl State {
     fn next(&mut self, ctx: &Context<Self>) {
         let index = self.get_index();
 
-        if index + 1 >= self.items.len() {
+        if index + 1 >= self.shared.items.borrow().len() {
             if self.shared.cycle.get() {
                 self.goto(0, ctx)
             } else {
@@ -115,7 +113,8 @@ impl State {
         let index = self.get_index();
         if index == 0 {
             if self.shared.cycle.get() {
-                self.goto(self.items.len() - 1, ctx);
+                let len = self.shared.items.borrow().len();
+                self.goto(len - 1, ctx);
             } else {
                 self.shared.playing.set(false);
             }
@@ -153,7 +152,9 @@ impl State {
     }
 
     fn goto(&mut self, index: Index, ctx: &Context<Self>) {
-        let item = if let Some(item) = self.items.get(index) {
+        let items = self.shared.items.borrow();
+
+        let item = if let Some(item) = items.get(index) {
             item
         } else {
             tracing::error!(
@@ -167,6 +168,7 @@ impl State {
             ty
         } else {
             // TODO: implement
+            std::mem::drop(items);
             self.next(ctx);
             return;
         };
@@ -227,12 +229,12 @@ impl State {
 
         self.shared.position.set(Position {
             index,
-            total: self.items.len(),
+            total: self.shared.items.borrow().len(),
         });
         self.shared.active_item.set(Some(ActiveItem {
             item: item.clone(),
             index,
-            total_count: self.items.len(),
+            total_count: items.len(),
             title: entity_title(&item.data),
         }));
 
@@ -255,7 +257,6 @@ impl MsgComponent for State {
         let mut s = Self {
             shared: props.shared,
             registry: context::registry(),
-            items: props.items,
             timeout_guard: None,
             current_handle: None,
             current_is_finished: false,
@@ -314,8 +315,9 @@ impl MsgComponent for State {
                 self.set_muted(self.shared.muted.get().not());
             }
             Msg::ReplaceItems(items) => {
-                self.items = items;
-                if self.items.len() > 0 {
+                let len = items.len();
+                *self.shared.items.borrow_mut() = items;
+                if len > 0 {
                     self.goto(0, &ctx);
                 } else {
                     self.dom_item.set(RefCell::new(
@@ -324,14 +326,19 @@ impl MsgComponent for State {
                 }
             }
             Msg::AppendItems(items) => {
-                let was_empty = self.items.is_empty();
-                self.items.extend(items);
+                let mut current_items = self.shared.items.borrow_mut();
+                let was_empty = items.is_empty();
+                current_items.extend(items);
                 if was_empty {
+                    std::mem::drop(current_items);
                     self.goto(0, &ctx);
                 }
             }
             Msg::Shuffle => {
-                self.items.shuffle(&mut rand::thread_rng());
+                self.shared
+                    .items
+                    .borrow_mut()
+                    .shuffle(&mut rand::thread_rng());
                 self.goto(0, &ctx);
             }
             Msg::ToggleCycle => {
@@ -361,6 +368,10 @@ struct PlayerHandleInner {
 impl PlayerHandle {
     pub fn replace_items(&self, items: Vec<Item>) {
         self.0.handle.send(Msg::ReplaceItems(items));
+    }
+
+    pub fn with_items<O, F: FnOnce(&[Item]) -> O>(&self, f: F) -> O {
+        f(&*self.0.shared.items.borrow())
     }
 
     // pub fn append_items(&self, items: Vec<Item>) {
@@ -453,6 +464,7 @@ impl PlayerViewer {
     pub fn build(self) -> (View, PlayerHandle) {
         let handle = Rc::new(RefCell::new(None));
         let shared = Rc::new(SharedStateData {
+            items: RefCell::new(self.items),
             playing: Mutable::new(true),
             cycle: Mutable::new(true),
             muted: Mutable::new(false),
@@ -462,7 +474,6 @@ impl PlayerViewer {
         });
         let content = build_component::<State>(Props {
             shared: shared.clone(),
-            items: self.items,
             handle: handle.clone(),
         });
 

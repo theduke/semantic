@@ -54,7 +54,10 @@ features = [
   "HtmlVideoElement",
   "HtmlAudioElement",
   "HtmlMediaElement",
+  "HtmlAnchorElement",
   # Clipboard stuff.
   "ClipboardEvent",
   "DataTransfer",
+  "Url",
+  "Blob",
 ]

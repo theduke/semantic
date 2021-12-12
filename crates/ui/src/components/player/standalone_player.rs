@@ -1,9 +1,12 @@
+use std::rc::Rc;
+
 use brass::{
     component::{msg::MsgComponent, Context},
     dom::{builder::div, Attr, ClickEvent, Event, Render, Tag, TagBuilder, View},
     effect::EventSubscription,
     signal::signal::{Mutable, SignalExt},
 };
+use semantic_core::base::{AttrBlobUri, Video};
 use semantic_ui_core::{
     components::{
         entity::entity_filter::{entity_filter, EntityFilter},
@@ -12,11 +15,12 @@ use semantic_ui_core::{
     },
     context,
 };
+use wasm_bindgen::JsCast;
 use web_sys::Element;
 
 use factordb::{
     query::{expr::Expr, select::Item},
-    schema::{builtin::AttrType, EntityDescriptor},
+    schema::{builtin::AttrType, AttrMapExt, EntityDescriptor},
     AnyError,
 };
 
@@ -40,6 +44,7 @@ enum Msg {
     ToggleFullscreen,
     KeyPress(String),
     OnFullscreenChange { is_fullscreen: bool },
+    DownloadPlaylist,
 }
 
 struct State {
@@ -57,6 +62,8 @@ struct State {
 
     dom_player: Option<Element>,
     rendered_player: View,
+
+    items: Rc<Vec<Item>>,
 }
 
 impl State {
@@ -135,6 +142,7 @@ impl MsgComponent for State {
             dom_player: None,
             player,
             rendered_player,
+            items: Rc::new(Vec::new()),
         };
 
         s.load(s.expr.clone(), ctx);
@@ -206,6 +214,48 @@ impl MsgComponent for State {
             }
             Msg::OnFullscreenChange { is_fullscreen } => {
                 self.fullscreen = is_fullscreen;
+            }
+            Msg::DownloadPlaylist => {
+                let content = self.player.with_items(|items| {
+                    let hostname = brass::web::window().location().origin().unwrap();
+
+                    items
+                        .iter()
+                        .filter_map(|item| {
+                            item.data
+                                .get_type_name()
+                                .filter(|t| t == &Video::QUALIFIED_NAME)
+                                .and_then(|_| item.data.get_attr::<AttrBlobUri>())
+                                .map(|uri| {
+                                    format!(
+                                        "{}{}",
+                                        hostname,
+                                        semantic_ui_core::base::build_blob_url(&uri)
+                                    )
+                                })
+                        })
+                        .collect::<Vec<_>>()
+                        .join("\n")
+                });
+
+                let data = js_sys::Array::new();
+                data.push(&js_sys::JsString::from(content));
+                let blob = web_sys::Blob::new_with_str_sequence(&data).unwrap();
+                let blob_url = web_sys::Url::create_object_url_with_blob(&blob).unwrap();
+
+                let a = brass::web::window()
+                    .document()
+                    .unwrap()
+                    .create_element("a")
+                    .unwrap()
+                    .dyn_into::<web_sys::HtmlAnchorElement>()
+                    .unwrap();
+                a.set_href(&blob_url);
+                a.set_download("playlist.m3u");
+
+                a.click();
+
+                web_sys::Url::revoke_object_url(&blob_url).unwrap();
             }
         }
     }
@@ -313,11 +363,17 @@ impl MsgComponent for State {
             .attr(Attr::Title, "Filter")
             .on(ctx.on(|_: ClickEvent| Msg::ToggleSettings));
 
+        let btn_download_playlist = button()
+            .and(icon_fas("fa-download"))
+            .attr(Attr::Title, "Download playlist")
+            .on(ctx.on(|_: ClickEvent| Msg::DownloadPlaylist));
+
         let bar_settings = div().class("mr-4").class(Cls::Buttons).and((
             btn_shuffle,
             btn_cycle,
             btn_mute,
             btn_fullscreen,
+            btn_download_playlist,
             btn_settings,
         ));
 
