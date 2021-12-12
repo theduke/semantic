@@ -6,7 +6,7 @@ use std::{
     sync::{Arc, RwLock},
 };
 
-use anyhow::{anyhow, Context};
+use anyhow::{anyhow, bail, Context};
 use factordb::{
     data::DataMap,
     query::{self, mutate::Mutate, select::Item},
@@ -23,7 +23,7 @@ use semantic_core::{
     plugin::{FetchUrlJob, FetchUrlOutput, ImportJob, ImportOutput, PluginDescriptor},
 };
 
-use crate::{blobstore::DynBlobStore, plugin::PluginManager};
+use crate::{blobstore::DynBlobStore, jobs::JobManager, plugin::PluginManager};
 
 pub use crate::plugin::deno::DenoConfig;
 
@@ -43,6 +43,7 @@ struct AppState {
     db: Db,
     blob: DynBlobStore,
     plugins: PluginManager,
+    jobs: JobManager,
 }
 
 #[derive(Clone)]
@@ -99,6 +100,19 @@ impl App {
 
     pub fn require_db(&self) -> Result<Db, AnyError> {
         self.db().ok_or_else(|| anyhow!("Database not initialized"))
+    }
+
+    pub fn jobs(&self) -> Option<JobManager> {
+        self.state
+            .read()
+            .unwrap()
+            .as_ref()
+            .map(|state| state.jobs.clone())
+    }
+
+    pub fn require_jobs(&self) -> Result<JobManager, AnyError> {
+        self.jobs()
+            .ok_or_else(|| anyhow!("JobManager not initialized"))
     }
 
     pub fn plugins(&self) -> Option<PluginManager> {
@@ -218,6 +232,7 @@ impl App {
                     backend_config: config,
                     last_activity_at: std::time::Instant::now(),
                     plugins,
+                    jobs: JobManager::new(),
                 }
             }
         };
@@ -404,6 +419,7 @@ impl App {
             download_url: None,
             preview_image_url: None,
             blob_uri: Some(blob_uri),
+            blob_uri_web: None,
             size: Some(size),
             mime_type: mime_guess.map(|x| x.mime_type().to_string()),
             hash: Some(hash),
@@ -802,6 +818,17 @@ impl App {
         }
     }
 
+    pub async fn convert_file(&self, job: api::ConvertFile) -> Result<api::Job, AnyError> {
+        let db = self.require_db()?;
+        let file = semantic_core::base::File::try_from_map(db.entity(job.file_id).await?)?;
+
+        if job.target_format != "web" {
+            bail!("Invalid target format '{}'", job.target_format);
+        }
+
+        todo!()
+    }
+
     #[tracing::instrument(level = "trace", skip(self), err)]
     pub async fn run_query(
         &self,
@@ -904,6 +931,16 @@ impl App {
                     .plugin_source_validate(source)
                     .await?;
                 Ok(api::Reply::PluginSourceValidate)
+            }
+            api::Query::JobStatus(id) => {
+                let job = self
+                    .require_jobs()?
+                    .job(id)
+                    .ok_or_else(|| anyhow!("Job not found: '{id}'"))?;
+                Ok(api::Reply::JobStatus(job))
+            }
+            api::Query::ConvertFile(_) => {
+                todo!()
             }
         };
         res.map_err(|err| {

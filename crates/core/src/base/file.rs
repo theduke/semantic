@@ -63,6 +63,10 @@ impl factordb::data::value::ValueTypeDescriptor for UniversalHash {
 pub struct AttrBlobUri(String);
 
 #[derive(Attribute)]
+#[factor(namespace = "semantic", title = "Blob")]
+pub struct AttrBlobUriWeb(String);
+
+#[derive(Attribute)]
 #[factor(namespace = "semantic", title = "MIME Type")]
 pub struct AttrMimeType(String);
 
@@ -144,6 +148,10 @@ pub struct File {
     #[factor(attr = AttrBlobUri)]
     #[serde(rename = "semantic/blob_uri")]
     pub blob_uri: Option<String>,
+
+    #[factor(attr = AttrBlobUriWeb)]
+    #[serde(rename = "semantic/blob_uri_web")]
+    pub blob_uri_web: Option<String>,
 
     #[factor(ignore)]
     #[serde(flatten)]

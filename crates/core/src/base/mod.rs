@@ -141,6 +141,7 @@ impl Plugin for SemanticBasePlugin {
                     TextFormat::schema(),
                     // file
                     AttrBlobUri::schema(),
+                    AttrBlobUriWeb::schema(),
                     AttrMimeType::schema(),
                     AttrHash::schema(),
                     AttrOriginalHash::schema(),
@@ -200,7 +201,60 @@ impl Plugin for SemanticBasePlugin {
             .attr_create(tags::AttrTagName::schema())
             .attr_create(tags::AttrTagParent::schema())
             .attr_create(tags::AttrTags::schema())
-            .entity_create(File::schema())
+            .entity_create(EntitySchema {
+                id: Id::nil(),
+                ident: File::QUALIFIED_NAME.to_string(),
+                title: Some("File".to_string()),
+                description: None,
+                attributes: vec![
+                    EntityAttribute {
+                        attribute: AttrIdent::IDENT,
+                        cardinality: factordb::schema::Cardinality::Optional,
+                    },
+                    EntityAttribute {
+                        attribute: AttrTitle::IDENT,
+                        cardinality: factordb::schema::Cardinality::Optional,
+                    },
+                    EntityAttribute {
+                        attribute: AttrFileName::IDENT,
+                        cardinality: factordb::schema::Cardinality::Optional,
+                    },
+                    EntityAttribute {
+                        attribute: AttrFileSize::IDENT,
+                        cardinality: factordb::schema::Cardinality::Optional,
+                    },
+                    EntityAttribute {
+                        attribute: AttrMimeType::IDENT,
+                        cardinality: factordb::schema::Cardinality::Optional,
+                    },
+                    EntityAttribute {
+                        attribute: AttrHash::IDENT,
+                        cardinality: factordb::schema::Cardinality::Optional,
+                    },
+                    EntityAttribute {
+                        attribute: AttrOriginalHash::IDENT,
+                        cardinality: factordb::schema::Cardinality::Optional,
+                    },
+                    EntityAttribute {
+                        attribute: AttrUrl::IDENT,
+                        cardinality: factordb::schema::Cardinality::Optional,
+                    },
+                    EntityAttribute {
+                        attribute: AttrDownloadUrl::IDENT,
+                        cardinality: factordb::schema::Cardinality::Optional,
+                    },
+                    EntityAttribute {
+                        attribute: AttrPreviewImageUrl::IDENT,
+                        cardinality: factordb::schema::Cardinality::Optional,
+                    },
+                    EntityAttribute {
+                        attribute: AttrBlobUri::IDENT,
+                        cardinality: factordb::schema::Cardinality::Optional,
+                    },
+                ],
+                extends: vec![],
+                strict: false,
+            })
             .entity_create(Image::schema())
             .entity_create(Video::schema())
             .entity_create(SocialMediaPost::schema())
@@ -241,11 +295,23 @@ impl Plugin for SemanticBasePlugin {
                 },
             ));
 
+        let create_file_blob_uri_web = Migration::with_name("create_file_blob_uri_web".to_string())
+            .attr_create(AttrBlobUriWeb::schema())
+            .action(migrate::SchemaAction::EntityAttributeAdd(
+                migrate::EntityAttributeAdd {
+                    entity: File::IDENT.to_string(),
+                    attribute: AttrBlobUriWeb::IDENT.to_string(),
+                    cardinality: factordb::schema::Cardinality::Optional,
+                    default_value: None,
+                },
+            ));
+
         vec![
             first,
             create_comment,
             create_note_body_format,
             add_text_format_to_note,
+            create_file_blob_uri_web,
         ]
     }
 }

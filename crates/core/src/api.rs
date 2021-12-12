@@ -1,6 +1,7 @@
 use std::collections::HashMap;
 
 use factordb::{
+    data::Timestamp,
     query::{
         mutate::Mutate,
         select::{Item, Page},
@@ -101,6 +102,57 @@ pub struct PluginTestFetch {
 }
 
 #[derive(serde::Serialize, serde::Deserialize, Clone, Debug)]
+pub enum JobProgress {
+    Percent(u8),
+    Items {
+        total_items: u64,
+        completed_items: u64,
+    },
+}
+
+#[derive(serde::Serialize, serde::Deserialize, Clone, Debug)]
+pub enum JobStatus {
+    Queued {
+        queue_position: Option<u64>,
+    },
+    Running {
+        started_at: Timestamp,
+        progress: Option<JobProgress>,
+    },
+    Finished {
+        started_at: Timestamp,
+        finished_at: Timestamp,
+        result: Result<String, ApiError>,
+    },
+}
+
+impl JobStatus {
+    /// Returns `true` if the job status is [`Finished`].
+    ///
+    /// [`Finished`]: JobStatus::Finished
+    pub fn is_finished(&self) -> bool {
+        matches!(self, Self::Finished { .. })
+    }
+}
+
+pub type JobId = uuid::Uuid;
+
+#[derive(serde::Serialize, serde::Deserialize, Clone, Debug)]
+pub struct Job {
+    pub id: JobId,
+    pub created_at: Timestamp,
+    pub name: String,
+    pub status: JobStatus,
+}
+
+#[derive(serde::Serialize, serde::Deserialize, Clone, Debug)]
+pub struct ConvertFile {
+    pub file_id: Id,
+    pub target_format: String,
+    pub settings: Option<serde_json::Value>,
+}
+
+#[derive(serde::Serialize, serde::Deserialize, Clone, Debug)]
 pub enum Query {
     ServerStatus,
     Initialize(BackendConfig),
@@ -128,6 +180,10 @@ pub enum Query {
 
     /// Execute an HTTP request.
     HttpFetch(SimpleHttpRequest),
+
+    JobStatus(JobId),
+
+    ConvertFile(ConvertFile),
 }
 
 #[derive(serde::Serialize, serde::Deserialize, Clone, Debug)]
@@ -161,6 +217,9 @@ pub enum Reply {
     Import(ImportOutput),
     FetchUrl(FetchUrlOutput),
     HttpFetch(SimpleHttpResponse),
+
+    JobStatus(Job),
+    ConvertFile(Job),
 }
 
 #[derive(serde::Serialize, serde::Deserialize, Clone, Debug)]

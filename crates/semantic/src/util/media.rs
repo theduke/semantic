@@ -8,6 +8,10 @@ use factordb::AnyError;
 use futures::{FutureExt, StreamExt};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
+pub fn build_file_web_blob_uri(file: &semantic_core::base::File, extension: &str) -> String {
+    format!("__converted/web/{}.{extension}", file.id)
+}
+
 pub fn optimize_image_data(data: &[u8]) -> Result<Vec<u8>, AnyError> {
     let kind = infer::get(data).context("Could not determine mime type")?;
     match kind.mime_type() {
