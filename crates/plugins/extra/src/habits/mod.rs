@@ -4,6 +4,7 @@ use semantic_core::plugin::{Plugin, PluginDescriptor};
 
 pub use self::db::*;
 
+#[cfg(feature = "ui")]
 mod ui;
 
 pub struct HabitsPlugin;
