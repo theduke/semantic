@@ -401,6 +401,7 @@ fn api_error(err: &AnyError) -> ApiError {
     ApiError {
         message: err.to_string(),
         code: None,
+        details: Some(format!("{:?}", err)),
     }
 }
 
