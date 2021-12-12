@@ -125,7 +125,6 @@ impl MsgComponent for State {
                 });
             }
             Msg::ToggleTagManager => {
-                tracing::trace!("toggling tag manager");
                 self.action.replace_with(|old| {
                     if matches!(old, Some(ActiveAction::ManageTags)) {
                         None
@@ -233,7 +232,6 @@ impl MsgComponent for State {
 
             let handle2 = handle.clone();
             let active_action_signal = action.signal_ref(move |action| -> View {
-                tracing::trace!(?action, "rendering action");
                 if let Some(action) = action {
                     let handle = handle2.clone();
                     let content = match action {
@@ -270,7 +268,6 @@ impl MsgComponent for State {
 
             match content_renderer {
                 Some(renderer) => {
-                    tracing::trace!("Using content renderer");
                     let item = item.clone();
                     let renderer = renderer.clone();
                     let opts = options.clone();
