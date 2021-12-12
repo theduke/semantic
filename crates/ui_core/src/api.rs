@@ -75,9 +75,7 @@ pub async fn upload_file(
     file: web_sys::File,
     meta: FileUploadMetadata,
 ) -> Result<semantic_core::base::TypedFile, AnyError> {
-    let meta_header = brass::web::window()
-        .btoa(&serde_json::to_string(&meta)?)
-        .map_err(|error| anyhow!("Could not base64-encode metadata: {:?}", error))?;
+    let meta_header = base64::encode(serde_json::to_string(&meta)?);
 
     let mut opts = web_sys::RequestInit::new();
     opts.method("POST");

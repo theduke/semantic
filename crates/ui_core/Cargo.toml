@@ -25,6 +25,7 @@ once_cell = "1.8.0"
 anyhow = "1.0.44"
 form_urlencoded = "1.0.1"
 chrono = { version = "0.4.19", features = ["wasmbind"] }
+base64 = "0.13.0"
 
 
 [dependencies.web-sys] 
