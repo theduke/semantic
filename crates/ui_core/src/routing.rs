@@ -5,8 +5,9 @@ use brass::{
     signal::signal::{Mutable, Signal},
 };
 use factordb::Ident;
+use futures::TryFutureExt;
 use url::Url;
-use wasm_bindgen::JsValue;
+use wasm_bindgen::{JsCast, JsValue};
 
 use crate::{context::router, SharedRenderer0};
 
@@ -126,6 +127,9 @@ pub struct Router {
     route: Rc<RefCell<Route>>,
     signal: Mutable<usize>,
     routers: Rc<RefCell<Vec<Box<dyn PluginRouter>>>>,
+
+    popstate_callback:
+        Rc<RefCell<Option<wasm_bindgen::closure::Closure<dyn FnMut(web_sys::Event)>>>>,
 }
 
 impl Router {
@@ -135,11 +139,38 @@ impl Router {
             route: route.clone(),
             signal: Mutable::new(0),
             routers: Rc::new(RefCell::new(Vec::new())),
+            popstate_callback: Rc::new(RefCell::new(None)),
         }
     }
 
     pub fn register_router(&self, router: DynPluginRouter) {
         self.routers.borrow_mut().push(router);
+    }
+
+    /// Event handler for location changes triggered by the browser.
+    pub fn on_location_changed(&self) {
+        let route = brass::web::window()
+            .location()
+            .href()
+            .ok()
+            .and_then(|href| url::Url::parse(&href).ok())
+            .and_then(|url| self.parse_url(url));
+        if let Some(route) = route {
+            self.goto(route)
+        }
+    }
+
+    pub fn subscribe_to_history(&self) {
+        let router = self.clone();
+
+        let callback =
+            wasm_bindgen::closure::Closure::wrap(Box::new(move |_event: web_sys::Event| {
+                router.on_location_changed();
+            }) as Box<dyn FnMut(web_sys::Event)>);
+        brass::web::window()
+            .add_event_listener_with_callback("popstate", callback.as_ref().unchecked_ref())
+            .unwrap();
+        *self.popstate_callback.borrow_mut() = Some(callback);
     }
 
     pub fn parse_url(&self, url: Url) -> Option<Route> {
@@ -197,10 +228,20 @@ impl Router {
 
     /// Update the current route without triggering a re-render.
     pub fn set_route_without_navigation(&self, route: Route) {
-        if let Some(history) = web_sys::window().and_then(|w| w.history().ok()) {
-            history
-                .push_state_with_url(&JsValue::NULL, &route.title(), Some(&route.to_path()))
-                .ok();
+        let win = brass::web::window();
+        let loc = win.location();
+
+        let cur_path = loc.pathname().unwrap();
+        let cur_query = loc.search().unwrap();
+        let cur_path = format!("{cur_path}{cur_query}");
+
+        let new_path = route.to_path();
+        if cur_path != new_path {
+            brass::web::window()
+                .history()
+                .unwrap()
+                .push_state_with_url(&JsValue::NULL, &route.title(), Some(&new_path))
+                .unwrap();
         }
         *self.route.borrow_mut() = route;
     }

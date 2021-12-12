@@ -125,14 +125,8 @@ impl Boot {
                 semantic_ui_core::context::set_registry(reg);
                 // Read current route.
 
-                let route = web_sys::window()
-                    .and_then(|w| w.location().href().ok())
-                    .and_then(|href| Url::parse(&href).ok())
-                    .and_then(|url| router.parse_url(url))
-                    .unwrap_or(Route::Browse);
-
-                // TODO: initialze url path listener.
-                router.goto(route);
+                router.subscribe_to_history();
+                router.on_location_changed();
 
                 self.status.set(phase);
             }
