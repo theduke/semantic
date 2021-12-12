@@ -70,7 +70,6 @@ impl BlobStore for logfs::LogFs {
                 for res in iter {
                     match res {
                         Ok(data) => {
-                            dbg!(("sending chunk", data.len()));
                             if let Err(err) = tx.blocking_send(Ok(data)) {
                                 tracing::warn!(%err, "Could not finish sending logfs blob data");
                                 break;

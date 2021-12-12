@@ -1,6 +1,6 @@
 use factordb::{
     data::DataMap,
-    schema::{builtin::AttrIdent, EntityDescriptor},
+    schema::{builtin::AttrIdent, AttrMapExt, EntityDescriptor},
     Attribute, Entity, Id, Value,
 };
 use serde::{Deserialize, Serialize};
@@ -158,6 +158,30 @@ pub struct File {
     pub extra: DataMap,
 }
 
+impl File {
+    pub fn build_blob_uri(file_id: Id, filename: Option<&str>) -> String {
+        let mut uri = format!("/blob/file/{file_id}");
+        if let Some(name) = filename {
+            uri.push('/');
+            uri.push_str(name);
+        }
+        uri
+    }
+
+    pub fn blob_uri_from_map(map: &DataMap) -> Option<String> {
+        let id = map.get_id()?;
+        let filename = map.get_attr::<AttrFileName>();
+
+        let url = Self::build_blob_uri(id, filename.as_ref().map(|x| x.as_str()));
+
+        Some(url)
+    }
+
+    pub fn blob_uri(&self) -> String {
+        Self::build_blob_uri(self.id, self.filename.as_ref().map(|x| x.as_str()))
+    }
+}
+
 #[derive(Serialize, Deserialize, Entity, Clone, Debug)]
 #[factor(namespace = "semantic")]
 pub struct Image {
@@ -176,6 +200,33 @@ pub struct Video {
     #[factor(attr = AttrDuration)]
     #[serde(rename = "semantic/duration")]
     pub duration: Option<u64>,
+}
+
+impl Video {
+    pub fn build_video_uri(file_id: Id, filename: Option<&str>) -> String {
+        let mut uri = format!("/blob/video/{file_id}");
+        if let Some(name) = filename {
+            uri.push('/');
+            uri.push_str(name);
+        }
+        uri
+    }
+
+    pub fn video_uri_from_map(map: &DataMap) -> Option<String> {
+        let id = map.get_id()?;
+        let filename = map.get_attr::<AttrFileName>();
+
+        let url = Self::build_video_uri(id, filename.as_ref().map(|x| x.as_str()));
+
+        Some(url)
+    }
+
+    pub fn video_uri(&self) -> String {
+        Self::build_video_uri(
+            self.file.id,
+            self.file.filename.as_ref().map(|x| x.as_str()),
+        )
+    }
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug)]

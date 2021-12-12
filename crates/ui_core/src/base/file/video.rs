@@ -2,7 +2,7 @@ use wasm_bindgen::JsCast;
 
 use brass::dom::{Attr, Event, Tag, TagBuilder};
 use factordb::{query::select::Item, schema::AttrMapExt};
-use semantic_core::base::{AttrBlobUri, AttrDownloadUrl, AttrPreviewImageUrl};
+use semantic_core::base::AttrPreviewImageUrl;
 
 use crate::{
     components::util::notification_warning,
@@ -18,15 +18,17 @@ pub struct VideoInfo {
 
 impl VideoInfo {
     pub fn from_item(item: &Item) -> Option<Self> {
-        let url = item
-            .data
-            .get_attr::<AttrBlobUri>()
-            .map(|uri| format!("/blob/video/{}", uri))
-            .or_else(|| {
-                item.data
-                    .get_attr::<AttrDownloadUrl>()
-                    .map(|x| x.to_string())
-            })?;
+        let url = semantic_core::base::Video::video_uri_from_map(&item.data)?;
+
+        // let url = item
+        //     .data
+        //     .get_attr::<AttrBlobUri>()
+        //     .map(|uri| format!("/blob/video/{}", uri))
+        //     .or_else(|| {
+        //         item.data
+        //             .get_attr::<AttrDownloadUrl>()
+        //             .map(|x| x.to_string())
+        //     })?;
 
         let mime_type = item.data.get_attr::<semantic_core::base::AttrMimeType>();
 

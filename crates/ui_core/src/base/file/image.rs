@@ -3,20 +3,16 @@ use brass::{
     signal::signal::{Mutable, SignalExt},
 };
 use factordb::{query::select::Item, schema::AttrMapExt};
-use semantic_core::base::{AttrBlobUri, AttrDownloadUrl};
+use semantic_core::base::AttrDownloadUrl;
 
 use crate::{components::util::modal::modal, EntityRenderOpts};
 
-use super::super::plugin::build_blob_url;
-
 pub fn image_content(item: &Item, opts: &EntityRenderOpts) -> TagBuilder {
-    let url = if let Some(blob_uri) = item.data.get_attr::<AttrBlobUri>() {
-        Some(build_blob_url(&blob_uri))
-    } else if let Some(url) = item.data.get_attr::<AttrDownloadUrl>() {
-        Some(url.to_string())
-    } else {
-        None
-    };
+    let url = semantic_core::base::File::blob_uri_from_map(&item.data).or_else(|| {
+        item.data
+            .get_attr::<AttrDownloadUrl>()
+            .map(|x| x.to_string())
+    });
 
     if let Some(url) = url {
         if opts.preview {

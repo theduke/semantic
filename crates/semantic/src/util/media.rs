@@ -8,6 +8,13 @@ use factordb::AnyError;
 use futures::{FutureExt, StreamExt};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
+pub fn video_mime_supports_browser(mime: &str) -> bool {
+    match mime {
+        "video/mp4" | "video/webm" => true,
+        _ => false,
+    }
+}
+
 pub fn build_file_web_blob_uri(file: &semantic_core::base::File, extension: &str) -> String {
     format!("__converted/web/{}.{extension}", file.id)
 }

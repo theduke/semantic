@@ -14,10 +14,7 @@ use hyper::{header, Body, Method, Request, Response, StatusCode};
 
 use semantic_core::api::{self, ApiError, ApiResponse, DbConfig, Query};
 
-use crate::{
-    app::{App, AppConfig},
-    blobstore::{BlobMeta, DynBlobStore},
-};
+use crate::app::{App, AppConfig};
 
 #[derive(serde::Serialize, serde::Deserialize, Clone, Debug)]
 pub struct ServerConfig {
@@ -93,8 +90,7 @@ pub async fn run_server(
             "/api/upload-file",
             post(handler_blob_upload).options(cors_handler),
         )
-        .nest("/blob/file", get(handler_file_read))
-        .nest("/blob/video", get(handler_blob_video))
+        .route("/blob/*rest", get(handler_file_read))
         .nest("/assets", get(handler_assets))
         .fallback(get(handler_index))
         .layer(AddExtensionLayer::new(state))
@@ -236,7 +232,12 @@ async fn file_upload(
 
 fn extract_file_range(req: &Request<Body>) -> Result<(Option<u64>, Option<u64>), AnyError> {
     let mut range_headers = req.headers().get_all(http::header::RANGE).iter().peekable();
+
     // Bail if no Range header present.
+    if range_headers.peek().is_none() {
+        return Ok((None, None));
+    }
+
     let items = headers::Range::decode(&mut range_headers)?;
     let mut ranges = items.iter();
     let (start_bound, end_bound) = if let Some(x) = ranges.next() {
@@ -249,30 +250,85 @@ fn extract_file_range(req: &Request<Body>) -> Result<(Option<u64>, Option<u64>),
         bail!("Only a single range is supported");
     }
 
-    let start = match start_bound {
+    let skip = match start_bound {
         std::ops::Bound::Included(x) => x,
-        std::ops::Bound::Excluded(x) => x + 1,
+        std::ops::Bound::Excluded(x) => x,
         std::ops::Bound::Unbounded => 0,
     };
 
     let take = match end_bound {
-        std::ops::Bound::Included(x) => Some(x - start + 1),
-        std::ops::Bound::Excluded(x) => Some(x - start),
+        std::ops::Bound::Included(x) => Some(x - skip),
+        std::ops::Bound::Excluded(x) => Some(x - skip - 1),
         std::ops::Bound::Unbounded => None,
     };
 
-    Ok((Some(start), take))
+    Ok((Some(skip), take))
 }
 
-async fn serve_blob(
-    req: Request<Body>,
-    blob: DynBlobStore,
-    meta: BlobMeta,
-) -> Result<Response<Body>, AnyError> {
-    tracing::trace!(key=%meta.key, "serving blob");
+async fn serve_file(app: &App, req: &Request<Body>) -> Result<Response<Body>, AnyError> {
+    #[derive(PartialEq, Eq, Debug)]
+    enum Format {
+        File,
+        Video,
+        Image,
+    }
+
+    let raw_path = req.uri().path();
+    let raw_path = raw_path.trim_start_matches('/');
+    let mut parts = raw_path.split('/');
+    debug_assert_eq!(parts.next().unwrap(), "blob");
+
+    let format = match parts.next() {
+        Some("file") => Format::File,
+        Some("video") => Format::Video,
+        Some("image") => Format::Image,
+        Some(other) => bail!("Unknown file format: {}", other),
+        None => {
+            return Ok(not_found());
+        }
+    };
+
+    let id_opt = parts
+        .next()
+        .and_then(|x| uuid::Uuid::parse_str(x).ok())
+        .map(Id::from_uuid);
+
+    let id = if let Some(id) = id_opt {
+        id
+    } else {
+        return Ok(not_found());
+    };
+
+    tracing::trace!(%id, "serving file");
+    let file_map = app.require_db()?.entity(id).await?;
+    let file = semantic_core::base::File::try_from_map(file_map)?;
+
+    let blob_path_opt = match format {
+        Format::File => file.blob_uri.clone(),
+        Format::Video => file.blob_uri.clone().filter(|_| {
+            dbg!(file.mime_type.as_ref())
+                .map(|x| crate::util::media::video_mime_supports_browser(&x))
+                .unwrap_or_default()
+        }),
+        Format::Image => file.blob_uri_web.clone().or_else(|| file.blob_uri.clone()),
+    };
+    let blob_path = if let Some(p) = blob_path_opt {
+        p
+    } else {
+        return Ok(not_found());
+    };
+
+    let size = file
+        .size
+        .clone()
+        .ok_or_else(|| anyhow!("File is not available"))?;
+
     let (skip, take) = extract_file_range(&req)?;
-    dbg!((&meta, &skip, &take));
-    let stream = blob.get_stream(&meta.key, skip).await?;
+    let is_partial = skip.is_some() || take.is_some();
+
+    let actual_length = take.unwrap_or(size) - skip.unwrap_or(0);
+
+    let stream = app.require_blob()?.get_stream(&blob_path, skip).await?;
 
     let body = if let Some(take) = take {
         let mut total = 0;
@@ -280,8 +336,9 @@ async fn serve_blob(
             let needed = match chunk {
                 Ok(chunk) => {
                     let should = total < take;
-                    dbg!((total, take, chunk));
                     total += chunk.len() as u64;
+                    // FIXME: need to truncate the last chunk to the given
+                    // range to not trunkate extra chunk data.
                     should
                 }
                 Err(_) => true,
@@ -292,22 +349,36 @@ async fn serve_blob(
         Body::wrap_stream(stream)
     };
 
-    let size = take.unwrap_or(meta.size);
+    let status = if is_partial {
+        StatusCode::PARTIAL_CONTENT
+    } else {
+        StatusCode::OK
+    };
 
-    let res = Response::builder()
-        .status(StatusCode::OK)
-        .header(http::header::CONTENT_LENGTH, size)
+    let mut res = Response::builder()
+        .status(status)
+        .header(http::header::CONTENT_LENGTH, actual_length)
         .header(
             http::header::ACCEPT_RANGES,
             http::HeaderValue::from_static("bytes"),
         )
-        .body(body)
-        .unwrap();
+        .body(body)?;
+
+    if let Some(mime) = &file.mime_type {
+        res.headers_mut()
+            .insert(http::header::CONTENT_TYPE, mime.parse()?);
+    }
+    if is_partial {
+        let start = skip.unwrap_or(0);
+        let end = take.map(|x| start + x).unwrap_or(size);
+        let h = headers::ContentRange::bytes(start..=end, Some(size))?;
+        res.headers_mut().typed_insert(h);
+    }
 
     Ok(res)
 }
 
-async fn handler_blob_read(Extension(state): ServerContext, req: Request<Body>) -> Response<Body> {
+async fn handler_file_read(Extension(state): ServerContext, req: Request<Body>) -> Response<Body> {
     if let Err(res) = request_validate_auth_cookie_http(&state, &req) {
         return res;
     }
@@ -320,107 +391,10 @@ async fn handler_blob_read(Extension(state): ServerContext, req: Request<Body>) 
         return res;
     }
 
-    let raw_path = req.uri().path();
-
-    let real_path = if raw_path.starts_with("/blob/files/") {
-        raw_path.trim_start_matches("/blob/").to_string()
-    } else if raw_path.starts_with("/files") {
-        raw_path.trim_start_matches('/').to_string()
-    } else {
-        format!("files{}", raw_path)
-    };
-
-    let blob = if let Some(b) = state.app.blob() {
-        b
-    } else {
-        return internal_server_error("Blobstore not initialized");
-    };
-
-    match blob.get_meta(&real_path).await {
-        Ok(Some(meta)) => serve_blob(req, blob, meta)
-            .await
-            .unwrap_or_else(|err| internal_server_error("Could not serve blob")),
-        Ok(None) => not_found(),
-        Err(err) => internal_server_error(err.to_string()),
-    }
-}
-
-async fn serve_video(
-    req: Request<Body>,
-    blob: DynBlobStore,
-    meta: BlobMeta,
-) -> Result<Response<Body>, AnyError> {
-    let mut stream = blob.get_stream(&meta.key, None).await?;
-
-    // Read first chunk so the mime type can be guessed.
-    let first = stream.next().await.ok_or_else(|| anyhow!("Empty file"))??;
-
-    let mime = infer::get(&first).ok_or_else(|| anyhow!("Could not detect mime type of video"))?;
-
-    // Re-assemble full content by chaining the first chunk to the
-    // stream.
-    let stream = futures::stream::once(futures::future::ready(Ok(first))).chain(stream);
-
-    match mime.mime_type() {
-        "video/mp4" | "video/webm" => {
-            // Video can be served to browser as is.
-            serve_blob(req, blob, meta).await
-        }
-        other if other.starts_with("video/") => {
-            tracing::trace!(blob_uri=%meta.key, "converting video");
-            // Video is incompatible with browser, so try to convert it on the
-            // fly.
-            let body = crate::util::media::ffmpeg_convert_video(stream).await?;
-            let res = Response::builder()
-                .status(StatusCode::OK)
-                .header(header::CONTENT_TYPE, "video/webm")
-                .body(body)
-                .unwrap();
-            Ok(res)
-        }
-        _other => {
-            bail!("File is not a video");
-        }
-    }
-}
-
-async fn handler_blob_video(Extension(state): ServerContext, req: Request<Body>) -> Response<Body> {
-    if let Err(res) = request_validate_auth_cookie_http(&state, &req) {
-        return res;
-    }
-    if req.method() == Method::OPTIONS {
-        let mut res = cors_response();
-        res.headers_mut().append(
-            http::header::ACCEPT_RANGES,
-            http::header::HeaderValue::from_static("bytes"),
-        );
-        return res;
-    }
-
-    let raw_path = req.uri().path();
-
-    let path = if raw_path.starts_with("/blob/video/") {
-        raw_path.replacen("/blob/video/", "", 1)
-    } else if raw_path.starts_with("/video/") {
-        raw_path.replacen("/video/", "", 1)
-    } else {
-        raw_path.to_string()
-    };
-    let file_path = path.trim_start_matches('/');
-
-    let blob = if let Ok(blob) = state.app.require_blob() {
-        blob
-    } else {
-        return internal_server_error("Blob store not available");
-    };
-
-    match blob.get_meta(&file_path).await {
-        Ok(Some(meta)) => serve_video(req, blob, meta)
-            .await
-            .unwrap_or_else(|err| internal_server_error("Could not serve video")),
-        Ok(None) => not_found(),
-        Err(err) => internal_server_error(err.to_string()),
-    }
+    serve_file(&state.app, &req).await.unwrap_or_else(|error| {
+        tracing::warn!(?error, path=%req.uri(), "could not serve file blob");
+        internal_server_error("Could not serve file")
+    })
 }
 
 fn api_error(err: &AnyError) -> ApiError {
