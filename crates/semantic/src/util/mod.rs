@@ -1,5 +1,8 @@
 use factordb::{schema::DbSchema, AnyError};
 
+#[cfg(feature = "archive")]
+pub mod archive;
+
 pub mod media;
 
 pub fn json_from_slice<T: serde::de::DeserializeOwned>(

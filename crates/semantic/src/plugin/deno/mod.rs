@@ -21,6 +21,7 @@ const PLUGIN_BASE_CODE: &'static str = include_str!("./plugin.ts");
 #[derive(serde::Serialize, serde::Deserialize, Clone, Debug)]
 pub struct DenoConfig {
     pub data_dir: PathBuf,
+    /// Directory with plugins (as *.ts files) which should always be loaded.
     pub plugin_dir: Option<PathBuf>,
 }
 

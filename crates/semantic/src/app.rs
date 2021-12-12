@@ -29,6 +29,7 @@ pub use crate::plugin::deno::DenoConfig;
 #[derive(serde::Serialize, serde::Deserialize, Clone, Debug)]
 pub struct AppConfig {
     pub backend: Option<api::BackendConfig>,
+    // TODO: move to server config?
     pub token_key: String,
 
     pub deno: Option<DenoConfig>,
@@ -838,7 +839,24 @@ impl App {
         todo!()
     }
 
-    #[tracing::instrument(level = "trace", skip(self), err)]
+    pub async fn build_export(
+        &self,
+        output: impl std::io::Write + Send + Sync + 'static,
+    ) -> Result<(), AnyError> {
+        #[cfg(feature = "archive")]
+        {
+            crate::util::archive::build_archive(self, output).await
+        }
+
+        #[cfg(not(feature = "archive"))]
+        {
+            let _ = output;
+            Err(AnyError::msg(
+                "This semantic instance was not built with archive support. Archives not possible.",
+            ))
+        }
+    }
+
     pub async fn run_query(
         &self,
         query: semantic_core::api::Query,

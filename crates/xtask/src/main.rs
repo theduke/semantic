@@ -209,7 +209,7 @@ fn cmd_install() -> Result<(), DynError> {
     task_build_ui(true)?;
     Command::new("cargo")
         .env("SEMANTIC_UI_DIR", ui_dist_path()?)
-        .args(&["install", "--path", "crates/semantic"])
+        .args(&["install", "--path", "crates/semantic", "--features", "archive"])
         .current_dir(root_path()?)
         .run()?;
     eprintln!("Installed!");

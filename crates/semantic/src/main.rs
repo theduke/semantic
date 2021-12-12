@@ -1,5 +1,11 @@
-use semantic_core::{api, base::SemanticBasePlugin, plugin::PluginDescriptor};
-use std::{io::Write, path::PathBuf};
+use anyhow::bail;
+use factordb::AnyError;
+use semantic_core::{
+    api::{self, DbConfig},
+    base::SemanticBasePlugin,
+    plugin::PluginDescriptor,
+};
+use std::io::Write;
 use structopt::StructOpt;
 
 use semantic::{app, server};
@@ -27,32 +33,18 @@ fn main() {
         CliCommand::Server(subargs) => {
             let data_dir = app::App::default_data_dir().unwrap();
 
-            let db_config = if subargs.no_backend {
+            let backend_config = if subargs.no_backend {
                 None
             } else {
-                Some(semantic_core::api::DbConfig::Crypto(
-                    semantic_core::api::BackendCryptoConfig {
-                        data_path: subargs.data_path,
-                        key: subargs.key.expect("Must specify --key"),
-                        raw: false,
-                        key_iterations: subargs.key_iterations,
-                        salt: subargs.salt,
-                    },
-                ))
+                Some(subargs.backend.build_backend_config().unwrap())
             };
-
-            let backend_config = db_config.map(|db| api::BackendConfig {
-                db,
-                // TODO: make configurable
-                idle_timeout: None,
-            });
 
             let app_config = app::AppConfig {
                 backend: backend_config,
                 token_key: subargs.token_key.unwrap_or_else(app::App::random_token_key),
                 deno: Some(app::DenoConfig {
                     data_dir: data_dir.join("deno"),
-                    plugin_dir: subargs.deno_plugin_dir.map(PathBuf::from),
+                    plugin_dir: None,
                 }),
             };
             let config = server::ServerConfig {
@@ -89,6 +81,39 @@ fn main() {
                 .expect("Could not build app");
             app.run_webview_gtk().expect("Could not run GTK app");
         }
+        CliCommand::Export { backend, path } => {
+            let backend = backend.build_backend_config().unwrap();
+            let app_config = semantic::app::AppConfig {
+                backend: Some(backend),
+                // TODO: this is useless. should be moved to server config.
+                token_key: "xxx".to_string(),
+                // No need for deno when exporting.
+                deno: None,
+            };
+
+            let rt = tokio::runtime::Runtime::new().expect("Could not start runtime");
+            let handle = rt.handle().clone();
+            rt.block_on(async move {
+                let app = semantic::app::App::build(app_config, handle).await?;
+
+                if let Some(path) = path {
+                    let pathb = std::path::PathBuf::from(&path);
+                    if pathb.is_dir() {
+                        bail!("Given path is a directory: {path}");
+                    } else if pathb.is_file() {
+                        bail!("Given path already exists: {path}");
+                    }
+                    let f = std::fs::File::create(path)?;
+                    let writer = std::io::BufWriter::new(f);
+
+                    app.build_export(writer).await
+                } else {
+                    let writer = std::io::stdout();
+                    app.build_export(writer).await
+                }
+            })
+            .expect("Export failed");
+        }
     }
 }
 
@@ -105,14 +130,22 @@ enum CliCommand {
     #[cfg(feature = "webkit")]
     Webkit(CommandWebkit),
     GenerateTypescript(GenerateTypescript),
+    /// Generate an archive that contains all data and blobs.
+    Export {
+        #[structopt(flatten)]
+        backend: BackendOptions,
+
+        /// Path where the export should be written.
+        /// If not given, data is written to stdout.
+        path: Option<String>,
+    },
 }
 
 #[derive(StructOpt)]
 struct GenerateTypescript {}
 
-/// Run the semantic server backend.
 #[derive(StructOpt)]
-struct CommandServer {
+struct BackendOptions {
     #[structopt(long, env = "SEMANTIC_DATA_PATH")]
     data_path: Option<String>,
     #[structopt(long, short, env = "SEMANTIC_KEY")]
@@ -121,16 +154,46 @@ struct CommandServer {
     key_iterations: Option<u32>,
     #[structopt(long, env = "SEMANTIC_SALT")]
     salt: Option<String>,
+}
 
-    #[structopt(long, env = "SEMANTIC_DENO_PLUGIN_DIR")]
-    deno_plugin_dir: Option<String>,
+impl BackendOptions {
+    fn build_backend_config(self) -> Result<api::BackendConfig, AnyError> {
+        let db = DbConfig::Crypto(api::BackendCryptoConfig {
+            data_path: self.data_path,
+            key: self.key.expect("Must specify --key"),
+            raw: false,
+            key_iterations: self.key_iterations,
+            salt: self.salt,
+        });
 
+        let c = api::BackendConfig {
+            db,
+            // TODO: make configurable.
+            idle_timeout: None,
+        };
+
+        Ok(c)
+    }
+}
+
+pub struct DenoOptions {}
+
+/// Run the semantic server backend.
+#[derive(StructOpt)]
+struct CommandServer {
+    #[structopt(flatten)]
+    backend: BackendOptions,
+
+    /// Do not initialize a backend.
+    /// The backend will have to be configured via the UI.
     #[structopt(long)]
     no_backend: bool,
-    /// The interface to listen on.
+
+    /// The server interface to listen on.
     /// eg: `0.0.0.0:3000`
     #[structopt(long, env = "SEMANTIC_ADDRESS")]
     address: Option<String>,
+
     /// The key used for JWT token encryption.
     #[structopt(long, env = "SEMANTIC_TOKEN_KEY")]
     token_key: Option<String>,

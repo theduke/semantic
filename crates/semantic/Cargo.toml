@@ -8,6 +8,7 @@ edition = "2021"
 
 [features]
 webkit = ["webkit2gtk", "javascriptcore-rs", "gtk", "gio", "glib"]
+archive = ["tar", "flate2"]
 
 media-optimizers = ["oxipng", "mozjpeg"]
 
@@ -66,3 +67,6 @@ semantic_core = { path = "../core" }
 semantic_extra = { version = "0.1", path = "../plugins/extra", default-features = false }
 tokio-util = { version = "0.6.9", features = ["io"] }
 headers = "0.3.5"
+
+tar = { version =  "0.4.37", optional = true }
+flate2 = { version = "1.0.22", optional = true }

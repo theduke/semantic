@@ -17,6 +17,8 @@ pub trait BlobStore {
     fn get_stream(&self, path: &str, offset: Option<u64>) -> BlobFuture<BlobStream>;
     fn put(&self, path: &str, content: Vec<u8>) -> BlobFuture<()>;
     fn remove(&self, path: &str) -> BlobFuture<()>;
+
+    fn get_std_reader(&self, path: &str) -> BlobFuture<Box<dyn std::io::Read + Send>>;
 }
 
 pub type DynBlobStore = Arc<dyn BlobStore + Send + Sync>;
@@ -103,6 +105,8 @@ impl BlobStore for logfs::LogFs {
     }
 
     fn get_meta(&self, path: &str) -> BlobFuture<Option<BlobMeta>> {
+        // No need for run_blocking because get_meta is quasi-instant.
+        // (metadata is all in memory)
         let res = match self.get_meta(path) {
             Ok(Some(meta)) => Ok(Some(BlobMeta {
                 key: path.to_string(),
@@ -112,5 +116,14 @@ impl BlobStore for logfs::LogFs {
             Err(err) => Err(AnyError::from(err)),
         };
         Box::pin(futures::future::ready(res))
+    }
+
+    fn get_std_reader(&self, path: &str) -> BlobFuture<Box<dyn std::io::Read + Send>> {
+        let path = path.to_string();
+        Box::pin(run_blocking(self, move |s| {
+            s.get_reader(path)
+                .map(|x| Box::new(x) as Box<dyn std::io::Read + Send>)
+                .map_err(AnyError::from)
+        }))
     }
 }
