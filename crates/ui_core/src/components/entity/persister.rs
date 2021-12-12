@@ -7,7 +7,7 @@ use crate::{loader::LoadState, ContextExt};
 
 pub struct FormValid {
     pub item: Item,
-    pub mutation: factordb::query::mutate::BatchUpdate,
+    pub mutation: factordb::query::mutate::Batch,
 }
 
 pub struct EntityFormProps {

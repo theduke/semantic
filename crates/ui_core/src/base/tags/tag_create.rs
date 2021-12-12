@@ -2,7 +2,7 @@ use std::rc::Rc;
 
 use brass::dom::TagBuilder;
 use factordb::{
-    query::mutate::{BatchUpdate, Mutate},
+    query::mutate::{Batch, Mutate},
     schema::EntityContainer,
     Id,
 };
@@ -34,7 +34,7 @@ pub fn tag_create(
                 let mut tag = tag.clone();
                 tag.id = Id::random();
                 context::api()
-                    .batch(BatchUpdate::with_action(Mutate::create(
+                    .batch(Batch::with_action(Mutate::create(
                         tag.id,
                         tag.clone().into_map()?,
                     )))

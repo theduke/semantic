@@ -160,7 +160,7 @@ pub enum Query {
 
     Select(factordb::query::select::Select),
     Mutate(factordb::query::mutate::Mutate),
-    Batch(factordb::query::mutate::BatchUpdate),
+    Batch(factordb::query::mutate::Batch),
 
     Schema,
 
@@ -349,7 +349,7 @@ impl<E: ApiClientExecutor> ApiClient<E> {
         self.mutate(Mutate::create(id, data)).await
     }
 
-    pub async fn batch(&self, batch: factordb::query::mutate::BatchUpdate) -> Result<(), AnyError> {
+    pub async fn batch(&self, batch: factordb::query::mutate::Batch) -> Result<(), AnyError> {
         match self.exec.execute(Query::Batch(batch)).await {
             Ok(Reply::Batch) => Ok(()),
             Ok(_other) => Err(anyhow::anyhow!("API returned invalid data")),

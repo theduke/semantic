@@ -7,7 +7,7 @@ use brass::{
 use factordb::{
     data::value::patch::{Patch, PatchOp},
     query::{
-        mutate::{BatchUpdate, Mutate},
+        mutate::{Batch, Mutate},
         select::Item,
     },
     schema::{AttrMapExt, AttributeDescriptor},
@@ -78,7 +78,7 @@ impl MsgComponent for State {
                         Some(Mutate::patch(id, patch.clone()))
                     })
                     .collect();
-                let batch = BatchUpdate { actions };
+                let batch = Batch { actions };
 
                 let guard = ctx.spawn_map(
                     async move {

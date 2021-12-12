@@ -340,7 +340,7 @@ impl App {
         self.entity_batch(vec![mutate].into()).await
     }
 
-    pub async fn entity_batch(&self, batch: query::mutate::BatchUpdate) -> Result<(), AnyError> {
+    pub async fn entity_batch(&self, batch: query::mutate::Batch) -> Result<(), AnyError> {
         self.require_db()?.batch(batch).await
     }
 
@@ -431,7 +431,7 @@ impl App {
 
         let map = item.clone().into_map()?;
 
-        let mut batch = query::mutate::BatchUpdate::with_action(Mutate::create(id, map));
+        let mut batch = query::mutate::Batch::with_action(Mutate::create(id, map));
 
         if let Some(col) = collection {
             // File should be added to a collection, so add the db operation.
@@ -516,7 +516,7 @@ impl App {
             .iter()
             .map(|merge| query::mutate::Mutate::Merge(merge.clone()))
             .collect();
-        let batch = query::mutate::BatchUpdate { actions };
+        let batch = query::mutate::Batch { actions };
 
         db.batch(batch).await?;
 
