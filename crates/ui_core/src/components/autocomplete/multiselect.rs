@@ -75,6 +75,8 @@ pub struct MultiSelect<T: Clone + 'static> {
 
     pub render: Box<dyn Fn(MultiSelectRender<'_, T>) -> TagBuilder>,
     pub search: Option<Box<dyn Fn(String) -> LocalBoxFuture<'static, Result<Vec<T>, AnyError>>>>,
+    // FIXME: implement functionality!
+    #[allow(dead_code)]
     pub load_more: Option<Box<dyn Fn(usize)>>,
     pub on_change: Option<Rc<dyn Fn(Vec<T>)>>,
     pub on_change_async:
@@ -95,6 +97,8 @@ pub struct State<T: Clone + 'static> {
     search: Option<Box<dyn Fn(String) -> LocalBoxFuture<'static, Result<Vec<T>, AnyError>>>>,
 
     get_id: fn(&T) -> String,
+    // FIXME: implement functionality!
+    #[allow(dead_code)]
     load_more: Option<Box<dyn Fn(usize)>>,
     on_change: Option<Rc<dyn Fn(Vec<T>)>>,
     on_change_async:

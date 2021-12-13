@@ -5,7 +5,6 @@ use brass::{
     signal::signal::{Mutable, Signal},
 };
 use factordb::Ident;
-use futures::TryFutureExt;
 use url::Url;
 use wasm_bindgen::{JsCast, JsValue};
 

@@ -41,7 +41,6 @@ pub struct Action {
 }
 
 enum Msg {
-    ToggleActions,
     Deleted,
     ClearAction,
     ToggleShowTable,
@@ -87,9 +86,6 @@ impl MsgComponent for State {
 
     fn update(&mut self, msg: Self::Msg, _ctx: Context<'_, Self>) {
         match msg {
-            Msg::ToggleActions => {
-                todo!()
-            }
             Msg::Open => {
                 if let Some(id) = self.item.lock_ref().data.get_id() {
                     context::router().goto(Route::Entity(id.into()));
@@ -180,7 +176,7 @@ impl MsgComponent for State {
                     label: "Go to URL".into(),
                     is_active: None,
                     is_disabled: false,
-                    on: Box::new(handle.callback(|| Msg::Open)),
+                    on: Box::new(handle.callback(|| Msg::OpenSourceUrl)),
                 })
             }
 
