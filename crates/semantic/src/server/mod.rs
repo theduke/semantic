@@ -1,5 +1,3 @@
-mod assets;
-
 use std::{net::SocketAddr, ops::Add, sync::Arc};
 
 use anyhow::{anyhow, bail, Context, Result};
@@ -47,6 +45,10 @@ impl ServerState {
 
 type ServerContext = Extension<Arc<ServerState>>;
 
+#[derive(rust_embed::RustEmbed)]
+#[folder = "$CARGO_MANIFEST_DIR/../../target/ui"]
+struct Asset;
+
 pub async fn run_server(
     config: ServerConfig,
     runtime: tokio::runtime::Handle,
@@ -63,27 +65,6 @@ pub async fn run_server(
 
     let state = Arc::new(ServerState { config, app });
 
-    #[cfg(debug_assertions)]
-    let asset_source = {
-        let manifest_dir_raw =
-            std::env::var("CARGO_MANIFEST_DIR").expect("Could not find CARGO_MANIFEST_DIR env var");
-        let path = std::path::PathBuf::from(manifest_dir_raw)
-            .parent()
-            .expect("CARGO_MANIFEST_DIR has no parent")
-            .parent()
-            .expect("CARGO_MANIFEST_DIR has no parent")
-            .join("target/ui");
-        assets::FsAssetSource::new(path)
-    };
-
-    #[cfg(not(debug_assertions))]
-    let asset_source = {
-        static ASSETS: include_dir::Dir = include_dir::include_dir!("../../target/ui");
-        assets::StaticAssetSource::new(ASSETS.clone())
-    };
-
-    let assets = assets::Assets::new(asset_source);
-
     let router = axum::Router::new()
         .route("/api/query", post(handler_api_query))
         .route(
@@ -94,7 +75,6 @@ pub async fn run_server(
         .nest("/assets", get(handler_assets))
         .fallback(get(handler_index))
         .layer(AddExtensionLayer::new(state))
-        .layer(AddExtensionLayer::new(assets))
         .layer(tower_http::trace::TraceLayer::new_for_http());
 
     tracing::info!(interface=%addr, "starting web server");
@@ -107,31 +87,36 @@ pub async fn run_server(
     })
 }
 
-async fn handler_assets(
-    Extension(assets): extract::Extension<assets::Assets>,
-    req: Request<Body>,
-) -> Response<Body> {
-    assets.request(req.uri().path())
+async fn handler_assets(req: Request<Body>) -> Response<Body> {
+    let path = req.uri().path().trim_start_matches('/');
+
+    dbg!(path);
+
+    match Asset::get(path) {
+        Some(file) => {
+            let mime = mime_guess::from_path(path)
+                .first_or_octet_stream()
+                .to_string();
+
+            Response::builder()
+                .header(hyper::header::CONTENT_TYPE, mime)
+                .body(Body::from(file.data.as_ref().to_vec()))
+                .unwrap()
+        }
+        None => not_found(),
+    }
 }
 
-async fn handler_index(Extension(assets): extract::Extension<assets::Assets>) -> Response<Body> {
-    let res = assets.request("index.html");
+async fn handler_index() -> Response<Body> {
+    let file = Asset::get("index.html").unwrap();
 
-    // COMMENTED OUT due to image loading issues in chrome.
-    // Add Cross-Origin headers.
-    // Both for security, and to enable better performance.now() precision.
-    // See https://developer.mozilla.org/en-US/docs/Web/HTTP/Headers/Cross-Origin-Embedder-Policy
-    // and https://developer.mozilla.org/en-US/docs/Web/HTTP/Cross-Origin_Resource_Policy_(CORP).
-    // res.headers_mut().append(
-    //     header::HeaderName::from_str("Cross-Origin-Resource-Policy").unwrap(),
-    //     "same-origin".parse().unwrap(),
-    // );
-    // res.headers_mut().append(
-    //     header::HeaderName::from_str("Cross-Origin-Embedder-Policy").unwrap(),
-    //     "require-corp".parse().unwrap(),
-    // );
+    let body = hyper::Body::from(file.data.as_ref().to_vec());
 
-    res
+    Response::builder()
+        .status(StatusCode::OK)
+        .header(http::header::CONTENT_TYPE, "text/html")
+        .body(body)
+        .unwrap()
 }
 
 async fn cors_handler() -> Response<Body> {

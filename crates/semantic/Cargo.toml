@@ -49,7 +49,6 @@ serde = { version = "1.0.127", features = ["derive"] }
 axum = "0.4.2"
 tower-http = { version = "0.2.0", features = ["trace", "fs"] }
 dirs = "4.0.0"
-include_dir = "0.7.2"
 tower = "0.4.8"
 
 logfs = { path = "../logfs" }
@@ -70,3 +69,4 @@ headers = "0.3.5"
 
 tar = { version =  "0.4.37", optional = true }
 flate2 = { version = "1.0.22", optional = true }
+rust-embed = { version = "6.3.0", features = ["interpolate-folder-path"] }
