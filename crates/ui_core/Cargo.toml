@@ -29,13 +29,13 @@ base64 = "0.13.0"
 
 
 [dependencies.web-sys] 
-version = "0.3.51"
+version = "0.3.55"
 features = [
-  "Headers",
-  "Request",
-  "RequestInit",
-  "RequestMode",
-  "Response",
-  "Window",
-  "File",
+    "HtmlVideoElement", 
+    "File", 
+    "Response", 
+    "RequestInit",
+    "RequestMode",
+    "Request",
+    "Headers",
 ]
