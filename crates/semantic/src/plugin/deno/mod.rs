@@ -75,6 +75,9 @@ pub struct PluginSource {
 
 #[derive(Clone, Debug)]
 struct PluginData {
+    // FIXME: implement re-initializiation logic
+    // (field currently not used because it's not implemented)
+    #[allow(dead_code)]
     source: PluginSource,
     // plugin_file: PathBuf,
     schema: PluginSchema,

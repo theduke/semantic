@@ -2,16 +2,14 @@ use std::{collections::HashMap, sync::Arc};
 
 use anyhow::{anyhow, bail, Context};
 use factordb::{
-    data::value::patch::Patch,
     prelude::EntityContainer,
     query::{migrate::Migration, mutate::Mutate},
-    schema::{AttrMapExt, AttributeDescriptor, EntityDescriptor},
-    AnyError, Db, Id,
+    schema::{AttrMapExt, EntityDescriptor},
+    AnyError, Db,
 };
 use semantic_core::{
     api::PluginTestFetch,
-    base::AttrComment,
-    core::{AttrPluginCode, PluginSource},
+    core::PluginSource,
     plugin::{
         DynPlugin, FetchUrlJob, FetchUrlOutput, ImportJob, ImportOutput, Plugin, PluginSchema,
     },

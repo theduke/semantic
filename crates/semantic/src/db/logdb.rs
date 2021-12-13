@@ -118,7 +118,7 @@ mod tests {
         if path.exists() {
             std::fs::remove_file(&path).unwrap();
         }
-        let log = LogFs::open(path, "test".into()).unwrap();
+        let log = logfs::ConfigBuilder::new(&path).open().unwrap();
         let db = LogDbStore::new(log).build_backend().await.unwrap();
         factordb::tests::test_backend(db, |f| {
             futures::executor::block_on(f);

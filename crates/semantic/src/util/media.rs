@@ -5,8 +5,6 @@ use std::{
 
 use anyhow::{bail, Context};
 use factordb::AnyError;
-use futures::{FutureExt, StreamExt};
-use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
 use semantic_core::base::UniversalHash;
 
@@ -197,7 +195,8 @@ fn mozjpeg_jpegtran(data: &[u8]) -> Result<Vec<u8>, AnyError> {
     Ok(output)
 }
 
-pub async fn ffmpeg_convert_video(
+// Commented out until job-system based video conversion is implemented.
+/* pub async fn ffmpeg_convert_video(
     input: impl futures::Stream<Item = Result<Vec<u8>, AnyError>> + Unpin + Send + 'static,
 ) -> Result<hyper::Body, AnyError> {
     let mut proc = tokio::process::Command::new("ffmpeg")
@@ -360,4 +359,4 @@ pub async fn ffmpeg_convert_video(
     });
 
     Ok(body)
-}
+} */

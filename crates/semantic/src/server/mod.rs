@@ -1,10 +1,7 @@
 use std::{net::SocketAddr, ops::Add, sync::Arc};
 
 use anyhow::{anyhow, bail, Context, Result};
-use axum::{
-    extract::{self, Extension},
-    http, AddExtensionLayer,
-};
+use axum::{extract::Extension, http, AddExtensionLayer};
 use factordb::{schema::EntityContainer, AnyError, Id};
 use futures::StreamExt;
 use headers::{Header, HeaderMapExt};
