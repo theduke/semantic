@@ -5,8 +5,9 @@ SHELL ["/bin/bash", "-c"]
 RUN apt-get update && \
     apt-get install -y curl unzip build-essential sassc binaryen git sudo && \
     echo "Install Rust toolchain" && \
-    curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- --default-toolchain stable -y && \
+    curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- --default-toolchain nightly -y && \
     source $HOME/.cargo/env && \
+    rustup install nightly && rustup default nightly && \
     rustup target add wasm32-unknown-unknown && \
     echo "Install wasm-pack" && \
     curl https://rustwasm.github.io/wasm-pack/installer/init.sh -sSf | sh && \
