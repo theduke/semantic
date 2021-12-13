@@ -1,5 +1,3 @@
-use std::rc::Rc;
-
 use brass::{
     component::{msg::MsgComponent, Context},
     dom::{builder::div, Attr, ClickEvent, Event, Render, Tag, TagBuilder, View},
@@ -62,8 +60,6 @@ struct State {
 
     dom_player: Option<Element>,
     rendered_player: View,
-
-    items: Rc<Vec<Item>>,
 }
 
 impl State {
@@ -142,7 +138,6 @@ impl MsgComponent for State {
             dom_player: None,
             player,
             rendered_player,
-            items: Rc::new(Vec::new()),
         };
 
         s.load(s.expr.clone(), ctx);

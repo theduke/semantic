@@ -14,10 +14,8 @@ use semantic_ui_core::{
     components::loader::{error_msg, spinner},
     context,
     plugin::DynBrowserPlugin,
-    routing::Route,
     Registry,
 };
-use url::Url;
 
 enum BootPhase {
     Init,
