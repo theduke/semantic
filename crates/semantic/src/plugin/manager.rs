@@ -3,6 +3,7 @@ use std::{collections::HashMap, sync::Arc};
 use anyhow::{anyhow, bail, Context};
 use factordb::{
     data::value::patch::Patch,
+    prelude::EntityContainer,
     query::{migrate::Migration, mutate::Mutate},
     schema::{AttrMapExt, AttributeDescriptor, EntityDescriptor},
     AnyError, Db, Id,
@@ -102,46 +103,43 @@ impl PluginManager {
 
     pub async fn plugin_source_replace(
         &self,
-        id: Id,
-        code: String,
-        comment: Option<String>,
+        new_source: PluginSource,
     ) -> Result<PluginSource, AnyError> {
-        let data = self.0.db.entity(id).await?;
-        let mut source: PluginSource = data.try_into_entity()?;
+        let data = self.0.db.entity(new_source.id).await?;
+        let old_source: PluginSource = data.try_into_entity()?;
 
-        let mut patch = Patch::new();
+        let mut new_plugin = None;
+        if let Some(code) = new_source.code.as_ref() {
+            if Some(code) != old_source.code.as_ref() {
+                // Source code has changed.
+                // Validate and replace the plugin.
 
-        let plugin = if source.code.as_ref() != Some(&code) {
-            // Source code has changed.
-            // Validate and replace the plugin.
+                if let Some(old) = self
+                    .0
+                    .mutable
+                    .write()
+                    .await
+                    .plugins
+                    .remove(&new_source.ident)
+                {
+                    old.plugin.stop()?;
+                }
 
-            if let Some(old) = self.0.mutable.write().await.plugins.remove(&source.ident) {
-                old.plugin.stop()?;
+                new_plugin = Some(self.build_source_plugin(&new_source).await?);
             }
-
-            patch = patch.replace(AttrPluginCode::QUALIFIED_NAME, code.clone());
-
-            source.code = Some(code);
-
-            let plugin = self.build_source_plugin(&source).await?;
-            Some(plugin)
-        } else {
-            None
-        };
-
-        if comment.as_ref() != source.comment.as_ref() {
-            patch = patch.replace(AttrComment::QUALIFIED_NAME, comment.clone());
-            source.comment = comment;
         }
 
-        if !patch.0.is_empty() {
-            self.0.db.patch(id, patch.clone()).await?;
+        if new_source != old_source {
+            self.0
+                .db
+                .replace(new_source.id, new_source.clone().into_map()?)
+                .await?;
         }
 
-        if let Some(plugin) = plugin {
+        if let Some(plugin) = new_plugin {
             self.register_plugin(plugin).await?;
         }
-        Ok(source)
+        Ok(new_source)
     }
 
     pub async fn delete_plugin(&self, name: String) -> Result<(), AnyError> {
@@ -186,7 +184,10 @@ impl PluginManager {
             .ok_or_else(|| anyhow!("Deno runtime not available"))?;
 
         let plugin = deno
-            .register_plugin(deno::PluginSource { path: None, code }, true)
+            .register_plugin(
+                deno::PluginSource { path: None, code },
+                source.strict_validation,
+            )
             .await
             .context("Deno failed to initialize plugin")?;
 

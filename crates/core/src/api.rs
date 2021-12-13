@@ -160,12 +160,7 @@ pub enum Query {
     Schema,
 
     PluginSourceCreate(PluginSource),
-    // TODO: use a better type.
-    PluginSourceUpgrade {
-        id: Id,
-        code: String,
-        comment: Option<String>,
-    },
+    PluginSourceUpdate(PluginSource),
     PluginSourceValidate(PluginSource),
     PluginDelete {
         name: String,
@@ -381,15 +376,9 @@ impl<E: ApiClientExecutor> ApiClient<E> {
 
     pub async fn plugin_source_upgrade(
         &self,
-        id: Id,
-        code: String,
-        comment: Option<String>,
+        source: PluginSource,
     ) -> Result<PluginSource, AnyError> {
-        match self
-            .exec
-            .execute(Query::PluginSourceUpgrade { id, code, comment })
-            .await
-        {
+        match self.exec.execute(Query::PluginSourceUpdate(source)).await {
             Ok(Reply::PluginSourceUpgrade(source)) => Ok(source),
             Ok(_other) => Err(anyhow::anyhow!("API returned invalid data")),
             Err(err) => Err(err),

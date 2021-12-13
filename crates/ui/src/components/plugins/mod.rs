@@ -10,25 +10,16 @@ use brass::{
         signal_vec::MutableVec,
     },
 };
-use factordb::{
-    data::value::patch::Patch,
-    query::select::Page,
-    schema::{builtin::AttrIdent, AttrMapExt, AttributeDescriptor},
-    AnyError, Id,
-};
-use semantic_core::{
-    api::PluginTestFetch,
-    core::{AttrPluginCode, PluginSource},
-    plugin::FetchUrlOutput,
-};
+use factordb::{query::select::Page, schema::AttrMapExt, AnyError, Id};
+use semantic_core::{api::PluginTestFetch, core::PluginSource, plugin::FetchUrlOutput};
 use semantic_ui_core::{
     components::{
         form::{self, FormLoadFuture},
         loader::{load, spinner, LoadState, Loader},
         util::{
-            box_, buttons, form_field_input, form_field_textarea, notification_default,
-            notification_error, notification_warning, subtitle_4, title_2, ButtonBuilder, Cls,
-            FormRenderer,
+            box_, buttons, form_field_checkbox, form_field_input, form_field_textarea,
+            notification_default, notification_error, notification_warning, subtitle_4, title_2,
+            ButtonBuilder, Cls, FormRenderer,
         },
     },
     context::{self, registry},
@@ -197,25 +188,33 @@ struct FormValues {
     pub name: String,
     pub code: String,
     pub comment: String,
+    pub strict_validation: bool,
 }
 
 impl FormValues {
     fn apply(self, source: &mut PluginSource) {
         source.ident = self.name;
         source.code = Some(self.code);
+
+        let comment = self.comment.trim();
+        source.comment = if comment.is_empty() {
+            None
+        } else {
+            Some(comment.to_string())
+        };
     }
 
-    fn build_patch(self, old: &PluginSource) -> Patch {
-        let mut patch = Patch::new();
-        if self.name != old.ident {
-            patch = patch.replace(AttrIdent::QUALIFIED_NAME, self.name);
-        }
-        if Some(&self.code) != old.code.as_ref() {
-            patch = patch.replace(AttrPluginCode::QUALIFIED_NAME, self.code);
-        }
+    // fn build_patch(self, old: &PluginSource) -> Patch {
+    //     let mut patch = Patch::new();
+    //     if self.name != old.ident {
+    //         patch = patch.replace(AttrIdent::QUALIFIED_NAME, self.name);
+    //     }
+    //     if Some(&self.code) != old.code.as_ref() {
+    //         patch = patch.replace(AttrPluginCode::QUALIFIED_NAME, self.code);
+    //     }
 
-        patch
-    }
+    //     patch
+    // }
 }
 
 fn plugin_source_form(
@@ -227,6 +226,7 @@ fn plugin_source_form(
         name: source.ident,
         code: source.code.unwrap_or_default(),
         comment: source.comment.unwrap_or_default(),
+        strict_validation: source.strict_validation,
     })
     .on_submit_async(move |values| on_submit_async(values.clone()))
     .render(move |handle| {
@@ -247,9 +247,18 @@ fn plugin_source_form(
             true,
         );
 
+        let validate = form_field_checkbox(
+            "Strict validation",
+            handle.field(|v| &mut v.strict_validation),
+        );
+
         let comment = form_field_textarea("Comment", handle.field(|v| &mut v.comment), 5, false);
 
-        builder.and(code).and(comment).buttons_submit("Save")
+        builder
+            .and(code)
+            .and(validate)
+            .and(comment)
+            .buttons_submit("Save")
     })
 }
 
@@ -260,6 +269,7 @@ fn plugin_source_create() -> TagBuilder {
         runtime: Some("deno".to_string()),
         code: None,
         comment: None,
+        strict_validation: true,
     };
 
     plugin_source_form(source.clone(), true, move |values| {
@@ -282,16 +292,12 @@ pub fn plugin_source_create_page() -> TagBuilder {
 
 fn plugin_source_update(source: PluginSource) -> TagBuilder {
     plugin_source_form(source.clone(), false, move |values| {
+        let source = source.clone();
         Box::pin(async move {
-            let comment = if values.comment.trim().is_empty() {
-                None
-            } else {
-                Some(values.comment.trim().to_string())
-            };
+            let mut new_source = source.clone();
+            values.apply(&mut new_source);
 
-            context::api()
-                .plugin_source_upgrade(source.id, values.code, comment)
-                .await?;
+            context::api().plugin_source_upgrade(new_source).await?;
             context::router().goto(Route::PluginManager);
             Ok(())
         })

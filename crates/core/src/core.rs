@@ -1,4 +1,5 @@
 use factordb::{
+    prelude::{AttributeSchema, ValueType},
     query::{
         expr::Expr,
         migrate::{self, Migration},
@@ -22,7 +23,11 @@ pub struct AttrPluginCode(String);
 #[factor(namespace = "semantic", name = "plugin_runtime")]
 pub struct AttrPluginRuntime(String);
 
-#[derive(Serialize, Deserialize, Entity, Clone, Debug)]
+#[derive(Attribute)]
+#[factor(namespace = "semantic", name = "plugin_strict_validation")]
+pub struct AttrPluginStrictValidation(bool);
+
+#[derive(Serialize, Deserialize, Entity, Clone, Debug, PartialEq, Eq)]
 #[factor(namespace = "semantic")]
 pub struct PluginSource {
     #[factor(attr = AttrId)]
@@ -40,6 +45,10 @@ pub struct PluginSource {
     #[factor(attr = AttrPluginCode)]
     #[serde(rename = "semantic/plugin_code")]
     pub code: Option<String>,
+
+    #[factor(attr = AttrPluginStrictValidation)]
+    #[serde(rename = "semantic/plugin_strict_validation", default)]
+    pub strict_validation: bool,
 
     #[factor(attr = AttrComment)]
     #[serde(rename = "semantic/comment")]
@@ -74,7 +83,11 @@ impl Plugin for SemanticCorePlugin {
             description: None,
             import_matchers: Vec::new(),
             db: Some(factordb::schema::DbSchema {
-                attributes: vec![AttrPluginCode::schema(), AttrPluginRuntime::schema()],
+                attributes: vec![
+                    AttrPluginCode::schema(),
+                    AttrPluginRuntime::schema(),
+                    AttrPluginStrictValidation::schema(),
+                ],
                 entities: vec![PluginSource::schema()],
                 indexes: vec![],
             }),
@@ -118,6 +131,33 @@ impl Plugin for SemanticCorePlugin {
                 },
             ));
 
-        vec![create, add_comment]
+        let create_strict_validation = Migration::with_name("create_strict_validation".to_string())
+            .attr_create(AttributeSchema {
+                id: Id::nil(),
+                ident: AttrPluginStrictValidation::QUALIFIED_NAME.to_string(),
+                title: Some("Strict Plugin Validation".to_string()),
+                description: None,
+                value_type: ValueType::Bool,
+                unique: false,
+                index: false,
+                strict: true,
+            });
+
+        let add_strict_validation =
+            Migration::with_name("add_strict_validation_to_pluginsource".to_string()).action(
+                migrate::SchemaAction::EntityAttributeAdd(migrate::EntityAttributeAdd {
+                    entity: PluginSource::IDENT.to_string(),
+                    attribute: AttrPluginStrictValidation::IDENT.to_string(),
+                    cardinality: factordb::schema::Cardinality::Required,
+                    default_value: Some(false.into()),
+                }),
+            );
+
+        vec![
+            create,
+            add_comment,
+            create_strict_validation,
+            add_strict_validation,
+        ]
     }
 }
