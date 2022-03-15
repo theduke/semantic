@@ -259,7 +259,7 @@ async fn serve_file(app: &App, req: &Request<Body>) -> Result<Response<Body>, An
     }
 
     let raw_path = req.uri().path();
-    let raw_path = raw_path.trim_start_matches('/');
+    let raw_path = raw_path.trim_start_matches('/').trim_start_matches("blob/");
     let mut parts = raw_path.split('/');
     debug_assert_eq!(parts.next().unwrap(), "blob");
 
