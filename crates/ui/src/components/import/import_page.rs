@@ -5,12 +5,8 @@ use brass::{
     dom::{builder::div, Render, TagBuilder, View},
 };
 use factordb::{
-    query::{
-        expr::Expr,
-        select::{Item, Select},
-    },
-    schema::{AttrMapExt, AttributeDescriptor},
-    AnyError, Id,
+    prelude::{AttrMapExt, AttributeDescriptor, Expr, Id, Item, Select},
+    AnyError,
 };
 use semantic_core::{
     base::AttrUrl,

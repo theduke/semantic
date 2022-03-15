@@ -10,7 +10,10 @@ use brass::{
         signal_vec::MutableVec,
     },
 };
-use factordb::{query::select::Page, schema::AttrMapExt, AnyError, Id};
+use factordb::{
+    prelude::{AttrMapExt, Id, Page},
+    AnyError,
+};
 use semantic_core::{api::PluginTestFetch, core::PluginSource, plugin::FetchUrlOutput};
 use semantic_ui_core::{
     components::{

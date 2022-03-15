@@ -8,6 +8,7 @@ use std::{
 use anyhow::{anyhow, bail, Context};
 use factordb::{
     data::DataMap,
+    prelude::{Id, Value, ValueMap},
     query::{self, mutate::Mutate, select::Item},
     schema::{AttrMapExt, EntityContainer},
     AnyError, Db,
@@ -390,7 +391,7 @@ impl App {
 
         let size = data.len() as u64;
 
-        let id = factordb::Id::random();
+        let id = Id::random();
         let blob_uri = format!("files/{}", id);
 
         blob.put(&blob_uri, data).await?;
@@ -481,7 +482,7 @@ impl App {
         // Now replace all ids in any attribute with the fixed up , existing id.
         for item in &mut items {
             for value in &mut item.0.values_mut() {
-                if let factordb::Value::Id(id) = value {
+                if let Value::Id(id) = value {
                     if let Some(actual_id) = map.get(&id) {
                         *id = *actual_id;
                     }
@@ -541,7 +542,7 @@ impl App {
 
     async fn download_entity_blob_content(
         self,
-        id: factordb::Id,
+        id: Id,
         client: reqwest::Client,
     ) -> Result<(), AnyError> {
         let db = self.require_db()?;
@@ -611,7 +612,7 @@ impl App {
             path
         };
 
-        let mut patch = factordb::data::value::ValueMap::new();
+        let mut patch = ValueMap::new();
         patch.insert_attr::<AttrBlobUri>(blob_path);
         patch.insert_attr::<AttrHash>(hash);
         if let Some(original) = original_hash {

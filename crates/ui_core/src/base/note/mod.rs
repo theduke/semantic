@@ -4,11 +4,7 @@ use brass::{
     dom::{builder::div, TagBuilder},
     signal::signal::{Mutable, SignalExt},
 };
-use factordb::{
-    query::{mutate::Mutate, select::Item},
-    schema::EntityContainer,
-    Id,
-};
+use factordb::prelude::{EntityContainer, Id, Item, Mutate};
 use semantic_core::base::{Note, TextFormat};
 
 use crate::{

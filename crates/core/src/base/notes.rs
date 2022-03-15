@@ -1,8 +1,7 @@
 use anyhow::bail;
 use factordb::{
-    data::{value::patch::Patch, DataMap},
-    schema::AttributeDescriptor,
-    AnyError, Attribute, Entity, Id,
+    prelude::{Attribute, AttributeDescriptor, DataMap, Entity, Id, Patch},
+    AnyError,
 };
 use serde::{Deserialize, Serialize};
 

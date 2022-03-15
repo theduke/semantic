@@ -1,7 +1,7 @@
 use std::collections::HashSet;
 
 use brass::dom::{builder::div, TagBuilder};
-use factordb::{query::expr::Expr, schema::AttributeDescriptor, Id};
+use factordb::prelude::{AttributeDescriptor, Expr, Id, Value};
 use semantic_core::base::Tag;
 
 use crate::{
@@ -37,11 +37,11 @@ impl EntityFilter {
             let values = self
                 .entity_types
                 .iter()
-                .map(|val| factordb::Value::from(val.clone()))
+                .map(|val| Value::from(val.clone()))
                 .collect();
             let se = Expr::in_(
                 Expr::Attr(factordb::schema::builtin::AttrType::IDENT),
-                factordb::Value::List(values),
+                Value::List(values),
             );
             e = e.and_with(se);
         }

@@ -1,5 +1,8 @@
 mod db;
-use factordb::schema::{AttributeDescriptor, DbSchema, EntityDescriptor};
+use factordb::{
+    prelude::IdOrIdent,
+    schema::{AttributeDescriptor, DbSchema, EntityDescriptor},
+};
 use semantic_core::plugin::{Plugin, PluginDescriptor};
 
 pub use self::db::*;
@@ -11,7 +14,7 @@ pub struct HabitsPlugin;
 
 impl PluginDescriptor for HabitsPlugin {
     const NAME: &'static str = "semantic_habits";
-    const IDENT: factordb::Ident = factordb::Ident::new_static(Self::NAME);
+    const IDENT: IdOrIdent = IdOrIdent::new_static(Self::NAME);
 
     fn new() -> semantic_core::plugin::DynPlugin {
         std::sync::Arc::new(Self)

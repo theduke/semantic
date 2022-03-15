@@ -4,9 +4,8 @@ use brass::{
     signal::signal::Mutable,
 };
 use factordb::{
-    query::{mutate::Mutate, select::Item},
-    schema::AttrMapExt,
-    AnyError, Id,
+    prelude::{AttrMapExt, Id, Item, Mutate},
+    AnyError,
 };
 use semantic_core::base::entity_title;
 

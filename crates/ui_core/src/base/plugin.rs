@@ -1,11 +1,7 @@
 use std::rc::Rc;
 
 use brass::dom::{builder::div, Attr, Tag, TagBuilder};
-use factordb::{
-    data::DataMap,
-    schema::{AttrMapExt, AttributeDescriptor, EntityDescriptor},
-    Value,
-};
+use factordb::prelude::{AttrMapExt, AttributeDescriptor, DataMap, EntityDescriptor, Value};
 use semantic_core::base::{self, AttrPreviewImageUrl};
 
 use crate::{

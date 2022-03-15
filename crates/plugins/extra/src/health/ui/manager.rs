@@ -3,7 +3,7 @@ use brass::{
     dom::{builder::div, Tag, TagBuilder, View},
     signal::{signal::Mutable, signal_vec::MutableVec},
 };
-use factordb::{query::mutate::Mutate, Id};
+use factordb::prelude::{Id, Mutate};
 use semantic_ui_core::{
     components::{
         loader::{LoadState, Loader},

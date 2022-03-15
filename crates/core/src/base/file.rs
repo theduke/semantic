@@ -1,9 +1,11 @@
 use factordb::{
-    data::DataMap,
-    query::{expr::Expr, select::Select},
-    schema::{builtin::AttrIdent, AttrMapExt, AttributeDescriptor, EntityDescriptor},
-    AnyError, Attribute, Db, Entity, Id, Value,
+    prelude::{
+        AttrIdent, AttrMapExt, Attribute, AttributeDescriptor, DataMap, Db, Entity,
+        EntityDescriptor, Expr, Id, IdOrIdent, Select, Value, ValueTypeDescriptor,
+    },
+    AnyError,
 };
+
 use serde::{Deserialize, Serialize};
 
 use super::{AttrPreviewImageUrl, AttrTitle, AttrUrl};
@@ -57,7 +59,7 @@ impl From<UniversalHash> for Value {
     }
 }
 
-impl factordb::data::value::ValueTypeDescriptor for UniversalHash {
+impl ValueTypeDescriptor for UniversalHash {
     fn value_type() -> factordb::data::ValueType {
         factordb::data::ValueType::String
     }
@@ -296,7 +298,7 @@ impl factordb::schema::EntityContainer for TypedFile {
         }
     }
 
-    fn entity_type(&self) -> factordb::Ident {
+    fn entity_type(&self) -> IdOrIdent {
         match self {
             TypedFile::Video(_) => Video::IDENT,
             TypedFile::Image(_) => Image::IDENT,

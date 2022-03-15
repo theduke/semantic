@@ -1,8 +1,7 @@
 mod tag_form;
 use factordb::{
-    query::{expr::Expr, select::Select},
-    schema::{builtin::AttrId, AttrMapExt},
-    AnyError, Id,
+    prelude::{AttrId, AttrMapExt, Expr, Id, Select},
+    AnyError,
 };
 use semantic_core::base::{AttrTags, Tag};
 pub use tag_form::tag_form;

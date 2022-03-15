@@ -5,12 +5,7 @@ use brass::{
     dom::{builder::div, Render, View},
 };
 use factordb::{
-    data::value::patch::{Patch, PatchOp},
-    query::{
-        mutate::{Batch, Mutate},
-        select::Item,
-    },
-    schema::{AttrMapExt, AttributeDescriptor},
+    prelude::{AttrMapExt, AttributeDescriptor, Batch, Item, Mutate, Patch, PatchOp},
     AnyError,
 };
 use semantic_core::base::{AttrTags, Tag};

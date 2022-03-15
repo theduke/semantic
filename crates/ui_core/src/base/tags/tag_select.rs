@@ -1,7 +1,7 @@
 use std::rc::Rc;
 
 use brass::dom::{Render, TagBuilder, View};
-use factordb::{AnyError, Id};
+use factordb::{prelude::Id, AnyError};
 use futures::future::LocalBoxFuture;
 use semantic_core::base::Tag;
 

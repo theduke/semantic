@@ -2,7 +2,10 @@ mod manager;
 
 use brass::dom::{Render, TagBuilder};
 use chrono::TimeZone;
-use factordb::{data::Timestamp, schema::EntityDescriptor, AnyError, Id};
+use factordb::{
+    prelude::{EntityDescriptor, Id, Timestamp},
+    AnyError,
+};
 use semantic_core::plugin::PluginDescriptor;
 use semantic_ui_core::{
     components::{

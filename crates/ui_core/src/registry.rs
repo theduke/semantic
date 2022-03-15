@@ -1,6 +1,7 @@
 use std::{collections::HashMap, rc::Rc};
 
 use factordb::{
+    prelude::IdOrIdent,
     schema::{AttrMapExt, AttributeSchema, EntityAttribute, EntityDescriptor, EntitySchema},
     AnyError,
 };
@@ -172,10 +173,10 @@ impl Registry {
         self.entities.get(ty)
     }
 
-    pub fn entity_by_ident(&self, ident: &factordb::Ident) -> Option<&EntityInfo> {
+    pub fn entity_by_ident(&self, ident: &IdOrIdent) -> Option<&EntityInfo> {
         match ident {
-            factordb::Ident::Id(_id) => todo!(),
-            factordb::Ident::Name(name) => self.entity(name),
+            IdOrIdent::Id(_id) => todo!(),
+            IdOrIdent::Name(name) => self.entity(name),
         }
     }
 

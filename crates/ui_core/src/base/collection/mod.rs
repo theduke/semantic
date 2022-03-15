@@ -22,12 +22,8 @@ mod collection_item_tagger;
 mod collection_item_manager;
 
 use factordb::{
-    query::{
-        mutate::Mutate,
-        select::{Item, Page},
-    },
-    schema::EntityContainer,
-    AnyError, Id,
+    prelude::{EntityContainer, Id, Item, Mutate, Page},
+    AnyError,
 };
 use semantic_core::base::Collection;
 

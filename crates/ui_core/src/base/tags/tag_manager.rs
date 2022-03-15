@@ -5,11 +5,7 @@ use brass::{
     dom::{builder::div, Render, TagBuilder},
     signal::signal::Mutable,
 };
-use factordb::{
-    query::select::{Item, Page},
-    schema::EntityContainer,
-    Id,
-};
+use factordb::prelude::{EntityContainer, Id, Item, Page};
 use semantic_core::base::Tag;
 
 use crate::components::{

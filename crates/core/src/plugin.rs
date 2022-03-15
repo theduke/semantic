@@ -1,7 +1,8 @@
 use factordb::{
+    prelude::IdOrIdent,
     query::{migrate, select::Item},
     schema::DbSchema,
-    AnyError, Ident,
+    AnyError,
 };
 use futures::future::BoxFuture;
 use url::Url;
@@ -170,7 +171,7 @@ pub struct PluginSpec {
 /// Provides various plugin metadata.
 pub trait PluginDescriptor {
     const NAME: &'static str;
-    const IDENT: Ident = Ident::new_static(Self::NAME);
+    const IDENT: IdOrIdent = IdOrIdent::new_static(Self::NAME);
 
     fn new() -> DynPlugin;
 }

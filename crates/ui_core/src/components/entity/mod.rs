@@ -6,14 +6,9 @@ pub mod entity_filter;
 pub mod entity_view;
 
 use brass::dom::{builder::div, Apply, Attr, Render, Tag, TagBuilder, View};
-use factordb::{
-    data::{DataMap, Value},
-    query::select::Item,
-    schema::{
-        builtin::{AttrId, AttrIdent, AttrType},
-        AttrMapExt, AttributeDescriptor, AttributeSchema,
-    },
-    Id,
+use factordb::prelude::{
+    AttrId, AttrIdent, AttrMapExt, AttrType, AttributeDescriptor, AttributeSchema, DataMap, Id,
+    Item, Value,
 };
 use semantic_core::base::AttrTitle;
 

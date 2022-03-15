@@ -1,11 +1,7 @@
 use std::rc::Rc;
 
 use brass::dom::TagBuilder;
-use factordb::{
-    query::mutate::{Batch, Mutate},
-    schema::EntityContainer,
-    Id,
-};
+use factordb::prelude::{Batch, EntityContainer, Id, Mutate};
 use semantic_core::base::Tag;
 
 use crate::context;

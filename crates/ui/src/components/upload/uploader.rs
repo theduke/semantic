@@ -11,9 +11,8 @@ use brass::{
     },
 };
 use factordb::{
-    query::{expr::Expr, select::Item},
-    schema::{builtin::AttrType, AttributeDescriptor, EntityContainer, EntityDescriptor},
-    AnyError, Id,
+    prelude::{AttrType, AttributeDescriptor, EntityContainer, EntityDescriptor, Expr, Id, Item},
+    AnyError,
 };
 use semantic_core::{
     api::FileUploadMetadata,

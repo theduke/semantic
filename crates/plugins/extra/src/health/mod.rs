@@ -3,14 +3,9 @@ mod ui;
 
 use serde::{Deserialize, Serialize};
 
-use factordb::{
-    data::Timestamp,
-    query::{
-        expr::Expr,
-        select::{Order, Select},
-    },
-    schema::{AttributeDescriptor, DbSchema, EntityDescriptor},
-    Attribute, Entity, Id,
+use factordb::prelude::{
+    Attribute, AttributeDescriptor, DbSchema, Entity, EntityDescriptor, Expr, Id, IdOrIdent, Order,
+    Select, Timestamp,
 };
 use semantic_core::{
     base::{AttrComment, AttrDateTime},
@@ -54,7 +49,7 @@ pub struct HealthPlugin;
 
 impl PluginDescriptor for HealthPlugin {
     const NAME: &'static str = "semantic_health";
-    const IDENT: factordb::Ident = factordb::Ident::new_static(Self::NAME);
+    const IDENT: IdOrIdent = IdOrIdent::new_static(Self::NAME);
 
     fn new() -> semantic_core::plugin::DynPlugin {
         std::sync::Arc::new(Self)

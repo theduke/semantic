@@ -80,7 +80,7 @@ pub struct FileUploadMetadata {
     pub filename: Option<String>,
     pub title: Option<String>,
     /// Id of the collection to which the uploaded files should be added.
-    pub collection_id: Option<factordb::Id>,
+    pub collection_id: Option<Id>,
 }
 
 impl FileUploadMetadata {
@@ -282,7 +282,7 @@ impl<E: ApiClientExecutor> ApiClient<E> {
         }
     }
 
-    pub async fn entity(&self, id: factordb::Id) -> Result<factordb::data::DataMap, AnyError> {
+    pub async fn entity(&self, id: Id) -> Result<factordb::data::DataMap, AnyError> {
         use factordb::query::expr::Expr;
         let filter = Expr::eq(Expr::Attr("factor/id".into()), id);
         let mut page = self

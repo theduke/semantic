@@ -15,15 +15,12 @@ pub use self::collection::*;
 mod tags;
 pub use self::tags::*;
 
-use factordb::{
-    data::{DataMap, Timestamp, ValueType},
-    query::migrate::{self, Migration},
-    schema::{
-        builtin::AttrIdent, AttrMapExt, AttributeDescriptor, EntityAttribute, EntityDescriptor,
-        EntitySchema,
-    },
-    Attribute, Id, Value,
+use factordb::prelude::IdOrIdent;
+use factordb::prelude::{
+    AttrIdent, AttrMapExt, Attribute, AttributeDescriptor, DataMap, EntityAttribute,
+    EntityDescriptor, EntitySchema, Id, Migration, Timestamp, Value, ValueType,
 };
+use factordb::query::migrate;
 
 // Common default attributes.
 
@@ -89,12 +86,12 @@ impl AttributeDescriptor for TextFormat {
     const NAMESPACE: &'static str = "semantic";
     const PLAIN_NAME: &'static str = "text_format";
     const QUALIFIED_NAME: &'static str = "semantic/text_format";
-    const IDENT: factordb::Ident = factordb::Ident::new_static(Self::QUALIFIED_NAME);
+    const IDENT: IdOrIdent = IdOrIdent::new_static(Self::QUALIFIED_NAME);
     type Type = TextFormat;
 
     fn schema() -> factordb::schema::AttributeSchema {
         factordb::schema::AttributeSchema {
-            id: factordb::Id::nil(),
+            id: Id::nil(),
             ident: Self::QUALIFIED_NAME.to_string(),
             title: Some("Text Format".to_string()),
             description: None,
@@ -113,7 +110,7 @@ pub struct SemanticBasePlugin;
 
 impl PluginDescriptor for SemanticBasePlugin {
     const NAME: &'static str = "semantic/base";
-    const IDENT: factordb::Ident = factordb::Ident::new_static(Self::NAME);
+    const IDENT: IdOrIdent = IdOrIdent::new_static(Self::NAME);
 
     fn new() -> crate::plugin::DynPlugin {
         std::sync::Arc::new(Self)

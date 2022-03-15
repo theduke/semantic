@@ -1,17 +1,11 @@
 use serde::{Deserialize, Serialize};
 
 use factordb::{
-    data::{value::patch::Patch, DataMap},
-    query::{
-        expr::Expr,
-        mutate::Mutate,
-        select::{Item, Select},
+    prelude::{
+        AttrId, AttrIdent, AttrMapExt, Attribute, AttributeDescriptor, DataMap, Entity,
+        EntityDescriptor, Expr, Id, Item, Mutate, Patch, Select,
     },
-    schema::{
-        builtin::{self, AttrId, AttrIdent},
-        AttrMapExt, AttributeDescriptor, EntityDescriptor,
-    },
-    Attribute, Entity, Id,
+    schema::builtin,
 };
 
 use super::{AttrDescription, AttrTitle, AttrUrl};

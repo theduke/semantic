@@ -1,4 +1,4 @@
-use factordb::{data::DataMap, Attribute, Entity, Id};
+use factordb::prelude::{Attribute, DataMap, Entity, Id};
 use serde::{Deserialize, Serialize};
 
 use super::{AttrIdent, AttrTitle, AttrUrl, AttrUsername};

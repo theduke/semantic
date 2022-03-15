@@ -1,13 +1,10 @@
-use factordb::{
-    prelude::{AttributeSchema, ValueType},
-    query::{
-        expr::Expr,
-        migrate::{self, Migration},
-        select::Select,
-    },
-    schema::{builtin::AttrIdent, AttributeDescriptor, EntityAttribute, EntityDescriptor},
-    Attribute, Entity, Id,
+use factordb::prelude::{
+    Attribute, AttributeDescriptor, AttributeSchema, Entity, EntityAttribute, EntityDescriptor,
+    Expr, Id, IdOrIdent, Migration, Select, ValueType,
 };
+use factordb::query::migrate;
+use factordb::schema::builtin::AttrIdent;
+
 use serde::{Deserialize, Serialize};
 
 use crate::{
@@ -65,7 +62,7 @@ pub struct SemanticCorePlugin;
 
 impl PluginDescriptor for SemanticCorePlugin {
     const NAME: &'static str = "semantic/core";
-    const IDENT: factordb::Ident = factordb::Ident::new_static(Self::NAME);
+    const IDENT: IdOrIdent = IdOrIdent::new_static(Self::NAME);
 
     fn new() -> crate::plugin::DynPlugin {
         std::sync::Arc::new(Self)

@@ -1,8 +1,11 @@
 use std::{net::SocketAddr, ops::Add, sync::Arc};
 
 use anyhow::{anyhow, bail, Context, Result};
-use axum::{extract::Extension, http, AddExtensionLayer};
-use factordb::{schema::EntityContainer, AnyError, Id};
+use axum::{extract::Extension, http};
+use factordb::{
+    prelude::{EntityContainer, Id},
+    AnyError,
+};
 use futures::StreamExt;
 use headers::{Header, HeaderMapExt};
 use hyper::{header, Body, Method, Request, Response, StatusCode};
@@ -71,7 +74,7 @@ pub async fn run_server(
         .route("/blob/*rest", get(handler_file_read))
         .nest("/assets", get(handler_assets))
         .fallback(get(handler_index))
-        .layer(AddExtensionLayer::new(state))
+        .layer(Extension(state))
         .layer(tower_http::trace::TraceLayer::new_for_http());
 
     tracing::info!(interface=%addr, "starting web server");
