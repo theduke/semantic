@@ -120,13 +120,6 @@ fn cmd_watch_server(default_backend: bool) -> Result<(), DynError> {
             "trace",
         );
     }
-    // TODO: check if lld is available
-    if true {
-        cmd.env(
-            "RUSTFLAGS",
-            "-C link-arg=-fuse-ld=lld --cfg=web_sys_unstable_apis",
-        );
-    }
     (&mut cmd).run()?;
 
     Ok(())
