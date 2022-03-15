@@ -5,16 +5,16 @@ set -euxo pipefail
 function install_rust_build_deps() {
   echo "Installing Rust build dependencies..."
 
-	apt-get update
-	apt-get install -y curl sassc binaryen git 
+  apt-get update
+  apt-get install -y curl sassc binaryen git
 
-	echo "Installing Rust toolchain..."
-	curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- --default-toolchain stable -y
-	source $HOME/.cargo/env
-	rustup target add wasm32-unknown-unknown
+  echo "Installing Rust toolchain..."
+  curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- --default-toolchain stable -y
+  source $HOME/.cargo/env
+  rustup target add wasm32-unknown-unknown
 
-	echo "Installing wasm-pack..."
-	curl https://rustwasm.github.io/wasm-pack/installer/init.sh -sSf | sh
+  echo "Installing wasm-pack..."
+  curl https://rustwasm.github.io/wasm-pack/installer/init.sh -sSf | sh
 }
 
 function install_mozjpeg() {
