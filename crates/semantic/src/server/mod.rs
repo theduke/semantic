@@ -90,8 +90,6 @@ pub async fn run_server(
 async fn handler_assets(req: Request<Body>) -> Response<Body> {
     let path = req.uri().path().trim_start_matches('/');
 
-    dbg!(path);
-
     match Asset::get(path) {
         Some(file) => {
             let mime = mime_guess::from_path(path)
@@ -258,8 +256,7 @@ async fn serve_file(app: &App, req: &Request<Body>) -> Result<Response<Body>, An
         Image,
     }
 
-    let raw_path = req.uri().path();
-    let raw_path = raw_path.trim_start_matches('/').trim_start_matches("blob/");
+    let raw_path = req.uri().path().trim_start_matches('/');
     let mut parts = raw_path.split('/');
     debug_assert_eq!(parts.next().unwrap(), "blob");
 
