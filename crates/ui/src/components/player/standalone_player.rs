@@ -7,7 +7,7 @@ use brass::{
 use semantic_core::base::{AttrBlobUri, Video};
 use semantic_ui_core::{
     components::{
-        entity::entity_filter::{entity_filter, EntityFilter},
+        entity::entity_filter,
         loader::Loader,
         util::{box_, button, icon_fas, Cls},
     },
@@ -17,6 +17,7 @@ use wasm_bindgen::JsCast;
 use web_sys::Element;
 
 use factordb::{
+    prelude::Select,
     query::{expr::Expr, select::Item},
     schema::{builtin::AttrType, AttrMapExt, EntityDescriptor},
     AnyError,
@@ -36,7 +37,7 @@ impl Render for StandalonePlayer {
 }
 
 enum Msg {
-    FilterChanged(EntityFilter),
+    FilterChanged(entity_filter::EntityFilter),
     Loaded(Result<Vec<Item>, AnyError>),
     ToggleSettings,
     ToggleFullscreen,
@@ -48,8 +49,8 @@ enum Msg {
 struct State {
     loader: Loader<()>,
 
-    base_filter: Option<Expr>,
-    expr: Expr,
+    base_filter: Expr,
+    select: Select,
 
     fullscreen: bool,
     settings_active: Mutable<bool>,
@@ -73,13 +74,12 @@ impl State {
         )
     }
 
-    fn load(&mut self, expr: Expr, ctx: Context<Self>) {
+    fn load(&mut self, select: Select, ctx: Context<Self>) {
         let api = context::api().clone();
+        self.select = select.clone();
         let guard = ctx.spawn_map(
             async move {
-                let select = factordb::query::select::Select::new()
-                    .with_filter(expr)
-                    .with_limit(50_000);
+                let select = select.with_limit(100_000);
                 let page = api.select(select).await?;
                 Ok(page.items)
             },
@@ -128,10 +128,13 @@ impl MsgComponent for State {
         let (rendered_player, player) =
             super::player_viewer::PlayerViewer { items: Vec::new() }.build();
 
+        let base_filter = props.filter.clone().unwrap_or_else(|| Self::default_expr());
+        let select = Select::new().with_filter(base_filter.clone());
+
         let mut s = Self {
             loader: Loader::new_idle(),
-            expr: props.filter.clone().unwrap_or_else(|| Self::default_expr()),
-            base_filter: props.filter,
+            base_filter,
+            select,
             fullscreen: false,
             settings_active: Mutable::new(false),
             _keydown_subscription,
@@ -140,7 +143,7 @@ impl MsgComponent for State {
             rendered_player,
         };
 
-        s.load(s.expr.clone(), ctx);
+        s.load(s.select.clone(), ctx);
 
         s
     }
@@ -157,14 +160,16 @@ impl MsgComponent for State {
                 }
             },
             Msg::FilterChanged(filter) => {
-                let expr = filter.build_expr();
+                let mut select = filter.build_select();
 
-                self.expr = if let Some(base) = &self.base_filter {
-                    base.clone().and_with(expr)
-                } else {
-                    expr
-                };
-                self.load(self.expr.clone(), ctx);
+                select.filter = Some(
+                    select
+                        .filter
+                        .map(|e| e.and_with(self.base_filter.clone()))
+                        .unwrap_or_else(|| self.base_filter.clone()),
+                );
+
+                self.load(select, ctx);
             }
             Msg::ToggleSettings => {
                 self.settings_active.replace_with(|old| !*old);
@@ -392,7 +397,7 @@ impl MsgComponent for State {
             if !flag {
                 View::Empty
             } else {
-                let filter = entity_filter(handle.on(Msg::FilterChanged));
+                let filter = entity_filter::entity_filter(handle.on(Msg::FilterChanged));
                 let content = box_().class("mb-4").and((Tag::Hr.new(), filter));
                 content.into()
             }

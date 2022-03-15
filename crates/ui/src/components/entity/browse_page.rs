@@ -14,7 +14,7 @@ use factordb::{
 
 use semantic_ui_core::{
     components::{
-        entity::{entity_box::EntityBox, entity_filter::entity_filter},
+        entity::{entity_box::EntityBox, entity_filter},
         loader::Loader,
         util::{box_, buttons, notification_warning, title_2, ButtonBuilder, Color},
     },
@@ -46,7 +46,7 @@ pub struct BrowsePage {
 
 pub enum Msg {
     Loaded(Result<ItemPage, AnyError>),
-    FilterUpdated(Expr),
+    FilterUpdated(entity_filter::EntityFilter),
     ToggleFilter,
     Next,
     Prev,
@@ -106,7 +106,13 @@ impl MsgComponent for BrowsePage {
     fn update(&mut self, msg: Self::Msg, ctx: Context<Self>) {
         match msg {
             Msg::FilterUpdated(filter) => {
-                let query = Select::new().with_filter(filter).with_limit(self.limit);
+                let mut query = filter.build_select().with_limit(self.limit);
+                query.filter = Some(
+                    query
+                        .filter
+                        .map(|f| f.and_with(Self::base_filter()))
+                        .unwrap_or_else(|| Self::base_filter()),
+                );
                 self.load(query, &ctx);
             }
             Msg::Loaded(res) => {
@@ -167,8 +173,8 @@ impl MsgComponent for BrowsePage {
                 self.filter_visible
                     .signal_ref(|flag| if *flag { "block" } else { "none" }),
             )
-            .and(entity_filter(move |query| {
-                handle.send(Msg::FilterUpdated(query.build_expr()));
+            .and(entity_filter::entity_filter(move |filter| {
+                handle.send(Msg::FilterUpdated(filter));
             }));
 
         let handle = ctx.handle();

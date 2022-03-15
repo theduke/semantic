@@ -1,26 +1,33 @@
-use std::collections::HashSet;
+use std::{collections::HashSet, rc::Rc};
 
-use brass::dom::{builder::div, TagBuilder};
-use factordb::prelude::{AttributeDescriptor, Expr, Id, Value};
+use brass::{
+    dom::{builder::div, TagBuilder},
+    signal::signal::{Mutable, SignalExt},
+};
+use factordb::prelude::{AttributeDescriptor, Expr, Id, Select, Value};
 use semantic_core::base::Tag;
 
 use crate::{
     base::tags::load_all_tags,
     components::{
         form,
-        util::{form_field_input, form_field_tag_select, FormRenderer, SelectOption},
+        util::{
+            buttons, form_field_input, form_field_tag_select, form_field_textarea, ButtonBuilder,
+            FormRenderer, SelectOption,
+        },
     },
     context,
+    validate::Validator,
 };
 
 #[derive(Clone)]
-pub struct EntityFilter {
+pub struct EntityFilterForm {
     search: String,
     entity_types: HashSet<String>,
     tags: HashSet<Id>,
 }
 
-impl EntityFilter {
+impl EntityFilterForm {
     pub fn build_expr(&self) -> Expr {
         let mut e = Expr::Literal(factordb::data::Value::Bool(true));
 
@@ -56,8 +63,8 @@ impl EntityFilter {
     }
 }
 
-pub fn entity_filter(on_submit: impl Fn(EntityFilter) + 'static) -> TagBuilder {
-    let form = form::Form::new(EntityFilter {
+pub fn entity_filter_form(on_submit: impl Fn(EntityFilterForm) + 'static) -> TagBuilder {
+    let form = form::Form::new(EntityFilterForm {
         search: String::new(),
         entity_types: HashSet::new(),
         tags: HashSet::new(),
@@ -105,4 +112,94 @@ pub fn entity_filter(on_submit: impl Fn(EntityFilter) + 'static) -> TagBuilder {
         .and(types)
         .and(tags)
         .buttons_submit("Apply")
+}
+
+#[derive(Clone)]
+pub struct EntityFilterSql {
+    sql: String,
+}
+
+struct SqlValidator;
+
+impl Validator<String> for SqlValidator {
+    fn validate(&self, value: &String) -> Result<(), Vec<String>> {
+        Select::parse_sql(value)
+            .map_err(|e| vec![e.to_string()])
+            .map(|_| ())
+    }
+}
+
+pub fn entity_filter_sql(on_submit: impl Fn(EntityFilterSql) + 'static) -> TagBuilder {
+    let form = form::Form::new(EntityFilterSql { sql: String::new() })
+        .on_submit(move |values| {
+            on_submit(values.clone());
+        })
+        .build();
+
+    let sql = form_field_textarea(
+        "SQL",
+        form.field_validated(|v| &mut v.sql, SqlValidator),
+        5,
+        true,
+    );
+
+    FormRenderer::new(form).and(sql).buttons_submit("Apply")
+}
+
+#[derive(Clone)]
+pub enum EntityFilter {
+    Form(EntityFilterForm),
+    Sql(EntityFilterSql),
+}
+
+impl EntityFilter {
+    pub fn build_select(&self) -> Select {
+        match self {
+            EntityFilter::Form(f) => Select::new().with_filter(f.build_expr()),
+            // TODO: no unwrap?
+            EntityFilter::Sql(f) => Select::parse_sql(&f.sql).unwrap(),
+        }
+    }
+}
+
+pub fn entity_filter(on_submit: impl Fn(EntityFilter) + 'static) -> TagBuilder {
+    let on_submit = Rc::new(on_submit);
+    let is_sql = Mutable::new(false);
+    div()
+        .and(
+            buttons()
+                .and(
+                    ButtonBuilder::new()
+                        .label("Filter")
+                        .on({
+                            let is_sql = is_sql.clone();
+                            move || {
+                                is_sql.set(false);
+                            }
+                        })
+                        .signal_active(is_sql.signal().map(|x| !x))
+                        .build(),
+                )
+                .and(
+                    ButtonBuilder::new()
+                        .label("SQL")
+                        .on({
+                            let is_sql = is_sql.clone();
+                            move || {
+                                is_sql.set(true);
+                            }
+                        })
+                        .signal_active(is_sql.signal())
+                        .build(),
+                ),
+        )
+        .signal(is_sql.signal().map(move |is_sql| {
+            if is_sql {
+                let on_submit = on_submit.clone();
+                entity_filter_sql(move |f| on_submit(EntityFilter::Sql(f)))
+            } else {
+                let on_submit = on_submit.clone();
+                entity_filter_form(move |f| on_submit(EntityFilter::Form(f)))
+            }
+        }))
 }
