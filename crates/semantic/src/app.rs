@@ -210,8 +210,8 @@ impl App {
 
                 let plugins = PluginManager::new(db.clone());
 
-                plugins.register_plugin(SemanticCorePlugin::new()).await?;
                 plugins.register_plugin(SemanticBasePlugin::new()).await?;
+                plugins.register_plugin(SemanticCorePlugin::new()).await?;
                 plugins
                     .register_plugin(semantic_extra::health::HealthPlugin::new())
                     .await?;
