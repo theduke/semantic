@@ -188,7 +188,7 @@ fn cmd_build_portable() -> Result<(), DynError> {
             "--rm",
             "-v",
             &format!("{}:/host", root_path()?.display()),
-            "ubuntu",
+            "debian:buster",
             "bash",
             "-c",
             "/host/lib/docker/build.sh"
