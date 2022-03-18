@@ -6,7 +6,7 @@ function install_rust_build_deps() {
   echo "Installing Rust build dependencies..."
 
   apt-get update
-  apt-get install -y curl sassc binaryen git
+  apt-get install -y curl sassc binaryen git build-essential
 
   echo "Installing Rust toolchain..."
   curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- --default-toolchain stable -y
@@ -54,6 +54,8 @@ function install_mozjpeg() {
   mv jpegtran-static /usr/bin/jpegtran
   jpegtran -version
   rm -r /tmp/build
+
+  echo mozpjpeg built!
 }
 
 function install_runtime_deps() {
@@ -65,6 +67,7 @@ function install_runtime_deps() {
 }
 
 function build_semantic() {
+  echo Building semantic...
   source $HOME/.cargo/env
 
   cd /host
@@ -72,6 +75,8 @@ function build_semantic() {
   export CARGO_TARGET_DIR=/host/target/docker
   # cargo xtask build-ui
   cargo xtask build-server
+
+  echo Semantic built!
 }
 
 function build_portable() {
@@ -82,12 +87,15 @@ function build_portable() {
 
   test -d target/portable/bin && rm -r target/portable/bin
 
+  echo Copying files to target/portable
   mkdir -p target/portable/bin
   cp target/docker/release/semantic target/portable/bin/
   cp /usr/bin/deno target/portable/bin/
   cp /usr/bin/jpegtran target/portable/bin/
 
   chmod -R 755 target/portable/bin
+
+  echo Portable executables built!
 }
 
 build_portable
