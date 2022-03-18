@@ -258,10 +258,10 @@ async fn serve_file(app: &App, req: &Request<Body>) -> Result<Response<Body>, An
     }
 
     let raw_path = req.uri().path().trim_start_matches('/');
-    let mut parts = raw_path.split('/');
-    debug_assert_eq!(parts.next().unwrap(), "blob");
+    let parts = raw_path.split('/').collect::<Vec<&str>>();
+    debug_assert_eq!(parts.get(0), Some(&"blob"));
 
-    let format = match parts.next() {
+    let format = match parts.get(1).map(|x| *x) {
         Some("file") => Format::File,
         Some("video") => Format::Video,
         Some("image") => Format::Image,
@@ -272,7 +272,7 @@ async fn serve_file(app: &App, req: &Request<Body>) -> Result<Response<Body>, An
     };
 
     let id_opt = parts
-        .next()
+        .get(2)
         .and_then(|x| uuid::Uuid::parse_str(x).ok())
         .map(Id::from_uuid);
 
@@ -570,9 +570,6 @@ async fn api_query(state: &ServerState, req: Request<Body>) -> Result<Response<B
     let app = &state.app;
 
     let res = match query {
-        api::Query::ServerStatus => Ok(api::Reply::ServerStatus(api::ServerStatus {
-            backend_initialized: app.db().is_some(),
-        })),
         api::Query::Initialize(options) => {
             app.configure_backend(options.clone()).await?;
             let exp = std::time::SystemTime::now()

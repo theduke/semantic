@@ -197,6 +197,17 @@ pub struct QueryWithId {
 #[derive(serde::Serialize, serde::Deserialize, Clone, Debug)]
 pub struct ServerStatus {
     pub backend_initialized: bool,
+    pub backend_status: Option<BackendStatus>,
+}
+
+#[derive(serde::Serialize, serde::Deserialize, Clone, Debug)]
+pub struct BackendStatus {
+    /// Size of database data in kilobytes.
+    pub db_size: Option<u64>,
+    /// Size of assets/files in kilobytes.
+    pub asset_size: Option<u64>,
+    /// Full size of disk storage.
+    pub storage_size: Option<u64>,
 }
 
 #[derive(serde::Serialize, serde::Deserialize, Clone, Debug)]

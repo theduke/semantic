@@ -5,7 +5,7 @@ use std::{
     sync::{Arc, RwLock},
 };
 
-use anyhow::{anyhow, bail, Context};
+use anyhow::{anyhow, Context};
 use factordb::{
     data::DataMap,
     prelude::{Id, Value, ValueMap},
@@ -14,7 +14,7 @@ use factordb::{
     AnyError, Db,
 };
 use semantic_core::{
-    api::{self, DbConfig, SemanticSchema},
+    api::{self, DbConfig, FileImportMetadata, SemanticSchema},
     base::{
         AttrBlobUri, AttrDownloadUrl, AttrFileSize, AttrHash, AttrMimeType, AttrOriginalHash,
         SemanticBasePlugin,
@@ -135,6 +135,22 @@ impl App {
             .unwrap()
             .as_ref()
             .map(|state| state.backend_config.clone())
+    }
+
+    pub async fn backend_status(&self) -> Option<api::BackendStatus> {
+        let db = self.db()?;
+        let blob = self.blob()?;
+
+        let db_size = db.backend().storage_usage().await.ok().flatten();
+        // TODO: fetch
+        let asset_size = blob.size_storage().await.ok().flatten();
+        let storage_size = db_size.unwrap_or_default() + asset_size.unwrap_or_default();
+
+        Some(api::BackendStatus {
+            db_size,
+            asset_size,
+            storage_size: Some(storage_size),
+        })
     }
 
     // pub fn require_backend_config(&self) -> Result<BackendConfig, AnyError> {
@@ -376,6 +392,7 @@ impl App {
         } else {
             Vec::new()
         };
+
         let mime_guess = infer::get(&data);
 
         // Try to optimise.
@@ -388,7 +405,6 @@ impl App {
             semantic_core::base::File::find_by_hash_or_original(&db, &hash, original_hash.as_ref())
                 .await?
         {
-            if let Some(blob_path) = old_file.get_attr::<AttrBlobUri>() {
             let mut file = semantic_core::base::File::try_from_map(old_file)?;
 
             if let Some(blob_path) = &file.blob_uri {
@@ -895,9 +911,14 @@ impl App {
         self.update_last_activity_time();
 
         let res = match query {
-            api::Query::ServerStatus => Ok(api::Reply::ServerStatus(api::ServerStatus {
-                backend_initialized: self.db().is_some(),
-            })),
+            api::Query::ServerStatus => {
+                let db = self.db();
+
+                Ok(api::Reply::ServerStatus(api::ServerStatus {
+                    backend_initialized: db.is_some(),
+                    backend_status: self.backend_status().await,
+                }))
+            }
             api::Query::Initialize(options) => {
                 self.configure_backend(options).await?;
 
