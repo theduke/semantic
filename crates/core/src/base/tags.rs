@@ -1,11 +1,14 @@
 use serde::{Deserialize, Serialize};
 
-use factordb::prelude::{
-    AttrType, Attribute, AttributeDescriptor, DataMap, Entity, EntityDescriptor, Expr, Id, Mutate,
-    Patch, Select,
+use factordb::{
+    prelude::{
+        AttrType, Attribute, AttributeDescriptor, DataMap, Entity, EntityContainer,
+        EntityDescriptor, Expr, Id, IdOrIdent, Mutate, Patch, Select,
+    },
+    AnyError, Db,
 };
 
-use super::AttrDescription;
+use super::{AttrDescription, AttrTitle};
 
 #[derive(Attribute)]
 #[factor(namespace = "semantic", title = "Tag Name", name = "tag_name")]
@@ -47,6 +50,36 @@ impl Tag {
     pub fn query_all() -> Select {
         let filter = Expr::eq(Expr::attr::<AttrType>(), Tag::QUALIFIED_NAME);
         Select::new().with_filter(filter).with_limit(10_000)
+    }
+
+    pub async fn search_by_title(db: &Db, title: &str) -> Result<Option<Tag>, AnyError> {
+        let filter = Expr::is_entity::<Tag>()
+            .and_with(Expr::eq(AttrTitle::expr(), Expr::literal(title.trim())));
+        let page = db.select(Select::new().with_filter(filter)).await?;
+
+        if let Some(item) = page.items.into_iter().next() {
+            let tag = Tag::try_from_map(item.data)?;
+            Ok(Some(tag))
+        } else {
+            Ok(None)
+        }
+    }
+
+    pub async fn search_by_ident(db: &Db, ident: &IdOrIdent) -> Result<Tag, AnyError> {
+        match ident {
+            IdOrIdent::Id(id) => {
+                let map = db.entity(*id).await?;
+                let tag = Tag::try_from_map(map)?;
+                Ok(tag)
+            }
+            IdOrIdent::Name(name) => {
+                // Find by title.
+                let tag = Self::search_by_title(db, &name)
+                    .await?
+                    .ok_or_else(|| anyhow::anyhow!("Tag not found: '{}'", name))?;
+                Ok(tag)
+            }
+        }
     }
 
     /// Build an expression that selects entities with the given tag
