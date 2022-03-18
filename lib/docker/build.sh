@@ -6,12 +6,20 @@ function install_rust_build_deps() {
   echo "Installing Rust build dependencies..."
 
   apt-get update
-  apt-get install -y curl sassc binaryen git build-essential
+  apt-get install -y curl git build-essential
 
   echo "Installing Rust toolchain..."
   curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- --default-toolchain stable -y
   source $HOME/.cargo/env
   rustup target add wasm32-unknown-unknown
+}
+
+function install_ui_deps() {
+  apt-get update
+  apt-get install -y --needed binaryen sassc
+
+  echo "Installing wasm-pack..."
+  curl https://rustwasm.github.io/wasm-pack/installer/init.sh -sSf | sh
 
   echo "Installing wasm-pack..."
   curl https://rustwasm.github.io/wasm-pack/installer/init.sh -sSf | sh
@@ -66,6 +74,18 @@ function install_runtime_deps() {
   curl -fsSL https://deno.land/x/install/install.sh | DENO_INSTALL=/usr sh
 }
 
+function build_ui() {
+  echo Building ui...
+  source $HOME/.cargo/env
+
+  cd /host
+  export CARGO_NET_GIT_FETCH_WITH_CLI="true"
+  export CARGO_TARGET_DIR=/host/target/docker
+  cargo xtask build-ui
+
+  echo Semantic built!
+}
+
 function build_semantic() {
   echo Building semantic...
   source $HOME/.cargo/env
@@ -73,7 +93,7 @@ function build_semantic() {
   cd /host
   export CARGO_NET_GIT_FETCH_WITH_CLI="true"
   export CARGO_TARGET_DIR=/host/target/docker
-  # cargo xtask build-ui
+  # build_ui
   cargo xtask build-server
 
   echo Semantic built!
