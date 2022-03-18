@@ -1,4 +1,4 @@
-use std::{sync::Arc, task::Poll};
+use std::{future::ready, sync::Arc, task::Poll};
 
 use factordb::AnyError;
 use futures::{future::BoxFuture, FutureExt};
@@ -19,6 +19,9 @@ pub trait BlobStore {
     fn remove(&self, path: &str) -> BlobFuture<()>;
 
     fn get_std_reader(&self, path: &str) -> BlobFuture<Box<dyn std::io::Read + Send>>;
+
+    fn size_storage(&self) -> BlobFuture<Option<u64>>;
+    fn size_data(&self) -> BlobFuture<Option<u64>>;
 }
 
 pub type DynBlobStore = Arc<dyn BlobStore + Send + Sync>;
@@ -125,5 +128,13 @@ impl BlobStore for logfs::LogFs {
                 .map(|x| Box::new(x) as Box<dyn std::io::Read + Send>)
                 .map_err(AnyError::from)
         }))
+    }
+
+    fn size_storage(&self) -> BlobFuture<Option<u64>> {
+        ready(self.size_log().map(Some).map_err(anyhow::Error::from)).boxed()
+    }
+
+    fn size_data(&self) -> BlobFuture<Option<u64>> {
+        ready(self.size_data().map(Some).map_err(anyhow::Error::from)).boxed()
     }
 }

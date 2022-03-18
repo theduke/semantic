@@ -106,6 +106,14 @@ impl factordb::backend::log::LogStore for LogDbStore {
     fn clear(&mut self) -> futures::future::BoxFuture<'static, Result<(), AnyError>> {
         self.clone().clear().boxed()
     }
+
+    fn size_log(&mut self) -> futures::future::BoxFuture<'static, Result<Option<u64>, AnyError>> {
+        ready(self.log.size_log().map(Some).map_err(AnyError::from)).boxed()
+    }
+
+    fn size_data(&mut self) -> futures::future::BoxFuture<'static, Result<Option<u64>, AnyError>> {
+        ready(self.log.size_data().map(Some).map_err(AnyError::from)).boxed()
+    }
 }
 
 #[cfg(test)]
