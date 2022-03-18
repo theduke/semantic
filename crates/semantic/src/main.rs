@@ -5,7 +5,7 @@ use semantic_core::{
     base::SemanticBasePlugin,
     plugin::PluginDescriptor,
 };
-use std::io::Write;
+use std::{io::Write, sync::Arc};
 use structopt::StructOpt;
 
 use semantic::{app, server};
@@ -114,6 +114,45 @@ fn main() {
             })
             .expect("Export failed");
         }
+        CliCommand::ImportFiles(args) => {
+            let data_dir = app::App::default_data_dir().unwrap();
+
+            let backend_config = args.backend.build_backend_config().unwrap();
+
+            let app_config = app::AppConfig {
+                backend: Some(backend_config),
+                token_key: "".to_string(),
+                deno: Some(app::DenoConfig {
+                    data_dir: data_dir.join("deno"),
+                    plugin_dir: None,
+                }),
+            };
+
+            let meta = api::FileImportMetadata {
+                collection_id: None,
+                tags: Vec::new(),
+            };
+
+            let rt = tokio::runtime::Runtime::new().expect("Could not start runtime");
+            let handle = rt.handle().clone();
+            rt.block_on(async move {
+                let app = semantic::app::App::build(app_config, handle).await?;
+
+                app.import_files(
+                    args.paths,
+                    meta,
+                    Arc::new(|path, _file| {
+                        tracing::info!(?path, "Imported file");
+                    }),
+                )
+                .await?;
+
+                Result::<(), AnyError>::Ok(())
+            })
+            .expect("Export failed");
+
+            tracing::info!("All paths imported");
+        }
     }
 }
 
@@ -127,6 +166,7 @@ struct CliArgs {
 #[derive(StructOpt)]
 enum CliCommand {
     Server(CommandServer),
+    ImportFiles(CommandImportFiles),
     #[cfg(feature = "webkit")]
     Webkit(CommandWebkit),
     GenerateTypescript(GenerateTypescript),
@@ -177,6 +217,15 @@ impl BackendOptions {
 }
 
 pub struct DenoOptions {}
+
+#[derive(StructOpt)]
+/// Import files into a semantic database.
+struct CommandImportFiles {
+    #[structopt(flatten)]
+    backend: BackendOptions,
+
+    paths: Vec<std::path::PathBuf>,
+}
 
 /// Run the semantic server backend.
 #[derive(StructOpt)]

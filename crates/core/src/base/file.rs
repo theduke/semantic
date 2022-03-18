@@ -1,7 +1,7 @@
 use factordb::{
     prelude::{
         AttrIdent, AttrMapExt, Attribute, AttributeDescriptor, DataMap, Db, Entity,
-        EntityDescriptor, Expr, Id, IdOrIdent, Select, Value, ValueTypeDescriptor,
+        EntityContainer, EntityDescriptor, Expr, Id, IdOrIdent, Select, Value, ValueTypeDescriptor,
     },
     AnyError,
 };
@@ -287,6 +287,20 @@ pub enum TypedFile {
     Video(Video),
     Image(Image),
     File(File),
+}
+
+impl TypedFile {
+    pub fn from_file(file: File) -> Self {
+        match file.entity_type().as_name().unwrap_or_default() {
+            Video::QUALIFIED_NAME => Self::Video(Video {
+                file,
+                // FIXME: parse duration.
+                duration: None,
+            }),
+            Image::QUALIFIED_NAME => Self::Image(Image { file }),
+            _ => Self::File(file),
+        }
+    }
 }
 
 impl factordb::schema::EntityContainer for TypedFile {

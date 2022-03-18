@@ -123,12 +123,15 @@ impl State {
             return Ok(());
         };
 
+        // TODO: add tags form field.
+
         let f = semantic_ui_core::api::upload_file(
             next_file.file.clone(),
             FileUploadMetadata {
                 filename: Some(next_file.filename),
                 title: None,
                 collection_id: self.collection.lock_ref().get_collection_id(),
+                tag_ids: Vec::new(),
             },
         );
         let id = next_file.id;

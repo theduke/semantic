@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 
 use factordb::{
-    prelude::{EntityContainer, Id, Item, Mutate, Page, Timestamp},
+    prelude::{EntityContainer, Id, IdOrIdent, Item, Mutate, Page, Timestamp},
     AnyError,
 };
 use url::Url;
@@ -81,6 +81,16 @@ pub struct FileUploadMetadata {
     pub title: Option<String>,
     /// Id of the collection to which the uploaded files should be added.
     pub collection_id: Option<Id>,
+    #[serde(default)]
+    pub tag_ids: Vec<Id>,
+}
+
+#[derive(serde::Serialize, serde::Deserialize, Clone, Debug)]
+pub struct FileImportMetadata {
+    /// Id of the collection to which the uploaded files should be added.
+    pub collection_id: Option<Id>,
+    #[serde(default)]
+    pub tags: Vec<IdOrIdent>,
 }
 
 impl FileUploadMetadata {

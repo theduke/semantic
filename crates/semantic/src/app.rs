@@ -366,6 +366,16 @@ impl App {
             None
         };
 
+        let tags = if meta.tag_ids.len() > 0 {
+            let mut tags = Vec::new();
+            for tag_id in meta.tag_ids {
+                let tag = semantic_core::base::Tag::try_from_map(db.entity(tag_id).await?)?;
+                tags.push(tag);
+            }
+            tags
+        } else {
+            Vec::new()
+        };
         let mime_guess = infer::get(&data);
 
         // Try to optimise.
@@ -379,12 +389,24 @@ impl App {
                 .await?
         {
             if let Some(blob_path) = old_file.get_attr::<AttrBlobUri>() {
+            let mut file = semantic_core::base::File::try_from_map(old_file)?;
+
+            if let Some(blob_path) = &file.blob_uri {
                 // Make sure the blob still exists.
                 if blob.get_meta(&blob_path).await?.is_some() {
                     // TODO: also check the hash is correct?
 
-                    // TODO: maybe still add to the collection and return ok?
-                    bail!("Could not upload: file with the same hash already exists");
+                    let mut batch = query::mutate::Batch {
+                        actions: Vec::new(),
+                    };
+
+                    crate::file_import::file_upload_apply_meta(
+                        &mut batch, &mut file, collection, tags,
+                    )?;
+
+                    db.batch(batch).await?;
+
+                    return Ok(TypedFile::from_file(file));
                 }
             }
         }
@@ -398,7 +420,7 @@ impl App {
 
         // FIXME: prevent duplicates.
 
-        let file = semantic_core::base::File {
+        let mut file = semantic_core::base::File {
             id,
             ident: None,
             title: meta.title.clone().or_else(|| meta.filename.clone()),
@@ -416,6 +438,12 @@ impl App {
         };
 
         // Build the data.
+
+        let mut batch = query::mutate::Batch {
+            actions: Vec::new(),
+        };
+        crate::file_import::file_upload_apply_meta(&mut batch, &mut file, collection, tags)?;
+
         let item = match mime_guess.map(|x| x.mime_type()).unwrap_or_default() {
             mime if mime.starts_with("image/") => {
                 TypedFile::Image(semantic_core::base::Image { file })
@@ -432,20 +460,22 @@ impl App {
 
         let map = item.clone().into_map()?;
 
-        let mut batch = query::mutate::Batch::with_action(Mutate::create(id, map));
-
-        if let Some(col) = collection {
-            // File should be added to a collection, so add the db operation.
-            batch
-                .actions
-                .push(semantic_core::base::Collection::mutate_add_item(col.id, id));
-        }
+        batch.actions.insert(0, Mutate::create(id, map));
 
         db.batch(batch).await?;
 
         tracing::trace!(entity=?item, "created file");
 
         Ok(item)
+    }
+
+    pub async fn import_files(
+        &self,
+        paths: Vec<std::path::PathBuf>,
+        meta: FileImportMetadata,
+        on_import: crate::file_import::FileImportCallback,
+    ) -> Result<(), AnyError> {
+        super::file_import::import_files(self, paths, meta, on_import).await
     }
 
     /// Find the given items in the database based on their [`Ident`], and then

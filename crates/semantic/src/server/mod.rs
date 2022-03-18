@@ -201,6 +201,7 @@ async fn file_upload(
             filename: None,
             title: None,
             collection_id: None,
+            tag_ids: Vec::new(),
         }
     };
 
