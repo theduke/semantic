@@ -33,6 +33,7 @@ semantic_ui_core = { path = "../ui_core" }
 
 semantic_extra = { path = "../plugins/extra" }
 chrono = { version = "0.4.19", features = ["wasmbind"] }
+bytesize = "1.1.0"
 # semantic_contrib = { path = "../contrib" }
 
 [dependencies.web-sys] 
