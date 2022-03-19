@@ -23,7 +23,7 @@ uuid = { version = "0.8.2", features = ["wasm-bindgen", "v4"] }
 rand = "0.8.4"
 futures = "0.3.17"
 
-brass = { version =  "0.1" }
+brass = { version =  "0.1", features = ["macros"] }
 # brass_bulma = "0.1"
 
 factordb = { version = "0.1", default-features = false }
