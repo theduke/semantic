@@ -1,14 +1,15 @@
 use factordb::{
     prelude::{
         AttrIdent, AttrMapExt, Attribute, AttributeDescriptor, DataMap, Db, Entity,
-        EntityContainer, EntityDescriptor, Expr, Id, IdOrIdent, Select, Value, ValueTypeDescriptor, Timestamp,
+        EntityContainer, EntityDescriptor, Expr, Id, IdOrIdent, Select, Timestamp, Value,
+        ValueTypeDescriptor,
     },
     AnyError,
 };
 
 use serde::{Deserialize, Serialize};
 
-use super::{AttrPreviewImageUrl, AttrTitle, AttrUrl, AttrCreatedAt, AttrUpdatedAt};
+use super::{AttrCreatedAt, AttrPreviewImageUrl, AttrTitle, AttrUpdatedAt, AttrUrl};
 
 /// A hash, prefixed by the hash type.
 /// eg: 'sha1:XXXXXXXXXX'

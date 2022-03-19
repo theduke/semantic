@@ -8,7 +8,7 @@ use std::{
 use anyhow::{anyhow, Context};
 use factordb::{
     data::DataMap,
-    prelude::{Id, Value, ValueMap, Timestamp},
+    prelude::{Id, Timestamp, Value, ValueMap},
     query::{self, mutate::Mutate, select::Item},
     schema::{AttrMapExt, EntityContainer},
     AnyError, Db,

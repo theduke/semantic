@@ -32,13 +32,22 @@ pub struct AttrTitle(String);
 #[factor(namespace = "semantic", title = "Comment")]
 pub struct AttrComment(String);
 
-
 #[derive(Attribute)]
-#[factor(namespace = "semantic", title = "Created at", name = "created_at", index)]
+#[factor(
+    namespace = "semantic",
+    title = "Created at",
+    name = "created_at",
+    index
+)]
 pub struct AttrCreatedAt(Timestamp);
 
 #[derive(Attribute)]
-#[factor(namespace = "semantic", title = "Updated at", name = "updated_at", index)]
+#[factor(
+    namespace = "semantic",
+    title = "Updated at",
+    name = "updated_at",
+    index
+)]
 pub struct AttrUpdatedAt(Timestamp);
 
 pub fn entity_title(data: &DataMap) -> String {
@@ -285,21 +294,20 @@ impl Plugin for SemanticBasePlugin {
             .entity_create(collection::Collection::schema())
             .entity_create(tags::Tag::schema());
 
-        let create_comment = Migration::with_name("create_comment_attribute")
-            .attr_create(AttrComment::schema());
+        let create_comment =
+            Migration::with_name("create_comment_attribute").attr_create(AttrComment::schema());
 
-        let create_note_body_format = Migration::with_name("create_text_format")
-            .attr_create(TextFormat::schema());
+        let create_note_body_format =
+            Migration::with_name("create_text_format").attr_create(TextFormat::schema());
 
-        let add_text_format_to_note = Migration::with_name("add_text_format_to_note")
-            .action(migrate::SchemaAction::EntityAttributeAdd(
-                migrate::EntityAttributeAdd {
-                    entity: Note::IDENT.to_string(),
-                    attribute: TextFormat::IDENT.to_string(),
-                    cardinality: factordb::schema::Cardinality::Required,
-                    default_value: Some(TextFormat::Markdown.to_str().into()),
-                },
-            ));
+        let add_text_format_to_note = Migration::with_name("add_text_format_to_note").action(
+            migrate::SchemaAction::EntityAttributeAdd(migrate::EntityAttributeAdd {
+                entity: Note::IDENT.to_string(),
+                attribute: TextFormat::IDENT.to_string(),
+                cardinality: factordb::schema::Cardinality::Required,
+                default_value: Some(TextFormat::Markdown.to_str().into()),
+            }),
+        );
 
         let create_file_blob_uri_web = Migration::with_name("create_file_blob_uri_web")
             .attr_create(AttrBlobUriWeb::schema())
@@ -334,7 +342,6 @@ impl Plugin for SemanticBasePlugin {
                 },
             ));
 
-            
         vec![
             first,
             create_comment,

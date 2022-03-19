@@ -32,12 +32,14 @@ fn server_status() -> TagBuilder {
                 .db_size
                 .map(|x| bytesize::ByteSize(x).to_string())
                 .unwrap_or_else(|| "n/a".to_string());
-            let asset_size = s.asset_size
-                            .map(|x| bytesize::ByteSize(x).to_string())
-                            .unwrap_or_else(|| "n/a".to_string());
-            let storage_size = s.storage_size
-                            .map(|x| bytesize::ByteSize(x).to_string())
-                            .unwrap_or_else(|| "n/a".to_string());
+            let asset_size = s
+                .asset_size
+                .map(|x| bytesize::ByteSize(x).to_string())
+                .unwrap_or_else(|| "n/a".to_string());
+            let storage_size = s
+                .storage_size
+                .map(|x| bytesize::ByteSize(x).to_string())
+                .unwrap_or_else(|| "n/a".to_string());
 
             view! {
                 div [
