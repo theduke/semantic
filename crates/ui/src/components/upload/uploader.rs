@@ -51,6 +51,7 @@ pub enum Msg {
         result: Result<TypedFile, AnyError>,
     },
     ClearUploaded,
+    Reset,
 }
 
 #[derive(Clone)]
@@ -233,6 +234,13 @@ impl MsgComponent for State {
             Msg::CollectionCreateStart => {
                 self.collection.set(CollectionTarget::Creating);
             }
+            Msg::Reset => {
+                if self.loader.is_idle() {
+                    self.uploaded_files.lock_mut().clear();
+                    self.files.lock_mut().clear();
+                    self.collection.set(CollectionTarget::None);
+                }
+            }
         }
     }
 
@@ -325,26 +333,33 @@ impl MsgComponent for State {
             .and(div().class("mb-2").and(bold().and("Add to collection")))
             .signal(collection_finder_content);
 
-        let btn_upload = ButtonBuilder::new()
+        let reset = buttons().and(
+            // TODO: hide button if nothing is resettable + show as disabled when upload in progress.
+            ButtonBuilder::new()
+                .label("Reset")
+                .on(ctx.callback_msg(|| Msg::Reset))
+                .build(),
+        );
+
+        let queue_btn_upload = ButtonBuilder::new()
             .label("Upload")
             .signal_disabled(self.queue_length.signal().map(|x| x < 1))
             .signal_loading(self.loader.signal_loading())
             .on(ctx.callback_msg(|| Msg::Upload))
             .build();
 
-        let btn_clear = ButtonBuilder::new()
+        let queue_btn_clear = ButtonBuilder::new()
             .label("Clear")
             .signal_disabled(self.queue_length.signal().map(|x| x < 1))
             .on(ctx.callback_msg(|| Msg::Clear))
             .build();
-
-        let btns = buttons().and((btn_upload, btn_clear));
+        let queue_btns = buttons().and((queue_btn_upload, queue_btn_clear));
 
         let handle = ctx.handle();
         let file_queue = div()
             .class("mt-4")
             .and(subtitle_4().and("Queue"))
-            .and(btns)
+            .and(queue_btns)
             .signal_vec_with_fallback(
                 self.files.signal_vec_cloned(),
                 move |file| render_file_item(&handle, file).build(),
@@ -393,7 +408,13 @@ impl MsgComponent for State {
                 notification_default().and("Nothing uploaded yet."),
             );
 
-        div().and((selector, collection_finder, file_queue, uploaded_items))
+        div().and((
+            selector,
+            collection_finder,
+            reset,
+            file_queue,
+            uploaded_items,
+        ))
     }
 }
 
