@@ -177,7 +177,7 @@ impl Plugin for SemanticBasePlugin {
     }
 
     fn migrations(&self) -> Vec<migrate::Migration> {
-        let first = Migration::with_name("semantic/base/v1".to_string())
+        let first = Migration::with_name("semantic/base/v1")
             .attr_create(AttrTitle::schema())
             .attr_create(AttrDateTime::schema())
             .attr_create(AttrDescription::schema())
@@ -276,13 +276,13 @@ impl Plugin for SemanticBasePlugin {
             .entity_create(collection::Collection::schema())
             .entity_create(tags::Tag::schema());
 
-        let create_comment = Migration::with_name("create_comment_attribute".to_string())
+        let create_comment = Migration::with_name("create_comment_attribute")
             .attr_create(AttrComment::schema());
 
-        let create_note_body_format = Migration::with_name("create_text_format".to_string())
+        let create_note_body_format = Migration::with_name("create_text_format")
             .attr_create(TextFormat::schema());
 
-        let add_text_format_to_note = Migration::with_name("add_text_format_to_note".to_string())
+        let add_text_format_to_note = Migration::with_name("add_text_format_to_note")
             .action(migrate::SchemaAction::EntityAttributeAdd(
                 migrate::EntityAttributeAdd {
                     entity: Note::IDENT.to_string(),
@@ -292,7 +292,7 @@ impl Plugin for SemanticBasePlugin {
                 },
             ));
 
-        let create_file_blob_uri_web = Migration::with_name("create_file_blob_uri_web".to_string())
+        let create_file_blob_uri_web = Migration::with_name("create_file_blob_uri_web")
             .attr_create(AttrBlobUriWeb::schema())
             .action(migrate::SchemaAction::EntityAttributeAdd(
                 migrate::EntityAttributeAdd {
