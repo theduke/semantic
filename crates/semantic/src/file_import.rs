@@ -44,8 +44,6 @@ async fn import_file(
 ) -> Result<semantic_core::base::TypedFile, AnyError> {
     let content = tokio::fs::read(path).await?;
 
-    dbg!(("content", content.len()));
-
     let meta = FileUploadMetadata {
         filename: path.file_name().map(|n| n.to_string_lossy().to_string()),
         title: None,
@@ -53,7 +51,6 @@ async fn import_file(
         tag_ids,
     };
     let file = app.upload_file(meta, content).await?;
-    dbg!(&file);
 
     Ok(file)
 }
