@@ -32,6 +32,15 @@ pub struct AttrTitle(String);
 #[factor(namespace = "semantic", title = "Comment")]
 pub struct AttrComment(String);
 
+
+#[derive(Attribute)]
+#[factor(namespace = "semantic", title = "Created at", name = "created_at", index)]
+pub struct AttrCreatedAt(Timestamp);
+
+#[derive(Attribute)]
+#[factor(namespace = "semantic", title = "Updated at", name = "updated_at", index)]
+pub struct AttrUpdatedAt(Timestamp);
+
 pub fn entity_title(data: &DataMap) -> String {
     data.get_attr::<AttrTitle>()
         .or_else(|| data.get_id().map(|x| x.to_string()))
@@ -303,12 +312,16 @@ impl Plugin for SemanticBasePlugin {
                 },
             ));
 
+        let create_attr_created_updated_at = Migration::with_name("create_attr_created_updated_at")
+            .attr_create(AttrCreatedAt::schema())
+            .attr_create(AttrUpdatedAt::schema());
         vec![
             first,
             create_comment,
             create_note_body_format,
             add_text_format_to_note,
             create_file_blob_uri_web,
+            create_attr_created_updated_at,
         ]
     }
 }
