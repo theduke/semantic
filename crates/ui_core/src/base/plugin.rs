@@ -1,7 +1,7 @@
 use std::rc::Rc;
 
 use brass::dom::{builder::div, Attr, Tag, TagBuilder};
-use factordb::prelude::{AttrMapExt, AttributeDescriptor, DataMap, EntityDescriptor, Value};
+use factordb::prelude::{AttrMapExt, AttributeDescriptor, DataMap, EntityDescriptor, Value, Id};
 use semantic_core::base::{self, AttrPreviewImageUrl};
 
 use crate::{
@@ -140,18 +140,21 @@ fn render_attr_preview_image(value: &Value, _entity: Option<&DataMap>) -> TagBui
     }
 }
 
-pub fn build_blob_url(uri: &str) -> String {
-    format!("/blob/{}", uri)
+pub fn build_entity_blob_path(entity_id: Id) -> String {
+    format!("/blob/file/{}", entity_id)
 }
 
 fn render_blob_uri(value: &Value, entity: Option<&DataMap>) -> TagBuilder {
-    if let Value::String(blob_uri) = value {
+    let id = entity.and_then(|e| e.get_id());
+
+    if let (Some(id), Value::String(blob_path)) = (id, value) {
         // FIXME: use actual server URL!
         // Blocked on trunk proxy working - need to upgrade to 0.11.
         // let url = format!("/blob/{}", blob_uri);
-        let url = build_blob_url(&blob_uri);
+        let url = build_entity_blob_path(id);
 
-        let ext = blob_uri.rsplit_once('.').map(|x| x.1);
+        // let ext = blob_uri.rsplit_once('.').map(|x| x.1);
+        let ext = Some("");
         match ext {
             Some("jpg" | "jpeg") => render_image(&url, None, true),
             Some("mp4") => {
@@ -161,9 +164,7 @@ fn render_blob_uri(value: &Value, entity: Option<&DataMap>) -> TagBuilder {
                 render_video(&url, thumb_url, true)
             }
             _ => {
-                let filename = blob_uri.rsplit('/').next().unwrap();
-                // TODO: use link?
-                Tag::A.new().attr(brass::dom::Attr::Href, url).and(filename)
+                Tag::A.new().attr(brass::dom::Attr::Href, url).and(blob_path)
             }
         }
     } else {

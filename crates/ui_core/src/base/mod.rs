@@ -1,7 +1,7 @@
 mod file;
 mod plugin;
 
-pub use plugin::build_blob_url;
+pub use plugin::build_entity_blob_path;
 
 pub mod collection;
 pub mod note;
