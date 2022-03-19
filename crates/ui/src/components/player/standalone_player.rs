@@ -4,8 +4,9 @@ use brass::{
     effect::EventSubscription,
     signal::signal::{Mutable, SignalExt},
 };
-use semantic_core::base::{AttrBlobUri, Video};
+use semantic_core::base::{entity_title, Video};
 use semantic_ui_core::{
+    base::build_entity_blob_path,
     components::{
         entity::{entity_box::EntityBox, entity_filter},
         loader::Loader,
@@ -236,27 +237,28 @@ impl MsgComponent for State {
                 self.fullscreen = is_fullscreen;
             }
             Msg::DownloadPlaylist => {
-                let content = self.player.with_items(|items| {
+                let list_items = self.player.with_items(|items| {
                     let hostname = brass::web::window().location().origin().unwrap();
 
                     items
                         .iter()
                         .filter_map(|item| {
+                            let title = entity_title(&item.data);
                             item.data
                                 .get_type_name()
                                 .filter(|t| t == &Video::QUALIFIED_NAME)
-                                .and_then(|_| item.data.get_attr::<AttrBlobUri>())
-                                .map(|uri| {
-                                    format!(
-                                        "{}{}",
-                                        hostname,
-                                        semantic_ui_core::base::build_blob_url(&uri)
-                                    )
+                                .and_then(|_| item.data.get_id())
+                                .map(|id| {
+                                    let path = build_entity_blob_path(id);
+                                    // TODO: add length in seconds if available (the '0' below)
+                                    format!("#EXTINF:0,{title}\r\n{hostname}{path}\r\n\r\n")
                                 })
                         })
                         .collect::<Vec<_>>()
                         .join("\n")
                 });
+
+                let content = format!("#EXTM3U\r\n\r\r\n{list_items}");
 
                 let data = js_sys::Array::new();
                 data.push(&js_sys::JsString::from(content));
