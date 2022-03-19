@@ -16,6 +16,10 @@ use wasm_bindgen::JsCast;
 
 use super::form::{FieldHandle, FormHandle};
 
+pub fn bold() -> TagBuilder {
+    Tag::new(Tag::B)
+}
+
 // Bulma classes
 // See https://bulma.dev/classes
 

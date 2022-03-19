@@ -7,7 +7,7 @@ use brass::{
     },
     signal::{
         signal::{Mutable, SignalExt},
-        signal_vec::MutableVec,
+        signal_vec::{MutableVec, SignalVecExt},
     },
 };
 use factordb::{
@@ -19,12 +19,14 @@ use semantic_core::{
     base::{Collection, TypedFile},
 };
 use semantic_ui_core::{
+    base::collection::collection_create,
     components::{
         autocomplete::entity_picker::entity_picker,
         entity::entity_box::EntityBox,
         loader::Loader,
         util::{
-            box_, button, buttons, file_input, notification_default, subtitle_4, ButtonBuilder, Cls,
+            bold, box_, button, buttons, file_input, modal::modal, notification_default,
+            subtitle_4, ButtonBuilder, Cls,
         },
     },
     EntityRenderOpts,
@@ -39,14 +41,16 @@ pub enum Msg {
     Upload,
     Clear,
     CollectionClear,
-    CollectionSelectStart,
+    CollectionFind,
     CollectionSelectCancel,
     CollectionSelected(Collection),
+    CollectionCreateStart,
     RemoveFile(Uuid),
     UploadResult {
         id: Uuid,
         result: Result<TypedFile, AnyError>,
     },
+    ClearUploaded,
 }
 
 #[derive(Clone)]
@@ -72,6 +76,7 @@ enum CollectionTarget {
     None,
     Selecting,
     Selected(Collection),
+    Creating,
 }
 
 impl CollectionTarget {
@@ -208,7 +213,7 @@ impl MsgComponent for State {
             Msg::CollectionClear => {
                 self.collection.set(CollectionTarget::None);
             }
-            Msg::CollectionSelectStart => {
+            Msg::CollectionFind => {
                 self.collection.set(CollectionTarget::Selecting);
             }
             Msg::CollectionSelectCancel => {
@@ -221,6 +226,12 @@ impl MsgComponent for State {
                 let mut files = self.files.lock_mut();
                 files.retain(|f| f.id != id);
                 self.queue_length.set(files.len());
+            }
+            Msg::ClearUploaded => {
+                self.uploaded_files.lock_mut().clear();
+            }
+            Msg::CollectionCreateStart => {
+                self.collection.set(CollectionTarget::Creating);
             }
         }
     }
@@ -258,14 +269,20 @@ impl MsgComponent for State {
 
         let handle = ctx.handle();
         let collection_finder_content = self.collection.signal_ref(move |status| match status {
-            CollectionTarget::None => div().and(
-                button()
-                    .and("Upload to collection")
-                    .on(handle.on(|_: ClickEvent| Msg::CollectionSelectStart)),
-            ),
+            CollectionTarget::None => buttons()
+                .and(
+                    button()
+                        .and("Find Collection")
+                        .on(handle.on(|_: ClickEvent| Msg::CollectionFind)),
+                )
+                .and(
+                    button()
+                        .and("Create Collection")
+                        .on(handle.on(|_: ClickEvent| Msg::CollectionCreateStart)),
+                ),
             CollectionTarget::Selecting => {
                 let entity_filter = Expr::eq(AttrType::expr(), Collection::QUALIFIED_NAME);
-                box_()
+                div()
                     .and(subtitle_4().and("Select Collection"))
                     .and(
                         entity_picker(
@@ -287,22 +304,26 @@ impl MsgComponent for State {
                         ),
                     )
             }
-            CollectionTarget::Selected(col) => box_()
-                .and(subtitle_4().and("Selected collection"))
+            CollectionTarget::Selected(col) => buttons()
+                .and(ButtonBuilder::new().label(&col.title).static_().build())
                 .and(
-                    div()
-                        .class("mb-2")
-                        .and(ButtonBuilder::new().label(&col.title).static_().build()),
-                )
-                .and(
-                    div().and(
-                        button()
-                            .and("Clear")
-                            .on(handle.on(|_: ClickEvent| Msg::CollectionClear)),
-                    ),
+                    ButtonBuilder::new()
+                        .label("Clear")
+                        .on(handle.callback(|| Msg::CollectionClear))
+                        .build(),
                 ),
+            CollectionTarget::Creating => modal(
+                box_()
+                    .and(subtitle_4().and("Create Collection"))
+                    .and(collection_create(handle.on(Msg::CollectionSelected))),
+                handle.callback(|| Msg::CollectionClear),
+                false,
+            ),
         });
-        let collection_finder = div().signal(collection_finder_content).class("mb-3");
+        let collection_finder = box_()
+            .class("mb-3")
+            .and(div().class("mb-2").and(bold().and("Add to collection")))
+            .signal(collection_finder_content);
 
         let btn_upload = ButtonBuilder::new()
             .label("Upload")
@@ -317,22 +338,42 @@ impl MsgComponent for State {
             .on(ctx.callback_msg(|| Msg::Clear))
             .build();
 
-        let buttons = buttons().and((btn_upload, btn_clear));
+        let btns = buttons().and((btn_upload, btn_clear));
 
         let handle = ctx.handle();
         let file_queue = div()
             .class("mt-4")
             .and(subtitle_4().and("Queue"))
-            .and(buttons)
+            .and(btns)
             .signal_vec_with_fallback(
                 self.files.signal_vec_cloned(),
                 move |file| render_file_item(&handle, file).build(),
                 notification_default().and("Select files to upload."),
             );
 
+        let uploaded_vec = self.uploaded_files.signal_vec_cloned();
+
+        let handle = ctx.handle();
         let uploaded_items = div()
             .class("mt-4")
             .and(subtitle_4().and("Uploaded Files"))
+            .signal(uploaded_vec.len().map(move |len| {
+                let handle = handle.clone();
+                if len > 0 {
+                    buttons()
+                        .and(
+                            ButtonBuilder::new()
+                                .label(format!("Clear ({len})"))
+                                .on(move || {
+                                    handle.send(Msg::ClearUploaded);
+                                })
+                                .build(),
+                        )
+                        .into_view()
+                } else {
+                    View::Empty
+                }
+            }))
             .signal_vec_with_fallback(
                 self.uploaded_files.signal_vec_cloned(),
                 move |item| {
