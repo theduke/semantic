@@ -366,6 +366,14 @@ struct PlayerHandleInner {
 }
 
 impl PlayerHandle {
+    pub fn active_item(&self) -> Option<Item> {
+        if let Some(active) = &*self.0.shared.active_item.lock_ref() {
+            Some(active.item.clone())
+        } else {
+            None
+        }
+    }
+
     pub fn replace_items(&self, items: Vec<Item>) {
         self.0.handle.send(Msg::ReplaceItems(items));
     }
@@ -382,13 +390,13 @@ impl PlayerHandle {
         self.0.handle.send(Msg::Shuffle);
     }
 
-    // pub fn start(&self) {
-    //     self.0.handle.send(Msg::Play);
-    // }
+    pub fn start(&self) {
+        self.0.handle.send(Msg::Play);
+    }
 
-    // pub fn pause(&self) {
-    //     self.0.handle.send(Msg::Pause);
-    // }
+    pub fn pause(&self) {
+        self.0.handle.send(Msg::Pause);
+    }
 
     pub fn toggle_paused(&self) {
         self.0.handle.send(Msg::TogglePaused);
@@ -416,6 +424,10 @@ impl PlayerHandle {
 
     pub fn signal_playing(&self) -> impl Signal<Item = bool> {
         self.0.shared.playing.signal()
+    }
+
+    pub fn is_playing(&self) -> bool {
+        self.0.shared.playing.get()
     }
 
     pub fn signal_muted(&self) -> impl Signal<Item = bool> {

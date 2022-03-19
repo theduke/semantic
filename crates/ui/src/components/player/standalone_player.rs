@@ -7,11 +7,11 @@ use brass::{
 use semantic_core::base::{AttrBlobUri, Video};
 use semantic_ui_core::{
     components::{
-        entity::entity_filter,
+        entity::{entity_box::EntityBox, entity_filter},
         loader::Loader,
-        util::{box_, button, icon_fas, Cls},
+        util::{box_, button, icon_fas, modal::modal, ButtonBuilder, Cls},
     },
-    context,
+    context, EntityRenderOpts,
 };
 use wasm_bindgen::JsCast;
 use web_sys::Element;
@@ -39,6 +39,8 @@ impl Render for StandalonePlayer {
 enum Msg {
     FilterChanged(entity_filter::EntityFilter),
     Loaded(Result<Vec<Item>, AnyError>),
+    ActiveItemModalShow,
+    ActiveItemModalClose,
     ToggleSettings,
     ToggleFullscreen,
     KeyPress(String),
@@ -58,6 +60,9 @@ struct State {
     // Never read, but must be kept alive.
     _keydown_subscription: Option<EventSubscription>,
     player: PlayerHandle,
+
+    active_modal_item: Mutable<Option<Item>>,
+    active_modal_should_play_on_close: bool,
 
     dom_player: Option<Element>,
     rendered_player: View,
@@ -141,6 +146,8 @@ impl MsgComponent for State {
             dom_player: None,
             player,
             rendered_player,
+            active_modal_item: Mutable::new(None),
+            active_modal_should_play_on_close: false,
         };
 
         s.load(s.select.clone(), ctx);
@@ -210,6 +217,19 @@ impl MsgComponent for State {
                     _other => {
                         tracing::trace!(?_other, "unhandled keypress");
                     }
+                }
+            }
+            Msg::ActiveItemModalShow => {
+                if let Some(item) = self.player.active_item() {
+                    self.active_modal_item.set(Some(item));
+                    self.active_modal_should_play_on_close = self.player.is_playing();
+                    self.player.pause();
+                }
+            }
+            Msg::ActiveItemModalClose => {
+                self.active_modal_item.set(None);
+                if self.active_modal_should_play_on_close {
+                    self.player.start();
                 }
             }
             Msg::OnFullscreenChange { is_fullscreen } => {
@@ -377,12 +397,13 @@ impl MsgComponent for State {
             btn_settings,
         ));
 
-        let item_info = self.player.signal_item().map(|item| -> View {
+        let handle = ctx.handle();
+        let item_info = self.player.signal_item().map(move |item| -> View {
             item.map(|item| {
-                let title = div()
-                    .class(Cls::Button)
-                    .class(Cls::IsStatic)
-                    .and(item.title);
+                let title = ButtonBuilder::new()
+                    .label(item.title)
+                    .on(handle.callback(|| Msg::ActiveItemModalShow))
+                    .build();
 
                 div()
                     .style_raw("flex-shrink: 1; margin: 0 2rem;")
@@ -390,6 +411,28 @@ impl MsgComponent for State {
                     .into_view()
             })
             .unwrap_or(View::Empty)
+        });
+
+        let handle = ctx.handle();
+        let active_item_modal = self.active_modal_item.signal_ref(move |item| {
+            if let Some(item) = item {
+                modal(
+                    EntityBox {
+                        item: item.clone(),
+                        show_link: true,
+                        options: EntityRenderOpts {
+                            editable: false,
+                            preview: false,
+                        },
+                        on_delete: None,
+                    },
+                    handle.callback(|| Msg::ActiveItemModalClose),
+                    true,
+                )
+                .into_view()
+            } else {
+                View::Empty
+            }
         });
 
         let handle = ctx.handle();
@@ -432,6 +475,7 @@ impl MsgComponent for State {
             .and(bar)
             .and(settings)
             .signal(loader)
+            .signal(active_item_modal)
             .and(player_wrap)
     }
 }
