@@ -407,7 +407,11 @@ fn render_file_item(ctx: &Handle<State>, item: &FileItem) -> TagBuilder {
     let info = div()
         .style_raw("display: flex; gap: 2rem;")
         .and(span().and(&item.filename))
-        .and(span().and("Size: ").and(item.size.to_string()))
+        .and(
+            span()
+                .and("Size: ")
+                .and(bytesize::ByteSize(item.size).to_string()),
+        )
         .and(span().and("Type: ").and(&item.mime_type))
         .and(btn_remove);
 
