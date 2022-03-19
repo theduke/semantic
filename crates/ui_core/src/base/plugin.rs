@@ -1,7 +1,7 @@
 use std::rc::Rc;
 
 use brass::dom::{builder::div, Attr, Tag, TagBuilder};
-use factordb::prelude::{AttrMapExt, AttributeDescriptor, DataMap, EntityDescriptor, Value, Id};
+use factordb::prelude::{AttrMapExt, AttributeDescriptor, DataMap, EntityDescriptor, Id, Value};
 use semantic_core::base::{self, AttrPreviewImageUrl};
 
 use crate::{
@@ -163,9 +163,10 @@ fn render_blob_uri(value: &Value, entity: Option<&DataMap>) -> TagBuilder {
 
                 render_video(&url, thumb_url, true)
             }
-            _ => {
-                Tag::A.new().attr(brass::dom::Attr::Href, url).and(blob_path)
-            }
+            _ => Tag::A
+                .new()
+                .attr(brass::dom::Attr::Href, url)
+                .and(blob_path),
         }
     } else {
         let mut t = Tag::Span.new();
