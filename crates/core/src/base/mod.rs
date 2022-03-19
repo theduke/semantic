@@ -315,6 +315,26 @@ impl Plugin for SemanticBasePlugin {
         let create_attr_created_updated_at = Migration::with_name("create_attr_created_updated_at")
             .attr_create(AttrCreatedAt::schema())
             .attr_create(AttrUpdatedAt::schema());
+
+        let add_created_updated_at_to_file = Migration::with_name("add_created_updated_at_to_file")
+            .action(migrate::SchemaAction::EntityAttributeAdd(
+                migrate::EntityAttributeAdd {
+                    entity: File::IDENT.to_string(),
+                    attribute: AttrCreatedAt::IDENT.to_string(),
+                    cardinality: factordb::schema::Cardinality::Optional,
+                    default_value: None,
+                },
+            ))
+            .action(migrate::SchemaAction::EntityAttributeAdd(
+                migrate::EntityAttributeAdd {
+                    entity: File::IDENT.to_string(),
+                    attribute: AttrUpdatedAt::IDENT.to_string(),
+                    cardinality: factordb::schema::Cardinality::Optional,
+                    default_value: None,
+                },
+            ));
+
+            
         vec![
             first,
             create_comment,
@@ -322,6 +342,7 @@ impl Plugin for SemanticBasePlugin {
             add_text_format_to_note,
             create_file_blob_uri_web,
             create_attr_created_updated_at,
+            add_created_updated_at_to_file,
         ]
     }
 }

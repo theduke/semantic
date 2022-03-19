@@ -8,7 +8,7 @@ use std::{
 use anyhow::{anyhow, Context};
 use factordb::{
     data::DataMap,
-    prelude::{Id, Value, ValueMap},
+    prelude::{Id, Value, ValueMap, Timestamp},
     query::{self, mutate::Mutate, select::Item},
     schema::{AttrMapExt, EntityContainer},
     AnyError, Db,
@@ -436,6 +436,8 @@ impl App {
 
         // FIXME: prevent duplicates.
 
+        let now = Timestamp::now();
+
         let mut file = semantic_core::base::File {
             id,
             ident: None,
@@ -450,6 +452,8 @@ impl App {
             mime_type: mime_guess.map(|x| x.mime_type().to_string()),
             hash: Some(hash),
             original_hash,
+            created_at: Some(now),
+            updated_at: Some(now),
             extra: Default::default(),
         };
 

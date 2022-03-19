@@ -1,14 +1,14 @@
 use factordb::{
     prelude::{
         AttrIdent, AttrMapExt, Attribute, AttributeDescriptor, DataMap, Db, Entity,
-        EntityContainer, EntityDescriptor, Expr, Id, IdOrIdent, Select, Value, ValueTypeDescriptor,
+        EntityContainer, EntityDescriptor, Expr, Id, IdOrIdent, Select, Value, ValueTypeDescriptor, Timestamp,
     },
     AnyError,
 };
 
 use serde::{Deserialize, Serialize};
 
-use super::{AttrPreviewImageUrl, AttrTitle, AttrUrl};
+use super::{AttrPreviewImageUrl, AttrTitle, AttrUrl, AttrCreatedAt, AttrUpdatedAt};
 
 /// A hash, prefixed by the hash type.
 /// eg: 'sha1:XXXXXXXXXX'
@@ -159,6 +159,14 @@ pub struct File {
     #[factor(attr = AttrBlobUriWeb)]
     #[serde(rename = "semantic/blob_uri_web")]
     pub blob_uri_web: Option<String>,
+
+    #[factor(attr = AttrCreatedAt)]
+    #[serde(rename = "semantic/created_at")]
+    pub created_at: Option<Timestamp>,
+
+    #[factor(attr = AttrUpdatedAt)]
+    #[serde(rename = "semantic/updated_at")]
+    pub updated_at: Option<Timestamp>,
 
     #[factor(ignore)]
     #[serde(flatten)]
