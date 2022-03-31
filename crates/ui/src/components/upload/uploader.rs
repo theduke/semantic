@@ -289,20 +289,21 @@ impl MsgComponent for State {
                         .on(handle.on(|_: ClickEvent| Msg::CollectionCreateStart)),
                 ),
             CollectionTarget::Selecting => {
-                let entity_filter = Expr::eq(AttrType::expr(), Collection::QUALIFIED_NAME);
+                let filter = brass::signal::signal::always(Expr::eq(
+                    AttrType::expr(),
+                    Collection::QUALIFIED_NAME,
+                ));
+                let picker = entity_picker(
+                    filter,
+                    handle.on_opt(|item: Item| {
+                        Collection::try_from_map(item.data)
+                            .ok()
+                            .map(Msg::CollectionSelected)
+                    }),
+                );
                 div()
                     .and(subtitle_4().and("Select Collection"))
-                    .and(
-                        entity_picker(
-                            entity_filter,
-                            handle.on_opt(|item: Item| {
-                                Collection::try_from_map(item.data)
-                                    .ok()
-                                    .map(Msg::CollectionSelected)
-                            }),
-                        )
-                        .class("mb-4"),
-                    )
+                    .and(div().class("mb-4").and(picker))
                     .and(
                         div().and(
                             ButtonBuilder::new()

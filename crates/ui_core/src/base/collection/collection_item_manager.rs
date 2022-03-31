@@ -19,7 +19,7 @@ use crate::{
 
 enum AddItemMode {
     None,
-    AddExisting { filter: Expr },
+    AddExisting,
 }
 
 pub struct CollectionItemManager {
@@ -37,6 +37,7 @@ struct State {
     collection_id: Id,
     items: MutableVec<Item>,
     mode: Mutable<AddItemMode>,
+    filter_ignored_ids: Mutable<Vec<Id>>,
     loader: Loader<()>,
 }
 
@@ -59,6 +60,7 @@ impl MsgComponent for State {
             items: props.items,
             mode: Mutable::new(AddItemMode::None),
             loader: Loader::new_idle(),
+            filter_ignored_ids: Mutable::new(vec![props.collection_id]),
         }
     }
 
@@ -86,6 +88,8 @@ impl MsgComponent for State {
                 self.items
                     .lock_mut()
                     .retain(|item| item.data.get_id() != Some(id));
+                // Remove id from filter.
+                self.filter_ignored_ids.lock_mut().retain(|x| *x != id);
             }
             Msg::Add(item) => {
                 if self.loader.is_loading() {
@@ -111,19 +115,13 @@ impl MsgComponent for State {
                 });
             }
             Msg::AddLoaded(item) => {
+                if let Some(id) = item.data.get_id() {
+                    self.filter_ignored_ids.lock_mut().push(id);
+                }
                 self.items.lock_mut().push_cloned(item);
             }
             Msg::ModeAddExisting => {
-                let ignored: Vec<_> = self
-                    .items
-                    .lock_ref()
-                    .iter()
-                    .filter_map(|item| item.data.get_id())
-                    .collect();
-
-                let filter = Expr::not(Expr::in_(AttrId::expr(), ignored));
-
-                self.mode.set(AddItemMode::AddExisting { filter });
+                self.mode.set(AddItemMode::AddExisting);
             }
         }
     }
@@ -140,6 +138,8 @@ impl MsgComponent for State {
         });
 
         let handle = ctx.handle();
+        let filter_ignored_ids = self.filter_ignored_ids.clone();
+
         let adder = self.mode.signal_ref(move |mode| match mode {
             AddItemMode::None => {
                 let btn_add = button()
@@ -150,8 +150,10 @@ impl MsgComponent for State {
 
                 buttons().and(btn_add)
             }
-            AddItemMode::AddExisting { filter } => {
-                let picker = entity_picker(filter.clone(), handle.on(Msg::Add));
+            AddItemMode::AddExisting => {
+                let ignored = filter_ignored_ids
+                    .signal_ref(|ids| Expr::not(Expr::in_(AttrId::expr(), ids.clone())));
+                let picker = entity_picker(ignored, handle.on(Msg::Add));
 
                 box_().and(subtitle_4().and("Find")).and(picker)
             }
