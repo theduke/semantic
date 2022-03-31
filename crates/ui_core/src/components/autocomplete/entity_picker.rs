@@ -25,12 +25,6 @@ use crate::{
     context,
 };
 
-#[derive(Clone, Debug)]
-struct Props {
-    name: String,
-    base: Expr,
-}
-
 async fn sleep(duration: std::time::Duration) {
     let mut closure: Box<dyn FnMut(Function, Function)> =
         Box::new(move |resolve: js_sys::Function, _reject: Function| {
