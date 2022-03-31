@@ -193,6 +193,11 @@ impl MsgComponent for State {
                     }
                     return;
                 }
+                // Ignore keypresses if item modal is active.
+                if self.active_modal_item.lock_ref().is_some() {
+                    return;
+                }
+
                 match key.as_str() {
                     "ArrowLeft" | "KeyH" | "KeyK" => {
                         self.player.prev();
