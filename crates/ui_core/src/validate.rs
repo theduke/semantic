@@ -81,6 +81,16 @@ impl Validator<String> for StringDateTime {
     }
 }
 
+pub struct ValidateStringUrl;
+
+impl Validator<String> for ValidateStringUrl {
+    fn validate(&self, value: &String) -> Result<(), Vec<String>> {
+        url::Url::parse(value)
+            .map(|_| ())
+            .map_err(|e| vec![format!("Expected a valid url: {e}")])
+    }
+}
+
 impl<T, V> Validator<T> for Rc<V>
 where
     V: Validator<T>,
