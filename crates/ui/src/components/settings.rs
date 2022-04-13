@@ -36,10 +36,6 @@ fn server_status() -> TagBuilder {
                 .asset_size
                 .map(|x| bytesize::ByteSize(x).to_string())
                 .unwrap_or_else(|| "n/a".to_string());
-            let storage_size = s
-                .storage_size
-                .map(|x| bytesize::ByteSize(x).to_string())
-                .unwrap_or_else(|| "n/a".to_string());
 
             view! {
                 div [
@@ -50,10 +46,6 @@ fn server_status() -> TagBuilder {
                     div [
                         "Asset size: "
                         {asset_size}
-                    ]
-                    div [
-                        "Storage size: "
-                        {storage_size}
                     ]
                 ]
             }
