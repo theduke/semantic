@@ -664,6 +664,7 @@ pub fn form_field_password<V: Clone>(name: &str, handle: FieldHandle<V, String>)
         .attr_signal(Attr::Value, handle.signal_value())
         .on(handle.clone().on(|ev: InputEvent| {
             ev.stop_propagation();
+            ev.prevent_default();
             ev.value()
         }));
 
