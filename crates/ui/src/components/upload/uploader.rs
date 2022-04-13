@@ -29,6 +29,7 @@ use semantic_ui_core::{
             subtitle_4, ButtonBuilder, Cls,
         },
     },
+    routing::link_with_class,
     EntityRenderOpts,
 };
 use uuid::Uuid;
@@ -314,7 +315,14 @@ impl MsgComponent for State {
                     )
             }
             CollectionTarget::Selected(col) => buttons()
-                .and(ButtonBuilder::new().label(&col.title).static_().build())
+                .and(
+                    link_with_class(
+                        semantic_ui_core::routing::Route::Entity(col.id.into()),
+                        &col.title,
+                        "button",
+                    )
+                    .attr(brass::dom::Attr::Target, "_blank"),
+                )
                 .and(
                     ButtonBuilder::new()
                         .label("Clear")
