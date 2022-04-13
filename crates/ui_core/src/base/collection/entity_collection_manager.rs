@@ -12,13 +12,13 @@ pub fn entity_collection_manager(id: Id) -> TagBuilder {
             initial_selection: page.items.clone(),
             on_add_async: Some(Rc::new(move |collection| {
                 Box::pin(async move {
-                    super::collection_add_entity(entity_id, collection.id).await?;
+                    super::collection_add_entity(collection.id, entity_id).await?;
                     Ok(collection)
                 })
             })),
             on_remove_async: Some(Rc::new(move |collection| {
                 Box::pin(async move {
-                    super::collection_remove_entity(entity_id, collection.id).await?;
+                    super::collection_remove_entity(collection.id, entity_id).await?;
                     Ok(collection)
                 })
             })),
