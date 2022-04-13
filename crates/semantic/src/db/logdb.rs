@@ -54,7 +54,7 @@ impl LogDbStore {
                     anyhow::anyhow!("Error while iterating events: event key not found")
                 })?;
 
-                let event = self.converter.deserialize(data)?;
+                let event = self.converter.deserialize(&data)?;
                 Ok(event)
             });
         let stream = futures::stream::iter(blobs).boxed();
@@ -88,7 +88,7 @@ impl factordb::backend::log::LogStore for LogDbStore {
             .get(Self::event_path(id))
             .map_err(AnyError::from)
             .and_then(move |data| {
-                data.map(|data| converter.deserialize(data).map_err(Into::into))
+                data.map(|data| converter.deserialize(&data).map_err(Into::into))
                     .transpose()
             });
         ready(res).boxed()
