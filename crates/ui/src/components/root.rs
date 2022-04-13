@@ -59,6 +59,7 @@ fn render_route(route: Route) -> View {
         Route::Settings => super::settings::settings_page().into_view(),
         Route::PluginUpdate { id } => super::plugins::plugin_source_update_page(id).into_view(),
         Route::Apps => super::plugins::plugin_main_routes().into_view(),
+        Route::BlobCleanup => crate::components::settings::blob_cleanup::blob_cleanup().into_view(),
     };
 
     container()

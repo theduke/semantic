@@ -8,7 +8,7 @@ use std::{
 use anyhow::{anyhow, Context};
 use factordb::{
     data::DataMap,
-    prelude::{AttributeDescriptor, Id, Patch, Timestamp, Value, ValueMap},
+    prelude::{AttributeDescriptor, Expr, Id, Patch, Select, Timestamp, Value, ValueMap},
     query::{self, mutate::Mutate, select::Item},
     schema::{AttrMapExt, EntityContainer},
     AnyError, Db,
@@ -418,6 +418,59 @@ impl App {
 
     pub async fn entity_batch(&self, batch: query::mutate::Batch) -> Result<(), AnyError> {
         self.require_db()?.batch(batch).await
+    }
+
+    async fn find_unused_blobs(&self) -> Result<Vec<api::BlobInfo>, AnyError> {
+        let db = self.require_db()?;
+        let blob = self.require_blob()?;
+
+        let keys = blob.paths_offset(0, usize::MAX).await?;
+
+        let mut unused = Vec::new();
+
+        for key in keys {
+            if !key.starts_with("files/") {
+                continue;
+            }
+
+            let entities = db
+                .select(Select::new().with_filter(Expr::or(
+                    Expr::eq(AttrBlobUri::expr(), &key),
+                    Expr::eq(AttrBlobUriWeb::expr(), &key),
+                )))
+                .await?;
+
+            if entities.items.is_empty() {
+                if let Some(info) = blob.get_meta(&key).await? {
+                    unused.push(api::BlobInfo {
+                        key,
+                        size: info.size,
+                    });
+                }
+            }
+        }
+
+        Ok(unused)
+    }
+
+    async fn delete_unused_blobs(&self) -> Result<api::UnusedBlobsDeleted, AnyError> {
+        let unused = self.find_unused_blobs().await?;
+
+        let blob = self.require_blob()?;
+
+        let mut count = 0;
+        let mut size = 0;
+        for item in unused {
+            tracing::trace!(key=%item.key, "deleting unused blob");
+            blob.remove(&item.key).await?;
+            count += 1;
+            size += item.size;
+        }
+
+        Ok(api::UnusedBlobsDeleted {
+            count,
+            reclaimed_size: size,
+        })
     }
 
     pub async fn upload_file(
@@ -1207,6 +1260,14 @@ impl App {
             api::Query::FileDiscardOptimised { file_id } => {
                 self.file_discard_optimised(file_id).await?;
                 Ok(api::Reply::FileDiscardOptimised)
+            }
+            api::Query::FindUnusedBlobs => {
+                let items = self.find_unused_blobs().await?;
+                Ok(api::Reply::FindUnusedBlobs { items })
+            }
+            api::Query::DeleteUnusedBlobs => {
+                let out = self.delete_unused_blobs().await?;
+                Ok(api::Reply::DeleteUnusedBlobs(out))
             }
         };
         res.map_err(|err| {

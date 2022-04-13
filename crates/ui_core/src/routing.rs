@@ -44,6 +44,7 @@ impl std::fmt::Debug for PluginRoute {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Route {
     Settings,
+    BlobCleanup,
 
     Apps,
     Browse,
@@ -92,6 +93,7 @@ impl Route {
             Route::Plugin(p) => p.path.clone(),
             Route::Settings => "/settings".to_string(),
             Route::Apps => "/apps".to_string(),
+            Route::BlobCleanup => "/settings/blob-cleanup".to_string(),
         }
     }
 
@@ -115,6 +117,7 @@ impl Route {
             Route::PluginTest => "Test Plugin".to_string(),
             Route::Settings => "Settings".to_string(),
             Route::Apps => "Apps".to_string(),
+            Route::BlobCleanup => "Blob Cleanup".to_string(),
         }
     }
 }
@@ -180,6 +183,7 @@ impl Router {
         match parts.as_slice() {
             ["apps"] => Some(Route::Apps),
             ["settings"] => Some(Route::Settings),
+            ["settings", "blob-cleanup"] => Some(Route::BlobCleanup),
             ["logout"] => Some(Route::Logout),
             ["browse"] => Some(Route::Browse),
             ["import"] => {

@@ -12,6 +12,8 @@ pub struct BlobMeta {
 }
 
 pub trait BlobStore {
+    fn paths_offset(&self, offset: usize, max: usize) -> BlobFuture<Vec<String>>;
+
     fn get(&self, path: &str) -> BlobFuture<Option<Vec<u8>>>;
     fn get_meta(&self, path: &str) -> BlobFuture<Option<BlobMeta>>;
     fn get_stream(&self, path: &str, offset: Option<u64>) -> BlobFuture<BlobStream>;
@@ -56,9 +58,28 @@ impl<T> futures::stream::Stream for MpscStream<T> {
 }
 
 impl BlobStore for logfs::LogFs {
+    fn paths_offset(&self, offset: usize, max: usize) -> BlobFuture<Vec<String>> {
+        let res = self.paths_offset(offset, max).map_err(anyhow::Error::from);
+        Box::pin(futures::future::ready(res))
+    }
+
     fn get(&self, path: &str) -> BlobFuture<Option<Vec<u8>>> {
         let path = path.to_string();
         run_blocking(self, move |s| s.get(&path).map_err(AnyError::from))
+    }
+
+    fn get_meta(&self, path: &str) -> BlobFuture<Option<BlobMeta>> {
+        // No need for run_blocking because get_meta is quasi-instant.
+        // (metadata is all in memory)
+        let res = match self.get_meta(path) {
+            Ok(Some(meta)) => Ok(Some(BlobMeta {
+                key: path.to_string(),
+                size: meta.size,
+            })),
+            Ok(None) => Ok(None),
+            Err(err) => Err(AnyError::from(err)),
+        };
+        Box::pin(futures::future::ready(res))
     }
 
     fn get_stream(&self, path: &str, offset: Option<u64>) -> BlobFuture<BlobStream> {
@@ -108,25 +129,20 @@ impl BlobStore for logfs::LogFs {
         run_blocking(self, move |s| s.remove(path).map_err(AnyError::from))
     }
 
-    fn get_meta(&self, path: &str) -> BlobFuture<Option<BlobMeta>> {
-        // No need for run_blocking because get_meta is quasi-instant.
-        // (metadata is all in memory)
-        let res = match self.get_meta(path) {
-            Ok(Some(meta)) => Ok(Some(BlobMeta {
-                key: path.to_string(),
-                size: meta.size,
-            })),
-            Ok(None) => Ok(None),
-            Err(err) => Err(AnyError::from(err)),
-        };
-        Box::pin(futures::future::ready(res))
-    }
-
     fn get_std_reader(&self, path: &str) -> BlobFuture<Box<dyn std::io::Read + Send>> {
         let path = path.to_string();
         Box::pin(run_blocking(self, move |s| {
             s.get_reader(path)
                 .map(|x| Box::new(x) as Box<dyn std::io::Read + Send>)
+                .map_err(AnyError::from)
+        }))
+    }
+
+    fn put_std_writer(&self, path: &str) -> BlobFuture<Box<dyn std::io::Write + Send>> {
+        let path = path.to_string();
+        Box::pin(run_blocking(self, move |s| {
+            s.insert_writer(path)
+                .map(|x| Box::new(x) as Box<dyn std::io::Write + Send>)
                 .map_err(AnyError::from)
         }))
     }
@@ -137,14 +153,5 @@ impl BlobStore for logfs::LogFs {
 
     fn size_data(&self) -> BlobFuture<Option<u64>> {
         ready(self.size_data().map(Some).map_err(anyhow::Error::from)).boxed()
-    }
-
-    fn put_std_writer(&self, path: &str) -> BlobFuture<Box<dyn std::io::Write + Send>> {
-        let path = path.to_string();
-        Box::pin(run_blocking(self, move |s| {
-            s.insert_writer(path)
-                .map(|x| Box::new(x) as Box<dyn std::io::Write + Send>)
-                .map_err(AnyError::from)
-        }))
     }
 }

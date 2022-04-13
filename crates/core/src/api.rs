@@ -262,6 +262,9 @@ pub enum Query {
     JobStatus(JobId),
 
     ConvertFile(ConvertFile),
+
+    FindUnusedBlobs,
+    DeleteUnusedBlobs,
 }
 
 #[derive(serde::Serialize, serde::Deserialize, Clone, Debug)]
@@ -284,6 +287,18 @@ pub struct BackendStatus {
     pub asset_size: Option<u64>,
     /// Full size of disk storage.
     pub storage_size: Option<u64>,
+}
+
+#[derive(serde::Serialize, serde::Deserialize, Clone, Debug)]
+pub struct BlobInfo {
+    pub key: String,
+    pub size: u64,
+}
+
+#[derive(serde::Serialize, serde::Deserialize, Clone, Debug)]
+pub struct UnusedBlobsDeleted {
+    pub count: u64,
+    pub reclaimed_size: u64,
 }
 
 #[derive(serde::Serialize, serde::Deserialize, Clone, Debug)]
@@ -312,6 +327,9 @@ pub enum Reply {
 
     JobStatus(Job),
     ConvertFile(Job),
+
+    FindUnusedBlobs { items: Vec<BlobInfo> },
+    DeleteUnusedBlobs(UnusedBlobsDeleted),
 }
 
 #[derive(serde::Serialize, serde::Deserialize, Clone, Debug)]
@@ -555,6 +573,22 @@ impl<E: ApiClientExecutor> ApiClient<E> {
             .await
         {
             Ok(Reply::FileDiscardUnOptimised) => Ok(()),
+            Ok(_other) => Err(anyhow::anyhow!("API returned invalid data")),
+            Err(err) => Err(err),
+        }
+    }
+
+    pub async fn find_unused_blobs(&self) -> Result<Vec<BlobInfo>, AnyError> {
+        match self.exec.execute(Query::FindUnusedBlobs).await {
+            Ok(Reply::FindUnusedBlobs { items }) => Ok(items),
+            Ok(_other) => Err(anyhow::anyhow!("API returned invalid data")),
+            Err(err) => Err(err),
+        }
+    }
+
+    pub async fn delete_unused_blobs(&self) -> Result<UnusedBlobsDeleted, AnyError> {
+        match self.exec.execute(Query::DeleteUnusedBlobs).await {
+            Ok(Reply::DeleteUnusedBlobs(info)) => Ok(info),
             Ok(_other) => Err(anyhow::anyhow!("API returned invalid data")),
             Err(err) => Err(err),
         }

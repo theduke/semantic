@@ -1,3 +1,5 @@
+pub mod blob_cleanup;
+
 use brass::{
     dom::{builder::div, TagBuilder},
     view,
@@ -17,6 +19,7 @@ pub fn settings_page() -> TagBuilder {
             .style_raw("display: flex; flex-direction: column; gap: 1rem;")
             .and(server_status())
             .and(div().and(link(Route::PluginManager, "Plugins").class(Cls::Button)))
+            .and(div().and(link(Route::BlobCleanup, "Blob Manager").class(Cls::Button)))
             .and(div().and(link(Route::Tags, "Tags").class(Cls::Button))),
     )
 }
