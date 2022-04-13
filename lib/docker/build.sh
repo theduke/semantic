@@ -16,10 +16,10 @@ function install_rust_build_deps() {
 
 function install_ui_deps() {
   apt-get update
-  apt-get install -y --needed binaryen sassc
 
   echo "Installing wasm-pack..."
   curl https://rustwasm.github.io/wasm-pack/installer/init.sh -sSf | sh
+  apt-get install -y binaryen sassc
 
   echo "Installing wasm-pack..."
   curl https://rustwasm.github.io/wasm-pack/installer/init.sh -sSf | sh
