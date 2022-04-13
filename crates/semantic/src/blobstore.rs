@@ -19,6 +19,7 @@ pub trait BlobStore {
     fn remove(&self, path: &str) -> BlobFuture<()>;
 
     fn get_std_reader(&self, path: &str) -> BlobFuture<Box<dyn std::io::Read + Send>>;
+    fn put_std_writer(&self, path: &str) -> BlobFuture<Box<dyn std::io::Write + Send>>;
 
     fn size_storage(&self) -> BlobFuture<Option<u64>>;
     fn size_data(&self) -> BlobFuture<Option<u64>>;
@@ -136,5 +137,14 @@ impl BlobStore for logfs::LogFs {
 
     fn size_data(&self) -> BlobFuture<Option<u64>> {
         ready(self.size_data().map(Some).map_err(anyhow::Error::from)).boxed()
+    }
+
+    fn put_std_writer(&self, path: &str) -> BlobFuture<Box<dyn std::io::Write + Send>> {
+        let path = path.to_string();
+        Box::pin(run_blocking(self, move |s| {
+            s.insert_writer(path)
+                .map(|x| Box::new(x) as Box<dyn std::io::Write + Send>)
+                .map_err(AnyError::from)
+        }))
     }
 }

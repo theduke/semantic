@@ -258,11 +258,12 @@ pub struct EntityFieldAtrr {
 
 // pub type DynRenderer<T> = Box<dyn Fn(&T) -> brass::VNode>;
 
-#[derive(PartialEq, Eq, Clone)]
+#[derive(PartialEq, Eq, Clone, Debug)]
 pub struct EntityRenderOpts {
     pub editable: bool,
     pub preview: bool,
 }
+
 pub type DynEntityRenderer =
     Rc<dyn Fn(&factordb::query::select::Item, &EntityRenderOpts) -> brass::dom::TagBuilder>;
 

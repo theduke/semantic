@@ -8,7 +8,7 @@ use std::{
 use anyhow::{anyhow, Context};
 use factordb::{
     data::DataMap,
-    prelude::{Id, Timestamp, Value, ValueMap},
+    prelude::{AttributeDescriptor, Id, Patch, Timestamp, Value, ValueMap},
     query::{self, mutate::Mutate, select::Item},
     schema::{AttrMapExt, EntityContainer},
     AnyError, Db,
@@ -16,8 +16,8 @@ use factordb::{
 use semantic_core::{
     api::{self, DbConfig, FileImportMetadata, SemanticSchema},
     base::{
-        AttrBlobUri, AttrDownloadUrl, AttrFileSize, AttrHash, AttrMimeType, AttrOriginalHash,
-        SemanticBasePlugin,
+        entity_title, AttrBlobUri, AttrBlobUriWeb, AttrDownloadUrl, AttrFileName, AttrFileSize,
+        AttrHash, AttrMimeType, AttrOriginalHash, SemanticBasePlugin, Video,
     },
     core::SemanticCorePlugin,
     plugin::{FetchUrlJob, FetchUrlOutput, ImportJob, ImportOutput, PluginDescriptor},
@@ -34,6 +34,20 @@ pub struct AppConfig {
     pub token_key: String,
 
     pub deno: Option<DenoConfig>,
+    pub tmp_dir: Option<PathBuf>,
+}
+
+impl AppConfig {
+    fn tmp_dir_videos(&self) -> Result<PathBuf, anyhow::Error> {
+        self.tmp_dir
+            .clone()
+            .map(|p| p.join("video_conversions"))
+            .ok_or_else(|| {
+                anyhow!(
+                "No temporary directory configured. A temp dir is required for video conversions"
+            )
+            })
+    }
 }
 
 struct AppState {
@@ -58,7 +72,7 @@ pub struct App {
 impl App {
     const WORKER_INTERVAL: std::time::Duration = std::time::Duration::from_secs(10);
 
-    /// Get a mutable reference to the app's config.
+    /// Get mutable reference to the app's config.
     pub fn config(&self) -> &AppConfig {
         &self.config
     }
@@ -274,6 +288,11 @@ impl App {
     }
 
     pub async fn build(config: AppConfig, rt: tokio::runtime::Handle) -> Result<Self, AnyError> {
+        // Purge old video conversion data.
+        if let Ok(p) = config.tmp_dir_videos() {
+            tokio::fs::remove_dir_all(&p).await.ok();
+        }
+
         let s = Self {
             config: config.clone(),
             state: Arc::new(RwLock::new(None)),
@@ -908,6 +927,116 @@ impl App {
         }
     }
 
+    async fn optimise_video(&self, video_id: Id) -> Result<api::JobId, anyhow::Error> {
+        let db = self.require_db()?;
+        let store = self.require_blob()?;
+        let tmp_dir = self.config().tmp_dir_videos()?;
+        let video_raw = db.entity(video_id).await?;
+        let title = entity_title(&video_raw);
+        let video = Video::try_from_map(video_raw)?;
+
+        let jobs = self.require_jobs()?;
+
+        let job = jobs.register_job(crate::jobs::JobInit {
+            name: format!("Optimise video: {title}"),
+            steps: Vec::new(),
+        });
+        let job_id = job.id;
+
+        tokio::spawn(async move {
+            crate::util::media::optimise_video(db, store, jobs, video, tmp_dir, job)
+                .await
+                .ok();
+        });
+
+        Ok(job_id)
+    }
+
+    async fn file_discard_optimised(&self, file_id: Id) -> Result<(), anyhow::Error> {
+        let db = self.require_db()?;
+        let blob = self.require_blob()?;
+
+        let data = db.entity(file_id).await?;
+        let file = semantic_core::base::File::try_from_map(data)?;
+
+        let original_blob_path = file.blob_uri.ok_or_else(|| {
+            anyhow!(
+                "Can't delet optimised file version: file does not have an original blob attached"
+            )
+        })?;
+
+        // Ensure that blob still exists.
+        blob.get_meta(&original_blob_path)
+            .await?
+            .ok_or_else(|| anyhow!("Original blob not found"))?;
+
+        let path = file
+            .blob_uri_web
+            .ok_or_else(|| anyhow!("File does not have an optimized version"))?;
+
+        db.patch(file_id, Patch::new().remove(AttrBlobUriWeb::QUALIFIED_NAME))
+            .await?;
+
+        blob.remove(&path).await?;
+
+        Ok(())
+    }
+
+    async fn file_discard_un_optimised(&self, file_id: Id) -> Result<(), anyhow::Error> {
+        let db = self.require_db()?;
+        let blob = self.require_blob()?;
+
+        let data = db.entity(file_id).await?;
+        let file = semantic_core::base::File::try_from_map(data)?;
+
+        let optimised_path = file
+            .blob_uri_web
+            .ok_or_else(|| anyhow!("File does not have an optimized version"))?;
+        let original_path = file
+            .blob_uri
+            .ok_or_else(|| anyhow!("File does not have an attached blob"))?;
+
+        // Ensure that optimized blob still exists.
+        let new_meta = blob
+            .get_meta(&optimised_path)
+            .await?
+            .ok_or_else(|| anyhow!("Optimized blob not found"))?;
+
+        let new_extension = PathBuf::from(&optimised_path)
+            .extension()
+            .and_then(|e| e.to_str())
+            .map(|s| s.to_string())
+            .ok_or_else(|| anyhow!("Optimized file does not have an extension"))?;
+
+        let new_mime = mime_guess::from_path(&optimised_path)
+            .first()
+            .ok_or_else(|| anyhow!("Could not determine mime type for new blob"))?
+            .to_string();
+        // TODO: actually check the file mime type?
+        // FIXME: update hash!
+
+        let new_filename = file.filename.and_then(|f| {
+            let mut p = PathBuf::from(f);
+            p.set_extension(&new_extension);
+            p.to_str().map(|x| x.to_string())
+        });
+
+        let mut patch = Patch::new()
+            .replace(AttrMimeType::QUALIFIED_NAME, new_mime)
+            .replace(AttrFileSize::QUALIFIED_NAME, new_meta.size)
+            .replace(AttrBlobUri::QUALIFIED_NAME, optimised_path);
+
+        if let Some(name) = new_filename {
+            patch = patch.replace(AttrFileName::QUALIFIED_NAME, name);
+        }
+
+        db.patch(file_id, patch).await?;
+
+        blob.remove(&original_path).await?;
+
+        Ok(())
+    }
+
     pub async fn run_query(
         &self,
         query: semantic_core::api::Query,
@@ -1024,6 +1153,20 @@ impl App {
             }
             api::Query::ConvertFile(_) => {
                 todo!()
+            }
+            api::Query::OptimiseVideo(job) => {
+                let job_id = self.optimise_video(job.video_id).await?;
+                Ok(api::Reply::OptimiseVideo(api::OptimiseVideoReply {
+                    job_id,
+                }))
+            }
+            api::Query::FileDiscardUnOptimized { file_id } => {
+                self.file_discard_un_optimised(file_id).await?;
+                Ok(api::Reply::FileDiscardUnOptimised)
+            }
+            api::Query::FileDiscardOptimised { file_id } => {
+                self.file_discard_optimised(file_id).await?;
+                Ok(api::Reply::FileDiscardOptimised)
             }
         };
         res.map_err(|err| {

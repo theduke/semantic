@@ -144,6 +144,10 @@ pub fn build_entity_blob_path(entity_id: Id) -> String {
     format!("/blob/file/{}", entity_id)
 }
 
+pub fn build_entity_blob_path_video(entity_id: Id) -> String {
+    format!("/blob/video/{}", entity_id)
+}
+
 fn render_blob_uri(value: &Value, entity: Option<&DataMap>) -> TagBuilder {
     let id = entity.and_then(|e| e.get_id());
 

@@ -1,8 +1,8 @@
 use wasm_bindgen::JsCast;
 
-use brass::dom::{Attr, Event, Tag, TagBuilder};
-use factordb::{query::select::Item, schema::AttrMapExt};
-use semantic_core::base::AttrPreviewImageUrl;
+use brass::dom::{builder::div, Attr, Event, Tag, TagBuilder};
+use factordb::{prelude::EntityContainer, query::select::Item, schema::AttrMapExt};
+use semantic_core::base::{AttrBlobUri, AttrBlobUriWeb, AttrPreviewImageUrl, Video};
 
 use crate::{
     components::util::notification_warning,
@@ -44,16 +44,39 @@ impl VideoInfo {
 
 /// Get the video URL from an item.
 pub fn video_content(item: &Item, opts: &EntityRenderOpts) -> TagBuilder {
+    tracing::info!(?opts, "video render opts");
+    let web_uri = item.data.get_attr::<AttrBlobUriWeb>();
+    let blob_uri = item.data.get_attr::<AttrBlobUri>();
+    let id = item.data.get_id();
+
+    let optimiser = match id {
+        Some(id) if !web_uri.is_some() && opts.editable => {
+            let opt = super::optimiser::VideoOptimiser { video_id: id };
+            Some(div().class("mb-4").and(opt))
+        }
+        Some(_id) if web_uri.is_some() && web_uri != blob_uri && opts.editable => {
+            if let Some(video) = Video::try_from_map(item.data.clone()).ok() {
+                Some(
+                    div()
+                        .class("mb-4")
+                        .and(super::optimise_compare::file_optimise_compare_toggle(video)),
+                )
+            } else {
+                None
+            }
+        }
+        _ => None,
+    };
+
     let info = if let Some(info) = VideoInfo::from_item(item) {
         info
     } else {
         return notification_warning().and("Video can't be played.");
     };
 
-    let source = Tag::Source.new().attr(Attr::Src, info.url);
-    let video = Tag::Video.new().attr_toggle(Attr::Controls).and(source);
+    let video = video_tag(&info.url);
 
-    if opts.preview {
+    let main = if opts.preview {
         video
             .style_raw("max-width: 200px; max-height: 200px; object-fit: contain;")
             // Disable preload in previews since some browsers trigger
@@ -61,7 +84,19 @@ pub fn video_content(item: &Item, opts: &EntityRenderOpts) -> TagBuilder {
             .attr(Attr::Preload, "none")
     } else {
         video
+    };
+
+    if let Some(opt) = optimiser {
+        div().and(opt).and(main)
+    } else {
+        main
     }
+}
+
+pub fn video_tag(url: &str) -> TagBuilder {
+    let source = Tag::Source.new().attr(Attr::Src, url);
+    let video = Tag::Video.new().attr_toggle(Attr::Controls).and(source);
+    video
 }
 
 pub fn video_media(item: &Item, opts: &MediaRenderOpts) -> (TagBuilder, Option<DynMediaHandle>) {

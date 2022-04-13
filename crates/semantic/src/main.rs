@@ -5,7 +5,7 @@ use semantic_core::{
     base::SemanticBasePlugin,
     plugin::PluginDescriptor,
 };
-use std::{io::Write, sync::Arc};
+use std::{io::Write, path::PathBuf, sync::Arc};
 use structopt::StructOpt;
 
 use semantic::{app, server};
@@ -39,6 +39,8 @@ fn main() {
                 Some(subargs.backend.build_backend_config().unwrap())
             };
 
+            let tmp_dir = subargs.tmp_dir.map(PathBuf::from);
+
             let app_config = app::AppConfig {
                 backend: backend_config,
                 token_key: subargs.token_key.unwrap_or_else(app::App::random_token_key),
@@ -46,6 +48,7 @@ fn main() {
                     data_dir: data_dir.join("deno"),
                     plugin_dir: None,
                 }),
+                tmp_dir,
             };
             let config = server::ServerConfig {
                 // Enable authentication when no backend is provided.
@@ -89,6 +92,7 @@ fn main() {
                 token_key: "xxx".to_string(),
                 // No need for deno when exporting.
                 deno: None,
+                tmp_dir: None,
             };
 
             let rt = tokio::runtime::Runtime::new().expect("Could not start runtime");
@@ -126,6 +130,7 @@ fn main() {
                     data_dir: data_dir.join("deno"),
                     plugin_dir: None,
                 }),
+                tmp_dir: None,
             };
 
             let meta = api::FileImportMetadata {
@@ -246,6 +251,9 @@ struct CommandServer {
     /// The key used for JWT token encryption.
     #[structopt(long, env = "SEMANTIC_TOKEN_KEY")]
     token_key: Option<String>,
+
+    #[structopt(long, env = "SEMANTIC_TMP_DIR")]
+    tmp_dir: Option<String>,
 }
 
 /// Run a semantic UI inside webkit.

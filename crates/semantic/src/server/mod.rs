@@ -286,35 +286,57 @@ async fn serve_file(app: &App, req: &Request<Body>) -> Result<Response<Body>, An
     let file_map = app.require_db()?.entity(id).await?;
     let file = semantic_core::base::File::try_from_map(file_map)?;
 
-    let blob_path_opt = match format {
-        Format::File => file.blob_uri.clone(),
-        Format::Video => file.blob_uri.clone().filter(|_| {
-            file.mime_type
-                .as_ref()
-                .map(|x| crate::util::media::video_mime_supports_browser(&x))
-                .unwrap_or_default()
-        }),
-        Format::Image => file.blob_uri_web.clone().or_else(|| file.blob_uri.clone()),
+    let (blob_path, mime) = match format {
+        Format::File => {
+            if let Some(uri) = file.blob_uri.clone() {
+                (uri, file.mime_type.clone())
+            } else {
+                return Ok(not_found());
+            }
+        }
+        // Prefer blob_uri_web if available, otherwise use the default.
+        Format::Video => {
+            if let Some(web) = file.blob_uri_web.clone() {
+                (web, Some("video/webm".to_string()))
+            } else if let Some(uri) = file.blob_uri.clone() {
+                (uri, file.mime_type.clone())
+            } else {
+                return Ok(not_found());
+            }
+        }
+        Format::Image => {
+            if let Some(uri) = file.blob_uri_web.clone().or_else(|| file.blob_uri.clone()) {
+                (uri, None)
+            } else {
+                return Ok(not_found());
+            }
+        }
     };
-    let blob_path = if let Some(p) = blob_path_opt {
-        p
-    } else {
-        return Ok(not_found());
-    };
 
-    let size = file
-        .size
-        .clone()
-        .ok_or_else(|| anyhow!("File is not available"))?;
+    let blob = app.require_blob()?;
+    let blob_info = blob
+        .get_meta(&blob_path)
+        .await?
+        .ok_or_else(|| anyhow!("Blob not found: {blob_path}"))?;
 
-    let (skip, take) = extract_file_range(&req)?;
-    let is_partial = skip.is_some() || take.is_some();
+    let mime = mime
+        .or_else(|| {
+            mime_guess::from_path(&blob_path)
+                .first()
+                .map(|x| x.as_ref().to_string())
+        })
+        .unwrap_or_else(|| "application/octet-stream".to_string());
 
-    let actual_length = take.unwrap_or(size) - skip.unwrap_or(0);
+    let size = blob_info.size;
 
-    let stream = app.require_blob()?.get_stream(&blob_path, skip).await?;
+    let (range_skip, range_take) = extract_file_range(&req)?;
+    let is_partial = range_skip.is_some() || range_take.is_some();
 
-    let body = if let Some(take) = take {
+    let actual_length = range_take.unwrap_or(size) - range_skip.unwrap_or(0);
+
+    let stream = blob.get_stream(&blob_path, range_skip).await?;
+
+    let body = if let Some(take) = range_take {
         let mut total = 0;
         Body::wrap_stream(stream.take_while(move |chunk| {
             let needed = match chunk {
@@ -341,6 +363,7 @@ async fn serve_file(app: &App, req: &Request<Body>) -> Result<Response<Body>, An
 
     let mut res = Response::builder()
         .status(status)
+        .header(http::header::CONTENT_TYPE, mime)
         .header(http::header::CONTENT_LENGTH, actual_length)
         .header(
             http::header::ACCEPT_RANGES,
@@ -353,8 +376,8 @@ async fn serve_file(app: &App, req: &Request<Body>) -> Result<Response<Body>, An
             .insert(http::header::CONTENT_TYPE, mime.parse()?);
     }
     if is_partial {
-        let start = skip.unwrap_or(0);
-        let end = take.map(|x| start + x).unwrap_or(size);
+        let start = range_skip.unwrap_or(0);
+        let end = range_take.map(|x| start + x).unwrap_or(size);
         let h = headers::ContentRange::bytes(start..=end, Some(size))?;
         res.headers_mut().typed_insert(h);
     }

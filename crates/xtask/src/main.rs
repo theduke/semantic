@@ -87,8 +87,9 @@ fn cmd_watch_server(default_backend: bool) -> Result<(), DynError> {
     //     }
     // });
 
-    let data_path = root_path()?
-        .join("data")
+    let data_dir = root_path()?.join("data");
+
+    let db_path = data_dir
         .join("db.data")
         .to_str()
         .unwrap()
@@ -104,7 +105,7 @@ fn cmd_watch_server(default_backend: bool) -> Result<(), DynError> {
     if default_backend {
         cmd.args(&[
             "--data-path",
-            &data_path,
+            &db_path,
             "--key",
             "semantic",
             "--key-iterations",
@@ -113,6 +114,9 @@ fn cmd_watch_server(default_backend: bool) -> Result<(), DynError> {
     } else {
         cmd.arg("--no-backend");
     }
+
+    cmd.arg("--tmp-dir");
+    cmd.arg(data_dir.join("tmp"));
 
     if std::env::var("RUST_LOG").is_err() {
         cmd.env(
@@ -202,7 +206,13 @@ fn cmd_install() -> Result<(), DynError> {
     task_build_ui(true)?;
     Command::new("cargo")
         .env("SEMANTIC_UI_DIR", ui_dist_path()?)
-        .args(&["install", "--path", "crates/semantic", "--features", "archive"])
+        .args(&[
+            "install",
+            "--path",
+            "crates/semantic",
+            "--features",
+            "archive",
+        ])
         .current_dir(root_path()?)
         .run()?;
     eprintln!("Installed!");
@@ -221,9 +231,14 @@ fn build_styles() -> Result<(), DynError> {
 
 fn task_build_ui(release: bool) -> Result<(), DynError> {
     eprintln!("Building ui...");
-    let target_dir = ui_dist_path().unwrap();
+    let target_dir = ui_dist_path()?;
     if !target_dir.is_dir() {
         std::fs::create_dir_all(&target_dir).unwrap();
+    }
+
+    let wasm_target = wasm_target_path()?;
+    if !wasm_target.is_dir() {
+        std::fs::create_dir_all(&wasm_target)?;
     }
 
     let rustflags = vec!["--cfg=web_sys_unstable_apis" /*, "-Cdebuginfo=0"*/];
@@ -231,7 +246,7 @@ fn task_build_ui(release: bool) -> Result<(), DynError> {
     let mut cmd = Command::new("wasm-pack");
     cmd.env("RUSTFLAGS", rustflags.join(" "))
         .current_dir(ui_path()?)
-        .env("CARGO_TARGET_DIR", wasm_target_path()?)
+        .env("CARGO_TARGET_DIR", wasm_target)
         .args(&["build", "--target", "web"])
         .arg("--out-dir")
         .arg(&target_dir)
@@ -312,12 +327,20 @@ fn root_path() -> Result<PathBuf, DynError> {
     }
 }
 
+fn cargo_target_dir() -> Result<PathBuf, DynError> {
+    if let Ok(p) = std::env::var("CARGO_TARGET_DIR") {
+        Ok(PathBuf::from(p))
+    } else {
+        root_path().map(|p| p.join("target"))
+    }
+}
+
 fn ui_dist_path() -> Result<PathBuf, DynError> {
     root_path().map(|p| p.join("target").join("ui"))
 }
 
 fn wasm_target_path() -> Result<PathBuf, DynError> {
-    root_path().map(|p| p.join("target/wasm"))
+    cargo_target_dir().map(|p| p.join("wasm"))
 }
 
 fn ui_path() -> Result<PathBuf, DynError> {

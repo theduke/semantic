@@ -107,26 +107,16 @@ pub struct PluginTestFetch {
 }
 
 #[derive(serde::Serialize, serde::Deserialize, Clone, Debug)]
-pub enum JobProgress {
-    Percent(u8),
-    Items {
-        total_items: u64,
-        completed_items: u64,
-    },
-}
-
-#[derive(serde::Serialize, serde::Deserialize, Clone, Debug)]
 pub enum JobStatus {
     Queued {
         queue_position: Option<u64>,
     },
     Running {
-        started_at: Timestamp,
-        progress: Option<JobProgress>,
+        step: Option<String>,
+        progress_percent: Option<u8>,
+        progress_message: Option<String>,
     },
     Finished {
-        started_at: Timestamp,
-        finished_at: Timestamp,
         result: Result<String, ApiError>,
     },
 }
@@ -143,11 +133,80 @@ impl JobStatus {
 pub type JobId = uuid::Uuid;
 
 #[derive(serde::Serialize, serde::Deserialize, Clone, Debug)]
+pub struct JobStep {
+    pub name: String,
+    pub started_at: Option<Timestamp>,
+    pub finished_at: Option<Timestamp>,
+}
+
+#[derive(serde::Serialize, serde::Deserialize, Clone, Debug)]
 pub struct Job {
     pub id: JobId,
-    pub created_at: Timestamp,
     pub name: String,
+    pub created_at: Timestamp,
+    pub started_at: Option<Timestamp>,
+    pub finished_at: Option<Timestamp>,
+    pub steps: Vec<JobStep>,
     pub status: JobStatus,
+}
+
+impl Job {
+    pub fn update(&mut self, status: JobStatus) {
+        let now = Timestamp::now();
+
+        match &status {
+            JobStatus::Queued { queue_position: _ } => {}
+            JobStatus::Running {
+                step,
+                progress_message: _,
+                progress_percent: _,
+            } => {
+                if self.started_at.is_none() {
+                    self.started_at = Some(now);
+                }
+
+                if let Some(step_name) = step.as_ref() {
+                    // Mark old step as finished.
+                    match &self.status {
+                        JobStatus::Running {
+                            step: Some(old_step),
+                            progress_message: _,
+                            progress_percent: _,
+                        } if old_step != step_name => {
+                            self.steps
+                                .iter_mut()
+                                .find(|s| &s.name == old_step)
+                                .map(|old_step| old_step.finished_at = Some(now));
+                        }
+                        _ => {}
+                    }
+
+                    let index = self
+                        .steps
+                        .iter_mut()
+                        .enumerate()
+                        .find(|(_index, s)| &s.name == step_name)
+                        .map(|(index, _)| index)
+                        .unwrap_or_else(|| {
+                            self.steps.push(JobStep {
+                                name: step_name.to_string(),
+                                started_at: Some(now),
+                                finished_at: None,
+                            });
+                            self.steps.len() - 1
+                        });
+
+                    let step = self.steps.get_mut(index).unwrap();
+                    step.started_at = Some(now);
+                }
+            }
+            JobStatus::Finished { .. } => {
+                self.finished_at = Some(now);
+            }
+        }
+
+        self.status = status;
+    }
 }
 
 #[derive(serde::Serialize, serde::Deserialize, Clone, Debug)]
@@ -155,6 +214,16 @@ pub struct ConvertFile {
     pub file_id: Id,
     pub target_format: String,
     pub settings: Option<serde_json::Value>,
+}
+
+#[derive(serde::Serialize, serde::Deserialize, Clone, Debug)]
+pub struct OptimiseVideo {
+    pub video_id: Id,
+}
+
+#[derive(serde::Serialize, serde::Deserialize, Clone, Debug)]
+pub struct OptimiseVideoReply {
+    pub job_id: JobId,
 }
 
 #[derive(serde::Serialize, serde::Deserialize, Clone, Debug)]
@@ -179,6 +248,13 @@ pub enum Query {
 
     Import(ImportJob),
     FetchUrl(FetchUrlJob),
+    OptimiseVideo(OptimiseVideo),
+    FileDiscardUnOptimized {
+        file_id: Id,
+    },
+    FileDiscardOptimised {
+        file_id: Id,
+    },
 
     /// Execute an HTTP request.
     HttpFetch(SimpleHttpRequest),
@@ -230,6 +306,9 @@ pub enum Reply {
     Import(ImportOutput),
     FetchUrl(FetchUrlOutput),
     HttpFetch(SimpleHttpResponse),
+    OptimiseVideo(OptimiseVideoReply),
+    FileDiscardOptimised,
+    FileDiscardUnOptimised,
 
     JobStatus(Job),
     ConvertFile(Job),
@@ -436,6 +515,46 @@ impl<E: ApiClientExecutor> ApiClient<E> {
     pub async fn import(&self, job: ImportJob) -> Result<ImportOutput, AnyError> {
         match self.exec.execute(Query::Import(job)).await {
             Ok(Reply::Import(output)) => Ok(output),
+            Ok(_other) => Err(anyhow::anyhow!("API returned invalid data")),
+            Err(err) => Err(err),
+        }
+    }
+
+    pub async fn job(&self, job_id: JobId) -> Result<Job, AnyError> {
+        match self.exec.execute(Query::JobStatus(job_id)).await {
+            Ok(Reply::JobStatus(output)) => Ok(output),
+            Ok(_other) => Err(anyhow::anyhow!("API returned invalid data")),
+            Err(err) => Err(err),
+        }
+    }
+
+    pub async fn optimise_video(&self, job: OptimiseVideo) -> Result<OptimiseVideoReply, AnyError> {
+        match self.exec.execute(Query::OptimiseVideo(job)).await {
+            Ok(Reply::OptimiseVideo(output)) => Ok(output),
+            Ok(_other) => Err(anyhow::anyhow!("API returned invalid data")),
+            Err(err) => Err(err),
+        }
+    }
+
+    pub async fn file_discard_optimized(&self, file_id: Id) -> Result<(), AnyError> {
+        match self
+            .exec
+            .execute(Query::FileDiscardOptimised { file_id })
+            .await
+        {
+            Ok(Reply::FileDiscardOptimised) => Ok(()),
+            Ok(_other) => Err(anyhow::anyhow!("API returned invalid data")),
+            Err(err) => Err(err),
+        }
+    }
+
+    pub async fn file_discard_un_optimized(&self, file_id: Id) -> Result<(), AnyError> {
+        match self
+            .exec
+            .execute(Query::FileDiscardUnOptimized { file_id })
+            .await
+        {
+            Ok(Reply::FileDiscardUnOptimised) => Ok(()),
             Ok(_other) => Err(anyhow::anyhow!("API returned invalid data")),
             Err(err) => Err(err),
         }
