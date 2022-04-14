@@ -227,6 +227,14 @@ pub struct OptimiseVideoReply {
 }
 
 #[derive(serde::Serialize, serde::Deserialize, Clone, Debug)]
+pub struct FileCreatePreviewImageBlob {
+    pub file_id: Id,
+    /// base64 encoded image content
+    pub data: String,
+    pub mime_type: String,
+}
+
+#[derive(serde::Serialize, serde::Deserialize, Clone, Debug)]
 pub enum Query {
     ServerStatus,
     Initialize(BackendConfig),
@@ -255,6 +263,7 @@ pub enum Query {
     FileDiscardOptimised {
         file_id: Id,
     },
+    FileCreatePreviewImageBlob(FileCreatePreviewImageBlob),
 
     /// Execute an HTTP request.
     HttpFetch(SimpleHttpRequest),
@@ -324,6 +333,7 @@ pub enum Reply {
     OptimiseVideo(OptimiseVideoReply),
     FileDiscardOptimised,
     FileDiscardUnOptimised,
+    FileCreatePreviewImageBlob,
 
     JobStatus(Job),
     ConvertFile(Job),
@@ -589,6 +599,21 @@ impl<E: ApiClientExecutor> ApiClient<E> {
     pub async fn delete_unused_blobs(&self) -> Result<UnusedBlobsDeleted, AnyError> {
         match self.exec.execute(Query::DeleteUnusedBlobs).await {
             Ok(Reply::DeleteUnusedBlobs(info)) => Ok(info),
+            Ok(_other) => Err(anyhow::anyhow!("API returned invalid data")),
+            Err(err) => Err(err),
+        }
+    }
+
+    pub async fn file_create_preview_image_blob(
+        &self,
+        data: FileCreatePreviewImageBlob,
+    ) -> Result<(), AnyError> {
+        match self
+            .exec
+            .execute(Query::FileCreatePreviewImageBlob(data))
+            .await
+        {
+            Ok(Reply::FileCreatePreviewImageBlob) => Ok(()),
             Ok(_other) => Err(anyhow::anyhow!("API returned invalid data")),
             Err(err) => Err(err),
         }

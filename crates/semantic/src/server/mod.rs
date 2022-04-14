@@ -255,6 +255,7 @@ async fn serve_file(app: &App, req: &Request<Body>) -> Result<Response<Body>, An
         File,
         Video,
         Image,
+        Preview,
     }
 
     let raw_path = req.uri().path().trim_start_matches('/');
@@ -265,6 +266,7 @@ async fn serve_file(app: &App, req: &Request<Body>) -> Result<Response<Body>, An
         Some("file") => Format::File,
         Some("video") => Format::Video,
         Some("image") => Format::Image,
+        Some("preview") => Format::Preview,
         Some(other) => bail!("Unknown file format: {}", other),
         None => {
             return Ok(not_found());
@@ -286,7 +288,27 @@ async fn serve_file(app: &App, req: &Request<Body>) -> Result<Response<Body>, An
     let file_map = app.require_db()?.entity(id).await?;
     let file = semantic_core::base::File::try_from_map(file_map)?;
 
+    let blob = app.require_blob()?;
+
     let (blob_path, mime) = match format {
+        Format::Preview => {
+            if let Some(uri) = &file.preview_image_blob_uri {
+                let content = if let Some(c) = blob.get(uri).await? {
+                    c
+                } else {
+                    return Ok(not_found());
+                };
+
+                // FIXME: don't hardcode image type?
+                let res = Response::builder()
+                    .header(http::header::CONTENT_TYPE, "image/webp")
+                    .body(hyper::Body::from(content))?;
+                return Ok(res);
+            } else {
+                // TODO: return some stub placeholder?
+                return Ok(not_found());
+            }
+        }
         Format::File => {
             if let Some(uri) = file.blob_uri.clone() {
                 (uri, file.mime_type.clone())
@@ -313,7 +335,6 @@ async fn serve_file(app: &App, req: &Request<Body>) -> Result<Response<Body>, An
         }
     };
 
-    let blob = app.require_blob()?;
     let blob_info = blob
         .get_meta(&blob_path)
         .await?

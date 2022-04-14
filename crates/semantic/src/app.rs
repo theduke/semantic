@@ -5,7 +5,7 @@ use std::{
     sync::{Arc, RwLock},
 };
 
-use anyhow::{anyhow, Context};
+use anyhow::{anyhow, bail, Context};
 use factordb::{
     data::DataMap,
     prelude::{AttributeDescriptor, Expr, Id, Patch, Select, Timestamp, Value, ValueMap},
@@ -17,7 +17,8 @@ use semantic_core::{
     api::{self, DbConfig, FileImportMetadata, SemanticSchema},
     base::{
         entity_title, AttrBlobUri, AttrBlobUriWeb, AttrDownloadUrl, AttrFileName, AttrFileSize,
-        AttrHash, AttrMimeType, AttrOriginalHash, SemanticBasePlugin, Video,
+        AttrHash, AttrMimeType, AttrOriginalHash, AttrPreviewImageBlobUri, SemanticBasePlugin,
+        Video,
     },
     core::SemanticCorePlugin,
     plugin::{FetchUrlJob, FetchUrlOutput, ImportJob, ImportOutput, PluginDescriptor},
@@ -434,10 +435,15 @@ impl App {
             }
 
             let entities = db
-                .select(Select::new().with_filter(Expr::or(
-                    Expr::eq(AttrBlobUri::expr(), &key),
-                    Expr::eq(AttrBlobUriWeb::expr(), &key),
-                )))
+                .select(
+                    Select::new().with_filter(
+                        Expr::or(
+                            Expr::eq(AttrBlobUri::expr(), &key),
+                            Expr::eq(AttrBlobUriWeb::expr(), &key),
+                        )
+                        .or_with(Expr::eq(AttrPreviewImageBlobUri::expr(), &key)),
+                    ),
+                )
                 .await?;
 
             if entities.items.is_empty() {
@@ -567,6 +573,7 @@ impl App {
             created_at: Some(now),
             updated_at: Some(now),
             extra: Default::default(),
+            preview_image_blob_uri: None,
         };
 
         // Build the data.
@@ -1130,6 +1137,51 @@ impl App {
         Ok(())
     }
 
+    async fn file_create_preview_image_blob(
+        &self,
+        data: api::FileCreatePreviewImageBlob,
+    ) -> Result<(), anyhow::Error> {
+        let db = self.require_db()?;
+        let blob = self.require_blob()?;
+
+        let file = db.entity(data.file_id).await?;
+
+        // TODO: validate entity type?
+
+        let file_data = base64::decode(&data.data).context("Invalid data: not base64-encoded")?;
+
+        let mime =
+            infer::get(&file_data).ok_or_else(|| anyhow!("Could not detect image mime type"))?;
+        match  mime.to_string().as_str() {
+            "image/jpeg" | "image/webp" => {}
+            other => bail!("Invalid image mime type: expected image/jpeg, image/png or image/webp, but got {other}"),
+        }
+        let extension = mime.extension();
+
+        let blob_path = format!("files/previews/{}/preview.{}", data.file_id, extension);
+
+        let old_preview_path = file.get_attr::<AttrPreviewImageBlobUri>();
+
+        blob.put(&blob_path, file_data).await?;
+
+        db.patch(
+            data.file_id,
+            Patch::new().replace(AttrPreviewImageBlobUri::QUALIFIED_NAME, blob_path),
+        )
+        .await?;
+
+        if let Some(old) = old_preview_path {
+            if let Err(error) = blob.remove(&old).await {
+                tracing::warn!(
+                    ?error,
+                    "Could not delete previous entity preview image blog"
+                );
+            }
+        }
+
+        Ok(())
+    }
+
     pub async fn run_query(
         &self,
         query: semantic_core::api::Query,
@@ -1268,6 +1320,10 @@ impl App {
             api::Query::DeleteUnusedBlobs => {
                 let out = self.delete_unused_blobs().await?;
                 Ok(api::Reply::DeleteUnusedBlobs(out))
+            }
+            api::Query::FileCreatePreviewImageBlob(data) => {
+                self.file_create_preview_image_blob(data).await?;
+                Ok(api::Reply::FileCreatePreviewImageBlob)
             }
         };
         res.map_err(|err| {

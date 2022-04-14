@@ -1,16 +1,27 @@
 use wasm_bindgen::JsCast;
 
-use brass::dom::{builder::div, Attr, Event, Tag, TagBuilder};
-use factordb::{prelude::EntityContainer, query::select::Item, schema::AttrMapExt};
-use semantic_core::base::{AttrBlobUri, AttrBlobUriWeb, AttrPreviewImageUrl, Video};
+use brass::dom::{builder::div, Attr, Event, Tag, TagBuilder, View};
+use factordb::{
+    prelude::{EntityContainer, Id},
+    query::select::Item,
+    schema::AttrMapExt,
+};
+use semantic_core::base::{
+    AttrBlobUri, AttrBlobUriWeb, AttrPreviewImageBlobUri, AttrPreviewImageUrl, Video,
+};
 
 use crate::{
+    base::{
+        file::video_preview_builder::video_preview_picker_toggle,
+        plugin::build_entity_blob_preview_image_uri,
+    },
     components::util::notification_warning,
     registry::{DynMediaHandle, MediaHandle, MediaRenderEvent, MediaRenderOpts},
     EntityRenderOpts,
 };
 
 pub struct VideoInfo {
+    pub id: Id,
     pub url: String,
     pub mime_type: Option<String>,
     pub preview_image_url: Option<url::Url>,
@@ -18,6 +29,7 @@ pub struct VideoInfo {
 
 impl VideoInfo {
     pub fn from_item(item: &Item) -> Option<Self> {
+        let id = item.data.get_id()?;
         let url = semantic_core::base::Video::video_uri_from_map(&item.data)?;
 
         // let url = item
@@ -35,6 +47,7 @@ impl VideoInfo {
         let preview_image_url = item.data.get_attr::<AttrPreviewImageUrl>();
 
         Some(VideoInfo {
+            id,
             url,
             mime_type,
             preview_image_url,
@@ -49,18 +62,20 @@ pub fn video_content(item: &Item, opts: &EntityRenderOpts) -> TagBuilder {
     let blob_uri = item.data.get_attr::<AttrBlobUri>();
     let id = item.data.get_id();
 
+    let video = Video::try_from_map(item.data.clone()).ok();
+
+    // FIXME: use custom EntityBox and add optimise / preview picker as action buttons
+
     let optimiser = match id {
         Some(id) if !web_uri.is_some() && opts.editable => {
             let opt = super::optimiser::VideoOptimiser { video_id: id };
             Some(div().class("mb-4").and(opt))
         }
         Some(_id) if web_uri.is_some() && web_uri != blob_uri && opts.editable => {
-            if let Some(video) = Video::try_from_map(item.data.clone()).ok() {
-                Some(
-                    div()
-                        .class("mb-4")
-                        .and(super::optimise_compare::file_optimise_compare_toggle(video)),
-                )
+            if let Some(video) = &video {
+                Some(div().class("mb-4").and(
+                    super::optimise_compare::file_optimise_compare_toggle(video.clone()),
+                ))
             } else {
                 None
             }
@@ -68,13 +83,37 @@ pub fn video_content(item: &Item, opts: &EntityRenderOpts) -> TagBuilder {
         _ => None,
     };
 
+    let preview_picker =
+        if opts.editable && item.data.get_attr::<AttrPreviewImageBlobUri>().is_none() {
+            if let Some(video) = &video {
+                div()
+                    .class("mb-4")
+                    .and(video_preview_picker_toggle(video.clone()))
+                    .into_view()
+            } else {
+                View::Empty
+            }
+        } else {
+            View::Empty
+        };
+
     let info = if let Some(info) = VideoInfo::from_item(item) {
         info
     } else {
         return notification_warning().and("Video can't be played.");
     };
 
-    let video = video_tag(&info.url);
+    let poster = item
+        .data
+        .get_attr::<AttrPreviewImageBlobUri>()
+        .map(|_path| build_entity_blob_preview_image_uri(info.id))
+        .or_else(|| info.preview_image_url.map(|x| x.to_string()));
+
+    let mut video = video_tag(&info.url);
+
+    if let Some(poster) = poster {
+        video = video.attr(Attr::Poster, poster);
+    }
 
     let main = if opts.preview {
         video
@@ -86,11 +125,7 @@ pub fn video_content(item: &Item, opts: &EntityRenderOpts) -> TagBuilder {
         video
     };
 
-    if let Some(opt) = optimiser {
-        div().and(opt).and(main)
-    } else {
-        main
-    }
+    div().and(optimiser).and(preview_picker).and(main)
 }
 
 pub fn video_tag(url: &str) -> TagBuilder {

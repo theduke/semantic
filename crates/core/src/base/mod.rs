@@ -76,6 +76,14 @@ pub struct AttrUrl(url::Url);
 pub struct AttrPreviewImageUrl(url::Url);
 
 #[derive(Attribute)]
+#[factor(
+    namespace = "semantic",
+    title = "Preview Image (Blob)",
+    name = "preview_image_blob_uri"
+)]
+pub struct AttrPreviewImageBlobUri(String);
+
+#[derive(Attribute)]
 #[factor(namespace = "semantic", title = "Datetime", name = "datetime")]
 pub struct AttrDateTime(Timestamp);
 
@@ -152,6 +160,7 @@ impl Plugin for SemanticBasePlugin {
                     AttrDescription::schema(),
                     AttrUrl::schema(),
                     AttrPreviewImageUrl::schema(),
+                    AttrPreviewImageBlobUri::schema(),
                     AttrUsername::schema(),
                     TextFormat::schema(),
                     // file
@@ -342,6 +351,28 @@ impl Plugin for SemanticBasePlugin {
                 },
             ));
 
+        let create_preview_blob_uri = Migration::with_name("create_attr_preview_blob_uri")
+            .attr_create(factordb::prelude::AttributeSchema {
+                id: Id::nil(),
+                ident: "semantic/preview_image_blob_uri".to_string(),
+                title: Some("Preview Image (Blob)".to_string()),
+                description: None,
+                value_type: ValueType::String,
+                unique: false,
+                index: false,
+                strict: true,
+            });
+
+        let add_preview_blob_uri_to_file = Migration::with_name("add_preview_blob_uri_to_file")
+            .action(migrate::SchemaAction::EntityAttributeAdd(
+                migrate::EntityAttributeAdd {
+                    entity: File::IDENT.to_string(),
+                    attribute: AttrPreviewImageBlobUri::IDENT.to_string(),
+                    cardinality: factordb::schema::Cardinality::Optional,
+                    default_value: None,
+                },
+            ));
+
         vec![
             first,
             create_comment,
@@ -350,6 +381,8 @@ impl Plugin for SemanticBasePlugin {
             create_file_blob_uri_web,
             create_attr_created_updated_at,
             add_created_updated_at_to_file,
+            create_preview_blob_uri,
+            add_preview_blob_uri_to_file,
         ]
     }
 }

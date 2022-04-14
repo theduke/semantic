@@ -9,7 +9,9 @@ use factordb::{
 
 use serde::{Deserialize, Serialize};
 
-use super::{AttrCreatedAt, AttrPreviewImageUrl, AttrTitle, AttrUpdatedAt, AttrUrl};
+use super::{
+    AttrCreatedAt, AttrPreviewImageBlobUri, AttrPreviewImageUrl, AttrTitle, AttrUpdatedAt, AttrUrl,
+};
 
 /// A hash, prefixed by the hash type.
 /// eg: 'sha1:XXXXXXXXXX'
@@ -152,6 +154,10 @@ pub struct File {
     #[factor(attr = AttrPreviewImageUrl)]
     #[serde(rename = "semantic/preview_image_url")]
     pub preview_image_url: Option<url::Url>,
+
+    #[factor(attr = AttrPreviewImageBlobUri)]
+    #[serde(rename = "semantic/preview_image_blob_uri")]
+    pub preview_image_blob_uri: Option<String>,
 
     #[factor(attr = AttrBlobUri)]
     #[serde(rename = "semantic/blob_uri")]

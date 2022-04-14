@@ -32,6 +32,8 @@ base64 = "0.13.0"
 version = "0.3.55"
 features = [
     "HtmlVideoElement", 
+    "HtmlCanvasElement",
+    "CanvasRenderingContext2d",
     "File", 
     "Response", 
     "RequestInit",
