@@ -81,6 +81,18 @@ impl Validator<String> for StringDateTime {
     }
 }
 
+pub struct ValidateOptionalStr<V>(pub V);
+
+impl<V: Validator<String>> Validator<String> for ValidateOptionalStr<V> {
+    fn validate(&self, value: &String) -> Result<(), Vec<String>> {
+        if value.trim().is_empty() {
+            Ok(())
+        } else {
+            self.0.validate(value)
+        }
+    }
+}
+
 pub struct ValidateStringUrl;
 
 impl Validator<String> for ValidateStringUrl {

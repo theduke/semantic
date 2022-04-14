@@ -7,7 +7,7 @@ use crate::{
         form::{self, FormLoadFuture},
         util::{form_field_input, FormRenderer},
     },
-    validate::{StringRequired, ValidateStringUrl},
+    validate::{StringRequired, ValidateOptionalStr, ValidateStringUrl},
 };
 
 #[derive(Clone)]
@@ -53,7 +53,7 @@ pub fn collection_metadata_form(
 
         let url = form_field_input(
             "Url",
-            handle.field_validated(|v| &mut v.url, ValidateStringUrl),
+            handle.field_validated(|v| &mut v.url, ValidateOptionalStr(ValidateStringUrl)),
         );
 
         FormRenderer::new(handle.clone())
