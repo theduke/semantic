@@ -168,7 +168,6 @@ fn main() {
 }
 
 fn compact(cmd: CommandCompactDb) -> Result<(), anyhow::Error> {
-
     // TODO: this should also "compact" the event log of the factordb, if allowed by config.
 
     let backend_config = cmd
