@@ -5,12 +5,9 @@ use std::collections::BTreeSet;
 
 use anyhow::anyhow;
 use factordb::{
-    query::{
-        expr::{self, Expr},
-        select::{Order, Select},
-    },
-    schema::{builtin::AttrId, AttrMapExt, AttributeDescriptor},
-    AnyError, Id,
+    prelude::{AttrId, AttrMapExt, AttributeDescriptor, Expr, Id, Order, Select},
+    query::expr,
+    AnyError,
 };
 use semantic_core::base::AttrBlobUri;
 
