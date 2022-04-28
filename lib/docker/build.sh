@@ -94,6 +94,7 @@ function build_semantic() {
   export CARGO_NET_GIT_FETCH_WITH_CLI="true"
   export CARGO_TARGET_DIR=/host/target/docker
   # build_ui
+  cargo xtask build-ui
   cargo xtask build-server
 
   echo Semantic built!
@@ -101,6 +102,7 @@ function build_semantic() {
 
 function build_portable() {
   install_rust_build_deps
+  install_ui_deps
   install_runtime_deps
 
   build_semantic
