@@ -38,6 +38,7 @@ pub struct BackendCryptoConfig {
     pub key_iterations: Option<u32>,
     pub salt: Option<String>,
     pub raw: bool,
+    pub offset: Option<u64>,
 }
 
 impl std::fmt::Debug for BackendCryptoConfig {
@@ -59,6 +60,7 @@ impl DbConfig {
     pub fn purge_secrets(self) -> Self {
         match self {
             Self::Crypto(c) => Self::Crypto(BackendCryptoConfig {
+                offset: c.offset,
                 data_path: c.data_path,
                 salt: None,
                 key_iterations: None,

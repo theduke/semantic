@@ -199,6 +199,7 @@ impl App {
             path: data_path.clone().into(),
             raw_mode: crypto.raw,
             allow_create: true,
+            offset: crypto.offset,
             crypto: Some(logfs::CryptoConfig {
                 key: crypto.key.clone().into(),
                 salt: crypto
@@ -243,6 +244,7 @@ impl App {
                     path: data_path.clone().into(),
                     raw_mode: crypto.raw,
                     allow_create: true,
+                    offset: crypto.offset,
                     crypto: Some(logfs::CryptoConfig {
                         key: crypto.key.clone().into(),
                         salt: crypto

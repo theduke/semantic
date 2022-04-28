@@ -40,6 +40,7 @@ pub fn login(on_success: impl Fn(SemanticSchema) + 'static) -> TagBuilder {
             let schema = context::api()
                 .initialize(BackendConfig {
                     db: DbConfig::Crypto(BackendCryptoConfig {
+                        offset: None,
                         data_path: Some(data_path),
                         key,
                         raw,

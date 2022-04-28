@@ -71,3 +71,4 @@ tar = { version =  "0.4.37", optional = true }
 flate2 = { version = "1.0.22", optional = true }
 rust-embed = { version = "6.3.0", features = ["interpolate-folder-path"] }
 ffprobe = "0.3.0"
+bytesize = "1.1.0"

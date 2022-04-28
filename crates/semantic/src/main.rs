@@ -298,11 +298,25 @@ struct BackendOptions {
     key_iterations: Option<u32>,
     #[structopt(long, env = "SEMANTIC_SALT")]
     salt: Option<String>,
+    /// Binary offset in the storage file.
+    /// Either a number of bytes, or a parsable pretty byte number like "300mb".
+    #[structopt(long)]
+    offset: Option<String>,
 }
 
 impl BackendOptions {
     fn build_backend_config(self) -> Result<api::BackendConfig, AnyError> {
+        let offset = if let Some(off) = self.offset {
+            let size = off
+                .parse::<bytesize::ByteSize>()
+                .map_err(|err| anyhow!("Invalid offset: {err}"))?;
+            Some(size.0)
+        } else {
+            None
+        };
+
         let db = DbConfig::Crypto(api::BackendCryptoConfig {
+            offset,
             data_path: self.data_path,
             key: self.key.expect("Must specify --key"),
             raw: false,
