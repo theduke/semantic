@@ -6,8 +6,8 @@ use brass::{
 };
 use semantic_ui_core::{
     components::{
-        loader::load,
-        util::{title_2, Cls},
+        loader::{load, Loader},
+        util::{buttons, notification_success, title_2, ButtonBuilder, Cls},
     },
     context,
     routing::{link, Route},
@@ -20,8 +20,34 @@ pub fn settings_page() -> TagBuilder {
             .and(server_status())
             .and(div().and(link(Route::PluginManager, "Plugins").class(Cls::Button)))
             .and(div().and(link(Route::BlobCleanup, "Blob Manager").class(Cls::Button)))
+            .and(media_analyze_toggle())
+            .and(div().and(link(Route::BlobCleanup, "Blob Manager").class(Cls::Button)))
             .and(div().and(link(Route::Tags, "Tags").class(Cls::Button))),
     )
+}
+
+fn media_analyze_toggle() -> TagBuilder {
+    let loader = Loader::<()>::new_idle();
+
+    let loader2 = loader.clone();
+    div()
+        .and(
+            buttons().and(
+                ButtonBuilder::new()
+                    .label("Start Media Analyzer")
+                    .signal_loading(loader.signal_loading())
+                    .on(move || {
+                        loader2.spawn(async { context::api().analyze_media(false).await });
+                    })
+                    .build(),
+            ),
+        )
+        .signal(loader.signal_render(|_| {
+            notification_success()
+                .and("Media analysis started in background.")
+                .into_view()
+        }))
+        .bind(loader)
 }
 
 fn server_status() -> TagBuilder {

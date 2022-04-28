@@ -1,19 +1,20 @@
 use std::{
     fmt::Write as _,
-    io::{BufReader, BufWriter, Read, Write},
+    io::{self, BufReader, BufWriter, Read, Write},
     path::PathBuf,
     process::{Command, Stdio},
+    sync::Arc,
 };
 
 use anyhow::{anyhow, bail, Context};
 use factordb::{
-    prelude::{AttrMapExt, DataMap},
+    prelude::{AttrMapExt, DataMap, Expr, Patch, Select},
     AnyError, Db,
 };
 
 use semantic_core::{
     api::{ApiError, Job, JobId},
-    base::{AttrBlobUriWeb, UniversalHash, Video},
+    base::{AttrBlobUriWeb, AttrDuration, AttrVideoHasSound, TypedFile, UniversalHash, Video},
 };
 use tokio::{io::AsyncBufReadExt, task::JoinHandle};
 
@@ -268,6 +269,203 @@ fn spawn_ffmpeg_output_monitor(
     })
 }
 
+#[derive(Clone, Debug)]
+pub struct VideoInfo {
+    pub duration: std::time::Duration,
+    pub has_audio: bool,
+}
+
+#[derive(Clone)]
+pub struct SharedBinarData(Arc<Vec<u8>>);
+
+impl SharedBinarData {
+    pub fn new(data: Vec<u8>) -> Self {
+        Self(Arc::new(data))
+    }
+
+    pub fn try_into_owned(self) -> Option<Vec<u8>> {
+        Arc::try_unwrap(self.0).ok()
+    }
+}
+
+impl AsRef<[u8]> for SharedBinarData {
+    fn as_ref(&self) -> &[u8] {
+        &self.0
+    }
+}
+
+// TODO: detect sound presence with minimum decible level
+// currently just checks if an audio stream is present, but videos often have
+// an audio stream that contains no hearable audio.
+pub async fn analyze_video<R>(reader: R) -> Result<VideoInfo, anyhow::Error>
+where
+    R: std::io::Read + Send + 'static,
+{
+    let out = tokio::task::spawn_blocking(move || -> Result<ffprobe::FfProbe, anyhow::Error> {
+        let mut cmd = std::process::Command::new("ffprobe");
+        cmd.args(&[
+            "-v",
+            "quiet",
+            // "-count_frames",
+            "-show_format",
+            "-show_streams",
+            "-print_format",
+            "json",
+        ]);
+        cmd.arg("-").stdin(Stdio::piped()).stdout(Stdio::piped());
+
+        let mut proc = cmd.spawn().context("could not start ffprobe")?;
+        let mut stdin = proc.stdin.take().unwrap();
+        let mut stdout = proc.stdout.take().unwrap();
+        let mut reader = reader;
+
+        let res = std::io::copy(&mut reader, &mut stdin);
+        match res {
+            Ok(_) => {}
+            Err(err) if err.kind() == io::ErrorKind::BrokenPipe => {
+                // Ignore broken pipe errors because ffprobe often only needs
+                // part of a video (unless count_frames is specified)
+            }
+            Err(err) => {
+                bail!("could not write video to ffprobe: {err}");
+            }
+        }
+        stdin.flush()?;
+        std::mem::drop(stdin);
+
+        let mut buf = Vec::new();
+        stdout
+            .read_to_end(&mut buf)
+            .context("Could not read ffprobe output")?;
+
+        let status = proc.wait().context("ffprobe failed")?;
+        if !status.success() {
+            bail!("ffprobe failed with status {status}");
+        }
+
+        let info: ffprobe::FfProbe =
+            serde_json::from_slice(&buf).context("could not parse ffprobe json output")?;
+
+        Ok(info)
+    })
+    .await??;
+
+    let video_stream = out
+        .streams
+        .iter()
+        .find(|s| s.codec_type.clone().unwrap_or_default() == "video")
+        .ok_or_else(|| anyhow::anyhow!("could not detect video stream"))?;
+    let audio_stream = out
+        .streams
+        .iter()
+        .find(|s| s.codec_type.clone().unwrap_or_default() == "audio");
+
+    let duration = out
+        .format
+        .duration
+        .as_ref()
+        .or(video_stream.duration.as_ref())
+        .and_then(|d| d.parse::<f64>().ok())
+        .map(|secs| std::time::Duration::from_secs(secs as u64))
+        .ok_or_else(|| anyhow!("could not determine video duration"))?;
+    let has_audio = audio_stream.is_some();
+
+    Ok(VideoInfo {
+        duration,
+        has_audio,
+    })
+}
+
+pub async fn analyze_files(db: Db, blob: DynBlobStore, force: bool) -> Result<(), anyhow::Error> {
+    let span = tracing::debug_span!("media file analysis");
+    let _guard = span.enter();
+
+    // FIXME: pagination...
+    // TODO: images, audio files, ...
+    let files = db
+        .select(Select::new().with_filter(Expr::is_entity::<Video>()))
+        .await?;
+
+    let total = files.items.len();
+    span.record("count", &total);
+
+    tracing::info!("starting analysis");
+    for (index, item) in files.items.into_iter().enumerate() {
+        let file_id = item.data.get_id().unwrap();
+        let typed = match TypedFile::from_map(item.data) {
+            Ok(t) => t,
+            Err(error) => {
+                tracing::trace!(%file_id, ?error, "could not analyse file");
+                continue;
+            }
+        };
+
+        let res = match typed {
+            TypedFile::Video(video) => video_analyze_and_update(&db, &blob, video, force)
+                .await
+                .map(|opt| opt.map(TypedFile::Video)),
+            TypedFile::Image(_) => todo!(),
+            TypedFile::File(_) => todo!(),
+        };
+
+        span.record("complete", &(index + 1));
+        match res {
+            Ok(Some(_)) => {
+                tracing::debug!(%file_id, "file analyzed");
+            }
+            Ok(None) => {
+                tracing::trace!(%file_id, "file analysis skipped");
+            }
+            Err(error) => {
+                tracing::warn!(%file_id, ?error, "file analysis failed");
+            }
+        }
+    }
+
+    tracing::info!("file analysis complete");
+
+    Ok(())
+}
+
+async fn video_analyze_and_update(
+    db: &Db,
+    blob: &DynBlobStore,
+    video: Video,
+    force: bool,
+) -> Result<Option<Video>, anyhow::Error> {
+    use factordb::prelude::{AttributeDescriptor, EntityContainer};
+
+    if video.duration.is_some() && !force {
+        // If duration is already set, assume that video was already analysed
+        // and there is nothing to do. Overwritten by force argument.
+        return Ok(None);
+    }
+
+    let blob_uri = video
+        .file
+        .blob_uri
+        .clone()
+        .ok_or_else(|| anyhow!("Video does not have a blob"))?;
+    let reader = blob
+        .get_std_reader(&blob_uri)
+        .await
+        .context("Could not obtaing blob reader for video")?;
+
+    let info = analyze_video(reader)
+        .await
+        .context("could not analyse video")?;
+
+    let patch = Patch::new()
+        .replace(AttrDuration::QUALIFIED_NAME, info.duration.as_secs())
+        .replace(AttrVideoHasSound::QUALIFIED_NAME, info.has_audio);
+
+    db.patch(video.id(), patch)
+        .await
+        .context("could not persist video information to db")?;
+
+    Ok(Some(video))
+}
+
 async fn try_optimise_video(
     db: &Db,
     store: DynBlobStore,
@@ -350,7 +548,7 @@ async fn try_optimise_video(
         let meta = ffprobe::ConfigBuilder::new()
             .count_frames(true)
             .run(&read_path)
-            .map_err(|err| dbg!(err))
+            .map_err(|err| err)
             .context("Could not run ffprobe")?;
         Ok(meta)
     })
@@ -595,169 +793,3 @@ pub async fn optimise_video(
 
     res
 }
-
-// Commented out until job-system based video conversion is implemented.
-/* pub async fn ffmpeg_convert_video(
-    input: impl futures::Stream<Item = Result<Vec<u8>, AnyError>> + Unpin + Send + 'static,
-) -> Result<hyper::Body, AnyError> {
-    let mut proc = tokio::process::Command::new("ffmpeg")
-        .args(&[
-            // Less verbose output.
-            // Only show errors.
-            "-hide_banner",
-            "-loglevel",
-            "error",
-            // read from stdin
-            "-i",
-            "pipe:",
-            // Convert to libvpx-vp9
-            "-c:v",
-            "libvpx-vp9",
-            // Constant rate factor.
-            // See https://trac.ffmpeg.org/wiki/Encode/VP9 - Constant Quality
-            // for background info.
-            "-crf",
-            "30",
-            // Bitrate. 0 means auto, but this must be specified or the webm encode
-            // will pick a very low default.
-            "-b:v",
-            "0",
-            // Set output format.
-            "-f",
-            "webm",
-            // Write to stdoud.
-            "pipe:",
-        ])
-        .stdin(std::process::Stdio::piped())
-        .stdout(std::process::Stdio::piped())
-        .stderr(std::process::Stdio::piped())
-        .spawn()?;
-
-    let stdout = proc.stdout.take().unwrap();
-
-    // Start a task that writes the stream to ffmpeg.
-    // TODO: log errors when the sender task fails.
-    // TODO: investigate if custom termination of the sender task is required.
-    let writer_handle = tokio::task::spawn(async move {
-        let mut input = input;
-        let mut stdin = proc.stdin.take().unwrap();
-
-        while let Some(res) = input.next().await {
-            let chunk = res?;
-            stdin.write_all(&chunk).await?;
-        }
-
-        stdin.flush().await?;
-        std::mem::drop(stdin);
-
-        match proc.wait().await {
-            Ok(status) => {
-                if !status.success() {
-                    let mut error_msg = String::new();
-                    if proc
-                        .stderr
-                        .take()
-                        .unwrap()
-                        .read_to_string(&mut error_msg)
-                        .await
-                        .is_err()
-                    {
-                        error_msg = "Unknown error".to_string();
-                    }
-
-                    Err(AnyError::msg(error_msg))
-                } else {
-                    Ok(())
-                }
-            }
-            Err(err) => {
-                let mut error_msg = String::new();
-                if proc
-                    .stderr
-                    .take()
-                    .unwrap()
-                    .read_to_string(&mut error_msg)
-                    .await
-                    .is_err()
-                {
-                    error_msg = "Unknown error".to_string();
-                }
-                Err(err).context(format!("ffmpeg failed: {}", error_msg))
-            }
-        }
-    });
-
-    // Read the first chunk right now.
-    // This ensures that ffmpeg has started converting the video and won't
-    // fail immediately.
-    let mut stdout_stream = tokio_util::io::ReaderStream::new(stdout).fuse();
-    let mut writer_join = writer_handle.fuse();
-
-    let first_chunk = futures::select_biased! {
-
-    join_res = &mut writer_join => {
-            join_res.context("ffmpeg stdin writer task failed")??;
-            stdout_stream.next().await.ok_or_else(|| AnyError::msg("ffmpeg did not return any chunks"))??
-    }
-    chunk_res = stdout_stream.next() => {
-            match chunk_res {
-                None => {
-                    bail!("ffmpeg returned empty output");
-                }
-                Some(res) => {
-                    res?
-                }
-            }
-        }
-
-    };
-
-    let (sender, body) = hyper::Body::channel();
-
-    // Start a task that reads the ffmpeg stdout and writes it to the hyper body.
-    tokio::task::spawn(async move {
-        let mut sender = sender;
-
-        // Now send the first chunk.
-        if let Err(error) = sender.send_data(first_chunk).await {
-            tracing::warn!(?error, "could not send video chunk to hyper body");
-            return;
-        }
-
-        loop {
-            futures::select! {
-                join_res = &mut writer_join => {
-                    let res = join_res.map_err(AnyError::from).and_then(|x| x);
-                    if let Err(error) = res {
-                        tracing::warn!(?error, "ffmpeg failed");
-                        sender.abort();
-                        break;
-                    }
-                }
-                chunk_res = stdout_stream.next() => {
-                    match chunk_res {
-                        None => {
-                            break;
-                        }
-                        Some(Ok(chunk)) => {
-                            if let Err(error) = sender.send_data(chunk).await {
-                                tracing::warn!(?error, "could not send video chunk to hyper body");
-                                sender.abort();
-                                break;
-                            }
-                        }
-                        Some(Err(error)) => {
-                            tracing::warn!(?error, "ffmpeg stdout read failed");
-                            sender.abort();
-                            break;
-                        }
-
-                    }
-
-                }
-            }
-        }
-    });
-
-    Ok(body)
-} */

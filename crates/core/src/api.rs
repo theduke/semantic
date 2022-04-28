@@ -276,6 +276,9 @@ pub enum Query {
 
     FindUnusedBlobs,
     DeleteUnusedBlobs,
+    AnalyzeMedia {
+        force: bool,
+    },
 }
 
 #[derive(serde::Serialize, serde::Deserialize, Clone, Debug)]
@@ -342,6 +345,7 @@ pub enum Reply {
 
     FindUnusedBlobs { items: Vec<BlobInfo> },
     DeleteUnusedBlobs(UnusedBlobsDeleted),
+    AnalyzeMedia,
 }
 
 #[derive(serde::Serialize, serde::Deserialize, Clone, Debug)]
@@ -601,6 +605,14 @@ impl<E: ApiClientExecutor> ApiClient<E> {
     pub async fn delete_unused_blobs(&self) -> Result<UnusedBlobsDeleted, AnyError> {
         match self.exec.execute(Query::DeleteUnusedBlobs).await {
             Ok(Reply::DeleteUnusedBlobs(info)) => Ok(info),
+            Ok(_other) => Err(anyhow::anyhow!("API returned invalid data")),
+            Err(err) => Err(err),
+        }
+    }
+
+    pub async fn analyze_media(&self, force: bool) -> Result<(), AnyError> {
+        match self.exec.execute(Query::AnalyzeMedia { force }).await {
+            Ok(Reply::AnalyzeMedia) => Ok(()),
             Ok(_other) => Err(anyhow::anyhow!("API returned invalid data")),
             Err(err) => Err(err),
         }

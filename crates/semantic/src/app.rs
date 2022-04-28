@@ -24,7 +24,7 @@ use semantic_core::{
     plugin::{FetchUrlJob, FetchUrlOutput, ImportJob, ImportOutput, PluginDescriptor},
 };
 
-use crate::{blobstore::DynBlobStore, jobs::JobManager, plugin::PluginManager};
+use crate::{blobstore::DynBlobStore, jobs::JobManager, plugin::PluginManager, util::media};
 
 pub use crate::plugin::deno::DenoConfig;
 
@@ -517,7 +517,7 @@ impl App {
 
         // Try to optimise.
         // TODO: add setting to disable optimisations.
-        let (data, hash, original_hash) = crate::util::media::optimise_file_data(data);
+        let (data, hash, original_hash) = media::optimise_file_data(data);
 
         // Prevent duplicates.
 
@@ -548,6 +548,24 @@ impl App {
         }
 
         let size = data.len() as u64;
+
+        let is_video = mime_guess
+            .as_ref()
+            .map(|x| x.mime_type().starts_with("video/"))
+            .unwrap_or_default();
+        let (video_info, data) = if is_video {
+            let data = media::SharedBinarData::new(data);
+            let info = media::analyze_video(std::io::Cursor::new(data.clone()))
+                .await
+                .map_err(|error| {
+                    tracing::warn!(?error, "could not analyze video");
+                })
+                .ok();
+
+            (info, data.try_into_owned().unwrap())
+        } else {
+            (None, data)
+        };
 
         let id = Id::random();
         let blob_uri = format!("files/{}", id);
@@ -589,10 +607,23 @@ impl App {
             mime if mime.starts_with("image/") => {
                 TypedFile::Image(semantic_core::base::Image { file })
             }
-            mime if mime.starts_with("video/") => TypedFile::Video(semantic_core::base::Video {
-                file,
-                duration: None,
-            }),
+            mime if mime.starts_with("video/") => {
+                let video = if let Some(info) = video_info {
+                    semantic_core::base::Video {
+                        file,
+                        duration: Some(info.duration.as_secs()),
+                        video_has_sound: Some(info.has_audio),
+                    }
+                } else {
+                    semantic_core::base::Video {
+                        file,
+                        duration: None,
+                        video_has_sound: None,
+                    }
+                };
+
+                TypedFile::Video(video)
+            }
             // mime if mime.starts_with("audio/") => {
             //     todo!()
             // }
@@ -745,7 +776,7 @@ impl App {
                 .await?;
 
         let mime_guess = infer::get(&data);
-        let (data, hash, original_hash) = crate::util::media::optimise_file_data(data.to_vec());
+        let (data, hash, original_hash) = media::optimise_file_data(data.to_vec());
         let size = data.len();
 
         let mut blob_uri: Option<String> = None;
@@ -1046,7 +1077,7 @@ impl App {
         let job_id = job.id;
 
         tokio::spawn(async move {
-            crate::util::media::optimise_video(db, store, jobs, video, tmp_dir, job)
+            media::optimise_video(db, store, jobs, video, tmp_dir, job)
                 .await
                 .ok();
         });
@@ -1180,6 +1211,24 @@ impl App {
                 );
             }
         }
+
+        Ok(())
+    }
+
+    fn start_analyze_media(&self, force: bool) -> Result<(), anyhow::Error> {
+        let db = self.require_db()?;
+        let blob = self.require_blob()?;
+
+        tokio::task::spawn(async move {
+            match crate::util::media::analyze_files(db, blob, force).await {
+                Ok(_) => {
+                    tracing::info!("media analysis complete");
+                }
+                Err(error) => {
+                    tracing::error!(?error, "media analysis failed");
+                }
+            }
+        });
 
         Ok(())
     }
@@ -1326,6 +1375,10 @@ impl App {
             api::Query::FileCreatePreviewImageBlob(data) => {
                 self.file_create_preview_image_blob(data).await?;
                 Ok(api::Reply::FileCreatePreviewImageBlob)
+            }
+            api::Query::AnalyzeMedia { force } => {
+                self.start_analyze_media(force)?;
+                Ok(api::Reply::AnalyzeMedia)
             }
         };
         res.map_err(|err| {

@@ -1,3 +1,4 @@
+use anyhow::Context;
 use factordb::{
     prelude::{
         AttrIdent, AttrMapExt, Attribute, AttributeDescriptor, DataMap, Db, Entity,
@@ -107,6 +108,42 @@ pub struct AttrFileName(String);
 #[derive(Attribute)]
 #[factor(namespace = "semantic", title = "Duration")]
 pub struct AttrDuration(u64);
+
+impl AttrDuration {
+    pub fn as_u64(self) -> u64 {
+        self.0
+    }
+}
+
+impl TryFrom<Value> for AttrDuration {
+    type Error = anyhow::Error;
+
+    fn try_from(value: Value) -> Result<Self, Self::Error> {
+        value.as_uint().map(Self).context("expected a number")
+    }
+}
+
+#[derive(Attribute)]
+#[factor(
+    namespace = "semantic",
+    title = "Sound available",
+    name = "video_has_sound"
+)]
+pub struct AttrVideoHasSound(bool);
+
+impl TryFrom<Value> for AttrVideoHasSound {
+    type Error = anyhow::Error;
+
+    fn try_from(value: Value) -> Result<Self, Self::Error> {
+        value.as_bool().map(Self).context("expected a boolean")
+    }
+}
+
+impl AttrVideoHasSound {
+    pub fn as_bool(self) -> bool {
+        self.0
+    }
+}
 
 #[derive(Serialize, Deserialize, Entity, Clone, Debug)]
 #[factor(namespace = "semantic")]
@@ -263,6 +300,10 @@ pub struct Video {
     #[factor(attr = AttrDuration)]
     #[serde(rename = "semantic/duration")]
     pub duration: Option<u64>,
+
+    #[factor(attr = AttrVideoHasSound)]
+    #[serde(rename = "semantic/video_has_sound")]
+    pub video_has_sound: Option<bool>,
 }
 
 impl Video {
@@ -305,12 +346,25 @@ pub enum TypedFile {
 }
 
 impl TypedFile {
+    pub fn from_map(map: DataMap) -> Result<Self, anyhow::Error> {
+        match map.get_type_name() {
+            Some(Video::QUALIFIED_NAME) => Video::try_from_map(map)
+                .map(TypedFile::Video)
+                .context("could not deserialize video"),
+            Some(Image::QUALIFIED_NAME) => Image::try_from_map(map)
+                .map(TypedFile::Image)
+                .context("could not deserialize image"),
+            Some(other) => Err(anyhow::anyhow!("unsupported file type {other}")),
+            None => Err(anyhow::anyhow!("map has no type")),
+        }
+    }
+
     pub fn from_file(file: File) -> Self {
         match file.entity_type().as_name().unwrap_or_default() {
             Video::QUALIFIED_NAME => Self::Video(Video {
+                duration: file.extra.get_attr::<AttrDuration>(),
+                video_has_sound: file.extra.get_attr::<AttrVideoHasSound>(),
                 file,
-                // FIXME: parse duration.
-                duration: None,
             }),
             Image::QUALIFIED_NAME => Self::Image(Image { file }),
             _ => Self::File(file),

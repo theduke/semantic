@@ -282,7 +282,18 @@ impl Plugin for SemanticBasePlugin {
                 strict: false,
             })
             .entity_create(Image::schema())
-            .entity_create(Video::schema())
+            .entity_create(EntitySchema {
+                id: Id::nil(),
+                ident: Video::IDENT.to_string(),
+                title: Some("Video".to_string()),
+                description: None,
+                attributes: vec![EntityAttribute {
+                    attribute: AttrDuration::IDENT,
+                    cardinality: factordb::prelude::Cardinality::Optional,
+                }],
+                extends: vec![File::IDENT.into()],
+                strict: false,
+            })
             .entity_create(SocialMediaPost::schema())
             .entity_create(EntitySchema {
                 id: Id::nil(),
@@ -371,6 +382,24 @@ impl Plugin for SemanticBasePlugin {
                     entity: File::IDENT.to_string(),
                     attribute: AttrPreviewImageBlobUri::IDENT.to_string(),
                     cardinality: factordb::schema::Cardinality::Optional,
+        let create_attr_video_has_sound = Migration::with_name("create_attr_video_has_sound")
+            .attr_create(factordb::prelude::AttributeSchema {
+                id: Id::nil(),
+                ident: "semantic/video_has_sound".to_string(),
+                title: Some("Sound available".to_string()),
+                description: None,
+                value_type: ValueType::Bool,
+                unique: false,
+                index: false,
+                strict: true,
+            });
+
+        let add_video_has_audio_to_video = Migration::with_name("add_video_has_sound_to_video")
+            .action(migrate::SchemaAction::EntityAttributeAdd(
+                migrate::EntityAttributeAdd {
+                    entity: Video::IDENT.to_string(),
+                    attribute: AttrVideoHasSound::IDENT.to_string(),
+                    cardinality: Cardinality::Optional,
                     default_value: None,
                 },
             ));
@@ -385,6 +414,9 @@ impl Plugin for SemanticBasePlugin {
             add_created_updated_at_to_file,
             create_preview_blob_uri,
             add_preview_blob_uri_to_file,
+            // video_has_sound
+            create_attr_video_has_sound,
+            add_video_has_audio_to_video,
         ]
     }
 }
