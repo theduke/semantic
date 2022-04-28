@@ -15,6 +15,7 @@ pub use self::collection::*;
 mod tags;
 pub use self::tags::*;
 
+
 use factordb::prelude::Cardinality;
 use factordb::prelude::IdOrIdent;
 use factordb::prelude::{
@@ -303,11 +304,11 @@ impl Plugin for SemanticBasePlugin {
                 attributes: vec![
                     EntityAttribute {
                         attribute: AttrTitle::IDENT,
-                        cardinality: factordb::schema::Cardinality::Required,
+                        cardinality: Cardinality::Required,
                     },
                     EntityAttribute {
                         attribute: AttrNoteBody::IDENT,
-                        cardinality: factordb::schema::Cardinality::Required,
+                        cardinality: Cardinality::Required,
                     },
                 ],
                 extends: vec![],
@@ -326,7 +327,7 @@ impl Plugin for SemanticBasePlugin {
             migrate::SchemaAction::EntityAttributeAdd(migrate::EntityAttributeAdd {
                 entity: Note::IDENT.to_string(),
                 attribute: TextFormat::IDENT.to_string(),
-                cardinality: factordb::schema::Cardinality::Required,
+                cardinality: Cardinality::Required,
                 default_value: Some(TextFormat::Markdown.to_str().into()),
             }),
         );
@@ -337,7 +338,7 @@ impl Plugin for SemanticBasePlugin {
                 migrate::EntityAttributeAdd {
                     entity: File::IDENT.to_string(),
                     attribute: AttrBlobUriWeb::IDENT.to_string(),
-                    cardinality: factordb::schema::Cardinality::Optional,
+                    cardinality: Cardinality::Optional,
                     default_value: None,
                 },
             ));
@@ -351,7 +352,7 @@ impl Plugin for SemanticBasePlugin {
                 migrate::EntityAttributeAdd {
                     entity: File::IDENT.to_string(),
                     attribute: AttrCreatedAt::IDENT.to_string(),
-                    cardinality: factordb::schema::Cardinality::Optional,
+                    cardinality: Cardinality::Optional,
                     default_value: None,
                 },
             ))
@@ -359,7 +360,7 @@ impl Plugin for SemanticBasePlugin {
                 migrate::EntityAttributeAdd {
                     entity: File::IDENT.to_string(),
                     attribute: AttrUpdatedAt::IDENT.to_string(),
-                    cardinality: factordb::schema::Cardinality::Optional,
+                    cardinality: Cardinality::Optional,
                     default_value: None,
                 },
             ));
@@ -381,7 +382,11 @@ impl Plugin for SemanticBasePlugin {
                 migrate::EntityAttributeAdd {
                     entity: File::IDENT.to_string(),
                     attribute: AttrPreviewImageBlobUri::IDENT.to_string(),
-                    cardinality: factordb::schema::Cardinality::Optional,
+                    cardinality: Cardinality::Optional,
+                    default_value: None,
+                },
+            ));
+
         let create_attr_video_has_sound = Migration::with_name("create_attr_video_has_sound")
             .attr_create(factordb::prelude::AttributeSchema {
                 id: Id::nil(),
