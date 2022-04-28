@@ -187,7 +187,7 @@ fn cmd_build_appimage() -> Result<(), DynError> {
 
 fn cmd_build_portable() -> Result<(), DynError> {
     Command::new("docker")
-        .args(dbg!(&[
+        .args(&[
             "run",
             "--rm",
             "-v",
@@ -196,7 +196,7 @@ fn cmd_build_portable() -> Result<(), DynError> {
             "bash",
             "-c",
             "/host/lib/docker/build.sh"
-        ]))
+        ])
         .run()?;
     Ok(())
 }
