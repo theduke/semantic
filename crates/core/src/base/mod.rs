@@ -15,6 +15,7 @@ pub use self::collection::*;
 mod tags;
 pub use self::tags::*;
 
+use factordb::prelude::Cardinality;
 use factordb::prelude::IdOrIdent;
 use factordb::prelude::{
     AttrIdent, AttrMapExt, Attribute, AttributeDescriptor, DataMap, EntityAttribute,
@@ -173,6 +174,7 @@ impl Plugin for SemanticBasePlugin {
                     AttrFileSize::schema(),
                     AttrDownloadUrl::schema(),
                     AttrFileName::schema(),
+                    AttrVideoHasSound::schema(),
                     // socialmedia
                     AttrSocialMediaPostContent::schema(),
                     // Notes.
@@ -233,47 +235,47 @@ impl Plugin for SemanticBasePlugin {
                 attributes: vec![
                     EntityAttribute {
                         attribute: AttrIdent::IDENT,
-                        cardinality: factordb::schema::Cardinality::Optional,
+                        cardinality: Cardinality::Optional,
                     },
                     EntityAttribute {
                         attribute: AttrTitle::IDENT,
-                        cardinality: factordb::schema::Cardinality::Optional,
+                        cardinality: Cardinality::Optional,
                     },
                     EntityAttribute {
                         attribute: AttrFileName::IDENT,
-                        cardinality: factordb::schema::Cardinality::Optional,
+                        cardinality: Cardinality::Optional,
                     },
                     EntityAttribute {
                         attribute: AttrFileSize::IDENT,
-                        cardinality: factordb::schema::Cardinality::Optional,
+                        cardinality: Cardinality::Optional,
                     },
                     EntityAttribute {
                         attribute: AttrMimeType::IDENT,
-                        cardinality: factordb::schema::Cardinality::Optional,
+                        cardinality: Cardinality::Optional,
                     },
                     EntityAttribute {
                         attribute: AttrHash::IDENT,
-                        cardinality: factordb::schema::Cardinality::Optional,
+                        cardinality: Cardinality::Optional,
                     },
                     EntityAttribute {
                         attribute: AttrOriginalHash::IDENT,
-                        cardinality: factordb::schema::Cardinality::Optional,
+                        cardinality: Cardinality::Optional,
                     },
                     EntityAttribute {
                         attribute: AttrUrl::IDENT,
-                        cardinality: factordb::schema::Cardinality::Optional,
+                        cardinality: Cardinality::Optional,
                     },
                     EntityAttribute {
                         attribute: AttrDownloadUrl::IDENT,
-                        cardinality: factordb::schema::Cardinality::Optional,
+                        cardinality: Cardinality::Optional,
                     },
                     EntityAttribute {
                         attribute: AttrPreviewImageUrl::IDENT,
-                        cardinality: factordb::schema::Cardinality::Optional,
+                        cardinality: Cardinality::Optional,
                     },
                     EntityAttribute {
                         attribute: AttrBlobUri::IDENT,
-                        cardinality: factordb::schema::Cardinality::Optional,
+                        cardinality: Cardinality::Optional,
                     },
                 ],
                 extends: vec![],
