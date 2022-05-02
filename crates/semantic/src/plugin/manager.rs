@@ -2,10 +2,8 @@ use std::{collections::HashMap, sync::Arc};
 
 use anyhow::{anyhow, bail, Context};
 use factordb::{
-    prelude::EntityContainer,
-    query::{migrate::Migration, mutate::Mutate},
-    schema::{AttrMapExt, EntityDescriptor},
-    AnyError, Db,
+    prelude::{AttrMapExt, Db, EntityContainer, EntityDescriptor, Migration, Mutate},
+    AnyError,
 };
 use semantic_core::{
     api::PluginTestFetch,
@@ -39,7 +37,7 @@ impl PluginManager {
             bail!("Deno is already initialized");
         }
 
-        let schema = self.0.db.schema()?;
+        let schema = self.0.db.schema().await?;
 
         let host = deno::DenoPluginHost::start(config, schema).await?;
 
@@ -210,7 +208,7 @@ impl PluginManager {
         }
 
         let db = &self.0.db;
-        let existing_migrations = db.backend().migrations().await?;
+        let existing_migrations = db.migrations().await?;
 
         // TODO: validate whole plugin schema.
 

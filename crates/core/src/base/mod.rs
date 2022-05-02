@@ -165,6 +165,8 @@ impl Plugin for SemanticBasePlugin {
                     AttrPreviewImageBlobUri::schema(),
                     AttrUsername::schema(),
                     TextFormat::schema(),
+                    AttrCreatedAt::schema(),
+                    AttrUpdatedAt::schema(),
                     // file
                     AttrBlobUri::schema(),
                     AttrBlobUriWeb::schema(),

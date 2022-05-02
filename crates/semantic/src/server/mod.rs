@@ -597,7 +597,7 @@ async fn api_query(state: &ServerState, req: Request<Body>) -> Result<Response<B
     let query: Query = serde_json::from_slice(&body)?;
 
     match &query {
-        Query::ServerStatus | Query::Initialize(_) => {}
+        Query::ServerStatus(()) | Query::Initialize(_) => {}
         _ => {
             if state.needs_auth() && token_claims.is_none() {
                 return Err(anyhow!("Unauthorized"));
@@ -642,14 +642,14 @@ async fn api_query(state: &ServerState, req: Request<Body>) -> Result<Response<B
                 "POST".parse().unwrap(),
             ));
 
-            let schema = app.load_schema()?;
+            let schema = app.load_schema().await?;
 
             Ok(api::Reply::Initialize(schema))
         }
-        api::Query::CloseBackend => {
+        api::Query::CloseBackend(()) => {
             app.close_backend().await?;
             extra_headers.push((header::SET_COOKIE, build_token_cookie("", true)?));
-            Ok(api::Reply::CloseBackend)
+            Ok(api::Reply::CloseBackend(()))
         }
         other => {
             // No special server-related logic required, so we use the default

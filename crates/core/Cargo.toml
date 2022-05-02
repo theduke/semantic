@@ -6,6 +6,10 @@ edition = "2021"
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
+[features]
+schema = ["schemars", "ts-rs", "factordb/jsonschema", "factordb/typescript-schema"]
+
+
 [dependencies]
 anyhow = { version = "1.0.40", features = ["backtrace"] }
 chrono = { version = "0.4.19", features = ["serde"] }
@@ -19,3 +23,6 @@ factordb = "0.1"
 base64 = "0.13.0"
 tracing = "0.1.29"
 typescript-type-def = "0.3.1"
+# FIXME: use normal crate once https://github.com/GREsau/schemars/pull/141 is merged upstream.
+schemars = { version = "0.8.8", features = ["chrono", "uuid", "url", "ordered-float"], optional = true, git = "https://github.com/theduke/schemars", branch = "ordered-float" }
+ts-rs = { version = "6.1.2", default-features = false, features = ["serde-compat", "chrono-impl", "uuid-impl", "ordered-float-impl"], optional = true }

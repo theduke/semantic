@@ -25,6 +25,9 @@ pub struct AttrPluginRuntime(String);
 pub struct AttrPluginStrictValidation(bool);
 
 #[derive(Serialize, Deserialize, Entity, Clone, Debug, PartialEq, Eq)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[cfg_attr(feature = "schema", derive(ts_rs::TS))]
+#[cfg_attr(feature = "schema", ts(export))]
 #[factor(namespace = "semantic")]
 pub struct PluginSource {
     #[factor(attr = AttrId)]

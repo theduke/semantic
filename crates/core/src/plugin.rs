@@ -63,17 +63,29 @@ impl UrlSupportMatches {
 }
 
 #[derive(serde::Serialize, serde::Deserialize, Clone, Debug)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[cfg_attr(feature = "schema", derive(ts_rs::TS))]
+#[cfg_attr(feature = "schema", ts(export))]
 pub struct RelatedUrl {
     pub label: String,
+
+    #[cfg_attr(feature = "schema", ts(type = "string"))]
     pub url: Url,
 }
 
 #[derive(serde::Serialize, serde::Deserialize, Clone, Debug)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[cfg_attr(feature = "schema", derive(ts_rs::TS))]
+#[cfg_attr(feature = "schema", ts(export))]
 pub struct FetchUrlJob {
+    #[cfg_attr(feature = "schema", ts(type = "string"))]
     pub url: Url,
 }
 
 #[derive(serde::Serialize, serde::Deserialize, Clone, Debug)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[cfg_attr(feature = "schema", derive(ts_rs::TS))]
+#[cfg_attr(feature = "schema", ts(export))]
 pub struct FetchUrlOutput {
     /// Potentially nested items.
     #[serde(default)]
@@ -88,12 +100,19 @@ pub struct FetchUrlOutput {
 }
 
 #[derive(serde::Serialize, serde::Deserialize, Clone, Debug)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[cfg_attr(feature = "schema", derive(ts_rs::TS))]
+#[cfg_attr(feature = "schema", ts(export))]
 pub struct ImportJob {
+    #[cfg_attr(feature = "schema", ts(type = "string"))]
     pub url: Url,
     pub import_media: bool,
 }
 
 #[derive(serde::Serialize, serde::Deserialize, Clone, Debug)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[cfg_attr(feature = "schema", derive(ts_rs::TS))]
+#[cfg_attr(feature = "schema", ts(export))]
 pub struct ImportOutput {
     pub items: Vec<Item>,
 }

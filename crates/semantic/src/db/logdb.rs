@@ -1,7 +1,8 @@
-use factordb::{
-    backend::log::{EventId, LogConverter, LogEvent},
-    AnyError,
+use factor_engine::backend::{
+    self,
+    log::{EventId, LogConverter, LogEvent},
 };
+use factordb::AnyError;
 use futures::{future::ready, FutureExt, StreamExt};
 use logfs::LogFs;
 
@@ -10,24 +11,24 @@ use logfs::LogFs;
 #[derive(Clone)]
 pub struct LogDbStore {
     log: LogFs,
-    converter: factordb::backend::log::convert_json::JsonConverter,
+    converter: backend::log::convert_json::JsonConverter,
 }
 
 impl LogDbStore {
     pub fn new(log: LogFs) -> Self {
         Self {
             log,
-            converter: factordb::backend::log::convert_json::JsonConverter,
+            converter: backend::log::convert_json::JsonConverter,
         }
     }
 
-    async fn build_backend(self) -> Result<factordb::backend::log::LogDb, AnyError> {
-        factordb::backend::log::LogDb::open(self).await
+    async fn build_backend(self) -> Result<backend::log::LogDb, AnyError> {
+        backend::log::LogDb::open(self).await
     }
 
-    pub async fn build_db(self) -> Result<factordb::Db, AnyError> {
+    pub async fn build_db(self) -> Result<factordb::db::Db, AnyError> {
         let be = self.build_backend().await?;
-        Ok(factordb::Db::new(be))
+        Ok(factor_engine::Engine::new(be).into_client())
     }
 
     fn event_path(id: EventId) -> String {
@@ -67,7 +68,7 @@ impl LogDbStore {
     }
 }
 
-impl factordb::backend::log::LogStore for LogDbStore {
+impl backend::log::LogStore for LogDbStore {
     fn iter_events(
         &self,
         from: EventId,
@@ -128,7 +129,7 @@ mod tests {
         }
         let log = logfs::ConfigBuilder::new(&path).open().unwrap();
         let db = LogDbStore::new(log).build_backend().await.unwrap();
-        factordb::tests::test_backend(db, |f| {
+        factor_engine::tests::test_backend(db, |f| {
             futures::executor::block_on(f);
         });
     }

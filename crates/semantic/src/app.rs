@@ -7,11 +7,11 @@ use std::{
 
 use anyhow::{anyhow, bail, Context};
 use factordb::{
-    data::DataMap,
-    prelude::{AttributeDescriptor, Expr, Id, Patch, Select, Timestamp, Value, ValueMap},
-    query::{self, mutate::Mutate, select::Item},
-    schema::{AttrMapExt, EntityContainer},
-    AnyError, Db,
+    prelude::{
+        AttrMapExt, AttributeDescriptor, DataMap, Db, EntityContainer, Expr, Id, Item, Mutate,
+        Patch, Select, Timestamp, Value, ValueMap,
+    },
+    query, AnyError,
 };
 use semantic_core::{
     api::{self, DbConfig, FileImportMetadata, SemanticSchema},
@@ -156,7 +156,7 @@ impl App {
         let db = self.db()?;
         let blob = self.blob()?;
 
-        let db_size = db.backend().storage_usage().await.ok().flatten();
+        let db_size = db.storage_usage().await.ok().flatten();
         // TODO: fetch
         let asset_size = blob.size_storage().await.ok().flatten();
         let storage_size = db_size.unwrap_or_default() + asset_size.unwrap_or_default();
@@ -409,8 +409,8 @@ impl App {
         Ok(())
     }
 
-    pub fn load_schema(&self) -> Result<SemanticSchema, AnyError> {
-        let db = self.require_db()?.schema()?;
+    pub async fn load_schema(&self) -> Result<SemanticSchema, AnyError> {
+        let db = self.require_db()?.schema().await?;
 
         Ok(SemanticSchema { db })
     }
@@ -1240,7 +1240,7 @@ impl App {
         self.update_last_activity_time();
 
         let res = match query {
-            api::Query::ServerStatus => {
+            api::Query::ServerStatus(()) => {
                 let db = self.db();
 
                 Ok(api::Reply::ServerStatus(api::ServerStatus {
@@ -1251,18 +1251,22 @@ impl App {
             api::Query::Initialize(options) => {
                 self.configure_backend(options).await?;
 
-                let schema = self.load_schema()?;
+                let schema = self.load_schema().await?;
                 Ok(api::Reply::Initialize(schema))
             }
-            api::Query::CloseBackend => {
+            api::Query::CloseBackend(()) => {
                 self.close_backend().await?;
-                Ok(api::Reply::CloseBackend)
+                Ok(api::Reply::CloseBackend(()))
             }
             api::Query::Select(sel) => self.require_db()?.select(sel).await.map(api::Reply::Select),
-            api::Query::Mutate(update) => {
-                self.entity_mutate(update).await.map(|_| api::Reply::Mutate)
-            }
-            api::Query::Batch(batch) => self.entity_batch(batch).await.map(|_| api::Reply::Batch),
+            api::Query::Mutate(update) => self
+                .entity_mutate(update)
+                .await
+                .map(|_| api::Reply::Mutate(())),
+            api::Query::Batch(batch) => self
+                .entity_batch(batch)
+                .await
+                .map(|_| api::Reply::Batch(())),
             api::Query::HttpFetch(req) => {
                 let method = req.method.parse()?;
                 let mut builder = self.http_client().request(method, req.url);
@@ -1306,8 +1310,8 @@ impl App {
                 let out = self.import(job).await?;
                 Ok(api::Reply::Import(out))
             }
-            api::Query::Schema => {
-                let schema = self.load_schema()?;
+            api::Query::Schema(()) => {
+                let schema = self.load_schema().await?;
                 let reply = api::Reply::Schema(schema);
                 Ok(reply)
             }
@@ -1319,9 +1323,9 @@ impl App {
                 let source = self.require_plugins()?.create_source(source).await?;
                 Ok(api::Reply::PluginSourceCreate(source))
             }
-            api::Query::PluginDelete { name } => {
-                self.require_plugins()?.delete_plugin(name).await?;
-                Ok(api::Reply::PluginDelete)
+            api::Query::PluginDelete(del) => {
+                self.require_plugins()?.delete_plugin(del.name).await?;
+                Ok(api::Reply::PluginDelete(()))
             }
             api::Query::PluginTestFetch(spec) => {
                 let out = self.require_plugins()?.test_fetch(spec).await?;
@@ -1338,7 +1342,7 @@ impl App {
                 self.require_plugins()?
                     .plugin_source_validate(source)
                     .await?;
-                Ok(api::Reply::PluginSourceValidate)
+                Ok(api::Reply::PluginSourceValidate(()))
             }
             api::Query::JobStatus(id) => {
                 let job = self
@@ -1356,29 +1360,29 @@ impl App {
                     job_id,
                 }))
             }
-            api::Query::FileDiscardUnOptimized { file_id } => {
-                self.file_discard_un_optimised(file_id).await?;
-                Ok(api::Reply::FileDiscardUnOptimised)
+            api::Query::FileDiscardUnOptimized(opt) => {
+                self.file_discard_un_optimised(opt.file_id).await?;
+                Ok(api::Reply::FileDiscardUnOptimised(()))
             }
-            api::Query::FileDiscardOptimised { file_id } => {
-                self.file_discard_optimised(file_id).await?;
-                Ok(api::Reply::FileDiscardOptimised)
+            api::Query::FileDiscardOptimised(opt) => {
+                self.file_discard_optimised(opt.file_id).await?;
+                Ok(api::Reply::FileDiscardOptimised(()))
             }
-            api::Query::FindUnusedBlobs => {
+            api::Query::FindUnusedBlobs(()) => {
                 let items = self.find_unused_blobs().await?;
                 Ok(api::Reply::FindUnusedBlobs { items })
             }
-            api::Query::DeleteUnusedBlobs => {
+            api::Query::DeleteUnusedBlobs(()) => {
                 let out = self.delete_unused_blobs().await?;
                 Ok(api::Reply::DeleteUnusedBlobs(out))
             }
             api::Query::FileCreatePreviewImageBlob(data) => {
                 self.file_create_preview_image_blob(data).await?;
-                Ok(api::Reply::FileCreatePreviewImageBlob)
+                Ok(api::Reply::FileCreatePreviewImageBlob(()))
             }
             api::Query::AnalyzeMedia { force } => {
                 self.start_analyze_media(force)?;
-                Ok(api::Reply::AnalyzeMedia)
+                Ok(api::Reply::AnalyzeMedia(()))
             }
         };
         res.map_err(|err| {

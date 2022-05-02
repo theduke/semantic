@@ -12,6 +12,8 @@ archive = ["tar", "flate2"]
 
 media-optimizers = ["oxipng", "mozjpeg"]
 
+jsonschema = ["semantic_core/schema"]
+
 
 default = []
 
@@ -42,6 +44,7 @@ gio = { version = "0.14.0", optional = true }
 glib = { version = "0.14.0", optional = true }
 
 factordb = "0.1"
+factor_engine = "0.1"
 factor_tools = "0.1"
 
 jsonwebtoken = { version = "7.2.0" }
@@ -72,3 +75,4 @@ flate2 = { version = "1.0.22", optional = true }
 rust-embed = { version = "6.3.0", features = ["interpolate-folder-path"] }
 ffprobe = "0.3.2"
 bytesize = "1.1.0"
+

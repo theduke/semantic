@@ -8,8 +8,8 @@ use std::{
 
 use anyhow::{anyhow, bail, Context};
 use factordb::{
-    prelude::{AttrMapExt, DataMap, Expr, Patch, Select},
-    AnyError, Db,
+    prelude::{AttrMapExt, DataMap, Expr, Patch, Select, Db},
+    AnyError,
 };
 
 use semantic_core::{

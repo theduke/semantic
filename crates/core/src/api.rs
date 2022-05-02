@@ -12,6 +12,9 @@ use crate::{
 };
 
 #[derive(serde::Serialize, serde::Deserialize, Clone, Debug)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[cfg_attr(feature = "schema", derive(ts_rs::TS))]
+#[cfg_attr(feature = "schema", ts(export))]
 pub struct SimpleHttpRequest {
     pub url: String,
     pub method: String,
@@ -20,6 +23,9 @@ pub struct SimpleHttpRequest {
 }
 
 #[derive(serde::Serialize, serde::Deserialize, Clone, Debug)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[cfg_attr(feature = "schema", derive(ts_rs::TS))]
+#[cfg_attr(feature = "schema", ts(export))]
 pub struct SimpleHttpResponse {
     pub status: u16,
     pub headers: HashMap<String, String>,
@@ -27,11 +33,17 @@ pub struct SimpleHttpResponse {
 }
 
 #[derive(serde::Serialize, serde::Deserialize, Default, Clone, Debug)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[cfg_attr(feature = "schema", derive(ts_rs::TS))]
+#[cfg_attr(feature = "schema", ts(export))]
 pub struct SemanticSchema {
     pub db: factordb::schema::DbSchema,
 }
 
 #[derive(serde::Serialize, serde::Deserialize, PartialEq, Eq, Clone)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[cfg_attr(feature = "schema", derive(ts_rs::TS))]
+#[cfg_attr(feature = "schema", ts(export))]
 pub struct BackendCryptoConfig {
     pub data_path: Option<String>,
     pub key: String,
@@ -51,6 +63,9 @@ impl std::fmt::Debug for BackendCryptoConfig {
 }
 
 #[derive(serde::Serialize, serde::Deserialize, PartialEq, Eq, Clone, Debug)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[cfg_attr(feature = "schema", derive(ts_rs::TS))]
+#[cfg_attr(feature = "schema", ts(export))]
 pub enum DbConfig {
     Crypto(BackendCryptoConfig),
 }
@@ -72,6 +87,9 @@ impl DbConfig {
 }
 
 #[derive(serde::Serialize, serde::Deserialize, Clone, Debug)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[cfg_attr(feature = "schema", derive(ts_rs::TS))]
+#[cfg_attr(feature = "schema", ts(export))]
 pub struct BackendConfig {
     pub db: DbConfig,
     pub idle_timeout: Option<Seconds>,
@@ -102,13 +120,20 @@ impl FileUploadMetadata {
 pub type Seconds = u64;
 
 #[derive(serde::Serialize, serde::Deserialize, Clone, Debug)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[cfg_attr(feature = "schema", derive(ts_rs::TS))]
+#[cfg_attr(feature = "schema", ts(export))]
 pub struct PluginTestFetch {
     pub runtime: String,
     pub code: String,
+    #[cfg_attr(feature = "schema", ts(type = "string"))]
     pub url: Url,
 }
 
 #[derive(serde::Serialize, serde::Deserialize, Clone, Debug)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[cfg_attr(feature = "schema", derive(ts_rs::TS))]
+#[cfg_attr(feature = "schema", ts(export))]
 pub enum JobStatus {
     Queued {
         queue_position: Option<u64>,
@@ -119,6 +144,7 @@ pub enum JobStatus {
         progress_message: Option<String>,
     },
     Finished {
+        #[cfg_attr(feature = "schema", ts(type = "{Ok: string} | {Err: ApiError}"))]
         result: Result<String, ApiError>,
     },
 }
@@ -135,6 +161,9 @@ impl JobStatus {
 pub type JobId = uuid::Uuid;
 
 #[derive(serde::Serialize, serde::Deserialize, Clone, Debug)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[cfg_attr(feature = "schema", derive(ts_rs::TS))]
+#[cfg_attr(feature = "schema", ts(export))]
 pub struct JobStep {
     pub name: String,
     pub started_at: Option<Timestamp>,
@@ -142,6 +171,9 @@ pub struct JobStep {
 }
 
 #[derive(serde::Serialize, serde::Deserialize, Clone, Debug)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[cfg_attr(feature = "schema", derive(ts_rs::TS))]
+#[cfg_attr(feature = "schema", ts(export))]
 pub struct Job {
     pub id: JobId,
     pub name: String,
@@ -212,23 +244,36 @@ impl Job {
 }
 
 #[derive(serde::Serialize, serde::Deserialize, Clone, Debug)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[cfg_attr(feature = "schema", derive(ts_rs::TS))]
+#[cfg_attr(feature = "schema", ts(export))]
 pub struct ConvertFile {
     pub file_id: Id,
     pub target_format: String,
+    #[cfg_attr(feature = "schema", ts(type = "any | null | undefined"))]
     pub settings: Option<serde_json::Value>,
 }
 
 #[derive(serde::Serialize, serde::Deserialize, Clone, Debug)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[cfg_attr(feature = "schema", derive(ts_rs::TS))]
+#[cfg_attr(feature = "schema", ts(export))]
 pub struct OptimiseVideo {
     pub video_id: Id,
 }
 
 #[derive(serde::Serialize, serde::Deserialize, Clone, Debug)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[cfg_attr(feature = "schema", derive(ts_rs::TS))]
+#[cfg_attr(feature = "schema", ts(export))]
 pub struct OptimiseVideoReply {
     pub job_id: JobId,
 }
 
 #[derive(serde::Serialize, serde::Deserialize, Clone, Debug)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[cfg_attr(feature = "schema", derive(ts_rs::TS))]
+#[cfg_attr(feature = "schema", ts(export))]
 pub struct FileCreatePreviewImageBlob {
     pub file_id: Id,
     /// base64 encoded image content
@@ -237,34 +282,47 @@ pub struct FileCreatePreviewImageBlob {
 }
 
 #[derive(serde::Serialize, serde::Deserialize, Clone, Debug)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[cfg_attr(feature = "schema", derive(ts_rs::TS))]
+#[cfg_attr(feature = "schema", ts(export))]
+pub struct PluginDelete {
+    pub name: String,
+}
+
+#[derive(serde::Serialize, serde::Deserialize, Clone, Debug)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[cfg_attr(feature = "schema", derive(ts_rs::TS))]
+#[cfg_attr(feature = "schema", ts(export))]
+pub struct FileDiscardUnOptimized {
+    pub file_id: Id,
+}
+
+#[derive(serde::Serialize, serde::Deserialize, Clone, Debug)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[cfg_attr(feature = "schema", derive(ts_rs::TS))]
+#[cfg_attr(feature = "schema", ts(export))]
 pub enum Query {
-    ServerStatus,
+    ServerStatus(()),
     Initialize(BackendConfig),
-    CloseBackend,
+    CloseBackend(()),
 
     Select(factordb::query::select::Select),
     Mutate(factordb::query::mutate::Mutate),
     Batch(factordb::query::mutate::Batch),
 
-    Schema,
+    Schema(()),
 
     PluginSourceCreate(PluginSource),
     PluginSourceUpdate(PluginSource),
     PluginSourceValidate(PluginSource),
-    PluginDelete {
-        name: String,
-    },
+    PluginDelete(PluginDelete),
     PluginTestFetch(PluginTestFetch),
 
     Import(ImportJob),
     FetchUrl(FetchUrlJob),
     OptimiseVideo(OptimiseVideo),
-    FileDiscardUnOptimized {
-        file_id: Id,
-    },
-    FileDiscardOptimised {
-        file_id: Id,
-    },
+    FileDiscardUnOptimized(FileDiscardUnOptimized),
+    FileDiscardOptimised(FileDiscardUnOptimized),
     FileCreatePreviewImageBlob(FileCreatePreviewImageBlob),
 
     /// Execute an HTTP request.
@@ -274,8 +332,8 @@ pub enum Query {
 
     ConvertFile(ConvertFile),
 
-    FindUnusedBlobs,
-    DeleteUnusedBlobs,
+    FindUnusedBlobs(()),
+    DeleteUnusedBlobs(()),
     AnalyzeMedia {
         force: bool,
     },
@@ -288,12 +346,18 @@ pub struct QueryWithId {
 }
 
 #[derive(serde::Serialize, serde::Deserialize, Clone, Debug)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[cfg_attr(feature = "schema", derive(ts_rs::TS))]
+#[cfg_attr(feature = "schema", ts(export))]
 pub struct ServerStatus {
     pub backend_initialized: bool,
     pub backend_status: Option<BackendStatus>,
 }
 
 #[derive(serde::Serialize, serde::Deserialize, Clone, Debug)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[cfg_attr(feature = "schema", derive(ts_rs::TS))]
+#[cfg_attr(feature = "schema", ts(export))]
 pub struct BackendStatus {
     /// Size of database data in kilobytes.
     pub db_size: Option<u64>,
@@ -304,51 +368,63 @@ pub struct BackendStatus {
 }
 
 #[derive(serde::Serialize, serde::Deserialize, Clone, Debug)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[cfg_attr(feature = "schema", derive(ts_rs::TS))]
+#[cfg_attr(feature = "schema", ts(export))]
 pub struct BlobInfo {
     pub key: String,
     pub size: u64,
 }
 
 #[derive(serde::Serialize, serde::Deserialize, Clone, Debug)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[cfg_attr(feature = "schema", derive(ts_rs::TS))]
+#[cfg_attr(feature = "schema", ts(export))]
 pub struct UnusedBlobsDeleted {
     pub count: u64,
     pub reclaimed_size: u64,
 }
 
 #[derive(serde::Serialize, serde::Deserialize, Clone, Debug)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[cfg_attr(feature = "schema", derive(ts_rs::TS))]
+#[cfg_attr(feature = "schema", ts(export))]
 pub enum Reply {
     ServerStatus(ServerStatus),
     Initialize(SemanticSchema),
-    CloseBackend,
+    CloseBackend(()),
 
     Select(Page<Item>),
-    Mutate,
-    Batch,
+    Mutate(()),
+    Batch(()),
     Schema(SemanticSchema),
 
     PluginSourceCreate(PluginSource),
     PluginSourceUpgrade(PluginSource),
-    PluginSourceValidate,
-    PluginDelete,
+    PluginSourceValidate(()),
+    PluginDelete(()),
     PluginTestFetch(Option<FetchUrlOutput>),
 
     Import(ImportOutput),
     FetchUrl(FetchUrlOutput),
     HttpFetch(SimpleHttpResponse),
     OptimiseVideo(OptimiseVideoReply),
-    FileDiscardOptimised,
-    FileDiscardUnOptimised,
-    FileCreatePreviewImageBlob,
+    FileDiscardOptimised(()),
+    FileDiscardUnOptimised(()),
+    FileCreatePreviewImageBlob(()),
 
     JobStatus(Job),
     ConvertFile(Job),
 
     FindUnusedBlobs { items: Vec<BlobInfo> },
     DeleteUnusedBlobs(UnusedBlobsDeleted),
-    AnalyzeMedia,
+    AnalyzeMedia(()),
 }
 
 #[derive(serde::Serialize, serde::Deserialize, Clone, Debug)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[cfg_attr(feature = "schema", derive(ts_rs::TS))]
+#[cfg_attr(feature = "schema", ts(export))]
 pub struct ApiError {
     pub message: String,
     pub code: Option<String>,
@@ -356,6 +432,9 @@ pub struct ApiError {
 }
 
 #[derive(serde::Serialize, serde::Deserialize, Clone, Debug)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[cfg_attr(feature = "schema", derive(ts_rs::TS))]
+#[cfg_attr(feature = "schema", ts(export))]
 pub enum ApiResponse<T = Reply> {
     Ok(T),
     Err(ApiError),
@@ -391,7 +470,7 @@ impl<E: ApiClientExecutor> ApiClient<E> {
 
     pub async fn server_status(&self) -> Result<ServerStatus, AnyError> {
         tracing::trace!("executing server status");
-        let res = self.exec.execute(Query::ServerStatus).await;
+        let res = self.exec.execute(Query::ServerStatus(())).await;
         tracing::trace!("got server_status res");
         match res {
             Ok(Reply::ServerStatus(status)) => Ok(status),
@@ -409,8 +488,8 @@ impl<E: ApiClientExecutor> ApiClient<E> {
     }
 
     pub async fn close_backend(&self) -> Result<(), AnyError> {
-        match self.exec.execute(Query::CloseBackend).await {
-            Ok(Reply::CloseBackend) => Ok(()),
+        match self.exec.execute(Query::CloseBackend(())).await {
+            Ok(Reply::CloseBackend(_)) => Ok(()),
             Ok(_other) => Err(anyhow::anyhow!("API returned invalid data")),
             Err(err) => Err(err),
         }
@@ -458,7 +537,7 @@ impl<E: ApiClientExecutor> ApiClient<E> {
 
     pub async fn mutate(&self, mutate: factordb::query::mutate::Mutate) -> Result<(), AnyError> {
         match self.exec.execute(Query::Mutate(mutate)).await {
-            Ok(Reply::Mutate) => Ok(()),
+            Ok(Reply::Mutate(())) => Ok(()),
             Ok(_other) => Err(anyhow::anyhow!("API returned invalid data")),
             Err(err) => Err(err),
         }
@@ -475,14 +554,14 @@ impl<E: ApiClientExecutor> ApiClient<E> {
 
     pub async fn batch(&self, batch: factordb::query::mutate::Batch) -> Result<(), AnyError> {
         match self.exec.execute(Query::Batch(batch)).await {
-            Ok(Reply::Batch) => Ok(()),
+            Ok(Reply::Batch(())) => Ok(()),
             Ok(_other) => Err(anyhow::anyhow!("API returned invalid data")),
             Err(err) => Err(err),
         }
     }
 
     pub async fn schema(&self) -> Result<SemanticSchema, AnyError> {
-        match self.exec.execute(Query::Schema).await {
+        match self.exec.execute(Query::Schema(())).await {
             Ok(Reply::Schema(schema)) => Ok(schema),
             Ok(_other) => Err(anyhow::anyhow!("API returned invalid data")),
             Err(err) => Err(err),
@@ -502,7 +581,7 @@ impl<E: ApiClientExecutor> ApiClient<E> {
 
     pub async fn plugin_source_validate(&self, source: PluginSource) -> Result<(), AnyError> {
         match self.exec.execute(Query::PluginSourceValidate(source)).await {
-            Ok(Reply::PluginSourceValidate) => Ok(()),
+            Ok(Reply::PluginSourceValidate(())) => Ok(()),
             Ok(_other) => Err(anyhow::anyhow!("API returned invalid data")),
             Err(err) => Err(err),
         }
@@ -520,8 +599,12 @@ impl<E: ApiClientExecutor> ApiClient<E> {
     }
 
     pub async fn plugin_delete(&self, name: String) -> Result<(), AnyError> {
-        match self.exec.execute(Query::PluginDelete { name }).await {
-            Ok(Reply::PluginDelete) => Ok(()),
+        match self
+            .exec
+            .execute(Query::PluginDelete(PluginDelete { name }))
+            .await
+        {
+            Ok(Reply::PluginDelete(())) => Ok(()),
             Ok(_other) => Err(anyhow::anyhow!("API returned invalid data")),
             Err(err) => Err(err),
         }
@@ -573,10 +656,12 @@ impl<E: ApiClientExecutor> ApiClient<E> {
     pub async fn file_discard_optimized(&self, file_id: Id) -> Result<(), AnyError> {
         match self
             .exec
-            .execute(Query::FileDiscardOptimised { file_id })
+            .execute(Query::FileDiscardOptimised(FileDiscardUnOptimized {
+                file_id,
+            }))
             .await
         {
-            Ok(Reply::FileDiscardOptimised) => Ok(()),
+            Ok(Reply::FileDiscardOptimised(())) => Ok(()),
             Ok(_other) => Err(anyhow::anyhow!("API returned invalid data")),
             Err(err) => Err(err),
         }
@@ -585,17 +670,19 @@ impl<E: ApiClientExecutor> ApiClient<E> {
     pub async fn file_discard_un_optimized(&self, file_id: Id) -> Result<(), AnyError> {
         match self
             .exec
-            .execute(Query::FileDiscardUnOptimized { file_id })
+            .execute(Query::FileDiscardUnOptimized(FileDiscardUnOptimized {
+                file_id,
+            }))
             .await
         {
-            Ok(Reply::FileDiscardUnOptimised) => Ok(()),
+            Ok(Reply::FileDiscardUnOptimised(())) => Ok(()),
             Ok(_other) => Err(anyhow::anyhow!("API returned invalid data")),
             Err(err) => Err(err),
         }
     }
 
     pub async fn find_unused_blobs(&self) -> Result<Vec<BlobInfo>, AnyError> {
-        match self.exec.execute(Query::FindUnusedBlobs).await {
+        match self.exec.execute(Query::FindUnusedBlobs(())).await {
             Ok(Reply::FindUnusedBlobs { items }) => Ok(items),
             Ok(_other) => Err(anyhow::anyhow!("API returned invalid data")),
             Err(err) => Err(err),
@@ -603,7 +690,7 @@ impl<E: ApiClientExecutor> ApiClient<E> {
     }
 
     pub async fn delete_unused_blobs(&self) -> Result<UnusedBlobsDeleted, AnyError> {
-        match self.exec.execute(Query::DeleteUnusedBlobs).await {
+        match self.exec.execute(Query::DeleteUnusedBlobs(())).await {
             Ok(Reply::DeleteUnusedBlobs(info)) => Ok(info),
             Ok(_other) => Err(anyhow::anyhow!("API returned invalid data")),
             Err(err) => Err(err),
@@ -612,7 +699,7 @@ impl<E: ApiClientExecutor> ApiClient<E> {
 
     pub async fn analyze_media(&self, force: bool) -> Result<(), AnyError> {
         match self.exec.execute(Query::AnalyzeMedia { force }).await {
-            Ok(Reply::AnalyzeMedia) => Ok(()),
+            Ok(Reply::AnalyzeMedia(())) => Ok(()),
             Ok(_other) => Err(anyhow::anyhow!("API returned invalid data")),
             Err(err) => Err(err),
         }
@@ -627,7 +714,7 @@ impl<E: ApiClientExecutor> ApiClient<E> {
             .execute(Query::FileCreatePreviewImageBlob(data))
             .await
         {
-            Ok(Reply::FileCreatePreviewImageBlob) => Ok(()),
+            Ok(Reply::FileCreatePreviewImageBlob(())) => Ok(()),
             Ok(_other) => Err(anyhow::anyhow!("API returned invalid data")),
             Err(err) => Err(err),
         }

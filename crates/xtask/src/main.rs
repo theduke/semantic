@@ -19,6 +19,7 @@ Commands:
 * build
 * install
 * build-wasm-js
+* build-typescript
 * help
 "#;
 
@@ -46,6 +47,7 @@ fn main() -> Result<(), DynError> {
         &["build"] => cmd_build(),
         &["install"] => cmd_install(),
         &["build-wasm-js"] => gen_javascript(),
+        &["build-typescript"] => gen_typescript(),
         &["help"] => {
             eprintln!("{}", USAGE);
             Ok(())
@@ -89,11 +91,7 @@ fn cmd_watch_server(default_backend: bool) -> Result<(), DynError> {
 
     let data_dir = root_path()?.join("data");
 
-    let db_path = data_dir
-        .join("db.data")
-        .to_str()
-        .unwrap()
-        .to_string();
+    let db_path = data_dir.join("db.data").to_str().unwrap().to_string();
 
     let mut cmd = Command::new("cargo");
     cmd.current_dir(root_path()?)
@@ -195,7 +193,7 @@ fn cmd_build_portable() -> Result<(), DynError> {
             "debian:buster",
             "bash",
             "-c",
-            "/host/lib/docker/build.sh"
+            "/host/lib/docker/build.sh",
         ])
         .run()?;
     Ok(())
@@ -307,6 +305,58 @@ fn trunk_watch_ui(release: bool) -> Result<(), DynError> {
             cmd,
         ])
         .run()
+}
+
+fn gen_typescript() -> Result<(), DynError> {
+    eprintln!("Generating typescript types...");
+
+    let res = Command::new("cargo")
+        .args(&[
+            "run",
+            "-p",
+            "semantic_core",
+            "--bin",
+            "generate-schema",
+            "--features",
+            "schema",
+        ])
+        .output()?;
+    if !res.status.success() {
+        eprintln!("{}", String::from_utf8_lossy(&res.stdout));
+        eprintln!("{}", String::from_utf8_lossy(&res.stderr));
+        return Err("schema generation failed!".to_string().into());
+    }
+    let schema = std::str::from_utf8(&res.stdout)?;
+
+    let out_dir = root_path()?.join("ui").join("src").join("semantic");
+
+    std::fs::write(out_dir.join("core.ts"), schema)?;
+
+    eprintln!("Generating entity type schemas from database...");
+
+    let res = Command::new("cargo")
+        .args(&[
+            "run",
+            "--release",
+            "-p",
+            "semantic",
+            "--",
+            "generate-typescript",
+        ])
+        .output()?;
+    if !res.status.success() {
+        let err = std::str::from_utf8(&res.stderr)?;
+        eprintln!("Cargo failed: \n{}", err);
+        return Err("failed to run 'semantic generate-typescript'"
+            .to_string()
+            .into());
+    }
+
+    let schema = std::str::from_utf8(&res.stdout)?;
+
+    std::fs::write(out_dir.join("schema.ts"), schema)?;
+
+    Ok(())
 }
 
 fn gen_javascript() -> Result<(), DynError> {

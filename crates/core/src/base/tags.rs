@@ -2,10 +2,10 @@ use serde::{Deserialize, Serialize};
 
 use factordb::{
     prelude::{
-        AttrType, Attribute, AttributeDescriptor, DataMap, Entity, EntityContainer,
+        AttrType, Attribute, AttributeDescriptor, DataMap, Db, Entity, EntityContainer,
         EntityDescriptor, Expr, Id, IdOrIdent, Mutate, Patch, Select,
     },
-    AnyError, Db,
+    AnyError,
 };
 
 use super::{AttrDescription, AttrTitle};
