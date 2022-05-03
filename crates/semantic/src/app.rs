@@ -17,7 +17,7 @@ use semantic_core::{
     api::{self, DbConfig, FileImportMetadata, SemanticSchema},
     base::{
         entity_title, AttrBlobUri, AttrBlobUriWeb, AttrDownloadUrl, AttrFileName, AttrFileSize,
-        AttrHash, AttrMimeType, AttrOriginalHash, AttrPreviewImageBlobUri, SemanticBasePlugin,
+        AttrHash, AttrMimeType, AttrOriginalHash, AttrPreviewImageBlobUri, SemanticBasePlugin, Tag,
         Video,
     },
     core::SemanticCorePlugin,

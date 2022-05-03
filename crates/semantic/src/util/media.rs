@@ -8,7 +8,7 @@ use std::{
 
 use anyhow::{anyhow, bail, Context};
 use factordb::{
-    prelude::{AttrMapExt, DataMap, Expr, Patch, Select, Db},
+    prelude::{AttrMapExt, DataMap, Db, Expr, Patch, Select},
     AnyError,
 };
 

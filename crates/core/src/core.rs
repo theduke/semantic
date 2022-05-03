@@ -1,9 +1,11 @@
-use factordb::prelude::{
-    Attribute, AttributeDescriptor, AttributeSchema, Entity, EntityAttribute, EntityDescriptor,
-    Expr, Id, IdOrIdent, Migration, Select, ValueType,
+use factordb::{
+    prelude::{
+        Attribute, AttributeDescriptor, AttributeSchema, Entity, EntityAttribute, EntityDescriptor,
+        Expr, Id, IdOrIdent, Migration, Select, ValueType,
+    },
+    query::migrate,
+    schema::builtin::AttrIdent,
 };
-use factordb::query::migrate;
-use factordb::schema::builtin::AttrIdent;
 
 use serde::{Deserialize, Serialize};
 

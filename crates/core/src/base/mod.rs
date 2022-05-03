@@ -15,14 +15,14 @@ pub use self::collection::*;
 mod tags;
 pub use self::tags::*;
 
-
-use factordb::prelude::Cardinality;
-use factordb::prelude::IdOrIdent;
-use factordb::prelude::{
-    AttrIdent, AttrMapExt, Attribute, AttributeDescriptor, DataMap, EntityAttribute,
-    EntityDescriptor, EntitySchema, Id, Migration, Timestamp, Value, ValueType,
+use factordb::{
+    prelude::{
+        AttrIdent, AttrMapExt, Attribute, AttributeDescriptor, Cardinality, DataMap,
+        EntityAttribute, EntityDescriptor, EntitySchema, Id, IdOrIdent, Migration, Timestamp,
+        Value, ValueType,
+    },
+    query::migrate,
 };
-use factordb::query::migrate;
 
 // Common default attributes.
 

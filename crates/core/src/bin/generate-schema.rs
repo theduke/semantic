@@ -1,9 +1,8 @@
-
 #[cfg(feature = "schema")]
 fn main() {
-    use semantic_core::{api, plugin, core};
+    use semantic_core::{api, core, plugin};
 
-    use factordb::prelude::{ValueMap, DataMap};
+    use factordb::prelude::{DataMap, ValueMap};
 
     let code = ts_rs::SingleFileExporter::new(true)
         // factordb
