@@ -20,9 +20,6 @@ function install_ui_deps() {
   echo "Installing wasm-pack..."
   curl https://rustwasm.github.io/wasm-pack/installer/init.sh -sSf | sh
   apt-get install -y binaryen sassc
-
-  echo "Installing wasm-pack..."
-  curl https://rustwasm.github.io/wasm-pack/installer/init.sh -sSf | sh
 }
 
 function install_mozjpeg() {
