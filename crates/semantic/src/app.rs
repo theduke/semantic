@@ -505,7 +505,7 @@ impl App {
         let tags = if meta.tag_ids.len() > 0 {
             let mut tags = Vec::new();
             for tag_id in meta.tag_ids {
-                let tag = semantic_core::base::Tag::try_from_map(db.entity(tag_id).await?)?;
+                let tag = Tag::try_from_map(db.entity(tag_id).await?)?;
                 tags.push(tag);
             }
             tags
@@ -1384,10 +1384,29 @@ impl App {
                 self.start_analyze_media(force)?;
                 Ok(api::Reply::AnalyzeMedia(()))
             }
+            api::Query::TagCreate(create) => {
+                let tag = self.tag_create(create).await?;
+                Ok(api::Reply::TagCreate(tag))
+            }
         };
         res.map_err(|err| {
             tracing::error!(?err, "api query failed");
             err
         })
+    }
+
+    async fn tag_create(&self, create: api::TagCreate) -> Result<DataMap, AnyError> {
+        let db = self.require_db()?;
+        let id = Id::random();
+        let tag = Tag {
+            id,
+            name: create.name,
+            description: None,
+            parent_id: None,
+            extra: Default::default(),
+        };
+        db.create(id, tag.clone().into_map()?).await?;
+        let raw = db.entity(id).await?;
+        Ok(raw)
     }
 }

@@ -45,6 +45,7 @@ fn main() {
         .and::<factordb::query::mutate::Replace>()
         //
         .and::<api::Query>()
+        .and::<api::TagCreate>()
         .and::<api::ApiResponse<api::Reply>>()
         .and::<api::ApiError>()
         .and::<api::PluginDelete>()

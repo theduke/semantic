@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 
 use factordb::{
-    prelude::{EntityContainer, Id, IdOrIdent, Item, Mutate, Page, Timestamp},
+    prelude::{DataMap, EntityContainer, Id, IdOrIdent, Item, Mutate, Page, Timestamp},
     AnyError,
 };
 use url::Url;
@@ -284,6 +284,13 @@ pub struct FileDiscardUnOptimized {
 #[derive(serde::Serialize, serde::Deserialize, Clone, Debug)]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[cfg_attr(feature = "schema", derive(ts_rs::TS))]
+pub struct TagCreate {
+    pub name: String,
+}
+
+#[derive(serde::Serialize, serde::Deserialize, Clone, Debug)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[cfg_attr(feature = "schema", derive(ts_rs::TS))]
 pub enum Query {
     ServerStatus(()),
     Initialize(BackendConfig),
@@ -300,6 +307,8 @@ pub enum Query {
     PluginSourceValidate(PluginSource),
     PluginDelete(PluginDelete),
     PluginTestFetch(PluginTestFetch),
+
+    TagCreate(TagCreate),
 
     Import(ImportJob),
     FetchUrl(FetchUrlJob),
@@ -382,6 +391,8 @@ pub enum Reply {
     PluginSourceValidate(()),
     PluginDelete(()),
     PluginTestFetch(Option<FetchUrlOutput>),
+
+    TagCreate(DataMap),
 
     Import(ImportOutput),
     FetchUrl(FetchUrlOutput),
