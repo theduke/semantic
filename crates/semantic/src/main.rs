@@ -311,7 +311,8 @@ async fn upload(cmd: CommandUpload) -> Result<(), AnyError> {
     }
 
     {
-        let mut lock = std::io::stderr().lock();
+        let stdio = std::io::stderr();
+        let mut lock = stdio.lock();
 
         write!(lock, "Found {} files:\n", files.len()).unwrap();
         for file in &files {
