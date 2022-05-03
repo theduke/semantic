@@ -1,0 +1,74 @@
+import { JSX } from "solid-js";
+import { boolean } from "yup";
+import { TextColor } from ".";
+
+const FA_ICON_MAP = {
+  train: "fas fa-train",
+  userGear: "fa-solid fa-user-gear",
+  signOut: "fa-solid fa-right-from-bracket",
+  search: "fas fa-search",
+};
+
+export type IconSize = "is-small" | "is-medium" | "is-large";
+
+export type IconName = keyof typeof FA_ICON_MAP;
+
+export function fontawesomeIconClass(name: IconName): string {
+  return FA_ICON_MAP[name];
+}
+
+export interface IconProps {
+  icon: IconName;
+  color?: TextColor;
+  size?: IconSize;
+  isLeft: boolean;
+}
+
+export function Icon(props: IconProps): JSX.Element {
+  let cls = "icon";
+  if (props.color) {
+    cls += " " + props.color;
+  }
+  if (props.size) {
+    cls += " " + props.size;
+  }
+  if (props.isLeft) {
+    cls += " is-left";
+  }
+  return (
+    <span aria-hidden class={cls}>
+      <i class={fontawesomeIconClass(props.icon)} />
+    </span>
+  );
+}
+
+export interface IconTextProps {
+  icon: IconName;
+  iconColor?: TextColor;
+  color?: TextColor;
+  textColor?: TextColor;
+  text: string;
+  // By default the elemnt is inline-flex. If notInline is set, the icon will
+  // be a flex element.
+  notInline?: boolean;
+}
+
+export function IconText(props: IconTextProps): JSX.Element {
+  let cls = "icon-text";
+  if (props.color) {
+    cls += " " + props.color;
+  }
+
+  const inner = (
+    <>
+      <Icon icon={props.icon} color={props.color} />
+      <span class={props.textColor}>{props.text}</span>
+    </>
+  );
+
+  if (props.notInline) {
+    return <div class={cls}>{inner}</div>;
+  } else {
+    return <span class={cls}>{inner}</span>;
+  }
+}
