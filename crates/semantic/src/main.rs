@@ -265,18 +265,21 @@ async fn upload(cmd: CommandUpload) -> Result<(), AnyError> {
             }
         } else if !cmd.auto_confirm || (cmd.auto_confirm && cmd.collection_create) {
             eprintln!("Collection not found!");
-            eprintln!("Create collection with title '{identifier}'?");
-            eprint!("Confirm [y|yes]: ");
-            let mut input = String::new();
-            {
-                std::io::stdin().read_line(&mut input)?;
-            }
-            eprint!("\n");
 
-            let input = input.trim();
-            if !(input == "y" || input == "yes") {
-                eprintln!("Aborting...");
-                return Ok(());
+            if !cmd.auto_confirm {
+                eprintln!("Create collection with title '{identifier}'?");
+                eprint!("Confirm [y|yes]: ");
+                let mut input = String::new();
+                {
+                    std::io::stdin().read_line(&mut input)?;
+                }
+                eprint!("\n");
+
+                let input = input.trim();
+                if !(input == "y" || input == "yes") {
+                    eprintln!("Aborting...");
+                    return Ok(());
+                }
             }
 
             let collection = semantic_core::base::Collection {
@@ -290,7 +293,7 @@ async fn upload(cmd: CommandUpload) -> Result<(), AnyError> {
             };
 
             client.entity_create(collection.clone()).await?;
-            eprintln!("Collection created!");
+            eprintln!("Collection '{identifier}' created!");
             Some(collection)
         } else {
             bail!("Could not resolve collection '{identifier}: not found");
