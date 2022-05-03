@@ -14,7 +14,6 @@ use crate::{
 #[derive(serde::Serialize, serde::Deserialize, Clone, Debug)]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[cfg_attr(feature = "schema", derive(ts_rs::TS))]
-#[cfg_attr(feature = "schema", ts(export))]
 pub struct SimpleHttpRequest {
     pub url: String,
     pub method: String,
@@ -25,7 +24,6 @@ pub struct SimpleHttpRequest {
 #[derive(serde::Serialize, serde::Deserialize, Clone, Debug)]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[cfg_attr(feature = "schema", derive(ts_rs::TS))]
-#[cfg_attr(feature = "schema", ts(export))]
 pub struct SimpleHttpResponse {
     pub status: u16,
     pub headers: HashMap<String, String>,
@@ -35,7 +33,6 @@ pub struct SimpleHttpResponse {
 #[derive(serde::Serialize, serde::Deserialize, Default, Clone, Debug)]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[cfg_attr(feature = "schema", derive(ts_rs::TS))]
-#[cfg_attr(feature = "schema", ts(export))]
 pub struct SemanticSchema {
     pub db: factordb::schema::DbSchema,
 }
@@ -43,7 +40,6 @@ pub struct SemanticSchema {
 #[derive(serde::Serialize, serde::Deserialize, PartialEq, Eq, Clone)]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[cfg_attr(feature = "schema", derive(ts_rs::TS))]
-#[cfg_attr(feature = "schema", ts(export))]
 pub struct BackendCryptoConfig {
     pub data_path: Option<String>,
     pub key: String,
@@ -65,7 +61,6 @@ impl std::fmt::Debug for BackendCryptoConfig {
 #[derive(serde::Serialize, serde::Deserialize, PartialEq, Eq, Clone, Debug)]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[cfg_attr(feature = "schema", derive(ts_rs::TS))]
-#[cfg_attr(feature = "schema", ts(export))]
 pub enum DbConfig {
     Crypto(BackendCryptoConfig),
 }
@@ -89,7 +84,6 @@ impl DbConfig {
 #[derive(serde::Serialize, serde::Deserialize, Clone, Debug)]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[cfg_attr(feature = "schema", derive(ts_rs::TS))]
-#[cfg_attr(feature = "schema", ts(export))]
 pub struct BackendConfig {
     pub db: DbConfig,
     pub idle_timeout: Option<Seconds>,
@@ -122,7 +116,6 @@ pub type Seconds = u64;
 #[derive(serde::Serialize, serde::Deserialize, Clone, Debug)]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[cfg_attr(feature = "schema", derive(ts_rs::TS))]
-#[cfg_attr(feature = "schema", ts(export))]
 pub struct PluginTestFetch {
     pub runtime: String,
     pub code: String,
@@ -133,7 +126,6 @@ pub struct PluginTestFetch {
 #[derive(serde::Serialize, serde::Deserialize, Clone, Debug)]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[cfg_attr(feature = "schema", derive(ts_rs::TS))]
-#[cfg_attr(feature = "schema", ts(export))]
 pub enum JobStatus {
     Queued {
         queue_position: Option<u64>,
@@ -163,7 +155,6 @@ pub type JobId = uuid::Uuid;
 #[derive(serde::Serialize, serde::Deserialize, Clone, Debug)]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[cfg_attr(feature = "schema", derive(ts_rs::TS))]
-#[cfg_attr(feature = "schema", ts(export))]
 pub struct JobStep {
     pub name: String,
     pub started_at: Option<Timestamp>,
@@ -173,7 +164,6 @@ pub struct JobStep {
 #[derive(serde::Serialize, serde::Deserialize, Clone, Debug)]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[cfg_attr(feature = "schema", derive(ts_rs::TS))]
-#[cfg_attr(feature = "schema", ts(export))]
 pub struct Job {
     pub id: JobId,
     pub name: String,
@@ -246,7 +236,6 @@ impl Job {
 #[derive(serde::Serialize, serde::Deserialize, Clone, Debug)]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[cfg_attr(feature = "schema", derive(ts_rs::TS))]
-#[cfg_attr(feature = "schema", ts(export))]
 pub struct ConvertFile {
     pub file_id: Id,
     pub target_format: String,
@@ -257,7 +246,6 @@ pub struct ConvertFile {
 #[derive(serde::Serialize, serde::Deserialize, Clone, Debug)]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[cfg_attr(feature = "schema", derive(ts_rs::TS))]
-#[cfg_attr(feature = "schema", ts(export))]
 pub struct OptimiseVideo {
     pub video_id: Id,
 }
@@ -265,7 +253,6 @@ pub struct OptimiseVideo {
 #[derive(serde::Serialize, serde::Deserialize, Clone, Debug)]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[cfg_attr(feature = "schema", derive(ts_rs::TS))]
-#[cfg_attr(feature = "schema", ts(export))]
 pub struct OptimiseVideoReply {
     pub job_id: JobId,
 }
@@ -273,7 +260,6 @@ pub struct OptimiseVideoReply {
 #[derive(serde::Serialize, serde::Deserialize, Clone, Debug)]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[cfg_attr(feature = "schema", derive(ts_rs::TS))]
-#[cfg_attr(feature = "schema", ts(export))]
 pub struct FileCreatePreviewImageBlob {
     pub file_id: Id,
     /// base64 encoded image content
@@ -284,7 +270,6 @@ pub struct FileCreatePreviewImageBlob {
 #[derive(serde::Serialize, serde::Deserialize, Clone, Debug)]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[cfg_attr(feature = "schema", derive(ts_rs::TS))]
-#[cfg_attr(feature = "schema", ts(export))]
 pub struct PluginDelete {
     pub name: String,
 }
@@ -292,7 +277,6 @@ pub struct PluginDelete {
 #[derive(serde::Serialize, serde::Deserialize, Clone, Debug)]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[cfg_attr(feature = "schema", derive(ts_rs::TS))]
-#[cfg_attr(feature = "schema", ts(export))]
 pub struct FileDiscardUnOptimized {
     pub file_id: Id,
 }
@@ -300,7 +284,6 @@ pub struct FileDiscardUnOptimized {
 #[derive(serde::Serialize, serde::Deserialize, Clone, Debug)]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[cfg_attr(feature = "schema", derive(ts_rs::TS))]
-#[cfg_attr(feature = "schema", ts(export))]
 pub enum Query {
     ServerStatus(()),
     Initialize(BackendConfig),
@@ -348,7 +331,6 @@ pub struct QueryWithId {
 #[derive(serde::Serialize, serde::Deserialize, Clone, Debug)]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[cfg_attr(feature = "schema", derive(ts_rs::TS))]
-#[cfg_attr(feature = "schema", ts(export))]
 pub struct ServerStatus {
     pub backend_initialized: bool,
     pub backend_status: Option<BackendStatus>,
@@ -357,7 +339,6 @@ pub struct ServerStatus {
 #[derive(serde::Serialize, serde::Deserialize, Clone, Debug)]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[cfg_attr(feature = "schema", derive(ts_rs::TS))]
-#[cfg_attr(feature = "schema", ts(export))]
 pub struct BackendStatus {
     /// Size of database data in kilobytes.
     pub db_size: Option<u64>,
@@ -370,7 +351,6 @@ pub struct BackendStatus {
 #[derive(serde::Serialize, serde::Deserialize, Clone, Debug)]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[cfg_attr(feature = "schema", derive(ts_rs::TS))]
-#[cfg_attr(feature = "schema", ts(export))]
 pub struct BlobInfo {
     pub key: String,
     pub size: u64,
@@ -379,7 +359,6 @@ pub struct BlobInfo {
 #[derive(serde::Serialize, serde::Deserialize, Clone, Debug)]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[cfg_attr(feature = "schema", derive(ts_rs::TS))]
-#[cfg_attr(feature = "schema", ts(export))]
 pub struct UnusedBlobsDeleted {
     pub count: u64,
     pub reclaimed_size: u64,
@@ -388,7 +367,6 @@ pub struct UnusedBlobsDeleted {
 #[derive(serde::Serialize, serde::Deserialize, Clone, Debug)]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[cfg_attr(feature = "schema", derive(ts_rs::TS))]
-#[cfg_attr(feature = "schema", ts(export))]
 pub enum Reply {
     ServerStatus(ServerStatus),
     Initialize(SemanticSchema),
@@ -424,7 +402,6 @@ pub enum Reply {
 #[derive(serde::Serialize, serde::Deserialize, Clone, Debug)]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[cfg_attr(feature = "schema", derive(ts_rs::TS))]
-#[cfg_attr(feature = "schema", ts(export))]
 pub struct ApiError {
     pub message: String,
     pub code: Option<String>,
@@ -434,7 +411,6 @@ pub struct ApiError {
 #[derive(serde::Serialize, serde::Deserialize, Clone, Debug)]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[cfg_attr(feature = "schema", derive(ts_rs::TS))]
-#[cfg_attr(feature = "schema", ts(export))]
 pub enum ApiResponse<T = Reply> {
     Ok(T),
     Err(ApiError),
