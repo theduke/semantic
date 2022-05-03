@@ -1,14 +1,11 @@
 use std::sync::Arc;
 
 use factordb::{
-    prelude::{AttributeDescriptor, Batch, Id, Value},
+    prelude::{Batch, Id},
     AnyError,
 };
 use futures::future::BoxFuture;
-use semantic_core::{
-    api::{FileImportMetadata, FileUploadMetadata},
-    base::AttrTags,
-};
+use semantic_core::api::{FileImportMetadata, FileUploadMetadata};
 
 use crate::app::App;
 
@@ -28,9 +25,10 @@ pub(crate) fn file_upload_apply_meta(
     }
 
     if tags.len() > 0 {
-        let tag_ids = Value::List(tags.iter().map(|t| Value::Id(t.id)).collect::<Vec<_>>());
-        file.extra
-            .insert(AttrTags::QUALIFIED_NAME.to_string(), tag_ids);
+        for tag in tags {
+            let mutation = semantic_core::base::Tag::mutate_add_tag(file.id, tag.id);
+            batch.actions.push(mutation.into());
+        }
     }
 
     Ok(())
