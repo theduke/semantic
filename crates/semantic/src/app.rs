@@ -542,7 +542,9 @@ impl App {
 
                     db.batch(batch).await?;
 
-                    return Ok(TypedFile::from_file(file));
+                    // Reload final file from db.
+                    let final_file = db.entity(file.id).await?;
+                    return TypedFile::from_map(final_file);
                 }
             }
         }
