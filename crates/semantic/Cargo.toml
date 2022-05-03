@@ -26,7 +26,7 @@ tracing = "0.1.26"
 tracing-subscriber = { version = "0.3.3", features = ["fmt", "env-filter"] }
 
 mime_guess = "2.0.3"
-infer = "0.5.0"
+infer = "0.7.0"
 
 # async
 futures = "0.3.15"
@@ -47,10 +47,10 @@ factordb = "0.1"
 factor_engine = "0.1"
 factor_tools = "0.1"
 
-jsonwebtoken = { version = "7.2.0" }
+jsonwebtoken = { version = "8.1.0" }
 serde = { version = "1.0.127", features = ["derive"] }
-axum = "0.4.2"
-tower-http = { version = "0.2.0", features = ["trace", "fs"] }
+axum = "0.5.0"
+tower-http = { version = "0.3.0", features = ["trace", "fs"] }
 dirs = "4.0.0"
 tower = "0.4.8"
 
@@ -62,12 +62,12 @@ url = "2.2.2"
 # tracing-tree = "0.1.10"
 serde_path_to_error = "0.1.5"
 
-oxipng = { version = "5.0.0", optional = true }
+oxipng = { version = "5.0.0", optional = true, default-features = false, features = ["parallel", "zopfli"] }
 mozjpeg = { version = "0.9.1", optional = true }
 
 semantic_core = { path = "../core" }
 semantic_extra = { version = "0.1", path = "../plugins/extra", default-features = false }
-tokio-util = { version = "0.6.9", features = ["io"] }
+tokio-util = { version = "0.7.0", features = ["io"] }
 headers = "0.3.5"
 
 tar = { version =  "0.4.37", optional = true }
