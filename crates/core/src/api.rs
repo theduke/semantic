@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::{collections::HashMap, ops::Deref};
 
 use factordb::{
     prelude::{DataMap, EntityContainer, Id, IdOrIdent, Item, Mutate, Page, Timestamp},
@@ -10,6 +10,8 @@ use crate::{
     core::PluginSource,
     plugin::{FetchUrlJob, FetchUrlOutput, ImportJob, ImportOutput},
 };
+
+pub const DEFAULT_PORT: u16 = 3000;
 
 #[derive(serde::Serialize, serde::Deserialize, Clone, Debug)]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
@@ -448,6 +450,14 @@ pub trait ApiClientExecutor {
 #[derive(Clone)]
 pub struct ApiClient<E: ApiClientExecutor> {
     exec: E,
+}
+
+impl<E: ApiClientExecutor> Deref for ApiClient<E> {
+    type Target = E;
+
+    fn deref(&self) -> &Self::Target {
+        &self.exec
+    }
 }
 
 impl<E: ApiClientExecutor> ApiClient<E> {

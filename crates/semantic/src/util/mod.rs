@@ -5,6 +5,8 @@ pub mod archive;
 
 pub mod media;
 
+pub mod api_client;
+
 pub fn json_from_slice<T: serde::de::DeserializeOwned>(
     slice: &[u8],
 ) -> Result<T, serde_path_to_error::Error<serde_json::Error>> {

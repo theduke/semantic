@@ -1,12 +1,20 @@
 use anyhow::{anyhow, bail, Context};
-use factordb::AnyError;
+use bytesize::ByteSize;
+use factordb::{
+    prelude::{AttrId, AttrIdent, AttributeDescriptor, EntityContainer, Id},
+    AnyError,
+};
 use semantic_core::{
-    api::{self, DbConfig},
-    base::SemanticBasePlugin,
+    api::{self, ApiClientExecutor, DbConfig},
+    base::{AttrTagName, SemanticBasePlugin, Tag},
     plugin::PluginDescriptor,
 };
-use std::{io::Write, path::PathBuf, sync::Arc};
-use structopt::StructOpt;
+use std::{
+    io::Write,
+    os::unix::prelude::OsStrExt,
+    path::{Path, PathBuf},
+    sync::Arc,
+};
 
 use semantic::{
     app::{self, App},
@@ -30,7 +38,7 @@ fn main() {
     // tracing::subscriber::set_global_default(subscriber).unwrap();
     tracing_subscriber::fmt::init();
 
-    let args = CliArgs::from_args();
+    let args = <CliArgs as clap::Parser>::parse();
 
     match args.command {
         CliCommand::Server(subargs) => {
@@ -164,7 +172,255 @@ fn main() {
         CliCommand::CompactDb(cmd) => {
             compact(cmd).expect("Compaction failed");
         }
+        CliCommand::Upload(cmd) => {
+            run_upload(cmd);
+        }
     }
+}
+
+fn run_upload(cmd: CommandUpload) {
+    let rt = tokio::runtime::Runtime::new().unwrap();
+
+    match rt.block_on(upload(cmd)) {
+        Ok(_) => {}
+        Err(err) => {
+            eprintln!("Upload failed!\n{err}");
+            std::process::exit(1);
+        }
+    }
+}
+
+async fn resolve_tags<E, L, V>(
+    client: &api::ApiClient<E>,
+    tag_names: L,
+) -> Result<Vec<Tag>, anyhow::Error>
+where
+    E: ApiClientExecutor,
+    L: AsRef<[V]>,
+    V: AsRef<str>,
+{
+    use factordb::prelude as db;
+
+    let mut tags = Vec::<Tag>::new();
+    for name in tag_names.as_ref() {
+        let name = name.as_ref().trim();
+
+        let filter = db::Expr::is_entity::<Tag>().and_with(
+            db::Expr::eq(AttrId::expr(), name)
+                .or_with(db::Expr::eq(AttrIdent::expr(), name))
+                .or_with(db::Expr::eq(AttrTagName::expr(), name)),
+        );
+        let select = db::Select::new().with_filter(filter);
+        let page = client.select(select).await?;
+
+        if let Some(item) = page.items.first() {
+            let tag = Tag::try_from_map(item.data.clone())?;
+
+            if page.items.len() == 1 {
+                tags.push(tag.clone());
+            } else {
+                bail!("Cound not resolve tag '{name}': found multiple matches");
+            };
+        } else {
+            bail!("Could not resolve tag '{name}': not found");
+        }
+    }
+
+    Ok(tags)
+}
+
+async fn upload(cmd: CommandUpload) -> Result<(), AnyError> {
+    if cmd.paths.is_empty() {
+        bail!("Must specify at least one path");
+    }
+
+    let endpoint = cmd
+        .address
+        .unwrap_or_else(|| format!("http://localhost:{}", api::DEFAULT_PORT));
+    let client = api::ApiClient::new(semantic::ApiClient::new(&endpoint)?);
+
+    // If tags were specified, resolve them.
+    let tags = if cmd.tag.is_empty() {
+        Vec::new()
+    } else {
+        eprintln!("Resolving tags...");
+        let items = resolve_tags(&client, &cmd.tag).await?;
+        items
+    };
+
+    // Resolve the target gallery, if specified.
+    let collection = if let Some(identifier) = cmd.collection {
+        eprintln!("Resolving collection...");
+        let identifier = identifier.trim();
+        let select = semantic_core::base::Collection::query_resolve_collection_name(&identifier);
+        let page = client.select(select).await?;
+
+        if let Some(item) = page.items.first() {
+            if page.items.len() == 1 {
+                Some(semantic_core::base::Collection::try_from_map(
+                    item.data.clone(),
+                )?)
+            } else {
+                bail!("Could not resolve collection '{identifier}': found multiple matches");
+            }
+        } else if !cmd.auto_confirm || (cmd.auto_confirm && cmd.collection_create) {
+            eprintln!("Collection not found!");
+            eprintln!("Create collection with title '{identifier}'?");
+            eprint!("Confirm [y|yes]: ");
+            let mut input = String::new();
+            {
+                std::io::stdin().read_line(&mut input)?;
+            }
+            eprint!("\n");
+
+            let input = input.trim();
+            if !(input == "y" || input == "yes") {
+                eprintln!("Aborting...");
+                return Ok(());
+            }
+
+            let collection = semantic_core::base::Collection {
+                id: Id::random(),
+                ident: None,
+                url: None,
+                title: identifier.to_string(),
+                description: None,
+                item_ids: Vec::new(),
+                extra: Default::default(),
+            };
+
+            client.entity_create(collection.clone()).await?;
+            eprintln!("Collection created!");
+            Some(collection)
+        } else {
+            bail!("Could not resolve collection '{identifier}: not found");
+        }
+    } else {
+        None
+    };
+
+    eprintln!("Searching for files...");
+    let mut files = Vec::<FileItem>::new();
+    for path in cmd.paths {
+        let canonical = std::fs::canonicalize(path)?;
+        find_files(&canonical, &mut files)?;
+    }
+
+    if files.is_empty() {
+        bail!("No files found.");
+    }
+
+    {
+        let mut lock = std::io::stderr().lock();
+
+        write!(lock, "Found {} files:\n", files.len()).unwrap();
+        for file in &files {
+            write!(
+                lock,
+                "* {} ({})\n",
+                file.path.display(),
+                ByteSize(file.size)
+            )
+            .unwrap();
+        }
+
+        write!(lock, "\n").unwrap();
+    }
+
+    if !cmd.auto_confirm {
+        let total_size: u64 = files.iter().map(|f| f.size).sum();
+        let tag_info = if tags.is_empty() {
+            "".to_string()
+        } else {
+            let names = tags
+                .iter()
+                .map(|t| t.name.as_str())
+                .collect::<Vec<_>>()
+                .join(", ");
+
+            format!("Adding tags: {}\n", names)
+        };
+        let collection_info = collection
+            .as_ref()
+            .map(|c| format!("Adding to collection: {}\n", c.title))
+            .unwrap_or_default();
+        eprint!(
+            "{} file(s) with total size of {}\n{collection_info}{tag_info}\nReally upload: [y|yes]: ",
+            files.len(),
+            ByteSize(total_size),
+        );
+        let mut buf = String::new();
+        std::io::stdin().read_line(&mut buf)?;
+        eprint!("\n");
+
+        let clean = buf.trim();
+        if !(clean == "y" || clean == "yes") {
+            eprintln!("Aborting...");
+            return Ok(());
+        }
+    }
+
+    eprintln!("Uploading files...");
+
+    let title = if files.len() == 1 { cmd.title } else { None };
+
+    let tag_ids: Vec<_> = tags.iter().map(|t| t.id).collect();
+
+    for file in files {
+        eprintln!("Uplading {}...", file.path.display());
+
+        let filename = file
+            .path
+            .file_name()
+            .map(|n| String::from_utf8_lossy(n.as_bytes()))
+            .map(|s| s.to_string());
+
+        let meta = api::FileUploadMetadata {
+            filename,
+            title: title.clone(),
+            collection_id: collection.as_ref().map(|c| c.id),
+            tag_ids: tag_ids.clone(),
+        };
+
+        let file = std::fs::File::open(&file.path)
+            .with_context(|| format!("Could  not open file: {}", file.path.display()))?;
+        let f = client.upload_file_std(meta, file).await?;
+
+        // TODO: nicer formatting...
+        eprintln!("{}", serde_json::to_string_pretty(&f).unwrap());
+    }
+
+    eprintln!("\nUpload complete!");
+
+    Ok(())
+}
+
+struct FileItem {
+    path: PathBuf,
+    size: u64,
+}
+
+fn find_files(path: &Path, buffer: &mut Vec<FileItem>) -> Result<(), AnyError> {
+    let meta = path
+        .metadata()
+        .with_context(|| format!("Could not read {}", path.display()))?;
+    if meta.is_file() {
+        buffer.push(FileItem {
+            path: path.to_owned(),
+            size: meta.len(),
+        });
+    } else if meta.is_dir() {
+        let reader = std::fs::read_dir(path)
+            .with_context(|| format!("Could not enumerate diretory {}", path.display()))?;
+
+        for res in reader {
+            let entry =
+                res.with_context(|| format!("Could not enumerate diretory {}", path.display()))?;
+            find_files(&entry.path(), buffer)?;
+        }
+    }
+
+    Ok(())
 }
 
 fn compact(cmd: CommandCompactDb) -> Result<(), anyhow::Error> {
@@ -260,13 +516,13 @@ fn compact(cmd: CommandCompactDb) -> Result<(), anyhow::Error> {
 }
 
 /// Semantic CLI
-#[derive(StructOpt)]
+#[derive(clap::Parser)]
 struct CliArgs {
-    #[structopt(subcommand)]
+    #[clap(subcommand)]
     command: CliCommand,
 }
 
-#[derive(StructOpt)]
+#[derive(clap::Subcommand)]
 enum CliCommand {
     Server(CommandServer),
     ImportFiles(CommandImportFiles),
@@ -276,31 +532,32 @@ enum CliCommand {
     CompactDb(CommandCompactDb),
     /// Generate an archive that contains all data and blobs.
     Export {
-        #[structopt(flatten)]
+        #[clap(flatten)]
         backend: BackendOptions,
 
         /// Path where the export should be written.
         /// If not given, data is written to stdout.
         path: Option<String>,
     },
+    Upload(CommandUpload),
 }
 
-#[derive(StructOpt)]
+#[derive(clap::Parser)]
 struct GenerateTypescript {}
 
-#[derive(StructOpt, Clone)]
+#[derive(clap::Parser, Clone)]
 struct BackendOptions {
-    #[structopt(long, env = "SEMANTIC_DATA_PATH")]
+    #[clap(long, env = "SEMANTIC_DATA_PATH")]
     data_path: Option<String>,
-    #[structopt(long, short, env = "SEMANTIC_KEY")]
+    #[clap(long, short, env = "SEMANTIC_KEY")]
     key: Option<String>,
-    #[structopt(long, env = "SEMANTIC_KEY_ITERATIONS")]
+    #[clap(long, env = "SEMANTIC_KEY_ITERATIONS")]
     key_iterations: Option<u32>,
-    #[structopt(long, env = "SEMANTIC_SALT")]
+    #[clap(long, env = "SEMANTIC_SALT")]
     salt: Option<String>,
     /// Binary offset in the storage file.
     /// Either a number of bytes, or a parsable pretty byte number like "300mb".
-    #[structopt(long)]
+    #[clap(long)]
     offset: Option<String>,
 }
 
@@ -336,55 +593,92 @@ impl BackendOptions {
 
 pub struct DenoOptions {}
 
-#[derive(StructOpt)]
+#[derive(clap::Parser)]
 /// Import files into a semantic database.
 struct CommandImportFiles {
-    #[structopt(flatten)]
+    #[clap(flatten)]
     backend: BackendOptions,
 
     paths: Vec<std::path::PathBuf>,
 }
 
 /// Run the semantic server backend.
-#[derive(StructOpt)]
+#[derive(clap::Parser)]
 struct CommandServer {
-    #[structopt(flatten)]
+    #[clap(flatten)]
     backend: BackendOptions,
 
     /// Do not initialize a backend.
     /// The backend will have to be configured via the UI.
-    #[structopt(long)]
+    #[clap(long)]
     no_backend: bool,
 
     /// The server interface to listen on.
     /// eg: `0.0.0.0:3000`
-    #[structopt(long, env = "SEMANTIC_ADDRESS")]
+    #[clap(long, env = "SEMANTIC_ADDRESS")]
     address: Option<String>,
 
     /// The key used for JWT token encryption.
-    #[structopt(long, env = "SEMANTIC_TOKEN_KEY")]
+    #[clap(long, env = "SEMANTIC_TOKEN_KEY")]
     token_key: Option<String>,
 
-    #[structopt(long, env = "SEMANTIC_TMP_DIR")]
+    #[clap(long, env = "SEMANTIC_TMP_DIR")]
     tmp_dir: Option<String>,
 }
 
-#[derive(StructOpt)]
+#[derive(clap::Parser)]
 struct CommandCompactDb {
-    #[structopt(flatten)]
+    #[clap(flatten)]
     backend: BackendOptions,
     /// The new password to use.
     /// If not set, the old one will be reused.
-    #[structopt(long)]
+    #[clap(long)]
     new_password: Option<String>,
-    #[structopt(long)]
+    #[clap(long)]
     force: bool,
     /// The path for the new, compacted database.
     new_path: String,
 }
 
+#[derive(clap::Parser)]
+struct CommandUpload {
+    /// Run in non-interactive mode without any prompts.
+    #[clap(short = 'y', long)]
+    auto_confirm: bool,
+
+    /// The URL of the semantic server.
+    #[clap(long)]
+    address: Option<String>,
+
+    /// Existing collection to upload files to.
+    /// Can be the gallery title, ident or id.
+    #[clap(long, short = 'c')]
+    collection: Option<String>,
+
+    /// If the speicified collection can not be found, create it.
+    #[clap(long)]
+    collection_create: bool,
+
+    /// The title to give the uploaded file.
+    ///
+    /// NOTE: only works if a SINGLE file is uploaded.
+    /// Will produce an error if multiple files are selected.
+    #[clap(long)]
+    title: Option<String>,
+
+    /// Tag(s) to add to the uploaded file(s).
+    ///
+    /// Each specified tag can be either the tag name, ident or ID.
+    #[clap(short = 't', long)]
+    tag: Vec<String>,
+
+    /// The file system paths.
+    /// Each path be either a file or a directory.
+    paths: Vec<PathBuf>,
+}
+
 /// Run a semantic UI inside webkit.
 #[cfg(feature = "webkit")]
-#[derive(StructOpt)]
-#[structopt(about = "Semantic CLI")]
+#[derive(clap::Parser)]
+#[clap(about = "Semantic CLI")]
 struct CommandWebkit {}

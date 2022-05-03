@@ -49,6 +49,18 @@ pub struct Collection {
 impl Collection {
     pub const ITEMS_JOIN: &'static str = "items";
 
+    /// Construct a query that finds a collection by name.
+    /// The name can either be the ident, the name or the id.
+    pub fn query_resolve_collection_name(name: &str) -> Select {
+        let filter = Expr::is_entity::<Self>().and_with(
+            Expr::eq(AttrId::expr(), name)
+                .or_with(Expr::eq(AttrIdent::expr(), name))
+                .or_with(Expr::eq(AttrTitle::expr(), name)),
+        );
+
+        Select::new().with_filter(filter)
+    }
+
     /// Build a select query that returns all collections that contain the given
     /// entity.
     pub fn query_collections_with_entity(id: Id) -> Select {
