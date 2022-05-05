@@ -262,6 +262,6 @@ fn render_graph(_habit: &Habit, items: &[HabitOccurence]) -> TagBuilder {
     div()
         .style(Style::Height, "400px")
         .class("is-flex")
-        .child(x_axis)
-        .child(bar_wrap)
+        .tag(x_axis)
+        .tag(bar_wrap)
 }

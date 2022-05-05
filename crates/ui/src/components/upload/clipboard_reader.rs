@@ -6,7 +6,7 @@ use semantic_ui_core::components::util::notification_default;
 pub fn clipboard_reader(on_paste: impl Fn(Vec<web_sys::File>) + 'static) -> TagBuilder {
     let sub = EventSubscription::subscribe(
         web_sys::window().unwrap().into(),
-        brass::dom::Event::Paste,
+        brass::dom::Ev::Paste,
         move |ev: web_sys::ClipboardEvent| {
             if let Some(files) = ev.clipboard_data().and_then(|d| d.files()) {
                 let items: Vec<web_sys::File> = (0..files.length())

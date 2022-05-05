@@ -140,7 +140,7 @@ pub fn render_value(value: &Value, parent: &mut TagBuilder) {
                 li
             });
 
-            parent.add_child(Tag::Ul.new().and_iter(entries))
+            parent.add_tag(Tag::Ul.new().and_iter(entries))
         }
         Value::Map(map) => {
             let mut table = table();
@@ -150,13 +150,13 @@ pub fn render_value(value: &Value, parent: &mut TagBuilder) {
                 let mut td_value = Tag::Td.new();
                 render_value(value, &mut td_value);
                 let tr = Tag::Tr.new().and((td_key, td_value));
-                table.add_child(tr);
+                table.add_tag(tr);
             }
             table.apply(parent);
         }
         Value::Id(id) => {
             let link = link(Route::Entity(id.clone().into()), &id.to_string());
-            parent.add_child(link);
+            parent.add_tag(link);
         }
     }
 }
@@ -176,7 +176,7 @@ pub fn attr_value(
 ) {
     if let Some(renderer) = registry.attr_renderer(&attr.ident) {
         let out = renderer(value, data);
-        parent.add_child(out);
+        parent.add_tag(out);
     } else {
         attr_value_generic(attr, value, parent);
     }
@@ -215,7 +215,7 @@ pub fn entity_fields_table(
                 title = key.as_str();
             };
 
-            Tag::Tr.new().child(Tag::Th.new().text(title)).child(td_val)
+            Tag::Tr.new().tag(Tag::Th.new().text(title)).tag(td_val)
         });
 
     table().and_iter(rows)

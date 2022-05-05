@@ -1,6 +1,6 @@
 use wasm_bindgen::JsCast;
 
-use brass::dom::{builder::div, Attr, Event, Tag, TagBuilder, View};
+use brass::dom::{builder::div, Attr, Ev, Tag, TagBuilder, View};
 use factordb::{
     prelude::{EntityContainer, Id},
     query::select::Item,
@@ -186,8 +186,8 @@ pub fn video_player(info: VideoInfo, options: &MediaRenderOpts) -> (TagBuilder, 
         .attr_toggle(Attr::Controls)
         .attr_toggle_if(options.muted, Attr::Muted)
         .attr_toggle_if(options.playing, Attr::AutoPlay)
-        .on_event(Event::Ended, on_finished)
-        .on_event(Event::Error, on_error)
+        .on_event(Ev::Ended, on_finished)
+        .on_event(Ev::Error, on_error)
         .and(source);
 
     let handle = VideoPlayerHandle {

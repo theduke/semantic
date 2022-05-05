@@ -71,12 +71,12 @@ fn collection_meta(col: &Collection) -> TagBuilder {
     let mut content = div();
 
     if let Some(v) = &col.description {
-        content.add_child(Tag::P.new().and(v));
+        content.add_tag(Tag::P.new().and(v));
     }
 
     if let Some(url) = &col.url {
         let url = url.to_string();
-        content.add_child(
+        content.add_tag(
             Tag::P
                 .new()
                 .and(Tag::A.new().and(&url).attr(Attr::Href, url)),

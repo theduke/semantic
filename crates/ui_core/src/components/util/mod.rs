@@ -5,7 +5,7 @@ use std::{collections::HashSet, hash::Hash, sync::atomic::AtomicBool};
 use brass::{
     dom::{
         builder::{div, p, span, tag},
-        Apply, Attr, ChangeEvent, ClickEvent, Event, InputEvent, Render, Tag, TagBuilder, View,
+        Apply, Attr, ChangeEvent, ClickEvent, Ev, InputEvent, Render, Tag, TagBuilder, View,
         WithSignal,
     },
     signal::signal::{Signal, SignalExt},
@@ -157,7 +157,7 @@ pub fn notification_error() -> TagBuilder {
 pub fn notification_with_errors(errors: impl IntoIterator<Item = impl Apply>) -> TagBuilder {
     let mut list = tag(Tag::Ul);
     for err in errors {
-        list.add_child(tag(Tag::Li).and(err));
+        list.add_tag(tag(Tag::Li).and(err));
     }
 
     notification_error().and(list)
@@ -181,7 +181,7 @@ impl NotificationBuilder {
 
     pub fn msg<'a>(mut self, color: Color, msg: impl Into<DomStr<'a>>) -> Self {
         self.tag.add_class(color);
-        self.tag.add_child(Tag::P.new().text(msg));
+        self.tag.add_tag(Tag::P.new().text(msg));
         self
     }
 
@@ -194,7 +194,7 @@ impl NotificationBuilder {
     }
 
     pub fn buttons(mut self, btns: ButtonGroupBuilder) -> Self {
-        self.tag.add_child(btns.tag);
+        self.tag.add_tag(btns.tag);
         self
     }
 
@@ -303,7 +303,7 @@ impl ButtonBuilder {
     }
 
     pub fn label<'a>(mut self, label: impl Into<DomStr<'a>>) -> Self {
-        self.tag.add_child(span().text(label));
+        self.tag.add_tag(span().text(label));
         self
     }
 
@@ -355,7 +355,7 @@ impl ButtonBuilder {
     }
 
     pub fn icon<'a>(mut self, icon_classes: &str) -> Self {
-        self.tag.add_child(icon(icon_classes));
+        self.tag.add_tag(icon(icon_classes));
         self
     }
 
@@ -401,7 +401,7 @@ impl ButtonGroupBuilder {
         label: impl Into<DomStr<'a>>,
         on_click: impl Fn() + 'static,
     ) -> Self {
-        self.tag.add_child(
+        self.tag.add_tag(
             ButtonBuilder::new()
                 .color(color)
                 .label(label)
@@ -417,7 +417,7 @@ impl ButtonGroupBuilder {
         on_click: impl Fn() + 'static,
     ) -> Self {
         self.tag
-            .add_child(ButtonBuilder::new().label(label).on(on_click).build());
+            .add_tag(ButtonBuilder::new().label(label).on(on_click).build());
         self
     }
 
@@ -573,13 +573,12 @@ impl FormFieldBuilder {
     }
 
     pub fn control(mut self, elem: TagBuilder) -> Self {
-        self.tag.add_child(div().class(Cls::Control).and(elem));
+        self.tag.add_tag(div().class(Cls::Control).and(elem));
         self
     }
 
     pub fn help(mut self, color: Option<Color>, content: impl Apply) -> Self {
-        self.tag
-            .add_child(tag(Tag::P).class_opt(color).and(content));
+        self.tag.add_tag(tag(Tag::P).class_opt(color).and(content));
         self
     }
 
@@ -597,11 +596,11 @@ impl Render for FormFieldBuilder {
 pub fn form_field<V: Clone, F: 'static>(
     name: &str,
     handle: FieldHandle<V, F>,
-    mut content: TagBuilder,
+    content: TagBuilder,
 ) -> TagBuilder {
     let help = tag(Tag::P).class(Cls::Help);
 
-    {
+    let f = {
         let content_elem = content.elem().clone();
         let help_elem = help.elem().clone();
         let help_text = create_text(empty_string().into());
@@ -609,7 +608,7 @@ pub fn form_field<V: Clone, F: 'static>(
 
         let mut have_errors = false;
         let mut have_success = false;
-        let f = handle.for_each(move |status| {
+        handle.for_each(move |status| {
             if let Err(errors) = &status.errors {
                 if have_success {
                     elem_remove_class_js(&content_elem, Color::Success.as_js_string());
@@ -636,9 +635,10 @@ pub fn form_field<V: Clone, F: 'static>(
 
                 set_text_data(&help_text, &empty_string().into());
             }
-        });
-        content.register_future(f);
-    }
+        })
+    };
+    // TODO: need a spawn_ui method because the future should run on the brass UI executor.
+    let content = content.spawn(f);
 
     field()
         .and(label().and(name))
@@ -750,7 +750,7 @@ where
             handle2.set(opt.value.clone());
         }
     });
-    let content = div().class(Cls::Select).child(sel);
+    let content = div().class(Cls::Select).tag(sel);
 
     form_field(name, handle, content)
 
@@ -897,7 +897,7 @@ impl<'a, V: Clone> FormButtonBuilder<'a, V> {
 
     pub fn submit(mut self, label: &str) -> Self {
         self.control
-            .add_child(form_button_submit(label, self.handle.clone()));
+            .add_tag(form_button_submit(label, self.handle.clone()));
         self
     }
 
@@ -906,7 +906,7 @@ impl<'a, V: Clone> FormButtonBuilder<'a, V> {
         V: Default,
     {
         self.control
-            .add_child(form_button_reset_default(label, self.handle.clone()));
+            .add_tag(form_button_reset_default(label, self.handle.clone()));
         self
     }
 
@@ -941,7 +941,7 @@ impl<V: Clone + 'static> FormRenderer<V> {
     pub fn new(handle: FormHandle<V>) -> Self {
         let mut form = tag(Tag::Form);
         let handle2 = handle.clone();
-        form.add_event_listener(Event::Submit, move |ev| {
+        form.add_event_listener(Ev::Submit, move |ev| {
             ev.prevent_default();
             ev.stop_propagation();
 
@@ -955,7 +955,7 @@ impl<V: Clone + 'static> FormRenderer<V> {
         field: FieldHandle<V, F>,
         render: impl FnOnce(FieldHandle<V, F>) -> TagBuilder,
     ) -> Self {
-        self.tag.add_child(render(field));
+        self.tag.add_tag(render(field));
         self
     }
 
@@ -978,7 +978,7 @@ impl<V: Clone + 'static> FormRenderer<V> {
         f: impl FnOnce(FormButtonBuilder<'_, V>) -> FormButtonBuilder<'_, V>,
     ) -> Self {
         self.tag
-            .add_child(f(FormButtonBuilder::new(&self.handle)).build());
+            .add_tag(f(FormButtonBuilder::new(&self.handle)).build());
         self
     }
 

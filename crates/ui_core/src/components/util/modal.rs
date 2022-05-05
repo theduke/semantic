@@ -40,7 +40,7 @@ pub fn modal<C: Apply>(
         let on_close = on_close.clone();
         let sub = EventSubscription::subscribe(
             window().clone().into(),
-            brass::dom::Event::KeyDown,
+            brass::dom::Ev::KeyDown,
             move |ev: web_sys::KeyboardEvent| {
                 if ev.code() == "Escape" {
                     on_close()

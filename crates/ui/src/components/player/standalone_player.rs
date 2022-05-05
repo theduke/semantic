@@ -1,6 +1,6 @@
 use brass::{
     component::{msg::MsgComponent, Context},
-    dom::{builder::div, Attr, ClickEvent, Event, Render, Tag, TagBuilder, View},
+    dom::{builder::div, Attr, ClickEvent, Ev, Render, Tag, TagBuilder, View},
     effect::EventSubscription,
     signal::signal::{Mutable, SignalExt},
 };
@@ -124,7 +124,7 @@ impl MsgComponent for State {
 
             Some(brass::effect::EventSubscription::subscribe(
                 web_sys::window().unwrap().into(),
-                brass::dom::Event::KeyDown,
+                brass::dom::Ev::KeyDown,
                 move |e: web_sys::KeyboardEvent| handle.send(Msg::KeyPress(e.code())),
             ))
         } else {
@@ -463,7 +463,7 @@ impl MsgComponent for State {
             .style_raw("flex-grow: 1; overflow: hidden;")
             .class_signal_toggle(Cls::IsHidden, self.loader.signal_loading())
             .on_event(
-                Event::FullScreenChange,
+                Ev::FullScreenChange,
                 ctx.on_opt(|_ev: web_sys::Event| {
                     let is_fullscreen = brass::web::document_fullscreen_element().is_some();
                     Some(Msg::OnFullscreenChange { is_fullscreen })

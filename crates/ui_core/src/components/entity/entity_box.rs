@@ -278,7 +278,7 @@ impl MsgComponent for State {
                     content.add_signal(signal);
                 }
                 None => {
-                    content.add_child(super::entity_fields_table(
+                    content.add_tag(super::entity_fields_table(
                         &item.data,
                         entity.as_ref(),
                         &registry,

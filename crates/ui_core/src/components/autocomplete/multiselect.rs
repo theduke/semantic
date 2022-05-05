@@ -389,7 +389,7 @@ pub fn multiselect_render_tags<'a, T: Clone>(
             .unwrap()
             .clone();
 
-        let mut p = Tag::P
+        let p = Tag::P
             .new()
             .class("control")
             .class("has-icons-left")
@@ -405,11 +405,11 @@ pub fn multiselect_render_tags<'a, T: Clone>(
             );
 
         let handle = handle.clone();
-        p.register_future(async move {
+        // TODO: need a spawn_ui method because the future should run on the brass UI executor.
+        p.spawn(async move {
             input_elem.focus().ok();
             handle.send(MultiSelectMsg::SearchElemChanged(input_elem));
-        });
-        p
+        })
     };
 
     let actions = {
