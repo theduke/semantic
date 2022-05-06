@@ -195,12 +195,12 @@ impl App {
             PathBuf::from(Self::default_data_path()?).join("db")
         };
 
-        let log_config = logfs::LogConfig {
-            path: data_path.clone().into(),
-            raw_mode: crypto.raw,
-            allow_create: true,
-            offset: crypto.offset,
-            crypto: Some(logfs::CryptoConfig {
+        let log_config = logfs::ConfigBuilder::new(data_path.clone())
+            .raw_mode()
+            .allow_create()
+            .offset(crypto.offset)
+            .default_chunk_size(8_000_000)
+            .crypto(logfs::CryptoConfig {
                 key: crypto.key.clone().into(),
                 salt: crypto
                     .salt
@@ -215,9 +215,8 @@ impl App {
                 } else {
                     NonZeroU32::new(3_000_000).unwrap()
                 },
-            }),
-            default_chunk_size: 8_000_000,
-        };
+            })
+            .build();
 
         let log = logfs::LogFs::<logfs::Journal2>::open(log_config)
             .map_err(|err| {
@@ -234,44 +233,8 @@ impl App {
         tracing::debug!(?config, "configuring backend");
         let state = match &config.db {
             DbConfig::Crypto(crypto) => {
-                let data_path = if let Some(p) = &crypto.data_path {
-                    PathBuf::from(p.clone())
-                } else {
-                    PathBuf::from(Self::default_data_path()?).join("db")
-                };
+                let log = Self::build_logfs(crypto)?;
 
-                let log_config = logfs::LogConfig {
-                    path: data_path.clone().into(),
-                    raw_mode: crypto.raw,
-                    allow_create: true,
-                    offset: crypto.offset,
-                    crypto: Some(logfs::CryptoConfig {
-                        key: crypto.key.clone().into(),
-                        salt: crypto
-                            .salt
-                            .clone()
-                            .map(|x| x.into_bytes())
-                            .unwrap_or(b"semantic".to_vec())
-                            .into(),
-                        iterations: if let Some(iters) = crypto.key_iterations {
-                            NonZeroU32::new(iters).ok_or_else(|| {
-                                anyhow!(
-                                    "Invalid number of key iterations: must be a positive number"
-                                )
-                            })?
-                        } else {
-                            NonZeroU32::new(3_000_000).unwrap()
-                        },
-                    }),
-                    default_chunk_size: 8_000_000,
-                };
-
-                let log = logfs::LogFs::<logfs::Journal2>::open(log_config)
-                    .map_err(|err| {
-                        tracing::error!(?err, "Could not open logfs");
-                        err
-                    })
-                    .context(format!("Could not open logfs at '{:?}'", data_path))?;
                 let db = crate::db::logdb::LogDbStore::new(log.clone())
                     .build_db()
                     .await
