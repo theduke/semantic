@@ -20,7 +20,7 @@ export function Notification(props: NotificationProps): JSX.Element {
 }
 
 export function NotificationError(
-  props: Omit<NotificationProps, "color">
+  props: Omit<NotificationProps, "color" | "class">
 ): JSX.Element {
   return <Notification {...props} color="is-danger" />;
 }
