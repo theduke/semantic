@@ -66,7 +66,11 @@ pub async fn run_server(
     let state = Arc::new(ServerState { config, app });
 
     let router = axum::Router::new()
-        .route("/api/query", post(handler_api_query))
+        .route(
+            "/api/query",
+            post(handler_api_query)
+                .route_layer(tower_http::compression::CompressionLayer::new().gzip(true)),
+        )
         .route(
             "/api/upload-file",
             post(handler_blob_upload).options(cors_handler),
