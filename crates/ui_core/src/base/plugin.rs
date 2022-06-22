@@ -2,7 +2,7 @@ use std::rc::Rc;
 
 use brass::dom::{builder::div, Attr, Tag, TagBuilder};
 use factordb::prelude::{AttrMapExt, AttributeDescriptor, DataMap, EntityDescriptor, Id, Value};
-use semantic_core::base::{self, AttrPreviewImageUrl};
+use semantic_core::base::{self, AttrPreviewImageUrl, AttrUrl};
 
 use crate::{
     components::entity::{render_image, render_value, render_video},
@@ -33,6 +33,11 @@ impl BrowserPlugin for BasePlugin {
         registry.register_attr_renderer(
             semantic_core::base::AttrBlobUri::QUALIFIED_NAME.to_string(),
             std::rc::Rc::new(render_blob_uri),
+        );
+
+        registry.register_attr_renderer(
+            AttrUrl::QUALIFIED_NAME.to_string(),
+            std::rc::Rc::new(render_url),
         );
 
         // Note
@@ -180,5 +185,15 @@ fn render_blob_uri(value: &Value, entity: Option<&DataMap>) -> TagBuilder {
         let mut t = Tag::Span.new();
         render_value(value, &mut t);
         t
+    }
+}
+
+fn render_url(value: &Value, _entity: Option<&DataMap>) -> TagBuilder {
+    if let Some(s) = value.as_str() {
+        Tag::A.new().attr(brass::dom::Attr::Href, s).and(s)
+    } else {
+        let mut span = Tag::Span.new();
+        render_value(value, &mut span);
+        span
     }
 }
