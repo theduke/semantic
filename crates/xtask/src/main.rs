@@ -330,7 +330,9 @@ fn gen_typescript() -> Result<(), DynError> {
 
     let out_dir = root_path()?.join("ui").join("src").join("semantic");
 
-    std::fs::write(out_dir.join("core.ts"), schema)?;
+    let core_path = out_dir.join("core.ts");
+    std::fs::write(&core_path, schema)?;
+    eprintln!("Wrote core types to {}", core_path.display());
 
     eprintln!("Generating entity type schemas from database...");
 
@@ -354,7 +356,9 @@ fn gen_typescript() -> Result<(), DynError> {
 
     let schema = std::str::from_utf8(&res.stdout)?;
 
-    std::fs::write(out_dir.join("schema.ts"), schema)?;
+    let schema_path = out_dir.join("schema.ts");
+    std::fs::write(&schema_path, schema)?;
+    eprintln!("wrote schema to {}", schema_path.display());
 
     Ok(())
 }
