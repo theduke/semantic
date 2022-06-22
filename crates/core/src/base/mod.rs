@@ -12,14 +12,17 @@ pub use self::socialmedia::*;
 mod collection;
 pub use self::collection::*;
 
+mod person;
+pub use self::person::*;
+
 mod tags;
 pub use self::tags::*;
 
 use factordb::{
     prelude::{
-        AttrIdent, AttrMapExt, Attribute, AttributeDescriptor, Cardinality, DataMap,
-        EntityAttribute, EntityDescriptor, EntitySchema, Id, IdOrIdent, Migration, Timestamp,
-        Value, ValueType,
+        AttrIdent, AttrMapExt, Attribute, AttributeDescriptor, AttributeSchema, Cardinality,
+        DataMap, EntityAttribute, EntityDescriptor, EntitySchema, Id, IdOrIdent, Migration,
+        Timestamp, Value, ValueType,
     },
     query::migrate,
 };
@@ -29,6 +32,14 @@ use factordb::{
 #[derive(Attribute)]
 #[factor(namespace = "semantic", title = "Title")]
 pub struct AttrTitle(String);
+
+#[derive(Attribute)]
+#[factor(namespace = "semantic", title = "Name")]
+pub struct AttrName(String);
+
+#[derive(Attribute)]
+#[factor(namespace = "semantic", title = "Parent")]
+pub struct AttrParentId(Id);
 
 #[derive(Attribute)]
 #[factor(namespace = "semantic", title = "Comment")]
@@ -157,6 +168,7 @@ impl Plugin for SemanticBasePlugin {
             import_matchers: Vec::new(),
             db: Some(factordb::schema::DbSchema {
                 attributes: vec![
+                    AttrParentId::schema(),
                     AttrTitle::schema(),
                     AttrComment::schema(),
                     AttrDescription::schema(),
@@ -180,6 +192,7 @@ impl Plugin for SemanticBasePlugin {
                     AttrVideoHasSound::schema(),
                     // socialmedia
                     AttrSocialMediaPostContent::schema(),
+                    AttrSocialMediaPostUserId::schema(),
                     // Notes.
                     notes::AttrNoteBody::schema(),
                     // Collection.
@@ -188,6 +201,11 @@ impl Plugin for SemanticBasePlugin {
                     tags::AttrTagName::schema(),
                     tags::AttrTagParent::schema(),
                     tags::AttrTags::schema(),
+                    // Person
+                    person::AttrGivenName::schema(),
+                    person::AttrFamilyName::schema(),
+                    person::AttrBirthDate::schema(),
+                    person::Gender::schema(),
                 ],
                 entities: vec![
                     // File
@@ -202,6 +220,8 @@ impl Plugin for SemanticBasePlugin {
                     collection::Collection::schema(),
                     // tags
                     tags::Tag::schema(),
+                    // person
+                    person::Person::schema(),
                 ],
                 indexes: vec![],
             }),
@@ -297,7 +317,36 @@ impl Plugin for SemanticBasePlugin {
                 extends: vec![File::IDENT.into()],
                 strict: false,
             })
-            .entity_create(SocialMediaPost::schema())
+            .entity_create(EntitySchema {
+                id: Id::nil(),
+                ident: SocialMediaPost::IDENT.to_string(),
+                title: Some("SocialMediaPost".to_string()),
+                description: None,
+                attributes: vec![
+                    EntityAttribute {
+                        attribute: AttrIdent::IDENT,
+                        cardinality: Cardinality::Optional,
+                    },
+                    EntityAttribute {
+                        attribute: AttrTitle::IDENT,
+                        cardinality: Cardinality::Optional,
+                    },
+                    EntityAttribute {
+                        attribute: AttrUrl::IDENT,
+                        cardinality: Cardinality::Optional,
+                    },
+                    EntityAttribute {
+                        attribute: AttrUsername::IDENT,
+                        cardinality: Cardinality::Optional,
+                    },
+                    EntityAttribute {
+                        attribute: AttrSocialMediaPostContent::IDENT,
+                        cardinality: Cardinality::Many,
+                    },
+                ],
+                extends: vec![],
+                strict: false,
+            })
             .entity_create(EntitySchema {
                 id: Id::nil(),
                 ident: Note::QUALIFIED_NAME.to_string(),
@@ -368,7 +417,7 @@ impl Plugin for SemanticBasePlugin {
             ));
 
         let create_preview_blob_uri = Migration::with_name("create_attr_preview_blob_uri")
-            .attr_create(factordb::prelude::AttributeSchema {
+            .attr_create(AttributeSchema {
                 id: Id::nil(),
                 ident: "semantic/preview_image_blob_uri".to_string(),
                 title: Some("Preview Image (Blob)".to_string()),
@@ -390,7 +439,7 @@ impl Plugin for SemanticBasePlugin {
             ));
 
         let create_attr_video_has_sound = Migration::with_name("create_attr_video_has_sound")
-            .attr_create(factordb::prelude::AttributeSchema {
+            .attr_create(AttributeSchema {
                 id: Id::nil(),
                 ident: "semantic/video_has_sound".to_string(),
                 title: Some("Sound available".to_string()),
@@ -411,6 +460,117 @@ impl Plugin for SemanticBasePlugin {
                 },
             ));
 
+        let create_parent_id =
+            Migration::with_name("create_parent_id").attr_create(AttributeSchema {
+                id: Id::nil(),
+                ident: "semantic/parent_id".to_string(),
+                title: Some("Parent ID".to_string()),
+                description: None,
+                value_type: ValueType::Ref,
+                unique: false,
+                index: false,
+                strict: true,
+            });
+
+        let create_social_media_post_user_id =
+            Migration::with_name("create_social_media_post_user_id").attr_create(AttributeSchema {
+                id: Id::nil(),
+                ident: "semantic/social_media_post_user_id".to_string(),
+                title: Some("Social Media Post User ID".to_string()),
+                description: None,
+                value_type: ValueType::Ref,
+                unique: false,
+                index: false,
+                strict: true,
+            });
+
+        let add_social_media_post_user_id_to_social_media_post =
+            Migration::with_name("add_social_media_post_user_id_to_social_media_post").action(
+                migrate::SchemaAction::EntityAttributeAdd(migrate::EntityAttributeAdd {
+                    entity: SocialMediaPost::IDENT.to_string(),
+                    attribute: AttrSocialMediaPostUserId::IDENT.to_string(),
+                    cardinality: Cardinality::Many,
+                    default_value: None,
+                }),
+            );
+
+        let create_attr_name =
+            Migration::with_name("create_name_attr").attr_create(AttrName::schema());
+
+        let create_person_attrs = Migration::with_name("create_person_attrs")
+            .attr_create(AttrFamilyName::schema())
+            .attr_create(AttrGivenName::schema())
+            .attr_create(AttrBirthDate::schema())
+            .attr_create(Gender::schema());
+
+        let create_person = Migration::with_name("create_person").entity_create(EntitySchema {
+            id: Id::nil(),
+            ident: "semantic/Person".to_string(),
+            title: Some("Person".to_string()),
+            description: None,
+            attributes: vec![
+                EntityAttribute {
+                    attribute: AttrIdent::IDENT,
+                    cardinality: Cardinality::Optional,
+                },
+                EntityAttribute {
+                    attribute: AttrDescription::IDENT,
+                    cardinality: Cardinality::Optional,
+                },
+                EntityAttribute {
+                    attribute: AttrUrl::IDENT,
+                    cardinality: Cardinality::Optional,
+                },
+                EntityAttribute {
+                    attribute: AttrName::IDENT,
+                    cardinality: Cardinality::Optional,
+                },
+                EntityAttribute {
+                    attribute: AttrFamilyName::IDENT,
+                    cardinality: Cardinality::Optional,
+                },
+                EntityAttribute {
+                    attribute: AttrGivenName::IDENT,
+                    cardinality: Cardinality::Optional,
+                },
+                EntityAttribute {
+                    attribute: Gender::IDENT,
+                    cardinality: Cardinality::Optional,
+                },
+            ],
+            extends: vec![],
+            strict: false,
+        });
+
+        let create_social_media_platform_attrs =
+            Migration::with_name("create_social_media_platform_attrs")
+                .attr_create(AttrSocialMediaPlatformName::schema())
+                .attr_create(AttrSocialMediaPlatformId::schema());
+
+        let create_social_media_account = Migration::with_name("create_social_media_account")
+            .entity_create(EntitySchema {
+                id: Id::nil(),
+                ident: "semantic/SocialMediaAccount".to_string(),
+                title: Some("Social Media Account".to_string()),
+                description: None,
+                attributes: vec![
+                    EntityAttribute {
+                        attribute: AttrUsername::IDENT,
+                        cardinality: Cardinality::Optional,
+                    },
+                    EntityAttribute {
+                        attribute: AttrSocialMediaPlatformName::IDENT,
+                        cardinality: Cardinality::Optional,
+                    },
+                    EntityAttribute {
+                        attribute: AttrSocialMediaPlatformId::IDENT,
+                        cardinality: Cardinality::Optional,
+                    },
+                ],
+                extends: vec![Person::IDENT],
+                strict: false,
+            });
+
         vec![
             first,
             create_comment,
@@ -424,6 +584,14 @@ impl Plugin for SemanticBasePlugin {
             // video_has_sound
             create_attr_video_has_sound,
             add_video_has_audio_to_video,
+            create_parent_id,
+            create_social_media_post_user_id,
+            add_social_media_post_user_id_to_social_media_post,
+            create_attr_name,
+            create_person_attrs,
+            create_person,
+            create_social_media_platform_attrs,
+            create_social_media_account,
         ]
     }
 }

@@ -1,7 +1,7 @@
 use factordb::prelude::{Attribute, DataMap, Entity, Id};
 use serde::{Deserialize, Serialize};
 
-use super::{AttrIdent, AttrTitle, AttrUrl, AttrUsername};
+use super::{AttrIdent, AttrTitle, AttrUrl, AttrUsername, Person};
 
 #[derive(Attribute)]
 #[factor(
@@ -10,6 +10,30 @@ use super::{AttrIdent, AttrTitle, AttrUrl, AttrUsername};
     title = "Content"
 )]
 pub struct AttrSocialMediaPostContent(Id);
+
+#[derive(Attribute)]
+#[factor(
+    namespace = "semantic",
+    name = "social_media_post_user_id",
+    title = "User ID"
+)]
+pub struct AttrSocialMediaPostUserId(Id);
+
+#[derive(Attribute)]
+#[factor(
+    namespace = "semantic",
+    name = "social_media_platform_name",
+    title = "Social Media Platform"
+)]
+pub struct AttrSocialMediaPlatformName(String);
+
+#[derive(Attribute)]
+#[factor(
+    namespace = "semantic",
+    name = "social_media_platform_id",
+    title = "Social Media Platform"
+)]
+pub struct AttrSocialMediaPlatformId(Id);
 
 #[derive(Serialize, Deserialize, Entity)]
 #[factor(namespace = "semantic", title = "SocialMediaPost")]
@@ -28,12 +52,44 @@ pub struct SocialMediaPost {
     #[serde(rename = "semantic/url")]
     pub url: Option<url::Url>,
     #[factor(attr = AttrUsername)]
-    #[serde(rename = "semantic/title")]
+    #[serde(rename = "semantic/username")]
     pub username: Option<String>,
+
+    #[factor(attr = AttrSocialMediaPostUserId)]
+    #[serde(rename = "semantic/social_media_post_user_id")]
+    pub user_id: Option<Id>,
 
     #[factor(attr = AttrSocialMediaPostContent)]
     #[serde(rename = "semantic/social_media_post_content")]
     pub content_ids: Vec<Id>,
+
+    #[factor(ignore)]
+    #[serde(flatten)]
+    pub extra: DataMap,
+}
+
+#[derive(Serialize, Deserialize, Entity)]
+#[factor(namespace = "semantic", title = "SocialMediaPost")]
+pub struct SocialMediaAccount {
+    #[factor(attr = AttrId)]
+    #[serde(rename = "factor/id")]
+    pub id: Id,
+
+    #[factor(attr = AttrSocialMediaPlatformName)]
+    #[serde(rename = "semantic/social_media_platform_name")]
+    pub platform_name: Option<String>,
+
+    #[factor(attr = AttrSocialMediaPlatformId)]
+    #[serde(rename = "semantic/social_media_platform_id")]
+    pub platform_id: Option<Id>,
+
+    #[factor(attr = AttrUsername)]
+    #[serde(rename = "semantic/username")]
+    pub username: String,
+
+    #[factor(extend)]
+    #[serde(flatten)]
+    pub person: Person,
 
     #[factor(ignore)]
     #[serde(flatten)]
