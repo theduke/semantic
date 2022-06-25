@@ -19,7 +19,7 @@ use std::{
 };
 
 use semantic::{
-    app::{self, App},
+    app::{self, App, AppConfig},
     server,
 };
 
@@ -33,6 +33,9 @@ struct CliArgs {
 #[derive(clap::Subcommand)]
 enum CliCommand {
     Server(CommandServer),
+    /// Database related commands.
+    #[clap(subcommand)]
+    Db(db::DbCmd),
     ImportFiles(CommandImportFiles),
     #[cfg(feature = "webkit")]
     Webkit(CommandWebkit),
@@ -57,10 +60,12 @@ struct GenerateTypescript {}
 struct BackendOptions {
     #[clap(long, env = "SEMANTIC_DATA_PATH")]
     data_path: Option<String>,
+    // TODO: use anonymizing wrapper?
     #[clap(long, short, env = "SEMANTIC_KEY")]
     key: Option<String>,
     #[clap(long, env = "SEMANTIC_KEY_ITERATIONS")]
     key_iterations: Option<u32>,
+    // TODO: use anonymizing wrapper?
     #[clap(long, env = "SEMANTIC_SALT")]
     salt: Option<String>,
     /// Binary offset in the storage file.
@@ -70,8 +75,8 @@ struct BackendOptions {
 }
 
 impl BackendOptions {
-    fn build_backend_config(self) -> Result<api::BackendConfig, AnyError> {
-        let offset = if let Some(off) = self.offset {
+    fn build_backend_config(&self) -> Result<api::BackendConfig, AnyError> {
+        let offset = if let Some(off) = &self.offset {
             let size = off
                 .parse::<bytesize::ByteSize>()
                 .map_err(|err| anyhow!("Invalid offset: {err}"))?;
@@ -82,11 +87,11 @@ impl BackendOptions {
 
         let db = DbConfig::Crypto(api::BackendCryptoConfig {
             offset,
-            data_path: self.data_path,
-            key: self.key.expect("Must specify --key"),
+            data_path: self.data_path.clone(),
+            key: self.key.clone().expect("Must specify --key"),
             raw: false,
             key_iterations: self.key_iterations,
-            salt: self.salt,
+            salt: self.salt.clone(),
         });
 
         let c = api::BackendConfig {
@@ -96,6 +101,52 @@ impl BackendOptions {
         };
 
         Ok(c)
+    }
+}
+
+#[derive(clap::Parser, Clone)]
+struct AppOptions {
+    #[clap(short)]
+    no_backend: bool,
+
+    /// Directory used for storing temporary data.
+    ///
+    /// If not specified then only memory will be used.
+    #[clap(long, env = "SEMANTIC_TMP_DIR")]
+    tmp_dir: Option<PathBuf>,
+
+    // TODO: this should only be on server config...
+    token_key: Option<String>,
+
+    #[clap(flatten)]
+    backend: BackendOptions,
+}
+
+impl AppOptions {
+    fn build(&self) -> Result<AppConfig, AnyError> {
+        let data_dir = app::App::default_data_dir().unwrap();
+
+        let backend_config = if self.no_backend {
+            None
+        } else {
+            Some(self.backend.build_backend_config()?)
+        };
+        let token_key = self
+            .token_key
+            .clone()
+            .unwrap_or_else(app::App::random_token_key);
+
+        let app_config = app::AppConfig {
+            backend: backend_config,
+            token_key,
+            deno: Some(app::DenoConfig {
+                data_dir: data_dir.join("deno"),
+                plugin_dir: None,
+            }),
+            tmp_dir: self.tmp_dir.clone(),
+        };
+
+        Ok(app_config)
     }
 }
 
@@ -110,11 +161,11 @@ struct CommandImportFiles {
     paths: Vec<std::path::PathBuf>,
 }
 
-/// Run the semantic server backend.
+/// Run the semantic server.
 #[derive(clap::Parser)]
 struct CommandServer {
     #[clap(flatten)]
-    backend: BackendOptions,
+    app: AppOptions,
 
     /// Do not initialize a backend.
     /// The backend will have to be configured via the UI.
@@ -129,9 +180,6 @@ struct CommandServer {
     /// The key used for JWT token encryption.
     #[clap(long, env = "SEMANTIC_TOKEN_KEY")]
     token_key: Option<String>,
-
-    #[clap(long, env = "SEMANTIC_TMP_DIR")]
-    tmp_dir: Option<String>,
 }
 
 #[derive(clap::Parser)]
@@ -212,25 +260,7 @@ fn main() {
 
     match args.command {
         CliCommand::Server(subargs) => {
-            let data_dir = app::App::default_data_dir().unwrap();
-
-            let backend_config = if subargs.no_backend {
-                None
-            } else {
-                Some(subargs.backend.build_backend_config().unwrap())
-            };
-
-            let tmp_dir = subargs.tmp_dir.map(PathBuf::from);
-
-            let app_config = app::AppConfig {
-                backend: backend_config,
-                token_key: subargs.token_key.unwrap_or_else(app::App::random_token_key),
-                deno: Some(app::DenoConfig {
-                    data_dir: data_dir.join("deno"),
-                    plugin_dir: None,
-                }),
-                tmp_dir,
-            };
+            let app_config = subargs.app.build().unwrap();
             let config = server::ServerConfig {
                 // Enable authentication when no backend is provided.
                 require_auth: app_config.backend.is_none(),
@@ -344,6 +374,9 @@ fn main() {
         }
         CliCommand::Upload(cmd) => {
             run_upload(cmd);
+        }
+        CliCommand::Db(cmd) => {
+            cmd.run();
         }
     }
 }
