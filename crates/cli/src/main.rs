@@ -167,19 +167,10 @@ struct CommandServer {
     #[clap(flatten)]
     app: AppOptions,
 
-    /// Do not initialize a backend.
-    /// The backend will have to be configured via the UI.
-    #[clap(long)]
-    no_backend: bool,
-
     /// The server interface to listen on.
     /// eg: `0.0.0.0:3000`
     #[clap(long, env = "SEMANTIC_ADDRESS")]
     address: Option<String>,
-
-    /// The key used for JWT token encryption.
-    #[clap(long, env = "SEMANTIC_TOKEN_KEY")]
-    token_key: Option<String>,
 }
 
 #[derive(clap::Parser)]
