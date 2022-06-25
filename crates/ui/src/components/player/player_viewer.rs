@@ -216,6 +216,10 @@ impl State {
             (content, None)
         };
 
+        if let Some(old_media) = self.current_handle.take() {
+            old_media.on_remove();
+        }
+
         self.current_handle = media_handle.clone();
 
         self.timeout_guard.take();

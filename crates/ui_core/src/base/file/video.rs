@@ -164,6 +164,12 @@ impl MediaHandle for VideoPlayerHandle {
     fn set_muted(&self, muted: bool) {
         self.elem.set_muted(muted);
     }
+
+    fn on_remove(&self) {
+        // Reset the video source to stop the request.
+        self.elem.pause().ok();
+        self.elem.set_src("");
+    }
 }
 
 pub fn video_player(info: VideoInfo, options: &MediaRenderOpts) -> (TagBuilder, DynMediaHandle) {

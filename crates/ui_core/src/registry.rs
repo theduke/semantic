@@ -337,6 +337,8 @@ pub trait MediaHandle {
     fn play(&self);
     fn pause(&self);
     fn set_muted(&self, muted: bool);
+
+    fn on_remove(&self);
 }
 
 pub type DynMediaHandle = Rc<dyn MediaHandle>;
