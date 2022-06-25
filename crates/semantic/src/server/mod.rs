@@ -6,7 +6,6 @@ use factordb::{
     prelude::{EntityContainer, Id},
     AnyError,
 };
-use futures::StreamExt;
 use headers::{Header, HeaderMapExt};
 use hyper::{header, Body, Method, Request, Response, StatusCode};
 
@@ -240,13 +239,13 @@ fn extract_file_range(req: &Request<Body>) -> Result<(Option<u64>, Option<u64>),
 
     let skip = match start_bound {
         std::ops::Bound::Included(x) => x,
-        std::ops::Bound::Excluded(x) => x,
+        std::ops::Bound::Excluded(x) => x + 1,
         std::ops::Bound::Unbounded => 0,
     };
 
     let take = match end_bound {
-        std::ops::Bound::Included(x) => Some(x - skip),
-        std::ops::Bound::Excluded(x) => Some(x - skip - 1),
+        std::ops::Bound::Included(x) => Some(x - skip + 1),
+        std::ops::Bound::Excluded(x) => Some(x - skip),
         std::ops::Bound::Unbounded => None,
     };
 
@@ -355,30 +354,16 @@ async fn serve_file(app: &App, req: &Request<Body>) -> Result<Response<Body>, An
     let size = blob_info.size;
 
     let (range_skip, range_take) = extract_file_range(&req)?;
-    let is_partial = range_skip.is_some() || range_take.is_some();
-
-    let actual_length = range_take.unwrap_or(size) - range_skip.unwrap_or(0);
-
-    let stream = blob.get_stream(&blob_path, range_skip).await?;
-
-    let body = if let Some(take) = range_take {
-        let mut total = 0;
-        Body::wrap_stream(stream.take_while(move |chunk| {
-            let needed = match chunk {
-                Ok(chunk) => {
-                    let should = total < take;
-                    total += chunk.len() as u64;
-                    // FIXME: need to truncate the last chunk to the given
-                    // range to not trunkate extra chunk data.
-                    should
-                }
-                Err(_) => true,
-            };
-            futures::future::ready(needed)
-        }))
-    } else {
-        Body::wrap_stream(stream)
+    let (is_partial, actual_length) = match (range_skip, range_take) {
+        (None, Some(take)) if take < size => (true, take),
+        (Some(offset), None) if offset > 0 && offset <= size => (true, size - offset),
+        (Some(offset), Some(take)) if offset <= size && take <= size - offset => (true, take),
+        _ => (false, size),
     };
+
+    let stream = blob.get_stream(&blob_path, range_skip, range_take).await?;
+
+    let body = Body::wrap_stream(stream);
 
     let status = if is_partial {
         StatusCode::PARTIAL_CONTENT
@@ -403,7 +388,7 @@ async fn serve_file(app: &App, req: &Request<Body>) -> Result<Response<Body>, An
     if is_partial {
         let start = range_skip.unwrap_or(0);
         let end = range_take.map(|x| start + x).unwrap_or(size);
-        let h = headers::ContentRange::bytes(start..=end, Some(size))?;
+        let h = headers::ContentRange::bytes(start..end, Some(size))?;
         res.headers_mut().typed_insert(h);
     }
 

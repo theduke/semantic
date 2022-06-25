@@ -16,7 +16,12 @@ pub trait BlobStore {
 
     fn get(&self, path: &str) -> BlobFuture<Option<Vec<u8>>>;
     fn get_meta(&self, path: &str) -> BlobFuture<Option<BlobMeta>>;
-    fn get_stream(&self, path: &str, offset: Option<u64>) -> BlobFuture<BlobStream>;
+    fn get_stream(
+        &self,
+        path: &str,
+        offset: Option<u64>,
+        take: Option<u64>,
+    ) -> BlobFuture<BlobStream>;
     fn put(&self, path: &str, content: Vec<u8>) -> BlobFuture<()>;
     fn remove(&self, path: &str) -> BlobFuture<()>;
 
@@ -82,11 +87,16 @@ impl BlobStore for logfs::LogFs {
         Box::pin(futures::future::ready(res))
     }
 
-    fn get_stream(&self, path: &str, offset: Option<u64>) -> BlobFuture<BlobStream> {
+    fn get_stream(
+        &self,
+        path: &str,
+        offset: Option<u64>,
+        take: Option<u64>,
+    ) -> BlobFuture<BlobStream> {
         let path = path.to_string();
 
         run_blocking(self, move |s| {
-            let mut iter = s.get_chunks(path)?;
+            let mut iter = s.get_chunks(&path)?;
             if let Some(offset) = offset {
                 iter.skip_bytes(offset)?;
             }
@@ -94,9 +104,24 @@ impl BlobStore for logfs::LogFs {
             let stream = MpscStream(rx);
 
             tokio::task::spawn_blocking(move || {
+                let mut transferred = 0;
                 for res in iter {
                     match res {
-                        Ok(data) => {
+                        Ok(mut data) => {
+                            if let Some(take) = take {
+                                let new_transferred = transferred + data.len() as u64;
+                                if new_transferred > take {
+                                    data.truncate((take - transferred) as usize);
+
+                                    if let Err(err) = tx.blocking_send(Ok(data)) {
+                                        tracing::warn!(%err, "Could not finish sending logfs blob data");
+                                    }
+                                    break;
+                                }
+
+                                transferred = new_transferred;
+                            }
+
                             if let Err(err) = tx.blocking_send(Ok(data)) {
                                 tracing::warn!(%err, "Could not finish sending logfs blob data");
                                 break;
@@ -111,6 +136,8 @@ impl BlobStore for logfs::LogFs {
                         }
                     }
                 }
+
+                tracing::trace!(%path, "file serving finished");
             });
 
             Ok(Box::pin(stream) as BlobStream)
