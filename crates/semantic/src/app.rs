@@ -340,7 +340,7 @@ impl App {
 
         loop {
             match tokio::spawn(self.clone().run_worker_tick()).await {
-                Ok(_) => tracing::trace!("App worker completed succesfully"),
+                Ok(_) => tracing::trace!("app worker tick completed"),
                 Err(error) => {
                     tracing::error!(?error, "worker tick failed");
                 }
