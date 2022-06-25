@@ -12,7 +12,7 @@ Commands:
 * watch-server
 * watch-ui
 * watch-ui
-* build-server
+* build-cli
 * build-server
 * build-appimage
 * build-portable
@@ -40,8 +40,8 @@ fn main() -> Result<(), DynError> {
         &["watch-server", "--no-backend"] => cmd_watch_server(false),
         &["watch-ui"] => trunk_watch_ui(false),
         &["watch-ui", "--release"] => trunk_watch_ui(true),
-        &["build-server"] => cmd_build_server(true),
-        &["build-server", "--dev"] => cmd_build_server(false),
+        &["build-cli"] => cmd_build_cli(true),
+        &["build-cli", "--dev"] => cmd_build_cli(false),
         &["build-appimage"] => cmd_build_appimage(),
         &["build-portable"] => cmd_build_portable(),
         &["build"] => cmd_build(),
@@ -134,22 +134,41 @@ fn cmd_install_git_hooks() -> Result<(), DynError> {
     Ok(())
 }
 
-fn cmd_build_server(release: bool) -> Result<(), DynError> {
-    eprintln!("Building semantic...");
+fn cmd_build_cli(release: bool) -> Result<(), DynError> {
+    eprintln!("Building CLI binary...");
     let mut cmd = Command::new("cargo");
-    cmd.args(&["build", "-p", "semantic"]);
+    cmd.current_dir(root_path()?.join("crates/cli"));
+    cmd.args(&["build"]);
     if release {
         cmd.arg("--release");
     }
-    cmd.current_dir(root_path()?).run()?;
+
+    cmd.run()?;
+
     eprintln!("Built!");
+    Ok(())
+}
+
+fn build_logfs(release: bool) -> Result<(), DynError> {
+    eprintln!("Building logfs binary...");
+    let mut cmd = Command::new("cargo");
+    cmd.current_dir(root_path()?.join("crates/logfs"));
+    let mut cmd = Command::new("cargo");
+    cmd.args(&["build"]);
+    if release {
+        cmd.arg("--release");
+    }
+
+    cmd.run()?;
+
     Ok(())
 }
 
 fn cmd_build() -> Result<(), DynError> {
     eprintln!("Building ui...");
     task_build_ui(true)?;
-    cmd_build_server(true)?;
+    cmd_build_cli(true)?;
+    build_logfs(true)?;
     Ok(())
 }
 
@@ -406,6 +425,13 @@ trait CommandExt {
 }
 
 impl CommandExt for &mut Command {
+    fn run(&mut self) -> Result<(), DynError> {
+        self.spawn()?.wait()?.ensure_success()?;
+        Ok(())
+    }
+}
+
+impl CommandExt for Command {
     fn run(&mut self) -> Result<(), DynError> {
         self.spawn()?.wait()?.ensure_success()?;
         Ok(())
