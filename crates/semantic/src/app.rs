@@ -188,6 +188,28 @@ impl App {
             .ok_or_else(|| anyhow!("Non-UTF-8 data directory"))
     }
 
+    pub fn build_crypto_config(
+        crypto: &api::BackendCryptoConfig,
+    ) -> Result<logfs::CryptoConfig, AnyError> {
+        let conf = logfs::CryptoConfig {
+            key: crypto.key.clone().into(),
+            salt: crypto
+                .salt
+                .clone()
+                .map(|x| x.into_bytes())
+                .unwrap_or(b"semantic".to_vec())
+                .into(),
+            iterations: if let Some(iters) = crypto.key_iterations {
+                NonZeroU32::new(iters).ok_or_else(|| {
+                    anyhow!("Invalid number of key iterations: must be a positive number")
+                })?
+            } else {
+                NonZeroU32::new(3_000_000).unwrap()
+            },
+        };
+        Ok(conf)
+    }
+
     pub fn build_logfs(crypto: &api::BackendCryptoConfig) -> Result<logfs::LogFs, AnyError> {
         let data_path = if let Some(p) = &crypto.data_path {
             PathBuf::from(p.clone())
@@ -200,22 +222,7 @@ impl App {
             .allow_create()
             .offset(crypto.offset)
             .default_chunk_size(8_000_000)
-            .crypto(logfs::CryptoConfig {
-                key: crypto.key.clone().into(),
-                salt: crypto
-                    .salt
-                    .clone()
-                    .map(|x| x.into_bytes())
-                    .unwrap_or(b"semantic".to_vec())
-                    .into(),
-                iterations: if let Some(iters) = crypto.key_iterations {
-                    NonZeroU32::new(iters).ok_or_else(|| {
-                        anyhow!("Invalid number of key iterations: must be a positive number")
-                    })?
-                } else {
-                    NonZeroU32::new(3_000_000).unwrap()
-                },
-            })
+            .crypto(Self::build_crypto_config(crypto)?)
             .build();
 
         let log = logfs::LogFs::<logfs::Journal2>::open(log_config)
