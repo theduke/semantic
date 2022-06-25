@@ -235,6 +235,18 @@ impl App {
         Ok(log)
     }
 
+    pub async fn recover_database_data(
+        config: api::BackendConfig,
+    ) -> Result<Vec<DataMap>, AnyError> {
+        match config.db {
+            DbConfig::Crypto(c) => {
+                let logfs = Self::build_logfs(&c)?;
+                let db = crate::db::logdb::LogDbStore::new(logfs.clone());
+                factor_engine::backend::log::LogDb::recover_data(db).await
+            }
+        }
+    }
+
     pub async fn configure_backend(&self, config: api::BackendConfig) -> Result<(), AnyError> {
         tracing::info!(?config, "configuring backend");
         tracing::debug!(?config, "configuring backend");
