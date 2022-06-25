@@ -87,12 +87,11 @@ function build_semantic() {
   echo Building semantic...
   source $HOME/.cargo/env
 
-  cd /host
+  git clone /host /build
+  cd /build
   export CARGO_NET_GIT_FETCH_WITH_CLI="true"
-  export CARGO_TARGET_DIR=/host/target/docker
   # build_ui
-  cargo xtask build-ui
-  cargo xtask build-server
+  cargo xtask build
 
   echo Semantic built!
 }
@@ -104,15 +103,17 @@ function build_portable() {
 
   build_semantic
 
-  test -d target/portable/bin && rm -r target/portable/bin
+  test -d /host/target/portable/bin && rm -r /host/target/portable/bin
 
   echo Copying files to target/portable
-  mkdir -p target/portable/bin
-  cp target/docker/release/semantic target/portable/bin/
-  cp /usr/bin/deno target/portable/bin/
-  cp /usr/bin/jpegtran target/portable/bin/
+  mkdir -p /host/target/portable/bin
+  cp /build/target/release/semantic /host/target/portable/bin/
+  cp /build/target/release/logfs /host/target/portable/bin/
+  cp /usr/bin/deno /host/target/portable/bin/
+  cp /usr/bin/jpegtran /host/target/portable/bin/
 
-  chmod -R 755 target/portable/bin
+  chmod -R 777 /host/target/portable/bin
+  chmod -R o+x /host/target/portable/bin
 
   echo Portable executables built!
 }
