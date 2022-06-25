@@ -14,8 +14,7 @@ media-optimizers = ["oxipng", "mozjpeg"]
 
 jsonschema = ["semantic_core/schema"]
 
-
-default = []
+default = ["archive"]
 
 [dependencies]
 base64 = "0.13.0"
