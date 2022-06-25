@@ -213,8 +213,14 @@ impl CmdUpload {
 
         let tag_ids: Vec<_> = tags.iter().map(|t| t.id).collect();
 
-        for file in files {
-            eprintln!("Uplading {}...", file.path.display());
+        let count = files.len();
+        for (index, file) in files.into_iter().enumerate() {
+            eprintln!(
+                "Uplading file {}/{}: {}...",
+                index + 1,
+                count,
+                file.path.display()
+            );
 
             let filename = file.path.file_name().unwrap().to_string_lossy();
 
