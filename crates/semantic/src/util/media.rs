@@ -380,6 +380,8 @@ pub async fn analyze_files(db: Db, blob: DynBlobStore, force: bool) -> Result<()
     let span = tracing::debug_span!("media file analysis");
     let _guard = span.enter();
 
+    tracing::trace!("loading files for media analysis...");
+
     // FIXME: pagination...
     // TODO: images, audio files, ...
     let files = db
@@ -389,7 +391,7 @@ pub async fn analyze_files(db: Db, blob: DynBlobStore, force: bool) -> Result<()
     let total = files.items.len();
     span.record("count", &total);
 
-    tracing::info!("starting analysis");
+    tracing::info!(file_count=%total, "starting analysis");
     for (index, item) in files.items.into_iter().enumerate() {
         let file_id = item.data.get_id().unwrap();
         let typed = match TypedFile::from_map(item.data) {
@@ -411,13 +413,13 @@ pub async fn analyze_files(db: Db, blob: DynBlobStore, force: bool) -> Result<()
         span.record("complete", &(index + 1));
         match res {
             Ok(Some(_)) => {
-                tracing::debug!(%file_id, "file analyzed");
+                tracing::debug!(%file_id, "file analyzed ({}/{})", index + 1, total);
             }
             Ok(None) => {
-                tracing::trace!(%file_id, "file analysis skipped");
+                tracing::trace!(%file_id, "file analysis skipped ({}/{})", index + 1, total);
             }
             Err(error) => {
-                tracing::warn!(%file_id, ?error, "file analysis failed");
+                tracing::warn!(%file_id, ?error, "file analysis failed ({}/{})", index + 1, total);
             }
         }
     }
