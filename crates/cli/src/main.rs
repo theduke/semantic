@@ -1,3 +1,5 @@
+mod db;
+
 use anyhow::{anyhow, bail, Context};
 use bytesize::ByteSize;
 use factordb::{
@@ -20,6 +22,174 @@ use semantic::{
     app::{self, App},
     server,
 };
+
+/// Semantic CLI
+#[derive(clap::Parser)]
+struct CliArgs {
+    #[clap(subcommand)]
+    command: CliCommand,
+}
+
+#[derive(clap::Subcommand)]
+enum CliCommand {
+    Server(CommandServer),
+    ImportFiles(CommandImportFiles),
+    #[cfg(feature = "webkit")]
+    Webkit(CommandWebkit),
+    GenerateTypescript(GenerateTypescript),
+    CompactDb(CommandCompactDb),
+    /// Generate an archive that contains all data and blobs.
+    Export {
+        #[clap(flatten)]
+        backend: BackendOptions,
+
+        /// Path where the export should be written.
+        /// If not given, data is written to stdout.
+        path: Option<String>,
+    },
+    Upload(CommandUpload),
+}
+
+#[derive(clap::Parser)]
+struct GenerateTypescript {}
+
+#[derive(clap::Parser, Clone)]
+struct BackendOptions {
+    #[clap(long, env = "SEMANTIC_DATA_PATH")]
+    data_path: Option<String>,
+    #[clap(long, short, env = "SEMANTIC_KEY")]
+    key: Option<String>,
+    #[clap(long, env = "SEMANTIC_KEY_ITERATIONS")]
+    key_iterations: Option<u32>,
+    #[clap(long, env = "SEMANTIC_SALT")]
+    salt: Option<String>,
+    /// Binary offset in the storage file.
+    /// Either a number of bytes, or a parsable pretty byte number like "300mb".
+    #[clap(long)]
+    offset: Option<String>,
+}
+
+impl BackendOptions {
+    fn build_backend_config(self) -> Result<api::BackendConfig, AnyError> {
+        let offset = if let Some(off) = self.offset {
+            let size = off
+                .parse::<bytesize::ByteSize>()
+                .map_err(|err| anyhow!("Invalid offset: {err}"))?;
+            Some(size.0)
+        } else {
+            None
+        };
+
+        let db = DbConfig::Crypto(api::BackendCryptoConfig {
+            offset,
+            data_path: self.data_path,
+            key: self.key.expect("Must specify --key"),
+            raw: false,
+            key_iterations: self.key_iterations,
+            salt: self.salt,
+        });
+
+        let c = api::BackendConfig {
+            db,
+            // TODO: make configurable.
+            idle_timeout: None,
+        };
+
+        Ok(c)
+    }
+}
+
+pub struct DenoOptions {}
+
+#[derive(clap::Parser)]
+/// Import files into a semantic database.
+struct CommandImportFiles {
+    #[clap(flatten)]
+    backend: BackendOptions,
+
+    paths: Vec<std::path::PathBuf>,
+}
+
+/// Run the semantic server backend.
+#[derive(clap::Parser)]
+struct CommandServer {
+    #[clap(flatten)]
+    backend: BackendOptions,
+
+    /// Do not initialize a backend.
+    /// The backend will have to be configured via the UI.
+    #[clap(long)]
+    no_backend: bool,
+
+    /// The server interface to listen on.
+    /// eg: `0.0.0.0:3000`
+    #[clap(long, env = "SEMANTIC_ADDRESS")]
+    address: Option<String>,
+
+    /// The key used for JWT token encryption.
+    #[clap(long, env = "SEMANTIC_TOKEN_KEY")]
+    token_key: Option<String>,
+
+    #[clap(long, env = "SEMANTIC_TMP_DIR")]
+    tmp_dir: Option<String>,
+}
+
+#[derive(clap::Parser)]
+struct CommandCompactDb {
+    #[clap(flatten)]
+    backend: BackendOptions,
+    /// The new password to use.
+    /// If not set, the old one will be reused.
+    #[clap(long)]
+    new_password: Option<String>,
+    #[clap(long)]
+    force: bool,
+    /// The path for the new, compacted database.
+    new_path: String,
+}
+
+#[derive(clap::Parser)]
+struct CommandUpload {
+    /// Run in non-interactive mode without any prompts.
+    #[clap(short = 'y', long)]
+    auto_confirm: bool,
+
+    /// The URL of the semantic server.
+    #[clap(long)]
+    address: Option<String>,
+
+    /// Existing collection to upload files to.
+    /// Can be the gallery title, ident or id.
+    #[clap(long, short = 'c')]
+    collection: Option<String>,
+
+    /// If the speicified collection can not be found, create it.
+    #[clap(long)]
+    collection_create: bool,
+
+    /// The title to give the uploaded file.
+    ///
+    /// NOTE: only works if a SINGLE file is uploaded.
+    /// Will produce an error if multiple files are selected.
+    #[clap(long)]
+    title: Option<String>,
+
+    /// Tag(s) to add to the uploaded file(s).
+    ///
+    /// Each specified tag can be either the tag name, ident or ID.
+    #[clap(short = 't', long)]
+    tag: Vec<String>,
+
+    /// The file system paths.
+    /// Each path be either a file or a directory.
+    paths: Vec<PathBuf>,
+}
+
+/// Run a semantic UI inside webkit.
+#[cfg(feature = "webkit")]
+#[derive(clap::Parser)]
+#[clap(about = "Semantic CLI")]
+struct CommandWebkit {}
 
 fn main() {
     if std::env::var("RUST_LOG").is_err() {
@@ -518,171 +688,3 @@ fn compact(cmd: CommandCompactDb) -> Result<(), anyhow::Error> {
 
     Ok(())
 }
-
-/// Semantic CLI
-#[derive(clap::Parser)]
-struct CliArgs {
-    #[clap(subcommand)]
-    command: CliCommand,
-}
-
-#[derive(clap::Subcommand)]
-enum CliCommand {
-    Server(CommandServer),
-    ImportFiles(CommandImportFiles),
-    #[cfg(feature = "webkit")]
-    Webkit(CommandWebkit),
-    GenerateTypescript(GenerateTypescript),
-    CompactDb(CommandCompactDb),
-    /// Generate an archive that contains all data and blobs.
-    Export {
-        #[clap(flatten)]
-        backend: BackendOptions,
-
-        /// Path where the export should be written.
-        /// If not given, data is written to stdout.
-        path: Option<String>,
-    },
-    Upload(CommandUpload),
-}
-
-#[derive(clap::Parser)]
-struct GenerateTypescript {}
-
-#[derive(clap::Parser, Clone)]
-struct BackendOptions {
-    #[clap(long, env = "SEMANTIC_DATA_PATH")]
-    data_path: Option<String>,
-    #[clap(long, short, env = "SEMANTIC_KEY")]
-    key: Option<String>,
-    #[clap(long, env = "SEMANTIC_KEY_ITERATIONS")]
-    key_iterations: Option<u32>,
-    #[clap(long, env = "SEMANTIC_SALT")]
-    salt: Option<String>,
-    /// Binary offset in the storage file.
-    /// Either a number of bytes, or a parsable pretty byte number like "300mb".
-    #[clap(long)]
-    offset: Option<String>,
-}
-
-impl BackendOptions {
-    fn build_backend_config(self) -> Result<api::BackendConfig, AnyError> {
-        let offset = if let Some(off) = self.offset {
-            let size = off
-                .parse::<bytesize::ByteSize>()
-                .map_err(|err| anyhow!("Invalid offset: {err}"))?;
-            Some(size.0)
-        } else {
-            None
-        };
-
-        let db = DbConfig::Crypto(api::BackendCryptoConfig {
-            offset,
-            data_path: self.data_path,
-            key: self.key.expect("Must specify --key"),
-            raw: false,
-            key_iterations: self.key_iterations,
-            salt: self.salt,
-        });
-
-        let c = api::BackendConfig {
-            db,
-            // TODO: make configurable.
-            idle_timeout: None,
-        };
-
-        Ok(c)
-    }
-}
-
-pub struct DenoOptions {}
-
-#[derive(clap::Parser)]
-/// Import files into a semantic database.
-struct CommandImportFiles {
-    #[clap(flatten)]
-    backend: BackendOptions,
-
-    paths: Vec<std::path::PathBuf>,
-}
-
-/// Run the semantic server backend.
-#[derive(clap::Parser)]
-struct CommandServer {
-    #[clap(flatten)]
-    backend: BackendOptions,
-
-    /// Do not initialize a backend.
-    /// The backend will have to be configured via the UI.
-    #[clap(long)]
-    no_backend: bool,
-
-    /// The server interface to listen on.
-    /// eg: `0.0.0.0:3000`
-    #[clap(long, env = "SEMANTIC_ADDRESS")]
-    address: Option<String>,
-
-    /// The key used for JWT token encryption.
-    #[clap(long, env = "SEMANTIC_TOKEN_KEY")]
-    token_key: Option<String>,
-
-    #[clap(long, env = "SEMANTIC_TMP_DIR")]
-    tmp_dir: Option<String>,
-}
-
-#[derive(clap::Parser)]
-struct CommandCompactDb {
-    #[clap(flatten)]
-    backend: BackendOptions,
-    /// The new password to use.
-    /// If not set, the old one will be reused.
-    #[clap(long)]
-    new_password: Option<String>,
-    #[clap(long)]
-    force: bool,
-    /// The path for the new, compacted database.
-    new_path: String,
-}
-
-#[derive(clap::Parser)]
-struct CommandUpload {
-    /// Run in non-interactive mode without any prompts.
-    #[clap(short = 'y', long)]
-    auto_confirm: bool,
-
-    /// The URL of the semantic server.
-    #[clap(long)]
-    address: Option<String>,
-
-    /// Existing collection to upload files to.
-    /// Can be the gallery title, ident or id.
-    #[clap(long, short = 'c')]
-    collection: Option<String>,
-
-    /// If the speicified collection can not be found, create it.
-    #[clap(long)]
-    collection_create: bool,
-
-    /// The title to give the uploaded file.
-    ///
-    /// NOTE: only works if a SINGLE file is uploaded.
-    /// Will produce an error if multiple files are selected.
-    #[clap(long)]
-    title: Option<String>,
-
-    /// Tag(s) to add to the uploaded file(s).
-    ///
-    /// Each specified tag can be either the tag name, ident or ID.
-    #[clap(short = 't', long)]
-    tag: Vec<String>,
-
-    /// The file system paths.
-    /// Each path be either a file or a directory.
-    paths: Vec<PathBuf>,
-}
-
-/// Run a semantic UI inside webkit.
-#[cfg(feature = "webkit")]
-#[derive(clap::Parser)]
-#[clap(about = "Semantic CLI")]
-struct CommandWebkit {}

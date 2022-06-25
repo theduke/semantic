@@ -1,0 +1,22 @@
+[package]
+name = "semantic_cli"
+version = "0.1.0"
+edition = "2021"
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[dependencies]
+semantic = { version = "0.1", path = "../semantic" }
+semantic_core = { version = "0.1.0", path = "../core" }
+
+factordb = "0.1"
+factor_tools = "0.1"
+
+anyhow = "1.0.58"
+bytesize = "1.1.0"
+tokio = { version = "1.19.2", features = ["full"] }
+sha2 = "0.10.2"
+serde_json = "1.0.81"
+clap = { version = "3.2.6", features = ["derive", "env"] }
+tracing-subscriber = { version = "0.3.11", features = ["fmt", "env-filter"] }
+tracing = "0.1.35"
