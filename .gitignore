@@ -1,6 +1,7 @@
 target
 crates/contrib/
 .direnv.fish
+flake.lock
 /data
 /lib/contrib
 /result
