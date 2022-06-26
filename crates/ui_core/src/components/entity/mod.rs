@@ -8,7 +8,7 @@ pub mod entity_view;
 use brass::dom::{builder::div, Apply, Attr, Render, Tag, TagBuilder, View};
 use factordb::prelude::{
     AttrId, AttrIdent, AttrMapExt, AttrType, AttributeDescriptor, AttributeSchema, DataMap, Id,
-    Item, Value,
+    Item, Timestamp, Value, ValueType,
 };
 use semantic_core::base::AttrTitle;
 
@@ -163,6 +163,12 @@ pub fn render_value(value: &Value, parent: &mut TagBuilder) {
 
 pub fn attr_value_generic(attr: &AttributeSchema, value: &Value, parent: &mut TagBuilder) {
     match (&attr.value_type, value) {
+        (ValueType::DateTime, Value::UInt(x)) => {
+            let stamp = Timestamp::from_millis(*x);
+            let dt = stamp.to_datetime();
+            let value = dt.to_rfc3339();
+            tracing::info!(%value, "datetime value");
+        }
         _ => render_value(value, parent),
     }
 }
