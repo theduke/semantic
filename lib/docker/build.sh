@@ -114,7 +114,7 @@ function build_portable() {
   cp /usr/bin/deno /host/target/portable/bin/
   cp /usr/bin/jpegtran /host/target/portable/bin/
 
-  chmod -R 777 /host/target/portable/bin
+  chmod -R 777 /host/target/portable
   chmod -R o+x /host/target/portable/bin
 
   echo Portable executables built!
