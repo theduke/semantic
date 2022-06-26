@@ -118,8 +118,8 @@ fn cmd_watch_server(default_backend: bool) -> Result<(), DynError> {
 
     if std::env::var("RUST_LOG").is_err() {
         cmd.env(
-            "RUST_LOG", // "semantic=trace,semantic_core=trace,factordb=info",
-            "trace",
+            "RUST_LOG", 
+            "semantic=trace,semantic_core=trace,factordb=info",
         );
     }
     (&mut cmd).run()?;
