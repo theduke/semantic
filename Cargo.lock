@@ -720,7 +720,7 @@ dependencies = [
 [[package]]
 name = "factor_engine"
 version = "0.1.0"
-source = "git+https://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@github.com/theduke/factordb.git?branch=main#22904eaa29ba5d9f7e527323365d6adf383be107"
+source = "git+https://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@github.com/theduke/factordb.git?branch=main#24e3bd0040394c38a5baa3763c8e82218222e800"
 dependencies = [
  "anyhow",
  "chrono",
@@ -742,7 +742,7 @@ dependencies = [
 [[package]]
 name = "factor_macros"
 version = "0.1.0"
-source = "git+https://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@github.com/theduke/factordb.git?branch=main#22904eaa29ba5d9f7e527323365d6adf383be107"
+source = "git+https://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@github.com/theduke/factordb.git?branch=main#24e3bd0040394c38a5baa3763c8e82218222e800"
 dependencies = [
  "Inflector",
  "proc-macro2",
@@ -753,7 +753,7 @@ dependencies = [
 [[package]]
 name = "factor_tools"
 version = "0.1.0"
-source = "git+https://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@github.com/theduke/factordb.git?branch=main#22904eaa29ba5d9f7e527323365d6adf383be107"
+source = "git+https://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@github.com/theduke/factordb.git?branch=main#24e3bd0040394c38a5baa3763c8e82218222e800"
 dependencies = [
  "Inflector",
  "anyhow",
@@ -763,7 +763,7 @@ dependencies = [
 [[package]]
 name = "factordb"
 version = "0.1.0"
-source = "git+https://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@github.com/theduke/factordb.git?branch=main#22904eaa29ba5d9f7e527323365d6adf383be107"
+source = "git+https://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@github.com/theduke/factordb.git?branch=main#24e3bd0040394c38a5baa3763c8e82218222e800"
 dependencies = [
  "anyhow",
  "chrono",
@@ -1544,6 +1544,7 @@ dependencies = [
  "bincode",
  "bitflags",
  "brotli",
+ "clap 3.2.6",
  "generic-array",
  "md5",
  "parking_lot",
@@ -1551,7 +1552,6 @@ dependencies = [
  "ring",
  "serde",
  "sha2 0.10.2",
- "structopt",
  "tracing",
  "tracing-subscriber",
  "zeroize",
@@ -2344,6 +2344,7 @@ dependencies = [
  "tower",
  "tower-http",
  "tracing",
+ "tracing-futures",
  "tracing-subscriber",
  "url",
  "uuid 1.1.2",
@@ -3069,6 +3070,16 @@ checksum = "7b7358be39f2f274f322d2aaed611acc57f382e8eb1e5b48cb9ae30933495ce7"
 dependencies = [
  "once_cell",
  "valuable",
+]
+
+[[package]]
+name = "tracing-futures"
+version = "0.2.5"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "97d095ae15e245a057c8e8451bab9b3ee1e1f68e9ba2b4fbc18d0ac5237835f2"
+dependencies = [
+ "pin-project",
+ "tracing",
 ]
 
 [[package]]
