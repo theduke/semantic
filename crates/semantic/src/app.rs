@@ -23,6 +23,7 @@ use semantic_core::{
     core::SemanticCorePlugin,
     plugin::{FetchUrlJob, FetchUrlOutput, ImportJob, ImportOutput, PluginDescriptor},
 };
+use tracing_futures::Instrument;
 
 use crate::{blobstore::DynBlobStore, jobs::JobManager, plugin::PluginManager, util::media};
 
@@ -463,12 +464,17 @@ impl App {
         })
     }
 
-    pub async fn upload_file(
+    /// File upload logic.
+    ///
+    /// Wrapped function used by Self::upload_file to provide a tracing span.
+    async fn upload_file_inner(
         &self,
         meta: api::FileUploadMetadata,
         data: Vec<u8>,
     ) -> Result<semantic_core::base::TypedFile, AnyError> {
         use semantic_core::base::TypedFile;
+
+        tracing::trace!(?meta, size=%data.len(), "file upload started");
 
         let blob = self.require_blob()?;
         let db = self.require_db()?;
@@ -555,6 +561,7 @@ impl App {
         let blob_uri = format!("files/{}", id);
 
         blob.put(&blob_uri, data).await?;
+        tracing::trace!(%blob_uri, "blob persisted");
 
         // FIXME: prevent duplicates.
 
@@ -620,9 +627,19 @@ impl App {
 
         db.batch(batch).await?;
 
-        tracing::trace!(entity=?item, "created file");
+        tracing::trace!(entity=?item, "file created");
 
         Ok(item)
+    }
+
+    pub async fn upload_file(
+        &self,
+        meta: api::FileUploadMetadata,
+        data: Vec<u8>,
+    ) -> Result<semantic_core::base::TypedFile, AnyError> {
+        self.upload_file_inner(meta, data)
+            .instrument(tracing::debug_span!("file upload"))
+            .await
     }
 
     pub async fn import_files(
