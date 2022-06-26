@@ -1,3 +1,5 @@
+use std::time::Duration;
+
 use factordb::{
     prelude::{AttrMapExt, AttributeDescriptor, Db, Id, Patch, Timestamp},
     AnyError,
@@ -15,6 +17,18 @@ impl RecordEntityVisit {
     pub async fn run(self, db: &Db) -> Result<(), AnyError> {
         // TODO: use atomic counter update.
         let entity = db.entity(self.entity_id).await?;
+
+        let duration_since_last_visit = entity
+            .get_attr::<AttrLastVisitTime>()
+            .and_then(|attr| attr.to_system_time())
+            .and_then(|t| t.elapsed().ok());
+
+        // Skip recording if the last visit was less than 10 minutes ago.
+        if let Some(elapsed) = duration_since_last_visit {
+            if elapsed < Duration::from_secs(60 * 10) {
+                return Ok(());
+            }
+        }
 
         let old_count = entity.get_attr::<AttrVisitCount>().unwrap_or(0);
 
