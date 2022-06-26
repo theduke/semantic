@@ -27,6 +27,9 @@ use factordb::{
     query::migrate,
 };
 
+mod common_actions;
+pub use self::common_actions::RecordEntityVisit;
+
 // Common default attributes.
 
 #[derive(Attribute)]
@@ -62,6 +65,24 @@ pub struct AttrCreatedAt(Timestamp);
     index
 )]
 pub struct AttrUpdatedAt(Timestamp);
+
+#[derive(Attribute)]
+#[factor(
+    namespace = "semantic",
+    title = "Visit count",
+    name = "visit_count",
+    index
+)]
+pub struct AttrVisitCount(u64);
+
+#[derive(Attribute)]
+#[factor(
+    namespace = "semantic",
+    title = "Last visited",
+    name = "last_visit_time",
+    index
+)]
+pub struct AttrLastVisitTime(Timestamp);
 
 pub fn entity_title(data: &DataMap) -> String {
     data.get_attr::<AttrTitle>()
@@ -179,6 +200,8 @@ impl Plugin for SemanticBasePlugin {
                     TextFormat::schema(),
                     AttrCreatedAt::schema(),
                     AttrUpdatedAt::schema(),
+                    AttrVisitCount::schema(),
+                    AttrLastVisitTime::schema(),
                     // file
                     AttrBlobUri::schema(),
                     AttrBlobUriWeb::schema(),
@@ -571,6 +594,28 @@ impl Plugin for SemanticBasePlugin {
                 strict: false,
             });
 
+        let create_visit_attrs = Migration::with_name("create_visit_attrs")
+            .attr_create(AttributeSchema {
+                id: Id::nil(),
+                ident: AttrVisitCount::QUALIFIED_NAME.to_string(),
+                title: Some("Visit count".to_string()),
+                description: None,
+                value_type: ValueType::UInt,
+                unique: false,
+                index: false,
+                strict: false,
+            })
+            .attr_create(AttributeSchema {
+                id: Id::nil(),
+                ident: AttrLastVisitTime::QUALIFIED_NAME.to_string(),
+                title: Some("Last visit".to_string()),
+                description: None,
+                value_type: ValueType::DateTime,
+                unique: false,
+                index: false,
+                strict: false,
+            });
+
         vec![
             first,
             create_comment,
@@ -592,6 +637,7 @@ impl Plugin for SemanticBasePlugin {
             create_person,
             create_social_media_platform_attrs,
             create_social_media_account,
+            create_visit_attrs,
         ]
     }
 }

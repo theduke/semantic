@@ -7,6 +7,7 @@ use factordb::{
 use url::Url;
 
 use crate::{
+    base::RecordEntityVisit,
     core::PluginSource,
     plugin::{FetchUrlJob, FetchUrlOutput, ImportJob, ImportOutput},
 };
@@ -319,6 +320,8 @@ pub enum Query {
     FileDiscardOptimised(FileDiscardUnOptimized),
     FileCreatePreviewImageBlob(FileCreatePreviewImageBlob),
 
+    RecordEntityVisit(RecordEntityVisit),
+
     /// Execute an HTTP request.
     HttpFetch(SimpleHttpRequest),
 
@@ -403,6 +406,8 @@ pub enum Reply {
     FileDiscardOptimised(()),
     FileDiscardUnOptimised(()),
     FileCreatePreviewImageBlob(()),
+
+    RecordEntityVisit,
 
     JobStatus(Job),
     ConvertFile(Job),
@@ -733,6 +738,18 @@ impl<E: ApiClientExecutor> ApiClient<E> {
                 response.body = body;
                 Ok(response)
             }
+            Ok(_other) => Err(anyhow::anyhow!("API returned invalid data")),
+            Err(err) => Err(err),
+        }
+    }
+
+    pub async fn record_entity_visit(&self, entity_id: Id) -> Result<(), AnyError> {
+        let visit = RecordEntityVisit {
+            entity_id,
+            time: None,
+        };
+        match self.exec.execute(Query::RecordEntityVisit(visit)).await {
+            Ok(Reply::RecordEntityVisit) => Ok(()),
             Ok(_other) => Err(anyhow::anyhow!("API returned invalid data")),
             Err(err) => Err(err),
         }

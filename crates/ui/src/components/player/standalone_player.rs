@@ -55,6 +55,8 @@ struct State {
     base_filter: Expr,
     select: Select,
 
+    track_visits: bool,
+
     fullscreen: bool,
     settings_active: Mutable<bool>,
 
@@ -131,8 +133,11 @@ impl MsgComponent for State {
             None
         };
 
-        let (rendered_player, player) =
-            super::player_viewer::PlayerViewer { items: Vec::new() }.build();
+        let (rendered_player, player) = super::player_viewer::PlayerViewer {
+            items: Vec::new(),
+            track_visits: true,
+        }
+        .build();
 
         let base_filter = props.filter.clone().unwrap_or_else(|| Self::default_expr());
         let select = Select::new().with_filter(base_filter.clone());
@@ -147,6 +152,8 @@ impl MsgComponent for State {
             dom_player: None,
             player,
             rendered_player,
+            // TODO: add settings toggle to enable/disable.
+            track_visits: true,
             active_modal_item: Mutable::new(None),
             active_modal_should_play_on_close: false,
         };

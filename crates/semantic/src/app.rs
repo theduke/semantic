@@ -1389,6 +1389,10 @@ impl App {
                 let tag = self.tag_create(create).await?;
                 Ok(api::Reply::TagCreate(tag))
             }
+            api::Query::RecordEntityVisit(rec) => {
+                self.record_entity_visit(rec).await?;
+                Ok(api::Reply::RecordEntityVisit)
+            }
         };
         res.map_err(|err| {
             tracing::error!(?err, "api query failed");
@@ -1409,5 +1413,13 @@ impl App {
         db.create(id, tag.clone().into_map()?).await?;
         let raw = db.entity(id).await?;
         Ok(raw)
+    }
+
+    async fn record_entity_visit(
+        &self,
+        rec: semantic_core::base::RecordEntityVisit,
+    ) -> Result<(), AnyError> {
+        let db = self.require_db()?;
+        rec.run(&db).await
     }
 }

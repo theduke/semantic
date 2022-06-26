@@ -19,6 +19,8 @@ use semantic_ui_core::{
 struct Props {
     shared: SharedState,
 
+    track_visits: bool,
+
     handle: Rc<RefCell<Option<Handle<State>>>>,
 }
 
@@ -72,6 +74,7 @@ struct SharedStateData {
 type SharedState = Rc<SharedStateData>;
 
 struct State {
+    track_visits: bool,
     shared: SharedState,
     registry: SharedRegistry,
 
@@ -167,13 +170,10 @@ impl State {
         let ty = if let Some(ty) = item.data.get_type_name() {
             ty
         } else {
-            // TODO: implement
             std::mem::drop(items);
-            self.next(ctx);
+            self.goto(index + 1, ctx);
             return;
         };
-
-        // ctx.handle().get
 
         let is_playing = self.shared.playing.get();
         let is_muted = self.shared.muted.get();
@@ -235,12 +235,27 @@ impl State {
             index,
             total: self.shared.items.borrow().len(),
         });
-        self.shared.active_item.set(Some(ActiveItem {
+        let old_item = self.shared.active_item.replace(Some(ActiveItem {
             item: item.clone(),
             index,
             total_count: items.len(),
             title: entity_title(&item.data),
         }));
+
+        // If track visists is enabled, record the visit via the API.
+        if self.track_visits {
+            if let Some(item) = old_item {
+                if let Some(id) = item.item.data.get_id() {
+                    let api = semantic_ui_core::context::api();
+
+                    wasm_bindgen_futures::spawn_local(async move {
+                        if let Err(err) = api.record_entity_visit(id).await {
+                            tracing::error!("Failed to record entity visit: {}", err);
+                        }
+                    });
+                }
+            }
+        }
 
         self.dom_item.set(RefCell::new(content));
     }
@@ -259,6 +274,7 @@ impl MsgComponent for State {
 
     fn init(props: Self::Properties, ctx: Context<Self>) -> Self {
         let mut s = Self {
+            track_visits: props.track_visits,
             shared: props.shared,
             registry: context::registry(),
             timeout_guard: None,
@@ -474,6 +490,8 @@ impl PlayerHandle {
 pub struct PlayerViewer {
     /// Initial items.
     pub items: Vec<Item>,
+
+    pub track_visits: bool,
 }
 
 impl PlayerViewer {
@@ -491,6 +509,7 @@ impl PlayerViewer {
         let content = build_component::<State>(Props {
             shared: shared.clone(),
             handle: handle.clone(),
+            track_visits: self.track_visits,
         });
 
         let handle = PlayerHandle(Rc::new(PlayerHandleInner {
