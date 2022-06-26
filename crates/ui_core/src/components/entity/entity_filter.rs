@@ -4,27 +4,37 @@ use brass::{
     dom::{builder::div, TagBuilder},
     signal::signal::{Mutable, SignalExt},
 };
-use factordb::prelude::{AttributeDescriptor, Expr, Id, Select, Value};
-use semantic_core::base::Tag;
+use factordb::prelude::{AttrId, AttributeDescriptor, Expr, Id, Order, Select, Value};
+use semantic_core::base::{AttrCreatedAt, AttrUpdatedAt, Tag, AttrLastVisitTime};
 
 use crate::{
     base::tags::load_all_tags,
     components::{
         form,
         util::{
-            buttons, form_field_input, form_field_tag_select, form_field_textarea, ButtonBuilder,
-            FormRenderer, SelectOption,
+            buttons, form_field_input, form_field_select, form_field_tag_select,
+            form_field_textarea, ButtonBuilder, FormRenderer, SelectOption,
         },
     },
     context,
     validate::Validator,
 };
 
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum FilterSort {
+    Id,
+    CreatedAt,
+    UpdatedAt,
+    LastVisisted,
+}
+
 #[derive(Clone)]
 pub struct EntityFilterForm {
-    search: String,
-    entity_types: HashSet<String>,
-    tags: HashSet<Id>,
+    pub search: String,
+    pub entity_types: HashSet<String>,
+    pub tags: HashSet<Id>,
+    pub sort: FilterSort,
+    pub sort_order: Order,
 }
 
 impl EntityFilterForm {
@@ -61,18 +71,34 @@ impl EntityFilterForm {
 
         e
     }
+
+    pub fn build_query(&self) -> Select {
+        let sort = match self.sort {
+            FilterSort::Id => Expr::attr::<AttrId>(),
+            FilterSort::CreatedAt => Expr::attr::<AttrCreatedAt>(),
+            FilterSort::UpdatedAt => Expr::attr::<AttrUpdatedAt>(),
+            FilterSort::LastVisisted => Expr::attr::<AttrLastVisitTime>(),
+        };
+
+        Select::new()
+            .with_filter(self.build_expr())
+            .with_sort(sort, self.sort_order)
+    }
 }
 
 pub fn entity_filter_form(on_submit: impl Fn(EntityFilterForm) + 'static) -> TagBuilder {
-    let form = form::Form::new(EntityFilterForm {
+    let data = EntityFilterForm {
         search: String::new(),
         entity_types: HashSet::new(),
         tags: HashSet::new(),
-    })
-    .on_submit(move |values| {
-        on_submit(values.clone());
-    })
-    .build();
+        sort: FilterSort::Id,
+        sort_order: Order::Asc,
+    };
+    let form = form::Form::new(data)
+        .on_submit(move |values| {
+            on_submit(values.clone());
+        })
+        .build();
 
     let search = form_field_input("Search", form.field(|v| &mut v.search));
 
@@ -90,10 +116,49 @@ pub fn entity_filter_form(on_submit: impl Fn(EntityFilterForm) + 'static) -> Tag
         .collect();
     let types = form_field_tag_select("Type", type_options, form.field(|v| &mut v.entity_types));
 
+    let sort = form_field_select(
+        "Sort by",
+        vec![
+            SelectOption {
+                label: "Id".to_string(),
+                value: FilterSort::Id,
+            },
+            SelectOption {
+                label: "Created at".to_string(),
+                value: FilterSort::CreatedAt,
+            },
+            SelectOption {
+                label: "Updated at".to_string(),
+                value: FilterSort::UpdatedAt,
+            },
+            SelectOption {
+                label: "Last viewed at".to_string(),
+                value: FilterSort::LastVisisted,
+            },
+        ],
+        form.field(|v| &mut v.sort),
+    );
+
+    let sort_order = form_field_select(
+        "Sort order",
+        vec![
+            SelectOption {
+                label: "Ascending".to_string(),
+                value: Order::Asc,
+            },
+            SelectOption {
+                label: "Descending".to_string(),
+                value: Order::Desc,
+            },
+        ],
+        form.field(|v| &mut v.sort_order),
+    );
+
     let form2 = form.clone();
     let tags = brass::dom::ApplyFuture(async move {
         match load_all_tags().await {
             Ok(tags) => {
+                tracing::info!(count = tags.len(), "entity filter tags loaded");
                 let options = tags
                     .into_iter()
                     .map(|t| SelectOption {
@@ -103,7 +168,10 @@ pub fn entity_filter_form(on_submit: impl Fn(EntityFilterForm) + 'static) -> Tag
                     .collect();
                 form_field_tag_select("Tags", options, form2.field(|v| &mut v.tags))
             }
-            Err(_err) => div(),
+            Err(error) => {
+                tracing::error!(?error, "could not load tags for entity filter");
+                div()
+            }
         }
     });
 
@@ -111,6 +179,8 @@ pub fn entity_filter_form(on_submit: impl Fn(EntityFilterForm) + 'static) -> Tag
         .and(search)
         .and(types)
         .and(tags)
+        .and(sort)
+        .and(sort_order)
         .buttons_submit("Apply")
 }
 
@@ -155,7 +225,7 @@ pub enum EntityFilter {
 impl EntityFilter {
     pub fn build_select(&self) -> Select {
         match self {
-            EntityFilter::Form(f) => Select::new().with_filter(f.build_expr()),
+            EntityFilter::Form(f) => f.build_query(),
             // TODO: no unwrap?
             EntityFilter::Sql(f) => Select::parse_sql(&f.sql).unwrap(),
         }
