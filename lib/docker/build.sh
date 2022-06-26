@@ -87,6 +87,8 @@ function build_semantic() {
   echo Building semantic...
   source $HOME/.cargo/env
 
+  # Must run twice, for whatever reason...
+  git clone /host /build || echo nope
   git clone /host /build
   cd /build
   export CARGO_NET_GIT_FETCH_WITH_CLI="true"
