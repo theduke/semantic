@@ -177,6 +177,8 @@
           buildInputs = with pkgs; [
             pkgconfig
             cargo-watch
+            llvmPackages_latest.clang
+            mold
 
           ] ++ uiBuildInputs ++ runtimeDeps;
           propagatedBuildInputs = with pkgs; [
