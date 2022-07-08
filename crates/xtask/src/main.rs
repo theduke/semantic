@@ -226,9 +226,7 @@ fn cmd_install() -> Result<(), DynError> {
         .args(&[
             "install",
             "--path",
-            "crates/semantic",
-            "--features",
-            "archive",
+            "crates/cli",
         ])
         .current_dir(root_path()?)
         .run()?;
