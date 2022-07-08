@@ -103,12 +103,14 @@ impl MsgComponent for State {
                     let err = notification_error()
                         .and(Tag::P.new().and("Could not delete entry."))
                         .and(Tag::P.new().and(err.as_str()))
-                        .and(div().and(
-                            ButtonBuilder::new()
-                                .label("Ok")
-                                .on(handle.callback(|| Msg::DeleteErrorDismiss))
-                                .build(),
-                        ));
+                        .and(
+                            div().and(
+                                ButtonBuilder::new()
+                                    .label("Ok")
+                                    .on(handle.callback(|| Msg::DeleteErrorDismiss))
+                                    .build(),
+                            ),
+                        );
 
                     focus(err).into()
                 } else {
@@ -140,15 +142,17 @@ impl MsgComponent for State {
                                     item.datetime.to_datetime().format("%Y-%m-%d").to_string(),
                                 ))
                                 .and(Tag::Td.new().and(item.weight.to_string()))
-                                .and(Tag::Td.new().and(
-                                    buttons().and(
-                                        ButtonBuilder::new()
-                                            .size_small()
-                                            .label("Delete")
-                                            .on(handle.callback(move || Msg::DeleteEntry(id)))
-                                            .build(),
+                                .and(
+                                    Tag::Td.new().and(
+                                        buttons().and(
+                                            ButtonBuilder::new()
+                                                .size_small()
+                                                .label("Delete")
+                                                .on(handle.callback(move || Msg::DeleteEntry(id)))
+                                                .build(),
+                                        ),
                                     ),
-                                ))
+                                )
                                 .build()
                         },
                         notification_warning()

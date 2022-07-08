@@ -5,7 +5,7 @@ use brass::{
     signal::signal::{Mutable, SignalExt},
 };
 use factordb::prelude::{AttrId, AttributeDescriptor, Expr, Id, Order, Select, Value};
-use semantic_core::base::{AttrCreatedAt, AttrUpdatedAt, Tag, AttrLastVisitTime};
+use semantic_core::base::{AttrCreatedAt, AttrLastVisitTime, AttrUpdatedAt, Tag};
 
 use crate::{
     base::tags::load_all_tags,

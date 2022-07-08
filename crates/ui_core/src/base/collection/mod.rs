@@ -124,23 +124,24 @@ pub fn collection_view(
         let editing = Mutable::new(false);
         let col = col.clone();
 
-        let meta_form =
-            editing.signal().map(move |is_editing| {
-                if is_editing {
-                    let editing = editing.clone();
-                    collection_meta_edit(col.clone(), move |_col| {
-                        editing.set(false);
-                    })
-                } else {
-                    let editing = editing.clone();
-                    div().and(collection_meta(&col).and(
+        let meta_form = editing.signal().map(move |is_editing| {
+            if is_editing {
+                let editing = editing.clone();
+                collection_meta_edit(col.clone(), move |_col| {
+                    editing.set(false);
+                })
+            } else {
+                let editing = editing.clone();
+                div().and(
+                    collection_meta(&col).and(
                         ButtonBuilder::new()
                             .label("Edit")
                             .on(move || editing.set(true))
                             .build(),
-                    ))
-                }
-            });
+                    ),
+                )
+            }
+        });
 
         div().signal(meta_form)
     } else {
