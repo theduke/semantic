@@ -1,11 +1,14 @@
-use std::sync::Arc;
+use std::{collections::HashSet, sync::Arc};
 
 use factordb::{
-    prelude::{Batch, Id},
+    prelude::{AttributeDescriptor, Batch, Id},
     AnyError,
 };
 use futures::future::BoxFuture;
-use semantic_core::api::{FileImportMetadata, FileUploadMetadata};
+use semantic_core::{
+    api::{FileImportMetadata, FileUploadMetadata},
+    base::AttrTags,
+};
 
 use crate::app::App;
 
@@ -16,18 +19,31 @@ pub(crate) fn file_upload_apply_meta(
     tags: Vec<semantic_core::base::Tag>,
 ) -> Result<(), AnyError> {
     if let Some(col) = collection {
-        // File should be added to a collection, so add the db operation.
-        batch
-            .actions
-            .push(semantic_core::base::Collection::mutate_add_item(
-                col.id, file.id,
-            ));
+        if !col.item_ids.contains(&file.id) {
+            // File should be added to a collection, so add the db operation.
+            batch
+                .actions
+                .push(semantic_core::base::Collection::mutate_add_item(
+                    col.id, file.id,
+                ));
+        }
     }
 
     if tags.len() > 0 {
+        let existing_tags: HashSet<Id> = file
+            .extra
+            .get(AttrTags::QUALIFIED_NAME)
+            .and_then(|x| x.as_list())
+            .unwrap_or_default()
+            .into_iter()
+            .filter_map(|x| x.as_id())
+            .collect();
+
         for tag in tags {
-            let mutation = semantic_core::base::Tag::mutate_add_tag(file.id, tag.id);
-            batch.actions.push(mutation.into());
+            if !existing_tags.contains(&tag.id) {
+                let mutation = semantic_core::base::Tag::mutate_add_tag(file.id, tag.id);
+                batch.actions.push(mutation.into());
+            }
         }
     }
 
