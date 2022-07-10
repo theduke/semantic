@@ -1,19 +1,20 @@
 use std::rc::Rc;
 
 use brass::{
-    dom::{builder::div, TagBuilder},
+    dom::{builder::div, ClickEvent, Style, TagBuilder},
     signal::signal::{Mutable, SignalExt},
 };
 use factordb::prelude::{EntityContainer, Id, Item, Mutate};
 use semantic_core::base::{Note, TextFormat};
+use wasm_bindgen::JsCast;
 
 use crate::{
     components::{
         form::{self, FormLoadFuture},
         markdown::markdown_view,
         util::{
-            form_field_input, form_field_textarea, notification_error, title_2, ButtonBuilder, Cls,
-            FormRenderer,
+            button, form_field_input, form_field_textarea, notification_error, title_2,
+            ButtonBuilder, Cls, FormRenderer,
         },
     },
     context::{api, router},
@@ -122,6 +123,16 @@ pub fn note_view_immutable(note: &Note) -> TagBuilder {
         .and(div().class(Cls::Content).and(markdown_view(&note.body)))
 }
 
+pub fn note_preview(note: &Note) -> TagBuilder {
+    let body = markdown_view(&note.body);
+
+    div()
+        .class(Cls::Content)
+        .style(Style::MaxHeight, "200px")
+        .style(Style::OverflowY, "scroll")
+        .and(body)
+}
+
 pub fn note_view(note: Note, opts: &EntityRenderOpts) -> TagBuilder {
     let mutable_note = Mutable::new(note);
 
@@ -151,7 +162,11 @@ pub fn note_view(note: Note, opts: &EntityRenderOpts) -> TagBuilder {
             }
         }))
     } else {
-        note_view_immutable(&mutable_note.get_cloned())
+        if opts.preview {
+            note_preview(&mutable_note.get_cloned())
+        } else {
+            note_view_immutable(&mutable_note.get_cloned())
+        }
     }
 }
 
