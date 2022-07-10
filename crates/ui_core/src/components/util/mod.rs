@@ -74,8 +74,10 @@ brass::make_str_enum! {
         Tag = "tag",
 
         // Helpers
+        HasAddons = "has-addons",
         IsFlex = "is-flex",
         IsAlignItemsCenter = "is-align-items-center",
+        IsJustifyContentCenter = "is-justify-content-center",
         IsClickable = "is-clickable",
         IsActive = "is-active",
         IsHidden = "is-hidden",

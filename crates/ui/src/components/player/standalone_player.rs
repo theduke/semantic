@@ -345,8 +345,10 @@ impl MsgComponent for State {
         let controls = div()
             .class("ml-4")
             .class("mr-4")
+            .class("mb-1")
             .class(Cls::Buttons)
-            .and((btn_play, btn_prev, btn_next))
+            .class(Cls::HasAddons)
+            .and((btn_prev, btn_play, btn_next))
             .signal(position_info);
 
         let player = self.player.clone();
@@ -402,14 +404,21 @@ impl MsgComponent for State {
             .attr(Attr::Title, "Download playlist")
             .on(ctx.on(|_: ClickEvent| Msg::DownloadPlaylist));
 
-        let bar_settings = div().class("mr-4").class(Cls::Buttons).and((
-            btn_shuffle,
-            btn_cycle,
-            btn_mute,
-            btn_fullscreen,
-            btn_download_playlist,
-            btn_settings,
-        ));
+        let bar_settings = div()
+            .class("mr-4")
+            .class("mb-1")
+            .class(Cls::Buttons)
+            .class(Cls::HasAddons)
+            .class(Cls::IsFlex)
+            .class(Cls::IsJustifyContentCenter)
+            .and((
+                btn_shuffle,
+                btn_cycle,
+                btn_mute,
+                btn_fullscreen,
+                btn_download_playlist,
+                btn_settings,
+            ));
 
         let handle = ctx.handle();
         let item_info = self.player.signal_item().map(move |item| -> View {
@@ -421,6 +430,7 @@ impl MsgComponent for State {
 
                 div()
                     .style_raw("flex-shrink: 1; margin: 0 2rem;")
+                    .class("mb-1")
                     .and(title)
                     .into_view()
             })
@@ -455,13 +465,14 @@ impl MsgComponent for State {
                 View::Empty
             } else {
                 let filter = entity_filter::entity_filter(handle.on(Msg::FilterChanged));
-                let content = box_().class("mb-4").and((Tag::Hr.new(), filter));
+                let content = box_()
+                    .and(filter);
                 content.into()
             }
         }));
 
         let bar = div()
-            .style_raw("display: flex; margin-bottom: 1rem; align-items: flex-start; flex-grow: 0; justify-content: space-between;")
+            .style_raw("display: flex; align-items: flex-start; flex-grow: 0; justify-content: space-between; flex-wrap: wrap;")
             .and(controls)
             .signal(item_info)
             .and(bar_settings);
