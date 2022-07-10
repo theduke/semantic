@@ -179,6 +179,7 @@
             cargo-watch
             llvmPackages_latest.clang
             mold
+            zlib
 
           ] ++ uiBuildInputs ++ runtimeDeps;
           propagatedBuildInputs = with pkgs; [
@@ -201,6 +202,7 @@
 
           # Allow `cargo run` etc to find ssl lib.
           # LD_LIBRARY_PATH = "${pkgs.openssl.out}/lib:${pkgs.gtk3}/lib:${pkgs.webkitgtk}/lib:${pkgs.glib.out}/lib:${pkgs.stdenv.cc.cc.lib}/lib64:${pkgs.glib-networking}/lib";
+          LD_LIBRARY_PATH = "${pkgs.zlib}/lib";
           RUST_BACKTRACE = "1";
           # Use lld linker for speedup.
           RUSTFLAGS = "--cfg=web_sys_unstable_apis";
