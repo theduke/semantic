@@ -492,7 +492,7 @@ impl App {
 
         let tags = if meta.tag_ids.len() > 0 {
             let mut tags = Vec::new();
-            for tag_id in meta.tag_ids {
+            for tag_id in meta.tag_ids.clone() {
                 let tag = Tag::try_from_map(db.entity(tag_id).await?)?;
                 tags.push(tag);
             }
@@ -525,9 +525,10 @@ impl App {
                     };
 
                     crate::file_import::file_upload_apply_meta(
-                        &mut batch, &mut file, collection, tags,
+                        &mut batch, &mut file, collection, tags, &meta,
                     )?;
 
+                    tracing::trace!(?batch, "updating existing file metadata");
                     db.batch(batch).await?;
 
                     // Reload final file from db.
@@ -571,7 +572,7 @@ impl App {
             id,
             ident: None,
             title: meta.title.clone().or_else(|| meta.filename.clone()),
-            filename: meta.filename,
+            filename: meta.filename.clone(),
             url: None,
             download_url: None,
             preview_image_url: None,
@@ -592,7 +593,7 @@ impl App {
         let mut batch = query::mutate::Batch {
             actions: Vec::new(),
         };
-        crate::file_import::file_upload_apply_meta(&mut batch, &mut file, collection, tags)?;
+        crate::file_import::file_upload_apply_meta(&mut batch, &mut file, collection, tags, &meta)?;
 
         let item = match mime_guess.map(|x| x.mime_type()).unwrap_or_default() {
             mime if mime.starts_with("image/") => {

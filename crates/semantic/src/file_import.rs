@@ -2,12 +2,13 @@ use std::{collections::HashSet, sync::Arc};
 
 use factordb::{
     prelude::{AttributeDescriptor, Batch, Id},
+    query::mutate::EntityPatch,
     AnyError,
 };
 use futures::future::BoxFuture;
 use semantic_core::{
     api::{FileImportMetadata, FileUploadMetadata},
-    base::AttrTags,
+    base::{AttrSecondaryUrl, AttrTags, AttrTitle, AttrUrl},
 };
 
 use crate::app::App;
@@ -17,6 +18,7 @@ pub(crate) fn file_upload_apply_meta(
     file: &mut semantic_core::base::File,
     collection: Option<semantic_core::base::Collection>,
     tags: Vec<semantic_core::base::Tag>,
+    meta: &FileUploadMetadata,
 ) -> Result<(), AnyError> {
     if let Some(col) = collection {
         if !col.item_ids.contains(&file.id) {
@@ -29,6 +31,8 @@ pub(crate) fn file_upload_apply_meta(
         }
     }
 
+    let mut patch = factordb::prelude::Patch::new();
+
     if tags.len() > 0 {
         let existing_tags: HashSet<Id> = file
             .extra
@@ -39,12 +43,42 @@ pub(crate) fn file_upload_apply_meta(
             .filter_map(|x| x.as_id())
             .collect();
 
-        for tag in tags {
-            if !existing_tags.contains(&tag.id) {
-                let mutation = semantic_core::base::Tag::mutate_add_tag(file.id, tag.id);
-                batch.actions.push(mutation.into());
-            }
+        let new_tags = tags
+            .into_iter()
+            .filter(|t| !existing_tags.contains(&t.id))
+            .collect::<Vec<_>>();
+
+        for tag in new_tags {
+            patch = patch.add(AttrTags::QUALIFIED_NAME.to_string(), tag.id);
         }
+    }
+
+    if let Some(title) = &meta.title {
+        if file.title.is_none() {
+            patch = patch.add(AttrTitle::QUALIFIED_NAME.to_string(), title.clone());
+        }
+    }
+
+    if let Some(url) = &meta.url {
+        if let Some(existing_url) = &file.url {
+            if existing_url != url {
+                patch = patch.add(
+                    AttrSecondaryUrl::QUALIFIED_NAME.to_string(),
+                    url.clone().to_string(),
+                );
+            }
+        } else {
+            patch = patch.add(AttrUrl::QUALIFIED_NAME.to_string(), url.clone().to_string());
+        }
+    }
+
+    if !patch.0.is_empty() {
+        batch
+            .actions
+            .push(factordb::prelude::Mutate::Patch(EntityPatch {
+                id: file.id,
+                patch,
+            }));
     }
 
     Ok(())
@@ -55,13 +89,16 @@ async fn import_file(
     path: &std::path::Path,
     collection_id: Option<Id>,
     tag_ids: Vec<Id>,
+    title: Option<String>,
+    url: Option<url::Url>,
 ) -> Result<semantic_core::base::TypedFile, AnyError> {
     let content = tokio::fs::read(path).await?;
 
     let meta = FileUploadMetadata {
         filename: path.file_name().map(|n| n.to_string_lossy().to_string()),
-        title: None,
+        title,
         collection_id,
+        url,
         tag_ids,
     };
     let file = app.upload_file(meta, content).await?;
@@ -85,7 +122,15 @@ fn import_path_recursive(
                 import_path_recursive(&app, entry.path(), meta.clone(), on_import.clone()).await?;
             }
         } else if fs_meta.is_file() {
-            let f = import_file(&app, &path, meta.collection_id, meta.tag_ids).await?;
+            let f = import_file(
+                &app,
+                &path,
+                meta.collection_id,
+                meta.tag_ids,
+                None,
+                meta.url.clone(),
+            )
+            .await?;
             on_import(&path, &f);
         }
 
@@ -117,6 +162,7 @@ pub async fn import_files(
         filename: None,
         title: None,
         collection_id: meta.collection_id,
+        url: meta.url.clone(),
         tag_ids,
     };
 
