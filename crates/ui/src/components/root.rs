@@ -1,6 +1,9 @@
 use brass::{
-    dom::{builder::div, Render, TagBuilder, View},
-    signal::signal::SignalExt,
+    dom::{
+        builder::{div, span},
+        Attr, ClickEvent, Render, Tag, TagBuilder, View,
+    },
+    signal::signal::{Mutable, SignalExt},
 };
 use semantic_ui_core::{
     components::{
@@ -68,10 +71,30 @@ fn render_route(route: Route) -> View {
         .into_view()
 }
 
+fn navbar_burger() -> TagBuilder {
+    Tag::A
+        .new()
+        .attr(Attr::Role, "button")
+        .attr(Attr::AriaLabel, "menu")
+        .attr(Attr::AriaExpanded, "false")
+        .class("navbar-burger")
+        .and(span().attr(Attr::AriaHidden, "true"))
+        .and(span().attr(Attr::AriaHidden, "true"))
+        .and(span().attr(Attr::AriaHidden, "true"))
+}
+
 fn navbar() -> TagBuilder {
+    let is_expanded = Mutable::new(false);
+
+    let is_expanded2 = is_expanded.clone();
+    let burger = navbar_burger().on(move |_: ClickEvent| {
+        is_expanded2.replace_with(|x| !*x);
+    });
+
     let brand = div()
         .class("navbar-brand")
-        .and(link(Route::Browse, "Semantic").class("navbar-item"));
+        .and(link(Route::Browse, "Semantic").class("navbar-item"))
+        .and(burger);
 
     let items = div()
         .class("navbar-start")
@@ -81,7 +104,9 @@ fn navbar() -> TagBuilder {
         .and(link(Route::Apps, "Apps").class("navbar-item"));
 
     let logout = link(Route::Logout, "Logout").class("navbar-item");
-    let settings = link(Route::Settings, icon_fa("fa-cog")).class("navbar-item");
+    let settings = link(Route::Settings, icon_fa("fa-cog"))
+        .class("navbar-item")
+        .attr(Attr::Title, "Settings");
 
     let actions = buttons().and(settings).and(logout);
     let end = div()
@@ -90,11 +115,12 @@ fn navbar() -> TagBuilder {
 
     let menu = div()
         .class("navbar-menu")
-        // .class(Cls::IsActive)
+        .class_signal_toggle("is-active", is_expanded.signal())
         .and((items, end));
 
+    let navbar = div().class("navbar").and((brand, menu));
+
     div()
-        .class("navbar")
-        .style_raw("height: 52px; border-bottom: 2px solid black; border-radius: 10px; margin-bottom: 1rem;")
-        .and((brand, menu))
+        .style_raw("border-bottom: 2px solid black; border-radius: 10px; margin-bottom: 1rem;")
+        .and(navbar)
 }
