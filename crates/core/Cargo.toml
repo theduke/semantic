@@ -11,17 +11,17 @@ schema = ["schemars", "ts-rs", "factordb/jsonschema", "factordb/typescript-schem
 
 
 [dependencies]
-anyhow = { version = "1.0.40", features = ["backtrace"] }
+anyhow = { version = "1.0.58", features = ["backtrace"] }
 chrono = { version = "0.4.19", features = ["serde"] }
-futures = "0.3.15"
-serde = { version = "1.0.126", features = ["derive"] }
-serde_json = "1.0.64"
+futures = "0.3.21"
+serde = { version = "1.0.138", features = ["derive"] }
+serde_json = "1.0.82"
 uuid = { version = "1.1.2", features = ["serde", "v4"] }
 url = { version = "2.2.2", features = ["serde"] }
 
 factordb = "0.1"
 base64 = "0.13.0"
-tracing = "0.1.29"
+tracing = "0.1.35"
 # FIXME: use normal crate once https://github.com/GREsau/schemars/pull/141 is merged upstream.
 schemars = { version = "0.8.8", features = ["chrono", "uuid", "url", "ordered-float"], optional = true, git = "https://github.com/theduke/schemars", branch = "ordered-float" }
 ts-rs = { version = "6.1.2", default-features = false, features = ["serde-compat", "chrono-impl", "uuid-impl", "ordered-float-impl"], optional = true }
