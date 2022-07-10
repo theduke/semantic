@@ -19,6 +19,22 @@ use super::deno;
 #[derive(Clone)]
 pub struct PluginManager(Arc<State>);
 
+struct State {
+    db: Db,
+    mutable: RwLock<MutableState>,
+}
+
+struct PluginItem {
+    index: usize,
+    schema: PluginSchema,
+    plugin: DynPlugin,
+}
+
+struct MutableState {
+    plugins: HashMap<String, PluginItem>,
+    deno: Option<deno::DenoPluginHost>,
+}
+
 impl PluginManager {
     pub fn new(db: Db) -> Self {
         Self(Arc::new(State {
@@ -358,22 +374,6 @@ impl PluginManager {
         deno.test_fetch(&spec.code, spec.url, true).await
     }
 }
-
-struct State {
-    db: Db,
-    mutable: RwLock<MutableState>,
-}
-
-struct PluginItem {
-    schema: PluginSchema,
-    plugin: DynPlugin,
-}
-
-struct MutableState {
-    plugins: HashMap<String, PluginItem>,
-    deno: Option<deno::DenoPluginHost>,
-}
-
 fn build_plugin_migration_name(
     plugin: &dyn Plugin,
     migration: &Migration,
