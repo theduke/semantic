@@ -68,6 +68,9 @@ struct BackendOptions {
     /// Either a number of bytes, or a parsable pretty byte number like "300mb".
     #[clap(long)]
     offset: Option<String>,
+
+    #[clap(long)]
+    full_index_write_interval: Option<u64>,
 }
 
 impl BackendOptions {
@@ -85,6 +88,7 @@ impl BackendOptions {
             offset,
             data_path: self.data_path.clone(),
             key: self.key.clone().expect("Must specify --key"),
+            full_index_write_interval: self.full_index_write_interval,
             raw: false,
             key_iterations: self.key_iterations,
             salt: self.salt.clone(),

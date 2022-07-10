@@ -218,13 +218,16 @@ impl App {
             PathBuf::from(Self::default_data_path()?).join("db")
         };
 
-        let log_config = logfs::ConfigBuilder::new(data_path.clone())
+        let mut log_config = logfs::ConfigBuilder::new(data_path.clone())
             .raw_mode()
             .allow_create()
             .offset(crypto.offset)
             .default_chunk_size(8_000_000)
-            .crypto(Self::build_crypto_config(crypto)?)
-            .build();
+            .crypto(Self::build_crypto_config(crypto)?);
+        if let Some(interval) = crypto.full_index_write_interval {
+            log_config = log_config.full_index_write_interval(interval);
+        }
+        let log_config = log_config.build();
 
         let log = logfs::LogFs::<logfs::Journal2>::open(log_config)
             .map_err(|err| {
