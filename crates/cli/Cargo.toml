@@ -25,3 +25,6 @@ serde_json = "1.0.81"
 clap = { version = "3.2.6", features = ["derive", "env"] }
 tracing-subscriber = { version = "0.3.11", features = ["fmt", "env-filter"] }
 tracing = "0.1.35"
+url = "2.2.2"
+reqwest = { version = "0.11.11", default-features = false, features = ["rustls-tls", "json"] }
+futures = "0.3.21"

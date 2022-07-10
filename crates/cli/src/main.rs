@@ -1,3 +1,4 @@
+mod client;
 mod cmd_upload;
 mod db;
 
@@ -28,6 +29,8 @@ enum CliCommand {
     /// Database related commands.
     #[clap(subcommand)]
     Db(db::DbCmd),
+    #[clap(subcommand)]
+    Client(client::ClientCommand),
     ImportFiles(CommandImportFiles),
     #[cfg(feature = "webkit")]
     Webkit(CommandWebkit),
@@ -51,6 +54,8 @@ struct GenerateTypescript {}
 struct BackendOptions {
     #[clap(long, env = "SEMANTIC_DATA_PATH")]
     data_path: Option<String>,
+    #[clap(long)]
+    create: bool,
     // TODO: use anonymizing wrapper?
     #[clap(long, short, env = "SEMANTIC_KEY")]
     key: Option<String>,
@@ -92,6 +97,22 @@ impl BackendOptions {
         };
 
         Ok(c)
+    }
+}
+
+#[derive(clap::Parser, Clone)]
+struct ClientOptions {
+    #[clap(long)]
+    address: Option<url::Url>,
+}
+
+impl ClientOptions {
+    fn build_client(&self) -> client::ReqwestApiClient {
+        let endpoint = self
+            .address
+            .clone()
+            .unwrap_or_else(|| "http://localhost:3000".parse().unwrap());
+        client::ReqwestApiClient::new(client::ReqwestExecutor::new(endpoint))
     }
 }
 
@@ -148,7 +169,6 @@ pub struct DenoOptions {}
 struct CommandImportFiles {
     #[clap(flatten)]
     backend: BackendOptions,
-
     paths: Vec<std::path::PathBuf>,
 }
 
@@ -280,6 +300,7 @@ fn main() {
             let meta = api::FileImportMetadata {
                 collection_id: None,
                 tags: Vec::new(),
+                url: None,
             };
 
             let rt = tokio::runtime::Runtime::new().expect("Could not start runtime");
@@ -306,6 +327,9 @@ fn main() {
             cmd.run();
         }
         CliCommand::Db(cmd) => {
+            cmd.run();
+        }
+        CliCommand::Client(cmd) => {
             cmd.run();
         }
     }
