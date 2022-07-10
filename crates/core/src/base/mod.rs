@@ -106,6 +106,14 @@ pub struct AttrDescription(String);
 pub struct AttrUrl(url::Url);
 
 #[derive(Attribute)]
+#[factor(
+    namespace = "semantic",
+    title = "Secondary Url",
+    name = "secondary_url"
+)]
+pub struct AttrSecondaryUrl(url::Url);
+
+#[derive(Attribute)]
 #[factor(namespace = "semantic", title = "Preview")]
 pub struct AttrPreviewImageUrl(url::Url);
 
@@ -202,6 +210,7 @@ impl Plugin for SemanticBasePlugin {
                     AttrUpdatedAt::schema(),
                     AttrVisitCount::schema(),
                     AttrLastVisitTime::schema(),
+                    AttrSecondaryUrl::schema(),
                     // file
                     AttrBlobUri::schema(),
                     AttrBlobUriWeb::schema(),
@@ -616,6 +625,18 @@ impl Plugin for SemanticBasePlugin {
                 strict: false,
             });
 
+        let create_attr_secondary_url = Migration::with_name("create_attr_secondary_url")
+            .attr_create(AttributeSchema {
+                id: Id::nil(),
+                ident: AttrSecondaryUrl::QUALIFIED_NAME.to_string(),
+                title: Some("Secondary url".to_string()),
+                description: None,
+                value_type: ValueType::Url,
+                unique: false,
+                index: true,
+                strict: false,
+            });
+
         vec![
             first,
             create_comment,
@@ -638,6 +659,7 @@ impl Plugin for SemanticBasePlugin {
             create_social_media_platform_attrs,
             create_social_media_account,
             create_visit_attrs,
+            create_attr_secondary_url,
         ]
     }
 }
