@@ -1,20 +1,19 @@
 use std::rc::Rc;
 
 use brass::{
-    dom::{builder::div, ClickEvent, Style, TagBuilder},
+    dom::{builder::div, Style, TagBuilder},
     signal::signal::{Mutable, SignalExt},
 };
 use factordb::prelude::{EntityContainer, Id, Item, Mutate};
 use semantic_core::base::{Note, TextFormat};
-use wasm_bindgen::JsCast;
 
 use crate::{
     components::{
         form::{self, FormLoadFuture},
         markdown::markdown_view,
         util::{
-            button, form_field_input, form_field_textarea, notification_error, title_2,
-            ButtonBuilder, Cls, FormRenderer,
+            form_field_input, form_field_textarea, notification_error, title_2, ButtonBuilder, Cls,
+            FormRenderer,
         },
     },
     context::{api, router},

@@ -465,8 +465,7 @@ impl MsgComponent for State {
                 View::Empty
             } else {
                 let filter = entity_filter::entity_filter(handle.on(Msg::FilterChanged));
-                let content = box_()
-                    .and(filter);
+                let content = box_().and(filter);
                 content.into()
             }
         }));

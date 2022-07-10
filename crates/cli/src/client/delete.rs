@@ -27,9 +27,7 @@ impl DeleteCmd {
 
         client.batch(batch).await.unwrap();
 
-        if !self.auto_confirm {
-
-        }
+        if !self.auto_confirm {}
 
         eprintln!("{} items deleted!", self.ids.len());
     }
