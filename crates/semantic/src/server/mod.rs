@@ -566,7 +566,7 @@ fn request_auth_check(
 }
 
 async fn api_query(state: &ServerState, req: Request<Body>) -> Result<Response<Body>, AnyError> {
-    let token_claims = match request_validate_auth_cookie(state, &req) {
+    let token_claims = match request_validate_auth_cookie(&state, &req) {
         Ok(claims) => claims,
         Err(err) => {
             // Reset auth cookie on invalid request.

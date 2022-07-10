@@ -45,6 +45,21 @@ impl PluginManager {
     }
 
     /// Get all plugins, ordered by the time they were registered.
+    pub async fn plugins_ordered(&self) -> Vec<DynPlugin> {
+        let mut items = self
+            .0
+            .mutable
+            .read()
+            .await
+            .plugins
+            .values()
+            .map(|item| (item.index, item.plugin.clone()))
+            .collect::<Vec<_>>();
+
+        items.sort_by(|a, b| a.0.cmp(&b.0));
+
+        items.into_iter().map(|(_index, plugin)| plugin).collect()
+    }
 
     pub async fn initialize_deno(&self, config: deno::DenoConfig) -> Result<(), AnyError> {
         let mut state = self.0.mutable.write().await;

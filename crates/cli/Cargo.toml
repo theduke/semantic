@@ -16,6 +16,7 @@ semantic_core = { version = "0.1.0", path = "../core" }
 
 factordb = "0.1"
 factor_tools = "0.1"
+factor_engine = "0.1"
 
 anyhow = "1.0.58"
 bytesize = "1.1.0"

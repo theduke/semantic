@@ -1,6 +1,6 @@
 pub mod app;
 mod blobstore;
-mod db;
+pub mod db;
 mod file_import;
 mod jobs;
 pub mod plugin;
