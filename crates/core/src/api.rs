@@ -92,10 +92,11 @@ pub struct BackendConfig {
     pub idle_timeout: Option<Seconds>,
 }
 
-#[derive(serde::Serialize, serde::Deserialize, Clone, Debug)]
+#[derive(serde::Serialize, serde::Deserialize, Clone, Debug, Default)]
 pub struct FileUploadMetadata {
     pub filename: Option<String>,
     pub title: Option<String>,
+    pub url: Option<url::Url>,
     /// Id of the collection to which the uploaded files should be added.
     pub collection_id: Option<Id>,
     #[serde(default)]
@@ -106,6 +107,7 @@ pub struct FileUploadMetadata {
 pub struct FileImportMetadata {
     /// Id of the collection to which the uploaded files should be added.
     pub collection_id: Option<Id>,
+    pub url: Option<url::Url>,
     #[serde(default)]
     pub tags: Vec<IdOrIdent>,
 }

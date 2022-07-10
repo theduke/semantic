@@ -24,6 +24,9 @@ pub struct CmdUpload {
     #[clap(long)]
     address: Option<String>,
 
+    #[clap(long)]
+    url: Option<url::Url>,
+
     /// Existing collection to upload files to.
     /// Can be the gallery title, ident or id.
     #[clap(long, short = 'c')]
@@ -227,6 +230,7 @@ impl CmdUpload {
             let meta = api::FileUploadMetadata {
                 filename: Some(filename.to_string()),
                 title: title.clone(),
+                url: cmd.url.clone(),
                 collection_id: collection.as_ref().map(|c| c.id),
                 tag_ids: tag_ids.clone(),
             };

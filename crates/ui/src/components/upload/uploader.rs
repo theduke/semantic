@@ -136,6 +136,8 @@ impl State {
             next_file.file.clone(),
             FileUploadMetadata {
                 filename: Some(next_file.filename),
+                // TODO: add url form field?
+                url: None,
                 title: None,
                 collection_id: self.collection.lock_ref().get_collection_id(),
                 tag_ids: Vec::new(),
