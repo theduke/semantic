@@ -200,12 +200,7 @@ async fn file_upload(
             .context("Invalid file metadata header: not a valid base64 string")?;
         serde_json::from_slice(&decoded).context("Invalid file metadata header: invalid json")?
     } else {
-        FileUploadMetadata {
-            filename: None,
-            title: None,
-            collection_id: None,
-            tag_ids: Vec::new(),
-        }
+        FileUploadMetadata::default()
     };
 
     tracing::trace!("fetching file upload body");
@@ -583,7 +578,9 @@ async fn api_query(state: &ServerState, req: Request<Body>) -> Result<Response<B
     };
 
     let body = hyper::body::to_bytes(req.into_body()).await?;
-    let query: Query = serde_json::from_slice(&body)?;
+
+    let jd = &mut serde_json::Deserializer::from_slice(&body);
+    let query: Query = serde_path_to_error::deserialize(jd)?;
 
     match &query {
         Query::ServerStatus(()) | Query::Initialize(_) => {}
