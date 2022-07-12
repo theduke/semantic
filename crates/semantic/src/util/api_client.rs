@@ -68,6 +68,15 @@ impl ApiClient {
         self.upload_file(meta, stream).await
     }
 
+    pub async fn upload_file_tokio(
+        &self,
+        meta: FileUploadMetadata,
+        file: tokio::fs::File,
+    ) -> Result<TypedFile, anyhow::Error> {
+        let stream = tokio_util::io::ReaderStream::new(file);
+        self.upload_file(meta, stream).await
+    }
+
     fn api_endpoint(&self) -> reqwest::Url {
         let mut s = self.endpoint.clone();
         s.set_path("/api/query");

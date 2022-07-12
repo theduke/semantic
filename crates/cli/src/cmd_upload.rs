@@ -9,9 +9,10 @@ use factordb::{
     prelude::{AttrId, AttrIdent, AttributeDescriptor, EntityContainer, Id},
     AnyError,
 };
+use futures::{StreamExt, TryStreamExt};
 use semantic_core::{
     api::{self, ApiClientExecutor},
-    base::{AttrTagName, Tag},
+    base::{AttrTagName, Collection, Tag, TypedFile},
 };
 
 #[derive(clap::Parser)]
@@ -49,6 +50,10 @@ pub struct CmdUpload {
     #[clap(short = 't', long)]
     tag: Vec<String>,
 
+    /// How many uploads should run in parallel.
+    #[clap(long)]
+    concurrency: Option<usize>,
+
     /// The file system paths.
     /// Each path be either a file or a directory.
     paths: Vec<PathBuf>,
@@ -58,6 +63,8 @@ struct FileItem {
     path: PathBuf,
     size: u64,
 }
+
+type Client = api::ApiClient<semantic::ApiClient>;
 
 impl CmdUpload {
     pub fn run(self) {
@@ -212,41 +219,84 @@ impl CmdUpload {
 
         eprintln!("Uploading files...");
 
+        let concurrency = cmd.concurrency.clone().unwrap_or(10);
+        let url = cmd.url.clone();
         let title = if files.len() == 1 { cmd.title } else { None };
-
         let tag_ids: Vec<_> = tags.iter().map(|t| t.id).collect();
 
         let count = files.len();
-        for (index, file) in files.into_iter().enumerate() {
-            eprintln!(
-                "Uplading file {}/{}: {}...",
-                index + 1,
-                count,
-                file.path.display()
-            );
 
-            let filename = file.path.file_name().unwrap().to_string_lossy();
+        futures::stream::iter(files.as_slice())
+            .enumerate()
+            .map(Ok)
+            .try_for_each_concurrent(concurrency, |(index, item)| {
+                eprintln!(
+                    "Uplading file {}/{}: {}...",
+                    index + 1,
+                    count,
+                    item.path.display()
+                );
 
-            let meta = api::FileUploadMetadata {
-                filename: Some(filename.to_string()),
-                title: title.clone(),
-                url: cmd.url.clone(),
-                collection_id: collection.as_ref().map(|c| c.id),
-                tag_ids: tag_ids.clone(),
-            };
+                let fut = upload_file(&client, &item, &title, &url, &collection, &tag_ids);
 
-            let file = std::fs::File::open(&file.path)
-                .with_context(|| format!("Could  not open file: {}", file.path.display()))?;
-            let f = client.upload_file_std(meta, file).await?;
+                async {
+                    let f = fut.await?;
+                    eprintln!("{}", serde_json::to_string_pretty(&f).unwrap());
+                    Ok::<(), anyhow::Error>(())
+                }
+            })
+            .await?;
 
-            // TODO: nicer formatting...
-            eprintln!("{}", serde_json::to_string_pretty(&f).unwrap());
-        }
+        // for (index, file) in files.into_iter().enumerate() {
+        //     let filename = file.path.file_name().unwrap().to_string_lossy();
+
+        //     let meta = api::FileUploadMetadata {
+        //         filename: Some(filename.to_string()),
+        //         title: title.clone(),
+        //         url: cmd.url.clone(),
+        //         collection_id: collection.as_ref().map(|c| c.id),
+        //         tag_ids: tag_ids.clone(),
+        //     };
+
+        //     let file = std::fs::File::open(&file.path)
+        //         .with_context(|| format!("Could  not open file: {}", file.path.display()))?;
+        //     let f = client.upload_file_std(meta, file).await?;
+
+        //     // TODO: nicer formatting...
+        //     eprintln!("{}", serde_json::to_string_pretty(&f).unwrap());
+        // }
 
         eprintln!("\nUpload complete!");
 
         Ok(())
     }
+}
+
+async fn upload_file(
+    client: &Client,
+    item: &FileItem,
+    title: &Option<String>,
+    url: &Option<url::Url>,
+    collection: &Option<Collection>,
+    tag_ids: &[Id],
+) -> Result<TypedFile, anyhow::Error> {
+    let filename = item.path.file_name().unwrap().to_string_lossy();
+
+    let meta = api::FileUploadMetadata {
+        filename: Some(filename.to_string()),
+        title: title.clone(),
+        url: url.clone(),
+        collection_id: collection.as_ref().map(|c| c.id),
+        tag_ids: tag_ids.to_vec(),
+    };
+
+    let file = tokio::fs::File::open(&item.path)
+        .await
+        .with_context(|| format!("Could  not open file: {}", item.path.display()))?;
+
+    let f = client.upload_file_tokio(meta, file).await?;
+
+    Ok(f)
 }
 
 async fn resolve_tags<E, L, V>(

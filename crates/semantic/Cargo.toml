@@ -30,6 +30,7 @@ infer = "0.7.0"
 # async
 futures = "0.3.15"
 tokio = { version = "1.17.0", features = ["full"] }
+tokio-util = { version = "0.7.0", features = ["io", "codec"] }
 
 # http
 reqwest = { version =  "0.11.3", default-features = false, features = ["gzip", "json", "rustls-tls", "stream"] }
@@ -66,7 +67,6 @@ mozjpeg = { version = "0.9.1", optional = true }
 
 semantic_core = { path = "../core" }
 semantic_extra = { version = "0.1", path = "../plugins/extra", default-features = false }
-tokio-util = { version = "0.7.0", features = ["io"] }
 headers = "0.3.5"
 
 tar = { version =  "0.4.37", optional = true }
