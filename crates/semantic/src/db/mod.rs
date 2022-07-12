@@ -96,7 +96,7 @@ pub async fn compact_db_history(
     async fn try_copy_entities(db: &Db, db2: &Db, batch_size: usize) -> Result<(), anyhow::Error> {
         // TODO: lock database to prevent stale data!
 
-        let select_limit = 5000;
+        let select_limit = 1_000_000;
         let mut persisted_ids = HashSet::<Id>::new();
         let mut pending_entities = HashMap::<Id, DataMap>::new();
         let mut last_id = Id::nil();
@@ -108,10 +108,19 @@ pub async fn compact_db_history(
         loop {
             if !queries_complete {
                 let filter = Expr::gt(Expr::attr::<AttrId>(), last_id.clone());
-                let select = Select::new().with_limit(select_limit).with_filter(filter);
+                let select = Select::new()
+                    .with_limit(select_limit)
+                    .with_filter(filter)
+                    .with_sort(Expr::attr::<AttrId>(), factordb::prelude::Order::Asc);
                 let items = db.select(select).await?.items;
 
-                tracing::debug!(entities=%items.len(), "loaded entity page");
+                tracing::debug!(
+                    entities=%items.len(),
+                    %last_id,
+                    persisted_count = %persisted_ids.len(),
+                    pending_count = %pending_entities.len(),
+                    "loaded entity page",
+                );
 
                 if items.is_empty() {
                     queries_complete = true;
@@ -120,6 +129,11 @@ pub async fn compact_db_history(
                     for item in items {
                         let data = item.data;
                         let id = data.get_id().unwrap();
+                        last_id = id;
+
+                        if persisted_ids.contains(&id) || pending_entities.contains_key(&id) {
+                            continue;
+                        }
 
                         let has_unmet_dependencies =
                             entity_data_related_ids(&data).any(|x| !persisted_ids.contains(&x));
@@ -130,7 +144,6 @@ pub async fn compact_db_history(
                             batch = batch.and_create(factordb::query::mutate::Create { id, data });
                             persisted_ids.insert(id);
                         }
-                        last_id = id;
 
                         if batch.actions.len() >= batch_size {
                             let entity_count = batch.actions.len();
@@ -157,6 +170,7 @@ pub async fn compact_db_history(
 
             for id in &pending_to_persist {
                 let data = pending_entities.remove(id).unwrap();
+                persisted_ids.insert(*id);
                 batch = batch.and_create(factordb::query::mutate::Create {
                     id: id.clone(),
                     data,
@@ -193,6 +207,12 @@ pub async fn compact_db_history(
     let new_prefix = "_x/";
     let batch_size = 10_000;
 
+    // Delete keys with the new prefix, which might be left over from a previous failed run.
+    tracing::trace!("deleting left-over temporary keys...");
+    log.remove_prefix(new_prefix)?;
+
+    tracing::trace!("opening database overlay...");
+
     let db2 = crate::db::logdb::LogDbStore::new_with_prefix(log.clone(), new_prefix.to_string())
         .build_db()
         .await
@@ -217,7 +237,7 @@ pub async fn compact_db_history(
     let old_keys = log.paths_prefix(logdb::DEFAULT_PREFIX)?;
     let new_keys = log.paths_prefix(new_prefix)?;
 
-    let renames = new_keys
+    let renames: Vec<_> = new_keys
         .into_iter()
         .map(|key| logfs::Rename {
             new_key: key.replacen(new_prefix, logdb::DEFAULT_PREFIX, 1),
@@ -227,6 +247,8 @@ pub async fn compact_db_history(
 
     tracing::info!("re-mapping keys...");
 
+    let old_key_count = old_keys.len();
+    let new_key_count = renames.len();
     let batch = logfs::Batch {
         deleted_keys: old_keys,
         renames,
@@ -234,7 +256,7 @@ pub async fn compact_db_history(
 
     log.batch(batch)?;
 
-    tracing::info!("compaction complete!");
+    tracing::info!(%old_key_count, %new_key_count, "compaction complete!");
 
     Ok(())
 }
