@@ -508,7 +508,8 @@ impl App {
 
         // Try to optimise.
         // TODO: add setting to disable optimisations.
-        let (data, hash, original_hash) = media::optimise_file_data(data);
+        let (data, hash, original_hash) =
+            tokio::task::spawn_blocking(move || media::optimise_file_data(data)).await?;
 
         // Prevent duplicates.
 
@@ -516,7 +517,7 @@ impl App {
             semantic_core::base::File::find_by_hash_or_original(&db, &hash, original_hash.as_ref())
                 .await?
         {
-            let mut file = semantic_core::base::File::try_from_map(old_file)?;
+            let mut file = semantic_core::base::File::try_from_map(old_file.clone())?;
 
             if let Some(blob_path) = &file.blob_uri {
                 // Make sure the blob still exists.
@@ -531,11 +532,17 @@ impl App {
                         &mut batch, &mut file, collection, tags, &meta,
                     )?;
 
-                    tracing::trace!(?batch, "updating existing file metadata");
-                    db.batch(batch).await?;
+                    let final_file = if !batch.actions.is_empty() {
+                        tracing::debug!(?batch, "updating existing file metadata");
+                        db.batch(batch).await?;
 
-                    // Reload final file from db.
-                    let final_file = db.entity(file.id).await?;
+                        // Reload final file from db.
+                        db.entity(file.id).await?
+                    } else {
+                        tracing::trace!("existing file - metadata did not change");
+                        old_file
+                    };
+
                     return TypedFile::from_map(final_file);
                 }
             }
@@ -629,9 +636,12 @@ impl App {
 
         batch.actions.insert(0, Mutate::create(id, map));
 
-        db.batch(batch).await?;
-
-        tracing::trace!(entity=?item, "file created");
+        if !batch.actions.is_empty() {
+            tracing::debug!(entity=?item, "file created");
+            db.batch(batch).await?;
+        } else {
+            tracing::trace!("file did not change");
+        }
 
         Ok(item)
     }
