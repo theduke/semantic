@@ -739,6 +739,14 @@ impl<E: ApiClientExecutor> ApiClient<E> {
         }
     }
 
+    pub async fn tag_create(&self, create: TagCreate) -> Result<DataMap, AnyError> {
+        match self.exec.execute(Query::TagCreate(create)).await {
+            Ok(Reply::TagCreate(tag)) => Ok(tag),
+            Ok(_other) => Err(anyhow::anyhow!("API returned invalid data")),
+            Err(err) => Err(err),
+        }
+    }
+
     pub async fn tag_merge(
         &self,
         source_tag: IdOrIdent,
