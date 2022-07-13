@@ -1,9 +1,17 @@
-use std::collections::{HashMap, HashSet};
+use std::{
+    collections::{HashMap, HashSet, VecDeque},
+    task::Poll,
+};
 
 use anyhow::bail;
-use factordb::prelude::{
-    AttrId, AttrMapExt, AttributeDescriptor, Batch, DataMap, Db, Expr, Id, Migration, Select,
+use factordb::{
+    prelude::{
+        AttrId, AttrMapExt, AttributeDescriptor, Batch, DataMap, Db, Expr, Id, Item, Migration,
+        Page, Select,
+    },
+    query::mutate,
 };
+use futures::{future::BoxFuture, StreamExt};
 use semantic_core::plugin::Plugin;
 
 use crate::plugin::PluginManager;
@@ -24,6 +32,141 @@ fn build_plugin_migration_name(
     // Doing so would break all plugins with migrations and require a
     // database purge!
     Ok(format!("plugin/{}/{}", plugin.name(), flat_name))
+}
+
+pin_project_lite::pin_project! {
+    pub struct EntitiesOrderedStream {
+        db: Db,
+        select_limit: u64,
+        handled_ids: HashSet<Id>,
+        pending_entities: HashMap<Id, DataMap>,
+        last_id: Id,
+        queries_finished: bool,
+
+        popqueue: VecDeque<(Id, DataMap)>,
+
+        #[pin]
+        next_page_future: Option<BoxFuture<'static, Result<Page<Item>, anyhow::Error>>>,
+    }
+}
+
+impl EntitiesOrderedStream {
+    pub fn new(db: Db, select_limit: u64) -> Self {
+        Self {
+            db,
+            select_limit,
+            handled_ids: HashSet::new(),
+            pending_entities: HashMap::new(),
+            last_id: Id::nil(),
+            queries_finished: false,
+            popqueue: VecDeque::new(),
+            next_page_future: None,
+        }
+    }
+}
+
+impl futures::stream::Stream for EntitiesOrderedStream {
+    type Item = Result<(Id, DataMap), anyhow::Error>;
+
+    fn poll_next(
+        self: std::pin::Pin<&mut Self>,
+        cx: &mut std::task::Context<'_>,
+    ) -> Poll<Option<Self::Item>> {
+        let mut this = self.project();
+
+        loop {
+            if let Some(f) = this.next_page_future.as_mut().get_mut() {
+                match f.as_mut().poll(cx) {
+                    Poll::Pending => {
+                        return Poll::Pending;
+                    }
+                    Poll::Ready(Err(err)) => {
+                        return Poll::Ready(Some(Err(err)));
+                    }
+                    Poll::Ready(Ok(page)) => {
+                        *this.next_page_future = None;
+
+                        let items = page.items;
+                        if items.is_empty() {
+                            *this.queries_finished = true;
+                            tracing::info!("all entities loaded, forwarding remaining entities...");
+                        } else {
+                            for item in items {
+                                let data = item.data;
+                                let id = data.get_id().unwrap();
+                                *this.last_id = id;
+
+                                if this.handled_ids.contains(&id)
+                                    || this.pending_entities.contains_key(&id)
+                                {
+                                    continue;
+                                }
+
+                                let has_unmet_dependencies = entity_data_related_ids(&data)
+                                    .any(|x| !this.handled_ids.contains(&x));
+
+                                if has_unmet_dependencies {
+                                    this.pending_entities.insert(id, data);
+                                } else {
+                                    this.handled_ids.insert(id);
+                                    this.popqueue.push_back((id, data));
+                                }
+                            }
+
+                            // Clean up pending entities.
+
+                            loop {
+                                let ready_entity_ids = this
+                                    .pending_entities
+                                    .iter()
+                                    .filter_map(|(id, data)| {
+                                        let has_unmet_dependencies = entity_data_related_ids(&data)
+                                            .any(|x| !this.handled_ids.contains(&x));
+                                        if has_unmet_dependencies {
+                                            None
+                                        } else {
+                                            Some(id.clone())
+                                        }
+                                    })
+                                    .collect::<Vec<_>>();
+
+                                if ready_entity_ids.is_empty() {
+                                    break;
+                                }
+
+                                for id in &ready_entity_ids {
+                                    let data = this.pending_entities.remove(id).unwrap();
+                                    this.handled_ids.insert(*id);
+                                    this.popqueue.push_back((*id, data));
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+
+            if let Some(next) = this.popqueue.pop_front() {
+                return Poll::Ready(Some(Ok(next)));
+            } else if !*this.queries_finished {
+                let filter = Expr::gt(Expr::attr::<AttrId>(), this.last_id.clone());
+                let select = Select::new()
+                    .with_limit(*this.select_limit)
+                    .with_filter(filter)
+                    .with_sort(Expr::attr::<AttrId>(), factordb::prelude::Order::Asc);
+                let db = this.db.clone();
+
+                let fut = Box::pin(async move { db.select(select).await });
+                *this.next_page_future = Some(fut);
+                continue;
+            } else if !this.pending_entities.is_empty() {
+                return Poll::Ready(Some(Err(anyhow::anyhow!(
+                    "Deadlock while resolving entity dependencies"
+                ))));
+            } else {
+                return Poll::Ready(None);
+            }
+        }
+    }
 }
 
 pub async fn apply_plugin_migrations(
@@ -92,105 +235,28 @@ pub async fn compact_db_history(
     db: &Db,
     log: &logfs::LogFs,
     plugins: &PluginManager,
+    select_window_size: u64,
 ) -> Result<(), anyhow::Error> {
-    async fn try_copy_entities(db: &Db, db2: &Db, batch_size: usize) -> Result<(), anyhow::Error> {
+    async fn try_copy_entities(
+        db: &Db,
+        db2: &Db,
+        batch_size: usize,
+        select_window_size: u64,
+    ) -> Result<(), anyhow::Error> {
         // TODO: lock database to prevent stale data!
 
-        let select_limit = 1_000_000;
-        let mut persisted_ids = HashSet::<Id>::new();
-        let mut pending_entities = HashMap::<Id, DataMap>::new();
-        let mut last_id = Id::nil();
-
         let mut batch = Batch::new();
+        let mut stream = EntitiesOrderedStream::new(db.clone(), select_window_size);
 
-        let mut queries_complete = false;
+        while let Some(res) = stream.next().await {
+            let (id, data) = res?;
 
-        loop {
-            if !queries_complete {
-                let filter = Expr::gt(Expr::attr::<AttrId>(), last_id.clone());
-                let select = Select::new()
-                    .with_limit(select_limit)
-                    .with_filter(filter)
-                    .with_sort(Expr::attr::<AttrId>(), factordb::prelude::Order::Asc);
-                let items = db.select(select).await?.items;
-
-                tracing::debug!(
-                    entities=%items.len(),
-                    %last_id,
-                    persisted_count = %persisted_ids.len(),
-                    pending_count = %pending_entities.len(),
-                    "loaded entity page",
-                );
-
-                if items.is_empty() {
-                    queries_complete = true;
-                    tracing::info!("all entities loaded, persisting remaining entities...");
-                } else {
-                    for item in items {
-                        let data = item.data;
-                        let id = data.get_id().unwrap();
-                        last_id = id;
-
-                        if persisted_ids.contains(&id) || pending_entities.contains_key(&id) {
-                            continue;
-                        }
-
-                        let has_unmet_dependencies =
-                            entity_data_related_ids(&data).any(|x| !persisted_ids.contains(&x));
-
-                        if has_unmet_dependencies {
-                            pending_entities.insert(id, data);
-                        } else {
-                            batch = batch.and_create(factordb::query::mutate::Create { id, data });
-                            persisted_ids.insert(id);
-                        }
-
-                        if batch.actions.len() >= batch_size {
-                            let entity_count = batch.actions.len();
-                            db2.batch(batch).await?;
-                            tracing::debug!(%entity_count, "persisted batch");
-                            batch = Batch::new();
-                        }
-                    }
-                }
-            }
-
-            let pending_to_persist = pending_entities
-                .iter()
-                .filter_map(|(id, data)| {
-                    let has_unmet_dependencies =
-                        entity_data_related_ids(&data).any(|x| !persisted_ids.contains(&x));
-                    if has_unmet_dependencies {
-                        None
-                    } else {
-                        Some(id.clone())
-                    }
-                })
-                .collect::<Vec<_>>();
-
-            for id in &pending_to_persist {
-                let data = pending_entities.remove(id).unwrap();
-                persisted_ids.insert(*id);
-                batch = batch.and_create(factordb::query::mutate::Create {
-                    id: id.clone(),
-                    data,
-                });
-                last_id = id.clone();
-            }
-
+            batch = batch.and_create(mutate::Create { id, data });
             if batch.actions.len() >= batch_size {
                 let entity_count = batch.actions.len();
                 db2.batch(batch).await?;
                 tracing::debug!(%entity_count, "persisted batch");
                 batch = Batch::new();
-            }
-
-            if queries_complete {
-                if pending_entities.is_empty() {
-                    break;
-                } else if pending_to_persist.is_empty() {
-                    bail!("Deadlock while trying to resolve entity reference dependencies!");
-                }
             }
         }
 
@@ -228,7 +294,7 @@ pub async fn compact_db_history(
 
     tracing::info!("copying entities...");
 
-    if let Err(error) = try_copy_entities(db, &db2, batch_size).await {
+    if let Err(error) = try_copy_entities(db, &db2, batch_size, select_window_size).await {
         tracing::error!(?error, "Entity copying failed - reverting");
         log.remove_prefix(new_prefix)?;
         return Err(error.context("Entity copying failed"));
@@ -284,7 +350,7 @@ mod tests {
 
     #[test]
     fn test_compact_logdb_history() {
-        tracing_subscriber::fmt::init();
+        tracing_subscriber::fmt::try_init().ok();
 
         let rt = tokio::runtime::Runtime::new().unwrap();
 
@@ -326,14 +392,18 @@ mod tests {
                 .unwrap();
             let db = app.db().unwrap();
 
-            let note1 = Note {
-                id: Id::random(),
-                title: "note 1".to_string(),
-                body: "note 1".to_string(),
-                format: semantic_core::base::TextFormat::Plain,
-                extra: Default::default(),
-            };
-            db.create_entity(note1.clone()).await.unwrap();
+            let mut notes = Vec::new();
+            for index in 0..500 {
+                let note = Note {
+                    id: Id::random(),
+                    title: format!("note {index}"),
+                    body: format!("note {index} body"),
+                    format: semantic_core::base::TextFormat::Plain,
+                    extra: Default::default(),
+                };
+                db.create_entity(note.clone()).await.unwrap();
+                notes.push(note);
+            }
 
             let log = db
                 .client()
@@ -355,16 +425,20 @@ mod tests {
 
             let plugins = app.plugins().unwrap();
 
-            compact_db_history(&db, log.log(), &plugins).await.unwrap();
+            compact_db_history(&db, log.log(), &plugins, 2)
+                .await
+                .unwrap();
 
             app.close_backend().await.unwrap();
 
             let app = App::build(app_config, handle.clone()).await.unwrap();
             let db = app.require_db().unwrap();
 
-            let note1_raw = db.entity(note1.id).await.unwrap();
-            let note1_a = Note::try_from_map(note1_raw).unwrap();
-            assert_eq!(note1_a.title, "note 1");
+            for old_note in &notes {
+                let note_raw = db.entity(old_note.id).await.unwrap();
+                let note = Note::try_from_map(note_raw).unwrap();
+                assert_eq!(note.title, old_note.title);
+            }
         });
     }
 }
