@@ -24,7 +24,7 @@ use factordb::{
         DataMap, EntityAttribute, EntityDescriptor, EntitySchema, Id, IdOrIdent, Migration,
         Timestamp, Value, ValueType,
     },
-    query::migrate,
+    query::{migrate, migrate::AttributeCreateIndex},
 };
 
 mod common_actions;
@@ -172,6 +172,13 @@ impl AttributeDescriptor for TextFormat {
             strict: false,
         }
     }
+}
+
+#[derive(serde::Serialize, serde::Deserialize, Clone, Debug)]
+#[serde(untagged)]
+pub enum OneOrMany<T> {
+    One(T),
+    Many(Vec<T>),
 }
 
 pub struct SemanticBasePlugin;
@@ -637,6 +644,14 @@ impl Plugin for SemanticBasePlugin {
                 strict: false,
             });
 
+        let change_attr_hash_to_indexed = Migration::with_name("change_attr_hash_to_indexed")
+            .action(migrate::SchemaAction::AttributeCreateIndex(
+                AttributeCreateIndex {
+                    attribute: AttrHash::QUALIFIED_NAME.to_string(),
+                    unique: false,
+                },
+            ));
+
         vec![
             first,
             create_comment,
@@ -660,6 +675,7 @@ impl Plugin for SemanticBasePlugin {
             create_social_media_account,
             create_visit_attrs,
             create_attr_secondary_url,
+            change_attr_hash_to_indexed,
         ]
     }
 }
