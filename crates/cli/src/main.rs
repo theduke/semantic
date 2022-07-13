@@ -1,8 +1,9 @@
+mod archive;
 mod client;
 mod cmd_upload;
 mod db;
 
-use anyhow::{anyhow, bail};
+use anyhow::anyhow;
 use factordb::AnyError;
 use semantic_core::{
     api::{self, DbConfig},
@@ -35,15 +36,8 @@ enum CliCommand {
     #[cfg(feature = "webkit")]
     Webkit(CommandWebkit),
     GenerateTypescript(GenerateTypescript),
-    /// Generate an archive that contains all data and blobs.
-    Export {
-        #[clap(flatten)]
-        backend: BackendOptions,
-
-        /// Path where the export should be written.
-        /// If not given, data is written to stdout.
-        path: Option<String>,
-    },
+    #[clap(subcommand)]
+    Archive(archive::ArchiveCmd),
     Upload(cmd_upload::CmdUpload),
 }
 
@@ -252,39 +246,8 @@ fn main() {
                 .expect("Could not build app");
             app.run_webview_gtk().expect("Could not run GTK app");
         }
-        CliCommand::Export { backend, path } => {
-            let backend = backend.build_backend_config().unwrap();
-            let app_config = semantic::app::AppConfig {
-                backend: Some(backend),
-                // TODO: this is useless. should be moved to server config.
-                token_key: "xxx".to_string(),
-                // No need for deno when exporting.
-                deno: None,
-                tmp_dir: None,
-            };
-
-            let rt = tokio::runtime::Runtime::new().expect("Could not start runtime");
-            let handle = rt.handle().clone();
-            rt.block_on(async move {
-                let app = semantic::app::App::build(app_config, handle).await?;
-
-                if let Some(path) = path {
-                    let pathb = std::path::PathBuf::from(&path);
-                    if pathb.is_dir() {
-                        bail!("Given path is a directory: {path}");
-                    } else if pathb.is_file() {
-                        bail!("Given path already exists: {path}");
-                    }
-                    let f = std::fs::File::create(path)?;
-                    let writer = std::io::BufWriter::new(f);
-
-                    app.build_export(writer).await
-                } else {
-                    let writer = std::io::stdout();
-                    app.build_export(writer).await
-                }
-            })
-            .expect("Export failed");
+        CliCommand::Archive(cmd) => {
+            cmd.run();
         }
         CliCommand::ImportFiles(args) => {
             let data_dir = app::App::default_data_dir().unwrap();
