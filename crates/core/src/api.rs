@@ -66,6 +66,7 @@ impl std::fmt::Debug for BackendCryptoConfig {
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[cfg_attr(feature = "schema", derive(ts_rs::TS))]
 pub enum DbConfig {
+    InMemory,
     Crypto(BackendCryptoConfig),
 }
 
@@ -73,6 +74,7 @@ impl DbConfig {
     /// Remove all sensitive information like passwords.
     pub fn purge_secrets(self) -> Self {
         match self {
+            Self::InMemory => Self::InMemory,
             Self::Crypto(c) => Self::Crypto(BackendCryptoConfig {
                 offset: c.offset,
                 data_path: c.data_path,

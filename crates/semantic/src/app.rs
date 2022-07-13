@@ -248,13 +248,55 @@ impl App {
                 let db = crate::db::logdb::LogDbStore::new(logfs.clone());
                 factor_engine::backend::log::LogDb::recover_data(db).await
             }
+            DbConfig::InMemory => {
+                unimplemented!("memory backend does not support database recovery");
+            }
         }
+    }
+
+    async fn initialize_backend(
+        &self,
+        config: api::BackendConfig,
+        db: Db,
+        blob: DynBlobStore,
+    ) -> Result<(), anyhow::Error> {
+        let plugins = PluginManager::new(db.clone());
+
+        plugins.register_plugin(SemanticBasePlugin::new()).await?;
+        plugins.register_plugin(SemanticCorePlugin::new()).await?;
+        plugins
+            .register_plugin(semantic_extra::health::HealthPlugin::new())
+            .await?;
+        plugins
+            .register_plugin(semantic_extra::habits::HabitsPlugin::new())
+            .await?;
+
+        if let Some(c) = &self.config.deno {
+            plugins.initialize_deno(c.clone()).await?;
+        };
+
+        plugins.load_db_plugins().await?;
+
+        // Load plugins.
+
+        let state = AppState {
+            db,
+            blob,
+            backend_config: config,
+            last_activity_at: std::time::Instant::now(),
+            plugins,
+            jobs: JobManager::new(),
+        };
+
+        *self.state.write().unwrap() = Some(state);
+
+        Ok(())
     }
 
     pub async fn configure_backend(&self, config: api::BackendConfig) -> Result<(), AnyError> {
         tracing::info!(?config, "configuring backend");
         tracing::debug!(?config, "configuring backend");
-        let state = match &config.db {
+        let (db, blob) = match &config.db {
             DbConfig::Crypto(crypto) => {
                 let log = Self::build_logfs(crypto)?;
 
@@ -265,40 +307,19 @@ impl App {
                         tracing::error!(?err, "Could not open logfs");
                         err
                     })?;
-                let blob = Arc::new(log);
+                let blob: DynBlobStore = Arc::new(log);
+                (db, blob)
+            }
+            DbConfig::InMemory => {
+                let backend = factor_engine::backend::memory::MemoryDb::new();
+                let db = factor_engine::Engine::new(backend).into_client();
 
-                let plugins = PluginManager::new(db.clone());
-
-                plugins.register_plugin(SemanticBasePlugin::new()).await?;
-                plugins.register_plugin(SemanticCorePlugin::new()).await?;
-                plugins
-                    .register_plugin(semantic_extra::health::HealthPlugin::new())
-                    .await?;
-                plugins
-                    .register_plugin(semantic_extra::habits::HabitsPlugin::new())
-                    .await?;
-
-                if let Some(c) = &self.config.deno {
-                    plugins.initialize_deno(c.clone()).await?;
-                };
-
-                plugins.load_db_plugins().await?;
-
-                // Load plugins.
-
-                AppState {
-                    db,
-                    blob,
-                    backend_config: config,
-                    last_activity_at: std::time::Instant::now(),
-                    plugins,
-                    jobs: JobManager::new(),
-                }
+                let blob: DynBlobStore = Arc::new(crate::blobstore::MemoryBlobStore::new());
+                (db, blob)
             }
         };
 
-        *self.state.write().unwrap() = Some(state);
-        Ok(())
+        self.initialize_backend(config, db, blob).await
     }
 
     pub async fn close_backend(&self) -> Result<(), AnyError> {
@@ -336,6 +357,25 @@ impl App {
         tokio::spawn(s.clone().run_worker());
 
         Ok(s)
+    }
+
+    pub async fn build_test_app(handle: tokio::runtime::Handle) -> Result<Self, AnyError> {
+        let tmp_dir = std::env::temp_dir().join("semantic/test-app");
+
+        let config = AppConfig {
+            backend: Some(BackendConfig {
+                db: DbConfig::InMemory,
+                idle_timeout: None,
+            }),
+            token_key: "testkey".to_string(),
+            deno: Some(DenoConfig {
+                data_dir: tmp_dir.join("deno"),
+                plugin_dir: None,
+            }),
+            tmp_dir: Some(tmp_dir.join("tmp")),
+        };
+
+        Self::build(config, handle).await
     }
 
     /// Runs a long-running task that periodically does maintenance work.

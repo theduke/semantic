@@ -36,6 +36,9 @@ impl LogCompactCmd {
 
         let crypto = match backend_config.db {
             DbConfig::Crypto(c) => c,
+            DbConfig::InMemory => {
+                unimplemented!("memory backend does not support compaction");
+            }
         };
 
         tracing::debug!("opening old database...");
