@@ -1447,6 +1447,10 @@ impl App {
                 self.record_entity_visit(rec).await?;
                 Ok(api::Reply::RecordEntityVisit)
             }
+            api::Query::TagMerge(merge) => {
+                self.tag_merge(merge).await?;
+                Ok(api::Reply::TagMerge)
+            }
         };
         res.map_err(|err| {
             tracing::error!(?err, "api query failed");
@@ -1467,6 +1471,34 @@ impl App {
         db.create(id, tag.clone().into_map()?).await?;
         let raw = db.entity(id).await?;
         Ok(raw)
+    }
+
+    async fn tag_merge(&self, merge: api::TagMerge) -> Result<(), anyhow::Error> {
+        let db = self.require_db()?;
+
+        let source_raw = db.entity(merge.source_tag).await?;
+        let target_raw = db.entity(merge.target_tag).await?;
+
+        let source = Tag::try_from_map(source_raw)?;
+        let target = Tag::try_from_map(target_raw)?;
+
+        let mutate_replace_tag_id = MutateSelect {
+            filter: Tag::filter_entity_has_tag(source.id),
+            variables: Default::default(),
+            action: MutateSelectAction::Patch(
+                Patch::new()
+                    .remove_with_old(AttrTags::QUALIFIED_NAME, source.id)
+                    .add(AttrTags::QUALIFIED_NAME, target.id),
+            ),
+        };
+        let mutate_delete_tag = query::mutate::Delete { id: source.id };
+        let batch = Batch::new()
+            .and_select(mutate_replace_tag_id)
+            .and_delete(mutate_delete_tag);
+
+        db.batch(batch).await?;
+
+        Ok(())
     }
 
     async fn record_entity_visit(

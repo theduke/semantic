@@ -297,6 +297,15 @@ pub struct TagCreate {
     pub name: String,
 }
 
+/// Merge a source tag into a target tag.
+#[derive(serde::Serialize, serde::Deserialize, Clone, Debug)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[cfg_attr(feature = "schema", derive(ts_rs::TS))]
+pub struct TagMerge {
+    pub target_tag: IdOrIdent,
+    pub source_tag: IdOrIdent,
+}
+
 #[derive(serde::Serialize, serde::Deserialize, Clone, Debug)]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[cfg_attr(feature = "schema", derive(ts_rs::TS))]
@@ -318,6 +327,7 @@ pub enum Query {
     PluginTestFetch(PluginTestFetch),
 
     TagCreate(TagCreate),
+    TagMerge(TagMerge),
 
     Import(ImportJob),
     FetchUrl(FetchUrlJob),
@@ -404,6 +414,7 @@ pub enum Reply {
     PluginTestFetch(Option<FetchUrlOutput>),
 
     TagCreate(DataMap),
+    TagMerge,
 
     Import(ImportOutput),
     FetchUrl(FetchUrlOutput),
@@ -723,6 +734,25 @@ impl<E: ApiClientExecutor> ApiClient<E> {
             .await
         {
             Ok(Reply::FileCreatePreviewImageBlob(())) => Ok(()),
+            Ok(_other) => Err(anyhow::anyhow!("API returned invalid data")),
+            Err(err) => Err(err),
+        }
+    }
+
+    pub async fn tag_merge(
+        &self,
+        source_tag: IdOrIdent,
+        target_tag: IdOrIdent,
+    ) -> Result<DataMap, AnyError> {
+        match self
+            .exec
+            .execute(Query::TagMerge(TagMerge {
+                target_tag,
+                source_tag,
+            }))
+            .await
+        {
+            Ok(Reply::TagCreate(tag)) => Ok(tag),
             Ok(_other) => Err(anyhow::anyhow!("API returned invalid data")),
             Err(err) => Err(err),
         }

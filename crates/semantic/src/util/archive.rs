@@ -1,7 +1,7 @@
 //! Functionality for exporting and importing database + blob data
 //! from archive files.
 
-use std::{collections::BTreeSet, io::BufRead, path::Path};
+use std::{collections::BTreeSet, io::BufRead};
 
 use anyhow::{anyhow, bail};
 use factordb::{
@@ -90,33 +90,37 @@ pub async fn build_archive(
     Ok(())
 }
 
-pub async fn import_archive(app: &App, archive_path: &Path) -> Result<(), anyhow::Error> {
+pub async fn import_archive<R: std::io::Read>(app: &App, reader: R) -> Result<(), anyhow::Error> {
     let db = app.require_db()?;
     let blob = app.require_blob()?;
 
-    let file = std::fs::File::open(archive_path)?;
-    let gz = flate2::read::GzDecoder::new(file);
+    tracing::debug!("starting import...");
+
+    let gz = flate2::read::GzDecoder::new(std::io::BufReader::new(reader));
     let mut archive = tar::Archive::new(gz);
 
     let mut batch = Batch::new();
 
-    let mut total_blob_count: u64 = 0;
-
     for res in archive.entries()? {
-        let entry = res?;
+        let mut entry = res?;
         let entry_path = entry.path()?;
         let path = entry_path.to_str().ok_or_else(|| {
             anyhow::anyhow!("Invalid archvie: non-utf8 path {}", entry_path.display())
         })?;
 
         if path.starts_with("_blobs/") {
-            total_blob_count += 1;
             let real_path = path.replacen("_blobs/", "", 1);
 
             if blob.get_meta(&real_path).await?.is_some() {
                 // TODO: check blobs for equality?
                 bail!("Duplicate blob path: {real_path}");
             }
+
+            // FIXME: clean up all written blobs when an error occurs!
+
+            let mut writer = blob.put_std_writer(&real_path).await?;
+            std::io::copy(&mut entry, &mut writer)?;
+            writer.flush()?;
         } else if path == "data.json" {
             tracing::info!("Importing entities...");
             let reader = std::io::BufReader::new(entry);
@@ -136,30 +140,10 @@ pub async fn import_archive(app: &App, archive_path: &Path) -> Result<(), anyhow
         }
     }
 
+    tracing::info!("persisting entities to database...");
     db.batch(batch).await?;
-    std::mem::drop(archive);
 
-    let file = std::fs::File::open(archive_path)?;
-    let gz = flate2::read::GzDecoder::new(file);
-    let mut archive = tar::Archive::new(gz);
-    for (index, res) in archive.entries()?.enumerate() {
-        let mut entry = res?;
-        let entry_path = entry.path()?;
-        let path = entry_path.to_str().ok_or_else(|| {
-            anyhow::anyhow!("Invalid archvie: non-utf8 path {}", entry_path.display())
-        })?;
-
-        if path.starts_with("_blobs/") {
-            let real_path = path.replacen("_blobs/", "", 1);
-
-            let mut writer = blob.put_std_writer(&real_path).await?;
-            std::io::copy(&mut entry, &mut writer)?;
-            writer.flush()?;
-        } else {
-        }
-
-        tracing::debug!("imported blob {index}/{total_blob_count}");
-    }
+    tracing::info!("import complete!");
 
     Ok(())
 }

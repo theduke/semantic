@@ -5,7 +5,7 @@ mod file_import;
 mod jobs;
 pub mod plugin;
 pub mod server;
-mod util;
+pub mod util;
 
 pub use app::App;
 pub use util::api_client::ApiClient;
