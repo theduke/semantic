@@ -8,17 +8,21 @@ use std::{
 use anyhow::{anyhow, bail, Context};
 use factordb::{
     prelude::{
-        AttrMapExt, AttributeDescriptor, DataMap, Db, EntityContainer, Expr, Id, Item, Mutate,
-        Patch, Select, Timestamp, Value, ValueMap,
+        AttrMapExt, AttributeDescriptor, Batch, DataMap, Db, EntityContainer, Expr, Id, Item,
+        Mutate, Patch, Select, Timestamp, Value, ValueMap,
     },
-    query, AnyError,
+    query::{
+        self,
+        mutate::{MutateSelect, MutateSelectAction},
+    },
+    AnyError,
 };
 use semantic_core::{
-    api::{self, DbConfig, FileImportMetadata, SemanticSchema},
+    api::{self, BackendConfig, DbConfig, FileImportMetadata, SemanticSchema},
     base::{
         entity_title, AttrBlobUri, AttrBlobUriWeb, AttrDownloadUrl, AttrFileName, AttrFileSize,
-        AttrHash, AttrMimeType, AttrOriginalHash, AttrPreviewImageBlobUri, SemanticBasePlugin, Tag,
-        Video,
+        AttrHash, AttrMimeType, AttrOriginalHash, AttrPreviewImageBlobUri, AttrTags,
+        SemanticBasePlugin, Tag, Video,
     },
     core::SemanticCorePlugin,
     plugin::{FetchUrlJob, FetchUrlOutput, ImportJob, ImportOutput, PluginDescriptor},
@@ -544,17 +548,28 @@ impl App {
             Vec::new()
         };
 
+        use sha2::Digest;
+        let raw_hash = sha2::Sha256::digest(&data);
+        let original_hash = semantic_core::base::UniversalHash::new(
+            semantic_core::base::UniversalHash::SHA256,
+            &format!("{:x}", raw_hash),
+        );
+
         let mime_guess = infer::get(&data);
 
         // Try to optimise.
         // TODO: add setting to disable optimisations.
-        let (data, hash, original_hash) =
+        let (data, optimized_hash) =
             tokio::task::spawn_blocking(move || media::optimise_file_data(data)).await?;
 
         // Prevent duplicates.
 
+        let hash = optimized_hash
+            .clone()
+            .unwrap_or_else(|| original_hash.clone());
+
         if let Some(old_file) =
-            semantic_core::base::File::find_by_hash_or_original(&db, &hash, original_hash.as_ref())
+            semantic_core::base::File::find_by_hash_or_original(&db, &hash, optimized_hash.as_ref())
                 .await?
         {
             let mut file = semantic_core::base::File::try_from_map(old_file.clone())?;
@@ -618,6 +633,12 @@ impl App {
 
         let now = Timestamp::now();
 
+        let (hash, original_hash) = if let Some(optimized) = optimized_hash {
+            (Some(optimized), Some(original_hash))
+        } else {
+            (Some(original_hash), None)
+        };
+
         let mut file = semantic_core::base::File {
             id,
             ident: None,
@@ -630,8 +651,8 @@ impl App {
             blob_uri_web: None,
             size: Some(size),
             mime_type: mime_guess.map(|x| x.mime_type().to_string()),
-            hash: Some(hash),
             original_hash,
+            hash,
             created_at: Some(now),
             updated_at: Some(now),
             extra: Default::default(),
@@ -830,17 +851,25 @@ impl App {
                 .bytes()
                 .await?;
 
+        use sha2::Digest;
+        let raw_hash = sha2::Sha256::digest(&data);
+        let original_hash = semantic_core::base::UniversalHash::new(
+            semantic_core::base::UniversalHash::SHA256,
+            &format!("{:x}", raw_hash),
+        );
+
         let mime_guess = infer::get(&data);
-        let (data, hash, original_hash) = media::optimise_file_data(data.to_vec());
+        let (data, optimized_hash) = media::optimise_file_data(data.to_vec());
         let size = data.len();
 
         let mut blob_uri: Option<String> = None;
 
+        let hash = optimized_hash
+            .clone()
+            .unwrap_or_else(|| original_hash.clone());
+
         // Prevent duplicate blobs by re-using existing file blobs.
-        if let Some(data) =
-            semantic_core::base::File::find_by_hash_or_original(&db, &hash, original_hash.as_ref())
-                .await?
-        {
+        if let Some(data) = semantic_core::base::File::find_by_hash(&db, &hash).await? {
             if let Some(path) = data.get_attr::<AttrBlobUri>() {
                 // Make sure blob exists.
 
@@ -872,8 +901,8 @@ impl App {
         let mut patch = ValueMap::new();
         patch.insert_attr::<AttrBlobUri>(blob_path);
         patch.insert_attr::<AttrHash>(hash);
-        if let Some(original) = original_hash {
-            patch.insert_attr::<AttrOriginalHash>(original);
+        if optimized_hash.is_some() && optimized_hash.as_ref() != Some(&original_hash) {
+            patch.insert_attr::<AttrOriginalHash>(original_hash);
         }
         patch.insert_attr::<AttrFileSize>(size as u64);
         if let Some(mime) = mime_guess {

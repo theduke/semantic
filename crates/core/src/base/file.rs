@@ -218,6 +218,33 @@ pub struct File {
 }
 
 impl File {
+    pub fn query_by_hash(hash: &UniversalHash) -> Select {
+        let filter = Expr::eq(AttrHash::expr(), hash.as_str());
+        Select::new().with_filter(filter).with_limit(100)
+    }
+
+    pub async fn find_by_hash(
+        db: &Db,
+        hash: &UniversalHash,
+    ) -> Result<Option<DataMap>, anyhow::Error> {
+        let page = db.select(Self::query_by_hash(hash)).await?;
+
+        let map = page.items.into_iter().find_map(|item| {
+            let ty = item.data.get_type()?.as_name().unwrap().to_string();
+
+            if ty == File::QUALIFIED_NAME
+                || ty == Image::QUALIFIED_NAME
+                || ty == Video::QUALIFIED_NAME
+            {
+                Some(item.data)
+            } else {
+                None
+            }
+        });
+
+        Ok(map)
+    }
+
     pub fn query_by_hash_or_original(
         hash: &UniversalHash,
         original: Option<&UniversalHash>,

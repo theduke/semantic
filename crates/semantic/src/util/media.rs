@@ -27,15 +27,10 @@ use crate::{blobstore::DynBlobStore, jobs::JobManager};
 //     }
 // }
 
-pub fn optimise_file_data(data: Vec<u8>) -> (Vec<u8>, UniversalHash, Option<UniversalHash>) {
+pub fn optimise_file_data(data: Vec<u8>) -> (Vec<u8>, Option<UniversalHash>) {
     use sha2::Digest;
 
     let mime_guess = infer::get(&data);
-    let raw_hash = sha2::Sha256::digest(&data);
-    let hash = semantic_core::base::UniversalHash::new(
-        semantic_core::base::UniversalHash::SHA256,
-        &format!("{:x}", raw_hash),
-    );
     match mime_guess {
         Some(t) if t.mime_type().starts_with("image/") => {
             tracing::trace!("starting media optimisation");
@@ -48,15 +43,15 @@ pub fn optimise_file_data(data: Vec<u8>) -> (Vec<u8>, UniversalHash, Option<Univ
                         &format!("{:x}", new_hash_raw),
                     );
 
-                    (new_data, hash, Some(new_hash))
+                    (new_data, Some(new_hash))
                 }
                 Err(err) => {
                     tracing::warn!(?err, "Failed to optimize image data");
-                    (data, hash, None)
+                    (data, None)
                 }
             }
         }
-        _ => (data, hash, None),
+        _ => (data, None),
     }
 }
 
