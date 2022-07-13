@@ -44,7 +44,7 @@ impl LogHistoryCompactCmd {
                 })
                 .await;
 
-            semantic::db::compact_db_history(&db, log.log(), &plugins).await
+            semantic::db::compact_db_history(&db, log.log(), &plugins, 1_000).await
         })?;
 
         Ok(())
