@@ -1,3 +1,4 @@
+use is_terminal::IsTerminal;
 use std::path::PathBuf;
 
 use anyhow::{anyhow, bail, Context};
@@ -37,11 +38,11 @@ impl LogCompactCmd {
         let crypto = match backend_config.db {
             DbConfig::Crypto(c) => c,
             DbConfig::InMemory => {
-                unimplemented!("memory backend does not support compaction");
+                bail!("memory backend does not support compaction");
             }
         };
 
-        tracing::debug!("opening old database...");
+        tracing::info!("opening old database...");
         let old_db = App::build_logfs(&crypto).context("Could not open old database...")?;
         tracing::info!("old database opened");
 
@@ -70,8 +71,15 @@ impl LogCompactCmd {
 
         tracing::info!("Copying {} blobs", keys.len());
 
+        let mut progress = if std::io::stdout().is_terminal() {
+            let bar = indicatif::ProgressBar::new(keys.len().try_into().unwrap());
+            bar.set_message("copying objects");
+            Some(bar)
+        } else {
+            None
+        };
+
         for (index, key) in keys.iter().enumerate() {
-            tracing::debug!(path=%key, "copying blob {}/{}", index+1, keys.len());
             let old_data = old_db
                 .get(&key)?
                 .ok_or_else(|| anyhow!("Could not read key"))?;
@@ -79,12 +87,25 @@ impl LogCompactCmd {
             old_size += old_data.len();
 
             new_db.insert(key, old_data)?;
+
+            if let Some(bar) = &progress {
+                bar.inc(1);
+            } else {
+                tracing::debug!(path=%key, "copying blob {}/{}", index+1, keys.len());
+            }
         }
 
         std::mem::drop(old_db);
         std::mem::drop(new_db);
 
         let old_hash = old_hash.finalize();
+
+        tracing::info!("all objects copied - validating new database");
+        if let Some(bar) = &mut progress {
+            bar.finish();
+            *bar = indicatif::ProgressBar::new(keys.len().try_into().unwrap());
+            bar.set_message("validating keys")
+        }
 
         // Sanity check.
         // Compare hash, size and keys.
@@ -104,6 +125,10 @@ impl LogCompactCmd {
                 .ok_or_else(|| anyhow!("Could not get key"))?;
             new_hash.update(&data);
             new_size += data.len();
+
+            if let Some(bar) = &progress {
+                bar.inc(1);
+            }
         }
 
         let new_hash = new_hash.finalize();

@@ -1,12 +1,12 @@
 mod create;
-mod log_compact;
 mod log_history_compact;
 mod log_recover_data;
+mod logfs_compact;
 
 #[derive(clap::Subcommand)]
 pub(crate) enum DbCmd {
     LogRecoverData(log_recover_data::LogRecoverDataCmd),
-    LogCompact(log_compact::LogCompactCmd),
+    LogFsCompact(logfs_compact::LogCompactCmd),
     LogHistoryCompact(log_history_compact::LogHistoryCompactCmd),
     Create(create::CreateCmd),
 }
@@ -17,7 +17,7 @@ impl DbCmd {
             Self::LogRecoverData(cmd) => {
                 cmd.run();
             }
-            Self::LogCompact(cmd) => {
+            Self::LogFsCompact(cmd) => {
                 cmd.run().unwrap();
             }
             Self::Create(cmd) => {
