@@ -11,10 +11,10 @@ use semantic_core::base::Tag;
 use crate::components::{
     entity::entity_deleter::EntityDeleter,
     loader::load,
-    util::{box_, button, notification_warning, subtitle_4, title_2, ButtonBuilder},
+    util::{box_, button, modal::modal, notification_warning, subtitle_4, title_2, ButtonBuilder},
 };
 
-use super::tag_form::ExistingTagValidator;
+use super::{tag_form::ExistingTagValidator, TagMerger};
 
 struct TagNode {
     tag: Tag,
@@ -67,41 +67,85 @@ impl TagNode {
         let children = Self::render_level(&self.children, depth + 1, on_delete.clone());
 
         let tag = self.tag.clone();
-        let deleter = deleting.clone().signal_ref(move |flag| {
-            if *flag {
-                let item = Item::new(tag.clone().into_map().unwrap());
+        let deleter = {
+            let on_delete = on_delete.clone();
+            deleting.clone().signal_ref(move |flag| {
+                if *flag {
+                    let item = Item::new(tag.clone().into_map().unwrap());
 
-                let deleting = deleting.clone();
-                let on_delete = on_delete.clone();
+                    let deleting = deleting.clone();
+                    let on_delete = on_delete.clone();
+                    let id = tag.id;
+                    let d = EntityDeleter {
+                        item,
+                        on_delete: Box::new(move || {
+                            on_delete(id);
+                        }),
+                        on_cancel: Box::new(move || {
+                            deleting.set(false);
+                        }),
+                    }
+                    .render();
+
+                    div().class("mt-2").class("mb-2").and(d)
+                } else {
+                    let deleting = deleting.clone();
+                    ButtonBuilder::new()
+                        .color(crate::components::util::Color::Danger)
+                        .icon("fas fa-trash")
+                        .size_small()
+                        .on(move || {
+                            deleting.set(true);
+                        })
+                        .build()
+                        .class("ml-2")
+                }
+            })
+        };
+
+        // TODO: use unified modal for deleter and merger.
+
+        let merging = Mutable::new(false);
+        let tag = self.tag.clone();
+        let merger = merging.clone().signal_ref(move |flag| {
+            if *flag {
+                let merging = merging.clone();
                 let id = tag.id;
-                let d = EntityDeleter {
-                    item,
-                    on_delete: Box::new(move || {
+                let on_delete = on_delete.clone();
+                let content = TagMerger {
+                    source_tag: tag.clone(),
+                    on_cancel: {
+                        let merging = merging.clone();
+                        Rc::new(move || {
+                            merging.set(false);
+                        })
+                    },
+                    on_merged: Rc::new(move || {
                         on_delete(id);
                     }),
-                    on_cancel: Box::new(move || {
-                        deleting.set(false);
-                    }),
-                }
-                .render();
+                };
 
-                div().class("mt-2").class("mb-2").and(d)
+                modal(
+                    content,
+                    move || {
+                        merging.set(false);
+                    },
+                    true,
+                )
             } else {
-                let deleting = deleting.clone();
+                let merging = merging.clone();
                 ButtonBuilder::new()
-                    .color(crate::components::util::Color::Danger)
-                    .icon("fas fa-trash")
+                    .label("Merge")
                     .size_small()
                     .on(move || {
-                        deleting.set(true);
+                        merging.set(true);
                     })
                     .build()
-                    .class("ml-2")
             }
         });
 
         let tag = button().and(&self.tag.name);
-        let row = div().and(tag).signal(deleter);
+        let row = div().and(tag).signal(deleter).signal(merger);
 
         div().class("mb-2").and(row).and(children)
     }

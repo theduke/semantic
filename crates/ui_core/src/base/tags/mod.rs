@@ -18,6 +18,9 @@ pub use tag_select::{form_field_tags, TagSelect};
 mod entity_tag_manager;
 pub use entity_tag_manager::entity_tag_manager;
 
+mod tag_merger;
+pub use tag_merger::TagMerger;
+
 pub async fn load_entity_tags(id: Id) -> Result<Vec<Tag>, AnyError> {
     let entity = crate::context::api().entity(id).await?;
     let tag_ids = entity.get_attr_vec::<AttrTags>();

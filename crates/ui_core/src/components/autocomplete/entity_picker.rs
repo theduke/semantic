@@ -45,7 +45,8 @@ async fn sleep(duration: std::time::Duration) {
 }
 
 struct EntityPicker {
-    filter: Pin<Box<dyn Signal<Item = Expr> + Send + 'static>>,
+    base_filter: Pin<Box<dyn Signal<Item = Expr> + Send + 'static>>,
+    filter_builder: Box<dyn Fn(&str) -> Expr>,
     on_select: Rc<dyn Fn(Item)>,
 }
 
@@ -57,7 +58,8 @@ enum Msg {
 }
 
 struct State {
-    filter: Option<Expr>,
+    base_filter: Option<Expr>,
+    filter_builder: Box<dyn Fn(&str) -> Expr>,
     on_select: Rc<dyn Fn(Item)>,
     value: Mutable<String>,
     loader: Loader<Vec<Item>>,
@@ -73,8 +75,8 @@ impl State {
             return;
         }
 
-        let filter = Expr::contains(AttrTitle::expr(), trimmed.to_string());
-        let filter = if let Some(base) = &self.filter {
+        let filter = (self.filter_builder)(trimmed);
+        let filter = if let Some(base) = &self.base_filter {
             base.clone().and_with(filter)
         } else {
             filter
@@ -97,7 +99,7 @@ impl MsgComponent for State {
     fn init(props: Self::Properties, ctx: brass::component::Context<Self>) -> Self {
         let handle = ctx.handle();
         let _filter_future = ctx.spawn_map(
-            props.filter.for_each(move |filter| {
+            props.base_filter.for_each(move |filter| {
                 handle.send(Msg::FilterChanged(filter));
                 async {}
             }),
@@ -105,7 +107,8 @@ impl MsgComponent for State {
         );
 
         Self {
-            filter: None,
+            base_filter: None,
+            filter_builder: props.filter_builder,
             on_select: props.on_select,
             value: Mutable::new(String::new()),
             loader: Loader::new_idle(),
@@ -131,7 +134,7 @@ impl MsgComponent for State {
             }
             Msg::Nop => {}
             Msg::FilterChanged(filter) => {
-                self.filter = Some(filter);
+                self.base_filter = Some(filter);
                 self.load();
             }
         }
@@ -173,7 +176,20 @@ pub fn entity_picker(
     on_select: impl Fn(Item) + 'static,
 ) -> View {
     State::build(EntityPicker {
-        filter: base_filter.boxed(),
+        base_filter: base_filter.boxed(),
+        filter_builder: Box::new(|title| Expr::contains(AttrTitle::expr(), title.to_string())),
+        on_select: Rc::new(on_select),
+    })
+}
+
+pub fn entity_picker_with_filter(
+    base_filter: impl Signal<Item = Expr> + Send + 'static,
+    filter_builder: impl Fn(&str) -> Expr + 'static,
+    on_select: impl Fn(Item) + 'static,
+) -> View {
+    State::build(EntityPicker {
+        base_filter: base_filter.boxed(),
+        filter_builder: Box::new(filter_builder),
         on_select: Rc::new(on_select),
     })
 }
