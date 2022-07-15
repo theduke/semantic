@@ -182,6 +182,22 @@ struct CommandServer {
     address: Option<String>,
 }
 
+impl CommandServer {
+    fn run(self) {
+        let app_config = self.app.build().unwrap();
+        let config = server::ServerConfig {
+            // Enable authentication when no backend is provided.
+            require_auth: app_config.backend.is_none(),
+            app: app_config,
+            address: self.address.unwrap_or(format!("127.0.0.1:3000")),
+        };
+
+        let rt = tokio::runtime::Runtime::new().expect("Could not start runtime");
+        rt.block_on(server::run_server(config, rt.handle().clone()))
+            .expect("Server failed");
+    }
+}
+
 /// Run a semantic UI inside webkit.
 #[cfg(feature = "webkit")]
 #[derive(clap::Parser)]
@@ -210,18 +226,8 @@ fn main() {
     let args = <CliArgs as clap::Parser>::parse();
 
     match args.command {
-        CliCommand::Server(subargs) => {
-            let app_config = subargs.app.build().unwrap();
-            let config = server::ServerConfig {
-                // Enable authentication when no backend is provided.
-                require_auth: app_config.backend.is_none(),
-                app: app_config,
-                address: subargs.address.unwrap_or(format!("127.0.0.1:3000")),
-            };
-
-            let rt = tokio::runtime::Runtime::new().expect("Could not start runtime");
-            rt.block_on(server::run_server(config, rt.handle().clone()))
-                .expect("Server failed");
+        CliCommand::Server(cmd) => {
+            cmd.run();
         }
         CliCommand::GenerateTypescript(_) => {
             let builtin = factordb::schema::builtin::builtin_db_schema();
