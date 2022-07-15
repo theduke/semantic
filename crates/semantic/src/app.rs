@@ -8,14 +8,10 @@ use std::{
 use anyhow::{anyhow, bail, Context};
 use factordb::{
     prelude::{
-        AttrMapExt, AttributeDescriptor, Batch, DataMap, Db, EntityContainer, Expr, Id, Item,
-        Mutate, Patch, Select, Timestamp, Value, ValueMap,
+        AttrMapExt, AttributeDescriptor, DataMap, Db, EntityContainer, Expr, Id, Item, Mutate,
+        Patch, Select, Timestamp, Value, ValueMap,
     },
-    query::{
-        self,
-        mutate::{MutateSelect, MutateSelectAction},
-    },
-    AnyError,
+    query, AnyError,
 };
 use semantic_core::{
     api::{self, BackendConfig, DbConfig, FileImportMetadata, SemanticSchema},
@@ -1512,21 +1508,7 @@ impl App {
         let source = Tag::try_from_map(source_raw)?;
         let target = Tag::try_from_map(target_raw)?;
 
-        let mutate_replace_tag_id = MutateSelect {
-            filter: Tag::filter_entity_has_tag(source.id),
-            variables: Default::default(),
-            action: MutateSelectAction::Patch(
-                Patch::new()
-                    .remove_with_old(AttrTags::QUALIFIED_NAME, source.id)
-                    .add(AttrTags::QUALIFIED_NAME, target.id),
-            ),
-        };
-        let mutate_delete_tag = query::mutate::Delete { id: source.id };
-        let batch = Batch::new()
-            .and_select(mutate_replace_tag_id)
-            .and_delete(mutate_delete_tag);
-
-        db.batch(batch).await?;
+        Tag::merge_tags(&db, source, target).await?;
 
         Ok(())
     }
@@ -1537,5 +1519,81 @@ impl App {
     ) -> Result<(), AnyError> {
         let db = self.require_db()?;
         rec.run(&db).await
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use factordb::{map, prelude::Batch};
+
+    use super::*;
+
+    // TODO: move test somewhere more sensible
+    #[test]
+    fn test_tag_merge() {
+        let rt = tokio::runtime::Runtime::new().unwrap();
+        let handle = rt.handle().clone();
+        rt.block_on(async move {
+            let app = App::build_test_app(handle).await.unwrap();
+
+            let db = app.require_db().unwrap();
+
+            let tag1 = app
+                .tag_create(api::TagCreate {
+                    name: "tag1".to_string(),
+                })
+                .await
+                .unwrap()
+                .try_into_entity::<Tag>()
+                .unwrap();
+            let tag2 = app
+                .tag_create(api::TagCreate {
+                    name: "tag2".to_string(),
+                })
+                .await
+                .unwrap()
+                .try_into_entity::<Tag>()
+                .unwrap();
+
+            let id1 = Id::random();
+            let id2 = Id::random();
+            let e1 = map! {
+                "semantic/title": "e1",
+            };
+            db.create(id1, e1).await.unwrap();
+
+            let e2 = map! {
+                "semantic/title": "e2",
+            };
+
+            db.create(id2, e2).await.unwrap();
+
+            db.batch(Batch {
+                actions: vec![
+                    Tag::mutate_add_tag(id1, tag1.id),
+                    Tag::mutate_add_tag(id2, tag2.id),
+                ],
+            })
+            .await
+            .unwrap();
+
+            let e1 = db.entity(id1).await.unwrap();
+            let e2 = db.entity(id2).await.unwrap();
+            app.tag_merge(api::TagMerge {
+                target_tag: tag1.id.into(),
+                source_tag: tag2.id.into(),
+            })
+            .await
+            .unwrap();
+
+            let e1 = db.entity(id1).await.unwrap();
+            let e2 = db.entity(id2).await.unwrap();
+
+            let x = e1.get(AttrTags::QUALIFIED_NAME).unwrap().as_id().unwrap();
+            assert_eq!(x, tag1.id);
+
+            let x = e2.get(AttrTags::QUALIFIED_NAME).unwrap().as_id().unwrap();
+            assert_eq!(x, tag1.id);
+        });
     }
 }
