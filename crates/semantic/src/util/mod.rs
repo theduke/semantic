@@ -18,3 +18,8 @@ pub fn generate_db_schema_typescript_definitions(schema: &DbSchema) -> Result<St
     let ts = factor_tools::typescript::schema_to_typescript(&schema, None)?;
     Ok(ts)
 }
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum Compression {
+    Gzip,
+}

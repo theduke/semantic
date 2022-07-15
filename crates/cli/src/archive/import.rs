@@ -1,5 +1,7 @@
 use std::path::PathBuf;
 
+use semantic::util::Compression;
+
 use crate::BackendOptions;
 
 /// Delete entities.
@@ -7,6 +9,9 @@ use crate::BackendOptions;
 pub struct ArchiveImportCmd {
     #[clap(flatten)]
     backend: BackendOptions,
+
+    #[clap(long)]
+    no_gzip: bool,
 
     /// Path of the export archive.
     ///
@@ -32,10 +37,25 @@ impl ArchiveImportCmd {
             let app = semantic::app::App::build(app_config, handle).await?;
 
             if let Some(path) = self.path {
+                let compression = if self.no_gzip {
+                    None
+                } else if path
+                    .extension()
+                    .and_then(|x| x.to_str())
+                    .map(|x| x == "gz")
+                    .unwrap_or_default()
+                {
+                    Some(Compression::Gzip)
+                } else {
+                    None
+                };
                 let f = std::fs::File::open(path)?;
-                semantic::util::archive::import_archive(&app, f).await?;
+                semantic::util::archive::import_archive(&app, f, compression).await?;
             } else {
-                semantic::util::archive::import_archive(&app, std::io::stdin().lock()).await?;
+                let compression = None;
+
+                semantic::util::archive::import_archive(&app, std::io::stdin().lock(), compression)
+                    .await?;
             }
 
             Ok::<(), anyhow::Error>(())

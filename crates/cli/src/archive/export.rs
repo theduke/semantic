@@ -1,6 +1,7 @@
 use std::path::PathBuf;
 
 use anyhow::bail;
+use semantic::app::AppConfig;
 
 use crate::BackendOptions;
 
@@ -9,6 +10,13 @@ use crate::BackendOptions;
 pub struct ArchiveExportCmd {
     #[clap(flatten)]
     backend: BackendOptions,
+
+    /// Don't compress the archive with gzip.
+    ///
+    /// Useful for doing custom compression or for piping the output directly
+    /// to another import command.
+    #[clap(long)]
+    no_gzip: bool,
 
     /// Path where the export should be written.
     ///
@@ -30,24 +38,37 @@ impl ArchiveExportCmd {
 
         let rt = tokio::runtime::Runtime::new().expect("Could not start runtime");
         let handle = rt.handle().clone();
-        rt.block_on(async move {
-            let app = semantic::app::App::build(app_config, handle).await?;
+        rt.block_on(self.export(app_config, handle))
+            .expect("Export failed");
+    }
 
-            if let Some(path) = self.path {
-                if path.is_dir() {
-                    bail!("Given path is a directory: {}", path.display());
-                } else if path.is_file() {
-                    bail!("Given path already exists: {}", path.display());
-                }
-                let f = std::fs::File::create(path)?;
-                let writer = std::io::BufWriter::new(f);
+    async fn export(
+        self,
+        app_config: AppConfig,
+        handle: tokio::runtime::Handle,
+    ) -> Result<(), anyhow::Error> {
+        tracing::debug!("opening database...");
+        let app = semantic::app::App::build(app_config, handle).await?;
 
-                app.build_export(writer).await
-            } else {
-                let writer = std::io::stdout();
-                app.build_export(writer).await
+        let compression = if self.no_gzip {
+            None
+        } else {
+            Some(semantic::util::Compression::Gzip)
+        };
+
+        if let Some(path) = self.path {
+            if path.is_dir() {
+                bail!("Given path is a directory: {}", path.display());
+            } else if path.is_file() {
+                bail!("Given path already exists: {}", path.display());
             }
-        })
-        .expect("Export failed");
+            let f = std::fs::File::create(path)?;
+            let writer = std::io::BufWriter::new(f);
+
+            app.build_export(writer, compression).await
+        } else {
+            let writer = std::io::stdout();
+            app.build_export(writer, compression).await
+        }
     }
 }

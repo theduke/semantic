@@ -2,8 +2,12 @@ use serde::{Deserialize, Serialize};
 
 use factordb::{
     prelude::{
-        AttrType, Attribute, AttributeDescriptor, DataMap, Db, Entity, EntityContainer,
-        EntityDescriptor, Expr, Id, IdOrIdent, Mutate, Patch, Select,
+        AttrType, Attribute, AttributeDescriptor, Batch, DataMap, Db, Entity, EntityContainer,
+        EntityDescriptor, Expr, Id, IdOrIdent, Mutate, Patch, Select, Value,
+    },
+    query::{
+        self,
+        mutate::{MutateSelect, MutateSelectAction},
     },
     AnyError,
 };
@@ -82,9 +86,34 @@ impl Tag {
         }
     }
 
+    pub async fn merge_tags(
+        db: &Db,
+        source_tag: Tag,
+        target_tag: Tag,
+    ) -> Result<(), anyhow::Error> {
+        let mutate_replace_tag_id = MutateSelect {
+            filter: Tag::filter_entity_has_tag(source_tag.id),
+            variables: Default::default(),
+            action: MutateSelectAction::Patch(
+                Patch::new()
+                    .remove_with_old(AttrTags::QUALIFIED_NAME, Value::Id(source_tag.id))
+                    .add(AttrTags::QUALIFIED_NAME, Value::Id(target_tag.id)),
+            ),
+        };
+        let mutate_delete_tag = query::mutate::Delete { id: source_tag.id };
+        let batch = Batch::new()
+            .and_select(mutate_replace_tag_id)
+            .and_delete(mutate_delete_tag);
+
+        db.batch(batch).await?;
+
+        Ok(())
+    }
+
     /// Build an expression that selects entities with the given tag
     pub fn filter_entity_has_tag(tag_id: Id) -> Expr {
-        Expr::in_(tag_id, Expr::attr::<AttrTags>())
+        Expr::eq(Expr::attr::<AttrTags>(), Value::Id(tag_id))
+            .or_with(Expr::in_(Value::Id(tag_id), Expr::attr::<AttrTags>()))
     }
 
     /// Build an expression that selects entities with the given tag

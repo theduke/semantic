@@ -29,3 +29,5 @@ tracing = "0.1.35"
 url = "2.2.2"
 reqwest = { version = "0.11.11", default-features = false, features = ["rustls-tls", "json"] }
 futures = "0.3.21"
+is-terminal = "0.3.0"
+indicatif = "0.16.2"

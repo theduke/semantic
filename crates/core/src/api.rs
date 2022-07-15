@@ -751,7 +751,7 @@ impl<E: ApiClientExecutor> ApiClient<E> {
         &self,
         source_tag: IdOrIdent,
         target_tag: IdOrIdent,
-    ) -> Result<DataMap, AnyError> {
+    ) -> Result<(), AnyError> {
         match self
             .exec
             .execute(Query::TagMerge(TagMerge {
@@ -760,7 +760,7 @@ impl<E: ApiClientExecutor> ApiClient<E> {
             }))
             .await
         {
-            Ok(Reply::TagCreate(tag)) => Ok(tag),
+            Ok(Reply::TagMerge) => Ok(()),
             Ok(_other) => Err(anyhow::anyhow!("API returned invalid data")),
             Err(err) => Err(err),
         }

@@ -1129,10 +1129,11 @@ impl App {
     pub async fn build_export(
         &self,
         output: impl std::io::Write + Send + Sync + 'static,
+        compression: Option<crate::util::Compression>,
     ) -> Result<(), AnyError> {
         #[cfg(feature = "archive")]
         {
-            crate::util::archive::build_archive(self, output).await
+            crate::util::archive::build_archive(self, output, compression).await
         }
 
         #[cfg(not(feature = "archive"))]

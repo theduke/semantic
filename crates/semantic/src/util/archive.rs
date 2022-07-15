@@ -13,10 +13,13 @@ use semantic_core::base::AttrBlobUri;
 
 use crate::{app::App, blobstore::DynBlobStore};
 
+use super::Compression;
+
 #[tracing::instrument(err, skip(app, output))]
 pub async fn build_archive(
     app: &App,
     output: impl std::io::Write + Send + 'static,
+    compression: Option<Compression>,
 ) -> Result<(), AnyError> {
     let db = app.require_db()?;
 
@@ -49,18 +52,27 @@ pub async fn build_archive(
     }
 
     tracing::debug!("loaded all entities!");
-    tracing::debug!(blob_count=%blob_paths.len(), "starting blob export");
 
-    let encoder = flate2::write::GzEncoder::new(output, flate2::Compression::default());
-    let mut tar = tar::Builder::new(encoder);
+    let buffered = std::io::BufWriter::new(output);
+    let writer: Box<dyn std::io::Write + Send + 'static> = match compression {
+        Some(Compression::Gzip) => {
+            let encoder = flate2::write::GzEncoder::new(buffered, flate2::Compression::default());
+            Box::new(encoder)
+        }
+        None => Box::new(buffered),
+    };
+    let bufwriter = std::io::BufWriter::new(writer);
+    let mut tar = tar::Builder::new(bufwriter);
 
     let mut header = tar::Header::new_gnu();
     header.set_size(data.len() as u64);
     header.set_cksum();
     tar.append_data(&mut header, "data.json", &*data)?;
 
+    tracing::debug!(blob_count=%blob_paths.len(), "starting blob export");
+
     let mut blob = app.require_blob()?;
-    for path in blob_paths {
+    for (index, path) in blob_paths.iter().enumerate() {
         let meta = blob
             .get_meta(&path)
             .await?
@@ -81,6 +93,10 @@ pub async fn build_archive(
         .await??;
         blob = items.0;
         tar = items.1;
+
+        if index % 100 == 0 {
+            tracing::debug!("exported {}/{} blobs", index + 1, blob_paths.len());
+        }
     }
 
     tar.finish()?;
@@ -90,18 +106,70 @@ pub async fn build_archive(
     Ok(())
 }
 
-pub async fn import_archive<R: std::io::Read>(app: &App, reader: R) -> Result<(), anyhow::Error> {
+pub async fn import_archive<R: std::io::Read>(
+    app: &App,
+    reader: R,
+    compression: Option<Compression>,
+) -> Result<(), anyhow::Error> {
     let db = app.require_db()?;
     let blob = app.require_blob()?;
 
     tracing::debug!("starting import...");
 
-    let gz = flate2::read::GzDecoder::new(std::io::BufReader::new(reader));
-    let mut archive = tar::Archive::new(gz);
+    let bufreader = std::io::BufReader::new(reader);
+    let reader: Box<dyn std::io::Read> = match compression {
+        Some(Compression::Gzip) => {
+            let gz = flate2::read::GzDecoder::new(bufreader);
+            Box::new(gz)
+        }
+        None => Box::new(bufreader),
+    };
 
-    let mut batch = Batch::new();
+    let mut archive = tar::Archive::new(reader);
 
-    for res in archive.entries()? {
+    let mut entries = archive.entries()?;
+
+    if let Some(res) = entries.next() {
+        let entry = res?;
+        let entry_path = entry.path()?;
+        let entry_path = entry_path.to_str().ok_or_else(|| {
+            anyhow::anyhow!("Invalid archvie: non-utf8 path {}", entry_path.display())
+        })?;
+
+        if entry_path != "data.json" {
+            bail!("Invalid archive: the first file in the archive must be 'data.json', but it is '{entry_path}'");
+        }
+
+        tracing::info!("Importing entities...");
+
+        let mut batch = Batch::new();
+
+        let reader = std::io::BufReader::new(entry);
+        for line_res in reader.lines() {
+            let line = line_res?;
+            if line.trim().is_empty() {
+                continue;
+            }
+
+            let data: DataMap = serde_json::from_str(&line)?;
+            let id = data
+                .get_id()
+                .ok_or_else(|| anyhow::anyhow!("Invalid entity without id: {data:?}"))?;
+
+            batch = batch.and_create(factordb::query::mutate::Create { id, data });
+        }
+
+        tracing::debug!("persisting entities...");
+        let entity_count = batch.actions.len();
+        db.batch(batch).await?;
+
+        tracing::info!(%entity_count, "entities persisted");
+    } else {
+        bail!("Invalid archive: archive has no files");
+    }
+
+    tracing::info!("Importing file blobs...");
+    for (index, res) in entries.enumerate() {
         let mut entry = res?;
         let entry_path = entry.path()?;
         let path = entry_path.to_str().ok_or_else(|| {
@@ -121,27 +189,14 @@ pub async fn import_archive<R: std::io::Read>(app: &App, reader: R) -> Result<()
             let mut writer = blob.put_std_writer(&real_path).await?;
             std::io::copy(&mut entry, &mut writer)?;
             writer.flush()?;
-        } else if path == "data.json" {
-            tracing::info!("Importing entities...");
-            let reader = std::io::BufReader::new(entry);
-            for line_res in reader.lines() {
-                let line = line_res?;
-                if line.trim().is_empty() {
-                    continue;
-                }
 
-                let data: DataMap = serde_json::from_str(&line)?;
-                let id = data
-                    .get_id()
-                    .ok_or_else(|| anyhow::anyhow!("Invalid entity without id: {data:?}"))?;
-
-                batch = batch.and_create(factordb::query::mutate::Create { id, data });
+            if index % 100 == 0 {
+                tracing::trace!("Imported {} blobs", index + 1);
             }
+        } else {
+            bail!("invalid path in archive: '{path}'");
         }
     }
-
-    tracing::info!("persisting entities to database...");
-    db.batch(batch).await?;
 
     tracing::info!("import complete!");
 
@@ -191,7 +246,7 @@ mod tests {
             let archive_path = data_dir.join("archive.tar.gz");
 
             let f = std::fs::File::create(&archive_path).unwrap();
-            build_archive(&app, f).await.unwrap();
+            build_archive(&app, f, None).await.unwrap();
 
             app.close_backend().await.unwrap();
 
@@ -200,7 +255,8 @@ mod tests {
             let db = app2.require_db().unwrap();
             let blob = app2.require_blob().unwrap();
 
-            import_archive(&app2, &archive_path).await.unwrap();
+            let output = std::fs::File::create(&archive_path).unwrap();
+            import_archive(&app2, output, None).await.unwrap();
 
             for (old_file, old_data) in files {
                 let id = old_file.get_id().unwrap();
