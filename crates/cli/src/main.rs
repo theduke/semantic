@@ -42,6 +42,21 @@ enum CliCommand {
 #[derive(clap::Parser)]
 struct GenerateTypescript {}
 
+impl GenerateTypescript {
+    fn run(self) {
+        let builtin = factordb::schema::builtin::builtin_db_schema();
+        let base = SemanticBasePlugin::new().schema().db.unwrap();
+
+        let schema = builtin.merge(base);
+
+        dbg!(&schema);
+
+        let ts = factor_tools::typescript::schema_to_typescript(&schema, None).unwrap();
+
+        write!(std::io::stdout(), "{}", ts).unwrap();
+    }
+}
+
 #[derive(clap::Parser, Clone)]
 struct BackendOptions {
     #[clap(long, env = "SEMANTIC_DATA_PATH")]
@@ -221,15 +236,8 @@ fn main() {
         CliCommand::Server(cmd) => {
             cmd.run();
         }
-        CliCommand::GenerateTypescript(_) => {
-            let builtin = factordb::schema::builtin::builtin_db_schema();
-            let base = SemanticBasePlugin::new().schema().db.unwrap();
-
-            let schema = builtin.merge(base);
-
-            let ts = factor_tools::typescript::schema_to_typescript(&schema, None).unwrap();
-
-            write!(std::io::stdout(), "{}", ts).unwrap();
+        CliCommand::GenerateTypescript(cmd) => {
+            cmd.run();
         }
         CliCommand::Archive(cmd) => {
             cmd.run();
