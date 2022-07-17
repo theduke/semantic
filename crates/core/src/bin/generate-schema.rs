@@ -1,8 +1,11 @@
 #[cfg(feature = "schema")]
 fn main() {
-    use semantic_core::{api, core, plugin};
+    use semantic_core::{
+        api::{self},
+        core, plugin,
+    };
 
-    use factordb::prelude::{DataMap, ValueMap};
+    use factordb::prelude::DataMap;
 
     let code = ts_rs::SingleFileExporter::new(true)
         // factordb
@@ -43,8 +46,16 @@ fn main() {
         .and::<factordb::query::mutate::Merge>()
         .and::<factordb::query::mutate::EntityPatch>()
         .and::<factordb::query::mutate::Replace>()
+        .and::<factordb::query::select::Aggregation>()
+        .and::<factordb::query::select::AggregationOp>()
+        .and::<factordb::data::value_type::ConstrainedRefType>()
+        .and::<factordb::query::mutate::MutateSelect>()
+        .and::<factordb::query::mutate::MutateSelectAction>()
         //
         .and::<api::Query>()
+        .and::<semantic_core::api::TagMerge>()
+        .and::<semantic_core::base::RecordEntityVisit>()
+        .and::<api::QuerySql>()
         .and::<api::TagCreate>()
         .and::<api::ApiResponse<api::Reply>>()
         .and::<api::ApiError>()

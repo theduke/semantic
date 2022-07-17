@@ -23,5 +23,5 @@ factordb = "0.1"
 base64 = "0.13.0"
 tracing = "0.1.35"
 # FIXME: use normal crate once https://github.com/GREsau/schemars/pull/141 is merged upstream.
-schemars = { version = "0.8.8", features = ["chrono", "uuid", "url", "ordered-float"], optional = true, git = "https://github.com/theduke/schemars", branch = "ordered-float" }
+schemars = { version = "0.8.8", features = ["chrono", "uuid1", "url", "ordered-float"], optional = true, git = "https://github.com/theduke/schemars", branch = "ordered-float" }
 ts-rs = { version = "6.1.2", default-features = false, features = ["serde-compat", "chrono-impl", "uuid-impl", "ordered-float-impl"], optional = true }

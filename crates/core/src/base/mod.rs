@@ -217,6 +217,7 @@ impl Plugin for SemanticBasePlugin {
                     AttrUpdatedAt::schema(),
                     AttrVisitCount::schema(),
                     AttrLastVisitTime::schema(),
+                    AttrName::schema(),
                     AttrSecondaryUrl::schema(),
                     // file
                     AttrBlobUri::schema(),

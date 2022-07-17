@@ -8,6 +8,8 @@ use factordb::{
 use super::{AttrLastVisitTime, AttrVisitCount};
 
 #[derive(serde::Serialize, serde::Deserialize, Clone, Debug)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[cfg_attr(feature = "schema", derive(ts_rs::TS))]
 pub struct RecordEntityVisit {
     pub entity_id: Id,
     pub time: Option<Timestamp>,

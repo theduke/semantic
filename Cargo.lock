@@ -679,7 +679,7 @@ dependencies = [
 [[package]]
 name = "factor_engine"
 version = "0.1.0"
-source = "git+https://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@github.com/theduke/factordb.git?branch=main#bddb896723336befce27d68c06e1dc46fc6843c2"
+source = "git+https://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@github.com/theduke/factordb.git?branch=main#6ef3182b295efc6f2dc4bcf14b02d24d60a4d048"
 dependencies = [
  "anyhow",
  "chrono",
@@ -701,7 +701,7 @@ dependencies = [
 [[package]]
 name = "factor_macros"
 version = "0.1.0"
-source = "git+https://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@github.com/theduke/factordb.git?branch=main#bddb896723336befce27d68c06e1dc46fc6843c2"
+source = "git+https://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@github.com/theduke/factordb.git?branch=main#6ef3182b295efc6f2dc4bcf14b02d24d60a4d048"
 dependencies = [
  "Inflector",
  "proc-macro2",
@@ -712,7 +712,7 @@ dependencies = [
 [[package]]
 name = "factor_tools"
 version = "0.1.0"
-source = "git+https://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@github.com/theduke/factordb.git?branch=main#bddb896723336befce27d68c06e1dc46fc6843c2"
+source = "git+https://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@github.com/theduke/factordb.git?branch=main#6ef3182b295efc6f2dc4bcf14b02d24d60a4d048"
 dependencies = [
  "Inflector",
  "anyhow",
@@ -722,7 +722,7 @@ dependencies = [
 [[package]]
 name = "factordb"
 version = "0.1.0"
-source = "git+https://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@github.com/theduke/factordb.git?branch=main#bddb896723336befce27d68c06e1dc46fc6843c2"
+source = "git+https://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@github.com/theduke/factordb.git?branch=main#6ef3182b295efc6f2dc4bcf14b02d24d60a4d048"
 dependencies = [
  "anyhow",
  "chrono",
@@ -1948,8 +1948,8 @@ dependencies = [
 
 [[package]]
 name = "schemars"
-version = "0.8.8"
-source = "git+https://github.com/theduke/schemars?branch=ordered-float#3440ec7f871e560cd401451a032a1bfb3c068470"
+version = "0.8.10"
+source = "git+https://github.com/theduke/schemars?branch=ordered-float#08a4be6fd321a9e24af0d6a9d0dd54889f38bbfd"
 dependencies = [
  "chrono",
  "dyn-clone",
@@ -1958,13 +1958,13 @@ dependencies = [
  "serde",
  "serde_json",
  "url",
- "uuid 0.8.2",
+ "uuid 1.1.2",
 ]
 
 [[package]]
 name = "schemars_derive"
-version = "0.8.8"
-source = "git+https://github.com/theduke/schemars?branch=ordered-float#3440ec7f871e560cd401451a032a1bfb3c068470"
+version = "0.8.10"
+source = "git+https://github.com/theduke/schemars?branch=ordered-float#08a4be6fd321a9e24af0d6a9d0dd54889f38bbfd"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -2168,9 +2168,9 @@ dependencies = [
 
 [[package]]
 name = "serde_derive_internals"
-version = "0.25.0"
+version = "0.26.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "1dbab34ca63057a1f15280bdf3c39f2b1eb1b54c17e98360e511637aef7418c6"
+checksum = "85bf8229e7920a9f636479437026331ce11aa132b4dde37d121944a44d6e5f3c"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -2667,20 +2667,20 @@ checksum = "59547bce71d9c38b83d9c0e92b6066c4253371f15005def0c30d9657f50c7642"
 
 [[package]]
 name = "ts-rs"
-version = "6.1.2"
-source = "git+https://github.com/theduke/ts-rs?branch=theduke#e6046240ad2197a0b5d3660717339b324ddef435"
+version = "6.2.0"
+source = "git+https://github.com/theduke/ts-rs?branch=theduke#67e7a9b8cc7a13af86c401602e353eb6d45da502"
 dependencies = [
  "chrono",
  "ordered-float",
  "thiserror",
  "ts-rs-macros",
- "uuid 0.8.2",
+ "uuid 1.1.2",
 ]
 
 [[package]]
 name = "ts-rs-macros"
-version = "6.1.2"
-source = "git+https://github.com/theduke/ts-rs?branch=theduke#e6046240ad2197a0b5d3660717339b324ddef435"
+version = "6.2.0"
+source = "git+https://github.com/theduke/ts-rs?branch=theduke#67e7a9b8cc7a13af86c401602e353eb6d45da502"
 dependencies = [
  "Inflector",
  "proc-macro2",
