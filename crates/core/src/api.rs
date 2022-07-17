@@ -309,12 +309,20 @@ pub struct TagMerge {
 #[derive(serde::Serialize, serde::Deserialize, Clone, Debug)]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[cfg_attr(feature = "schema", derive(ts_rs::TS))]
+pub struct QuerySql {
+    pub query: String,
+}
+
+#[derive(serde::Serialize, serde::Deserialize, Clone, Debug)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[cfg_attr(feature = "schema", derive(ts_rs::TS))]
 pub enum Query {
     ServerStatus(()),
     Initialize(BackendConfig),
     CloseBackend(()),
 
     Select(factordb::query::select::Select),
+    QuerySql(QuerySql),
     Mutate(factordb::query::mutate::Mutate),
     Batch(factordb::query::mutate::Batch),
 
@@ -403,6 +411,8 @@ pub enum Reply {
     CloseBackend(()),
 
     Select(Page<Item>),
+    QuerySql(Vec<DataMap>),
+
     Mutate(()),
     Batch(()),
     Schema(SemanticSchema),

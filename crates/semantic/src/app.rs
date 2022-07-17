@@ -17,8 +17,8 @@ use semantic_core::{
     api::{self, BackendConfig, DbConfig, FileImportMetadata, SemanticSchema},
     base::{
         entity_title, AttrBlobUri, AttrBlobUriWeb, AttrDownloadUrl, AttrFileName, AttrFileSize,
-        AttrHash, AttrMimeType, AttrOriginalHash, AttrPreviewImageBlobUri, AttrTags,
-        SemanticBasePlugin, Tag, Video,
+        AttrHash, AttrMimeType, AttrOriginalHash, AttrPreviewImageBlobUri, SemanticBasePlugin, Tag,
+        Video,
     },
     core::SemanticCorePlugin,
     plugin::{FetchUrlJob, FetchUrlOutput, ImportJob, ImportOutput, PluginDescriptor},
@@ -1340,6 +1340,10 @@ impl App {
                 Ok(api::Reply::CloseBackend(()))
             }
             api::Query::Select(sel) => self.require_db()?.select(sel).await.map(api::Reply::Select),
+            api::Query::QuerySql(select) => {
+                let items = self.select_sql(select).await?;
+                Ok(api::Reply::QuerySql(items))
+            }
             api::Query::Mutate(update) => self
                 .entity_mutate(update)
                 .await
@@ -1519,6 +1523,12 @@ impl App {
     ) -> Result<(), AnyError> {
         let db = self.require_db()?;
         rec.run(&db).await
+    }
+
+    async fn select_sql(&self, select: api::QuerySql) -> Result<Vec<DataMap>, AnyError> {
+        let db = self.require_db()?;
+        let sel = Select::parse_sql(&select.query)?;
+        db.select_map(sel).await
     }
 }
 
