@@ -33,8 +33,6 @@ enum CliCommand {
     #[clap(subcommand)]
     Client(client::ClientCommand),
     ImportFiles(CommandImportFiles),
-    #[cfg(feature = "webkit")]
-    Webkit(CommandWebkit),
     GenerateTypescript(GenerateTypescript),
     #[clap(subcommand)]
     Archive(archive::ArchiveCmd),
@@ -198,12 +196,6 @@ impl CommandServer {
     }
 }
 
-/// Run a semantic UI inside webkit.
-#[cfg(feature = "webkit")]
-#[derive(clap::Parser)]
-#[clap(about = "Semantic CLI")]
-struct CommandWebkit {}
-
 fn main() {
     if std::env::var("RUST_LOG").is_err() {
         #[cfg(not(debug_assertions))]
@@ -238,19 +230,6 @@ fn main() {
             let ts = factor_tools::typescript::schema_to_typescript(&schema, None).unwrap();
 
             write!(std::io::stdout(), "{}", ts).unwrap();
-        }
-        #[cfg(feature = "webkit")]
-        CliCommand::Gtk => {
-            let config = app::AppConfig {
-                backend: None,
-                token_key: uuid::Uuid::new_v4().to_string(),
-                server: None,
-            };
-            let rt = tokio::runtime::Runtime::new().expect("Could not start runtime");
-            let app = rt
-                .block_on(app::App::build(config, rt.handle().clone()))
-                .expect("Could not build app");
-            app.run_webview_gtk().expect("Could not run GTK app");
         }
         CliCommand::Archive(cmd) => {
             cmd.run();

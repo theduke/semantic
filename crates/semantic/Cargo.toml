@@ -7,7 +7,6 @@ edition = "2021"
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [features]
-webkit = ["webkit2gtk", "javascriptcore-rs", "gtk", "gio", "glib"]
 archive = ["tar", "flate2"]
 
 media-optimizers = ["oxipng", "mozjpeg"]
@@ -35,13 +34,6 @@ tokio-util = { version = "0.7.0", features = ["io", "codec"] }
 # http
 reqwest = { version =  "0.11.3", default-features = false, features = ["gzip", "json", "rustls-tls", "stream"] }
 hyper = { version =  "0.14.9", features = ["server", "http1"] }
-
-# webkit-gtk
-webkit2gtk = { version =  "0.15.0", features = [ "v2_4", "v2_6",  "v2_16", "v2_22", "v2_26"] , optional = true }
-javascriptcore-rs = { version =  "0.15.1", optional = true }
-gtk = { version = "0.14.0", optional = true }
-gio = { version = "0.14.0", optional = true }
-glib = { version = "0.14.0", optional = true }
 
 factordb = "0.1"
 factor_engine = "0.1"
