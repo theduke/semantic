@@ -1,7 +1,7 @@
 use std::{collections::HashMap, rc::Rc};
 
 use factordb::{
-    prelude::IdOrIdent,
+    prelude::{DataMap, IdOrIdent},
     schema::{AttrMapExt, AttributeSchema, EntityAttribute, EntityDescriptor, EntitySchema},
     AnyError,
 };
@@ -187,13 +187,11 @@ impl Registry {
         data.get_type().and_then(|ty| self.entity_by_ident(&ty))
     }
 
-    /// Convenience helper to get the `[EntityInfo]` for an [`Item`].
+    /// Convenience helper to get the `[EntityInfo]` for a [`DataMap`].
     /// Returns [`None`] if the data does not have a "factor/type" attribute or
     /// if no info is registered.
-    pub fn entity_by_item(&self, item: &factordb::query::select::Item) -> Option<&EntityInfo> {
-        item.data
-            .get_type()
-            .and_then(|ty| self.entity_by_ident(&ty))
+    pub fn entity_by_item(&self, item: &DataMap) -> Option<&EntityInfo> {
+        item.get_type().and_then(|ty| self.entity_by_ident(&ty))
     }
 
     pub fn attr_renderer(&self, ty: &str) -> Option<&DynAttrRenderer> {
@@ -264,8 +262,7 @@ pub struct EntityRenderOpts {
     pub preview: bool,
 }
 
-pub type DynEntityRenderer =
-    Rc<dyn Fn(&factordb::query::select::Item, &EntityRenderOpts) -> brass::dom::TagBuilder>;
+pub type DynEntityRenderer = Rc<dyn Fn(&DataMap, &EntityRenderOpts) -> brass::dom::TagBuilder>;
 
 pub enum MediaRenderEvent {
     Finished(Result<(), AnyError>),
@@ -289,12 +286,8 @@ pub struct MediaRenderOpts {
     pub callback: Rc<dyn Fn(MediaRenderEvent)>,
 }
 
-pub type DynMediaRenderer = Rc<
-    dyn Fn(
-        &factordb::query::select::Item,
-        &MediaRenderOpts,
-    ) -> (brass::dom::TagBuilder, Option<DynMediaHandle>),
->;
+pub type DynMediaRenderer =
+    Rc<dyn Fn(&DataMap, &MediaRenderOpts) -> (brass::dom::TagBuilder, Option<DynMediaHandle>)>;
 
 #[derive(Clone)]
 pub struct RegisteredMediaRenderer {

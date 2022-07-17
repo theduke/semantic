@@ -2,7 +2,7 @@ use brass::{
     component::{msg::MsgComponent, Component},
     dom::{builder::div, Render, View},
 };
-use factordb::{query::select::Page, schema::EntityDescriptor, AnyError};
+use factordb::{schema::EntityDescriptor, AnyError};
 use semantic_ui_core::{
     components::{
         loader::Loader,
@@ -23,11 +23,11 @@ impl Render for HabitDashboard {
 }
 
 enum Msg {
-    HabitsLoaded(Result<Page<Habit>, AnyError>),
+    HabitsLoaded(Result<Vec<Habit>, AnyError>),
 }
 
 struct State {
-    page: Loader<Page<Habit>>,
+    page: Loader<Vec<Habit>>,
 }
 
 impl MsgComponent for State {
@@ -64,13 +64,13 @@ impl MsgComponent for State {
                 "New Habit",
                 "button is-large",
             )))
-            .signal(self.page.signal_render(|page| {
-                if page.items.is_empty() {
+            .signal(self.page.signal_render(|items| {
+                if items.is_empty() {
                     notification_warning()
                         .text("No habits found. Why don't you create a new one?")
                         .into_view()
                 } else {
-                    let items = page.items.iter().map(|habit| {
+                    let items = items.iter().map(|habit| {
                         box_()
                             .and(HabitView {
                                 habit: habit.clone(),

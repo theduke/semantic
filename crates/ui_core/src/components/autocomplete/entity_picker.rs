@@ -7,10 +7,8 @@ use brass::{
     signal::signal::{Mutable, Signal, SignalExt},
 };
 use factordb::{
-    query::{
-        expr::Expr,
-        select::{Item, Select},
-    },
+    prelude::DataMap,
+    query::{expr::Expr, select::Select},
     schema::AttributeDescriptor,
 };
 use js_sys::Function;
@@ -47,12 +45,12 @@ async fn sleep(duration: std::time::Duration) {
 struct EntityPicker {
     base_filter: Pin<Box<dyn Signal<Item = Expr> + Send + 'static>>,
     filter_builder: Box<dyn Fn(&str) -> Expr>,
-    on_select: Rc<dyn Fn(Item)>,
+    on_select: Rc<dyn Fn(DataMap)>,
 }
 
 enum Msg {
     Nop,
-    ItemSelected(Item),
+    ItemSelected(DataMap),
     Value(String),
     FilterChanged(Expr),
 }
@@ -60,9 +58,9 @@ enum Msg {
 struct State {
     base_filter: Option<Expr>,
     filter_builder: Box<dyn Fn(&str) -> Expr>,
-    on_select: Rc<dyn Fn(Item)>,
+    on_select: Rc<dyn Fn(DataMap)>,
     value: Mutable<String>,
-    loader: Loader<Vec<Item>>,
+    loader: Loader<Vec<DataMap>>,
     _filter_future: EffectGuard,
     input: Option<web_sys::HtmlInputElement>,
 }
@@ -86,7 +84,6 @@ impl State {
             context::api()
                 .select(Select::new().with_limit(10).with_filter(filter))
                 .await
-                .map(|p| p.items)
         };
         self.loader.spawn(f);
     }
@@ -153,7 +150,7 @@ impl MsgComponent for State {
         let items = self.loader.signal_render(move |items| -> View {
             let handle = handle.clone();
             let options = items.iter().map(move |item| {
-                let name = entity_title(&item.data);
+                let name = entity_title(&item);
                 let handle = handle.clone();
 
                 let item = item.clone();
@@ -173,7 +170,7 @@ impl MsgComponent for State {
 
 pub fn entity_picker(
     base_filter: impl Signal<Item = Expr> + Send + 'static,
-    on_select: impl Fn(Item) + 'static,
+    on_select: impl Fn(DataMap) + 'static,
 ) -> View {
     State::build(EntityPicker {
         base_filter: base_filter.boxed(),
@@ -185,7 +182,7 @@ pub fn entity_picker(
 pub fn entity_picker_with_filter(
     base_filter: impl Signal<Item = Expr> + Send + 'static,
     filter_builder: impl Fn(&str) -> Expr + 'static,
-    on_select: impl Fn(Item) + 'static,
+    on_select: impl Fn(DataMap) + 'static,
 ) -> View {
     State::build(EntityPicker {
         base_filter: base_filter.boxed(),

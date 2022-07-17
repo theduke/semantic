@@ -11,10 +11,9 @@ use crate::components::{
 };
 
 async fn load_all_tags() -> Result<Vec<Tag>, AnyError> {
-    let page = crate::context::api()
+    crate::context::api()
         .select_entities::<Tag>(Tag::query_all())
-        .await?;
-    Ok(page.items)
+        .await
 }
 
 pub struct TagSelect {

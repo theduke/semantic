@@ -2,17 +2,14 @@ use brass::{
     dom::{builder::div, Attr, ClickEvent, Tag, TagBuilder, View},
     signal::signal::{Mutable, SignalExt},
 };
-use factordb::{query::select::Item, schema::AttrMapExt};
+use factordb::{prelude::DataMap, schema::AttrMapExt};
 use semantic_core::base::AttrDownloadUrl;
 
 use crate::{components::util::modal::modal, EntityRenderOpts};
 
-pub fn image_content(item: &Item, opts: &EntityRenderOpts) -> TagBuilder {
-    let url = semantic_core::base::File::blob_uri_from_map(&item.data).or_else(|| {
-        item.data
-            .get_attr::<AttrDownloadUrl>()
-            .map(|x| x.to_string())
-    });
+pub fn image_content(item: &DataMap, opts: &EntityRenderOpts) -> TagBuilder {
+    let url = semantic_core::base::File::blob_uri_from_map(&item)
+        .or_else(|| item.get_attr::<AttrDownloadUrl>().map(|x| x.to_string()));
 
     if let Some(url) = url {
         if opts.preview {

@@ -1,7 +1,7 @@
 use std::{collections::HashMap, ops::Deref};
 
 use factordb::{
-    prelude::{DataMap, EntityContainer, Id, IdOrIdent, Item, Mutate, Page, Timestamp},
+    prelude::{DataMap, EntityContainer, Id, IdOrIdent, Mutate, Timestamp},
     AnyError,
 };
 use url::Url;
@@ -410,7 +410,7 @@ pub enum Reply {
     Initialize(SemanticSchema),
     CloseBackend(()),
 
-    Select(Page<Item>),
+    Select(Vec<DataMap>),
     QuerySql(Vec<DataMap>),
 
     Mutate(()),
@@ -527,21 +527,18 @@ impl<E: ApiClientExecutor> ApiClient<E> {
     pub async fn entity(&self, id: Id) -> Result<factordb::data::DataMap, AnyError> {
         use factordb::query::expr::Expr;
         let filter = Expr::eq(Expr::Attr("factor/id".into()), id);
-        let mut page = self
+        let mut items = self
             .select(factordb::query::select::Select::new().with_filter(filter))
             .await?;
-        page.items
-            .pop()
-            .map(|x| x.data)
-            .ok_or_else(|| anyhow::anyhow!("Not found"))
+        items.pop().ok_or_else(|| anyhow::anyhow!("Not found"))
     }
 
     pub async fn select(
         &self,
         select: factordb::query::select::Select,
-    ) -> Result<Page<Item>, AnyError> {
+    ) -> Result<Vec<DataMap>, AnyError> {
         match self.exec.execute(Query::Select(select)).await {
-            Ok(Reply::Select(page)) => Ok(page),
+            Ok(Reply::Select(items)) => Ok(items),
             Ok(_other) => Err(anyhow::anyhow!("API returned invalid data")),
             Err(err) => Err(err),
         }
@@ -550,14 +547,17 @@ impl<E: ApiClientExecutor> ApiClient<E> {
     pub async fn select_entities<T>(
         &self,
         select: factordb::query::select::Select,
-    ) -> Result<Page<T>, AnyError>
+    ) -> Result<Vec<T>, AnyError>
     where
         T: factordb::schema::EntityContainer + serde::de::DeserializeOwned,
     {
         match self.exec.execute(Query::Select(select)).await {
-            Ok(Reply::Select(page)) => {
-                let page2 = page.convert_data()?;
-                Ok(page2)
+            Ok(Reply::Select(items)) => {
+                let entities = items
+                    .into_iter()
+                    .map(|map| T::try_from_map(map).map_err(anyhow::Error::from))
+                    .collect::<Result<Vec<_>, _>>();
+                entities
             }
             Ok(_other) => Err(anyhow::anyhow!("API returned invalid data")),
             Err(err) => Err(err),

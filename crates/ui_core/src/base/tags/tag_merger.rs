@@ -5,7 +5,7 @@ use brass::{
     dom::{builder::div, Render, View},
     signal::signal::Mutable,
 };
-use factordb::prelude::{AttrId, AttrMapExt, AttributeDescriptor, Expr, Item};
+use factordb::prelude::{AttrId, AttrMapExt, AttributeDescriptor, DataMap, Expr};
 use semantic_core::base::{AttrTagName, Tag};
 
 use crate::{
@@ -34,7 +34,7 @@ struct State {
 }
 
 enum Msg {
-    TagSelected(Item),
+    TagSelected(DataMap),
     Submit,
     Cancel,
     Complete,
@@ -57,7 +57,7 @@ impl MsgComponent for State {
     fn update(&mut self, msg: Self::Msg, ctx: brass::component::Context<Self>) {
         match msg {
             Msg::TagSelected(item) => {
-                if let Ok(tag) = item.data.try_into_entity() {
+                if let Ok(tag) = item.try_into_entity() {
                     self.target_tag.set(Some(tag));
                 }
             }

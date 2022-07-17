@@ -1146,7 +1146,11 @@ impl App {
                 self.close_backend().await?;
                 Ok(api::Reply::CloseBackend(()))
             }
-            api::Query::Select(sel) => self.require_db()?.select(sel).await.map(api::Reply::Select),
+            api::Query::Select(sel) => self
+                .require_db()?
+                .select_map(sel)
+                .await
+                .map(api::Reply::Select),
             api::Query::QuerySql(select) => {
                 let items = self.select_sql(select).await?;
                 Ok(api::Reply::QuerySql(items))

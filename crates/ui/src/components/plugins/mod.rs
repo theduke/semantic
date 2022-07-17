@@ -11,7 +11,7 @@ use brass::{
     },
 };
 use factordb::{
-    prelude::{AttrMapExt, Id, Page},
+    prelude::{AttrMapExt, Id},
     AnyError,
 };
 use semantic_core::{api::PluginTestFetch, core::PluginSource, plugin::FetchUrlOutput};
@@ -30,7 +30,7 @@ use semantic_ui_core::{
     validate::{StringRequired, StringUrl},
 };
 
-async fn load_all_sources() -> Result<Page<PluginSource>, AnyError> {
+async fn load_all_sources() -> Result<Vec<PluginSource>, AnyError> {
     context::api()
         .select_entities(PluginSource::query_all())
         .await
@@ -120,11 +120,11 @@ pub fn plugin_manager() -> TagBuilder {
                 .build(),
         );
 
-    let list = load(load_all_sources(), |page| {
-        if page.items.is_empty() {
+    let list = load(load_all_sources(), |items| {
+        if items.is_empty() {
             notification_warning().and("No plugins found.").into_view()
         } else {
-            let items = MutableVec::new_with_values(page.items.clone());
+            let items = MutableVec::new_with_values(items.clone());
 
             div()
                 .signal_vec(

@@ -4,7 +4,7 @@ use brass::{
     dom::{builder::div, Style, TagBuilder},
     signal::signal::{Mutable, SignalExt},
 };
-use factordb::prelude::{EntityContainer, Id, Item, Mutate};
+use factordb::prelude::{DataMap, EntityContainer, Id, Mutate};
 use semantic_core::base::{Note, TextFormat};
 
 use crate::{
@@ -110,7 +110,7 @@ pub fn note_edit(note: Note, on_saved: impl Fn(Note) + 'static) -> TagBuilder {
     })
 }
 
-pub fn note_create_page(_item: &Item, _opts: &EntityRenderOpts) -> TagBuilder {
+pub fn note_create_page(_item: &DataMap, _opts: &EntityRenderOpts) -> TagBuilder {
     note_create(|note| {
         router().goto(Route::Entity(note.id.into()));
     })
@@ -169,8 +169,8 @@ pub fn note_view(note: Note, opts: &EntityRenderOpts) -> TagBuilder {
     }
 }
 
-pub fn note_content(item: &Item, opts: &EntityRenderOpts) -> TagBuilder {
-    if let Ok(col) = Note::try_from_map(item.data.clone()) {
+pub fn note_content(item: &DataMap, opts: &EntityRenderOpts) -> TagBuilder {
+    if let Ok(col) = Note::try_from_map(item.clone()) {
         note_view(col, opts)
     } else {
         notification_error().and("Item is not a collection")

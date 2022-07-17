@@ -5,7 +5,7 @@ use brass::{
     dom::{builder::div, Render, TagBuilder},
     signal::signal::Mutable,
 };
-use factordb::prelude::{EntityContainer, Id, Item, Page};
+use factordb::prelude::{EntityContainer, Id};
 use semantic_core::base::Tag;
 
 use crate::components::{
@@ -71,7 +71,7 @@ impl TagNode {
             let on_delete = on_delete.clone();
             deleting.clone().signal_ref(move |flag| {
                 if *flag {
-                    let item = Item::new(tag.clone().into_map().unwrap());
+                    let item = tag.clone().into_map().unwrap();
 
                     let deleting = deleting.clone();
                     let on_delete = on_delete.clone();
@@ -165,8 +165,12 @@ struct State {
     tree: Mutable<Vec<TagNode>>,
 }
 
+pub struct TagManager {
+    items: Vec<Tag>,
+}
+
 impl MsgComponent for State {
-    type Properties = Page<Tag>;
+    type Properties = TagManager;
     type Msg = Msg;
 
     fn init(props: Self::Properties, _ctx: brass::component::Context<Self>) -> Self {
@@ -219,11 +223,13 @@ impl MsgComponent for State {
 
 pub fn tag_manager() -> TagBuilder {
     let f = async move {
-        let page = crate::context::api()
-            .select(Tag::query_all())
-            .await?
-            .convert_data::<Tag>()?;
-        Ok(page)
+        crate::context::api()
+            .select_entities::<Tag>(Tag::query_all())
+            .await
     };
-    load(f, |page| State::build(page.clone()))
+    load(f, |items| {
+        State::build(TagManager {
+            items: items.clone(),
+        })
+    })
 }

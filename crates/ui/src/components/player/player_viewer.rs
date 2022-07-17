@@ -6,7 +6,7 @@ use brass::{
     effect::{set_timeout, TimeoutGuard},
     signal::signal::{Mutable, Signal, SignalExt},
 };
-use factordb::{query::select::Item, schema::AttrMapExt};
+use factordb::{prelude::DataMap, schema::AttrMapExt};
 use rand::prelude::SliceRandom;
 use semantic_core::base::entity_title;
 use semantic_ui_core::{
@@ -26,7 +26,7 @@ struct Props {
 
 #[derive(Clone)]
 pub struct ActiveItem {
-    pub item: Item,
+    pub item: DataMap,
     pub index: Index,
     pub total_count: usize,
     pub title: String,
@@ -45,8 +45,8 @@ enum Msg {
     Mute(bool),
     ToggleMute,
     ToggleCycle,
-    ReplaceItems(Vec<Item>),
-    AppendItems(Vec<Item>),
+    ReplaceItems(Vec<DataMap>),
+    AppendItems(Vec<DataMap>),
     ItemEvent {
         index: usize,
         event: MediaRenderEvent,
@@ -62,7 +62,7 @@ pub struct Position {
 }
 
 struct SharedStateData {
-    items: RefCell<Vec<Item>>,
+    items: RefCell<Vec<DataMap>>,
     playing: Mutable<bool>,
     cycle: Mutable<bool>,
     muted: Mutable<bool>,
@@ -167,7 +167,7 @@ impl State {
             return;
         };
 
-        let ty = if let Some(ty) = item.data.get_type_name() {
+        let ty = if let Some(ty) = item.get_type_name() {
             ty
         } else {
             std::mem::drop(items);
@@ -239,13 +239,13 @@ impl State {
             item: item.clone(),
             index,
             total_count: items.len(),
-            title: entity_title(&item.data),
+            title: entity_title(&item),
         }));
 
         // If track visists is enabled, record the visit via the API.
         if self.track_visits {
             if let Some(item) = old_item {
-                if let Some(id) = item.item.data.get_id() {
+                if let Some(id) = item.item.get_id() {
                     let api = semantic_ui_core::context::api();
 
                     wasm_bindgen_futures::spawn_local(async move {
@@ -386,7 +386,7 @@ struct PlayerHandleInner {
 }
 
 impl PlayerHandle {
-    pub fn active_item(&self) -> Option<Item> {
+    pub fn active_item(&self) -> Option<DataMap> {
         if let Some(active) = &*self.0.shared.active_item.lock_ref() {
             Some(active.item.clone())
         } else {
@@ -394,11 +394,11 @@ impl PlayerHandle {
         }
     }
 
-    pub fn replace_items(&self, items: Vec<Item>) {
+    pub fn replace_items(&self, items: Vec<DataMap>) {
         self.0.handle.send(Msg::ReplaceItems(items));
     }
 
-    pub fn with_items<O, F: FnOnce(&[Item]) -> O>(&self, f: F) -> O {
+    pub fn with_items<O, F: FnOnce(&[DataMap]) -> O>(&self, f: F) -> O {
         f(&*self.0.shared.items.borrow())
     }
 
@@ -489,7 +489,7 @@ impl PlayerHandle {
 
 pub struct PlayerViewer {
     /// Initial items.
-    pub items: Vec<Item>,
+    pub items: Vec<DataMap>,
 
     pub track_visits: bool,
 }

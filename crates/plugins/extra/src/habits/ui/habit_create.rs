@@ -1,5 +1,5 @@
 use brass::dom::{builder::div, TagBuilder};
-use factordb::prelude::{Id, Item};
+use factordb::prelude::{DataMap, Id};
 use semantic_ui_core::{context, routing::Route, EntityRenderOpts};
 
 use crate::habits::{Habit, HabitMode};
@@ -27,6 +27,6 @@ pub fn habit_create() -> TagBuilder {
     })
 }
 
-pub fn habit_create_page(_: &Item, _: &EntityRenderOpts) -> TagBuilder {
+pub fn habit_create_page(_: &DataMap, _: &EntityRenderOpts) -> TagBuilder {
     div().and(habit_create())
 }

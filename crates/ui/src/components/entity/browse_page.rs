@@ -5,10 +5,8 @@ use brass::{
     signal::signal::Mutable,
 };
 use factordb::{
-    query::{
-        expr::Expr,
-        select::{Item, ItemPage, Select},
-    },
+    prelude::DataMap,
+    query::{expr::Expr, select::Select},
     AnyError,
 };
 
@@ -26,7 +24,7 @@ pub struct BrowsePageProps {}
 // use super::entity_filter::EntityFilter;
 
 struct LoadedPage {
-    items: Vec<Item>,
+    items: Vec<DataMap>,
     page: usize,
     limit: usize,
 }
@@ -45,7 +43,7 @@ pub struct BrowsePage {
 }
 
 pub enum Msg {
-    Loaded(Result<ItemPage, AnyError>),
+    Loaded(Result<Vec<DataMap>, AnyError>),
     FilterUpdated(entity_filter::EntityFilter),
     ToggleFilter,
     Next,
@@ -116,8 +114,8 @@ impl MsgComponent for BrowsePage {
                 self.load(query, &ctx);
             }
             Msg::Loaded(res) => {
-                let res = res.map(|page| LoadedPage {
-                    items: page.items,
+                let res = res.map(|items| LoadedPage {
+                    items,
                     page: self.page,
                     limit: self.limit as usize,
                 });

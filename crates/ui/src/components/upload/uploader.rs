@@ -11,7 +11,9 @@ use brass::{
     },
 };
 use factordb::{
-    prelude::{AttrType, AttributeDescriptor, EntityContainer, EntityDescriptor, Expr, Id, Item},
+    prelude::{
+        AttrType, AttributeDescriptor, DataMap, EntityContainer, EntityDescriptor, Expr, Id,
+    },
     AnyError,
 };
 use semantic_core::{
@@ -92,7 +94,7 @@ impl CollectionTarget {
 
 struct State {
     files: MutableVec<FileItem>,
-    uploaded_files: MutableVec<Item>,
+    uploaded_files: MutableVec<DataMap>,
     collection: Mutable<CollectionTarget>,
     queue_length: Mutable<usize>,
 
@@ -197,7 +199,7 @@ impl MsgComponent for State {
                             self.queue_length.set(lock.len());
 
                             if let Ok(map) = typed_file.into_map() {
-                                self.uploaded_files.lock_mut().push_cloned(Item::new(map));
+                                self.uploaded_files.lock_mut().push_cloned(map);
                             }
                         }
 
@@ -298,8 +300,8 @@ impl MsgComponent for State {
                 ));
                 let picker = entity_picker(
                     filter,
-                    handle.on_opt(|item: Item| {
-                        Collection::try_from_map(item.data)
+                    handle.on_opt(|item: DataMap| {
+                        Collection::try_from_map(item)
                             .ok()
                             .map(Msg::CollectionSelected)
                     }),

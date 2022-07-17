@@ -49,8 +49,8 @@ impl MsgComponent for State {
     fn init(_props: Self::Properties, _ctx: brass::component::Context<Self>) -> Self {
         Self {
             entries: Loader::new_spawn(async {
-                let page = api().select_entities(WeightLogEntry::query_all()).await?;
-                Ok(MutableVec::new_with_values(page.items))
+                let items = api().select_entities(WeightLogEntry::query_all()).await?;
+                Ok(MutableVec::new_with_values(items))
             }),
             delete_loader: Loader::new_idle(),
             creating: Mutable::new(false),

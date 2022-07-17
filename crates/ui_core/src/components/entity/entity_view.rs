@@ -5,7 +5,7 @@ use brass::{
     signal::signal::Signal,
     DomStr,
 };
-use factordb::{query::select::Item, schema::AttrMapExt};
+use factordb::{prelude::DataMap, schema::AttrMapExt};
 use semantic_core::base::entity_title;
 
 use crate::{
@@ -25,8 +25,8 @@ pub struct EntityView<'a> {
 }
 
 impl<'a> EntityView<'a> {
-    pub fn from_item(item: &Item, registry: &Registry, opts: &EntityRenderOpts) -> Self {
-        let ty_ident = item.data.get_type();
+    pub fn from_item(item: &DataMap, registry: &Registry, opts: &EntityRenderOpts) -> Self {
+        let ty_ident = item.get_type();
         let entity = ty_ident
             .as_ref()
             .and_then(|ty| registry.entity_by_ident(ty))
@@ -35,12 +35,12 @@ impl<'a> EntityView<'a> {
         let content_renderer = ty
             .as_ref()
             .and_then(|ty| registry.entity_content_renderer(ty));
-        let type_name = super::entity_type_name(&item.data, entity.as_ref()).map(DomStr::from);
-        let title = DomStr::from(entity_title(&item.data));
+        let type_name = super::entity_type_name(&item, entity.as_ref()).map(DomStr::from);
+        let title = DomStr::from(entity_title(&item));
 
         let content = match content_renderer {
             Some(r) => r(&item, opts),
-            None => super::entity_fields_table(&item.data, entity.as_ref(), registry),
+            None => super::entity_fields_table(&item, entity.as_ref(), registry),
         };
 
         Self {

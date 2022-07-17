@@ -1,7 +1,7 @@
 pub mod browse_page;
 
 use brass::dom::{builder::div, Tag, TagBuilder};
-use factordb::query::select::Item;
+use factordb::prelude::DataMap;
 use semantic_ui_core::{
     components::util::{buttons, notification_error, notification_warning, title_2, ButtonBuilder},
     context,
@@ -16,7 +16,7 @@ pub fn entity_create(entity_type: &str) -> TagBuilder {
 
     if let Some(renderer) = renderer {
         renderer(
-            &Item::default(),
+            &DataMap::default(),
             &EntityRenderOpts {
                 editable: true,
                 preview: false,

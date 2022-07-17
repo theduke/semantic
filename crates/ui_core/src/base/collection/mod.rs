@@ -22,7 +22,7 @@ mod collection_item_tagger;
 mod collection_item_manager;
 
 use factordb::{
-    prelude::{EntityContainer, Id, Item, Mutate, Page},
+    prelude::{DataMap, EntityContainer, Id, Mutate},
     AnyError,
 };
 use semantic_core::base::Collection;
@@ -102,7 +102,7 @@ fn collection_meta_edit(col: Collection, on_saved: impl Fn(Collection) + 'static
 
 pub fn collection_view(
     col: Collection,
-    items: Option<&[Item]>,
+    items: Option<&[DataMap]>,
     opts: &EntityRenderOpts,
 ) -> TagBuilder {
     if opts.preview {
@@ -148,10 +148,10 @@ pub fn collection_view(
         collection_meta(&col)
     };
 
-    let items = load(load_collection_items(col.clone()), move |page| {
+    let items = load(load_collection_items(col.clone()), move |items| {
         let item_tagging = Mutable::new(false);
 
-        let items2 = page.items.clone();
+        let items2 = items.clone();
         let item_tagger = item_tagging.clone().signal_ref(move |flag| -> View {
             if *flag {
                 let toggle = item_tagging.clone();
@@ -190,7 +190,7 @@ pub fn collection_view(
 
         let manager = CollectionItemManager {
             collection_id: col.id,
-            items: MutableVec::new_with_values(page.items.clone()),
+            items: MutableVec::new_with_values(items.clone()),
         }
         .render();
 
@@ -200,32 +200,27 @@ pub fn collection_view(
     div().and(meta).and(Tag::Hr.new()).and(items)
 }
 
-pub fn collection_content(item: &Item, opts: &EntityRenderOpts) -> TagBuilder {
-    if let Ok(col) = Collection::try_from_map(item.data.clone()) {
-        let items = item
-            .joins
-            .iter()
-            .find(|j| j.name == Collection::ITEMS_JOIN)
-            .map(|j| j.items.as_slice());
-        collection_view(col, items, opts)
+pub fn collection_content(item: &DataMap, opts: &EntityRenderOpts) -> TagBuilder {
+    if let Ok(col) = Collection::try_from_map(item.clone()) {
+        collection_view(col, None, opts)
     } else {
         notification_warning().and("Item is not a collection")
     }
 }
 
-pub fn collection_create_page(_item: &Item, _opts: &EntityRenderOpts) -> TagBuilder {
+pub fn collection_create_page(_item: &DataMap, _opts: &EntityRenderOpts) -> TagBuilder {
     collection_create(|col| {
         router().goto(Route::Entity(col.id.into()));
     })
 }
 
-async fn search_collections(term: String) -> Result<Page<Collection>, AnyError> {
+async fn search_collections(term: String) -> Result<Vec<Collection>, AnyError> {
     context::api()
         .select_entities(Collection::search_collections(term, 10))
         .await
 }
 
-async fn load_entity_collections(id: Id) -> Result<Page<Collection>, AnyError> {
+async fn load_entity_collections(id: Id) -> Result<Vec<Collection>, AnyError> {
     context::api()
         .select_entities(Collection::query_collections_with_entity(id))
         .await
@@ -243,6 +238,6 @@ async fn collection_remove_entity(collection: Id, entity: Id) -> Result<(), AnyE
         .await
 }
 
-async fn load_collection_items(col: Collection) -> Result<Page<Item>, AnyError> {
+async fn load_collection_items(col: Collection) -> Result<Vec<DataMap>, AnyError> {
     api().select(Collection::query_collection_items(&col)).await
 }

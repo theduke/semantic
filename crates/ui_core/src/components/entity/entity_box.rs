@@ -4,7 +4,7 @@ use brass::{
     signal::signal::{Mutable, SignalExt},
     DomStr,
 };
-use factordb::{query::select::Item, schema::AttrMapExt};
+use factordb::{prelude::DataMap, schema::AttrMapExt};
 use semantic_core::base::entity_title;
 use web_sys::Element;
 
@@ -22,9 +22,9 @@ use super::{
 };
 
 pub struct EntityBox {
-    pub item: Item,
+    pub item: DataMap,
     pub options: EntityRenderOpts,
-    pub on_delete: Option<Box<dyn Fn(Item)>>,
+    pub on_delete: Option<Box<dyn Fn(DataMap)>>,
     pub show_link: bool,
 }
 
@@ -59,10 +59,10 @@ enum ActiveAction {
 }
 
 struct State {
-    item: Mutable<Item>,
+    item: Mutable<DataMap>,
     // entity_id: Option<Id>,
     options: EntityRenderOpts,
-    on_delete: Option<Box<dyn Fn(Item)>>,
+    on_delete: Option<Box<dyn Fn(DataMap)>>,
     show_table: Mutable<bool>,
     action: Mutable<Option<ActiveAction>>,
 
@@ -87,7 +87,7 @@ impl MsgComponent for State {
     fn update(&mut self, msg: Self::Msg, _ctx: Context<'_, Self>) {
         match msg {
             Msg::Open => {
-                if let Some(id) = self.item.lock_ref().data.get_id() {
+                if let Some(id) = self.item.lock_ref().get_id() {
                     context::router().goto(Route::Entity(id.into()));
                 }
             }
@@ -95,7 +95,6 @@ impl MsgComponent for State {
                 if let Some(url) = self
                     .item
                     .lock_ref()
-                    .data
                     .get_attr::<semantic_core::base::AttrUrl>()
                 {
                     let _ = brass::web::window()
@@ -156,7 +155,7 @@ impl MsgComponent for State {
 
         let content_signal = self.item.signal_ref(move |item| {
             let registry = context::registry();
-            let ty_ident = item.data.get_type();
+            let ty_ident = item.get_type();
             let entity = ty_ident
                 .as_ref()
                 .and_then(|ty| registry.entity_by_ident(ty))
@@ -165,11 +164,11 @@ impl MsgComponent for State {
             let content_renderer = ty
                 .as_ref()
                 .and_then(|ty| registry.entity_content_renderer(ty));
-            let type_name = super::entity_type_name(&item.data, entity.as_ref()).map(DomStr::from);
+            let type_name = super::entity_type_name(&item, entity.as_ref()).map(DomStr::from);
 
             let mut actions = Vec::new();
 
-            if item.data.has_attr::<semantic_core::base::AttrUrl>() {
+            if item.has_attr::<semantic_core::base::AttrUrl>() {
                 actions.push(EntityActionButton {
                     // TODO: want to use fas, not fa!
                     icon: "fa-globe".into(),
@@ -221,7 +220,7 @@ impl MsgComponent for State {
 
             // let mutable_item = self.item.clone();
 
-            let id = item.data.get_id();
+            let id = item.get_id();
 
             let registry = registry.clone();
             let mutable_item = mutable_item.clone();
@@ -270,7 +269,7 @@ impl MsgComponent for State {
                     let registry = registry.clone();
                     let signal = show_table.signal_cloned().map(move |table| {
                         if table {
-                            super::entity_fields_table(&item.data, entity.as_ref(), &registry)
+                            super::entity_fields_table(&item, entity.as_ref(), &registry)
                         } else {
                             renderer(&item, &opts)
                         }
@@ -279,7 +278,7 @@ impl MsgComponent for State {
                 }
                 None => {
                     content.add_tag(super::entity_fields_table(
-                        &item.data,
+                        &item,
                         entity.as_ref(),
                         &registry,
                     ));
@@ -288,7 +287,7 @@ impl MsgComponent for State {
 
             EntityView {
                 link_path: super::entity_href(item),
-                title: entity_title(&item.data).into(),
+                title: entity_title(&item).into(),
                 type_name,
                 on_open: Some(Box::new(handle.callback(|| Msg::Open))),
                 actions,

@@ -29,7 +29,7 @@ impl Render for HabitView {
 enum Msg {
     Trigger,
     TriggerLoaded(Result<HabitOccurence, AnyError>),
-    OccurencesLoaded(Result<Page<HabitOccurence>, AnyError>),
+    OccurencesLoaded(Result<Vec<HabitOccurence>, AnyError>),
 }
 
 struct State {
@@ -124,15 +124,15 @@ impl MsgComponent for State {
             },
             Msg::OccurencesLoaded(res) => {
                 match res {
-                    Ok(page) => {
-                        if let Some(latest) = page.items.first() {
+                    Ok(items) => {
+                        if let Some(latest) = items.first() {
                             self.start_timer(latest.clone());
                         }
 
                         // TODO: append to current page instead of replacing?
                         // (to respect new entries already added on current page)
                         self.list_loader.set_success(());
-                        self.occurences.lock_mut().items.extend(page.items);
+                        self.occurences.lock_mut().items.extend(items);
                     }
                     Err(err) => {
                         self.list_loader.set_err(err);

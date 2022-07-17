@@ -1,13 +1,13 @@
 use std::rc::Rc;
 
 use brass::dom::{Render, View};
-use factordb::{query::select::Item, schema::AttrMapExt};
+use factordb::{prelude::DataMap, schema::AttrMapExt};
 use semantic_core::base::AttrTags;
 
 use crate::components::util::notification_error;
 
-pub fn entity_tag_manager(entity: &Item) -> View {
-    let id = if let Some(id) = entity.data.get_id() {
+pub fn entity_tag_manager(entity: &DataMap) -> View {
+    let id = if let Some(id) = entity.get_id() {
         id
     } else {
         return notification_error()
@@ -15,7 +15,7 @@ pub fn entity_tag_manager(entity: &Item) -> View {
             .into();
     };
 
-    let item_tag_ids = entity.data.get_attr_vec::<AttrTags>().unwrap_or_default();
+    let item_tag_ids = entity.get_attr_vec::<AttrTags>().unwrap_or_default();
 
     let entity_id = id;
     super::TagSelect {

@@ -8,7 +8,7 @@ pub mod entity_view;
 use brass::dom::{builder::div, Apply, Attr, Render, Tag, TagBuilder, View};
 use factordb::prelude::{
     AttrId, AttrIdent, AttrMapExt, AttrType, AttributeDescriptor, AttributeSchema, DataMap, Id,
-    Item, Timestamp, Value, ValueType,
+    Timestamp, Value, ValueType,
 };
 use semantic_core::base::AttrTitle;
 
@@ -22,17 +22,12 @@ use self::{entity_box::EntityBox, entity_view::EntityView};
 
 use super::{loader::Loader, util::table};
 
-fn entity_href(item: &Item) -> Option<String> {
-    item.data
-        .get_id()
-        .map(|id| Route::Entity(id.into()).to_path())
+fn entity_href(item: &DataMap) -> Option<String> {
+    item.get_id().map(|id| Route::Entity(id.into()).to_path())
 }
 
-pub fn entity_loader(id: Id, render: impl Fn(&Item) -> View + 'static) -> TagBuilder {
-    let loader = Loader::new_spawn(async move {
-        let data = context::api().entity(id).await?;
-        Ok(Item::new(data))
-    });
+pub fn entity_loader(id: Id, render: impl Fn(&DataMap) -> View + 'static) -> TagBuilder {
+    let loader = Loader::new_spawn(async move { context::api().entity(id).await });
     let inner = loader.signal_render(render);
     // FIXME: need to manually retain the loader for now. remove when loader
     // is refactored.
@@ -244,7 +239,7 @@ pub fn entity_fields_table(
 //     div().and(vdom::hr()).and_iter(joins).build()
 // }
 
-pub fn entity_list(items: &[Item], registry: &Registry, opts: &EntityRenderOpts) -> TagBuilder {
+pub fn entity_list(items: &[DataMap], registry: &Registry, opts: &EntityRenderOpts) -> TagBuilder {
     let items = items
         .iter()
         .map(|item| EntityView::from_item(item, registry, opts));

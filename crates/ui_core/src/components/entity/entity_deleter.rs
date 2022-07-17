@@ -4,7 +4,7 @@ use brass::{
     signal::signal::Mutable,
 };
 use factordb::{
-    prelude::{AttrMapExt, Id, Item, Mutate},
+    prelude::{AttrMapExt, DataMap, Id, Mutate},
     AnyError,
 };
 use semantic_core::base::entity_title;
@@ -18,7 +18,7 @@ use crate::{
 };
 
 pub struct EntityDeleter {
-    pub item: Item,
+    pub item: DataMap,
     pub on_delete: Box<dyn Fn()>,
     pub on_cancel: Box<dyn Fn()>,
 }
@@ -47,7 +47,7 @@ impl MsgComponent for State {
 
     fn init(props: Self::Properties, _ctx: brass::component::Context<'_, Self>) -> Self {
         Self {
-            id: props.item.data.get_id(),
+            id: props.item.get_id(),
             props,
             state: Mutable::new(LoadState::Idle),
         }
@@ -77,8 +77,8 @@ impl MsgComponent for State {
     }
 
     fn render(&mut self, ctx: brass::component::Context<'_, Self>) -> TagBuilder {
-        if self.props.item.data.get_id().is_some() {
-            let title = entity_title(&self.props.item.data);
+        if self.props.item.get_id().is_some() {
+            let title = entity_title(&self.props.item);
 
             let handle = ctx.handle();
             let signal = self.state.signal_ref(move |state| match state {

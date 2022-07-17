@@ -18,8 +18,8 @@ use wasm_bindgen::JsCast;
 use web_sys::Element;
 
 use factordb::{
-    prelude::Select,
-    query::{expr::Expr, select::Item},
+    prelude::{DataMap, Select},
+    query::expr::Expr,
     schema::{builtin::AttrType, AttrMapExt, EntityDescriptor},
     AnyError,
 };
@@ -39,7 +39,7 @@ impl Render for StandalonePlayer {
 
 enum Msg {
     FilterChanged(entity_filter::EntityFilter),
-    Loaded(Result<Vec<Item>, AnyError>),
+    Loaded(Result<Vec<DataMap>, AnyError>),
     ActiveItemModalShow,
     ActiveItemModalClose,
     ToggleSettings,
@@ -64,7 +64,7 @@ struct State {
     _keydown_subscription: Option<EventSubscription>,
     player: PlayerHandle,
 
-    active_modal_item: Mutable<Option<Item>>,
+    active_modal_item: Mutable<Option<DataMap>>,
     active_modal_should_play_on_close: bool,
 
     dom_player: Option<Element>,
@@ -88,8 +88,8 @@ impl State {
         let guard = ctx.spawn_map(
             async move {
                 let select = select.with_limit(100_000);
-                let page = api.select(select).await?;
-                Ok(page.items)
+                let items = api.select(select).await?;
+                Ok(items)
             },
             Msg::Loaded,
         );
@@ -255,11 +255,10 @@ impl MsgComponent for State {
                     items
                         .iter()
                         .filter_map(|item| {
-                            let title = entity_title(&item.data);
-                            item.data
-                                .get_type_name()
+                            let title = entity_title(&item);
+                            item.get_type_name()
                                 .filter(|t| t == &Video::QUALIFIED_NAME)
-                                .and_then(|_| item.data.get_id())
+                                .and_then(|_| item.get_id())
                                 .map(|id| {
                                     let path = build_entity_blob_path(id);
                                     // TODO: add length in seconds if available (the '0' below)

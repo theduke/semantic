@@ -5,7 +5,7 @@ use brass::{
     dom::{builder::div, Render, View},
 };
 use factordb::{
-    prelude::{AttrMapExt, AttributeDescriptor, Batch, Item, Mutate, Patch, PatchOp},
+    prelude::{AttrMapExt, AttributeDescriptor, Batch, DataMap, Mutate, Patch, PatchOp},
     AnyError,
 };
 use semantic_core::base::{AttrTags, Tag};
@@ -16,7 +16,7 @@ use crate::{
 };
 
 pub struct CollectionItemTagger {
-    pub items: Vec<Item>,
+    pub items: Vec<DataMap>,
     pub on_complete: Rc<dyn Fn()>,
 }
 
@@ -32,7 +32,7 @@ enum Msg {
 }
 
 struct State {
-    items: Vec<Item>,
+    items: Vec<DataMap>,
     on_complete: Rc<dyn Fn()>,
 
     loader: Loader<()>,
@@ -68,7 +68,7 @@ impl MsgComponent for State {
                     .items
                     .iter()
                     .filter_map(|item| {
-                        let id = item.data.get_id()?;
+                        let id = item.get_id()?;
 
                         Some(Mutate::patch(id, patch.clone()))
                     })

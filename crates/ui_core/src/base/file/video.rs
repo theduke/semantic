@@ -2,8 +2,7 @@ use wasm_bindgen::JsCast;
 
 use brass::dom::{builder::div, Attr, Ev, Tag, TagBuilder, View};
 use factordb::{
-    prelude::{EntityContainer, Id},
-    query::select::Item,
+    prelude::{DataMap, EntityContainer, Id},
     schema::AttrMapExt,
 };
 use semantic_core::base::{
@@ -28,9 +27,9 @@ pub struct VideoInfo {
 }
 
 impl VideoInfo {
-    pub fn from_item(item: &Item) -> Option<Self> {
-        let id = item.data.get_id()?;
-        let url = semantic_core::base::Video::video_uri_from_map(&item.data)?;
+    pub fn from_map(item: &DataMap) -> Option<Self> {
+        let id = item.get_id()?;
+        let url = semantic_core::base::Video::video_uri_from_map(&item)?;
 
         // let url = item
         //     .data
@@ -42,9 +41,9 @@ impl VideoInfo {
         //             .map(|x| x.to_string())
         //     })?;
 
-        let mime_type = item.data.get_attr::<semantic_core::base::AttrMimeType>();
+        let mime_type = item.get_attr::<semantic_core::base::AttrMimeType>();
 
-        let preview_image_url = item.data.get_attr::<AttrPreviewImageUrl>();
+        let preview_image_url = item.get_attr::<AttrPreviewImageUrl>();
 
         Some(VideoInfo {
             id,
@@ -56,13 +55,13 @@ impl VideoInfo {
 }
 
 /// Get the video URL from an item.
-pub fn video_content(item: &Item, opts: &EntityRenderOpts) -> TagBuilder {
+pub fn video_content(item: &DataMap, opts: &EntityRenderOpts) -> TagBuilder {
     tracing::info!(?opts, "video render opts");
-    let web_uri = item.data.get_attr::<AttrBlobUriWeb>();
-    let blob_uri = item.data.get_attr::<AttrBlobUri>();
-    let id = item.data.get_id();
+    let web_uri = item.get_attr::<AttrBlobUriWeb>();
+    let blob_uri = item.get_attr::<AttrBlobUri>();
+    let id = item.get_id();
 
-    let video = Video::try_from_map(item.data.clone()).ok();
+    let video = Video::try_from_map(item.clone()).ok();
 
     // FIXME: use custom EntityBox and add optimise / preview picker as action buttons
 
@@ -83,28 +82,26 @@ pub fn video_content(item: &Item, opts: &EntityRenderOpts) -> TagBuilder {
         _ => None,
     };
 
-    let preview_picker =
-        if opts.editable && item.data.get_attr::<AttrPreviewImageBlobUri>().is_none() {
-            if let Some(video) = &video {
-                div()
-                    .class("mb-4")
-                    .and(video_preview_picker_toggle(video.clone()))
-                    .into_view()
-            } else {
-                View::Empty
-            }
+    let preview_picker = if opts.editable && item.get_attr::<AttrPreviewImageBlobUri>().is_none() {
+        if let Some(video) = &video {
+            div()
+                .class("mb-4")
+                .and(video_preview_picker_toggle(video.clone()))
+                .into_view()
         } else {
             View::Empty
-        };
+        }
+    } else {
+        View::Empty
+    };
 
-    let info = if let Some(info) = VideoInfo::from_item(item) {
+    let info = if let Some(info) = VideoInfo::from_map(item) {
         info
     } else {
         return notification_warning().and("Video can't be played.");
     };
 
     let poster = item
-        .data
         .get_attr::<AttrPreviewImageBlobUri>()
         .map(|_path| build_entity_blob_preview_image_uri(info.id))
         .or_else(|| info.preview_image_url.map(|x| x.to_string()));
@@ -134,8 +131,8 @@ pub fn video_tag(url: &str) -> TagBuilder {
     video
 }
 
-pub fn video_media(item: &Item, opts: &MediaRenderOpts) -> (TagBuilder, Option<DynMediaHandle>) {
-    if let Some(info) = VideoInfo::from_item(item) {
+pub fn video_media(item: &DataMap, opts: &MediaRenderOpts) -> (TagBuilder, Option<DynMediaHandle>) {
+    if let Some(info) = VideoInfo::from_map(item) {
         let (tag, handle) = video_player(info, opts);
         (tag, Some(handle))
     } else {

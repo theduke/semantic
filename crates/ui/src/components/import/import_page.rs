@@ -5,7 +5,7 @@ use brass::{
     dom::{builder::div, Render, TagBuilder, View},
 };
 use factordb::{
-    prelude::{AttrMapExt, AttributeDescriptor, Expr, Id, Item, Select},
+    prelude::{AttrMapExt, AttributeDescriptor, DataMap, Expr, Id, Item, Select},
     AnyError,
 };
 use semantic_core::{
@@ -65,10 +65,10 @@ struct Preview {
 #[derive(Clone)]
 struct PreviewItem {
     index: Index,
-    item: Item,
+    item: DataMap,
     url: Option<Url>,
     existing_id: Option<Id>,
-    loader: Loader<Item>,
+    loader: Loader<DataMap>,
 }
 
 struct State {
@@ -79,10 +79,10 @@ struct State {
     full_import: Loader<Vec<Item>>,
 }
 
-async fn build_preview_items(items: Vec<Item>) -> Result<Vec<PreviewItem>, AnyError> {
+async fn build_preview_items(items: Vec<DataMap>) -> Result<Vec<PreviewItem>, AnyError> {
     let old_urls: Vec<_> = items
         .iter()
-        .filter_map(|item| item.data.get_attr::<AttrUrl>())
+        .filter_map(|item| item.get_attr::<AttrUrl>())
         .map(|url| url.to_string())
         .collect();
     let filter = Expr::in_(AttrUrl::expr(), old_urls);
@@ -94,16 +94,15 @@ async fn build_preview_items(items: Vec<Item>) -> Result<Vec<PreviewItem>, AnyEr
         )
         .await?;
     let mut old_map: HashMap<Url, Id> = old_page
-        .items
         .into_iter()
-        .filter_map(|item| Some((item.data.get_attr::<AttrUrl>()?, item.data.get_id()?)))
+        .filter_map(|item| Some((item.get_attr::<AttrUrl>()?, item.get_id()?)))
         .collect();
 
     let items = items
         .into_iter()
         .enumerate()
         .map(|(index, item)| {
-            let url = item.data.get_attr::<AttrUrl>();
+            let url = item.get_attr::<AttrUrl>();
             PreviewItem {
                 index,
                 existing_id: url.as_ref().and_then(|url| old_map.remove(url)),
@@ -174,7 +173,13 @@ impl MsgComponent for State {
                     let guard = ctx.spawn_map(
                         async move {
                             let mut out = api().fetch_url(FetchUrlJob { url }).await?;
-                            let items = build_preview_items(std::mem::take(&mut out.items)).await?;
+
+                            let items = std::mem::take(&mut out.items)
+                                .into_iter()
+                                .map(|x| x.data)
+                                .collect();
+
+                            let items = build_preview_items(items).await?;
 
                             Ok((out, items))
                         },
@@ -229,7 +234,7 @@ impl MsgComponent for State {
                     return;
                 };
 
-                let url = if let Some(x) = item.item.data.get_attr::<AttrUrl>() {
+                let url = if let Some(x) = item.item.get_attr::<AttrUrl>() {
                     x
                 } else {
                     return;
@@ -272,7 +277,7 @@ impl MsgComponent for State {
                                 new_item.data.get_attr::<AttrUrl>().as_ref() == Some(&url)
                             });
                             if let Some(new) = new_item {
-                                item.loader.set_result(Ok(new));
+                                item.loader.set_result(Ok(new.data));
                             } else {
                                 item.loader.set_err("Could not import item.");
                             }
@@ -477,7 +482,7 @@ impl MsgComponent for State {
                 .and(notification_success().and(format!("Imported {} items.", items.len())))
                 .and_iter(items.iter().map(|item| {
                     EntityBox {
-                        item: item.clone(),
+                        item: item.data.clone(),
                         show_link: true,
                         options: EntityRenderOpts {
                             editable: false,

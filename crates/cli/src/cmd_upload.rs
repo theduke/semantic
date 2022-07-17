@@ -106,13 +106,11 @@ impl CmdUpload {
             let identifier = identifier.trim();
             let select =
                 semantic_core::base::Collection::query_resolve_collection_name(&identifier);
-            let page = client.select(select).await?;
+            let items = client.select(select).await?;
 
-            if let Some(item) = page.items.first() {
-                if page.items.len() == 1 {
-                    Some(semantic_core::base::Collection::try_from_map(
-                        item.data.clone(),
-                    )?)
+            if let Some(item) = items.first() {
+                if items.len() == 1 {
+                    Some(semantic_core::base::Collection::try_from_map(item.clone())?)
                 } else {
                     bail!("Could not resolve collection '{identifier}': found multiple matches");
                 }
@@ -320,12 +318,12 @@ where
                 .or_with(db::Expr::eq(AttrTagName::expr(), name)),
         );
         let select = db::Select::new().with_filter(filter);
-        let page = client.select(select).await?;
+        let items = client.select(select).await?;
 
-        if let Some(item) = page.items.first() {
-            let tag = Tag::try_from_map(item.data.clone())?;
+        if let Some(item) = items.first() {
+            let tag = Tag::try_from_map(item.clone())?;
 
-            if page.items.len() == 1 {
+            if items.len() == 1 {
                 tags.push(tag.clone());
             } else {
                 bail!("Cound not resolve tag '{name}': found multiple matches");

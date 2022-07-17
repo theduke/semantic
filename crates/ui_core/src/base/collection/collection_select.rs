@@ -24,10 +24,7 @@ impl Render for CollectionSelect {
             initial_selection: self.initial_selection.clone(),
             multi: true,
             search: Some(Box::new(move |term| {
-                Box::pin(async move {
-                    let page = super::search_collections(term).await?;
-                    Ok(page.items)
-                })
+                Box::pin(async move { super::search_collections(term).await })
             })),
             load_more: None,
             on_change: None,

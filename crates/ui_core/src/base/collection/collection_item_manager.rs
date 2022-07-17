@@ -3,7 +3,7 @@ use brass::{
     dom::{builder::div, Attr, ClickEvent, Render, TagBuilder, View},
     signal::{signal::Mutable, signal_vec::MutableVec},
 };
-use factordb::prelude::{AttrId, AttrMapExt, AttributeDescriptor, Expr, Id, Item};
+use factordb::prelude::{AttrId, AttrMapExt, AttributeDescriptor, DataMap, Expr, Id};
 use semantic_core::base::Collection;
 
 use crate::{
@@ -24,7 +24,7 @@ enum AddItemMode {
 
 pub struct CollectionItemManager {
     pub collection_id: Id,
-    pub items: MutableVec<Item>,
+    pub items: MutableVec<DataMap>,
 }
 
 impl Render for CollectionItemManager {
@@ -35,7 +35,7 @@ impl Render for CollectionItemManager {
 
 struct State {
     collection_id: Id,
-    items: MutableVec<Item>,
+    items: MutableVec<DataMap>,
     mode: Mutable<AddItemMode>,
     filter_ignored_ids: Mutable<Vec<Id>>,
     loader: Loader<()>,
@@ -44,8 +44,8 @@ struct State {
 enum Msg {
     Remove(Id),
     RemoveLoaded(Id),
-    Add(Item),
-    AddLoaded(Item),
+    Add(DataMap),
+    AddLoaded(DataMap),
 
     ModeAddExisting,
 }
@@ -87,7 +87,7 @@ impl MsgComponent for State {
             Msg::RemoveLoaded(id) => {
                 self.items
                     .lock_mut()
-                    .retain(|item| item.data.get_id() != Some(id));
+                    .retain(|item| item.get_id() != Some(id));
                 // Remove id from filter.
                 self.filter_ignored_ids.lock_mut().retain(|x| *x != id);
             }
@@ -97,7 +97,7 @@ impl MsgComponent for State {
                 }
 
                 let collection_id = self.collection_id;
-                let item_id = if let Some(id) = item.data.get_id() {
+                let item_id = if let Some(id) = item.get_id() {
                     id
                 } else {
                     return;
@@ -115,7 +115,7 @@ impl MsgComponent for State {
                 });
             }
             Msg::AddLoaded(item) => {
-                if let Some(id) = item.data.get_id() {
+                if let Some(id) = item.get_id() {
                     self.filter_ignored_ids.lock_mut().push(id);
                 }
                 self.items.lock_mut().push_cloned(item);
@@ -163,7 +163,11 @@ impl MsgComponent for State {
     }
 }
 
-fn render_item(item: &Item, registry: &Registry, on_remove: impl Fn(Id) + 'static) -> TagBuilder {
+fn render_item(
+    item: &DataMap,
+    registry: &Registry,
+    on_remove: impl Fn(Id) + 'static,
+) -> TagBuilder {
     let opts = EntityRenderOpts {
         editable: false,
         preview: true,
@@ -172,7 +176,7 @@ fn render_item(item: &Item, registry: &Registry, on_remove: impl Fn(Id) + 'stati
     let view = EntityView::from_item(item, registry, &opts);
     let view_wrap = div().class("is-flex-grow-1").and(view);
 
-    let id = item.data.get_id().unwrap_or(Id::nil());
+    let id = item.get_id().unwrap_or(Id::nil());
     let btn_remove = button()
         .and(icon_fas("fa-minus-circle"))
         .attr(Attr::Title, "Remove")

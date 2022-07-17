@@ -26,18 +26,15 @@ pub async fn load_entity_tags(id: Id) -> Result<Vec<Tag>, AnyError> {
     let tag_ids = entity.get_attr_vec::<AttrTags>();
 
     let filter = Expr::in_(Expr::attr::<AttrId>(), tag_ids);
-    let page = crate::context::api()
-        .select(Select::new().with_filter(filter).with_limit(1000))
-        .await?
-        .convert_data::<Tag>()?;
-    Ok(page.items)
+    crate::context::api()
+        .select_entities::<Tag>(Select::new().with_filter(filter).with_limit(1000))
+        .await
 }
 
 pub async fn load_all_tags() -> Result<Vec<Tag>, AnyError> {
-    let page = crate::context::api()
+    crate::context::api()
         .select_entities(Tag::query_all())
-        .await?;
-    Ok(page.items)
+        .await
 }
 
 pub async fn entity_set_tags(entity_id: Id, tags: Vec<Id>) -> Result<(), AnyError> {
