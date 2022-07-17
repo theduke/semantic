@@ -1346,6 +1346,7 @@ impl App {
 #[cfg(test)]
 mod tests {
     use factordb::{map, prelude::Batch};
+    use semantic_core::base::AttrTags;
 
     use super::*;
 
@@ -1398,8 +1399,8 @@ mod tests {
             .await
             .unwrap();
 
-            let e1 = db.entity(id1).await.unwrap();
-            let e2 = db.entity(id2).await.unwrap();
+            let _e1 = db.entity(id1).await.unwrap();
+            let _e2 = db.entity(id2).await.unwrap();
             app.tag_merge(api::TagMerge {
                 target_tag: tag1.id.into(),
                 source_tag: tag2.id.into(),
