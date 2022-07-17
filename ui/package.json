@@ -5,6 +5,7 @@
   "scripts": {
     "fmt": "prettier --write .",
     "start": "vite --port 3001",
+    "check": "tsc --noEmit",
     "dev": "vite",
     "build": "vite build",
     "serve": "vite preview"
