@@ -5,17 +5,11 @@ import {
   renderEntityTable,
   renderGenericEntityBox,
 } from "../component/entity";
-import {
-  AttributeSchema,
-  EntitySchema,
-  Item,
-  SemanticSchema,
-  Value,
-} from "./core";
+import { AttributeSchema, EntitySchema, SemanticSchema } from "./core";
 import { UiPlugin } from "./plugin";
 import { FACTOR_IDENT, FACTOR_TYPE } from "./schema";
 
-export type ValueMap = Record<string, Value>;
+export type ValueMap = Record<string, any>;
 
 export interface EntityRenderOpts {
   preview: boolean;
@@ -23,18 +17,18 @@ export interface EntityRenderOpts {
 
 export type EntityTitleRenderer = (entity: ValueMap) => JSX.Element;
 export type EntityContentRenderer = (
-  item: Item,
+  item: ValueMap,
   opts: EntityRenderOpts
 ) => JSX.Element;
-export type AttributeRenderer = (value: any, item: Item) => JSX.Element;
+export type AttributeRenderer = (value: any, item: ValueMap) => JSX.Element;
 export type EntityRenderer = (
-  item: Item,
+  item: ValueMap,
   opts: EntityRenderOpts
 ) => JSX.Element;
 export type EditableEntityRenderer = (
-  entity: Item,
+  entity: ValueMap,
   opts: EntityRenderOpts,
-  onChanged: (newItem: Item) => void
+  onChanged: (newItem: ValueMap) => void
 ) => JSX.Element;
 
 export type EntityTypeMap<T> = Record<EntityType, T>;
@@ -58,7 +52,7 @@ export class UiRegistry {
   constructor(schema: SemanticSchema) {
     this.schema = schema;
 
-    const tableRender = (item: Item) => renderEntityTable(this, item);
+    const tableRender = (item: ValueMap) => renderEntityTable(this, item);
     const attrRenderer = (attr: AttributeName, value: any) =>
       renderAttrValue(this, attr, value);
 
@@ -109,8 +103,8 @@ export class UiRegistry {
     return genericEntityTitle(entity);
   }
 
-  renderEntity(item: Item, opts: EntityRenderOpts): JSX.Element {
-    const ty = item.data[FACTOR_TYPE];
+  renderEntity(item: ValueMap, opts: EntityRenderOpts): JSX.Element {
+    const ty = item[FACTOR_TYPE];
     const render = this.entityRenderers[ty];
     if (render) {
       return render(item, opts);
@@ -120,9 +114,9 @@ export class UiRegistry {
   }
 
   renderEditableEntity(
-    item: Item,
+    item: ValueMap,
     opts: EntityRenderOpts,
-    onChanged: (newItem: Item) => void
+    onChanged: (newItem: ValueMap) => void
   ): JSX.Element {
     const ty = item.data[FACTOR_TYPE];
     const render = this.editableEntityRenderers[ty];

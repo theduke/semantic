@@ -11,8 +11,8 @@ export interface EntityBoxProps {
 export function EntityBox(props: EntityBoxProps): JSX.Element {
   return (
     <div class="card">
-      <header className="card-header">
-        <p className="card-header-title">
+      <header class="card-header">
+        <p class="card-header-title">
           <Link href={props.linkPath} style={{ color: "inherit" }}>
             {props.title}
           </Link>
@@ -21,7 +21,7 @@ export function EntityBox(props: EntityBoxProps): JSX.Element {
           </small>
         </p>
       </header>
-      <div className="card-content">{props.children}</div>
+      <div class="card-content">{props.children}</div>
     </div>
   );
 }

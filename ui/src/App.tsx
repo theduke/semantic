@@ -1,4 +1,4 @@
-import { Component, createSignal, JSX, Show } from "solid-js";
+import { createSignal, JSX, Show } from "solid-js";
 
 import { Link, Route, Router, Routes, useParams } from "solid-app-router";
 

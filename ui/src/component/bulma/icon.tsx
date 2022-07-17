@@ -21,7 +21,7 @@ export interface IconProps {
   icon: IconName;
   color?: TextColor;
   size?: IconSize;
-  isLeft: boolean;
+  isLeft?: boolean;
 }
 
 export function Icon(props: IconProps): JSX.Element {

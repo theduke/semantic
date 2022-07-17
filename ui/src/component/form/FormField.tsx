@@ -11,8 +11,8 @@ export interface FormFieldProps<T> {
 export function FormField<T>(props: FormFieldProps<T>): JSX.Element {
   return (
     <div class="field">
-      <div className="label">{props.label}</div>
-      <div className="control">{props.control}</div>
+      <div class="label">{props.label}</div>class
+      <div class="control">{props.control}</div>
       {props.help ? <p class="help">{props.help}</p> : null}
       {renderFieldErrors(props.field)}
     </div>
@@ -23,17 +23,17 @@ function renderFieldErrors(field: FieldAccessor<any>): JSX.Element {
   return (
     <>
       <Show when={field.errors()?.errors?.length ?? 0 > 0}>
-        <p className="help is-danger">
+        <p class="help is-danger">
           <For each={field.errors()?.errors ?? []}>
-            {(error) => <div className="mb-2">{error.message}</div>}
+            {(error) => <div class="mb-2">{error.message}</div>}
           </For>
         </p>
       </Show>
 
       <Show when={field.errors()?.warnings?.length ?? 0 > 0}>
-        <p className="help is-warning">
+        <p class="help is-warning">
           <For each={field.errors()?.warnings ?? []}>
-            {(error) => <div className="mb-2">{error.message}</div>}
+            {(error) => <div class="mb-2">{error.message}</div>}
           </For>
         </p>
       </Show>

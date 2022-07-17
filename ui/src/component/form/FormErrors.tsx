@@ -10,17 +10,17 @@ export function FormErrors(props: FormErrorsProps): JSX.Element {
   return (
     <>
       <Show when={form.state.validation?.form?.errors?.length ?? 0 > 0}>
-        <p className="notification is-danger">
+        <p class="notification is-danger">
           <For each={form.state.validation?.form?.errors ?? []}>
-            {(error) => <div className="mb-2">{error.message}</div>}
+            {(error) => <div class="mb-2">{error.message}</div>}
           </For>
         </p>
       </Show>
 
       <Show when={form.state.validation?.form?.warnings?.length ?? 0 > 0}>
-        <p className="notification is-warning">
+        <p class="notification is-warning">
           <For each={form.state.validation?.form?.warnings ?? []}>
-            {(warning) => <div className="mb-2">{warning.message}</div>}
+            {(warning) => <div class="mb-2">{warning.message}</div>}
           </For>
         </p>
       </Show>

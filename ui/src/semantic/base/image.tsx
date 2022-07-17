@@ -3,13 +3,15 @@ import { Modal } from "../../component/bulma/modal";
 import { NotificationWarning } from "../../component/bulma/notification";
 import { renderEntityTable } from "../../component/entity";
 import { useRegistry } from "../../context";
-import { Item } from "../core";
-import { EntityRenderOpts } from "../registry";
+import { EntityRenderOpts, ValueMap } from "../registry";
 import { FACTOR_ID, SemanticImage, SEMANTIC_DESCRIPTION } from "../schema";
 
-export function renderImage(item: Item, opts: EntityRenderOpts): JSX.Element {
+export function renderImage(
+  item: ValueMap,
+  opts: EntityRenderOpts
+): JSX.Element {
   // TODO: typechecks!
-  const data: SemanticImage = item.data as any;
+  const data: SemanticImage = item as any;
   const id = data[FACTOR_ID];
 
   let blob = data["semantic/blob_uri_web"] ?? data["semantic/blob_uri"];

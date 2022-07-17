@@ -7,7 +7,7 @@ import {
   Suspense,
   createResource,
   Show,
-  PropsWithChildren,
+  ParentProps,
 } from "solid-js";
 import { assertDefined } from "../..";
 import { NotificationError } from "../bulma/notification";
@@ -50,7 +50,7 @@ export function renderError(error: any): JSX.Element {
 
 export const SPINNER = (
   <div>
-    <button className="button is-large is-disabled is-loading" />
+    <button class="button is-large is-disabled is-loading" />
   </div>
 );
 
@@ -97,7 +97,7 @@ export function BoundarySuspenseLoader<T>(
   );
 }
 
-export function BoundarySuspense(props: PropsWithChildren): JSX.Element {
+export function BoundarySuspense(props: ParentProps): JSX.Element {
   return (
     <ErrorBoundary fallback={renderError}>
       <Suspense fallback={SPINNER}>{props.children}</Suspense>

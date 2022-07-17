@@ -116,7 +116,7 @@ function TagManager(props: TagManagerProps): JSX.Element {
           </div>
         }
       >
-        <div className="box">
+        <div class="box">
           <TagCreate onCreated={addTag} onCancel={() => setCreating(false)} />
         </div>
       </Show>

@@ -10,9 +10,13 @@ import {
 import { assertDefined } from "../..";
 import { newSelect } from "../../api";
 import { useApi, useRegistry } from "../../context";
-import { Item, Page, Select } from "../../semantic/core";
-import { EntityRenderOpts, UiRegistry } from "../../semantic/registry";
-import { GenericPage, PageTitle } from "../util";
+import { Select } from "../../semantic/core";
+import {
+  EntityRenderOpts,
+  UiRegistry,
+  ValueMap,
+} from "../../semantic/registry";
+import { GenericPage } from "../util";
 import { renderError, SPINNER } from "../util/load";
 import { MultiSelectSearch } from "../util/MultiSelect";
 
@@ -51,12 +55,12 @@ export function BrowsePage(): JSX.Element {
 
 function renderItems(
   reg: UiRegistry,
-  page: Page<Item>,
+  items: ValueMap[],
   opts: EntityRenderOpts
 ): JSX.Element {
   return (
     <div class="is-flex is-flex-direction-column mb-4" style={{ gap: "2rem" }}>
-      <For each={page.items}>{(item) => reg.renderEntity(item, opts)}</For>
+      <For each={items}>{(item) => reg.renderEntity(item, opts)}</For>
     </div>
   );
 }

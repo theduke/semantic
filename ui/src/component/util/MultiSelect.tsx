@@ -165,7 +165,7 @@ export function MultiSelectSearch<V>(props: MultiSelectProps<V>): JSX.Element {
           <input
             oninput={onInput}
             ref={inputRef}
-            className="input"
+            class="input"
             type="text"
             placeholder={props.searchPlaceholder ?? "Search..."}
           />

@@ -14,6 +14,8 @@ export const FACTOR_ENTITY_ATTRIBUTES = "factor/entityAttributes";
 export const FACTOR_EXTEND = "factor/extend";
 export const FACTOR_IS_RELATION = "factor/isRelation";
 export const FACTOR_INDEX_ATTRIBUTES = "factor/index_attributes";
+export const FACTOR_COUNT = "factor/count";
+export const SEMANTIC_PARENT_ID = "semantic/parent_id";
 export const SEMANTIC_TITLE = "semantic/title";
 export const SEMANTIC_COMMENT = "semantic/comment";
 export const SEMANTIC_DESCRIPTION = "semantic/description";
@@ -25,6 +27,10 @@ export const SEMANTIC_USERNAME = "semantic/username";
 export const SEMANTIC_TEXT_FORMAT = "semantic/text_format";
 export const SEMANTIC_CREATED_AT = "semantic/created_at";
 export const SEMANTIC_UPDATED_AT = "semantic/updated_at";
+export const SEMANTIC_VISIT_COUNT = "semantic/visit_count";
+export const SEMANTIC_LAST_VISIT_TIME = "semantic/last_visit_time";
+export const SEMANTIC_NAME = "semantic/name";
+export const SEMANTIC_SECONDARY_URL = "semantic/secondary_url";
 export const SEMANTIC_BLOB_URI = "semantic/blob_uri";
 export const SEMANTIC_BLOB_URI_WEB = "semantic/blob_uri_web";
 export const SEMANTIC_MIME_TYPE = "semantic/mime_type";
@@ -37,11 +43,17 @@ export const SEMANTIC_FILENAME = "semantic/filename";
 export const SEMANTIC_VIDEO_HAS_SOUND = "semantic/video_has_sound";
 export const SEMANTIC_SOCIAL_MEDIA_POST_CONTENT =
   "semantic/social_media_post_content";
+export const SEMANTIC_SOCIAL_MEDIA_POST_USER_ID =
+  "semantic/social_media_post_user_id";
 export const SEMANTIC_NOTE_BODY = "semantic/note_body";
 export const SEMANTIC_COLLECTION_ITEMS = "semantic/collection_items";
 export const SEMANTIC_TAG_NAME = "semantic/tag_name";
 export const SEMANTIC_TAG_PARENT = "semantic/tag_parent";
 export const SEMANTIC_TAGS = "semantic/tags";
+export const SEMANTIC_GIVEN_NAME = "semantic/given_name";
+export const SEMANTIC_FAMILY_NAME = "semantic/family_name";
+export const SEMANTIC_BIRTHDATE = "semantic/birthdate";
+export const SEMANTIC_GENDER = "semantic/gender";
 
 export type EntityId = string;
 export type Ident = EntityId | string;
@@ -131,6 +143,7 @@ export interface SemanticSocialMediaPost extends BaseEntity {
   "semantic/title"?: string | null;
   "semantic/url"?: Url | null;
   "semantic/username"?: string | null;
+  "semantic/social_media_post_user_id"?: EntityId | null;
   "semantic/social_media_post_content": EntityId[];
 }
 
@@ -158,4 +171,17 @@ export interface SemanticTag extends BaseEntity {
   "semantic/tag_name": string;
   "semantic/description"?: string | null;
   "semantic/tag_parent"?: EntityId | null;
+}
+
+export const TY_SEMANTIC_PERSON = "semantic/Person";
+export interface SemanticPerson extends BaseEntity {
+  "factor/type": "semantic/Person";
+  "factor/ident"?: string | null;
+  "semantic/description"?: string | null;
+  "semantic/url"?: Url | null;
+  "semantic/name"?: string | null;
+  "semantic/given_name"?: string | null;
+  "semantic/family_name"?: EntityId | null;
+  "semantic/birthdate"?: EntityId | null;
+  "semantic/gender"?: "male" | "female" | null;
 }

@@ -2,6 +2,7 @@ const API_ENDPOINT = "/api/query";
 
 import * as core from "./semantic/core";
 import { exprEq } from "./semantic/db";
+import { ValueMap } from "./semantic/registry";
 import { FACTOR_ID, SemanticTag } from "./semantic/schema";
 
 export function newSelect(): core.Select {
@@ -12,6 +13,7 @@ export function newSelect(): core.Select {
     offset: 0 as any,
     cursor: null,
     variables: {},
+    aggregate: [],
     sort: [],
     joins: [],
   };
@@ -45,8 +47,10 @@ type ReplyKeys = KeysOfUnion<core.Reply>;
 
 async function fetchApi<R>(key: ReplyKeys, query: core.Query): Promise<R> {
   const reply = await fetchApiRaw(query);
-  if (!(key in reply)) {
-    throw new Error("API returned malformed response");
+  if (!(key in (reply as object))) {
+    throw new Error(
+      `API returned malformed response: exptected ${key.toString()}`
+    );
   }
   return (reply as any)[key];
 }
@@ -64,17 +68,17 @@ export class Api {
     return fetchApi<void>("CloseBackend", { CloseBackend: null });
   }
 
-  async select(param: core.Select): Promise<core.Page<core.Item>> {
+  async select(param: core.Select): Promise<ValueMap[]> {
     return fetchApi("Select", { Select: param });
   }
 
-  async entity(ident: core.IdOrIdent): Promise<core.Item> {
+  async entity(ident: core.IdOrIdent): Promise<ValueMap> {
     const page = await this.select({
       ...newSelect(),
       filter: exprEq({ Attr: FACTOR_ID }, { Ident: ident }),
     });
 
-    const item = page.items[0];
+    const item = page[0];
     if (!item) {
       throw new Error(`Entity ${ident} not found`);
     }

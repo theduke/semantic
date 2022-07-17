@@ -1,5 +1,9 @@
 import { JSX } from "solid-js";
-import { EntityRenderOpts, UiRegistry } from "../../semantic/registry";
+import {
+  EntityRenderOpts,
+  UiRegistry,
+  ValueMap,
+} from "../../semantic/registry";
 import { Temporal } from "@js-temporal/polyfill";
 import { Link } from "solid-app-router";
 import { EntityBox } from "./EntityBox";
@@ -9,13 +13,12 @@ import {
   genericEntityTitle,
 } from "../../semantic";
 import {
-  FACTOR_ID,
   FACTOR_IDENT,
   FACTOR_TITLE,
   FACTOR_TYPE,
   FACTOR_VALUE_TYPE,
 } from "../../semantic/schema";
-import { EntitySchema, Expr, Item, Sort } from "../../semantic/core";
+import { EntitySchema } from "../../semantic/core";
 
 export function rendererValue(value: any): JSX.Element {
   const ty = typeof value;
@@ -109,7 +112,10 @@ export function renderAttrValue(
   return rendererValue(value);
 }
 
-export function renderEntityTable(reg: UiRegistry, item: Item): JSX.Element {
+export function renderEntityTable(
+  reg: UiRegistry,
+  item: ValueMap
+): JSX.Element {
   const rows = Object.entries(item.data).map(([attr, value]) => {
     const name = reg.attrs[attr]?.["factor/title"] ?? attr;
     const rendered = renderAttrValue(reg, attr, value);
@@ -127,7 +133,7 @@ export function renderEntityTable(reg: UiRegistry, item: Item): JSX.Element {
 export function renderEntityBox(
   reg: UiRegistry,
   schema: EntitySchema,
-  item: Item,
+  item: ValueMap,
   opts: EntityRenderOpts
 ): JSX.Element {
   // TODO: wrap in nested function to cache lookups.
@@ -152,7 +158,7 @@ export function renderEntityBox(
 
 export function renderGenericEntityBox(
   reg: UiRegistry,
-  item: Item,
+  item: ValueMap,
   opts: EntityRenderOpts
 ): JSX.Element {
   const ty = item.data[FACTOR_TYPE];

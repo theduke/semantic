@@ -2,13 +2,15 @@ import { JSX } from "solid-js";
 import { NotificationWarning } from "../../component/bulma/notification";
 import { renderEntityTable } from "../../component/entity";
 import { useRegistry } from "../../context";
-import { Item } from "../core";
-import { EntityRenderOpts } from "../registry";
+import { EntityRenderOpts, ValueMap } from "../registry";
 import { FACTOR_ID, SemanticVideo, SEMANTIC_DESCRIPTION } from "../schema";
 
-export function renderVideo(item: Item, opts: EntityRenderOpts): JSX.Element {
+export function renderVideo(
+  item: ValueMap,
+  opts: EntityRenderOpts
+): JSX.Element {
   // TODO: typechecks!
-  const data: SemanticVideo = item.data as any;
+  const data: SemanticVideo = item as any;
 
   const id = data[FACTOR_ID];
 

@@ -7,7 +7,7 @@ export interface InputFieldProps
   placeholder?: string;
 }
 
-export function InputField(props: InputFieldPropsement): JSX.Element {
+export function InputField(props: InputFieldProps): JSX.Element {
   return (
     <FormField
       {...props}

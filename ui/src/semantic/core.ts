@@ -9,12 +9,14 @@ export type Mutate =
   | { Replace: Replace }
   | { Merge: Merge }
   | { Patch: EntityPatch }
-  | { Delete: Delete };
+  | { Delete: Delete }
+  | { Select: MutateSelect };
 
 export interface Select {
   filter: Expr | null;
   joins: Array<Join>;
   sort: Array<Sort>;
+  aggregate: Array<Aggregation>;
   variables: Record<string, Value>;
   limit: bigint;
   offset: bigint;
@@ -135,6 +137,7 @@ export type ValueType =
   | "DateTime"
   | "Url"
   | "Ref"
+  | { RefConstrained: ConstrainedRefType }
   | { Const: Value };
 
 export interface ObjectType {
@@ -208,11 +211,31 @@ export interface Replace {
   data: Record<string, any>;
 }
 
+export interface Aggregation {
+  name: string;
+  op: AggregationOp;
+}
+
+export type AggregationOp = "Count";
+
+export interface ConstrainedRefType {
+  allowed_entity_types: Array<IdOrIdent>;
+}
+
+export interface MutateSelect {
+  filter: Expr;
+  variables: Record<string, Value>;
+  action: MutateSelectAction;
+}
+
+export type MutateSelectAction = "Delete" | { Patch: Patch };
+
 export type Query =
   | { ServerStatus: null }
   | { Initialize: BackendConfig }
   | { CloseBackend: null }
   | { Select: Select }
+  | { QuerySql: QuerySql }
   | { Mutate: Mutate }
   | { Batch: Batch }
   | { Schema: null }
@@ -222,18 +245,34 @@ export type Query =
   | { PluginDelete: PluginDelete }
   | { PluginTestFetch: PluginTestFetch }
   | { TagCreate: TagCreate }
+  | { TagMerge: TagMerge }
   | { Import: ImportJob }
   | { FetchUrl: FetchUrlJob }
   | { OptimiseVideo: OptimiseVideo }
   | { FileDiscardUnOptimized: FileDiscardUnOptimized }
   | { FileDiscardOptimised: FileDiscardUnOptimized }
   | { FileCreatePreviewImageBlob: FileCreatePreviewImageBlob }
+  | { RecordEntityVisit: RecordEntityVisit }
   | { HttpFetch: SimpleHttpRequest }
   | { JobStatus: string }
   | { ConvertFile: ConvertFile }
   | { FindUnusedBlobs: null }
   | { DeleteUnusedBlobs: null }
   | { AnalyzeMedia: { force: boolean } };
+
+export interface TagMerge {
+  target_tag: IdOrIdent;
+  source_tag: IdOrIdent;
+}
+
+export interface RecordEntityVisit {
+  entity_id: Id;
+  time: Timestamp | null;
+}
+
+export interface QuerySql {
+  query: string;
+}
 
 export interface TagCreate {
   name: string;
@@ -309,7 +348,7 @@ export interface BackendStatus {
   storage_size: bigint | null;
 }
 
-export type DbConfig = { Crypto: BackendCryptoConfig };
+export type DbConfig = "InMemory" | { Crypto: BackendCryptoConfig };
 
 export interface BackendCryptoConfig {
   data_path: string | null;
@@ -318,6 +357,7 @@ export interface BackendCryptoConfig {
   salt: string | null;
   raw: boolean;
   offset: bigint | null;
+  full_index_write_interval: bigint | null;
 }
 
 export interface Job {
@@ -400,7 +440,8 @@ export type Reply =
   | { ServerStatus: ServerStatus }
   | { Initialize: SemanticSchema }
   | { CloseBackend: null }
-  | { Select: Page<Item> }
+  | { Select: Array<Record<string, any>> }
+  | { QuerySql: Array<Record<string, any>> }
   | { Mutate: null }
   | { Batch: null }
   | { Schema: SemanticSchema }
@@ -410,6 +451,7 @@ export type Reply =
   | { PluginDelete: null }
   | { PluginTestFetch: FetchUrlOutput | null }
   | { TagCreate: Record<string, any> }
+  | "TagMerge"
   | { Import: ImportOutput }
   | { FetchUrl: FetchUrlOutput }
   | { HttpFetch: SimpleHttpResponse }
@@ -417,6 +459,7 @@ export type Reply =
   | { FileDiscardOptimised: null }
   | { FileDiscardUnOptimised: null }
   | { FileCreatePreviewImageBlob: null }
+  | "RecordEntityVisit"
   | { JobStatus: Job }
   | { ConvertFile: Job }
   | { FindUnusedBlobs: { items: Array<BlobInfo> } }
