@@ -356,9 +356,8 @@ fn gen_typescript() -> Result<(), DynError> {
     let res = Command::new("cargo")
         .args(&[
             "run",
-            "--release",
             "-p",
-            "semantic",
+            "semantic_cli",
             "--",
             "generate-typescript",
         ])
