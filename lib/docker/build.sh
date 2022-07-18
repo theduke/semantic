@@ -89,6 +89,7 @@ function build_semantic() {
 
   # Must run twice, for whatever reason...
   git clone /host /build || echo nope
+  rm -rf /build
   git clone /host /build
   cd /build
   export CARGO_NET_GIT_FETCH_WITH_CLI="true"
