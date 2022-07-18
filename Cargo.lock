@@ -679,7 +679,7 @@ dependencies = [
 [[package]]
 name = "factor_engine"
 version = "0.1.0"
-source = "git+https://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@github.com/theduke/factordb.git?branch=main#6ef3182b295efc6f2dc4bcf14b02d24d60a4d048"
+source = "git+https://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@github.com/theduke/factordb.git?branch=main#d990a7950e2dceff51a2664db470981da38965e8"
 dependencies = [
  "anyhow",
  "chrono",
@@ -701,7 +701,7 @@ dependencies = [
 [[package]]
 name = "factor_macros"
 version = "0.1.0"
-source = "git+https://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@github.com/theduke/factordb.git?branch=main#6ef3182b295efc6f2dc4bcf14b02d24d60a4d048"
+source = "git+https://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@github.com/theduke/factordb.git?branch=main#d990a7950e2dceff51a2664db470981da38965e8"
 dependencies = [
  "Inflector",
  "proc-macro2",
@@ -712,7 +712,7 @@ dependencies = [
 [[package]]
 name = "factor_tools"
 version = "0.1.0"
-source = "git+https://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@github.com/theduke/factordb.git?branch=main#6ef3182b295efc6f2dc4bcf14b02d24d60a4d048"
+source = "git+https://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@github.com/theduke/factordb.git?branch=main#d990a7950e2dceff51a2664db470981da38965e8"
 dependencies = [
  "Inflector",
  "anyhow",
@@ -722,7 +722,7 @@ dependencies = [
 [[package]]
 name = "factordb"
 version = "0.1.0"
-source = "git+https://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@github.com/theduke/factordb.git?branch=main#6ef3182b295efc6f2dc4bcf14b02d24d60a4d048"
+source = "git+https://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@github.com/theduke/factordb.git?branch=main#d990a7950e2dceff51a2664db470981da38965e8"
 dependencies = [
  "anyhow",
  "chrono",
