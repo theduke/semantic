@@ -937,10 +937,11 @@ impl App {
         &self,
         output: impl std::io::Write + Send + Sync + 'static,
         compression: Option<crate::util::Compression>,
+        skip_blobs: bool,
     ) -> Result<(), AnyError> {
         #[cfg(feature = "archive")]
         {
-            crate::util::archive::build_archive(self, output, compression).await
+            crate::util::archive::build_archive(self, output, compression, skip_blobs).await
         }
 
         #[cfg(not(feature = "archive"))]

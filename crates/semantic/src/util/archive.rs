@@ -20,6 +20,7 @@ pub async fn build_archive(
     app: &App,
     output: impl std::io::Write + Send + 'static,
     compression: Option<Compression>,
+    skip_blobs: bool,
 ) -> Result<(), AnyError> {
     let db = app.require_db()?;
 
@@ -37,8 +38,10 @@ pub async fn build_archive(
     while let Some(res) = stream.next().await {
         let (_id, map) = res?;
 
-        if let Some(path) = map.get_attr::<AttrBlobUri>() {
-            blob_paths.insert(path);
+        if !skip_blobs {
+            if let Some(path) = map.get_attr::<AttrBlobUri>() {
+                blob_paths.insert(path);
+            }
         }
 
         let serialized = serde_json::to_vec(&map)?;
@@ -71,31 +74,34 @@ pub async fn build_archive(
 
     tracing::debug!(blob_count=%blob_paths.len(), "starting blob export");
 
-    let mut blob = app.require_blob()?;
-    for (index, path) in blob_paths.iter().enumerate() {
-        let meta = blob
-            .get_meta(&path)
-            .await?
-            .ok_or_else(|| anyhow!("Blob not found: '{path}'"))?;
+    if !skip_blobs {
+        let mut blob = app.require_blob()?;
+        for (index, path) in blob_paths.iter().enumerate() {
+            let meta = blob
+                .get_meta(&path)
+                .await?
+                .ok_or_else(|| anyhow!("Blob not found: '{path}'"))?;
 
-        let full_path = format!("_blobs/{path}");
-        let reader = blob.get_std_reader(&path).await?;
+            let full_path = format!("_blobs/{path}");
+            let reader = blob.get_std_reader(&path).await?;
 
-        let items = tokio::task::spawn_blocking(move || -> Result<(DynBlobStore, _), AnyError> {
-            let mut header = tar::Header::new_gnu();
-            header.set_size(meta.size);
-            header.set_cksum();
+            let items =
+                tokio::task::spawn_blocking(move || -> Result<(DynBlobStore, _), AnyError> {
+                    let mut header = tar::Header::new_gnu();
+                    header.set_size(meta.size);
+                    header.set_cksum();
 
-            tar.append_data(&mut header, &full_path, reader)?;
+                    tar.append_data(&mut header, &full_path, reader)?;
 
-            Ok((blob, tar))
-        })
-        .await??;
-        blob = items.0;
-        tar = items.1;
+                    Ok((blob, tar))
+                })
+                .await??;
+            blob = items.0;
+            tar = items.1;
 
-        if index % 100 == 0 {
-            tracing::debug!("exported {}/{} blobs", index + 1, blob_paths.len());
+            if index % 100 == 0 {
+                tracing::debug!("exported {}/{} blobs", index + 1, blob_paths.len());
+            }
         }
     }
 

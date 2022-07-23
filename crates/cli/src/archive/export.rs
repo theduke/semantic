@@ -18,6 +18,10 @@ pub struct ArchiveExportCmd {
     #[clap(long)]
     no_gzip: bool,
 
+    /// Do not include any blobs (files) in the archive, only semantic entities.
+    #[clap(long)]
+    skip_blobs: bool,
+
     /// Path where the export should be written.
     ///
     /// If not given, data is written to stdout.
@@ -65,10 +69,10 @@ impl ArchiveExportCmd {
             let f = std::fs::File::create(path)?;
             let writer = std::io::BufWriter::new(f);
 
-            app.build_export(writer, compression).await
+            app.build_export(writer, compression, self.skip_blobs).await
         } else {
             let writer = std::io::stdout();
-            app.build_export(writer, compression).await
+            app.build_export(writer, compression, self.skip_blobs).await
         }
     }
 }
