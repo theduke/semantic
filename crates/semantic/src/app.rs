@@ -775,6 +775,7 @@ impl App {
         tracing::trace!("starting import");
 
         let output = self.require_plugins()?.import(job.clone()).await?;
+        tracing::trace!(?output, "plugin import data acquired");
         let items = Item::flatten_list(output.items);
 
         let db = self.require_db()?;
@@ -792,6 +793,7 @@ impl App {
             .map(|merge| query::mutate::Mutate::Merge(merge.clone()))
             .collect();
         let batch = query::mutate::Batch { actions };
+        tracing::trace!(?batch, "persisting import batch");
 
         db.batch(batch).await?;
 
@@ -821,6 +823,8 @@ impl App {
     ) -> Result<(), AnyError> {
         let db = self.require_db()?;
         let blob = self.require_blob()?;
+
+        tracing::trace!(entity_id=%id, "starting entity blob content download");
 
         let data = db.entity(id).await?;
 
