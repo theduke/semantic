@@ -32,7 +32,7 @@ pub async fn build_archive(
     tracing::debug!("starting database export");
     let mut entity_count = 0;
 
-    let mut stream = crate::db::EntitiesOrderedStream::new(db.clone(), 1_000);
+    let mut stream = crate::db::EntitiesOrderedStream::new(db.clone(), 1_000).await?;
 
     while let Some(res) = stream.next().await {
         let (_id, map) = res?;

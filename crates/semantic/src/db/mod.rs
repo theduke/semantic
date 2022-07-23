@@ -7,7 +7,7 @@ use anyhow::bail;
 use factordb::{
     prelude::{
         AttrId, AttrMapExt, AttributeDescriptor, Batch, DataMap, Db, Expr, Id, Item, Migration,
-        Page, Select,
+        Page, Select, Value, ValueMap,
     },
     query::mutate,
 };
@@ -34,9 +34,33 @@ fn build_plugin_migration_name(
     Ok(format!("plugin/{}/{}", plugin.name(), flat_name))
 }
 
+fn filter_allowed_value(value: Value, all_ids: &HashSet<Id>) -> Option<Value> {
+    if let Some(id) = value.as_id() {
+        if all_ids.contains(&id) {
+            Some(value)
+        } else {
+            None
+        }
+    } else if let Some(list) = value.as_list() {
+        let clean = list
+            .to_vec()
+            .into_iter()
+            .filter_map(|x| filter_allowed_value(x, all_ids))
+            .collect::<Vec<_>>();
+        if clean.is_empty() {
+            None
+        } else {
+            Some(Value::List(clean))
+        }
+    } else {
+        Some(value)
+    }
+}
+
 pin_project_lite::pin_project! {
     pub struct EntitiesOrderedStream {
         db: Db,
+        all_ids: HashSet<Id>,
         select_limit: u64,
         handled_ids: HashSet<Id>,
         pending_entities: HashMap<Id, DataMap>,
@@ -51,9 +75,32 @@ pin_project_lite::pin_project! {
 }
 
 impl EntitiesOrderedStream {
-    pub fn new(db: Db, select_limit: u64) -> Self {
-        Self {
+    pub async fn new(db: Db, select_limit: u64) -> Result<Self, anyhow::Error> {
+        let mut all_ids = HashSet::new();
+
+        let mut last_id = Id::nil();
+        loop {
+            let filter = Expr::gt(Expr::attr::<AttrId>(), last_id.clone());
+            let select = Select::new()
+                .with_limit(select_limit)
+                .with_filter(filter)
+                .with_sort(Expr::attr::<AttrId>(), factordb::prelude::Order::Asc);
+            let items = db.select_map(select).await?;
+
+            if items.is_empty() {
+                break;
+            }
+
+            for item in items {
+                let id = item.get_id().unwrap();
+                last_id = id;
+                all_ids.insert(id);
+            }
+        }
+
+        Ok(Self {
             db,
+            all_ids,
             select_limit,
             handled_ids: HashSet::new(),
             pending_entities: HashMap::new(),
@@ -61,7 +108,7 @@ impl EntitiesOrderedStream {
             queries_finished: false,
             popqueue: VecDeque::new(),
             next_page_future: None,
-        }
+        })
     }
 }
 
@@ -92,7 +139,17 @@ impl futures::stream::Stream for EntitiesOrderedStream {
                             tracing::info!("all entities loaded, forwarding remaining entities...");
                         } else {
                             for item in items {
-                                let data = item.data;
+                                let raw_data = item.data;
+                                let clean_data = raw_data
+                                    .0
+                                    .into_iter()
+                                    .filter_map(|(key, value)| {
+                                        let val = filter_allowed_value(value, &this.all_ids)?;
+                                        Some((key, val))
+                                    })
+                                    .collect();
+                                let data = ValueMap(clean_data);
+
                                 let id = data.get_id().unwrap();
                                 *this.last_id = id;
 
@@ -112,33 +169,40 @@ impl futures::stream::Stream for EntitiesOrderedStream {
                                     this.popqueue.push_back((id, data));
                                 }
                             }
+                        }
 
-                            // Clean up pending entities.
+                        // Clean up pending entities.
 
-                            loop {
-                                let ready_entity_ids = this
-                                    .pending_entities
-                                    .iter()
-                                    .filter_map(|(id, data)| {
-                                        let has_unmet_dependencies = entity_data_related_ids(&data)
-                                            .any(|x| !this.handled_ids.contains(&x));
-                                        if has_unmet_dependencies {
-                                            None
-                                        } else {
-                                            Some(id.clone())
+                        loop {
+                            let ready_entity_ids = this
+                                .pending_entities
+                                .iter()
+                                .filter_map(|(id, data)| {
+                                    let missing_ids =
+                                        entity_data_related_ids(&data).collect::<Vec<_>>();
+                                    let has_unmet_dependencies =
+                                        missing_ids.iter().any(|x| !this.handled_ids.contains(&x));
+                                    if has_unmet_dependencies {
+                                        if *this.queries_finished {
+                                            eprintln!(
+                                                "Missing ids for entity id {id}: {missing_ids:?}"
+                                            );
                                         }
-                                    })
-                                    .collect::<Vec<_>>();
+                                        None
+                                    } else {
+                                        Some(id.clone())
+                                    }
+                                })
+                                .collect::<Vec<_>>();
 
-                                if ready_entity_ids.is_empty() {
-                                    break;
-                                }
+                            if ready_entity_ids.is_empty() {
+                                break;
+                            }
 
-                                for id in &ready_entity_ids {
-                                    let data = this.pending_entities.remove(id).unwrap();
-                                    this.handled_ids.insert(*id);
-                                    this.popqueue.push_back((*id, data));
-                                }
+                            for id in &ready_entity_ids {
+                                let data = this.pending_entities.remove(id).unwrap();
+                                this.handled_ids.insert(*id);
+                                this.popqueue.push_back((*id, data));
                             }
                         }
                     }
@@ -160,7 +224,8 @@ impl futures::stream::Stream for EntitiesOrderedStream {
                 continue;
             } else if !this.pending_entities.is_empty() {
                 return Poll::Ready(Some(Err(anyhow::anyhow!(
-                    "Deadlock while resolving entity dependencies"
+                    "Deadlock while resolving entity dependencies: {}",
+                    serde_json::to_string_pretty(&this.pending_entities).unwrap(),
                 ))));
             } else {
                 return Poll::Ready(None);
@@ -246,7 +311,7 @@ pub async fn compact_db_history(
         // TODO: lock database to prevent stale data!
 
         let mut batch = Batch::new();
-        let mut stream = EntitiesOrderedStream::new(db.clone(), select_window_size);
+        let mut stream = EntitiesOrderedStream::new(db.clone(), select_window_size).await?;
 
         while let Some(res) = stream.next().await {
             let (id, data) = res?;
@@ -328,12 +393,21 @@ pub async fn compact_db_history(
 }
 
 fn entity_data_related_ids(data: &DataMap) -> impl Iterator<Item = Id> + '_ {
-    data.iter().filter_map(|(key, value)| match (key, value) {
-        (key, factordb::prelude::Value::Id(id)) if key != AttrId::QUALIFIED_NAME => {
-            Some(id.clone())
-        }
-        _ => None,
-    })
+    data.iter()
+        .map(|(key, value)| -> Vec<Id> {
+            if let Some(id) = value.as_id() {
+                if key != AttrId::QUALIFIED_NAME {
+                    return vec![id];
+                } else {
+                    vec![]
+                }
+            } else if let Some(list) = value.as_list() {
+                list.iter().filter_map(|x| x.as_id()).collect::<Vec<_>>()
+            } else {
+                vec![]
+            }
+        })
+        .flatten()
 }
 
 #[cfg(test)]
