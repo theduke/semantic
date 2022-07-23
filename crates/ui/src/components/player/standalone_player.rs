@@ -55,6 +55,7 @@ struct State {
     base_filter: Expr,
     select: Select,
 
+    #[allow(dead_code)]
     track_visits: bool,
 
     fullscreen: bool,
