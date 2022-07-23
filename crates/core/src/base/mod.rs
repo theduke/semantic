@@ -67,6 +67,18 @@ pub struct AttrCreatedAt(Timestamp);
 pub struct AttrUpdatedAt(Timestamp);
 
 #[derive(Attribute)]
+#[factor(namespace = "semantic", title = "Parent", name = "parent", index)]
+pub struct AttrParent(Id);
+
+#[derive(Attribute)]
+#[factor(
+    namespace = "semantic",
+    title = "Embedded in parent",
+    name = "embedded_in_parent"
+)]
+pub struct AttrEmbeddedInParent(bool);
+
+#[derive(Attribute)]
 #[factor(
     namespace = "semantic",
     title = "Visit count",
@@ -219,6 +231,8 @@ impl Plugin for SemanticBasePlugin {
                     AttrLastVisitTime::schema(),
                     AttrName::schema(),
                     AttrSecondaryUrl::schema(),
+                    AttrParent::schema(),
+                    AttrEmbeddedInParent::schema(),
                     // file
                     AttrBlobUri::schema(),
                     AttrBlobUriWeb::schema(),
@@ -270,26 +284,210 @@ impl Plugin for SemanticBasePlugin {
 
     fn migrations(&self) -> Vec<migrate::Migration> {
         let first = Migration::with_name("semantic/base/v1")
-            .attr_create(AttrTitle::schema())
-            .attr_create(AttrDateTime::schema())
-            .attr_create(AttrDescription::schema())
-            .attr_create(AttrUrl::schema())
-            .attr_create(AttrPreviewImageUrl::schema())
-            .attr_create(AttrUsername::schema())
-            .attr_create(AttrBlobUri::schema())
-            .attr_create(AttrMimeType::schema())
-            .attr_create(AttrHash::schema())
-            .attr_create(AttrOriginalHash::schema())
-            .attr_create(AttrDuration::schema())
-            .attr_create(AttrFileSize::schema())
-            .attr_create(AttrDownloadUrl::schema())
-            .attr_create(AttrFileName::schema())
-            .attr_create(AttrSocialMediaPostContent::schema())
-            .attr_create(notes::AttrNoteBody::schema())
-            .attr_create(collection::AttrCollectionItem::schema())
-            .attr_create(tags::AttrTagName::schema())
-            .attr_create(tags::AttrTagParent::schema())
-            .attr_create(tags::AttrTags::schema())
+            .attr_create(AttributeSchema {
+                id: Id::nil(),
+                ident: "semantic/title".to_string(),
+                title: Some("Title".to_string()),
+                description: None,
+                value_type: ValueType::String,
+                unique: false,
+                index: false,
+                strict: false,
+            })
+            .attr_create(AttributeSchema {
+                id: Id::nil(),
+                ident: "semantic/datetime".to_string(),
+                title: Some("Datetime".to_string()),
+                description: None,
+                value_type: ValueType::DateTime,
+                unique: false,
+                index: false,
+                strict: false,
+            })
+            .attr_create(AttributeSchema {
+                id: Id::nil(),
+                ident: "semantic/description".to_string(),
+                title: Some("Description".to_string()),
+                description: None,
+                value_type: ValueType::String,
+                unique: false,
+                index: false,
+                strict: false,
+            })
+            .attr_create(AttributeSchema {
+                id: Id::nil(),
+                ident: "semantic/url".to_string(),
+                title: Some("Url".to_string()),
+                description: None,
+                value_type: ValueType::Url,
+                unique: false,
+                index: false,
+                strict: false,
+            })
+            .attr_create(AttributeSchema {
+                id: Id::nil(),
+                ident: "semantic/preview_image_url".to_string(),
+                title: Some("Preview".to_string()),
+                description: None,
+                value_type: ValueType::Url,
+                unique: false,
+                index: false,
+                strict: false,
+            })
+            .attr_create(AttributeSchema {
+                id: Id::nil(),
+                ident: "semantic/username".to_string(),
+                title: Some("Username".to_string()),
+                description: None,
+                value_type: ValueType::String,
+                unique: false,
+                index: false,
+                strict: false,
+            })
+            .attr_create(AttributeSchema {
+                id: Id::nil(),
+                ident: "semantic/blob_uri".to_string(),
+                title: Some("Blob".to_string()),
+                description: None,
+                value_type: ValueType::String,
+                unique: false,
+                index: false,
+                strict: false,
+            })
+            .attr_create(AttributeSchema {
+                id: Id::nil(),
+                ident: "semantic/mime_type".to_string(),
+                title: Some("MIME Type".to_string()),
+                description: None,
+                value_type: ValueType::String,
+                unique: false,
+                index: false,
+                strict: false,
+            })
+            .attr_create(AttributeSchema {
+                id: Id::nil(),
+                ident: "semantic/hash".to_string(),
+                title: Some("Content Hash".to_string()),
+                description: None,
+                value_type: ValueType::String,
+                unique: false,
+                index: false,
+                strict: false,
+            })
+            // create original hash schema
+            .attr_create(AttributeSchema {
+                id: Id::nil(),
+                ident: "semantic/original_hash".to_string(),
+                title: Some("Original Content Hash".to_string()),
+                description: None,
+                value_type: ValueType::String,
+                unique: false,
+                index: false,
+                strict: false,
+            })
+            // create duration schema
+            .attr_create(AttributeSchema {
+                id: Id::nil(),
+                ident: "semantic/duration".to_string(),
+                title: Some("Duration".to_string()),
+                description: None,
+                // TODO: this should be UInt!
+                value_type: ValueType::Int,
+                unique: false,
+                index: false,
+                strict: false,
+            })
+            .attr_create(AttributeSchema {
+                id: Id::nil(),
+                ident: "semantic/file_size".to_string(),
+                title: Some("Size".to_string()),
+                description: None,
+                // TODO: this should be UInt!
+                value_type: ValueType::Int,
+                unique: false,
+                index: false,
+                strict: false,
+            })
+            .attr_create(AttributeSchema {
+                id: Id::nil(),
+                ident: "semantic/download_url".to_string(),
+                title: Some("Download URL".to_string()),
+                description: None,
+                value_type: ValueType::Url,
+                unique: false,
+                index: false,
+                strict: false,
+            })
+            .attr_create(AttributeSchema {
+                id: Id::nil(),
+                ident: "semantic/filename".to_string(),
+                title: Some("Filename".to_string()),
+                description: None,
+                value_type: ValueType::String,
+                unique: false,
+                index: false,
+                strict: false,
+            })
+            .attr_create(AttributeSchema {
+                id: Id::nil(),
+                ident: "semantic/social_media_post_content".to_string(),
+                title: Some("Content".to_string()),
+                description: None,
+                value_type: ValueType::Ref,
+                unique: false,
+                index: false,
+                strict: false,
+            })
+            .attr_create(AttributeSchema {
+                id: Id::nil(),
+                ident: "semantic/note_body".to_string(),
+                title: Some("Note".to_string()),
+                description: None,
+                value_type: ValueType::String,
+                unique: false,
+                index: false,
+                strict: false,
+            })
+            .attr_create(AttributeSchema {
+                id: Id::nil(),
+                ident: "semantic/collection_items".to_string(),
+                title: Some("Items".to_string()),
+                description: None,
+                value_type: ValueType::Ref,
+                unique: false,
+                index: false,
+                strict: false,
+            })
+            .attr_create(AttributeSchema {
+                id: Id::nil(),
+                ident: "semantic/tag_name".to_string(),
+                title: Some("Tag Name".to_string()),
+                description: None,
+                value_type: ValueType::String,
+                unique: false,
+                index: false,
+                strict: false,
+            })
+            .attr_create(AttributeSchema {
+                id: Id::nil(),
+                ident: "semantic/tag_parent".to_string(),
+                title: Some("Tag Parent".to_string()),
+                description: None,
+                value_type: ValueType::Ref,
+                unique: false,
+                index: false,
+                strict: false,
+            })
+            .attr_create(AttributeSchema {
+                id: Id::nil(),
+                ident: "semantic/tags".to_string(),
+                title: Some("Tags".to_string()),
+                description: None,
+                value_type: ValueType::Ref,
+                unique: false,
+                index: false,
+                strict: false,
+            })
             .entity_create(EntitySchema {
                 id: Id::nil(),
                 ident: File::QUALIFIED_NAME.to_string(),
@@ -344,7 +542,15 @@ impl Plugin for SemanticBasePlugin {
                 extends: vec![],
                 strict: false,
             })
-            .entity_create(Image::schema())
+            .entity_create(EntitySchema {
+                id: Id::nil(),
+                ident: Image::QUALIFIED_NAME.to_string(),
+                title: Some("Image".to_string()),
+                description: None,
+                attributes: vec![],
+                extends: vec![File::IDENT],
+                strict: false,
+            })
             .entity_create(EntitySchema {
                 id: Id::nil(),
                 ident: Video::IDENT.to_string(),
@@ -405,14 +611,86 @@ impl Plugin for SemanticBasePlugin {
                 extends: vec![],
                 strict: false,
             })
-            .entity_create(collection::Collection::schema())
-            .entity_create(tags::Tag::schema());
+            .entity_create(EntitySchema {
+                id: Id::nil(),
+                ident: Collection::QUALIFIED_NAME.to_string(),
+                title: Some("Collection".to_string()),
+                description: None,
+                attributes: vec![
+                    EntityAttribute {
+                        attribute: AttrIdent::IDENT,
+                        cardinality: Cardinality::Optional,
+                    },
+                    EntityAttribute {
+                        attribute: AttrUrl::IDENT,
+                        cardinality: Cardinality::Optional,
+                    },
+                    EntityAttribute {
+                        attribute: AttrTitle::IDENT,
+                        cardinality: Cardinality::Required,
+                    },
+                    EntityAttribute {
+                        attribute: AttrDescription::IDENT,
+                        cardinality: Cardinality::Optional,
+                    },
+                    EntityAttribute {
+                        attribute: AttrCollectionItem::IDENT,
+                        cardinality: Cardinality::Many,
+                    },
+                ],
+                extends: vec![],
+                strict: false,
+            })
+            .entity_create(EntitySchema {
+                id: Id::nil(),
+                ident: Tag::QUALIFIED_NAME.to_string(),
+                title: Some("Tag".to_string()),
+                description: None,
+                attributes: vec![
+                    EntityAttribute {
+                        attribute: AttrTagName::IDENT,
+                        cardinality: Cardinality::Required,
+                    },
+                    EntityAttribute {
+                        attribute: AttrDescription::IDENT,
+                        cardinality: Cardinality::Optional,
+                    },
+                    EntityAttribute {
+                        attribute: AttrTagParent::IDENT,
+                        cardinality: Cardinality::Optional,
+                    },
+                ],
+                extends: vec![],
+                strict: false,
+            });
 
         let create_comment =
-            Migration::with_name("create_comment_attribute").attr_create(AttrComment::schema());
+            Migration::with_name("create_comment_attribute").attr_create(AttributeSchema {
+                id: Id::nil(),
+                ident: AttrComment::IDENT.to_string(),
+                title: Some("Comment".to_string()),
+                description: None,
+                value_type: ValueType::String,
+                unique: false,
+                index: false,
+                strict: false,
+            });
 
-        let create_note_body_format =
-            Migration::with_name("create_text_format").attr_create(TextFormat::schema());
+        let create_note_body_format = Migration::with_name("create_text_format").attr_create(
+            factordb::schema::AttributeSchema {
+                id: Id::nil(),
+                ident: TextFormat::QUALIFIED_NAME.to_string(),
+                title: Some("Text Format".to_string()),
+                description: None,
+                value_type: ValueType::Union(vec![
+                    ValueType::Const(Value::String("plain".to_string())),
+                    ValueType::Const(Value::String("markdown".to_string())),
+                ]),
+                unique: false,
+                index: false,
+                strict: false,
+            },
+        );
 
         let add_text_format_to_note = Migration::with_name("add_text_format_to_note").action(
             migrate::SchemaAction::EntityAttributeAdd(migrate::EntityAttributeAdd {
@@ -424,7 +702,16 @@ impl Plugin for SemanticBasePlugin {
         );
 
         let create_file_blob_uri_web = Migration::with_name("create_file_blob_uri_web")
-            .attr_create(AttrBlobUriWeb::schema())
+            .attr_create(AttributeSchema {
+                id: Id::nil(),
+                ident: AttrBlobUriWeb::IDENT.to_string(),
+                title: Some("Blob".to_string()),
+                description: None,
+                value_type: ValueType::String,
+                unique: false,
+                index: false,
+                strict: false,
+            })
             .action(migrate::SchemaAction::EntityAttributeAdd(
                 migrate::EntityAttributeAdd {
                     entity: File::IDENT.to_string(),
@@ -435,8 +722,26 @@ impl Plugin for SemanticBasePlugin {
             ));
 
         let create_attr_created_updated_at = Migration::with_name("create_attr_created_updated_at")
-            .attr_create(AttrCreatedAt::schema())
-            .attr_create(AttrUpdatedAt::schema());
+            .attr_create(AttributeSchema {
+                id: Id::nil(),
+                ident: AttrCreatedAt::IDENT.to_string(),
+                title: Some("Created at".to_string()),
+                description: None,
+                value_type: ValueType::DateTime,
+                unique: false,
+                index: true,
+                strict: false,
+            })
+            .attr_create(AttributeSchema {
+                id: Id::nil(),
+                ident: AttrUpdatedAt::IDENT.to_string(),
+                title: Some("Updated at".to_string()),
+                description: None,
+                value_type: ValueType::DateTime,
+                unique: false,
+                index: true,
+                strict: false,
+            });
 
         let add_created_updated_at_to_file = Migration::with_name("add_created_updated_at_to_file")
             .action(migrate::SchemaAction::EntityAttributeAdd(
@@ -535,13 +840,61 @@ impl Plugin for SemanticBasePlugin {
             );
 
         let create_attr_name =
-            Migration::with_name("create_name_attr").attr_create(AttrName::schema());
+            Migration::with_name("create_name_attr").attr_create(AttributeSchema {
+                id: Id::nil(),
+                ident: "semantic/name".to_string(),
+                title: Some("Name".to_string()),
+                description: None,
+                value_type: ValueType::String,
+                unique: false,
+                index: false,
+                strict: false,
+            });
 
         let create_person_attrs = Migration::with_name("create_person_attrs")
-            .attr_create(AttrFamilyName::schema())
-            .attr_create(AttrGivenName::schema())
-            .attr_create(AttrBirthDate::schema())
-            .attr_create(Gender::schema());
+            .attr_create(AttributeSchema {
+                id: Id::nil(),
+                ident: "semantic/family_name".to_string(),
+                title: Some("Family name".to_string()),
+                description: None,
+                value_type: ValueType::Ref,
+                unique: false,
+                index: false,
+                strict: false,
+            })
+            .attr_create(AttributeSchema {
+                id: Id::nil(),
+                ident: "semantic/given_name".to_string(),
+                title: Some("Given name".to_string()),
+                description: None,
+                value_type: ValueType::String,
+                unique: false,
+                index: false,
+                strict: false,
+            })
+            .attr_create(AttributeSchema {
+                id: Id::nil(),
+                ident: "semantic/birthdate".to_string(),
+                title: Some("Date of birth".to_string()),
+                description: None,
+                value_type: ValueType::Ref,
+                unique: false,
+                index: false,
+                strict: false,
+            })
+            .attr_create(AttributeSchema {
+                id: Id::nil(),
+                ident: Gender::QUALIFIED_NAME.to_string(),
+                title: Some("Gender".to_string()),
+                description: None,
+                value_type: ValueType::Union(vec![
+                    ValueType::Const("male".into()),
+                    ValueType::Const("female".into()),
+                ]),
+                unique: false,
+                index: false,
+                strict: false,
+            });
 
         let create_person = Migration::with_name("create_person").entity_create(EntitySchema {
             id: Id::nil(),
@@ -584,8 +937,26 @@ impl Plugin for SemanticBasePlugin {
 
         let create_social_media_platform_attrs =
             Migration::with_name("create_social_media_platform_attrs")
-                .attr_create(AttrSocialMediaPlatformName::schema())
-                .attr_create(AttrSocialMediaPlatformId::schema());
+                .attr_create(AttributeSchema {
+                    id: Id::nil(),
+                    ident: "semantic/social_media_platform_name".to_string(),
+                    title: Some("Social Media Platform".to_string()),
+                    description: None,
+                    value_type: ValueType::String,
+                    unique: false,
+                    index: false,
+                    strict: false,
+                })
+                .attr_create(AttributeSchema {
+                    id: Id::nil(),
+                    ident: "semantic/social_media_platform_id".to_string(),
+                    title: Some("Social Media Platform".to_string()),
+                    description: None,
+                    value_type: ValueType::Ref,
+                    unique: false,
+                    index: false,
+                    strict: false,
+                });
 
         let create_social_media_account = Migration::with_name("create_social_media_account")
             .entity_create(EntitySchema {
@@ -653,6 +1024,28 @@ impl Plugin for SemanticBasePlugin {
                 },
             ));
 
+        let create_parent_attrs = Migration::with_name("create_parent_attrs")
+            .attr_create(AttributeSchema {
+                id: Id::nil(),
+                ident: AttrParent::QUALIFIED_NAME.to_string(),
+                title: Some("Parent".to_string()),
+                description: None,
+                value_type: ValueType::Ref,
+                unique: false,
+                index: true,
+                strict: false,
+            })
+            .attr_create(AttributeSchema {
+                id: Id::nil(),
+                ident: AttrEmbeddedInParent::QUALIFIED_NAME.to_string(),
+                title: Some("Embedded in parent".to_string()),
+                description: None,
+                value_type: ValueType::Bool,
+                unique: false,
+                index: false,
+                strict: false,
+            });
+
         vec![
             first,
             create_comment,
@@ -677,6 +1070,7 @@ impl Plugin for SemanticBasePlugin {
             create_visit_attrs,
             create_attr_secondary_url,
             change_attr_hash_to_indexed,
+            create_parent_attrs,
         ]
     }
 }

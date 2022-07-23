@@ -4,8 +4,8 @@ mod ui;
 use serde::{Deserialize, Serialize};
 
 use factordb::prelude::{
-    Attribute, AttributeDescriptor, DbSchema, Entity, EntityDescriptor, Expr, Id, IdOrIdent, Order,
-    Select, Timestamp,
+    Attribute, AttributeDescriptor, AttributeSchema, DbSchema, Entity, EntityAttribute,
+    EntityDescriptor, EntitySchema, Expr, Id, IdOrIdent, Order, Select, Timestamp, ValueType,
 };
 use semantic_core::{
     base::{AttrComment, AttrDateTime},
@@ -77,8 +77,38 @@ impl Plugin for HealthPlugin {
     fn migrations(&self) -> Vec<factordb::query::migrate::Migration> {
         vec![
             factordb::query::migrate::Migration::with_name("create_weight_schema".to_string())
-                .attr_create(AttrWeight::schema())
-                .entity_create(WeightLogEntry::schema()),
+                .attr_create(AttributeSchema {
+                    id: Id::nil(),
+                    ident: AttrWeight::QUALIFIED_NAME.to_string(),
+                    title: Some("Weight".to_string()),
+                    description: None,
+                    value_type: ValueType::Float,
+                    unique: false,
+                    index: false,
+                    strict: false,
+                })
+                .entity_create(EntitySchema {
+                    id: Id::nil(),
+                    ident: WeightLogEntry::QUALIFIED_NAME.to_string(),
+                    title: Some("Weight Log Entry".to_string()),
+                    description: None,
+                    attributes: vec![
+                        EntityAttribute {
+                            attribute: AttrWeight::IDENT,
+                            cardinality: factordb::prelude::Cardinality::Required,
+                        },
+                        EntityAttribute {
+                            attribute: AttrComment::IDENT,
+                            cardinality: factordb::prelude::Cardinality::Optional,
+                        },
+                        EntityAttribute {
+                            attribute: AttrDateTime::IDENT,
+                            cardinality: factordb::prelude::Cardinality::Required,
+                        },
+                    ],
+                    extends: vec![],
+                    strict: false,
+                }),
         ]
     }
 }

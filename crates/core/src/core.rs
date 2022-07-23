@@ -97,8 +97,26 @@ impl Plugin for SemanticCorePlugin {
 
     fn migrations(&self) -> Vec<factordb::query::migrate::Migration> {
         let create = Migration::with_name("semantic/core/v1".to_string())
-            .attr_create(AttrPluginCode::schema())
-            .attr_create(AttrPluginRuntime::schema())
+            .attr_create(AttributeSchema {
+                id: Id::nil(),
+                ident: "semantic/plugin_code".to_string(),
+                title: None,
+                description: None,
+                value_type: ValueType::String,
+                unique: false,
+                index: false,
+                strict: false,
+            })
+            .attr_create(AttributeSchema {
+                id: Id::nil(),
+                ident: "semantic/plugin_runtime".to_string(),
+                title: None,
+                description: None,
+                value_type: ValueType::String,
+                unique: false,
+                index: false,
+                strict: false,
+            })
             .entity_create(factordb::schema::EntitySchema {
                 id: Id::nil(),
                 ident: PluginSource::QUALIFIED_NAME.to_string(),
