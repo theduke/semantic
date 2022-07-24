@@ -6,8 +6,8 @@ use std::{
 use anyhow::bail;
 use factordb::{
     prelude::{
-        AttrId, AttrMapExt, AttributeDescriptor, Batch, DataMap, Db, Expr, Id, Item, Migration,
-        Page, Select, Value, ValueMap,
+        AttrId, AttrMapExt, AttributeDescriptor, Batch, DataMap, Db, Expr, Id, Item, Page, Select,
+        Value, ValueMap,
     },
     query::mutate,
 };
@@ -18,20 +18,17 @@ use crate::plugin::PluginManager;
 
 pub mod logdb;
 
-fn build_plugin_migration_name(
-    plugin: &(dyn Plugin + Send + Sync + 'static),
-    migration: &Migration,
-) -> Result<String, anyhow::Error> {
-    let flat_name = migration.name.as_ref().ok_or_else(|| {
-        anyhow::anyhow!(
-            "Plugin {} has an invalid migration: migrations must have a name",
-            plugin.name(),
-        )
-    })?;
+fn plugin_migration_name_prefix(plugin_name: &str) -> String {
     // ATTENTION: do not change this calcuation!
-    // Doing so would break all plugins with migrations and require a
-    // database purge!
-    Ok(format!("plugin/{}/{}", plugin.name(), flat_name))
+    // Doing so would break all plugins with migrations and require a database purge!
+    format!("plugin/{}/", plugin_name)
+}
+
+fn plugin_migration_name(plugin_name: &str, migration_name: &str) -> String {
+    // ATTENTION: do not change this calcuation!
+    // Doing so would break all plugins with migrations and require a database purge!
+    let prefix = plugin_migration_name_prefix(plugin_name);
+    format!("{prefix}{migration_name}")
 }
 
 fn filter_allowed_value(value: Value, all_ids: &HashSet<Id>) -> Option<Value> {
@@ -238,27 +235,58 @@ pub async fn apply_plugin_migrations(
     db: &Db,
     plugin: &(dyn Plugin + Send + Sync + 'static),
 ) -> Result<(), anyhow::Error> {
-    let existing_migrations = db.migrations().await?;
+    let migration_name_prefix = plugin_migration_name_prefix(plugin.name());
+
+    let existing_migrations = db
+        .migrations()
+        .await?
+        .into_iter()
+        .filter(|m| {
+            m.name
+                .clone()
+                .unwrap_or_default()
+                .starts_with(&migration_name_prefix)
+        })
+        .collect::<Vec<_>>();
 
     // TODO: validate whole plugin schema.
 
+    let existing_migration_names = existing_migrations
+        .iter()
+        .filter_map(|m| m.name.clone())
+        .collect::<HashSet<_>>();
+
+    let mut migration_names = HashSet::<String>::new();
+
     // Run migrations.
-    let migrations = plugin.migrations();
+    let migrations = plugin.migrations(&existing_migration_names);
 
     let mut new_migrations = Vec::new();
 
     for (index, mut migration) in migrations.into_iter().enumerate() {
-        let name = build_plugin_migration_name(&*plugin, &migration)?;
-        migration.name = Some(name.clone());
+        let plain_name = migration.name.clone().ok_or_else(|| {
+            anyhow::anyhow!(
+                "Invalid migration at index {index}: plugin migrations must have a name"
+            )
+        })?;
+        let full_name = plugin_migration_name(plugin.name(), &plain_name);
+        migration.name = Some(full_name.clone());
 
         // TODO: validate migration
         // Ensure that it only changes schema/data that is managed by the
         // plugin itself.
 
-        let old_mig = existing_migrations
+        let old = existing_migrations
             .iter()
-            .find(|n| n.name == migration.name);
-        if let Some(old_migration) = old_mig {
+            .enumerate()
+            .find(|(_index, n)| n.name == migration.name);
+
+        if let Some((old_index, old_migration)) = old {
+            if old_index != index {
+                dbg!(&existing_migrations[index]);
+                bail!("Invalid migration order: migration {plain_name} was previosly at index {old_index}, but is not at {index}");
+            }
+
             if old_migration != &migration {
                 let mut changes = Vec::new();
 
@@ -276,14 +304,22 @@ pub async fn apply_plugin_migrations(
 
                 let changes_text = changes.join("\n\n");
 
-                bail!("Invalid migration '{}' (index {}): Migration was already applied, but has changed\n\nCHANGES:\n{}", name, index, changes_text);
+                bail!("Invalid migration '{}' (index {}): Migration was already applied, but has changed\n\nCHANGES:\n{}", full_name, index, changes_text);
             }
 
             if !new_migrations.is_empty() {
-                bail!("Invalid migration '{}': invalid ordering: old migration comes after missing migration", name);
+                bail!("Invalid migration '{}': invalid ordering: old migration comes after missing migration", full_name);
             }
         } else {
-            new_migrations.push((name, migration));
+            new_migrations.push((full_name.clone(), migration));
+        }
+
+        migration_names.insert(full_name.clone());
+    }
+
+    for (index, old_name) in existing_migration_names.iter().enumerate() {
+        if !migration_names.contains(old_name) {
+            bail!("Invalid migrations: already applied migraiton {old_name} at index {index} was removed!");
         }
     }
 
