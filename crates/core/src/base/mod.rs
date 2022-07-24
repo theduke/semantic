@@ -348,8 +348,11 @@ impl Plugin for SemanticBasePlugin {
             .with_title("Tag Name");
         let create_tag_parent = AttributeSchema::new(AttrTagParent::QUALIFIED_NAME, ValueType::Ref)
             .with_title("Tag Parent");
-        let create_tags =
-            AttributeSchema::new(AttrTags::QUALIFIED_NAME, ValueType::Ref).with_title("Tags");
+        let create_tags = AttributeSchema::new(
+            AttrTags::QUALIFIED_NAME,
+            ValueType::new_list(ValueType::Ref),
+        )
+        .with_title("Tags");
 
         let create_file = EntitySchema {
             id: Id::nil(),
