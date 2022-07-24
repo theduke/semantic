@@ -1,3 +1,5 @@
+use std::collections::HashSet;
+
 use factordb::{
     prelude::{
         Attribute, AttributeDescriptor, AttributeSchema, Entity, EntityAttribute, EntityDescriptor,
@@ -95,7 +97,10 @@ impl Plugin for SemanticCorePlugin {
         }
     }
 
-    fn migrations(&self) -> Vec<factordb::query::migrate::Migration> {
+    fn migrations(
+        &self,
+        _already_applied_migrations: &HashSet<String>,
+    ) -> Vec<factordb::query::migrate::Migration> {
         let create = Migration::with_name("semantic/core/v1".to_string())
             .attr_create(AttributeSchema {
                 id: Id::nil(),

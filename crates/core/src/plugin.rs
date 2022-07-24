@@ -1,3 +1,5 @@
+use std::collections::HashSet;
+
 use factordb::{
     prelude::IdOrIdent,
     query::{migrate, select::Item},
@@ -196,7 +198,7 @@ pub trait PluginDescriptor {
 pub trait Plugin {
     fn name(&self) -> &str;
     fn schema(&self) -> PluginSchema;
-    fn migrations(&self) -> Vec<migrate::Migration>;
+    fn migrations(&self, already_applied_migrations: &HashSet<String>) -> Vec<migrate::Migration>;
 
     /// Quickly check if a URL is supported.
     #[allow(unused_variables)]

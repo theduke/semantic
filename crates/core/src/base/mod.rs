@@ -282,7 +282,7 @@ impl Plugin for SemanticBasePlugin {
         }
     }
 
-    fn migrations(&self) -> Vec<migrate::Migration> {
+    fn migrations(&self, _already_applied_migrations: &HashSet<String>) -> Vec<migrate::Migration> {
         let first = Migration::with_name("semantic/base/v1")
             .attr_create(AttributeSchema {
                 id: Id::nil(),

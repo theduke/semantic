@@ -1,6 +1,8 @@
 #[cfg(feature = "ui")]
 mod ui;
 
+use std::collections::HashSet;
+
 use serde::{Deserialize, Serialize};
 
 use factordb::prelude::{
@@ -74,7 +76,10 @@ impl Plugin for HealthPlugin {
         }
     }
 
-    fn migrations(&self) -> Vec<factordb::query::migrate::Migration> {
+    fn migrations(
+        &self,
+        _already_applied_migrations: &HashSet<String>,
+    ) -> Vec<factordb::query::migrate::Migration> {
         vec![
             factordb::query::migrate::Migration::with_name("create_weight_schema".to_string())
                 .attr_create(AttributeSchema {

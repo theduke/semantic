@@ -1,5 +1,5 @@
 use std::{
-    collections::HashMap,
+    collections::{HashMap, HashSet},
     path::{Path, PathBuf},
     sync::{Arc, RwLock},
 };
@@ -101,7 +101,10 @@ impl semantic_core::plugin::Plugin for DenoPlugin {
         self.host.stop_plugin(&self.data.schema.name)
     }
 
-    fn migrations(&self) -> Vec<factordb::query::migrate::Migration> {
+    fn migrations(
+        &self,
+        _already_applied: &HashSet<String>,
+    ) -> Vec<factordb::query::migrate::Migration> {
         // TODO: support migations.
         Vec::new()
     }

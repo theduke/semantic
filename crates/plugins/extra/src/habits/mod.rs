@@ -1,4 +1,6 @@
 mod db;
+use std::collections::HashSet;
+
 use factordb::{
     prelude::{AttributeSchema, EntityAttribute, EntitySchema, Id, IdOrIdent, ValueType},
     schema::{AttributeDescriptor, DbSchema, EntityDescriptor},
@@ -47,7 +49,10 @@ impl Plugin for HabitsPlugin {
         }
     }
 
-    fn migrations(&self) -> Vec<factordb::query::migrate::Migration> {
+    fn migrations(
+        &self,
+        _already_applied_migrations: &HashSet<String>,
+    ) -> Vec<factordb::query::migrate::Migration> {
         vec![
             factordb::query::migrate::Migration::with_name("habits_create".to_string())
                 .attr_create(AttributeSchema {
