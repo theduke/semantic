@@ -301,6 +301,7 @@ pub async fn compact_db_history(
     log: &logfs::LogFs,
     plugins: &PluginManager,
     select_window_size: u64,
+    batch_size: u64,
 ) -> Result<(), anyhow::Error> {
     async fn try_copy_entities(
         db: &Db,
@@ -309,6 +310,8 @@ pub async fn compact_db_history(
         select_window_size: u64,
     ) -> Result<(), anyhow::Error> {
         // TODO: lock database to prevent stale data!
+
+        let select_window_size = std::cmp::min(select_window_size, batch_size as u64);
 
         let mut batch = Batch::new();
         let mut stream = EntitiesOrderedStream::new(db.clone(), select_window_size).await?;
@@ -336,7 +339,6 @@ pub async fn compact_db_history(
 
     tracing::info!("starting DB history compaction...");
     let new_prefix = "_x/";
-    let batch_size = 10_000;
 
     // Delete keys with the new prefix, which might be left over from a previous failed run.
     tracing::trace!("deleting left-over temporary keys...");
@@ -359,7 +361,7 @@ pub async fn compact_db_history(
 
     tracing::info!("copying entities...");
 
-    if let Err(error) = try_copy_entities(db, &db2, batch_size, select_window_size).await {
+    if let Err(error) = try_copy_entities(db, &db2, batch_size as usize, select_window_size).await {
         tracing::error!(?error, "Entity copying failed - reverting");
         log.remove_prefix(new_prefix)?;
         return Err(error.context("Entity copying failed"));
@@ -499,7 +501,7 @@ mod tests {
 
             let plugins = app.plugins().unwrap();
 
-            compact_db_history(&db, log.log(), &plugins, 2)
+            compact_db_history(&db, log.log(), &plugins, 2, 2)
                 .await
                 .unwrap();
 

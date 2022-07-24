@@ -9,7 +9,10 @@ pub struct LogHistoryCompactCmd {
     options: AppOptions,
 
     #[clap(long)]
-    batch_size: Option<usize>,
+    select_window_size: Option<u64>,
+
+    #[clap(long)]
+    batch_size: Option<u64>,
 }
 
 impl LogHistoryCompactCmd {
@@ -44,7 +47,17 @@ impl LogHistoryCompactCmd {
                 })
                 .await;
 
-            semantic::db::compact_db_history(&db, log.log(), &plugins, 1_000).await
+            let batch_size = self.batch_size.unwrap_or(10000);
+            let select_window_size = self.select_window_size.unwrap_or(10000);
+
+            semantic::db::compact_db_history(
+                &db,
+                log.log(),
+                &plugins,
+                select_window_size,
+                batch_size,
+            )
+            .await
         })?;
 
         Ok(())
