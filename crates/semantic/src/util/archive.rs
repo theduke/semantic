@@ -252,7 +252,7 @@ mod tests {
             let archive_path = data_dir.join("archive.tar.gz");
 
             let f = std::fs::File::create(&archive_path).unwrap();
-            build_archive(&app, f, None).await.unwrap();
+            build_archive(&app, f, None, false).await.unwrap();
 
             app.close_backend().await.unwrap();
 
