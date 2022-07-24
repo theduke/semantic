@@ -5,7 +5,7 @@ use brass::{
     signal::signal::{Mutable, SignalExt},
 };
 use factordb::prelude::{AttrId, AttributeDescriptor, Expr, Id, Order, Select, Value};
-use semantic_core::base::{AttrCreatedAt, AttrLastVisitTime, AttrUpdatedAt, Tag};
+use semantic_core::base::{AttrCreatedAt, AttrLastVisitTime, AttrTitle, AttrUpdatedAt, Tag};
 
 use crate::{
     base::tags::load_all_tags,
@@ -23,6 +23,7 @@ use crate::{
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum FilterSort {
     Id,
+    Title,
     CreatedAt,
     UpdatedAt,
     LastVisisted,
@@ -78,6 +79,7 @@ impl EntityFilterForm {
             FilterSort::CreatedAt => Expr::attr::<AttrCreatedAt>(),
             FilterSort::UpdatedAt => Expr::attr::<AttrUpdatedAt>(),
             FilterSort::LastVisisted => Expr::attr::<AttrLastVisitTime>(),
+            FilterSort::Title => Expr::attr::<AttrTitle>(),
         };
 
         Select::new()
@@ -119,6 +121,10 @@ pub fn entity_filter_form(on_submit: impl Fn(EntityFilterForm) + 'static) -> Tag
     let sort = form_field_select(
         "Sort by",
         vec![
+            SelectOption {
+                label: "Title".to_string(),
+                value: FilterSort::Title,
+            },
             SelectOption {
                 label: "Id".to_string(),
                 value: FilterSort::Id,
