@@ -1,0 +1,11 @@
+{
+  "name": "semantic-workspace",
+  "version": "0.1.0",
+  "private": true,
+  "license": "MIT",
+  "workspaces": [
+    "solid-bulma",
+    "ui"
+  ],
+  "packageManager": "yarn@3.2.1"
+}
