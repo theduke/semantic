@@ -7,9 +7,10 @@ use std::{
 
 use anyhow::{anyhow, bail, Context};
 use factordb::{
+    error::EntityNotFound,
     prelude::{
-        AttrMapExt, AttributeDescriptor, DataMap, Db, EntityContainer, Expr, Id, Item, Mutate,
-        Patch, Select, Timestamp, Value, ValueMap,
+        AttrIdent, AttrMapExt, AttributeDescriptor, DataMap, Db, EntityContainer, Expr, Id, Item,
+        Mutate, Patch, Select, Timestamp, Value, ValueMap,
     },
     query, AnyError,
 };
@@ -17,8 +18,8 @@ use semantic_core::{
     api::{self, BackendConfig, DbConfig, FileImportMetadata, SemanticSchema},
     base::{
         entity_title, AttrBlobUri, AttrBlobUriWeb, AttrDownloadUrl, AttrFileName, AttrFileSize,
-        AttrHash, AttrMimeType, AttrOriginalHash, AttrPreviewImageBlobUri, SemanticBasePlugin, Tag,
-        Video,
+        AttrHash, AttrMimeType, AttrOriginalHash, AttrParent, AttrPreviewImageBlobUri,
+        SemanticBasePlugin, Tag, Video,
     },
     core::SemanticCorePlugin,
     plugin::{FetchUrlJob, FetchUrlOutput, ImportJob, ImportOutput, PluginDescriptor},
@@ -564,6 +565,16 @@ impl App {
             .clone()
             .unwrap_or_else(|| original_hash.clone());
 
+        let new_parent = if let Some(parent) = &meta.parent {
+            match db.entity(parent.clone()).await {
+                Ok(p) => Some(p),
+                Err(err) if err.is::<EntityNotFound>() => None,
+                Err(err) => return Err(err.into()),
+            }
+        } else {
+            None
+        };
+
         if let Some(old_file) =
             semantic_core::base::File::find_by_hash_or_original(&db, &hash, optimized_hash.as_ref())
                 .await?
@@ -578,6 +589,23 @@ impl App {
                     let mut batch = query::mutate::Batch {
                         actions: Vec::new(),
                     };
+
+                    if let (Some(old_ident), Some(new_ident)) =
+                        (old_file.get_attr::<AttrIdent>(), &meta.ident)
+                    {
+                        if &old_ident != new_ident {
+                            bail!("File already exists with ident '{old_ident}', but metadata specifies different ident '{new_ident}'");
+                        }
+                    }
+
+                    if let (Some(old_parent), Some(new_parent)) = (
+                        old_file.get_attr::<AttrParent>(),
+                        new_parent.as_ref().and_then(|e| e.get_attr::<AttrParent>()),
+                    ) {
+                        if old_parent != new_parent {
+                            bail!("File already exists with parent '{old_parent}', but metadata specifies different parent '{new_parent}'");
+                        }
+                    }
 
                     crate::file_import::file_upload_apply_meta(
                         &mut batch, &mut file, collection, tags, &meta,
@@ -660,6 +688,7 @@ impl App {
         let mut batch = query::mutate::Batch {
             actions: Vec::new(),
         };
+
         crate::file_import::file_upload_apply_meta(&mut batch, &mut file, collection, tags, &meta)?;
 
         let item = match mime_guess.map(|x| x.mime_type()).unwrap_or_default() {

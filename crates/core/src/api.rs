@@ -101,6 +101,8 @@ pub struct FileUploadMetadata {
     pub filename: Option<String>,
     pub title: Option<String>,
     pub url: Option<url::Url>,
+    pub ident: Option<String>,
+    pub parent: Option<Id>,
     /// Id of the collection to which the uploaded files should be added.
     pub collection_id: Option<Id>,
     #[serde(default)]
@@ -114,6 +116,7 @@ pub struct FileImportMetadata {
     pub url: Option<url::Url>,
     #[serde(default)]
     pub tags: Vec<IdOrIdent>,
+    pub parent: Option<Id>,
 }
 
 impl FileUploadMetadata {

@@ -143,6 +143,8 @@ impl State {
                 title: None,
                 collection_id: self.collection.lock_ref().get_collection_id(),
                 tag_ids: Vec::new(),
+                ident: None,
+                parent: None,
             },
         );
         let id = next_file.id;

@@ -261,6 +261,7 @@ fn main() {
                 collection_id: None,
                 tags: Vec::new(),
                 url: None,
+                parent: None,
             };
 
             let rt = tokio::runtime::Runtime::new().expect("Could not start runtime");

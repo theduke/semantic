@@ -286,6 +286,9 @@ async fn upload_file(
         url: url.clone(),
         collection_id: collection.as_ref().map(|c| c.id),
         tag_ids: tag_ids.to_vec(),
+        ident: None,
+        // TODO: allow uploading to a container instead of a collection
+        parent: None,
     };
 
     let file = tokio::fs::File::open(&item.path)

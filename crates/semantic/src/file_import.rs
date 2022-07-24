@@ -1,14 +1,15 @@
 use std::{collections::HashSet, sync::Arc};
 
+use anyhow::bail;
 use factordb::{
-    prelude::{AttributeDescriptor, Batch, Id},
+    prelude::{AttrIdent, AttrMapExt, AttributeDescriptor, Batch, Id},
     query::mutate::EntityPatch,
     AnyError,
 };
 use futures::future::BoxFuture;
 use semantic_core::{
     api::{FileImportMetadata, FileUploadMetadata},
-    base::{AttrSecondaryUrl, AttrTags, AttrTitle, AttrUrl},
+    base::{AttrParent, AttrSecondaryUrl, AttrTags, AttrTitle, AttrUrl},
 };
 
 use crate::app::App;
@@ -49,26 +50,43 @@ pub(crate) fn file_upload_apply_meta(
             .collect::<Vec<_>>();
 
         for tag in new_tags {
-            patch = patch.add(AttrTags::QUALIFIED_NAME.to_string(), tag.id);
+            patch = patch.add(AttrTags::QUALIFIED_NAME, tag.id);
         }
     }
 
     if let Some(title) = &meta.title {
         if file.title.is_none() {
-            patch = patch.add(AttrTitle::QUALIFIED_NAME.to_string(), title.clone());
+            patch = patch.add(AttrTitle::QUALIFIED_NAME, title.clone());
         }
     }
 
     if let Some(url) = &meta.url {
         if let Some(existing_url) = &file.url {
             if existing_url != url {
-                patch = patch.add(
-                    AttrSecondaryUrl::QUALIFIED_NAME.to_string(),
-                    url.clone().to_string(),
-                );
+                patch = patch.add(AttrSecondaryUrl::QUALIFIED_NAME, url.clone().to_string());
             }
         } else {
-            patch = patch.add(AttrUrl::QUALIFIED_NAME.to_string(), url.clone().to_string());
+            patch = patch.add(AttrUrl::QUALIFIED_NAME, url.clone().to_string());
+        }
+    }
+
+    if let Some(ident) = &meta.ident {
+        if let Some(old_ident) = &file.ident {
+            if old_ident != ident {
+                bail!("invalid metadata: ident has changed - old ident {old_ident} / new ident: {ident}");
+            }
+        } else {
+            patch = patch.add(AttrIdent::QUALIFIED_NAME, ident.clone());
+        }
+    }
+
+    if let Some(parent) = meta.parent.clone() {
+        if let Some(old_parent) = file.extra.get_attr::<AttrParent>() {
+            if old_parent != parent {
+                bail!("invalid metadata: parent has changed - old parent {old_parent} / new parent: {parent}");
+            }
+        } else {
+            patch = patch.add(AttrParent::QUALIFIED_NAME, parent);
         }
     }
 
@@ -100,6 +118,8 @@ async fn import_file(
         collection_id,
         url,
         tag_ids,
+        ident: None,
+        parent: None,
     };
     let file = app.upload_file(meta, content).await?;
 
@@ -164,6 +184,8 @@ pub async fn import_files(
         collection_id: meta.collection_id,
         url: meta.url.clone(),
         tag_ids,
+        ident: None,
+        parent: meta.parent,
     };
 
     for path in paths {
