@@ -88,10 +88,12 @@ function build_semantic() {
   source $HOME/.cargo/env
 
   # Must run twice, for whatever reason...
-  git clone /host /build || echo nope
-  rm -rf /build
-  git clone /host /build
+  mkdir -p /build
+  cp -r /host/.git /build/.git
   cd /build
+  chown -R root: .git
+  git reset --hard HEAD
+
   export CARGO_NET_GIT_FETCH_WITH_CLI="true"
   # build_ui
   cargo xtask build
