@@ -1,4 +1,9 @@
 mod file;
+use std::collections::HashSet;
+
+mod container;
+pub use self::container::*;
+
 use crate::plugin::{Plugin, PluginDescriptor, PluginSchema};
 
 pub use self::file::*;
@@ -24,7 +29,13 @@ use factordb::{
         DataMap, EntityAttribute, EntityDescriptor, EntitySchema, Id, IdOrIdent, Migration,
         Timestamp, Value, ValueType,
     },
-    query::{migrate, migrate::AttributeCreateIndex},
+    query::{
+        migrate,
+        migrate::{
+            AttributeCreateIndex, EntityAttributeChangeCardinality, EntityAttributeRemove,
+            SchemaAction,
+        },
+    },
 };
 
 mod common_actions;
@@ -39,10 +50,6 @@ pub struct AttrTitle(String);
 #[derive(Attribute)]
 #[factor(namespace = "semantic", title = "Name")]
 pub struct AttrName(String);
-
-#[derive(Attribute)]
-#[factor(namespace = "semantic", title = "Parent")]
-pub struct AttrParentId(Id);
 
 #[derive(Attribute)]
 #[factor(namespace = "semantic", title = "Comment")]
@@ -69,6 +76,14 @@ pub struct AttrUpdatedAt(Timestamp);
 #[derive(Attribute)]
 #[factor(namespace = "semantic", title = "Parent", name = "parent", index)]
 pub struct AttrParent(Id);
+
+#[derive(Attribute)]
+#[factor(
+    namespace = "semantic",
+    title = "Parent Sort Order",
+    name = "parent_sort_order"
+)]
+pub struct AttrParentSortOrder(i64);
 
 #[derive(Attribute)]
 #[factor(
@@ -216,7 +231,6 @@ impl Plugin for SemanticBasePlugin {
             import_matchers: Vec::new(),
             db: Some(factordb::schema::DbSchema {
                 attributes: vec![
-                    AttrParentId::schema(),
                     AttrTitle::schema(),
                     AttrComment::schema(),
                     AttrDescription::schema(),
@@ -283,398 +297,273 @@ impl Plugin for SemanticBasePlugin {
     }
 
     fn migrations(&self, _already_applied_migrations: &HashSet<String>) -> Vec<migrate::Migration> {
+        let create_title =
+            AttributeSchema::new(AttrTitle::QUALIFIED_NAME, ValueType::String).with_title("Title");
+        let create_datetime =
+            AttributeSchema::new(AttrDateTime::QUALIFIED_NAME, ValueType::DateTime)
+                .with_title("Datetime");
+        let create_comment = AttributeSchema::new(AttrComment::QUALIFIED_NAME, ValueType::String)
+            .with_title("Comment");
+        let create_description =
+            AttributeSchema::new(AttrDescription::QUALIFIED_NAME, ValueType::String)
+                .with_title("Description");
+        let create_url =
+            AttributeSchema::new(AttrUrl::QUALIFIED_NAME, ValueType::Url).with_title("Url");
+        let create_preview_image_url =
+            AttributeSchema::new(AttrPreviewImageUrl::QUALIFIED_NAME, ValueType::Url)
+                .with_title("Preview");
+        let create_username = AttributeSchema::new(AttrUsername::QUALIFIED_NAME, ValueType::String)
+            .with_title("Username");
+        let create_blob_uri =
+            AttributeSchema::new(AttrBlobUri::QUALIFIED_NAME, ValueType::String).with_title("Blob");
+        let create_mime_type =
+            AttributeSchema::new(AttrMimeType::QUALIFIED_NAME, ValueType::String)
+                .with_title("MIME Type");
+        let create_hash = AttributeSchema::new(AttrHash::QUALIFIED_NAME, ValueType::String)
+            .with_title("Content Hash");
+        let create_original_hash =
+            AttributeSchema::new(AttrOriginalHash::QUALIFIED_NAME, ValueType::String)
+                .with_title("Original Content Hash");
+        let create_duration = AttributeSchema::new(AttrDuration::QUALIFIED_NAME, ValueType::Int)
+            .with_title("Duration");
+        let create_file_size =
+            AttributeSchema::new(AttrFileSize::QUALIFIED_NAME, ValueType::Int).with_title("Size");
+        let create_download_url =
+            AttributeSchema::new(AttrDownloadUrl::QUALIFIED_NAME, ValueType::Url)
+                .with_title("Download URL");
+        let create_filename = AttributeSchema::new(AttrFileName::QUALIFIED_NAME, ValueType::String)
+            .with_title("Filename");
+
+        let create_social_media_post_content =
+            AttributeSchema::new(AttrSocialMediaPostContent::QUALIFIED_NAME, ValueType::Ref)
+                .with_title("Content");
+        let create_note_body =
+            AttributeSchema::new(AttrNoteBody::QUALIFIED_NAME, ValueType::String)
+                .with_title("Note");
+        let create_collection_items =
+            AttributeSchema::new(AttrCollectionItem::QUALIFIED_NAME, ValueType::Ref)
+                .with_title("Items");
+
+        let create_tag_name = AttributeSchema::new(AttrTagName::QUALIFIED_NAME, ValueType::String)
+            .with_title("Tag Name");
+        let create_tag_parent = AttributeSchema::new(AttrTagParent::QUALIFIED_NAME, ValueType::Ref)
+            .with_title("Tag Parent");
+        let create_tags =
+            AttributeSchema::new(AttrTags::QUALIFIED_NAME, ValueType::Ref).with_title("Tags");
+
+        let create_file = EntitySchema {
+            id: Id::nil(),
+            ident: File::QUALIFIED_NAME.to_string(),
+            title: Some("File".to_string()),
+            description: None,
+            attributes: vec![
+                EntityAttribute {
+                    attribute: AttrIdent::IDENT,
+                    cardinality: Cardinality::Optional,
+                },
+                EntityAttribute {
+                    attribute: AttrTitle::IDENT,
+                    cardinality: Cardinality::Optional,
+                },
+                EntityAttribute {
+                    attribute: AttrFileName::IDENT,
+                    cardinality: Cardinality::Optional,
+                },
+                EntityAttribute {
+                    attribute: AttrFileSize::IDENT,
+                    cardinality: Cardinality::Optional,
+                },
+                EntityAttribute {
+                    attribute: AttrMimeType::IDENT,
+                    cardinality: Cardinality::Optional,
+                },
+                EntityAttribute {
+                    attribute: AttrHash::IDENT,
+                    cardinality: Cardinality::Optional,
+                },
+                EntityAttribute {
+                    attribute: AttrOriginalHash::IDENT,
+                    cardinality: Cardinality::Optional,
+                },
+                EntityAttribute {
+                    attribute: AttrUrl::IDENT,
+                    cardinality: Cardinality::Optional,
+                },
+                EntityAttribute {
+                    attribute: AttrDownloadUrl::IDENT,
+                    cardinality: Cardinality::Optional,
+                },
+                EntityAttribute {
+                    attribute: AttrPreviewImageUrl::IDENT,
+                    cardinality: Cardinality::Optional,
+                },
+                EntityAttribute {
+                    attribute: AttrBlobUri::IDENT,
+                    cardinality: Cardinality::Optional,
+                },
+            ],
+            extends: vec![],
+            strict: false,
+        };
+
+        let create_image = EntitySchema {
+            id: Id::nil(),
+            ident: Image::QUALIFIED_NAME.to_string(),
+            title: Some("Image".to_string()),
+            description: None,
+            attributes: vec![],
+            extends: vec![File::IDENT],
+            strict: false,
+        };
+
+        let create_video = EntitySchema {
+            id: Id::nil(),
+            ident: Video::IDENT.to_string(),
+            title: Some("Video".to_string()),
+            description: None,
+            attributes: vec![EntityAttribute {
+                attribute: AttrDuration::IDENT,
+                cardinality: factordb::prelude::Cardinality::Optional,
+            }],
+            extends: vec![File::IDENT.into()],
+            strict: false,
+        };
+
+        let create_social_media_post = EntitySchema {
+            id: Id::nil(),
+            ident: SocialMediaPost::IDENT.to_string(),
+            title: Some("SocialMediaPost".to_string()),
+            description: None,
+            attributes: vec![
+                EntityAttribute {
+                    attribute: AttrIdent::IDENT,
+                    cardinality: Cardinality::Optional,
+                },
+                EntityAttribute {
+                    attribute: AttrTitle::IDENT,
+                    cardinality: Cardinality::Optional,
+                },
+                EntityAttribute {
+                    attribute: AttrUrl::IDENT,
+                    cardinality: Cardinality::Optional,
+                },
+                EntityAttribute {
+                    attribute: AttrUsername::IDENT,
+                    cardinality: Cardinality::Optional,
+                },
+                EntityAttribute {
+                    attribute: AttrSocialMediaPostContent::IDENT,
+                    cardinality: Cardinality::Optional,
+                },
+            ],
+            extends: vec![],
+            strict: false,
+        };
+
+        let create_note = EntitySchema {
+            id: Id::nil(),
+            ident: Note::QUALIFIED_NAME.to_string(),
+            title: Some("Note".to_string()),
+            description: None,
+            attributes: vec![
+                EntityAttribute {
+                    attribute: AttrTitle::IDENT,
+                    cardinality: Cardinality::Required,
+                },
+                EntityAttribute {
+                    attribute: AttrNoteBody::IDENT,
+                    cardinality: Cardinality::Required,
+                },
+            ],
+            extends: vec![],
+            strict: false,
+        };
+
+        let create_collection = EntitySchema {
+            id: Id::nil(),
+            ident: Collection::QUALIFIED_NAME.to_string(),
+            title: Some("Collection".to_string()),
+            description: None,
+            attributes: vec![
+                EntityAttribute {
+                    attribute: AttrIdent::IDENT,
+                    cardinality: Cardinality::Optional,
+                },
+                EntityAttribute {
+                    attribute: AttrUrl::IDENT,
+                    cardinality: Cardinality::Optional,
+                },
+                EntityAttribute {
+                    attribute: AttrTitle::IDENT,
+                    cardinality: Cardinality::Required,
+                },
+                EntityAttribute {
+                    attribute: AttrDescription::IDENT,
+                    cardinality: Cardinality::Optional,
+                },
+                EntityAttribute {
+                    attribute: AttrCollectionItem::IDENT,
+                    cardinality: Cardinality::Required,
+                },
+            ],
+            extends: vec![],
+            strict: false,
+        };
+
+        let create_tag = EntitySchema {
+            id: Id::nil(),
+            ident: Tag::QUALIFIED_NAME.to_string(),
+            title: Some("Tag".to_string()),
+            description: None,
+            attributes: vec![
+                EntityAttribute {
+                    attribute: AttrTagName::IDENT,
+                    cardinality: Cardinality::Required,
+                },
+                EntityAttribute {
+                    attribute: AttrDescription::IDENT,
+                    cardinality: Cardinality::Optional,
+                },
+                EntityAttribute {
+                    attribute: AttrTagParent::IDENT,
+                    cardinality: Cardinality::Optional,
+                },
+            ],
+            extends: vec![],
+            strict: false,
+        };
+
         let first = Migration::with_name("semantic/base/v1")
-            .attr_create(AttributeSchema {
-                id: Id::nil(),
-                ident: "semantic/title".to_string(),
-                title: Some("Title".to_string()),
-                description: None,
-                value_type: ValueType::String,
-                unique: false,
-                index: false,
-                strict: false,
-            })
-            .attr_create(AttributeSchema {
-                id: Id::nil(),
-                ident: "semantic/datetime".to_string(),
-                title: Some("Datetime".to_string()),
-                description: None,
-                value_type: ValueType::DateTime,
-                unique: false,
-                index: false,
-                strict: false,
-            })
-            .attr_create(AttributeSchema {
-                id: Id::nil(),
-                ident: "semantic/description".to_string(),
-                title: Some("Description".to_string()),
-                description: None,
-                value_type: ValueType::String,
-                unique: false,
-                index: false,
-                strict: false,
-            })
-            .attr_create(AttributeSchema {
-                id: Id::nil(),
-                ident: "semantic/url".to_string(),
-                title: Some("Url".to_string()),
-                description: None,
-                value_type: ValueType::Url,
-                unique: false,
-                index: false,
-                strict: false,
-            })
-            .attr_create(AttributeSchema {
-                id: Id::nil(),
-                ident: "semantic/preview_image_url".to_string(),
-                title: Some("Preview".to_string()),
-                description: None,
-                value_type: ValueType::Url,
-                unique: false,
-                index: false,
-                strict: false,
-            })
-            .attr_create(AttributeSchema {
-                id: Id::nil(),
-                ident: "semantic/username".to_string(),
-                title: Some("Username".to_string()),
-                description: None,
-                value_type: ValueType::String,
-                unique: false,
-                index: false,
-                strict: false,
-            })
-            .attr_create(AttributeSchema {
-                id: Id::nil(),
-                ident: "semantic/blob_uri".to_string(),
-                title: Some("Blob".to_string()),
-                description: None,
-                value_type: ValueType::String,
-                unique: false,
-                index: false,
-                strict: false,
-            })
-            .attr_create(AttributeSchema {
-                id: Id::nil(),
-                ident: "semantic/mime_type".to_string(),
-                title: Some("MIME Type".to_string()),
-                description: None,
-                value_type: ValueType::String,
-                unique: false,
-                index: false,
-                strict: false,
-            })
-            .attr_create(AttributeSchema {
-                id: Id::nil(),
-                ident: "semantic/hash".to_string(),
-                title: Some("Content Hash".to_string()),
-                description: None,
-                value_type: ValueType::String,
-                unique: false,
-                index: false,
-                strict: false,
-            })
-            // create original hash schema
-            .attr_create(AttributeSchema {
-                id: Id::nil(),
-                ident: "semantic/original_hash".to_string(),
-                title: Some("Original Content Hash".to_string()),
-                description: None,
-                value_type: ValueType::String,
-                unique: false,
-                index: false,
-                strict: false,
-            })
-            // create duration schema
-            .attr_create(AttributeSchema {
-                id: Id::nil(),
-                ident: "semantic/duration".to_string(),
-                title: Some("Duration".to_string()),
-                description: None,
-                // TODO: this should be UInt!
-                value_type: ValueType::Int,
-                unique: false,
-                index: false,
-                strict: false,
-            })
-            .attr_create(AttributeSchema {
-                id: Id::nil(),
-                ident: "semantic/file_size".to_string(),
-                title: Some("Size".to_string()),
-                description: None,
-                // TODO: this should be UInt!
-                value_type: ValueType::Int,
-                unique: false,
-                index: false,
-                strict: false,
-            })
-            .attr_create(AttributeSchema {
-                id: Id::nil(),
-                ident: "semantic/download_url".to_string(),
-                title: Some("Download URL".to_string()),
-                description: None,
-                value_type: ValueType::Url,
-                unique: false,
-                index: false,
-                strict: false,
-            })
-            .attr_create(AttributeSchema {
-                id: Id::nil(),
-                ident: "semantic/filename".to_string(),
-                title: Some("Filename".to_string()),
-                description: None,
-                value_type: ValueType::String,
-                unique: false,
-                index: false,
-                strict: false,
-            })
-            .attr_create(AttributeSchema {
-                id: Id::nil(),
-                ident: "semantic/social_media_post_content".to_string(),
-                title: Some("Content".to_string()),
-                description: None,
-                value_type: ValueType::Ref,
-                unique: false,
-                index: false,
-                strict: false,
-            })
-            .attr_create(AttributeSchema {
-                id: Id::nil(),
-                ident: "semantic/note_body".to_string(),
-                title: Some("Note".to_string()),
-                description: None,
-                value_type: ValueType::String,
-                unique: false,
-                index: false,
-                strict: false,
-            })
-            .attr_create(AttributeSchema {
-                id: Id::nil(),
-                ident: "semantic/collection_items".to_string(),
-                title: Some("Items".to_string()),
-                description: None,
-                value_type: ValueType::Ref,
-                unique: false,
-                index: false,
-                strict: false,
-            })
-            .attr_create(AttributeSchema {
-                id: Id::nil(),
-                ident: "semantic/tag_name".to_string(),
-                title: Some("Tag Name".to_string()),
-                description: None,
-                value_type: ValueType::String,
-                unique: false,
-                index: false,
-                strict: false,
-            })
-            .attr_create(AttributeSchema {
-                id: Id::nil(),
-                ident: "semantic/tag_parent".to_string(),
-                title: Some("Tag Parent".to_string()),
-                description: None,
-                value_type: ValueType::Ref,
-                unique: false,
-                index: false,
-                strict: false,
-            })
-            .attr_create(AttributeSchema {
-                id: Id::nil(),
-                ident: "semantic/tags".to_string(),
-                title: Some("Tags".to_string()),
-                description: None,
-                value_type: ValueType::Ref,
-                unique: false,
-                index: false,
-                strict: false,
-            })
-            .entity_create(EntitySchema {
-                id: Id::nil(),
-                ident: File::QUALIFIED_NAME.to_string(),
-                title: Some("File".to_string()),
-                description: None,
-                attributes: vec![
-                    EntityAttribute {
-                        attribute: AttrIdent::IDENT,
-                        cardinality: Cardinality::Optional,
-                    },
-                    EntityAttribute {
-                        attribute: AttrTitle::IDENT,
-                        cardinality: Cardinality::Optional,
-                    },
-                    EntityAttribute {
-                        attribute: AttrFileName::IDENT,
-                        cardinality: Cardinality::Optional,
-                    },
-                    EntityAttribute {
-                        attribute: AttrFileSize::IDENT,
-                        cardinality: Cardinality::Optional,
-                    },
-                    EntityAttribute {
-                        attribute: AttrMimeType::IDENT,
-                        cardinality: Cardinality::Optional,
-                    },
-                    EntityAttribute {
-                        attribute: AttrHash::IDENT,
-                        cardinality: Cardinality::Optional,
-                    },
-                    EntityAttribute {
-                        attribute: AttrOriginalHash::IDENT,
-                        cardinality: Cardinality::Optional,
-                    },
-                    EntityAttribute {
-                        attribute: AttrUrl::IDENT,
-                        cardinality: Cardinality::Optional,
-                    },
-                    EntityAttribute {
-                        attribute: AttrDownloadUrl::IDENT,
-                        cardinality: Cardinality::Optional,
-                    },
-                    EntityAttribute {
-                        attribute: AttrPreviewImageUrl::IDENT,
-                        cardinality: Cardinality::Optional,
-                    },
-                    EntityAttribute {
-                        attribute: AttrBlobUri::IDENT,
-                        cardinality: Cardinality::Optional,
-                    },
-                ],
-                extends: vec![],
-                strict: false,
-            })
-            .entity_create(EntitySchema {
-                id: Id::nil(),
-                ident: Image::QUALIFIED_NAME.to_string(),
-                title: Some("Image".to_string()),
-                description: None,
-                attributes: vec![],
-                extends: vec![File::IDENT],
-                strict: false,
-            })
-            .entity_create(EntitySchema {
-                id: Id::nil(),
-                ident: Video::IDENT.to_string(),
-                title: Some("Video".to_string()),
-                description: None,
-                attributes: vec![EntityAttribute {
-                    attribute: AttrDuration::IDENT,
-                    cardinality: factordb::prelude::Cardinality::Optional,
-                }],
-                extends: vec![File::IDENT.into()],
-                strict: false,
-            })
-            .entity_create(EntitySchema {
-                id: Id::nil(),
-                ident: SocialMediaPost::IDENT.to_string(),
-                title: Some("SocialMediaPost".to_string()),
-                description: None,
-                attributes: vec![
-                    EntityAttribute {
-                        attribute: AttrIdent::IDENT,
-                        cardinality: Cardinality::Optional,
-                    },
-                    EntityAttribute {
-                        attribute: AttrTitle::IDENT,
-                        cardinality: Cardinality::Optional,
-                    },
-                    EntityAttribute {
-                        attribute: AttrUrl::IDENT,
-                        cardinality: Cardinality::Optional,
-                    },
-                    EntityAttribute {
-                        attribute: AttrUsername::IDENT,
-                        cardinality: Cardinality::Optional,
-                    },
-                    EntityAttribute {
-                        attribute: AttrSocialMediaPostContent::IDENT,
-                        cardinality: Cardinality::Many,
-                    },
-                ],
-                extends: vec![],
-                strict: false,
-            })
-            .entity_create(EntitySchema {
-                id: Id::nil(),
-                ident: Note::QUALIFIED_NAME.to_string(),
-                title: Some("Note".to_string()),
-                description: None,
-                attributes: vec![
-                    EntityAttribute {
-                        attribute: AttrTitle::IDENT,
-                        cardinality: Cardinality::Required,
-                    },
-                    EntityAttribute {
-                        attribute: AttrNoteBody::IDENT,
-                        cardinality: Cardinality::Required,
-                    },
-                ],
-                extends: vec![],
-                strict: false,
-            })
-            .entity_create(EntitySchema {
-                id: Id::nil(),
-                ident: Collection::QUALIFIED_NAME.to_string(),
-                title: Some("Collection".to_string()),
-                description: None,
-                attributes: vec![
-                    EntityAttribute {
-                        attribute: AttrIdent::IDENT,
-                        cardinality: Cardinality::Optional,
-                    },
-                    EntityAttribute {
-                        attribute: AttrUrl::IDENT,
-                        cardinality: Cardinality::Optional,
-                    },
-                    EntityAttribute {
-                        attribute: AttrTitle::IDENT,
-                        cardinality: Cardinality::Required,
-                    },
-                    EntityAttribute {
-                        attribute: AttrDescription::IDENT,
-                        cardinality: Cardinality::Optional,
-                    },
-                    EntityAttribute {
-                        attribute: AttrCollectionItem::IDENT,
-                        cardinality: Cardinality::Many,
-                    },
-                ],
-                extends: vec![],
-                strict: false,
-            })
-            .entity_create(EntitySchema {
-                id: Id::nil(),
-                ident: Tag::QUALIFIED_NAME.to_string(),
-                title: Some("Tag".to_string()),
-                description: None,
-                attributes: vec![
-                    EntityAttribute {
-                        attribute: AttrTagName::IDENT,
-                        cardinality: Cardinality::Required,
-                    },
-                    EntityAttribute {
-                        attribute: AttrDescription::IDENT,
-                        cardinality: Cardinality::Optional,
-                    },
-                    EntityAttribute {
-                        attribute: AttrTagParent::IDENT,
-                        cardinality: Cardinality::Optional,
-                    },
-                ],
-                extends: vec![],
-                strict: false,
-            });
+            .attr_create(create_title)
+            .attr_create(create_datetime)
+            .attr_create(create_description)
+            .attr_create(create_url)
+            .attr_create(create_preview_image_url)
+            .attr_create(create_username)
+            .attr_create(create_blob_uri)
+            .attr_create(create_mime_type)
+            .attr_create(create_hash)
+            .attr_create(create_original_hash)
+            .attr_create(create_duration)
+            .attr_create(create_file_size)
+            .attr_create(create_download_url)
+            .attr_create(create_filename)
+            .attr_create(create_social_media_post_content)
+            .attr_create(create_note_body)
+            .attr_create(create_collection_items)
+            .attr_create(create_tag_name)
+            .attr_create(create_tag_parent)
+            .attr_create(create_tags)
+            .entity_create(create_file)
+            .entity_create(create_image)
+            .entity_create(create_video)
+            .entity_create(create_social_media_post)
+            .entity_create(create_note)
+            .entity_create(create_collection)
+            .entity_create(create_tag);
 
         let create_comment =
-            Migration::with_name("create_comment_attribute").attr_create(AttributeSchema {
-                id: Id::nil(),
-                ident: AttrComment::IDENT.to_string(),
-                title: Some("Comment".to_string()),
-                description: None,
-                value_type: ValueType::String,
-                unique: false,
-                index: false,
-                strict: false,
-            });
+            Migration::with_name("create_comment_attribute").attr_create(create_comment);
 
         let create_note_body_format = Migration::with_name("create_text_format").attr_create(
             factordb::schema::AttributeSchema {
@@ -834,7 +723,7 @@ impl Plugin for SemanticBasePlugin {
                 migrate::SchemaAction::EntityAttributeAdd(migrate::EntityAttributeAdd {
                     entity: SocialMediaPost::IDENT.to_string(),
                     attribute: AttrSocialMediaPostUserId::IDENT.to_string(),
-                    cardinality: Cardinality::Many,
+                    cardinality: Cardinality::Optional,
                     default_value: None,
                 }),
             );
@@ -1046,7 +935,51 @@ impl Plugin for SemanticBasePlugin {
                 strict: false,
             });
 
-        vec![
+        let change_cardinality_many_attrs_to_vec =
+            Migration::with_name("change_cardinality_many_attrs_to_vec")
+                .attr_change_type(
+                    AttrCollectionItem::QUALIFIED_NAME,
+                    ValueType::List(Box::new(ValueType::Ref)),
+                )
+                .attr_change_type(
+                    AttrSocialMediaPostContent::QUALIFIED_NAME,
+                    ValueType::List(Box::new(ValueType::Ref)),
+                );
+
+        let change_cardinality_many_attrs_to_optional =
+            Migration::with_name("change_cardinality_many_attrs_to_optional")
+                .action(migrate::SchemaAction::EntityAttributeChangeCardinality(
+                    EntityAttributeChangeCardinality {
+                        entity_type: SocialMediaPost::QUALIFIED_NAME.to_string(),
+                        attribute: AttrSocialMediaPostContent::QUALIFIED_NAME.to_string(),
+                        new_cardinality: Cardinality::Optional,
+                    },
+                ))
+                // .action(migrate::SchemaAction::EntityAttributeChangeCardinality(
+                //     EntityAttributeChangeCardinality {
+                //         entity_type: SocialMediaPost::QUALIFIED_NAME.to_string(),
+                //         attribute: AttrSocialMediaPostUserId::QUALIFIED_NAME.to_string(),
+                //         new_cardinality: Cardinality::Optional,
+                //     },
+                // ))
+                .action(migrate::SchemaAction::EntityAttributeChangeCardinality(
+                    EntityAttributeChangeCardinality {
+                        entity_type: Collection::QUALIFIED_NAME.to_string(),
+                        attribute: AttrCollectionItem::QUALIFIED_NAME.to_string(),
+                        new_cardinality: Cardinality::Required,
+                    },
+                ));
+
+        let remove_user_id_from_social_media_post = Migration::with_name(
+            "remove_user_id_from_social_media_post",
+        )
+        .action(SchemaAction::EntityAttributeRemove(EntityAttributeRemove {
+            entity_type: SocialMediaPost::QUALIFIED_NAME.to_string(),
+            attribute: AttrSocialMediaPostUserId::QUALIFIED_NAME.to_string(),
+            delete_values: true,
+        }));
+
+        let batch1 = vec![
             first,
             create_comment,
             create_note_body_format,
@@ -1071,6 +1004,38 @@ impl Plugin for SemanticBasePlugin {
             create_attr_secondary_url,
             change_attr_hash_to_indexed,
             create_parent_attrs,
-        ]
+            change_cardinality_many_attrs_to_vec,
+            change_cardinality_many_attrs_to_optional,
+            remove_user_id_from_social_media_post,
+        ];
+
+        let mut rollup = factordb::query::migrate::unify_migrations(batch1.clone()).unwrap();
+        rollup.name = Some("batch1_rollup".to_string());
+
+        let create_like_count = Migration::with_name("create_like_count").attr_create(
+            AttributeSchema::new(AttrLikeCount::QUALIFIED_NAME, ValueType::UInt)
+                .with_title("Likes"),
+        );
+
+        let create_container_and_parent_sort =
+            Migration::with_name("create_container_and_parent_sort")
+                .attr_create(AttributeSchema::new(
+                    AttrParentSortOrder::QUALIFIED_NAME,
+                    ValueType::Int,
+                ))
+                .entity_create(EntitySchema {
+                    id: Id::nil(),
+                    ident: Container::QUALIFIED_NAME.to_string(),
+                    title: Some("Container".to_string()),
+                    description: None,
+                    attributes: vec![EntityAttribute {
+                        attribute: AttrTitle::IDENT,
+                        cardinality: Cardinality::Optional,
+                    }],
+                    extends: vec![],
+                    strict: false,
+                });
+
+        vec![rollup, create_like_count, create_container_and_parent_sort]
     }
 }

@@ -12,7 +12,7 @@ use super::{AttrDescription, AttrTitle, AttrUrl};
 
 #[derive(Attribute)]
 #[factor(namespace = "semantic", title = "Items", name = "collection_items")]
-pub struct AttrCollectionItem(Id);
+pub struct AttrCollectionItem(Vec<Id>);
 
 #[derive(Serialize, Deserialize, Entity, Clone, Debug, PartialEq, Eq)]
 #[factor(namespace = "semantic")]
