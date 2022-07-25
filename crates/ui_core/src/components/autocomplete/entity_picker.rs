@@ -7,7 +7,7 @@ use brass::{
     signal::signal::{Mutable, Signal, SignalExt},
 };
 use factordb::{
-    prelude::DataMap,
+    prelude::{AttrId, DataMap, Id},
     query::{expr::Expr, select::Select},
     schema::AttributeDescriptor,
 };
@@ -171,10 +171,26 @@ impl MsgComponent for State {
 pub fn entity_picker(
     base_filter: impl Signal<Item = Expr> + Send + 'static,
     on_select: impl Fn(DataMap) + 'static,
+    filter_builder: Option<Box<dyn Fn(&str) -> Expr>>,
 ) -> View {
+    let filter_builder = filter_builder.unwrap_or_else(|| {
+        Box::new(|title| {
+            let trimmed = title.trim_start();
+            if let Ok(id) = trimmed.parse::<Id>() {
+                Expr::eq(AttrId::expr(), id)
+            } else if trimmed.starts_with("~*") && trimmed.len() > 2 {
+                Expr::regex_match_case_insensitive(AttrTitle::expr(), &trimmed[2..])
+            } else if trimmed.starts_with("~") && trimmed.len() > 1 {
+                Expr::regex_match(AttrTitle::expr(), &trimmed[1..])
+            } else {
+                Expr::contains(AttrTitle::expr(), title.trim_end())
+            }
+        })
+    });
+
     State::build(EntityPicker {
         base_filter: base_filter.boxed(),
-        filter_builder: Box::new(|title| Expr::contains(AttrTitle::expr(), title.to_string())),
+        filter_builder,
         on_select: Rc::new(on_select),
     })
 }

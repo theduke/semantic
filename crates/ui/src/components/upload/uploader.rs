@@ -307,6 +307,7 @@ impl MsgComponent for State {
                             .ok()
                             .map(Msg::CollectionSelected)
                     }),
+                    None,
                 );
                 div()
                     .and(subtitle_4().and("Select Collection"))

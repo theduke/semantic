@@ -153,7 +153,7 @@ impl MsgComponent for State {
             AddItemMode::AddExisting => {
                 let ignored = filter_ignored_ids
                     .signal_ref(|ids| Expr::not(Expr::in_(AttrId::expr(), ids.clone())));
-                let picker = entity_picker(ignored, handle.on(Msg::Add));
+                let picker = entity_picker(ignored, handle.on(Msg::Add), None);
 
                 box_().and(subtitle_4().and("Find")).and(picker)
             }
