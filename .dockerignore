@@ -1,8 +1,7 @@
 target
 crates/xtask/target
 /data
-/.git
 node_modules
 js/node_modules
 js/.yarn
-
+lib/docker/Dockerfile
