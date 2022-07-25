@@ -7,8 +7,8 @@ pub mod entity_view;
 
 use brass::dom::{builder::div, Apply, Attr, Render, Tag, TagBuilder, View};
 use factordb::prelude::{
-    AttrId, AttrIdent, AttrMapExt, AttrType, AttributeDescriptor, AttributeSchema, DataMap, Id,
-    Timestamp, Value, ValueType,
+    AttrId, AttrIdent, AttrMapExt, AttrType, AttributeDescriptor, AttributeSchema, DataMap, Expr,
+    Id, Timestamp, Value, ValueType,
 };
 use semantic_core::base::AttrTitle;
 
@@ -84,6 +84,19 @@ pub fn attr_title(attr: &AttributeSchema) -> &str {
         title.as_str()
     } else {
         attr.ident.as_str()
+    }
+}
+
+pub fn build_search_term_expr(term: &str) -> Expr {
+    let trimmed = term.trim_start();
+    if let Ok(id) = trimmed.parse::<Id>() {
+        Expr::eq(AttrId::expr(), id)
+    } else if trimmed.starts_with("~*") && trimmed.len() > 2 {
+        Expr::regex_match_case_insensitive(AttrTitle::expr(), &trimmed[2..])
+    } else if trimmed.starts_with("~") && trimmed.len() > 1 {
+        Expr::regex_match(AttrTitle::expr(), &trimmed[1..])
+    } else {
+        Expr::contains(AttrTitle::expr(), term.trim_end())
     }
 }
 

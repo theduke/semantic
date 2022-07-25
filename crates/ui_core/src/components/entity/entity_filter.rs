@@ -20,6 +20,8 @@ use crate::{
     validate::Validator,
 };
 
+use super::build_search_term_expr;
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum FilterSort {
     Id,
@@ -42,13 +44,8 @@ impl EntityFilterForm {
     pub fn build_expr(&self) -> Expr {
         let mut e = Expr::Literal(factordb::data::Value::Bool(true));
 
-        let search = self.search.trim();
-        if !search.is_empty() {
-            let se = Expr::contains(
-                Expr::attr::<semantic_core::base::AttrTitle>(),
-                search.clone(),
-            );
-            e = e.and_with(se);
+        if !self.search.trim().is_empty() {
+            e = e.and_with(build_search_term_expr(&self.search));
         }
 
         if !self.entity_types.is_empty() {

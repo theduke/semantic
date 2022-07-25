@@ -7,16 +7,16 @@ use brass::{
     signal::signal::{Mutable, Signal, SignalExt},
 };
 use factordb::{
-    prelude::{AttrId, DataMap, Id},
+    prelude::DataMap,
     query::{expr::Expr, select::Select},
-    schema::AttributeDescriptor,
 };
 use js_sys::Function;
-use semantic_core::base::{entity_title, AttrTitle};
+use semantic_core::base::entity_title;
 use wasm_bindgen::JsCast;
 
 use crate::{
     components::{
+        entity::build_search_term_expr,
         loader::Loader,
         util::{ButtonBuilder, Cls},
     },
@@ -173,20 +173,7 @@ pub fn entity_picker(
     on_select: impl Fn(DataMap) + 'static,
     filter_builder: Option<Box<dyn Fn(&str) -> Expr>>,
 ) -> View {
-    let filter_builder = filter_builder.unwrap_or_else(|| {
-        Box::new(|title| {
-            let trimmed = title.trim_start();
-            if let Ok(id) = trimmed.parse::<Id>() {
-                Expr::eq(AttrId::expr(), id)
-            } else if trimmed.starts_with("~*") && trimmed.len() > 2 {
-                Expr::regex_match_case_insensitive(AttrTitle::expr(), &trimmed[2..])
-            } else if trimmed.starts_with("~") && trimmed.len() > 1 {
-                Expr::regex_match(AttrTitle::expr(), &trimmed[1..])
-            } else {
-                Expr::contains(AttrTitle::expr(), title.trim_end())
-            }
-        })
-    });
+    let filter_builder = filter_builder.unwrap_or_else(|| Box::new(build_search_term_expr));
 
     State::build(EntityPicker {
         base_filter: base_filter.boxed(),
