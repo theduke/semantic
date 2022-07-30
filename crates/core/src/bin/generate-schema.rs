@@ -88,6 +88,7 @@ fn main() {
         .and::<plugin::FetchUrlOutput>()
         .and::<core::PluginSource>()
         .and::<api::Reply>()
+        .and::<api::FileUploadMetadata>()
         .finish()
         .unwrap();
 

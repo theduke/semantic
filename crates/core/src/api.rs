@@ -97,9 +97,12 @@ pub struct BackendConfig {
 }
 
 #[derive(serde::Serialize, serde::Deserialize, Clone, Debug, Default)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[cfg_attr(feature = "schema", derive(ts_rs::TS))]
 pub struct FileUploadMetadata {
     pub filename: Option<String>,
     pub title: Option<String>,
+    #[cfg_attr(feature = "schema", ts(type = "string|null|undefined"))]
     pub url: Option<url::Url>,
     pub ident: Option<String>,
     pub parent: Option<Id>,

@@ -261,6 +261,8 @@ impl Plugin for SemanticBasePlugin {
                     // socialmedia
                     AttrSocialMediaPostContent::schema(),
                     AttrSocialMediaPostUserId::schema(),
+                    AttrSocialMediaPlatformName::schema(),
+                    AttrSocialMediaPlatformId::schema(),
                     // Notes.
                     notes::AttrNoteBody::schema(),
                     // Collection.
@@ -274,6 +276,7 @@ impl Plugin for SemanticBasePlugin {
                     person::AttrFamilyName::schema(),
                     person::AttrBirthDate::schema(),
                     person::Gender::schema(),
+                    AttrLikeCount::schema(),
                 ],
                 entities: vec![
                     // File
@@ -282,6 +285,7 @@ impl Plugin for SemanticBasePlugin {
                     Video::schema(),
                     // socialmedia
                     SocialMediaPost::schema(),
+                    SocialMediaAccount::schema(),
                     // Notes
                     notes::Note::schema(),
                     // collection
