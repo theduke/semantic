@@ -132,7 +132,7 @@ pub fn entity_title(data: &DataMap) -> String {
 pub struct AttrDescription(String);
 
 #[derive(Attribute)]
-#[factor(namespace = "semantic", title = "Url")]
+#[factor(namespace = "semantic", title = "Url", index)]
 pub struct AttrUrl(url::Url);
 
 #[derive(Attribute)]
@@ -1155,6 +1155,13 @@ impl Plugin for SemanticBasePlugin {
                 .into(),
             );
 
+        let make_url_indexed = Migration::with_name("make_url_indexed").action(
+            SchemaAction::AttributeCreateIndex(AttributeCreateIndex {
+                attribute: AttrUrl::QUALIFIED_NAME.to_string(),
+                unique: false,
+            }),
+        );
+
         vec![
             rollup,
             create_like_count,
@@ -1162,6 +1169,7 @@ impl Plugin for SemanticBasePlugin {
             create_bookmark,
             add_pixel_width_height,
             create_imported_at,
+            make_url_indexed,
         ]
     }
 }
