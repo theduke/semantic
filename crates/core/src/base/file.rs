@@ -11,7 +11,8 @@ use factordb::{
 use serde::{Deserialize, Serialize};
 
 use super::{
-    AttrCreatedAt, AttrPreviewImageBlobUri, AttrPreviewImageUrl, AttrTitle, AttrUpdatedAt, AttrUrl,
+    AttrCreatedAt, AttrImportedAt, AttrPreviewImageBlobUri, AttrPreviewImageUrl, AttrTitle,
+    AttrUpdatedAt, AttrUrl,
 };
 
 /// A hash, prefixed by the hash type.
@@ -219,6 +220,10 @@ pub struct File {
     #[factor(attr = AttrUpdatedAt)]
     #[serde(rename = "semantic/updated_at")]
     pub updated_at: Option<Timestamp>,
+
+    #[factor(attr = AttrImportedAt)]
+    #[serde(rename = "semantic/imported_at")]
+    pub imported_at: Option<Timestamp>,
 
     #[factor(ignore)]
     #[serde(flatten)]

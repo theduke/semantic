@@ -17,8 +17,8 @@ use semantic_core::{
     api::{self, BackendConfig, DbConfig, FileImportMetadata, SemanticSchema},
     base::{
         entity_title, AttrBlobUri, AttrBlobUriWeb, AttrDownloadUrl, AttrFileName, AttrFileSize,
-        AttrHash, AttrImportedAt, AttrMimeType, AttrOriginalHash, AttrPreviewImageBlobUri,
-        SemanticBasePlugin, Tag, Video,
+        AttrHash, AttrMimeType, AttrOriginalHash, AttrPreviewImageBlobUri, SemanticBasePlugin, Tag,
+        Video,
     },
     core::SemanticCorePlugin,
     plugin::{FetchUrlJob, FetchUrlOutput, ImportJob, ImportOutput, PluginDescriptor},
@@ -666,8 +666,8 @@ impl App {
             updated_at: Some(now),
             extra: Default::default(),
             preview_image_blob_uri: None,
+            imported_at: Some(Timestamp::now()),
         };
-        file.extra.insert_attr::<AttrImportedAt>(Timestamp::now());
 
         // Build the data.
 

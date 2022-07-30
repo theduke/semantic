@@ -1122,9 +1122,38 @@ impl Plugin for SemanticBasePlugin {
                 .into(),
             );
 
-        let create_imported_at = Migration::with_name("create_imported_at").attr_create(
-            AttributeSchema::new(AttrImportedAt::QUALIFIED_NAME, ValueType::DateTime),
-        );
+        let create_imported_at = Migration::with_name("create_imported_at")
+            .attr_create(AttributeSchema::new(
+                AttrImportedAt::QUALIFIED_NAME,
+                ValueType::DateTime,
+            ))
+            .action(
+                EntityAttributeAdd {
+                    entity: File::QUALIFIED_NAME.to_string(),
+                    attribute: AttrImportedAt::QUALIFIED_NAME.to_string(),
+                    cardinality: Cardinality::Optional,
+                    default_value: None,
+                }
+                .into(),
+            )
+            .action(
+                EntityAttributeAdd {
+                    entity: SocialMediaPost::QUALIFIED_NAME.to_string(),
+                    attribute: AttrImportedAt::QUALIFIED_NAME.to_string(),
+                    cardinality: Cardinality::Optional,
+                    default_value: None,
+                }
+                .into(),
+            )
+            .action(
+                EntityAttributeAdd {
+                    entity: SocialMediaAccount::QUALIFIED_NAME.to_string(),
+                    attribute: AttrImportedAt::QUALIFIED_NAME.to_string(),
+                    cardinality: Cardinality::Optional,
+                    default_value: None,
+                }
+                .into(),
+            );
 
         vec![
             rollup,

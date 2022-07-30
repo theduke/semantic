@@ -1,7 +1,7 @@
-use factordb::prelude::{Attribute, DataMap, Entity, Id};
+use factordb::prelude::{Attribute, DataMap, Entity, Id, Timestamp};
 use serde::{Deserialize, Serialize};
 
-use super::{AttrIdent, AttrTitle, AttrUsername, Person};
+use super::{AttrIdent, AttrImportedAt, AttrTitle, AttrUsername, Person};
 
 #[derive(Attribute)]
 #[factor(
@@ -70,6 +70,10 @@ pub struct SocialMediaPost {
     #[serde(rename = "semantic/social_media_post_content")]
     pub content_ids: Vec<Id>,
 
+    #[factor(attr = AttrImportedAt)]
+    #[serde(rename = "semantic/imported_at")]
+    pub imported_at: Option<Timestamp>,
+
     #[factor(ignore)]
     #[serde(flatten)]
     pub extra: DataMap,
@@ -97,6 +101,10 @@ pub struct SocialMediaAccount {
     #[factor(extend)]
     #[serde(flatten)]
     pub person: Person,
+
+    #[factor(attr = AttrImportedAt)]
+    #[serde(rename = "semantic/imported_at")]
+    pub imported_at: Option<Timestamp>,
 
     #[factor(ignore)]
     #[serde(flatten)]
