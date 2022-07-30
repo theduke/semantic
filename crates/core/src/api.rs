@@ -212,10 +212,11 @@ impl Job {
                             progress_message: _,
                             progress_percent: _,
                         } if old_step != step_name => {
-                            self.steps
-                                .iter_mut()
-                                .find(|s| &s.name == old_step)
-                                .map(|old_step| old_step.finished_at = Some(now));
+                            if let Some(old_step) =
+                                self.steps.iter_mut().find(|s| &s.name == old_step)
+                            {
+                                old_step.finished_at = Some(now);
+                            }
                         }
                         _ => {}
                     }
@@ -558,13 +559,10 @@ impl<E: ApiClientExecutor> ApiClient<E> {
         T: factordb::schema::EntityContainer + serde::de::DeserializeOwned,
     {
         match self.exec.execute(Query::Select(select)).await {
-            Ok(Reply::Select(items)) => {
-                let entities = items
-                    .into_iter()
-                    .map(|map| T::try_from_map(map).map_err(anyhow::Error::from))
-                    .collect::<Result<Vec<_>, _>>();
-                entities
-            }
+            Ok(Reply::Select(items)) => items
+                .into_iter()
+                .map(|map| T::try_from_map(map).map_err(anyhow::Error::from))
+                .collect::<Result<Vec<_>, _>>(),
             Ok(_other) => Err(anyhow::anyhow!("API returned invalid data")),
             Err(err) => Err(err),
         }
