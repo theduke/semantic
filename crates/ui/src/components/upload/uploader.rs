@@ -17,8 +17,8 @@ use factordb::{
     AnyError,
 };
 use semantic_core::{
-    api::FileUploadMetadata,
-    base::{Collection, TypedFile},
+    api::{self, FileUploadMetadata},
+    base::Collection,
 };
 use semantic_ui_core::{
     base::collection::collection_create,
@@ -51,7 +51,7 @@ pub enum Msg {
     RemoveFile(Uuid),
     UploadResult {
         id: Uuid,
-        result: Result<TypedFile, AnyError>,
+        result: Result<api::FileUploadReply, AnyError>,
     },
     ClearUploaded,
     Reset,
@@ -192,17 +192,14 @@ impl MsgComponent for State {
             Msg::UploadResult { id, result } => {
                 self.loader.set_idle();
                 match result {
-                    Ok(typed_file) => {
+                    Ok(data) => {
                         {
                             let mut lock = self.files.lock_mut();
                             if let Some(index) = lock.iter().position(|f| f.id == id) {
                                 lock.remove(index);
                             }
                             self.queue_length.set(lock.len());
-
-                            if let Ok(map) = typed_file.into_map() {
-                                self.uploaded_files.lock_mut().push_cloned(map);
-                            }
+                            self.uploaded_files.lock_mut().push_cloned(data.file);
                         }
 
                         if let Err(error) = self.upload(&ctx) {

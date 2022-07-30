@@ -515,7 +515,7 @@ impl App {
         &self,
         meta: api::FileUploadMetadata,
         data: Vec<u8>,
-    ) -> Result<semantic_core::base::TypedFile, AnyError> {
+    ) -> Result<api::FileUploadReply, AnyError> {
         use semantic_core::base::TypedFile;
 
         tracing::trace!(?meta, size=%data.len(), "file upload started");
@@ -581,6 +581,8 @@ impl App {
         {
             let mut file = semantic_core::base::File::try_from_map(old_file.clone())?;
 
+            let old_file_id = old_file.get_id().unwrap_or_else(|| Id::nil());
+
             if let Some(blob_path) = &file.blob_uri {
                 // Make sure the blob still exists.
                 if blob.get_meta(&blob_path).await?.is_some() {
@@ -594,7 +596,7 @@ impl App {
                         (old_file.get_attr::<AttrIdent>(), &meta.ident)
                     {
                         if &old_ident != new_ident {
-                            bail!("File already exists with ident '{old_ident}', but metadata specifies different ident '{new_ident}'");
+                            bail!("File already exists with ident '{old_ident}', but metadata specifies different ident '{new_ident}' (old file id: {})", old_file_id);
                         }
                     }
 
@@ -603,7 +605,7 @@ impl App {
                         new_parent.as_ref().and_then(|e| e.get_attr::<AttrParent>()),
                     ) {
                         if old_parent != new_parent {
-                            bail!("File already exists with parent '{old_parent}', but metadata specifies different parent '{new_parent}'");
+                            bail!("File already exists with parent '{old_parent}', but metadata specifies different parent '{new_parent}' (old file id: {})", old_file_id);
                         }
                     }
 
@@ -622,7 +624,10 @@ impl App {
                         old_file
                     };
 
-                    return TypedFile::from_map(final_file);
+                    return Ok(api::FileUploadReply {
+                        file: final_file,
+                        is_new: false,
+                    });
                 }
             }
         }
@@ -729,14 +734,19 @@ impl App {
             tracing::trace!("file did not change");
         }
 
-        Ok(item)
+        let final_file = db.entity(id).await?;
+
+        Ok(api::FileUploadReply {
+            file: final_file,
+            is_new: true,
+        })
     }
 
     pub async fn upload_file(
         &self,
         meta: api::FileUploadMetadata,
         data: Vec<u8>,
-    ) -> Result<semantic_core::base::TypedFile, AnyError> {
+    ) -> Result<api::FileUploadReply, AnyError> {
         self.upload_file_inner(meta, data)
             .instrument(tracing::debug_span!("file upload"))
             .await

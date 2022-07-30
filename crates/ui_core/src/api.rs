@@ -73,7 +73,7 @@ pub fn new_api(endpoint: Option<String>) -> BrowserApiClient {
 pub async fn upload_file(
     file: web_sys::File,
     meta: FileUploadMetadata,
-) -> Result<semantic_core::base::TypedFile, AnyError> {
+) -> Result<api::FileUploadReply, AnyError> {
     let meta_header = base64::encode(serde_json::to_string(&meta)?);
 
     let mut opts = web_sys::RequestInit::new();
@@ -106,8 +106,7 @@ pub async fn upload_file(
         .map_err(anyerr_from_js)?;
     let body: String = body_js.into();
 
-    let response: api::ApiResponse<UploadFile> =
-        serde_json::from_slice(body.as_bytes())?;
+    let response: api::ApiResponse<api::FileUploadReply> = serde_json::from_slice(body.as_bytes())?;
     match response {
         api::ApiResponse::Ok(reply) => Ok(reply),
         api::ApiResponse::Err(err) => Err(AnyError::msg(err.message)),

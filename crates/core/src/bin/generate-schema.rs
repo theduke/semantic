@@ -89,6 +89,7 @@ fn main() {
         .and::<core::PluginSource>()
         .and::<api::Reply>()
         .and::<api::FileUploadMetadata>()
+        .and::<api::FileUploadReply>()
         .finish()
         .unwrap();
 

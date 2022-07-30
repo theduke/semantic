@@ -183,7 +183,7 @@ async fn handler_blob_upload(
 async fn file_upload(
     state: &ServerState,
     req: Request<Body>,
-) -> Result<semantic_core::base::TypedFile, AnyError> {
+) -> Result<api::FileUploadReply, AnyError> {
     request_validate_auth_cookie(state, &req)?;
 
     tracing::trace!("file upload started");

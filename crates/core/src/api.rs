@@ -112,6 +112,14 @@ pub struct FileUploadMetadata {
     pub tag_ids: Vec<Id>,
 }
 
+#[derive(serde::Serialize, serde::Deserialize, Clone, Debug, Default)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[cfg_attr(feature = "schema", derive(ts_rs::TS))]
+pub struct FileUploadReply {
+    pub file: DataMap,
+    pub is_new: bool,
+}
+
 #[derive(serde::Serialize, serde::Deserialize, Clone, Debug)]
 pub struct FileImportMetadata {
     /// Id of the collection to which the uploaded files should be added.

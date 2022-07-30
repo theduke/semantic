@@ -8,7 +8,7 @@ use factordb::{
 };
 use futures::future::BoxFuture;
 use semantic_core::{
-    api::{FileImportMetadata, FileUploadMetadata},
+    api::{self, FileImportMetadata, FileUploadMetadata},
     base::{AttrParent, AttrSecondaryUrl, AttrTags, AttrTitle, AttrUrl},
 };
 
@@ -109,7 +109,7 @@ async fn import_file(
     tag_ids: Vec<Id>,
     title: Option<String>,
     url: Option<url::Url>,
-) -> Result<semantic_core::base::TypedFile, AnyError> {
+) -> Result<api::FileUploadReply, AnyError> {
     let content = tokio::fs::read(path).await?;
 
     let meta = FileUploadMetadata {
@@ -161,7 +161,7 @@ fn import_path_recursive(
 }
 
 pub type FileImportCallback =
-    Arc<dyn Fn(&std::path::Path, &semantic_core::base::TypedFile) + Send + Sync + 'static>;
+    Arc<dyn Fn(&std::path::Path, &api::FileUploadReply) + Send + Sync + 'static>;
 
 pub async fn import_files(
     app: &App,
