@@ -32,32 +32,32 @@ fn main() -> Result<(), DynError> {
     let args_str: Vec<_> = args.iter().map(|x| x.as_str()).collect();
 
     match args_str.as_slice() {
-        &["git-pre-commit"] => cmd_git_pre_commit(),
-        &["install-git-hooks"] => cmd_install_git_hooks(),
-        &["build-ui"] => task_build_ui(true),
-        &["build-ui", "--dev"] => task_build_ui(false),
-        &["watch-server"] => cmd_watch_server(true),
-        &["watch-server", "--no-backend"] => cmd_watch_server(false),
-        &["watch-ui"] => trunk_watch_ui(false),
-        &["watch-ui", "--release"] => trunk_watch_ui(true),
-        &["build-cli"] => cmd_build_cli(true),
-        &["build-cli", "--dev"] => cmd_build_cli(false),
-        &["build-appimage"] => cmd_build_appimage(),
-        &["build-portable"] => cmd_build_portable(),
-        &["build"] => cmd_build(),
-        &["install"] => cmd_install(),
-        &["build-wasm-js"] => gen_javascript(),
-        &["build-typescript"] => gen_typescript(),
-        &["help"] => {
+        ["git-pre-commit"] => cmd_git_pre_commit(),
+        ["install-git-hooks"] => cmd_install_git_hooks(),
+        ["build-ui"] => task_build_ui(true),
+        ["build-ui", "--dev"] => task_build_ui(false),
+        ["watch-server"] => cmd_watch_server(true),
+        ["watch-server", "--no-backend"] => cmd_watch_server(false),
+        ["watch-ui"] => trunk_watch_ui(false),
+        ["watch-ui", "--release"] => trunk_watch_ui(true),
+        ["build-cli"] => cmd_build_cli(true),
+        ["build-cli", "--dev"] => cmd_build_cli(false),
+        ["build-appimage"] => cmd_build_appimage(),
+        ["build-portable"] => cmd_build_portable(),
+        ["build"] => cmd_build(),
+        ["install"] => cmd_install(),
+        ["build-wasm-js"] => gen_javascript(),
+        ["build-typescript"] => gen_typescript(),
+        ["help"] => {
             eprintln!("{}", USAGE);
             Ok(())
         }
-        &[first, ..] => {
+        [first, ..] => {
             eprintln!("Error: Unknown command: {}", first);
             eprintln!("{}", USAGE);
             std::process::exit(1);
         }
-        &[] => {
+        [] => {
             eprintln!("Error: No command specified");
             eprintln!("{}", USAGE);
             std::process::exit(1);
