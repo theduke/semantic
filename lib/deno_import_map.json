@@ -1,6 +1,0 @@
-{
-  "imports": {
-    "@semantic/semantic.ts": "./typescript/semantic.ts",
-    "@semantic/schema.ts": "./typescript/schema.ts"
-  }
-}
