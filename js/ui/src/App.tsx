@@ -24,7 +24,6 @@ import {
 import { TagManagerPage } from "./component/tag/TagManager";
 import { EntitySearcherModalToggle } from "./component/entity/search";
 import { EntityCreateSelectorPage } from "./component/entity/EntityCreateSelectorPage";
-import { useRoute } from "solid-app-router/dist/routing";
 import { EntityCreatePage } from "./component/entity/EntityCreatePage";
 
 export function App(): JSX.Element {
@@ -85,6 +84,7 @@ function AppNavbar(): JSX.Element {
       start={
         <>
           <NavbarItemLink href="/browse">Browse</NavbarItemLink>
+          <NavbarItemLink href="/entity/create">Create</NavbarItemLink>
         </>
       }
       end={

@@ -1,4 +1,4 @@
-import { createSignal, JSX } from "solid-js";
+import { createEffect, createSignal, ErrorBoundary, JSX, Show } from "solid-js";
 import {
   EntityRenderOpts,
   UiRegistry,
@@ -13,12 +13,19 @@ import {
   genericEntityTitle,
 } from "../../semantic";
 import {
+  BaseEntity,
+  FACTOR_ID,
   FACTOR_IDENT,
   FACTOR_TITLE,
   FACTOR_TYPE,
   FACTOR_VALUE_TYPE,
 } from "../../semantic/schema";
 import { EntitySchema } from "../../semantic/core";
+import { EntityChildren } from "./EntityChildren";
+import { EntityEditor } from "./EntityEditor";
+import { EntityDeleterModal } from "./EntityDeleterModal";
+import { NotificationError, NotificationWarning } from "../bulma/notification";
+import { Button } from "../bulma/button";
 
 export function rendererValue(value: any): JSX.Element {
   const ty = typeof value;
@@ -121,11 +128,23 @@ export function renderEntityTable(
     const rendered = renderAttrValue(reg, attr, value);
     return (
       <tr>
-        <td>{name}</td>
+        <td>
+          <span title={attr}>{name}</span>
+        </td>
         <td>{rendered}</td>
       </tr>
     );
   });
+
+  const children = (
+    <tr>
+      <td>Children</td>
+      <td>
+        <EntityChildren id={item[FACTOR_ID]} />
+      </td>
+    </tr>
+  );
+  rows.push(children);
 
   return <table class="table">{rows}</table>;
 }
@@ -170,35 +189,118 @@ export function renderGenericEntityBox(
 
   const ident = schema?.["factor/ident"];
 
+  const [getItem, setItem] = createSignal<ValueMap>(item);
+  const [deleted, setDeleted] = createSignal<boolean>(false);
+
   let actions: EntityAction[] = [];
+
+  if (opts.allowEdit) {
+    const editAction: EntityAction = {
+      label: "Edit",
+      icon: "pencil",
+      replacesContent: true,
+      render: (props) => {
+        return (
+          <div>
+            <ErrorBoundary
+              fallback={(err: any) => (
+                <NotificationError>
+                  <div class="mb-4">
+                    Could not render form:
+                    <br />
+                    {err.toString()}
+                  </div>
+                  <div>
+                    <Button
+                      onClick={() => {
+                        props.close(editAction);
+                      }}
+                    >
+                      Okay
+                    </Button>
+                  </div>
+                </NotificationError>
+              )}
+            >
+              <EntityEditor
+                item={getItem()}
+                onSaved={(item) => {
+                  setItem(item);
+                  props.close(editAction);
+                  opts.onModified?.(item);
+                }}
+              />
+            </ErrorBoundary>
+          </div>
+        );
+      },
+    };
+    actions.push(editAction);
+  }
+  if (opts.allowDelete) {
+    const deleteAction: EntityAction = {
+      label: "Delete",
+      icon: "trash",
+      replacesContent: false,
+      render: (props) => {
+        return (
+          <EntityDeleterModal
+            entity={getItem() as BaseEntity}
+            onDeleted={() => {
+              setDeleted(true);
+              props.close(deleteAction);
+              opts.onDeleted?.(getItem());
+            }}
+            onCancel={() => {
+              props.close(deleteAction);
+            }}
+          />
+        );
+      },
+    };
+    actions.push(deleteAction);
+  }
 
   let [content, setContent] = createSignal<JSX.Element>(null);
 
+  let render: (item: ValueMap) => JSX.Element;
   const contentRender = reg.entityContentRenderers[ident];
 
   if (!!contentRender) {
-    setContent(contentRender(item, opts));
+    render = (item) => contentRender(item, opts);
 
     actions.push({
       label: "Show table",
       icon: "table",
       replacesContent: true,
       render: () => {
-        return renderEntityTable(reg, item);
+        return renderEntityTable(reg, getItem());
       },
     });
   } else {
-    setContent(renderEntityTable(reg, item));
+    render = (item) => renderEntityTable(reg, item);
   }
 
-  return (
+  setContent(render(getItem()));
+  createEffect(() => {
+    console.debug('replacting entity box content');
+    setContent(render(getItem()));
+  });
+
+  const box = (
     <EntityBox
       linkPath={entityLinkPath(item)}
-      title={genericEntityTitle(item)}
+      title={genericEntityTitle(getItem())}
       type={typeName}
       actions={actions}
     >
       {content()}
     </EntityBox>
+  );
+
+  return (
+    <Show when={deleted()} fallback={box}>
+      <NotificationWarning>Item was deleted.</NotificationWarning>
+    </Show>
   );
 }

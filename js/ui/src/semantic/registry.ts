@@ -14,6 +14,10 @@ export type ValueMap = Record<string, any>;
 
 export interface EntityRenderOpts {
   preview: boolean;
+  allowDelete?: boolean;
+  allowEdit?: boolean;
+  onDeleted?: (item: ValueMap) => void;
+  onModified?: (item: ValueMap) => void;
 }
 
 export type EntityTitleRenderer = (entity: ValueMap) => JSX.Element;

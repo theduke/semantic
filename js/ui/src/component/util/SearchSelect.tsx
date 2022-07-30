@@ -1,4 +1,4 @@
-import { leading, debounce } from "@solid-primitives/scheduled";
+import { throttle } from "lodash";
 import {
   createResource,
   createSignal,
@@ -7,8 +7,11 @@ import {
   JSX,
   Match,
   onMount,
+  ParentComponent,
+  ParentProps,
   Show,
   Switch,
+  untrack,
 } from "solid-js";
 import { Notification } from "../bulma/notification";
 import { SearchInput } from "../bulma/SearchInput";
@@ -16,7 +19,9 @@ import { renderError, SPINNER } from "./load";
 
 export interface SearchSelectProps<T> {
   search: (term: string) => Promise<T[]>;
+  defaultItems?: T[];
   renderItem: (item: T, index: number, onClick: () => void) => JSX.Element;
+  itemWrapper?: ParentComponent;
   onSelect: (item: T) => void;
   searchPlaceholder?: string;
   onCancel?: () => void;
@@ -27,50 +32,56 @@ export interface SearchSelectProps<T> {
 export function SearchSelect<T>(props: SearchSelectProps<T>): JSX.Element {
   const [term, setTerm] = createSignal("");
 
-  const [res] = createResource(term, props.search);
+  const doSearch = (term: string) => {
+    if (term.length > 0) {
+      return props.search(term);
+    } else {
+      return props.defaultItems || [];
+    }
+  };
+
+  const [res] = createResource(term, doSearch);
 
   let inputRef: HTMLInputElement | undefined;
 
-  const onSearch = leading(
-    debounce,
-    (term: string) => {
-      setTerm(term.trim());
-    },
-    500
-  );
+  const onTermChange = throttle((term: string) => {
+    console.log("termChange", { term });
+    setTerm(term.trim());
+  }, 500);
 
   const noResultsFallback =
     props.noResultsFallback ?? (() => <p>Nothing found.</p>);
 
-  console.debug({ f: props.autoFocus });
   if (props.autoFocus) {
     onMount(() => {
-      console.log({ inputRef });
       inputRef?.focus();
     });
   }
+
+  const ItemWrapper =
+    props.itemWrapper || ((props: ParentProps) => <div>{props.children}</div>);
+
+  console.debug("rendering SearchSelect");
 
   return (
     <div>
       <div class="mb-3">
         <SearchInput
-          ref={inputRef}
           placeholder={props.searchPlaceholder ?? "Search..."}
-          onInput={(e) => onSearch(e.currentTarget.value)}
+          onInput={(e) => {
+            e.stopPropagation();
+            onTermChange(e.currentTarget.value);
+          }}
         />
       </div>
 
       <div>
         <ErrorBoundary fallback={renderError}>
           <Switch>
-            <Match when={term().length < 1}>
-              <Notification>Enter a search term to see results.</Notification>
-            </Match>
-            <Match when={res.loading}>{SPINNER}</Match>
             <Match when={res()}>
               {(items) => (
-                <Show when={term().length > 0}>
-                  <Show when={items.length > 0} fallback={noResultsFallback}>
+                <Show when={items.length > 0} fallback={noResultsFallback}>
+                  <ItemWrapper>
                     <For each={res()}>
                       {(item, index) =>
                         props.renderItem(item, index(), () =>
@@ -78,10 +89,14 @@ export function SearchSelect<T>(props: SearchSelectProps<T>): JSX.Element {
                         )
                       }
                     </For>
-                  </Show>
+                  </ItemWrapper>
                 </Show>
               )}
             </Match>
+            <Match when={term().length < 1}>
+              <Notification>Enter a search term to see results.</Notification>
+            </Match>
+            <Match when={res.loading}>{SPINNER}</Match>
           </Switch>
         </ErrorBoundary>
       </div>

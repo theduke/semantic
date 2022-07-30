@@ -1,11 +1,4 @@
-import {
-  Accessor,
-  Component,
-  createSignal,
-  JSX,
-  Setter,
-  Signal,
-} from "solid-js";
+import { Component, createSignal, JSX, Signal } from "solid-js";
 import { Dynamic } from "solid-js/web";
 import { ButtonSize } from "./button";
 
@@ -20,12 +13,15 @@ export interface TabsProps {
   size?: ButtonSize;
   style?: TabsStyle;
   fullWidth?: boolean;
-  onChange: (index: TabIndex) => void;
+  onChange?: (index: TabIndex) => void;
   children: JSX.Element[];
+
+  signal?: Signal<TabIndex>;
 }
 
 export function Tabs(props: TabsProps): JSX.Element {
-  const [activeIndex, setActiveIndex] = createSignal<TabIndex>(0);
+  const [activeIndex, setActiveIndex] =
+    props.signal || createSignal<TabIndex>(0);
 
   let cls = "tabs";
   if (props.size) {
@@ -43,7 +39,7 @@ export function Tabs(props: TabsProps): JSX.Element {
 
   const onChange = (index: TabIndex) => {
     setActiveIndex(index);
-    props.onChange(index);
+    props.onChange?.(index);
   };
 
   return (
@@ -70,23 +66,20 @@ export interface TabberItem {
 }
 
 export interface TabberProps {
-  activeIndex?: Signal<TabIndex>;
+  signal?: Signal<TabIndex>;
   initialIndex?: TabIndex;
   items: TabberItem[];
 }
 
 export function Tabber(props: TabberProps): JSX.Element {
   const { items } = props;
-  const [activeIndex, setActiveIndex] =
-    props.activeIndex ?? createSignal<number>(props.initialIndex ?? 0);
+  const signal = props.signal ?? createSignal<number>(props.initialIndex ?? 0);
 
   return (
     <div>
-      <Tabs activeIndex={activeIndex} setActiveIndex={setActiveIndex}>
-        {items.map((item) => item.label)}
-      </Tabs>
+      <Tabs signal={signal}>{items.map((item) => item.label)}</Tabs>
 
-      <Dynamic component={items[activeIndex()].children} />
+      <Dynamic component={items[signal[0]()].children} />
     </div>
   );
 }

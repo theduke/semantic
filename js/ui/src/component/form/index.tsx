@@ -81,7 +81,7 @@ export class FormState<Values extends Record<string, any>> {
   // private onSubmitAsync?: (value: F) => Promise<FormSubmitResult>;
   // private builder?: (values: {[key in keyof F]: any}) => T;
 
-  private init: FormInit<Values>;
+  init: FormInit<Values>;
   private setStore: SetStoreFunction<StoreData<Values>>;
   state: Store<StoreData<Values>>;
 
@@ -257,9 +257,10 @@ export class FormState<Values extends Record<string, any>> {
   }
 
   private invokeSubmit() {
-    const values = this.buildValues();
     try {
+      const values = this.buildValues();
       const res = this.init?.onSubmit?.(values, this);
+      console.log({ res, isPromise: isPromise(res) });
       if (isPromise(res)) {
         this.setStore("isSubmitting", true);
 
@@ -268,6 +269,7 @@ export class FormState<Values extends Record<string, any>> {
             this.setStore("isSubmitting", false);
           })
           .catch((error) => {
+            console.error("Form submit threw an exception", { error });
             this.setStore(
               produce((store) => {
                 store.validation = {

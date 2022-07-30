@@ -1,4 +1,3 @@
-import { EntitySchema } from "./core";
 import { ValueMap } from "./registry";
 import { BaseEntity, FACTOR_ID, FACTOR_IDENT, SEMANTIC_TITLE } from "./schema";
 
@@ -20,7 +19,7 @@ export function genericTypedEntityTitle<E extends BaseEntity>(
   }
 }
 
-export function genericEntityTitle(entity: EntitySchema): string {
+export function genericEntityTitle(entity: ValueMap): string {
   const title = entity[SEMANTIC_TITLE];
   if (title) {
     return title.toString();

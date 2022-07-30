@@ -11,7 +11,7 @@ export interface PageTitleProps {
 }
 
 export function PageTitle(props: PageTitleProps): JSX.Element {
-  return <h2 class="title is-2">{props.children}</h2>;
+  return <h3 class="title is-3">{props.children}</h3>;
 }
 
 export interface GenericPageProps {

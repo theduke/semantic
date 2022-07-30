@@ -11,6 +11,8 @@ const FA_ICON_MAP = {
   plus: "fa-solid fa-plus",
   minus: "fa-solid fa-minus",
   arrowsCross: "fa-solid fa-up-down-left-right",
+  trash: "fa-solid fa-trash",
+  xmark: "fa-solid fa-xmark",
 };
 
 export type IconSize = "is-small" | "is-medium" | "is-large";

@@ -33,31 +33,54 @@ export function EntityBox(props: EntityBoxProps): JSX.Element {
     },
   };
 
+  console.debug('rendering EntityBox');
+
   let actions: JSX.Element = null;
   if (props.actions && props.actions.length > 0) {
     actions = (
       <div style={{ display: "flex", "align-items": "center" }}>
         {props.actions.map((action, index) => {
-          return (
+          const buttonInactive = (
             <Button
               title={action.label}
               isActive={activeAction()?.index === index}
               size="is-small"
               onclick={() => {
-                if (activeAction()) {
-                  setActiveAction(null);
-                } else {
-                  setActiveAction({ index });
-                }
+                setActiveAction({ index });
               }}
             >
               <Icon icon={action.icon} />
             </Button>
           );
+
+          const buttonActive = () => (
+            <Button
+              title={action.label}
+              isActive={activeAction()?.index === index}
+              color="is-info"
+              size="is-small"
+              onclick={() => {
+                setActiveAction(null);
+              }}
+            >
+              <Icon icon={action.icon} />
+            </Button>
+          );
+
+          return (
+            <Show
+              when={activeAction()?.index === index}
+              fallback={buttonInactive}
+            >
+              {buttonActive}
+            </Show>
+          );
         })}
       </div>
     );
   }
+
+  console.debug('entity box render');
 
   return (
     <div class="card">
@@ -75,6 +98,7 @@ export function EntityBox(props: EntityBoxProps): JSX.Element {
       <div class="card-content">
         <Show when={activeAction()} fallback={props.children}>
           {(index) => {
+            console.log('rendering action content');
             const action = props.actions?.[index.index];
             if (!action) {
               throw new Error("invalid action index");

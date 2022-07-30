@@ -7,7 +7,7 @@ import { EntityType } from "../../semantic";
 import { ValueMap } from "../../semantic/registry";
 import { NotificationError } from "../bulma/notification";
 import { GenericPage } from "../util";
-import { GenericEntityForm } from "./entity_form";
+import { EntityCreator } from "./EntityCreator";
 
 export interface EntityCreatePageProps {
   entityType: EntityType;
@@ -19,15 +19,19 @@ export function EntityCreatePage(props: EntityCreatePageProps): JSX.Element {
   const api = useApi();
   const navigate = useNavigate();
 
+  const typeTitle = schema?.["factor/title"] ?? schema?.["factor/ident"];
+
   const onSubmit = async (entity: ValueMap) => {
     const id = newUuid();
     await api.batch({
-      actions: [{
-        'Create': {
-          id,
-          data: entity,
+      actions: [
+        {
+          Create: {
+            id,
+            data: entity,
+          },
         },
-      }],
+      ],
     });
     navigate(routeEntityPage(id));
   };
@@ -36,19 +40,12 @@ export function EntityCreatePage(props: EntityCreatePageProps): JSX.Element {
     <ErrorBoundary
       fallback={(e) => <NotificationError>{e.toString()}</NotificationError>}
     >
-      <GenericEntityForm
-        registry={reg}
-        schema={schema}
-        submitLabel={"Create"}
-        onSubmit={onSubmit}
-      />
+      <EntityCreator schema={schema} onSubmit={onSubmit} />
     </ErrorBoundary>
   ) : (
     <NotificationError>
       Entity type {props.entityType} not found
     </NotificationError>
   );
-  return (
-    <GenericPage title={"Create " + props.entityType}>{content}</GenericPage>
-  );
+  return <GenericPage title={"New " + typeTitle}>{content}</GenericPage>;
 }

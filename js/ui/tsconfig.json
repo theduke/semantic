@@ -14,5 +14,6 @@
     "noEmit": true,
     "isolatedModules": true
   },
-  "references": [{ "path": "../solid-bulma" }]
+  "references": [{ "path": "../solid-bulma" }],
+  "exclude": ["**/vite-plugin-solid/**/*"]
 }

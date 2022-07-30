@@ -1,0 +1,14 @@
+{
+  "name": "semantic",
+  "version": "1.0.0",
+  "main": "./dist/src/index.js",
+  "types": "./dist/src/index.d.ts",
+  "files": [
+    "./dist"
+  ],
+  "license": "MIT",
+  "dependencies": {
+    "cross-fetch": "^3.1.5",
+    "isomorphic-fetch": "^3.0.0"
+  }
+}

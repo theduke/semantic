@@ -25,6 +25,7 @@ import {
 import { throttle } from "@solid-primitives/scheduled";
 import { NotificationWarning } from "../bulma/notification";
 import { isEqual } from "lodash";
+import { FACTOR_ID } from "../../semantic/schema";
 
 export function BrowsePage(): JSX.Element {
   const api = useApi();
@@ -55,8 +56,7 @@ export function BrowsePage(): JSX.Element {
     }
   });
 
-  const [page] = createResource(fetchFilter, (filter) => {
-    console.debug("filter changed", { filter });
+  const [page, { mutate }] = createResource(fetchFilter, (filter) => {
     if (filter.type === "sql") {
       if (filter.sql.trim()) {
         return api.selectSql(filter.sql);
@@ -65,13 +65,17 @@ export function BrowsePage(): JSX.Element {
       }
     } else {
       const select = buildFilterDataSelect(filter);
-      console.debug({ select });
       return api.select(select);
     }
   });
 
   const opts: EntityRenderOpts = {
     preview: true,
+    allowDelete: true,
+    allowEdit: true,
+    onDeleted: (item) => {
+      mutate((old) => old?.filter((x) => x[FACTOR_ID] != item[FACTOR_ID]));
+    },
   };
 
   return (

@@ -3,13 +3,11 @@ import { FieldAccessor } from ".";
 
 export type InputType = "text" | "number" | "url" | "datetime-local";
 
-export interface InputProps {
-  field: FieldAccessor<string>;
-  placeholder?: string;
-  type?: InputType;
+export interface DateTimeInputProps {
+  field: FieldAccessor<number>;
 }
 
-export function Input(props: InputProps): JSX.Element {
+export function DateTimeInput(props: DateTimeInputProps): JSX.Element {
   const field = props.field;
   let elem: HTMLInputElement | undefined;
 
@@ -17,7 +15,12 @@ export function Input(props: InputProps): JSX.Element {
     createEffect(() => {
       const field = props.field.get();
       if (elem) {
-        elem.value = field?.value ?? "";
+        if (field?.value) {
+          const date = new Date(field.value);
+          if (!isNaN(date as any)) {
+            elem.value = date.toISOString();
+          }
+        }
       }
     });
 
@@ -40,15 +43,20 @@ export function Input(props: InputProps): JSX.Element {
 
   return (
     <input
-      placeholder={props.placeholder}
+      placeholder={"YYYY-MM-DDTHH:MM:SS.SSSZ"}
       class="input"
       ref={elem}
-      type={props.type ?? "text"}
+      type="text"
       onchange={(e) => {
         e.preventDefault();
         e.stopPropagation();
-        const value = elem?.value;
-        field.set(value ?? "");
+        const value = elem?.value?.trim();
+        if (value) {
+          const date = new Date(value);
+          if (!isNaN(date as any)) {
+            field.set(date.getTime());
+          }
+        }
       }}
     />
   );

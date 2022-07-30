@@ -83,15 +83,11 @@ export function BoundarySuspenseLoader<T>(
   return (
     <ErrorBoundary fallback={renderError}>
       <Suspense fallback={SPINNER}>
-        {() => {
-          return (
-            <Show when={data()}>
-              {() => {
-                return props.render(assertDefined(data()));
-              }}
-            </Show>
-          );
-        }}
+        <Show when={data()}>
+          {(data) => {
+            return props.render(data);
+          }}
+        </Show>
       </Suspense>
     </ErrorBoundary>
   );

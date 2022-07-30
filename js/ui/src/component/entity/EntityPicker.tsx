@@ -27,6 +27,7 @@ export interface EntityPickerProps {
     index: number,
     onClick: () => void
   ) => JSX.Element;
+
   onSelect: (entity: ValueMap) => void;
 }
 

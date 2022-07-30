@@ -1,0 +1,10 @@
+export declare type BulmaColor = "is-primary" | "is-link" | "is-info" | "is-success" | "is-warning" | "is-danger" | 'is-black' | 'is-dark' | 'is-light' | 'is-white';
+export declare type BulmaTextColor = "has-text-primary" | "has-text-link" | "has-text-info" | "has-text-success" | "has-text-warning" | "has-text-danger";
+export { Box } from './box';
+import { TagSize as OriginalTagSize, TagProps as OriginalTagProps, Tag, DeletableTagProps as OriginalDeletableTagProps, DeletableTag, TagsSize as OriginalTagsSize, TagsProps as OriginalTagsProps, Tags } from './tag';
+export declare type TagSize = OriginalTagSize;
+export declare type TagProps = OriginalTagProps;
+export declare type DeletableTagProps = OriginalDeletableTagProps;
+export declare type TagsSize = OriginalTagsSize;
+export declare type TagsProps = OriginalTagsProps;
+export { Tag, DeletableTag, Tags };

@@ -1,0 +1,13 @@
+import { BinaryOp, Expr, Value } from "./core";
+export declare function exprBinary(op: BinaryOp, left: Expr, right: Expr): Expr;
+export declare function exprEq(left: Expr, right: Expr): Expr;
+export declare function exprNotEq(left: Expr, right: Expr): Expr;
+export declare function exprAnd(left: Expr, right: Expr): Expr;
+export declare function exprAndMany(exprs: Expr[]): Expr | null;
+export declare function exprOr(left: Expr, right: Expr): Expr;
+export declare function exprContains(left: Expr, right: Expr): Expr;
+export declare function exprIn(left: Expr, right: Expr): Expr;
+export declare function exprAttr(attrName: string): Expr;
+export declare function exprLiteral(value: Value): Expr;
+export declare function exprIsEntityType(ty: string): Expr;
+export declare function exprIsInEntityTypes(types: string[]): Expr;
