@@ -345,7 +345,7 @@ fn gen_typescript() -> Result<(), DynError> {
     }
     let schema = std::str::from_utf8(&res.stdout)?;
 
-    let out_dir = root_path()?.join("ui").join("src").join("semantic");
+    let out_dir = root_path()?.join("js").join("semantic").join("src");
 
     let core_path = out_dir.join("core.ts");
     std::fs::write(&core_path, schema)?;
