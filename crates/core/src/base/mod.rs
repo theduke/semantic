@@ -163,6 +163,10 @@ pub struct AttrDateTime(Timestamp);
 #[factor(namespace = "semantic", title = "Username")]
 pub struct AttrUsername(String);
 
+#[derive(Attribute)]
+#[factor(namespace = "semantic", name = "imported_at", title = "Imported at")]
+pub struct AttrImportedAt(Timestamp);
+
 #[derive(serde::Serialize, serde::Deserialize, Clone)]
 pub enum TextFormat {
     #[serde(rename = "plain")]
@@ -250,6 +254,7 @@ impl Plugin for SemanticBasePlugin {
                     AttrSecondaryUrl::schema(),
                     AttrParent::schema(),
                     AttrEmbeddedInParent::schema(),
+                    AttrImportedAt::schema(),
                     // file
                     AttrBlobUri::schema(),
                     AttrBlobUriWeb::schema(),
@@ -1117,12 +1122,17 @@ impl Plugin for SemanticBasePlugin {
                 .into(),
             );
 
+        let create_imported_at = Migration::with_name("create_imported_at").attr_create(
+            AttributeSchema::new(AttrImportedAt::QUALIFIED_NAME, ValueType::DateTime),
+        );
+
         vec![
             rollup,
             create_like_count,
             create_container_and_parent_sort,
             create_bookmark,
             add_pixel_width_height,
+            create_imported_at,
         ]
     }
 }
