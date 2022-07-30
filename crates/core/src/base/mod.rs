@@ -23,6 +23,9 @@ pub use self::person::*;
 mod tags;
 pub use self::tags::*;
 
+mod bookmark;
+pub use self::bookmark::*;
+
 use factordb::{
     prelude::{
         AttrIdent, AttrMapExt, Attribute, AttributeDescriptor, AttributeSchema, Cardinality,
@@ -1043,6 +1046,34 @@ impl Plugin for SemanticBasePlugin {
                     strict: false,
                 });
 
-        vec![rollup, create_like_count, create_container_and_parent_sort]
+        let create_bookmark = Migration::with_name("create_bookmark").entity_create(EntitySchema {
+            id: Id::nil(),
+            ident: Bookmark::QUALIFIED_NAME.to_string(),
+            title: Some("Bookmark".to_string()),
+            description: None,
+            attributes: vec![
+                EntityAttribute {
+                    attribute: AttrUrl::IDENT,
+                    cardinality: Cardinality::Required,
+                },
+                EntityAttribute {
+                    attribute: AttrTitle::IDENT,
+                    cardinality: Cardinality::Optional,
+                },
+                EntityAttribute {
+                    attribute: AttrCreatedAt::IDENT,
+                    cardinality: Cardinality::Optional,
+                },
+            ],
+            extends: vec![],
+            strict: false,
+        });
+
+        vec![
+            rollup,
+            create_like_count,
+            create_container_and_parent_sort,
+            create_bookmark,
+        ]
     }
 }
