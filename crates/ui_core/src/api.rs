@@ -1,7 +1,7 @@
 use std::pin::Pin;
 
 use factordb::AnyError;
-use semantic_core::api::{ApiClient, FileUploadMetadata, self};
+use semantic_core::api::{self, ApiClient, FileUploadMetadata};
 use wasm_bindgen::{JsCast, JsValue};
 
 fn anyerr_from_js(value: wasm_bindgen::JsValue) -> AnyError {
@@ -14,10 +14,7 @@ pub struct BrowserExecutor {
 }
 
 impl BrowserExecutor {
-    async fn execute(
-        self,
-        query: api::Query,
-    ) -> Result<api::Reply, AnyError> {
+    async fn execute(self, query: api::Query) -> Result<api::Reply, AnyError> {
         let body: JsValue = serde_json::to_string(&query)?.into();
 
         let mut opts = web_sys::RequestInit::new();
@@ -54,8 +51,7 @@ impl BrowserExecutor {
 }
 
 impl api::ApiClientExecutor for BrowserExecutor {
-    type Future =
-        Pin<Box<dyn std::future::Future<Output = Result<api::Reply, AnyError>>>>;
+    type Future = Pin<Box<dyn std::future::Future<Output = Result<api::Reply, AnyError>>>>;
 
     fn execute(&self, query: api::Query) -> Self::Future {
         Box::pin(self.clone().execute(query))
