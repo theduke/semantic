@@ -17,8 +17,8 @@ use semantic_core::{
     api::{self, BackendConfig, DbConfig, FileImportMetadata, SemanticSchema},
     base::{
         entity_title, AttrBlobUri, AttrBlobUriWeb, AttrDownloadUrl, AttrFileName, AttrFileSize,
-        AttrHash, AttrMimeType, AttrOriginalHash, AttrPreviewImageBlobUri, SemanticBasePlugin, Tag,
-        Video,
+        AttrHash, AttrImportedAt, AttrMimeType, AttrOriginalHash, AttrPreviewImageBlobUri,
+        SemanticBasePlugin, Tag, Video,
     },
     core::SemanticCorePlugin,
     plugin::{FetchUrlJob, FetchUrlOutput, ImportJob, ImportOutput, PluginDescriptor},
@@ -667,6 +667,7 @@ impl App {
             extra: Default::default(),
             preview_image_blob_uri: None,
         };
+        file.extra.insert_attr::<AttrImportedAt>(Timestamp::now());
 
         // Build the data.
 
@@ -810,6 +811,8 @@ impl App {
             .into_iter()
             .map(query::mutate::Merge::try_from_map)
             .collect::<Result<Vec<_>, _>>()?;
+
+        // TODO: set semantic/imported_at.
 
         let entity_ids: Vec<_> = merges.iter().map(|merge| merge.id).collect();
 
