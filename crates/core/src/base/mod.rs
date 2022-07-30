@@ -35,8 +35,8 @@ use factordb::{
     query::{
         migrate,
         migrate::{
-            AttributeCreateIndex, EntityAttributeChangeCardinality, EntityAttributeRemove,
-            SchemaAction,
+            AttributeCreateIndex, EntityAttributeAdd, EntityAttributeChangeCardinality,
+            EntityAttributeRemove, SchemaAction,
         },
     },
 };
@@ -261,6 +261,8 @@ impl Plugin for SemanticBasePlugin {
                     AttrDownloadUrl::schema(),
                     AttrFileName::schema(),
                     AttrVideoHasSound::schema(),
+                    AttrPixelWidth::schema(),
+                    AttrPixelHeight::schema(),
                     // socialmedia
                     AttrSocialMediaPostContent::schema(),
                     AttrSocialMediaPostUserId::schema(),
@@ -1069,11 +1071,58 @@ impl Plugin for SemanticBasePlugin {
             strict: false,
         });
 
+        let add_pixel_width_height = Migration::with_name("add_pixel_width_height")
+            .attr_create(AttributeSchema::new(
+                AttrPixelWidth::QUALIFIED_NAME,
+                ValueType::UInt,
+            ))
+            .attr_create(AttributeSchema::new(
+                AttrPixelHeight::QUALIFIED_NAME,
+                ValueType::UInt,
+            ))
+            .action(
+                EntityAttributeAdd {
+                    entity: Image::QUALIFIED_NAME.to_string(),
+                    attribute: AttrPixelWidth::QUALIFIED_NAME.to_string(),
+                    cardinality: Cardinality::Optional,
+                    default_value: None,
+                }
+                .into(),
+            )
+            .action(
+                EntityAttributeAdd {
+                    entity: Image::QUALIFIED_NAME.to_string(),
+                    attribute: AttrPixelHeight::QUALIFIED_NAME.to_string(),
+                    cardinality: Cardinality::Optional,
+                    default_value: None,
+                }
+                .into(),
+            )
+            .action(
+                EntityAttributeAdd {
+                    entity: Video::QUALIFIED_NAME.to_string(),
+                    attribute: AttrPixelWidth::QUALIFIED_NAME.to_string(),
+                    cardinality: Cardinality::Optional,
+                    default_value: None,
+                }
+                .into(),
+            )
+            .action(
+                EntityAttributeAdd {
+                    entity: Video::QUALIFIED_NAME.to_string(),
+                    attribute: AttrPixelHeight::QUALIFIED_NAME.to_string(),
+                    cardinality: Cardinality::Optional,
+                    default_value: None,
+                }
+                .into(),
+            );
+
         vec![
             rollup,
             create_like_count,
             create_container_and_parent_sort,
             create_bookmark,
+            add_pixel_width_height,
         ]
     }
 }

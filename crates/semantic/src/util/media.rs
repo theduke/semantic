@@ -264,10 +264,23 @@ fn spawn_ffmpeg_output_monitor(
     })
 }
 
+/// Dimensions in pixels.
+#[derive(Clone, Debug)]
+pub struct Dimensions {
+    pub width: u64,
+    pub height: u64,
+}
+
+#[derive(Clone, Debug)]
+pub struct ImageInfo {
+    pub dimensions: Option<Dimensions>,
+}
+
 #[derive(Clone, Debug)]
 pub struct VideoInfo {
     pub duration: std::time::Duration,
     pub has_audio: bool,
+    pub dimensions: Option<Dimensions>,
 }
 
 #[derive(Clone)]
@@ -365,9 +378,21 @@ where
         .ok_or_else(|| anyhow!("could not determine video duration"))?;
     let has_audio = audio_stream.is_some();
 
+    let width: Option<u64> = video_stream.width.clone().and_then(|w| w.try_into().ok());
+    let height: Option<u64> = video_stream.height.clone().and_then(|h| h.try_into().ok());
+    let dimensions = if let (Some(w), Some(h)) = (width, height) {
+        Some(Dimensions {
+            width: w,
+            height: h,
+        })
+    } else {
+        None
+    };
+
     Ok(VideoInfo {
         duration,
         has_audio,
+        dimensions,
     })
 }
 

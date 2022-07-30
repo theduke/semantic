@@ -697,21 +697,27 @@ impl App {
         crate::file_import::file_upload_apply_meta(&mut batch, &mut file, collection, tags, &meta)?;
 
         let item = match mime_guess.map(|x| x.mime_type()).unwrap_or_default() {
-            mime if mime.starts_with("image/") => {
-                TypedFile::Image(semantic_core::base::Image { file })
-            }
+            mime if mime.starts_with("image/") => TypedFile::Image(semantic_core::base::Image {
+                file,
+                width: None,
+                height: None,
+            }),
             mime if mime.starts_with("video/") => {
                 let video = if let Some(info) = video_info {
                     semantic_core::base::Video {
                         file,
                         duration: Some(info.duration.as_secs()),
                         video_has_sound: Some(info.has_audio),
+                        width: info.dimensions.as_ref().map(|x| x.width),
+                        height: info.dimensions.as_ref().map(|x| x.height),
                     }
                 } else {
                     semantic_core::base::Video {
                         file,
                         duration: None,
                         video_has_sound: None,
+                        width: None,
+                        height: None,
                     }
                 };
 

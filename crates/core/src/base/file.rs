@@ -109,6 +109,14 @@ pub struct AttrFileName(String);
 #[factor(namespace = "semantic", title = "Duration")]
 pub struct AttrDuration(u64);
 
+#[derive(Attribute)]
+#[factor(namespace = "semantic", name = "pixel_width", title = "Width")]
+pub struct AttrPixelWidth(u64);
+
+#[derive(Attribute)]
+#[factor(namespace = "semantic", name = "pixel_height", title = "Height")]
+pub struct AttrPixelHeight(u64);
+
 impl AttrDuration {
     pub fn as_u64(self) -> u64 {
         self.0
@@ -315,6 +323,14 @@ pub struct Image {
     #[factor(extend)]
     #[serde(flatten)]
     pub file: File,
+
+    #[factor(attr = AttrPixelWidth)]
+    #[serde(rename = "semantic/pixel_width")]
+    pub width: Option<u64>,
+
+    #[factor(attr = AttrPixelHeight)]
+    #[serde(rename = "semantic/pixel_height")]
+    pub height: Option<u64>,
 }
 
 #[derive(Serialize, Deserialize, Entity, Clone, Debug)]
@@ -331,6 +347,14 @@ pub struct Video {
     #[factor(attr = AttrVideoHasSound)]
     #[serde(rename = "semantic/video_has_sound")]
     pub video_has_sound: Option<bool>,
+
+    #[factor(attr = AttrPixelWidth)]
+    #[serde(rename = "semantic/pixel_width")]
+    pub width: Option<u64>,
+
+    #[factor(attr = AttrPixelHeight)]
+    #[serde(rename = "semantic/pixel_height")]
+    pub height: Option<u64>,
 }
 
 impl Video {
@@ -391,9 +415,15 @@ impl TypedFile {
             Video::QUALIFIED_NAME => Self::Video(Video {
                 duration: file.extra.get_attr::<AttrDuration>(),
                 video_has_sound: file.extra.get_attr::<AttrVideoHasSound>(),
+                width: file.extra.get_attr::<AttrPixelWidth>(),
+                height: file.extra.get_attr::<AttrPixelHeight>(),
                 file,
             }),
-            Image::QUALIFIED_NAME => Self::Image(Image { file }),
+            Image::QUALIFIED_NAME => Self::Image(Image {
+                width: file.extra.get_attr::<AttrPixelWidth>(),
+                height: file.extra.get_attr::<AttrPixelHeight>(),
+                file,
+            }),
             _ => Self::File(file),
         }
     }
