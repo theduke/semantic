@@ -25,7 +25,7 @@ import {
 import { throttle } from "@solid-primitives/scheduled";
 import { NotificationWarning } from "../bulma/notification";
 import { isEqual } from "lodash";
-import { FACTOR_ID } from "../../semantic/schema";
+import { FACTOR_ID } from "semantic/dist/schema";
 
 export function BrowsePage(): JSX.Element {
   const api = useApi();

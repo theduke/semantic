@@ -6,9 +6,9 @@ import {
   Cardinality,
   EntitySchema,
   SemanticSchema,
-} from "./core";
+} from "semantic/dist/core";
 import { UiPlugin } from "./plugin";
-import { FACTOR_IDENT, FACTOR_TYPE } from "./schema";
+import { FACTOR_IDENT, FACTOR_TYPE } from "semantic/dist/schema";
 
 export type ValueMap = Record<string, any>;
 

@@ -1,5 +1,5 @@
 import { PluginSchema, UiPlugin } from "../plugin";
-import { TY_SEMANTIC_IMAGE, TY_SEMANTIC_VIDEO } from "../schema";
+import { TY_SEMANTIC_IMAGE, TY_SEMANTIC_VIDEO } from "semantic/dist/schema";
 import { renderImage } from "./image";
 import { renderVideo } from "./video";
 

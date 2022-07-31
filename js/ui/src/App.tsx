@@ -3,10 +3,10 @@ import { createSignal, JSX, Show } from "solid-js";
 import { Link, Route, Router, Routes, useParams } from "solid-app-router";
 
 import { LoginPage } from "./component/LoginPage";
-import { SemanticSchema } from "./semantic/core";
+import { SemanticSchema } from "semantic/dist/core";
 
 import * as context from "./context";
-import { Api } from "./api";
+import { Api } from "semantic/dist/api";
 import { assertDefined } from ".";
 import { BrowsePage } from "./component/entity/BrowsePage";
 import { UiRegistry } from "./semantic/registry";
@@ -35,8 +35,10 @@ export function App(): JSX.Element {
     setRegistry(reg);
   };
 
+  const serverUrl = 'http://localhost:3000';
+
   return (
-    <context.ApiContext.Provider value={new Api()}>
+    <context.ApiContext.Provider value={new Api(serverUrl)}>
       <Show when={getRegistry()} fallback={<LoginPage onLogin={onLogin} />}>
         <context.UiRegistryContext.Provider
           value={assertDefined(getRegistry())}

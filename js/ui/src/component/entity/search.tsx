@@ -4,7 +4,7 @@ import { createSignal, JSX, Show } from "solid-js";
 import { Portal } from "solid-js/web";
 import { useRegistry } from "../../context";
 import { ValueMap } from "../../semantic/registry";
-import { FACTOR_ID } from "../../semantic/schema";
+import { FACTOR_ID } from "semantic/dist/schema";
 import { Box } from "solid-bulma";
 import { Button, Buttons } from "../bulma/button";
 import { Icon } from "../bulma/icon";

@@ -1,8 +1,8 @@
 import { JSX } from "solid-js";
 import { useRegistry } from "../../context";
-import { EntitySchema } from "../../semantic/core";
+import { EntitySchema } from "semantic/dist/core";
 import { ValueMap } from "../../semantic/registry";
-import { SEMANTIC_CREATED_AT } from "../../semantic/schema";
+import { SEMANTIC_CREATED_AT } from "semantic/dist/schema";
 import { GenericEntityForm } from "./entity_form";
 
 export interface EntityCreatorProps {

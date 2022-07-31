@@ -1,7 +1,7 @@
 import { JSX } from "solid-js";
-import { newSelect } from "../../api";
+import { newSelect } from "semantic/dist/api";
 import { useApi, useRegistry } from "../../context";
-import { Expr, Select } from "../../semantic/core";
+import { Expr, Select } from "semantic/dist/core";
 import {
   exprAnd,
   exprAttr,
@@ -9,9 +9,9 @@ import {
   exprEq,
   exprLiteral,
   exprOr,
-} from "../../semantic/db";
+} from "semantic/dist/db";
 import { ValueMap } from "../../semantic/registry";
-import { FACTOR_ID, SEMANTIC_TITLE } from "../../semantic/schema";
+import { FACTOR_ID, SEMANTIC_TITLE } from "semantic/dist/schema";
 import { Button } from "../bulma/button";
 import { SearchSelect } from "../util/SearchSelect";
 

@@ -19,8 +19,8 @@ import {
   FACTOR_TITLE,
   FACTOR_TYPE,
   FACTOR_VALUE_TYPE,
-} from "../../semantic/schema";
-import { EntitySchema } from "../../semantic/core";
+} from "semantic/dist/schema";
+import { EntitySchema } from "semantic/dist/core";
 import { EntityChildren } from "./EntityChildren";
 import { EntityEditor } from "./EntityEditor";
 import { EntityDeleterModal } from "./EntityDeleterModal";

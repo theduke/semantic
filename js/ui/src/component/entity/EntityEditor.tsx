@@ -1,8 +1,8 @@
 import { JSX } from "solid-js";
 import { useApi, useRegistry } from "../../context";
-import { Mutate } from "../../semantic/core";
+import { Mutate } from "semantic/dist/core";
 import { ValueMap } from "../../semantic/registry";
-import { FACTOR_ID, FACTOR_TYPE } from "../../semantic/schema";
+import { FACTOR_ID, FACTOR_TYPE } from "semantic/dist/schema";
 import { GenericEntityForm } from "./entity_form";
 
 export type PersistanceMode = "merge" | "replace";

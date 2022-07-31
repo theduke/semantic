@@ -1,13 +1,13 @@
 import { createSignal, For, Show } from "solid-js";
 import { JSX } from "solid-js/jsx-runtime";
-import { newSelect } from "../../api";
-import { Select } from "../../semantic/core";
-import { exprAttr, exprIsEntityType } from "../../semantic/db";
+import { newSelect } from "semantic/dist/api";
+import { Select } from "semantic/dist/core";
+import { exprAttr, exprIsEntityType } from "semantic/dist/db";
 import {
   SemanticTag,
   SEMANTIC_TITLE,
   TY_SEMANTIC_TAG,
-} from "../../semantic/schema";
+} from "semantic/dist/schema";
 import { Button, Buttons } from "../bulma/button";
 import { NotificationWarning } from "../bulma/notification";
 import { EntitiesLoader } from "../entity/EntitiesLoader";

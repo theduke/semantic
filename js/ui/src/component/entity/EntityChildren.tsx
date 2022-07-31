@@ -1,8 +1,8 @@
 import { For, JSX } from "solid-js";
-import { newSelect } from "../../api";
+import { newSelect } from "semantic/dist/api";
 import { useRegistry } from "../../context";
-import { Expr, Id, Select, Sort } from "../../semantic/core";
-import { exprAnd } from "../../semantic/db";
+import { Expr, Id, Select, Sort } from "semantic/dist/core";
+import { exprAnd } from "semantic/dist/db";
 import { EntitiesLoader } from "./EntitiesLoader";
 
 export interface EntityChildrenProps {

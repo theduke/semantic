@@ -1,21 +1,21 @@
 import { Accessor, createSignal, For, JSX, Setter, Show } from "solid-js";
 import { DeletableTag } from "solid-bulma";
 
-import { newSelect } from "../../../api";
+import { newSelect } from "semantic/dist/api";
 import { useRegistry } from "../../../context";
-import { EntitySchema, Select } from "../../../semantic/core";
+import { EntitySchema, Select } from "semantic/dist/core";
 import {
   exprAndMany,
   exprAttr,
   exprContains,
   exprIsInEntityTypes,
   exprLiteral,
-} from "../../../semantic/db";
+} from "semantic/dist/db";
 import {
   FACTOR_IDENT,
   FACTOR_TITLE,
   SEMANTIC_TITLE,
-} from "../../../semantic/schema";
+} from "semantic/dist/schema";
 import { Button } from "../../bulma/button";
 import { FieldHorizontal } from "../../bulma/form";
 import { Icon } from "../../bulma/icon";
