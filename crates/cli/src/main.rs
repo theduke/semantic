@@ -59,7 +59,7 @@ impl GenerateTypescript {
 
 #[derive(clap::Parser, Clone)]
 struct BackendOptions {
-    #[clap(long, env = "SEMANTIC_DATA_PATH")]
+    #[clap(short = 'p', long, env = "SEMANTIC_DATA_PATH")]
     data_path: Option<String>,
     #[clap(long)]
     create: bool,
