@@ -1,6 +1,6 @@
 use factordb::prelude::{AttrIdent, DataMap, Id, Timestamp};
 
-use super::{AttrCreatedAt, AttrDescription, AttrTitle, AttrUrl};
+use super::{AttrCreatedAt, AttrDescription, AttrImportedAt, AttrTitle, AttrUrl};
 
 #[derive(serde::Serialize, serde::Deserialize, factordb::Entity, Clone, Debug)]
 #[factor(namespace = "semantic")]
@@ -28,6 +28,10 @@ pub struct Bookmark {
     #[factor(attr = AttrCreatedAt)]
     #[serde(rename = "semantic/created_at")]
     pub created_at: Option<Timestamp>,
+
+    #[factor(attr = AttrImportedAt)]
+    #[serde(rename = "semantic/imported_at")]
+    pub imported_at: Option<Timestamp>,
 
     #[factor(ignore)]
     #[serde(flatten)]

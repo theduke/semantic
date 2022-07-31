@@ -304,6 +304,8 @@ impl Plugin for SemanticBasePlugin {
                     tags::Tag::schema(),
                     // person
                     person::Person::schema(),
+                    // Bookmarks.
+                    Bookmark::schema(),
                 ],
                 indexes: vec![],
             }),
@@ -1162,6 +1164,27 @@ impl Plugin for SemanticBasePlugin {
             }),
         );
 
+        let add_imported_at_and_description_to_bookmark =
+            Migration::with_name("add_imported_at_and_description_to_bookmark")
+                .action(
+                    EntityAttributeAdd {
+                        entity: Bookmark::QUALIFIED_NAME.to_string(),
+                        attribute: AttrDescription::QUALIFIED_NAME.to_string(),
+                        cardinality: Cardinality::Optional,
+                        default_value: None,
+                    }
+                    .into(),
+                )
+                .action(
+                    EntityAttributeAdd {
+                        entity: Bookmark::QUALIFIED_NAME.to_string(),
+                        attribute: AttrImportedAt::QUALIFIED_NAME.to_string(),
+                        cardinality: Cardinality::Optional,
+                        default_value: None,
+                    }
+                    .into(),
+                );
+
         vec![
             rollup,
             create_like_count,
@@ -1170,6 +1193,7 @@ impl Plugin for SemanticBasePlugin {
             add_pixel_width_height,
             create_imported_at,
             make_url_indexed,
+            add_imported_at_and_description_to_bookmark,
         ]
     }
 }
