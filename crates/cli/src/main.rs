@@ -59,15 +59,22 @@ impl GenerateTypescript {
 
 #[derive(clap::Parser, Clone)]
 struct BackendOptions {
+    /// Path for the database.
     #[clap(short = 'p', long, env = "SEMANTIC_DATA_PATH")]
     data_path: Option<String>,
+    /// Fore creation of a new database.
+    /// Will fail if the database already exists.
     #[clap(long)]
     create: bool,
+    /// The password.
     // TODO: use anonymizing wrapper?
     #[clap(long, short, env = "SEMANTIC_KEY")]
     key: Option<String>,
+    /// Number of key iterations used for encryption key derivation.
+    /// This can normally remain unchanged.
     #[clap(long, env = "SEMANTIC_KEY_ITERATIONS")]
     key_iterations: Option<u32>,
+    /// Use a custom encryption salt.
     // TODO: use anonymizing wrapper?
     #[clap(long, env = "SEMANTIC_SALT")]
     salt: Option<String>,
@@ -76,6 +83,7 @@ struct BackendOptions {
     #[clap(long)]
     offset: Option<String>,
 
+    /// The number of key changes after which a full key index is written.
     #[clap(long)]
     full_index_write_interval: Option<u64>,
 }
@@ -113,7 +121,10 @@ impl BackendOptions {
 
 #[derive(clap::Parser, Clone)]
 struct ClientOptions {
-    #[clap(long)]
+    /// Server address.
+    ///
+    /// Defaults to "http://localhost:3000".
+    #[clap(short = 'a', long)]
     address: Option<url::Url>,
 }
 
@@ -129,6 +140,11 @@ impl ClientOptions {
 
 #[derive(clap::Parser, Clone)]
 struct AppOptions {
+    #[clap(flatten)]
+    backend: BackendOptions,
+
+    /// Start without a backend.
+    /// A backend will have to be initialized via the UI.
     #[clap(short)]
     no_backend: bool,
 
@@ -138,11 +154,11 @@ struct AppOptions {
     #[clap(long, env = "SEMANTIC_TMP_DIR")]
     tmp_dir: Option<PathBuf>,
 
+    /// Key for API token generation.
+    /// This should remain the same across server restarts.
+    /// Otherwise existing tokens will be invalidated.
     // TODO: this should only be on server config...
     token_key: Option<String>,
-
-    #[clap(flatten)]
-    backend: BackendOptions,
 }
 
 impl AppOptions {
