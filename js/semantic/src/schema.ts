@@ -32,6 +32,7 @@ export const SEMANTIC_NAME = "semantic/name";
 export const SEMANTIC_SECONDARY_URL = "semantic/secondary_url";
 export const SEMANTIC_PARENT = "semantic/parent";
 export const SEMANTIC_EMBEDDED_IN_PARENT = "semantic/embedded_in_parent";
+export const SEMANTIC_IMPORTED_AT = "semantic/imported_at";
 export const SEMANTIC_BLOB_URI = "semantic/blob_uri";
 export const SEMANTIC_BLOB_URI_WEB = "semantic/blob_uri_web";
 export const SEMANTIC_MIME_TYPE = "semantic/mime_type";
@@ -42,6 +43,8 @@ export const SEMANTIC_FILE_SIZE = "semantic/file_size";
 export const SEMANTIC_DOWNLOAD_URL = "semantic/download_url";
 export const SEMANTIC_FILENAME = "semantic/filename";
 export const SEMANTIC_VIDEO_HAS_SOUND = "semantic/video_has_sound";
+export const SEMANTIC_PIXEL_WIDTH = "semantic/pixel_width";
+export const SEMANTIC_PIXEL_HEIGHT = "semantic/pixel_height";
 export const SEMANTIC_SOCIAL_MEDIA_POST_CONTENT = "semantic/social_media_post_content";
 export const SEMANTIC_SOCIAL_MEDIA_POST_USER_ID = "semantic/social_media_post_user_id";
 export const SEMANTIC_SOCIAL_MEDIA_PLATFORM_NAME = "semantic/social_media_platform_name";
@@ -58,7 +61,6 @@ export const SEMANTIC_GENDER = "semantic/gender";
 export const SEMANTIC_LIKE_COUNT = "semantic/like_count";
 
 export type EntityId = string;
-export type EntityIdent = string;
 export type Ident = string;
 export type IdOrIdent = EntityId | string;
 export type Url = string;
@@ -93,8 +95,8 @@ export interface FactorEntity extends BaseEntity {
   "factor/description"?: string | null,
   "factor/isStrict": boolean,
   "factor/isRelation": boolean,
-  "factor/extend": EntityIdent[],
-  "factor/entityAttributes": {attribute: EntityIdent, cardinality: "Optional" | "Required",}[],
+  "factor/extend": Ident[],
+  "factor/entityAttributes": {attribute: Ident, cardinality: "Optional" | "Required",}[],
 }
 
 
@@ -127,12 +129,15 @@ export interface SemanticFile extends BaseEntity {
   "semantic/blob_uri_web"?: string | null,
   "semantic/created_at"?: Timestamp | null,
   "semantic/updated_at"?: Timestamp | null,
+  "semantic/imported_at"?: Timestamp | null,
 }
 
 
 export const TY_SEMANTIC_IMAGE = "semantic/Image";
 export interface SemanticImage extends Omit<SemanticFile, "factor/type"> {
   "factor/type": "semantic/Image",
+  "semantic/pixel_width"?: number | null,
+  "semantic/pixel_height"?: number | null,
 }
 
 
@@ -141,6 +146,8 @@ export interface SemanticVideo extends Omit<SemanticFile, "factor/type"> {
   "factor/type": "semantic/Video",
   "semantic/duration"?: number | null,
   "semantic/video_has_sound"?: boolean | null,
+  "semantic/pixel_width"?: number | null,
+  "semantic/pixel_height"?: number | null,
 }
 
 
@@ -153,6 +160,7 @@ export interface SemanticSocialMediaPost extends BaseEntity {
   "semantic/social_media_post_user_id"?: EntityId | null,
   "semantic/like_count"?: number | null,
   "semantic/social_media_post_content": EntityId[],
+  "semantic/imported_at"?: Timestamp | null,
 }
 
 
@@ -162,6 +170,7 @@ export interface SemanticSocialMediaAccount extends Omit<SemanticPerson, "factor
   "semantic/social_media_platform_name"?: string | null,
   "semantic/social_media_platform_id"?: EntityId | null,
   "semantic/username": string,
+  "semantic/imported_at"?: Timestamp | null,
 }
 
 
@@ -205,4 +214,16 @@ export interface SemanticPerson extends BaseEntity {
   "semantic/family_name"?: EntityId | null,
   "semantic/birthdate"?: EntityId | null,
   "semantic/gender"?: "male" | "female" | null,
+}
+
+
+export const TY_SEMANTIC_BOOKMARK = "semantic/Bookmark";
+export interface SemanticBookmark extends BaseEntity {
+  "factor/type": "semantic/Bookmark",
+  "factor/ident"?: string | null,
+  "semantic/url": Url,
+  "semantic/title"?: string | null,
+  "semantic/description"?: string | null,
+  "semantic/created_at"?: Timestamp | null,
+  "semantic/imported_at"?: Timestamp | null,
 }

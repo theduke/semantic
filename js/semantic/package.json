@@ -1,14 +1,70 @@
 {
   "name": "semantic",
-  "version": "1.0.0",
-  "main": "./dist/src/index.js",
-  "types": "./dist/src/index.d.ts",
+  "version": "0.1.0",
+  "license": "MIT",
+  "module": "./dist/semantic.mjs",
+  "main": "./dist/semantic.umd.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "import": "./dist/semantic.mjs",
+      "require": "./dist/semantic.umd.js"
+    },
+    "./api": {
+      "types": "./dist/api.d.ts",
+      "import": "./dist/api.mjs",
+      "require": "./dist/api.umd.js"
+    },
+    "./core": {
+      "types": "./dist/core.d.ts",
+      "import": "./dist/core.mjs",
+      "require": "./dist/core.umd.js"
+    },
+    "./schema": {
+      "types": "./dist/schema.d.ts",
+      "import": "./dist/schema.mjs",
+      "require": "./dist/schema.umd.js"
+    },
+    "./db": {
+      "types": "./dist/db.d.ts",
+      "import": "./dist/db.mjs",
+      "require": "./dist/db.umd.js"
+    },
+    "./dist/api": {
+      "types": "./dist/api.d.ts",
+      "import": "./dist/api.mjs",
+      "require": "./dist/api.umd.js"
+    },
+    "./dist/core": {
+      "types": "./dist/core.d.ts",
+      "import": "./dist/core.mjs",
+      "require": "./dist/core.umd.js"
+    },
+    "./dist/schema": {
+      "types": "./dist/schema.d.ts",
+      "import": "./dist/schema.mjs",
+      "require": "./dist/schema.umd.js"
+    },
+    "./dist/db": {
+      "types": "./dist/db.d.ts",
+      "import": "./dist/db.mjs",
+      "require": "./dist/db.umd.js"
+    }
+  },
   "files": [
     "./dist"
   ],
-  "license": "MIT",
+  "scripts": {
+    "build": "yarn tsc && node build.mjs"
+  },
   "dependencies": {
     "cross-fetch": "^3.1.5",
     "isomorphic-fetch": "^3.0.0"
+  },
+  "devDependencies": {
+    "tsc": "^2.0.4",
+    "typescript": "^4.7.4",
+    "vite": "^3.0.4",
+    "vite-plugin-dts": "^1.4.0"
   }
 }

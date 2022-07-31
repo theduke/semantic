@@ -17,6 +17,10 @@ export function exprAnd(left: Expr, right: Expr): Expr {
   return exprBinary("And", left, right);
 }
 
+export function exprList(items: Expr[]): Expr {
+  return { List: items };
+}
+
 // Build nested AND expressions from a list.
 // Returns null if the list is empty, or the single expression if lenght is 1.
 export function exprAndMany(exprs: Expr[]): Expr | null {

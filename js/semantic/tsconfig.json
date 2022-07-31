@@ -1,9 +1,9 @@
 {
   "compilerOptions": {
     "strict": true,
-    "outDir": "./dist",
     "target": "es2022",
-    "module": "commonjs",
+    "module": "es2022",
+    "noEmit": true,
     "lib": ["ES2022", "dom"],
     "moduleResolution": "node",
     "allowSyntheticDefaultImports": true,
@@ -13,7 +13,8 @@
     // "noEmit": true,
     // "isolatedModules": true,
     // Required for Typescript project references to work.
-    "composite": true
+    "composite": true,
+    "types": ["vite/client"]
   },
   "include": ["src/**/*", "tests/**/*"]
 }
