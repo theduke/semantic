@@ -1,0 +1,30 @@
+{
+  "name": "semantic-webextension",
+  "author": "theduke",
+  "version": "0.1.0",
+  "displayName": "Semantic web extension.",
+  "description": "Semantic web extension.",
+  "scripts": {
+    "build": "tsc && vite build",
+    "watch": "vite build --watch",
+    "dev": "vite",
+    "serve:firefox": "web-ext run --start-url \"about:debugging#/runtime/this-firefox\"  --source-dir ./dist/",
+    "serve:librewolf": "web-ext run --firefox librewolf --start-url \"about:debugging#/runtime/this-firefox\"  --source-dir ./dist/",
+    "serve:chrome": "web-ext run -t chromium --start-url \"https://google.com\" --source-dir ./dist/"
+  },
+  "license": "MIT",
+  "devDependencies": {
+    "@samrum/vite-plugin-web-extension": "^1.0.0",
+    "@types/uuid": "^8.3.4",
+    "@types/webextension-polyfill": "^0.8.3",
+    "typescript": "^4.5.4",
+    "vite": "~2.9.0",
+    "web-ext": "^6.6.0"
+  },
+  "dependencies": {
+    "semantic": "^0.1.0",
+    "uuid": "^8.3.2",
+    "webextension-polyfill": "^0.9.0"
+  },
+  "packageManager": "yarn@3.2.2"
+}
