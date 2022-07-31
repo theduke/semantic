@@ -16,15 +16,11 @@ import { basePlugin } from "./semantic/base";
 import { Buttons } from "./component/bulma/button";
 import { Icon } from "./component/bulma/icon";
 import { SettingsPage } from "./component/SettingsPage";
-import {
-  ROUTE_BROWSE,
-  ROUTE_SETTINGS,
-  ROUTE_SETTINGS_TAG_MANAGER,
-} from "./routing";
+import { ROUTE_SETTINGS, ROUTE_SETTINGS_TAG_MANAGER } from "./routing";
 import { TagManagerPage } from "./component/tag/TagManager";
-import { EntitySearcherModalToggle } from "./component/entity/search";
 import { EntityCreateSelectorPage } from "./component/entity/EntityCreateSelectorPage";
 import { EntityCreatePage } from "./component/entity/EntityCreatePage";
+import { EntitySearcherModalToggle } from "./component/entity/EntitySearcherModalToggle";
 
 export function App(): JSX.Element {
   const [getRegistry, setRegistry] = createSignal<UiRegistry | null>();
@@ -35,7 +31,7 @@ export function App(): JSX.Element {
     setRegistry(reg);
   };
 
-  const serverUrl = 'http://localhost:3000';
+  const serverUrl = "http://localhost:3000";
 
   return (
     <context.ApiContext.Provider value={new Api(serverUrl)}>
@@ -46,8 +42,6 @@ export function App(): JSX.Element {
           <Router>
             <AppNavbar />
             <Routes>
-              <Route path="/" element={BrowsePage} />
-              <Route path={ROUTE_BROWSE} element={BrowsePage} />
               <Route path="/entity/:ident" component={EntityPageRoute} />
               <Route
                 path="/entity/create"
@@ -65,6 +59,7 @@ export function App(): JSX.Element {
                 path={ROUTE_SETTINGS_TAG_MANAGER}
                 component={TagManagerPage}
               />
+              <Route path="/" component={BrowsePage} />
             </Routes>
           </Router>
         </context.UiRegistryContext.Provider>
@@ -82,10 +77,10 @@ function AppNavbar(): JSX.Element {
   return (
     <Navbar
       brandLinkContent="Semantic"
-      brandExtra={[<EntitySearcherModalToggle />]}
+      brandExtra={[<EntitySearcherModalToggle keyboard />]}
       start={
         <>
-          <NavbarItemLink href="/browse">Browse</NavbarItemLink>
+          <NavbarItemLink href="/">Browse</NavbarItemLink>
           <NavbarItemLink href="/entity/create">Create</NavbarItemLink>
         </>
       }

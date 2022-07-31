@@ -12,10 +12,7 @@ import {
 } from "semantic/dist/core";
 import { exprAttr, exprLiteral, exprNotEq } from "semantic/dist/db";
 import { UiRegistry, ValueMap } from "../../semantic/registry";
-import {
-  FACTOR_ID,
-  FACTOR_TYPE,
-} from "semantic/dist/schema";
+import { FACTOR_ID, FACTOR_TYPE } from "semantic/dist/schema";
 import { Button, Buttons } from "../bulma/button";
 import { FieldHorizontal } from "../bulma/form";
 import { Icon } from "../bulma/icon";
@@ -46,7 +43,7 @@ function unionPlainOptions(variants: ValueType[]): SelectOption<Value>[] {
     } else {
       throw new Error(
         "Unsupported union type - only unions of constant values are supported " +
-        JSON.stringify(variant)
+          JSON.stringify(variant)
       );
     }
   });

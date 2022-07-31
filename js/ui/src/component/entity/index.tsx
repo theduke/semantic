@@ -283,14 +283,15 @@ export function renderGenericEntityBox(
 
   setContent(render(getItem()));
   createEffect(() => {
-    console.debug('replacting entity box content');
     setContent(render(getItem()));
   });
+
+  const title = genericEntityTitle(getItem());
 
   const box = (
     <EntityBox
       linkPath={entityLinkPath(item)}
-      title={genericEntityTitle(getItem())}
+      title={title}
       type={typeName}
       actions={actions}
     >
@@ -300,7 +301,7 @@ export function renderGenericEntityBox(
 
   return (
     <Show when={deleted()} fallback={box}>
-      <NotificationWarning>Item was deleted.</NotificationWarning>
+      <NotificationWarning>{title} was deleted.</NotificationWarning>
     </Show>
   );
 }

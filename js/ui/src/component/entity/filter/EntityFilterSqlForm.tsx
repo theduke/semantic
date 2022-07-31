@@ -1,13 +1,15 @@
 import { Accessor, JSX, Setter } from "solid-js";
-
-import { InputField } from "../../form/InputField";
 import { createForm, FormValidation } from "../../form";
 import { TextAreaField } from "../../form/TextAreaField";
 
-export type EntityFilterSql = {
-  type: "sql";
-  sql: string;
-};
+import zod from "zod";
+
+export const validateEntityFilterSql = zod.object({
+  type: zod.literal("sql"),
+  sql: zod.string(),
+});
+
+export type EntityFilterSql = zod.infer<typeof validateEntityFilterSql>;
 
 export interface EntityFilterSqlFormProps {
   filter: Accessor<EntityFilterSql>;

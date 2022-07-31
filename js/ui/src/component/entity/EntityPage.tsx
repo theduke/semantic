@@ -7,8 +7,8 @@ import { EntityLoader } from "./EntityLoader";
 
 export type EntityPageProps =
   | {
-    entity: Item;
-  }
+      entity: Item;
+    }
   | { ident: IdOrIdent };
 
 export function EntityPage(props: EntityPageProps): JSX.Element {
@@ -22,16 +22,15 @@ export function EntityPage(props: EntityPageProps): JSX.Element {
 
   let content: JSX.Element;
   if ("entity" in props) {
-    content = registry.renderEditableEntity(props.entity, opts, (_) => { });
+    content = registry.renderEditableEntity(props.entity, opts, (_) => {});
   } else {
     content = (
       <EntityLoader ident={props.ident}>
         {(item) => {
           return untrack(() => {
-
-            console.debug('rendering editable entity')
-            return registry.renderEditableEntity(item, opts, (_) => { });
-          })
+            console.debug("rendering editable entity");
+            return registry.renderEditableEntity(item, opts, (_) => {});
+          });
         }}
       </EntityLoader>
     );

@@ -10,7 +10,9 @@ export function useRegistry(): UiRegistry {
   return useContext(UiRegistryContext);
 }
 
-export const ApiContext: Context<Api> = createContext(new Api('http://localhost:3000'));
+export const ApiContext: Context<Api> = createContext(
+  new Api("http://localhost:3000")
+);
 
 export function useApi(): Api {
   return useContext(ApiContext);

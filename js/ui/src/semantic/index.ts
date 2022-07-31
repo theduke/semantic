@@ -1,5 +1,10 @@
 import { ValueMap } from "./registry";
-import { BaseEntity, FACTOR_ID, FACTOR_IDENT, SEMANTIC_TITLE } from "semantic/dist/schema";
+import {
+  BaseEntity,
+  FACTOR_ID,
+  FACTOR_IDENT,
+  SEMANTIC_TITLE,
+} from "semantic/dist/schema";
 
 export const UUID_ZERO = "00000000-0000-0000-0000-000000000000";
 

@@ -4,7 +4,11 @@ import { NotificationWarning } from "../../component/bulma/notification";
 import { renderEntityTable } from "../../component/entity";
 import { useRegistry } from "../../context";
 import { EntityRenderOpts, ValueMap } from "../registry";
-import { FACTOR_ID, SemanticImage, SEMANTIC_DESCRIPTION } from "semantic/dist/schema";
+import {
+  FACTOR_ID,
+  SemanticImage,
+  SEMANTIC_DESCRIPTION,
+} from "semantic/dist/schema";
 
 export function renderImage(
   item: ValueMap,

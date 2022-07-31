@@ -1,15 +1,25 @@
-import { Box as div } from "solid-bulma";
 import { createEffect, createSignal, JSX, Match, Switch } from "solid-js";
-import { Select } from "../../../semantic/core";
-import { Tabber, Tabs } from "../../bulma/tabs";
+import { Select } from "semantic/dist/core";
+import { Tabs } from "../../bulma/tabs";
 import {
   EntityFilterData,
   EntityFilterForm,
   newFilterData,
+  validateEntityFilterData,
 } from "./EntityFilterForm";
-import { EntityFilterSql, EntityFilterSqlForm } from "./EntityFilterSqlForm";
+import {
+  EntityFilterSql,
+  EntityFilterSqlForm,
+  validateEntityFilterSql,
+} from "./EntityFilterSqlForm";
+import zod from "zod";
+import { isDate } from "lodash";
 
-export type EntityFilter = EntityFilterData | EntityFilterSql;
+export const validateEntityFilter = zod.discriminatedUnion("type", [
+  validateEntityFilterData,
+  validateEntityFilterSql,
+]);
+export type EntityFilter = zod.infer<typeof validateEntityFilter>;
 
 export interface EntityFilterProps {
   initialFilter?: EntityFilter;
@@ -26,22 +36,40 @@ function isData(filter: EntityFilter): filter is EntityFilterData {
 }
 
 export function EntityFilter(props: EntityFilterProps): JSX.Element {
-  const [filter, setFilter] = createSignal<EntityFilter>(
-    props.initialFilter ?? newFilterData()
-  );
+  const initialFilter = props.initialFilter ?? newFilterData();
+
+  const [filter, setFilter] = createSignal<EntityFilter>(initialFilter);
+
+  let oldDataFilter: EntityFilterData | undefined;
+  let oldSqlFilter: EntityFilterSql | undefined;
+  if (isSql(initialFilter)) {
+    oldSqlFilter = initialFilter;
+  } else {
+    oldDataFilter = initialFilter;
+  }
 
   createEffect(() => {
-    props.onChange(filter());
+    const current = filter();
+
+    if (isSql(current)) {
+      oldSqlFilter = current;
+    } else if (isData(current)) {
+      oldDataFilter = current;
+    }
+    props.onChange(current);
   });
 
   return (
     <div>
       <Tabs
+        initialIndex={
+          props.initialFilter ? (isSql(props.initialFilter) ? 1 : 0) : 0
+        }
         onChange={(index) => {
           if (index === 0) {
-            setFilter(newFilterData());
+            setFilter(oldDataFilter ?? newFilterData());
           } else if (index === 1) {
-            setFilter({ type: "sql", sql: "" });
+            setFilter(oldSqlFilter ?? { type: "sql", sql: "" });
           } else {
             throw new Error("invalid tab index");
           }

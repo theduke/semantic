@@ -9,11 +9,12 @@ export type TabsStyle = "is-boxed" | "is-toggle" | "is-toggle is-rounded";
 export type TabIndex = number;
 
 export interface TabsProps {
+  initialIndex?: TabIndex;
   align?: TabsAlignment;
   size?: ButtonSize;
   style?: TabsStyle;
   fullWidth?: boolean;
-  onChange?: (index: TabIndex) => void;
+  onChange?: (index: TabIndex, currentIndex: TabIndex) => void;
   children: JSX.Element[];
 
   signal?: Signal<TabIndex>;
@@ -21,7 +22,7 @@ export interface TabsProps {
 
 export function Tabs(props: TabsProps): JSX.Element {
   const [activeIndex, setActiveIndex] =
-    props.signal || createSignal<TabIndex>(0);
+    props.signal || createSignal<TabIndex>(props.initialIndex ?? 0);
 
   let cls = "tabs";
   if (props.size) {
@@ -39,7 +40,7 @@ export function Tabs(props: TabsProps): JSX.Element {
 
   const onChange = (index: TabIndex) => {
     setActiveIndex(index);
-    props.onChange?.(index);
+    props.onChange?.(index, activeIndex());
   };
 
   return (

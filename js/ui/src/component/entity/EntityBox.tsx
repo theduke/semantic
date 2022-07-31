@@ -33,8 +33,6 @@ export function EntityBox(props: EntityBoxProps): JSX.Element {
     },
   };
 
-  console.debug('rendering EntityBox');
-
   let actions: JSX.Element = null;
   if (props.actions && props.actions.length > 0) {
     actions = (
@@ -80,8 +78,6 @@ export function EntityBox(props: EntityBoxProps): JSX.Element {
     );
   }
 
-  console.debug('entity box render');
-
   return (
     <div class="card">
       <header class="card-header">
@@ -98,7 +94,6 @@ export function EntityBox(props: EntityBoxProps): JSX.Element {
       <div class="card-content">
         <Show when={activeAction()} fallback={props.children}>
           {(index) => {
-            console.log('rendering action content');
             const action = props.actions?.[index.index];
             if (!action) {
               throw new Error("invalid action index");

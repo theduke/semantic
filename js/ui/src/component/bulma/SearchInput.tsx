@@ -7,26 +7,23 @@ export interface SearchInputProps {
   placeholder?: string;
   onChange?: JSX.EventHandlerUnion<HTMLInputElement, Event>;
   onInput?: JSX.EventHandlerUnion<HTMLInputElement, Event>;
+  autoFocus?: boolean;
 }
 
 export function SearchInput(props: SearchInputProps): JSX.Element {
+  let inputRef: HTMLInputElement | undefined;
 
-  let ref: HTMLDivElement | undefined;
-
-  onMount(() => {
-    const obs = new MutationObserver((mutations) => {
-      console.debug({ mutations });
-      debugger;
+  // Auto-focus input element if enabled.
+  if (props.autoFocus) {
+    onMount(() => {
+      inputRef?.focus();
     });
-
-    if (ref) {
-      obs.observe(ref, {childList: true});
-    }
-  })
+  }
 
   return (
-    <Control class="has-icons-left" ref={ref}>
+    <Control class="has-icons-left">
       <input
+        ref={inputRef}
         value={props.value ?? ""}
         oninput={props.onInput}
         onchange={props.onChange}

@@ -2324,7 +2324,7 @@ __metadata:
   languageName: node
   linkType: hard
 
-"esbuild@npm:^0.14.27, esbuild@npm:^0.14.47":
+"esbuild@npm:^0.14.27, esbuild@npm:^0.14.47, esbuild@npm:^0.14.51":
   version: 0.14.51
   resolution: "esbuild@npm:0.14.51"
   dependencies:
@@ -5356,6 +5356,7 @@ __metadata:
   resolution: "semantic@workspace:semantic"
   dependencies:
     cross-fetch: ^3.1.5
+    esbuild: ^0.14.51
     isomorphic-fetch: ^3.0.0
     tsc: ^2.0.4
     typescript: ^4.7.4
@@ -6116,6 +6117,7 @@ __metadata:
     vite: ^3.0.0
     vite-plugin-solid: ^2.2.6
     yup: ^0.32.11
+    zod: ^3.17.10
   languageName: unknown
   linkType: soft
 
@@ -6700,5 +6702,12 @@ __metadata:
     async: ^3.2.0
     jszip: ^3.2.2
   checksum: bfcfdefe410da3dd583f294b51db8dd670e6b4f742c95255e526df58cb9302e3c742fe84a0834fe4705c72c9c601fc3a14d7402560ce580a1ae3bd307cbed60c
+  languageName: node
+  linkType: hard
+
+"zod@npm:^3.17.10":
+  version: 3.17.10
+  resolution: "zod@npm:3.17.10"
+  checksum: 5de630b8eceda3de211cce0a734b629f8c4ca4bc887127b0ebd57e9c9be23204725e60adf2faf1c5ccb9b660c7588a8b04f60dfda1ed8e67a789e93c15f838f1
   languageName: node
   linkType: hard

@@ -1,9 +1,18 @@
-import { Accessor, createSignal, For, JSX, Setter, Show } from "solid-js";
+import {
+  Accessor,
+  createSignal,
+  For,
+  JSX,
+  Setter,
+  Show,
+  untrack,
+} from "solid-js";
 import { DeletableTag } from "solid-bulma";
+import zod from "zod";
 
 import { newSelect } from "semantic/dist/api";
 import { useRegistry } from "../../../context";
-import { EntitySchema, Select } from "semantic/dist/core";
+import { Select } from "semantic/dist/core";
 import {
   exprAndMany,
   exprAttr,
@@ -21,12 +30,16 @@ import { FieldHorizontal } from "../../bulma/form";
 import { Icon } from "../../bulma/icon";
 import { SearchInput } from "../../bulma/SearchInput";
 import { MultiSelectSearch } from "../../util/MultiSelectSearch";
+import { EntityType } from "../../../semantic";
+import { SelectOption } from "../../form/Select";
 
-export interface EntityFilterData {
-  type: "data";
-  searchTerm: string;
-  entityTypes?: EntitySchema[];
-}
+export const validateEntityFilterData = zod.object({
+  type: zod.literal("data"),
+  searchTerm: zod.optional(zod.string()),
+  entityTypes: zod.optional(zod.array(zod.string())),
+});
+
+export type EntityFilterData = zod.infer<typeof validateEntityFilterData>;
 
 export function newFilterData(): EntityFilterData {
   return {
@@ -38,14 +51,14 @@ export function newFilterData(): EntityFilterData {
 export function buildFilterDataSelect(filter: EntityFilterData): Select {
   let exprs = [];
 
-  const term = filter.searchTerm.trim();
+  const term = filter.searchTerm?.trim();
   if (term) {
     const contains = exprContains(exprAttr(SEMANTIC_TITLE), exprLiteral(term));
     exprs.push(contains);
   }
 
   if (filter.entityTypes && filter.entityTypes.length > 0) {
-    const types = filter.entityTypes.map((schema) => schema[FACTOR_IDENT]);
+    const types = filter.entityTypes;
     exprs.push(exprIsInEntityTypes(types));
   }
 
@@ -62,30 +75,47 @@ export interface EntityFilterFormProps {
   autoUpdate?: boolean;
 }
 
+interface EntityTypeOption extends SelectOption<EntityType> {
+  title: string;
+}
+
 export function EntityFilterForm(props: EntityFilterFormProps): JSX.Element {
   const [editingType, setEditingType] = createSignal<boolean>(false);
   const reg = useRegistry();
 
-  const entityTypes = Object.values(reg.entityTypes);
+  const entityTypes: EntityTypeOption[] = Object.values(reg.entityTypes).map(
+    (type) => ({
+      value: type[FACTOR_IDENT],
+      label: type[FACTOR_TITLE] ?? type[FACTOR_IDENT],
+      title: type[FACTOR_TITLE] ?? type[FACTOR_IDENT],
+    })
+  );
+  const entityTypeLookup: Record<EntityType, EntityTypeOption> = {};
+  for (const item of entityTypes) {
+    entityTypeLookup[item.value] = item;
+  }
 
   const searchType = (
     term: string,
-    afterItem?: EntitySchema
-  ): Promise<EntitySchema[]> => {
+    afterItem?: EntityTypeOption
+  ): Promise<EntityTypeOption[]> => {
     const lower = term.toLowerCase();
     const filtered = entityTypes.filter((t) => {
       return (
-        t["factor/title"]?.toLowerCase().search(lower) !== -1 ||
-        t["factor/ident"]?.toLowerCase().search(lower) !== -1
+        t.title.toLowerCase().search(lower) !== -1 ||
+        t.value?.toLowerCase().search(lower) !== -1
       );
     });
     return Promise.resolve(filtered);
   };
 
+  const initialFilter = untrack(() => props.filter());
+
   return (
     <div>
       <div class="mb-2">
         <SearchInput
+          value={initialFilter.searchTerm}
           onInput={(e) =>
             props.setFilter((old) => ({
               ...old,
@@ -110,23 +140,27 @@ export function EntityFilterForm(props: EntityFilterFormProps): JSX.Element {
 
             <div>
               <For each={props.filter()?.entityTypes}>
-                {(type, index) => (
-                  <DeletableTag
-                    onDelete={() => {
-                      props.setFilter((old) => {
-                        const fixed = [...(old?.entityTypes ?? [])];
-                        fixed.splice(index(), 1);
+                {(type, index) => {
+                  const schema = reg.entityTypes[type];
 
-                        return {
-                          ...old,
-                          entityTypes: fixed,
-                        };
-                      });
-                    }}
-                  >
-                    {type[FACTOR_TITLE] || type[FACTOR_IDENT]}
-                  </DeletableTag>
-                )}
+                  return (
+                    <DeletableTag
+                      onDelete={() => {
+                        props.setFilter((old) => {
+                          const fixed = [...(old?.entityTypes ?? [])];
+                          fixed.splice(index(), 1);
+
+                          return {
+                            ...old,
+                            entityTypes: fixed,
+                          };
+                        });
+                      }}
+                    >
+                      {schema[FACTOR_TITLE] || schema[FACTOR_IDENT]}
+                    </DeletableTag>
+                  );
+                }}
               </For>
             </div>
 
@@ -134,26 +168,30 @@ export function EntityFilterForm(props: EntityFilterFormProps): JSX.Element {
           </div>
 
           <Show when={editingType()}>
-            <MultiSelectSearch<EntitySchema>
+            <MultiSelectSearch<EntityTypeOption>
               renderSelected={(_selected) => null}
               search={searchType}
               defaultItems={entityTypes.filter(
-                (t) => !props.filter()?.entityTypes?.includes(t)
+                (t) => !props.filter()?.entityTypes?.includes(t.value)
               )}
-              initialSelection={props.filter()?.entityTypes}
+              initialSelection={props
+                .filter()
+                ?.entityTypes?.flatMap((t) => [entityTypeLookup[t]])}
               onChange={(items) => {
                 props.setFilter((old) => ({
                   ...old,
-                  entityTypes: items,
+                  entityTypes: items.map((i) => i.value),
                 }));
               }}
-              renderItemWrapper={(items) => <div class="tags">{items}</div>}
+              renderItemWrapper={(items) => <div class="tags m-2">{items}</div>}
               renderItem={(item, onSelect) => {
-                const title = item[FACTOR_TITLE] ?? item[FACTOR_IDENT];
-                const ty = item[FACTOR_IDENT];
                 return (
-                  <span class="tag is-clickable" title={ty} onClick={onSelect}>
-                    {title}
+                  <span
+                    class="tag is-clickable"
+                    title={item.title}
+                    onClick={onSelect}
+                  >
+                    {item.title}
                   </span>
                 );
               }}

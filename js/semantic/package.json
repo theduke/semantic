@@ -6,52 +6,48 @@
   "main": "./dist/semantic.umd.js",
   "types": "./dist/index.d.ts",
   "scripts": {
-    "build": "yarn tsc && mv dist/src/* ./dist/ && rm -r dist/src && esbuild --platform=neutral --outdir=./dist src/index.ts src/api.ts src/core.ts src/db.ts src/schema.ts"
+    "build": "rm -rf ./dist && yarn tsc && mv dist/src/* ./dist && rm -rf ./dist/src && esbuild --platform=neutral --outdir=./dist --out-extension:.js=.mjs --sourcemap=inline src/index.ts src/api.ts src/core.ts src/db.ts src/schema.ts && esbuild --platform=neutral --outdir=./dist --format=cjs --out-extension:.js=.js --sourcemap=inline src/index.ts src/api.ts src/core.ts src/db.ts src/schema.ts"
   },
   "exports": {
-    ".": {
-      "import": "./dist/semantic.mjs",
-      "require": "./dist/semantic.umd.js"
-    },
     "./api": {
       "types": "./dist/api.d.ts",
       "import": "./dist/api.mjs",
-      "require": "./dist/api.umd.js"
+      "require": "./dist/api.js"
     },
     "./core": {
       "types": "./dist/core.d.ts",
       "import": "./dist/core.mjs",
-      "require": "./dist/core.umd.js"
+      "require": "./dist/core.js"
     },
     "./schema": {
       "types": "./dist/schema.d.ts",
       "import": "./dist/schema.mjs",
-      "require": "./dist/schema.umd.js"
+      "require": "./dist/schema.js"
     },
     "./db": {
       "types": "./dist/db.d.ts",
       "import": "./dist/db.mjs",
-      "require": "./dist/db.umd.js"
+      "require": "./dist/db.js"
     },
     "./dist/api": {
       "types": "./dist/api.d.ts",
       "import": "./dist/api.mjs",
-      "require": "./dist/api.umd.js"
+      "require": "./dist/api.js"
     },
     "./dist/core": {
       "types": "./dist/core.d.ts",
       "import": "./dist/core.mjs",
-      "require": "./dist/core.umd.js"
+      "require": "./dist/core.js"
     },
     "./dist/schema": {
       "types": "./dist/schema.d.ts",
       "import": "./dist/schema.mjs",
-      "require": "./dist/schema.umd.js"
+      "require": "./dist/schema.js"
     },
     "./dist/db": {
       "types": "./dist/db.d.ts",
       "import": "./dist/db.mjs",
-      "require": "./dist/db.umd.js"
+      "require": "./dist/db.js"
     }
   },
   "files": [

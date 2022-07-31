@@ -3,7 +3,11 @@ import { NotificationWarning } from "../../component/bulma/notification";
 import { renderEntityTable } from "../../component/entity";
 import { useRegistry } from "../../context";
 import { EntityRenderOpts, ValueMap } from "../registry";
-import { FACTOR_ID, SemanticVideo, SEMANTIC_DESCRIPTION } from "semantic/dist/schema";
+import {
+  FACTOR_ID,
+  SemanticVideo,
+  SEMANTIC_DESCRIPTION,
+} from "semantic/dist/schema";
 
 export function renderVideo(
   item: ValueMap,

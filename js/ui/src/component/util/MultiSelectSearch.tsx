@@ -8,7 +8,6 @@ import { loadAsError, loadAsSuccess, LoadState, SPINNER } from "./load";
 import { NotificationError } from "../bulma/notification";
 
 import styles from "./MultiSelectSearch.module.css";
-import { UiRegistry } from "../../semantic/registry";
 
 export interface MultiSelectProps<V> {
   defaultItems?: V[];

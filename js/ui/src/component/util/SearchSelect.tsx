@@ -42,8 +42,6 @@ export function SearchSelect<T>(props: SearchSelectProps<T>): JSX.Element {
 
   const [res] = createResource(term, doSearch);
 
-  let inputRef: HTMLInputElement | undefined;
-
   const onTermChange = throttle((term: string) => {
     console.log("termChange", { term });
     setTerm(term.trim());
@@ -52,21 +50,14 @@ export function SearchSelect<T>(props: SearchSelectProps<T>): JSX.Element {
   const noResultsFallback =
     props.noResultsFallback ?? (() => <p>Nothing found.</p>);
 
-  if (props.autoFocus) {
-    onMount(() => {
-      inputRef?.focus();
-    });
-  }
-
   const ItemWrapper =
     props.itemWrapper || ((props: ParentProps) => <div>{props.children}</div>);
-
-  console.debug("rendering SearchSelect");
 
   return (
     <div>
       <div class="mb-3">
         <SearchInput
+          autoFocus={props.autoFocus}
           placeholder={props.searchPlaceholder ?? "Search..."}
           onInput={(e) => {
             e.stopPropagation();

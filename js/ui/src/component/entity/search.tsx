@@ -1,17 +1,14 @@
 import { Link } from "solid-app-router";
-import { useNavigate } from "solid-app-router";
 import { createSignal, JSX, Show } from "solid-js";
-import { Portal } from "solid-js/web";
 import { useRegistry } from "../../context";
 import { ValueMap } from "../../semantic/registry";
 import { FACTOR_ID } from "semantic/dist/schema";
-import { Box } from "solid-bulma";
 import { Button, Buttons } from "../bulma/button";
 import { Icon } from "../bulma/icon";
-import { Modal } from "../bulma/modal";
 import { EntityPicker } from "./EntityPicker";
 
 export interface EntitySearcherProps {
+  autoFocus?: boolean;
   onSelected: (entity: ValueMap) => void;
 }
 
@@ -25,7 +22,7 @@ export function EntitySearcher(props: EntitySearcherProps): JSX.Element {
       when={activeItem()}
       fallback={
         <EntityPicker
-          autoFocus={true}
+          autoFocus={props.autoFocus}
           renderItem={(item, _index, _onClick) => {
             // TODO: create helper comoponent for button with addons in bulma/button.tsx
             return (
@@ -76,39 +73,5 @@ export function EntitySearcher(props: EntitySearcherProps): JSX.Element {
         );
       }}
     </Show>
-  );
-}
-
-export function EntitySearcherModalToggle(): JSX.Element {
-  const [active, setActive] = createSignal(false);
-
-  const navigate = useNavigate();
-
-  return (
-    <div style={{ display: "flex", "align-items": "center" }}>
-      <Button
-        size="is-normal"
-        onClick={() => {
-          setActive(true);
-        }}
-      >
-        <Icon icon="search" />
-      </Button>
-
-      <Show when={active()}>
-        <Portal>
-          <Modal onClose={() => setActive(false)}>
-            <Box>
-              <EntitySearcher
-                onSelected={(entity) => {
-                  setActive(false);
-                  navigate(`/entity/${entity[FACTOR_ID]}`);
-                }}
-              />
-            </Box>
-          </Modal>
-        </Portal>
-      </Show>
-    </div>
   );
 }

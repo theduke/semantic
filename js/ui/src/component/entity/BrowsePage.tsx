@@ -1,114 +1,35 @@
-import {
-  createEffect,
-  createResource,
-  createSignal,
-  For,
-  JSX,
-  Match,
-  Suspense,
-  Switch,
-} from "solid-js";
-import { useApi, useRegistry } from "../../context";
-import {
-  EntityRenderOpts,
-  UiRegistry,
-  ValueMap,
-} from "../../semantic/registry";
-import { Box } from "solid-bulma";
+import { useSearchParams } from "solid-app-router";
+import { JSX } from "solid-js";
 import { GenericPage } from "../util";
-import { renderError, SPINNER } from "../util/load";
-import { EntityFilter } from "./filter/EntityFilter";
-import {
-  buildFilterDataSelect,
-  newFilterData,
-} from "./filter/EntityFilterForm";
-import { throttle } from "@solid-primitives/scheduled";
-import { NotificationWarning } from "../bulma/notification";
-import { isEqual } from "lodash";
-import { FACTOR_ID } from "semantic/dist/schema";
+import { EntityBrowser } from "./EntityBrowser";
+import { EntityFilter, validateEntityFilter } from "./filter/EntityFilter";
+
+const STORAGE_KEY = "browse-page";
 
 export function BrowsePage(): JSX.Element {
-  const api = useApi();
-  const registry = useRegistry();
+  // return <EntityBrowser storageKey={STORAGE_KEY} />
 
-  const [filter, setFilter] = createSignal<EntityFilter>(newFilterData());
-  const [fetchFilter, setFetchFilter] = createSignal<EntityFilter>(
-    newFilterData()
-  );
+  let initialFilter: EntityFilter | undefined;
 
-  // const onFilterChangeDebounced = leading(debounce, (filter: EntityFilter) => {
-  //   setFetchFilter(filter);
-  // }, 500);
-  const onFilterChangeDebounced = throttle((filter: EntityFilter) => {
-    setFetchFilter(filter);
-  }, 500);
-  createEffect(() => {
-    let newFilter = filter();
-
-    // Ignore sql filter if query is empty.
-    if (newFilter.type === "sql" && newFilter.sql.trim() === "") {
-      newFilter = newFilterData();
+  const [searchParams, setSearchParams] = useSearchParams();
+  const rawFilter = searchParams["filter"];
+  if (typeof rawFilter === "string") {
+    try {
+      const json = JSON.parse(rawFilter);
+      initialFilter = validateEntityFilter.parse(json);
+    } catch (e) {
+      console.debug("Failed to parse filter", { rawFilter });
     }
-
-    // Avoid a refetch if filter hasn't changed.
-    if (!isEqual(newFilter, fetchFilter())) {
-      onFilterChangeDebounced(newFilter);
-    }
-  });
-
-  const [page, { mutate }] = createResource(fetchFilter, (filter) => {
-    if (filter.type === "sql") {
-      if (filter.sql.trim()) {
-        return api.selectSql(filter.sql);
-      } else {
-        return [];
-      }
-    } else {
-      const select = buildFilterDataSelect(filter);
-      return api.select(select);
-    }
-  });
-
-  const opts: EntityRenderOpts = {
-    preview: true,
-    allowDelete: true,
-    allowEdit: true,
-    onDeleted: (item) => {
-      mutate((old) => old?.filter((x) => x[FACTOR_ID] != item[FACTOR_ID]));
-    },
-  };
-
+  }
   return (
     <GenericPage title="Browse">
-      <Box>
-        <EntityFilter onChange={setFilter} />
-      </Box>
-
-      <Suspense fallback={SPINNER}>
-        <Switch>
-          <Match when={page.loading}>{SPINNER}</Match>
-          <Match when={page.error}>{(error) => renderError(error)}</Match>
-          <Match when={page()}>
-            {(page) => renderItems(registry, page, opts)}
-          </Match>
-        </Switch>
-      </Suspense>
+      <EntityBrowser
+        storageKey={STORAGE_KEY}
+        initialFilter={initialFilter}
+        onFilterChanged={(filter) => {
+          setSearchParams({ filter: JSON.stringify(filter) });
+        }}
+      />
     </GenericPage>
-  );
-}
-
-function renderItems(
-  reg: UiRegistry,
-  items: ValueMap[],
-  opts: EntityRenderOpts
-): JSX.Element {
-  if (items.length < 1) {
-    return <NotificationWarning>Nothing found!</NotificationWarning>;
-  }
-
-  return (
-    <div class="is-flex is-flex-direction-column mb-4" style={{ gap: "2rem" }}>
-      <For each={items}>{(item) => reg.renderEntity(item, opts)}</For>
-    </div>
   );
 }

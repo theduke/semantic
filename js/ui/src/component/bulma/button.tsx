@@ -1,6 +1,7 @@
 import { JSX, splitProps } from "solid-js";
 import { Color } from ".";
 import { isAccessor } from "../util";
+import { Icon, IconName, IconSize } from "./icon";
 
 export type ButtonsSize = "are-small" | "are-medium" | "are-large";
 
@@ -9,6 +10,7 @@ export interface ButtonsProps {
   size?: ButtonsSize;
   // If true, the buttons are grouped together without spacing.
   attach?: boolean;
+  hasAddons?: boolean;
 }
 
 export function Buttons(props: ButtonsProps): JSX.Element {
@@ -19,7 +21,6 @@ export function Buttons(props: ButtonsProps): JSX.Element {
   if (props.attach) {
     cls += " has-addons";
   }
-
   return <div class={cls}>{props.children}</div>;
 }
 
@@ -99,5 +100,32 @@ export function Button(props: ButtonProps): JSX.Element {
     >
       {props.children}
     </button>
+  );
+}
+
+export interface IconButtonProps extends ButtonProps {
+  icon: IconName;
+}
+
+export function IconButton(props: IconButtonProps): JSX.Element {
+  const [local, rest] = splitProps(props, ["icon", "children"]);
+
+  let iconSize: IconSize | undefined;
+  switch (props.size) {
+    case "is-small":
+      iconSize = "is-small";
+      break;
+    case 'is-large':
+      iconSize = 'is-medium';
+      break;
+  }
+
+  return (
+    <Button {...rest}>
+      <Icon size={iconSize} icon={local.icon} />
+      <span>
+        {props.children}
+      </span>
+    </Button>
   );
 }
