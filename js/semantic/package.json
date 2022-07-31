@@ -5,6 +5,9 @@
   "module": "./dist/semantic.mjs",
   "main": "./dist/semantic.umd.js",
   "types": "./dist/index.d.ts",
+  "scripts": {
+    "build": "yarn tsc && mv dist/src/* ./dist/ && rm -r dist/src && esbuild --platform=neutral --outdir=./dist src/index.ts src/api.ts src/core.ts src/db.ts src/schema.ts"
+  },
   "exports": {
     ".": {
       "import": "./dist/semantic.mjs",
@@ -54,11 +57,9 @@
   "files": [
     "./dist"
   ],
-  "scripts": {
-    "build": "yarn tsc && node build.mjs"
-  },
   "dependencies": {
     "cross-fetch": "^3.1.5",
+    "esbuild": "^0.14.51",
     "isomorphic-fetch": "^3.0.0"
   },
   "devDependencies": {
