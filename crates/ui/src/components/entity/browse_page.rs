@@ -109,7 +109,7 @@ impl MsgComponent for BrowsePage {
                     query
                         .filter
                         .map(|f| f.and_with(Self::base_filter()))
-                        .unwrap_or_else(|| Self::base_filter()),
+                        .unwrap_or_else(Self::base_filter),
                 );
                 self.load(query, &ctx);
             }
