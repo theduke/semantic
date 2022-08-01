@@ -1,5 +1,5 @@
 import { JSX } from "solid-js/jsx-runtime";
-import { Select } from "../../semantic/core";
+import { Select } from "semantic/dist/core";
 
 export interface QueryBuilderProps {
   onChange?: (select: Select) => void;

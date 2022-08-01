@@ -1,6 +1,6 @@
 import { JSX } from "solid-js/jsx-runtime";
 import { useApi } from "../../context";
-import { Select } from "../../semantic/core";
+import { Select } from "semantic/dist/core";
 import { ValueMap } from "../../semantic/registry";
 import { BoundarySuspenseLoader } from "../util/load";
 

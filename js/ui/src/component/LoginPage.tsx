@@ -1,8 +1,8 @@
 import { Show } from "solid-js";
 import { JSX } from "solid-js/jsx-runtime";
-import { Api } from "../api";
+import { Api } from "semantic/dist/api";
 import { useApi } from "../context";
-import { SemanticSchema } from "../semantic/core";
+import { SemanticSchema } from "semantic/dist/core";
 import { BoundarySuspenseLoader } from "./util/load";
 
 export interface LoginPageProps {

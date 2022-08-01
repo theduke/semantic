@@ -5,6 +5,7 @@ import { ValueMap } from "../../semantic/registry";
 import { FACTOR_ID, SEMANTIC_CREATED_AT } from "semantic/dist/schema";
 import { GenericEntityForm } from "./entity_form";
 import { newUuid } from "..";
+import { NotificationErrorBoundary } from "../util";
 
 export interface EntityCreatorProps {
   schema: EntitySchema;
@@ -58,14 +59,16 @@ export function EntityCreator(props: EntityCreatorProps): JSX.Element {
   }
 
   return (
-    <GenericEntityForm
-      registry={reg}
-      schema={props.schema}
-      submitLabel={submitLabel}
-      cancelLabel={props.cancelLabel}
-      onCancel={props.onCancel}
-      onSubmit={onSubmit}
-      initialValues={initialValues}
-    />
+    <NotificationErrorBoundary>
+      <GenericEntityForm
+        registry={reg}
+        schema={props.schema}
+        submitLabel={submitLabel}
+        cancelLabel={props.cancelLabel}
+        onCancel={props.onCancel}
+        onSubmit={onSubmit}
+        initialValues={initialValues}
+      />
+    </NotificationErrorBoundary>
   );
 }

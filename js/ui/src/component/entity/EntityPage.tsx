@@ -1,7 +1,7 @@
 import { untrack } from "solid-js";
 import { JSX } from "solid-js/jsx-runtime";
 import { useRegistry } from "../../context";
-import { IdOrIdent, Item } from "../../semantic/core";
+import { IdOrIdent, Item } from "semantic/dist/core";
 import { EntityRenderOpts } from "../../semantic/registry";
 import { EntityLoader } from "./EntityLoader";
 

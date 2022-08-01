@@ -32,6 +32,7 @@ import { SelectOption } from "../form/Select";
 import { SelectField } from "../form/SelectField";
 import { SearchSelect } from "../util/SearchSelect";
 import { EntityPicker } from "./EntityPicker";
+import { NotificationErrorBoundary } from "../util";
 
 function unionPlainOptions(variants: ValueType[]): SelectOption<Value>[] {
   return variants.map((variant) => {
@@ -224,7 +225,7 @@ export function entityAttributeFormField(
   }
 
   throw new Error(
-    `unsupported attribute type for attribute ${attrIdent}: ${JSON.stringify(
+    `Could not create form field: unsupported attribute type for attribute ${attrIdent}: ${JSON.stringify(
       ty
     )}`
   );

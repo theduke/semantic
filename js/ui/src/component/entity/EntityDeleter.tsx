@@ -2,7 +2,7 @@ import { createSignal, Show } from "solid-js";
 import { JSX } from "solid-js/jsx-runtime";
 import { useApi } from "../../context";
 import { genericTypedEntityTitle } from "../../semantic";
-import { BaseEntity } from "../../semantic/schema";
+import { BaseEntity } from "semantic/dist/schema";
 import { Button, Buttons } from "../bulma/button";
 import { NotificationError } from "../bulma/notification";
 import { LoadState } from "../util/load";

@@ -1,5 +1,5 @@
 import { JSX } from "solid-js";
-import { BaseEntity } from "../../semantic/schema";
+import { BaseEntity } from "semantic/dist/schema";
 import { Modal } from "../bulma/modal";
 import { EntityDeleter, EntityDeleterProps } from "./EntityDeleter";
 

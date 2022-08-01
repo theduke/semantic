@@ -9,7 +9,6 @@ import {
   Show,
   ParentProps,
 } from "solid-js";
-import { assertDefined } from "../..";
 import { NotificationError } from "../bulma/notification";
 
 export type LoadState<T> =

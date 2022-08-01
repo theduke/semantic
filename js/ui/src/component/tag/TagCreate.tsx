@@ -1,6 +1,6 @@
 import { JSX } from "solid-js/jsx-runtime";
 import { useApi } from "../../context";
-import { SemanticTag } from "../../semantic/schema";
+import { SemanticTag } from "semantic/dist/schema";
 import { Subtitle } from "../bulma/title";
 import { TagForm } from "./TagForm";
 

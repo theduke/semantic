@@ -189,6 +189,7 @@ export function Uploader(_props: UploaderProps): JSX.Element {
             onChange={(data) => {
               metadata = data;
             }}
+            onCancel={() => setMetaFormVisible(false)}
           />
         </div>
       </Show>
@@ -274,6 +275,7 @@ interface MetaFormValues {
 
 interface UploaderMetaFormProps {
   onChange: (values: MetaFormValues) => void;
+  onCancel: () => void;
 }
 
 function UploaderMetaForm(props: UploaderMetaFormProps): JSX.Element {
@@ -288,7 +290,8 @@ function UploaderMetaForm(props: UploaderMetaFormProps): JSX.Element {
   const values: MetaFormValues = {};
 
   return (
-    <div>
+    <Box>
+      <h5 class="title is-5">Metadata</h5>
       <div>
         <FieldHorizontal label={"Collection"}>
           <Box>
@@ -314,8 +317,12 @@ function UploaderMetaForm(props: UploaderMetaFormProps): JSX.Element {
             />
           </Box>
         </FieldHorizontal>
+
+        <Buttons>
+          <Button onClick={props.onCancel}> Clear </Button>
+        </Buttons>
       </div>
-    </div>
+    </Box>
   );
 }
 
@@ -340,8 +347,8 @@ function QueueItem(props: QueueItemProps): JSX.Element {
   return (
     <Box>
       <div>
-        <div class="is-flex">
-          <div class="is-flex-grow-1">
+        <div class="columns">
+          <div class="column is-flex-grow-1">
             <div class="mb-2">
               <b>{item.file.name}</b>
             </div>
@@ -350,11 +357,11 @@ function QueueItem(props: QueueItemProps): JSX.Element {
               <span class="pl-2">{prettyPrintByteSize(item.file.size)}</span>
             </div>
           </div>
-          <div>
+          <div class="column">
             <Show
               when={loading()}
               fallback={
-                <Buttons>
+                <Buttons class="is-justify-content-flex-end">
                   <IconButton
                     icon="upload"
                     loading={loading()}

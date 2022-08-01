@@ -1,4 +1,5 @@
-import { Accessor, JSX } from "solid-js";
+import { Accessor, ErrorBoundary, JSX, ParentProps } from "solid-js";
+import { NotificationError } from "../bulma/notification";
 
 export function isAccessor<T>(
   value: Accessor<T> | T | null | undefined
@@ -21,7 +22,7 @@ export interface GenericPageProps {
 
 export function GenericPage(props: GenericPageProps): JSX.Element {
   return (
-    <div class="container">
+    <div class="container mb-6">
       <PageTitle>{props.title}</PageTitle>
       {props.children}
     </div>
@@ -38,4 +39,16 @@ export function prettyPrintByteSize(size: number): string {
   } else {
     return `${(size / 1000 / 1000 / 1000).toFixed(2)}Gb`;
   }
+}
+
+export function NotificationErrorBoundary(props: ParentProps): JSX.Element {
+  return (
+    <ErrorBoundary
+      fallback={(error: any) => (
+        <NotificationError>{error.toString()}</NotificationError>
+      )}
+    >
+      {props.children}
+    </ErrorBoundary>
+  );
 }
