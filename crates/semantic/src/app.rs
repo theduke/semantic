@@ -614,26 +614,20 @@ impl App {
 
         let size = data.len() as u64;
 
-        let is_video = mime_guess
-            .as_ref()
-            .map(|x| x.mime_type().starts_with("video/"))
-            .unwrap_or_default();
-        let (video_info, data) = if is_video {
-            let data = media::SharedBinarData::new(data);
-            let info = media::analyze_video(std::io::Cursor::new(data.clone()))
+        let data = media::SharedBinarData::new(data);
+        let media_info =
+            media::analyze_file_async(mime_guess.clone(), media::DataSource::Memory(data.clone()))
                 .await
                 .map_err(|error| {
                     tracing::warn!(?error, "could not analyze video");
                 })
-                .ok();
-
-            (info, data.try_into_owned().unwrap())
-        } else {
-            (None, data)
-        };
+                .ok()
+                .flatten();
 
         let id = Id::random();
         let blob_uri = format!("files/{}", id);
+
+        let data = data.try_into_owned().unwrap();
 
         blob.put(&blob_uri, data).await?;
         tracing::trace!(%blob_uri, "blob persisted");
@@ -678,13 +672,24 @@ impl App {
         crate::file_import::file_upload_apply_meta(&mut batch, &mut file, collection, tags, &meta)?;
 
         let item = match mime_guess.map(|x| x.mime_type()).unwrap_or_default() {
-            mime if mime.starts_with("image/") => TypedFile::Image(semantic_core::base::Image {
-                file,
-                width: None,
-                height: None,
-            }),
+            mime if mime.starts_with("image/") => {
+                let (width, height) = if let Some(media::FileInfo::Image(img)) = media_info {
+                    (
+                        img.dimensions.as_ref().map(|x| x.width),
+                        img.dimensions.as_ref().map(|x| x.height),
+                    )
+                } else {
+                    (None, None)
+                };
+
+                TypedFile::Image(semantic_core::base::Image {
+                    file,
+                    width,
+                    height,
+                })
+            }
             mime if mime.starts_with("video/") => {
-                let video = if let Some(info) = video_info {
+                let video = if let Some(media::FileInfo::Video(info)) = media_info {
                     semantic_core::base::Video {
                         file,
                         duration: Some(info.duration.as_secs()),
@@ -704,9 +709,15 @@ impl App {
 
                 TypedFile::Video(video)
             }
-            // mime if mime.starts_with("audio/") => {
-            //     todo!()
-            // }
+            mime if mime.starts_with("audio/") => {
+                let duration = if let Some(media::FileInfo::Audio(audio)) = media_info {
+                    Some(audio.duration.as_secs())
+                } else {
+                    None
+                };
+
+                TypedFile::Audio(semantic_core::base::Audio { file, duration })
+            }
             _other => TypedFile::File(file),
         };
 

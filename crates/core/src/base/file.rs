@@ -394,10 +394,23 @@ impl Video {
     }
 }
 
+#[derive(Serialize, Deserialize, Entity, Clone, Debug)]
+#[factor(namespace = "semantic", title = "Audio")]
+pub struct Audio {
+    #[factor(extend)]
+    #[serde(flatten)]
+    pub file: File,
+
+    #[factor(attr = AttrDuration)]
+    #[serde(rename = "semantic/duration")]
+    pub duration: Option<u64>,
+}
+
 #[derive(Serialize, Deserialize, Clone, Debug)]
 pub enum TypedFile {
     Video(Video),
     Image(Image),
+    Audio(Audio),
     File(File),
 }
 
@@ -410,6 +423,9 @@ impl TypedFile {
             Some(Image::QUALIFIED_NAME) => Image::try_from_map(map)
                 .map(TypedFile::Image)
                 .context("could not deserialize image"),
+            Some(Audio::QUALIFIED_NAME) => Audio::try_from_map(map)
+                .map(TypedFile::Audio)
+                .context("could not deserialize audio file"),
             Some(other) => Err(anyhow::anyhow!("unsupported file type {other}")),
             None => Err(anyhow::anyhow!("map has no type")),
         }
@@ -429,6 +445,10 @@ impl TypedFile {
                 height: file.extra.get_attr::<AttrPixelHeight>(),
                 file,
             }),
+            Audio::QUALIFIED_NAME => Self::Audio(Audio {
+                duration: file.extra.get_attr::<AttrDuration>(),
+                file,
+            }),
             _ => Self::File(file),
         }
     }
@@ -440,6 +460,7 @@ impl factordb::schema::EntityContainer for TypedFile {
             TypedFile::Video(e) => e.file.id,
             TypedFile::Image(e) => e.file.id,
             TypedFile::File(e) => e.id,
+            TypedFile::Audio(e) => e.file.id,
         }
     }
 
@@ -448,6 +469,7 @@ impl factordb::schema::EntityContainer for TypedFile {
             TypedFile::Video(_) => Video::IDENT,
             TypedFile::Image(_) => Image::IDENT,
             TypedFile::File(_) => File::IDENT,
+            TypedFile::Audio(_) => Audio::IDENT,
         }
     }
 
@@ -459,6 +481,7 @@ impl factordb::schema::EntityContainer for TypedFile {
             TypedFile::Video(e) => e.into_map(),
             TypedFile::Image(e) => e.into_map(),
             TypedFile::File(e) => e.into_map(),
+            TypedFile::Audio(e) => e.into_map(),
         }
     }
 }

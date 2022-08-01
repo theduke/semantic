@@ -293,6 +293,7 @@ impl Plugin for SemanticBasePlugin {
                     File::schema(),
                     Image::schema(),
                     Video::schema(),
+                    Audio::schema(),
                     // socialmedia
                     SocialMediaPost::schema(),
                     SocialMediaAccount::schema(),
@@ -1185,6 +1186,20 @@ impl Plugin for SemanticBasePlugin {
                     .into(),
                 );
 
+        let create_audio =
+            Migration::with_name("create_audio_entity").entity_create(EntitySchema {
+                id: Id::nil(),
+                ident: Audio::QUALIFIED_NAME.to_string(),
+                title: Some("Audio".to_string()),
+                description: None,
+                attributes: vec![EntityAttribute {
+                    attribute: AttrDuration::IDENT,
+                    cardinality: Cardinality::Optional,
+                }],
+                extends: vec![File::IDENT],
+                strict: false,
+            });
+
         vec![
             rollup,
             create_like_count,
@@ -1194,6 +1209,7 @@ impl Plugin for SemanticBasePlugin {
             create_imported_at,
             make_url_indexed,
             add_imported_at_and_description_to_bookmark,
+            create_audio,
         ]
     }
 }

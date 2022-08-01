@@ -24,6 +24,7 @@ class Plugin {
       items: [
         {
           data: {
+            'factor/id': SAMPLE_ID,
             'factor/type': 'semantic/Image',
             'factor/title': 'Some Image ' + url,
             'semantic/url': url,
@@ -45,6 +46,7 @@ class Plugin {
       items: [
         {
           data: {
+            'factor/id': SAMPLE_ID,
             'factor/type': 'semantic/Image',
             'factor/title': 'Some Image ' + url,
             'semantic/url': url,

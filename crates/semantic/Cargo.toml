@@ -69,4 +69,5 @@ clap = { version = "3.1.15", features = ["derive", "env"] }
 bytes = "1.1.0"
 tracing-futures = "0.2.5"
 pin-project-lite = "0.2.9"
+image = "0.24.3"
 

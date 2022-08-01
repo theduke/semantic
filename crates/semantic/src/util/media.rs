@@ -1,9 +1,10 @@
 use std::{
     fmt::Write as _,
-    io::{self, BufReader, BufWriter, Read, Write},
+    io::{self, BufReader, BufWriter, Cursor, Read, Write},
     path::PathBuf,
     process::{Command, Stdio},
     sync::Arc,
+    time::Duration,
 };
 
 use anyhow::{anyhow, bail, Context};
@@ -20,12 +21,50 @@ use tokio::{io::AsyncBufReadExt, task::JoinHandle};
 
 use crate::{blobstore::DynBlobStore, jobs::JobManager};
 
-// pub fn video_mime_supports_browser(mime: &str) -> bool {
-//     match mime {
-//         "video/mp4" | "video/webm" => true,
-//         _ => false,
-//     }
-// }
+#[derive(Clone)]
+pub struct SharedBinarData(Arc<Vec<u8>>);
+
+impl SharedBinarData {
+    pub fn new(data: Vec<u8>) -> Self {
+        Self(Arc::new(data))
+    }
+
+    pub fn try_into_owned(self) -> Option<Vec<u8>> {
+        Arc::try_unwrap(self.0).ok()
+    }
+}
+
+impl AsRef<[u8]> for SharedBinarData {
+    fn as_ref(&self) -> &[u8] {
+        &self.0
+    }
+}
+
+pub enum DataSource {
+    Memory(SharedBinarData),
+    Reader(Box<dyn std::io::Read + Send>),
+}
+
+impl DataSource {
+    fn into_reader(self) -> impl std::io::Read + Send + 'static {
+        match self {
+            DataSource::Memory(mem) => Box::new(Cursor::new(mem)),
+            DataSource::Reader(r) => r,
+        }
+    }
+
+    // TODO: allow limiting maximum used memory
+    fn into_bytes(self) -> Result<SharedBinarData, anyhow::Error> {
+        match self {
+            DataSource::Memory(mem) => Ok(mem),
+            DataSource::Reader(mut r) => {
+                let mut buf = Vec::new();
+                r.read_to_end(&mut buf)?;
+                Ok(SharedBinarData::new(buf))
+            }
+        }
+    }
+}
 
 pub fn optimise_file_data(data: Vec<u8>) -> (Vec<u8>, Option<UniversalHash>) {
     use sha2::Digest;
@@ -254,7 +293,7 @@ fn spawn_ffmpeg_output_monitor(
                 }
                 Ok(None) => {
                     // Wait a bit for more output.
-                    tokio::time::sleep(std::time::Duration::from_millis(300)).await;
+                    tokio::time::sleep(Duration::from_millis(300)).await;
                 }
                 Err(error) => {
                     tracing::warn!(path=%path.display(), %error, "ffmpeg output monitor has failed");
@@ -278,85 +317,156 @@ pub struct ImageInfo {
 
 #[derive(Clone, Debug)]
 pub struct VideoInfo {
-    pub duration: std::time::Duration,
+    pub duration: Duration,
     pub has_audio: bool,
     pub dimensions: Option<Dimensions>,
 }
 
-#[derive(Clone)]
-pub struct SharedBinarData(Arc<Vec<u8>>);
+#[derive(Clone, Debug)]
+pub struct AudioInfo {
+    pub duration: Duration,
+}
 
-impl SharedBinarData {
-    pub fn new(data: Vec<u8>) -> Self {
-        Self(Arc::new(data))
-    }
+#[derive(Clone, Debug)]
+pub enum FileInfo {
+    Video(VideoInfo),
+    Image(ImageInfo),
+    Audio(AudioInfo),
+}
 
-    pub fn try_into_owned(self) -> Option<Vec<u8>> {
-        Arc::try_unwrap(self.0).ok()
+pub async fn analyze_file_async(
+    mime_guess: Option<infer::Type>,
+    data: DataSource,
+) -> Result<Option<FileInfo>, anyhow::Error> {
+    tokio::task::spawn_blocking(move || analyze_file_sync(mime_guess, data)).await?
+}
+
+fn analyze_file_sync(
+    mime_guess: Option<infer::Type>,
+    data: DataSource,
+) -> Result<Option<FileInfo>, anyhow::Error> {
+    match mime_guess {
+        None => Ok(None),
+        Some(x) => {
+            if x.mime_type().starts_with("video/") {
+                let video = analyze_video_sync(data.into_reader())?;
+                Ok(Some(FileInfo::Video(video)))
+            } else if x.mime_type().starts_with("image/") {
+                let data = data.into_bytes()?;
+                let info = analyze_image(&data)?;
+                Ok(Some(FileInfo::Image(info)))
+            } else if x.mime_type().starts_with("audio/") {
+                let info = analyze_audio(data)?;
+                Ok(Some(FileInfo::Audio(info)))
+            } else {
+                Ok(None)
+            }
+        }
     }
 }
 
-impl AsRef<[u8]> for SharedBinarData {
-    fn as_ref(&self) -> &[u8] {
-        &self.0
+fn analyze_audio(source: DataSource) -> Result<AudioInfo, anyhow::Error> {
+    let out = run_ffprobe(source.into_reader())?;
+
+    let audio_stream = out
+        .streams
+        .iter()
+        .find(|s| s.codec_type.clone().unwrap_or_default() == "audio");
+
+    let duration = out
+        .format
+        .duration
+        .or_else(|| audio_stream.as_ref().and_then(|s| s.duration.clone()))
+        .and_then(|d| d.parse::<f64>().ok())
+        .map(|secs| Duration::from_secs(secs as u64))
+        .ok_or_else(|| anyhow!("could not determine video duration"))?;
+
+    Ok(AudioInfo { duration })
+}
+
+fn analyze_image(data: &SharedBinarData) -> Result<ImageInfo, anyhow::Error> {
+    analyze_image_image(data.as_ref())
+}
+
+fn analyze_image_image(data: &[u8]) -> Result<ImageInfo, anyhow::Error> {
+    let img = image::io::Reader::new(std::io::Cursor::new(data))
+        .with_guessed_format()?
+        .decode()?;
+
+    let width = img.width();
+    let height = img.height();
+
+    Ok(ImageInfo {
+        dimensions: Some(Dimensions {
+            width: width.into(),
+            height: height.into(),
+        }),
+    })
+}
+
+fn run_ffprobe(reader: impl std::io::Read) -> Result<ffprobe::FfProbe, anyhow::Error> {
+    let mut cmd = std::process::Command::new("ffprobe");
+    cmd.args(&[
+        "-v",
+        "quiet",
+        // "-count_frames",
+        "-show_format",
+        "-show_streams",
+        "-print_format",
+        "json",
+    ]);
+    cmd.arg("-").stdin(Stdio::piped()).stdout(Stdio::piped());
+
+    let mut proc = cmd.spawn().context("could not start ffprobe")?;
+    let mut stdin = proc.stdin.take().unwrap();
+    let mut stdout = proc.stdout.take().unwrap();
+    let mut reader = reader;
+
+    let res = std::io::copy(&mut reader, &mut stdin);
+    match res {
+        Ok(_) => {}
+        Err(err) if err.kind() == io::ErrorKind::BrokenPipe => {
+            // Ignore broken pipe errors because ffprobe often only needs
+            // part of a video (unless count_frames is specified)
+        }
+        Err(err) => {
+            bail!("could not write video to ffprobe: {err}");
+        }
     }
+    stdin.flush()?;
+    std::mem::drop(stdin);
+
+    let mut buf = Vec::new();
+    stdout
+        .read_to_end(&mut buf)
+        .context("Could not read ffprobe output")?;
+
+    let status = proc.wait().context("ffprobe failed")?;
+    if !status.success() {
+        bail!("ffprobe failed with status {status}");
+    }
+
+    let info: ffprobe::FfProbe =
+        serde_json::from_slice(&buf).context("could not parse ffprobe json output")?;
+
+    Ok(info)
+}
+
+async fn analyze_video_async<R>(reader: R) -> Result<VideoInfo, anyhow::Error>
+where
+    R: std::io::Read + Send + 'static,
+{
+    tokio::task::spawn_blocking(move || analyze_video_sync(reader)).await?
 }
 
 // TODO: detect sound presence with minimum decible level
 // currently just checks if an audio stream is present, but videos often have
 // an audio stream that contains no hearable audio.
-pub async fn analyze_video<R>(reader: R) -> Result<VideoInfo, anyhow::Error>
+fn analyze_video_sync<R>(reader: R) -> Result<VideoInfo, anyhow::Error>
 where
-    R: std::io::Read + Send + 'static,
+    R: std::io::Read,
 {
-    let out = tokio::task::spawn_blocking(move || -> Result<ffprobe::FfProbe, anyhow::Error> {
-        let mut cmd = std::process::Command::new("ffprobe");
-        cmd.args(&[
-            "-v",
-            "quiet",
-            // "-count_frames",
-            "-show_format",
-            "-show_streams",
-            "-print_format",
-            "json",
-        ]);
-        cmd.arg("-").stdin(Stdio::piped()).stdout(Stdio::piped());
-
-        let mut proc = cmd.spawn().context("could not start ffprobe")?;
-        let mut stdin = proc.stdin.take().unwrap();
-        let mut stdout = proc.stdout.take().unwrap();
-        let mut reader = reader;
-
-        let res = std::io::copy(&mut reader, &mut stdin);
-        match res {
-            Ok(_) => {}
-            Err(err) if err.kind() == io::ErrorKind::BrokenPipe => {
-                // Ignore broken pipe errors because ffprobe often only needs
-                // part of a video (unless count_frames is specified)
-            }
-            Err(err) => {
-                bail!("could not write video to ffprobe: {err}");
-            }
-        }
-        stdin.flush()?;
-        std::mem::drop(stdin);
-
-        let mut buf = Vec::new();
-        stdout
-            .read_to_end(&mut buf)
-            .context("Could not read ffprobe output")?;
-
-        let status = proc.wait().context("ffprobe failed")?;
-        if !status.success() {
-            bail!("ffprobe failed with status {status}");
-        }
-
-        let info: ffprobe::FfProbe =
-            serde_json::from_slice(&buf).context("could not parse ffprobe json output")?;
-
-        Ok(info)
-    })
-    .await??;
+    let out = run_ffprobe(reader)?;
 
     let video_stream = out
         .streams
@@ -374,7 +484,7 @@ where
         .as_ref()
         .or(video_stream.duration.as_ref())
         .and_then(|d| d.parse::<f64>().ok())
-        .map(|secs| std::time::Duration::from_secs(secs as u64))
+        .map(|secs| Duration::from_secs(secs as u64))
         .ok_or_else(|| anyhow!("could not determine video duration"))?;
     let has_audio = audio_stream.is_some();
 
@@ -428,6 +538,7 @@ pub async fn analyze_files(db: Db, blob: DynBlobStore, force: bool) -> Result<()
                 .map(|opt| opt.map(TypedFile::Video)),
             TypedFile::Image(_) => todo!(),
             TypedFile::File(_) => todo!(),
+            TypedFile::Audio(_) => todo!(),
         };
 
         span.record("complete", &(index + 1));
@@ -473,7 +584,7 @@ async fn video_analyze_and_update(
         .await
         .context("Could not obtaing blob reader for video")?;
 
-    let info = analyze_video(reader)
+    let info = analyze_video_async(reader)
         .await
         .context("could not analyse video")?;
 
