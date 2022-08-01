@@ -2,8 +2,13 @@
   "name": "solid-bulma",
   "version": "0.1.0",
   "license": "MIT",
+  "scripts": {
+    "format": "prettier --write '**/*.{ts,tsx}'",
+    "fmt": "yarn format"
+  },
   "main": "src/index.js",
   "devDependencies": {
+    "prettier": "^2.7.1",
     "vite": "^3.0.2"
   },
   "dependencies": {

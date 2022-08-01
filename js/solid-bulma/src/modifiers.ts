@@ -5,11 +5,10 @@ export type BulmaColor =
   | "is-success"
   | "is-warning"
   | "is-danger"
-  | 'is-black'
-  | 'is-dark'
-  | 'is-light'
-  | 'is-white'
-  ;
+  | "is-black"
+  | "is-dark"
+  | "is-light"
+  | "is-white";
 
 export type BulmaTextColor =
   | "has-text-primary"

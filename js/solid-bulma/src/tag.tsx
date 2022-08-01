@@ -1,7 +1,7 @@
 import { JSX, ParentProps, splitProps } from "solid-js";
 import { BulmaColor } from "./";
 
-export type TagSize = 'is-normal' | 'is-medium' | 'is-large';
+export type TagSize = "is-normal" | "is-medium" | "is-large";
 
 export interface TagProps extends JSX.HTMLAttributes<HTMLSpanElement> {
   color?: BulmaColor;
@@ -26,7 +26,7 @@ export function Tag(props: TagProps): JSX.Element {
     cls += " is-rounded";
   }
 
-  return <span class={cls}>{props.children}</span>
+  return <span class={cls}>{props.children}</span>;
 }
 
 export interface DeletableTagProps extends TagProps {
@@ -35,7 +35,7 @@ export interface DeletableTagProps extends TagProps {
 
 // A tag with a small delete icon.
 export function DeletableTag(props: DeletableTagProps): JSX.Element {
-  const [_, rest] = splitProps(props, ['onDelete']);
+  const [_, rest] = splitProps(props, ["onDelete"]);
   return (
     <Tag {...rest}>
       {props.children}
@@ -44,7 +44,7 @@ export function DeletableTag(props: DeletableTagProps): JSX.Element {
   );
 }
 
-export type TagsSize = 'are-medium' | 'are-large';
+export type TagsSize = "are-medium" | "are-large";
 
 export interface TagsProps extends ParentProps {
   attached?: boolean;
@@ -59,5 +59,5 @@ export function Tags(props: TagsProps): JSX.Element {
   if (props.size) {
     cls += " " + props.size;
   }
-  return <div class={cls}>{props.children}</div>
+  return <div class={cls}>{props.children}</div>;
 }
