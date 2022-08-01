@@ -5,7 +5,7 @@ import { Expr, Select } from "semantic/dist/core";
 import {
   exprAnd,
   exprAttr,
-  exprContains,
+  exprRegexIMatch,
   exprEq,
   exprLiteral,
   exprOr,
@@ -53,7 +53,7 @@ export function EntityPicker(props: EntityPickerProps) {
         }
         const termExpr = exprOr(
           exprEq(exprAttr(FACTOR_ID), exprLiteral(term)),
-          exprContains(exprAttr(SEMANTIC_TITLE), exprLiteral(term))
+          exprRegexIMatch(exprAttr(SEMANTIC_TITLE), term)
         );
 
         let select: Select;

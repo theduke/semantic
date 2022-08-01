@@ -1,9 +1,10 @@
 import { JSX } from "solid-js";
-import { useRegistry } from "../../context";
+import { useApi, useRegistry } from "../../context";
 import { EntitySchema } from "semantic/dist/core";
 import { ValueMap } from "../../semantic/registry";
-import { SEMANTIC_CREATED_AT } from "semantic/dist/schema";
+import { FACTOR_ID, SEMANTIC_CREATED_AT } from "semantic/dist/schema";
 import { GenericEntityForm } from "./entity_form";
+import { newUuid } from "..";
 
 export interface EntityCreatorProps {
   schema: EntitySchema;
@@ -12,7 +13,15 @@ export interface EntityCreatorProps {
   onCancel?: () => void;
 
   submitLabel?: JSX.Element;
+
   onSubmit?: (values: ValueMap) => Promise<void> | void;
+
+  // Called once the entity has been created.
+  // NOTE: only called when onSubmit is not specified.
+  // If it is specified, then the user must manually persist.
+  onPersisted?: (entity: ValueMap) => void;
+
+  // TODO: enfore that either onSubmit or onPersisted is specified via union types
 }
 
 export function EntityCreator(props: EntityCreatorProps): JSX.Element {
@@ -30,6 +39,24 @@ export function EntityCreator(props: EntityCreatorProps): JSX.Element {
     initialValues[SEMANTIC_CREATED_AT] = new Date().getTime();
   }
 
+  let onSubmit = props.onSubmit;
+  if (props.onPersisted) {
+    const api = useApi();
+    const onPersisted = props.onPersisted;
+    onSubmit = async (values) => {
+      const id = newUuid();
+      await api.batch({ actions: [{ Create: { id, data: values } }] });
+      onPersisted({ ...values, [FACTOR_ID]: id });
+    };
+  } else {
+    console.trace(
+      "invalid EntityCreator props: must either specify onSubmit or onPersisted"
+    );
+    throw new Error(
+      "invalid EntityCreator props: must either specify onSubmit or onPersisted"
+    );
+  }
+
   return (
     <GenericEntityForm
       registry={reg}
@@ -37,7 +64,7 @@ export function EntityCreator(props: EntityCreatorProps): JSX.Element {
       submitLabel={submitLabel}
       cancelLabel={props.cancelLabel}
       onCancel={props.onCancel}
-      onSubmit={props.onSubmit}
+      onSubmit={onSubmit}
       initialValues={initialValues}
     />
   );

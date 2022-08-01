@@ -27,3 +27,15 @@ export function GenericPage(props: GenericPageProps): JSX.Element {
     </div>
   );
 }
+
+export function prettyPrintByteSize(size: number): string {
+  if (size < 1000) {
+    return `${size}B`;
+  } else if (size < 1000 * 1000) {
+    return `${(size / 1000).toFixed()}Kb`;
+  } else if (size < 1000 * 1000 * 1000) {
+    return `${(size / 1000 / 1000).toFixed()}Mb`;
+  } else {
+    return `${(size / 1000 / 1000 / 1000).toFixed(2)}Gb`;
+  }
+}

@@ -13,9 +13,10 @@ const FA_ICON_MAP = {
   arrowsCross: "fa-solid fa-up-down-left-right",
   trash: "fa-solid fa-trash",
   xmark: "fa-solid fa-xmark",
+  circleXmarkRegular: "fa-regular fa-circle-xmark",
   filter: "fa-solid fa-filter",
-  globe: 'fa-solid fa-globe',
-  upload: 'fa-solid fa-upload',
+  globe: "fa-solid fa-globe",
+  upload: "fa-solid fa-upload",
 };
 
 export type IconSize = "is-small" | "is-medium" | "is-large";

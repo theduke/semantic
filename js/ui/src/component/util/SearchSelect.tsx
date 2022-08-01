@@ -48,7 +48,15 @@ export function SearchSelect<T>(props: SearchSelectProps<T>): JSX.Element {
   }, 500);
 
   const noResultsFallback =
-    props.noResultsFallback ?? (() => <p>Nothing found.</p>);
+    props.noResultsFallback ??
+    (() => (
+      <Show
+        when={term()?.length > 0}
+        fallback={<Notification>Please enter a search term.</Notification>}
+      >
+        <Notification>Nothing found.</Notification>
+      </Show>
+    ));
 
   const ItemWrapper =
     props.itemWrapper || ((props: ParentProps) => <div>{props.children}</div>);

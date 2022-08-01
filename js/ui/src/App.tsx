@@ -21,6 +21,7 @@ import { TagManagerPage } from "./component/tag/TagManager";
 import { EntityCreateSelectorPage } from "./component/entity/EntityCreateSelectorPage";
 import { EntityCreatePage } from "./component/entity/EntityCreatePage";
 import { EntitySearcherModalToggle } from "./component/entity/EntitySearcherModalToggle";
+import { UploadPage } from "./component/upload/UploadPage";
 
 export function App(): JSX.Element {
   const [getRegistry, setRegistry] = createSignal<UiRegistry | null>();
@@ -54,6 +55,7 @@ export function App(): JSX.Element {
                   return <EntityCreatePage entityType={params.ident} />;
                 }}
               />
+              <Route path="/upload" component={UploadPage} />
               <Route path={ROUTE_SETTINGS} component={SettingsPage} />
               <Route
                 path={ROUTE_SETTINGS_TAG_MANAGER}

@@ -21,6 +21,10 @@ export type LoadState<T> =
 export const IDLE = { state: "idle" };
 export const LOADING = { state: "loading" };
 
+export function mkIdle<T>(): LoadState<T> {
+  return { state: "idle" };
+}
+
 export function mkError<T>(error: any): LoadState<T> {
   return { state: "error", error: error.toString() };
 }
@@ -35,6 +39,24 @@ export function loadAsError<T>(state: LoadState<T>): string | null {
 
 export function loadAsSuccess<T>(state: LoadState<T>): T | null {
   return state.state === "success" ? state.data : null;
+}
+
+export function startLoader<T>(
+  [_, set]: Signal<LoadState<T>>,
+  fetcher: () => Promise<T>
+): Promise<LoadState<T>> {
+  set({ state: "loading" });
+  return fetcher()
+    .then((data) => {
+      const state: LoadState<T> = { state: "success", data: data };
+      set(state);
+      return state;
+    })
+    .catch((err) => {
+      const state: LoadState<T> = { state: "error", error: err };
+      set(state);
+      return state;
+    });
 }
 
 export function createLoader<T>(

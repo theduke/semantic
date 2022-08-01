@@ -5,8 +5,7 @@ import { Icon, IconName, IconSize } from "./icon";
 
 export type ButtonsSize = "are-small" | "are-medium" | "are-large";
 
-export interface ButtonsProps {
-  children?: JSX.Element;
+export interface ButtonsProps extends JSX.HTMLAttributes<HTMLDivElement> {
   size?: ButtonsSize;
   // If true, the buttons are grouped together without spacing.
   attach?: boolean;
@@ -20,6 +19,9 @@ export function Buttons(props: ButtonsProps): JSX.Element {
   }
   if (props.attach) {
     cls += " has-addons";
+  }
+  if (props.class) {
+    cls += " " + props.class;
   }
   return <div class={cls}>{props.children}</div>;
 }
@@ -115,17 +117,15 @@ export function IconButton(props: IconButtonProps): JSX.Element {
     case "is-small":
       iconSize = "is-small";
       break;
-    case 'is-large':
-      iconSize = 'is-medium';
+    case "is-large":
+      iconSize = "is-medium";
       break;
   }
 
   return (
     <Button {...rest}>
       <Icon size={iconSize} icon={local.icon} />
-      <span>
-        {props.children}
-      </span>
+      <span>{props.children}</span>
     </Button>
   );
 }

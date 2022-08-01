@@ -47,6 +47,15 @@ export function exprContains(left: Expr, right: Expr): Expr {
   return exprBinary("Contains", left, right);
 }
 
+export function exprRegexMatch(left: Expr, regex: string): Expr {
+  return exprBinary("RegexMatch", left, exprLiteral(regex));
+}
+
+// Case-insensitive regex match.
+export function exprRegexIMatch(left: Expr, regex: string): Expr {
+  return exprBinary("RegexMatchCaseInsensitive", left, exprLiteral(regex));
+}
+
 export function exprIn(left: Expr, right: Expr): Expr {
   return exprBinary("In", left, right);
 }

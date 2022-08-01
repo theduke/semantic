@@ -88,10 +88,6 @@ export function entityAttributeFormField(
 
   const attrIdent = attr["factor/ident"];
 
-  if (cardinality === "Many") {
-    throw new Error("Many cardinality not supported");
-  }
-
   const isRequired = cardinality === "Required";
 
   if (ty === "Bool") {
