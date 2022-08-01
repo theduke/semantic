@@ -8,6 +8,7 @@ export interface InputFieldProps
   placeholder?: string;
   type?: InputType;
   icon?: IconName;
+  mode?: "onchange" | "oninput";
 }
 
 export function InputField(props: InputFieldProps): JSX.Element {
@@ -20,6 +21,7 @@ export function InputField(props: InputFieldProps): JSX.Element {
           type={props.type}
           placeholder={props.placeholder}
           field={props.field}
+          mode={props.mode}
         />,
         props.icon ? <Icon icon={props.icon} isLeft /> : undefined,
       ]}

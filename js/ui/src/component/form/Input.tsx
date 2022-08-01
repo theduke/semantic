@@ -7,6 +7,7 @@ export interface InputProps {
   field: FieldAccessor<string>;
   placeholder?: string;
   type?: InputType;
+  mode?: "onchange" | "oninput";
 }
 
 export function Input(props: InputProps): JSX.Element {
@@ -44,11 +45,24 @@ export function Input(props: InputProps): JSX.Element {
       class="input"
       ref={elem}
       type={props.type ?? "text"}
-      onchange={(e) => {
-        e.stopPropagation();
-        const value = elem?.value;
-        field.set(value ?? "");
-      }}
+      onchange={
+        props.mode === "oninput"
+          ? undefined
+          : (e) => {
+              e.stopPropagation();
+              const value = elem?.value;
+              field.set(value ?? "");
+            }
+      }
+      oninput={
+        props.mode === "oninput"
+          ? (e) => {
+              e.stopPropagation();
+              const value = elem?.value;
+              field.set(value ?? "");
+            }
+          : undefined
+      }
     />
   );
 }

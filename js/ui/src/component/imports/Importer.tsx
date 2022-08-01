@@ -55,11 +55,6 @@ interface QueueItem {
   loader: Signal<LoadState<ValueMap>>;
 }
 
-interface State {
-  state: FetchUrlOutput;
-  items: QueueItem[];
-}
-
 export interface ImporterProps {
   initialSettings?: ImportSettings;
   onSettingsChanged?: (settings: ImportSettings) => void;
@@ -93,54 +88,56 @@ export function Importer(props: ImporterProps): JSX.Element {
 
   let nextItemId = 0;
 
-  const [results] = createResource<LoadState<FetchUrlOutput>, FetchUrlJob>(
+  const [results, { mutate }] = createResource<
+    LoadState<FetchUrlOutput>,
+    FetchUrlJob
+  >(
     query,
     async (query): Promise<LoadState<FetchUrlOutput>> => {
-      if (query && query.url) {
-        try {
-          const out = await api.fetchUrl(query);
-          const state: LoadState<FetchUrlOutput> = {
-            state: "success",
-            data: out,
-          };
-
-          // Find existing.
-
-          const urls: string[] = out.items
-            .map((item) => item.data[SEMANTIC_URL])
-            .filter((x) => !!x);
-          const existingEntities = await api.select({
-            ...newSelect(),
-            filter: exprIn(
-              exprAttr(SEMANTIC_URL),
-              exprList(urls.map(exprLiteral))
-            ),
-            limit: Math.max(urls.length * 2, 500) as any,
-          });
-
-          const items = out.items.map(
-            (item): QueueItem => ({
-              id: nextItemId++,
-              data: item.data as ValueMap,
-              loader: createSignal({ state: "idle" }),
-              oldEntity: existingEntities.find(
-                (entity) => entity[SEMANTIC_URL] === item.data[SEMANTIC_URL]
-              ) as BaseEntity | null,
-            })
-          );
-          setQueueItems(items);
-
-          props.onSettingsChanged?.({
-            url: query.url,
-            importMedia: values().importMedia,
-          });
-
-          return state;
-        } catch (error: any) {
-          return { state: "error", error: error.toString() };
-        }
-      } else {
+      if (!(query && query.url)) {
         return { state: "idle" };
+      }
+      try {
+        const out = await api.fetchUrl(query);
+        const state: LoadState<FetchUrlOutput> = {
+          state: "success",
+          data: out,
+        };
+
+        // Find existing.
+
+        const urls: string[] = out.items
+          .map((item) => item.data[SEMANTIC_URL])
+          .filter((x) => !!x);
+        const existingEntities = await api.select({
+          ...newSelect(),
+          filter: exprIn(
+            exprAttr(SEMANTIC_URL),
+            exprList(urls.map(exprLiteral))
+          ),
+          limit: Math.max(urls.length * 2, 500) as any,
+        });
+
+        const items = out.items.map(
+          (item): QueueItem => ({
+            id: nextItemId++,
+            data: item.data as ValueMap,
+            loader: createSignal({ state: "idle" }),
+            oldEntity: existingEntities.find(
+              (entity) => entity[SEMANTIC_URL] === item.data[SEMANTIC_URL]
+            ) as BaseEntity | null,
+          })
+        );
+        setQueueItems(items);
+
+        props.onSettingsChanged?.({
+          url: query.url,
+          importMedia: values().importMedia,
+        });
+
+        return state;
+      } catch (error: any) {
+        return { state: "error", error: error.toString() };
       }
     },
     { initialValue: { state: "idle" } }
@@ -190,8 +187,12 @@ export function Importer(props: ImporterProps): JSX.Element {
 
   const form = createForm<FormValues>({
     initialValues: initialValues,
-    onValid: onValueChange,
+    onValid: (values) => {
+      onValueChange(values);
+    },
   });
+
+  const urlField = form.field("url");
 
   return (
     <div>
@@ -203,10 +204,19 @@ export function Importer(props: ImporterProps): JSX.Element {
           }}
         >
           <InputField
+            mode="oninput"
             icon="search"
-            field={form.field("url")}
+            field={urlField}
             label={null}
-            help="Url to import."
+            help={
+              urlField.get().value !== query()?.url ? (
+                <span class="has-text-info">
+                  <b>Pending...</b>
+                </span>
+              ) : (
+                "Enter a url to import."
+              )
+            }
             placeholder="https://..."
           />
           <CheckboxField
