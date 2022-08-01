@@ -1,10 +1,17 @@
-import { JSX } from "solid-js";
+import { JSX, splitProps } from "solid-js";
 import { FormField, FormFieldProps } from "./FormField";
 import { Checkbox } from "./Checkbox";
 
 export interface CheckboxFieldProps
-  extends Omit<FormFieldProps<boolean>, "control"> {}
+  extends Omit<FormFieldProps<boolean>, "control"> {
+  checkboxLabel: string;
+}
 
 export function CheckboxField(props: CheckboxFieldProps): JSX.Element {
-  return <FormField {...props} control={<Checkbox field={props.field} />} />;
+  return (
+    <FormField
+      {...props}
+      control={<Checkbox label={props.checkboxLabel} field={props.field} />}
+    />
+  );
 }

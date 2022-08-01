@@ -1,6 +1,6 @@
 import { createSignal, JSX, Show } from "solid-js";
 import { Modal } from "../../component/bulma/modal";
-import { NotificationWarning } from "../../component/bulma/notification";
+import { Notification } from "../../component/bulma/notification";
 import { renderEntityTable } from "../../component/entity";
 import { useRegistry } from "../../context";
 import { EntityRenderOpts, ValueMap } from "../registry";
@@ -47,9 +47,7 @@ export function renderImage(
   } else {
     return (
       <div>
-        <NotificationWarning>
-          Image has no blob or remote url.
-        </NotificationWarning>
+        <Notification>Image has no blob or remote url.</Notification>
         {renderEntityTable(useRegistry(), item)}
       </div>
     );

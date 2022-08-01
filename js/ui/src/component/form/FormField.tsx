@@ -6,13 +6,21 @@ export interface FormFieldProps<T> {
   help?: JSX.Element;
   field: FieldAccessor<T>;
   control: JSX.Element;
+  controlExtraClasses?: string;
 }
 
 export function FormField<T>(props: FormFieldProps<T>): JSX.Element {
   return (
     <div class="field">
-      <div class="label">{props.label}</div>
-      <div class="control">{props.control}</div>
+      {props.label ? <div class="label">{props.label}</div> : null}
+      <div
+        class={
+          "control" +
+          (props.controlExtraClasses ? " " + props.controlExtraClasses : "")
+        }
+      >
+        {props.control}
+      </div>
       {props.help ? <p class="help">{props.help}</p> : null}
       {renderFieldErrors(props.field)}
     </div>

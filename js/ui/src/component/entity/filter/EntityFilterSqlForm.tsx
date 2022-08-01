@@ -41,7 +41,12 @@ export function EntityFilterSqlForm(
   });
 
   return (
-    <form onsubmit={(e) => {}}>
+    <form
+      onsubmit={(e) => {
+        e.preventDefault();
+        e.stopPropagation();
+      }}
+    >
       <TextAreaField
         field={form.field("sql")}
         label={null}

@@ -94,7 +94,12 @@ export function entityAttributeFormField(
   if (ty === "Bool") {
     let field = form.field(attrIdent) as FieldAccessor<boolean>;
     return [
-      <CheckboxField label={attributeName} field={field} />,
+      // TODO: better checkboxLabel?
+      <CheckboxField
+        label={attributeName}
+        checkboxLabel={"True/False"}
+        field={field}
+      />,
       (_values) => null,
     ];
   } else if (ty === "String" || ty === "Url") {

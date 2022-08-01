@@ -2,6 +2,7 @@ import { createEffect, JSX, onMount } from "solid-js";
 import { FieldAccessor } from ".";
 
 export interface CheckboxProps {
+  label: string;
   field: FieldAccessor<boolean>;
 }
 
@@ -34,14 +35,17 @@ export function Checkbox(props: CheckboxProps): JSX.Element {
   });
 
   return (
-    <input
-      ref={elem}
-      type="checkbox"
-      onchange={(e) => {
-        e.preventDefault();
-        e.stopPropagation();
-        field.set(e.currentTarget.checked);
-      }}
-    />
+    <label class="checkbox">
+      <input
+        ref={elem}
+        type="checkbox"
+        onchange={(e) => {
+          e.preventDefault();
+          e.stopPropagation();
+          field.set(e.currentTarget.checked);
+        }}
+      />{" "}
+      {props.label}
+    </label>
   );
 }

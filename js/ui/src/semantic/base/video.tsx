@@ -1,5 +1,5 @@
 import { JSX } from "solid-js";
-import { NotificationWarning } from "../../component/bulma/notification";
+import { Notification } from "../../component/bulma/notification";
 import { renderEntityTable } from "../../component/entity";
 import { useRegistry } from "../../context";
 import { EntityRenderOpts, ValueMap } from "../registry";
@@ -69,9 +69,7 @@ export function renderVideo(
   } else {
     return (
       <div>
-        <NotificationWarning>
-          Video has no blob or remote url.
-        </NotificationWarning>
+        <Notification>Video has no blob or remote url.</Notification>
         {renderEntityTable(useRegistry(), item)}
       </div>
     );

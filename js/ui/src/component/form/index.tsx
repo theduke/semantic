@@ -174,6 +174,7 @@ export class FormState<Values extends Record<string, any>> {
   }
 
   onChanged() {
+    console.log("onchanged");
     if (this.init.onValid) {
       this.init.onValid(this.buildValues());
     }
@@ -181,6 +182,7 @@ export class FormState<Values extends Record<string, any>> {
 
   runValidations(): Promise<void> | void {
     if (!this.init.validate) {
+      this.onChanged();
       return;
     }
     if (this.state.isValidating || this.state.isSubmitting) {

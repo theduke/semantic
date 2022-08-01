@@ -8,7 +8,11 @@ import {
   createResource,
   Show,
   ParentProps,
+  Resource,
+  Switch,
+  Match,
 } from "solid-js";
+import { NotificationErrorBoundary } from ".";
 import { NotificationError } from "../bulma/notification";
 
 export type LoadState<T> =
@@ -65,7 +69,7 @@ export function createLoader<T>(
 }
 
 export function renderError(error: any): JSX.Element {
-  console.error(error);
+  console.trace(error);
   return <NotificationError>{error.toString()}</NotificationError>;
 }
 
@@ -118,6 +122,26 @@ export function BoundarySuspense(props: ParentProps): JSX.Element {
   return (
     <ErrorBoundary fallback={renderError}>
       <Suspense fallback={SPINNER}>{props.children}</Suspense>
+    </ErrorBoundary>
+  );
+}
+
+export interface ResourceViewerProps<T> {
+  resource: Resource<T>;
+  children: (data: T) => JSX.Element;
+  fallback?: JSX.Element;
+}
+
+export function ResourceViewer<T>(props: ResourceViewerProps<T>): JSX.Element {
+  return (
+    <ErrorBoundary fallback={renderError}>
+      <Switch fallback={props.fallback}>
+        <Match when={props.resource.loading}>{SPINNER}</Match>
+        <Match when={props.resource.error}>
+          {(error) => <NotificationError>{error.toString()}</NotificationError>}
+        </Match>
+        <Match when={props.resource()}>{(data) => props.children(data)}</Match>
+      </Switch>
     </ErrorBoundary>
   );
 }

@@ -136,14 +136,16 @@ export function renderEntityTable(
     );
   });
 
-  const children = (
+  const id = item[FACTOR_ID];
+
+  const children = id ? (
     <tr>
       <td>Children</td>
       <td>
         <EntityChildren id={item[FACTOR_ID]} />
       </td>
     </tr>
-  );
+  ) : null;
   rows.push(children);
 
   return <table class="table">{rows}</table>;

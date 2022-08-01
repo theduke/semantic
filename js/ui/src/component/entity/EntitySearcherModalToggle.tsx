@@ -22,7 +22,6 @@ export function EntitySearcherModalToggle(
 
   if (props.keyboard) {
     const handler = (e: KeyboardEvent) => {
-      console.log(e);
       if (e.key === "s" && e.altKey) {
         e.stopPropagation();
         e.preventDefault();
@@ -48,19 +47,21 @@ export function EntitySearcherModalToggle(
       </Button>
 
       <Show when={active()}>
-        <Portal>
-          <Modal onClose={() => setActive(false)}>
-            <Box>
-              <EntitySearcher
-                autoFocus
-                onSelected={(entity) => {
-                  setActive(false);
-                  navigate(`/entity/${entity[FACTOR_ID]}`);
-                }}
-              />
-            </Box>
-          </Modal>
-        </Portal>
+        {(_) => (
+          <Portal>
+            <Modal onClose={() => setActive(false)}>
+              <Box>
+                <EntitySearcher
+                  autoFocus
+                  onSelected={(entity) => {
+                    setActive(false);
+                    navigate(`/entity/${entity[FACTOR_ID]}`);
+                  }}
+                />
+              </Box>
+            </Modal>
+          </Portal>
+        )}
       </Show>
     </div>
   );

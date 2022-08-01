@@ -45,7 +45,6 @@ export function Input(props: InputProps): JSX.Element {
       ref={elem}
       type={props.type ?? "text"}
       onchange={(e) => {
-        e.preventDefault();
         e.stopPropagation();
         const value = elem?.value;
         field.set(value ?? "");

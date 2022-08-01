@@ -91,8 +91,15 @@ export function Uploader(_props: UploaderProps): JSX.Element {
     document.removeEventListener("paste", pasteHandler);
   });
 
-  const doUpload = (item: QueueItem): Promise<LoadState<FileUploadReply>> => {
+  const doUpload = (
+    item: QueueItem
+  ): Promise<LoadState<FileUploadReply>> | null => {
     console.log("uploading item", { item });
+
+    if (item.loader[0]().state === "loading") {
+      return null;
+    }
+
     setStatus("uploading");
     return startLoader(item.loader, async () => {
       const meta: FileUploadMetadata = {

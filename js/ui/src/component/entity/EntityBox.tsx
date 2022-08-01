@@ -16,7 +16,7 @@ export interface EntityAction {
 }
 
 export interface EntityBoxProps {
-  linkPath: string;
+  linkPath?: string;
   title: JSX.Element;
   type?: string;
   actions?: EntityAction[];
@@ -82,9 +82,13 @@ export function EntityBox(props: EntityBoxProps): JSX.Element {
     <div class="card">
       <header class="card-header">
         <p class="card-header-title" style={{ "flex-grow": 0 }}>
-          <Link href={props.linkPath} style={{ color: "inherit" }}>
-            {props.title}
-          </Link>
+          {props.linkPath ? (
+            <Link href={props.linkPath} style={{ color: "inherit" }}>
+              {props.title}
+            </Link>
+          ) : (
+            <span>{props.title}</span>
+          )}
           <small style={{ "font-weight": "normal", "padding-left": "0.8rem" }}>
             {props.type}
           </small>
