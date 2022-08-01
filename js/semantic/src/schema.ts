@@ -60,6 +60,7 @@ export const SEMANTIC_BIRTHDATE = "semantic/birthdate";
 export const SEMANTIC_GENDER = "semantic/gender";
 export const SEMANTIC_LIKE_COUNT = "semantic/like_count";
 
+
 export type EntityId = string;
 export type Ident = string;
 export type IdOrIdent = EntityId | string;
@@ -148,6 +149,13 @@ export interface SemanticVideo extends Omit<SemanticFile, "factor/type"> {
   "semantic/video_has_sound"?: boolean | null,
   "semantic/pixel_width"?: number | null,
   "semantic/pixel_height"?: number | null,
+}
+
+
+export const TY_SEMANTIC_AUDIO = "semantic/Audio";
+export interface SemanticAudio extends Omit<SemanticFile, "factor/type"> {
+  "factor/type": "semantic/Audio",
+  "semantic/duration"?: number | null,
 }
 
 

@@ -4892,7 +4892,7 @@ __metadata:
   languageName: node
   linkType: hard
 
-"prettier@npm:^2.6.2":
+"prettier@npm:^2.6.2, prettier@npm:^2.7.1":
   version: 2.7.1
   resolution: "prettier@npm:2.7.1"
   bin:
@@ -5536,6 +5536,7 @@ __metadata:
   version: 0.0.0-use.local
   resolution: "solid-bulma@workspace:solid-bulma"
   dependencies:
+    prettier: ^2.7.1
     solid-js: ^1.4.7
     vite: ^3.0.2
   languageName: unknown
