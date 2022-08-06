@@ -62,6 +62,8 @@ struct BackendOptions {
     /// Path for the database.
     #[clap(short = 'p', long, env = "SEMANTIC_DATA_PATH")]
     data_path: Option<String>,
+    #[clap(long, env = "SEMANTIC_READONLY")]
+    readonly: bool,
     /// Fore creation of a new database.
     /// Will fail if the database already exists.
     #[clap(long)]
@@ -107,6 +109,7 @@ impl BackendOptions {
             raw: false,
             key_iterations: self.key_iterations,
             salt: self.salt.clone(),
+            readonly: self.readonly,
         });
 
         let c = api::BackendConfig {

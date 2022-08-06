@@ -51,6 +51,7 @@ pub struct BackendCryptoConfig {
     pub raw: bool,
     pub offset: Option<u64>,
     pub full_index_write_interval: Option<u64>,
+    pub readonly: bool,
 }
 
 impl std::fmt::Debug for BackendCryptoConfig {
@@ -83,6 +84,7 @@ impl DbConfig {
                 key: String::new(),
                 raw: false,
                 full_index_write_interval: c.full_index_write_interval,
+                readonly: c.readonly,
             }),
         }
     }

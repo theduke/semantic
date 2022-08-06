@@ -47,6 +47,7 @@ pub fn login(on_success: impl Fn(SemanticSchema) + 'static) -> TagBuilder {
                         key_iterations: None,
                         salt: None,
                         full_index_write_interval: None,
+                        readonly: false,
                     }),
                     idle_timeout: None,
                 })
