@@ -28,9 +28,9 @@ pub use self::bookmark::*;
 
 use factordb::{
     prelude::{
-        AttrIdent, AttrMapExt, Attribute, AttributeDescriptor, AttributeSchema, Cardinality,
-        DataMap, EntityAttribute, EntityDescriptor, EntitySchema, Id, IdOrIdent, Migration,
-        Timestamp, Value, ValueType,
+        AttrId, AttrIdent, AttrMapExt, Attribute, AttributeDescriptor, AttributeSchema,
+        Cardinality, DataMap, EntityAttribute, EntityDescriptor, EntitySchema, Expr, Id, IdOrIdent,
+        Migration, Timestamp, Value, ValueType,
     },
     query::{
         migrate,
@@ -1211,5 +1211,13 @@ impl Plugin for SemanticBasePlugin {
             add_imported_at_and_description_to_bookmark,
             create_audio,
         ]
+    }
+}
+
+pub fn expr_find_by_id_ident_or_title(ident: &str) -> Expr {
+    if let Ok(id) = ident.parse::<Id>() {
+        Expr::eq(AttrId::expr(), id)
+    } else {
+        Expr::eq(AttrIdent::expr(), ident).or_with(Expr::contains(AttrTitle::expr(), ident.trim()))
     }
 }

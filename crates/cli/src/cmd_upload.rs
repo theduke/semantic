@@ -6,13 +6,13 @@ use std::{
 use anyhow::{bail, Context};
 use bytesize::ByteSize;
 use factordb::{
-    prelude::{AttrId, AttrIdent, AttributeDescriptor, EntityContainer, Id},
+    prelude::{AttrId, AttrIdent, AttrMapExt, AttributeDescriptor, EntityContainer, Id, Select},
     AnyError,
 };
 use futures::{StreamExt, TryStreamExt};
 use semantic_core::{
-    api::{self, ApiClientExecutor},
-    base::{AttrTagName, Collection, Tag, TypedFile},
+    api::{self, ApiClientExecutor, FileUploadMetadata},
+    base::{entity_title, expr_find_by_id_ident_or_title, AttrTagName, Tag, TypedFile},
 };
 
 #[derive(clap::Parser)]
@@ -32,6 +32,11 @@ pub struct CmdUpload {
     /// Can be the gallery title, ident or id.
     #[clap(long, short = 'c')]
     collection: Option<String>,
+
+    /// The name, ident or ID of the parent entity.
+    /// All uploaded files will be saved as children of the specified parent.
+    #[clap(long)]
+    parent: Option<String>,
 
     /// If the speicified collection can not be found, create it.
     #[clap(long)]
@@ -153,6 +158,29 @@ impl CmdUpload {
             None
         };
 
+        let parent_id: Option<Id> = if let Some(identifier) = cmd.parent {
+            eprintln!("Resolving parent...");
+            let identifier = identifier.trim();
+
+            let expr = expr_find_by_id_ident_or_title(identifier);
+            let select = Select::new().with_filter(expr).with_limit(10);
+            let items = client.select(select).await?;
+
+            if let Some(item) = items.first() {
+                if items.len() == 1 {
+                    let title = entity_title(item);
+                    eprintln!("Setting parent: {title}");
+                    Some(item.get_id().unwrap())
+                } else {
+                    bail!("Could not resolve parent '{identifier}': found multiple matches");
+                }
+            } else {
+                bail!("Could not resolve parent '{identifier}': not found");
+            }
+        } else {
+            None
+        };
+
         eprintln!("Searching for files...");
         let mut files = Vec::<FileItem>::new();
         for path in cmd.paths {
@@ -224,6 +252,16 @@ impl CmdUpload {
 
         let count = files.len();
 
+        let meta = FileUploadMetadata {
+            filename: None,
+            title,
+            url,
+            ident: None,
+            parent: parent_id,
+            collection_id: collection.map(|c| c.id),
+            tag_ids,
+        };
+
         futures::stream::iter(files.as_slice())
             .enumerate()
             .map(Ok)
@@ -235,7 +273,7 @@ impl CmdUpload {
                     item.path.display()
                 );
 
-                let fut = upload_file(&client, &item, &title, &url, &collection, &tag_ids);
+                let fut = upload_file(&client, &item, &meta);
 
                 async {
                     let f = fut.await?;
@@ -273,22 +311,13 @@ impl CmdUpload {
 async fn upload_file(
     client: &Client,
     item: &FileItem,
-    title: &Option<String>,
-    url: &Option<url::Url>,
-    collection: &Option<Collection>,
-    tag_ids: &[Id],
+    meta: &FileUploadMetadata,
 ) -> Result<TypedFile, anyhow::Error> {
     let filename = item.path.file_name().unwrap().to_string_lossy();
 
     let meta = api::FileUploadMetadata {
         filename: Some(filename.to_string()),
-        title: title.clone(),
-        url: url.clone(),
-        collection_id: collection.as_ref().map(|c| c.id),
-        tag_ids: tag_ids.to_vec(),
-        ident: None,
-        // TODO: allow uploading to a container instead of a collection
-        parent: None,
+        ..meta.clone()
     };
 
     let file = tokio::fs::File::open(&item.path)
