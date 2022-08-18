@@ -161,6 +161,7 @@ struct AppOptions {
     /// This should remain the same across server restarts.
     /// Otherwise existing tokens will be invalidated.
     // TODO: this should only be on server config...
+    #[clap(long)]
     token_key: Option<String>,
 }
 
