@@ -3,16 +3,21 @@ use futures::future::BoxFuture;
 use semantic_core::api;
 
 mod delete;
+mod sql;
 
 #[derive(clap::Subcommand)]
 pub(crate) enum ClientCommand {
     Delete(delete::DeleteCmd),
+    Sql(sql::SqlCmd),
 }
 
 impl ClientCommand {
     pub fn run(self) {
         match self {
             Self::Delete(cmd) => {
+                cmd.run();
+            }
+            Self::Sql(cmd) => {
                 cmd.run();
             }
         }
