@@ -1,7 +1,7 @@
-target
-crates/xtask/target
 /data
+target
 node_modules
 js/node_modules
 js/.yarn
 lib/docker/Dockerfile
+.dockerignore
