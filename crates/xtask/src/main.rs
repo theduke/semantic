@@ -116,9 +116,11 @@ fn cmd_watch_server(default_backend: bool) -> Result<(), DynError> {
     cmd.arg("--tmp-dir");
     cmd.arg(data_dir.join("tmp"));
 
+    cmd.arg("--v2");
+
     if std::env::var("RUST_LOG").is_err() {
         cmd.env(
-            "RUST_LOG", 
+            "RUST_LOG",
             "semantic=trace,semantic_core=trace,factordb=info",
         );
     }
@@ -223,11 +225,7 @@ fn cmd_install() -> Result<(), DynError> {
     task_build_ui(true)?;
     Command::new("cargo")
         .env("SEMANTIC_UI_DIR", ui_dist_path()?)
-        .args(&[
-            "install",
-            "--path",
-            "crates/cli",
-        ])
+        .args(&["install", "--path", "crates/cli"])
         .current_dir(root_path()?)
         .run()?;
     eprintln!("Installed!");
@@ -244,7 +242,29 @@ fn build_styles() -> Result<(), DynError> {
     Ok(())
 }
 
+fn build_ui_v2() -> Result<(), DynError> {
+    eprintln!("Building UI v2...");
+
+    let js_path = root_path()?.join("js").join("ui");
+
+    Command::new("yarn")
+        .args(&["build"])
+        .current_dir(&js_path)
+        .run()?;
+
+    let build_path = js_path.join("dist");
+    let target_path = root_path()?.join("target/ui2");
+
+    std::fs::remove_dir_all(&target_path)?;
+    std::fs::rename(&build_path, &target_path)?;
+
+    eprintln!("UI v2 built");
+    Ok(())
+}
+
 fn task_build_ui(release: bool) -> Result<(), DynError> {
+    build_ui_v2()?;
+
     eprintln!("Building ui...");
     let target_dir = ui_dist_path()?;
     if !target_dir.is_dir() {
@@ -291,6 +311,7 @@ fn task_build_ui(release: bool) -> Result<(), DynError> {
     }
 
     eprintln!("UI built");
+
     Ok(())
 }
 
@@ -354,13 +375,7 @@ fn gen_typescript() -> Result<(), DynError> {
     eprintln!("Generating entity type schemas from database...");
 
     let res = Command::new("cargo")
-        .args(&[
-            "run",
-            "-p",
-            "semantic_cli",
-            "--",
-            "generate-typescript",
-        ])
+        .args(&["run", "-p", "semantic_cli", "--", "generate-typescript"])
         .output()?;
     if !res.status.success() {
         let err = std::str::from_utf8(&res.stderr)?;

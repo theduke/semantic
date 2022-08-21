@@ -213,6 +213,9 @@ struct CommandServer {
     /// eg: `0.0.0.0:3000`
     #[clap(long, env = "SEMANTIC_ADDRESS")]
     address: Option<String>,
+
+    #[clap(long)]
+    v2: bool,
 }
 
 impl CommandServer {
@@ -223,6 +226,7 @@ impl CommandServer {
             require_auth: app_config.backend.is_none(),
             app: app_config,
             address: self.address.unwrap_or(format!("127.0.0.1:3000")),
+            ui_v2: self.v2,
         };
 
         let rt = tokio::runtime::Runtime::new().expect("Could not start runtime");

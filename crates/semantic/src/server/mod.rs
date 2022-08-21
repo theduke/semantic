@@ -29,6 +29,8 @@ pub struct ServerConfig {
     /// If true, all interaction via the server requires a login or an access
     /// token.
     pub require_auth: bool,
+
+    pub ui_v2: bool,
 }
 
 struct ServerState {
@@ -47,6 +49,10 @@ type ServerContext = Extension<Arc<ServerState>>;
 #[derive(rust_embed::RustEmbed)]
 #[folder = "$CARGO_MANIFEST_DIR/../../target/ui"]
 struct Asset;
+
+#[derive(rust_embed::RustEmbed)]
+#[folder = "$CARGO_MANIFEST_DIR/../../target/ui2"]
+struct AssetsV2;
 
 pub async fn run_server(
     config: ServerConfig,
@@ -90,14 +96,21 @@ pub async fn run_server(
     })
 }
 
-async fn handler_assets(req: Request<Body>) -> Response<Body> {
+async fn handler_assets(Extension(state): ServerContext, req: Request<Body>) -> Response<Body> {
     let path = req.uri().path().trim_start_matches('/');
 
-    match Asset::get(path) {
+    let file_opt = if state.config.ui_v2 {
+        AssetsV2::get(&format!("assets/{path}"))
+    } else {
+        Asset::get(path)
+    };
+
+    match file_opt {
         Some(file) => {
             let mime = mime_guess::from_path(path)
                 .first_or_octet_stream()
                 .to_string();
+            dbg!(&mime, &path);
 
             Response::builder()
                 .header(hyper::header::CONTENT_TYPE, mime)
@@ -108,9 +121,12 @@ async fn handler_assets(req: Request<Body>) -> Response<Body> {
     }
 }
 
-async fn handler_index() -> Response<Body> {
-    let file = Asset::get("index.html").unwrap();
-
+async fn handler_index(Extension(state): ServerContext) -> Response<Body> {
+    let file = if state.config.ui_v2 {
+        AssetsV2::get("index.html").unwrap()
+    } else {
+        Asset::get("index.html").unwrap()
+    };
     let body = hyper::Body::from(file.data.as_ref().to_vec());
 
     Response::builder()
