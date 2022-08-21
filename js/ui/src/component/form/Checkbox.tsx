@@ -11,6 +11,10 @@ export function Checkbox(props: CheckboxProps): JSX.Element {
   let elem: HTMLInputElement | undefined;
 
   onMount(() => {
+    if (elem) {
+      console.log({ checkboxValue: props.field.get().value });
+      elem.checked = props.field.get()?.value ?? false;
+    }
     createEffect(() => {
       if (elem) {
         elem.checked = props.field.get()?.value ?? false;

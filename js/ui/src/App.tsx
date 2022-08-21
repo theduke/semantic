@@ -23,6 +23,7 @@ import { EntityCreatePage } from "./component/entity/EntityCreatePage";
 import { EntitySearcherModalToggle } from "./component/entity/EntitySearcherModalToggle";
 import { UploadPage } from "./component/upload/UploadPage";
 import { ImportPage } from "./component/imports/ImportPage";
+import { PlayPage } from "./component/play/PlayPage";
 
 export function App(): JSX.Element {
   const [getRegistry, setRegistry] = createSignal<UiRegistry | null>();
@@ -57,6 +58,7 @@ export function App(): JSX.Element {
                 }}
               />
               <Route path="/upload" component={UploadPage} />
+              <Route path="/play" component={PlayPage} />
               <Route path="/import" component={ImportPage} />
               <Route path={ROUTE_SETTINGS} component={SettingsPage} />
               <Route
@@ -86,6 +88,7 @@ function AppNavbar(): JSX.Element {
         <>
           <NavbarItemLink href="/">Browse</NavbarItemLink>
           <NavbarItemLink href="/entity/create">Create</NavbarItemLink>
+          <NavbarItemLink href="/play">Play</NavbarItemLink>
         </>
       }
       end={

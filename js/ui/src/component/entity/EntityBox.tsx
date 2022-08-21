@@ -96,7 +96,7 @@ export function EntityBox(props: EntityBoxProps): JSX.Element {
         {actions}
       </header>
       <div class="card-content">
-        <Show when={activeAction()} fallback={props.children}>
+        <Show when={activeAction()} fallback={() => props.children}>
           {(index) => {
             const action = props.actions?.[index.index];
             if (!action) {

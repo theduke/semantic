@@ -57,46 +57,24 @@ export function Button(props: ButtonProps): JSX.Element {
     "class",
     "isActive",
   ]);
-  let cls = "button";
-  if (localProps.size) {
-    cls += " " + props.size;
-  }
-  if (localProps.color) {
-    cls += " " + props.color;
-  }
-  if (localProps.fullWidth) {
-    cls += " is-fullwidth";
-  }
-  if (localProps.outlined) {
-    cls += " is-outlined";
-  }
-  if (localProps.inverted) {
-    cls += " is-inverted";
-  }
-  if (localProps.rounded) {
-    cls += " is-rounded";
-  }
-  if (localProps.loading) {
-    cls += " is-loading";
-  }
-  if (localProps.isStatic) {
-    cls += " is-static";
-  }
-  if (localProps.selected) {
-    cls += " is-selected";
-  }
-  if (localProps.class) {
-    cls += " " + localProps.class;
-  }
-
-  const isActive = localProps.isActive;
-  const activeDynamic = isAccessor(isActive);
 
   return (
     <button
-      class={cls}
+      class={
+        "button" +
+        (localProps.size ? " " + localProps.size : "") +
+        (localProps.color ? " " + localProps.color : "") +
+        (localProps.class ? " " + localProps.class : "")
+      }
       classList={{
-        "is-active": activeDynamic ? isActive() : isActive,
+        "is-active": localProps.isActive,
+        "is-outlined": localProps.outlined,
+        "is-loading": localProps.loading,
+        "is-static": localProps.isStatic,
+        "is-selected": localProps.selected,
+        "is-rounded": localProps.rounded,
+        "is-inverted": localProps.inverted,
+        "is-fullwidth": localProps.fullWidth,
       }}
       {...extraProps}
     >
@@ -125,7 +103,7 @@ export function IconButton(props: IconButtonProps): JSX.Element {
   return (
     <Button {...rest}>
       <Icon size={iconSize} icon={local.icon} />
-      <span>{props.children}</span>
+      {props.children ? <span>{props.children}</span> : null}
     </Button>
   );
 }

@@ -21,7 +21,7 @@ import {
   FACTOR_VALUE_TYPE,
 } from "semantic/dist/schema";
 import { EntitySchema } from "semantic/dist/core";
-import { EntityChildren } from "./EntityChildren";
+import { EntityChildrenLoader } from "./EntityChildren";
 import { EntityEditor } from "./EntityEditor";
 import { EntityDeleterModal } from "./EntityDeleterModal";
 import { NotificationError, NotificationWarning } from "../bulma/notification";
@@ -138,11 +138,20 @@ export function renderEntityTable(
 
   const id = item[FACTOR_ID];
 
+  const [showChildren, setShowChildren] = createSignal(false);
+
   const children = id ? (
     <tr>
       <td>Children</td>
       <td>
-        <EntityChildren id={item[FACTOR_ID]} />
+        <Show
+          when={showChildren()}
+          fallback={
+            <Button onclick={() => setShowChildren(true)}>Load children</Button>
+          }
+        >
+          <EntityChildrenLoader id={item[FACTOR_ID]} />
+        </Show>
       </td>
     </tr>
   ) : null;

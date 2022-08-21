@@ -11,7 +11,7 @@ export interface EntityChildrenProps {
   sort?: Sort;
 }
 
-export function EntityChildren(props: EntityChildrenProps): JSX.Element {
+export function EntityChildrenLoader(props: EntityChildrenProps): JSX.Element {
   let filter: Expr = {
     BinaryOp: {
       op: "Eq",

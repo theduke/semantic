@@ -8,7 +8,18 @@ export function ImportPage() {
   const rawUrl = params["url"];
   const url = typeof rawUrl === "string" ? rawUrl : "";
   const rawImportMedia = params["importMedia"];
-  const importMedia = rawImportMedia === "1" ? true : false;
+
+  let importMedia: boolean;
+  switch (rawImportMedia) {
+    case "1":
+      importMedia = true;
+      break;
+    case "0":
+      importMedia = false;
+      break;
+    default:
+      importMedia = true;
+  }
 
   return (
     <GenericPage title="Import">

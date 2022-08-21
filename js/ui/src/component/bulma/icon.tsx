@@ -17,6 +17,20 @@ const FA_ICON_MAP = {
   filter: "fa-solid fa-filter",
   globe: "fa-solid fa-globe",
   upload: "fa-solid fa-upload",
+  play: "fa-solid fa-play",
+  pause: "fa-solid fa-play",
+  caretRight: "fa-solid fa-caret-right",
+  arrowLeft: "fa-solid fa-arrow-left",
+  arrowRight: "fa-solid fa-arrow-right",
+  caretLeft: "fa-solid fa-caret-left",
+  shuffle: "fa-solid fa-shuffle",
+  rotateLeft: "fa-solid fa-rotate-left",
+  volumeXmark: "fa-solid fa-volume-xmark",
+  volumeHigh: "fa-solid fa-volume-high",
+  arrowsRotate: "fa-solid fa-arrows-rotate",
+  angleLeft: "fa-solid fa-angle-left",
+  angleRight: "fa-solid fa-angle-right",
+  arrowsLeftRight: "fa-solid fa-arrows-left-right",
 };
 
 export type IconSize = "is-small" | "is-medium" | "is-large";

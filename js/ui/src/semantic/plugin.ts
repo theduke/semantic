@@ -3,6 +3,7 @@ import {
   AttributeRenderer,
   EditableEntityRenderer,
   EntityContentRenderer,
+  EntityMediaRenderer,
   EntityRenderer,
   EntityTitleRenderer,
   EntityTypeMap,
@@ -14,6 +15,7 @@ export interface PluginSchema {
   attributeRenderers?: Record<AttributeName, AttributeRenderer>;
   entityTitleRenderers?: EntityTypeMap<EntityTitleRenderer>;
   entityContentRenderers?: EntityTypeMap<EntityContentRenderer>;
+  entityMediaRenderers?: EntityTypeMap<EntityMediaRenderer>;
   entityRenderers?: EntityTypeMap<EntityRenderer>;
   editableEntityRenderers?: EntityTypeMap<EditableEntityRenderer>;
 }

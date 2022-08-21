@@ -21,20 +21,46 @@ export interface EntityRenderOpts {
 }
 
 export type EntityTitleRenderer = (entity: ValueMap) => JSX.Element;
+
 export type EntityContentRenderer = (
   item: ValueMap,
   opts: EntityRenderOpts
 ) => JSX.Element;
+
 export type AttributeRenderer = (value: any, item: ValueMap) => JSX.Element;
+
 export type EntityRenderer = (
   item: ValueMap,
   opts: EntityRenderOpts
 ) => JSX.Element;
+
 export type EditableEntityRenderer = (
   entity: ValueMap,
   opts: EntityRenderOpts,
   onChanged?: (newItem: ValueMap) => void
 ) => JSX.Element;
+
+export interface MediaHandle {
+  play(): void;
+  pause(): void;
+  mute(): void;
+  unmute(): void;
+  isPlaying(): boolean;
+  // Progress as a float between 0 and 1.
+  progress(): number;
+}
+
+export interface MediaRenderProps {
+  item: ValueMap;
+  onPaused(): void;
+  onResumed(): void;
+  onFinished(): void;
+  onFailed(error: string): void;
+}
+
+export type EntityMediaRenderer = (
+  props: MediaRenderProps
+) => [MediaHandle, JSX.Element];
 
 export type EntityTypeMap<T> = Record<EntityType, T>;
 
@@ -51,6 +77,7 @@ export class UiRegistry {
   attributeRenderers: Record<AttributeName, AttributeRenderer> = {};
   entityTitleRenderers: EntityTypeMap<EntityTitleRenderer> = {};
   entityContentRenderers: EntityTypeMap<EntityContentRenderer> = {};
+  entityMediaRenderers: EntityTypeMap<EntityMediaRenderer> = {};
   entityRenderers: EntityTypeMap<EntityRenderer> = {};
   editableEntityRenderers: EntityTypeMap<EditableEntityRenderer> = {};
 
@@ -93,6 +120,11 @@ export class UiRegistry {
       schema.entityContentRenderers ?? {}
     )) {
       this.entityContentRenderers[ty] = render;
+    }
+    for (const [ty, render] of Object.entries(
+      schema.entityMediaRenderers ?? {}
+    )) {
+      this.entityMediaRenderers[ty] = render;
     }
     for (const [ty, render] of Object.entries(schema.entityRenderers ?? {})) {
       this.entityRenderers[ty] = render;
@@ -144,6 +176,14 @@ export class UiRegistry {
     } else {
       return renderGenericEntityBox(this, item, opts);
     }
+  }
+
+  renderEntityMedia(
+    props: MediaRenderProps
+  ): [MediaHandle, JSX.Element] | null {
+    const ty = props.item[FACTOR_TYPE];
+    const render = this.entityMediaRenderers[ty];
+    return render ? render(props) : null;
   }
 
   renderEditableEntity(
