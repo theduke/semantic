@@ -11,7 +11,7 @@ schema = ["schemars", "ts-rs", "factordb/jsonschema", "factordb/typescript-schem
 
 
 [dependencies]
-anyhow = { version = "1.0.58", features = ["backtrace"] }
+anyhow = { version = "1.0.62" }
 chrono = { version = "0.4.19", features = ["serde"] }
 futures = "0.3.21"
 serde = { version = "1.0.138", features = ["derive"] }

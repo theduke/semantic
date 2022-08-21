@@ -18,7 +18,7 @@ factordb = "0.1"
 factor_tools = "0.1"
 factor_engine = "0.1"
 
-anyhow = "1.0.58"
+anyhow = "1.0.62"
 bytesize = "1.1.0"
 tokio = { version = "1.19.2", features = ["full"] }
 sha2 = "0.10.2"
