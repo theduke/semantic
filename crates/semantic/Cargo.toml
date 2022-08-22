@@ -11,8 +11,6 @@ archive = ["tar", "flate2"]
 
 media-optimizers = ["oxipng", "mozjpeg"]
 
-# jsonschema = ["semantic_core/schema"]
-
 default = ["archive"]
 
 [dependencies]
