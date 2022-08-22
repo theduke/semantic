@@ -1,6 +1,5 @@
 node_modules
-**/node_modules
-**/dist
+dist
 tsconfig.tsbuildinfo
 .yarn
-**/yarn-error.log
+yarn-error.log
