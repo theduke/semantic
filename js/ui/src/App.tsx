@@ -34,7 +34,7 @@ export function App(): JSX.Element {
     setRegistry(reg);
   };
 
-  const serverUrl = "http://localhost:3000";
+  const serverUrl = "/";
 
   return (
     <context.ApiContext.Provider value={new Api(serverUrl)}>
