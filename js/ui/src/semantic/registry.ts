@@ -8,7 +8,11 @@ import {
   SemanticSchema,
 } from "semantic/dist/core";
 import { UiPlugin } from "./plugin";
-import { FACTOR_ENTITY_ATTRIBUTES, FACTOR_IDENT, FACTOR_TYPE } from "semantic/dist/schema";
+import {
+  FACTOR_ENTITY_ATTRIBUTES,
+  FACTOR_IDENT,
+  FACTOR_TYPE,
+} from "semantic/dist/schema";
 
 export type ValueMap = Record<string, any>;
 
@@ -163,8 +167,8 @@ export class UiRegistry {
   entityAttributes(ty: EntityType): [Attribute, Cardinality][] {
     const schema = this.mustGetEntityType(ty);
     return schema[FACTOR_ENTITY_ATTRIBUTES].map((field) => {
-      const as = this.mustGetAttribute(field['factor/attribute']);
-      return [as, field['factor/required'] ? 'Required' : 'Optional'];
+      const as = this.mustGetAttribute(field["factor/attribute"]);
+      return [as, field["factor/required"] ? "Required" : "Optional"];
     });
   }
 

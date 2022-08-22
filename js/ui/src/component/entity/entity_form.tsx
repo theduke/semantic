@@ -12,7 +12,13 @@ import {
 } from "semantic/dist/core";
 import { exprAttr, exprLiteral, exprNotEq } from "semantic/dist/db";
 import { UiRegistry, ValueMap } from "../../semantic/registry";
-import { FACTOR_ENTITY_ATTRIBUTES, FACTOR_ID, FACTOR_IDENT, FACTOR_TITLE, FACTOR_TYPE } from "semantic/dist/schema";
+import {
+  FACTOR_ENTITY_ATTRIBUTES,
+  FACTOR_ID,
+  FACTOR_IDENT,
+  FACTOR_TITLE,
+  FACTOR_TYPE,
+} from "semantic/dist/schema";
 import { Button, Buttons } from "../bulma/button";
 import { FieldHorizontal } from "../bulma/form";
 import { Icon } from "../bulma/icon";
@@ -351,7 +357,7 @@ export function GenericEntityForm(props: GenericEntityFormProps): JSX.Element {
     }
     const isInEntity =
       props.schema?.[FACTOR_ENTITY_ATTRIBUTES].find(
-        (field) => field['factor/attribute'] === ident
+        (field) => field["factor/attribute"] === ident
       ) !== undefined;
     return !isInEntity;
   });

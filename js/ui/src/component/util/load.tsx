@@ -70,7 +70,9 @@ export function createLoader<T>(
 
 export function renderError(error: any): JSX.Element {
   console.trace(error);
-  return <NotificationError>{error.toString()}</NotificationError>;
+  return (
+    <NotificationError>{error.toString() || "Unknown Error"}</NotificationError>
+  );
 }
 
 export const SPINNER = (
