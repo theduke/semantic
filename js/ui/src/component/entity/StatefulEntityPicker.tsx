@@ -30,7 +30,7 @@ export function StatefulEntityPicker(
   props: StatefulEntityPickerProps
 ): JSX.Element {
   const reg = useRegistry();
-  const [local, rest] = splitProps(props, ["signal", "onChange", "schema"]);
+  const [_local, rest] = splitProps(props, ["signal", "onChange", "schema"]);
 
   const [item, setItem] = props.signal || createSignal<ValueMap | undefined>();
   const [mode, setMode] = createSignal<"empty" | "search" | "create">("empty");

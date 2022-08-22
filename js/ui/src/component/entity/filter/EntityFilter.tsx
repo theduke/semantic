@@ -1,5 +1,4 @@
 import { createEffect, createSignal, JSX, Match, Switch } from "solid-js";
-import { Select } from "semantic/dist/core";
 import { Tabs } from "../../bulma/tabs";
 import {
   EntityFilterData,
@@ -13,7 +12,6 @@ import {
   validateEntityFilterSql,
 } from "./EntityFilterSqlForm";
 import zod from "zod";
-import { isDate } from "lodash";
 
 export const validateEntityFilter = zod.discriminatedUnion("type", [
   validateEntityFilterData,

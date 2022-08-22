@@ -15,7 +15,6 @@ import {
   ValueMap,
 } from "../../semantic/registry";
 import { Box } from "solid-bulma";
-import { GenericPage } from "../util";
 import { renderError, SPINNER } from "../util/load";
 import { EntityFilter } from "./filter/EntityFilter";
 import {
@@ -28,7 +27,7 @@ import { isEqual } from "lodash";
 import { FACTOR_ID } from "semantic/dist/schema";
 import { ToggleableEntityFilter } from "./filter/ToggleableEntityFilter";
 
-const STORAGE_KEY_BROWSE_PAGE_FILTER_EXPANDED = "browse-page-filter-expanded";
+// const STORAGE_KEY_BROWSE_PAGE_FILTER_EXPANDED = "browse-page-filter-expanded";
 
 export interface EntityBrowserProps {
   initialFilter?: EntityFilter;

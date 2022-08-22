@@ -2,7 +2,7 @@ import { FACTOR_IDENT } from "semantic/dist/schema";
 import { Link } from "solid-app-router";
 import { JSX } from "solid-js";
 import { useRegistry } from "../../context";
-import { Button, Buttons, IconButton } from "../bulma/button";
+import { Buttons } from "../bulma/button";
 import { Icon } from "../bulma/icon";
 import { GenericPage } from "../util";
 

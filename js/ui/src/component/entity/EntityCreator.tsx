@@ -49,8 +49,7 @@ export function EntityCreator(props: EntityCreatorProps): JSX.Element {
       await api.batch({ actions: [{ Create: { id, data: values } }] });
       onPersisted({ ...values, [FACTOR_ID]: id });
     };
-  } else if (props.onSubmit) {
-  } else {
+  } else if (!props.onSubmit) {
     console.trace(
       "invalid EntityCreator props: must either specify onSubmit or onPersisted"
     );

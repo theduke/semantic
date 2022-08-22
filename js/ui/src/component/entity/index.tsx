@@ -203,7 +203,7 @@ export function renderGenericEntityBox(
   const [getItem, setItem] = createSignal<ValueMap>(item);
   const [deleted, setDeleted] = createSignal<boolean>(false);
 
-  let actions: EntityAction[] = [];
+  const actions: EntityAction[] = [];
 
   if (opts.allowEdit) {
     const editAction: EntityAction = {
@@ -272,12 +272,12 @@ export function renderGenericEntityBox(
     actions.push(deleteAction);
   }
 
-  let [content, setContent] = createSignal<JSX.Element>(null);
+  const [content, setContent] = createSignal<JSX.Element>(null);
 
   let render: (item: ValueMap) => JSX.Element;
   const contentRender = reg.entityContentRenderers[ident];
 
-  if (!!contentRender) {
+  if (contentRender) {
     render = (item) => contentRender(item, opts);
 
     actions.push({

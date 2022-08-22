@@ -6,12 +6,10 @@ import {
   For,
   JSX,
   Match,
-  onMount,
   ParentComponent,
   ParentProps,
   Show,
   Switch,
-  untrack,
 } from "solid-js";
 import { Notification } from "../bulma/notification";
 import { SearchInput } from "../bulma/SearchInput";

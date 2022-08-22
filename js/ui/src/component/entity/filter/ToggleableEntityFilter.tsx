@@ -1,6 +1,4 @@
 import { createSignal, JSX, Show, splitProps } from "solid-js";
-import { setAttribute } from "solid-js/web";
-import { defineConfig } from "vite";
 import { Button } from "../../bulma/button";
 import { Icon } from "../../bulma/icon";
 import { EntityFilter } from "./EntityFilter";

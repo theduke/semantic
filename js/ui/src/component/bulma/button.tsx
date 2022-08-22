@@ -1,6 +1,5 @@
 import { JSX, splitProps } from "solid-js";
 import { Color } from ".";
-import { isAccessor } from "../util";
 import { Icon, IconName, IconSize } from "./icon";
 
 export type ButtonsSize = "are-small" | "are-medium" | "are-large";

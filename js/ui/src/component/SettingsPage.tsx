@@ -1,6 +1,5 @@
 import { Link } from "solid-app-router";
 import { JSX } from "solid-js/jsx-runtime";
-import { Button } from "./bulma/button";
 import { GenericPage } from "./util";
 
 export function SettingsPage(): JSX.Element {

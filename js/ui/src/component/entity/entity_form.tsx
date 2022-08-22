@@ -102,7 +102,7 @@ export function entityAttributeFormField(
       (_values) => null,
     ];
   } else if (ty === "String" || ty === "Url") {
-    let field = form.field(attrIdent) as FieldAccessor<string>;
+    const field = form.field(attrIdent) as FieldAccessor<string>;
 
     let inputType: InputType;
     let val: FormValidator<ValueMap>;
@@ -122,14 +122,14 @@ export function entityAttributeFormField(
         throw new Error(`Unsupported value type: ${ty}`);
     }
 
-    let elem = (
+    const elem = (
       <InputField type={inputType} label={attributeName} field={field} />
     );
 
     return [elem, val];
   } else if (ty === "DateTime") {
-    let field = form.field(attrIdent) as FieldAccessor<number>;
-    let validator = (values: ValueMap) => {
+    const field = form.field(attrIdent) as FieldAccessor<number>;
+    const validator = (values: ValueMap) => {
       const value = values[attrIdent];
 
       if (isRequired) {
@@ -151,11 +151,11 @@ export function entityAttributeFormField(
       return null;
     };
 
-    let elem = <DateTimeInputField label={attributeName} field={field} />;
+    const elem = <DateTimeInputField label={attributeName} field={field} />;
 
     return [elem, validator];
   } else if (ty === "Ref") {
-    let field = form.field(attrIdent) as FieldAccessor<Id | undefined>;
+    const field = form.field(attrIdent) as FieldAccessor<Id | undefined>;
 
     const id = form.init.initialValues[FACTOR_ID];
 
@@ -198,7 +198,7 @@ export function entityAttributeFormField(
         { label: "", value: undefined },
         ...unionPlainOptions(ty["Union"]),
       ];
-      let field = form.field(attrIdent) as FieldAccessor<Value>;
+      const field = form.field(attrIdent) as FieldAccessor<Value>;
 
       return [
         <SelectField<Value | undefined>

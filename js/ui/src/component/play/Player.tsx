@@ -1,10 +1,9 @@
 import { ValueMap } from "semantic/dist/api";
-import { JSX, Signal } from "solid-js";
+import { JSX } from "solid-js";
 import {
 	createStore,
 	SetStoreFunction,
 	Store,
-	StoreSetter,
 } from "solid-js/store";
 import { MediaHandle, UiRegistry } from "../../semantic/registry";
 

@@ -29,13 +29,13 @@ export interface MultiSelectProps<V> {
 export function MultiSelectSearch<V>(props: MultiSelectProps<V>): JSX.Element {
   let inputRef: HTMLInputElement | undefined;
 
-  let [searchTerm, setSearchTerm] = createSignal("");
+  const [searchTerm, setSearchTerm] = createSignal("");
 
   const initialState: LoadState<V[]> =
     props.defaultItems && props.defaultItems.length > 0
       ? { state: "success", data: props.defaultItems }
       : { state: "idle" };
-  let [loader, setLoader] = createSignal<LoadState<V[]>>(initialState);
+  const [loader, setLoader] = createSignal<LoadState<V[]>>(initialState);
   const [selected, setSelected] = createSignal<V[]>(
     props.initialSelection ?? []
   );

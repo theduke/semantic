@@ -37,7 +37,7 @@ export function Label(props: ParentProps): JSX.Element {
   return <label class="label">{props.children}</label>;
 }
 
-export interface ControlProps extends JSX.HTMLAttributes<HTMLDivElement> {}
+export type ControlProps = JSX.HTMLAttributes<HTMLDivElement>;
 
 export function Control(props: ControlProps): JSX.Element {
   let cls = "control";

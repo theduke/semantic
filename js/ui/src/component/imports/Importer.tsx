@@ -1,6 +1,6 @@
 import { throttle } from "lodash";
 import { Api, newSelect, ValueMap } from "semantic/dist/api";
-import { FetchUrlJob, FetchUrlOutput, ImportOutput } from "semantic/dist/core";
+import { FetchUrlJob } from "semantic/dist/core";
 import { exprAttr, exprIn, exprList, exprLiteral } from "semantic/dist/db";
 import { BaseEntity, FACTOR_TYPE, SEMANTIC_URL } from "semantic/dist/schema";
 import { Link } from "solid-app-router";
@@ -234,7 +234,7 @@ export function Importer(props: ImporterProps): JSX.Element {
                       const contentRender = reg.entityContentRenderers[ident];
                       console.debug({ contentRender });
                       let content;
-                      if (!!contentRender) {
+                      if (contentRender) {
                         content = contentRender(data, { preview: true });
                       } else {
                         content = renderEntityTable(reg, data);

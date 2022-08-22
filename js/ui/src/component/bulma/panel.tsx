@@ -1,4 +1,4 @@
-import { JSX, PropsWithChildren, splitProps } from "solid-js";
+import { JSX, splitProps } from "solid-js";
 import { fontawesomeIconClass, IconName } from "./icon";
 
 export interface PanelProps extends JSX.HTMLAttributes<HTMLElement> {
