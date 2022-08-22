@@ -1,4 +1,3 @@
-use factordb::AnyError;
 use semantic::app::App;
 
 use crate::AppOptions;
@@ -16,7 +15,7 @@ pub struct LogHistoryCompactCmd {
 }
 
 impl LogHistoryCompactCmd {
-    pub fn run(self) -> Result<(), AnyError> {
+    pub fn run(self) -> Result<(), anyhow::Error> {
         let config = self.options.build()?;
 
         let rt = tokio::runtime::Runtime::new()?;

@@ -1,7 +1,7 @@
 use std::rc::Rc;
 
 use brass::dom::{Render, TagBuilder, View};
-use factordb::{prelude::Id, AnyError};
+use factdb::Id;
 use futures::future::LocalBoxFuture;
 use semantic_core::base::Tag;
 
@@ -10,7 +10,7 @@ use crate::components::{
     loader::load,
 };
 
-async fn load_all_tags() -> Result<Vec<Tag>, AnyError> {
+async fn load_all_tags() -> Result<Vec<Tag>, anyhow::Error> {
     crate::context::api()
         .select_entities::<Tag>(Tag::query_all())
         .await
@@ -20,10 +20,12 @@ pub struct TagSelect {
     pub initial_selection: Vec<Id>,
     pub on_submit: Option<Rc<dyn Fn(&Vec<Tag>)>>,
     pub on_change: Option<Rc<dyn Fn(Vec<Tag>)>>,
-    pub on_add_async: Option<Rc<dyn Fn(Tag) -> LocalBoxFuture<'static, Result<Tag, AnyError>>>>,
-    pub on_remove_async: Option<Rc<dyn Fn(Tag) -> LocalBoxFuture<'static, Result<Tag, AnyError>>>>,
+    pub on_add_async:
+        Option<Rc<dyn Fn(Tag) -> LocalBoxFuture<'static, Result<Tag, anyhow::Error>>>>,
+    pub on_remove_async:
+        Option<Rc<dyn Fn(Tag) -> LocalBoxFuture<'static, Result<Tag, anyhow::Error>>>>,
     pub on_change_async:
-        Option<Rc<dyn Fn(Vec<Tag>) -> LocalBoxFuture<'static, Result<Vec<Tag>, AnyError>>>>,
+        Option<Rc<dyn Fn(Vec<Tag>) -> LocalBoxFuture<'static, Result<Vec<Tag>, anyhow::Error>>>>,
 }
 
 impl Render for TagSelect {

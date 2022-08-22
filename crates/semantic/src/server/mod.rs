@@ -2,10 +2,7 @@ use std::{net::SocketAddr, ops::Add, sync::Arc};
 
 use anyhow::{anyhow, bail, Context, Result};
 use axum::{extract::Extension, http};
-use factordb::{
-    prelude::{EntityContainer, Id},
-    AnyError,
-};
+use factdb::{ClassContainer, Id};
 use headers::{Header, HeaderMapExt};
 use hyper::{header, Body, Method, Request, Response, StatusCode};
 
@@ -57,7 +54,7 @@ struct AssetsV2;
 pub async fn run_server(
     config: ServerConfig,
     runtime: tokio::runtime::Handle,
-) -> Result<(), AnyError> {
+) -> Result<(), anyhow::Error> {
     use axum::routing::{get, post};
 
     // Run the server like above...
@@ -199,7 +196,7 @@ async fn handler_blob_upload(
 async fn file_upload(
     state: &ServerState,
     req: Request<Body>,
-) -> Result<api::FileUploadReply, AnyError> {
+) -> Result<api::FileUploadReply, anyhow::Error> {
     request_validate_auth_cookie(state, &req)?;
 
     tracing::trace!("file upload started");
@@ -228,7 +225,7 @@ async fn file_upload(
     Ok(item)
 }
 
-fn extract_file_range(req: &Request<Body>) -> Result<(Option<u64>, Option<u64>), AnyError> {
+fn extract_file_range(req: &Request<Body>) -> Result<(Option<u64>, Option<u64>), anyhow::Error> {
     let mut range_headers = req.headers().get_all(http::header::RANGE).iter().peekable();
 
     // Bail if no Range header present.
@@ -263,7 +260,7 @@ fn extract_file_range(req: &Request<Body>) -> Result<(Option<u64>, Option<u64>),
     Ok((Some(skip), take))
 }
 
-async fn serve_file(app: &App, req: &Request<Body>) -> Result<Response<Body>, AnyError> {
+async fn serve_file(app: &App, req: &Request<Body>) -> Result<Response<Body>, anyhow::Error> {
     #[derive(PartialEq, Eq, Debug)]
     enum Format {
         File,
@@ -425,7 +422,7 @@ async fn handler_file_read(Extension(state): ServerContext, req: Request<Body>) 
     })
 }
 
-fn api_error(err: &AnyError) -> ApiError {
+fn api_error(err: &anyhow::Error) -> ApiError {
     ApiError {
         message: err.to_string(),
         code: None,
@@ -433,7 +430,7 @@ fn api_error(err: &AnyError) -> ApiError {
     }
 }
 
-fn api_response_err(err: &AnyError) -> ApiResponse {
+fn api_response_err(err: &anyhow::Error) -> ApiResponse {
     ApiResponse::Err(api_error(err))
 }
 
@@ -528,7 +525,7 @@ fn get_auth_cookie_token(req: &Request<Body>) -> Option<String> {
         })
 }
 
-fn validate_auth_token(app: &App, raw_token: &str) -> Result<TokenClaims, AnyError> {
+fn validate_auth_token(app: &App, raw_token: &str) -> Result<TokenClaims, anyhow::Error> {
     let claims = TokenClaims::decode(&app.config().token_key, raw_token)?;
 
     let config = app
@@ -544,7 +541,7 @@ fn validate_auth_token(app: &App, raw_token: &str) -> Result<TokenClaims, AnyErr
 fn request_validate_auth_cookie(
     state: &ServerState,
     req: &Request<Body>,
-) -> Result<Option<TokenClaims>, AnyError> {
+) -> Result<Option<TokenClaims>, anyhow::Error> {
     get_auth_cookie_token(req)
         .map(|raw| validate_auth_token(&state.app, &raw))
         .transpose()
@@ -570,7 +567,7 @@ fn request_validate_auth_cookie_http(
 fn request_auth_check(
     state: &ServerState,
     req: &Request<Body>,
-) -> Result<Option<TokenClaims>, AnyError> {
+) -> Result<Option<TokenClaims>, anyhow::Error> {
     if state.needs_auth() {
         match request_validate_auth_cookie(state, req)? {
             Some(claims) => Ok(Some(claims)),
@@ -581,7 +578,10 @@ fn request_auth_check(
     }
 }
 
-async fn api_query(state: &ServerState, req: Request<Body>) -> Result<Response<Body>, AnyError> {
+async fn api_query(
+    state: &ServerState,
+    req: Request<Body>,
+) -> Result<Response<Body>, anyhow::Error> {
     let token_claims = match request_validate_auth_cookie(&state, &req) {
         Ok(claims) => claims,
         Err(err) => {

@@ -4,10 +4,7 @@ use brass::{
     effect::{set_timeout, EffectGuard, TimeoutGuard},
     signal::signal::{Mutable, SignalExt},
 };
-use factordb::{
-    prelude::{EntityContainer, Id},
-    AnyError,
-};
+use factdb::{ClassContainer, Id};
 use semantic_core::{
     api::{self, Job, JobId},
     base::Video,
@@ -56,10 +53,10 @@ struct State {
 #[derive(Debug)]
 enum Msg {
     Start,
-    JobStartLoaded(Result<api::OptimiseVideoReply, AnyError>),
+    JobStartLoaded(Result<api::OptimiseVideoReply, anyhow::Error>),
     JobPollTick,
-    JobPolled(Result<Job, AnyError>),
-    VideoLoaded(Result<Video, AnyError>),
+    JobPolled(Result<Job, anyhow::Error>),
+    VideoLoaded(Result<Video, anyhow::Error>),
 }
 
 impl State {
@@ -131,7 +128,7 @@ impl MsgComponent for State {
                                 async move {
                                     let raw = context::api().entity(id).await?;
                                     let video = Video::try_from_map(raw)?;
-                                    Ok::<Video, AnyError>(video)
+                                    Ok::<Video, anyhow::Error>(video)
                                 },
                                 Msg::VideoLoaded,
                             ));

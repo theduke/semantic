@@ -1,11 +1,8 @@
 use anyhow::Context;
-use factordb::{
-    prelude::{
-        AttrIdent, AttrMapExt, Attribute, AttributeDescriptor, DataMap, Db, Entity,
-        EntityContainer, EntityDescriptor, Expr, Id, IdOrIdent, Select, Timestamp, Value,
-        ValueTypeDescriptor,
-    },
-    AnyError,
+use factdb::{
+    macros::{Attribute, Class},
+    AttrIdent, AttrMapExt, AttributeMeta, ClassContainer, ClassMeta, DataMap, Db, Expr, Id,
+    IdOrIdent, Select, Timestamp, Value, ValueTypeDescriptor,
 };
 
 use serde::{Deserialize, Serialize};
@@ -65,8 +62,8 @@ impl From<UniversalHash> for Value {
 }
 
 impl ValueTypeDescriptor for UniversalHash {
-    fn value_type() -> factordb::data::ValueType {
-        factordb::data::ValueType::String
+    fn value_type() -> factdb::data::ValueType {
+        factdb::data::ValueType::String
     }
 }
 
@@ -154,7 +151,7 @@ impl AttrVideoHasSound {
     }
 }
 
-#[derive(Serialize, Deserialize, Entity, Clone, Debug)]
+#[derive(Serialize, Deserialize, Class, Clone, Debug)]
 #[factor(namespace = "semantic")]
 pub struct File {
     #[factor(attr = AttrId)]
@@ -286,7 +283,7 @@ impl File {
         db: &Db,
         hash: &UniversalHash,
         original: Option<&UniversalHash>,
-    ) -> Result<Option<DataMap>, AnyError> {
+    ) -> Result<Option<DataMap>, anyhow::Error> {
         let page = db
             .select(Self::query_by_hash_or_original(hash, original))
             .await?;
@@ -322,7 +319,7 @@ impl File {
     }
 }
 
-#[derive(Serialize, Deserialize, Entity, Clone, Debug)]
+#[derive(Serialize, Deserialize, Class, Clone, Debug)]
 #[factor(namespace = "semantic")]
 pub struct Image {
     #[factor(extend)]
@@ -338,7 +335,7 @@ pub struct Image {
     pub height: Option<u64>,
 }
 
-#[derive(Serialize, Deserialize, Entity, Clone, Debug)]
+#[derive(Serialize, Deserialize, Class, Clone, Debug)]
 #[factor(namespace = "semantic")]
 pub struct Video {
     #[factor(extend)]
@@ -394,7 +391,7 @@ impl Video {
     }
 }
 
-#[derive(Serialize, Deserialize, Entity, Clone, Debug)]
+#[derive(Serialize, Deserialize, Class, Clone, Debug)]
 #[factor(namespace = "semantic", title = "Audio")]
 pub struct Audio {
     #[factor(extend)]
@@ -454,7 +451,7 @@ impl TypedFile {
     }
 }
 
-impl factordb::schema::EntityContainer for TypedFile {
+impl factdb::schema::ClassContainer for TypedFile {
     fn id(&self) -> Id {
         match self {
             TypedFile::Video(e) => e.file.id,
@@ -473,7 +470,7 @@ impl factordb::schema::EntityContainer for TypedFile {
         }
     }
 
-    fn into_map(self) -> Result<factordb::data::DataMap, factordb::data::value::ValueSerializeError>
+    fn into_map(self) -> Result<factdb::data::DataMap, factdb::data::value::ValueSerializeError>
     where
         Self: serde::Serialize + Sized,
     {

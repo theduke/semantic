@@ -1,5 +1,6 @@
-use factordb::prelude::{
-    Attribute, AttributeDescriptor, AttributeSchema, DataMap, Entity, Id, Timestamp, ValueType,
+use factdb::{
+    macros::{Attribute, Class},
+    Attribute, AttributeMeta, DataMap, Id, Timestamp, ValueType,
 };
 use serde::{Deserialize, Serialize};
 
@@ -23,18 +24,17 @@ pub enum Gender {
     Female,
 }
 
-impl AttributeDescriptor for Gender {
+impl AttributeMeta for Gender {
     const NAMESPACE: &'static str = "semantic";
     const PLAIN_NAME: &'static str = "gender";
     const QUALIFIED_NAME: &'static str = "semantic/gender";
 
-    const IDENT: factordb::prelude::IdOrIdent =
-        factordb::prelude::IdOrIdent::new_static(Self::QUALIFIED_NAME);
+    const IDENT: factdb::IdOrIdent = factdb::IdOrIdent::new_static(Self::QUALIFIED_NAME);
 
     type Type = Self;
 
-    fn schema() -> AttributeSchema {
-        AttributeSchema {
+    fn schema() -> Attribute {
+        Attribute {
             id: Id::nil(),
             ident: Self::QUALIFIED_NAME.to_string(),
             title: Some("Gender".to_string()),
@@ -50,7 +50,7 @@ impl AttributeDescriptor for Gender {
     }
 }
 
-#[derive(Serialize, Deserialize, Entity)]
+#[derive(Serialize, Deserialize, Class)]
 #[factor(namespace = "semantic", title = "Person")]
 pub struct Person {
     #[factor(attr = AttrId)]

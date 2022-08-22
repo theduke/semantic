@@ -1,4 +1,7 @@
-use factordb::prelude::{Attribute, DataMap, Entity, Id, Timestamp};
+use factdb::{
+    macros::{Attribute, Class},
+    DataMap, Id, Timestamp,
+};
 use serde::{Deserialize, Serialize};
 
 use super::{AttrIdent, AttrImportedAt, AttrTitle, AttrUsername, Person};
@@ -39,7 +42,7 @@ pub struct AttrSocialMediaPlatformId(Id);
 #[factor(namespace = "semantic", name = "like_count", title = "Likes")]
 pub struct AttrLikeCount(u64);
 
-#[derive(Serialize, Deserialize, Entity)]
+#[derive(Serialize, Deserialize, Class)]
 #[factor(namespace = "semantic", title = "SocialMediaPost")]
 pub struct SocialMediaPost {
     #[factor(attr = AttrId)]
@@ -79,7 +82,7 @@ pub struct SocialMediaPost {
     pub extra: DataMap,
 }
 
-#[derive(Serialize, Deserialize, Entity)]
+#[derive(Serialize, Deserialize, Class)]
 #[factor(namespace = "semantic", title = "SocialMediaAccount")]
 pub struct SocialMediaAccount {
     #[factor(attr = AttrId)]

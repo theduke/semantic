@@ -1,5 +1,5 @@
 use brass::dom::{builder::div, TagBuilder};
-use factordb::prelude::{DataMap, Id};
+use factdb::{DataMap, Id};
 use semantic_ui_core::{context, routing::Route, EntityRenderOpts};
 
 use crate::habits::{Habit, HabitMode};

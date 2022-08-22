@@ -1,9 +1,8 @@
 mod db;
 use std::collections::HashSet;
 
-use factordb::{
-    prelude::{AttributeSchema, EntityAttribute, EntitySchema, Id, IdOrIdent, ValueType},
-    schema::{AttributeDescriptor, DbSchema, EntityDescriptor},
+use factdb::{
+    Attribute, AttributeMeta, Class, ClassAttribute, ClassMeta, DbSchema, Id, IdOrIdent, ValueType,
 };
 use semantic_core::{
     base::{AttrDescription, AttrTitle},
@@ -42,7 +41,7 @@ impl Plugin for HabitsPlugin {
                     AttrHabitOccurenceTime::schema(),
                     HabitMode::schema(),
                 ],
-                entities: vec![Habit::schema(), HabitOccurence::schema()],
+                classes: vec![Habit::schema(), HabitOccurence::schema()],
                 indexes: vec![],
             }),
             import_matchers: vec![],
@@ -52,10 +51,10 @@ impl Plugin for HabitsPlugin {
     fn migrations(
         &self,
         _already_applied_migrations: &HashSet<String>,
-    ) -> Vec<factordb::query::migrate::Migration> {
+    ) -> Vec<factdb::query::migrate::Migration> {
         vec![
-            factordb::query::migrate::Migration::with_name("habits_create".to_string())
-                .attr_create(AttributeSchema {
+            factdb::query::migrate::Migration::with_name("habits_create".to_string())
+                .attr_create(Attribute {
                     id: Id::nil(),
                     ident: AttrHabitOccurenceComment::QUALIFIED_NAME.to_string(),
                     title: Some("Comment".to_string()),
@@ -65,7 +64,7 @@ impl Plugin for HabitsPlugin {
                     index: false,
                     strict: false,
                 })
-                .attr_create(AttributeSchema {
+                .attr_create(Attribute {
                     id: Id::nil(),
                     ident: AttrHabitOccurenceParentId::QUALIFIED_NAME.to_string(),
                     title: Some("Duration".to_string()),
@@ -75,7 +74,7 @@ impl Plugin for HabitsPlugin {
                     index: false,
                     strict: false,
                 })
-                .attr_create(AttributeSchema {
+                .attr_create(Attribute {
                     id: Id::nil(),
                     ident: AttrHabitOccurenceTime::QUALIFIED_NAME.to_string(),
                     title: Some("Time".to_string()),
@@ -85,7 +84,7 @@ impl Plugin for HabitsPlugin {
                     index: false,
                     strict: false,
                 })
-                .attr_create(factordb::schema::AttributeSchema {
+                .attr_create(factdb::schema::Attribute {
                     id: Id::nil(),
                     ident: HabitMode::QUALIFIED_NAME.to_string(),
                     title: Some("Habit Mode".into()),
@@ -99,49 +98,49 @@ impl Plugin for HabitsPlugin {
                     index: false,
                     strict: true,
                 })
-                .entity_create(EntitySchema {
+                .entity_create(Class {
                     id: Id::nil(),
                     ident: Habit::QUALIFIED_NAME.to_string(),
                     title: Some("Habit".to_string()),
                     description: None,
                     attributes: vec![
-                        EntityAttribute {
-                            attribute: AttrTitle::IDENT,
-                            cardinality: factordb::prelude::Cardinality::Required,
+                        ClassAttribute {
+                            attribute: AttrTitle::QUALIFIED_NAME.to_string(),
+                            required: true,
                         },
-                        EntityAttribute {
-                            attribute: AttrDescription::IDENT,
-                            cardinality: factordb::prelude::Cardinality::Optional,
+                        ClassAttribute {
+                            attribute: AttrDescription::QUALIFIED_NAME.to_string(),
+                            required: false,
                         },
-                        EntityAttribute {
-                            attribute: HabitMode::IDENT,
-                            cardinality: factordb::prelude::Cardinality::Required,
+                        ClassAttribute {
+                            attribute: HabitMode::QUALIFIED_NAME.to_string(),
+                            required: true,
                         },
                     ],
                     extends: vec![],
                     strict: false,
                 })
-                .entity_create(EntitySchema {
+                .entity_create(Class {
                     id: Id::nil(),
                     ident: HabitOccurence::QUALIFIED_NAME.to_string(),
                     title: Some("Habit Occurence".to_string()),
                     description: None,
                     attributes: vec![
-                        EntityAttribute {
-                            attribute: AttrHabitOccurenceParentId::IDENT,
-                            cardinality: factordb::prelude::Cardinality::Required,
+                        ClassAttribute {
+                            attribute: AttrHabitOccurenceParentId::QUALIFIED_NAME.to_string(),
+                            required: true,
                         },
-                        EntityAttribute {
-                            attribute: AttrHabitOccurenceTime::IDENT,
-                            cardinality: factordb::prelude::Cardinality::Required,
+                        ClassAttribute {
+                            attribute: AttrHabitOccurenceTime::QUALIFIED_NAME.to_string(),
+                            required: true,
                         },
-                        EntityAttribute {
-                            attribute: HabitMode::IDENT,
-                            cardinality: factordb::prelude::Cardinality::Required,
+                        ClassAttribute {
+                            attribute: HabitMode::QUALIFIED_NAME.to_string(),
+                            required: true,
                         },
-                        EntityAttribute {
-                            attribute: AttrHabitOccurenceComment::IDENT,
-                            cardinality: factordb::prelude::Cardinality::Optional,
+                        ClassAttribute {
+                            attribute: AttrHabitOccurenceComment::QUALIFIED_NAME.to_string(),
+                            required: false,
                         },
                     ],
                     extends: vec![],

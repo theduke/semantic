@@ -5,10 +5,7 @@ use std::{
 
 use anyhow::{bail, Context};
 use bytesize::ByteSize;
-use factordb::{
-    prelude::{AttrId, AttrIdent, AttrMapExt, AttributeDescriptor, EntityContainer, Id, Select},
-    AnyError,
-};
+use factdb::{AttrId, AttrIdent, AttrMapExt, AttributeMeta, ClassContainer, Id, Select};
 use futures::{StreamExt, TryStreamExt};
 use semantic_core::{
     api::{self, ApiClientExecutor, FileUploadMetadata},
@@ -84,7 +81,7 @@ impl CmdUpload {
         }
     }
 
-    async fn upload(self) -> Result<(), AnyError> {
+    async fn upload(self) -> Result<(), anyhow::Error> {
         let cmd = self;
 
         if cmd.paths.is_empty() {
@@ -338,7 +335,7 @@ where
     L: AsRef<[V]>,
     V: AsRef<str>,
 {
-    use factordb::prelude as db;
+    use factdb as db;
 
     let mut tags = Vec::<Tag>::new();
     for name in tag_names.as_ref() {
@@ -368,7 +365,7 @@ where
     Ok(tags)
 }
 
-fn find_files(path: &Path, buffer: &mut Vec<FileItem>) -> Result<(), AnyError> {
+fn find_files(path: &Path, buffer: &mut Vec<FileItem>) -> Result<(), anyhow::Error> {
     let meta = path
         .metadata()
         .with_context(|| format!("Could not read {}", path.display()))?;

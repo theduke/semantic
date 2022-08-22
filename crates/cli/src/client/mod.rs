@@ -1,4 +1,3 @@
-use factordb::AnyError;
 use futures::future::BoxFuture;
 use semantic_core::api;
 
@@ -39,7 +38,7 @@ impl ReqwestExecutor {
 }
 
 impl api::ApiClientExecutor for ReqwestExecutor {
-    type Future = BoxFuture<'static, Result<api::Reply, AnyError>>;
+    type Future = BoxFuture<'static, Result<api::Reply, anyhow::Error>>;
 
     fn execute(&self, query: semantic_core::api::Query) -> Self::Future {
         let mut url = self.endpoint.clone();

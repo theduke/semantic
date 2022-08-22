@@ -1,11 +1,10 @@
 use serde::{Deserialize, Serialize};
 
-use factordb::{
-    prelude::{
-        AttrId, AttrIdent, AttrMapExt, Attribute, AttributeDescriptor, DataMap, Entity,
-        EntityDescriptor, Expr, Id, Item, Mutate, Patch, Select,
-    },
+use factdb::{
+    macros::{Attribute, Class},
     schema::builtin,
+    AttrId, AttrIdent, AttrMapExt, AttributeMeta, ClassMeta, DataMap, Expr, Id, Item, Mutate,
+    Patch, Select,
 };
 
 use super::{AttrDescription, AttrTitle, AttrUrl};
@@ -14,7 +13,7 @@ use super::{AttrDescription, AttrTitle, AttrUrl};
 #[factor(namespace = "semantic", title = "Items", name = "collection_items")]
 pub struct AttrCollectionItem(Vec<Id>);
 
-#[derive(Serialize, Deserialize, Entity, Clone, Debug, PartialEq, Eq)]
+#[derive(Serialize, Deserialize, Class, Clone, Debug, PartialEq, Eq)]
 #[factor(namespace = "semantic")]
 pub struct Collection {
     #[factor(attr = AttrId)]
@@ -126,7 +125,7 @@ impl CollectionWithItems {
 
     pub fn from_query_result(
         collection: Collection,
-        entities: Vec<factordb::query::select::Item>,
+        entities: Vec<factdb::query::select::Item>,
     ) -> Self {
         let sorted = collection
             .item_ids

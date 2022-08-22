@@ -4,7 +4,7 @@ use brass::{
     effect::{set_interval, IntervalGuard},
     signal::signal::Mutable,
 };
-use factordb::{query::select::Page, AnyError};
+use factdb::query::select::Page;
 use semantic_ui_core::{
     components::{
         loader::Loader,
@@ -28,8 +28,8 @@ impl Render for HabitView {
 
 enum Msg {
     Trigger,
-    TriggerLoaded(Result<HabitOccurence, AnyError>),
-    OccurencesLoaded(Result<Vec<HabitOccurence>, AnyError>),
+    TriggerLoaded(Result<HabitOccurence, anyhow::Error>),
+    OccurencesLoaded(Result<Vec<HabitOccurence>, anyhow::Error>),
 }
 
 struct State {

@@ -6,12 +6,9 @@ use std::{
 };
 
 use anyhow::{anyhow, bail, Context};
-use factordb::{
-    prelude::{
-        AttrMapExt, AttributeDescriptor, DataMap, Db, EntityContainer, Expr, Id, Item, Mutate,
-        Patch, Select, Timestamp, Value, ValueMap,
-    },
-    query, AnyError,
+use factdb::{
+    query, AttrMapExt, AttributeMeta, ClassContainer, DataMap, Db, Expr, Id, Item, Mutate, Patch,
+    Select, Timestamp, Value, ValueMap,
 };
 use semantic_core::{
     api::{self, BackendConfig, DbConfig, FileImportMetadata, SemanticSchema},
@@ -83,7 +80,7 @@ impl App {
         &self.http_client
     }
 
-    pub fn default_data_dir() -> Result<PathBuf, AnyError> {
+    pub fn default_data_dir() -> Result<PathBuf, anyhow::Error> {
         let home = dirs::home_dir().context("Could not determine user home directory")?;
 
         let path = home.join(".local").join("share").join("semantic");
@@ -102,7 +99,7 @@ impl App {
             .map(|state| state.blob.clone())
     }
 
-    pub fn require_blob(&self) -> Result<DynBlobStore, AnyError> {
+    pub fn require_blob(&self) -> Result<DynBlobStore, anyhow::Error> {
         self.blob()
             .ok_or_else(|| anyhow!("Blobstore not initialized"))
     }
@@ -115,7 +112,7 @@ impl App {
             .map(|state| state.db.clone())
     }
 
-    pub fn require_db(&self) -> Result<Db, AnyError> {
+    pub fn require_db(&self) -> Result<Db, anyhow::Error> {
         self.db().ok_or_else(|| anyhow!("Database not initialized"))
     }
 
@@ -127,7 +124,7 @@ impl App {
             .map(|state| state.jobs.clone())
     }
 
-    pub fn require_jobs(&self) -> Result<JobManager, AnyError> {
+    pub fn require_jobs(&self) -> Result<JobManager, anyhow::Error> {
         self.jobs()
             .ok_or_else(|| anyhow!("JobManager not initialized"))
     }
@@ -140,7 +137,7 @@ impl App {
             .map(|state| state.plugins.clone())
     }
 
-    pub fn require_plugins(&self) -> Result<PluginManager, AnyError> {
+    pub fn require_plugins(&self) -> Result<PluginManager, anyhow::Error> {
         self.plugins()
             .ok_or_else(|| anyhow!("PluginManager not initialized"))
     }
@@ -169,13 +166,13 @@ impl App {
         })
     }
 
-    // pub fn require_backend_config(&self) -> Result<BackendConfig, AnyError> {
+    // pub fn require_backend_config(&self) -> Result<BackendConfig, anyhow::Error> {
     //     self.backend_config()
     //         .ok_or_else(|| anyhow::anyhow!("Database not initialized"))
     // }
     //
 
-    pub fn default_data_path() -> Result<String, AnyError> {
+    pub fn default_data_path() -> Result<String, anyhow::Error> {
         let path = dirs::data_dir()
             .ok_or_else(|| anyhow!("Could not determine default data directory"))?
             .join("semantic");
@@ -191,7 +188,7 @@ impl App {
 
     pub fn build_crypto_config(
         crypto: &api::BackendCryptoConfig,
-    ) -> Result<logfs::CryptoConfig, AnyError> {
+    ) -> Result<logfs::CryptoConfig, anyhow::Error> {
         let conf = logfs::CryptoConfig {
             key: crypto.key.clone().into(),
             salt: crypto
@@ -211,7 +208,7 @@ impl App {
         Ok(conf)
     }
 
-    pub fn build_logfs(crypto: &api::BackendCryptoConfig) -> Result<logfs::LogFs, AnyError> {
+    pub fn build_logfs(crypto: &api::BackendCryptoConfig) -> Result<logfs::LogFs, anyhow::Error> {
         let data_path = if let Some(p) = &crypto.data_path {
             PathBuf::from(p.clone())
         } else {
@@ -241,7 +238,7 @@ impl App {
 
     pub async fn recover_database_data(
         config: api::BackendConfig,
-    ) -> Result<Vec<DataMap>, AnyError> {
+    ) -> Result<Vec<DataMap>, anyhow::Error> {
         match config.db {
             DbConfig::Crypto(c) => {
                 let logfs = Self::build_logfs(&c)?;
@@ -293,7 +290,7 @@ impl App {
         Ok(())
     }
 
-    pub async fn configure_backend(&self, config: api::BackendConfig) -> Result<(), AnyError> {
+    pub async fn configure_backend(&self, config: api::BackendConfig) -> Result<(), anyhow::Error> {
         tracing::info!(?config, "configuring backend");
         tracing::debug!(?config, "configuring backend");
         let (db, blob) = match &config.db {
@@ -322,7 +319,7 @@ impl App {
         self.initialize_backend(config, db, blob).await
     }
 
-    pub async fn close_backend(&self) -> Result<(), AnyError> {
+    pub async fn close_backend(&self) -> Result<(), anyhow::Error> {
         let mut lock = self
             .state
             .write()
@@ -337,7 +334,10 @@ impl App {
         Ok(())
     }
 
-    pub async fn build(config: AppConfig, rt: tokio::runtime::Handle) -> Result<Self, AnyError> {
+    pub async fn build(
+        config: AppConfig,
+        rt: tokio::runtime::Handle,
+    ) -> Result<Self, anyhow::Error> {
         // Purge old video conversion data.
         if let Ok(p) = config.tmp_dir_videos() {
             tokio::fs::remove_dir_all(&p).await.ok();
@@ -359,7 +359,7 @@ impl App {
         Ok(s)
     }
 
-    pub async fn build_test_app(handle: tokio::runtime::Handle) -> Result<Self, AnyError> {
+    pub async fn build_test_app(handle: tokio::runtime::Handle) -> Result<Self, anyhow::Error> {
         let tmp_dir = std::env::temp_dir().join("semantic/test-app");
 
         let config = AppConfig {
@@ -395,7 +395,7 @@ impl App {
     }
 
     /// Run a periodic maintenance check.
-    async fn run_worker_tick(self) -> Result<(), AnyError> {
+    async fn run_worker_tick(self) -> Result<(), anyhow::Error> {
         let should_close_backend = {
             let state_opt = self
                 .state
@@ -435,21 +435,21 @@ impl App {
         Ok(())
     }
 
-    pub async fn load_schema(&self) -> Result<SemanticSchema, AnyError> {
+    pub async fn load_schema(&self) -> Result<SemanticSchema, anyhow::Error> {
         let db = self.require_db()?.schema().await?;
 
         Ok(SemanticSchema { db })
     }
 
-    pub async fn entity_mutate(&self, mutate: query::mutate::Mutate) -> Result<(), AnyError> {
+    pub async fn entity_mutate(&self, mutate: query::mutate::Mutate) -> Result<(), anyhow::Error> {
         self.entity_batch(vec![mutate].into()).await
     }
 
-    pub async fn entity_batch(&self, batch: query::mutate::Batch) -> Result<(), AnyError> {
+    pub async fn entity_batch(&self, batch: query::mutate::Batch) -> Result<(), anyhow::Error> {
         self.require_db()?.batch(batch).await
     }
 
-    async fn find_unused_blobs(&self) -> Result<Vec<api::BlobInfo>, AnyError> {
+    async fn find_unused_blobs(&self) -> Result<Vec<api::BlobInfo>, anyhow::Error> {
         let db = self.require_db()?;
         let blob = self.require_blob()?;
 
@@ -487,7 +487,7 @@ impl App {
         Ok(unused)
     }
 
-    async fn delete_unused_blobs(&self) -> Result<api::UnusedBlobsDeleted, AnyError> {
+    async fn delete_unused_blobs(&self) -> Result<api::UnusedBlobsDeleted, anyhow::Error> {
         let unused = self.find_unused_blobs().await?;
 
         let blob = self.require_blob()?;
@@ -514,7 +514,7 @@ impl App {
         &self,
         meta: api::FileUploadMetadata,
         data: Vec<u8>,
-    ) -> Result<api::FileUploadReply, AnyError> {
+    ) -> Result<api::FileUploadReply, anyhow::Error> {
         use semantic_core::base::TypedFile;
 
         tracing::trace!(?meta, size=%data.len(), "file upload started");
@@ -744,7 +744,7 @@ impl App {
         &self,
         meta: api::FileUploadMetadata,
         data: Vec<u8>,
-    ) -> Result<api::FileUploadReply, AnyError> {
+    ) -> Result<api::FileUploadReply, anyhow::Error> {
         self.upload_file_inner(meta, data)
             .instrument(tracing::debug_span!("file upload"))
             .await
@@ -755,7 +755,7 @@ impl App {
         paths: Vec<std::path::PathBuf>,
         meta: FileImportMetadata,
         on_import: crate::file_import::FileImportCallback,
-    ) -> Result<(), AnyError> {
+    ) -> Result<(), anyhow::Error> {
         super::file_import::import_files(self, paths, meta, on_import).await
     }
 
@@ -765,11 +765,11 @@ impl App {
     async fn entity_id_ident_fixup(
         db: &Db,
         mut items: Vec<DataMap>,
-    ) -> Result<Vec<DataMap>, AnyError> {
+    ) -> Result<Vec<DataMap>, anyhow::Error> {
         let mut map = HashMap::new();
         // FIXME: use a single query.
         for item in &mut items {
-            if let Some(ident) = item.get_attr::<factordb::schema::builtin::AttrIdent>() {
+            if let Some(ident) = item.get_attr::<factdb::schema::builtin::AttrIdent>() {
                 if let Ok(old_entity) = db.entity(ident.clone()).await {
                     let current_type = old_entity.get_type();
                     let new_type = item.get_type();
@@ -804,11 +804,11 @@ impl App {
         Ok(items)
     }
 
-    pub async fn fetch_url(&self, job: FetchUrlJob) -> Result<FetchUrlOutput, AnyError> {
+    pub async fn fetch_url(&self, job: FetchUrlJob) -> Result<FetchUrlOutput, anyhow::Error> {
         self.require_plugins()?.fetch_url(job).await
     }
 
-    pub async fn import(&self, job: ImportJob) -> Result<ImportOutput, AnyError> {
+    pub async fn import(&self, job: ImportJob) -> Result<ImportOutput, anyhow::Error> {
         tracing::trace!("starting import");
 
         let output = self.require_plugins()?.import(job.clone()).await?;
@@ -859,7 +859,7 @@ impl App {
         self,
         id: Id,
         client: reqwest::Client,
-    ) -> Result<(), AnyError> {
+    ) -> Result<(), anyhow::Error> {
         let db = self.require_db()?;
         let blob = self.require_blob()?;
 
@@ -961,7 +961,7 @@ impl App {
         }
     }
 
-    pub async fn convert_file(&self, _job: api::ConvertFile) -> Result<api::Job, AnyError> {
+    pub async fn convert_file(&self, _job: api::ConvertFile) -> Result<api::Job, anyhow::Error> {
         // let db = self.require_db()?;
         // let file = semantic_core::base::File::try_from_map(db.entity(job.file_id).await?)?;
 
@@ -977,7 +977,7 @@ impl App {
         output: impl std::io::Write + Send + Sync + 'static,
         compression: Option<crate::util::Compression>,
         skip_blobs: bool,
-    ) -> Result<(), AnyError> {
+    ) -> Result<(), anyhow::Error> {
         #[cfg(feature = "archive")]
         {
             crate::util::archive::build_archive(self, output, compression, skip_blobs).await
@@ -986,7 +986,7 @@ impl App {
         #[cfg(not(feature = "archive"))]
         {
             let _ = output;
-            Err(AnyError::msg(
+            Err(anyhow::Error::msg(
                 "This semantic instance was not built with archive support. Archives not possible.",
             ))
         }
@@ -1168,7 +1168,7 @@ impl App {
     pub async fn run_query(
         &self,
         query: semantic_core::api::Query,
-    ) -> Result<semantic_core::api::Reply, AnyError> {
+    ) -> Result<semantic_core::api::Reply, anyhow::Error> {
         self.update_last_activity_time();
 
         let res = match query {
@@ -1343,7 +1343,7 @@ impl App {
         })
     }
 
-    async fn tag_create(&self, create: api::TagCreate) -> Result<DataMap, AnyError> {
+    async fn tag_create(&self, create: api::TagCreate) -> Result<DataMap, anyhow::Error> {
         let db = self.require_db()?;
         let id = Id::random();
         let tag = Tag {
@@ -1375,12 +1375,12 @@ impl App {
     async fn record_entity_visit(
         &self,
         rec: semantic_core::base::RecordEntityVisit,
-    ) -> Result<(), AnyError> {
+    ) -> Result<(), anyhow::Error> {
         let db = self.require_db()?;
         rec.run(&db).await
     }
 
-    async fn select_sql(&self, select: api::QuerySql) -> Result<Vec<DataMap>, AnyError> {
+    async fn select_sql(&self, select: api::QuerySql) -> Result<Vec<DataMap>, anyhow::Error> {
         let db = self.require_db()?;
         let sel = Select::parse_sql(&select.query)?;
         db.select_map(sel).await
@@ -1389,7 +1389,7 @@ impl App {
 
 #[cfg(test)]
 mod tests {
-    use factordb::{map, prelude::Batch};
+    use factdb::{map, Batch};
     use semantic_core::base::AttrTags;
 
     use super::*;

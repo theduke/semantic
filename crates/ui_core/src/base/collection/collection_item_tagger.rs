@@ -4,10 +4,7 @@ use brass::{
     component::{msg::MsgComponent, Component},
     dom::{builder::div, Render, View},
 };
-use factordb::{
-    prelude::{AttrMapExt, AttributeDescriptor, Batch, DataMap, Mutate, Patch, PatchOp},
-    AnyError,
-};
+use factdb::{AttrMapExt, AttributeMeta, Batch, DataMap, Mutate, Patch, PatchOp};
 use semantic_core::base::{AttrTags, Tag};
 
 use crate::{
@@ -28,7 +25,7 @@ impl Render for CollectionItemTagger {
 
 enum Msg {
     Submit(Vec<Tag>),
-    PersistLoaded(Result<(), AnyError>),
+    PersistLoaded(Result<(), anyhow::Error>),
 }
 
 struct State {

@@ -25,7 +25,7 @@ impl SqlCmd {
     async fn sql_query(self) {
         let client = self.client.build_client();
 
-        let query = match factordb::prelude::Select::parse_sql(&self.sql) {
+        let query = match factdb::Select::parse_sql(&self.sql) {
             Ok(s) => s,
             Err(err) => {
                 eprintln!("Invalid query: {}", err);

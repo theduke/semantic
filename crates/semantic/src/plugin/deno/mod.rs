@@ -5,7 +5,7 @@ use std::{
 };
 
 use anyhow::{anyhow, bail, Context};
-use factordb::{schema::DbSchema, AnyError};
+use factdb::DbSchema;
 use semantic_core::plugin::{
     DynPlugin, FetchUrlJob, FetchUrlOutput, ImportJob, ImportOutput, PluginSchema,
 };
@@ -30,7 +30,7 @@ impl DenoConfig {
         self.data_dir.join("bridges")
     }
 
-    fn ensure_bridge_dir(&self) -> Result<PathBuf, AnyError> {
+    fn ensure_bridge_dir(&self) -> Result<PathBuf, anyhow::Error> {
         let p = self.bridge_path();
         if !p.is_dir() {
             std::fs::create_dir_all(&p)?;
@@ -42,7 +42,7 @@ impl DenoConfig {
         self.data_dir.join("lib")
     }
 
-    fn ensure_lib_dir(&self) -> Result<PathBuf, AnyError> {
+    fn ensure_lib_dir(&self) -> Result<PathBuf, anyhow::Error> {
         let p = self.lib_path();
         if !p.is_dir() {
             std::fs::create_dir_all(&p)?;
@@ -58,7 +58,7 @@ impl DenoConfig {
         self.lib_path().join("schema.ts")
     }
 
-    fn ensure_temp_dir(&self) -> Result<PathBuf, AnyError> {
+    fn ensure_temp_dir(&self) -> Result<PathBuf, anyhow::Error> {
         let p = self.data_dir.join("tmp");
         if !p.is_dir() {
             std::fs::create_dir_all(&p)?;
@@ -97,14 +97,14 @@ impl semantic_core::plugin::Plugin for DenoPlugin {
         self.data.schema.clone()
     }
 
-    fn stop(&self) -> Result<(), AnyError> {
+    fn stop(&self) -> Result<(), anyhow::Error> {
         self.host.stop_plugin(&self.data.schema.name)
     }
 
     fn migrations(
         &self,
         _already_applied: &HashSet<String>,
-    ) -> Vec<factordb::query::migrate::Migration> {
+    ) -> Vec<factdb::query::migrate::Migration> {
         // TODO: support migations.
         Vec::new()
     }
@@ -116,7 +116,7 @@ impl semantic_core::plugin::Plugin for DenoPlugin {
     fn fetch_url(
         &self,
         job: FetchUrlJob,
-    ) -> futures::future::BoxFuture<'static, Result<Option<FetchUrlOutput>, AnyError>> {
+    ) -> futures::future::BoxFuture<'static, Result<Option<FetchUrlOutput>, anyhow::Error>> {
         Box::pin(
             self.host
                 .clone()
@@ -127,7 +127,7 @@ impl semantic_core::plugin::Plugin for DenoPlugin {
     fn import(
         &self,
         job: ImportJob,
-    ) -> futures::future::BoxFuture<'static, Result<Option<ImportOutput>, AnyError>> {
+    ) -> futures::future::BoxFuture<'static, Result<Option<ImportOutput>, anyhow::Error>> {
         Box::pin(self.host.clone().import(self.data.schema.name.clone(), job))
     }
 }
@@ -147,7 +147,7 @@ struct Worker {
 
 impl Worker {
     // bridge_path is the path to the bridge.ts file.
-    async fn boot(bridge_path: &Path) -> Result<Self, AnyError> {
+    async fn boot(bridge_path: &Path) -> Result<Self, anyhow::Error> {
         let mut child = tokio::process::Command::new("deno")
             // WARNING: Deno is written in Rust and writes logs to stderr when
             // RUST_LOG is set, which breaks the stderr communication.
@@ -178,7 +178,7 @@ impl Worker {
         Ok(w)
     }
 
-    async fn send_command(&mut self, command: PluginCommand) -> Result<PluginReply, AnyError> {
+    async fn send_command(&mut self, command: PluginCommand) -> Result<PluginReply, anyhow::Error> {
         tracing::trace!(?command, "Sending command to plugin");
         // FIXME: taint and destroy workers if they fail internally so they can
         // be re-created. Probably want a WorkerManager that handles this.
@@ -202,7 +202,7 @@ impl Worker {
             .map_err(|err| anyhow!("Plugin failed: {}", err))
     }
 
-    async fn send_init(&mut self, plugin_path: &Path) -> Result<PluginSchema, AnyError> {
+    async fn send_init(&mut self, plugin_path: &Path) -> Result<PluginSchema, anyhow::Error> {
         let plugin_path = plugin_path.to_str().context("invalid path")?.to_string();
         match self
             .send_command(PluginCommand::Init { plugin_path })
@@ -213,7 +213,7 @@ impl Worker {
         }
     }
 
-    async fn send_ping(&mut self) -> Result<(), AnyError> {
+    async fn send_ping(&mut self) -> Result<(), anyhow::Error> {
         match self.send_command(PluginCommand::Ping).await? {
             PluginReply::Ping => Ok(()),
             _other => Err(anyhow::anyhow!("Plugin sent invalid response")),
@@ -223,7 +223,7 @@ impl Worker {
     async fn send_fetch_url(
         &mut self,
         job: &FetchUrlJob,
-    ) -> Result<Option<FetchUrlOutput>, AnyError> {
+    ) -> Result<Option<FetchUrlOutput>, anyhow::Error> {
         match self
             .send_command(PluginCommand::FetchUrl(job.clone()))
             .await?
@@ -233,7 +233,10 @@ impl Worker {
         }
     }
 
-    async fn send_import(&mut self, job: &ImportJob) -> Result<Option<ImportOutput>, AnyError> {
+    async fn send_import(
+        &mut self,
+        job: &ImportJob,
+    ) -> Result<Option<ImportOutput>, anyhow::Error> {
         match self
             .send_command(PluginCommand::Import(job.clone()))
             .await?
@@ -250,7 +253,7 @@ pub struct DenoPluginHost {
 }
 
 impl DenoPluginHost {
-    pub async fn start(config: DenoConfig, schema: DbSchema) -> Result<Self, AnyError> {
+    pub async fn start(config: DenoConfig, schema: DbSchema) -> Result<Self, anyhow::Error> {
         if !config.data_dir.is_dir() {
             std::fs::create_dir_all(&config.data_dir)?;
         }
@@ -280,7 +283,7 @@ impl DenoPluginHost {
         Ok(host)
     }
 
-    pub async fn initialize_plugin_dir(&self, path: PathBuf) -> Result<(), AnyError> {
+    pub async fn initialize_plugin_dir(&self, path: PathBuf) -> Result<(), anyhow::Error> {
         for source in Self::load_plugins_directory(&path).await? {
             self.register_plugin(source, false).await?;
         }
@@ -288,7 +291,7 @@ impl DenoPluginHost {
     }
 
     // FIXME: unify code with equivalent in Self::boot_plugin_worker
-    pub async fn validate_typescript_plugin(&self, code: String) -> Result<(), AnyError> {
+    pub async fn validate_typescript_plugin(&self, code: String) -> Result<(), anyhow::Error> {
         let config = { self.state.read().unwrap().config.clone() };
         let plugin_path = config
             .semantic_lib_file()
@@ -338,7 +341,7 @@ impl DenoPluginHost {
         &self,
         source: PluginSource,
         validate: bool,
-    ) -> Result<DynPlugin, AnyError> {
+    ) -> Result<DynPlugin, anyhow::Error> {
         tracing::trace!(?source.path, "Loading deno plugin");
         let config = { self.state.read().unwrap().config.clone() };
 
@@ -362,7 +365,7 @@ impl DenoPluginHost {
         code: &str,
         url: url::Url,
         validate: bool,
-    ) -> Result<Option<FetchUrlOutput>, AnyError> {
+    ) -> Result<Option<FetchUrlOutput>, anyhow::Error> {
         let config = { self.state.read().unwrap().config.clone() };
         let (mut worker, _schema) = Self::boot_plugin_worker(&config, code, validate).await?;
 
@@ -371,7 +374,7 @@ impl DenoPluginHost {
             .await
     }
 
-    fn stop_plugin(&self, name: &str) -> Result<(), AnyError> {
+    fn stop_plugin(&self, name: &str) -> Result<(), anyhow::Error> {
         let mut state = self.state.write().unwrap();
 
         state.plugins.remove(name);
@@ -395,7 +398,7 @@ impl DenoPluginHost {
         self,
         plugin_name: String,
         job: FetchUrlJob,
-    ) -> Result<Option<FetchUrlOutput>, AnyError> {
+    ) -> Result<Option<FetchUrlOutput>, anyhow::Error> {
         tracing::trace!("starting deno fetch");
         let worker_lock = {
             self.state
@@ -419,7 +422,7 @@ impl DenoPluginHost {
         self,
         plugin_name: String,
         job: ImportJob,
-    ) -> Result<Option<ImportOutput>, AnyError> {
+    ) -> Result<Option<ImportOutput>, anyhow::Error> {
         tracing::trace!("starting deno fetch");
         let worker_lock = {
             self.state
@@ -438,7 +441,7 @@ impl DenoPluginHost {
         worker.send_import(&job).await
     }
 
-    async fn load_plugins_directory(plugin_dir: &Path) -> Result<Vec<PluginSource>, AnyError> {
+    async fn load_plugins_directory(plugin_dir: &Path) -> Result<Vec<PluginSource>, anyhow::Error> {
         let mut plugins = Vec::new();
 
         for res in std::fs::read_dir(plugin_dir)? {
@@ -469,7 +472,7 @@ impl DenoPluginHost {
         config: &DenoConfig,
         code: &str,
         validate: bool,
-    ) -> Result<(Worker, PluginSchema), AnyError> {
+    ) -> Result<(Worker, PluginSchema), anyhow::Error> {
         // Ensure bridge.
         let script_dir = config.data_dir.join("scripts");
         if !script_dir.is_dir() {
@@ -538,7 +541,7 @@ impl DenoPluginHost {
     //     Ok(p)
     // }
 
-    // fn run<T>(plugin_code: &str, config: &DenoConfig, command: PluginCommand) -> Result<T, AnyError>
+    // fn run<T>(plugin_code: &str, config: &DenoConfig, command: PluginCommand) -> Result<T, anyhow::Error>
     // where
     //     T: serde::de::DeserializeOwned,
     // {
@@ -597,10 +600,10 @@ impl DenoPluginHost {
     //     }
 
     //     crate::util::json_from_slice::<Result<T, String>>(&out.stderr)?
-    //         .map_err(|err| AnyError::msg(err))
+    //         .map_err(|err| anyhow::Error::msg(err))
     // }
 
-    // fn run_schema(plugin_code: &str, config: &DenoConfig) -> Result<PluginSchema, AnyError> {
+    // fn run_schema(plugin_code: &str, config: &DenoConfig) -> Result<PluginSchema, anyhow::Error> {
     //     Self::run(plugin_code, config, PluginCommand::Schema)
     // }
 
@@ -608,7 +611,7 @@ impl DenoPluginHost {
     //     plugin_code: &str,
     //     config: &DenoConfig,
     //     url: String,
-    // ) -> Result<Option<ImportOutput>, AnyError> {
+    // ) -> Result<Option<ImportOutput>, anyhow::Error> {
     //     Self::run(plugin_code, config, PluginCommand::Import { url })
     // }
 }
@@ -639,7 +642,7 @@ mod tests {
     const SAMPLE_PLUGIN: &'static str = include_str!("./sample-plugin.ts");
 
     #[test]
-    fn test_deno_worker() -> Result<(), AnyError> {
+    fn test_deno_worker() -> Result<(), anyhow::Error> {
         let data_dir = std::env::temp_dir().join("semantic/deno/worker");
         if data_dir.is_dir() {
             std::fs::remove_dir_all(&data_dir)?;

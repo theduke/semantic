@@ -26,7 +26,7 @@ futures = "0.3.17"
 brass = { version =  "0.1", features = ["macros"] }
 # brass_bulma = "0.1"
 
-factordb = { version = "0.1", default-features = false }
+factdb = { version = "0.1", default-features = false }
 
 semantic_core = { path = "../core" }
 semantic_ui_core = { path = "../ui_core" }

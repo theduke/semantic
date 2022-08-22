@@ -4,10 +4,7 @@
 use std::{collections::BTreeSet, io::BufRead};
 
 use anyhow::{anyhow, bail};
-use factordb::{
-    prelude::{AttrMapExt, Batch, DataMap},
-    AnyError,
-};
+use factdb::{AttrMapExt, Batch, DataMap};
 use futures::StreamExt;
 use semantic_core::base::AttrBlobUri;
 
@@ -21,7 +18,7 @@ pub async fn build_archive(
     output: impl std::io::Write + Send + 'static,
     compression: Option<Compression>,
     skip_blobs: bool,
-) -> Result<(), AnyError> {
+) -> Result<(), anyhow::Error> {
     let db = app.require_db()?;
 
     // TODO: don't buffer everything in memory.
@@ -86,7 +83,7 @@ pub async fn build_archive(
             let reader = blob.get_std_reader(&path).await?;
 
             let items =
-                tokio::task::spawn_blocking(move || -> Result<(DynBlobStore, _), AnyError> {
+                tokio::task::spawn_blocking(move || -> Result<(DynBlobStore, _), anyhow::Error> {
                     let mut header = tar::Header::new_gnu();
                     header.set_size(meta.size);
                     header.set_cksum();
@@ -162,7 +159,7 @@ pub async fn import_archive<R: std::io::Read>(
                 .get_id()
                 .ok_or_else(|| anyhow::anyhow!("Invalid entity without id: {data:?}"))?;
 
-            batch = batch.and_create(factordb::query::mutate::Create { id, data });
+            batch = batch.and_create(factdb::query::mutate::Create { id, data });
         }
 
         tracing::debug!("persisting entities...");
@@ -211,7 +208,7 @@ pub async fn import_archive<R: std::io::Read>(
 
 #[cfg(test)]
 mod tests {
-    use factordb::prelude::EntityContainer;
+    use factdb::ClassContainer;
     use semantic_core::api::FileUploadMetadata;
 
     use super::*;
@@ -232,6 +229,8 @@ mod tests {
                 let typed = app
                     .upload_file(
                         FileUploadMetadata {
+                            ident: None,
+                            parent: None,
                             filename: Some(format!("x{x}.bin")),
                             title: Some(format!("x{x}.bin")),
                             url: None,

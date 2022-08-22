@@ -1,7 +1,7 @@
 use std::rc::Rc;
 
 use brass::dom::{Render, View};
-use factordb::{prelude::DataMap, schema::AttrMapExt};
+use factdb::{AttrMapExt, DataMap};
 use semantic_core::base::AttrTags;
 
 use crate::components::util::notification_error;

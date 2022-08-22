@@ -2,7 +2,7 @@ use brass::{
     component::{msg::MsgComponent, Component},
     dom::{builder::div, Render, View},
 };
-use factordb::{schema::EntityDescriptor, AnyError};
+use factdb::ClassMeta;
 use semantic_ui_core::{
     components::{
         loader::Loader,
@@ -23,7 +23,7 @@ impl Render for HabitDashboard {
 }
 
 enum Msg {
-    HabitsLoaded(Result<Vec<Habit>, AnyError>),
+    HabitsLoaded(Result<Vec<Habit>, anyhow::Error>),
 }
 
 struct State {

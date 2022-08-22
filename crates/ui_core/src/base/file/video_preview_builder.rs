@@ -4,7 +4,7 @@ use brass::{
     dom::{builder::div, Render, Tag, TagBuilder, View},
     signal::signal::Mutable,
 };
-use factordb::AnyError;
+
 use semantic_core::{api, base::Video};
 use wasm_bindgen::JsCast;
 use web_sys::{HtmlCanvasElement, HtmlVideoElement};
@@ -169,7 +169,7 @@ impl MsgComponent for State {
     }
 }
 
-fn capture(video: &HtmlVideoElement, canvas: &HtmlCanvasElement) -> Result<String, AnyError> {
+fn capture(video: &HtmlVideoElement, canvas: &HtmlCanvasElement) -> Result<String, anyhow::Error> {
     let width = video.video_width();
     let height = video.video_height();
     canvas.set_width(width);

@@ -6,7 +6,7 @@ use brass::{
     effect::{set_timeout, TimeoutGuard},
     signal::signal::{Mutable, Signal, SignalExt},
 };
-use factordb::{prelude::DataMap, schema::AttrMapExt};
+use factdb::{AttrMapExt, DataMap};
 use rand::prelude::SliceRandom;
 use semantic_core::base::entity_title;
 use semantic_ui_core::{

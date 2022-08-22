@@ -6,7 +6,7 @@ use std::{
 };
 
 use anyhow::anyhow;
-use factordb::{data::Timestamp, AnyError};
+use factdb::Timestamp;
 use semantic_core::api::{Job, JobId, JobStatus, JobStep};
 
 #[derive(Clone)]
@@ -59,7 +59,7 @@ impl JobManager {
         job
     }
 
-    pub fn job_update(&self, id: JobId, status: JobStatus) -> Result<Job, AnyError> {
+    pub fn job_update(&self, id: JobId, status: JobStatus) -> Result<Job, anyhow::Error> {
         let mut lock = self.0.write().unwrap();
         let job = lock
             .jobs
@@ -71,7 +71,7 @@ impl JobManager {
         Ok(job.clone())
     }
 
-    pub fn job_add_steps(&self, id: JobId, steps: Vec<String>) -> Result<Job, AnyError> {
+    pub fn job_add_steps(&self, id: JobId, steps: Vec<String>) -> Result<Job, anyhow::Error> {
         let mut lock = self.0.write().unwrap();
         let job = lock
             .jobs

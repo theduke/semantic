@@ -1,5 +1,6 @@
-use factordb::prelude::{
-    Attribute, AttributeDescriptor, DataMap, Entity, Expr, Id, Select, Timestamp, ValueType,
+use factdb::{
+    macros::{Attribute, Class},
+    AttributeMeta, DataMap, Expr, Id, Select, Timestamp, ValueType,
 };
 use serde::{Deserialize, Serialize};
 
@@ -45,15 +46,15 @@ impl Default for HabitMode {
     }
 }
 
-impl AttributeDescriptor for HabitMode {
+impl AttributeMeta for HabitMode {
     const NAMESPACE: &'static str = "semantic.habit";
     const PLAIN_NAME: &'static str = "habit_mode";
     const QUALIFIED_NAME: &'static str = "semantic.habit/habit_mode";
 
     type Type = HabitMode;
 
-    fn schema() -> factordb::schema::AttributeSchema {
-        factordb::schema::AttributeSchema {
+    fn schema() -> factdb::schema::Attribute {
+        factdb::schema::Attribute {
             id: Id::nil(),
             ident: Self::QUALIFIED_NAME.to_string(),
             title: Some("Habit Mode".into()),
@@ -70,7 +71,7 @@ impl AttributeDescriptor for HabitMode {
     }
 }
 
-#[derive(Serialize, Deserialize, Entity, Clone, Debug)]
+#[derive(Serialize, Deserialize, Class, Clone, Debug)]
 #[factor(namespace = "semantic.habit")]
 pub struct Habit {
     #[factor(attr = AttrId)]
@@ -110,7 +111,7 @@ impl Habit {
     }
 }
 
-#[derive(Serialize, Deserialize, Entity, Clone, Debug)]
+#[derive(Serialize, Deserialize, Class, Clone, Debug)]
 #[factor(namespace = "semantic.habit")]
 pub struct HabitOccurence {
     #[factor(attr = AttrId)]
@@ -143,7 +144,7 @@ impl HabitOccurence {
             )
             .with_sort(
                 AttrHabitOccurenceTime::expr(),
-                factordb::query::select::Order::Desc,
+                factdb::query::select::Order::Desc,
             )
     }
 }

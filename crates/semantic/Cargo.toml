@@ -11,7 +11,7 @@ archive = ["tar", "flate2"]
 
 media-optimizers = ["oxipng", "mozjpeg"]
 
-jsonschema = ["semantic_core/schema"]
+# jsonschema = ["semantic_core/schema"]
 
 default = ["archive"]
 
@@ -24,7 +24,7 @@ tracing = "0.1.26"
 tracing-subscriber = { version = "0.3.3", features = ["fmt", "env-filter"] }
 
 mime_guess = "2.0.3"
-infer = "0.7.0"
+infer = "0.9.0"
 
 # async
 futures = "0.3.15"
@@ -35,7 +35,7 @@ tokio-util = { version = "0.7.0", features = ["io", "codec"] }
 reqwest = { version =  "0.11.3", default-features = false, features = ["gzip", "json", "rustls-tls", "stream"] }
 hyper = { version =  "0.14.9", features = ["server", "http1"] }
 
-factordb = "0.1"
+factdb = "0.1"
 factor_engine = "0.1"
 factor_tools = "0.1"
 

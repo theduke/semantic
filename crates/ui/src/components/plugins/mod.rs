@@ -10,10 +10,7 @@ use brass::{
         signal_vec::MutableVec,
     },
 };
-use factordb::{
-    prelude::{AttrMapExt, Id},
-    AnyError,
-};
+use factdb::{AttrMapExt, Id};
 use semantic_core::{api::PluginTestFetch, core::PluginSource, plugin::FetchUrlOutput};
 use semantic_ui_core::{
     components::{
@@ -30,7 +27,7 @@ use semantic_ui_core::{
     validate::{StringRequired, StringUrl},
 };
 
-async fn load_all_sources() -> Result<Vec<PluginSource>, AnyError> {
+async fn load_all_sources() -> Result<Vec<PluginSource>, anyhow::Error> {
     context::api()
         .select_entities(PluginSource::query_all())
         .await

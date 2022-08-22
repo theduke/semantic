@@ -1,9 +1,8 @@
 use std::{collections::HashMap, rc::Rc};
 
-use factordb::{
-    prelude::{DataMap, IdOrIdent},
-    schema::{AttrMapExt, AttributeSchema, EntityAttribute, EntityDescriptor, EntitySchema},
-    AnyError,
+use factdb::{
+    schema::{AttrMapExt, Attribute, Class, ClassAttribute, ClassMeta},
+    DataMap, IdOrIdent,
 };
 use fnv::{FnvHashMap, FnvHashSet};
 use futures::future::LocalBoxFuture;
@@ -16,7 +15,7 @@ use crate::{
 pub struct Registry {
     schema: semantic_core::api::SemanticSchema,
 
-    attributes: FnvHashMap<String, AttributeSchema>,
+    attributes: FnvHashMap<String, Attribute>,
     entities: FnvHashMap<String, EntityInfo>,
 
     plugins: HashMap<String, DynBrowserPlugin>,
@@ -38,7 +37,7 @@ impl Registry {
     pub fn new(schema: semantic_core::api::SemanticSchema) -> Self {
         let entities = schema
             .db
-            .entities
+            .classes
             .clone()
             .into_iter()
             .map(|entity| {
@@ -47,7 +46,7 @@ impl Registry {
                     .clone()
                     .into_iter()
                     .filter_map(|field| {
-                        let attr = schema.db.resolve_attr(&field.attribute)?.clone();
+                        let attr = schema.db.attr_by_ident(&field.attribute)?.clone();
                         Some((attr.ident.clone(), EntityFieldAtrr { field, attr }))
                     })
                     .collect();
@@ -87,9 +86,9 @@ impl Registry {
 
             ignored_entity_types: FnvHashSet::from_iter(vec![
                 // Ignore the factor builtin base types.
-                factordb::schema::builtin::EntitySchemaType::QUALIFIED_NAME.to_string(),
-                factordb::schema::builtin::AttributeSchemaType::QUALIFIED_NAME.to_string(),
-                factordb::schema::builtin::IndexSchemaType::QUALIFIED_NAME.to_string(),
+                factdb::Class::QUALIFIED_NAME.to_string(),
+                factdb::Attribute::QUALIFIED_NAME.to_string(),
+                factdb::schema::builtin::IndexSchemaType::QUALIFIED_NAME.to_string(),
             ]),
         }
     }
@@ -154,7 +153,7 @@ impl Registry {
         self.entity_renderer_media.get(entity_type)
     }
 
-    pub fn attr(&self, ty: &str) -> Option<&AttributeSchema> {
+    pub fn attr(&self, ty: &str) -> Option<&Attribute> {
         self.attributes.get(ty)
     }
 
@@ -183,7 +182,7 @@ impl Registry {
     /// Convenience helper to get the `[EntityInfo]` for some data.
     /// Returns [`None`] if the data does not have a "factor/type" attribute or
     /// if no info is registered.
-    pub fn entity_by_data(&self, data: &factordb::data::DataMap) -> Option<&EntityInfo> {
+    pub fn entity_by_data(&self, data: &factdb::data::DataMap) -> Option<&EntityInfo> {
         data.get_type().and_then(|ty| self.entity_by_ident(&ty))
     }
 
@@ -250,8 +249,8 @@ impl std::ops::Deref for SharedRegistry {
 
 #[derive(Clone, Debug)]
 pub struct EntityFieldAtrr {
-    pub field: EntityAttribute,
-    pub attr: AttributeSchema,
+    pub field: ClassAttribute,
+    pub attr: Attribute,
 }
 
 // pub type DynRenderer<T> = Box<dyn Fn(&T) -> brass::VNode>;
@@ -265,7 +264,7 @@ pub struct EntityRenderOpts {
 pub type DynEntityRenderer = Rc<dyn Fn(&DataMap, &EntityRenderOpts) -> brass::dom::TagBuilder>;
 
 pub enum MediaRenderEvent {
-    Finished(Result<(), AnyError>),
+    Finished(Result<(), anyhow::Error>),
     Paused,
     Resumed,
 }
@@ -299,11 +298,11 @@ pub struct RegisteredMediaRenderer {
 }
 
 pub type DynAttrRenderer =
-    Rc<dyn Fn(&factordb::data::Value, Option<&factordb::data::DataMap>) -> brass::dom::TagBuilder>;
+    Rc<dyn Fn(&factdb::data::Value, Option<&factdb::data::DataMap>) -> brass::dom::TagBuilder>;
 
 #[derive(Clone, Debug)]
 pub struct EntityInfo {
-    pub schema: EntitySchema,
+    pub schema: Class,
     pub fields: FnvHashMap<String, EntityFieldAtrr>,
 }
 
@@ -324,7 +323,7 @@ pub struct EntityRendererSpec {
     pub is_default: bool,
 }
 
-pub type MediaFuture<T> = LocalBoxFuture<'static, Result<T, AnyError>>;
+pub type MediaFuture<T> = LocalBoxFuture<'static, Result<T, anyhow::Error>>;
 
 pub trait MediaHandle {
     fn play(&self);

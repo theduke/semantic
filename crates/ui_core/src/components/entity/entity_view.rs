@@ -5,7 +5,7 @@ use brass::{
     signal::signal::Signal,
     DomStr,
 };
-use factordb::{prelude::DataMap, schema::AttrMapExt};
+use factdb::{AttrMapExt, DataMap};
 use semantic_core::base::entity_title;
 
 use crate::{

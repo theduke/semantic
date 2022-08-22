@@ -6,7 +6,7 @@ mod habits_dashboard;
 use std::rc::Rc;
 
 use brass::dom::{Render, TagBuilder};
-use factordb::schema::EntityDescriptor;
+use factdb::schema::ClassMeta;
 use semantic_core::plugin::PluginDescriptor;
 use semantic_ui_core::{
     plugin::PluginMainRoute,

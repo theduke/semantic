@@ -10,12 +10,7 @@ use brass::{
         signal_vec::{MutableVec, SignalVecExt},
     },
 };
-use factordb::{
-    prelude::{
-        AttrType, AttributeDescriptor, DataMap, EntityContainer, EntityDescriptor, Expr, Id,
-    },
-    AnyError,
-};
+use factdb::{AttrType, AttributeMeta, ClassContainer, ClassMeta, DataMap, Expr, Id};
 use semantic_core::{
     api::{self, FileUploadMetadata},
     base::Collection,
@@ -51,7 +46,7 @@ pub enum Msg {
     RemoveFile(Uuid),
     UploadResult {
         id: Uuid,
-        result: Result<api::FileUploadReply, AnyError>,
+        result: Result<api::FileUploadReply, anyhow::Error>,
     },
     ClearUploaded,
     Reset,
@@ -115,7 +110,7 @@ impl State {
         });
     }
 
-    fn upload(&mut self, ctx: &Context<Self>) -> Result<(), AnyError> {
+    fn upload(&mut self, ctx: &Context<Self>) -> Result<(), anyhow::Error> {
         if self.loader.is_loading() {
             bail!("Upload already in progress");
         }

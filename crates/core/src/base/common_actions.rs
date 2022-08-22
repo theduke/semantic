@@ -1,9 +1,6 @@
 use std::time::Duration;
 
-use factordb::{
-    prelude::{AttrMapExt, AttributeDescriptor, Db, Id, Patch, Timestamp},
-    AnyError,
-};
+use factdb::{AttrMapExt, AttributeMeta, Db, Id, Patch, Timestamp};
 
 use super::{AttrLastVisitTime, AttrVisitCount};
 
@@ -16,7 +13,7 @@ pub struct RecordEntityVisit {
 }
 
 impl RecordEntityVisit {
-    pub async fn run(self, db: &Db) -> Result<(), AnyError> {
+    pub async fn run(self, db: &Db) -> Result<(), anyhow::Error> {
         // TODO: use atomic counter update.
         let entity = db.entity(self.entity_id).await?;
 

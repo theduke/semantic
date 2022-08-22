@@ -1,7 +1,7 @@
 use std::{io::Read, path::PathBuf};
 
 use anyhow::Context;
-use factordb::prelude::{AttrMapExt, DataMap, Id};
+use factdb::{AttrMapExt, DataMap, Id};
 
 /// Create entities from JSON.
 ///
@@ -71,10 +71,10 @@ impl CreateCmd {
 
         eprintln!("Creating...");
         let len = items.len();
-        let mut batch = factordb::prelude::Batch::new();
+        let mut batch = factdb::Batch::new();
         for item in items {
             let id = item.get_id().unwrap_or_else(|| Id::random());
-            batch = batch.and_create(factordb::query::mutate::Create { id, data: item });
+            batch = batch.and_create(factdb::query::mutate::Create { id, data: item });
         }
 
         db.batch(batch).await.unwrap();

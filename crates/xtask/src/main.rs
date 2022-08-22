@@ -255,7 +255,9 @@ fn build_ui_v2() -> Result<(), DynError> {
     let build_path = js_path.join("dist");
     let target_path = root_path()?.join("target/ui2");
 
-    std::fs::remove_dir_all(&target_path)?;
+    if target_path.exists() {
+        std::fs::remove_dir_all(&target_path)?;
+    }
     std::fs::rename(&build_path, &target_path)?;
 
     eprintln!("UI v2 built");

@@ -3,7 +3,6 @@ use std::path::PathBuf;
 
 use anyhow::{anyhow, bail, Context};
 
-use factordb::AnyError;
 use semantic::app::App;
 use semantic_core::api::DbConfig;
 
@@ -24,7 +23,7 @@ pub struct LogCompactCmd {
 }
 
 impl LogCompactCmd {
-    pub fn run(self) -> Result<(), AnyError> {
+    pub fn run(self) -> Result<(), anyhow::Error> {
         let cmd = self;
 
         // TODO: this should also "compact" the event log of the factordb, if allowed by config.

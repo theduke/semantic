@@ -5,7 +5,7 @@ use brass::{
     dom::{builder::div, Render, TagBuilder},
     signal::signal::Mutable,
 };
-use factordb::prelude::{EntityContainer, Id};
+use factdb::{ClassContainer, Id};
 use semantic_core::base::Tag;
 
 use crate::components::{

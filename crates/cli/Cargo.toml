@@ -14,7 +14,7 @@ name = "semantic"
 semantic = { version = "0.1", path = "../semantic" }
 semantic_core = { version = "0.1.0", path = "../core" }
 
-factordb = "0.1"
+factdb = "0.1"
 factor_tools = "0.1"
 factor_engine = "0.1"
 
@@ -30,4 +30,4 @@ url = "2.2.2"
 reqwest = { version = "0.11.11", default-features = false, features = ["rustls-tls", "json"] }
 futures = "0.3.21"
 is-terminal = "0.3.0"
-indicatif = "0.16.2"
+indicatif = "0.17.0"

@@ -1,8 +1,8 @@
-use factordb::prelude::{AttrIdent, Expr, Id, Select};
+use factdb::{macros::Class, AttrIdent, Expr, Id, Select};
 
 use super::{AttrParent, AttrTitle};
 
-#[derive(serde::Serialize, serde::Deserialize, factordb::Entity, Clone)]
+#[derive(serde::Serialize, serde::Deserialize, Class, Clone)]
 #[factor(namespace = "semantic")]
 pub struct Container {
     #[factor(attr = AttrId)]

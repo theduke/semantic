@@ -2,7 +2,7 @@ use brass::{
     dom::{builder::div, Attr, ClickEvent, Tag, TagBuilder, View},
     signal::signal::{Mutable, SignalExt},
 };
-use factordb::{prelude::DataMap, schema::AttrMapExt};
+use factdb::{schema::AttrMapExt, DataMap};
 use semantic_core::base::AttrDownloadUrl;
 
 use crate::{components::util::modal::modal, EntityRenderOpts};

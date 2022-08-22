@@ -1,10 +1,7 @@
 use wasm_bindgen::JsCast;
 
 use brass::dom::{builder::div, Attr, Ev, Tag, TagBuilder, View};
-use factordb::{
-    prelude::{DataMap, EntityContainer, Id},
-    schema::AttrMapExt,
-};
+use factdb::{AttrMapExt, ClassContainer, DataMap, Id};
 use semantic_core::base::{
     AttrBlobUri, AttrBlobUriWeb, AttrPreviewImageBlobUri, AttrPreviewImageUrl, Video,
 };

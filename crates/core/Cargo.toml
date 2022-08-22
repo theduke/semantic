@@ -7,8 +7,7 @@ edition = "2021"
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [features]
-schema = ["schemars", "ts-rs", "factordb/jsonschema", "factordb/typescript-schema"]
-
+schema = [ "schemars" ]
 
 [dependencies]
 anyhow = { version = "1.0.62" }
@@ -19,7 +18,7 @@ serde_json = "1.0.82"
 uuid = { version = "1.1.2", features = ["serde", "v4"] }
 url = { version = "2.2.2", features = ["serde"] }
 
-factordb = "0.1"
+factdb = "0.1"
 base64 = "0.13.0"
 tracing = "0.1.35"
 # FIXME: use normal crate once https://github.com/GREsau/schemars/pull/141 is merged upstream.

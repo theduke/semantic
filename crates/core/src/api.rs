@@ -1,9 +1,6 @@
 use std::{collections::HashMap, ops::Deref};
 
-use factordb::{
-    prelude::{DataMap, EntityContainer, Id, IdOrIdent, Mutate, Timestamp},
-    AnyError,
-};
+use factdb::{ClassContainer, DataMap, Id, IdOrIdent, Mutate, Timestamp};
 use url::Url;
 
 use crate::{
@@ -37,7 +34,7 @@ pub struct SimpleHttpResponse {
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[cfg_attr(feature = "schema", derive(ts_rs::TS))]
 pub struct SemanticSchema {
-    pub db: factordb::schema::DbSchema,
+    pub db: factdb::schema::DbSchema,
 }
 
 #[derive(serde::Serialize, serde::Deserialize, PartialEq, Eq, Clone)]
@@ -338,10 +335,10 @@ pub enum Query {
     Initialize(BackendConfig),
     CloseBackend(()),
 
-    Select(factordb::query::select::Select),
+    Select(factdb::query::select::Select),
     QuerySql(QuerySql),
-    Mutate(factordb::query::mutate::Mutate),
-    Batch(factordb::query::mutate::Batch),
+    Mutate(factdb::query::mutate::Mutate),
+    Batch(factdb::query::mutate::Batch),
 
     Schema(()),
 
@@ -479,7 +476,7 @@ pub enum ApiResponse<T = Reply> {
 }
 
 impl<T> ApiResponse<T> {
-    pub fn from_res(res: Result<T, AnyError>) -> Self {
+    pub fn from_res(res: Result<T, anyhow::Error>) -> Self {
         match res {
             Ok(data) => Self::Ok(data),
             Err(err) => Self::Err(ApiError {
@@ -492,7 +489,7 @@ impl<T> ApiResponse<T> {
 }
 
 pub trait ApiClientExecutor {
-    type Future: std::future::Future<Output = Result<Reply, AnyError>>;
+    type Future: std::future::Future<Output = Result<Reply, anyhow::Error>>;
     fn execute(&self, query: Query) -> Self::Future;
 }
 
@@ -514,7 +511,7 @@ impl<E: ApiClientExecutor> ApiClient<E> {
         Self { exec }
     }
 
-    pub async fn server_status(&self) -> Result<ServerStatus, AnyError> {
+    pub async fn server_status(&self) -> Result<ServerStatus, anyhow::Error> {
         tracing::trace!("executing server status");
         let res = self.exec.execute(Query::ServerStatus(())).await;
         tracing::trace!("got server_status res");
@@ -525,7 +522,10 @@ impl<E: ApiClientExecutor> ApiClient<E> {
         }
     }
 
-    pub async fn initialize(&self, options: BackendConfig) -> Result<SemanticSchema, AnyError> {
+    pub async fn initialize(
+        &self,
+        options: BackendConfig,
+    ) -> Result<SemanticSchema, anyhow::Error> {
         match self.exec.execute(Query::Initialize(options)).await {
             Ok(Reply::Initialize(schema)) => Ok(schema),
             Ok(_other) => Err(anyhow::anyhow!("API returned invalid data")),
@@ -533,7 +533,7 @@ impl<E: ApiClientExecutor> ApiClient<E> {
         }
     }
 
-    pub async fn close_backend(&self) -> Result<(), AnyError> {
+    pub async fn close_backend(&self) -> Result<(), anyhow::Error> {
         match self.exec.execute(Query::CloseBackend(())).await {
             Ok(Reply::CloseBackend(_)) => Ok(()),
             Ok(_other) => Err(anyhow::anyhow!("API returned invalid data")),
@@ -541,19 +541,19 @@ impl<E: ApiClientExecutor> ApiClient<E> {
         }
     }
 
-    pub async fn entity(&self, id: Id) -> Result<factordb::data::DataMap, AnyError> {
-        use factordb::query::expr::Expr;
+    pub async fn entity(&self, id: Id) -> Result<factdb::data::DataMap, anyhow::Error> {
+        use factdb::query::expr::Expr;
         let filter = Expr::eq(Expr::Attr("factor/id".into()), id);
         let mut items = self
-            .select(factordb::query::select::Select::new().with_filter(filter))
+            .select(factdb::query::select::Select::new().with_filter(filter))
             .await?;
         items.pop().ok_or_else(|| anyhow::anyhow!("Not found"))
     }
 
     pub async fn select(
         &self,
-        select: factordb::query::select::Select,
-    ) -> Result<Vec<DataMap>, AnyError> {
+        select: factdb::query::select::Select,
+    ) -> Result<Vec<DataMap>, anyhow::Error> {
         match self.exec.execute(Query::Select(select)).await {
             Ok(Reply::Select(items)) => Ok(items),
             Ok(_other) => Err(anyhow::anyhow!("API returned invalid data")),
@@ -563,10 +563,10 @@ impl<E: ApiClientExecutor> ApiClient<E> {
 
     pub async fn select_entities<T>(
         &self,
-        select: factordb::query::select::Select,
-    ) -> Result<Vec<T>, AnyError>
+        select: factdb::query::select::Select,
+    ) -> Result<Vec<T>, anyhow::Error>
     where
-        T: factordb::schema::EntityContainer + serde::de::DeserializeOwned,
+        T: factdb::schema::ClassContainer + serde::de::DeserializeOwned,
     {
         match self.exec.execute(Query::Select(select)).await {
             Ok(Reply::Select(items)) => items
@@ -578,7 +578,7 @@ impl<E: ApiClientExecutor> ApiClient<E> {
         }
     }
 
-    pub async fn mutate(&self, mutate: factordb::query::mutate::Mutate) -> Result<(), AnyError> {
+    pub async fn mutate(&self, mutate: factdb::query::mutate::Mutate) -> Result<(), anyhow::Error> {
         match self.exec.execute(Query::Mutate(mutate)).await {
             Ok(Reply::Mutate(())) => Ok(()),
             Ok(_other) => Err(anyhow::anyhow!("API returned invalid data")),
@@ -586,16 +586,16 @@ impl<E: ApiClientExecutor> ApiClient<E> {
         }
     }
 
-    pub async fn entity_create<V: EntityContainer + serde::Serialize>(
+    pub async fn entity_create<V: ClassContainer + serde::Serialize>(
         &self,
         entity: V,
-    ) -> Result<(), AnyError> {
+    ) -> Result<(), anyhow::Error> {
         let id = entity.id();
         let data = entity.into_map()?;
         self.mutate(Mutate::create(id, data)).await
     }
 
-    pub async fn batch(&self, batch: factordb::query::mutate::Batch) -> Result<(), AnyError> {
+    pub async fn batch(&self, batch: factdb::query::mutate::Batch) -> Result<(), anyhow::Error> {
         match self.exec.execute(Query::Batch(batch)).await {
             Ok(Reply::Batch(())) => Ok(()),
             Ok(_other) => Err(anyhow::anyhow!("API returned invalid data")),
@@ -603,7 +603,7 @@ impl<E: ApiClientExecutor> ApiClient<E> {
         }
     }
 
-    pub async fn schema(&self) -> Result<SemanticSchema, AnyError> {
+    pub async fn schema(&self) -> Result<SemanticSchema, anyhow::Error> {
         match self.exec.execute(Query::Schema(())).await {
             Ok(Reply::Schema(schema)) => Ok(schema),
             Ok(_other) => Err(anyhow::anyhow!("API returned invalid data")),
@@ -614,7 +614,7 @@ impl<E: ApiClientExecutor> ApiClient<E> {
     pub async fn plugin_source_create(
         &self,
         source: PluginSource,
-    ) -> Result<PluginSource, AnyError> {
+    ) -> Result<PluginSource, anyhow::Error> {
         match self.exec.execute(Query::PluginSourceCreate(source)).await {
             Ok(Reply::PluginSourceCreate(source)) => Ok(source),
             Ok(_other) => Err(anyhow::anyhow!("API returned invalid data")),
@@ -622,7 +622,7 @@ impl<E: ApiClientExecutor> ApiClient<E> {
         }
     }
 
-    pub async fn plugin_source_validate(&self, source: PluginSource) -> Result<(), AnyError> {
+    pub async fn plugin_source_validate(&self, source: PluginSource) -> Result<(), anyhow::Error> {
         match self.exec.execute(Query::PluginSourceValidate(source)).await {
             Ok(Reply::PluginSourceValidate(())) => Ok(()),
             Ok(_other) => Err(anyhow::anyhow!("API returned invalid data")),
@@ -633,7 +633,7 @@ impl<E: ApiClientExecutor> ApiClient<E> {
     pub async fn plugin_source_upgrade(
         &self,
         source: PluginSource,
-    ) -> Result<PluginSource, AnyError> {
+    ) -> Result<PluginSource, anyhow::Error> {
         match self.exec.execute(Query::PluginSourceUpdate(source)).await {
             Ok(Reply::PluginSourceUpgrade(source)) => Ok(source),
             Ok(_other) => Err(anyhow::anyhow!("API returned invalid data")),
@@ -641,7 +641,7 @@ impl<E: ApiClientExecutor> ApiClient<E> {
         }
     }
 
-    pub async fn plugin_delete(&self, name: String) -> Result<(), AnyError> {
+    pub async fn plugin_delete(&self, name: String) -> Result<(), anyhow::Error> {
         match self
             .exec
             .execute(Query::PluginDelete(PluginDelete { name }))
@@ -656,7 +656,7 @@ impl<E: ApiClientExecutor> ApiClient<E> {
     pub async fn plugin_test_fetch(
         &self,
         spec: PluginTestFetch,
-    ) -> Result<Option<FetchUrlOutput>, AnyError> {
+    ) -> Result<Option<FetchUrlOutput>, anyhow::Error> {
         match self.exec.execute(Query::PluginTestFetch(spec)).await {
             Ok(Reply::PluginTestFetch(out)) => Ok(out),
             Ok(_other) => Err(anyhow::anyhow!("API returned invalid data")),
@@ -664,7 +664,7 @@ impl<E: ApiClientExecutor> ApiClient<E> {
         }
     }
 
-    pub async fn fetch_url(&self, job: FetchUrlJob) -> Result<FetchUrlOutput, AnyError> {
+    pub async fn fetch_url(&self, job: FetchUrlJob) -> Result<FetchUrlOutput, anyhow::Error> {
         match self.exec.execute(Query::FetchUrl(job)).await {
             Ok(Reply::FetchUrl(output)) => Ok(output),
             Ok(_other) => Err(anyhow::anyhow!("API returned invalid data")),
@@ -672,7 +672,7 @@ impl<E: ApiClientExecutor> ApiClient<E> {
         }
     }
 
-    pub async fn import(&self, job: ImportJob) -> Result<ImportOutput, AnyError> {
+    pub async fn import(&self, job: ImportJob) -> Result<ImportOutput, anyhow::Error> {
         match self.exec.execute(Query::Import(job)).await {
             Ok(Reply::Import(output)) => Ok(output),
             Ok(_other) => Err(anyhow::anyhow!("API returned invalid data")),
@@ -680,7 +680,7 @@ impl<E: ApiClientExecutor> ApiClient<E> {
         }
     }
 
-    pub async fn job(&self, job_id: JobId) -> Result<Job, AnyError> {
+    pub async fn job(&self, job_id: JobId) -> Result<Job, anyhow::Error> {
         match self.exec.execute(Query::JobStatus(job_id)).await {
             Ok(Reply::JobStatus(output)) => Ok(output),
             Ok(_other) => Err(anyhow::anyhow!("API returned invalid data")),
@@ -688,7 +688,10 @@ impl<E: ApiClientExecutor> ApiClient<E> {
         }
     }
 
-    pub async fn optimise_video(&self, job: OptimiseVideo) -> Result<OptimiseVideoReply, AnyError> {
+    pub async fn optimise_video(
+        &self,
+        job: OptimiseVideo,
+    ) -> Result<OptimiseVideoReply, anyhow::Error> {
         match self.exec.execute(Query::OptimiseVideo(job)).await {
             Ok(Reply::OptimiseVideo(output)) => Ok(output),
             Ok(_other) => Err(anyhow::anyhow!("API returned invalid data")),
@@ -696,7 +699,7 @@ impl<E: ApiClientExecutor> ApiClient<E> {
         }
     }
 
-    pub async fn file_discard_optimized(&self, file_id: Id) -> Result<(), AnyError> {
+    pub async fn file_discard_optimized(&self, file_id: Id) -> Result<(), anyhow::Error> {
         match self
             .exec
             .execute(Query::FileDiscardOptimised(FileDiscardUnOptimized {
@@ -710,7 +713,7 @@ impl<E: ApiClientExecutor> ApiClient<E> {
         }
     }
 
-    pub async fn file_discard_un_optimized(&self, file_id: Id) -> Result<(), AnyError> {
+    pub async fn file_discard_un_optimized(&self, file_id: Id) -> Result<(), anyhow::Error> {
         match self
             .exec
             .execute(Query::FileDiscardUnOptimized(FileDiscardUnOptimized {
@@ -724,7 +727,7 @@ impl<E: ApiClientExecutor> ApiClient<E> {
         }
     }
 
-    pub async fn find_unused_blobs(&self) -> Result<Vec<BlobInfo>, AnyError> {
+    pub async fn find_unused_blobs(&self) -> Result<Vec<BlobInfo>, anyhow::Error> {
         match self.exec.execute(Query::FindUnusedBlobs(())).await {
             Ok(Reply::FindUnusedBlobs { items }) => Ok(items),
             Ok(_other) => Err(anyhow::anyhow!("API returned invalid data")),
@@ -732,7 +735,7 @@ impl<E: ApiClientExecutor> ApiClient<E> {
         }
     }
 
-    pub async fn delete_unused_blobs(&self) -> Result<UnusedBlobsDeleted, AnyError> {
+    pub async fn delete_unused_blobs(&self) -> Result<UnusedBlobsDeleted, anyhow::Error> {
         match self.exec.execute(Query::DeleteUnusedBlobs(())).await {
             Ok(Reply::DeleteUnusedBlobs(info)) => Ok(info),
             Ok(_other) => Err(anyhow::anyhow!("API returned invalid data")),
@@ -740,7 +743,7 @@ impl<E: ApiClientExecutor> ApiClient<E> {
         }
     }
 
-    pub async fn analyze_media(&self, force: bool) -> Result<(), AnyError> {
+    pub async fn analyze_media(&self, force: bool) -> Result<(), anyhow::Error> {
         match self.exec.execute(Query::AnalyzeMedia { force }).await {
             Ok(Reply::AnalyzeMedia(())) => Ok(()),
             Ok(_other) => Err(anyhow::anyhow!("API returned invalid data")),
@@ -751,7 +754,7 @@ impl<E: ApiClientExecutor> ApiClient<E> {
     pub async fn file_create_preview_image_blob(
         &self,
         data: FileCreatePreviewImageBlob,
-    ) -> Result<(), AnyError> {
+    ) -> Result<(), anyhow::Error> {
         match self
             .exec
             .execute(Query::FileCreatePreviewImageBlob(data))
@@ -763,7 +766,7 @@ impl<E: ApiClientExecutor> ApiClient<E> {
         }
     }
 
-    pub async fn tag_create(&self, create: TagCreate) -> Result<DataMap, AnyError> {
+    pub async fn tag_create(&self, create: TagCreate) -> Result<DataMap, anyhow::Error> {
         match self.exec.execute(Query::TagCreate(create)).await {
             Ok(Reply::TagCreate(tag)) => Ok(tag),
             Ok(_other) => Err(anyhow::anyhow!("API returned invalid data")),
@@ -775,7 +778,7 @@ impl<E: ApiClientExecutor> ApiClient<E> {
         &self,
         source_tag: IdOrIdent,
         target_tag: IdOrIdent,
-    ) -> Result<(), AnyError> {
+    ) -> Result<(), anyhow::Error> {
         match self
             .exec
             .execute(Query::TagMerge(TagMerge {
@@ -793,7 +796,7 @@ impl<E: ApiClientExecutor> ApiClient<E> {
     pub async fn http_fetch(
         &self,
         request: SimpleHttpRequest,
-    ) -> Result<SimpleHttpResponse, AnyError> {
+    ) -> Result<SimpleHttpResponse, anyhow::Error> {
         match self.exec.execute(Query::HttpFetch(request)).await {
             Ok(Reply::HttpFetch(mut response)) => {
                 let body = if let Some(body) = response.body {
@@ -811,7 +814,7 @@ impl<E: ApiClientExecutor> ApiClient<E> {
         }
     }
 
-    pub async fn record_entity_visit(&self, entity_id: Id) -> Result<(), AnyError> {
+    pub async fn record_entity_visit(&self, entity_id: Id) -> Result<(), anyhow::Error> {
         let visit = RecordEntityVisit {
             entity_id,
             time: None,

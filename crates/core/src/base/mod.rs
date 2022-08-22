@@ -26,19 +26,17 @@ pub use self::tags::*;
 mod bookmark;
 pub use self::bookmark::*;
 
-use factordb::{
-    prelude::{
-        AttrId, AttrIdent, AttrMapExt, Attribute, AttributeDescriptor, AttributeSchema,
-        Cardinality, DataMap, EntityAttribute, EntityDescriptor, EntitySchema, Expr, Id, IdOrIdent,
-        Migration, Timestamp, Value, ValueType,
+mod code_snippet;
+pub use self::code_snippet::*;
+
+use factdb::{
+    macros::Attribute,
+    query::migrate::{
+        self, AttributeCreateIndex, EntityAttributeAdd, EntityAttributeChangeCardinality,
+        EntityAttributeRemove, SchemaAction,
     },
-    query::{
-        migrate,
-        migrate::{
-            AttributeCreateIndex, EntityAttributeAdd, EntityAttributeChangeCardinality,
-            EntityAttributeRemove, SchemaAction,
-        },
-    },
+    AttrId, AttrIdent, AttrMapExt, Attribute, AttributeMeta, Cardinality, Class, ClassAttribute,
+    ClassMeta, DataMap, Expr, Id, IdOrIdent, Migration, Timestamp, Value, ValueType,
 };
 
 mod common_actions;
@@ -167,6 +165,10 @@ pub struct AttrUsername(String);
 #[factor(namespace = "semantic", name = "imported_at", title = "Imported at")]
 pub struct AttrImportedAt(Timestamp);
 
+#[derive(Attribute)]
+#[factor(namespace = "semantic", title = "Content", name = "text_content")]
+pub struct AttrTextContent(String);
+
 #[derive(serde::Serialize, serde::Deserialize, Clone)]
 pub enum TextFormat {
     #[serde(rename = "plain")]
@@ -184,15 +186,15 @@ impl TextFormat {
     }
 }
 
-impl AttributeDescriptor for TextFormat {
+impl AttributeMeta for TextFormat {
     const NAMESPACE: &'static str = "semantic";
     const PLAIN_NAME: &'static str = "text_format";
     const QUALIFIED_NAME: &'static str = "semantic/text_format";
     const IDENT: IdOrIdent = IdOrIdent::new_static(Self::QUALIFIED_NAME);
     type Type = TextFormat;
 
-    fn schema() -> factordb::schema::AttributeSchema {
-        factordb::schema::AttributeSchema {
+    fn schema() -> factdb::schema::Attribute {
+        factdb::schema::Attribute {
             id: Id::nil(),
             ident: Self::QUALIFIED_NAME.to_string(),
             title: Some("Text Format".to_string()),
@@ -236,7 +238,7 @@ impl Plugin for SemanticBasePlugin {
             name: Self::NAME.into(),
             description: None,
             import_matchers: Vec::new(),
-            db: Some(factordb::schema::DbSchema {
+            db: Some(factdb::schema::DbSchema {
                 attributes: vec![
                     AttrTitle::schema(),
                     AttrComment::schema(),
@@ -288,7 +290,7 @@ impl Plugin for SemanticBasePlugin {
                     person::Gender::schema(),
                     AttrLikeCount::schema(),
                 ],
-                entities: vec![
+                classes: vec![
                     // File
                     File::schema(),
                     Image::schema(),
@@ -315,238 +317,231 @@ impl Plugin for SemanticBasePlugin {
 
     fn migrations(&self, _already_applied_migrations: &HashSet<String>) -> Vec<migrate::Migration> {
         let create_title =
-            AttributeSchema::new(AttrTitle::QUALIFIED_NAME, ValueType::String).with_title("Title");
-        let create_datetime =
-            AttributeSchema::new(AttrDateTime::QUALIFIED_NAME, ValueType::DateTime)
-                .with_title("Datetime");
-        let create_comment = AttributeSchema::new(AttrComment::QUALIFIED_NAME, ValueType::String)
-            .with_title("Comment");
-        let create_description =
-            AttributeSchema::new(AttrDescription::QUALIFIED_NAME, ValueType::String)
-                .with_title("Description");
-        let create_url =
-            AttributeSchema::new(AttrUrl::QUALIFIED_NAME, ValueType::Url).with_title("Url");
+            Attribute::new(AttrTitle::QUALIFIED_NAME, ValueType::String).with_title("Title");
+        let create_datetime = Attribute::new(AttrDateTime::QUALIFIED_NAME, ValueType::DateTime)
+            .with_title("Datetime");
+        let create_comment =
+            Attribute::new(AttrComment::QUALIFIED_NAME, ValueType::String).with_title("Comment");
+        let create_description = Attribute::new(AttrDescription::QUALIFIED_NAME, ValueType::String)
+            .with_title("Description");
+        let create_url = Attribute::new(AttrUrl::QUALIFIED_NAME, ValueType::Url).with_title("Url");
         let create_preview_image_url =
-            AttributeSchema::new(AttrPreviewImageUrl::QUALIFIED_NAME, ValueType::Url)
+            Attribute::new(AttrPreviewImageUrl::QUALIFIED_NAME, ValueType::Url)
                 .with_title("Preview");
-        let create_username = AttributeSchema::new(AttrUsername::QUALIFIED_NAME, ValueType::String)
-            .with_title("Username");
+        let create_username =
+            Attribute::new(AttrUsername::QUALIFIED_NAME, ValueType::String).with_title("Username");
         let create_blob_uri =
-            AttributeSchema::new(AttrBlobUri::QUALIFIED_NAME, ValueType::String).with_title("Blob");
+            Attribute::new(AttrBlobUri::QUALIFIED_NAME, ValueType::String).with_title("Blob");
         let create_mime_type =
-            AttributeSchema::new(AttrMimeType::QUALIFIED_NAME, ValueType::String)
-                .with_title("MIME Type");
-        let create_hash = AttributeSchema::new(AttrHash::QUALIFIED_NAME, ValueType::String)
-            .with_title("Content Hash");
+            Attribute::new(AttrMimeType::QUALIFIED_NAME, ValueType::String).with_title("MIME Type");
+        let create_hash =
+            Attribute::new(AttrHash::QUALIFIED_NAME, ValueType::String).with_title("Content Hash");
         let create_original_hash =
-            AttributeSchema::new(AttrOriginalHash::QUALIFIED_NAME, ValueType::String)
+            Attribute::new(AttrOriginalHash::QUALIFIED_NAME, ValueType::String)
                 .with_title("Original Content Hash");
-        let create_duration = AttributeSchema::new(AttrDuration::QUALIFIED_NAME, ValueType::Int)
-            .with_title("Duration");
+        let create_duration =
+            Attribute::new(AttrDuration::QUALIFIED_NAME, ValueType::Int).with_title("Duration");
         let create_file_size =
-            AttributeSchema::new(AttrFileSize::QUALIFIED_NAME, ValueType::Int).with_title("Size");
-        let create_download_url =
-            AttributeSchema::new(AttrDownloadUrl::QUALIFIED_NAME, ValueType::Url)
-                .with_title("Download URL");
-        let create_filename = AttributeSchema::new(AttrFileName::QUALIFIED_NAME, ValueType::String)
-            .with_title("Filename");
+            Attribute::new(AttrFileSize::QUALIFIED_NAME, ValueType::Int).with_title("Size");
+        let create_download_url = Attribute::new(AttrDownloadUrl::QUALIFIED_NAME, ValueType::Url)
+            .with_title("Download URL");
+        let create_filename =
+            Attribute::new(AttrFileName::QUALIFIED_NAME, ValueType::String).with_title("Filename");
 
         let create_social_media_post_content =
-            AttributeSchema::new(AttrSocialMediaPostContent::QUALIFIED_NAME, ValueType::Ref)
+            Attribute::new(AttrSocialMediaPostContent::QUALIFIED_NAME, ValueType::Ref)
                 .with_title("Content");
         let create_note_body =
-            AttributeSchema::new(AttrNoteBody::QUALIFIED_NAME, ValueType::String)
-                .with_title("Note");
+            Attribute::new(AttrNoteBody::QUALIFIED_NAME, ValueType::String).with_title("Note");
         let create_collection_items =
-            AttributeSchema::new(AttrCollectionItem::QUALIFIED_NAME, ValueType::Ref)
-                .with_title("Items");
+            Attribute::new(AttrCollectionItem::QUALIFIED_NAME, ValueType::Ref).with_title("Items");
 
-        let create_tag_name = AttributeSchema::new(AttrTagName::QUALIFIED_NAME, ValueType::String)
-            .with_title("Tag Name");
-        let create_tag_parent = AttributeSchema::new(AttrTagParent::QUALIFIED_NAME, ValueType::Ref)
-            .with_title("Tag Parent");
-        let create_tags = AttributeSchema::new(
+        let create_tag_name =
+            Attribute::new(AttrTagName::QUALIFIED_NAME, ValueType::String).with_title("Tag Name");
+        let create_tag_parent =
+            Attribute::new(AttrTagParent::QUALIFIED_NAME, ValueType::Ref).with_title("Tag Parent");
+        let create_tags = Attribute::new(
             AttrTags::QUALIFIED_NAME,
             ValueType::new_list(ValueType::Ref),
         )
         .with_title("Tags");
 
-        let create_file = EntitySchema {
+        let create_file = Class {
             id: Id::nil(),
             ident: File::QUALIFIED_NAME.to_string(),
             title: Some("File".to_string()),
             description: None,
             attributes: vec![
-                EntityAttribute {
-                    attribute: AttrIdent::IDENT,
-                    cardinality: Cardinality::Optional,
+                ClassAttribute {
+                    attribute: AttrIdent::QUALIFIED_NAME.to_string(),
+                    required: false,
                 },
-                EntityAttribute {
-                    attribute: AttrTitle::IDENT,
-                    cardinality: Cardinality::Optional,
+                ClassAttribute {
+                    attribute: AttrTitle::QUALIFIED_NAME.to_string(),
+                    required: false,
                 },
-                EntityAttribute {
-                    attribute: AttrFileName::IDENT,
-                    cardinality: Cardinality::Optional,
+                ClassAttribute {
+                    attribute: AttrFileName::QUALIFIED_NAME.to_string(),
+                    required: false,
                 },
-                EntityAttribute {
-                    attribute: AttrFileSize::IDENT,
-                    cardinality: Cardinality::Optional,
+                ClassAttribute {
+                    attribute: AttrFileSize::QUALIFIED_NAME.to_string(),
+                    required: false,
                 },
-                EntityAttribute {
-                    attribute: AttrMimeType::IDENT,
-                    cardinality: Cardinality::Optional,
+                ClassAttribute {
+                    attribute: AttrMimeType::QUALIFIED_NAME.to_string(),
+                    required: false,
                 },
-                EntityAttribute {
-                    attribute: AttrHash::IDENT,
-                    cardinality: Cardinality::Optional,
+                ClassAttribute {
+                    attribute: AttrHash::QUALIFIED_NAME.to_string(),
+                    required: false,
                 },
-                EntityAttribute {
-                    attribute: AttrOriginalHash::IDENT,
-                    cardinality: Cardinality::Optional,
+                ClassAttribute {
+                    attribute: AttrOriginalHash::QUALIFIED_NAME.to_string(),
+                    required: false,
                 },
-                EntityAttribute {
-                    attribute: AttrUrl::IDENT,
-                    cardinality: Cardinality::Optional,
+                ClassAttribute {
+                    attribute: AttrUrl::QUALIFIED_NAME.to_string(),
+                    required: false,
                 },
-                EntityAttribute {
-                    attribute: AttrDownloadUrl::IDENT,
-                    cardinality: Cardinality::Optional,
+                ClassAttribute {
+                    attribute: AttrDownloadUrl::QUALIFIED_NAME.to_string(),
+                    required: false,
                 },
-                EntityAttribute {
-                    attribute: AttrPreviewImageUrl::IDENT,
-                    cardinality: Cardinality::Optional,
+                ClassAttribute {
+                    attribute: AttrPreviewImageUrl::QUALIFIED_NAME.to_string(),
+                    required: false,
                 },
-                EntityAttribute {
-                    attribute: AttrBlobUri::IDENT,
-                    cardinality: Cardinality::Optional,
+                ClassAttribute {
+                    attribute: AttrBlobUri::QUALIFIED_NAME.to_string(),
+                    required: false,
                 },
             ],
             extends: vec![],
             strict: false,
         };
 
-        let create_image = EntitySchema {
+        let create_image = Class {
             id: Id::nil(),
             ident: Image::QUALIFIED_NAME.to_string(),
             title: Some("Image".to_string()),
             description: None,
             attributes: vec![],
-            extends: vec![File::IDENT],
+            extends: vec![File::QUALIFIED_NAME.to_string()],
             strict: false,
         };
 
-        let create_video = EntitySchema {
+        let create_video = Class {
             id: Id::nil(),
             ident: Video::IDENT.to_string(),
             title: Some("Video".to_string()),
             description: None,
-            attributes: vec![EntityAttribute {
-                attribute: AttrDuration::IDENT,
-                cardinality: factordb::prelude::Cardinality::Optional,
+            attributes: vec![ClassAttribute {
+                attribute: AttrDuration::QUALIFIED_NAME.to_string(),
+                required: false,
             }],
-            extends: vec![File::IDENT.into()],
+            extends: vec![File::QUALIFIED_NAME.into()],
             strict: false,
         };
 
-        let create_social_media_post = EntitySchema {
+        let create_social_media_post = Class {
             id: Id::nil(),
             ident: SocialMediaPost::IDENT.to_string(),
             title: Some("SocialMediaPost".to_string()),
             description: None,
             attributes: vec![
-                EntityAttribute {
-                    attribute: AttrIdent::IDENT,
-                    cardinality: Cardinality::Optional,
+                ClassAttribute {
+                    attribute: AttrIdent::QUALIFIED_NAME.to_string(),
+                    required: false,
                 },
-                EntityAttribute {
-                    attribute: AttrTitle::IDENT,
-                    cardinality: Cardinality::Optional,
+                ClassAttribute {
+                    attribute: AttrTitle::QUALIFIED_NAME.to_string(),
+                    required: false,
                 },
-                EntityAttribute {
-                    attribute: AttrUrl::IDENT,
-                    cardinality: Cardinality::Optional,
+                ClassAttribute {
+                    attribute: AttrUrl::QUALIFIED_NAME.to_string(),
+                    required: false,
                 },
-                EntityAttribute {
-                    attribute: AttrUsername::IDENT,
-                    cardinality: Cardinality::Optional,
+                ClassAttribute {
+                    attribute: AttrUsername::QUALIFIED_NAME.to_string(),
+                    required: false,
                 },
-                EntityAttribute {
-                    attribute: AttrSocialMediaPostContent::IDENT,
-                    cardinality: Cardinality::Optional,
+                ClassAttribute {
+                    attribute: AttrSocialMediaPostContent::QUALIFIED_NAME.to_string(),
+                    required: false,
                 },
             ],
             extends: vec![],
             strict: false,
         };
 
-        let create_note = EntitySchema {
+        let create_note = Class {
             id: Id::nil(),
             ident: Note::QUALIFIED_NAME.to_string(),
             title: Some("Note".to_string()),
             description: None,
             attributes: vec![
-                EntityAttribute {
-                    attribute: AttrTitle::IDENT,
-                    cardinality: Cardinality::Required,
+                ClassAttribute {
+                    attribute: AttrTitle::QUALIFIED_NAME.to_string(),
+                    required: true,
                 },
-                EntityAttribute {
-                    attribute: AttrNoteBody::IDENT,
-                    cardinality: Cardinality::Required,
+                ClassAttribute {
+                    attribute: AttrNoteBody::QUALIFIED_NAME.to_string(),
+                    required: true,
                 },
             ],
             extends: vec![],
             strict: false,
         };
 
-        let create_collection = EntitySchema {
+        let create_collection = Class {
             id: Id::nil(),
             ident: Collection::QUALIFIED_NAME.to_string(),
             title: Some("Collection".to_string()),
             description: None,
             attributes: vec![
-                EntityAttribute {
-                    attribute: AttrIdent::IDENT,
-                    cardinality: Cardinality::Optional,
+                ClassAttribute {
+                    attribute: AttrIdent::QUALIFIED_NAME.to_string(),
+                    required: false,
                 },
-                EntityAttribute {
-                    attribute: AttrUrl::IDENT,
-                    cardinality: Cardinality::Optional,
+                ClassAttribute {
+                    attribute: AttrUrl::QUALIFIED_NAME.to_string(),
+                    required: false,
                 },
-                EntityAttribute {
-                    attribute: AttrTitle::IDENT,
-                    cardinality: Cardinality::Required,
+                ClassAttribute {
+                    attribute: AttrTitle::QUALIFIED_NAME.to_string(),
+                    required: true,
                 },
-                EntityAttribute {
-                    attribute: AttrDescription::IDENT,
-                    cardinality: Cardinality::Optional,
+                ClassAttribute {
+                    attribute: AttrDescription::QUALIFIED_NAME.to_string(),
+                    required: false,
                 },
-                EntityAttribute {
-                    attribute: AttrCollectionItem::IDENT,
-                    cardinality: Cardinality::Required,
+                ClassAttribute {
+                    attribute: AttrCollectionItem::QUALIFIED_NAME.to_string(),
+                    required: true,
                 },
             ],
             extends: vec![],
             strict: false,
         };
 
-        let create_tag = EntitySchema {
+        let create_tag = Class {
             id: Id::nil(),
             ident: Tag::QUALIFIED_NAME.to_string(),
             title: Some("Tag".to_string()),
             description: None,
             attributes: vec![
-                EntityAttribute {
-                    attribute: AttrTagName::IDENT,
-                    cardinality: Cardinality::Required,
+                ClassAttribute {
+                    attribute: AttrTagName::QUALIFIED_NAME.to_string(),
+                    required: true,
                 },
-                EntityAttribute {
-                    attribute: AttrDescription::IDENT,
-                    cardinality: Cardinality::Optional,
+                ClassAttribute {
+                    attribute: AttrDescription::QUALIFIED_NAME.to_string(),
+                    required: false,
                 },
-                EntityAttribute {
-                    attribute: AttrTagParent::IDENT,
-                    cardinality: Cardinality::Optional,
+                ClassAttribute {
+                    attribute: AttrTagParent::QUALIFIED_NAME.to_string(),
+                    required: false,
                 },
             ],
             extends: vec![],
@@ -585,8 +580,8 @@ impl Plugin for SemanticBasePlugin {
         let create_comment =
             Migration::with_name("create_comment_attribute").attr_create(create_comment);
 
-        let create_note_body_format = Migration::with_name("create_text_format").attr_create(
-            factordb::schema::AttributeSchema {
+        let create_note_body_format =
+            Migration::with_name("create_text_format").attr_create(factdb::schema::Attribute {
                 id: Id::nil(),
                 ident: TextFormat::QUALIFIED_NAME.to_string(),
                 title: Some("Text Format".to_string()),
@@ -598,8 +593,7 @@ impl Plugin for SemanticBasePlugin {
                 unique: false,
                 index: false,
                 strict: false,
-            },
-        );
+            });
 
         let add_text_format_to_note = Migration::with_name("add_text_format_to_note").action(
             migrate::SchemaAction::EntityAttributeAdd(migrate::EntityAttributeAdd {
@@ -611,7 +605,7 @@ impl Plugin for SemanticBasePlugin {
         );
 
         let create_file_blob_uri_web = Migration::with_name("create_file_blob_uri_web")
-            .attr_create(AttributeSchema {
+            .attr_create(Attribute {
                 id: Id::nil(),
                 ident: AttrBlobUriWeb::IDENT.to_string(),
                 title: Some("Blob".to_string()),
@@ -631,7 +625,7 @@ impl Plugin for SemanticBasePlugin {
             ));
 
         let create_attr_created_updated_at = Migration::with_name("create_attr_created_updated_at")
-            .attr_create(AttributeSchema {
+            .attr_create(Attribute {
                 id: Id::nil(),
                 ident: AttrCreatedAt::IDENT.to_string(),
                 title: Some("Created at".to_string()),
@@ -641,7 +635,7 @@ impl Plugin for SemanticBasePlugin {
                 index: true,
                 strict: false,
             })
-            .attr_create(AttributeSchema {
+            .attr_create(Attribute {
                 id: Id::nil(),
                 ident: AttrUpdatedAt::IDENT.to_string(),
                 title: Some("Updated at".to_string()),
@@ -671,7 +665,7 @@ impl Plugin for SemanticBasePlugin {
             ));
 
         let create_preview_blob_uri = Migration::with_name("create_attr_preview_blob_uri")
-            .attr_create(AttributeSchema {
+            .attr_create(Attribute {
                 id: Id::nil(),
                 ident: "semantic/preview_image_blob_uri".to_string(),
                 title: Some("Preview Image (Blob)".to_string()),
@@ -693,7 +687,7 @@ impl Plugin for SemanticBasePlugin {
             ));
 
         let create_attr_video_has_sound = Migration::with_name("create_attr_video_has_sound")
-            .attr_create(AttributeSchema {
+            .attr_create(Attribute {
                 id: Id::nil(),
                 ident: "semantic/video_has_sound".to_string(),
                 title: Some("Sound available".to_string()),
@@ -714,20 +708,19 @@ impl Plugin for SemanticBasePlugin {
                 },
             ));
 
-        let create_parent_id =
-            Migration::with_name("create_parent_id").attr_create(AttributeSchema {
-                id: Id::nil(),
-                ident: "semantic/parent_id".to_string(),
-                title: Some("Parent ID".to_string()),
-                description: None,
-                value_type: ValueType::Ref,
-                unique: false,
-                index: false,
-                strict: true,
-            });
+        let create_parent_id = Migration::with_name("create_parent_id").attr_create(Attribute {
+            id: Id::nil(),
+            ident: "semantic/parent_id".to_string(),
+            title: Some("Parent ID".to_string()),
+            description: None,
+            value_type: ValueType::Ref,
+            unique: false,
+            index: false,
+            strict: true,
+        });
 
         let create_social_media_post_user_id =
-            Migration::with_name("create_social_media_post_user_id").attr_create(AttributeSchema {
+            Migration::with_name("create_social_media_post_user_id").attr_create(Attribute {
                 id: Id::nil(),
                 ident: "semantic/social_media_post_user_id".to_string(),
                 title: Some("Social Media Post User ID".to_string()),
@@ -748,20 +741,19 @@ impl Plugin for SemanticBasePlugin {
                 }),
             );
 
-        let create_attr_name =
-            Migration::with_name("create_name_attr").attr_create(AttributeSchema {
-                id: Id::nil(),
-                ident: "semantic/name".to_string(),
-                title: Some("Name".to_string()),
-                description: None,
-                value_type: ValueType::String,
-                unique: false,
-                index: false,
-                strict: false,
-            });
+        let create_attr_name = Migration::with_name("create_name_attr").attr_create(Attribute {
+            id: Id::nil(),
+            ident: "semantic/name".to_string(),
+            title: Some("Name".to_string()),
+            description: None,
+            value_type: ValueType::String,
+            unique: false,
+            index: false,
+            strict: false,
+        });
 
         let create_person_attrs = Migration::with_name("create_person_attrs")
-            .attr_create(AttributeSchema {
+            .attr_create(Attribute {
                 id: Id::nil(),
                 ident: "semantic/family_name".to_string(),
                 title: Some("Family name".to_string()),
@@ -771,7 +763,7 @@ impl Plugin for SemanticBasePlugin {
                 index: false,
                 strict: false,
             })
-            .attr_create(AttributeSchema {
+            .attr_create(Attribute {
                 id: Id::nil(),
                 ident: "semantic/given_name".to_string(),
                 title: Some("Given name".to_string()),
@@ -781,7 +773,7 @@ impl Plugin for SemanticBasePlugin {
                 index: false,
                 strict: false,
             })
-            .attr_create(AttributeSchema {
+            .attr_create(Attribute {
                 id: Id::nil(),
                 ident: "semantic/birthdate".to_string(),
                 title: Some("Date of birth".to_string()),
@@ -791,7 +783,7 @@ impl Plugin for SemanticBasePlugin {
                 index: false,
                 strict: false,
             })
-            .attr_create(AttributeSchema {
+            .attr_create(Attribute {
                 id: Id::nil(),
                 ident: Gender::QUALIFIED_NAME.to_string(),
                 title: Some("Gender".to_string()),
@@ -805,39 +797,39 @@ impl Plugin for SemanticBasePlugin {
                 strict: false,
             });
 
-        let create_person = Migration::with_name("create_person").entity_create(EntitySchema {
+        let create_person = Migration::with_name("create_person").entity_create(Class {
             id: Id::nil(),
             ident: "semantic/Person".to_string(),
             title: Some("Person".to_string()),
             description: None,
             attributes: vec![
-                EntityAttribute {
-                    attribute: AttrIdent::IDENT,
-                    cardinality: Cardinality::Optional,
+                ClassAttribute {
+                    attribute: AttrIdent::QUALIFIED_NAME.to_string(),
+                    required: false,
                 },
-                EntityAttribute {
-                    attribute: AttrDescription::IDENT,
-                    cardinality: Cardinality::Optional,
+                ClassAttribute {
+                    attribute: AttrDescription::QUALIFIED_NAME.to_string(),
+                    required: false,
                 },
-                EntityAttribute {
-                    attribute: AttrUrl::IDENT,
-                    cardinality: Cardinality::Optional,
+                ClassAttribute {
+                    attribute: AttrUrl::QUALIFIED_NAME.to_string(),
+                    required: false,
                 },
-                EntityAttribute {
-                    attribute: AttrName::IDENT,
-                    cardinality: Cardinality::Optional,
+                ClassAttribute {
+                    attribute: AttrName::QUALIFIED_NAME.to_string(),
+                    required: false,
                 },
-                EntityAttribute {
-                    attribute: AttrFamilyName::IDENT,
-                    cardinality: Cardinality::Optional,
+                ClassAttribute {
+                    attribute: AttrFamilyName::QUALIFIED_NAME.to_string(),
+                    required: false,
                 },
-                EntityAttribute {
-                    attribute: AttrGivenName::IDENT,
-                    cardinality: Cardinality::Optional,
+                ClassAttribute {
+                    attribute: AttrGivenName::QUALIFIED_NAME.to_string(),
+                    required: false,
                 },
-                EntityAttribute {
-                    attribute: Gender::IDENT,
-                    cardinality: Cardinality::Optional,
+                ClassAttribute {
+                    attribute: Gender::QUALIFIED_NAME.to_string(),
+                    required: false,
                 },
             ],
             extends: vec![],
@@ -846,7 +838,7 @@ impl Plugin for SemanticBasePlugin {
 
         let create_social_media_platform_attrs =
             Migration::with_name("create_social_media_platform_attrs")
-                .attr_create(AttributeSchema {
+                .attr_create(Attribute {
                     id: Id::nil(),
                     ident: "semantic/social_media_platform_name".to_string(),
                     title: Some("Social Media Platform".to_string()),
@@ -856,7 +848,7 @@ impl Plugin for SemanticBasePlugin {
                     index: false,
                     strict: false,
                 })
-                .attr_create(AttributeSchema {
+                .attr_create(Attribute {
                     id: Id::nil(),
                     ident: "semantic/social_media_platform_id".to_string(),
                     title: Some("Social Media Platform".to_string()),
@@ -868,31 +860,31 @@ impl Plugin for SemanticBasePlugin {
                 });
 
         let create_social_media_account = Migration::with_name("create_social_media_account")
-            .entity_create(EntitySchema {
+            .entity_create(Class {
                 id: Id::nil(),
                 ident: "semantic/SocialMediaAccount".to_string(),
                 title: Some("Social Media Account".to_string()),
                 description: None,
                 attributes: vec![
-                    EntityAttribute {
-                        attribute: AttrUsername::IDENT,
-                        cardinality: Cardinality::Optional,
+                    ClassAttribute {
+                        attribute: AttrUsername::QUALIFIED_NAME.to_string(),
+                        required: false,
                     },
-                    EntityAttribute {
-                        attribute: AttrSocialMediaPlatformName::IDENT,
-                        cardinality: Cardinality::Optional,
+                    ClassAttribute {
+                        attribute: AttrSocialMediaPlatformName::QUALIFIED_NAME.to_string(),
+                        required: false,
                     },
-                    EntityAttribute {
-                        attribute: AttrSocialMediaPlatformId::IDENT,
-                        cardinality: Cardinality::Optional,
+                    ClassAttribute {
+                        attribute: AttrSocialMediaPlatformId::QUALIFIED_NAME.to_string(),
+                        required: false,
                     },
                 ],
-                extends: vec![Person::IDENT],
+                extends: vec![Person::QUALIFIED_NAME.to_string()],
                 strict: false,
             });
 
         let create_visit_attrs = Migration::with_name("create_visit_attrs")
-            .attr_create(AttributeSchema {
+            .attr_create(Attribute {
                 id: Id::nil(),
                 ident: AttrVisitCount::QUALIFIED_NAME.to_string(),
                 title: Some("Visit count".to_string()),
@@ -902,7 +894,7 @@ impl Plugin for SemanticBasePlugin {
                 index: false,
                 strict: false,
             })
-            .attr_create(AttributeSchema {
+            .attr_create(Attribute {
                 id: Id::nil(),
                 ident: AttrLastVisitTime::QUALIFIED_NAME.to_string(),
                 title: Some("Last visit".to_string()),
@@ -914,7 +906,7 @@ impl Plugin for SemanticBasePlugin {
             });
 
         let create_attr_secondary_url = Migration::with_name("create_attr_secondary_url")
-            .attr_create(AttributeSchema {
+            .attr_create(Attribute {
                 id: Id::nil(),
                 ident: AttrSecondaryUrl::QUALIFIED_NAME.to_string(),
                 title: Some("Secondary url".to_string()),
@@ -934,7 +926,7 @@ impl Plugin for SemanticBasePlugin {
             ));
 
         let create_parent_attrs = Migration::with_name("create_parent_attrs")
-            .attr_create(AttributeSchema {
+            .attr_create(Attribute {
                 id: Id::nil(),
                 ident: AttrParent::QUALIFIED_NAME.to_string(),
                 title: Some("Parent".to_string()),
@@ -944,7 +936,7 @@ impl Plugin for SemanticBasePlugin {
                 index: true,
                 strict: false,
             })
-            .attr_create(AttributeSchema {
+            .attr_create(Attribute {
                 id: Id::nil(),
                 ident: AttrEmbeddedInParent::QUALIFIED_NAME.to_string(),
                 title: Some("Embedded in parent".to_string()),
@@ -979,7 +971,7 @@ impl Plugin for SemanticBasePlugin {
                 //     EntityAttributeChangeCardinality {
                 //         entity_type: SocialMediaPost::QUALIFIED_NAME.to_string(),
                 //         attribute: AttrSocialMediaPostUserId::QUALIFIED_NAME.to_string(),
-                //         new_cardinality: Cardinality::Optional,
+                //         new_required: false,
                 //     },
                 // ))
                 .action(migrate::SchemaAction::EntityAttributeChangeCardinality(
@@ -1029,50 +1021,49 @@ impl Plugin for SemanticBasePlugin {
             remove_user_id_from_social_media_post,
         ];
 
-        let mut rollup = factordb::query::migrate::unify_migrations(batch1.clone()).unwrap();
+        let mut rollup = factdb::query::migrate::unify_migrations(batch1.clone()).unwrap();
         rollup.name = Some("batch1_rollup".to_string());
 
         let create_like_count = Migration::with_name("create_like_count").attr_create(
-            AttributeSchema::new(AttrLikeCount::QUALIFIED_NAME, ValueType::UInt)
-                .with_title("Likes"),
+            Attribute::new(AttrLikeCount::QUALIFIED_NAME, ValueType::UInt).with_title("Likes"),
         );
 
         let create_container_and_parent_sort =
             Migration::with_name("create_container_and_parent_sort")
-                .attr_create(AttributeSchema::new(
+                .attr_create(Attribute::new(
                     AttrParentSortOrder::QUALIFIED_NAME,
                     ValueType::Int,
                 ))
-                .entity_create(EntitySchema {
+                .entity_create(Class {
                     id: Id::nil(),
                     ident: Container::QUALIFIED_NAME.to_string(),
                     title: Some("Container".to_string()),
                     description: None,
-                    attributes: vec![EntityAttribute {
-                        attribute: AttrTitle::IDENT,
-                        cardinality: Cardinality::Optional,
+                    attributes: vec![ClassAttribute {
+                        attribute: AttrTitle::QUALIFIED_NAME.to_string(),
+                        required: false,
                     }],
                     extends: vec![],
                     strict: false,
                 });
 
-        let create_bookmark = Migration::with_name("create_bookmark").entity_create(EntitySchema {
+        let create_bookmark = Migration::with_name("create_bookmark").entity_create(Class {
             id: Id::nil(),
             ident: Bookmark::QUALIFIED_NAME.to_string(),
             title: Some("Bookmark".to_string()),
             description: None,
             attributes: vec![
-                EntityAttribute {
-                    attribute: AttrUrl::IDENT,
-                    cardinality: Cardinality::Required,
+                ClassAttribute {
+                    attribute: AttrUrl::QUALIFIED_NAME.to_string(),
+                    required: true,
                 },
-                EntityAttribute {
-                    attribute: AttrTitle::IDENT,
-                    cardinality: Cardinality::Optional,
+                ClassAttribute {
+                    attribute: AttrTitle::QUALIFIED_NAME.to_string(),
+                    required: false,
                 },
-                EntityAttribute {
-                    attribute: AttrCreatedAt::IDENT,
-                    cardinality: Cardinality::Optional,
+                ClassAttribute {
+                    attribute: AttrCreatedAt::QUALIFIED_NAME.to_string(),
+                    required: false,
                 },
             ],
             extends: vec![],
@@ -1080,11 +1071,11 @@ impl Plugin for SemanticBasePlugin {
         });
 
         let add_pixel_width_height = Migration::with_name("add_pixel_width_height")
-            .attr_create(AttributeSchema::new(
+            .attr_create(Attribute::new(
                 AttrPixelWidth::QUALIFIED_NAME,
                 ValueType::UInt,
             ))
-            .attr_create(AttributeSchema::new(
+            .attr_create(Attribute::new(
                 AttrPixelHeight::QUALIFIED_NAME,
                 ValueType::UInt,
             ))
@@ -1126,7 +1117,7 @@ impl Plugin for SemanticBasePlugin {
             );
 
         let create_imported_at = Migration::with_name("create_imported_at")
-            .attr_create(AttributeSchema::new(
+            .attr_create(Attribute::new(
                 AttrImportedAt::QUALIFIED_NAME,
                 ValueType::DateTime,
             ))
@@ -1186,17 +1177,70 @@ impl Plugin for SemanticBasePlugin {
                     .into(),
                 );
 
-        let create_audio =
-            Migration::with_name("create_audio_entity").entity_create(EntitySchema {
+        let create_audio = Migration::with_name("create_audio_entity").entity_create(Class {
+            id: Id::nil(),
+            ident: Audio::QUALIFIED_NAME.to_string(),
+            title: Some("Audio".to_string()),
+            description: None,
+            attributes: vec![ClassAttribute {
+                attribute: AttrDuration::QUALIFIED_NAME.to_string(),
+                required: false,
+            }],
+            extends: vec![File::QUALIFIED_NAME.to_string()],
+            strict: false,
+        });
+
+        let create_attr_text_content = Migration::with_name("create_attr_text_content")
+            .attr_create(Attribute::new(
+                AttrTextContent::QUALIFIED_NAME,
+                ValueType::String,
+            ));
+
+        let create_code_snippet = Migration::with_name("create_code_snippet")
+            .attr_create(Attribute::new(
+                AttrCodeSnippetLanguage::QUALIFIED_NAME,
+                ValueType::String,
+            ))
+            .entity_create(Class {
                 id: Id::nil(),
-                ident: Audio::QUALIFIED_NAME.to_string(),
-                title: Some("Audio".to_string()),
+                ident: CodeSnippet::QUALIFIED_NAME.to_string(),
+                title: Some("Snippet".to_string()),
                 description: None,
-                attributes: vec![EntityAttribute {
-                    attribute: AttrDuration::IDENT,
-                    cardinality: Cardinality::Optional,
-                }],
-                extends: vec![File::IDENT],
+                attributes: vec![
+                    ClassAttribute {
+                        attribute: AttrTextContent::QUALIFIED_NAME.to_string(),
+                        required: true,
+                    },
+                    ClassAttribute {
+                        attribute: AttrCodeSnippetLanguage::QUALIFIED_NAME.to_string(),
+                        required: false,
+                    },
+                    ClassAttribute {
+                        attribute: AttrUrl::QUALIFIED_NAME.to_string(),
+                        required: false,
+                    },
+                    ClassAttribute {
+                        attribute: AttrTitle::QUALIFIED_NAME.to_string(),
+                        required: false,
+                    },
+                    ClassAttribute {
+                        attribute: AttrDescription::QUALIFIED_NAME.to_string(),
+                        required: false,
+                    },
+                    ClassAttribute {
+                        attribute: AttrCreatedAt::QUALIFIED_NAME.to_string(),
+                        required: false,
+                    },
+                    ClassAttribute {
+                        attribute: AttrUpdatedAt::QUALIFIED_NAME.to_string(),
+                        required: false,
+                    },
+                    ClassAttribute {
+                        attribute: AttrImportedAt::QUALIFIED_NAME.to_string(),
+                        required: false,
+                    },
+                ],
+                extends: vec![],
                 strict: false,
             });
 
@@ -1210,6 +1254,8 @@ impl Plugin for SemanticBasePlugin {
             make_url_indexed,
             add_imported_at_and_description_to_bookmark,
             create_audio,
+            create_attr_text_content,
+            create_code_snippet,
         ]
     }
 }

@@ -8,7 +8,6 @@ use brass::{
     effect::{spawn_guarded, EffectGuard},
     signal::signal::Mutable,
 };
-use factordb::AnyError;
 use semantic_core::api::SemanticSchema;
 use semantic_ui_core::{
     components::loader::{error_msg, spinner},
@@ -20,8 +19,8 @@ use semantic_ui_core::{
 enum BootPhase {
     Init,
     LoadingStatus(EffectGuard),
-    StatusFailed(AnyError),
-    SchemaFailed(AnyError),
+    StatusFailed(anyhow::Error),
+    SchemaFailed(anyhow::Error),
     SchemaLoaded(SemanticSchema),
     Login,
 }

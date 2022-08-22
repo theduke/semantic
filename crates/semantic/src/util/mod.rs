@@ -1,4 +1,4 @@
-use factordb::{schema::DbSchema, AnyError};
+use factdb::DbSchema;
 
 #[cfg(feature = "archive")]
 pub mod archive;
@@ -14,7 +14,9 @@ pub fn json_from_slice<T: serde::de::DeserializeOwned>(
     serde_path_to_error::deserialize(jd)
 }
 
-pub fn generate_db_schema_typescript_definitions(schema: &DbSchema) -> Result<String, AnyError> {
+pub fn generate_db_schema_typescript_definitions(
+    schema: &DbSchema,
+) -> Result<String, anyhow::Error> {
     let ts = factor_tools::typescript::schema_to_typescript(&schema, None)?;
     Ok(ts)
 }

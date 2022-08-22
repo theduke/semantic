@@ -334,12 +334,13 @@ dependencies = [
 
 [[package]]
 name = "cfb"
-version = "0.6.1"
+version = "0.7.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "74f89d248799e3f15f91b70917f65381062a01bb8e222700ea0e5a7ff9785f9c"
+checksum = "d38f2da7a0a2c4ccf0065be06397cc26a81f4e528be095826eee9d4adbb8c60f"
 dependencies = [
  "byteorder",
- "uuid 0.8.2",
+ "fnv",
+ "uuid",
 ]
 
 [[package]]
@@ -437,6 +438,7 @@ dependencies = [
  "libc",
  "once_cell",
  "terminal_size",
+ "unicode-width",
  "winapi",
 ]
 
@@ -687,13 +689,51 @@ dependencies = [
 ]
 
 [[package]]
-name = "factor_engine"
+name = "factdb"
 version = "0.1.0"
-source = "git+https://github.com/theduke/factordb.git?branch=main#0e8d30a6f5ea0968c92141c8c35e7406ff0ae699"
+source = "git+https://github.com/theduke/factordb.git?branch=main#87b56e4bf2c99b3a427c500428f7480528e1a1b7"
 dependencies = [
  "anyhow",
  "chrono",
- "factordb",
+ "factor_core",
+ "factor_macros",
+ "fnv",
+ "futures",
+ "mongodb-language-model",
+ "ordered-float",
+ "serde",
+ "serde_json",
+ "sqlparser 0.19.0",
+ "tracing",
+ "url",
+ "uuid",
+]
+
+[[package]]
+name = "factor_core"
+version = "0.1.0"
+source = "git+https://github.com/theduke/factordb.git?branch=main#87b56e4bf2c99b3a427c500428f7480528e1a1b7"
+dependencies = [
+ "anyhow",
+ "chrono",
+ "fnv",
+ "ordered-float",
+ "serde",
+ "serde_json",
+ "sqlparser 0.19.0",
+ "tracing",
+ "url",
+ "uuid",
+]
+
+[[package]]
+name = "factor_engine"
+version = "0.1.0"
+source = "git+https://github.com/theduke/factordb.git?branch=main#87b56e4bf2c99b3a427c500428f7480528e1a1b7"
+dependencies = [
+ "anyhow",
+ "chrono",
+ "factor_core",
  "fnv",
  "futures",
  "ordered-float",
@@ -705,13 +745,13 @@ dependencies = [
  "tokio-stream",
  "tracing",
  "url",
- "uuid 1.1.2",
+ "uuid",
 ]
 
 [[package]]
 name = "factor_macros"
 version = "0.1.0"
-source = "git+https://github.com/theduke/factordb.git?branch=main#0e8d30a6f5ea0968c92141c8c35e7406ff0ae699"
+source = "git+https://github.com/theduke/factordb.git?branch=main#87b56e4bf2c99b3a427c500428f7480528e1a1b7"
 dependencies = [
  "Inflector",
  "proc-macro2",
@@ -722,33 +762,13 @@ dependencies = [
 [[package]]
 name = "factor_tools"
 version = "0.1.0"
-source = "git+https://github.com/theduke/factordb.git?branch=main#0e8d30a6f5ea0968c92141c8c35e7406ff0ae699"
+source = "git+https://github.com/theduke/factordb.git?branch=main#87b56e4bf2c99b3a427c500428f7480528e1a1b7"
 dependencies = [
  "Inflector",
  "anyhow",
- "factordb",
-]
-
-[[package]]
-name = "factordb"
-version = "0.1.0"
-source = "git+https://github.com/theduke/factordb.git?branch=main#0e8d30a6f5ea0968c92141c8c35e7406ff0ae699"
-dependencies = [
- "anyhow",
- "chrono",
- "factor_macros",
- "fnv",
- "futures",
- "mongodb-language-model",
- "ordered-float",
- "schemars",
- "serde",
+ "factor_core",
  "serde_json",
- "sqlparser 0.19.0",
- "tracing",
- "ts-rs",
- "url",
- "uuid 1.1.2",
+ "serde_path_to_error",
 ]
 
 [[package]]
@@ -1192,21 +1212,20 @@ dependencies = [
 
 [[package]]
 name = "indicatif"
-version = "0.16.2"
+version = "0.17.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "2d207dc617c7a380ab07ff572a6e52fa202a2a8f355860ac9c38e23f8196be1b"
+checksum = "fcc42b206e70d86ec03285b123e65a5458c92027d1fb2ae3555878b8113b3ddf"
 dependencies = [
  "console",
- "lazy_static",
  "number_prefix",
- "regex",
+ "unicode-width",
 ]
 
 [[package]]
 name = "infer"
-version = "0.7.0"
+version = "0.9.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "20b2b533137b9cad970793453d4f921c2e91312a6d88b1085c07bc15fc51bb3b"
+checksum = "f178e61cdbfe084aa75a2f4f7a25a5bb09701a47ae1753608f194b15783c937a"
 dependencies = [
  "cfb",
 ]
@@ -2120,7 +2139,7 @@ dependencies = [
  "serde",
  "serde_json",
  "url",
- "uuid 1.1.2",
+ "uuid",
 ]
 
 [[package]]
@@ -2167,9 +2186,9 @@ dependencies = [
  "bytesize",
  "clap",
  "dirs",
+ "factdb",
  "factor_engine",
  "factor_tools",
- "factordb",
  "ffprobe",
  "flate2",
  "futures",
@@ -2200,7 +2219,7 @@ dependencies = [
  "tracing-futures",
  "tracing-subscriber",
  "url",
- "uuid 1.1.2",
+ "uuid",
 ]
 
 [[package]]
@@ -2210,9 +2229,9 @@ dependencies = [
  "anyhow",
  "bytesize",
  "clap",
+ "factdb",
  "factor_engine",
  "factor_tools",
- "factordb",
  "futures",
  "indicatif",
  "is-terminal",
@@ -2234,7 +2253,7 @@ dependencies = [
  "anyhow",
  "base64",
  "chrono",
- "factordb",
+ "factdb",
  "futures",
  "schemars",
  "serde",
@@ -2242,16 +2261,17 @@ dependencies = [
  "tracing",
  "ts-rs",
  "url",
- "uuid 1.1.2",
+ "uuid",
 ]
 
 [[package]]
 name = "semantic_extra"
 version = "0.1.0"
 dependencies = [
+ "anyhow",
  "brass",
  "chrono",
- "factordb",
+ "factdb",
  "semantic_core",
  "semantic_ui_core",
  "serde",
@@ -2267,7 +2287,7 @@ dependencies = [
  "bytesize",
  "chrono",
  "console_error_panic_hook",
- "factordb",
+ "factdb",
  "futures",
  "getrandom",
  "js-sys",
@@ -2279,7 +2299,7 @@ dependencies = [
  "tracing",
  "tracing-wasm",
  "url",
- "uuid 1.1.2",
+ "uuid",
  "wasm-bindgen",
  "wasm-bindgen-futures",
  "web-sys",
@@ -2293,7 +2313,7 @@ dependencies = [
  "base64",
  "brass",
  "chrono",
- "factordb",
+ "factdb",
  "fnv",
  "form_urlencoded",
  "futures",
@@ -2885,7 +2905,7 @@ dependencies = [
  "ordered-float",
  "thiserror",
  "ts-rs-macros",
- "uuid 1.1.2",
+ "uuid",
 ]
 
 [[package]]
@@ -2972,12 +2992,6 @@ dependencies = [
  "percent-encoding",
  "serde",
 ]
-
-[[package]]
-name = "uuid"
-version = "0.8.2"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "bc5cf98d8186244414c848017f0e2676b3fcb46807f6668a97dfe67359a3c4b7"
 
 [[package]]
 name = "uuid"

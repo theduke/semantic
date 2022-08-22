@@ -5,10 +5,9 @@ use std::{
     task::Poll,
 };
 
-use factordb::AnyError;
 use futures::{future::BoxFuture, FutureExt};
 
-pub type BlobFuture<T> = BoxFuture<'static, Result<T, AnyError>>;
+pub type BlobFuture<T> = BoxFuture<'static, Result<T, anyhow::Error>>;
 
 #[derive(Clone, Debug)]
 pub struct BlobMeta {
@@ -39,12 +38,12 @@ pub trait BlobStore {
 
 pub type DynBlobStore = Arc<dyn BlobStore + Send + Sync>;
 
-pub type BlobStream = futures::stream::BoxStream<'static, Result<Vec<u8>, AnyError>>;
+pub type BlobStream = futures::stream::BoxStream<'static, Result<Vec<u8>, anyhow::Error>>;
 
 fn run_blocking<T, F>(log: &logfs::LogFs, f: F) -> BlobFuture<T>
 where
     T: Send + 'static,
-    F: FnOnce(&logfs::LogFs) -> Result<T, AnyError> + Send + 'static,
+    F: FnOnce(&logfs::LogFs) -> Result<T, anyhow::Error> + Send + 'static,
 {
     let s = log.clone();
     (async move {
@@ -250,7 +249,7 @@ impl BlobStore for logfs::LogFs {
 
     fn get(&self, path: &str) -> BlobFuture<Option<Vec<u8>>> {
         let path = path.to_string();
-        run_blocking(self, move |s| s.get(&path).map_err(AnyError::from))
+        run_blocking(self, move |s| s.get(&path).map_err(anyhow::Error::from))
     }
 
     fn get_meta(&self, path: &str) -> BlobFuture<Option<BlobMeta>> {
@@ -262,7 +261,7 @@ impl BlobStore for logfs::LogFs {
                 size: meta.size,
             })),
             Ok(None) => Ok(None),
-            Err(err) => Err(AnyError::from(err)),
+            Err(err) => Err(anyhow::Error::from(err)),
         };
         Box::pin(futures::future::ready(res))
     }
@@ -280,7 +279,7 @@ impl BlobStore for logfs::LogFs {
             if let Some(offset) = offset {
                 iter.skip_bytes(offset)?;
             }
-            let (tx, rx) = tokio::sync::mpsc::channel::<Result<Vec<u8>, AnyError>>(2);
+            let (tx, rx) = tokio::sync::mpsc::channel::<Result<Vec<u8>, anyhow::Error>>(2);
             let stream = MpscStream(rx);
 
             tokio::task::spawn_blocking(move || {
@@ -309,7 +308,7 @@ impl BlobStore for logfs::LogFs {
                         }
                         Err(error) => {
                             tracing::trace!(?error, "could not read from logfs stream");
-                            if let Err(_err) = tx.blocking_send(Err(AnyError::from(error))) {
+                            if let Err(_err) = tx.blocking_send(Err(anyhow::Error::from(error))) {
                                 tracing::warn!(?_err, "Could not send blob stream termination");
                             }
                             break;
@@ -327,13 +326,13 @@ impl BlobStore for logfs::LogFs {
     fn put(&self, path: &str, content: Vec<u8>) -> BlobFuture<()> {
         let path = path.to_string();
         run_blocking(self, move |s| {
-            s.insert(path, content).map_err(AnyError::from)
+            s.insert(path, content).map_err(anyhow::Error::from)
         })
     }
 
     fn remove(&self, path: &str) -> BlobFuture<()> {
         let path = path.to_string();
-        run_blocking(self, move |s| s.remove(path).map_err(AnyError::from))
+        run_blocking(self, move |s| s.remove(path).map_err(anyhow::Error::from))
     }
 
     fn get_std_reader(&self, path: &str) -> BlobFuture<Box<dyn std::io::Read + Send>> {
@@ -341,7 +340,7 @@ impl BlobStore for logfs::LogFs {
         Box::pin(run_blocking(self, move |s| {
             s.get_reader(path)
                 .map(|x| Box::new(x) as Box<dyn std::io::Read + Send>)
-                .map_err(AnyError::from)
+                .map_err(anyhow::Error::from)
         }))
     }
 
@@ -350,7 +349,7 @@ impl BlobStore for logfs::LogFs {
         Box::pin(run_blocking(self, move |s| {
             s.insert_writer(path)
                 .map(|x| Box::new(x) as Box<dyn std::io::Write + Send>)
-                .map_err(AnyError::from)
+                .map_err(anyhow::Error::from)
         }))
     }
 

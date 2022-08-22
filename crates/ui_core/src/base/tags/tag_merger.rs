@@ -5,7 +5,7 @@ use brass::{
     dom::{builder::div, Render, View},
     signal::signal::Mutable,
 };
-use factordb::prelude::{AttrId, AttrMapExt, AttributeDescriptor, DataMap, Expr};
+use factdb::{AttrId, AttrMapExt, AttributeMeta, DataMap, Expr};
 use semantic_core::base::{AttrTagName, Tag};
 
 use crate::{

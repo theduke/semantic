@@ -3,10 +3,7 @@ use brass::{
     dom::{builder::div, ClickEvent, TagBuilder, View},
     signal::signal::Mutable,
 };
-use factordb::{
-    prelude::{AttrMapExt, DataMap, Id, Mutate},
-    AnyError,
-};
+use factdb::{AttrMapExt, DataMap, Id, Mutate};
 use semantic_core::base::entity_title;
 
 use crate::{
@@ -38,7 +35,7 @@ struct State {
 enum Msg {
     Confirm,
     Cancel,
-    Loaded(Result<(), AnyError>),
+    Loaded(Result<(), anyhow::Error>),
 }
 
 impl MsgComponent for State {

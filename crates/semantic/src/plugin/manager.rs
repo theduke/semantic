@@ -1,10 +1,7 @@
 use std::{collections::HashMap, sync::Arc};
 
 use anyhow::{anyhow, bail, Context};
-use factordb::{
-    prelude::{AttrMapExt, Db, EntityContainer, EntityDescriptor, Mutate},
-    AnyError,
-};
+use factdb::{AttrMapExt, ClassContainer, ClassMeta, Db, Mutate};
 use semantic_core::{
     api::PluginTestFetch,
     core::PluginSource,
@@ -61,7 +58,7 @@ impl PluginManager {
         items.into_iter().map(|(_index, plugin)| plugin).collect()
     }
 
-    pub async fn initialize_deno(&self, config: deno::DenoConfig) -> Result<(), AnyError> {
+    pub async fn initialize_deno(&self, config: deno::DenoConfig) -> Result<(), anyhow::Error> {
         let mut state = self.0.mutable.write().await;
 
         if state.deno.is_some() {
@@ -76,7 +73,7 @@ impl PluginManager {
         Ok(())
     }
 
-    pub async fn load_db_plugins(&self) -> Result<(), AnyError> {
+    pub async fn load_db_plugins(&self) -> Result<(), anyhow::Error> {
         let page = self
             .0
             .db
@@ -105,7 +102,7 @@ impl PluginManager {
         Ok(())
     }
 
-    pub async fn plugin_source_validate(&self, source: PluginSource) -> Result<(), AnyError> {
+    pub async fn plugin_source_validate(&self, source: PluginSource) -> Result<(), anyhow::Error> {
         match source.runtime.as_ref().map(|x| x.as_str()) {
             Some("deno") => {}
             _ => {
@@ -116,7 +113,7 @@ impl PluginManager {
         Ok(())
     }
 
-    pub async fn create_source(&self, source: PluginSource) -> Result<PluginSource, AnyError> {
+    pub async fn create_source(&self, source: PluginSource) -> Result<PluginSource, anyhow::Error> {
         let plugin = self.build_source_plugin(&source).await?;
         let source = PluginSource {
             id: source.id.non_nil_or_randomize(),
@@ -131,7 +128,7 @@ impl PluginManager {
     pub async fn plugin_source_replace(
         &self,
         new_source: PluginSource,
-    ) -> Result<PluginSource, AnyError> {
+    ) -> Result<PluginSource, anyhow::Error> {
         let data = self.0.db.entity(new_source.id).await?;
         let old_source: PluginSource = data.try_into_entity()?;
 
@@ -169,7 +166,7 @@ impl PluginManager {
         Ok(new_source)
     }
 
-    pub async fn delete_plugin(&self, name: String) -> Result<(), AnyError> {
+    pub async fn delete_plugin(&self, name: String) -> Result<(), anyhow::Error> {
         let mut state = self.0.mutable.write().await;
 
         if let Some(plugin) = state.plugins.remove(&name) {
@@ -191,7 +188,7 @@ impl PluginManager {
         Ok(())
     }
 
-    async fn build_source_plugin(&self, source: &PluginSource) -> Result<DynPlugin, AnyError> {
+    async fn build_source_plugin(&self, source: &PluginSource) -> Result<DynPlugin, anyhow::Error> {
         match source.runtime.as_ref().map(|s| s.as_str()) {
             Some("deno") => {}
             Some(other) => {
@@ -225,7 +222,7 @@ impl PluginManager {
         Ok(plugin)
     }
 
-    pub async fn register_plugin(&self, plugin: DynPlugin) -> Result<(), AnyError> {
+    pub async fn register_plugin(&self, plugin: DynPlugin) -> Result<(), anyhow::Error> {
         // Lock the state to prevent race conditions.
         let mut state = self.0.mutable.write().await;
 
@@ -256,7 +253,7 @@ impl PluginManager {
         Ok(())
     }
 
-    pub async fn fetch_url(&self, job: FetchUrlJob) -> Result<FetchUrlOutput, AnyError> {
+    pub async fn fetch_url(&self, job: FetchUrlJob) -> Result<FetchUrlOutput, anyhow::Error> {
         let url = job.url.clone();
         tracing::trace!(%url, "finding plugin to fetch url");
 
@@ -286,7 +283,7 @@ impl PluginManager {
         Ok(output)
     }
 
-    pub async fn import(&self, job: ImportJob) -> Result<ImportOutput, AnyError> {
+    pub async fn import(&self, job: ImportJob) -> Result<ImportOutput, anyhow::Error> {
         let url = job.url.clone();
         tracing::trace!(%url, "finding plugin to fetch url");
 
@@ -319,7 +316,7 @@ impl PluginManager {
     pub async fn test_fetch(
         &self,
         spec: PluginTestFetch,
-    ) -> Result<Option<FetchUrlOutput>, AnyError> {
+    ) -> Result<Option<FetchUrlOutput>, anyhow::Error> {
         if spec.runtime != "deno" {
             bail!("Unsupported runtime '{}'", spec.runtime);
         }

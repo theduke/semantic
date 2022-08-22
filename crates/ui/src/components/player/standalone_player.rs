@@ -17,12 +17,7 @@ use semantic_ui_core::{
 use wasm_bindgen::JsCast;
 use web_sys::Element;
 
-use factordb::{
-    prelude::{DataMap, Select},
-    query::expr::Expr,
-    schema::{builtin::AttrType, AttrMapExt, EntityDescriptor},
-    AnyError,
-};
+use factdb::{AttrMapExt, AttrType, ClassMeta, DataMap, Expr, Select};
 
 use super::player_viewer::PlayerHandle;
 
@@ -39,7 +34,7 @@ impl Render for StandalonePlayer {
 
 enum Msg {
     FilterChanged(entity_filter::EntityFilter),
-    Loaded(Result<Vec<DataMap>, AnyError>),
+    Loaded(Result<Vec<DataMap>, anyhow::Error>),
     ActiveItemModalShow,
     ActiveItemModalClose,
     ToggleSettings,
@@ -84,7 +79,7 @@ impl State {
     }
 
     fn load(&mut self, select: Select, ctx: Context<Self>) {
-        let api = context::api().clone();
+        let api = context::api();
         self.select = select.clone();
         let guard = ctx.spawn_map(
             async move {
@@ -140,7 +135,7 @@ impl MsgComponent for State {
         }
         .build();
 
-        let base_filter = props.filter.clone().unwrap_or_else(|| Self::default_expr());
+        let base_filter = props.filter.unwrap_or_else(Self::default_expr);
         let select = Select::new().with_filter(base_filter.clone());
 
         let mut s = Self {
@@ -256,7 +251,7 @@ impl MsgComponent for State {
                     items
                         .iter()
                         .filter_map(|item| {
-                            let title = entity_title(&item);
+                            let title = entity_title(item);
                             item.get_type_name()
                                 .filter(|t| t == &Video::QUALIFIED_NAME)
                                 .and_then(|_| item.get_id())

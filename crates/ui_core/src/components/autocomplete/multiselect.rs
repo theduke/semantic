@@ -8,7 +8,7 @@ use brass::{
         signal_vec::MutableVec,
     },
 };
-use factordb::AnyError;
+
 use futures::future::LocalBoxFuture;
 use wasm_bindgen::JsCast;
 
@@ -74,17 +74,18 @@ pub struct MultiSelect<T: Clone + 'static> {
     pub available_fallback: Option<SharedRenderer0>,
 
     pub render: Box<dyn Fn(MultiSelectRender<'_, T>) -> TagBuilder>,
-    pub search: Option<Box<dyn Fn(String) -> LocalBoxFuture<'static, Result<Vec<T>, AnyError>>>>,
+    pub search:
+        Option<Box<dyn Fn(String) -> LocalBoxFuture<'static, Result<Vec<T>, anyhow::Error>>>>,
     // FIXME: implement functionality!
     #[allow(dead_code)]
     pub load_more: Option<Box<dyn Fn(usize)>>,
     pub on_change: Option<Rc<dyn Fn(Vec<T>)>>,
     pub on_change_async:
-        Option<Rc<dyn Fn(Vec<T>) -> LocalBoxFuture<'static, Result<Vec<T>, AnyError>>>>,
+        Option<Rc<dyn Fn(Vec<T>) -> LocalBoxFuture<'static, Result<Vec<T>, anyhow::Error>>>>,
     pub on_submit: Option<Action<Vec<T>>>,
     pub on_cancel: Option<Action<()>>,
-    pub on_add_async: Option<Rc<dyn Fn(T) -> LocalBoxFuture<'static, Result<T, AnyError>>>>,
-    pub on_remove_async: Option<Rc<dyn Fn(T) -> LocalBoxFuture<'static, Result<T, AnyError>>>>,
+    pub on_add_async: Option<Rc<dyn Fn(T) -> LocalBoxFuture<'static, Result<T, anyhow::Error>>>>,
+    pub on_remove_async: Option<Rc<dyn Fn(T) -> LocalBoxFuture<'static, Result<T, anyhow::Error>>>>,
 }
 
 impl<T: Clone + 'static> Render for MultiSelect<T> {
@@ -94,7 +95,7 @@ impl<T: Clone + 'static> Render for MultiSelect<T> {
 }
 
 pub struct State<T: Clone + 'static> {
-    search: Option<Box<dyn Fn(String) -> LocalBoxFuture<'static, Result<Vec<T>, AnyError>>>>,
+    search: Option<Box<dyn Fn(String) -> LocalBoxFuture<'static, Result<Vec<T>, anyhow::Error>>>>,
 
     get_id: fn(&T) -> String,
     // FIXME: implement functionality!
@@ -102,11 +103,11 @@ pub struct State<T: Clone + 'static> {
     load_more: Option<Box<dyn Fn(usize)>>,
     on_change: Option<Rc<dyn Fn(Vec<T>)>>,
     on_change_async:
-        Option<Rc<dyn Fn(Vec<T>) -> LocalBoxFuture<'static, Result<Vec<T>, AnyError>>>>,
+        Option<Rc<dyn Fn(Vec<T>) -> LocalBoxFuture<'static, Result<Vec<T>, anyhow::Error>>>>,
     on_submit: Option<Action<Vec<T>>>,
     on_cancel: Option<Action<()>>,
-    on_add_async: Option<Rc<dyn Fn(T) -> LocalBoxFuture<'static, Result<T, AnyError>>>>,
-    on_remove_async: Option<Rc<dyn Fn(T) -> LocalBoxFuture<'static, Result<T, AnyError>>>>,
+    on_add_async: Option<Rc<dyn Fn(T) -> LocalBoxFuture<'static, Result<T, anyhow::Error>>>>,
+    on_remove_async: Option<Rc<dyn Fn(T) -> LocalBoxFuture<'static, Result<T, anyhow::Error>>>>,
 
     selected_fallback: Option<SharedRenderer0>,
     available_fallback: Option<SharedRenderer0>,

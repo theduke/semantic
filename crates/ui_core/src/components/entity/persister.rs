@@ -1,13 +1,13 @@
 use std::rc::Rc;
 
 use brass::Callback;
-use factordb::query::select::Item;
+use factdb::query::select::Item;
 
 use crate::{loader::LoadState, ContextExt};
 
 pub struct FormValid {
     pub item: Item,
-    pub mutation: factordb::query::mutate::Batch,
+    pub mutation: factdb::query::mutate::Batch,
 }
 
 pub struct EntityFormProps {
@@ -23,7 +23,7 @@ pub enum Msg {
     // Valid(FormValid),
     Submit(FormValid),
     Cancel,
-    Loaded(Result<(), factordb::AnyError>),
+    Loaded(Result<(), anyhow::Error>),
 }
 
 pub struct EntityPersister {

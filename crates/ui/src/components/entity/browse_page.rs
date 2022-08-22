@@ -4,11 +4,7 @@ use brass::{
     effect::EffectGuard,
     signal::signal::Mutable,
 };
-use factordb::{
-    prelude::DataMap,
-    query::{expr::Expr, select::Select},
-    AnyError,
-};
+use factdb::{DataMap, Expr, Select};
 
 use semantic_ui_core::{
     components::{
@@ -43,7 +39,7 @@ pub struct BrowsePage {
 }
 
 pub enum Msg {
-    Loaded(Result<Vec<DataMap>, AnyError>),
+    Loaded(Result<Vec<DataMap>, anyhow::Error>),
     FilterUpdated(entity_filter::EntityFilter),
     ToggleFilter,
     Next,
@@ -59,7 +55,7 @@ impl BrowsePage {
             .collect();
 
         Expr::not(Expr::in_(
-            Expr::attr::<factordb::schema::builtin::AttrType>(),
+            Expr::attr::<factdb::schema::builtin::AttrType>(),
             ignored,
         ))
     }

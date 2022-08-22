@@ -6,10 +6,7 @@ use brass::{
     effect::EffectGuard,
     signal::signal::{Mutable, Signal, SignalExt},
 };
-use factordb::{
-    prelude::DataMap,
-    query::{expr::Expr, select::Select},
-};
+use factdb::{DataMap, Expr, Select};
 use js_sys::Function;
 use semantic_core::base::entity_title;
 use wasm_bindgen::JsCast;

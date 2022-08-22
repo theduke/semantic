@@ -1,7 +1,7 @@
 use std::rc::Rc;
 
 use brass::dom::{Render, TagBuilder};
-use factordb::prelude::Id;
+use factdb::Id;
 
 use crate::components::loader::load;
 

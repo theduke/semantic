@@ -1,11 +1,10 @@
 use std::pin::Pin;
 
-use factordb::AnyError;
 use semantic_core::api::{self, ApiClient, FileUploadMetadata};
 use wasm_bindgen::{JsCast, JsValue};
 
-fn anyerr_from_js(value: wasm_bindgen::JsValue) -> AnyError {
-    AnyError::msg(format!("{:?}", value))
+fn anyerr_from_js(value: wasm_bindgen::JsValue) -> anyhow::Error {
+    anyhow::Error::msg(format!("{:?}", value))
 }
 
 #[derive(Clone, Debug)]
@@ -14,7 +13,7 @@ pub struct BrowserExecutor {
 }
 
 impl BrowserExecutor {
-    async fn execute(self, query: api::Query) -> Result<api::Reply, AnyError> {
+    async fn execute(self, query: api::Query) -> Result<api::Reply, anyhow::Error> {
         let body: JsValue = serde_json::to_string(&query)?.into();
 
         let mut opts = web_sys::RequestInit::new();
@@ -45,13 +44,13 @@ impl BrowserExecutor {
         let response: api::ApiResponse = serde_json::from_slice(body.as_bytes())?;
         match response {
             api::ApiResponse::Ok(reply) => Ok(reply),
-            api::ApiResponse::Err(err) => Err(AnyError::msg(err.message)),
+            api::ApiResponse::Err(err) => Err(anyhow::Error::msg(err.message)),
         }
     }
 }
 
 impl api::ApiClientExecutor for BrowserExecutor {
-    type Future = Pin<Box<dyn std::future::Future<Output = Result<api::Reply, AnyError>>>>;
+    type Future = Pin<Box<dyn std::future::Future<Output = Result<api::Reply, anyhow::Error>>>>;
 
     fn execute(&self, query: api::Query) -> Self::Future {
         Box::pin(self.clone().execute(query))
@@ -69,7 +68,7 @@ pub fn new_api(endpoint: Option<String>) -> BrowserApiClient {
 pub async fn upload_file(
     file: web_sys::File,
     meta: FileUploadMetadata,
-) -> Result<api::FileUploadReply, AnyError> {
+) -> Result<api::FileUploadReply, anyhow::Error> {
     let meta_header = base64::encode(serde_json::to_string(&meta)?);
 
     let mut opts = web_sys::RequestInit::new();
@@ -105,6 +104,6 @@ pub async fn upload_file(
     let response: api::ApiResponse<api::FileUploadReply> = serde_json::from_slice(body.as_bytes())?;
     match response {
         api::ApiResponse::Ok(reply) => Ok(reply),
-        api::ApiResponse::Err(err) => Err(AnyError::msg(err.message)),
+        api::ApiResponse::Err(err) => Err(anyhow::Error::msg(err.message)),
     }
 }

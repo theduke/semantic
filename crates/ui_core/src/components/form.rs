@@ -5,12 +5,12 @@ use brass::{
     effect::{spawn_guarded, EffectGuard},
     signal::signal::{Mutable, Signal, SignalExt},
 };
-use factordb::AnyError;
+
 use futures::{future::LocalBoxFuture, Future};
 
 use crate::validate::{PassingValidator, Validator};
 
-pub type FormLoadFuture = LocalBoxFuture<'static, Result<(), AnyError>>;
+pub type FormLoadFuture = LocalBoxFuture<'static, Result<(), anyhow::Error>>;
 
 pub struct Form<V: 'static> {
     values: V,

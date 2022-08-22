@@ -1,12 +1,11 @@
 use std::collections::HashSet;
 
-use factordb::{
-    prelude::{
-        Attribute, AttributeDescriptor, AttributeSchema, Entity, EntityAttribute, EntityDescriptor,
-        Expr, Id, IdOrIdent, Migration, Select, ValueType,
-    },
+use factdb::{
+    macros::{Attribute, Class},
     query::migrate,
     schema::builtin::AttrIdent,
+    Attribute, AttributeMeta, ClassAttribute, ClassMeta, Expr, Id, IdOrIdent, Migration, Select,
+    ValueType,
 };
 
 use serde::{Deserialize, Serialize};
@@ -28,7 +27,7 @@ pub struct AttrPluginRuntime(String);
 #[factor(namespace = "semantic", name = "plugin_strict_validation")]
 pub struct AttrPluginStrictValidation(bool);
 
-#[derive(Serialize, Deserialize, Entity, Clone, Debug, PartialEq, Eq)]
+#[derive(Serialize, Deserialize, Class, Clone, Debug, PartialEq, Eq)]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[cfg_attr(feature = "schema", derive(ts_rs::TS))]
 #[factor(namespace = "semantic")]
@@ -85,13 +84,13 @@ impl Plugin for SemanticCorePlugin {
             name: Self::NAME.into(),
             description: None,
             import_matchers: Vec::new(),
-            db: Some(factordb::schema::DbSchema {
+            db: Some(factdb::schema::DbSchema {
                 attributes: vec![
                     AttrPluginCode::schema(),
                     AttrPluginRuntime::schema(),
                     AttrPluginStrictValidation::schema(),
                 ],
-                entities: vec![PluginSource::schema()],
+                classes: vec![PluginSource::schema()],
                 indexes: vec![],
             }),
         }
@@ -100,9 +99,9 @@ impl Plugin for SemanticCorePlugin {
     fn migrations(
         &self,
         _already_applied_migrations: &HashSet<String>,
-    ) -> Vec<factordb::query::migrate::Migration> {
+    ) -> Vec<factdb::query::migrate::Migration> {
         let create = Migration::with_name("semantic/core/v1".to_string())
-            .attr_create(AttributeSchema {
+            .attr_create(Attribute {
                 id: Id::nil(),
                 ident: "semantic/plugin_code".to_string(),
                 title: None,
@@ -112,7 +111,7 @@ impl Plugin for SemanticCorePlugin {
                 index: false,
                 strict: false,
             })
-            .attr_create(AttributeSchema {
+            .attr_create(Attribute {
                 id: Id::nil(),
                 ident: "semantic/plugin_runtime".to_string(),
                 title: None,
@@ -122,23 +121,23 @@ impl Plugin for SemanticCorePlugin {
                 index: false,
                 strict: false,
             })
-            .entity_create(factordb::schema::EntitySchema {
+            .entity_create(factdb::schema::Class {
                 id: Id::nil(),
                 ident: PluginSource::QUALIFIED_NAME.to_string(),
                 title: Some("Plugin Source".to_string()),
                 description: None,
                 attributes: vec![
-                    EntityAttribute {
-                        attribute: AttrIdent::IDENT,
-                        cardinality: factordb::schema::Cardinality::Required,
+                    ClassAttribute {
+                        attribute: AttrIdent::QUALIFIED_NAME.to_string(),
+                        required: true,
                     },
-                    EntityAttribute {
-                        attribute: AttrPluginRuntime::IDENT,
-                        cardinality: factordb::schema::Cardinality::Optional,
+                    ClassAttribute {
+                        attribute: AttrPluginRuntime::QUALIFIED_NAME.to_string(),
+                        required: false,
                     },
-                    EntityAttribute {
-                        attribute: AttrPluginCode::IDENT,
-                        cardinality: factordb::schema::Cardinality::Optional,
+                    ClassAttribute {
+                        attribute: AttrPluginCode::QUALIFIED_NAME.to_string(),
+                        required: false,
                     },
                 ],
                 extends: vec![],
@@ -150,13 +149,13 @@ impl Plugin for SemanticCorePlugin {
                 migrate::EntityAttributeAdd {
                     entity: PluginSource::IDENT.to_string(),
                     attribute: AttrComment::IDENT.to_string(),
-                    cardinality: factordb::schema::Cardinality::Optional,
+                    cardinality: factdb::schema::Cardinality::Optional,
                     default_value: None,
                 },
             ));
 
         let create_strict_validation = Migration::with_name("create_strict_validation".to_string())
-            .attr_create(AttributeSchema {
+            .attr_create(Attribute {
                 id: Id::nil(),
                 ident: AttrPluginStrictValidation::QUALIFIED_NAME.to_string(),
                 title: Some("Strict Plugin Validation".to_string()),
@@ -172,7 +171,7 @@ impl Plugin for SemanticCorePlugin {
                 migrate::SchemaAction::EntityAttributeAdd(migrate::EntityAttributeAdd {
                     entity: PluginSource::IDENT.to_string(),
                     attribute: AttrPluginStrictValidation::IDENT.to_string(),
-                    cardinality: factordb::schema::Cardinality::Required,
+                    cardinality: factdb::schema::Cardinality::Required,
                     default_value: Some(false.into()),
                 }),
             );

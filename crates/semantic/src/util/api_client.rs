@@ -1,5 +1,4 @@
 use bytes::Bytes;
-use factordb::AnyError;
 use futures::{future::BoxFuture, TryStream};
 use semantic_core::{
     api::{self, ApiResponse, FileUploadMetadata},
@@ -85,7 +84,7 @@ impl ApiClient {
 }
 
 impl api::ApiClientExecutor for ApiClient {
-    type Future = BoxFuture<'static, Result<api::Reply, AnyError>>;
+    type Future = BoxFuture<'static, Result<api::Reply, anyhow::Error>>;
 
     fn execute(&self, query: semantic_core::api::Query) -> Self::Future {
         let s = self.clone();

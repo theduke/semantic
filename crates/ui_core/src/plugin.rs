@@ -54,7 +54,7 @@ pub trait BrowserPlugin: Sync + Send {
     //     url: url::Url,
     //     api: &crate::api::BrowserApiClient,
     // ) -> std::pin::Pin<
-    //     Box<dyn std::future::Future<Output = Result<Option<FetchUrlOutput>, AnyError>> + 'static>,
+    //     Box<dyn std::future::Future<Output = Result<Option<FetchUrlOutput>, anyhow::Error>> + 'static>,
     // > {
     //     Box::pin(futures::future::ready(Ok(None)))
     // }

@@ -13,7 +13,7 @@ pub mod components;
 pub type SharedRenderer0 = std::rc::Rc<dyn Fn() -> TagBuilder>;
 
 use brass::dom::TagBuilder;
-use factordb::data::Timestamp;
+use factdb::data::Timestamp;
 
 pub use self::{
     plugin::{BrowserPlugin, BrowserPluginSpec},

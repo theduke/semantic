@@ -1,11 +1,7 @@
 use std::{collections::HashSet, sync::Arc};
 
 use anyhow::bail;
-use factordb::{
-    prelude::{AttrIdent, AttrMapExt, AttributeDescriptor, Batch, Id},
-    query::mutate::EntityPatch,
-    AnyError,
-};
+use factdb::{query::mutate::EntityPatch, AttrIdent, AttrMapExt, AttributeMeta, Batch, Id};
 use futures::future::BoxFuture;
 use semantic_core::{
     api::{self, FileImportMetadata, FileUploadMetadata},
@@ -20,7 +16,7 @@ pub(crate) fn file_upload_apply_meta(
     collection: Option<semantic_core::base::Collection>,
     tags: Vec<semantic_core::base::Tag>,
     meta: &FileUploadMetadata,
-) -> Result<(), AnyError> {
+) -> Result<(), anyhow::Error> {
     if let Some(col) = collection {
         if !col.item_ids.contains(&file.id) {
             // File should be added to a collection, so add the db operation.
@@ -32,7 +28,7 @@ pub(crate) fn file_upload_apply_meta(
         }
     }
 
-    let mut patch = factordb::prelude::Patch::new();
+    let mut patch = factdb::Patch::new();
 
     if tags.len() > 0 {
         let existing_tags: HashSet<Id> = file
@@ -93,10 +89,7 @@ pub(crate) fn file_upload_apply_meta(
     if !patch.0.is_empty() {
         batch
             .actions
-            .push(factordb::prelude::Mutate::Patch(EntityPatch {
-                id: file.id,
-                patch,
-            }));
+            .push(factdb::Mutate::Patch(EntityPatch { id: file.id, patch }));
     }
 
     Ok(())
@@ -109,7 +102,7 @@ async fn import_file(
     tag_ids: Vec<Id>,
     title: Option<String>,
     url: Option<url::Url>,
-) -> Result<api::FileUploadReply, AnyError> {
+) -> Result<api::FileUploadReply, anyhow::Error> {
     let content = tokio::fs::read(path).await?;
 
     let meta = FileUploadMetadata {
@@ -131,7 +124,7 @@ fn import_path_recursive(
     path: std::path::PathBuf,
     meta: FileUploadMetadata,
     on_import: FileImportCallback,
-) -> BoxFuture<'static, Result<(), AnyError>> {
+) -> BoxFuture<'static, Result<(), anyhow::Error>> {
     let app = app.clone();
     let f = async move {
         let fs_meta = tokio::fs::metadata(&path).await?;
@@ -168,7 +161,7 @@ pub async fn import_files(
     paths: Vec<std::path::PathBuf>,
     meta: FileImportMetadata,
     on_import: FileImportCallback,
-) -> Result<(), AnyError> {
+) -> Result<(), anyhow::Error> {
     let mut tag_ids = Vec::new();
     {
         let db = app.require_db()?;

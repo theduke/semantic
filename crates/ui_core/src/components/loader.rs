@@ -8,7 +8,7 @@ use brass::{
     effect::{spawn_guarded, EffectGuard},
     signal::signal::{Mutable, Signal},
 };
-use factordb::AnyError;
+
 use futures::Future;
 use wasm_bindgen::JsCast;
 use wasm_bindgen_futures::spawn_local;
@@ -214,7 +214,7 @@ impl<T> Loader<T> {
         self.0.lock_ref().clone()
     }
 
-    pub fn new_spawn(f: impl Future<Output = Result<T, AnyError>> + 'static) -> Self
+    pub fn new_spawn(f: impl Future<Output = Result<T, anyhow::Error>> + 'static) -> Self
     where
         T: 'static,
     {
@@ -232,7 +232,7 @@ impl<T> Loader<T> {
         &self.0
     }
 
-    pub fn spawn(&self, f: impl Future<Output = Result<T, AnyError>> + 'static)
+    pub fn spawn(&self, f: impl Future<Output = Result<T, anyhow::Error>> + 'static)
     where
         T: 'static,
     {
@@ -252,7 +252,7 @@ impl<T> Loader<T> {
         self.0.set(LoadState::Idle);
     }
 
-    pub fn set_result(&mut self, res: Result<T, AnyError>) {
+    pub fn set_result(&mut self, res: Result<T, anyhow::Error>) {
         self.0.set(LoadState::from_res(res));
     }
 
@@ -358,7 +358,7 @@ impl Loader<()> {
 }
 
 pub fn load<T: 'static>(
-    f: impl Future<Output = Result<T, AnyError>> + 'static,
+    f: impl Future<Output = Result<T, anyhow::Error>> + 'static,
     render: impl Fn(&T) -> View + 'static,
 ) -> TagBuilder {
     let loader = Loader::new_spawn(f);

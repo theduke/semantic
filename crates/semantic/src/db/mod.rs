@@ -4,12 +4,9 @@ use std::{
 };
 
 use anyhow::bail;
-use factordb::{
-    prelude::{
-        AttrId, AttrMapExt, AttributeDescriptor, Batch, DataMap, Db, Expr, Id, Item, Page, Select,
-        Value, ValueMap,
-    },
-    query::mutate,
+use factdb::{
+    query::mutate, AttrId, AttrMapExt, AttributeMeta, Batch, DataMap, Db, Expr, Id, Item, Page,
+    Select, Value, ValueMap,
 };
 use futures::{future::BoxFuture, StreamExt};
 use semantic_core::plugin::Plugin;
@@ -81,7 +78,7 @@ impl EntitiesOrderedStream {
             let select = Select::new()
                 .with_limit(select_limit)
                 .with_filter(filter)
-                .with_sort(Expr::attr::<AttrId>(), factordb::prelude::Order::Asc);
+                .with_sort(Expr::attr::<AttrId>(), factdb::Order::Asc);
             let items = db.select_map(select).await?;
 
             if items.is_empty() {
@@ -213,7 +210,7 @@ impl futures::stream::Stream for EntitiesOrderedStream {
                 let select = Select::new()
                     .with_limit(*this.select_limit)
                     .with_filter(filter)
-                    .with_sort(Expr::attr::<AttrId>(), factordb::prelude::Order::Asc);
+                    .with_sort(Expr::attr::<AttrId>(), factdb::Order::Asc);
                 let db = this.db.clone();
 
                 let fut = Box::pin(async move { db.select(select).await });
@@ -450,7 +447,7 @@ fn entity_data_related_ids(data: &DataMap) -> impl Iterator<Item = Id> + '_ {
 
 #[cfg(test)]
 mod tests {
-    use factordb::prelude::EntityContainer;
+    use factdb::ClassContainer;
     use semantic_core::{
         api::{BackendConfig, BackendCryptoConfig},
         base::Note,
@@ -478,6 +475,7 @@ mod tests {
         let app_config = AppConfig {
             backend: Some(BackendConfig {
                 db: semantic_core::api::DbConfig::Crypto(BackendCryptoConfig {
+                    readonly: false,
                     data_path: Some(data_dir.join("db").to_str().unwrap().to_string()),
                     key: "key".to_string(),
                     key_iterations: Some(1),

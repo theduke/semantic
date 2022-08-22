@@ -1,7 +1,7 @@
 use std::rc::Rc;
 
 use brass::dom::{builder::div, Attr, Tag, TagBuilder};
-use factordb::prelude::{AttrMapExt, AttributeDescriptor, DataMap, EntityDescriptor, Id, Value};
+use factdb::{AttrMapExt, AttributeMeta, ClassMeta, DataMap, Id, Value};
 use semantic_core::base::{self, AttrPreviewImageUrl, AttrUrl};
 
 use crate::{

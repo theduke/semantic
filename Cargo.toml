@@ -25,7 +25,7 @@ exclude = [
 
 [patch.crates-io]
 brass = { git = "https://github.com/theduke/brass.git", branch = "main" }
-factordb = { version = "0.1", git = "https://github.com/theduke/factordb.git", branch = "main" }
+factdb = { git = "https://github.com/theduke/factordb.git", branch = "main" }
 factor_engine = { version = "0.1", git = "https://github.com/theduke/factordb.git", branch = "main" }
 factor_tools = { version = "0.1", git = "https://github.com/theduke/factordb.git", branch = "main" }
 ts-rs = { version = "6.1.2", git = "https://github.com/theduke/ts-rs", branch = "theduke" }

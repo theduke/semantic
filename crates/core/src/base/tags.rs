@@ -1,15 +1,13 @@
 use serde::{Deserialize, Serialize};
 
-use factordb::{
-    prelude::{
-        AttrType, Attribute, AttributeDescriptor, Batch, DataMap, Db, Entity, EntityContainer,
-        EntityDescriptor, Expr, Id, IdOrIdent, Mutate, Patch, Select, Value,
-    },
+use factdb::{
+    macros::{Attribute, Class},
     query::{
         self,
         mutate::{MutateSelect, MutateSelectAction},
     },
-    AnyError,
+    AttrType, AttributeMeta, Batch, ClassContainer, ClassMeta, DataMap, Db, Expr, Id, IdOrIdent,
+    Mutate, Patch, Select, Value,
 };
 
 use super::{AttrDescription, AttrTitle};
@@ -26,7 +24,7 @@ pub struct AttrTagParent(Id);
 #[factor(namespace = "semantic", title = "Tags", name = "tags")]
 pub struct AttrTags(Id);
 
-#[derive(Serialize, Deserialize, Entity, Clone, Debug, PartialEq, Eq)]
+#[derive(Serialize, Deserialize, Class, Clone, Debug, PartialEq, Eq)]
 #[factor(namespace = "semantic")]
 pub struct Tag {
     #[factor(attr = AttrId)]
@@ -56,7 +54,7 @@ impl Tag {
         Select::new().with_filter(filter).with_limit(10_000)
     }
 
-    pub async fn search_by_title(db: &Db, title: &str) -> Result<Option<Tag>, AnyError> {
+    pub async fn search_by_title(db: &Db, title: &str) -> Result<Option<Tag>, anyhow::Error> {
         let filter = Expr::is_entity::<Tag>()
             .and_with(Expr::eq(AttrTitle::expr(), Expr::literal(title.trim())));
         let page = db.select(Select::new().with_filter(filter)).await?;
@@ -69,7 +67,7 @@ impl Tag {
         }
     }
 
-    pub async fn search_by_ident(db: &Db, ident: &IdOrIdent) -> Result<Tag, AnyError> {
+    pub async fn search_by_ident(db: &Db, ident: &IdOrIdent) -> Result<Tag, anyhow::Error> {
         match ident {
             IdOrIdent::Id(id) => {
                 let map = db.entity(*id).await?;

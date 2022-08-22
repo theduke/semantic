@@ -1,7 +1,7 @@
 pub mod browse_page;
 
 use brass::dom::{builder::div, Tag, TagBuilder};
-use factordb::prelude::DataMap;
+use factdb::DataMap;
 use semantic_ui_core::{
     components::util::{buttons, notification_error, notification_warning, title_2, ButtonBuilder},
     context,

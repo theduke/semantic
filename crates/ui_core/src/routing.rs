@@ -4,7 +4,7 @@ use brass::{
     dom::{builder::tag, Apply, ClickEvent, TagBuilder},
     signal::signal::{Mutable, Signal},
 };
-use factordb::prelude::IdOrIdent;
+use factdb::IdOrIdent;
 use url::Url;
 use wasm_bindgen::{JsCast, JsValue};
 
@@ -197,7 +197,7 @@ impl Router {
             }
             ["upload"] => Some(Route::Upload),
             ["play"] => Some(Route::Play),
-            ["entity", id] => Some(Route::Entity(IdOrIdent::from_str(id))),
+            ["entity", id] => Some(Route::Entity(IdOrIdent::new_str(id))),
             ["create"] => Some(Route::Create),
             ["create", tail @ ..] => Some(Route::EntityCreate {
                 entity_type: tail.join("/"),

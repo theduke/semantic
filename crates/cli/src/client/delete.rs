@@ -8,7 +8,7 @@ pub struct DeleteCmd {
     #[clap(short = 'y', long)]
     auto_confirm: bool,
 
-    ids: Vec<factordb::prelude::Id>,
+    ids: Vec<factdb::Id>,
 }
 
 impl DeleteCmd {
@@ -20,9 +20,9 @@ impl DeleteCmd {
     async fn delete(self) {
         let client = self.client.build_client();
 
-        let mut batch = factordb::prelude::Batch::new();
+        let mut batch = factdb::Batch::new();
         for id in &self.ids {
-            batch = batch.and_delete(factordb::query::mutate::Delete { id: id.clone() });
+            batch = batch.and_delete(factdb::query::mutate::Delete { id: id.clone() });
         }
 
         client.batch(batch).await.unwrap();

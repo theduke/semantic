@@ -21,10 +21,7 @@ mod collection_item_tagger;
 
 mod collection_item_manager;
 
-use factordb::{
-    prelude::{DataMap, EntityContainer, Id, Mutate},
-    AnyError,
-};
+use factdb::{ClassContainer, DataMap, Id, Mutate};
 use semantic_core::base::Collection;
 
 use crate::{
@@ -214,30 +211,30 @@ pub fn collection_create_page(_item: &DataMap, _opts: &EntityRenderOpts) -> TagB
     })
 }
 
-async fn search_collections(term: String) -> Result<Vec<Collection>, AnyError> {
+async fn search_collections(term: String) -> Result<Vec<Collection>, anyhow::Error> {
     context::api()
         .select_entities(Collection::search_collections(term, 10))
         .await
 }
 
-async fn load_entity_collections(id: Id) -> Result<Vec<Collection>, AnyError> {
+async fn load_entity_collections(id: Id) -> Result<Vec<Collection>, anyhow::Error> {
     context::api()
         .select_entities(Collection::query_collections_with_entity(id))
         .await
 }
 
-async fn collection_add_entity(collection: Id, entity: Id) -> Result<(), AnyError> {
+async fn collection_add_entity(collection: Id, entity: Id) -> Result<(), anyhow::Error> {
     context::api()
         .mutate(Collection::mutate_add_item(collection, entity))
         .await
 }
 
-async fn collection_remove_entity(collection: Id, entity: Id) -> Result<(), AnyError> {
+async fn collection_remove_entity(collection: Id, entity: Id) -> Result<(), anyhow::Error> {
     context::api()
         .mutate(Collection::mutate_remove_item(collection, entity))
         .await
 }
 
-async fn load_collection_items(col: Collection) -> Result<Vec<DataMap>, AnyError> {
+async fn load_collection_items(col: Collection) -> Result<Vec<DataMap>, anyhow::Error> {
     api().select(Collection::query_collection_items(&col)).await
 }

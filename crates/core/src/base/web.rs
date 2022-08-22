@@ -1,10 +1,10 @@
-use factordb::prelude::{DataMap, Entity, Id, Timestamp};
+use factdb::{DataMap, Class, Id, Timestamp};
 use serde::{Deserialize, Serialize};
 use url::Url;
 
 use super::{AttrCreatedAt, AttrDescription, AttrTitle, AttrUpdatedAt, AttrUrl};
 
-#[derive(Serialize, Deserialize, Entity, Clone)]
+#[derive(Serialize, Deserialize, Class, Clone)]
 #[factor(namespace = "semantic")]
 pub struct Webpage {
     #[factor(attr = AttrId)]

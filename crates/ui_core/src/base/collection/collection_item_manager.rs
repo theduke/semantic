@@ -3,7 +3,7 @@ use brass::{
     dom::{builder::div, Attr, ClickEvent, Render, TagBuilder, View},
     signal::{signal::Mutable, signal_vec::MutableVec},
 };
-use factordb::prelude::{AttrId, AttrMapExt, AttributeDescriptor, DataMap, Expr, Id};
+use factdb::{AttrId, AttrMapExt, AttributeMeta, DataMap, Expr, Id};
 use semantic_core::base::Collection;
 
 use crate::{

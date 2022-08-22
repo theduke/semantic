@@ -1,7 +1,7 @@
 use std::rc::Rc;
 
 use brass::dom::{Render, View};
-use factordb::AnyError;
+
 use futures::future::LocalBoxFuture;
 use semantic_core::base::Collection;
 
@@ -9,10 +9,12 @@ use crate::components::autocomplete::multiselect::{multiselect_render_tags, Mult
 
 pub struct CollectionSelect {
     pub initial_selection: Vec<Collection>,
-    pub on_add_async:
-        Option<Rc<dyn Fn(Collection) -> LocalBoxFuture<'static, Result<Collection, AnyError>>>>,
-    pub on_remove_async:
-        Option<Rc<dyn Fn(Collection) -> LocalBoxFuture<'static, Result<Collection, AnyError>>>>,
+    pub on_add_async: Option<
+        Rc<dyn Fn(Collection) -> LocalBoxFuture<'static, Result<Collection, anyhow::Error>>>,
+    >,
+    pub on_remove_async: Option<
+        Rc<dyn Fn(Collection) -> LocalBoxFuture<'static, Result<Collection, anyhow::Error>>>,
+    >,
 }
 
 impl Render for CollectionSelect {

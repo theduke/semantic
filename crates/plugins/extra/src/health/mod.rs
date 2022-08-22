@@ -5,9 +5,10 @@ use std::collections::HashSet;
 
 use serde::{Deserialize, Serialize};
 
-use factordb::prelude::{
-    Attribute, AttributeDescriptor, AttributeSchema, DbSchema, Entity, EntityAttribute,
-    EntityDescriptor, EntitySchema, Expr, Id, IdOrIdent, Order, Select, Timestamp, ValueType,
+use factdb::{
+    macros::{Attribute, Class},
+    Attribute, AttributeMeta, Class, ClassAttribute, ClassMeta, DbSchema, Expr, Id, IdOrIdent,
+    Order, Select, Timestamp, ValueType,
 };
 use semantic_core::{
     base::{AttrComment, AttrDateTime},
@@ -18,7 +19,7 @@ use semantic_core::{
 #[factor(namespace = "semantic_health", title = "Weight")]
 pub struct AttrWeight(f64);
 
-#[derive(Serialize, Deserialize, Entity, Clone, Debug)]
+#[derive(Serialize, Deserialize, Class, Clone, Debug)]
 #[factor(namespace = "semantic_health")]
 pub struct WeightLogEntry {
     #[factor(attr = AttrId)]
@@ -69,7 +70,7 @@ impl Plugin for HealthPlugin {
             description: None,
             db: Some(DbSchema {
                 attributes: vec![AttrWeight::schema()],
-                entities: vec![WeightLogEntry::schema()],
+                classes: vec![WeightLogEntry::schema()],
                 indexes: vec![],
             }),
             import_matchers: vec![],
@@ -79,10 +80,10 @@ impl Plugin for HealthPlugin {
     fn migrations(
         &self,
         _already_applied_migrations: &HashSet<String>,
-    ) -> Vec<factordb::query::migrate::Migration> {
+    ) -> Vec<factdb::query::migrate::Migration> {
         vec![
-            factordb::query::migrate::Migration::with_name("create_weight_schema".to_string())
-                .attr_create(AttributeSchema {
+            factdb::query::migrate::Migration::with_name("create_weight_schema".to_string())
+                .attr_create(Attribute {
                     id: Id::nil(),
                     ident: AttrWeight::QUALIFIED_NAME.to_string(),
                     title: Some("Weight".to_string()),
@@ -92,23 +93,23 @@ impl Plugin for HealthPlugin {
                     index: false,
                     strict: false,
                 })
-                .entity_create(EntitySchema {
+                .entity_create(Class {
                     id: Id::nil(),
                     ident: WeightLogEntry::QUALIFIED_NAME.to_string(),
                     title: Some("Weight Log Entry".to_string()),
                     description: None,
                     attributes: vec![
-                        EntityAttribute {
-                            attribute: AttrWeight::IDENT,
-                            cardinality: factordb::prelude::Cardinality::Required,
+                        ClassAttribute {
+                            attribute: AttrWeight::QUALIFIED_NAME.to_string(),
+                            required: true,
                         },
-                        EntityAttribute {
-                            attribute: AttrComment::IDENT,
-                            cardinality: factordb::prelude::Cardinality::Optional,
+                        ClassAttribute {
+                            attribute: AttrComment::QUALIFIED_NAME.to_string(),
+                            required: false,
                         },
-                        EntityAttribute {
-                            attribute: AttrDateTime::IDENT,
-                            cardinality: factordb::prelude::Cardinality::Required,
+                        ClassAttribute {
+                            attribute: AttrDateTime::QUALIFIED_NAME.to_string(),
+                            required: true,
                         },
                     ],
                     extends: vec![],

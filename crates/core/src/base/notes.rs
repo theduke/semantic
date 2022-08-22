@@ -1,7 +1,7 @@
 use anyhow::bail;
-use factordb::{
-    prelude::{Attribute, AttributeDescriptor, DataMap, Entity, Id, Patch},
-    AnyError,
+use factdb::{
+    macros::{Attribute, Class},
+    AttributeMeta, DataMap, Id, Patch,
 };
 use serde::{Deserialize, Serialize};
 
@@ -11,7 +11,7 @@ use super::{AttrTitle, TextFormat};
 #[factor(namespace = "semantic", title = "Note")]
 pub struct AttrNoteBody(String);
 
-#[derive(Serialize, Deserialize, Entity, Clone)]
+#[derive(Serialize, Deserialize, Class, Clone)]
 #[factor(namespace = "semantic")]
 pub struct Note {
     #[factor(attr = AttrId)]
@@ -36,7 +36,7 @@ pub struct Note {
 }
 
 impl Note {
-    pub fn build_patch(old: &Self, new: &Self) -> Result<Patch, AnyError> {
+    pub fn build_patch(old: &Self, new: &Self) -> Result<Patch, anyhow::Error> {
         if old.id != new.id {
             bail!("Note ID mismatch");
         }

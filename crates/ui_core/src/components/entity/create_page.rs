@@ -1,6 +1,6 @@
 use brass::Callback;
 use brass_bulma::box_;
-use factordb::{query::select::Item, schema::AttrMapExt};
+use factdb::{query::select::Item, schema::AttrMapExt};
 
 use crate::ContextExt;
 

@@ -4,10 +4,7 @@ use brass::{
     component::{msg::MsgComponent, Component, Context},
     dom::{builder::div, Render, TagBuilder, View},
 };
-use factordb::{
-    prelude::{AttrMapExt, AttributeDescriptor, DataMap, Expr, Id, Item, Select},
-    AnyError,
-};
+use factdb::{AttrMapExt, AttributeMeta, DataMap, Expr, Id, Item, Select};
 use semantic_core::{
     base::AttrUrl,
     plugin::{FetchUrlJob, FetchUrlOutput, ImportJob, ImportOutput},
@@ -44,11 +41,11 @@ type Index = usize;
 
 enum Msg {
     FormSubmit(Values),
-    FetchLoaded(Result<(FetchUrlOutput, Vec<PreviewItem>), AnyError>),
-    ImportLoaded(Result<ImportOutput, AnyError>),
+    FetchLoaded(Result<(FetchUrlOutput, Vec<PreviewItem>), anyhow::Error>),
+    ImportLoaded(Result<ImportOutput, anyhow::Error>),
     ImportItem(Index),
     ImportItemLoaded {
-        res: Result<Vec<Item>, AnyError>,
+        res: Result<Vec<Item>, anyhow::Error>,
         url: Url,
     },
     OpenRelatedUrl(Url),
@@ -79,7 +76,7 @@ struct State {
     full_import: Loader<Vec<Item>>,
 }
 
-async fn build_preview_items(items: Vec<DataMap>) -> Result<Vec<PreviewItem>, AnyError> {
+async fn build_preview_items(items: Vec<DataMap>) -> Result<Vec<PreviewItem>, anyhow::Error> {
     let old_urls: Vec<_> = items
         .iter()
         .filter_map(|item| item.get_attr::<AttrUrl>())

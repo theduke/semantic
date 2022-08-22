@@ -2,10 +2,7 @@ mod manager;
 
 use brass::dom::{Render, TagBuilder};
 use chrono::TimeZone;
-use factordb::{
-    prelude::{EntityDescriptor, Id, Timestamp},
-    AnyError,
-};
+use factdb::{ClassMeta, Id, Timestamp};
 use semantic_core::plugin::PluginDescriptor;
 use semantic_ui_core::{
     components::{
@@ -85,7 +82,7 @@ fn weightlog_create(on_created: impl Fn(WeightLogEntry) + 'static) -> TagBuilder
             let local = chrono::offset::Local
                 .from_local_datetime(&naive)
                 .earliest()
-                .ok_or_else(|| AnyError::msg("Could not determine local timezone"))?;
+                .ok_or_else(|| anyhow::Error::msg("Could not determine local timezone"))?;
             let datetime = Timestamp::from_millis(local.timestamp_millis() as u64);
 
             let entry = WeightLogEntry {

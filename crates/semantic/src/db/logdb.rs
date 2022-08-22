@@ -2,7 +2,6 @@ use factor_engine::backend::{
     self,
     log::{EventId, LogConverter, LogEvent},
 };
-use factordb::AnyError;
 use futures::{future::ready, FutureExt, StreamExt};
 use logfs::LogFs;
 
@@ -38,11 +37,11 @@ impl LogDbStore {
         &self.log
     }
 
-    async fn build_backend(self) -> Result<backend::log::LogDb, AnyError> {
+    async fn build_backend(self) -> Result<backend::log::LogDb, anyhow::Error> {
         backend::log::LogDb::open(self).await
     }
 
-    pub async fn build_db(self) -> Result<factordb::db::Db, AnyError> {
+    pub async fn build_db(self) -> Result<factdb::Db, anyhow::Error> {
         let be = self.build_backend().await?;
         Ok(factor_engine::Engine::new(be).into_client())
     }
@@ -55,7 +54,8 @@ impl LogDbStore {
         &self,
         _from: EventId,
         _until: EventId,
-    ) -> Result<futures::stream::BoxStream<'_, Result<LogEvent, AnyError>>, AnyError> {
+    ) -> Result<futures::stream::BoxStream<'_, Result<LogEvent, anyhow::Error>>, anyhow::Error>
+    {
         // let start = Self::event_path(from);
         // let end = Self::event_path(until);
 
@@ -78,7 +78,7 @@ impl LogDbStore {
         Ok(stream)
     }
 
-    async fn clear(self) -> Result<(), AnyError> {
+    async fn clear(self) -> Result<(), anyhow::Error> {
         self.log.remove_prefix(&self.prefix)?;
         Ok(())
     }
@@ -94,7 +94,7 @@ impl backend::log::LogStore for LogDbStore {
         from: EventId,
         until: EventId,
     ) -> futures::future::BoxFuture<
-        Result<futures::stream::BoxStream<Result<LogEvent, AnyError>>, AnyError>,
+        Result<futures::stream::BoxStream<Result<LogEvent, anyhow::Error>>, anyhow::Error>,
     > {
         self.iter_events(from, until).boxed()
     }
@@ -102,12 +102,12 @@ impl backend::log::LogStore for LogDbStore {
     fn read_event(
         &self,
         id: EventId,
-    ) -> futures::future::BoxFuture<Result<Option<LogEvent>, AnyError>> {
+    ) -> futures::future::BoxFuture<Result<Option<LogEvent>, anyhow::Error>> {
         let converter = self.converter.clone();
         let res = self
             .log
             .get(self.event_path(id))
-            .map_err(AnyError::from)
+            .map_err(anyhow::Error::from)
             .and_then(move |data| {
                 data.map(|data| converter.deserialize(&data).map_err(Into::into))
                     .transpose()
@@ -115,25 +115,32 @@ impl backend::log::LogStore for LogDbStore {
         ready(res).boxed()
     }
 
-    fn write_event(&mut self, event: LogEvent) -> futures::future::BoxFuture<Result<(), AnyError>> {
+    fn write_event(
+        &mut self,
+        event: LogEvent,
+    ) -> futures::future::BoxFuture<Result<(), anyhow::Error>> {
         let res = self.converter.serialize(&event).and_then(|data| {
             self.log
                 .insert(self.event_path(event.id()), data)
-                .map_err(AnyError::from)
+                .map_err(anyhow::Error::from)
         });
         ready(res).boxed()
     }
 
-    fn clear(&mut self) -> futures::future::BoxFuture<'static, Result<(), AnyError>> {
+    fn clear(&mut self) -> futures::future::BoxFuture<'static, Result<(), anyhow::Error>> {
         self.clone().clear().boxed()
     }
 
-    fn size_log(&mut self) -> futures::future::BoxFuture<'static, Result<Option<u64>, AnyError>> {
-        ready(self.log.size_log().map(Some).map_err(AnyError::from)).boxed()
+    fn size_log(
+        &mut self,
+    ) -> futures::future::BoxFuture<'static, Result<Option<u64>, anyhow::Error>> {
+        ready(self.log.size_log().map(Some).map_err(anyhow::Error::from)).boxed()
     }
 
-    fn size_data(&mut self) -> futures::future::BoxFuture<'static, Result<Option<u64>, AnyError>> {
-        ready(self.log.size_data().map(Some).map_err(AnyError::from)).boxed()
+    fn size_data(
+        &mut self,
+    ) -> futures::future::BoxFuture<'static, Result<Option<u64>, anyhow::Error>> {
+        ready(self.log.size_data().map(Some).map_err(anyhow::Error::from)).boxed()
     }
 }
 

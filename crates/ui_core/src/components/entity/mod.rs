@@ -6,9 +6,9 @@ pub mod entity_filter;
 pub mod entity_view;
 
 use brass::dom::{builder::div, Apply, Attr, Render, Tag, TagBuilder, View};
-use factordb::prelude::{
-    AttrId, AttrIdent, AttrMapExt, AttrType, AttributeDescriptor, AttributeSchema, DataMap, Expr,
-    Id, Timestamp, Value, ValueType,
+use factdb::{
+    AttrId, AttrIdent, AttrMapExt, AttrType, Attribute, AttributeMeta, DataMap, Expr, Id,
+    Timestamp, Value, ValueType,
 };
 use semantic_core::base::AttrTitle;
 
@@ -79,7 +79,7 @@ pub fn entity_type_name(data: &DataMap, entity: Option<&EntityInfo>) -> Option<S
 //     brass_bulma::card_header().and((title, ty))
 // }
 
-pub fn attr_title(attr: &AttributeSchema) -> &str {
+pub fn attr_title(attr: &Attribute) -> &str {
     if let Some(title) = &attr.title {
         title.as_str()
     } else {
@@ -169,7 +169,7 @@ pub fn render_value(value: &Value, parent: &mut TagBuilder) {
     }
 }
 
-pub fn attr_value_generic(attr: &AttributeSchema, value: &Value, parent: &mut TagBuilder) {
+pub fn attr_value_generic(attr: &Attribute, value: &Value, parent: &mut TagBuilder) {
     match (&attr.value_type, value) {
         (ValueType::DateTime, Value::UInt(x)) => {
             let stamp = Timestamp::from_millis(*x);
@@ -182,7 +182,7 @@ pub fn attr_value_generic(attr: &AttributeSchema, value: &Value, parent: &mut Ta
 }
 
 pub fn attr_value(
-    attr: &AttributeSchema,
+    attr: &Attribute,
     value: &Value,
     data: Option<&DataMap>,
     registry: &Registry,

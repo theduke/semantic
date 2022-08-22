@@ -8,10 +8,7 @@ use std::{
 };
 
 use anyhow::{anyhow, bail, Context};
-use factordb::{
-    prelude::{AttrMapExt, DataMap, Db, Expr, Patch, Select},
-    AnyError,
-};
+use factdb::{AttrMapExt, DataMap, Db, Expr, Patch, Select};
 
 use semantic_core::{
     api::{ApiError, Job, JobId},
@@ -94,7 +91,7 @@ pub fn optimise_file_data(data: Vec<u8>) -> (Vec<u8>, Option<UniversalHash>) {
     }
 }
 
-pub fn optimize_image_data(data: &[u8]) -> Result<Vec<u8>, AnyError> {
+pub fn optimize_image_data(data: &[u8]) -> Result<Vec<u8>, anyhow::Error> {
     let kind = infer::get(data).context("Could not determine mime type")?;
     match kind.mime_type() {
         "image/jpeg" => {
@@ -108,14 +105,14 @@ pub fn optimize_image_data(data: &[u8]) -> Result<Vec<u8>, AnyError> {
 
 /// Losslessly optimize pngs with oxipng as an embedded library.
 #[cfg(feature = "media-optimizers")]
-fn oxipng(data: &[u8]) -> Result<Vec<u8>, AnyError> {
+fn oxipng(data: &[u8]) -> Result<Vec<u8>, anyhow::Error> {
     oxipng::optimize_from_memory(data, &oxipng::Options::from_preset(4))
         .context("Could not optimize png with oxipng")
 }
 
 /// Losslessly optimize pngs with oxipng as a CLI tool.
 #[cfg(not(feature = "media-optimizers"))]
-fn oxipng(data: &[u8]) -> Result<Vec<u8>, AnyError> {
+fn oxipng(data: &[u8]) -> Result<Vec<u8>, anyhow::Error> {
     let mut child = Command::new("oxipng")
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
@@ -201,7 +198,7 @@ fn oxipng(data: &[u8]) -> Result<Vec<u8>, AnyError> {
 
 /// Losslessly optimize jpegs with mozjpeg as a CLI tool.
 // #[cfg(not(feature = "media-optimizers"))]
-fn mozjpeg_jpegtran(data: &[u8]) -> Result<Vec<u8>, AnyError> {
+fn mozjpeg_jpegtran(data: &[u8]) -> Result<Vec<u8>, anyhow::Error> {
     let mut child = Command::new("jpegtran")
         .arg("-optimize")
         .stdin(Stdio::piped())
@@ -566,7 +563,7 @@ async fn video_analyze_and_update(
     video: Video,
     force: bool,
 ) -> Result<Option<Video>, anyhow::Error> {
-    use factordb::prelude::{AttributeDescriptor, EntityContainer};
+    use factdb::{AttributeMeta, ClassContainer};
 
     if video.duration.is_some() && !force {
         // If duration is already set, assume that video was already analysed

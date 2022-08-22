@@ -4,7 +4,6 @@ mod cmd_upload;
 mod db;
 
 use anyhow::anyhow;
-use factordb::AnyError;
 use semantic_core::{
     api::{self, DbConfig},
     base::SemanticBasePlugin,
@@ -44,7 +43,7 @@ struct GenerateTypescript {}
 
 impl GenerateTypescript {
     fn run(self) {
-        let builtin = factordb::schema::builtin::builtin_db_schema();
+        let builtin = factdb::schema::builtin::builtin_db_schema();
         let base = SemanticBasePlugin::new().schema().db.unwrap();
 
         let schema = builtin.merge(base);
@@ -91,7 +90,7 @@ struct BackendOptions {
 }
 
 impl BackendOptions {
-    fn build_backend_config(&self) -> Result<api::BackendConfig, AnyError> {
+    fn build_backend_config(&self) -> Result<api::BackendConfig, anyhow::Error> {
         let offset = if let Some(off) = &self.offset {
             let size = off
                 .parse::<bytesize::ByteSize>()
@@ -166,7 +165,7 @@ struct AppOptions {
 }
 
 impl AppOptions {
-    fn build(&self) -> Result<AppConfig, AnyError> {
+    fn build(&self) -> Result<AppConfig, anyhow::Error> {
         let data_dir = app::App::default_data_dir().unwrap();
 
         let backend_config = if self.no_backend {
@@ -302,7 +301,7 @@ fn main() {
                 )
                 .await?;
 
-                Result::<(), AnyError>::Ok(())
+                Result::<(), anyhow::Error>::Ok(())
             })
             .expect("Export failed");
 

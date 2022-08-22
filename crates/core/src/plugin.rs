@@ -1,10 +1,9 @@
 use std::collections::HashSet;
 
-use factordb::{
-    prelude::IdOrIdent,
+use factdb::{
     query::{migrate, select::Item},
     schema::DbSchema,
-    AnyError,
+    IdOrIdent,
 };
 use futures::future::BoxFuture;
 use url::Url;
@@ -118,7 +117,7 @@ pub struct ImportOutput {
 pub struct PluginSchema {
     pub name: String,
     pub description: Option<String>,
-    pub db: Option<factordb::schema::DbSchema>,
+    pub db: Option<factdb::schema::DbSchema>,
     #[serde(default)]
     pub import_matchers: Vec<ImportMatcherRule>,
 }
@@ -210,16 +209,19 @@ pub trait Plugin {
     fn fetch_url(
         &self,
         job: FetchUrlJob,
-    ) -> BoxFuture<'static, Result<Option<FetchUrlOutput>, AnyError>> {
+    ) -> BoxFuture<'static, Result<Option<FetchUrlOutput>, anyhow::Error>> {
         Box::pin(async move { Ok(None) })
     }
 
     #[allow(unused_variables)]
-    fn import(&self, job: ImportJob) -> BoxFuture<'static, Result<Option<ImportOutput>, AnyError>> {
+    fn import(
+        &self,
+        job: ImportJob,
+    ) -> BoxFuture<'static, Result<Option<ImportOutput>, anyhow::Error>> {
         Box::pin(async move { Ok(None) })
     }
 
-    fn stop(&self) -> Result<(), AnyError> {
+    fn stop(&self) -> Result<(), anyhow::Error> {
         Ok(())
     }
 }
@@ -236,7 +238,7 @@ pub fn build_upsert_migration(schema: &DbSchema) -> migrate::Migration {
             schema: attr.clone(),
         })
     });
-    let entities = schema.entities.iter().map(|entity| {
+    let entities = schema.classes.iter().map(|entity| {
         migrate::SchemaAction::EntityUpsert(migrate::EntityUpsert {
             schema: entity.clone(),
         })
