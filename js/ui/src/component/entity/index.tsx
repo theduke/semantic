@@ -20,7 +20,7 @@ import {
   FACTOR_TYPE,
   FACTOR_VALUE_TYPE,
 } from "semantic/dist/schema";
-import { EntitySchema } from "semantic/dist/core";
+import { Class } from "semantic/dist/core";
 import { EntityChildrenLoader } from "./EntityChildren";
 import { EntityEditor } from "./EntityEditor";
 import { EntityDeleterModal } from "./EntityDeleterModal";
@@ -162,7 +162,7 @@ export function renderEntityTable(
 
 export function renderEntityBox(
   reg: UiRegistry,
-  schema: EntitySchema,
+  schema: Class,
   item: ValueMap,
   opts: EntityRenderOpts
 ): JSX.Element {

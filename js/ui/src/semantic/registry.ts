@@ -2,9 +2,9 @@ import { JSX } from "solid-js/jsx-runtime";
 import { AttributeName, EntityType, genericEntityTitle } from ".";
 import { renderAttrValue, renderGenericEntityBox } from "../component/entity";
 import {
-  AttributeSchema,
+  Attribute,
   Cardinality,
-  EntitySchema,
+  Class,
   SemanticSchema,
 } from "semantic/dist/core";
 import { UiPlugin } from "./plugin";
@@ -67,8 +67,8 @@ export type EntityTypeMap<T> = Record<EntityType, T>;
 export class UiRegistry {
   schema: SemanticSchema;
 
-  attrs: Record<AttributeName, AttributeSchema> = {};
-  entityTypes: EntityTypeMap<EntitySchema> = {};
+  attrs: Record<AttributeName, Attribute> = {};
+  entityTypes: EntityTypeMap<Class> = {};
 
   hiddenEntityTypes: Set<EntityType> = new Set();
 
@@ -94,7 +94,7 @@ export class UiRegistry {
       this.attributeRenderers[ident] = attrRenderer;
     }
 
-    for (const entity of schema.db.entities) {
+    for (const entity of schema.db.classes) {
       const ident = entity[FACTOR_IDENT];
       this.entityTypes[ident] = entity;
       this.entityTitleRenderers[ident] = genericEntityTitle;
@@ -136,11 +136,11 @@ export class UiRegistry {
     }
   }
 
-  getEntityType(ty: EntityType): EntitySchema | null {
+  getEntityType(ty: EntityType): Class | null {
     return this.entityTypes[ty] ?? null;
   }
 
-  mustGetEntityType(ty: EntityType): EntitySchema {
+  mustGetEntityType(ty: EntityType): Class {
     const entity = this.entityTypes[ty];
     if (!entity) {
       throw new Error(`Entity type ${ty} not found`);
@@ -148,7 +148,7 @@ export class UiRegistry {
     return entity;
   }
 
-  mustGetAttribute(attr: AttributeName): AttributeSchema {
+  mustGetAttribute(attr: AttributeName): Attribute {
     const attrSchema = this.attrs[attr];
     if (!attrSchema) {
       throw new Error(`Attribute ${attr} not found`);
@@ -160,11 +160,11 @@ export class UiRegistry {
     return genericEntityTitle(entity);
   }
 
-  entityAttributes(ty: EntityType): [AttributeSchema, Cardinality][] {
+  entityAttributes(ty: EntityType): [Attribute, Cardinality][] {
     const schema = this.mustGetEntityType(ty);
     return schema[FACTOR_ENTITY_ATTRIBUTES].map((field) => {
-      const as = this.mustGetAttribute(field.attribute);
-      return [as, field.cardinality];
+      const as = this.mustGetAttribute(field['factor/attribute']);
+      return [as, field['factor/required'] ? 'Required' : 'Optional'];
     });
   }
 

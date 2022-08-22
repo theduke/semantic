@@ -9,7 +9,7 @@ import { GenericPage } from "../util";
 export function EntityCreateSelectorPage(): JSX.Element {
   const reg = useRegistry();
 
-  const buttons = reg.schema.db.entities
+  const buttons = reg.schema.db.classes
     .filter((entity) => !entity[FACTOR_IDENT]?.startsWith("factor/"))
     .map((entity) => {
       const title = entity["factor/title"] || entity["factor/ident"];

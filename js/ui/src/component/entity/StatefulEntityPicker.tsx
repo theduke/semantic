@@ -1,5 +1,5 @@
 import { ValueMap } from "semantic/dist/api";
-import { EntitySchema } from "semantic/dist/core";
+import { Class } from "semantic/dist/core";
 import {
   createEffect,
   createSignal,
@@ -18,7 +18,7 @@ import { EntityPicker, EntityPickerProps } from "./EntityPicker";
 
 export interface StatefulEntityPickerProps
   extends Omit<EntityPickerProps, "onSelect"> {
-  schema: EntitySchema;
+  schema: Class;
 
   noCreate?: boolean;
 

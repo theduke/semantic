@@ -1,6 +1,6 @@
 import { JSX } from "solid-js";
 import { useApi, useRegistry } from "../../context";
-import { EntitySchema } from "semantic/dist/core";
+import { Class } from "semantic/dist/core";
 import { ValueMap } from "../../semantic/registry";
 import { FACTOR_ENTITY_ATTRIBUTES, FACTOR_ID, SEMANTIC_CREATED_AT } from "semantic/dist/schema";
 import { GenericEntityForm } from "./entity_form";
@@ -8,7 +8,7 @@ import { newUuid } from "..";
 import { NotificationErrorBoundary } from "../util";
 
 export interface EntityCreatorProps {
-  schema: EntitySchema;
+  schema: Class;
 
   cancelLabel?: JSX.Element;
   onCancel?: () => void;
@@ -33,7 +33,7 @@ export function EntityCreator(props: EntityCreatorProps): JSX.Element {
 
   const hasCreatedAt =
     props.schema[FACTOR_ENTITY_ATTRIBUTES].find(
-      (x) => x.attribute === SEMANTIC_CREATED_AT
+      (x) => x['factor/attribute'] === SEMANTIC_CREATED_AT
     ) !== undefined;
 
   if (hasCreatedAt) {

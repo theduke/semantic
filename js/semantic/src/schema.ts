@@ -87,9 +87,9 @@ export interface FactorAttribute extends BaseEntity {
 }
 
 
-export const TY_FACTOR_ENTITY = "factor/Entity";
-export interface FactorEntity extends BaseEntity {
-  "factor/type": "factor/Entity",
+export const TY_FACTOR_CLASS = "factor/Class";
+export interface FactorClass extends BaseEntity {
+  "factor/type": "factor/Class",
   "factor/id": EntityId,
   "factor/ident": string,
   "factor/title"?: string | null,

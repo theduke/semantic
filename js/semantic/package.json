@@ -6,6 +6,7 @@
   "main": "./dist/semantic.umd.js",
   "types": "./dist/index.d.ts",
   "scripts": {
+    "check": "tsc --noEmit",
     "build": "rm -rf ./dist && yarn tsc && mv dist/src/* ./dist && rm -rf ./dist/src && esbuild --platform=neutral --outdir=./dist --out-extension:.js=.mjs --sourcemap=inline src/index.ts src/api.ts src/core.ts src/db.ts src/schema.ts && esbuild --platform=neutral --outdir=./dist --format=cjs --out-extension:.js=.js --sourcemap=inline src/index.ts src/api.ts src/core.ts src/db.ts src/schema.ts"
   },
   "exports": {

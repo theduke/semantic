@@ -2,9 +2,9 @@ import { merge } from "lodash";
 import { Box } from "solid-bulma";
 import { createEffect, createSignal, For, JSX, Show } from "solid-js";
 import {
-  AttributeSchema,
+  Attribute,
   Cardinality,
-  EntitySchema,
+  Class,
   Expr,
   Id,
   Value,
@@ -80,7 +80,7 @@ function makeStringValidator(
 
 export function entityAttributeFormField(
   form: FormState<ValueMap>,
-  attr: AttributeSchema,
+  attr: Attribute,
   cardinality: Cardinality
 ): [JSX.Element, FormValidator<ValueMap>] {
   const attributeName = attr["factor/title"] || attr["factor/ident"];
@@ -237,7 +237,7 @@ export function entityAttributeFormField(
 
 export interface GenericEntityFormProps {
   registry: UiRegistry;
-  schema?: EntitySchema | null;
+  schema?: Class | null;
 
   forbidExtraAttributes?: boolean;
 
@@ -254,7 +254,7 @@ export interface GenericEntityFormProps {
 }
 
 interface ExtraAttrItem {
-  schema: AttributeSchema;
+  schema: Attribute;
   validator: FormValidator<ValueMap>;
   rendered: JSX.Element;
 }
@@ -351,11 +351,11 @@ export function GenericEntityForm(props: GenericEntityFormProps): JSX.Element {
     }
     const isInEntity =
       props.schema?.[FACTOR_ENTITY_ATTRIBUTES].find(
-        (field) => field.attribute === ident
+        (field) => field['factor/attribute'] === ident
       ) !== undefined;
     return !isInEntity;
   });
-  const extraAdderSearch = (term: string): Promise<AttributeSchema[]> => {
+  const extraAdderSearch = (term: string): Promise<Attribute[]> => {
     const lower = term.toLowerCase();
 
     const matches = availableAttrs.filter((attr) => {
@@ -403,7 +403,7 @@ export function GenericEntityForm(props: GenericEntityFormProps): JSX.Element {
                   <b>Add attribute</b>
                 </p>
 
-                <SearchSelect<AttributeSchema>
+                <SearchSelect<Attribute>
                   itemWrapper={(props) => (
                     <div class="mb-2">
                       <Buttons>{props.children}</Buttons>

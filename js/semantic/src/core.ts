@@ -26,19 +26,19 @@ export type BinaryOp = "And" | "Or" | "Eq" | "Neq" | "Gt" | "Gte" | "Lt" | "Lte"
 
 export interface Sort { on: Expr, order: Order, }
 
-export interface DbSchema { attributes: Array<AttributeSchema>, entities: Array<EntitySchema>, indexes: Array<IndexSchema>, }
+export interface DbSchema { attributes: Array<Attribute>, classes: Array<Class>, indexes: Array<IndexSchema>, }
 
-export interface AttributeSchema { "factor/id": Id, "factor/ident": string, "factor/title": string | null, "factor/description": string | null, "factor/valueType": ValueType, "factor/unique": boolean, "factor/index": boolean, "factor/isStrict": boolean, }
+export interface Attribute { "factor/id": Id, "factor/ident": string, "factor/title": string | null, "factor/description": string | null, "factor/valueType": ValueType, "factor/unique": boolean, "factor/index": boolean, "factor/isStrict": boolean, }
 
-export interface EntitySchema { "factor/id": Id, "factor/ident": string, "factor/title": string | null, "factor/description": string | null, "factor/entityAttributes": Array<EntityAttribute>, "factor/extend": Array<IdOrIdent>, "factor/isStrict": boolean, }
+export interface Class { "factor/id": Id, "factor/ident": string, "factor/title": string | null, "factor/description": string | null, "factor/entityAttributes": Array<ClassAttribute>, "factor/extend": Array<string>, "factor/isStrict": boolean, }
 
-export interface EntityAttribute { attribute: IdOrIdent, cardinality: Cardinality, }
+export interface ClassAttribute { "factor/attribute": string, "factor/required": boolean, }
 
 export type Cardinality = "Optional" | "Required";
 
 export interface IndexSchema { "factor/id": Id, "factor/ident": string, "factor/title": string | null, "factor/index_attributes": Array<Id>, "factor/description": string | null, "factor/unique": boolean, }
 
-export type ValueType = "Any" | "Unit" | "Bool" | "Int" | "UInt" | "Float" | "String" | "Bytes" | { List: ValueType } | { Map: MapType } | { Union: Array<ValueType> } | { Object: ObjectType } | "DateTime" | "Url" | "Ref" | { Ident: ConstrainedRefType } | { RefConstrained: ConstrainedRefType } | { Const: Value };
+export type ValueType = "Any" | "Unit" | "Bool" | "Int" | "UInt" | "Float" | "String" | "Bytes" | { List: ValueType } | { Map: MapType } | { Union: Array<ValueType> } | { Object: ObjectType } | "DateTime" | "Url" | "Ref" | { Ident: ConstrainedRefType } | { RefConstrained: ConstrainedRefType } | "EmbeddedEntity" | { Const: Value };
 
 export interface ObjectType { name: string | null, fields: Array<ObjectField>, }
 
@@ -120,7 +120,7 @@ export interface BackendStatus { db_size: bigint | null, asset_size: bigint | nu
 
 export type DbConfig = "InMemory" | { Crypto: BackendCryptoConfig };
 
-export interface BackendCryptoConfig { data_path: string | null, key: string, key_iterations: number | null, salt: string | null, raw: boolean, offset: bigint | null, full_index_write_interval: bigint | null, }
+export interface BackendCryptoConfig { data_path: string | null, key: string, key_iterations: number | null, salt: string | null, raw: boolean, offset: bigint | null, full_index_write_interval: bigint | null, readonly: boolean, }
 
 export interface Job { id: string, name: string, created_at: Timestamp, started_at: Timestamp | null, finished_at: Timestamp | null, steps: Array<JobStep>, status: JobStatus, }
 
