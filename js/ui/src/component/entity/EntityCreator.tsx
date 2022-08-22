@@ -2,7 +2,7 @@ import { JSX } from "solid-js";
 import { useApi, useRegistry } from "../../context";
 import { EntitySchema } from "semantic/dist/core";
 import { ValueMap } from "../../semantic/registry";
-import { FACTOR_ID, SEMANTIC_CREATED_AT } from "semantic/dist/schema";
+import { FACTOR_ENTITY_ATTRIBUTES, FACTOR_ID, SEMANTIC_CREATED_AT } from "semantic/dist/schema";
 import { GenericEntityForm } from "./entity_form";
 import { newUuid } from "..";
 import { NotificationErrorBoundary } from "../util";
@@ -32,7 +32,7 @@ export function EntityCreator(props: EntityCreatorProps): JSX.Element {
   const initialValues: ValueMap = {};
 
   const hasCreatedAt =
-    props.schema["factor/entityAttributes"].find(
+    props.schema[FACTOR_ENTITY_ATTRIBUTES].find(
       (x) => x.attribute === SEMANTIC_CREATED_AT
     ) !== undefined;
 

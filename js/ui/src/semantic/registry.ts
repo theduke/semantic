@@ -8,7 +8,7 @@ import {
   SemanticSchema,
 } from "semantic/dist/core";
 import { UiPlugin } from "./plugin";
-import { FACTOR_IDENT, FACTOR_TYPE } from "semantic/dist/schema";
+import { FACTOR_ENTITY_ATTRIBUTES, FACTOR_IDENT, FACTOR_TYPE } from "semantic/dist/schema";
 
 export type ValueMap = Record<string, any>;
 
@@ -162,7 +162,7 @@ export class UiRegistry {
 
   entityAttributes(ty: EntityType): [AttributeSchema, Cardinality][] {
     const schema = this.mustGetEntityType(ty);
-    return schema["factor/entityAttributes"].map((field) => {
+    return schema[FACTOR_ENTITY_ATTRIBUTES].map((field) => {
       const as = this.mustGetAttribute(field.attribute);
       return [as, field.cardinality];
     });

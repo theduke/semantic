@@ -12,7 +12,7 @@ import {
 } from "semantic/dist/core";
 import { exprAttr, exprLiteral, exprNotEq } from "semantic/dist/db";
 import { UiRegistry, ValueMap } from "../../semantic/registry";
-import { FACTOR_ID, FACTOR_TYPE } from "semantic/dist/schema";
+import { FACTOR_ENTITY_ATTRIBUTES, FACTOR_ID, FACTOR_IDENT, FACTOR_TITLE, FACTOR_TYPE } from "semantic/dist/schema";
 import { Button, Buttons } from "../bulma/button";
 import { FieldHorizontal } from "../bulma/form";
 import { Icon } from "../bulma/icon";
@@ -32,7 +32,6 @@ import { SelectOption } from "../form/Select";
 import { SelectField } from "../form/SelectField";
 import { SearchSelect } from "../util/SearchSelect";
 import { EntityPicker } from "./EntityPicker";
-import { NotificationErrorBoundary } from "../util";
 
 function unionPlainOptions(variants: ValueType[]): SelectOption<Value>[] {
   return variants.map((variant) => {
@@ -346,12 +345,12 @@ export function GenericEntityForm(props: GenericEntityFormProps): JSX.Element {
   const [extraAdderActive, setExtraAdderActive] = createSignal(false);
 
   const availableAttrs = Object.values(props.registry.attrs).filter((attr) => {
-    const ident = attr["factor/ident"];
+    const ident = attr[FACTOR_IDENT];
     if (ident.startsWith("factor/")) {
       return false;
     }
     const isInEntity =
-      props.schema?.["factor/entityAttributes"].find(
+      props.schema?.[FACTOR_ENTITY_ATTRIBUTES].find(
         (field) => field.attribute === ident
       ) !== undefined;
     return !isInEntity;
@@ -361,13 +360,13 @@ export function GenericEntityForm(props: GenericEntityFormProps): JSX.Element {
 
     const matches = availableAttrs.filter((attr) => {
       const isMatch =
-        (attr["factor/title"]?.toLowerCase().includes(lower) ?? false) ||
-        attr["factor/ident"].toLowerCase().includes(lower);
+        (attr[FACTOR_TITLE]?.toLowerCase().includes(lower) ?? false) ||
+        attr[FACTOR_IDENT].toLowerCase().includes(lower);
 
       if (isMatch) {
         const isInUse =
           extraAttrs().find(
-            (field) => field.schema["factor/ident"] === attr["factor/ident"]
+            (field) => field.schema[FACTOR_IDENT] === attr[FACTOR_IDENT]
           ) !== undefined;
         return !isInUse;
       } else {
