@@ -1,6 +1,6 @@
 import { throttle } from "lodash";
 import { Api, newSelect, ValueMap } from "semantic/dist/api";
-import { FetchUrlJob } from "semantic/dist/core";
+import { FetchUrlJob, FetchUrlOutput } from "semantic/dist/core";
 import { exprAttr, exprIn, exprList, exprLiteral } from "semantic/dist/db";
 import { BaseEntity, FACTOR_TYPE, SEMANTIC_URL } from "semantic/dist/schema";
 import { Link } from "solid-app-router";
@@ -24,12 +24,18 @@ import {
   NotificationError,
   NotificationWarning,
 } from "../bulma/notification";
-import { renderEntityTable } from "../entity";
+import { renderEntityBox, renderEntityTable } from "../entity";
 import { EntityBox } from "../entity/EntityBox";
 import { createForm } from "../form";
 import { CheckboxField } from "../form/CheckboxField";
 import { InputField } from "../form/InputField";
-import { loadAsError, LoadState, renderError, SPINNER } from "../util/load";
+import {
+  loadAsError,
+  loadAsSuccess,
+  LoadState,
+  renderError,
+  SPINNER,
+} from "../util/load";
 import zod from "zod";
 
 interface FormValues {
@@ -80,6 +86,9 @@ export function Importer(props: ImporterProps): JSX.Element {
   const [values, setValues] = createSignal<FormValues>(initialValues);
   const [query, setQuery] = createSignal<FetchUrlJob | undefined>(initialQuery);
 
+  const [fetchOutput, setFetchOutput] = createSignal<
+    FetchUrlOutput | undefined
+  >();
   const [queueItems, setQueueItems] = createSignal<QueueItem[]>([]);
   const [importedItems, setImportedItems] = createSignal<BaseEntity[]>([]);
 
@@ -101,28 +110,34 @@ export function Importer(props: ImporterProps): JSX.Element {
 
   let nextItemId = 0;
 
-  const [results, { mutate }] = createResource<true | null, FetchUrlJob>(
+  const [results, { mutate }] = createResource<LoadState<boolean>, FetchUrlJob>(
     query,
-    async (query): Promise<true | null> => {
+    async (query): Promise<LoadState<boolean>> => {
       if (!(query && query.url)) {
-        return null;
+        return { state: "idle" };
       }
-      let items = await loadPreview(api, query, nextItemId);
+      let output, items;
+      try {
+        [output, items] = await loadPreview(api, query, nextItemId);
+      } catch (error: any) {
+        return { state: "error", error: error.toString() };
+      }
+
       nextItemId += items.length;
-      console.debug({ skip: form.state.fields.skipExisting?.value });
       if (form.state.fields.skipExisting?.value ?? false) {
         items = items.filter((item) => !item.oldEntity);
       }
 
+      setFetchOutput(output);
       setQueueItems(items);
       props.onSettingsChanged?.({
         url: query.url,
         importMedia: values().importMedia,
       });
 
-      return true;
+      return { state: "success", data: true };
     },
-    { initialValue: null }
+    { initialValue: { state: "idle" } }
   );
 
   const doImport = async (originalItem: QueueItem) => {
@@ -208,91 +223,109 @@ export function Importer(props: ImporterProps): JSX.Element {
       </Box>
 
       <div>
-        <ErrorBoundary fallback={renderError}>
-          <Switch>
-            <Match when={results.loading}>{SPINNER}</Match>
-            <Match when={results() === null}>
-              <Notification>Enter a url...</Notification>
-            </Match>
-            <Match when={results() === true}>
-              <Show
-                when={queueItems().length > 0}
-                fallback={<Notification>No items found</Notification>}
+        <Switch>
+          <Match when={results.loading}>{SPINNER}</Match>
+          <Match when={results().state === "idle"}>
+            <Notification>Enter a url...</Notification>
+          </Match>
+          <Match when={loadAsError(results())}>
+            {(err) => {
+              console.trace(err);
+              return renderError(err);
+            }}
+          </Match>
+          <Match when={loadAsSuccess(results())}>
+            <Show
+              when={queueItems().length > 0}
+              fallback={<Notification>No items found</Notification>}
+            >
+              <div
+                style={{
+                  display: "flex",
+                  "flex-direction": "column",
+                  gap: "1rem",
+                }}
               >
-                <div
-                  style={{
-                    display: "flex",
-                    "flex-direction": "column",
-                    gap: "1rem",
-                  }}
-                >
-                  <For each={queueItems()}>
-                    {(item) => {
-                      const data = item.data;
+                <For each={queueItems()}>
+                  {(item) => {
+                    const data = item.data;
 
-                      const ident = data[FACTOR_TYPE];
-                      const contentRender = reg.entityContentRenderers[ident];
-                      console.debug({ contentRender });
-                      let content;
-                      if (contentRender) {
-                        content = contentRender(data, { preview: true });
-                      } else {
-                        content = renderEntityTable(reg, data);
-                      }
-                      const title = reg.entityTitle(data);
-                      return (
-                        <EntityBox title={title}>
-                          <Buttons>
-                            <Show when={item.data[SEMANTIC_URL]}>
-                              <Button
-                                loading={item.loader[0]().state === "loading"}
-                                onClick={() => {
-                                  doImport(item);
-                                }}
-                              >
-                                Import
-                              </Button>
-                            </Show>
+                    const ident = data[FACTOR_TYPE];
+                    const contentRender = reg.entityContentRenderers[ident];
+                    console.debug({ contentRender });
+                    let content;
+                    if (contentRender) {
+                      content = contentRender(data, { preview: true });
+                    } else {
+                      content = renderEntityTable(reg, data);
+                    }
+                    const title = reg.entityTitle(data);
+                    return (
+                      <EntityBox title={title}>
+                        <Buttons>
+                          <Show when={item.data[SEMANTIC_URL]}>
                             <Button
+                              loading={item.loader[0]().state === "loading"}
                               onClick={() => {
-                                discardItem(item);
+                                doImport(item);
                               }}
                             >
-                              Discard
+                              Import
                             </Button>
-                          </Buttons>
-
-                          <Show when={item.oldEntity}>
-                            {(old) => {
-                              return (
-                                <NotificationWarning>
-                                  Already imported:{" "}
-                                  <Link href={entityLinkPath(old)}>
-                                    {reg.entityTitle(old)}
-                                  </Link>
-                                </NotificationWarning>
-                              );
+                          </Show>
+                          <Button
+                            onClick={() => {
+                              discardItem(item);
                             }}
-                          </Show>
+                          >
+                            Discard
+                          </Button>
+                        </Buttons>
 
-                          <Show when={loadAsError(item.loader[0]())}>
-                            {(err) => (
-                              <NotificationError>{err}</NotificationError>
-                            )}
-                          </Show>
+                        <Show when={item.oldEntity}>
+                          {(old) => {
+                            return (
+                              <NotificationWarning>
+                                Already imported:{" "}
+                                <Link href={entityLinkPath(old)}>
+                                  {reg.entityTitle(old)}
+                                </Link>
+                              </NotificationWarning>
+                            );
+                          }}
+                        </Show>
 
-                          <hr />
+                        <Show when={loadAsError(item.loader[0]())}>
+                          {(err) => (
+                            <NotificationError>{err}</NotificationError>
+                          )}
+                        </Show>
 
-                          {content}
-                        </EntityBox>
-                      );
-                    }}
-                  </For>
-                </div>
-              </Show>
-            </Match>
-          </Switch>
-        </ErrorBoundary>
+                        <hr />
+
+                        {content}
+                      </EntityBox>
+                    );
+                  }}
+                </For>
+              </div>
+            </Show>
+
+            <Show when={fetchOutput()}>
+              {(out) => (
+                <RelatedLinks
+                  currentUrl={query()?.url || ""}
+                  data={out}
+                  openUrl={(url: string) => {
+                    form.setField("url", url);
+                  }}
+                />
+              )}
+            </Show>
+
+            <hr />
+          </Match>
+        </Switch>
 
         <Show when={importedItems().length > 0}>
           <h4 class="title is-4 mt-4">Imported</h4>
@@ -322,7 +355,58 @@ export function Importer(props: ImporterProps): JSX.Element {
   );
 }
 
-async function loadPreview(api: Api, query: FetchUrlJob, firstItemId: number) {
+function RelatedLinks(props: {
+  data: FetchUrlOutput;
+  currentUrl: string;
+  openUrl: (url: string) => void;
+}): JSX.Element {
+  const data = props.data;
+
+  const parts: JSX.Element[] = [];
+
+  if (data.load_more_url) {
+    const url = data.load_more_url.url;
+    parts.push(
+      <Buttons class="is-justify-content-center">
+        <Button
+          size="is-large"
+          onClick={() => {
+            props.openUrl(url);
+          }}
+        >
+          Load More
+        </Button>
+      </Buttons>
+    );
+  }
+
+  if (data.related_urls?.length > 0) {
+    parts.push(
+      <Buttons>
+        <For each={data.related_urls}>
+          {(item) => (
+            <Button
+              classList={{ "is-active": item.url === props.currentUrl }}
+              onClick={() => {
+                props.openUrl(item.url);
+              }}
+            >
+              {item.label}
+            </Button>
+          )}
+        </For>
+      </Buttons>
+    );
+  }
+
+  return parts.length > 0 ? <div class="mt-4">{parts}</div> : null;
+}
+
+async function loadPreview(
+  api: Api,
+  query: FetchUrlJob,
+  firstItemId: number
+): Promise<[FetchUrlOutput, QueueItem[]]> {
   const out = await api.fetchUrl(query);
   // Find existing.
   const urls: string[] = out.items
@@ -346,5 +430,5 @@ async function loadPreview(api: Api, query: FetchUrlJob, firstItemId: number) {
       ) as BaseEntity | null,
     })
   );
-  return items;
+  return [out, items];
 }
