@@ -154,7 +154,14 @@ export function renderEntityTable(
             <Button onclick={() => setShowChildren(true)}>Load children</Button>
           }
         >
-          <EntityChildrenLoader id={item[FACTOR_ID]} />
+          <EntityChildrenLoader
+            id={item[FACTOR_ID]}
+            render={(item) => {
+              return (
+                <Link href={entityLinkPath(item)}>{reg.entityTitle(item)}</Link>
+              );
+            }}
+          />
         </Show>
       </td>
     </tr>

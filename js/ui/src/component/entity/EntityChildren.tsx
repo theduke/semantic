@@ -1,14 +1,17 @@
 import { For, JSX } from "solid-js";
-import { newSelect } from "semantic/dist/api";
+import { newSelect, ValueMap } from "semantic/dist/api";
 import { useRegistry } from "../../context";
 import { Expr, Id, Select, Sort } from "semantic/dist/core";
 import { exprAnd } from "semantic/dist/db";
 import { EntitiesLoader } from "./EntitiesLoader";
+import { Notification } from "../bulma/notification";
 
 export interface EntityChildrenProps {
   id: Id;
   baseFilter?: Expr;
   sort?: Sort;
+
+  render?: (item: ValueMap) => JSX.Element;
 }
 
 export function EntityChildrenLoader(props: EntityChildrenProps): JSX.Element {
@@ -31,8 +34,15 @@ export function EntityChildrenLoader(props: EntityChildrenProps): JSX.Element {
   return (
     <EntitiesLoader select={select}>
       {(items) => (
-        <For each={items}>
-          {(item) => reg.renderEntity(item, { preview: true })}
+        <For
+          each={items}
+          fallback={<Notification>Nothing found.</Notification>}
+        >
+          {(item) =>
+            props.render
+              ? props.render(item)
+              : reg.renderEntity(item, { preview: true })
+          }
         </For>
       )}
     </EntitiesLoader>
