@@ -287,7 +287,7 @@ interface UploaderMetaFormProps {
 
 function UploaderMetaForm(props: UploaderMetaFormProps): JSX.Element {
   const reg = useRegistry();
-  const collectionSchema = Object.values(reg.entityTypes).find(
+  const collectionSchema = Object.values(reg.classes).find(
     (e) => e[FACTOR_IDENT] === TY_SEMANTIC_COLLECTION
   );
   if (!collectionSchema) {

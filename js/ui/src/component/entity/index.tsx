@@ -27,9 +27,7 @@ import { EntityEditor } from "./EntityEditor";
 import { EntityDeleterModal } from "./EntityDeleterModal";
 import { NotificationError, NotificationWarning } from "../bulma/notification";
 import { Button } from "../bulma/button";
-import { Modal } from "../bulma/modal";
 import { EntityTagManager } from "../tag/EntityTagManager";
-import { Box } from "solid-bulma";
 
 export function rendererValue(value: any): JSX.Element {
   const ty = typeof value;
@@ -203,7 +201,7 @@ export function renderGenericEntityBox(
   opts: EntityRenderOpts
 ): JSX.Element {
   const ty = item[FACTOR_TYPE];
-  const schema = reg.entityTypes[ty];
+  const schema = reg.classes[ty];
 
   const typeName = schema
     ? schema?.[FACTOR_TITLE] ?? schema?.[FACTOR_IDENT] ?? ty

@@ -10,6 +10,7 @@ import {
 import { UiPlugin } from "./plugin";
 import {
   FACTOR_ENTITY_ATTRIBUTES,
+  FACTOR_EXTEND,
   FACTOR_IDENT,
   FACTOR_TYPE,
 } from "semantic/dist/schema";
@@ -79,9 +80,9 @@ export class UiRegistry {
   schema: SemanticSchema;
 
   attrs: Record<AttributeName, Attribute> = {};
-  entityTypes: EntityTypeMap<Class> = {};
-
-  hiddenEntityTypes: Set<EntityType> = new Set();
+  classes: EntityTypeMap<Class> = {};
+  classParentMap: Record<EntityType, Set<EntityType>>;
+  hiddenClasses: Set<EntityType> = new Set();
 
   plugins: Record<string, UiPlugin> = {};
 
@@ -105,12 +106,31 @@ export class UiRegistry {
       this.attributeRenderers[ident] = attrRenderer;
     }
 
-    for (const entity of schema.db.classes) {
-      const ident = entity[FACTOR_IDENT];
-      this.entityTypes[ident] = entity;
+    for (const cls of schema.db.classes) {
+      const ident = cls[FACTOR_IDENT];
+      this.classes[ident] = cls;
       this.entityTitleRenderers[ident] = genericEntityTitle;
       // this.entityContentRenderers[ident] = tableRender;
     }
+
+    // Build parents map.
+    const map: Record<EntityType, Set<EntityType>> = {};
+    for (const cls of schema.db.classes) {
+      let parents: EntityType[] = cls[FACTOR_EXTEND] ?? [];
+      const set = new Set<EntityType>([]);
+
+      while (true) {
+        const parentIdent = parents.pop();
+        if (!parentIdent) {
+          break;
+        }
+        set.add(parentIdent);
+        const nestedParents = this.classes[parentIdent][FACTOR_EXTEND] ?? [];
+        parents = [...parents, ...nestedParents];
+      }
+      map[cls[FACTOR_IDENT]] = set;
+    }
+    this.classParentMap = map;
   }
 
   registerPlugin(plugin: UiPlugin) {
@@ -148,11 +168,11 @@ export class UiRegistry {
   }
 
   getEntityType(ty: EntityType): Class | null {
-    return this.entityTypes[ty] ?? null;
+    return this.classes[ty] ?? null;
   }
 
   mustGetEntityType(ty: EntityType): Class {
-    const entity = this.entityTypes[ty];
+    const entity = this.classes[ty];
     if (!entity) {
       throw new Error(`Entity type ${ty} not found`);
     }

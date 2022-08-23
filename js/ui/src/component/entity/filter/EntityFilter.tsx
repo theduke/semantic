@@ -1,39 +1,18 @@
 import { createEffect, createSignal, JSX, Match, Switch } from "solid-js";
 import { Tabs } from "../../bulma/tabs";
-import {
-  buildFilterDataSelect,
-  EntityFilterData,
-  EntityFilterForm,
-  newFilterData,
-  validateEntityFilterData,
-} from "./EntityFilterForm";
-import {
-  EntityFilterSql,
-  EntityFilterSqlForm,
-  validateEntityFilterSql,
-} from "./EntityFilterSqlForm";
-import zod from "zod";
+import { EntityFilterBuilderForm } from "./EntityFilterForm";
+import { EntityFilterSqlForm } from "./EntityFilterSqlForm";
 import { Api, ValueMap } from "semantic/dist/api";
 
-export const validateEntityFilter = zod.discriminatedUnion("type", [
-  validateEntityFilterData,
-  validateEntityFilterSql,
-]);
-export type EntityFilter = zod.infer<typeof validateEntityFilter>;
-
-export interface EntityFilterProps {
-  initialFilter?: EntityFilter;
-
-  onChange: (filter: EntityFilter) => void;
-}
-
-function isSql(filter: EntityFilter): filter is EntityFilterSql {
-  return filter.type === "sql";
-}
-
-function isData(filter: EntityFilter): filter is EntityFilterData {
-  return filter.type === "data";
-}
+import {
+  buildFilterDataSelect,
+  EntityFilter,
+  EntityFilterData,
+  EntityFilterSql,
+  filterIsData,
+  filterIsSql,
+  newFilterData,
+} from ".";
 
 export function loadFilter(
   api: Api,
@@ -59,14 +38,20 @@ export function emptyEntityFilter(): EntityFilter {
   };
 }
 
-export function EntityFilter(props: EntityFilterProps): JSX.Element {
+export interface EntityFilterFormProps {
+  initialFilter?: EntityFilter;
+
+  onChange: (filter: EntityFilter) => void;
+}
+
+export function EntityFilterForm(props: EntityFilterFormProps): JSX.Element {
   const initialFilter = props.initialFilter ?? newFilterData();
 
   const [filter, setFilter] = createSignal<EntityFilter>(initialFilter);
 
   let oldDataFilter: EntityFilterData | undefined;
   let oldSqlFilter: EntityFilterSql | undefined;
-  if (isSql(initialFilter)) {
+  if (filterIsSql(initialFilter)) {
     oldSqlFilter = initialFilter;
   } else {
     oldDataFilter = initialFilter;
@@ -75,9 +60,9 @@ export function EntityFilter(props: EntityFilterProps): JSX.Element {
   createEffect(() => {
     const current = filter();
 
-    if (isSql(current)) {
+    if (filterIsSql(current)) {
       oldSqlFilter = current;
-    } else if (isData(current)) {
+    } else if (filterIsData(current)) {
       oldDataFilter = current;
     }
     props.onChange(current);
@@ -87,7 +72,7 @@ export function EntityFilter(props: EntityFilterProps): JSX.Element {
     <div>
       <Tabs
         initialIndex={
-          props.initialFilter ? (isSql(props.initialFilter) ? 1 : 0) : 0
+          props.initialFilter ? (filterIsSql(props.initialFilter) ? 1 : 0) : 0
         }
         onChange={(index) => {
           if (index === 0) {
@@ -103,13 +88,18 @@ export function EntityFilter(props: EntityFilterProps): JSX.Element {
 
       <Switch>
         <Match when={filter().type === "data"}>
-          <EntityFilterForm filter={filter as any} setFilter={setFilter} />
+          <EntityFilterBuilderForm
+            filter={filter as any}
+            setFilter={setFilter}
+          />
         </Match>
 
         <Match when={filter().type === "sql"}>
           <EntityFilterSqlForm filter={filter as any} setFilter={setFilter} />
         </Match>
       </Switch>
+
+      <div></div>
     </div>
   );
 }

@@ -8,23 +8,8 @@ import {
   untrack,
 } from "solid-js";
 import { DeletableTag, Tags } from "solid-bulma";
-import zod from "zod";
-
-import { newSelect } from "semantic/dist/api";
 import { useRegistry } from "../../../context";
-import { Select } from "semantic/dist/core";
-import {
-  exprAndMany,
-  exprAttr,
-  exprContains,
-  exprIsInEntityTypes,
-  exprLiteral,
-} from "semantic/dist/db";
-import {
-  FACTOR_IDENT,
-  FACTOR_TITLE,
-  SEMANTIC_TITLE,
-} from "semantic/dist/schema";
+import { FACTOR_IDENT, FACTOR_TITLE } from "semantic/dist/schema";
 import { Button } from "../../bulma/button";
 import { FieldHorizontal } from "../../bulma/form";
 import { Icon } from "../../bulma/icon";
@@ -32,43 +17,9 @@ import { SearchInput } from "../../bulma/SearchInput";
 import { MultiSelectSearch } from "../../util/MultiSelectSearch";
 import { EntityType } from "../../../semantic";
 import { SelectOption } from "../../form/Select";
+import { EntityFilterData } from ".";
 
-export const validateEntityFilterData = zod.object({
-  type: zod.literal("data"),
-  searchTerm: zod.optional(zod.string()),
-  entityTypes: zod.optional(zod.array(zod.string())),
-});
-
-export type EntityFilterData = zod.infer<typeof validateEntityFilterData>;
-
-export function newFilterData(): EntityFilterData {
-  return {
-    type: "data",
-    searchTerm: "",
-  };
-}
-
-export function buildFilterDataSelect(filter: EntityFilterData): Select {
-  let exprs = [];
-
-  const term = filter.searchTerm?.trim();
-  if (term) {
-    const contains = exprContains(exprAttr(SEMANTIC_TITLE), exprLiteral(term));
-    exprs.push(contains);
-  }
-
-  if (filter.entityTypes && filter.entityTypes.length > 0) {
-    const types = filter.entityTypes;
-    exprs.push(exprIsInEntityTypes(types));
-  }
-
-  return {
-    ...newSelect(),
-    filter: exprAndMany(exprs),
-  };
-}
-
-export interface EntityFilterFormProps {
+export interface EntityFilterBuilderFormProps {
   filter: Accessor<EntityFilterData>;
   setFilter: Setter<EntityFilterData>;
 
@@ -79,11 +30,13 @@ interface EntityTypeOption extends SelectOption<EntityType> {
   title: string;
 }
 
-export function EntityFilterForm(props: EntityFilterFormProps): JSX.Element {
+export function EntityFilterBuilderForm(
+  props: EntityFilterBuilderFormProps
+): JSX.Element {
   const [editingType, setEditingType] = createSignal<boolean>(false);
   const reg = useRegistry();
 
-  const entityTypes: EntityTypeOption[] = Object.values(reg.entityTypes).map(
+  const entityTypes: EntityTypeOption[] = Object.values(reg.classes).map(
     (type) => ({
       value: type[FACTOR_IDENT],
       label: type[FACTOR_TITLE] ?? type[FACTOR_IDENT],
@@ -151,7 +104,7 @@ export function EntityFilterForm(props: EntityFilterFormProps): JSX.Element {
             <Tags>
               <For each={props.filter()?.entityTypes} fallback={<p>All</p>}>
                 {(type, index) => {
-                  const schema = reg.entityTypes[type];
+                  const schema = reg.classes[type];
 
                   return (
                     <DeletableTag

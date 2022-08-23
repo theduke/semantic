@@ -2,7 +2,7 @@ import { useSearchParams } from "solid-app-router";
 import { JSX } from "solid-js";
 import { GenericPage } from "../util";
 import { EntityBrowser } from "./EntityBrowser";
-import { EntityFilter, validateEntityFilter } from "./filter/EntityFilter";
+import { EntityFilter, validateEntityFilter } from "./filter";
 
 const STORAGE_KEY = "browse-page";
 

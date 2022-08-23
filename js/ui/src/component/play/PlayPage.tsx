@@ -6,7 +6,6 @@ import {
 } from "semantic/dist/schema";
 import { Box } from "solid-bulma";
 import {
-  createEffect,
   createSignal,
   getOwner,
   JSX,
@@ -20,11 +19,8 @@ import { Portal } from "solid-js/web";
 import { useApi, useRegistry } from "../../context";
 import { Button, Buttons } from "../bulma/button";
 import { Modal } from "../bulma/modal";
-import {
-  emptyEntityFilter,
-  EntityFilter,
-  loadFilter,
-} from "../entity/filter/EntityFilter";
+import { EntityFilter } from "../entity/filter";
+import { EntityFilterForm, loadFilter } from "../entity/filter/EntityFilter";
 import {
   createLoader,
   loadAsError,
@@ -115,7 +111,7 @@ export function PlayPage(): JSX.Element {
 
   const onKeyDown = (e: KeyboardEvent) => {
     // Don't handle any keypresses if modal is open.
-    if (entityModalItem()) {
+    if (entityModalItem() || filterActive()) {
       return;
     }
 
@@ -199,7 +195,10 @@ export function PlayPage(): JSX.Element {
         <Switch>
           <Match when={filterActive()}>
             <Box>
-              <EntityFilter initialFilter={filter} onChange={onFilterChange} />
+              <EntityFilterForm
+                initialFilter={filter}
+                onChange={onFilterChange}
+              />
 
               <Buttons>
                 <Button

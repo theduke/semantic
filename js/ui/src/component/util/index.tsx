@@ -22,7 +22,7 @@ export interface GenericPageProps {
 
 export function GenericPage(props: GenericPageProps): JSX.Element {
   return (
-    <div class="container mb-6">
+    <div class="container pb-6">
       <PageTitle>{props.title}</PageTitle>
       {props.children}
     </div>

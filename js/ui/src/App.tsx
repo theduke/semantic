@@ -16,7 +16,11 @@ import { basePlugin } from "./semantic/base";
 import { Buttons } from "./component/bulma/button";
 import { Icon } from "./component/bulma/icon";
 import { SettingsPage } from "./component/SettingsPage";
-import { ROUTE_SETTINGS, ROUTE_SETTINGS_TAG_MANAGER } from "./routing";
+import {
+  ROUTE_SETTINGS,
+  ROUTE_SETTINGS_BLOB_CLEANUP,
+  ROUTE_SETTINGS_TAG_MANAGER,
+} from "./routing";
 import { TagManagerPage } from "./component/tag/TagManager";
 import { EntityCreateSelectorPage } from "./component/entity/EntityCreateSelectorPage";
 import { EntityCreatePage } from "./component/entity/EntityCreatePage";
@@ -24,6 +28,7 @@ import { EntitySearcherModalToggle } from "./component/entity/EntitySearcherModa
 import { UploadPage } from "./component/upload/UploadPage";
 import { ImportPage } from "./component/imports/ImportPage";
 import { PlayPage } from "./component/play/PlayPage";
+import { BlobCleanupPage } from "./component/settings/blob_cleanup";
 
 export function App(): JSX.Element {
   const [getRegistry, setRegistry] = createSignal<UiRegistry | null>();
@@ -71,6 +76,10 @@ export function App(): JSX.Element {
                 <Route
                   path={ROUTE_SETTINGS_TAG_MANAGER}
                   component={TagManagerPage}
+                />
+                <Route
+                  path={ROUTE_SETTINGS_BLOB_CLEANUP}
+                  component={BlobCleanupPage}
                 />
                 <Route path="/" component={BrowsePage} />
               </Routes>

@@ -1,7 +1,8 @@
 import { createSignal, JSX, Show, splitProps } from "solid-js";
+import { EntityFilter } from ".";
 import { Button } from "../../bulma/button";
 import { Icon } from "../../bulma/icon";
-import { EntityFilter } from "./EntityFilter";
+import { EntityFilterForm } from "./EntityFilter";
 
 export interface ToggleableEntityFilterProps {
   initialFilter?: EntityFilter;
@@ -33,7 +34,7 @@ export function ToggleableEntityFilter(
     "localStorageKey",
     "defaultExpanded",
   ]);
-  const filter = <EntityFilter {...rest} />;
+  const filter = <EntityFilterForm {...rest} />;
 
   const initialExpanded = local.localStorageKey
     ? storageGetExpanded(local.localStorageKey, local.defaultExpanded ?? false)

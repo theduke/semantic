@@ -7,7 +7,7 @@ import crossFetch from 'cross-fetch';
 
 // import { ValueMap } from "./semantic/registry";
 import { BaseEntity, FACTOR_ID, SemanticFile, SemanticTag } from "./schema";
-import { FileUploadMetadata, FileUploadReply } from "./core";
+import { BlobInfo, FileUploadMetadata, FileUploadReply } from "./core";
 
 export type ValueMap = Record<string, any>;
 
@@ -221,8 +221,9 @@ export class Api {
 	}
 
 	// FIXME: change APi to the return here is a custom struct instead of a plain enum variant
-	async findUnusedBlobs(): Promise<{ items: Array<core.BlobInfo> }> {
-		return this.fetchApi("FindUnusedBlobs", { FindUnusedBlobs: null });
+	async findUnusedBlobs(): Promise<BlobInfo[]> {
+		const out: {items: BlobInfo[]} = await this.fetchApi("FindUnusedBlobs", { FindUnusedBlobs: null });
+    return out.items;
 	}
 
 	async deleteUnusedBlobs(): Promise<core.UnusedBlobsDeleted> {

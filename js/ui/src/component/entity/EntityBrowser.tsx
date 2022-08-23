@@ -16,16 +16,12 @@ import {
 } from "../../semantic/registry";
 import { Box } from "solid-bulma";
 import { renderError, SPINNER } from "../util/load";
-import { EntityFilter } from "./filter/EntityFilter";
-import {
-  buildFilterDataSelect,
-  newFilterData,
-} from "./filter/EntityFilterForm";
 import { throttle } from "@solid-primitives/scheduled";
 import { NotificationWarning } from "../bulma/notification";
 import { isEqual } from "lodash";
 import { FACTOR_ID } from "semantic/dist/schema";
 import { ToggleableEntityFilter } from "./filter/ToggleableEntityFilter";
+import { buildFilterDataSelect, EntityFilter, newFilterData } from "./filter";
 
 // const STORAGE_KEY_BROWSE_PAGE_FILTER_EXPANDED = "browse-page-filter-expanded";
 
@@ -101,7 +97,7 @@ export function EntityBrowser(props: EntityBrowserProps): JSX.Element {
         />
       </Box>
 
-      <div>
+      <div style={{ "max-width": "90%", "min-width": "500px" }}>
         <Suspense fallback={SPINNER}>
           <Switch>
             <Match when={page.loading}>{SPINNER}</Match>

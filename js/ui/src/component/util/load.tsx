@@ -1,19 +1,113 @@
 import {
   createEffect,
+  createResource,
   createSignal,
   Signal,
   JSX,
   ErrorBoundary,
   Suspense,
-  createResource,
-  Show,
   ParentProps,
   Resource,
   Switch,
   Match,
+  ResourceFetcher,
+  ResourceOptions,
+  ResourceReturn,
 } from "solid-js";
-import { NotificationErrorBoundary } from ".";
+import { createStore } from "solid-js/store";
+import {
+  ResourceActions,
+  ResourceSource,
+} from "solid-js/types/reactive/signal";
+import { setErrorMap } from "zod";
 import { NotificationError } from "../bulma/notification";
+
+export type FallibleResource<O> = Resource<O> & { caughtError?: any };
+
+export type FallibleResourceReturn<
+  T,
+  O extends ResourceOptions<T | undefined> | undefined,
+  K = T
+> = [
+  FallibleResource<
+    O extends undefined | null
+      ? T | undefined
+      : NonNullable<O>["initialValue"] extends undefined
+      ? T | undefined
+      : T
+  >,
+  ResourceActions<K>
+];
+
+export function createFallibleResource<T, S = true>(
+  fetcher: ResourceFetcher<S, T>,
+  options?: ResourceOptions<undefined>
+): FallibleResourceReturn<T | undefined, typeof options>;
+export function createFallibleResource<T, S = true>(
+  fetcher: ResourceFetcher<S, T>,
+  options: ResourceOptions<T>
+): FallibleResourceReturn<T, typeof options>;
+export function createFallibleResource<T, S>(
+  source: ResourceSource<S>,
+  fetcher: ResourceFetcher<S, T>,
+  options?: ResourceOptions<undefined>
+): FallibleResourceReturn<T | undefined, typeof options>;
+export function createFallibleResource<T, S>(
+  source: ResourceSource<S>,
+  fetcher: ResourceFetcher<S, T>,
+  options: ResourceOptions<T>
+): FallibleResourceReturn<T, typeof options>;
+
+export function createFallibleResource<T, S>(
+  source: ResourceSource<S> | ResourceFetcher<S, T>,
+  fetcher?:
+    | ResourceFetcher<S, T>
+    | ResourceOptions<T>
+    | ResourceOptions<undefined>,
+  options?: ResourceOptions<T> | ResourceOptions<undefined>
+): FallibleResourceReturn<T | undefined, typeof options> {
+  if (arguments.length === 2) {
+    if (typeof fetcher === "object") {
+      options = fetcher as ResourceOptions<T> | ResourceOptions<undefined>;
+      fetcher = source as ResourceFetcher<S, T>;
+      source = true as ResourceSource<S>;
+    }
+  } else if (arguments.length === 1) {
+    fetcher = source as ResourceFetcher<S, T>;
+    source = true as ResourceSource<S>;
+  }
+  options || (options = {});
+
+  const [errorStore, setErrorStore] = createStore<{ error?: any }>({});
+
+  const wrappedFetcher = async function () {
+    try {
+      let output = (fetcher as any)(arguments);
+      if (typeof output === "object" && "then" in output) {
+        output = await output;
+      }
+      return output;
+    } catch (error: any) {
+      setErrorStore({ error });
+      return undefined;
+    }
+  };
+
+  const xSource = source as any;
+  const res: any =
+    xSource === true
+      ? createResource(wrappedFetcher as any, options)
+      : createResource(source as any, wrappedFetcher as any, options);
+  const getter = res[0];
+
+  const wrappedGetter = function () {
+    return getter();
+  };
+  wrappedGetter.error = errorStore.error;
+  wrappedGetter.caughtError = errorStore.error;
+  res[0] = wrappedGetter;
+  return res;
+}
 
 export type LoadState<T> =
   | { state: "idle" }
@@ -98,23 +192,46 @@ export function spawnLoader<T>(load: () => Promise<T>): Signal<LoadState<T>> {
   return [get, set];
 }
 
-export interface BoundarySuspenseLoaderProps<T> {
+export function SuspsenseSpinner(props: ParentProps): JSX.Element {
+  return <Suspense fallback={SPINNER}>{props.children}</Suspense>;
+}
+
+export type FallibleResourceLoaderProps<T> = {
+  load: () => Promise<T>;
+  children: (data: T, actions: ResourceActions<T>) => JSX.Element;
+};
+
+export function FallibleResourceLoader<T>(
+  props: FallibleResourceLoaderProps<T>
+): JSX.Element {
+  const [data, actions] = createFallibleResource(props.load);
+  return (
+    <Switch>
+      <Match when={data.loading}>{SPINNER}</Match>
+      <Match when={data.caughtError}>{renderError(data.caughtError)}</Match>
+      <Match when={data()}>
+        {(data) => props.children(data, actions as any)}
+      </Match>
+    </Switch>
+  );
+}
+
+export type BoundarySuspenseLoaderProps<T> = {
   load: () => Promise<T>;
   render: (data: T) => JSX.Element;
-}
+};
 
 export function BoundarySuspenseLoader<T>(
   props: BoundarySuspenseLoaderProps<T>
 ): JSX.Element {
-  const [data] = createResource(props.load);
+  const [data] = createFallibleResource(props.load);
   return (
     <ErrorBoundary fallback={renderError}>
       <Suspense fallback={SPINNER}>
-        <Show when={data()}>
-          {(data) => {
-            return props.render(data);
-          }}
-        </Show>
+        {() => {
+          const out = data();
+          return out ? props.render(out) : null;
+        }}
       </Suspense>
     </ErrorBoundary>
   );
