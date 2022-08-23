@@ -7,10 +7,11 @@ import {
   Class,
   Expr,
   Id,
+  Select,
   Value,
   ValueType,
 } from "semantic/dist/core";
-import { exprAttr, exprLiteral, exprNotEq } from "semantic/dist/db";
+import { exprAttr, exprIn, exprLiteral, exprNotEq } from "semantic/dist/db";
 import { UiRegistry, ValueMap } from "../../semantic/registry";
 import {
   FACTOR_ENTITY_ATTRIBUTES,
@@ -38,6 +39,10 @@ import { SelectOption } from "../form/Select";
 import { SelectField } from "../form/SelectField";
 import { SearchSelect } from "../util/SearchSelect";
 import { EntityPicker } from "./EntityPicker";
+import { MultiEntityPicker } from "./MultiEntityPicker";
+import { newSelect } from "semantic/dist/api";
+import { EntitiesLoader } from "./EntitiesLoader";
+import { FormField } from "../form/FormField";
 
 function unionPlainOptions(variants: ValueType[]): SelectOption<Value>[] {
   return variants.map((variant) => {
@@ -57,11 +62,12 @@ function unionPlainOptions(variants: ValueType[]): SelectOption<Value>[] {
 
 function makeStringValidator(
   attr: string,
-  required: boolean
+  required: boolean,
+  validate?: (value: string) => string | null
 ): FormValidator<ValueMap> {
   if (required) {
     return (values) => {
-      const value = values[attr]?.trim();
+      const value = values[attr]?.toString().trim();
 
       if (!value || value.length < 1) {
         return {
@@ -76,7 +82,26 @@ function makeStringValidator(
           },
         };
       } else {
-        return null;
+        if (validate) {
+          const msg = validate(value);
+          if (msg) {
+            return {
+              fields: {
+                [attr]: {
+                  errors: [
+                    {
+                      message: msg,
+                    },
+                  ],
+                },
+              },
+            };
+          } else {
+            return null;
+          }
+        } else {
+          return null;
+        }
       }
     };
   } else {
@@ -107,7 +132,13 @@ export function entityAttributeFormField(
       />,
       (_values) => null,
     ];
-  } else if (ty === "String" || ty === "Url") {
+  } else if (
+    ty === "String" ||
+    ty === "Url" ||
+    ty == "UInt" ||
+    ty === "Int" ||
+    ty === "Float"
+  ) {
     const field = form.field(attrIdent) as FieldAccessor<string>;
 
     let inputType: InputType;
@@ -122,6 +153,49 @@ export function entityAttributeFormField(
         inputType = "url";
         // TODO: validate correct URL
         val = makeStringValidator(attrIdent, isRequired);
+        break;
+
+      // TODO: int and uint should not use strings as values!
+      case "Int":
+        inputType = "number";
+        // TODO: validate correct URL
+        val = makeStringValidator(attrIdent, isRequired, (value) => {
+          try {
+            parseInt(value);
+            return null;
+          } catch (err: any) {
+            return err.toString();
+          }
+        });
+        break;
+
+      case "UInt":
+        inputType = "number";
+        // TODO: validate correct URL
+        val = makeStringValidator(attrIdent, isRequired, (value) => {
+          try {
+            const num = parseInt(value);
+            if (num < 0) {
+              return "must be 0 or greater";
+            }
+            return null;
+          } catch (err: any) {
+            return err.toString();
+          }
+        });
+        break;
+
+      case "Float":
+        inputType = "number";
+        // TODO: validate correct URL
+        val = makeStringValidator(attrIdent, isRequired, (value) => {
+          try {
+            parseFloat(value);
+            return null;
+          } catch (err: any) {
+            return err.toString();
+          }
+        });
         break;
 
       default:
@@ -198,7 +272,59 @@ export function entityAttributeFormField(
     );
 
     return [elem, (_values) => null];
+  } else if (typeof ty === "object" && "List" in ty) {
+    const itemType = ty["List"];
+
+    if (itemType === "Ref") {
+      const field = form.field(attrIdent) as FieldAccessor<Id[] | undefined>;
+      const id = form.init.initialValues[FACTOR_ID];
+
+      const baseFilter: Expr | undefined = id
+        ? exprNotEq(exprAttr(FACTOR_ID), exprLiteral(id))
+        : undefined;
+
+      // TODO: make reactive!
+      const initialValues = field.get()?.value || [];
+      const currentItemsFilter = exprIn(
+        exprAttr(FACTOR_ID),
+        exprLiteral(initialValues)
+      );
+      const currentItemsSelect: Select = {
+        ...newSelect(),
+        filter: currentItemsFilter,
+        limit: 1000 as any,
+      };
+      const elem = (
+        <EntitiesLoader select={currentItemsSelect}>
+          {(initialItems) => {
+            const picker = (
+              <MultiEntityPicker
+                baseFilter={baseFilter}
+                initialSelection={initialItems}
+                onChange={(items) => {
+                  const ids = items.map((item) => item[FACTOR_ID]);
+                  field.set(ids);
+                }}
+              />
+            );
+            const elem = (
+              <FormField field={field} label={attributeName} control={picker} />
+            );
+
+            return elem;
+          }}
+        </EntitiesLoader>
+      );
+      return [elem, (_) => null];
+    } else {
+      throw new Error(
+        `Could not create form field: unsupported attribute type for attribute ${attrIdent}: ${JSON.stringify(
+          ty
+        )}`
+      );
+    }
   } else if (typeof ty === "object") {
+    // FIXME: implement support!
     if ("Union" in ty) {
       const options: SelectOption<Value | undefined>[] = [
         { label: "", value: undefined },
