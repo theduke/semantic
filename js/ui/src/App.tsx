@@ -45,7 +45,7 @@ export function App(): JSX.Element {
           <Router>
             <AppNavbar />
             <Routes>
-              <Route path="/entity/:ident" component={EntityPageRoute} />
+              <Route path="/entity/*ident" component={EntityPageRoute} />
               <Route
                 path="/entity/create"
                 component={EntityCreateSelectorPage}
