@@ -259,6 +259,13 @@ export class FormState<Values extends Record<string, any>> {
   }
 
   private invokeSubmit() {
+    if (
+      this.state.isValidating ||
+      this.state.isSubmitting ||
+      this.state.isValid === false
+    ) {
+      return;
+    }
     try {
       const values = this.buildValues();
       const res = this.init?.onSubmit?.(values, this);
