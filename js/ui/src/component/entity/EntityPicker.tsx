@@ -27,21 +27,28 @@ export interface EntityPickerProps {
     index: number,
     onClick: () => void
   ) => JSX.Element;
+  renderItemLabel?: (item: ValueMap) => JSX.Element;
 
   onSelect: (entity: ValueMap) => void;
 }
 
 export function EntityPicker(props: EntityPickerProps) {
   const reg = useRegistry();
-  const renderItem =
-    props.renderItem ??
-    ((item, _index, onClick) => {
+
+  let renderItem;
+  if (props.renderItem) {
+    renderItem = props.renderItem;
+  } else {
+    const renderLabel =
+      props.renderItemLabel || ((item: ValueMap) => reg.entityTitle(item));
+    renderItem = (item: ValueMap, _index: number, onClick: () => void) => {
       return (
         <div>
-          <Button onClick={onClick}>{reg.entityTitle(item)}</Button>
+          <Button onClick={onClick}>{renderLabel(item)}</Button>
         </div>
       );
-    });
+    };
+  }
 
   return (
     <SearchSelect<ValueMap>
