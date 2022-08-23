@@ -94,7 +94,7 @@ export function renderAttrValue(
         return value.toString();
       }
     case "DateTime":
-      return new Temporal.Instant(BigInt(value)).toLocaleString();
+      return new Temporal.Instant(BigInt(value * 1_000_000)).toLocaleString();
     case "Url":
       return (
         <a href={value} target="_blank">

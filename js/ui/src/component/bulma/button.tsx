@@ -1,4 +1,4 @@
-import { JSX, splitProps } from "solid-js";
+import { createEffect, JSX, splitProps, For } from "solid-js";
 import { Color } from ".";
 import { Icon, IconName, IconSize } from "./icon";
 
@@ -23,6 +23,33 @@ export function Buttons(props: ButtonsProps): JSX.Element {
     cls += " " + props.class;
   }
   return <div class={cls}>{props.children}</div>;
+}
+
+// TODO: omit children,attach,classList, class!
+export interface ButtonGroupProps
+  extends JSX.HTMLAttributes<Omit<HTMLDivElement, "class">> {
+  children: JSX.Element[];
+  attach?: boolean;
+  extraClass?: string;
+}
+
+export function ButtonGroup(props: ButtonGroupProps): JSX.Element {
+  const [_local, extra] = splitProps(props, [
+    "children",
+    "attach",
+    "extraClass",
+  ]);
+  return (
+    <div
+      {...extra}
+      class={"field" + (props.extraClass ? " " + props.extraClass : "")}
+      classList={{ "has-addons": props.attach, "is-grouped": !props.attach }}
+    >
+      <For each={props.children}>
+        {(child) => <p class="control">{child}</p>}
+      </For>
+    </div>
+  );
 }
 
 export type ButtonSize = "is-small" | "is-normal" | "is-medium" | "is-large";
@@ -88,6 +115,12 @@ export interface IconButtonProps extends ButtonProps {
 
 export function IconButton(props: IconButtonProps): JSX.Element {
   const [local, rest] = splitProps(props, ["icon", "children"]);
+
+  if (["play", "pause"].includes(props.icon)) {
+    createEffect(() => {
+      console.log({ icon: props.icon });
+    });
+  }
 
   let iconSize: IconSize | undefined;
   switch (props.size) {

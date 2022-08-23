@@ -43,30 +43,38 @@ export function App(): JSX.Element {
           value={assertDefined(getRegistry())}
         >
           <Router>
-            <AppNavbar />
-            <Routes>
-              <Route path="/entity/*ident" component={EntityPageRoute} />
-              <Route
-                path="/entity/create"
-                component={EntityCreateSelectorPage}
-              />
-              <Route
-                path="/entity/create/*ident"
-                component={() => {
-                  const params = useParams<{ ident: string }>();
-                  return <EntityCreatePage entityType={params.ident} />;
-                }}
-              />
-              <Route path="/upload" component={UploadPage} />
-              <Route path="/play" component={PlayPage} />
-              <Route path="/import" component={ImportPage} />
-              <Route path={ROUTE_SETTINGS} component={SettingsPage} />
-              <Route
-                path={ROUTE_SETTINGS_TAG_MANAGER}
-                component={TagManagerPage}
-              />
-              <Route path="/" component={BrowsePage} />
-            </Routes>
+            <div
+              style={{
+                display: "flex",
+                "flex-direction": "column",
+                height: "100%",
+              }}
+            >
+              <AppNavbar />
+              <Routes>
+                <Route path="/entity/*ident" component={EntityPageRoute} />
+                <Route
+                  path="/entity/create"
+                  component={EntityCreateSelectorPage}
+                />
+                <Route
+                  path="/entity/create/*ident"
+                  component={() => {
+                    const params = useParams<{ ident: string }>();
+                    return <EntityCreatePage entityType={params.ident} />;
+                  }}
+                />
+                <Route path="/upload" component={UploadPage} />
+                <Route path="/play" component={PlayPage} />
+                <Route path="/import" component={ImportPage} />
+                <Route path={ROUTE_SETTINGS} component={SettingsPage} />
+                <Route
+                  path={ROUTE_SETTINGS_TAG_MANAGER}
+                  component={TagManagerPage}
+                />
+                <Route path="/" component={BrowsePage} />
+              </Routes>
+            </div>
           </Router>
         </context.UiRegistryContext.Provider>
       </Show>
@@ -101,7 +109,7 @@ function AppNavbar(): JSX.Element {
                 class="button"
                 href={ROUTE_SETTINGS}
               >
-                <Icon icon="userGear" />
+                <Icon icon="gear" />
               </Link>
               <Link
                 class="button"

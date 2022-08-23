@@ -1,5 +1,6 @@
 import { ValueMap } from "semantic/dist/api";
-import { JSX } from "solid-js";
+import { FACTOR_TYPE } from "semantic/dist/schema";
+import { JSX, Owner, runWithOwner } from "solid-js";
 import { createStore, SetStoreFunction, Store } from "solid-js/store";
 import { MediaHandle, UiRegistry } from "../../semantic/registry";
 
@@ -7,12 +8,19 @@ export interface PlayerProps {
   items: ValueMap[];
 }
 
-interface PlayerItem {
+export type Seconds = number;
+export type ProgressPercent = number;
+
+export interface PlayerItem {
   index: number;
   data: ValueMap;
-  mediaHandle?: MediaHandle;
   rendered?: JSX.Element;
   title: string;
+
+  mediaHandle: MediaHandle | null;
+  // Only available if item has a media handle.
+  duration?: Seconds;
+  progress?: ProgressPercent;
 }
 
 interface PlayerStatus {
@@ -26,6 +34,7 @@ interface PlayerStatus {
   // Millisecond autoplay interval.
   interval: number | null;
 
+  get isPaused(): boolean;
   get itemCount(): number;
   get hasPrev(): boolean;
   get hasNext(): boolean;
@@ -37,16 +46,22 @@ export class Player {
 
   private registry: UiRegistry;
   private timeoutReference: number | null = null;
+  private renderScope: Owner;
 
-  constructor(registry: UiRegistry, items: ValueMap[]) {
+  constructor(registry: UiRegistry, items: ValueMap[], renderScope: Owner) {
     this.registry = registry;
+    this.renderScope = renderScope;
     const [getter, setter] = createStore<PlayerStatus>({
       items,
       activeItem: null,
       muted: false,
       cycle: true,
-      playing: true,
-      interval: null,
+      playing: false,
+      interval: 5000,
+
+      get isPaused(): boolean {
+        return !this.playing;
+      },
 
       get itemCount(): number {
         return this.items.length;
@@ -69,7 +84,8 @@ export class Player {
     this.setMuted = this.setMuted.bind(this);
     this.setCycle = this.setCycle.bind(this);
     this.setInterval = this.setInterval.bind(this);
-    this.setPlaying = this.setPlaying.bind(this);
+    this.start = this.start.bind(this);
+    this.stop = this.stop.bind(this);
     this.togglePlaying = this.togglePlaying.bind(this);
     this.next = this.next.bind(this);
     this.prev = this.prev.bind(this);
@@ -77,6 +93,31 @@ export class Player {
     this.goto = this.goto.bind(this);
     this.toggleMuted = this.toggleMuted.bind(this);
     this.toggleCycle = this.toggleCycle.bind(this);
+  }
+
+  isPlaying(): boolean {
+    return !this.state.isPaused;
+  }
+
+  appendItems(items: ValueMap[]) {
+    this.setState((old) => ({ items: [...old.items, ...items] }));
+  }
+
+  replaceItems(items: ValueMap[]) {
+    this.setState({ items });
+    this.goto(0);
+  }
+
+  shuffleItems() {
+    this.setState((old) => {
+      const items = [...old.items];
+      shuffleArray(items);
+      return {
+        ...old,
+        items,
+      };
+    });
+    this.goto(0);
   }
 
   setMuted(muted: boolean): void {
@@ -99,12 +140,38 @@ export class Player {
     this.setState({ interval });
   }
 
-  setPlaying(playing: boolean): void {
-    this.setState({ playing });
+  togglePlaying(): void {
+    if (this.state.playing) {
+      this.stop();
+    } else {
+      this.start();
+    }
   }
 
-  togglePlaying(): void {
-    this.setState((old) => ({ playing: !old.playing }));
+  start() {
+    if (this.state.playing || this.state.itemCount < 1) {
+      return;
+    }
+    const active = this.state.activeItem;
+
+    this.setState({ playing: true });
+
+    if (active?.mediaHandle) {
+      active.mediaHandle.play();
+    } else {
+      this.next();
+    }
+  }
+
+  stop() {
+    this.setState({ playing: false });
+    if (this.timeoutReference) {
+      clearTimeout(this.timeoutReference);
+      this.timeoutReference = null;
+    }
+    if (this.state.activeItem?.mediaHandle) {
+      this.state.activeItem.mediaHandle.pause();
+    }
   }
 
   next(): void {
@@ -117,12 +184,53 @@ export class Player {
     this.goto(target);
   }
 
-  stop() {
-    this.setState({ playing: false });
-    if (this.timeoutReference) {
-      clearTimeout(this.timeoutReference);
-      this.timeoutReference = null;
-    }
+  renderItem(item: ValueMap): [JSX.Element, MediaHandle | null] {
+    const ty = item[FACTOR_TYPE];
+    const mediaRenderer = this.registry.mediaRenderer(ty);
+
+    return runWithOwner(this.renderScope, () => {
+      let content: JSX.Element | undefined;
+      let mediaHandle: MediaHandle | null = null;
+      if (mediaRenderer) {
+        [mediaHandle, content] = mediaRenderer({
+          item,
+          showControls: true,
+          autoStart: this.state.playing,
+          onPaused: () => {
+            this.setState({ playing: false });
+          },
+          onResumed: () => {
+            this.setState({ playing: true });
+          },
+          onFinished: () => {
+            this.next();
+          },
+          onFailed: (_error: string) => {
+            // TODO: show error!
+            this.next();
+          },
+          onDurationAvailable: (duration: Seconds) => {
+            this.setState((old) => ({
+              ...old,
+              activeItem: old.activeItem
+                ? { ...old.activeItem, duration }
+                : null,
+            }));
+          },
+          onProgress: (progress: ProgressPercent) => {
+            this.setState((old) => ({
+              ...old,
+              activeItem: old.activeItem
+                ? { ...old.activeItem, progress }
+                : null,
+            }));
+          },
+        });
+      } else {
+        content = this.registry.renderEntity(item, { preview: true });
+      }
+      return [content, mediaHandle];
+    });
   }
 
   goto(index: number): void {
@@ -152,7 +260,23 @@ export class Player {
 
     const item = this.state.items[index];
     const title = this.registry.entityTitle(item);
+    const [content, mediaHandle] = this.renderItem(item);
 
-    this.setState({ activeItem: { index, data: item, title } });
+    if (!mediaHandle && this.state.playing && this.state.interval) {
+      this.timeoutReference = setTimeout(() => {
+        this.next();
+      }, this.state.interval) as any as number;
+    }
+
+    this.setState({
+      activeItem: { index, data: item, title, rendered: content, mediaHandle },
+    });
+  }
+}
+
+function shuffleArray<T>(array: T[]) {
+  for (let i = array.length - 1; i > 0; i--) {
+    const j = Math.floor(Math.random() * (i + 1));
+    [array[i], array[j]] = [array[j], array[i]];
   }
 }

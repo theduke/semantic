@@ -18,7 +18,7 @@ const FA_ICON_MAP = {
   globe: "fa-solid fa-globe",
   upload: "fa-solid fa-upload",
   play: "fa-solid fa-play",
-  pause: "fa-solid fa-play",
+  pause: "fa-solid fa-pause",
   caretRight: "fa-solid fa-caret-right",
   arrowLeft: "fa-solid fa-arrow-left",
   arrowRight: "fa-solid fa-arrow-right",
@@ -32,6 +32,10 @@ const FA_ICON_MAP = {
   angleRight: "fa-solid fa-angle-right",
   arrowsLeftRight: "fa-solid fa-arrows-left-right",
   tags: "fa-solid fa-tags",
+  gears: "fa-solid fa-gears",
+  gear: "fa-solid fa-gear",
+  minimize: "fa-solid fa-minimize",
+  maximize: "fa-solid fa-maximize",
 };
 
 export type IconSize = "is-small" | "is-medium" | "is-large";

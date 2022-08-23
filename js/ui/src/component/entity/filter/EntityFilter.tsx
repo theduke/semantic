@@ -1,6 +1,7 @@
 import { createEffect, createSignal, JSX, Match, Switch } from "solid-js";
 import { Tabs } from "../../bulma/tabs";
 import {
+  buildFilterDataSelect,
   EntityFilterData,
   EntityFilterForm,
   newFilterData,
@@ -12,6 +13,7 @@ import {
   validateEntityFilterSql,
 } from "./EntityFilterSqlForm";
 import zod from "zod";
+import { Api, ValueMap } from "semantic/dist/api";
 
 export const validateEntityFilter = zod.discriminatedUnion("type", [
   validateEntityFilterData,
@@ -31,6 +33,30 @@ function isSql(filter: EntityFilter): filter is EntityFilterSql {
 
 function isData(filter: EntityFilter): filter is EntityFilterData {
   return filter.type === "data";
+}
+
+export function loadFilter(
+  api: Api,
+  filter: EntityFilter
+): Promise<ValueMap[]> {
+  if (filter.type === "sql") {
+    if (filter.sql.trim()) {
+      return api.selectSql(filter.sql);
+    } else {
+      return Promise.resolve([]);
+    }
+  } else {
+    const select = buildFilterDataSelect(filter);
+    return api.select(select);
+  }
+}
+
+export function emptyEntityFilter(): EntityFilter {
+  return {
+    type: "data",
+    searchTerm: "",
+    entityTypes: [],
+  };
 }
 
 export function EntityFilter(props: EntityFilterProps): JSX.Element {

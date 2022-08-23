@@ -118,7 +118,6 @@ export function MultiSelectSearch<V>(props: MultiSelectProps<V>): JSX.Element {
       newItems.splice(itemIndex, 1);
       setSelected(newItems);
       props.onChange?.(newItems);
-      debugger;
       setLoader((old) => {
         if (old.state === "success") {
           return { state: "success", data: [...old.data, item] };

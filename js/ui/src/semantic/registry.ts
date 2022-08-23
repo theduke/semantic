@@ -50,21 +50,28 @@ export interface MediaHandle {
   mute(): void;
   unmute(): void;
   isPlaying(): boolean;
+  isFinished(): boolean;
   // Progress as a float between 0 and 1.
-  progress(): number;
+  progress(): number | null;
 }
 
 export interface MediaRenderProps {
   item: ValueMap;
+
+  autoStart: boolean;
+  showControls: boolean;
+
   onPaused(): void;
   onResumed(): void;
   onFinished(): void;
   onFailed(error: string): void;
+  onProgress(progress: number): void;
+  onDurationAvailable(durationSeconds: Number): void;
 }
 
 export type EntityMediaRenderer = (
   props: MediaRenderProps
-) => [MediaHandle, JSX.Element];
+) => [MediaHandle | null, JSX.Element];
 
 export type EntityTypeMap<T> = Record<EntityType, T>;
 
@@ -182,9 +189,13 @@ export class UiRegistry {
     }
   }
 
+  mediaRenderer(ty: EntityType): EntityMediaRenderer | null {
+    return this.entityMediaRenderers[ty] ?? null;
+  }
+
   renderEntityMedia(
     props: MediaRenderProps
-  ): [MediaHandle, JSX.Element] | null {
+  ): [MediaHandle | null, JSX.Element] | null {
     const ty = props.item[FACTOR_TYPE];
     const render = this.entityMediaRenderers[ty];
     return render ? render(props) : null;
