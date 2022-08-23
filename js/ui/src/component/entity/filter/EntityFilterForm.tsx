@@ -7,7 +7,7 @@ import {
   Show,
   untrack,
 } from "solid-js";
-import { DeletableTag } from "solid-bulma";
+import { DeletableTag, Tags } from "solid-bulma";
 import zod from "zod";
 
 import { newSelect } from "semantic/dist/api";
@@ -90,6 +90,16 @@ export function EntityFilterForm(props: EntityFilterFormProps): JSX.Element {
       title: type[FACTOR_TITLE] ?? type[FACTOR_IDENT],
     })
   );
+  entityTypes.sort((a, b) => {
+    if (a.value < b.value) {
+      return -1;
+    } else if (a.value > b.value) {
+      return 1;
+    } else {
+      return 0;
+    }
+  });
+
   const entityTypeLookup: Record<EntityType, EntityTypeOption> = {};
   for (const item of entityTypes) {
     entityTypeLookup[item.value] = item;
@@ -138,8 +148,8 @@ export function EntityFilterForm(props: EntityFilterFormProps): JSX.Element {
               </Button>
             </div>
 
-            <div>
-              <For each={props.filter()?.entityTypes}>
+            <Tags>
+              <For each={props.filter()?.entityTypes} fallback={<p>All</p>}>
                 {(type, index) => {
                   const schema = reg.entityTypes[type];
 
@@ -162,40 +172,47 @@ export function EntityFilterForm(props: EntityFilterFormProps): JSX.Element {
                   );
                 }}
               </For>
-            </div>
+            </Tags>
 
             <div class="tags"></div>
           </div>
 
           <Show when={editingType()}>
-            <MultiSelectSearch<EntityTypeOption>
-              renderSelected={(_selected) => null}
-              search={searchType}
-              defaultItems={entityTypes.filter(
-                (t) => !props.filter()?.entityTypes?.includes(t.value)
-              )}
-              initialSelection={props
-                .filter()
-                ?.entityTypes?.flatMap((t) => [entityTypeLookup[t]])}
-              onChange={(items) => {
-                props.setFilter((old) => ({
-                  ...old,
-                  entityTypes: items.map((i) => i.value),
-                }));
-              }}
-              renderItemWrapper={(items) => <div class="tags m-2">{items}</div>}
-              renderItem={(item, onSelect) => {
-                return (
-                  <span
-                    class="tag is-clickable"
-                    title={item.title}
-                    onClick={onSelect}
-                  >
-                    {item.title}
-                  </span>
-                );
-              }}
-            />
+            {() => {
+              console.log("rendering multiselect", props.filter()?.entityTypes);
+              return (
+                <MultiSelectSearch<EntityTypeOption>
+                  renderSelected={(_selected) => null}
+                  search={searchType}
+                  defaultItems={entityTypes.filter(
+                    (t) => !props.filter()?.entityTypes?.includes(t.value)
+                  )}
+                  initialSelection={props
+                    .filter()
+                    ?.entityTypes?.flatMap((t) => [entityTypeLookup[t]])}
+                  onChange={(items) => {
+                    props.setFilter((old) => ({
+                      ...old,
+                      entityTypes: items.map((i) => i.value),
+                    }));
+                  }}
+                  renderItemWrapper={(items) => (
+                    <div class="tags m-2">{items}</div>
+                  )}
+                  renderItem={(item, onSelect) => {
+                    return (
+                      <span
+                        class="tag is-clickable"
+                        title={item.title}
+                        onClick={onSelect}
+                      >
+                        {item.title}
+                      </span>
+                    );
+                  }}
+                />
+              );
+            }}
           </Show>
         </div>
       </FieldHorizontal>
