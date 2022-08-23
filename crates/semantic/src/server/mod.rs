@@ -107,8 +107,6 @@ async fn handler_assets(Extension(state): ServerContext, req: Request<Body>) -> 
             let mime = mime_guess::from_path(path)
                 .first_or_octet_stream()
                 .to_string();
-            dbg!(&mime, &path);
-
             Response::builder()
                 .header(hyper::header::CONTENT_TYPE, mime)
                 .body(Body::from(file.data.as_ref().to_vec()))

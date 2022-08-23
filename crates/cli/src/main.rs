@@ -48,8 +48,6 @@ impl GenerateTypescript {
 
         let schema = builtin.merge(base);
 
-        dbg!(&schema);
-
         let ts = factor_tools::typescript::schema_to_typescript(&schema, None).unwrap();
 
         write!(std::io::stdout(), "{}", ts).unwrap();

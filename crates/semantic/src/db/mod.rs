@@ -280,7 +280,6 @@ pub async fn apply_plugin_migrations(
 
         if let Some((old_index, old_migration)) = old {
             if old_index != index {
-                dbg!(&existing_migrations[index]);
                 bail!("Invalid migration order: migration {plain_name} was previosly at index {old_index}, but is not at {index}");
             }
 
