@@ -1,10 +1,11 @@
-import { createSignal, For, Show } from "solid-js";
+import { createSignal, For, Match, Show, Switch } from "solid-js";
 import { JSX } from "solid-js/jsx-runtime";
 import { newSelect } from "semantic/dist/api";
 import { Select } from "semantic/dist/core";
 import { exprAttr, exprIsEntityType } from "semantic/dist/db";
 import {
   SemanticTag,
+  SEMANTIC_TAG_NAME,
   SEMANTIC_TITLE,
   TY_SEMANTIC_TAG,
 } from "semantic/dist/schema";
@@ -14,12 +15,17 @@ import { EntitiesLoader } from "../entity/EntitiesLoader";
 import { EntityDeleterModal } from "../entity/EntityDeleterModal";
 import { GenericPage } from "../util";
 import { TagCreate } from "./TagCreate";
+import { Link } from "solid-app-router";
+import { entityLinkPath } from "../../semantic";
+import { Modal } from "../bulma/modal";
+import { TagMerger } from "./TagMerger";
+import { Box } from "solid-bulma";
 
 export function TagManagerPage(): JSX.Element {
   const select: Select = {
     ...newSelect(),
     // FIXME: no bigint (needs type change)
-    limit: 20_000 as any,
+    limit: 1000 as any,
     filter: exprIsEntityType(TY_SEMANTIC_TAG),
     sort: [{ on: exprAttr(SEMANTIC_TITLE), order: "Asc" }],
   };
@@ -51,6 +57,12 @@ function TagManager(props: TagManagerProps): JSX.Element {
   const [tags, setTags] = createSignal(sortedTags);
   const [tagDelete, setTagDelete] = createSignal<SemanticTag | null>(null);
   const [creating, setCreating] = createSignal<boolean>(false);
+  const [merging, setMerging] = createSignal<SemanticTag | null>(null);
+
+  const onTagMerged = (sourceTag: SemanticTag, _newTag: SemanticTag) => {
+    setTags((tags) => tags.filter((tag) => tag !== sourceTag));
+    setMerging(null);
+  };
 
   const addTag = (tag: SemanticTag) => {
     const name = tag["semantic/tag_name"];
@@ -88,23 +100,44 @@ function TagManager(props: TagManagerProps): JSX.Element {
   const startTagDelete = (tag: SemanticTag) => {
     setTagDelete(tag);
   };
+  const startTagMerge = (tag: SemanticTag) => {
+    setMerging(tag);
+  };
 
   return (
     <div>
-      <Show when={tagDelete()}>
-        {(tag) => {
-          return (
-            <EntityDeleterModal
-              entity={tag}
-              confirmationContent={
-                <p>Really delete tag {tag["semantic/tag_name"]}?</p>
-              }
-              onDeleted={onTagDeleted}
-              onCancel={onDeleteCancel}
-            />
-          );
-        }}
-      </Show>
+      <Switch>
+        <Match when={tagDelete()}>
+          {(tag) => {
+            return (
+              <EntityDeleterModal
+                entity={tag}
+                confirmationContent={
+                  <p>Really delete tag {tag["semantic/tag_name"]}?</p>
+                }
+                onDeleted={onTagDeleted}
+                onCancel={onDeleteCancel}
+              />
+            );
+          }}
+        </Match>
+
+        <Match when={merging()}>
+          {(sourceTag) => (
+            <Modal onClose={() => setMerging(null)}>
+              <Box>
+                <TagMerger
+                  tag={sourceTag}
+                  onCancel={() => setMerging(null)}
+                  onMerged={(newTag: SemanticTag) =>
+                    onTagMerged(sourceTag, newTag)
+                  }
+                />
+              </Box>
+            </Modal>
+          )}
+        </Match>
+      </Switch>
 
       <Show
         when={creating()}
@@ -131,13 +164,18 @@ function TagManager(props: TagManagerProps): JSX.Element {
           {(tag) => (
             <div>
               <Buttons>
-                <Button>{tag["semantic/tag_name"]}</Button>
+                <Link class="button" href={entityLinkPath(tag)}>
+                  {tag[SEMANTIC_TAG_NAME]}
+                </Link>
                 <Button
                   size="is-small"
                   color="is-danger"
                   onClick={[startTagDelete, tag]}
                 >
                   Delete
+                </Button>
+                <Button size="is-small" onClick={[startTagMerge, tag]}>
+                  Merge
                 </Button>
               </Buttons>
             </div>

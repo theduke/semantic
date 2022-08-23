@@ -42,7 +42,7 @@ export function TagForm(props: TagFormProps): JSX.Element {
         form.handleSubmit(e);
       }}
     >
-      <InputField field={form.field("name")} label="Name" />
+      <InputField mode="onchange" field={form.field("name")} label="Name" />
 
       <FormFooter
         form={form}
