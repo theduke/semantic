@@ -55,7 +55,7 @@ export function Input(props: InputProps): JSX.Element {
             }
       }
       oninput={
-        props.mode === "oninput"
+        props.mode === "onchange"
           ? (e) => {
               e.stopPropagation();
               const value = elem?.value;
