@@ -11,6 +11,8 @@ export interface TagProps extends JSX.HTMLAttributes<HTMLSpanElement> {
 }
 
 export function Tag(props: TagProps): JSX.Element {
+  const [local, rest] = splitProps(props, ["color", "size", "isLight", "rounded"]);
+
   let cls = "tag";
 
   if (props.color) {
@@ -26,22 +28,31 @@ export function Tag(props: TagProps): JSX.Element {
     cls += " is-rounded";
   }
 
-  return <span class={cls}>{props.children}</span>;
+  return <span class={cls} {...rest}>{props.children}</span>;
 }
 
 export interface DeletableTagProps extends TagProps {
   onDelete: () => void;
+  wholeTagDelete?: boolean;
 }
 
 // A tag with a small delete icon.
 export function DeletableTag(props: DeletableTagProps): JSX.Element {
   const [_, rest] = splitProps(props, ["onDelete"]);
-  return (
-    <Tag {...rest}>
-      {props.children}
-      <button class="delete" onclick={props.onDelete} />
-    </Tag>
-  );
+  if (props.wholeTagDelete) {
+      <Tag style={{cursor: 'pointer'}} onclick={props.onDelete} {...rest}>
+        {props.children}
+        <button class="delete" onclick={props.onDelete} />
+      </Tag>
+  } else {
+    return (
+      <Tag {...rest}>
+        {props.children}
+        <button class="delete" onclick={props.onDelete} />
+      </Tag>
+    );
+  }
+
 }
 
 export type TagsSize = "are-medium" | "are-large";

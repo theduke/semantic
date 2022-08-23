@@ -31,6 +31,7 @@ const FA_ICON_MAP = {
   angleLeft: "fa-solid fa-angle-left",
   angleRight: "fa-solid fa-angle-right",
   arrowsLeftRight: "fa-solid fa-arrows-left-right",
+  tags: "fa-solid fa-tags",
 };
 
 export type IconSize = "is-small" | "is-medium" | "is-large";

@@ -1,4 +1,4 @@
-import { createSignal, For, Match, Show, Switch } from "solid-js";
+import { Accessor, createSignal, For, Match, Show, Switch } from "solid-js";
 import { JSX } from "solid-js/jsx-runtime";
 import { debounce } from "@solid-primitives/scheduled";
 import { Control } from "../bulma/form";
@@ -9,10 +9,17 @@ import { NotificationError } from "../bulma/notification";
 
 import styles from "./MultiSelectSearch.module.css";
 
-export interface MultiSelectProps<V> {
+interface SearchPropsSync<V> {
+  search: (term: string, afterItem?: V) => Promise<V[]>;
+}
+
+interface SearchPropsAsync<V> {
+  searchSync: (term: string, afterItem?: V) => V[];
+}
+
+interface BaseProps<V> {
   defaultItems?: V[];
   initialSelection?: V[];
-  search: (term: string, afterItem?: V) => Promise<V[]>;
   searchPlaceholder?: string;
 
   // Content displayed when no search term was entered yet.
@@ -21,10 +28,16 @@ export interface MultiSelectProps<V> {
   renderItemWrapper?: (items: JSX.Element) => JSX.Element;
   renderItem?: (item: V, onSelect: () => void) => JSX.Element;
 
-  renderSelected?: (items: V[]) => JSX.Element;
+  renderSelected?: (
+    items: Accessor<V[]>,
+    remove: (itemIndex: number) => void
+  ) => JSX.Element;
 
   onChange?: (selectedItems: V[]) => void;
 }
+
+type MultiSelectProps<V> = BaseProps<V> &
+  (SearchPropsSync<V> | SearchPropsAsync<V>);
 
 export function MultiSelectSearch<V>(props: MultiSelectProps<V>): JSX.Element {
   let inputRef: HTMLInputElement | undefined;
@@ -40,24 +53,42 @@ export function MultiSelectSearch<V>(props: MultiSelectProps<V>): JSX.Element {
     props.initialSelection ?? []
   );
 
-  const onSearch = debounce((term: string) => {
-    props
-      .search(term)
-      .then((values) => {
-        setLoader({ state: "success", data: values });
-      })
-      .catch((error) => {
-        // TODO: better error formatting.
-        setLoader({ state: "error", error: error.toString() });
-      });
-  }, 500);
+  let onSearch: (term: string) => void;
+  let clearSearch: (() => void) | null = null;
+
+  if ("searchSync" in props) {
+    onSearch = (term: string) => {
+      try {
+        const items = props.searchSync(term);
+        setLoader({ state: "success", data: items });
+      } catch (err: any) {
+        setLoader({ state: "error", error: err });
+      }
+    };
+  } else if ("search" in props) {
+    const s = debounce((term: string) => {
+      props
+        .search(term)
+        .then((values) => {
+          setLoader({ state: "success", data: values });
+        })
+        .catch((error) => {
+          // TODO: better error formatting.
+          setLoader({ state: "error", error: error.toString() });
+        });
+    }, 500);
+    onSearch = s;
+    clearSearch = () => {
+      s.clear();
+    };
+  }
 
   const onInput = () => {
     const term = inputRef?.value.trim() ?? "";
 
     if (term === "") {
       setLoader({ state: "idle" });
-      onSearch.clear();
+      clearSearch?.();
       if (props.defaultItems) {
         setLoader({ state: "success", data: props.defaultItems });
       }
@@ -170,7 +201,7 @@ export function MultiSelectSearch<V>(props: MultiSelectProps<V>): JSX.Element {
   let selectedRender: JSX.Element;
 
   if (props.renderSelected) {
-    selectedRender = props.renderSelected(selected());
+    selectedRender = props.renderSelected(selected, doUnselect);
   } else {
     selectedRender = (
       <Show when={selected().length > 0}>

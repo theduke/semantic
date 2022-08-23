@@ -1,14 +1,7 @@
 import { createSignal, For, Match, Show, Switch } from "solid-js";
 import { JSX } from "solid-js/jsx-runtime";
-import { newSelect } from "semantic/dist/api";
 import { Select } from "semantic/dist/core";
-import { exprAttr, exprIsEntityType } from "semantic/dist/db";
-import {
-  SemanticTag,
-  SEMANTIC_TAG_NAME,
-  SEMANTIC_TITLE,
-  TY_SEMANTIC_TAG,
-} from "semantic/dist/schema";
+import { SemanticTag, SEMANTIC_TAG_NAME } from "semantic/dist/schema";
 import { Button, Buttons } from "../bulma/button";
 import { NotificationWarning } from "../bulma/notification";
 import { EntitiesLoader } from "../entity/EntitiesLoader";
@@ -20,15 +13,10 @@ import { entityLinkPath } from "../../semantic";
 import { Modal } from "../bulma/modal";
 import { TagMerger } from "./TagMerger";
 import { Box } from "solid-bulma";
+import { buildTagSelect } from ".";
 
 export function TagManagerPage(): JSX.Element {
-  const select: Select = {
-    ...newSelect(),
-    // FIXME: no bigint (needs type change)
-    limit: 1000 as any,
-    filter: exprIsEntityType(TY_SEMANTIC_TAG),
-    sort: [{ on: exprAttr(SEMANTIC_TITLE), order: "Asc" }],
-  };
+  const select: Select = buildTagSelect();
 
   return (
     <GenericPage title="Tags">

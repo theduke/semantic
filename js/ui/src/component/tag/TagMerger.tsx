@@ -1,19 +1,10 @@
-import { Expr } from "semantic/dist/core";
-import {
-  exprAnd,
-  exprAttr,
-  exprEq,
-  exprIsEntityType,
-  exprLiteral,
-  exprRegexIMatch,
-} from "semantic/dist/db";
 import {
   FACTOR_ID,
   SemanticTag,
   SEMANTIC_TAG_NAME,
-  TY_SEMANTIC_TAG,
 } from "semantic/dist/schema";
 import { createSignal, JSX, Show } from "solid-js";
+import { exprSearchTagByName } from ".";
 import { useApi, useRegistry } from "../../context";
 import { Button, Buttons } from "../bulma/button";
 import { EntityPicker } from "../entity/EntityPicker";
@@ -28,13 +19,6 @@ export interface TagMergerProps {
   tag: SemanticTag;
   onCancel: () => void;
   onMerged: (mergedTag: SemanticTag) => void;
-}
-
-function exprSearchTagByName(term: string): Expr {
-  return exprAnd(
-    exprIsEntityType(TY_SEMANTIC_TAG),
-    exprRegexIMatch(exprAttr(SEMANTIC_TAG_NAME), term)
-  );
 }
 
 export function TagMerger(props: TagMergerProps): JSX.Element {

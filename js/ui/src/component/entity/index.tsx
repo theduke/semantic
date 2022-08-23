@@ -19,6 +19,7 @@ import {
   FACTOR_TITLE,
   FACTOR_TYPE,
   FACTOR_VALUE_TYPE,
+  SEMANTIC_TAGS,
 } from "semantic/dist/schema";
 import { Class } from "semantic/dist/core";
 import { EntityChildrenLoader } from "./EntityChildren";
@@ -26,6 +27,9 @@ import { EntityEditor } from "./EntityEditor";
 import { EntityDeleterModal } from "./EntityDeleterModal";
 import { NotificationError, NotificationWarning } from "../bulma/notification";
 import { Button } from "../bulma/button";
+import { Modal } from "../bulma/modal";
+import { EntityTagManager } from "../tag/EntityTagManager";
+import { Box } from "solid-bulma";
 
 export function rendererValue(value: any): JSX.Element {
   const ty = typeof value;
@@ -204,6 +208,27 @@ export function renderGenericEntityBox(
   const [deleted, setDeleted] = createSignal<boolean>(false);
 
   const actions: EntityAction[] = [];
+
+  const tagManagerAction: EntityAction = {
+    label: "Tags",
+    icon: "tags",
+    replacesContent: false,
+    render: (props) => {
+      return (
+        <EntityTagManager
+          entity={getItem()}
+          modal
+          onFinished={(newTags) => {
+            if (newTags !== null) {
+              setItem((old) => ({ ...old, [SEMANTIC_TAGS]: newTags }));
+            }
+            props.close(tagManagerAction);
+          }}
+        />
+      );
+    },
+  };
+  actions.push(tagManagerAction);
 
   if (opts.allowEdit) {
     const editAction: EntityAction = {
