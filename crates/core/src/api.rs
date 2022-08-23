@@ -438,7 +438,7 @@ pub enum Reply {
     PluginTestFetch(Option<FetchUrlOutput>),
 
     TagCreate(DataMap),
-    TagMerge,
+    TagMerge(DataMap),
 
     Import(ImportOutput),
     FetchUrl(FetchUrlOutput),
@@ -778,7 +778,7 @@ impl<E: ApiClientExecutor> ApiClient<E> {
         &self,
         source_tag: IdOrIdent,
         target_tag: IdOrIdent,
-    ) -> Result<(), anyhow::Error> {
+    ) -> Result<DataMap, anyhow::Error> {
         match self
             .exec
             .execute(Query::TagMerge(TagMerge {
@@ -787,7 +787,7 @@ impl<E: ApiClientExecutor> ApiClient<E> {
             }))
             .await
         {
-            Ok(Reply::TagMerge) => Ok(()),
+            Ok(Reply::TagMerge(new_tag)) => Ok(new_tag),
             Ok(_other) => Err(anyhow::anyhow!("API returned invalid data")),
             Err(err) => Err(err),
         }

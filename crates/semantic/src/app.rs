@@ -1333,8 +1333,8 @@ impl App {
                 Ok(api::Reply::RecordEntityVisit)
             }
             api::Query::TagMerge(merge) => {
-                self.tag_merge(merge).await?;
-                Ok(api::Reply::TagMerge)
+                let new_tag = self.tag_merge(merge).await?;
+                Ok(api::Reply::TagMerge(new_tag))
             }
         };
         res.map_err(|err| {
@@ -1358,18 +1358,18 @@ impl App {
         Ok(raw)
     }
 
-    async fn tag_merge(&self, merge: api::TagMerge) -> Result<(), anyhow::Error> {
+    async fn tag_merge(&self, merge: api::TagMerge) -> Result<DataMap, anyhow::Error> {
         let db = self.require_db()?;
 
         let source_raw = db.entity(merge.source_tag).await?;
         let target_raw = db.entity(merge.target_tag).await?;
 
         let source = Tag::try_from_map(source_raw)?;
-        let target = Tag::try_from_map(target_raw)?;
+        let target = Tag::try_from_map(target_raw.clone())?;
 
         Tag::merge_tags(&db, source, target).await?;
 
-        Ok(())
+        Ok(target_raw)
     }
 
     async fn record_entity_visit(

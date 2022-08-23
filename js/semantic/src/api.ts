@@ -237,4 +237,9 @@ export class Api {
 		// TODO: type check of returned data?
 		return this.fetchApi("TagCreate", { TagCreate: param });
 	}
+
+	async tagMerge(source: string, target: string): Promise<void> {
+		// TODO: type check of returned data?
+		return this.fetchApi("TagMerge", { TagMerge: {target_tag: target, source_tag: source} });
+	}
 }
