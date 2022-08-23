@@ -13,7 +13,6 @@ import { EntitiesLoader } from "../entity/EntitiesLoader";
 import { MultiSelectSearch } from "../util/MultiSelectSearch";
 import { PatchOp } from "semantic/dist/core";
 import { useApi } from "../../context";
-import { NotificationError } from "../bulma/notification";
 import { renderError } from "../util/load";
 import { isEqual } from "lodash";
 import { Button, Buttons } from "../bulma/button";
@@ -174,7 +173,7 @@ export function EntityTagManager(props: EntityTagManagerProps): JSX.Element {
               >
                 Save
               </Button>
-              <Button onclick={() => props.onFinished?.(null)}>Discard</Button>
+              <Button onclick={() => props.onFinished?.(null)}>Cancel</Button>
             </Buttons>
 
             <Show when={error()}>{renderError}</Show>
