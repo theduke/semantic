@@ -154,7 +154,7 @@ pub enum JobStatus {
     },
     Running {
         step: Option<String>,
-        progress_percent: Option<u8>,
+        progress_percent: Option<f64>,
         progress_message: Option<String>,
     },
     Finished {
@@ -194,6 +194,15 @@ pub struct Job {
     pub finished_at: Option<Timestamp>,
     pub steps: Vec<JobStep>,
     pub status: JobStatus,
+}
+
+#[derive(serde::Serialize, serde::Deserialize, Clone, Debug)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[cfg_attr(feature = "schema", derive(ts_rs::TS))]
+pub struct JobEvent {
+    pub name: String,
+    #[cfg_attr(feature = "schema", ts(type = "any"))]
+    pub data: serde_json::Value,
 }
 
 impl Job {
@@ -364,6 +373,7 @@ pub enum Query {
     HttpFetch(SimpleHttpRequest),
 
     JobStatus(JobId),
+    JobEvents(JobId),
 
     ConvertFile(ConvertFile),
 
@@ -451,11 +461,12 @@ pub enum Reply {
     RecordEntityVisit,
 
     JobStatus(Job),
+    JobEvents(Vec<JobEvent>),
     ConvertFile(Job),
 
     FindUnusedBlobs { items: Vec<BlobInfo> },
     DeleteUnusedBlobs(UnusedBlobsDeleted),
-    AnalyzeMedia(()),
+    AnalyzeMedia(Job),
 }
 
 #[derive(serde::Serialize, serde::Deserialize, Clone, Debug)]
@@ -465,6 +476,16 @@ pub struct ApiError {
     pub message: String,
     pub code: Option<String>,
     pub details: Option<String>,
+}
+
+impl ApiError {
+    pub fn from_error(err: anyhow::Error) -> Self {
+        Self {
+            message: err.to_string(),
+            code: None,
+            details: None,
+        }
+    }
 }
 
 #[derive(serde::Serialize, serde::Deserialize, Clone, Debug)]
@@ -743,9 +764,9 @@ impl<E: ApiClientExecutor> ApiClient<E> {
         }
     }
 
-    pub async fn analyze_media(&self, force: bool) -> Result<(), anyhow::Error> {
+    pub async fn analyze_media(&self, force: bool) -> Result<Job, anyhow::Error> {
         match self.exec.execute(Query::AnalyzeMedia { force }).await {
-            Ok(Reply::AnalyzeMedia(())) => Ok(()),
+            Ok(Reply::AnalyzeMedia(job)) => Ok(job),
             Ok(_other) => Err(anyhow::anyhow!("API returned invalid data")),
             Err(err) => Err(err),
         }

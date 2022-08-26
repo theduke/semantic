@@ -151,6 +151,21 @@ impl AttrVideoHasSound {
     }
 }
 
+pub struct AttrVisualHash(Vec<u8>);
+
+impl AttributeMeta for AttrVisualHash {
+    const NAMESPACE: &'static str = "semantic";
+    const PLAIN_NAME: &'static str = "visual_hash";
+    const QUALIFIED_NAME: &'static str = "semantic/visual_hash";
+    const IDENT: IdOrIdent = IdOrIdent::new_static(Self::QUALIFIED_NAME);
+
+    type Type = Vec<u8>;
+
+    fn schema() -> factdb::Attribute {
+        factdb::Attribute::new(Self::QUALIFIED_NAME, factdb::data::ValueType::Bytes)
+    }
+}
+
 #[derive(Serialize, Deserialize, Class, Clone, Debug)]
 #[factor(namespace = "semantic")]
 pub struct File {
@@ -333,6 +348,10 @@ pub struct Image {
     #[factor(attr = AttrPixelHeight)]
     #[serde(rename = "semantic/pixel_height")]
     pub height: Option<u64>,
+
+    #[factor(attr = AttrVisualHash)]
+    #[serde(rename = "semantic/visual_hash")]
+    pub visual_hash: Option<Vec<u8>>,
 }
 
 #[derive(Serialize, Deserialize, Class, Clone, Debug)]
@@ -440,6 +459,15 @@ impl TypedFile {
             Image::QUALIFIED_NAME => Self::Image(Image {
                 width: file.extra.get_attr::<AttrPixelWidth>(),
                 height: file.extra.get_attr::<AttrPixelHeight>(),
+                visual_hash: file.extra.get(AttrVisualHash::QUALIFIED_NAME).and_then(
+                    |x| -> Option<Vec<u8>> {
+                        if x.is_bytes() {
+                            x.clone().try_into().ok()
+                        } else {
+                            None
+                        }
+                    },
+                ),
                 file,
             }),
             Audio::QUALIFIED_NAME => Self::Audio(Audio {

@@ -8,11 +8,17 @@ use std::{
 };
 
 use anyhow::{anyhow, bail, Context};
-use factdb::{AttrMapExt, DataMap, Db, Expr, Patch, Select};
+use factdb::{
+    schema::builtin::AttrCount, AttrId, AttrMapExt, AttributeMeta, ClassContainer, DataMap, Db,
+    Expr, Patch, Select,
+};
 
 use semantic_core::{
     api::{ApiError, Job, JobId},
-    base::{AttrBlobUriWeb, AttrDuration, AttrVideoHasSound, TypedFile, UniversalHash, Video},
+    base::{
+        AttrBlobUriWeb, AttrDuration, AttrPixelHeight, AttrPixelWidth, AttrVideoHasSound,
+        AttrVisualHash, File, Image, TypedFile, UniversalHash, Video,
+    },
 };
 use tokio::{io::AsyncBufReadExt, task::JoinHandle};
 
@@ -267,8 +273,7 @@ fn spawn_ffmpeg_output_monitor(
 
                         let progress_percent = if let Some(count) = &frame_count {
                             write!(&mut msg, "/{count}").unwrap();
-                            let percent =
-                                (((frame as f64) / (*count as f64)) * 100.0).floor() as u8;
+                            let percent = ((frame as f64) / (*count as f64)) * 100.0;
                             Some(percent)
                         } else {
                             None
@@ -308,8 +313,14 @@ pub struct Dimensions {
 }
 
 #[derive(Clone, Debug)]
+pub enum ImageHash {
+    ImgHashDoubleGradient16B(Vec<u8>),
+}
+
+#[derive(Clone, Debug)]
 pub struct ImageInfo {
     pub dimensions: Option<Dimensions>,
+    pub visual_hash: Option<ImageHash>,
 }
 
 #[derive(Clone, Debug)]
@@ -331,6 +342,20 @@ pub enum FileInfo {
     Audio(AudioInfo),
 }
 
+impl FileInfo {
+    pub fn as_image(&self) -> Option<&ImageInfo> {
+        if let Self::Image(v) = self {
+            Some(v)
+        } else {
+            None
+        }
+    }
+}
+
+pub trait ProgressReporter: Send + Sync {
+    fn on_progress(&self, percent: f64, message: Option<String>);
+}
+
 pub async fn analyze_file_async(
     mime_guess: Option<infer::Type>,
     data: DataSource,
@@ -350,7 +375,7 @@ fn analyze_file_sync(
                 Ok(Some(FileInfo::Video(video)))
             } else if x.mime_type().starts_with("image/") {
                 let data = data.into_bytes()?;
-                let info = analyze_image(&data)?;
+                let info = analyze_image(&data, true)?;
                 Ok(Some(FileInfo::Image(info)))
             } else if x.mime_type().starts_with("audio/") {
                 let info = analyze_audio(data)?;
@@ -381,11 +406,18 @@ fn analyze_audio(source: DataSource) -> Result<AudioInfo, anyhow::Error> {
     Ok(AudioInfo { duration })
 }
 
-fn analyze_image(data: &SharedBinarData) -> Result<ImageInfo, anyhow::Error> {
-    analyze_image_image(data.as_ref())
+async fn analyze_image_async(
+    data: SharedBinarData,
+    hash: bool,
+) -> Result<ImageInfo, anyhow::Error> {
+    tokio::task::spawn_blocking(move || analyze_image(&data, hash)).await?
 }
 
-fn analyze_image_image(data: &[u8]) -> Result<ImageInfo, anyhow::Error> {
+fn analyze_image(data: &SharedBinarData, hash: bool) -> Result<ImageInfo, anyhow::Error> {
+    analyze_image_image(data.as_ref(), hash)
+}
+
+fn analyze_image_image(data: &[u8], hash: bool) -> Result<ImageInfo, anyhow::Error> {
     let img = image::io::Reader::new(std::io::Cursor::new(data))
         .with_guessed_format()?
         .decode()?;
@@ -393,11 +425,25 @@ fn analyze_image_image(data: &[u8]) -> Result<ImageInfo, anyhow::Error> {
     let width = img.width();
     let height = img.height();
 
+    let visual_hash = if hash {
+        let hasher = img_hash::HasherConfig::new()
+            .hash_alg(img_hash::HashAlg::DoubleGradient)
+            .hash_size(16, 16)
+            .to_hasher();
+
+        let hash = hasher.hash_image(&img);
+        let hash = ImageHash::ImgHashDoubleGradient16B(hash.as_bytes().to_vec());
+        Some(hash)
+    } else {
+        None
+    };
+
     Ok(ImageInfo {
         dimensions: Some(Dimensions {
             width: width.into(),
             height: height.into(),
         }),
+        visual_hash,
     })
 }
 
@@ -503,51 +549,90 @@ where
     })
 }
 
-pub async fn analyze_files(db: Db, blob: DynBlobStore, force: bool) -> Result<(), anyhow::Error> {
-    let span = tracing::debug_span!("media file analysis");
-    let _guard = span.enter();
+pub async fn analyze_files(
+    db: Db,
+    blob: DynBlobStore,
+    force: bool,
+    progress: impl ProgressReporter,
+) -> Result<(), anyhow::Error> {
+    let plain_select = Select::new()
+        .with_filter(Expr::is_entity_nested::<File>())
+        .with_sort(AttrId::expr(), factdb::Order::Asc);
 
-    tracing::trace!("loading files for media analysis...");
+    let count_select = plain_select.clone().with_aggregate(
+        factdb::query::select::AggregationOp::Count,
+        "count".to_string(),
+    );
+    let file_count = db.select(count_select).await?.items[0]
+        .data
+        .get_attr::<AttrCount>()
+        .unwrap();
 
-    // FIXME: pagination...
-    // TODO: images, audio files, ...
-    let files = db
-        .select(Select::new().with_filter(Expr::is_entity::<Video>()))
-        .await?;
+    let base_select = plain_select.clone().with_limit(100);
 
-    let total = files.items.len();
-    span.record("count", &total);
+    let mut select = base_select.clone();
 
-    tracing::info!(file_count=%total, "starting analysis");
-    for (index, item) in files.items.into_iter().enumerate() {
-        let file_id = item.data.get_id().unwrap();
-        let typed = match TypedFile::from_map(item.data) {
-            Ok(t) => t,
-            Err(error) => {
-                tracing::trace!(%file_id, ?error, "could not analyse file");
-                continue;
-            }
-        };
+    let mut index = 0;
+    loop {
+        let page = db.select(select.clone()).await?;
 
-        let res = match typed {
-            TypedFile::Video(video) => video_analyze_and_update(&db, &blob, video, force)
-                .await
-                .map(|opt| opt.map(TypedFile::Video)),
-            TypedFile::Image(_) => todo!(),
-            TypedFile::File(_) => todo!(),
-            TypedFile::Audio(_) => todo!(),
-        };
+        if let Some(last) = page.items.last() {
+            // Prepare select for next page.
+            let id = last.data.get_id().unwrap_or_default();
+            select = base_select
+                .clone()
+                .with_filter(Expr::gt(AttrId::expr(), id));
+        } else {
+            // Page is empty, so stop.
+            break;
+        }
+        if page.items.is_empty() {
+            break;
+        }
+        // Prepare next query so we dont' forget...
 
-        span.record("complete", &(index + 1));
-        match res {
-            Ok(Some(_)) => {
-                tracing::debug!(%file_id, "file analyzed ({}/{})", index + 1, total);
-            }
-            Ok(None) => {
-                tracing::trace!(%file_id, "file analysis skipped ({}/{})", index + 1, total);
-            }
-            Err(error) => {
-                tracing::warn!(%file_id, ?error, "file analysis failed ({}/{})", index + 1, total);
+        let total = page.items.len();
+
+        for item in page.items {
+            index += 1;
+            let file_id = item.data.get_id().unwrap();
+            let typed = match TypedFile::from_map(item.data) {
+                Ok(t) => t,
+                Err(error) => {
+                    tracing::trace!(%file_id, ?error, "could not analyse file");
+                    continue;
+                }
+            };
+
+            let res = match typed {
+                TypedFile::Video(video) => video_analyze_and_update(&db, &blob, video, force)
+                    .await
+                    .map(|opt| opt.map(TypedFile::Video)),
+                TypedFile::Image(img) => image_analyze_and_update(&db, &blob, img, force)
+                    .await
+                    .map(|opt| opt.map(TypedFile::Image)),
+                TypedFile::File(_) => Ok(None),
+                TypedFile::Audio(_) => {
+                    // FIXME: implement!
+                    Ok(None)
+                }
+            };
+
+            progress.on_progress(
+                index as f64 / file_count as f64,
+                Some(format!("Analayzed {}/{} files", index, file_count)),
+            );
+
+            match res {
+                Ok(Some(_)) => {
+                    tracing::debug!(%file_id, "file analyzed ({}/{})", index + 1, total);
+                }
+                Ok(None) => {
+                    tracing::trace!(%file_id, "file analysis skipped ({}/{})", index + 1, total);
+                }
+                Err(error) => {
+                    tracing::warn!(%file_id, ?error, "file analysis failed ({}/{})", index + 1, total);
+                }
             }
         }
     }
@@ -560,14 +645,14 @@ pub async fn analyze_files(db: Db, blob: DynBlobStore, force: bool) -> Result<()
 async fn video_analyze_and_update(
     db: &Db,
     blob: &DynBlobStore,
-    video: Video,
+    mut video: Video,
     force: bool,
 ) -> Result<Option<Video>, anyhow::Error> {
-    use factdb::{AttributeMeta, ClassContainer};
+    let has_dimensions = video.width.is_some() && video.height.is_some();
+    let has_duration = video.duration.is_some();
 
-    if video.duration.is_some() && !force {
-        // If duration is already set, assume that video was already analysed
-        // and there is nothing to do. Overwritten by force argument.
+    if !force && (has_dimensions && has_duration) {
+        // Duration and dimensions available, so no re-analysis required.
         return Ok(None);
     }
 
@@ -585,15 +670,92 @@ async fn video_analyze_and_update(
         .await
         .context("could not analyse video")?;
 
-    let patch = Patch::new()
-        .replace(AttrDuration::QUALIFIED_NAME, info.duration.as_secs())
-        .replace(AttrVideoHasSound::QUALIFIED_NAME, info.has_audio);
+    let mut patch = Patch::new();
 
-    db.patch(video.id(), patch)
-        .await
-        .context("could not persist video information to db")?;
+    if !has_duration || video.duration != Some(info.duration.as_secs()) {
+        let secs = info.duration.as_secs();
+        patch = patch.replace(AttrDuration::QUALIFIED_NAME, secs);
+        video.duration = Some(secs);
+    }
+    if let Some(dim) = info.dimensions {
+        if Some(dim.width) != video.width {
+            patch = patch.replace(AttrPixelWidth::QUALIFIED_NAME, dim.width);
+        }
+        if Some(dim.height) != video.height {
+            patch = patch.replace(AttrPixelHeight::QUALIFIED_NAME, dim.height);
+        }
+
+        video.width = Some(dim.width);
+        video.height = Some(dim.height);
+    }
+    if video.video_has_sound != Some(info.has_audio) {
+        patch = patch.replace(AttrVideoHasSound::QUALIFIED_NAME, info.has_audio);
+        video.video_has_sound = Some(info.has_audio);
+    }
+
+    if !patch.0.is_empty() {
+        db.patch(video.id(), patch)
+            .await
+            .context("could not persist video information to db")?;
+    }
 
     Ok(Some(video))
+}
+
+async fn image_analyze_and_update(
+    db: &Db,
+    blob: &DynBlobStore,
+    mut img: Image,
+    force: bool,
+) -> Result<Option<Image>, anyhow::Error> {
+    let has_dimensions = img.width.is_some() && img.height.is_some();
+    let has_vishash = img.visual_hash.is_some();
+
+    if !force && (has_dimensions && has_vishash) {
+        // Duration and dimensions available, so no re-analysis required.
+        return Ok(None);
+    }
+
+    let blob_uri = img
+        .file
+        .blob_uri
+        .clone()
+        .ok_or_else(|| anyhow!("Video does not have a blob"))?;
+    let raw_data = blob
+        .get(&blob_uri)
+        .await?
+        .context("Could not obtaing blob reader for video")?;
+    let data = SharedBinarData::new(raw_data);
+
+    let info = analyze_image_async(data, true)
+        .await
+        .context("could not analyse image")?;
+
+    let mut patch = Patch::new();
+    if let Some(dim) = info.dimensions {
+        if Some(dim.width) != img.width {
+            patch = patch.replace(AttrPixelWidth::QUALIFIED_NAME, dim.width);
+        }
+        if Some(dim.height) != img.height {
+            patch = patch.replace(AttrPixelHeight::QUALIFIED_NAME, dim.height);
+        }
+        img.width = Some(dim.width);
+        img.height = Some(dim.height);
+    }
+    if let Some(ImageHash::ImgHashDoubleGradient16B(bytes)) = info.visual_hash {
+        if Some(&bytes) != img.visual_hash.as_ref() {
+            patch = patch.replace(AttrVisualHash::QUALIFIED_NAME, bytes.clone());
+            img.visual_hash = Some(bytes);
+        }
+    }
+
+    if !patch.0.is_empty() {
+        db.patch(img.id(), patch)
+            .await
+            .context("could not persist image information to db")?;
+    }
+
+    Ok(Some(img))
 }
 
 async fn try_optimise_video(

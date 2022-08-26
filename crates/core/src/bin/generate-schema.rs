@@ -74,6 +74,7 @@ fn main() {
         .and::<api::DbConfig>()
         .and::<api::BackendCryptoConfig>()
         .and::<api::Job>()
+        .and::<api::JobEvent>()
         .and::<api::JobStep>()
         .and::<api::JobStatus>()
         .and::<api::ServerStatus>()

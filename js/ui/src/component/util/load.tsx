@@ -196,6 +196,25 @@ export function SuspsenseSpinner(props: ParentProps): JSX.Element {
   return <Suspense fallback={SPINNER}>{props.children}</Suspense>;
 }
 
+export type FallibleResourceProps<T> = {
+  resource: FallibleResource<T>;
+  children: (data: T) => JSX.Element;
+};
+
+export function FallibleResource<T>(
+  props: FallibleResourceProps<T>
+): JSX.Element {
+  return (
+    <Switch>
+      <Match when={props.resource.loading}>{SPINNER}</Match>
+      <Match when={props.resource.caughtError}>
+        {renderError(props.resource.caughtError)}
+      </Match>
+      <Match when={props.resource()}>{(data) => props.children(data)}</Match>
+    </Switch>
+  );
+}
+
 export type FallibleResourceLoaderProps<T> = {
   load: () => Promise<T>;
   children: (data: T, actions: ResourceActions<T>) => JSX.Element;

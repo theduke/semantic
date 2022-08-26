@@ -18,6 +18,7 @@ import { Icon } from "./component/bulma/icon";
 import { SettingsPage } from "./component/SettingsPage";
 import {
   ROUTE_SETTINGS,
+  ROUTE_SETTINGS_ANALYSE_MEDIA,
   ROUTE_SETTINGS_BLOB_CLEANUP,
   ROUTE_SETTINGS_TAG_MANAGER,
 } from "./routing";
@@ -29,6 +30,7 @@ import { UploadPage } from "./component/upload/UploadPage";
 import { ImportPage } from "./component/imports/ImportPage";
 import { PlayPage } from "./component/play/PlayPage";
 import { BlobCleanupPage } from "./component/settings/blob_cleanup";
+import { MediaAnalyzerPage } from "./component/settings/media_analyzer";
 
 export function App(): JSX.Element {
   const [getRegistry, setRegistry] = createSignal<UiRegistry | null>();
@@ -80,6 +82,10 @@ export function App(): JSX.Element {
                 <Route
                   path={ROUTE_SETTINGS_BLOB_CLEANUP}
                   component={BlobCleanupPage}
+                />
+                <Route
+                  path={ROUTE_SETTINGS_ANALYSE_MEDIA}
+                  component={MediaAnalyzerPage}
                 />
                 <Route path="/" component={BrowsePage} />
               </Routes>

@@ -270,6 +270,7 @@ impl Plugin for SemanticBasePlugin {
                     AttrVideoHasSound::schema(),
                     AttrPixelWidth::schema(),
                     AttrPixelHeight::schema(),
+                    AttrVisualHash::schema(),
                     // socialmedia
                     AttrSocialMediaPostContent::schema(),
                     AttrSocialMediaPostUserId::schema(),
@@ -1244,6 +1245,20 @@ impl Plugin for SemanticBasePlugin {
                 strict: false,
             });
 
+        let create_visual_hash = Migration::with_name("create_visual_hash")
+            .attr_create(Attribute::new(
+                AttrVisualHash::QUALIFIED_NAME,
+                ValueType::Bytes,
+            ))
+            .action(migrate::SchemaAction::EntityAttributeAdd(
+                migrate::EntityAttributeAdd {
+                    entity: Image::IDENT.to_string(),
+                    attribute: AttrVisualHash::IDENT.to_string(),
+                    cardinality: Cardinality::Optional,
+                    default_value: None,
+                },
+            ));
+
         vec![
             rollup,
             create_like_count,
@@ -1256,6 +1271,7 @@ impl Plugin for SemanticBasePlugin {
             create_audio,
             create_attr_text_content,
             create_code_snippet,
+            create_visual_hash,
         ]
     }
 }

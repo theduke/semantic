@@ -68,4 +68,5 @@ bytes = "1.1.0"
 tracing-futures = "0.2.5"
 pin-project-lite = "0.2.9"
 image = "0.24.3"
+img_hash = { git = "https://github.com/theduke/img_hash.git", version = "3.2.0", branch = "upgrade-image-0.24" }
 

@@ -11,7 +11,7 @@ use factdb::{
     Select, Timestamp, Value, ValueMap,
 };
 use semantic_core::{
-    api::{self, BackendConfig, DbConfig, FileImportMetadata, SemanticSchema},
+    api::{self, ApiError, BackendConfig, DbConfig, FileImportMetadata, JobId, SemanticSchema},
     base::{
         entity_title, AttrBlobUri, AttrBlobUriWeb, AttrDownloadUrl, AttrFileName, AttrFileSize,
         AttrHash, AttrMimeType, AttrOriginalHash, AttrPreviewImageBlobUri, SemanticBasePlugin, Tag,
@@ -22,7 +22,12 @@ use semantic_core::{
 };
 use tracing_futures::Instrument;
 
-use crate::{blobstore::DynBlobStore, jobs::JobManager, plugin::PluginManager, util::media};
+use crate::{
+    blobstore::DynBlobStore,
+    jobs::JobManager,
+    plugin::PluginManager,
+    util::media::{self, FileInfo},
+};
 
 pub use crate::plugin::deno::DenoConfig;
 
@@ -673,19 +678,31 @@ impl App {
 
         let item = match mime_guess.map(|x| x.mime_type()).unwrap_or_default() {
             mime if mime.starts_with("image/") => {
-                let (width, height) = if let Some(media::FileInfo::Image(img)) = media_info {
-                    (
-                        img.dimensions.as_ref().map(|x| x.width),
-                        img.dimensions.as_ref().map(|x| x.height),
-                    )
-                } else {
-                    (None, None)
-                };
+                let mut width = None;
+                let mut height = None;
+                let mut visual_hash = None;
+
+                if let Some(FileInfo::Image(imginfo)) = media_info {
+                    if let Some(dim) = imginfo.dimensions {
+                        width = Some(dim.width);
+                        height = Some(dim.height);
+                    }
+                    if let Some(hash) = imginfo.visual_hash {
+                        match hash {
+                            media::ImageHash::ImgHashDoubleGradient16B(b) => {
+                                visual_hash = Some(Vec::from(b));
+                            } // _ => {
+                              //     tracing::trace!(?hash, "unsupported visual hash type");
+                              // }
+                        }
+                    }
+                }
 
                 TypedFile::Image(semantic_core::base::Image {
                     file,
                     width,
                     height,
+                    visual_hash,
                 })
             }
             mime if mime.starts_with("video/") => {
@@ -1147,22 +1164,69 @@ impl App {
         Ok(())
     }
 
-    fn start_analyze_media(&self, force: bool) -> Result<(), anyhow::Error> {
+    fn start_analyze_media(&self, force: bool) -> Result<api::Job, anyhow::Error> {
+        struct Reporter {
+            manager: JobManager,
+            step: String,
+            id: JobId,
+        }
+
+        impl media::ProgressReporter for Reporter {
+            fn on_progress(&self, percent: f64, message: Option<String>) {
+                self.manager
+                    .job_update(
+                        self.id,
+                        api::JobStatus::Running {
+                            step: Some(self.step.clone()),
+                            progress_percent: Some(percent),
+                            progress_message: message,
+                        },
+                    )
+                    .ok();
+            }
+        }
+
         let db = self.require_db()?;
         let blob = self.require_blob()?;
+        let jobs = self.require_jobs()?;
+
+        let job = jobs.register_job(crate::jobs::JobInit {
+            name: "Analyze media".to_string(),
+            steps: Vec::new(),
+        });
+
+        let reporter = Reporter {
+            manager: jobs.clone(),
+            step: "Analyze media".to_string(),
+            id: job.id,
+        };
 
         tokio::task::spawn(async move {
-            match crate::util::media::analyze_files(db, blob, force).await {
+            match crate::util::media::analyze_files(db, blob, force, reporter).await {
                 Ok(_) => {
                     tracing::info!("media analysis complete");
+                    jobs.job_update(
+                        job.id,
+                        api::JobStatus::Finished {
+                            result: Ok("Complete".to_string()),
+                        },
+                    )
+                    .ok();
                 }
                 Err(error) => {
                     tracing::error!(?error, "media analysis failed");
+                    jobs.job_update(
+                        job.id,
+                        api::JobStatus::Finished {
+                            result: Err(ApiError::from_error(error)),
+                        },
+                    )
+                    .ok();
                 }
             }
         });
 
-        Ok(())
+        Ok(job)
     }
 
     pub async fn run_query(
@@ -1291,6 +1355,10 @@ impl App {
                     .ok_or_else(|| anyhow!("Job not found: '{id}'"))?;
                 Ok(api::Reply::JobStatus(job))
             }
+            api::Query::JobEvents(id) => {
+                let events = self.require_jobs()?.job_take_events(id)?;
+                Ok(api::Reply::JobEvents(events))
+            }
             api::Query::ConvertFile(_) => {
                 todo!()
             }
@@ -1321,8 +1389,8 @@ impl App {
                 Ok(api::Reply::FileCreatePreviewImageBlob(()))
             }
             api::Query::AnalyzeMedia { force } => {
-                self.start_analyze_media(force)?;
-                Ok(api::Reply::AnalyzeMedia(()))
+                let job = self.start_analyze_media(force)?;
+                Ok(api::Reply::AnalyzeMedia(job))
             }
             api::Query::TagCreate(create) => {
                 let tag = self.tag_create(create).await?;

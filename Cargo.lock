@@ -460,9 +460,9 @@ checksum = "5827cebf4670468b8772dd191856768aedcb1b0278a04f989f7766351917b9dc"
 
 [[package]]
 name = "cpufeatures"
-version = "0.2.3"
+version = "0.2.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "1079fb8528d9f9c888b1e8aa651e6e079ade467323d58f75faf1d30b1808f540"
+checksum = "dc948ebb96241bb40ab73effeb80d9f93afaad49359d159a5e61be51619fe813"
 dependencies = [
  "libc",
 ]
@@ -691,7 +691,7 @@ dependencies = [
 [[package]]
 name = "factdb"
 version = "0.1.0"
-source = "git+https://github.com/theduke/factordb.git?branch=main#20c802bba7195bc21cf6e74bb075fcb78ee94200"
+source = "git+https://github.com/theduke/factordb.git?branch=main#cead2a219f8f238bc22dd6058540068c453aff30"
 dependencies = [
  "anyhow",
  "chrono",
@@ -712,7 +712,7 @@ dependencies = [
 [[package]]
 name = "factor_core"
 version = "0.1.0"
-source = "git+https://github.com/theduke/factordb.git?branch=main#20c802bba7195bc21cf6e74bb075fcb78ee94200"
+source = "git+https://github.com/theduke/factordb.git?branch=main#cead2a219f8f238bc22dd6058540068c453aff30"
 dependencies = [
  "anyhow",
  "chrono",
@@ -731,7 +731,7 @@ dependencies = [
 [[package]]
 name = "factor_engine"
 version = "0.1.0"
-source = "git+https://github.com/theduke/factordb.git?branch=main#20c802bba7195bc21cf6e74bb075fcb78ee94200"
+source = "git+https://github.com/theduke/factordb.git?branch=main#cead2a219f8f238bc22dd6058540068c453aff30"
 dependencies = [
  "anyhow",
  "chrono",
@@ -753,7 +753,7 @@ dependencies = [
 [[package]]
 name = "factor_macros"
 version = "0.1.0"
-source = "git+https://github.com/theduke/factordb.git?branch=main#20c802bba7195bc21cf6e74bb075fcb78ee94200"
+source = "git+https://github.com/theduke/factordb.git?branch=main#cead2a219f8f238bc22dd6058540068c453aff30"
 dependencies = [
  "Inflector",
  "proc-macro2",
@@ -764,7 +764,7 @@ dependencies = [
 [[package]]
 name = "factor_tools"
 version = "0.1.0"
-source = "git+https://github.com/theduke/factordb.git?branch=main#20c802bba7195bc21cf6e74bb075fcb78ee94200"
+source = "git+https://github.com/theduke/factordb.git?branch=main#cead2a219f8f238bc22dd6058540068c453aff30"
 dependencies = [
  "Inflector",
  "anyhow",
@@ -1202,6 +1202,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "img_hash"
+version = "3.2.0"
+source = "git+https://github.com/theduke/img_hash.git?branch=upgrade-image-0.24#56e08b0082bd1802d346d44f954455fb22fc948c"
+dependencies = [
+ "base64",
+ "image 0.24.3",
+ "rustdct",
+ "serde",
+ "transpose 0.2.1",
+]
+
+[[package]]
 name = "indexmap"
 version = "1.9.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1527,6 +1539,16 @@ checksum = "f93ab6289c7b344a8a9f60f88d80aa20032336fe78da341afc91c8a2341fc75f"
 dependencies = [
  "autocfg",
  "num-integer",
+ "num-traits",
+]
+
+[[package]]
+name = "num-complex"
+version = "0.2.4"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "b6b19411a9719e753aff12e5187b74d60d3dc449ec3f4dc21e3989c3f554bc95"
+dependencies = [
+ "autocfg",
  "num-traits",
 ]
 
@@ -2080,6 +2102,28 @@ dependencies = [
 ]
 
 [[package]]
+name = "rustdct"
+version = "0.4.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "ef4d167674b4cf68c2114bdbcd34c95aa9071652b73b0f43b19298f1d2780b7d"
+dependencies = [
+ "rustfft",
+]
+
+[[package]]
+name = "rustfft"
+version = "3.0.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "77008ed59a8923c8b4ac2e5eaa6d28fbe893d3b9515098a4a5fc7767d6430fe5"
+dependencies = [
+ "num-complex",
+ "num-integer",
+ "num-traits",
+ "strength_reduce",
+ "transpose 0.1.0",
+]
+
+[[package]]
 name = "rustix"
 version = "0.35.9"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2197,6 +2241,7 @@ dependencies = [
  "headers",
  "hyper",
  "image 0.24.3",
+ "img_hash",
  "infer",
  "jsonwebtoken",
  "logfs",
@@ -2472,7 +2517,7 @@ dependencies = [
  "num-bigint",
  "num-traits",
  "thiserror",
- "time 0.3.13",
+ "time 0.3.14",
 ]
 
 [[package]]
@@ -2492,9 +2537,9 @@ checksum = "2fd0db749597d91ff862fd1d55ea87f7855a744a8425a64695b6fca237d1dad1"
 
 [[package]]
 name = "socket2"
-version = "0.4.4"
+version = "0.4.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "66d72b759436ae32898a2af0a14218dbf55efde3feeb170eb623637db85ee1e0"
+checksum = "10c98bba371b9b22a71a9414e420f92ddeb2369239af08200816169d5e2dd7aa"
 dependencies = [
  "libc",
  "winapi",
@@ -2523,6 +2568,12 @@ checksum = "06f81e3ef3e44bcec9b9a349555f93178d2a427c2bb3e9611c50180085ad07a9"
 dependencies = [
  "log",
 ]
+
+[[package]]
+name = "strength_reduce"
+version = "0.2.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "a3ff2f71c82567c565ba4b3009a9350a96a7269eaa4001ebedae926230bc2254"
 
 [[package]]
 name = "strsim"
@@ -2645,9 +2696,9 @@ dependencies = [
 
 [[package]]
 name = "time"
-version = "0.3.13"
+version = "0.3.14"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "db76ff9fa4b1458b3c7f077f3ff9887394058460d21e634355b273aaf11eea45"
+checksum = "3c3f9a28b618c3a6b9251b6908e9c99e04b9e5c02e6581ccbb67d59c34ef7f9b"
 dependencies = [
  "itoa",
  "libc",
@@ -2881,6 +2932,22 @@ dependencies = [
  "tracing",
  "tracing-subscriber",
  "wasm-bindgen",
+]
+
+[[package]]
+name = "transpose"
+version = "0.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "643e21580bb0627c7bb09e5cedbb42c8705b19d012de593ed6b0309270b3cd1e"
+
+[[package]]
+name = "transpose"
+version = "0.2.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "95f9c900aa98b6ea43aee227fd680550cdec726526aab8ac801549eadb25e39f"
+dependencies = [
+ "num-integer",
+ "strength_reduce",
 ]
 
 [[package]]

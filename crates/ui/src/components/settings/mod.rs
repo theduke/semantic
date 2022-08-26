@@ -37,7 +37,10 @@ fn media_analyze_toggle() -> TagBuilder {
                     .label("Start Media Analyzer")
                     .signal_loading(loader.signal_loading())
                     .on(move || {
-                        loader2.spawn(async { context::api().analyze_media(false).await });
+                        loader2.spawn(async {
+                            context::api().analyze_media(false).await?;
+                            Ok(())
+                        });
                     })
                     .build(),
             ),

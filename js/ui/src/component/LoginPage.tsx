@@ -3,7 +3,7 @@ import { JSX } from "solid-js/jsx-runtime";
 import { Api } from "semantic/dist/api";
 import { useApi } from "../context";
 import { SemanticSchema } from "semantic/dist/core";
-import { BoundarySuspenseLoader } from "./util/load";
+import { BoundarySuspenseLoader, FallibleResourceLoader } from "./util/load";
 
 export interface LoginPageProps {
   onLogin: (schema: SemanticSchema) => void;
@@ -26,9 +26,9 @@ async function tryLogin(
 export function LoginPage(props: LoginPageProps): JSX.Element {
   const api = useApi();
   return (
-    <BoundarySuspenseLoader
+    <FallibleResourceLoader
       load={() => tryLogin(api, props.onLogin)}
-      render={(flag) => <Show when={!flag}>LOGIN FORM</Show>}
+      children={(flag) => <Show when={!flag}>LOGIN FORM</Show>}
     />
   );
 }

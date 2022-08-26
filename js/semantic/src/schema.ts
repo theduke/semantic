@@ -45,6 +45,7 @@ export const SEMANTIC_FILENAME = "semantic/filename";
 export const SEMANTIC_VIDEO_HAS_SOUND = "semantic/video_has_sound";
 export const SEMANTIC_PIXEL_WIDTH = "semantic/pixel_width";
 export const SEMANTIC_PIXEL_HEIGHT = "semantic/pixel_height";
+export const SEMANTIC_VISUAL_HASH = "semantic/visual_hash";
 export const SEMANTIC_SOCIAL_MEDIA_POST_CONTENT = "semantic/social_media_post_content";
 export const SEMANTIC_SOCIAL_MEDIA_POST_USER_ID = "semantic/social_media_post_user_id";
 export const SEMANTIC_SOCIAL_MEDIA_PLATFORM_NAME = "semantic/social_media_platform_name";
@@ -139,6 +140,7 @@ export interface SemanticImage extends Omit<SemanticFile, "factor/type"> {
   "factor/type": "semantic/Image",
   "semantic/pixel_width"?: number | null,
   "semantic/pixel_height"?: number | null,
+  "semantic/visual_hash"?: number[] | null,
 }
 
 

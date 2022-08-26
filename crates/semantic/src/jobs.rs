@@ -7,13 +7,19 @@ use std::{
 
 use anyhow::anyhow;
 use factdb::Timestamp;
-use semantic_core::api::{Job, JobId, JobStatus, JobStep};
+use semantic_core::api::{Job, JobEvent, JobId, JobStatus, JobStep};
 
 #[derive(Clone)]
 pub struct JobManager(Arc<RwLock<State>>);
 
+#[derive(Clone, Debug)]
+struct JobState {
+    job: Job,
+    events: Vec<JobEvent>,
+}
+
 struct State {
-    jobs: HashMap<JobId, Job>,
+    jobs: HashMap<JobId, JobState>,
 }
 
 #[derive(Debug, Clone)]
@@ -30,7 +36,7 @@ impl JobManager {
     }
 
     pub fn job(&self, id: JobId) -> Option<Job> {
-        self.0.read().unwrap().jobs.get(&id).cloned()
+        self.0.read().unwrap().jobs.get(&id).map(|i| i.job.clone())
     }
 
     pub fn register_job(&self, init: JobInit) -> Job {
@@ -55,25 +61,29 @@ impl JobManager {
                 queue_position: None,
             },
         };
-        self.0.write().unwrap().jobs.insert(job.id, job.clone());
+        let item = JobState {
+            job: job.clone(),
+            events: Vec::new(),
+        };
+        self.0.write().unwrap().jobs.insert(job.id, item);
         job
     }
 
     pub fn job_update(&self, id: JobId, status: JobStatus) -> Result<Job, anyhow::Error> {
         let mut lock = self.0.write().unwrap();
-        let job = lock
+        let item = lock
             .jobs
             .get_mut(&id)
             .ok_or_else(|| anyhow!("Job not found: '{id}'"))?;
-        job.update(status);
+        item.job.update(status);
 
-        tracing::trace!(job=?job, "job status update");
-        Ok(job.clone())
+        tracing::trace!(job=?item.job, "job status update");
+        Ok(item.job.clone())
     }
 
     pub fn job_add_steps(&self, id: JobId, steps: Vec<String>) -> Result<Job, anyhow::Error> {
         let mut lock = self.0.write().unwrap();
-        let job = lock
+        let item = lock
             .jobs
             .get_mut(&id)
             .ok_or_else(|| anyhow!("Job not found: '{id}'"))?;
@@ -83,21 +93,44 @@ impl JobManager {
             started_at: None,
             finished_at: None,
         });
-        job.steps.extend(steps);
+        item.job.steps.extend(steps);
 
-        Ok(job.clone())
+        Ok(item.job.clone())
+    }
+
+    pub fn job_add_events(&self, id: JobId, events: Vec<JobEvent>) -> Result<(), anyhow::Error> {
+        let mut lock = self.0.write().unwrap();
+        let item = lock
+            .jobs
+            .get_mut(&id)
+            .ok_or_else(|| anyhow!("Job not found: '{id}'"))?;
+
+        item.events.extend(events);
+        Ok(())
+    }
+
+    pub fn job_take_events(&self, id: JobId) -> Result<Vec<JobEvent>, anyhow::Error> {
+        let mut lock = self.0.write().unwrap();
+        let item = lock
+            .jobs
+            .get_mut(&id)
+            .ok_or_else(|| anyhow!("Job not found: '{id}'"))?;
+        let events = std::mem::take(&mut item.events);
+        Ok(events)
     }
 
     pub fn remove_job(&self, id: JobId) -> Option<Job> {
-        self.0.write().unwrap().jobs.remove(&id)
+        let item = self.0.write().unwrap().jobs.remove(&id)?;
+        Some(item.job)
     }
 
     /// Remove completed jobs that are older than the given timestamp.
     pub fn purge_completed(&self, completed_before: Timestamp) {
-        self.0
-            .write()
-            .unwrap()
-            .jobs
-            .retain(|_, j| j.finished_at.map(|t| t > completed_before).unwrap_or(true));
+        self.0.write().unwrap().jobs.retain(|_, item| {
+            item.job
+                .finished_at
+                .map(|t| t > completed_before)
+                .unwrap_or(true)
+        });
     }
 }
