@@ -1,24 +1,22 @@
 import { JSX } from "solid-js";
 import { Icon, IconName } from "../bulma/icon";
 import { FormField, FormFieldProps } from "./FormField";
-import { StringInput, InputType } from "./StringInput";
+import { InputFloat } from "./InputFloat";
 
-export interface InputFieldProps
-  extends Omit<FormFieldProps<string>, "control"> {
+export interface InputFloatFieldProps
+  extends Omit<FormFieldProps<number>, "control"> {
   placeholder?: string;
-  type?: InputType;
   icon?: IconName;
   mode?: "onchange" | "oninput";
 }
 
-export function InputField(props: InputFieldProps): JSX.Element {
+export function InputFloatField(props: InputFloatFieldProps): JSX.Element {
   return (
     <FormField
       {...props}
       controlExtraClasses={props.icon ? "has-icons-left" : ""}
       control={[
-        <StringInput
-          type={props.type}
+        <InputFloat
           placeholder={props.placeholder}
           field={props.field}
           mode={props.mode}

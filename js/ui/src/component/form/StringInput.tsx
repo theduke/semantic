@@ -3,16 +3,14 @@ import { FieldAccessor } from ".";
 
 export type InputType = "text" | "number" | "url" | "datetime-local";
 
-export interface InputProps<T> {
-  field: FieldAccessor<T>;
-  parse: (value: string) => T;
-  format: (value: T) => string;
+export interface StringInputProps {
+  field: FieldAccessor<string>;
   placeholder?: string;
   type?: InputType;
   mode?: "onchange" | "oninput";
 }
 
-export function Input<T>(props: InputProps<T>): JSX.Element {
+export function StringInput(props: StringInputProps): JSX.Element {
   const field = props.field;
   let elem: HTMLInputElement | undefined;
 
@@ -20,7 +18,7 @@ export function Input<T>(props: InputProps<T>): JSX.Element {
     createEffect(() => {
       const field = props.field.get();
       if (elem) {
-        elem.value = field?.value ? props.format(field.value) : "";
+        elem.value = field?.value ?? "";
       }
     });
 

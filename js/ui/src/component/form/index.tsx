@@ -1,3 +1,4 @@
+import { merge } from "lodash";
 import { batch, createEffect } from "solid-js";
 import {
   createStore,
@@ -40,9 +41,10 @@ export type FormValidation<Values> = {
 export const VALID = "valid";
 
 interface FieldState<T> {
-  value: T;
+  value: T | undefined;
   touched: boolean;
   changed: boolean;
+  validation?: ValidationResult;
 }
 
 export type FormValidator<Values> = (
@@ -136,9 +138,13 @@ export class FormState<Values extends Record<string, any>> {
   setField<K extends keyof Values>(
     name: K,
     value: Values[K],
+    validations?: ValidationResult,
     skipValidations: boolean = false
   ) {
     const old = this.state.fields?.[name] as any;
+
+    const isValid = validations?.errors?.length === 0 || true;
+
     this.setStore(
       "fields",
       name as any,
@@ -146,8 +152,14 @@ export class FormState<Values extends Record<string, any>> {
         value,
         touched: true,
         changed: old?.changed ?? value !== old?.value,
+        validations,
       } as any
     );
+
+    if (!isValid) {
+      this.setStore("isValid", false);
+    }
+
     if (!skipValidations && this.init.validateOnChange) {
       this.runValidations();
     } else {
@@ -156,71 +168,80 @@ export class FormState<Values extends Record<string, any>> {
   }
 
   field<K extends keyof Values>(field: K): FieldAccessor<Values[K]> {
-    return new FieldAccessor(this, field as any);
+    return new BasicFieldAccessor(this, field as any);
   }
 
   fieldGetter<K extends keyof Values>(name: K): () => FieldState<Values[K]> {
     return () => (this.state as any).fields[name];
   }
 
-  buildValues(): Values {
-    const values = {} as any;
+  private buildValues(): Values {
+    const values: Values = {} as any;
+    const validations: FieldValidations<Values> = {};
     for (const [key, field] of Object.entries(this.state.fields)) {
-      const value =
-        field === undefined ? this.init.initialValues[key] : field.value;
-      values[key] = value;
+      if (field) {
+        values[key as any as keyof Values] = field.value;
+        // TODO: prevent any cast
+        validations[key as any as keyof Values] = field.validation;
+      } else {
+        values[key as any as keyof Values] = this.init.initialValues[key];
+      }
     }
     return values;
   }
 
-  onChanged() {
-    console.log("onchanged");
+  private onChanged() {
     if (this.init.onValid) {
       this.init.onValid(this.buildValues());
     }
   }
 
-  runValidations(): Promise<void> | void {
-    if (!this.init.validate) {
-      this.onChanged();
-      return;
-    }
+  private runValidations(): Promise<void> | void {
     if (this.state.isValidating || this.state.isSubmitting) {
       return;
     }
 
-    try {
-      const res = this.init.validate(this.buildValues());
+    if (this.init.validate) {
+      try {
+        const res = this.init.validate(this.buildValues());
 
-      if (isPromise(res)) {
-        this.setStore("isValidating", true);
-        return res
-          .then((res) => {
-            this.applyValidations(res);
-          })
-          .catch((error) => {
-            console.error("Form validator threw an exception", { error });
-            this.applyValidations({
-              form: { errors: [{ message: (error as any)?.toString() }] },
+        if (isPromise(res)) {
+          this.setStore("isValidating", true);
+          return res
+            .then((res) => {
+              this.applyValidations(res);
+            })
+            .catch((error) => {
+              console.error("Form validator threw an exception", { error });
+              this.applyValidations({
+                form: { errors: [{ message: (error as any)?.toString() }] },
+              });
             });
-          });
-      } else {
-        this.applyValidations(res);
+        } else {
+          this.applyValidations(res);
+        }
+      } catch (error) {
+        console.error("Form validator threw an exception", { error });
+        this.applyValidations({
+          form: { errors: [{ message: (error as any)?.toString() }] },
+        });
       }
-    } catch (error) {
-      console.error("Form validator threw an exception", { error });
-      this.applyValidations({
-        form: { errors: [{ message: (error as any)?.toString() }] },
-      });
+      this.onChanged();
+      return;
+    } else {
+      this.applyValidations({});
     }
   }
 
   private applyValidations(res: FormValidation<Values> | null) {
     const formValid = res?.form?.errors?.length === 0 || true;
+    const fieldStateInvalid = Object.values(this.state.fields).find(
+      (f) => f.validations?.errors?.length > 0
+    );
     const fieldsInvalid = Object.values(res?.fields ?? {}).find(
       (field: ValidationResult) => (field?.errors?.length ?? 0) > 0
     );
-    const isValid = formValid && !fieldsInvalid;
+    const isValid = fieldStateInvalid && formValid && !fieldsInvalid;
 
     this.setStore(
       produce((state) => {
@@ -298,9 +319,15 @@ export class FormState<Values extends Record<string, any>> {
   }
 }
 
-export class FieldAccessor<T> {
-  private form: FormState<any>;
-  private key: string;
+export interface FieldAccessor<T> {
+  get(): FieldState<T>;
+  errors(): ValidationResult | undefined;
+  set(value: T, validations?: ValidationResult): void;
+}
+
+class BasicFieldAccessor<T> implements FieldAccessor<T> {
+  protected form: FormState<any>;
+  protected key: string;
 
   constructor(form: FormState<any>, key: string) {
     this.form = form;
@@ -312,11 +339,62 @@ export class FieldAccessor<T> {
   }
 
   errors(): ValidationResult | undefined {
-    return (this.form.state as any).validation?.fields?.[this.key];
+    const fieldVal = this.get().validation;
+    const formVal = (this.form.state as any).validation?.fields?.[this.key];
+    if (fieldVal || formVal) {
+      return merge(fieldVal ?? {}, formVal ?? {});
+    } else {
+      return undefined;
+    }
   }
 
-  set(value: T) {
-    this.form.setField(this.key, value);
+  set(value: T, validations?: ValidationResult) {
+    this.form.setField(this.key, value, validations);
+  }
+}
+
+export class MappedFieldAccessor<T, M> implements FieldAccessor<M> {
+  field: FieldAccessor<T>;
+  parse: (value: M) => T;
+  format: (value: T) => M;
+
+  constructor(
+    field: FieldAccessor<T>,
+    parse: (value: M) => T,
+    format: (value: T) => M
+  ) {
+    this.field = field;
+    this.parse = parse;
+    this.format = format;
+  }
+
+  get(): FieldState<M> {
+    const state: FieldState<T> = this.field.get();
+    const format = this.format;
+    return {
+      get value(): M {
+        return state.value === undefined
+          ? undefined
+          : (format(state.value) as any);
+      },
+      changed: state.changed,
+      touched: state.touched,
+    };
+  }
+
+  errors(): ValidationResult | undefined {
+    return this.field.errors();
+  }
+
+  set(value: M, validations?: ValidationResult) {
+    try {
+      const parsed = this.parse(value);
+      this.field.set(parsed, validations);
+    } catch (err: any) {
+      this.field.set(undefined as any, {
+        errors: [{ message: err.toString() }],
+      });
+    }
   }
 }
 
