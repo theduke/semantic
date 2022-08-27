@@ -214,8 +214,13 @@ export class Api {
 
   async jobStatus(param: string): Promise<core.Job> {
     const job = await this.fetchApi<core.Job>("JobStatus", { JobStatus: param });
-    console.log({apiJob: job});
+    console.log({ apiJob: job });
     return job;
+  }
+
+  async jobEvents(jobId: string): Promise<core.JobEvent[]> {
+    const events = await this.fetchApi<core.JobEvent[]>("JobEvents", { JobEvents: jobId });
+    return events;
   }
 
   async convertFile(param: core.ConvertFile): Promise<core.Job> {
@@ -249,5 +254,10 @@ export class Api {
   async startMediaAnalysis(): Promise<Job> {
     // TODO: type check of returned data?
     return this.fetchApi("AnalyzeMedia", { AnalyzeMedia: { force: false } });
+  }
+
+  async findSimilarImages(maxCount: number, similarityMin: number, similarityMax: number): Promise<Job> {
+    // TODO: type check of returned data?
+    return this.fetchApi("FindSimilarImages", { FindSimilarImages: { max_results: maxCount as any, similarity_min: similarityMin, similarity_max: similarityMax } });
   }
 }

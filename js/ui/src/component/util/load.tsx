@@ -16,6 +16,7 @@ import {
 } from "solid-js";
 import { createStore } from "solid-js/store";
 import {
+  Accessor,
   ResourceActions,
   ResourceSource,
 } from "solid-js/types/reactive/signal";
@@ -194,6 +195,21 @@ export function spawnLoader<T>(load: () => Promise<T>): Signal<LoadState<T>> {
 
 export function SuspsenseSpinner(props: ParentProps): JSX.Element {
   return <Suspense fallback={SPINNER}>{props.children}</Suspense>;
+}
+
+export interface LoaderViewProps<T> {
+  loader: Accessor<LoadState<T | undefined>>;
+  children: (data: T) => JSX.Element;
+}
+
+export function LoaderView<T>(props: LoaderViewProps<T>): JSX.Element {
+  return (
+    <Switch>
+      <Match when={props.loader().state === "loading"}>{SPINNER}</Match>
+      <Match when={loadAsError(props.loader())}>{renderError}</Match>
+      <Match when={loadAsSuccess(props.loader())}>{props.children}</Match>
+    </Switch>
+  );
 }
 
 export type FallibleResourceProps<T> = {

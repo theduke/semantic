@@ -80,7 +80,7 @@ export interface MutateSelect { filter: Expr, variables: Record<string, Value>, 
 
 export type MutateSelectAction = "Delete" | { Patch: Patch };
 
-export type Query = { ServerStatus: null } | { Initialize: BackendConfig } | { CloseBackend: null } | { Select: Select } | { QuerySql: QuerySql } | { Mutate: Mutate } | { Batch: Batch } | { Schema: null } | { PluginSourceCreate: PluginSource } | { PluginSourceUpdate: PluginSource } | { PluginSourceValidate: PluginSource } | { PluginDelete: PluginDelete } | { PluginTestFetch: PluginTestFetch } | { TagCreate: TagCreate } | { TagMerge: TagMerge } | { Import: ImportJob } | { FetchUrl: FetchUrlJob } | { OptimiseVideo: OptimiseVideo } | { FileDiscardUnOptimized: FileDiscardUnOptimized } | { FileDiscardOptimised: FileDiscardUnOptimized } | { FileCreatePreviewImageBlob: FileCreatePreviewImageBlob } | { RecordEntityVisit: RecordEntityVisit } | { HttpFetch: SimpleHttpRequest } | { JobStatus: string } | { JobEvents: string } | { ConvertFile: ConvertFile } | { FindUnusedBlobs: null } | { DeleteUnusedBlobs: null } | { AnalyzeMedia: { force: boolean, } };
+export type Query = { ServerStatus: null } | { Initialize: BackendConfig } | { CloseBackend: null } | { Select: Select } | { QuerySql: QuerySql } | { Mutate: Mutate } | { Batch: Batch } | { Schema: null } | { PluginSourceCreate: PluginSource } | { PluginSourceUpdate: PluginSource } | { PluginSourceValidate: PluginSource } | { PluginDelete: PluginDelete } | { PluginTestFetch: PluginTestFetch } | { TagCreate: TagCreate } | { TagMerge: TagMerge } | { Import: ImportJob } | { FetchUrl: FetchUrlJob } | { OptimiseVideo: OptimiseVideo } | { FileDiscardUnOptimized: FileDiscardUnOptimized } | { FileDiscardOptimised: FileDiscardUnOptimized } | { FileCreatePreviewImageBlob: FileCreatePreviewImageBlob } | { RecordEntityVisit: RecordEntityVisit } | { HttpFetch: SimpleHttpRequest } | { JobStatus: string } | { JobEvents: string } | { ConvertFile: ConvertFile } | { FindUnusedBlobs: null } | { DeleteUnusedBlobs: null } | { AnalyzeMedia: { force: boolean, } } | { FindSimilarImages: SimilarImageOptions };
 
 export interface TagMerge { target_tag: IdOrIdent, source_tag: IdOrIdent, }
 
@@ -126,6 +126,8 @@ export interface Job { id: string, name: string, created_at: Timestamp, started_
 
 export interface JobEvent { name: string, data: any, }
 
+export interface SimilarImageOptions { max_results: bigint, similarity_min: number, similarity_max: number, }
+
 export interface JobStep { name: string, started_at: Timestamp | null, finished_at: Timestamp | null, }
 
 export type JobStatus = { Queued: { queue_position: bigint | null, } } | { Running: { step: string | null, progress_percent: number | null, progress_message: string | null, } } | { Finished: { result: {Ok: string} | {Err: ApiError}, } };
@@ -148,7 +150,7 @@ export interface ImportOutput { items: Array<Item>, }
 
 export interface PluginSource { "factor/id": Id, "factor/ident": string, "semantic/plugin_runtime": string | null, "semantic/plugin_code": string | null, "semantic/plugin_strict_validation": boolean, "semantic/comment": string | null, }
 
-export type Reply = { ServerStatus: ServerStatus } | { Initialize: SemanticSchema } | { CloseBackend: null } | { Select: Array<Record<string, any>> } | { QuerySql: Array<Record<string, any>> } | { Mutate: null } | { Batch: null } | { Schema: SemanticSchema } | { PluginSourceCreate: PluginSource } | { PluginSourceUpgrade: PluginSource } | { PluginSourceValidate: null } | { PluginDelete: null } | { PluginTestFetch: FetchUrlOutput | null } | { TagCreate: Record<string, any> } | { TagMerge: Record<string, any> } | { Import: ImportOutput } | { FetchUrl: FetchUrlOutput } | { HttpFetch: SimpleHttpResponse } | { OptimiseVideo: OptimiseVideoReply } | { FileDiscardOptimised: null } | { FileDiscardUnOptimised: null } | { FileCreatePreviewImageBlob: null } | "RecordEntityVisit" | { JobStatus: Job } | { JobEvents: Array<JobEvent> } | { ConvertFile: Job } | { FindUnusedBlobs: { items: Array<BlobInfo>, } } | { DeleteUnusedBlobs: UnusedBlobsDeleted } | { AnalyzeMedia: Job };
+export type Reply = { ServerStatus: ServerStatus } | { Initialize: SemanticSchema } | { CloseBackend: null } | { Select: Array<Record<string, any>> } | { QuerySql: Array<Record<string, any>> } | { Mutate: null } | { Batch: null } | { Schema: SemanticSchema } | { PluginSourceCreate: PluginSource } | { PluginSourceUpgrade: PluginSource } | { PluginSourceValidate: null } | { PluginDelete: null } | { PluginTestFetch: FetchUrlOutput | null } | { TagCreate: Record<string, any> } | { TagMerge: Record<string, any> } | { Import: ImportOutput } | { FetchUrl: FetchUrlOutput } | { HttpFetch: SimpleHttpResponse } | { OptimiseVideo: OptimiseVideoReply } | { FileDiscardOptimised: null } | { FileDiscardUnOptimised: null } | { FileCreatePreviewImageBlob: null } | "RecordEntityVisit" | { JobStatus: Job } | { JobEvents: Array<JobEvent> } | { ConvertFile: Job } | { FindUnusedBlobs: { items: Array<BlobInfo>, } } | { DeleteUnusedBlobs: UnusedBlobsDeleted } | { AnalyzeMedia: Job } | { FindSimilarImages: Job };
 
 export interface FileUploadMetadata { filename: string | null, title: string | null, url: string|null|undefined, ident: string | null, parent: Id | null, collection_id: Id | null, tag_ids: Array<Id>, }
 

@@ -3,6 +3,7 @@ import { JSX } from "solid-js/jsx-runtime";
 import {
   ROUTE_SETTINGS_ANALYSE_MEDIA,
   ROUTE_SETTINGS_BLOB_CLEANUP,
+  ROUTE_SETTINGS_SIMILAR_FILES,
   ROUTE_SETTINGS_TAG_MANAGER,
 } from "../routing";
 import { GenericPage } from "./util";
@@ -21,6 +22,10 @@ export function SettingsPage(): JSX.Element {
 
         <Link class="button is-medium" href={ROUTE_SETTINGS_ANALYSE_MEDIA}>
           Analyze Media
+        </Link>
+
+        <Link class="button is-medium" href={ROUTE_SETTINGS_SIMILAR_FILES}>
+          Find Duplicate Files
         </Link>
       </div>
     </GenericPage>

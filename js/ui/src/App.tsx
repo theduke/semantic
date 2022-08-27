@@ -20,6 +20,7 @@ import {
   ROUTE_SETTINGS,
   ROUTE_SETTINGS_ANALYSE_MEDIA,
   ROUTE_SETTINGS_BLOB_CLEANUP,
+  ROUTE_SETTINGS_SIMILAR_FILES,
   ROUTE_SETTINGS_TAG_MANAGER,
 } from "./routing";
 import { TagManagerPage } from "./component/tag/TagManager";
@@ -31,6 +32,7 @@ import { ImportPage } from "./component/imports/ImportPage";
 import { PlayPage } from "./component/play/PlayPage";
 import { BlobCleanupPage } from "./component/settings/blob_cleanup";
 import { MediaAnalyzerPage } from "./component/settings/media_analyzer";
+import { SimilarFileFinderPage } from "./component/settings/similar_image_finder";
 
 export function App(): JSX.Element {
   const [getRegistry, setRegistry] = createSignal<UiRegistry | null>();
@@ -87,6 +89,12 @@ export function App(): JSX.Element {
                   path={ROUTE_SETTINGS_ANALYSE_MEDIA}
                   component={MediaAnalyzerPage}
                 />
+                <Route
+                  path={ROUTE_SETTINGS_SIMILAR_FILES}
+                  component={SimilarFileFinderPage}
+                />
+
+                {/* */}
                 <Route path="/" component={BrowsePage} />
               </Routes>
             </div>

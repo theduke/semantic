@@ -17,11 +17,16 @@ import {
   TY_SEMANTIC_IMAGE,
 } from "semantic/dist/schema";
 import { Box } from "solid-bulma";
+import { Id } from "semantic/dist/core";
 
 interface ImageInfo {
   imageUrl: string;
   previewUrl?: string;
   title?: string;
+}
+
+export function blobImageUrl(id: Id): string {
+  return "/blob/image/" + id;
 }
 
 function extractImageInfo(item: ValueMap): ImageInfo | null {

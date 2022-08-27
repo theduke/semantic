@@ -52,3 +52,11 @@ export function NotificationErrorBoundary(props: ParentProps): JSX.Element {
     </ErrorBoundary>
   );
 }
+
+export function tryParseFloat(value: string): number | null {
+  try {
+    return parseFloat(value);
+  } catch {
+    return null;
+  }
+}
