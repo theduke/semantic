@@ -1218,7 +1218,7 @@ impl App {
                     jobs.job_update(
                         job.id,
                         api::JobStatus::Finished {
-                            result: Err(ApiError::from_error(error)),
+                            result: Err(ApiError::from_error(&error)),
                         },
                     )
                     .ok();
@@ -1403,6 +1403,15 @@ impl App {
             api::Query::TagMerge(merge) => {
                 let new_tag = self.tag_merge(merge).await?;
                 Ok(api::Reply::TagMerge(new_tag))
+            }
+            api::Query::FindSimilarImages(options) => {
+                let job = crate::util::media::run_find_similar_images_job(
+                    self.require_db()?,
+                    self.require_jobs()?,
+                    options,
+                )
+                .await?;
+                Ok(api::Reply::FindSimilarImages(job))
             }
         };
         res.map_err(|err| {

@@ -14,7 +14,7 @@ use factdb::{
 };
 
 use semantic_core::{
-    api::{ApiError, Job, JobId},
+    api::{ApiError, Job, JobEvent, JobId, JobStatus, SimilarImageOptions},
     base::{
         AttrBlobUriWeb, AttrDuration, AttrPixelHeight, AttrPixelWidth, AttrVideoHasSound,
         AttrVisualHash, File, Image, TypedFile, UniversalHash, Video,
@@ -22,7 +22,10 @@ use semantic_core::{
 };
 use tokio::{io::AsyncBufReadExt, task::JoinHandle};
 
-use crate::{blobstore::DynBlobStore, jobs::JobManager};
+use crate::{
+    blobstore::DynBlobStore,
+    jobs::{JobInit, JobManager},
+};
 
 #[derive(Clone)]
 pub struct SharedBinarData(Arc<Vec<u8>>);
@@ -427,7 +430,7 @@ fn analyze_image_image(data: &[u8], hash: bool) -> Result<ImageInfo, anyhow::Err
 
     let visual_hash = if hash {
         let hasher = img_hash::HasherConfig::new()
-            .hash_alg(img_hash::HashAlg::DoubleGradient)
+            .hash_alg(img_hash::HashAlg::Gradient)
             .hash_size(16, 16)
             .to_hasher();
 
@@ -756,6 +759,259 @@ async fn image_analyze_and_update(
     }
 
     Ok(Some(img))
+}
+
+/// Similiarty between two files.
+/// Range is [0, 1].
+/// 1 means exactly the same, 0 means no similarity.
+#[derive(serde::Serialize, serde::Deserialize, PartialEq, PartialOrd, Clone, Debug)]
+pub struct Similarity(f32);
+
+impl std::fmt::Display for Similarity {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        self.0.fmt(f)
+    }
+}
+
+impl Similarity {
+    pub fn new(value: f32) -> Result<Self, anyhow::Error> {
+        if value < 0.0 || value > 1.0 {
+            Err(anyhow!("Similarity value must be between 0 and 1"))
+        } else {
+            Ok(Similarity(value))
+        }
+    }
+}
+
+impl std::ops::Deref for Similarity {
+    type Target = f32;
+    fn deref(&self) -> &Self::Target {
+        &self.0
+    }
+}
+
+#[derive(serde::Serialize, serde::Deserialize, Clone, Debug)]
+pub struct SimilarImageMatch {
+    pub image: Image,
+    pub similarity: Similarity,
+}
+
+#[derive(serde::Serialize, serde::Deserialize, Clone, Debug)]
+pub struct SimilarImageMatches {
+    pub image: Image,
+    pub related: Vec<SimilarImageMatch>,
+}
+
+#[derive(Debug)]
+struct HashedImage {
+    image: Image,
+    hash: img_hash::ImageHash,
+}
+
+async fn load_hashed_images(db: Db) -> Result<Vec<HashedImage>, anyhow::Error> {
+    let base_filter = Expr::and(
+        Expr::is_entity::<Image>(),
+        Expr::neq(AttrVisualHash::expr(), Expr::literal(factdb::Value::Unit)),
+    );
+
+    let mut images = Vec::<HashedImage>::new();
+
+    let mut filter = base_filter.clone();
+    loop {
+        let sel = Select::new()
+            .with_filter(filter.clone())
+            .with_limit(5000)
+            .with_sort(AttrId::expr(), factdb::Order::Asc);
+        let page = db.select(sel).await?;
+        if let Some(last) = page.items.last() {
+            let id = last.data.get_id().unwrap();
+            filter = base_filter.clone().and_with(Expr::gt(AttrId::expr(), id));
+        } else {
+            break;
+        }
+
+        for item in page.items {
+            let image = match Image::try_from_map(item.data) {
+                Ok(x) => x,
+                Err(error) => {
+                    tracing::trace!(?error, "ignoring image - could not deserialize");
+                    continue;
+                }
+            };
+            let raw_hash = image.visual_hash.as_ref().unwrap();
+            let hash = match img_hash::ImageHash::from_bytes(raw_hash) {
+                Ok(h) => h,
+                Err(error) => {
+                    tracing::trace!(
+                        ?error,
+                        "ignoring image - visual hash is present, but invalid!"
+                    );
+                    continue;
+                }
+            };
+
+            images.push(HashedImage { image, hash });
+        }
+    }
+    Ok(images)
+}
+
+fn compare_images<'a>(
+    images: &'a [HashedImage],
+    similarity_min: Similarity,
+    similarity_max: Similarity,
+) -> impl Iterator<Item = SimilarImageMatches> + 'a {
+    images.iter().enumerate().filter_map(move |(index, img)| {
+        let id = img.image.id();
+        tracing::trace!(id=%id, "comparing image with others");
+        let matches = images
+            .iter()
+            .enumerate()
+            .filter_map(|(index2, other_img)| {
+                let start = std::time::Instant::now();
+                if index == index2 {
+                    return None;
+                }
+                let hamming_distance = img.hash.dist(&other_img.hash);
+                // Hash uses 16x16 pixels, so the total number of pixesl is
+                // 16x16.
+                let similarity =
+                    Similarity::new(1.0 - (hamming_distance as f32) / (16.0 * 16.0)).unwrap();
+
+                let elapsed = start.elapsed();
+                tracing::trace!(
+                    img1=%img.image.id(),
+                    img2=%other_img.image.id(),
+                    time=%elapsed.as_millis(),
+                    similarity=%similarity,
+                    "compared images",
+                );
+
+                if similarity >= similarity_min && similarity <= similarity_max {
+                    Some(SimilarImageMatch {
+                        image: other_img.image.clone(),
+                        similarity,
+                    })
+                } else {
+                    None
+                }
+            })
+            .collect::<Vec<_>>();
+
+        if matches.is_empty() {
+            None
+        } else {
+            Some(SimilarImageMatches {
+                image: img.image.clone(),
+                related: matches,
+            })
+        }
+    })
+}
+
+async fn find_similar_images_channel(
+    db: Db,
+    options: SimilarImageOptions,
+) -> Result<tokio::sync::mpsc::Receiver<SimilarImageMatches>, anyhow::Error> {
+    // First load all images.
+
+    let similarity_min =
+        Similarity::new(options.similarity_min).context("Invalid minimum similarity")?;
+    let similarity_max =
+        Similarity::new(options.similarity_max).context("Invalid maximum similarity")?;
+
+    tracing::debug!("loading images");
+    let images = load_hashed_images(db).await?;
+    tracing::debug!(image_count = %images.len(), "images loaded");
+
+    // All images loaded.
+    // Compute similarities.
+
+    let (tx, rx) = tokio::sync::mpsc::channel(100);
+
+    tokio::task::spawn_blocking(move || {
+        let max_matches: usize = options.max_results.try_into().unwrap_or_default();
+        for matched in compare_images(&images, similarity_min, similarity_max).take(max_matches) {
+            if let Err(e) = tx.blocking_send(matched) {
+                tracing::error!(%e, "could not send similar image match to response channel");
+                break;
+            }
+        }
+    })
+    .await?;
+
+    tracing::debug!("similar image comparison complete");
+
+    Ok(rx)
+}
+
+pub async fn run_find_similar_images_job(
+    db: Db,
+    jobs: JobManager,
+    options: SimilarImageOptions,
+) -> Result<Job, anyhow::Error> {
+    let job = jobs.register_job(JobInit {
+        name: "Similar image search".to_string(),
+        steps: vec![],
+    });
+
+    jobs.job_update(
+        job.id,
+        JobStatus::Running {
+            step: Some("Loading images...".to_string()),
+            progress_percent: None,
+            progress_message: None,
+        },
+    )?;
+
+    tokio::task::spawn(async move {
+        let mut rx = match find_similar_images_channel(db, options).await {
+            Ok(c) => c,
+            Err(err) => {
+                jobs.job_update(job.id, JobStatus::failed_from_anyhow(&err))
+                    .ok();
+                return Err(err);
+            }
+        };
+
+        jobs.job_update(
+            job.id,
+            JobStatus::Running {
+                step: Some("Comparing images...".to_string()),
+                progress_percent: None,
+                progress_message: None,
+            },
+        )?;
+
+        while let Some(matches) = rx.recv().await {
+            let json = match serde_json::to_value(&matches) {
+                Ok(j) => j,
+                Err(err) => {
+                    tracing::error!(?err, "could not serialize similar image matches");
+                    continue;
+                }
+            };
+            if let Err(error) = jobs.job_add_events(
+                job.id,
+                vec![JobEvent {
+                    name: "match_found".to_string(),
+                    data: json,
+                }],
+            ) {
+                tracing::warn!(?error, "could not add job event");
+                break;
+            }
+        }
+
+        jobs.job_update(
+            job.id,
+            JobStatus::Finished {
+                result: Ok("Complete!".to_string()),
+            },
+        )
+    });
+
+    Ok(job)
 }
 
 async fn try_optimise_video(

@@ -170,6 +170,12 @@ impl JobStatus {
     pub fn is_finished(&self) -> bool {
         matches!(self, Self::Finished { .. })
     }
+
+    pub fn failed_from_anyhow(err: &anyhow::Error) -> Self {
+        Self::Finished {
+            result: Err(ApiError::from_error(err)),
+        }
+    }
 }
 
 pub type JobId = uuid::Uuid;
@@ -320,6 +326,15 @@ pub struct TagCreate {
     pub name: String,
 }
 
+#[derive(serde::Serialize, serde::Deserialize, Clone, Debug)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[cfg_attr(feature = "schema", derive(ts_rs::TS))]
+pub struct SimilarImageOptions {
+    pub max_results: u64,
+    pub similarity_min: f32,
+    pub similarity_max: f32,
+}
+
 /// Merge a source tag into a target tag.
 #[derive(serde::Serialize, serde::Deserialize, Clone, Debug)]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
@@ -382,6 +397,7 @@ pub enum Query {
     AnalyzeMedia {
         force: bool,
     },
+    FindSimilarImages(SimilarImageOptions),
 }
 
 #[derive(serde::Serialize, serde::Deserialize, Clone, Debug)]
@@ -467,6 +483,7 @@ pub enum Reply {
     FindUnusedBlobs { items: Vec<BlobInfo> },
     DeleteUnusedBlobs(UnusedBlobsDeleted),
     AnalyzeMedia(Job),
+    FindSimilarImages(Job),
 }
 
 #[derive(serde::Serialize, serde::Deserialize, Clone, Debug)]
@@ -479,7 +496,7 @@ pub struct ApiError {
 }
 
 impl ApiError {
-    pub fn from_error(err: anyhow::Error) -> Self {
+    pub fn from_error(err: &anyhow::Error) -> Self {
         Self {
             message: err.to_string(),
             code: None,

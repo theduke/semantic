@@ -75,6 +75,7 @@ fn main() {
         .and::<api::BackendCryptoConfig>()
         .and::<api::Job>()
         .and::<api::JobEvent>()
+        .and::<api::SimilarImageOptions>()
         .and::<api::JobStep>()
         .and::<api::JobStatus>()
         .and::<api::ServerStatus>()
