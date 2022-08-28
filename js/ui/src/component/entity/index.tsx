@@ -20,6 +20,7 @@ import {
   FACTOR_TYPE,
   FACTOR_VALUE_TYPE,
   SEMANTIC_TAGS,
+  SEMANTIC_URL,
 } from "semantic/dist/schema";
 import { Class } from "semantic/dist/core";
 import { EntityChildrenLoader } from "./EntityChildren";
@@ -28,6 +29,7 @@ import { EntityDeleterModal } from "./EntityDeleterModal";
 import { NotificationError, NotificationWarning } from "../bulma/notification";
 import { Button } from "../bulma/button";
 import { EntityTagManager } from "../tag/EntityTagManager";
+import { Icon } from "../bulma/icon";
 
 export function rendererValue(value: any): JSX.Element {
   const ty = typeof value;
@@ -213,6 +215,24 @@ export function renderGenericEntityBox(
   const [deleted, setDeleted] = createSignal<boolean>(false);
 
   const actions: EntityAction[] = [];
+
+  const externalUrl: string = item[SEMANTIC_URL];
+  if (externalUrl && externalUrl.startsWith("http")) {
+    const externalUrlAction: EntityAction = {
+      label: "Open external url",
+      icon: "globe",
+      replacesContent: false,
+      render: () => null,
+      renderAction: () => {
+        return (
+          <a class="button is-small" target="_blank" href={externalUrl}>
+            <Icon icon="globe" />
+          </a>
+        );
+      },
+    };
+    actions.push(externalUrlAction);
+  }
 
   const tagManagerAction: EntityAction = {
     label: "Tags",

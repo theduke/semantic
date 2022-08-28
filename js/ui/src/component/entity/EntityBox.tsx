@@ -1,5 +1,5 @@
 import { Link } from "solid-app-router";
-import { createSignal, Show } from "solid-js";
+import { createSignal, For, Show } from "solid-js";
 import { JSX } from "solid-js/jsx-runtime";
 import { Button } from "../bulma/button";
 import { Icon, IconName } from "../bulma/icon";
@@ -13,6 +13,7 @@ export interface EntityAction {
   icon: IconName;
   replacesContent: boolean;
   render: (opts: EntityActionRenderProps) => JSX.Element;
+  renderAction?: () => JSX.Element;
 }
 
 export interface EntityBoxProps {
@@ -37,43 +38,27 @@ export function EntityBox(props: EntityBoxProps): JSX.Element {
   if (props.actions && props.actions.length > 0) {
     actions = (
       <div style={{ display: "flex", "align-items": "center" }}>
-        {props.actions.map((action, index) => {
-          const buttonInactive = (
-            <Button
-              title={action.label}
-              isActive={activeAction()?.index === index}
-              size="is-small"
-              onclick={() => {
-                setActiveAction({ index });
-              }}
-            >
-              <Icon icon={action.icon} />
-            </Button>
-          );
+        <For each={props.actions}>
+          {(action, indexSignal) => {
+            if (action.renderAction) {
+              return action.renderAction();
+            }
 
-          const buttonActive = () => (
-            <Button
-              title={action.label}
-              isActive={activeAction()?.index === index}
-              color="is-info"
-              size="is-small"
-              onclick={() => {
-                setActiveAction(null);
-              }}
-            >
-              <Icon icon={action.icon} />
-            </Button>
-          );
-
-          return (
-            <Show
-              when={activeAction()?.index === index}
-              fallback={buttonInactive}
-            >
-              {buttonActive}
-            </Show>
-          );
-        })}
+            const index = indexSignal();
+            return (
+              <Button
+                title={action.label}
+                isActive={activeAction()?.index === indexSignal()}
+                size="is-small"
+                onclick={() => {
+                  setActiveAction({ index });
+                }}
+              >
+                <Icon icon={action.icon} />
+              </Button>
+            );
+          }}
+        </For>
       </div>
     );
   }
