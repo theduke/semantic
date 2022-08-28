@@ -8,7 +8,6 @@ import { Box } from "solid-bulma";
 import {
   createResource,
   createSignal,
-  ErrorBoundary,
   For,
   JSX,
   Match,
@@ -24,7 +23,7 @@ import {
   NotificationError,
   NotificationWarning,
 } from "../bulma/notification";
-import { renderEntityBox, renderEntityTable } from "../entity";
+import { renderEntityTable } from "../entity";
 import { EntityBox } from "../entity/EntityBox";
 import { createForm } from "../form";
 import { CheckboxField } from "../form/CheckboxField";
@@ -106,7 +105,7 @@ export function Importer(props: ImporterProps): JSX.Element {
     } else if (values.skipExisting === true) {
       setQueueItems((old) => old.filter((item) => !item.oldEntity));
     }
-  }, 500);
+  }, 1000);
 
   let nextItemId = 0;
 
@@ -191,10 +190,11 @@ export function Importer(props: ImporterProps): JSX.Element {
           onsubmit={(e) => {
             e.preventDefault();
             e.stopPropagation();
+            form.submit();
           }}
         >
           <InputField
-            mode="oninput"
+            mode="onchange"
             icon="search"
             field={urlField}
             label={null}

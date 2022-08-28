@@ -16,6 +16,7 @@ import { useApi } from "../../context";
 import { renderError } from "../util/load";
 import { isEqual } from "lodash";
 import { Button, Buttons } from "../bulma/button";
+import { Portal } from "solid-js/web";
 
 export interface EntityTagManagerProps {
   entity: ValueMap;
@@ -182,12 +183,14 @@ export function EntityTagManager(props: EntityTagManagerProps): JSX.Element {
 
         if (props.modal) {
           return (
-            <Modal onClose={onClose}>
-              <Box>
-                <h5 class="title is-5">Tags</h5>
-                {wrapper}
-              </Box>
-            </Modal>
+            <Portal>
+              <Modal onClose={onClose}>
+                <Box>
+                  <h5 class="title is-5">Tags</h5>
+                  {wrapper}
+                </Box>
+              </Modal>
+            </Portal>
           );
         } else {
           return wrapper;

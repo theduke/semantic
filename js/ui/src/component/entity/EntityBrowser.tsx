@@ -97,7 +97,7 @@ export function EntityBrowser(props: EntityBrowserProps): JSX.Element {
         />
       </Box>
 
-      <div style={{ "max-width": "90%", "min-width": "500px" }}>
+      <div style={{ "min-width": "500px" }}>
         <Suspense fallback={SPINNER}>
           <Switch>
             <Match when={page.loading}>{SPINNER}</Match>

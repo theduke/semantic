@@ -168,7 +168,7 @@ export function renderEntityTable(
   ) : null;
   rows.push(children);
 
-  return <table class="table">{rows}</table>;
+  return <table class="table" style={{'overflow-y': 'scroll'}}>{rows}</table>;
 }
 
 export function renderEntityBox(
@@ -214,7 +214,27 @@ export function renderGenericEntityBox(
   const [getItem, setItem] = createSignal<ValueMap>(item);
   const [deleted, setDeleted] = createSignal<boolean>(false);
 
+
+  const [content, setContent] = createSignal<JSX.Element>(null);
   const actions: EntityAction[] = [];
+
+  let render: (item: ValueMap) => JSX.Element;
+  const contentRender = reg.entityContentRenderers[ident];
+
+  if (contentRender) {
+    render = (item) => contentRender(item, opts);
+
+    actions.push({
+      label: "Show table",
+      icon: "table",
+      replacesContent: true,
+      render: () => {
+        return renderEntityTable(reg, getItem());
+      },
+    });
+  } else {
+    render = (item) => renderEntityTable(reg, item);
+  }
 
   const externalUrl: string = item[SEMANTIC_URL];
   if (externalUrl && externalUrl.startsWith("http")) {
@@ -322,25 +342,6 @@ export function renderGenericEntityBox(
     actions.push(deleteAction);
   }
 
-  const [content, setContent] = createSignal<JSX.Element>(null);
-
-  let render: (item: ValueMap) => JSX.Element;
-  const contentRender = reg.entityContentRenderers[ident];
-
-  if (contentRender) {
-    render = (item) => contentRender(item, opts);
-
-    actions.push({
-      label: "Show table",
-      icon: "table",
-      replacesContent: true,
-      render: () => {
-        return renderEntityTable(reg, getItem());
-      },
-    });
-  } else {
-    render = (item) => renderEntityTable(reg, item);
-  }
 
   setContent(render(getItem()));
   createEffect(() => {

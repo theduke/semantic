@@ -51,7 +51,11 @@ export function EntityBox(props: EntityBoxProps): JSX.Element {
                 isActive={activeAction()?.index === indexSignal()}
                 size="is-small"
                 onclick={() => {
-                  setActiveAction({ index });
+                  if (activeAction()?.index === indexSignal()) {
+                    setActiveAction(null);
+                  } else {
+                    setActiveAction({ index });
+                  }
                 }}
               >
                 <Icon icon={action.icon} />
@@ -80,7 +84,7 @@ export function EntityBox(props: EntityBoxProps): JSX.Element {
         </p>
         {actions}
       </header>
-      <div class="card-content">
+      <div class="card-content" style={{width: '100%', "max-width": '100%', 'overflow-y': 'scroll'}}>
         <Show when={activeAction()} fallback={() => props.children}>
           {(index) => {
             const action = props.actions?.[index.index];

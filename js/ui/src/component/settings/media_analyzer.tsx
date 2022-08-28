@@ -15,6 +15,7 @@ import {
   createFallibleResource,
   FallibleResource,
   FallibleResourceLoader,
+  SPINNER,
 } from "../util/load";
 
 export function MediaAnalyzer(): JSX.Element {
@@ -77,6 +78,9 @@ function MediaAnalysisProgress(props: { job: Job }): JSX.Element {
 
             return (
               <Notification>
+                <div class='mr-4' style={{ display: 'inline-block' }}>
+                  {SPINNER}
+                </div>
                 Progress: {msg} {percent}
               </Notification>
             );
