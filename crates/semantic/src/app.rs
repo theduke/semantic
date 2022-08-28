@@ -1457,10 +1457,11 @@ impl App {
         rec.run(&db).await
     }
 
-    async fn select_sql(&self, select: api::QuerySql) -> Result<Vec<DataMap>, anyhow::Error> {
+    async fn select_sql(&self, query: api::QuerySql) -> Result<Vec<DataMap>, anyhow::Error> {
         let db = self.require_db()?;
-        let sel = Select::parse_sql(&select.query)?;
-        db.select_map(sel).await
+        let page = db.sql(query.query).await?;
+        let items = page.items.into_iter().map(|item| item.data).collect();
+        Ok(items)
     }
 }
 

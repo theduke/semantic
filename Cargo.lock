@@ -691,7 +691,7 @@ dependencies = [
 [[package]]
 name = "factdb"
 version = "0.1.0"
-source = "git+https://github.com/theduke/factordb.git?branch=main#cead2a219f8f238bc22dd6058540068c453aff30"
+source = "git+https://github.com/theduke/factordb.git?branch=main#a1ab70529520a1ade6271268bac670a05377b4df"
 dependencies = [
  "anyhow",
  "chrono",
@@ -712,7 +712,7 @@ dependencies = [
 [[package]]
 name = "factor_core"
 version = "0.1.0"
-source = "git+https://github.com/theduke/factordb.git?branch=main#cead2a219f8f238bc22dd6058540068c453aff30"
+source = "git+https://github.com/theduke/factordb.git?branch=main#a1ab70529520a1ade6271268bac670a05377b4df"
 dependencies = [
  "anyhow",
  "chrono",
@@ -731,7 +731,7 @@ dependencies = [
 [[package]]
 name = "factor_engine"
 version = "0.1.0"
-source = "git+https://github.com/theduke/factordb.git?branch=main#cead2a219f8f238bc22dd6058540068c453aff30"
+source = "git+https://github.com/theduke/factordb.git?branch=main#a1ab70529520a1ade6271268bac670a05377b4df"
 dependencies = [
  "anyhow",
  "chrono",
@@ -753,7 +753,7 @@ dependencies = [
 [[package]]
 name = "factor_macros"
 version = "0.1.0"
-source = "git+https://github.com/theduke/factordb.git?branch=main#cead2a219f8f238bc22dd6058540068c453aff30"
+source = "git+https://github.com/theduke/factordb.git?branch=main#a1ab70529520a1ade6271268bac670a05377b4df"
 dependencies = [
  "Inflector",
  "proc-macro2",
@@ -764,7 +764,7 @@ dependencies = [
 [[package]]
 name = "factor_tools"
 version = "0.1.0"
-source = "git+https://github.com/theduke/factordb.git?branch=main#cead2a219f8f238bc22dd6058540068c453aff30"
+source = "git+https://github.com/theduke/factordb.git?branch=main#a1ab70529520a1ade6271268bac670a05377b4df"
 dependencies = [
  "Inflector",
  "anyhow",
@@ -1354,9 +1354,9 @@ checksum = "d4d2456c373231a208ad294c33dc5bff30051eafd954cd4caae83a712b12854d"
 
 [[package]]
 name = "lock_api"
-version = "0.4.7"
+version = "0.4.8"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "327fa5b6a6940e4699ec49a9beae1ea4845c6bab9314e4f84ac68742139d8c53"
+checksum = "9f80bf5aacaf25cbfc8210d1cfb718f2bf3b11c4c54e5afe36c236853a8ec390"
 dependencies = [
  "autocfg",
  "scopeguard",
