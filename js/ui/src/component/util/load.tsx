@@ -12,7 +12,6 @@ import {
   Match,
   ResourceFetcher,
   ResourceOptions,
-  ResourceReturn,
 } from "solid-js";
 import { createStore } from "solid-js/store";
 import {
@@ -20,7 +19,6 @@ import {
   ResourceActions,
   ResourceSource,
 } from "solid-js/types/reactive/signal";
-import { setErrorMap } from "zod";
 import { NotificationError } from "../bulma/notification";
 
 export type FallibleResource<O> = Resource<O> & { caughtError?: any };

@@ -12,7 +12,6 @@ export function Checkbox(props: CheckboxProps): JSX.Element {
 
   onMount(() => {
     if (elem) {
-      console.log({ checkboxValue: props.field.get().value });
       elem.checked = props.field.get()?.value ?? false;
     }
     createEffect(() => {
