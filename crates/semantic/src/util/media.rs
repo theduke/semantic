@@ -623,7 +623,7 @@ pub async fn analyze_files(
 
             progress.on_progress(
                 index as f64 / file_count as f64,
-                Some(format!("Analayzed {}/{} files", index, file_count)),
+                Some(format!("Analyzed {}/{} files", index, file_count)),
             );
 
             match res {
