@@ -339,7 +339,7 @@ class BasicFieldAccessor<T> implements FieldAccessor<T> {
   }
 
   errors(): ValidationResult | undefined {
-    const fieldVal = this.get().validation;
+    const fieldVal = this.get()?.validation;
     const formVal = (this.form.state as any).validation?.fields?.[this.key];
     if (fieldVal || formVal) {
       return merge(fieldVal ?? {}, formVal ?? {});
