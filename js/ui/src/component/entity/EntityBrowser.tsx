@@ -72,7 +72,6 @@ export function EntityBrowser(props: EntityBrowserProps): JSX.Element {
 
   const DEFAULT_LIMIT = 50;
 
-  let select: Select | null = null;
   // TODO: parse sql filter via API query to enable pagination etc!
 
   const [page, actions] = createResource(fetchFilter, (filter) => {

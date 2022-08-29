@@ -6,18 +6,18 @@ import {
   EntityMediaRenderer,
   EntityRenderer,
   EntityTitleRenderer,
-  EntityTypeMap,
+  ClassMap,
 } from "./registry";
 
 export type SemanticVersion = string;
 
 export interface PluginSchema {
   attributeRenderers?: Record<AttributeName, AttributeRenderer>;
-  entityTitleRenderers?: EntityTypeMap<EntityTitleRenderer>;
-  entityContentRenderers?: EntityTypeMap<EntityContentRenderer>;
-  entityMediaRenderers?: EntityTypeMap<EntityMediaRenderer>;
-  entityRenderers?: EntityTypeMap<EntityRenderer>;
-  editableEntityRenderers?: EntityTypeMap<EditableEntityRenderer>;
+  entityTitleRenderers?: ClassMap<EntityTitleRenderer>;
+  entityContentRenderers?: ClassMap<EntityContentRenderer>;
+  entityMediaRenderers?: ClassMap<EntityMediaRenderer>;
+  entityRenderers?: ClassMap<EntityRenderer>;
+  editableEntityRenderers?: ClassMap<EditableEntityRenderer>;
 }
 
 export interface UiPlugin {

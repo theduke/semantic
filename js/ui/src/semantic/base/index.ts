@@ -1,7 +1,12 @@
 import { PluginSchema, UiPlugin } from "../plugin";
 import {
+  FACTOR_ID,
+  FACTOR_IDENT,
+  SEMANTIC_TAG_NAME,
+  SEMANTIC_TITLE,
   TY_SEMANTIC_AUDIO,
   TY_SEMANTIC_IMAGE,
+  TY_SEMANTIC_TAG,
   TY_SEMANTIC_VIDEO,
 } from "semantic/dist/schema";
 import { renderImage, renderImageMedia } from "./image";
@@ -28,6 +33,9 @@ export function basePlugin(): UiPlugin {
           [TY_SEMANTIC_IMAGE]: renderImageMedia,
           [TY_SEMANTIC_AUDIO]: renderAudioMedia,
         },
+        entityTitleRenderers: {
+          [TY_SEMANTIC_TAG]: (tag) => tag[SEMANTIC_TAG_NAME] || tag[SEMANTIC_TITLE] || tag[FACTOR_IDENT] || tag[FACTOR_ID] || '???',
+        }
       };
     },
   };

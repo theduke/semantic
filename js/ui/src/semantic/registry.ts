@@ -25,7 +25,7 @@ export interface EntityRenderOpts {
   onModified?: (item: ValueMap) => void;
 }
 
-export type EntityTitleRenderer = (entity: ValueMap) => JSX.Element;
+export type EntityTitleRenderer = (entity: ValueMap) => string;
 
 export type EntityContentRenderer = (
   item: ValueMap,
@@ -74,24 +74,24 @@ export type EntityMediaRenderer = (
   props: MediaRenderProps
 ) => [MediaHandle | null, JSX.Element];
 
-export type EntityTypeMap<T> = Record<EntityType, T>;
+export type ClassMap<T> = Record<EntityType, T>;
 
 export class UiRegistry {
   schema: SemanticSchema;
 
   attrs: Record<AttributeName, Attribute> = {};
-  classes: EntityTypeMap<Class> = {};
-  classParentMap: Record<EntityType, Set<EntityType>>;
+  classes: ClassMap<Class> = {};
+  classParentMap: ClassMap<Set<EntityType>>;
   hiddenClasses: Set<EntityType> = new Set();
 
   plugins: Record<string, UiPlugin> = {};
 
   attributeRenderers: Record<AttributeName, AttributeRenderer> = {};
-  entityTitleRenderers: EntityTypeMap<EntityTitleRenderer> = {};
-  entityContentRenderers: EntityTypeMap<EntityContentRenderer> = {};
-  entityMediaRenderers: EntityTypeMap<EntityMediaRenderer> = {};
-  entityRenderers: EntityTypeMap<EntityRenderer> = {};
-  editableEntityRenderers: EntityTypeMap<EditableEntityRenderer> = {};
+  entityTitleRenderers: ClassMap<EntityTitleRenderer> = {};
+  entityContentRenderers: ClassMap<EntityContentRenderer> = {};
+  entityMediaRenderers: ClassMap<EntityMediaRenderer> = {};
+  entityRenderers: ClassMap<EntityRenderer> = {};
+  editableEntityRenderers: ClassMap<EditableEntityRenderer> = {};
 
   constructor(schema: SemanticSchema) {
     this.schema = schema;
@@ -188,7 +188,8 @@ export class UiRegistry {
   }
 
   entityTitle(entity: ValueMap): string {
-    return genericEntityTitle(entity);
+    const ty: string = entity[FACTOR_TYPE];
+    return this.entityTitleRenderers[ty]?.(entity) || genericEntityTitle(entity);
   }
 
   entityAttributes(ty: EntityType): [Attribute, Cardinality][] {

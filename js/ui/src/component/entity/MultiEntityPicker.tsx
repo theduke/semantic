@@ -4,7 +4,7 @@ import { FACTOR_ID, SEMANTIC_TITLE } from "semantic/dist/schema";
 import { DeletableTag, Tag, Tags } from "solid-bulma";
 import { For, JSX } from "solid-js";
 import { searchEntities } from ".";
-import { useApi } from "../../context";
+import { useApi, useRegistry } from "../../context";
 import { MultiSelectSearch } from "../util/MultiSelectSearch";
 
 export interface MultiEntityPickerProps {
@@ -15,6 +15,7 @@ export interface MultiEntityPickerProps {
 
 export function MultiEntityPicker(props: MultiEntityPickerProps): JSX.Element {
   const api = useApi();
+  const reg = useRegistry();
 
   const search = (term: string): Promise<ValueMap[]> =>
     searchEntities(api, term, 50, props.baseFilter ?? null);
@@ -25,7 +26,7 @@ export function MultiEntityPicker(props: MultiEntityPickerProps): JSX.Element {
       onChange={props.onChange}
       initialSelection={props.initialSelection ?? []}
       renderItem={(item, onSelect) => {
-        const title = item[SEMANTIC_TITLE] ?? item[FACTOR_ID];
+        const title = reg.entityTitle(item);
         return (
           <Tag style={{ cursor: "pointer" }} onclick={onSelect}>
             {title}
@@ -41,7 +42,7 @@ export function MultiEntityPicker(props: MultiEntityPickerProps): JSX.Element {
                 {(item, index) => {
                   return (
                     <DeletableTag onDelete={() => onRemove(index())}>
-                      {item[SEMANTIC_TITLE] ?? item[FACTOR_ID]}
+                      {reg.entityTitle(item)}
                     </DeletableTag>
                   );
                 }}

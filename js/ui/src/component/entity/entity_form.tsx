@@ -1,4 +1,4 @@
-import { merge } from "lodash";
+import { isMap, merge } from "lodash";
 import { Box } from "solid-bulma";
 import { createEffect, createSignal, For, JSX, Show } from "solid-js";
 import {
@@ -21,7 +21,7 @@ import {
   FACTOR_TYPE,
 } from "semantic/dist/schema";
 import { Button, Buttons } from "../bulma/button";
-import { FieldHorizontal } from "../bulma/form";
+import { Field, FieldHorizontal } from "../bulma/form";
 import { Icon } from "../bulma/icon";
 import {
   createForm,
@@ -29,6 +29,7 @@ import {
   FormState,
   FormValidation,
   FormValidator,
+  ValidationResult,
 } from "../form";
 import { CheckboxField } from "../form/CheckboxField";
 import { DateTimeInputField } from "../form/DateTimeInputField";
@@ -54,22 +55,18 @@ function unionPlainOptions(variants: ValueType[]): SelectOption<Value>[] {
     } else {
       throw new Error(
         "Unsupported union type - only unions of constant values are supported " +
-          JSON.stringify(variant)
+        JSON.stringify(variant)
       );
     }
   });
 }
 
-function makeStringValidator(
-  attr: string,
-  required: boolean,
-  validate?: (value: string) => string | null
-): FormValidator<ValueMap> {
-  if (required) {
-    return (values) => {
-      const value = values[attr]?.toString().trim();
+export function makeAttributeValidator<T>(attr: string, required: boolean, validate?: (value: T, values: ValueMap) => ValidationResult | null): FormValidator<ValueMap> {
+  return (values) => {
+    const value = values[attr];
 
-      if (!value || value.length < 1) {
+    if (value === undefined || value === null) {
+      if (required) {
         return {
           fields: {
             [attr]: {
@@ -82,31 +79,43 @@ function makeStringValidator(
           },
         };
       } else {
-        if (validate) {
-          const msg = validate(value);
-          if (msg) {
-            return {
-              fields: {
-                [attr]: {
-                  errors: [
-                    {
-                      message: msg,
-                    },
-                  ],
-                },
-              },
-            };
-          } else {
-            return null;
-          }
+        return null;
+      }
+    } else {
+      if (validate) {
+        const res = validate(value, values);
+        if (res) {
+          return {
+            fields: {
+              [attr]: res,
+            },
+          };
         } else {
           return null;
         }
+      } else {
+        return null;
       }
-    };
-  } else {
-    return (_values) => null;
-  }
+    }
+  };
+}
+
+function makeStringValidator(
+  attr: string,
+  required: boolean,
+  validate?: (value: string, values: ValueMap) => string | null
+): FormValidator<ValueMap> {
+  const val = validate ? (value: any, values: ValueMap): ValidationResult | null => {
+    const s = validate(value.toString(), values);
+    if (s) {
+      return {
+        errors: [{ message: s }]
+      }
+    } else {
+      return null;
+    }
+  } : undefined;
+  return makeAttributeValidator<any>(attr, required, val);
 }
 
 export function entityAttributeFormField(
@@ -152,7 +161,18 @@ export function entityAttributeFormField(
       case "Url":
         inputType = "url";
         // TODO: validate correct URL
-        val = makeStringValidator(attrIdent, isRequired);
+        val = makeStringValidator(attrIdent, isRequired, value => {
+          debugger;
+          try {
+            const u = new URL(value);
+            if (!u.protocol || !u.host) {
+              return 'Invalid url: must have a scheme and a host';
+            }
+            return null;
+          } catch (error: any) {
+            return 'Invalid url: ' + error.toString();
+          }
+        });
         break;
 
       // TODO: int and uint should not use strings as values!
@@ -358,6 +378,15 @@ export function entityAttributeFormField(
         },
       ];
     }
+  } else if (ty === 'Bytes') {
+    const f = <Field>
+      <div class="label">{attributeName}</div>
+      <div class="control">
+        bytes...
+      </div>
+    </Field>;
+
+    return [f, () => null];
   }
 
   throw new Error(
@@ -415,7 +444,7 @@ export function GenericEntityForm(props: GenericEntityFormProps): JSX.Element {
   handledAttrs.add(FACTOR_TYPE);
   if (props.schema) {
     const schemaAttrs = props.registry.entityAttributes(
-      props.schema["factor/ident"]
+      props.schema[FACTOR_IDENT]
     );
     for (const [attr, cardinality] of schemaAttrs) {
       const [elem, validator] = entityAttributeFormField(
@@ -425,26 +454,11 @@ export function GenericEntityForm(props: GenericEntityFormProps): JSX.Element {
       );
       elems.push(elem);
       validators.push(validator);
-      handledAttrs.add(attr["factor/ident"]);
+      handledAttrs.add(attr[FACTOR_IDENT]);
     }
+  }
 
-    if (props.initialValues) {
-      for (const attrIdent of Object.keys(props.initialValues)) {
-        if (!handledAttrs.has(attrIdent)) {
-          const attrSchema = props.registry.attrs[attrIdent];
-          if (attrSchema) {
-            const [elem, validator] = entityAttributeFormField(
-              form,
-              attrSchema,
-              "Required"
-            );
-            elems.push(elem);
-            validators.push(validator);
-          }
-        }
-      }
-    }
-  } else if (props.initialValues) {
+  if (props.initialValues) {
     for (const attrIdent of Object.keys(props.initialValues)) {
       if (!handledAttrs.has(attrIdent)) {
         const attrSchema = props.registry.attrs[attrIdent];
@@ -452,11 +466,13 @@ export function GenericEntityForm(props: GenericEntityFormProps): JSX.Element {
           const [elem, validator] = entityAttributeFormField(
             form,
             attrSchema,
-            "Required"
+            "Optional"
           );
           elems.push(elem);
           validators.push(validator);
         }
+
+        handledAttrs.add(attrIdent);
       }
     }
   }
@@ -481,12 +497,15 @@ export function GenericEntityForm(props: GenericEntityFormProps): JSX.Element {
     if (ident.startsWith("factor/")) {
       return false;
     }
-    const isInEntity =
-      props.schema?.[FACTOR_ENTITY_ATTRIBUTES].find(
-        (field) => field["factor/attribute"] === ident
-      ) !== undefined;
-    return !isInEntity;
+    return !handledAttrs.has(attr[FACTOR_IDENT]);
   });
+
+  availableAttrs.sort((a, b) => {
+    const x = a[FACTOR_TITLE] || a[FACTOR_IDENT] || a[FACTOR_ID] || '';
+    const y = b[FACTOR_TITLE] || b[FACTOR_IDENT] || a[FACTOR_ID] || '';
+    return (x < y) ? -1 : (x > y ? 1 : 0)
+  });
+
   const extraAdderSearch = (term: string): Promise<Attribute[]> => {
     const lower = term.toLowerCase();
 
@@ -495,15 +514,10 @@ export function GenericEntityForm(props: GenericEntityFormProps): JSX.Element {
         (attr[FACTOR_TITLE]?.toLowerCase().includes(lower) ?? false) ||
         attr[FACTOR_IDENT].toLowerCase().includes(lower);
 
-      if (isMatch) {
-        const isInUse =
-          extraAttrs().find(
-            (field) => field.schema[FACTOR_IDENT] === attr[FACTOR_IDENT]
-          ) !== undefined;
-        return !isInUse;
-      } else {
+      if (!isMatch) {
         return false;
       }
+      return handledAttrs.has(attr[FACTOR_IDENT]);
     });
 
     return Promise.resolve(matches);
@@ -528,7 +542,6 @@ export function GenericEntityForm(props: GenericEntityFormProps): JSX.Element {
           }
         >
           {() => {
-            console.log("rendering extra adder picker");
             return (
               <Box>
                 <p class="mb-2">
@@ -554,6 +567,7 @@ export function GenericEntityForm(props: GenericEntityFormProps): JSX.Element {
                     };
                     setExtraAttrs((old) => [...old, item]);
                     setExtraAdderActive(false);
+                    handledAttrs.add(schema[FACTOR_IDENT]);
                   }}
                   onCancel={() => {
                     setExtraAdderActive(false);
