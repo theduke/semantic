@@ -5,6 +5,7 @@ import {
   For,
   JSX,
   Match,
+  Show,
   Suspense,
   Switch,
 } from "solid-js";
@@ -22,6 +23,8 @@ import { isEqual } from "lodash";
 import { FACTOR_ID } from "semantic/dist/schema";
 import { ToggleableEntityFilter } from "./filter/ToggleableEntityFilter";
 import { buildFilterDataSelect, EntityFilter, newFilterData } from "./filter";
+import { Button } from "../bulma/button";
+import { Select } from "semantic/dist/core";
 
 // const STORAGE_KEY_BROWSE_PAGE_FILTER_EXPANDED = "browse-page-filter-expanded";
 
@@ -40,6 +43,7 @@ export function EntityBrowser(props: EntityBrowserProps): JSX.Element {
   const [filter, setFilter] = createSignal<EntityFilter>(initialFilter);
   const [fetchFilter, setFetchFilter] =
     createSignal<EntityFilter>(initialFilter);
+  const [offset, setOffset] = createSignal(0);
 
   if (props.onFilterChanged) {
     const handler = props.onFilterChanged;
@@ -49,6 +53,7 @@ export function EntityBrowser(props: EntityBrowserProps): JSX.Element {
   }
 
   const onFilterChangeDebounced = throttle((filter: EntityFilter) => {
+    setOffset(0);
     setFetchFilter(filter);
   }, 500);
   createEffect(() => {
@@ -65,7 +70,12 @@ export function EntityBrowser(props: EntityBrowserProps): JSX.Element {
     }
   });
 
-  const [page, { mutate }] = createResource(fetchFilter, (filter) => {
+  const DEFAULT_LIMIT = 50;
+
+  let select: Select | null = null;
+  // TODO: parse sql filter via API query to enable pagination etc!
+
+  const [page, actions] = createResource(fetchFilter, (filter) => {
     if (filter.type === "sql") {
       if (filter.sql.trim()) {
         return api.selectSql(filter.sql);
@@ -74,16 +84,25 @@ export function EntityBrowser(props: EntityBrowserProps): JSX.Element {
       }
     } else {
       const select = buildFilterDataSelect(filter);
+      select.limit = DEFAULT_LIMIT as any;
+      select.offset = offset() as any;
       return api.select(select);
     }
   });
+
+  const loadNextPage = () => {
+    setOffset((old) => old + DEFAULT_LIMIT);
+    actions.refetch();
+  };
 
   const opts: EntityRenderOpts = {
     preview: true,
     allowDelete: true,
     allowEdit: true,
     onDeleted: (item) => {
-      mutate((old) => old?.filter((x) => x[FACTOR_ID] != item[FACTOR_ID]));
+      actions.mutate((old) =>
+        old?.filter((x) => x[FACTOR_ID] != item[FACTOR_ID])
+      );
     },
   };
 
@@ -103,7 +122,26 @@ export function EntityBrowser(props: EntityBrowserProps): JSX.Element {
             <Match when={page.loading}>{SPINNER}</Match>
             <Match when={page.error}>{(error) => renderError(error)}</Match>
             <Match when={page()}>
-              {(page) => renderItems(registry, page, opts)}
+              {(page) => {
+                const f = filter();
+
+                const hasMore =
+                  f.type === "data" ? page.length >= DEFAULT_LIMIT : false;
+
+                return (
+                  <div>
+                    {renderItems(registry, page, opts)}
+
+                    <Show when={hasMore}>
+                      <div class="is-flex is-justify-content-center">
+                        <Button size="is-large" onclick={loadNextPage}>
+                          More
+                        </Button>
+                      </div>
+                    </Show>
+                  </div>
+                );
+              }}
             </Match>
           </Switch>
         </Suspense>
