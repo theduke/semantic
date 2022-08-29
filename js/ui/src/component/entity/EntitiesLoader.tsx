@@ -15,7 +15,7 @@ export function EntitiesLoader(props: EntititesLoaderProps): JSX.Element {
 
   const renderer = props.emptyFallback
     ? (values: ValueMap[]) => {
-        if (values.length === 0) {
+        if (values.length === 0 && props.emptyFallback) {
           return props.emptyFallback;
         } else {
           return props.children(values);

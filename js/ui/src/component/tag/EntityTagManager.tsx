@@ -13,7 +13,12 @@ import { EntitiesLoader } from "../entity/EntitiesLoader";
 import { MultiSelectSearch } from "../util/MultiSelectSearch";
 import { PatchOp } from "semantic/dist/core";
 import { useApi } from "../../context";
-import { renderError } from "../util/load";
+import {
+  createLoader,
+  loadAsError,
+  renderError,
+  runWithLoader,
+} from "../util/load";
 import { isEqual } from "lodash";
 import { Button, Buttons } from "../bulma/button";
 import { Portal } from "solid-js/web";
@@ -33,7 +38,7 @@ export function EntityTagManager(props: EntityTagManagerProps): JSX.Element {
         // TODO: validation
         const allTags = tagsRaw as SemanticTag[];
 
-        const [error, setError] = createSignal<any | null>(null);
+        const [persistState, setPersistState] = createLoader<void>();
 
         const findTag = (rawTerm: string): SemanticTag[] => {
           const term = rawTerm.trim().toLowerCase();
@@ -67,7 +72,7 @@ export function EntityTagManager(props: EntityTagManagerProps): JSX.Element {
           setIsChanged(hasChanges);
         });
 
-        const doPersist = async (): Promise<string[]> => {
+        const doPersist = async (isFinished: boolean): Promise<string[]> => {
           const oldTags = props.entity[SEMANTIC_TAGS] ?? ([] as string[]);
           const newTags = selected().map((t) => t[FACTOR_ID]);
 
@@ -89,26 +94,29 @@ export function EntityTagManager(props: EntityTagManagerProps): JSX.Element {
           }
 
           if (ops.length > 0) {
-            await api.mutate({
-              Patch: { id: props.entity[FACTOR_ID], patch: ops },
-            });
+            try {
+              const out = await runWithLoader(
+                setPersistState,
+                api.mutate({
+                  Patch: { id: props.entity[FACTOR_ID], patch: ops },
+                })
+              );
+
+              if (isFinished && props.onFinished) {
+                props.onFinished(newTags);
+              }
+            } catch (err: any) {}
           }
 
           return newTags;
         };
 
         const onClose = async () => {
-          if (error()) {
+          if (persistState().state === "error") {
             props.onFinished?.(null);
             return;
           }
-
-          try {
-            const newTags = await doPersist();
-            props.onFinished?.(newTags);
-          } catch (err: any) {
-            setError(err);
-          }
+          doPersist(true);
         };
 
         const select = (
@@ -119,7 +127,7 @@ export function EntityTagManager(props: EntityTagManagerProps): JSX.Element {
             onChange={setSelected}
             renderSelected={(items, remove) => {
               const out = (
-                <div class="mr-2 ml-2">
+                <div class="mr-2 ml-2 pt-2">
                   <Tags>
                     <Show
                       when={items().length > 0}
@@ -151,14 +159,14 @@ export function EntityTagManager(props: EntityTagManagerProps): JSX.Element {
                   <p class="mb-2">
                     <b>Add</b>
                   </p>
-                  <Tags>{items}</Tags>
+                  <Buttons>{items}</Buttons>
                 </div>
               );
             }}
             renderItem={(tag, onSelect) => (
-              <Tag style={{ cursor: "pointer" }} onclick={onSelect}>
+              <Button size="is-small" outlined onclick={onSelect}>
                 {tag[SEMANTIC_TAG_NAME]}
-              </Tag>
+              </Button>
             )}
           />
         );
@@ -170,14 +178,15 @@ export function EntityTagManager(props: EntityTagManagerProps): JSX.Element {
             <Buttons>
               <Button
                 disabled={!isChanged()}
-                onclick={() => props.onFinished?.(null)}
+                loading={persistState().state === "loading"}
+                onclick={() => doPersist(true)}
               >
                 Save
               </Button>
               <Button onclick={() => props.onFinished?.(null)}>Cancel</Button>
             </Buttons>
 
-            <Show when={error()}>{renderError}</Show>
+            <Show when={loadAsError(persistState())}>{renderError}</Show>
           </div>
         );
 

@@ -12,14 +12,17 @@ export interface LoginPageProps {
 async function tryLogin(
   api: Api,
   onSchemaFound: (schema: SemanticSchema) => void
-): Promise<boolean> {
-  const status = await api.serverStatus();
-  if (status.backend_initialized) {
+): Promise<void> {
+  try {
+    const status = await api.serverStatus();
+    if (!status.backend_initialized) {
+      throw new Error("Backend not initialized");
+    }
     const schema = await api.schema();
     onSchemaFound(schema);
-    return true;
-  } else {
-    return false;
+  } catch (err: any) {
+    console.error(err);
+    throw err;
   }
 }
 
@@ -28,7 +31,7 @@ export function LoginPage(props: LoginPageProps): JSX.Element {
   return (
     <FallibleResourceLoader
       load={() => tryLogin(api, props.onLogin)}
-      children={(flag) => <Show when={!flag}>LOGIN FORM</Show>}
+      children={(_) => <p>LOGIN FORM</p>}
     />
   );
 }

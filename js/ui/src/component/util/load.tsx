@@ -18,7 +18,9 @@ import {
   Accessor,
   ResourceActions,
   ResourceSource,
+  Setter,
 } from "solid-js/types/reactive/signal";
+import { setErrorMap } from "zod";
 import { NotificationError } from "../bulma/notification";
 
 export type FallibleResource<O> = Resource<O> & { caughtError?: any };
@@ -77,7 +79,7 @@ export function createFallibleResource<T, S>(
   }
   options || (options = {});
 
-  const [errorStore, setErrorStore] = createStore<{ error?: any }>({});
+  const [getError, setError] = createSignal<any | undefined>();
 
   const wrappedFetcher = async function () {
     try {
@@ -87,7 +89,7 @@ export function createFallibleResource<T, S>(
       }
       return output;
     } catch (error: any) {
-      setErrorStore({ error });
+      setError(error);
       return undefined;
     }
   };
@@ -102,8 +104,14 @@ export function createFallibleResource<T, S>(
   const wrappedGetter = function () {
     return getter();
   };
-  wrappedGetter.error = errorStore.error;
-  wrappedGetter.caughtError = errorStore.error;
+
+  Object.defineProperty(wrappedGetter, "loading", {
+    get: () => getter.loading,
+  });
+  Object.defineProperty(wrappedGetter, "caughtError", {
+    get: () => getError(),
+  });
+  Object.defineProperty(wrappedGetter, "error", { get: () => getError() });
   res[0] = wrappedGetter;
   return res;
 }
@@ -191,6 +199,21 @@ export function spawnLoader<T>(load: () => Promise<T>): Signal<LoadState<T>> {
   return [get, set];
 }
 
+export async function runWithLoader<T>(
+  setter: Setter<LoadState<T>>,
+  promise: Promise<T>
+): Promise<T> {
+  setter({ state: "loading" });
+  try {
+    const data: T = await promise;
+    setter({ state: "success", data });
+    return data;
+  } catch (error: any) {
+    setter({ state: "error", error });
+    throw error;
+  }
+}
+
 export function SuspsenseSpinner(props: ParentProps): JSX.Element {
   return <Suspense fallback={SPINNER}>{props.children}</Suspense>;
 }
@@ -238,6 +261,15 @@ export function FallibleResourceLoader<T>(
   props: FallibleResourceLoaderProps<T>
 ): JSX.Element {
   const [data, actions] = createFallibleResource(props.load);
+
+  createEffect(() => {
+    console.log({
+      data: data(),
+      error: data.error,
+      caughtError: data.caughtError,
+      loading: data.loading,
+    });
+  });
   return (
     <Switch>
       <Match when={data.loading}>{SPINNER}</Match>

@@ -1,13 +1,19 @@
 import { newSelect } from "semantic/dist/api";
-import { Select } from "semantic/dist/core";
+import { Id, Order, Select } from "semantic/dist/core";
 import {
   exprAndMany,
   exprAttr,
   exprContains,
   exprIsInEntityTypes,
+  exprList,
   exprLiteral,
 } from "semantic/dist/db";
-import { SEMANTIC_TITLE } from "semantic/dist/schema";
+import {
+  FACTOR_ID,
+  Ident,
+  SEMANTIC_TAGS,
+  SEMANTIC_TITLE,
+} from "semantic/dist/schema";
 import * as zod from "zod";
 
 export const validateEntityFilterSql = zod.object({
@@ -24,18 +30,26 @@ export const validateEntityFilterData = zod.object({
   type: zod.literal("data"),
   searchTerm: zod.optional(zod.string()),
   entityTypes: zod.optional(zod.array(zod.string())),
+  tags: zod.optional(zod.array(zod.string())),
+  sortAttr: zod.optional(zod.string()),
+  sortOrder: zod.optional(zod.enum(["Asc", "Desc"])),
 });
 
 export interface EntityFilterData {
   type: "data";
   searchTerm?: string;
   entityTypes?: string[];
+  tags?: Id[];
+  sortAttr?: Ident;
+  sortOrder?: Order;
 }
 
 export function newFilterData(): EntityFilterData {
   return {
     type: "data",
     searchTerm: "",
+    sortAttr: FACTOR_ID,
+    sortOrder: "Asc",
   };
 }
 
@@ -51,6 +65,10 @@ export function buildFilterDataSelect(filter: EntityFilterData): Select {
   if (filter.entityTypes && filter.entityTypes.length > 0) {
     const types = filter.entityTypes;
     exprs.push(exprIsInEntityTypes(types));
+  }
+
+  if (filter.tags && filter.tags.length > 0) {
+    exprs.push(exprContains(exprLiteral(filter.tags), exprAttr(SEMANTIC_TAGS)));
   }
 
   return {

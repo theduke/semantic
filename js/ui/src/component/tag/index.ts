@@ -6,11 +6,7 @@ import {
   exprIsEntityType,
   exprRegexIMatch,
 } from "semantic/dist/db";
-import {
-  SemanticTag,
-  SEMANTIC_TAG_NAME,
-  TY_SEMANTIC_TAG,
-} from "semantic/dist/schema";
+import { SEMANTIC_TAG_NAME, TY_SEMANTIC_TAG } from "semantic/dist/schema";
 
 // Builds a Select for tags, sorted by name.
 export function buildTagSelect(): Select {

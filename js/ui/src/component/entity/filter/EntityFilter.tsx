@@ -1,6 +1,6 @@
 import { createEffect, createSignal, JSX, Match, Switch } from "solid-js";
 import { Tabs } from "../../bulma/tabs";
-import { EntityFilterBuilderForm } from "./EntityFilterForm";
+import { FilterBuilder } from "./EntityFilterForm";
 import { EntityFilterSqlForm } from "./EntityFilterSqlForm";
 import { Api, ValueMap } from "semantic/dist/api";
 
@@ -88,10 +88,7 @@ export function EntityFilterForm(props: EntityFilterFormProps): JSX.Element {
 
       <Switch>
         <Match when={filter().type === "data"}>
-          <EntityFilterBuilderForm
-            filter={filter as any}
-            setFilter={setFilter}
-          />
+          <FilterBuilder filter={filter as any} setFilter={setFilter} />
         </Match>
 
         <Match when={filter().type === "sql"}>

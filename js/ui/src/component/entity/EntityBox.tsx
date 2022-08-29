@@ -84,7 +84,10 @@ export function EntityBox(props: EntityBoxProps): JSX.Element {
         </p>
         {actions}
       </header>
-      <div class="card-content" style={{width: '100%', "max-width": '100%', 'overflow-y': 'scroll'}}>
+      <div
+        class="card-content"
+        style={{ width: "100%", "max-width": "100%", "overflow-y": "scroll" }}
+      >
         <Show when={activeAction()} fallback={() => props.children}>
           {(index) => {
             const action = props.actions?.[index.index];

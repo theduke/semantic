@@ -1,25 +1,16 @@
-import {
-  Accessor,
-  createSignal,
-  For,
-  JSX,
-  Setter,
-  Show,
-  untrack,
-} from "solid-js";
-import { DeletableTag, Tags } from "solid-bulma";
+import { Accessor, createSignal, JSX, Setter, untrack } from "solid-js";
 import { useRegistry } from "../../../context";
-import { FACTOR_IDENT, FACTOR_TITLE } from "semantic/dist/schema";
-import { Button } from "../../bulma/button";
+import { FACTOR_ID, FACTOR_IDENT, FACTOR_TITLE } from "semantic/dist/schema";
 import { FieldHorizontal } from "../../bulma/form";
-import { Icon } from "../../bulma/icon";
 import { SearchInput } from "../../bulma/SearchInput";
-import { MultiSelectSearch } from "../../util/MultiSelectSearch";
+import { MultiSelectToggleableTags } from "../../util/MultiSelectSearch";
 import { EntityType } from "../../../semantic";
 import { SelectOption } from "../../form/Select";
 import { EntityFilterData } from ".";
+import { TagEntitySelector } from "../../tag/TagEntitySelector";
+import { SortSelector } from "./SortSelector";
 
-export interface EntityFilterBuilderFormProps {
+export interface FilterBuilderProps {
   filter: Accessor<EntityFilterData>;
   setFilter: Setter<EntityFilterData>;
 
@@ -30,9 +21,7 @@ interface EntityTypeOption extends SelectOption<EntityType> {
   title: string;
 }
 
-export function EntityFilterBuilderForm(
-  props: EntityFilterBuilderFormProps
-): JSX.Element {
+export function FilterBuilder(props: FilterBuilderProps): JSX.Element {
   const [editingType, setEditingType] = createSignal<boolean>(false);
   const reg = useRegistry();
 
@@ -44,9 +33,9 @@ export function EntityFilterBuilderForm(
     })
   );
   entityTypes.sort((a, b) => {
-    if (a.value < b.value) {
+    if (a.title < b.title) {
       return -1;
-    } else if (a.value > b.value) {
+    } else if (a.title > b.title) {
       return 1;
     } else {
       return 0;
@@ -60,8 +49,8 @@ export function EntityFilterBuilderForm(
 
   const searchType = (
     term: string,
-    afterItem?: EntityTypeOption
-  ): Promise<EntityTypeOption[]> => {
+    selected: EntityTypeOption[]
+  ): EntityTypeOption[] => {
     const lower = term.toLowerCase();
     const filtered = entityTypes.filter((t) => {
       return (
@@ -69,7 +58,7 @@ export function EntityFilterBuilderForm(
         t.value?.toLowerCase().search(lower) !== -1
       );
     });
-    return Promise.resolve(filtered);
+    return filtered;
   };
 
   const initialFilter = untrack(() => props.filter());
@@ -90,83 +79,52 @@ export function EntityFilterBuilderForm(
 
       <FieldHorizontal label="Type" smallLabel>
         <div class="control">
-          <div class="is-flex">
-            <div class="mr-4">
-              <Button
-                onClick={() => {
-                  setEditingType((old) => !old);
-                }}
-              >
-                <Icon icon="plus" />
-              </Button>
-            </div>
-
-            <Tags>
-              <For each={props.filter()?.entityTypes} fallback={<p>All</p>}>
-                {(type, index) => {
-                  const schema = reg.classes[type];
-
-                  return (
-                    <DeletableTag
-                      onDelete={() => {
-                        props.setFilter((old) => {
-                          const fixed = [...(old?.entityTypes ?? [])];
-                          fixed.splice(index(), 1);
-
-                          return {
-                            ...old,
-                            entityTypes: fixed,
-                          };
-                        });
-                      }}
-                    >
-                      {schema[FACTOR_TITLE] || schema[FACTOR_IDENT]}
-                    </DeletableTag>
-                  );
-                }}
-              </For>
-            </Tags>
-
-            <div class="tags"></div>
-          </div>
-
-          <Show when={editingType()}>
-            {() => {
-              console.log("rendering multiselect", props.filter()?.entityTypes);
-              return (
-                <MultiSelectSearch<EntityTypeOption>
-                  renderSelected={(_selected) => null}
-                  search={searchType}
-                  defaultItems={entityTypes.filter(
-                    (t) => !props.filter()?.entityTypes?.includes(t.value)
-                  )}
-                  initialSelection={props
-                    .filter()
-                    ?.entityTypes?.flatMap((t) => [entityTypeLookup[t]])}
-                  onChange={(items) => {
-                    props.setFilter((old) => ({
-                      ...old,
-                      entityTypes: items.map((i) => i.value),
-                    }));
-                  }}
-                  renderItemWrapper={(items) => (
-                    <div class="tags m-2">{items}</div>
-                  )}
-                  renderItem={(item, onSelect) => {
-                    return (
-                      <span
-                        class="tag is-clickable"
-                        title={item.title}
-                        onClick={onSelect}
-                      >
-                        {item.title}
-                      </span>
-                    );
-                  }}
-                />
-              );
+          <MultiSelectToggleableTags<EntityTypeOption>
+            selectionPlaceholder={"All types."}
+            defaultItems={entityTypes}
+            initialSelection={
+              initialFilter.entityTypes?.map((t) => entityTypeLookup[t]) ?? []
+            }
+            buildTitle={(v) => v.title}
+            searchSync={searchType}
+            onChange={(types) => {
+              props.setFilter((old) => ({
+                ...old,
+                entityTypes: types.map((t) => t.value),
+              }));
             }}
-          </Show>
+          />
+        </div>
+      </FieldHorizontal>
+
+      <FieldHorizontal label="Tags" smallLabel>
+        <div class="control">
+          <TagEntitySelector
+            initialSelection={initialFilter.tags}
+            onChange={(tags) => {
+              props.setFilter((old) => ({
+                ...old,
+                tags: tags.map((t) => t[FACTOR_ID]),
+              }));
+            }}
+          />
+        </div>
+      </FieldHorizontal>
+
+      <FieldHorizontal label="Sort" smallLabel>
+        <div class="control">
+          <SortSelector
+            initialSelection={
+              initialFilter.sortOrder && initialFilter.sortAttr
+                ? [initialFilter.sortAttr, initialFilter.sortOrder]
+                : undefined
+            }
+            onSelected={(x) => {
+              const sortAttr = x?.[0][FACTOR_IDENT];
+              const sortOrder = x?.[1];
+              props.setFilter((f) => ({ ...f, sortAttr, sortOrder }));
+            }}
+          />
         </div>
       </FieldHorizontal>
     </div>

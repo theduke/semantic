@@ -23,6 +23,7 @@ export function SearchInput(props: SearchInputProps): JSX.Element {
   return (
     <Control class="has-icons-left">
       <input
+        style={{ width: "100%" }}
         ref={inputRef}
         value={props.value ?? ""}
         oninput={props.onInput}

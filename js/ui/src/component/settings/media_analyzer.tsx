@@ -78,7 +78,7 @@ function MediaAnalysisProgress(props: { job: Job }): JSX.Element {
 
             return (
               <Notification>
-                <div class='mr-4' style={{ display: 'inline-block' }}>
+                <div class="mr-4" style={{ display: "inline-block" }}>
                   {SPINNER}
                 </div>
                 Progress: {msg} {percent}

@@ -27,6 +27,7 @@ export function BrowsePage(): JSX.Element {
         storageKey={STORAGE_KEY}
         initialFilter={initialFilter}
         onFilterChanged={(filter) => {
+          console.debug({ changedFilter: filter });
           setSearchParams({ filter: JSON.stringify(filter) });
         }}
       />

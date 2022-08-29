@@ -1,16 +1,9 @@
-import { newSelect, ValueMap } from "semantic/dist/api";
-import { Expr, Select } from "semantic/dist/core";
-import {
-  exprAnd,
-  exprAttr,
-  exprEq,
-  exprLiteral,
-  exprOr,
-  exprRegexIMatch,
-} from "semantic/dist/db";
+import { ValueMap } from "semantic/dist/api";
+import { Expr } from "semantic/dist/core";
 import { FACTOR_ID, SEMANTIC_TITLE } from "semantic/dist/schema";
 import { DeletableTag, Tag, Tags } from "solid-bulma";
 import { For, JSX } from "solid-js";
+import { searchEntities } from ".";
 import { useApi } from "../../context";
 import { MultiSelectSearch } from "../util/MultiSelectSearch";
 
@@ -23,29 +16,8 @@ export interface MultiEntityPickerProps {
 export function MultiEntityPicker(props: MultiEntityPickerProps): JSX.Element {
   const api = useApi();
 
-  const search = async (rawTerm: string): Promise<ValueMap[]> => {
-    const term = rawTerm.trim().toLowerCase();
-    if (term === "") {
-      return Promise.resolve([]);
-    }
-
-    const searchFilter = exprOr(
-      exprEq(exprAttr(FACTOR_ID), exprLiteral(term)),
-      exprRegexIMatch(exprAttr(SEMANTIC_TITLE), term)
-    );
-
-    const filter = props.baseFilter
-      ? exprAnd(props.baseFilter, searchFilter)
-      : searchFilter;
-
-    const select: Select = {
-      ...newSelect(),
-      filter,
-      limit: 20 as any,
-    };
-
-    return api.select(select);
-  };
+  const search = (term: string): Promise<ValueMap[]> =>
+    searchEntities(api, term, 50, props.baseFilter ?? null);
 
   return (
     <MultiSelectSearch<ValueMap>

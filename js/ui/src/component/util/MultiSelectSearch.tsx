@@ -1,43 +1,78 @@
-import { Accessor, createSignal, For, Match, Show, Switch } from "solid-js";
+import {
+  Accessor,
+  Component,
+  createSignal,
+  For,
+  Match,
+  Show,
+  Switch,
+} from "solid-js";
 import { JSX } from "solid-js/jsx-runtime";
 import { debounce } from "@solid-primitives/scheduled";
 import { Control } from "../bulma/form";
 import { Icon } from "../bulma/icon";
 import { Panel, PanelBlock } from "../bulma/panel";
-import { loadAsError, loadAsSuccess, LoadState, SPINNER } from "./load";
+import {
+  loadAsError,
+  loadAsSuccess,
+  LoaderView,
+  LoadState,
+  runWithLoader,
+  SPINNER,
+} from "./load";
 import { NotificationError } from "../bulma/notification";
 
 import styles from "./MultiSelectSearch.module.css";
+import { Button, Buttons, IconButton } from "../bulma/button";
+import { DeletableTag, Tag, Tags } from "solid-bulma";
+import { SearchInput } from "../bulma/SearchInput";
 
 interface SearchPropsSync<V> {
-  search: (term: string, afterItem?: V) => Promise<V[]>;
+  searchSync: (term: string, selected: V[]) => V[];
 }
 
 interface SearchPropsAsync<V> {
-  searchSync: (term: string, afterItem?: V) => V[];
+  search: (term: string, afterItem?: V) => Promise<V[]>;
 }
 
-interface BaseProps<V> {
-  defaultItems?: V[];
-  initialSelection?: V[];
-  searchPlaceholder?: string;
-
-  // Content displayed when no search term was entered yet.
+export interface MultiSelectRenderers<V> {
   renderIdle?: () => JSX.Element;
   renderItems?: (items: V[], onSelect: (index: number) => void) => JSX.Element;
-  renderItemWrapper?: (items: JSX.Element) => JSX.Element;
   renderItem?: (item: V, onSelect: () => void) => JSX.Element;
-
+  renderItemWrapper?: (items: JSX.Element) => JSX.Element;
   renderSelected?: (
     items: Accessor<V[]>,
     remove: (itemIndex: number) => void
   ) => JSX.Element;
+}
+
+export interface MultiSelectRenderProps<V> extends MultiSelectRenderers<V> {
+  searchPlaceholder?: string;
+
+  loader: Accessor<LoadState<V[]>>;
+  selected: Accessor<V[]>;
+  searchTerm: Accessor<string>;
+
+  onSelect: (itemIndex: number) => void;
+  onUnselect: (itemIndex: number) => void;
+  onTermChange: (term: string) => void;
+}
+
+interface BaseProps<V> extends MultiSelectRenderers<V> {
+  defaultItems?: V[];
+  initialSelection?: V[];
+  searchPlaceholder?: string;
+
+  toggleable?: boolean;
+
+  render?: Component<MultiSelectRenderProps<V>>;
 
   onChange?: (selectedItems: V[]) => void;
 }
 
-type MultiSelectProps<V> = BaseProps<V> &
-  (SearchPropsSync<V> | SearchPropsAsync<V>);
+type SearchProps<V> = SearchPropsSync<V> | SearchPropsAsync<V>;
+
+type MultiSelectProps<V> = BaseProps<V> & SearchProps<V>;
 
 export function MultiSelectSearch<V>(props: MultiSelectProps<V>): JSX.Element {
   let inputRef: HTMLInputElement | undefined;
@@ -46,7 +81,12 @@ export function MultiSelectSearch<V>(props: MultiSelectProps<V>): JSX.Element {
 
   const initialState: LoadState<V[]> =
     props.defaultItems && props.defaultItems.length > 0
-      ? { state: "success", data: props.defaultItems }
+      ? {
+          state: "success",
+          data: props.defaultItems.filter(
+            (x) => !props.initialSelection?.includes(x)
+          ),
+        }
       : { state: "idle" };
   const [loader, setLoader] = createSignal<LoadState<V[]>>(initialState);
   const [selected, setSelected] = createSignal<V[]>(
@@ -59,7 +99,7 @@ export function MultiSelectSearch<V>(props: MultiSelectProps<V>): JSX.Element {
   if ("searchSync" in props) {
     onSearch = (term: string) => {
       try {
-        const items = props.searchSync(term);
+        const items = props.searchSync(term, selected());
         setLoader({ state: "success", data: items });
       } catch (err: any) {
         setLoader({ state: "error", error: err });
@@ -67,15 +107,7 @@ export function MultiSelectSearch<V>(props: MultiSelectProps<V>): JSX.Element {
     };
   } else if ("search" in props) {
     const s = debounce((term: string) => {
-      props
-        .search(term)
-        .then((values) => {
-          setLoader({ state: "success", data: values });
-        })
-        .catch((error) => {
-          // TODO: better error formatting.
-          setLoader({ state: "error", error: error.toString() });
-        });
+      runWithLoader(setLoader, props.search(term));
     }, 500);
     onSearch = s;
     clearSearch = () => {
@@ -83,14 +115,13 @@ export function MultiSelectSearch<V>(props: MultiSelectProps<V>): JSX.Element {
     };
   }
 
-  const onInput = () => {
-    const term = inputRef?.value.trim() ?? "";
-
+  const onTermChange = (term: string) => {
     if (term === "") {
-      setLoader({ state: "idle" });
       clearSearch?.();
       if (props.defaultItems) {
         setLoader({ state: "success", data: props.defaultItems });
+      } else {
+        setLoader({ state: "idle" });
       }
     } else {
       setLoader({ state: "loading" });
@@ -98,7 +129,7 @@ export function MultiSelectSearch<V>(props: MultiSelectProps<V>): JSX.Element {
     }
   };
 
-  const doSelect = (itemIndex: number) => {
+  const onSelect = (itemIndex: number) => {
     const items = loadAsSuccess(loader()) || [];
     const item = items[itemIndex];
     if (item) {
@@ -110,7 +141,7 @@ export function MultiSelectSearch<V>(props: MultiSelectProps<V>): JSX.Element {
     }
   };
 
-  const doUnselect = (itemIndex: number) => {
+  const onUnselect = (itemIndex: number) => {
     const items = selected();
     const item = items[itemIndex];
     if (itemIndex < items.length) {
@@ -128,6 +159,25 @@ export function MultiSelectSearch<V>(props: MultiSelectProps<V>): JSX.Element {
     }
   };
 
+  const renderProps: MultiSelectRenderProps<V> = {
+    loader: loader,
+    selected,
+    searchTerm,
+    onSelect,
+    onUnselect,
+    onTermChange,
+    renderIdle: props.renderIdle,
+    renderItems: props.renderItems,
+    renderItem: props.renderItem,
+    renderItemWrapper: props.renderItemWrapper,
+    renderSelected: props.renderSelected,
+  };
+  const renderer = props.render ?? defaultRenderer;
+  return renderer(renderProps);
+}
+
+function defaultRenderer<V>(props: MultiSelectRenderProps<V>): JSX.Element {
+  const loader = props.loader;
   const renderIdle =
     props.renderIdle ??
     (() => {
@@ -136,11 +186,9 @@ export function MultiSelectSearch<V>(props: MultiSelectProps<V>): JSX.Element {
       );
     });
 
-  console.log(styles);
-
   const choices = (
     <Switch>
-      <Match when={loader().state === "idle"}>{renderIdle}</Match>
+      <Match when={props.loader().state === "idle"}>{renderIdle}</Match>
 
       <Match when={loader().state === "loading"}>
         <PanelBlock>{SPINNER}</PanelBlock>
@@ -163,7 +211,7 @@ export function MultiSelectSearch<V>(props: MultiSelectProps<V>): JSX.Element {
           }
 
           if (props.renderItems) {
-            return props.renderItems(items, doSelect);
+            return props.renderItems(items, props.onSelect);
           }
 
           const renderItem = props.renderItem;
@@ -175,15 +223,7 @@ export function MultiSelectSearch<V>(props: MultiSelectProps<V>): JSX.Element {
           const renderedItems = (
             <For each={items}>
               {(item, index) => {
-                // return (
-                //   <PanelBlock
-                //     class={styles.multiselectOption}
-                //     onclick={[doSelect, index()]}
-                //   >
-                //     {props.renderItem(item)}
-                //   </PanelBlock>
-                // );
-                return renderItem(item, () => doSelect(index()));
+                return renderItem(item, () => props.onSelect(index()));
               }}
             </For>
           );
@@ -201,25 +241,25 @@ export function MultiSelectSearch<V>(props: MultiSelectProps<V>): JSX.Element {
   let selectedRender: JSX.Element;
 
   if (props.renderSelected) {
-    selectedRender = props.renderSelected(selected, doUnselect);
+    selectedRender = props.renderSelected(props.selected, props.onUnselect);
   } else {
     selectedRender = (
-      <Show when={selected().length > 0}>
+      <Show when={props.selected().length > 0}>
         <PanelBlock>
           <hr />
           <strong>Selected:</strong>
         </PanelBlock>
 
-        <For each={selected()}>
+        <For each={props.selected()}>
           {(item, index) => {
             return (
               <PanelBlock
                 class={styles.multiselectSelected}
-                onclick={[doUnselect, index()]}
+                onclick={[props.onUnselect, index()]}
               >
                 {
                   // FIXME: handle missing renderItem!
-                  props.renderItem?.(item, () => doUnselect(index()))
+                  props.renderItem?.(item, () => props.onUnselect(index()))
                 }
               </PanelBlock>
             );
@@ -236,9 +276,10 @@ export function MultiSelectSearch<V>(props: MultiSelectProps<V>): JSX.Element {
       <PanelBlock>
         <Control class="has-icons-left">
           <input
-            oninput={onInput}
-            value={searchTerm()}
-            ref={inputRef}
+            onchange={(e) => {
+              props.onTermChange(e.currentTarget.value);
+            }}
+            value={props.searchTerm()}
             class="input"
             type="text"
             placeholder={props.searchPlaceholder ?? "Search..."}
@@ -249,5 +290,135 @@ export function MultiSelectSearch<V>(props: MultiSelectProps<V>): JSX.Element {
 
       {choices}
     </Panel>
+  );
+}
+
+export interface MultiSelectViewToggleableTagsProps<V> {
+  buildTitle: (item: V) => string;
+  searchable?: boolean;
+  selectionPlaceholder?: JSX.Element;
+}
+
+function buildViewToggleableTags<V>(
+  viewProps: MultiSelectViewToggleableTagsProps<V>
+): Component<MultiSelectRenderProps<V>> {
+  const [isEditing, setIsEditing] = createSignal(false);
+  const searchable = viewProps.searchable ?? true;
+
+  return (props: MultiSelectRenderProps<V>): JSX.Element => {
+    const selectionFallback = viewProps.selectionPlaceholder ?? (
+      <p>Nothing selected yet.</p>
+    );
+
+    return (
+      <div>
+        <div
+          class="is-flex"
+          style={{
+            "justify-content": "flex-start",
+            "align-items": "flex-start",
+          }}
+        >
+          <IconButton
+            color={isEditing() ? "is-primary" : undefined}
+            icon="pencil"
+            onclick={() => setIsEditing((old) => !old)}
+          />
+          <div class="ml-4">
+            <Show
+              when={props.selected().length > 0}
+              fallback={selectionFallback}
+            >
+              <Tags>
+                <For each={props.selected()}>
+                  {(item, index) => {
+                    const title = viewProps.buildTitle(item);
+
+                    return (
+                      <DeletableTag onDelete={() => props.onUnselect(index())}>
+                        {title}
+                      </DeletableTag>
+                    );
+                  }}
+                </For>
+              </Tags>
+            </Show>
+
+            <Show when={isEditing()}>
+              {() => {
+                const search = searchable ? (
+                  <div class="mb-4">
+                    <SearchInput
+                      onInput={(e) => props.onTermChange(e.currentTarget.value)}
+                    />
+                  </div>
+                ) : null;
+
+                return (
+                  <div>
+                    <hr />
+                    {search}
+
+                    <LoaderView loader={props.loader}>
+                      {(items) => {
+                        return (
+                          <Show
+                            when={items.length > 0}
+                            fallback={<p>Nothing found...</p>}
+                          >
+                            <Buttons>
+                              <For each={items}>
+                                {(item, index) => (
+                                  <Button
+                                    outlined
+                                    rounded
+                                    size="is-small"
+                                    onclick={() => props.onSelect(index())}
+                                  >
+                                    {viewProps.buildTitle(item)}
+                                  </Button>
+                                )}
+                              </For>
+                            </Buttons>
+                          </Show>
+                        );
+                      }}
+                    </LoaderView>
+                  </div>
+                );
+              }}
+            </Show>
+          </div>
+        </div>
+      </div>
+    );
+  };
+}
+
+export type MultiSelectToggleableTagsProps<V> = {
+  initialSelection?: V[];
+  buildTitle: (item: V) => string;
+  searchable?: boolean;
+  defaultItems: V[];
+  selectionPlaceholder?: JSX.Element;
+  onChange?: (selectedItems: V[]) => void;
+} & (SearchPropsSync<V> | SearchPropsAsync<V>);
+
+export function MultiSelectToggleableTags<V>(
+  props: MultiSelectToggleableTagsProps<V>
+): JSX.Element {
+  return (
+    <MultiSelectSearch<V>
+      defaultItems={props.defaultItems}
+      initialSelection={props.initialSelection}
+      search={("search" in props ? props.search : undefined) as any}
+      searchSync={"searchSync" in props ? props.searchSync : undefined}
+      render={buildViewToggleableTags({
+        buildTitle: props.buildTitle,
+        searchable: props.searchable,
+        selectionPlaceholder: props.selectionPlaceholder,
+      })}
+      onChange={props.onChange}
+    />
   );
 }

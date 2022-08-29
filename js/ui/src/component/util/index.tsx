@@ -22,7 +22,7 @@ export interface GenericPageProps {
 
 export function GenericPage(props: GenericPageProps): JSX.Element {
   return (
-    <div class="container pb-6" style={{width: '100%'}}>
+    <div class="container pb-6" style={{ width: "100%" }}>
       <PageTitle>{props.title}</PageTitle>
       {props.children}
     </div>

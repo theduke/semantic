@@ -20,9 +20,10 @@ import {
   FACTOR_TYPE,
   FACTOR_VALUE_TYPE,
   SEMANTIC_TAGS,
+  SEMANTIC_TITLE,
   SEMANTIC_URL,
 } from "semantic/dist/schema";
-import { Class } from "semantic/dist/core";
+import { Class, Expr, Select } from "semantic/dist/core";
 import { EntityChildrenLoader } from "./EntityChildren";
 import { EntityEditor } from "./EntityEditor";
 import { EntityDeleterModal } from "./EntityDeleterModal";
@@ -30,6 +31,50 @@ import { NotificationError, NotificationWarning } from "../bulma/notification";
 import { Button } from "../bulma/button";
 import { EntityTagManager } from "../tag/EntityTagManager";
 import { Icon } from "../bulma/icon";
+import {
+  exprAnd,
+  exprAttr,
+  exprEq,
+  exprLiteral,
+  exprOr,
+  exprRegexIMatch,
+} from "semantic/dist/db";
+import { Api, newSelect } from "semantic/dist/api";
+import * as uuid from "uuid";
+
+// Search for entities with a string.
+//
+// The string may either be in "semantic/title" or a uuid.
+export async function searchEntities(
+  api: Api,
+  term: string,
+  limit: number,
+  baseFilter: Expr | null
+): Promise<ValueMap[]> {
+  term = term.trim().toLowerCase();
+  if (term === "") {
+    return Promise.resolve([]);
+  }
+
+  // Build up the filter expression.
+  const titleFilter = exprRegexIMatch(exprAttr(SEMANTIC_TITLE), term);
+  // Filter by "factor/id" if the search term is a valid UUID.
+  const uuidFilter = uuid.validate(term)
+    ? exprEq(exprAttr(FACTOR_ID), exprLiteral(term))
+    : null;
+  const searchFilter = uuidFilter
+    ? exprOr(uuidFilter, titleFilter)
+    : titleFilter;
+  const filter = baseFilter ? exprAnd(baseFilter, searchFilter) : searchFilter;
+
+  const select: Select = {
+    ...newSelect(),
+    filter,
+    limit: limit as any,
+  };
+
+  return api.select(select);
+}
 
 export function rendererValue(value: any): JSX.Element {
   const ty = typeof value;
@@ -168,7 +213,11 @@ export function renderEntityTable(
   ) : null;
   rows.push(children);
 
-  return <table class="table" style={{'overflow-y': 'scroll'}}>{rows}</table>;
+  return (
+    <table class="table" style={{ "overflow-y": "scroll" }}>
+      {rows}
+    </table>
+  );
 }
 
 export function renderEntityBox(
@@ -213,7 +262,6 @@ export function renderGenericEntityBox(
 
   const [getItem, setItem] = createSignal<ValueMap>(item);
   const [deleted, setDeleted] = createSignal<boolean>(false);
-
 
   const [content, setContent] = createSignal<JSX.Element>(null);
   const actions: EntityAction[] = [];
@@ -341,7 +389,6 @@ export function renderGenericEntityBox(
     };
     actions.push(deleteAction);
   }
-
 
   setContent(render(getItem()));
   createEffect(() => {
