@@ -4,7 +4,7 @@ use brass::{
     dom::{builder::div, TagBuilder},
     signal::signal::{Mutable, SignalExt},
 };
-use factdb::{AttrId, ClassMeta, Expr, Id, Order, Select, Value};
+use factdb::{AttrId, AttrType, AttributeMeta, ClassMeta, Expr, Id, Order, Select, Value};
 use semantic_core::base::{AttrCreatedAt, AttrLastVisitTime, AttrTitle, AttrUpdatedAt, Tag};
 
 use crate::{
@@ -54,7 +54,7 @@ impl EntityFilterForm {
                 .iter()
                 .map(|val| Value::from(val.clone()))
                 .collect();
-            let se = Expr::in_(Expr::Attr(factdb::Attribute::IDENT), Value::List(values));
+            let se = Expr::in_(AttrType::expr(), Value::List(values));
             e = e.and_with(se);
         }
 
