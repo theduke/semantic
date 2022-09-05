@@ -28,7 +28,6 @@ export function EntityPage(props: EntityPageProps): JSX.Element {
       <EntityLoader ident={props.ident}>
         {(item) => {
           return untrack(() => {
-            console.debug("rendering editable entity");
             return registry.renderEditableEntity(item, opts, (_) => {});
           });
         }}
@@ -36,5 +35,5 @@ export function EntityPage(props: EntityPageProps): JSX.Element {
     );
   }
 
-  return <div class="container">{content}</div>;
+  return <div class="container" style={{'max-width': '100%', 'min-width': '600px'}}>{content}</div>;
 }

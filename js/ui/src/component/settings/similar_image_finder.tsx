@@ -7,18 +7,14 @@ import { blobImageUrl } from "../../semantic/base/image";
 import { Notification } from "../bulma/notification";
 import { createForm } from "../form";
 import { FormButtons } from "../form/FormButtons";
-import { InputField } from "../form/InputField";
 import { InputFloatField } from "../form/InputFloatField";
 import { InputIntField } from "../form/InputIntField";
-import { StringInput } from "../form/StringInput";
-import { JobStatusLoader, renderJobStatus } from "../job/JobStatusLoader";
-import { GenericPage, tryParseFloat } from "../util";
+import { renderJobStatus } from "../job/JobStatusLoader";
+import { GenericPage } from "../util";
 import {
   createLoader,
   FallibleResourceLoader,
-  loadAsError,
   LoaderView,
-  renderError,
 } from "../util/load";
 
 interface FormData {
@@ -73,10 +69,14 @@ export function SimilarImageFinder(): JSX.Element {
               <InputFloatField
                 field={form.field("similarityMin")}
                 label={"Minimum similarity"}
+                min={0}
+                max={100}
               />
               <InputFloatField
                 field={form.field("similarityMax")}
                 label={"Maximum similarity"}
+                min={0}
+                max={100}
               />
               <InputIntField
                 field={form.field("maxResults")}

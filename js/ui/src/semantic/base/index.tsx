@@ -2,7 +2,9 @@ import { PluginSchema, UiPlugin } from "../plugin";
 import {
   FACTOR_ID,
   FACTOR_IDENT,
+  SEMANTIC_NOTE_BODY,
   SEMANTIC_TAG_NAME,
+  SEMANTIC_TEXT_FORMAT,
   SEMANTIC_TITLE,
   TY_SEMANTIC_AUDIO,
   TY_SEMANTIC_IMAGE,
@@ -12,6 +14,10 @@ import {
 import { renderImage, renderImageMedia } from "./image";
 import { renderVideo, renderVideoMedia } from "./video";
 import { renderAudio, renderAudioMedia } from "./audio";
+import { renderAttrFieldTextArea } from "../../component/entity/entity_form";
+import { ValueMap } from "../registry";
+import { JSX } from "solid-js";
+import SolidMarkdown from "solid-markdown";
 
 export function basePlugin(): UiPlugin {
   return {
@@ -23,6 +29,32 @@ export function basePlugin(): UiPlugin {
     },
     schema(): PluginSchema {
       return {
+        attributeRenderers: {
+          [SEMANTIC_NOTE_BODY]: (value: any, item: ValueMap): JSX.Element => {
+            const content = (typeof value === 'string') ? value.trim() : '';
+
+            if (content === '') {
+              return null;
+            }
+
+            const rawFormat = item[SEMANTIC_TEXT_FORMAT];
+            const format = rawFormat === 'markdown' ? 'markdown' : null;
+            console.debug({item, format, rawFormat})
+
+            if (format === 'markdown') {
+              return (
+                <SolidMarkdown children={content} />
+              );
+            } else {
+              return <pre class="content" >
+                {content}
+              </pre>
+            }
+          }
+        },
+        attributeFieldRenderers: {
+          [SEMANTIC_NOTE_BODY]: renderAttrFieldTextArea,
+        },
         entityContentRenderers: {
           [TY_SEMANTIC_IMAGE]: renderImage,
           [TY_SEMANTIC_VIDEO]: renderVideo,

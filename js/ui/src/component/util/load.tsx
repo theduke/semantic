@@ -170,7 +170,6 @@ export function createLoader<T>(
 }
 
 export function renderError(error: any): JSX.Element {
-  console.trace(error);
   return (
     <NotificationError>{error.toString() || "Unknown Error"}</NotificationError>
   );
@@ -261,15 +260,6 @@ export function FallibleResourceLoader<T>(
   props: FallibleResourceLoaderProps<T>
 ): JSX.Element {
   const [data, actions] = createFallibleResource(props.load);
-
-  createEffect(() => {
-    console.log({
-      data: data(),
-      error: data.error,
-      caughtError: data.caughtError,
-      loading: data.loading,
-    });
-  });
   return (
     <Switch>
       <Match when={data.loading}>{SPINNER}</Match>

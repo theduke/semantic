@@ -32,7 +32,9 @@ export function PlayerBar(props: PlayerBarProps): JSX.Element {
         style={{
           display: "flex",
           "align-items": "flex-start",
-          "flex-shrink": 0,
+          // "flex-shrink": 0,
+          'flex-grow': 1,
+          'flex-basis': 0,
         }}
       >
         <ButtonGroup
@@ -117,9 +119,10 @@ export function PlayerBar(props: PlayerBarProps): JSX.Element {
       <div
         style={{
           "flex-shrink": 3,
+          'flex-grow': 1,
           display: "flex",
           "overflow-x": "hidden",
-          "flex-basis": "auto",
+          "flex-basis": "0",
           "justify-content": "flex-end",
           "align-items": "flex-start",
         }}

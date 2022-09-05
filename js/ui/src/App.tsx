@@ -34,31 +34,39 @@ import { BlobCleanupPage } from "./component/settings/blob_cleanup";
 import { MediaAnalyzerPage } from "./component/settings/media_analyzer";
 import { SimilarFileFinderPage } from "./component/settings/similar_image_finder";
 
-export function App(): JSX.Element {
-  const [getRegistry, setRegistry] = createSignal<UiRegistry | null>();
+function buildRegistry(schema: SemanticSchema): UiRegistry {
+  const reg = new UiRegistry(schema);
+  reg.registerPlugin(basePlugin());
+  return reg;
+}
 
-  const onLogin = function (schema: SemanticSchema) {
-    const reg = new UiRegistry(schema);
-    reg.registerPlugin(basePlugin());
+export function App(): JSX.Element {
+  const oldSchema = context.storageLoadSchema();
+  const oldRegistry = oldSchema ? buildRegistry(oldSchema) : null;
+  const [getRegistry, setRegistry] = createSignal<UiRegistry | null>(oldRegistry);
+
+  const onLogin = function(schema: SemanticSchema) {
+    context.storageSaveSchema(schema);
+    const reg = buildRegistry(schema);
     setRegistry(reg);
   };
 
   const serverUrl = "/";
 
   return (
-    <context.ApiContext.Provider value={new Api(serverUrl)}>
-      <Show when={getRegistry()} fallback={<LoginPage onLogin={onLogin} />}>
-        <context.UiRegistryContext.Provider
-          value={assertDefined(getRegistry())}
-        >
-          <Router>
-            <div
-              style={{
-                display: "flex",
-                "flex-direction": "column",
-                height: "100%",
-              }}
-            >
+    <div
+      style={{
+        display: "flex",
+        "flex-direction": "column",
+        height: "100%",
+      }}
+    >
+      <context.ApiContext.Provider value={new Api(serverUrl)}>
+        <Show when={getRegistry()} fallback={<LoginPage onLogin={onLogin} />}>
+          <context.UiRegistryContext.Provider
+            value={assertDefined(getRegistry())}
+          >
+            <Router>
               <AppNavbar />
               <Routes>
                 <Route path="/entity/*ident" component={EntityPageRoute} />
@@ -97,11 +105,11 @@ export function App(): JSX.Element {
                 {/* */}
                 <Route path="/" component={BrowsePage} />
               </Routes>
-            </div>
-          </Router>
-        </context.UiRegistryContext.Provider>
-      </Show>
-    </context.ApiContext.Provider>
+            </Router>
+          </context.UiRegistryContext.Provider>
+        </Show>
+      </context.ApiContext.Provider>
+    </div>
   );
 }
 

@@ -1,4 +1,4 @@
-import { isMap, merge } from "lodash";
+import { merge } from "lodash";
 import { Box } from "solid-bulma";
 import { createEffect, createSignal, For, JSX, Show } from "solid-js";
 import {
@@ -12,9 +12,8 @@ import {
   ValueType,
 } from "semantic/dist/core";
 import { exprAttr, exprIn, exprLiteral, exprNotEq } from "semantic/dist/db";
-import { UiRegistry, ValueMap } from "../../semantic/registry";
+import { AttributeFieldRendererProps, UiRegistry, ValueMap } from "../../semantic/registry";
 import {
-  FACTOR_ENTITY_ATTRIBUTES,
   FACTOR_ID,
   FACTOR_IDENT,
   FACTOR_TITLE,
@@ -44,6 +43,7 @@ import { MultiEntityPicker } from "./MultiEntityPicker";
 import { newSelect } from "semantic/dist/api";
 import { EntitiesLoader } from "./EntitiesLoader";
 import { FormField } from "../form/FormField";
+import { TextAreaField } from "../form/TextAreaField";
 
 function unionPlainOptions(variants: ValueType[]): SelectOption<Value>[] {
   return variants.map((variant) => {
@@ -119,15 +119,24 @@ function makeStringValidator(
 }
 
 export function entityAttributeFormField(
+  registry: UiRegistry,
   form: FormState<ValueMap>,
   attr: Attribute,
   cardinality: Cardinality
 ): [JSX.Element, FormValidator<ValueMap>] {
-  const attributeName = attr["factor/title"] || attr["factor/ident"];
-  const ty = attr["factor/valueType"];
 
   const attrIdent = attr["factor/ident"];
+  const customRenderer = registry.attributeFieldRenderer(attrIdent);
+  if (customRenderer) {
+    return customRenderer({
+      field: form.field(attrIdent),
+      attribute: attr,
+      cardinality,
+    })
+  }
 
+  const attributeName = attr["factor/title"] || attr["factor/ident"];
+  const ty = attr["factor/valueType"];
   const isRequired = cardinality === "Required";
 
   if (ty === "Bool") {
@@ -162,7 +171,6 @@ export function entityAttributeFormField(
         inputType = "url";
         // TODO: validate correct URL
         val = makeStringValidator(attrIdent, isRequired, value => {
-          debugger;
           try {
             const u = new URL(value);
             if (!u.protocol || !u.host) {
@@ -448,6 +456,7 @@ export function GenericEntityForm(props: GenericEntityFormProps): JSX.Element {
     );
     for (const [attr, cardinality] of schemaAttrs) {
       const [elem, validator] = entityAttributeFormField(
+        props.registry,
         form,
         attr,
         cardinality
@@ -464,6 +473,7 @@ export function GenericEntityForm(props: GenericEntityFormProps): JSX.Element {
         const attrSchema = props.registry.attrs[attrIdent];
         if (attrSchema) {
           const [elem, validator] = entityAttributeFormField(
+            props.registry,
             form,
             attrSchema,
             "Optional"
@@ -556,6 +566,7 @@ export function GenericEntityForm(props: GenericEntityFormProps): JSX.Element {
                   )}
                   onSelect={(schema) => {
                     const [rendered, validator] = entityAttributeFormField(
+                      props.registry,
                       form,
                       schema,
                       "Optional"
@@ -614,4 +625,11 @@ export function GenericEntityForm(props: GenericEntityFormProps): JSX.Element {
       />
     </form>
   );
+}
+
+export function renderAttrFieldTextArea(props: AttributeFieldRendererProps): [JSX.Element, FormValidator<ValueMap>] {
+  const attributeName = props.attribute["factor/title"] || props.attribute["factor/ident"];
+  const elem =  <TextAreaField field={props.field} label={attributeName} />
+  // TODO: validator?
+  return [elem, (_values: any) => null]
 }

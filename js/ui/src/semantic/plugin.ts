@@ -7,12 +7,15 @@ import {
   EntityRenderer,
   EntityTitleRenderer,
   ClassMap,
+  AttributeFieldRenderer,
 } from "./registry";
 
 export type SemanticVersion = string;
 
 export interface PluginSchema {
   attributeRenderers?: Record<AttributeName, AttributeRenderer>;
+  attributeFieldRenderers?: Record<AttributeName, AttributeFieldRenderer>;
+
   entityTitleRenderers?: ClassMap<EntityTitleRenderer>;
   entityContentRenderers?: ClassMap<EntityContentRenderer>;
   entityMediaRenderers?: ClassMap<EntityMediaRenderer>;

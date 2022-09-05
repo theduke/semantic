@@ -15,6 +15,7 @@ export function FormSubmitButton(props: FormSubmitButtonProps): JSX.Element {
   return (
     <Button
       {...btnProps}
+      disabled={form.state.isValid}
       loading={form.state.isValidating || form.state.isSubmitting}
       type="submit"
     />

@@ -1,6 +1,6 @@
 import { JSX } from "solid-js/jsx-runtime";
 import { AttributeName, EntityType, genericEntityTitle } from ".";
-import { renderAttrValue, renderGenericEntityBox } from "../component/entity";
+import { renderGenericEntityBox } from "../component/entity";
 import {
   Attribute,
   Cardinality,
@@ -14,6 +14,7 @@ import {
   FACTOR_IDENT,
   FACTOR_TYPE,
 } from "semantic/dist/schema";
+import { FieldAccessor, FormValidator } from "../component/form";
 
 export type ValueMap = Record<string, any>;
 
@@ -74,6 +75,14 @@ export type EntityMediaRenderer = (
   props: MediaRenderProps
 ) => [MediaHandle | null, JSX.Element];
 
+export interface AttributeFieldRendererProps {
+  field: FieldAccessor<any>,
+  attribute: Attribute,
+  cardinality: Cardinality,
+}
+
+export type AttributeFieldRenderer = (props: AttributeFieldRendererProps) => [JSX.Element, FormValidator<ValueMap>];
+
 export type ClassMap<T> = Record<EntityType, T>;
 
 export class UiRegistry {
@@ -87,6 +96,8 @@ export class UiRegistry {
   plugins: Record<string, UiPlugin> = {};
 
   attributeRenderers: Record<AttributeName, AttributeRenderer> = {};
+  private attributeFieldrenderers: Record<AttributeName, AttributeFieldRenderer> = {};
+
   entityTitleRenderers: ClassMap<EntityTitleRenderer> = {};
   entityContentRenderers: ClassMap<EntityContentRenderer> = {};
   entityMediaRenderers: ClassMap<EntityMediaRenderer> = {};
@@ -96,14 +107,8 @@ export class UiRegistry {
   constructor(schema: SemanticSchema) {
     this.schema = schema;
 
-    // const tableRender = (item: ValueMap) => renderEntityTable(this, item);
-    const attrRenderer = (attr: AttributeName, value: any) =>
-      renderAttrValue(this, attr, value);
-
     for (const attr of schema.db.attributes) {
-      const ident = attr[FACTOR_IDENT];
-      this.attrs[ident] = attr;
-      this.attributeRenderers[ident] = attrRenderer;
+      this.attrs[attr[FACTOR_IDENT]] = attr;
     }
 
     for (const cls of schema.db.classes) {
@@ -142,6 +147,10 @@ export class UiRegistry {
     )) {
       this.attributeRenderers[attr] = render;
     }
+    for (const [attr, render] of Object.entries(schema.attributeFieldRenderers ?? {})) {
+      this.attributeFieldrenderers[attr] = render;
+    }
+
     for (const [ty, render] of Object.entries(
       schema.entityTitleRenderers ?? {}
     )) {
@@ -185,6 +194,10 @@ export class UiRegistry {
       throw new Error(`Attribute ${attr} not found`);
     }
     return attrSchema;
+  }
+
+  attributeFieldRenderer(ident: AttributeName): AttributeFieldRenderer | null {
+    return this.attributeFieldrenderers[ident] ?? null;
   }
 
   entityTitle(entity: ValueMap): string {

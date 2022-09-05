@@ -8,6 +8,9 @@ export interface InputFloatFieldProps
   placeholder?: string;
   icon?: IconName;
   mode?: "onchange" | "oninput";
+
+  min?: number;
+  max?: number;
 }
 
 export function InputFloatField(props: InputFloatFieldProps): JSX.Element {
@@ -20,6 +23,8 @@ export function InputFloatField(props: InputFloatFieldProps): JSX.Element {
           placeholder={props.placeholder}
           field={props.field}
           mode={props.mode}
+          min={props.min}
+          max={props.max}
         />,
         props.icon ? <Icon icon={props.icon} isLeft /> : undefined,
       ]}

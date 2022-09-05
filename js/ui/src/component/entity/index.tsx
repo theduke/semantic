@@ -23,7 +23,7 @@ import {
   SEMANTIC_TITLE,
   SEMANTIC_URL,
 } from "semantic/dist/schema";
-import { Class, Expr, Select } from "semantic/dist/core";
+import { Class, Expr, Select, ValueType } from "semantic/dist/core";
 import { EntityChildrenLoader } from "./EntityChildren";
 import { EntityEditor } from "./EntityEditor";
 import { EntityDeleterModal } from "./EntityDeleterModal";
@@ -76,7 +76,7 @@ export async function searchEntities(
   return api.select(select);
 }
 
-export function rendererValue(value: any): JSX.Element {
+export function renderValue(value: any): JSX.Element {
   const ty = typeof value;
   switch (ty) {
     case "string":
@@ -97,8 +97,8 @@ export function rendererValue(value: any): JSX.Element {
       if (value === null) {
         return null;
       } else if (Array.isArray(value)) {
-        const values = value.map((v) => <li>{rendererValue(v)}</li>);
-        return <ul>{values}</ul>;
+        const values = value.map((v) => <li>{renderValue(v)}</li>);
+        return <div class='content'><ul>{values}</ul></div>;
       } else {
         // FIXME: render generic objects!
         return JSON.stringify(value, null, 2);
@@ -106,66 +106,91 @@ export function rendererValue(value: any): JSX.Element {
   }
 }
 
-export function renderAttrValue(
-  reg: UiRegistry,
-  attr: AttributeName,
-  value: any
-): JSX.Element {
-  const attrty = reg.attrs[attr];
-  if (!attrty) {
-    return rendererValue(value);
+export function renderTypedValue(value: any, ty: ValueType): JSX.Element {
+  if (value === null || value === undefined) {
+    return null;
   }
-  const valty = attrty[FACTOR_VALUE_TYPE];
-  const ty = typeof value;
-  switch (valty) {
+
+  const valty = typeof value;
+
+  switch (ty) {
     case "Any":
-      return value;
-    case "Unit":
-      return null;
-    case "Bool":
-      return value ? "yes" : "no";
     case "Int":
-      return value;
     case "UInt":
-      return value;
     case "Float":
-      return value;
     case "String":
-      return value;
+    case "Unit":
+      break;
+
+    case "Bool":
+      if (valty === 'boolean') {
+        return value ? "yes" : "no";
+      }
     case "Bytes":
       if (Array.isArray(value)) {
         return `bytearray[len=${value.length}]`;
-      } else {
-        return value.toString();
       }
     case "DateTime":
-      return new Temporal.Instant(BigInt(value * 1_000_000)).toLocaleString();
-    case "Url":
-      return (
-        <a href={value} target="_blank">
-          {value}
-        </a>
-      );
-    case "Ref":
-      return <Link href={"/entity/" + value}>{value}</Link>;
-    default:
-      if (ty === "object") {
-        if ("Const" in value) {
-          return rendererValue(value["Const"]);
-        } else if ("Map" in value) {
-          // FIXME: render map!
-          return JSON.stringify(value, null, 2);
-        } else if ("Union" in value) {
-          // FIXME: render union!
-          return JSON.stringify(value, null, 2);
-        } else if ("Object" in value) {
-          // FIXME: render object!
-          return JSON.stringify(value, null, 2);
-        }
+      if (valty === 'number') {
+        return new Temporal.Instant(BigInt(value * 1_000_000)).toLocaleString();
       }
+    case "Url":
+      if (valty === 'string') {
+        return (
+          <a href={value} target="_blank">
+            {value}
+          </a>
+        );
+      }
+    case "Ref":
+      if (typeof value === 'string') {
+        return <Link href={"/entity/" + value}>{value}</Link>;
+      }
+    default:
+      break;
   }
 
-  return rendererValue(value);
+  if (typeof ty === 'object') {
+    if ('List' in ty && Array.isArray(value)) {
+      const itemTy = ty['List'];
+      console.log({ itemTy, value })
+      const items = value.map(v => <li>{renderTypedValue(v, itemTy)}</li>);
+      return (<div class="content"><ul style={{'margin-top': 0}}>
+        {items}
+      </ul></div>);
+    }
+  } else if (valty === "object") {
+    if ("Map" in value) {
+      // FIXME: render map!
+      return JSON.stringify(value, null, 2);
+    } else if ("Union" in value) {
+      // FIXME: render union!
+      return JSON.stringify(value, null, 2);
+    } else if ("Object" in value) {
+      // FIXME: render object!
+      return JSON.stringify(value, null, 2);
+    }
+  }
+
+  return renderValue(value);
+}
+
+export function renderAttrValue(
+  reg: UiRegistry,
+  attr: AttributeName,
+  value: any,
+  entity: ValueMap,
+): JSX.Element {
+  const attrty = reg.attrs[attr];
+  if (attrty) {
+    const customRenderer = reg.attributeRenderers[attr];
+    if (customRenderer) {
+      return customRenderer(value, entity);
+    }
+    return renderTypedValue(value, attrty[FACTOR_VALUE_TYPE]);
+  } else {
+    return renderValue(value);
+  }
 }
 
 export function renderEntityTable(
@@ -174,7 +199,7 @@ export function renderEntityTable(
 ): JSX.Element {
   const rows = Object.entries(item).map(([attr, value]) => {
     const name = reg.attrs[attr]?.["factor/title"] ?? attr;
-    const rendered = renderAttrValue(reg, attr, value);
+    const rendered = renderAttrValue(reg, attr, value, item);
     return (
       <tr>
         <td>

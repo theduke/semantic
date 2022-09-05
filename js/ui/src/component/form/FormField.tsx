@@ -1,4 +1,4 @@
-import { For, JSX, Show } from "solid-js";
+import { createEffect, For, JSX, Show } from "solid-js";
 import { FieldAccessor } from ".";
 
 export interface FormFieldProps<T> {
@@ -22,12 +22,17 @@ export function FormField<T>(props: FormFieldProps<T>): JSX.Element {
         {props.control}
       </div>
       {props.help ? <p class="help">{props.help}</p> : null}
-      {renderFieldErrors(props.field)}
+      <FieldErrors field={props.field} />
     </div>
   );
 }
 
-function renderFieldErrors(field: FieldAccessor<any>): JSX.Element {
+function FieldErrors(props: { field: FieldAccessor<any> }): JSX.Element {
+  const field = props.field;
+  createEffect(() => {
+    const errors = field.errors()?.errors;
+    console.debug({field, fieldErrrs: errors, form: (field as any).form})
+  })
   return (
     <>
       <Show when={field.errors()?.errors?.length ?? 0 > 0}>
