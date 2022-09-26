@@ -4,7 +4,7 @@ use factdb::{
 };
 use serde::{Deserialize, Serialize};
 
-use super::{AttrIdent, AttrImportedAt, AttrTitle, AttrUsername, Person};
+use super::{AttrDescription, AttrIdent, AttrImportedAt, AttrTitle, AttrUsername, Person};
 
 #[derive(Attribute)]
 #[factor(

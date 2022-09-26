@@ -324,13 +324,13 @@ impl File {
         let id = map.get_id()?;
         let filename = map.get_attr::<AttrFileName>();
 
-        let url = Self::build_blob_uri(id, filename.as_ref().map(|x| x.as_str()));
+        let url = Self::build_blob_uri(id, filename.as_deref());
 
         Some(url)
     }
 
     pub fn blob_uri(&self) -> String {
-        Self::build_blob_uri(self.id, self.filename.as_ref().map(|x| x.as_str()))
+        Self::build_blob_uri(self.id, self.filename.as_deref())
     }
 }
 
@@ -397,16 +397,13 @@ impl Video {
         let id = map.get_id()?;
         let filename = map.get_attr::<AttrFileName>();
 
-        let url = Self::build_video_uri(id, filename.as_ref().map(|x| x.as_str()));
+        let url = Self::build_video_uri(id, filename.as_deref());
 
         Some(url)
     }
 
     pub fn video_uri(&self) -> String {
-        Self::build_video_uri(
-            self.file.id,
-            self.file.filename.as_ref().map(|x| x.as_str()),
-        )
+        Self::build_video_uri(self.file.id, self.file.filename.as_deref())
     }
 }
 

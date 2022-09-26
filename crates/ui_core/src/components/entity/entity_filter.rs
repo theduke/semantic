@@ -4,7 +4,7 @@ use brass::{
     dom::{builder::div, TagBuilder},
     signal::signal::{Mutable, SignalExt},
 };
-use factdb::{AttrId, AttrType, AttributeMeta, ClassMeta, Expr, Id, Order, Select, Value};
+use factdb::{AttrId, AttrType, AttributeMeta, Expr, Id, Order, Select, Value};
 use semantic_core::base::{AttrCreatedAt, AttrLastVisitTime, AttrTitle, AttrUpdatedAt, Tag};
 
 use crate::{
