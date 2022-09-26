@@ -99,7 +99,7 @@
           targets = [ "crates/semantic" ];
 
           buildInputs = with pkgs; [
-            pkgconfig
+            pkg-config
           ];
 
           nativeBuildInputs = [
@@ -175,7 +175,7 @@
           name = "semantics";
           src = self;
           buildInputs = with pkgs; [
-            pkgconfig
+            pkg-config
             cargo-watch
             llvmPackages_latest.clang
             mold
