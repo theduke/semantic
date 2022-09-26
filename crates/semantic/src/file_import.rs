@@ -5,7 +5,7 @@ use factdb::{query::mutate::EntityPatch, AttrIdent, AttrMapExt, AttributeMeta, B
 use futures::future::BoxFuture;
 use semantic_core::{
     api::{self, FileImportMetadata, FileUploadMetadata},
-    base::{AttrParent, AttrSecondaryUrl, AttrTags, AttrTitle, AttrUrl},
+    base::{AttrParent, AttrParentSortOrder, AttrSecondaryUrl, AttrTags, AttrTitle, AttrUrl},
 };
 
 use crate::app::App;
@@ -84,6 +84,10 @@ pub(crate) fn file_upload_apply_meta(
         } else {
             patch = patch.add(AttrParent::QUALIFIED_NAME, parent);
         }
+
+        if let Some(sort) = meta.parent_sort {
+            patch = patch.replace(AttrParentSortOrder::QUALIFIED_NAME, sort);
+        }
     }
 
     if !patch.0.is_empty() {
@@ -113,6 +117,7 @@ async fn import_file(
         tag_ids,
         ident: None,
         parent: None,
+        parent_sort: None,
     };
     let file = app.upload_file(meta, content).await?;
 
@@ -179,6 +184,7 @@ pub async fn import_files(
         tag_ids,
         ident: None,
         parent: meta.parent,
+        parent_sort: None,
     };
 
     for path in paths {

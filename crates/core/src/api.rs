@@ -105,6 +105,8 @@ pub struct FileUploadMetadata {
     pub url: Option<url::Url>,
     pub ident: Option<String>,
     pub parent: Option<Id>,
+    /// Sort order for the parent. (attribute semantic/parent_sort_order)
+    pub parent_sort: Option<i64>,
     /// Id of the collection to which the uploaded files should be added.
     pub collection_id: Option<Id>,
     #[serde(default)]

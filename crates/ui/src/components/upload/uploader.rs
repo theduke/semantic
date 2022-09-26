@@ -140,6 +140,7 @@ impl State {
                 tag_ids: Vec::new(),
                 ident: None,
                 parent: None,
+                parent_sort: None,
             },
         );
         let id = next_file.id;

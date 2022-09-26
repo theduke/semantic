@@ -5,11 +5,11 @@ use std::{
 
 use anyhow::{bail, Context};
 use bytesize::ByteSize;
-use factdb::{AttrId, AttrIdent, AttrMapExt, AttributeMeta, ClassContainer, Id, Select};
+use factdb::{AttrId, AttrIdent, AttrMapExt, AttributeMeta, ClassContainer, DataMap, Id, Select};
 use futures::{StreamExt, TryStreamExt};
 use semantic_core::{
     api::{self, ApiClientExecutor, FileUploadMetadata},
-    base::{entity_title, expr_find_by_id_ident_or_title, AttrTagName, Tag, TypedFile},
+    base::{entity_title, expr_find_by_id_ident_or_title, AttrTagName, Tag},
 };
 
 #[derive(clap::Parser)]
@@ -34,6 +34,11 @@ pub struct CmdUpload {
     /// All uploaded files will be saved as children of the specified parent.
     #[clap(long)]
     parent: Option<String>,
+
+    /// When a parent entity is specified, upload all files with a
+    /// "semantic/parent_sort_order" attribute, ordered by filename.
+    #[clap(long)]
+    parent_sort: bool,
 
     /// If the speicified collection can not be found, create it.
     #[clap(long)]
@@ -189,6 +194,12 @@ impl CmdUpload {
             bail!("No files found.");
         }
 
+        if cmd.parent_sort {
+            files.sort_by(|a, b| {
+                human_sort::compare(&a.path.display().to_string(), &b.path.display().to_string())
+            });
+        }
+
         {
             let stdio = std::io::stderr();
             let mut lock = stdio.lock();
@@ -249,7 +260,7 @@ impl CmdUpload {
 
         let count = files.len();
 
-        let meta = FileUploadMetadata {
+        let shared_meta = FileUploadMetadata {
             filename: None,
             title,
             url,
@@ -257,8 +268,10 @@ impl CmdUpload {
             parent: parent_id,
             collection_id: collection.map(|c| c.id),
             tag_ids,
+            parent_sort: None,
         };
 
+        let parent_sorted = cmd.parent_sort;
         futures::stream::iter(files.as_slice())
             .enumerate()
             .map(Ok)
@@ -270,7 +283,16 @@ impl CmdUpload {
                     item.path.display()
                 );
 
-                let fut = upload_file(&client, &item, &meta);
+                let meta = if parent_sorted {
+                    FileUploadMetadata {
+                        parent_sort: Some((index * 10).try_into().unwrap()),
+                        ..shared_meta.clone()
+                    }
+                } else {
+                    shared_meta.clone()
+                };
+
+                let fut = upload_file(&client, &item, meta);
 
                 async {
                     let f = fut.await?;
@@ -308,8 +330,8 @@ impl CmdUpload {
 async fn upload_file(
     client: &Client,
     item: &FileItem,
-    meta: &FileUploadMetadata,
-) -> Result<TypedFile, anyhow::Error> {
+    meta: FileUploadMetadata,
+) -> Result<DataMap, anyhow::Error> {
     let filename = item.path.file_name().unwrap().to_string_lossy();
 
     let meta = api::FileUploadMetadata {

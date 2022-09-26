@@ -31,3 +31,4 @@ reqwest = { version = "0.11.11", default-features = false, features = ["rustls-t
 futures = "0.3.21"
 is-terminal = "0.3.0"
 indicatif = "0.17.0"
+human-sort = "0.2.2"
