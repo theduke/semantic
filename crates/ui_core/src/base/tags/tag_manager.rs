@@ -206,7 +206,8 @@ impl MsgComponent for State {
         let form = super::tag_create(on_created, self.validator.clone());
         let form_wrap = box_().and((subtitle_4().and("New Tag"), form));
 
-        let on_delete = Rc::new(ctx.on(Msg::TagDeleted));
+        let handle = ctx.handle();
+        let on_delete = Rc::new(move |id: Id| handle.send(Msg::TagDeleted(id)));
 
         div()
             .and(title_2().and("Tags"))
