@@ -1,9 +1,7 @@
 use bytes::Bytes;
+use factdb::DataMap;
 use futures::{future::BoxFuture, TryStream};
-use semantic_core::{
-    api::{self, ApiResponse, FileUploadMetadata},
-    base::TypedFile,
-};
+use semantic_core::api::{self, ApiResponse, FileUploadMetadata};
 
 #[derive(Clone, Debug)]
 pub struct ApiClient {
@@ -27,7 +25,7 @@ impl ApiClient {
         &self,
         meta: FileUploadMetadata,
         stream: S,
-    ) -> Result<TypedFile, anyhow::Error>
+    ) -> Result<DataMap, anyhow::Error>
     where
         S: TryStream + Send + Sync + 'static,
         S::Error: Into<Box<dyn std::error::Error + Send + Sync>>,
@@ -48,7 +46,7 @@ impl ApiClient {
             .send()
             .await?
             .error_for_status()?
-            .json::<ApiResponse<TypedFile>>()
+            .json::<ApiResponse<DataMap>>()
             .await?;
 
         match res {
@@ -61,7 +59,7 @@ impl ApiClient {
         &self,
         meta: FileUploadMetadata,
         file: std::fs::File,
-    ) -> Result<TypedFile, anyhow::Error> {
+    ) -> Result<DataMap, anyhow::Error> {
         let reader = tokio::io::BufReader::new(tokio::fs::File::from_std(file));
         let stream = tokio_util::io::ReaderStream::new(reader);
         self.upload_file(meta, stream).await
@@ -71,7 +69,7 @@ impl ApiClient {
         &self,
         meta: FileUploadMetadata,
         file: tokio::fs::File,
-    ) -> Result<TypedFile, anyhow::Error> {
+    ) -> Result<DataMap, anyhow::Error> {
         let stream = tokio_util::io::ReaderStream::new(file);
         self.upload_file(meta, stream).await
     }
