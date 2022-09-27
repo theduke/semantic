@@ -51,7 +51,7 @@ export type FormValidator<Values> = (
   values: Values
 ) => FormValidation<Values> | Promise<FormValidation<Values>> | null;
 
-export interface FormInit<Values> {
+export interface FormInit<Values extends Record<string, any>> {
   initialValues: Values;
   validate?: FormValidator<Values>;
   validateOnMount?: boolean;
@@ -400,6 +400,6 @@ export class MappedFieldAccessor<T, M> implements FieldAccessor<M> {
   }
 }
 
-export function createForm<Values>(init: FormInit<Values>): FormState<Values> {
+export function createForm<Values extends Record<string, any>>(init: FormInit<Values>): FormState<Values> {
   return new FormState(init);
 }

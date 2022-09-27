@@ -138,13 +138,14 @@ export function entityAttributeFormField(
   const attributeName = attr["factor/title"] || attr["factor/ident"];
   const ty = attr["factor/valueType"];
   const isRequired = cardinality === "Required";
+  const label = isRequired ? attributeName + ' *' : attributeName;
 
   if (ty === "Bool") {
     let field = form.field(attrIdent) as FieldAccessor<boolean>;
     return [
       // TODO: better checkboxLabel?
       <CheckboxField
-        label={attributeName}
+        label={label}
         checkboxLabel={"True/False"}
         field={field}
       />,
@@ -231,7 +232,7 @@ export function entityAttributeFormField(
     }
 
     const elem = (
-      <InputField type={inputType} label={attributeName} field={field} />
+      <InputField type={inputType} label={label} field={field} />
     );
 
     return [elem, val];
@@ -259,7 +260,7 @@ export function entityAttributeFormField(
       return null;
     };
 
-    const elem = <DateTimeInputField label={attributeName} field={field} />;
+    const elem = <DateTimeInputField label={label} field={field} />;
 
     return [elem, validator];
   } else if (ty === "Ref") {
@@ -283,7 +284,7 @@ export function entityAttributeFormField(
       />
     );
     const elem = (
-      <FieldHorizontal label={attributeName}>
+      <FieldHorizontal label={label}>
         <Show when={field.get()?.value} fallback={picker}>
           {(id) => {
             return (
@@ -336,7 +337,7 @@ export function entityAttributeFormField(
               />
             );
             const elem = (
-              <FormField field={field} label={attributeName} control={picker} />
+              <FormField field={field} label={label} control={picker} />
             );
 
             return elem;
@@ -362,7 +363,7 @@ export function entityAttributeFormField(
 
       return [
         <SelectField<Value | undefined>
-          label={attributeName}
+          label={label}
           field={field}
           options={options}
         />,
@@ -628,6 +629,7 @@ export function GenericEntityForm(props: GenericEntityFormProps): JSX.Element {
 }
 
 export function renderAttrFieldTextArea(props: AttributeFieldRendererProps): [JSX.Element, FormValidator<ValueMap>] {
+  // FIXME: validator!
   const attributeName = props.attribute["factor/title"] || props.attribute["factor/ident"];
   const elem =  <TextAreaField field={props.field} label={attributeName} />
   // TODO: validator?
