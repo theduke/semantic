@@ -9,7 +9,7 @@ use semantic_core::{
     base::SemanticBasePlugin,
     plugin::PluginDescriptor,
 };
-use std::{io::Write, path::PathBuf, sync::Arc};
+use std::{io::Write, net::SocketAddr, path::PathBuf, sync::Arc};
 
 use semantic::{
     app::{self, AppConfig},
@@ -209,10 +209,7 @@ struct CommandServer {
     /// The server interface to listen on.
     /// eg: `0.0.0.0:3000`
     #[clap(long, env = "SEMANTIC_ADDRESS")]
-    address: Option<String>,
-
-    #[clap(long)]
-    v2: bool,
+    address: Option<SocketAddr>,
 }
 
 impl CommandServer {
@@ -222,8 +219,9 @@ impl CommandServer {
             // Enable authentication when no backend is provided.
             require_auth: app_config.backend.is_none(),
             app: app_config,
-            address: self.address.unwrap_or(format!("127.0.0.1:3000")),
-            ui_v2: self.v2,
+            address: self
+                .address
+                .unwrap_or_else(|| "127.0.0.1:3000".parse().unwrap()),
         };
 
         let rt = tokio::runtime::Runtime::new().expect("Could not start runtime");

@@ -21,16 +21,15 @@ pub struct ServerConfig {
     /// - 127.0.0.1:3000
     /// - 0.0.0.0:8080
     /// - ::1:3000
-    pub address: String,
+    pub address: SocketAddr,
 
     /// If true, all interaction via the server requires a login or an access
     /// token.
     pub require_auth: bool,
-
-    pub ui_v2: bool,
 }
 
 struct ServerState {
+    ui_version: UiVersion,
     config: ServerConfig,
     app: App,
 }
@@ -55,17 +54,43 @@ pub async fn run_server(
     config: ServerConfig,
     runtime: tokio::runtime::Handle,
 ) -> Result<(), anyhow::Error> {
+    let app = App::build(config.app.clone(), runtime.clone()).await?;
+
+    let v1 = start_server(config.clone(), app.clone(), UiVersion::V1);
+    let v2 = {
+        let mut config2 = config.clone();
+        config2.address = SocketAddr::new(config2.address.ip(), config2.address.port() + 1);
+
+        start_server(config2, app.clone(), UiVersion::V2)
+    };
+
+    let (r1, r2) = futures::future::join(v1, v2).await;
+    r1?;
+    r2?;
+    Ok(())
+}
+
+#[derive(Clone, Copy, Debug)]
+enum UiVersion {
+    V1,
+    V2,
+}
+
+async fn start_server(
+    config: ServerConfig,
+    app: App,
+    ui_version: UiVersion,
+) -> Result<(), anyhow::Error> {
     use axum::routing::{get, post};
 
     // Run the server like above...
-    let addr: SocketAddr = config.address.parse().context(format!(
-        "Invalid server interface specification '{}'",
-        config.address
-    ))?;
+    let addr = config.address;
 
-    let app = App::build(config.app.clone(), runtime).await?;
-
-    let state = Arc::new(ServerState { config, app });
+    let state = Arc::new(ServerState {
+        ui_version,
+        config,
+        app,
+    });
 
     let router = axum::Router::new()
         .route(
@@ -83,7 +108,7 @@ pub async fn run_server(
         .layer(Extension(state))
         .layer(tower_http::trace::TraceLayer::new_for_http());
 
-    tracing::info!(interface=%addr, "starting web server");
+    tracing::info!(?ui_version, interface=%addr, "starting web server");
 
     let server = axum::Server::bind(&addr).serve(router.into_make_service());
 
@@ -96,10 +121,9 @@ pub async fn run_server(
 async fn handler_assets(Extension(state): ServerContext, req: Request<Body>) -> Response<Body> {
     let path = req.uri().path().trim_start_matches('/');
 
-    let file_opt = if state.config.ui_v2 {
-        AssetsV2::get(&format!("assets/{path}"))
-    } else {
-        Asset::get(path)
+    let file_opt = match state.ui_version {
+        UiVersion::V1 => Asset::get(path),
+        UiVersion::V2 => AssetsV2::get(&format!("assets/{path}")),
     };
 
     match file_opt {
@@ -117,10 +141,9 @@ async fn handler_assets(Extension(state): ServerContext, req: Request<Body>) -> 
 }
 
 async fn handler_index(Extension(state): ServerContext) -> Response<Body> {
-    let file = if state.config.ui_v2 {
-        AssetsV2::get("index.html").unwrap()
-    } else {
-        Asset::get("index.html").unwrap()
+    let file = match state.ui_version {
+        UiVersion::V1 => Asset::get("index.html").unwrap(),
+        UiVersion::V2 => AssetsV2::get("index.html").unwrap(),
     };
     let body = hyper::Body::from(file.data.as_ref().to_vec());
 
