@@ -1259,6 +1259,16 @@ impl Plugin for SemanticBasePlugin {
                 },
             ));
 
+        let add_description_to_socialmediaaccount =
+            Migration::with_name("add_description_to_socialmediaaccount").action(
+                SchemaAction::EntityAttributeAdd(migrate::EntityAttributeAdd {
+                    entity: SocialMediaAccount::IDENT.to_string(),
+                    attribute: AttrDescription::IDENT.to_string(),
+                    cardinality: Cardinality::Optional,
+                    default_value: None,
+                }),
+            );
+
         vec![
             rollup,
             create_like_count,
@@ -1272,6 +1282,7 @@ impl Plugin for SemanticBasePlugin {
             create_attr_text_content,
             create_code_snippet,
             create_visual_hash,
+            add_description_to_socialmediaaccount,
         ]
     }
 }

@@ -93,6 +93,10 @@ pub struct SocialMediaAccount {
     #[serde(rename = "semantic/social_media_platform_name")]
     pub platform_name: Option<String>,
 
+    #[factor(attr = AttrDescription)]
+    #[serde(rename = "semantic/description")]
+    pub description: Option<String>,
+
     #[factor(attr = AttrSocialMediaPlatformId)]
     #[serde(rename = "semantic/social_media_platform_id")]
     pub platform_id: Option<Id>,
