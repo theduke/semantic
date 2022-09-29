@@ -14,9 +14,9 @@ pub struct LogCompactCmd {
     backend: BackendOptions,
     /// The new password to use.
     /// If not set, the old one will be reused.
-    #[clap(long)]
+    #[arg(long)]
     new_password: Option<String>,
-    #[clap(long)]
+    #[arg(long)]
     force: bool,
     /// The path for the new, compacted database.
     new_path: String,

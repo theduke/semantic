@@ -15,11 +15,11 @@ pub struct ArchiveExportCmd {
     ///
     /// Useful for doing custom compression or for piping the output directly
     /// to another import command.
-    #[clap(long)]
+    #[arg(long)]
     no_gzip: bool,
 
     /// Do not include any blobs (files) in the archive, only semantic entities.
-    #[clap(long)]
+    #[arg(long)]
     skip_blobs: bool,
 
     /// Path where the export should be written.

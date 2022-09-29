@@ -7,10 +7,10 @@ pub struct LogHistoryCompactCmd {
     #[clap(flatten)]
     options: AppOptions,
 
-    #[clap(long)]
+    #[arg(long)]
     select_window_size: Option<u64>,
 
-    #[clap(long)]
+    #[arg(long)]
     batch_size: Option<u64>,
 }
 

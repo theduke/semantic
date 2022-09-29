@@ -10,7 +10,7 @@ pub struct ArchiveImportCmd {
     #[clap(flatten)]
     backend: BackendOptions,
 
-    #[clap(long)]
+    #[arg(long)]
     no_gzip: bool,
 
     /// Path of the export archive.

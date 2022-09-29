@@ -5,7 +5,7 @@ pub struct DeleteCmd {
     client: crate::ClientOptions,
 
     /// Run in non-interactive mode without any prompts.
-    #[clap(short = 'y', long)]
+    #[arg(short = 'y', long)]
     auto_confirm: bool,
 
     ids: Vec<factdb::Id>,

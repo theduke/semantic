@@ -4,13 +4,13 @@ pub struct SqlCmd {
     #[clap(flatten)]
     client: crate::ClientOptions,
 
-    #[clap(arg_enum, short, long)]
+    #[arg(value_enum, short, long)]
     format: Format,
 
     sql: String,
 }
 
-#[derive(Clone, Debug, clap::ArgEnum)]
+#[derive(Clone, Debug, clap::ValueEnum)]
 enum Format {
     Json,
     JsonPretty,

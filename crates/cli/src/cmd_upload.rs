@@ -15,50 +15,50 @@ use semantic_core::{
 #[derive(clap::Parser)]
 pub struct CmdUpload {
     /// Run in non-interactive mode without any prompts.
-    #[clap(short = 'y', long)]
+    #[arg(short = 'y', long)]
     auto_confirm: bool,
 
     /// The URL of the semantic server.
-    #[clap(long)]
+    #[arg(long)]
     address: Option<String>,
 
-    #[clap(long)]
+    #[arg(long)]
     url: Option<url::Url>,
 
     /// Existing collection to upload files to.
     /// Can be the gallery title, ident or id.
-    #[clap(long, short = 'c')]
+    #[arg(long, short = 'c')]
     collection: Option<String>,
 
     /// The name, ident or ID of the parent entity.
     /// All uploaded files will be saved as children of the specified parent.
-    #[clap(long)]
+    #[arg(long)]
     parent: Option<String>,
 
     /// When a parent entity is specified, upload all files with a
     /// "semantic/parent_sort_order" attribute, ordered by filename.
-    #[clap(long)]
+    #[arg(long)]
     parent_sort: bool,
 
     /// If the speicified collection can not be found, create it.
-    #[clap(long)]
+    #[arg(long)]
     collection_create: bool,
 
     /// The title to give the uploaded file.
     ///
     /// NOTE: only works if a SINGLE file is uploaded.
     /// Will produce an error if multiple files are selected.
-    #[clap(long)]
+    #[arg(long)]
     title: Option<String>,
 
     /// Tag(s) to add to the uploaded file(s).
     ///
     /// Each specified tag can be either the tag name, ident or ID.
-    #[clap(short = 't', long)]
+    #[arg(short = 't', long)]
     tag: Vec<String>,
 
     /// How many uploads should run in parallel.
-    #[clap(long)]
+    #[arg(long)]
     concurrency: Option<usize>,
 
     /// The file system paths.

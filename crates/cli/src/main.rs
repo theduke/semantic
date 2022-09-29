@@ -19,7 +19,7 @@ use semantic::{
 /// Semantic CLI
 #[derive(clap::Parser)]
 struct CliArgs {
-    #[clap(subcommand)]
+    #[command(subcommand)]
     command: CliCommand,
 }
 
@@ -27,13 +27,13 @@ struct CliArgs {
 enum CliCommand {
     Server(CommandServer),
     /// Database related commands.
-    #[clap(subcommand)]
+    #[command(subcommand)]
     Db(db::DbCmd),
-    #[clap(subcommand)]
+    #[command(subcommand)]
     Client(client::ClientCommand),
     ImportFiles(CommandImportFiles),
     GenerateTypescript(GenerateTypescript),
-    #[clap(subcommand)]
+    #[command(subcommand)]
     Archive(archive::ArchiveCmd),
     Upload(cmd_upload::CmdUpload),
 }
@@ -57,33 +57,33 @@ impl GenerateTypescript {
 #[derive(clap::Parser, Clone)]
 struct BackendOptions {
     /// Path for the database.
-    #[clap(short = 'p', long, env = "SEMANTIC_DATA_PATH")]
+    #[arg(short = 'p', long, env = "SEMANTIC_DATA_PATH")]
     data_path: Option<String>,
-    #[clap(long, env = "SEMANTIC_READONLY")]
+    #[arg(long, env = "SEMANTIC_READONLY")]
     readonly: bool,
     /// Fore creation of a new database.
     /// Will fail if the database already exists.
-    #[clap(long)]
+    #[arg(long)]
     create: bool,
     /// The password.
     // TODO: use anonymizing wrapper?
-    #[clap(long, short, env = "SEMANTIC_KEY")]
+    #[arg(long, short, env = "SEMANTIC_KEY")]
     key: Option<String>,
     /// Number of key iterations used for encryption key derivation.
     /// This can normally remain unchanged.
-    #[clap(long, env = "SEMANTIC_KEY_ITERATIONS")]
+    #[arg(long, env = "SEMANTIC_KEY_ITERATIONS")]
     key_iterations: Option<u32>,
     /// Use a custom encryption salt.
     // TODO: use anonymizing wrapper?
-    #[clap(long, env = "SEMANTIC_SALT")]
+    #[arg(long, env = "SEMANTIC_SALT")]
     salt: Option<String>,
     /// Binary offset in the storage file.
     /// Either a number of bytes, or a parsable pretty byte number like "300mb".
-    #[clap(long)]
+    #[arg(long)]
     offset: Option<String>,
 
     /// The number of key changes after which a full key index is written.
-    #[clap(long)]
+    #[arg(long)]
     full_index_write_interval: Option<u64>,
 }
 
@@ -124,7 +124,7 @@ struct ClientOptions {
     /// Server address.
     ///
     /// Defaults to "http://localhost:3000".
-    #[clap(short = 'a', long)]
+    #[arg(short = 'a', long)]
     address: Option<url::Url>,
 }
 
@@ -145,20 +145,20 @@ struct AppOptions {
 
     /// Start without a backend.
     /// A backend will have to be initialized via the UI.
-    #[clap(short)]
+    #[arg(short)]
     no_backend: bool,
 
     /// Directory used for storing temporary data.
     ///
     /// If not specified then only memory will be used.
-    #[clap(long, env = "SEMANTIC_TMP_DIR")]
+    #[arg(long, env = "SEMANTIC_TMP_DIR")]
     tmp_dir: Option<PathBuf>,
 
     /// Key for API token generation.
     /// This should remain the same across server restarts.
     /// Otherwise existing tokens will be invalidated.
     // TODO: this should only be on server config...
-    #[clap(long)]
+    #[arg(long)]
     token_key: Option<String>,
 }
 
@@ -197,18 +197,19 @@ pub struct DenoOptions {}
 struct CommandImportFiles {
     #[clap(flatten)]
     backend: BackendOptions,
+
     paths: Vec<std::path::PathBuf>,
 }
 
 /// Run the semantic server.
 #[derive(clap::Parser)]
 struct CommandServer {
-    #[clap(flatten)]
+    #[command(flatten)]
     app: AppOptions,
 
     /// The server interface to listen on.
     /// eg: `0.0.0.0:3000`
-    #[clap(long, env = "SEMANTIC_ADDRESS")]
+    #[arg(long, env = "SEMANTIC_ADDRESS")]
     address: Option<SocketAddr>,
 }
 
