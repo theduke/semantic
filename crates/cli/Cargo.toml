@@ -18,17 +18,17 @@ factdb = "0.1"
 factor_tools = "0.1"
 factor_engine = "0.1"
 
-anyhow = "1.0.62"
+anyhow = "1.0.65"
 bytesize = "1.1.0"
-tokio = { version = "1.19.2", features = ["full"] }
-sha2 = "0.10.2"
-serde_json = "1.0.81"
-clap = { version = "3.2.6", features = ["derive", "env"] }
-tracing-subscriber = { version = "0.3.11", features = ["fmt", "env-filter"] }
-tracing = "0.1.35"
-url = "2.2.2"
-reqwest = { version = "0.11.11", default-features = false, features = ["rustls-tls", "json"] }
-futures = "0.3.21"
+tokio = { version = "1.21.2", features = ["full"] }
+sha2 = "0.10.6"
+serde_json = "1.0.85"
+clap = { version = "3.2.22", features = ["derive", "env"] }
+tracing-subscriber = { version = "0.3.15", features = ["fmt", "env-filter"] }
+tracing = "0.1.36"
+url = "2.3.1"
+reqwest = { version = "0.11.12", default-features = false, features = ["rustls-tls", "json"] }
+futures = "0.3.24"
 is-terminal = "0.3.0"
-indicatif = "0.17.0"
+indicatif = "0.17.1"
 human-sort = "0.2.2"

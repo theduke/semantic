@@ -14,10 +14,10 @@ ui = ["semantic_ui_core", "brass"]
 [dependencies]
 semantic_core = { version = "0.1", path = "../../core" }
 factdb = { version = "0.1", default-features = false }
-serde = { version = "1.0.130", features = ["derive"] }
-chrono = "0.4.19"
-tracing = "0.1.29"
+serde = { version = "1.0.145", features = ["derive"] }
+chrono = "0.4.22"
+tracing = "0.1.36"
 
-anyhow = "1.0.62"
+anyhow = "1.0.65"
 brass = { version =  "0.1", optional = true }
 semantic_ui_core = { version = "0.1", optional = true, path = "../../ui_core" }

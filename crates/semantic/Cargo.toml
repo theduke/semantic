@@ -15,58 +15,55 @@ default = ["archive"]
 
 [dependencies]
 base64 = "0.13.0"
-serde_json = "1.0.64"
+serde_json = "1.0.85"
 
-anyhow = { version = "1.0.62" }
-tracing = "0.1.26"
-tracing-subscriber = { version = "0.3.3", features = ["fmt", "env-filter"] }
+anyhow = { version = "1.0.65" }
+tracing = "0.1.36"
 
-mime_guess = "2.0.3"
+mime_guess = "2.0.4"
 infer = "0.9.0"
 
 # async
-futures = "0.3.15"
-tokio = { version = "1.17.0", features = ["full"] }
-tokio-util = { version = "0.7.0", features = ["io", "codec"] }
+futures = "0.3.24"
+tokio = { version = "1.21.2", features = ["full"] }
+tokio-util = { version = "0.7.4", features = ["io", "codec"] }
 
 # http
-reqwest = { version =  "0.11.3", default-features = false, features = ["gzip", "json", "rustls-tls", "stream"] }
-hyper = { version =  "0.14.9", features = ["server", "http1"] }
+reqwest = { version =  "0.11.12", default-features = false, features = ["gzip", "json", "rustls-tls", "stream"] }
+hyper = { version =  "0.14.20", features = ["server", "http1"] }
 
 factdb = "0.1"
 factor_engine = "0.1"
 factor_tools = "0.1"
 
-jsonwebtoken = { version = "8.1.0" }
-serde = { version = "1.0.127", features = ["derive"] }
-axum = "0.5.12"
+jsonwebtoken = { version = "8.1.1" }
+serde = { version = "1.0.145", features = ["derive"] }
+axum = "0.5.16"
 
-tower-http = { version = "0.3.0", features = ["trace", "fs", "compression-gzip"] }
+tower-http = { version = "0.3.4", features = ["trace", "fs", "compression-gzip"] }
 dirs = "4.0.0"
-tower = "0.4.8"
+tower = "0.4.13"
 
 logfs = { path = "../logfs" }
-sha2 = "0.10.0"
+sha2 = "0.10.6"
 uuid = { version = "1.1.2", features = ["v4"] }
-url = "2.2.2"
-serde_path_to_error = "0.1.7"
+url = "2.3.1"
+serde_path_to_error = "0.1.8"
 
 oxipng = { version = "6.0.1", optional = true, default-features = false, features = ["parallel", "zopfli"] }
-mozjpeg = { version = "0.9.1", optional = true }
+mozjpeg = { version = "0.9.4", optional = true }
 
 semantic_core = { path = "../core" }
 semantic_extra = { version = "0.1", path = "../plugins/extra", default-features = false }
-headers = "0.3.5"
+headers = "0.3.8"
 
-tar = { version =  "0.4.37", optional = true }
-flate2 = { version = "1.0.22", optional = true }
-rust-embed = { version = "6.3.0", features = ["interpolate-folder-path"] }
-ffprobe = "0.3.2"
-bytesize = "1.1.0"
-clap = { version = "3.1.15", features = ["derive", "env"] }
-bytes = "1.1.0"
+tar = { version =  "0.4.38", optional = true }
+flate2 = { version = "1.0.24", optional = true }
+rust-embed = { version = "6.4.1", features = ["interpolate-folder-path"] }
+ffprobe = "0.3.3"
+bytes = "1.2.1"
 tracing-futures = "0.2.5"
 pin-project-lite = "0.2.9"
-image = "0.24.3"
+image = "0.24.4"
 img_hash = { git = "https://github.com/theduke/img_hash.git", version = "3.2.0", branch = "upgrade-image-0.24" }
 

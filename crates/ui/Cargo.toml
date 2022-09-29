@@ -9,19 +9,19 @@ edition = "2021"
 crate-type = ["rlib", "cdylib"]
 
 [dependencies]
-console_error_panic_hook = "0.1.6"
-tracing = "0.1.29"
-tracing-wasm = "0.2.0"
-wasm-bindgen = "0.2.78"
-wasm-bindgen-futures = "0.4.28"
-js-sys = "0.3.55"
-serde_json = "1.0.64"
-getrandom = { version = "0.2.3", features = ["js"] }
-url = "2.2.2"
-anyhow = { version = "1.0.62" }
+console_error_panic_hook = "0.1.7"
+tracing = "0.1.36"
+tracing-wasm = "0.2.1"
+wasm-bindgen = "0.2.83"
+wasm-bindgen-futures = "0.4.33"
+js-sys = "0.3.60"
+serde_json = "1.0.85"
+getrandom = { version = "0.2.7", features = ["js"] }
+url = "2.3.1"
+anyhow = { version = "1.0.65" }
 uuid = { version = "1.1.2", features = ["js", "v4"] }
-rand = "0.8.4"
-futures = "0.3.17"
+rand = "0.8.5"
+futures = "0.3.24"
 
 brass = { version =  "0.1", features = ["macros"] }
 # brass_bulma = "0.1"
@@ -32,12 +32,12 @@ semantic_core = { path = "../core" }
 semantic_ui_core = { path = "../ui_core" }
 
 semantic_extra = { path = "../plugins/extra" }
-chrono = { version = "0.4.19", features = ["wasmbind"] }
+chrono = { version = "0.4.22", features = ["wasmbind"] }
 bytesize = "1.1.0"
 # semantic_contrib = { path = "../contrib" }
 
 [dependencies.web-sys] 
-version = "0.3.55"
+version = "0.3.60"
 features = [
   "Event",
   "InputEvent",
