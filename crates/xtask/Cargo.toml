@@ -6,6 +6,8 @@ edition = "2021"
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [dependencies]
+anyhow = "1.0.65"
+clap = { version = "4.0.2", features = ["derive", "help"] }
 devx-pre-commit = "0.5.0"
 
 # witx-bindgen-gen-spidermonkey = { git = "https://github.com/bytecodealliance/witx-bindgen.git" }

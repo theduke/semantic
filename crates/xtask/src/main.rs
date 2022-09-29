@@ -1,71 +1,58 @@
 use std::{path::PathBuf, process::Command};
 
-const USAGE: &'static str = r#"
-Semantic development CLI
+use clap::Parser;
 
-Commands:
-* git-pre-commit
-* install-git-hooks
-* build-ui
-* build-ui
-* watch-server
-* watch-server
-* watch-ui
-* watch-ui
-* build-cli
-* build-server
-* build-appimage
-* build-portable
-* build
-* install
-* build-wasm-js
-* build-typescript
-* help
-"#;
+#[derive(clap::Parser)]
+struct Args {
+    #[command(subcommand)]
+    cmd: Subcommand,
+}
 
-type DynError = Box<dyn std::error::Error>;
+#[derive(clap::Subcommand)]
+enum Subcommand {
+    GitPreCommit,
+    GitInstallHooks,
+    BuildUi {
+        #[arg(long)]
+        release: bool,
+    },
+    WatchServer {
+        #[arg(long)]
+        no_backend: bool,
+    },
+    WatchUi {
+        #[clap(long)]
+        release: bool,
+    },
+    BuildCli {
+        #[arg(long)]
+        release: bool,
+    },
+    BuildAppimage,
+    BuildPortable,
+    Build,
+    Install,
+    BuildTypescript,
+}
 
-fn main() -> Result<(), DynError> {
-    // This is just a simple development CLI, so just do some manual argument
-    // parsing instead of pulling in a dependency like clap/structopt.
-    let args: Vec<_> = std::env::args().skip(1).collect();
-    let args_str: Vec<_> = args.iter().map(|x| x.as_str()).collect();
-
-    match args_str.as_slice() {
-        ["git-pre-commit"] => cmd_git_pre_commit(),
-        ["install-git-hooks"] => cmd_install_git_hooks(),
-        ["build-ui"] => task_build_ui(true),
-        ["build-ui", "--dev"] => task_build_ui(false),
-        ["watch-server"] => cmd_watch_server(true),
-        ["watch-server", "--no-backend"] => cmd_watch_server(false),
-        ["watch-ui"] => trunk_watch_ui(false),
-        ["watch-ui", "--release"] => trunk_watch_ui(true),
-        ["build-cli"] => cmd_build_cli(true),
-        ["build-cli", "--dev"] => cmd_build_cli(false),
-        ["build-appimage"] => cmd_build_appimage(),
-        ["build-portable"] => cmd_build_portable(),
-        ["build"] => cmd_build(),
-        ["install"] => cmd_install(),
-        ["build-wasm-js"] => gen_javascript(),
-        ["build-typescript"] => gen_typescript(),
-        ["help"] => {
-            eprintln!("{}", USAGE);
-            Ok(())
-        }
-        [first, ..] => {
-            eprintln!("Error: Unknown command: {}", first);
-            eprintln!("{}", USAGE);
-            std::process::exit(1);
-        }
-        [] => {
-            eprintln!("Error: No command specified");
-            eprintln!("{}", USAGE);
-            std::process::exit(1);
-        }
+fn main() -> Result<(), anyhow::Error> {
+    let args = Args::parse();
+    match args.cmd {
+        Subcommand::GitPreCommit => cmd_git_pre_commit(),
+        Subcommand::GitInstallHooks => cmd_install_git_hooks(),
+        Subcommand::BuildUi { release } => task_build_ui(release),
+        Subcommand::WatchServer { no_backend } => cmd_watch_server(!no_backend),
+        Subcommand::WatchUi { release } => cmd_watch_ui(release),
+        Subcommand::BuildCli { release } => cmd_build_cli(release),
+        Subcommand::BuildAppimage => cmd_build_appimage(),
+        Subcommand::BuildPortable => cmd_build_portable(),
+        Subcommand::Build => cmd_build(),
+        Subcommand::Install => cmd_install(),
+        Subcommand::BuildTypescript => cmd_build_typescript(),
     }
 }
 
-fn cmd_git_pre_commit() -> Result<(), DynError> {
+fn cmd_git_pre_commit() -> Result<(), anyhow::Error> {
     let mut ctx =
         devx_pre_commit::PreCommitContext::from_git_diff(devx_pre_commit::locate_project_root()?)?;
 
@@ -81,7 +68,7 @@ fn cmd_git_pre_commit() -> Result<(), DynError> {
     Ok(())
 }
 
-fn cmd_watch_server(default_backend: bool) -> Result<(), DynError> {
+fn cmd_watch_server(default_backend: bool) -> Result<(), anyhow::Error> {
     // std::thread::spawn(|| {
     //     if let Err(err) = trunk_watch_ui() {
     //         eprintln!("UI WATCHER FAILED: {:?}", err);
@@ -95,13 +82,13 @@ fn cmd_watch_server(default_backend: bool) -> Result<(), DynError> {
 
     let mut cmd = Command::new("cargo");
     cmd.current_dir(root_path()?)
-        .args(&["run", "--bin", "semantic", "--", "server"])
+        .args(["run", "--bin", "semantic", "--", "server"])
         // .arg("--deno-plugin-dir")
         // .arg(root_path()?.join("lib").join("contrib"))
         ;
 
     if default_backend {
-        cmd.args(&[
+        cmd.args([
             "--data-path",
             &db_path,
             "--key",
@@ -116,31 +103,29 @@ fn cmd_watch_server(default_backend: bool) -> Result<(), DynError> {
     cmd.arg("--tmp-dir");
     cmd.arg(data_dir.join("tmp"));
 
-    cmd.arg("--v2");
-
     if std::env::var("RUST_LOG").is_err() {
         cmd.env(
             "RUST_LOG",
             "semantic=trace,semantic_core=trace,factordb=info",
         );
     }
-    (&mut cmd).run()?;
+    cmd.run()?;
 
     Ok(())
 }
 
-fn cmd_install_git_hooks() -> Result<(), DynError> {
+fn cmd_install_git_hooks() -> Result<(), anyhow::Error> {
     eprintln!("Installing git hooks...");
     devx_pre_commit::install_self_as_hook(&devx_pre_commit::locate_project_root()?)?;
     eprintln!("Git hooks installed!");
     Ok(())
 }
 
-fn cmd_build_cli(release: bool) -> Result<(), DynError> {
+fn cmd_build_cli(release: bool) -> Result<(), anyhow::Error> {
     eprintln!("Building CLI binary...");
     let mut cmd = Command::new("cargo");
     cmd.current_dir(root_path()?.join("crates/cli"));
-    cmd.args(&["build"]);
+    cmd.args(["build"]);
     if release {
         cmd.arg("--release");
     }
@@ -151,12 +136,12 @@ fn cmd_build_cli(release: bool) -> Result<(), DynError> {
     Ok(())
 }
 
-fn build_logfs(release: bool) -> Result<(), DynError> {
+fn build_logfs(release: bool) -> Result<(), anyhow::Error> {
     eprintln!("Building logfs binary...");
     let mut cmd = Command::new("cargo");
     cmd.current_dir(root_path()?.join("crates/logfs"));
     let mut cmd = Command::new("cargo");
-    cmd.args(&["build"]);
+    cmd.args(["build"]);
     if release {
         cmd.arg("--release");
     }
@@ -166,7 +151,7 @@ fn build_logfs(release: bool) -> Result<(), DynError> {
     Ok(())
 }
 
-fn cmd_build() -> Result<(), DynError> {
+fn cmd_build() -> Result<(), anyhow::Error> {
     eprintln!("Building ui...");
     task_build_ui(true)?;
     cmd_build_cli(true)?;
@@ -174,7 +159,7 @@ fn cmd_build() -> Result<(), DynError> {
     Ok(())
 }
 
-fn cmd_build_appimage() -> Result<(), DynError> {
+fn cmd_build_appimage() -> Result<(), anyhow::Error> {
     cmd_build()?;
 
     let build_dir = root_path()?.join("target").join("appimage");
@@ -204,9 +189,9 @@ fn cmd_build_appimage() -> Result<(), DynError> {
     Ok(())
 }
 
-fn cmd_build_portable() -> Result<(), DynError> {
+fn cmd_build_portable() -> Result<(), anyhow::Error> {
     Command::new("docker")
-        .args(&[
+        .args([
             "run",
             "--rm",
             "-v",
@@ -220,19 +205,19 @@ fn cmd_build_portable() -> Result<(), DynError> {
     Ok(())
 }
 
-fn cmd_install() -> Result<(), DynError> {
+fn cmd_install() -> Result<(), anyhow::Error> {
     eprintln!("Installing...");
     task_build_ui(true)?;
     Command::new("cargo")
         .env("SEMANTIC_UI_DIR", ui_dist_path()?)
-        .args(&["install", "--path", "crates/cli"])
+        .args(["install", "--path", "crates/cli"])
         .current_dir(root_path()?)
         .run()?;
     eprintln!("Installed!");
     Ok(())
 }
 
-fn build_styles() -> Result<(), DynError> {
+fn build_styles() -> Result<(), anyhow::Error> {
     eprintln!("Building styles...");
     Command::new("sassc")
         .arg(ui_path()?.join("assets").join("styles.scss"))
@@ -242,13 +227,13 @@ fn build_styles() -> Result<(), DynError> {
     Ok(())
 }
 
-fn build_ui_v2() -> Result<(), DynError> {
+fn build_ui_v2() -> Result<(), anyhow::Error> {
     eprintln!("Building UI v2...");
 
     let js_path = root_path()?.join("js").join("ui");
 
     Command::new("yarn")
-        .args(&["build"])
+        .args(["build"])
         .current_dir(&js_path)
         .run()?;
 
@@ -264,7 +249,7 @@ fn build_ui_v2() -> Result<(), DynError> {
     Ok(())
 }
 
-fn task_build_ui(release: bool) -> Result<(), DynError> {
+fn task_build_ui(release: bool) -> Result<(), anyhow::Error> {
     build_ui_v2()?;
 
     eprintln!("Building ui...");
@@ -284,7 +269,7 @@ fn task_build_ui(release: bool) -> Result<(), DynError> {
     cmd.env("RUSTFLAGS", rustflags.join(" "))
         .current_dir(ui_path()?)
         .env("CARGO_TARGET_DIR", wasm_target)
-        .args(&["build", "--target", "web"])
+        .args(["build", "--target", "web"])
         .arg("--out-dir")
         .arg(&target_dir)
         .arg(ui_path()?);
@@ -292,7 +277,7 @@ fn task_build_ui(release: bool) -> Result<(), DynError> {
         cmd.arg("--dev");
     }
     eprintln!("Building ui crate...\n{:?}", cmd);
-    (&mut cmd).run()?;
+    cmd.run()?;
 
     eprintln!("Building styles...");
     build_styles()?;
@@ -317,7 +302,7 @@ fn task_build_ui(release: bool) -> Result<(), DynError> {
     Ok(())
 }
 
-fn trunk_watch_ui(release: bool) -> Result<(), DynError> {
+fn cmd_watch_ui(release: bool) -> Result<(), anyhow::Error> {
     let cmd = if release {
         "cargo xtask build-ui"
     } else {
@@ -325,7 +310,7 @@ fn trunk_watch_ui(release: bool) -> Result<(), DynError> {
     };
     Command::new("cargo")
         .current_dir(root_path()?)
-        .args(&[
+        .args([
             "watch",
             "--ignore",
             "crates/semantic/*",
@@ -347,11 +332,11 @@ fn trunk_watch_ui(release: bool) -> Result<(), DynError> {
         .run()
 }
 
-fn gen_typescript() -> Result<(), DynError> {
+fn cmd_build_typescript() -> Result<(), anyhow::Error> {
     eprintln!("Generating typescript types...");
 
     let res = Command::new("cargo")
-        .args(&[
+        .args([
             "run",
             "-p",
             "semantic_core",
@@ -364,7 +349,7 @@ fn gen_typescript() -> Result<(), DynError> {
     if !res.status.success() {
         eprintln!("{}", String::from_utf8_lossy(&res.stdout));
         eprintln!("{}", String::from_utf8_lossy(&res.stderr));
-        return Err("schema generation failed!".to_string().into());
+        anyhow::bail!("schema generation failed!");
     }
     let schema = std::str::from_utf8(&res.stdout)?;
 
@@ -377,14 +362,12 @@ fn gen_typescript() -> Result<(), DynError> {
     eprintln!("Generating entity type schemas from database...");
 
     let res = Command::new("cargo")
-        .args(&["run", "-p", "semantic_cli", "--", "generate-typescript"])
+        .args(["run", "-p", "semantic_cli", "--", "generate-typescript"])
         .output()?;
     if !res.status.success() {
         let err = std::str::from_utf8(&res.stderr)?;
         eprintln!("Cargo failed: \n{}", err);
-        return Err("failed to run 'semantic generate-typescript'"
-            .to_string()
-            .into());
+        anyhow::bail!("failed to run 'semantic generate-typescript'");
     }
 
     let schema = std::str::from_utf8(&res.stdout)?;
@@ -396,25 +379,19 @@ fn gen_typescript() -> Result<(), DynError> {
     Ok(())
 }
 
-fn gen_javascript() -> Result<(), DynError> {
-    // let mut gen = witx_bindgen_gen_spidermonkey::SpiderMonkeyWasm::new("foo.js", "");
-    // gen.import_spidermonkey(true);
-    Ok(())
-}
-
-fn root_path() -> Result<PathBuf, DynError> {
+fn root_path() -> Result<PathBuf, anyhow::Error> {
     if let Ok(manifest) = std::env::var("CARGO_MANIFEST_DIR") {
         let path = PathBuf::from(manifest);
         path.parent()
             .and_then(|x| x.parent())
             .map(|x| x.to_path_buf())
-            .ok_or_else(|| "Could not find project root".into())
+            .ok_or_else(|| anyhow::anyhow!("Could not find project root"))
     } else {
         Ok(std::env::current_dir()?)
     }
 }
 
-fn cargo_target_dir() -> Result<PathBuf, DynError> {
+fn cargo_target_dir() -> Result<PathBuf, anyhow::Error> {
     if let Ok(p) = std::env::var("CARGO_TARGET_DIR") {
         Ok(PathBuf::from(p))
     } else {
@@ -422,44 +399,47 @@ fn cargo_target_dir() -> Result<PathBuf, DynError> {
     }
 }
 
-fn ui_dist_path() -> Result<PathBuf, DynError> {
+fn ui_dist_path() -> Result<PathBuf, anyhow::Error> {
     root_path().map(|p| p.join("target").join("ui"))
 }
 
-fn wasm_target_path() -> Result<PathBuf, DynError> {
+fn wasm_target_path() -> Result<PathBuf, anyhow::Error> {
     cargo_target_dir().map(|p| p.join("wasm"))
 }
 
-fn ui_path() -> Result<PathBuf, DynError> {
+fn ui_path() -> Result<PathBuf, anyhow::Error> {
     root_path().map(|p| p.join("crates").join("ui"))
 }
 
 trait CommandExt {
-    fn run(&mut self) -> Result<(), DynError>;
+    fn run(&mut self) -> Result<(), anyhow::Error>;
 }
 
 impl CommandExt for &mut Command {
-    fn run(&mut self) -> Result<(), DynError> {
+    fn run(&mut self) -> Result<(), anyhow::Error> {
         self.spawn()?.wait()?.ensure_success()?;
         Ok(())
     }
 }
 
 impl CommandExt for Command {
-    fn run(&mut self) -> Result<(), DynError> {
+    fn run(&mut self) -> Result<(), anyhow::Error> {
         self.spawn()?.wait()?.ensure_success()?;
         Ok(())
     }
 }
 
 trait SuccessExt: Sized {
-    fn ensure_success(self) -> Result<Self, DynError>;
+    fn ensure_success(self) -> Result<Self, anyhow::Error>;
 }
 
 impl SuccessExt for std::process::Output {
-    fn ensure_success(self) -> Result<Self, DynError> {
+    fn ensure_success(self) -> Result<Self, anyhow::Error> {
         if !self.status.success() {
-            Err(format!("Command failed with exit code '{}'", self.status).into())
+            Err(anyhow::anyhow!(
+                "Command failed with exit code '{}'",
+                self.status
+            ))
         } else {
             Ok(self)
         }
@@ -467,9 +447,9 @@ impl SuccessExt for std::process::Output {
 }
 
 impl SuccessExt for std::process::ExitStatus {
-    fn ensure_success(self) -> Result<Self, DynError> {
+    fn ensure_success(self) -> Result<Self, anyhow::Error> {
         if !self.success() {
-            Err(format!("Command failed with exit code '{}'", self).into())
+            Err(anyhow::anyhow!("Command failed with exit code '{}'", self))
         } else {
             Ok(self)
         }
