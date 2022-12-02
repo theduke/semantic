@@ -240,6 +240,8 @@ fn build_ui_v2() -> Result<(), anyhow::Error> {
     let build_path = js_path.join("dist");
     let target_path = root_path()?.join("target/ui2");
 
+    std::fs::create_dir_all(target_path.parent().unwrap())?;
+
     if target_path.exists() {
         std::fs::remove_dir_all(&target_path)?;
     }
