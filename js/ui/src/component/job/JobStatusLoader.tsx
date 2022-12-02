@@ -1,10 +1,8 @@
-import { Job, JobStatus } from "semantic/dist/core";
-import { createEffect, JSX, onCleanup, onMount } from "solid-js";
+import { Job } from "semantic/dist/core";
+import { JSX, onCleanup, onMount } from "solid-js";
 import { useApi } from "../../context";
 import {
-  createFallibleResource,
   createLoader,
-  FallibleResource,
   LoaderView,
 } from "../util/load";
 import { Notification, NotificationError } from "../bulma/notification";
