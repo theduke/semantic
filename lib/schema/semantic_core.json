@@ -1,0 +1,39 @@
+{
+  "factor/ident": "TestSchema",
+  "factor/migrations": [
+    {
+      "factor/commits": [
+          {
+              "factor/subject": "test/MyAttr",
+              "factor/set": {
+                  "factor/type": "factor/Attribute",
+                  "factor/valueType": "String"
+              }
+          },
+          {
+              "factor/subject": "test/MyClass",
+              "factor/set": {
+                  "factor/type": "factor/Class",
+                  "factor/classAttributes": [
+                  ]
+              }
+          },
+          {
+              "factor/subject": "test/MyChildClass",
+              "factor/set": {
+                  "factor/type": "factor/Class",
+                  "factor/classAttributes": [
+                      {
+                          "factor/attribute": "factor/title",
+                          "factor/required": true
+                      }
+                  ],
+                  "factor/extend": [
+                      "test/MyClass"
+                  ]
+              }
+          }
+      ]
+    }
+  ]
+}
