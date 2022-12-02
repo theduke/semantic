@@ -23,7 +23,7 @@ bytesize = "1.1.0"
 tokio = { version = "1.21.2", features = ["full"] }
 sha2 = "0.10.6"
 serde_json = "1.0.85"
-clap = { version = "4.0.2", features = ["derive", "env"] }
+clap = { version = "4.0.2", features = ["derive", "env", "help"] }
 tracing-subscriber = { version = "0.3.15", features = ["fmt", "env-filter"] }
 tracing = "0.1.36"
 url = "2.3.1"
