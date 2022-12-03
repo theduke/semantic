@@ -3,9 +3,18 @@
 
   inputs = {
     # nixpkgs.url = github:NixOS/nixpkgs/nixos-unstable;
-    flakeutils.url = "github:numtide/flake-utils";
-    naersk.url = "github:nmattia/naersk";
-    rust-overlay.url = "github:oxalica/rust-overlay";
+    flakeutils = {
+      url = "github:numtide/flake-utils";
+      inputs.nixpkgs.follows = "nixpkgs";
+    };
+    naersk = {
+      url = "github:nmattia/naersk";
+      inputs.nixpkgs.follows = "nixpkgs";
+    };
+    rust-overlay = {
+      url = "github:oxalica/rust-overlay";
+      inputs.nixpkgs.follows = "nixpkgs";
+    };
   };
 
   outputs = { self, nixpkgs, flakeutils, rust-overlay, naersk }:
@@ -14,7 +23,7 @@
         VERSION = "0.1";
 
         overlays = [
-          rust-overlay.overlay
+          rust-overlay.overlays.default
         ];
         pkgs = import nixpkgs {
           inherit system overlays;
