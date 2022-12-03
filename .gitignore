@@ -4,3 +4,4 @@ crates/contrib/
 /data
 /lib/contrib
 /result
+.direnv
