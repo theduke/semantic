@@ -11,6 +11,7 @@ use factdb::{
     Timestamp, Value, ValueType,
 };
 use semantic_core::base::AttrTitle;
+use time::format_description::well_known::Rfc3339;
 
 use crate::{
     context,
@@ -174,7 +175,9 @@ pub fn attr_value_generic(attr: &Attribute, value: &Value, parent: &mut TagBuild
         (ValueType::DateTime, Value::UInt(x)) => {
             let stamp = Timestamp::from_millis(*x);
             let dt = stamp.to_datetime();
-            let value = dt.to_rfc3339();
+            let value = dt
+                .format(&Rfc3339)
+                .unwrap_or_else(|_err| "<invalid date>".to_string());
             tracing::info!(%value, "datetime value");
         }
         _ => render_value(value, parent),

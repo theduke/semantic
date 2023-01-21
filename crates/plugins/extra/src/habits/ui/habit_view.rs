@@ -10,7 +10,7 @@ use semantic_ui_core::{
         loader::Loader,
         util::{notification_default, notification_error, ButtonBuilder, Color},
     },
-    context, now,
+    context,
 };
 
 use crate::habits::{Habit, HabitMode, HabitOccurence};
@@ -45,10 +45,9 @@ struct State {
 impl State {
     fn start_timer(&mut self, last_ocurrence: HabitOccurence) {
         fn build_timer(oc: &HabitOccurence) -> String {
-            let secs = now()
-                .to_datetime()
-                .signed_duration_since(oc.time.to_datetime())
-                .num_seconds();
+            let secs = time::OffsetDateTime::now_utc()
+                .unix_timestamp()
+                .saturating_sub(oc.time.to_datetime().unix_timestamp());
             format!(
                 "{:02}:{:02}:{:02}",
                 secs / (60 * 60),
@@ -200,12 +199,12 @@ fn render_graph(_habit: &Habit, items: &[HabitOccurence]) -> TagBuilder {
     let mut items = items.iter().collect::<Vec<_>>();
     items.sort_by(|a, b| a.time.cmp(&b.time));
 
-    let mut date_counter = Vec::<(chrono::NaiveDate, usize)>::new();
+    let mut date_counter = Vec::<(time::Date, usize)>::new();
 
     // NOTE: items are assumed to be sorted by time (asc) already.
 
     for item in items.iter() {
-        let date = item.time.to_datetime().date().naive_utc();
+        let date = item.time.to_datetime().date();
 
         match date_counter.last_mut() {
             Some((cur_date, counter)) if cur_date == &date => {
@@ -243,13 +242,16 @@ fn render_graph(_habit: &Habit, items: &[HabitOccurence]) -> TagBuilder {
         .and_iter(x_labels);
 
     let bars = date_counter.into_iter().map(|(date, count)| {
+        let date_formatted = date
+            .format(&time::format_description::parse("[year]-[month]-[day]").unwrap())
+            .unwrap_or_default();
         div()
             .style(Style::Width, "20px")
             .style(Style::Height, format!("{}%", count * 100 / max_x))
             .style(Style::BackgroundColor, "red")
             .attr(
                 Attr::Title,
-                format!("Count: {count} - Date: {}", date.format("%Y-%m-%d")),
+                format!("Count: {count} - Date: {date_formatted}"),
             )
     });
 

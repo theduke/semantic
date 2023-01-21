@@ -138,9 +138,20 @@ impl MsgComponent for State {
                             let id = item.id;
                             Tag::Tr
                                 .new()
-                                .and(Tag::Td.new().and(
-                                    item.datetime.to_datetime().format("%Y-%m-%d").to_string(),
-                                ))
+                                .and(
+                                    Tag::Td.new().and(
+                                        item.datetime
+                                            .to_datetime()
+                                            .format(
+                                                &time::format_description::parse(
+                                                    "[year]-[month]-[day]",
+                                                )
+                                                .unwrap(),
+                                            )
+                                            .ok()
+                                            .unwrap_or_default(),
+                                    ),
+                                )
                                 .and(Tag::Td.new().and(item.weight.to_string()))
                                 .and(
                                     Tag::Td.new().and(
