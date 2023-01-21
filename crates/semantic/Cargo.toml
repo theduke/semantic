@@ -48,6 +48,8 @@ dirs = "4.0.0"
 tower = "0.4.13"
 
 logfs = { path = "../logfs" }
+blobfs = { git = "https://github.com/theduke/blobfs.git" }
+blobfs_async = { git = "https://github.com/theduke/blobfs.git" }
 sha2 = "0.10.6"
 serde_path_to_error = "0.1.8"
 
@@ -67,3 +69,5 @@ tracing-futures = "0.2.5"
 pin-project-lite = "0.2.9"
 image = "0.24.4"
 img_hash = { git = "https://github.com/theduke/img_hash.git", version = "3.2.0", branch = "upgrade-image-0.24" }
+tracing-subscriber = { version = "0.3.16", features = ["fmt", "env-filter"] }
+tokio-stream = "0.1.11"

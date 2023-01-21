@@ -34,6 +34,7 @@ async fn test_app(name: &str, handle: &tokio::runtime::Handle) -> (std::path::Pa
                 raw: false,
                 offset: None,
                 full_index_write_interval: None,
+                readonly: false,
             }),
             idle_timeout: None,
         }),

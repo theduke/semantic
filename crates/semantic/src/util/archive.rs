@@ -236,13 +236,14 @@ mod tests {
                             url: None,
                             collection_id: None,
                             tag_ids: Vec::new(),
+                            parent_sort: None,
                         },
                         data.clone(),
                     )
                     .await
                     .unwrap();
 
-                let id = typed.id();
+                let id = typed.file.id();
 
                 let map = db.entity(id).await.unwrap();
                 files.push((map, data));

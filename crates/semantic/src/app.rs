@@ -23,7 +23,7 @@ use semantic_core::{
 use tracing_futures::Instrument;
 
 use crate::{
-    blobstore::DynBlobStore,
+    blobstore::{blobfs::TokioSpawner, memory::MemoryBlobStore, DynBlobStore},
     jobs::JobManager,
     plugin::PluginManager,
     util::media::{self, FileInfo},
@@ -251,7 +251,10 @@ impl App {
                 factor_engine::backend::log::LogDb::recover_data(db).await
             }
             DbConfig::InMemory => {
-                unimplemented!("memory backend does not support database recovery");
+                bail!("Cannot recover data from in-memory database");
+            }
+            DbConfig::BlobFs(_) => {
+                bail!("blobfs backend does not support database recovery");
             }
         }
     }
@@ -316,7 +319,26 @@ impl App {
                 let backend = factor_engine::backend::memory::MemoryDb::new();
                 let db = factor_engine::Engine::new(backend).into_client();
 
-                let blob: DynBlobStore = Arc::new(crate::blobstore::MemoryBlobStore::new());
+                let blob: DynBlobStore = Arc::new(MemoryBlobStore::new());
+                (db, blob)
+            }
+            DbConfig::BlobFs(b) => {
+                let init = blobfs::RepoInit {
+                    root_path: b.path.clone().into(),
+                    name: None,
+                    password: b.password.clone(),
+                    key_name: None,
+                };
+                let repo = blobfs_async::AsyncRepo::open(init, TokioSpawner {}).await?;
+
+                let db = crate::db::blobfs::BlobfsDbStore::new(repo.clone())
+                    .build_db()
+                    .await
+                    .map_err(|err| {
+                        tracing::error!(?err, "Could not open logfs");
+                        err
+                    })?;
+                let blob: DynBlobStore = Arc::new(repo);
                 (db, blob)
             }
         };

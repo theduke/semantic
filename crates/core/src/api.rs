@@ -66,6 +66,15 @@ impl std::fmt::Debug for BackendCryptoConfig {
 pub enum DbConfig {
     InMemory,
     Crypto(BackendCryptoConfig),
+    BlobFs(BlobFsConfig),
+}
+
+#[derive(serde::Serialize, serde::Deserialize, PartialEq, Eq, Clone, Debug)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[cfg_attr(feature = "schema", derive(ts_rs::TS))]
+pub struct BlobFsConfig {
+    pub path: String,
+    pub password: String,
 }
 
 impl DbConfig {
@@ -83,6 +92,11 @@ impl DbConfig {
                 full_index_write_interval: c.full_index_write_interval,
                 readonly: c.readonly,
             }),
+            DbConfig::BlobFs(mut b) => {
+                // TODO: actually overwrite.
+                b.password.clear();
+                Self::BlobFs(b)
+            }
         }
     }
 }

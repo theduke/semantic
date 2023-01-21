@@ -1,3 +1,6 @@
+pub mod blobfs;
+pub mod logdb;
+
 use std::{
     collections::{HashMap, HashSet, VecDeque},
     task::Poll,
@@ -12,8 +15,6 @@ use futures::{future::BoxFuture, StreamExt};
 use semantic_core::plugin::Plugin;
 
 use crate::plugin::PluginManager;
-
-pub mod logdb;
 
 fn plugin_migration_name_prefix(plugin_name: &str) -> String {
     // ATTENTION: do not change this calcuation!

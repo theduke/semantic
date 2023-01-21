@@ -3,7 +3,7 @@ mod client;
 mod cmd_upload;
 mod db;
 
-use anyhow::anyhow;
+use anyhow::{anyhow, Context};
 use semantic_core::{
     api::{self, DbConfig},
     base::SemanticBasePlugin,
@@ -82,6 +82,11 @@ struct BackendOptions {
     #[arg(long)]
     offset: Option<String>,
 
+    /// Use blobfs storage.
+    /// (default is logfs)
+    #[arg(long)]
+    blobfs: bool,
+
     /// The number of key changes after which a full key index is written.
     #[arg(long)]
     full_index_write_interval: Option<u64>,
@@ -98,16 +103,29 @@ impl BackendOptions {
             None
         };
 
-        let db = DbConfig::Crypto(api::BackendCryptoConfig {
-            offset,
-            data_path: self.data_path.clone(),
-            key: self.key.clone().expect("Must specify --key"),
-            full_index_write_interval: self.full_index_write_interval,
-            raw: false,
-            key_iterations: self.key_iterations,
-            salt: self.salt.clone(),
-            readonly: self.readonly,
-        });
+        let db = if self.blobfs {
+            let path = self
+                .data_path
+                .clone()
+                .ok_or_else(|| anyhow!("--data-path must be specified for blobfs"))?;
+            let password = self
+                .key
+                .clone()
+                .context("--key must be specified for blobfs")?;
+
+            api::DbConfig::BlobFs(api::BlobFsConfig { path, password })
+        } else {
+            DbConfig::Crypto(api::BackendCryptoConfig {
+                offset,
+                data_path: self.data_path.clone(),
+                key: self.key.clone().context("Must specify --key")?,
+                full_index_write_interval: self.full_index_write_interval,
+                raw: false,
+                key_iterations: self.key_iterations,
+                salt: self.salt.clone(),
+                readonly: self.readonly,
+            })
+        };
 
         let c = api::BackendConfig {
             db,

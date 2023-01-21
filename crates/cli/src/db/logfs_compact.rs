@@ -39,6 +39,9 @@ impl LogCompactCmd {
             DbConfig::InMemory => {
                 bail!("memory backend does not support compaction");
             }
+            DbConfig::BlobFs(_b) => {
+                bail!("blobfs backend does not support compaction");
+            }
         };
 
         tracing::info!("opening old database...");
