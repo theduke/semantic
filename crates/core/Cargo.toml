@@ -10,17 +10,18 @@ edition = "2021"
 schema = [ "schemars", "ts-rs", "factdb/jsonschema", "factdb/typescript-schema" ]
 
 [dependencies]
-anyhow = { version = "1.0.65" }
-chrono = { version = "0.4.22", features = ["serde"] }
-futures = "0.3.24"
-serde = { version = "1.0.145", features = ["derive"] }
-serde_json = "1.0.85"
-uuid = { version = "1.1.2", features = ["serde", "v4"] }
-url = { version = "2.3.1", features = ["serde"] }
+factdb.workspace = true
+anyhow.workspace = true
+futures.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+uuid = { workspace = true, features = ["serde", "v4"] }
+url = { workspace = true, features = ["serde"] }
+tracing.workspace = true
 
-factdb = "0.1"
+chrono = { version = "0.4.22", features = ["serde"] }
+
 base64 = "0.13.0"
-tracing = "0.1.36"
 # FIXME: use normal crate once https://github.com/GREsau/schemars/pull/141 is merged upstream.
 schemars = { version = "0.8.8", features = ["chrono", "uuid1", "url", "ordered-float"], optional = true, git = "https://github.com/theduke/schemars", branch = "ordered-float" }
 ts-rs = { version = "6.2.0", default-features = false, features = ["serde-compat", "chrono-impl", "uuid-impl", "ordered-float-impl"], optional = true }

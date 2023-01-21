@@ -14,30 +14,33 @@ media-optimizers = ["oxipng", "mozjpeg"]
 default = ["archive"]
 
 [dependencies]
-base64 = "0.13.0"
-serde_json = "1.0.85"
+anyhow.workspace = true
+futures.workspace = true
+factdb.workspace = true
+factor_engine.workspace = true
+factor_tools.workspace = true
+serde = { workspace = true, features = ["derive"] }
+serde_json.workspace = true
+uuid = { workspace = true, features = ["v4"] }
+tokio = { workspace = true, features = ["full"] }
+url = { workspace = true }
+tracing = { workspace = true }
 
-anyhow = { version = "1.0.65" }
-tracing = "0.1.36"
+base64 = "0.13.0"
+
 
 mime_guess = "2.0.4"
 infer = "0.9.0"
 
 # async
-futures = "0.3.24"
-tokio = { version = "1.21.2", features = ["full"] }
 tokio-util = { version = "0.7.4", features = ["io", "codec"] }
 
 # http
 reqwest = { version =  "0.11.12", default-features = false, features = ["gzip", "json", "rustls-tls", "stream"] }
 hyper = { version =  "0.14.20", features = ["server", "http1"] }
 
-factdb = "0.1"
-factor_engine = "0.1"
-factor_tools = "0.1"
 
 jsonwebtoken = { version = "8.1.1" }
-serde = { version = "1.0.145", features = ["derive"] }
 axum = "0.5.16"
 
 tower-http = { version = "0.3.4", features = ["trace", "fs", "compression-gzip"] }
@@ -46,8 +49,6 @@ tower = "0.4.13"
 
 logfs = { path = "../logfs" }
 sha2 = "0.10.6"
-uuid = { version = "1.1.2", features = ["v4"] }
-url = "2.3.1"
 serde_path_to_error = "0.1.8"
 
 oxipng = { version = "6.0.1", optional = true, default-features = false, features = ["parallel", "zopfli"] }
@@ -66,4 +67,3 @@ tracing-futures = "0.2.5"
 pin-project-lite = "0.2.9"
 image = "0.24.4"
 img_hash = { git = "https://github.com/theduke/img_hash.git", version = "3.2.0", branch = "upgrade-image-0.24" }
-

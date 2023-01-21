@@ -6,23 +6,26 @@ edition = "2021"
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [dependencies]
-brass = { version = "0.1" }
+semantic_core = { path = "../core" }
+
+brass.workspace = true
+factdb = { workspace = true, default-features = false }
+anyhow.workspace = true
+futures.workspace = true
+serde_json.workspace = true
+url.workspace = true
+time = { workspace = true, features = ["serde", "formatting", "parsing"] }
+
 # brass_bulma = "0.1"
-factdb = { version = "0.1", default-features = false }
 fnv = "1.0.7"
-futures = "0.3.24"
 js-sys = "0.3.60"
 pulldown-cmark = "0.9.2"
 
-serde_json = "1.0.85"
 tracing = "0.1.36"
-url = "2.3.1"
 wasm-bindgen = "0.2.83"
 wasm-bindgen-futures = "0.4.33"
 
-semantic_core = { path = "../core" }
 once_cell = "1.15.0"
-anyhow = "1.0.65"
 form_urlencoded = "1.1.0"
 chrono = { version = "0.4.22", features = ["wasmbind"] }
 base64 = "0.13.0"

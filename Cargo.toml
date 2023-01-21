@@ -13,7 +13,6 @@ members = [
 
     "crates/plugins/extra",
 ]
-
 exclude = [
     "crates/xtask",
     "crates/plugin_python",
@@ -23,11 +22,22 @@ exclude = [
     "factordb",
 ]
 
-[patch.crates-io]
+[workspace.dependencies]
 brass = { git = "https://github.com/theduke/brass.git", branch = "main" }
 factdb = { git = "https://github.com/theduke/factordb.git", branch = "main" }
 factor_engine = { version = "0.1", git = "https://github.com/theduke/factordb.git", branch = "main" }
 factor_tools = { version = "0.1", git = "https://github.com/theduke/factordb.git", branch = "main" }
+anyhow = { version = "1.0.68" }
+tokio = { version = "1.22.0", features = ["full"] }
+futures = "0.3.25"
+serde = { version = "1.0.148", features = ["derive"] }
+serde_json = { version = "1.0.89" }
+uuid = "1.2.2"
+url = "2.3.1"
+tracing = "0.1.36"
+time = "0.3.17"
+
+[patch.crates-io]
 ts-rs = { version = "6.1.2", git = "https://github.com/theduke/ts-rs", branch = "theduke" }
 
 [profile.dev.package.img_hash]
