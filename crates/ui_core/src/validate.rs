@@ -74,7 +74,9 @@ pub struct StringDateTime;
 
 impl Validator<String> for StringDateTime {
     fn validate(&self, value: &String) -> Result<(), Vec<String>> {
-        chrono::NaiveDateTime::parse_from_str(value, "%Y-%m-%d %H:%M").map_err(|_| {
+        let fmt =
+            time::macros::format_description!("[year]-[month]-[day]:[hour]:[minute]:[second]");
+        time::PrimitiveDateTime::parse(value, &fmt).map_err(|_| {
             vec!["Expected a valid date + time (format: 2020-10-10 HH::MM)".to_string()]
         })?;
         Ok(())

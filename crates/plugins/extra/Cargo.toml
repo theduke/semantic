@@ -21,6 +21,5 @@ factdb = { workspace = true, default-features = false }
 serde = { workspace = true, features = ["derive"] }
 time = { workspace = true }
 
-chrono = "0.4.22"
 tracing = "0.1.36"
 

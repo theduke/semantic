@@ -30,7 +30,6 @@ wasm-bindgen-futures = "0.4.33"
 js-sys = "0.3.60"
 getrandom = { version = "0.2.7", features = ["js"] }
 rand = "0.8.5"
-chrono = { version = "0.4.22", features = ["wasmbind"] }
 bytesize = "1.1.0"
 
 [dependencies.web-sys] 

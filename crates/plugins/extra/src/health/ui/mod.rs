@@ -1,7 +1,6 @@
 mod manager;
 
 use brass::dom::{Render, TagBuilder};
-use chrono::TimeZone;
 use factdb::{ClassMeta, Id, Timestamp};
 use semantic_core::plugin::PluginDescriptor;
 use semantic_ui_core::{
@@ -14,6 +13,7 @@ use semantic_ui_core::{
     validate::{StringDateTime, StringFloat},
     BrowserPlugin,
 };
+use time::OffsetDateTime;
 
 use super::WeightLogEntry;
 
@@ -60,6 +60,9 @@ impl PluginRouter for HealthRouter {
     }
 }
 
+const FORMAT_DATE_TIME: &[time::format_description::FormatItem<'static>] =
+    time::macros::format_description!("[year]-[month]-[day] [hour]:[minute]");
+
 fn weightlog_create(on_created: impl Fn(WeightLogEntry) + 'static) -> TagBuilder {
     #[derive(Clone)]
     struct Values {
@@ -69,21 +72,19 @@ fn weightlog_create(on_created: impl Fn(WeightLogEntry) + 'static) -> TagBuilder
 
     let on_created = std::rc::Rc::new(on_created);
 
+    let fmt = time::macros::format_description!("");
+
     let form = Form::new(Values {
         weight: String::new(),
-        date: chrono::Utc::now().format("%Y-%m-%d %H:%M").to_string(),
+        date: time::OffsetDateTime::now_utc().format(&fmt).unwrap(),
     })
     .on_submit_async(move |values| {
         let on_created = on_created.clone();
         let values = values.clone();
 
         Box::pin(async move {
-            let naive = chrono::NaiveDateTime::parse_from_str(&values.date, "%Y-%m-%d %H:%M")?;
-            let local = chrono::offset::Local
-                .from_local_datetime(&naive)
-                .earliest()
-                .ok_or_else(|| anyhow::Error::msg("Could not determine local timezone"))?;
-            let datetime = Timestamp::from_millis(local.timestamp_millis() as u64);
+            let dt = OffsetDateTime::parse(&values.date, &FORMAT_DATE_TIME)?;
+            let datetime = Timestamp::from(dt);
 
             let entry = WeightLogEntry {
                 id: Id::random(),
