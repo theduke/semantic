@@ -125,7 +125,17 @@ impl BlobStore for blobfs_async::AsyncRepo<TokioSpawner> {
 
         tokio::task::spawn_blocking(move || {
             if let Err(err) = try_send(&mut tx, repo, path, offset, take) {
-                tx.blocking_send(Err(anyhow::Error::from(err))).unwrap();
+                if err.is::<std::sync::mpsc::SendError<Vec<u8>>>() {
+                    tracing::debug!(
+                        "could not finish sending data to blob reader channel - channel closed"
+                    );
+                } else {
+                    if let Err(_err) = tx.blocking_send(Err(anyhow::Error::from(err))) {
+                        tracing::debug!(
+                            "could not finish sending data to blob reader channel - channel closed"
+                        );
+                    }
+                }
             }
         });
 
