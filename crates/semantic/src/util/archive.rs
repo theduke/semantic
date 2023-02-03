@@ -208,72 +208,71 @@ pub async fn import_archive<R: std::io::Read>(
 
 #[cfg(test)]
 mod tests {
-    use factdb::ClassContainer;
+    use std::io::Write;
+
     use semantic_core::api::FileUploadMetadata;
 
     use super::*;
 
-    #[test]
-    fn test_archive_export_import_roundtrip() {
-        let rt = tokio::runtime::Runtime::new().unwrap();
-        let handle = rt.handle().clone();
-        rt.block_on(async move {
-            let (data_dir, app) =
-                crate::test_app("archive-export-import-roundtrip-export", &handle).await;
-            let db = app.require_db().unwrap();
+    #[tokio::test]
+    async fn test_archive_export_import_roundtrip() {
+        let handle = tokio::runtime::Handle::current();
 
-            let mut files = Vec::new();
+        let (data_dir, app) =
+            crate::test_app("archive-export-import-roundtrip-export", &handle).await;
+        let db = app.require_db().unwrap();
 
-            for x in 0u8..10 {
-                let data = vec![x];
-                let typed = app
-                    .upload_file(
-                        FileUploadMetadata {
-                            ident: None,
-                            parent: None,
-                            filename: Some(format!("x{x}.bin")),
-                            title: Some(format!("x{x}.bin")),
-                            url: None,
-                            collection_id: None,
-                            tag_ids: Vec::new(),
-                            parent_sort: None,
-                        },
-                        data.clone(),
-                    )
-                    .await
-                    .unwrap();
+        let mut files = Vec::new();
 
-                let id = typed.file.id();
+        for x in 0u8..10 {
+            let data = vec![x];
+            let typed = app
+                .upload_file(
+                    FileUploadMetadata {
+                        ident: None,
+                        parent: None,
+                        filename: Some(format!("x{x}.bin")),
+                        title: Some(format!("x{x}.bin")),
+                        url: None,
+                        collection_id: None,
+                        tag_ids: Vec::new(),
+                        parent_sort: None,
+                    },
+                    data.clone(),
+                )
+                .await
+                .unwrap();
 
-                let map = db.entity(id).await.unwrap();
-                files.push((map, data));
-            }
+            let id = typed.file.get_id().unwrap();
 
-            let archive_path = data_dir.join("archive.tar.gz");
+            let map = db.entity(id).await.unwrap();
+            files.push((map, data));
+        }
 
-            let f = std::fs::File::create(&archive_path).unwrap();
-            build_archive(&app, f, None, false).await.unwrap();
+        let archive_path = data_dir.join("archive.tar.gz");
 
-            app.close_backend().await.unwrap();
+        let mut f = std::fs::File::create(&archive_path).unwrap();
+        f.flush().unwrap();
+        build_archive(&app, f, None, false).await.unwrap();
 
-            let (_, app2) =
-                crate::test_app("archive-export-import-roundtrip-import", &handle).await;
-            let db = app2.require_db().unwrap();
-            let blob = app2.require_blob().unwrap();
+        app.close_backend().await.unwrap();
 
-            let output = std::fs::File::create(&archive_path).unwrap();
-            import_archive(&app2, output, None).await.unwrap();
+        let (_, app2) = crate::test_app("archive-export-import-roundtrip-import", &handle).await;
+        let db = app2.require_db().unwrap();
+        let blob = app2.require_blob().unwrap();
 
-            for (old_file, old_data) in files {
-                let id = old_file.get_id().unwrap();
-                let blob_path = old_file.get_attr::<AttrBlobUri>().unwrap();
-                let new_file = db.entity(id).await.unwrap();
+        let output = std::fs::File::create(&archive_path).unwrap();
+        import_archive(&app2, output, None).await.unwrap();
 
-                assert_eq!(old_file, new_file);
+        for (old_file, old_data) in files {
+            let id = old_file.get_id().unwrap();
+            let blob_path = old_file.get_attr::<AttrBlobUri>().unwrap();
+            let new_file = db.entity(id).await.unwrap();
 
-                let new_data = blob.get(&blob_path).await.unwrap().unwrap();
-                assert_eq!(old_data, new_data);
-            }
-        });
+            assert_eq!(old_file, new_file);
+
+            let new_data = blob.get(&blob_path).await.unwrap().unwrap();
+            assert_eq!(old_data, new_data);
+        }
     }
 }
