@@ -166,6 +166,8 @@ impl AttributeMeta for AttrVisualHash {
     }
 }
 
+pub const ATTR_DATA_URL: &str = "semantic/data_url";
+
 #[derive(Serialize, Deserialize, Class, Clone, Debug)]
 #[factor(namespace = "semantic")]
 pub struct File {
@@ -428,6 +430,15 @@ pub enum TypedFile {
 }
 
 impl TypedFile {
+    pub fn type_from_mime(mime: &str) -> Option<String> {
+        match mime {
+            _ if mime.starts_with("image/") => Some(Image::QUALIFIED_NAME.to_string()),
+            _ if mime.starts_with("video/") => Some(Video::QUALIFIED_NAME.to_string()),
+            _ if mime.starts_with("audio/") => Some(Audio::QUALIFIED_NAME.to_string()),
+            _ => None,
+        }
+    }
+
     pub fn from_map(map: DataMap) -> Result<Self, anyhow::Error> {
         match map.get_type_name() {
             Some(Video::QUALIFIED_NAME) => Video::try_from_map(map)

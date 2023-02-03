@@ -79,6 +79,10 @@ pub struct AttrUpdatedAt(Timestamp);
 pub struct AttrParent(Id);
 
 #[derive(Attribute)]
+#[factor(namespace = "semantic", title = "Children", name = "children")]
+pub struct AttrChildren(Vec<Id>);
+
+#[derive(Attribute)]
 #[factor(
     namespace = "semantic",
     title = "Parent Sort Order",

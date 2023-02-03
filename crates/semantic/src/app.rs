@@ -1,5 +1,4 @@
 use std::{
-    collections::HashMap,
     num::NonZeroU32,
     path::PathBuf,
     sync::{Arc, RwLock},
@@ -7,15 +6,16 @@ use std::{
 
 use anyhow::{anyhow, bail, Context};
 use factdb::{
-    query, AttrMapExt, AttributeMeta, ClassContainer, DataMap, Db, Expr, Id, Item, Mutate, Patch,
-    Select, Timestamp, Value, ValueMap,
+    query, AttrMapExt, AttrType, AttributeMeta, ClassContainer, ClassMeta, DataMap, Db, Expr, Id,
+    Item, Mutate, Patch, Select, Timestamp, Value, ValueMap,
 };
+use futures::TryStreamExt;
 use semantic_core::{
     api::{self, ApiError, BackendConfig, DbConfig, FileImportMetadata, JobId, SemanticSchema},
     base::{
         entity_title, AttrBlobUri, AttrBlobUriWeb, AttrDownloadUrl, AttrFileName, AttrFileSize,
         AttrHash, AttrMimeType, AttrOriginalHash, AttrPreviewImageBlobUri, SemanticBasePlugin, Tag,
-        Video,
+        Video, ATTR_DATA_URL,
     },
     core::SemanticCorePlugin,
     plugin::{FetchUrlJob, FetchUrlOutput, ImportJob, ImportOutput, PluginDescriptor},
@@ -798,64 +798,93 @@ impl App {
         super::file_import::import_files(self, paths, meta, on_import).await
     }
 
-    /// Find the given items in the database based on their [`Ident`], and then
-    /// fix up all attributes so they match the existing ids instead of the
-    /// newly specified ones.
-    async fn entity_id_ident_fixup(
-        db: &Db,
-        mut items: Vec<DataMap>,
-    ) -> Result<Vec<DataMap>, anyhow::Error> {
-        let mut map = HashMap::new();
-        // FIXME: use a single query.
-        for item in &mut items {
-            if let Some(ident) = item.get_attr::<factdb::schema::builtin::AttrIdent>() {
-                if let Ok(old_entity) = db.entity(ident.clone()).await {
-                    let current_type = old_entity.get_type();
-                    let new_type = item.get_type();
-
-                    if current_type != new_type {
-                        return Err(anyhow!(
-                                "Could not import entity '{:?}' - entity already exists with a different type (existing: {:?}, new: {:?})",
-                                ident, current_type, new_type));
-                    }
-
-                    let current_id = item.get_id();
-                    let old_id = old_entity.get_id().unwrap();
-
-                    if let Some(current) = current_id {
-                        map.insert(current, old_id);
-                    }
-                }
-            }
+    pub async fn fetch_url(&self, job: FetchUrlJob) -> Result<FetchUrlOutput, anyhow::Error> {
+        if let Some(out) = self.require_plugins()?.fetch_url(job.clone()).await? {
+            Ok(out)
+        } else {
+            let out = self.fetch_url_fallback(&job.url).await?;
+            Ok(out)
         }
-
-        // Now replace all ids in any attribute with the fixed up , existing id.
-        for item in &mut items {
-            for value in &mut item.0.values_mut() {
-                if let Value::Id(id) = value {
-                    if let Some(actual_id) = map.get(&id) {
-                        *id = *actual_id;
-                    }
-                }
-            }
-        }
-
-        Ok(items)
     }
 
-    pub async fn fetch_url(&self, job: FetchUrlJob) -> Result<FetchUrlOutput, anyhow::Error> {
-        self.require_plugins()?.fetch_url(job).await
+    async fn fetch_url_fallback(&self, url: &url::Url) -> Result<FetchUrlOutput, anyhow::Error> {
+        let client = reqwest::Client::new();
+        let res = client.get(url.as_str()).send().await?;
+
+        let ty = res
+            .headers()
+            .get(reqwest::header::CONTENT_TYPE)
+            .and_then(|x| x.to_str().ok())
+            .unwrap_or_default();
+
+        if ty != "application/json" {
+            bail!("unsupported content type: {}", ty);
+        }
+
+        let body: serde_json::Value = res.json().await?;
+        let maps = crate::util::db_items_from_json(body)?;
+        let items = maps.into_iter().map(Item::new).collect();
+
+        Ok(FetchUrlOutput {
+            items,
+            load_more_url: None,
+            related_urls: Vec::new(),
+            related_items: Vec::new(),
+        })
     }
 
     pub async fn import(&self, job: ImportJob) -> Result<ImportOutput, anyhow::Error> {
         tracing::trace!("starting import");
+        let output = if let Some(out) = self.require_plugins()?.import(job.clone()).await? {
+            out
+        } else {
+            let out = self.fetch_url_fallback(&job.url).await?;
+            ImportOutput { items: out.items }
+        };
+        self.persist_import(output, job.import_media).await
+    }
 
-        let output = self.require_plugins()?.import(job.clone()).await?;
-        tracing::trace!(?output, "plugin import data acquired");
+    async fn persist_import(
+        &self,
+        output: ImportOutput,
+        import_media: bool,
+    ) -> Result<ImportOutput, anyhow::Error> {
+        tracing::trace!("persisting import");
         let items = Item::flatten_list(output.items);
 
         let db = self.require_db()?;
-        let entities = Self::entity_id_ident_fixup(&db, items).await?;
+        let all_entities = crate::db::entity_id_ident_fixup(&db, items).await?;
+
+        // Remove files with a data_url to upload them.
+
+        let mut entities = Vec::new();
+        let mut files_with_data = Vec::new();
+
+        for mut item in all_entities {
+            let is_file = item.get_type().map(|x| x.to_string()).unwrap_or_default()
+                == semantic_core::base::File::QUALIFIED_NAME;
+
+            if is_file {
+                let data_url = item.remove(ATTR_DATA_URL).and_then(|x| {
+                    if let Value::String(s) = x {
+                        Some(s)
+                    } else {
+                        None
+                    }
+                });
+                if let Some(s) = data_url {
+                    if let Some((_, raw)) = s.split_once("data:;base64,") {
+                        let data = base64::decode(raw)?;
+                        files_with_data.push((item.clone(), data));
+                    } else {
+                        tracing::warn!(?item, "trying to import file item with invalid data url");
+                    }
+                }
+            }
+
+            entities.push(item);
+        }
+
         let merges = entities
             .clone()
             .into_iter()
@@ -875,15 +904,32 @@ impl App {
 
         db.batch(batch).await?;
 
-        if job.import_media {
+        let entities = if import_media {
             let client = reqwest::Client::new();
 
+            let tasks = futures::stream::FuturesUnordered::new();
+
             // NOTE: if the download fails, the file still ends up in the database.
+
             for id in entity_ids {
-                tokio::spawn(
-                    self.clone()
-                        .download_entity_blob_content(id, client.clone()),
-                );
+                let task = self
+                    .clone()
+                    .download_entity_blob_content(id, client.clone());
+                tasks.push(task);
+            }
+
+            tasks.try_collect::<Vec<_>>().await?
+        } else {
+            entities
+        };
+
+        let mut entities = entities;
+        for (item, data) in files_with_data {
+            let new_item = self.persist_entity_blob_content(item, data, None).await?;
+            if let Some(id) = new_item.get_id() {
+                if let Some(old) = entities.iter_mut().find(|x| x.get_id() == Some(id)) {
+                    *old = new_item;
+                }
             }
         }
 
@@ -894,28 +940,38 @@ impl App {
         Ok(ImportOutput { items })
     }
 
+    pub async fn import_raw(
+        &self,
+        value: serde_json::Value,
+    ) -> Result<ImportOutput, anyhow::Error> {
+        let maps = crate::util::db_items_from_json(value)?;
+        let items = maps.into_iter().map(Item::new).collect();
+
+        let output = ImportOutput { items };
+
+        self.persist_import(output, true).await
+    }
+
     async fn download_entity_blob_content(
         self,
         id: Id,
         client: reqwest::Client,
-    ) -> Result<(), anyhow::Error> {
+    ) -> Result<DataMap, anyhow::Error> {
         let db = self.require_db()?;
-        let blob = self.require_blob()?;
-
         tracing::trace!(entity_id=%id, "starting entity blob content download");
 
-        let data = db.entity(id).await?;
+        let item = db.entity(id).await?;
 
-        if let Some(_blob_uri) = data.get_attr::<AttrBlobUri>() {
+        if let Some(_blob_uri) = item.get_attr::<AttrBlobUri>() {
             // TODO: check if blob exists.
             tracing::trace!(%id, "skipping download_url fetch - blob_url already present");
-            return Ok(());
+            return Ok(item);
         }
 
-        let download_url = if let Some(url) = data.get_attr::<AttrDownloadUrl>() {
+        let download_url = if let Some(url) = item.get_attr::<AttrDownloadUrl>() {
             url
         } else {
-            return Ok(());
+            return Ok(item);
         };
         tracing::trace!(%id, %download_url, "downloading file for entity");
 
@@ -929,12 +985,39 @@ impl App {
                 .bytes()
                 .await?;
 
+        let filename = Some(download_url.path().to_string());
+
+        self.persist_entity_blob_content(item, data.into(), filename)
+            .await
+    }
+
+    async fn persist_entity_blob_content(
+        &self,
+        item: DataMap,
+        data: Vec<u8>,
+        filename: Option<String>,
+    ) -> Result<DataMap, anyhow::Error> {
+        let db = self.require_db()?;
+        let blob = self.require_blob()?;
+
+        let id = item
+            .get_id()
+            .context("cant persist file item without an id")?;
+
         use sha2::Digest;
         let raw_hash = sha2::Sha256::digest(&data);
         let original_hash = semantic_core::base::UniversalHash::new(
             semantic_core::base::UniversalHash::SHA256,
             &format!("{:x}", raw_hash),
         );
+
+        if let Some(blob_uri) = item.get_attr::<AttrBlobUri>() {
+            if blob.get_meta(&blob_uri).await?.is_some() {
+                // TODO: check if hash matches.
+                tracing::trace!(%id, "skipping download_url fetch - blob_url already present");
+                return Ok(item);
+            }
+        }
 
         let mime_guess = infer::get(&data);
         let (data, optimized_hash) = media::optimise_file_data(data.to_vec());
@@ -957,19 +1040,14 @@ impl App {
                 }
             }
         }
+
         let blob_path = if let Some(x) = blob_uri {
             x
         } else {
-            let tmp_path = std::path::PathBuf::from(download_url.as_str());
-            let filename_opt = tmp_path
-                .file_name()
-                .and_then(|x| x.to_str())
-                .map(|x| x.to_string());
-
             let mut path = format!("files/{}", id);
-            if let Some(filename) = filename_opt {
+            if let Some(filename) = &filename {
                 path.push('/');
-                path.push_str(&filename);
+                path.push_str(filename);
             }
 
             blob.put(&path, data.to_vec()).await?;
@@ -986,12 +1064,21 @@ impl App {
         if let Some(mime) = mime_guess {
             // TODO: handle mismatch between expected and actual mime type!
             patch.insert_attr::<AttrMimeType>(mime.mime_type().to_string());
+
+            if let Some(mime) = mime_guess {
+                if let Some(ty) = semantic_core::base::TypedFile::type_from_mime(&mime.to_string())
+                {
+                    patch.insert(AttrType::QUALIFIED_NAME.to_string(), ty.into());
+                }
+            }
         }
         db.merge(id, patch).await?;
 
-        tracing::debug!(%download_url, entity_id=%id, %size, "imported file for entity");
+        let final_entity = db.entity(id).await?;
 
-        Ok(())
+        tracing::debug!(?filename, entity_id=%id, %size, "imported file for entity");
+
+        Ok(final_entity)
     }
 
     fn update_last_activity_time(&self) {
@@ -1555,11 +1642,40 @@ mod tests {
             let e1 = db.entity(id1).await.unwrap();
             let e2 = db.entity(id2).await.unwrap();
 
-            let x = e1.get(AttrTags::QUALIFIED_NAME).unwrap().as_id().unwrap();
-            assert_eq!(x, tag1.id);
+            let x = e1.get(AttrTags::QUALIFIED_NAME).unwrap().as_list().unwrap();
+            assert_eq!(x[0].as_id().unwrap(), tag1.id);
 
-            let x = e2.get(AttrTags::QUALIFIED_NAME).unwrap().as_id().unwrap();
-            assert_eq!(x, tag1.id);
+            let x = e2.get(AttrTags::QUALIFIED_NAME).unwrap().as_list().unwrap();
+            assert_eq!(x[0].as_id().unwrap(), tag1.id);
         });
+    }
+
+    #[tokio::test]
+    async fn test_import_raw() {
+        let handle = tokio::runtime::Handle::current();
+        let app = App::build_test_app(handle).await.unwrap();
+        // let db = app.require_db().unwrap();
+
+        let id = Id::random();
+        let data = vec![1u8, 2, 3, 4, 5];
+        let map = serde_json::json!({
+            "factor/id": id,
+            "factor/type": "semantic/File",
+            "semantic/data_url": format!("data:;base64,{}", base64::encode(&data)),
+        });
+
+        let out = app.import_raw(map).await.unwrap();
+        let item = &out.items[0].data;
+
+        let blob_path = item.get_attr::<AttrBlobUri>().unwrap();
+        let persisted_data = app
+            .require_blob()
+            .unwrap()
+            .get(&blob_path)
+            .await
+            .unwrap()
+            .unwrap();
+
+        assert_eq!(persisted_data, data);
     }
 }

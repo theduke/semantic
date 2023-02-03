@@ -6,10 +6,10 @@ use std::{
     task::Poll,
 };
 
-use anyhow::bail;
+use anyhow::{anyhow, bail};
 use factdb::{
-    query::mutate, AttrId, AttrMapExt, AttributeMeta, Batch, DataMap, Db, Expr, Id, Item, Page,
-    Select, Value, ValueMap,
+    query::mutate, AttrId, AttrIdent, AttrMapExt, AttributeMeta, Batch, DataMap, Db, Expr, Id,
+    Item, Page, Select, Value, ValueMap,
 };
 use futures::{future::BoxFuture, StreamExt};
 use semantic_core::plugin::Plugin;
@@ -445,21 +445,96 @@ fn entity_data_related_ids(data: &DataMap) -> impl Iterator<Item = Id> + '_ {
         .flatten()
 }
 
+/// Find the given items in the database based on their [`Ident`], and then
+/// fix up all attributes so they match the existing ids instead of the
+/// newly specified ones.
+pub async fn entity_id_ident_fixup(
+    db: &Db,
+    mut items: Vec<DataMap>,
+) -> Result<Vec<DataMap>, anyhow::Error> {
+    let mut id_map = HashMap::new();
+    let mut ident_map = HashMap::new();
+
+    // TODO: use a single query.
+    for item in &mut items {
+        if let Some(ident) = item.get_attr::<factdb::schema::builtin::AttrIdent>() {
+            if let Ok(old_entity) = db.entity(ident.clone()).await {
+                let current_type = old_entity.get_type();
+                let new_type = item.get_type();
+
+                if current_type != new_type {
+                    return Err(anyhow!(
+                                "Could not import entity '{:?}' - entity already exists with a different type (existing: {:?}, new: {:?})",
+                                ident, current_type, new_type));
+                }
+
+                let current_id = item.get_id();
+                let old_id = old_entity.get_id().unwrap();
+
+                item.insert(AttrId::QUALIFIED_NAME.to_string(), old_id.into());
+                if let Some(current) = current_id {
+                    id_map.insert(current, old_id);
+                }
+                ident_map.insert(ident, old_id);
+            } else {
+                let id = item.get_id().unwrap_or_else(|| Id::random());
+                item.insert(AttrId::QUALIFIED_NAME.to_string(), id.into());
+                ident_map.insert(ident, id);
+            }
+        } else {
+            if item.get_id().is_none() {
+                item.insert(AttrId::QUALIFIED_NAME.to_string(), Id::random().into());
+            }
+        }
+    }
+
+    // Now replace all ids and idents in any attribute with the fixed up , existing id.
+    for item in &mut items {
+        for (key, value) in &mut item.0.iter_mut() {
+            if key == AttrId::QUALIFIED_NAME || key == AttrIdent::QUALIFIED_NAME {
+                continue;
+            }
+
+            match value {
+                Value::Id(id) => {
+                    if let Some(actual_id) = id_map.get(&id) {
+                        *id = *actual_id;
+                    }
+                }
+                Value::String(v) => {
+                    if let Some(id) = ident_map.get(v) {
+                        *value = Value::Id(*id);
+                    }
+                }
+                _ => (),
+            }
+        }
+    }
+
+    Ok(items)
+}
+
 #[cfg(test)]
 mod tests {
-    use factdb::ClassContainer;
+    use factdb::{map, ClassContainer};
     use semantic_core::{
         api::{BackendConfig, BackendCryptoConfig},
-        base::Note,
+        base::{AttrParent, Note},
     };
 
-    use crate::app::{App, AppConfig};
+    use crate::{
+        app::{App, AppConfig},
+        test_app,
+    };
 
     use super::*;
 
     #[test]
     fn test_compact_logdb_history() {
-        tracing_subscriber::fmt::try_init().ok();
+        tracing_subscriber::fmt::fmt()
+            .with_test_writer()
+            .try_init()
+            .ok();
 
         let rt = tokio::runtime::Runtime::new().unwrap();
 
@@ -550,5 +625,33 @@ mod tests {
                 assert_eq!(note.title, old_note.title);
             }
         });
+    }
+
+    #[tokio::test]
+    async fn test_db_entity_ident_no_old() {
+        tracing_subscriber::fmt::fmt()
+            .with_test_writer()
+            .try_init()
+            .ok();
+        let handle = tokio::runtime::Handle::current();
+        let (_path, app) = test_app("entity_ident_fixup_no_old", &handle).await;
+        let db = app.require_db().unwrap();
+
+        let items = vec![
+            map! {
+                "factor/ident": "test2".to_string(),
+                "semantic/parent": "test1".to_string(),
+            },
+            map! {
+                "factor/ident": "test1".to_string(),
+            },
+        ];
+
+        let items = entity_id_ident_fixup(&db, items).await.unwrap();
+        dbg!(&items);
+
+        let id = items[1].get_id().unwrap();
+        let parent = items[0].get_attr::<AttrParent>().unwrap();
+        assert_eq!(id, parent);
     }
 }
