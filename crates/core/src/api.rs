@@ -422,7 +422,6 @@ pub enum Query {
 #[cfg_attr(feature = "schema", derive(ts_rs::TS))]
 pub struct ImportRaw {
     pub data: serde_json::Value,
-    pub return_items: bool,
 }
 
 #[derive(serde::Serialize, serde::Deserialize, Clone, Debug)]
