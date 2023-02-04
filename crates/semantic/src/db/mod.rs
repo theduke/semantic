@@ -6,13 +6,13 @@ use std::{
     task::Poll,
 };
 
-use anyhow::{anyhow, bail};
+use anyhow::{anyhow, bail, Context};
 use factdb::{
     query::mutate, AttrId, AttrIdent, AttrMapExt, AttributeMeta, Batch, DataMap, Db, Expr, Id,
-    Item, Page, Select, Value, ValueMap,
+    IdOrIdent, Item, Page, Select, Value, ValueMap,
 };
 use futures::{future::BoxFuture, StreamExt};
-use semantic_core::plugin::Plugin;
+use semantic_core::{base::AttrParent, plugin::Plugin};
 
 use crate::plugin::PluginManager;
 
@@ -507,6 +507,36 @@ pub async fn entity_id_ident_fixup(
                     }
                 }
                 _ => (),
+            }
+
+            if key == AttrParent::QUALIFIED_NAME {
+                match value {
+                    Value::String(v) => {
+                        // Parent is a string.
+                        // Need to find the ID.
+
+                        if let Some(id) = ident_map.get(v) {
+                            *value = Value::Id(*id);
+                        } else {
+                            // Ident not available, so query for it.
+
+                            let id = db
+                                .entity(IdOrIdent::Name(v.clone().into()))
+                                .await
+                                .with_context(|| {
+                                    format!("Could not resolve ident '{v}' - unknown ident")
+                                })?
+                                .get_id()
+                                .unwrap();
+                            ident_map.insert(v.clone(), id);
+                            *value = id.into();
+                        }
+                    }
+                    Value::Id(_) => {
+                        // Already an id, nothing to do.
+                    }
+                    _ => {}
+                }
             }
         }
     }
