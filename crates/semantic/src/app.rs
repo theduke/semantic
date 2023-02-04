@@ -1522,6 +1522,12 @@ impl App {
                 .await?;
                 Ok(api::Reply::FindSimilarImages(job))
             }
+            api::Query::ImportRaw(raw) => {
+                let out = self.import_raw(raw.data).await?;
+                Ok(api::Reply::ImportRaw(api::ImportRawReply {
+                    items: out.items.into_iter().map(|i| i.data).collect(),
+                }))
+            }
         };
         res.map_err(|err| {
             tracing::error!(?err, "api query failed");

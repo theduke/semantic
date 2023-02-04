@@ -392,6 +392,7 @@ pub enum Query {
     TagMerge(TagMerge),
 
     Import(ImportJob),
+    ImportRaw(ImportRaw),
     FetchUrl(FetchUrlJob),
     OptimiseVideo(OptimiseVideo),
     FileDiscardUnOptimized(FileDiscardUnOptimized),
@@ -414,6 +415,14 @@ pub enum Query {
         force: bool,
     },
     FindSimilarImages(SimilarImageOptions),
+}
+
+#[derive(serde::Serialize, serde::Deserialize, Clone, Debug)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[cfg_attr(feature = "schema", derive(ts_rs::TS))]
+pub struct ImportRaw {
+    pub data: serde_json::Value,
+    pub return_items: bool,
 }
 
 #[derive(serde::Serialize, serde::Deserialize, Clone, Debug)]
@@ -461,6 +470,13 @@ pub struct UnusedBlobsDeleted {
 #[derive(serde::Serialize, serde::Deserialize, Clone, Debug)]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[cfg_attr(feature = "schema", derive(ts_rs::TS))]
+pub struct ImportRawReply {
+    pub items: Vec<DataMap>,
+}
+
+#[derive(serde::Serialize, serde::Deserialize, Clone, Debug)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[cfg_attr(feature = "schema", derive(ts_rs::TS))]
 pub enum Reply {
     ServerStatus(ServerStatus),
     Initialize(SemanticSchema),
@@ -483,6 +499,7 @@ pub enum Reply {
     TagMerge(DataMap),
 
     Import(ImportOutput),
+    ImportRaw(ImportRawReply),
     FetchUrl(FetchUrlOutput),
     HttpFetch(SimpleHttpResponse),
     OptimiseVideo(OptimiseVideoReply),
