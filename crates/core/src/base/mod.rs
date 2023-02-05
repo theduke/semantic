@@ -29,6 +29,9 @@ pub use self::bookmark::*;
 mod code_snippet;
 pub use self::code_snippet::*;
 
+mod listing;
+pub use self::listing::*;
+
 use factdb::{
     macros::Attribute,
     query::migrate::{
