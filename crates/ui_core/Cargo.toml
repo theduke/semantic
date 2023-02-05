@@ -14,7 +14,7 @@ anyhow.workspace = true
 futures.workspace = true
 serde_json.workspace = true
 url.workspace = true
-time = { workspace = true, features = ["serde", "formatting", "parsing", "wasm-bindgen"] }
+time = { workspace = true, features = ["serde", "formatting", "parsing", "wasm-bindgen", "macros"] }
 
 # brass_bulma = "0.1"
 fnv = "1.0.7"
