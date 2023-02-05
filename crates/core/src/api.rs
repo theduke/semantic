@@ -631,6 +631,14 @@ impl<E: ApiClientExecutor> ApiClient<E> {
         }
     }
 
+    pub async fn select_sql(&self, query: String) -> Result<Vec<DataMap>, anyhow::Error> {
+        match self.exec.execute(Query::QuerySql(QuerySql { query })).await {
+            Ok(Reply::QuerySql(items)) => Ok(items),
+            Ok(_other) => Err(anyhow::anyhow!("API returned invalid data")),
+            Err(err) => Err(err),
+        }
+    }
+
     pub async fn select_entities<T>(
         &self,
         select: factdb::query::select::Select,
