@@ -14,8 +14,8 @@ use semantic_core::{
     api::{self, ApiError, BackendConfig, DbConfig, FileImportMetadata, JobId, SemanticSchema},
     base::{
         entity_title, AttrBlobUri, AttrBlobUriWeb, AttrDownloadUrl, AttrFileName, AttrFileSize,
-        AttrHash, AttrMimeType, AttrOriginalHash, AttrPreviewImageBlobUri, SemanticBasePlugin, Tag,
-        Video, ATTR_DATA_URL,
+        AttrHash, AttrImportUrl, AttrMimeType, AttrOriginalHash, AttrPreviewImageBlobUri,
+        SemanticBasePlugin, Tag, Video, ATTR_DATA_URL,
     },
     core::SemanticCorePlugin,
     plugin::{FetchUrlJob, FetchUrlOutput, ImportJob, ImportOutput, PluginDescriptor},
@@ -823,7 +823,15 @@ impl App {
 
         let body: serde_json::Value = res.json().await?;
         let maps = crate::util::db_items_from_json(body)?;
-        let items = maps.into_iter().map(Item::new).collect();
+        let items = maps
+            .into_iter()
+            .map(|mut map| {
+                // Remove the custom import_url if it exists, since it shouldn't
+                // go into the database.
+                map.remove(AttrImportUrl::QUALIFIED_NAME);
+                Item::from(map)
+            })
+            .collect();
 
         Ok(FetchUrlOutput {
             items,

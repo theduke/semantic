@@ -6,7 +6,7 @@ use brass::{
 };
 use factdb::{AttrMapExt, AttributeMeta, DataMap, Expr, Id, Item, Select};
 use semantic_core::{
-    base::AttrUrl,
+    base::{AttrImportUrl, AttrUrl},
     plugin::{FetchUrlJob, FetchUrlOutput, ImportJob, ImportOutput},
 };
 use semantic_ui_core::{
@@ -231,7 +231,11 @@ impl MsgComponent for State {
                     return;
                 };
 
-                let url = if let Some(x) = item.item.get_attr::<AttrUrl>() {
+                let url_opt = item
+                    .item
+                    .get_attr::<AttrImportUrl>()
+                    .or_else(|| item.item.get_attr::<AttrUrl>());
+                let url = if let Some(x) = url_opt {
                     x
                 } else {
                     return;

@@ -116,6 +116,15 @@ pub struct AttrVisitCount(u64);
 )]
 pub struct AttrLastVisitTime(Timestamp);
 
+#[derive(Attribute)]
+#[factor(
+    namespace = "semantic",
+    title = "Import Url",
+    name = "import_url",
+    index
+)]
+pub struct AttrImportUrl(url::Url);
+
 pub fn entity_title(data: &DataMap) -> String {
     data.get_attr::<AttrTitle>()
         .or_else(|| data.get_id().map(|x| x.to_string()))
