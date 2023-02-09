@@ -12,6 +12,7 @@ pub struct Listing {
     pub description: Option<String>,
 
     #[serde(rename = "semantic/children")]
+    #[serde(default)]
     pub children: Vec<DataMap>,
 
     pub load_more_link: Option<ListingLink>,
