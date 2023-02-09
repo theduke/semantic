@@ -1,6 +1,3 @@
 [alias]
 # This configures a `cargo xtask` alias than runs a custom development CLI.
 xtask = "run --manifest-path crates/xtask/Cargo.toml --"
-
-[build]
-rustflags = ["--cfg=web_sys_unstable_apis"]
