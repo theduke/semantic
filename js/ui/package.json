@@ -4,7 +4,7 @@
   "description": "",
   "scripts": {
     "fmt": "prettier --write .",
-    "start": "vite --port 3001",
+    "start": "vite --port 4000",
     "lint": "eslint",
     "check": "tsc --noEmit",
     "dev": "vite",
