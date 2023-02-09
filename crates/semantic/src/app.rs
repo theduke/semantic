@@ -882,8 +882,6 @@ impl App {
     pub async fn import(&self, job: ImportJob) -> Result<ImportOutput, anyhow::Error> {
         tracing::trace!("starting import");
 
-        let db = self.require_db()?;
-
         let new_url = self.rewrite_fetch_url(job.url.clone()).await?;
         let job = if let Some(url) = new_url {
             tracing::debug!(original_url=%job.url, final_url=%url, "rewrote import url");
