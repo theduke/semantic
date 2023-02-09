@@ -15,7 +15,7 @@ use semantic_core::{
     base::{
         entity_title, AttrBlobUri, AttrBlobUriWeb, AttrDownloadUrl, AttrFileName, AttrFileSize,
         AttrHash, AttrImportUrl, AttrMimeType, AttrOriginalHash, AttrPreviewImageBlobUri,
-        SemanticBasePlugin, Tag, Video, ATTR_DATA_URL,
+        ImportUrlMapping, SemanticBasePlugin, Tag, Video, ATTR_DATA_URL,
     },
     core::SemanticCorePlugin,
     plugin::{FetchUrlJob, FetchUrlOutput, ImportJob, ImportOutput, PluginDescriptor},
@@ -799,6 +799,14 @@ impl App {
     }
 
     pub async fn fetch_url(&self, job: FetchUrlJob) -> Result<FetchUrlOutput, anyhow::Error> {
+        let new_url = self.rewrite_fetch_url(job.url.clone()).await?;
+        let job = if let Some(url) = new_url {
+            tracing::debug!(original_url=%job.url, final_url=%url, "rewrote import url");
+            FetchUrlJob { url, ..job }
+        } else {
+            job
+        };
+
         if let Some(out) = self.require_plugins()?.fetch_url(job.clone()).await? {
             Ok(out)
         } else {
@@ -829,7 +837,7 @@ impl App {
                 // Remove the custom import_url if it exists, since it shouldn't
                 // go into the database.
                 map.remove(AttrImportUrl::QUALIFIED_NAME);
-                Item::from(map)
+                Item::new(map)
             })
             .collect();
 
@@ -841,8 +849,49 @@ impl App {
         })
     }
 
+    async fn rewrite_fetch_url(&self, url: url::Url) -> Result<Option<url::Url>, anyhow::Error> {
+        let db = self.require_db()?;
+
+        let q = Select::new().with_filter(Expr::is_entity::<ImportUrlMapping>());
+        let mappings = db.select(q).await?;
+
+        let new_url = if let Some(domain) = url.domain() {
+            mappings.items.into_iter().find_map(|item| {
+                let map = ImportUrlMapping::try_from_map(item.data).ok()?;
+
+                if dbg!(map.source_url.trim()) == dbg!(domain) {
+                    let raw = format!(
+                        "{}/{}/{}?{}",
+                        map.target_url,
+                        url.domain().unwrap_or_default(),
+                        url.path(),
+                        url.query().unwrap_or_default(),
+                    );
+                    url::Url::parse(&raw).ok()
+                } else {
+                    None
+                }
+            })
+        } else {
+            None
+        };
+
+        Ok(new_url)
+    }
+
     pub async fn import(&self, job: ImportJob) -> Result<ImportOutput, anyhow::Error> {
         tracing::trace!("starting import");
+
+        let db = self.require_db()?;
+
+        let new_url = self.rewrite_fetch_url(job.url.clone()).await?;
+        let job = if let Some(url) = new_url {
+            tracing::debug!(original_url=%job.url, final_url=%url, "rewrote import url");
+            ImportJob { url, ..job }
+        } else {
+            job
+        };
+
         let output = if let Some(out) = self.require_plugins()?.import(job.clone()).await? {
             out
         } else {

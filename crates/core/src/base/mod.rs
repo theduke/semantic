@@ -32,6 +32,9 @@ pub use self::code_snippet::*;
 mod listing;
 pub use self::listing::*;
 
+mod import;
+pub use self::import::*;
+
 use factdb::{
     macros::Attribute,
     query::migrate::{
@@ -306,6 +309,8 @@ impl Plugin for SemanticBasePlugin {
                     person::AttrBirthDate::schema(),
                     person::Gender::schema(),
                     AttrLikeCount::schema(),
+                    AttrImportUrlMappingSourceUrl::schema(),
+                    AttrImportUrlMappingTargetUrl::schema(),
                 ],
                 classes: vec![
                     // File
@@ -326,6 +331,8 @@ impl Plugin for SemanticBasePlugin {
                     person::Person::schema(),
                     // Bookmarks.
                     Bookmark::schema(),
+                    // import
+                    ImportUrlMapping::schema(),
                 ],
                 indexes: vec![],
             }),
@@ -1285,6 +1292,40 @@ impl Plugin for SemanticBasePlugin {
                 }),
             );
 
+        let create_import_mapping = Migration::with_name("create_import_mapping")
+            .attr_create(
+                Attribute::new(
+                    AttrImportUrlMappingSourceUrl::QUALIFIED_NAME,
+                    ValueType::String,
+                )
+                .with_title("Source Url"),
+            )
+            .attr_create(
+                Attribute::new(
+                    AttrImportUrlMappingTargetUrl::QUALIFIED_NAME,
+                    ValueType::String,
+                )
+                .with_title("Target Url"),
+            )
+            .entity_create(Class {
+                id: Id::nil(),
+                ident: ImportUrlMapping::QUALIFIED_NAME.to_string(),
+                title: Some("Import Url Mapping".to_string()),
+                description: None,
+                attributes: vec![
+                    ClassAttribute {
+                        attribute: AttrImportUrlMappingSourceUrl::QUALIFIED_NAME.to_string(),
+                        required: true,
+                    },
+                    ClassAttribute {
+                        attribute: AttrImportUrlMappingTargetUrl::QUALIFIED_NAME.to_string(),
+                        required: true,
+                    },
+                ],
+                extends: Vec::new(),
+                strict: false,
+            });
+
         vec![
             rollup,
             create_like_count,
@@ -1299,6 +1340,7 @@ impl Plugin for SemanticBasePlugin {
             create_code_snippet,
             create_visual_hash,
             add_description_to_socialmediaaccount,
+            create_import_mapping,
         ]
     }
 }
