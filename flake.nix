@@ -214,9 +214,7 @@
           LD_LIBRARY_PATH = "${pkgs.zlib}/lib";
           RUST_BACKTRACE = "1";
           # Use lld linker for speedup.
-          RUSTFLAGS = "--cfg=web_sys_unstable_apis";
           RUST_LOG = "semantic=trace";
-          CARGO_INCREMENTAL = "1";
 
           # Needed for https / ssl support
           GIO_MODULE_DIR = "${pkgs.glib-networking}/lib/gio/modules/";
