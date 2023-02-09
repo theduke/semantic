@@ -24,7 +24,7 @@ exclude = [
 
 [workspace.dependencies]
 brass = { git = "https://github.com/theduke/brass.git", branch = "main" }
-factdb = { git = "https://github.com/theduke/factordb.git", branch = "main" }
+factdb = { git = "https://github.com/theduke/factordb.git", branch = "main" , default-features = false }
 factor_engine = { version = "0.1", git = "https://github.com/theduke/factordb.git", branch = "main" }
 factor_tools = { version = "0.1", git = "https://github.com/theduke/factordb.git", branch = "main" }
 anyhow = { version = "1.0.68" }
