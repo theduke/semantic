@@ -3,6 +3,7 @@ import {
   FACTOR_ID,
   FACTOR_IDENT,
   SEMANTIC_NOTE_BODY,
+  SEMANTIC_PREVIEW_IMAGE_URL,
   SEMANTIC_TAG_NAME,
   SEMANTIC_TEXT_FORMAT,
   SEMANTIC_TITLE,
@@ -14,7 +15,7 @@ import {
 import { renderImage, renderImageMedia } from "./image";
 import { renderVideo, renderVideoMedia } from "./video";
 import { renderAudio, renderAudioMedia } from "./audio";
-import { renderAttrFieldTextArea } from "../../component/entity/entity_form";
+import { renderAttrFieldTextArea, renderAttrImageLink } from "../../component/entity/entity_form";
 import { ValueMap } from "../registry";
 import { JSX } from "solid-js";
 import SolidMarkdown from "solid-markdown";
@@ -50,6 +51,9 @@ export function basePlugin(): UiPlugin {
                 {content}
               </pre>
             }
+          },
+          [SEMANTIC_PREVIEW_IMAGE_URL]: (value: any, item: ValueMap): JSX.Element => {
+            return <img src={value} style={{"max-width": '100%', "max-height": '300px'}} />
           }
         },
         attributeFieldRenderers: {
