@@ -1,10 +1,7 @@
 import { Job } from "semantic/dist/core";
 import { JSX, onCleanup, onMount } from "solid-js";
 import { useApi } from "../../context";
-import {
-  createLoader,
-  LoaderView,
-} from "../util/load";
+import { createLoader, LoaderView } from "../util/load";
 import { Notification, NotificationError } from "../bulma/notification";
 
 export interface JobStatusLoaderProps {

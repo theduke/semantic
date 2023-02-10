@@ -43,9 +43,11 @@ function buildRegistry(schema: SemanticSchema): UiRegistry {
 export function App(): JSX.Element {
   const oldSchema = context.storageLoadSchema();
   const oldRegistry = oldSchema ? buildRegistry(oldSchema) : null;
-  const [getRegistry, setRegistry] = createSignal<UiRegistry | null>(oldRegistry);
+  const [getRegistry, setRegistry] = createSignal<UiRegistry | null>(
+    oldRegistry
+  );
 
-  const onLogin = function(schema: SemanticSchema) {
+  const onLogin = function (schema: SemanticSchema) {
     context.storageSaveSchema(schema);
     const reg = buildRegistry(schema);
     setRegistry(reg);

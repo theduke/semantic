@@ -15,7 +15,10 @@ import {
 import { renderImage, renderImageMedia } from "./image";
 import { renderVideo, renderVideoMedia } from "./video";
 import { renderAudio, renderAudioMedia } from "./audio";
-import { renderAttrFieldTextArea, renderAttrImageLink } from "../../component/entity/entity_form";
+import {
+  renderAttrFieldTextArea,
+  renderAttrImageLink,
+} from "../../component/entity/entity_form";
 import { ValueMap } from "../registry";
 import { JSX } from "solid-js";
 import SolidMarkdown from "solid-markdown";
@@ -32,29 +35,33 @@ export function basePlugin(): UiPlugin {
       return {
         attributeRenderers: {
           [SEMANTIC_NOTE_BODY]: (value: any, item: ValueMap): JSX.Element => {
-            const content = (typeof value === 'string') ? value.trim() : '';
+            const content = typeof value === "string" ? value.trim() : "";
 
-            if (content === '') {
+            if (content === "") {
               return null;
             }
 
             const rawFormat = item[SEMANTIC_TEXT_FORMAT];
-            const format = rawFormat === 'markdown' ? 'markdown' : null;
-            console.debug({item, format, rawFormat})
+            const format = rawFormat === "markdown" ? "markdown" : null;
+            console.debug({ item, format, rawFormat });
 
-            if (format === 'markdown') {
-              return (
-                <SolidMarkdown children={content} />
-              );
+            if (format === "markdown") {
+              return <SolidMarkdown children={content} />;
             } else {
-              return <pre class="content" >
-                {content}
-              </pre>
+              return <pre class="content">{content}</pre>;
             }
           },
-          [SEMANTIC_PREVIEW_IMAGE_URL]: (value: any, item: ValueMap): JSX.Element => {
-            return <img src={value} style={{"max-width": '100%', "max-height": '300px'}} />
-          }
+          [SEMANTIC_PREVIEW_IMAGE_URL]: (
+            value: any,
+            item: ValueMap
+          ): JSX.Element => {
+            return (
+              <img
+                src={value}
+                style={{ "max-width": "100%", "max-height": "300px" }}
+              />
+            );
+          },
         },
         attributeFieldRenderers: {
           [SEMANTIC_NOTE_BODY]: renderAttrFieldTextArea,
@@ -70,8 +77,13 @@ export function basePlugin(): UiPlugin {
           [TY_SEMANTIC_AUDIO]: renderAudioMedia,
         },
         entityTitleRenderers: {
-          [TY_SEMANTIC_TAG]: (tag) => tag[SEMANTIC_TAG_NAME] || tag[SEMANTIC_TITLE] || tag[FACTOR_IDENT] || tag[FACTOR_ID] || '???',
-        }
+          [TY_SEMANTIC_TAG]: (tag) =>
+            tag[SEMANTIC_TAG_NAME] ||
+            tag[SEMANTIC_TITLE] ||
+            tag[FACTOR_IDENT] ||
+            tag[FACTOR_ID] ||
+            "???",
+        },
       };
     },
   };

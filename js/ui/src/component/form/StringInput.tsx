@@ -4,14 +4,14 @@ import { FieldAccessor } from ".";
 export type InputType = "text" | "number" | "url" | "datetime-local";
 
 export type StringInputPropsNumber = {
-  type: 'number';
+  type: "number";
   min?: number;
   max?: number;
-}
+};
 
 export type StringInputPropsUntyped = {
   type: InputType;
-}
+};
 
 export interface StringInputBaseProps {
   field: FieldAccessor<string>;
@@ -19,7 +19,8 @@ export interface StringInputBaseProps {
   mode?: "onchange" | "oninput";
 }
 
-export type StringInputProps = StringInputBaseProps & (StringInputPropsNumber | StringInputPropsUntyped);
+export type StringInputProps = StringInputBaseProps &
+  (StringInputPropsNumber | StringInputPropsUntyped);
 
 export function StringInput(props: StringInputProps): JSX.Element {
   const field = props.field;
@@ -29,7 +30,7 @@ export function StringInput(props: StringInputProps): JSX.Element {
     createEffect(() => {
       const field = props.field.get();
       const value = field?.value;
-      if (elem  && value !== undefined) {
+      if (elem && value !== undefined) {
         elem.value = value;
       }
     });
@@ -52,7 +53,8 @@ export function StringInput(props: StringInputProps): JSX.Element {
   });
 
   // TODO: avoid cast...
-  const numProps: StringInputPropsNumber | null = (props.type === 'number') ? props as StringInputPropsNumber : null;
+  const numProps: StringInputPropsNumber | null =
+    props.type === "number" ? (props as StringInputPropsNumber) : null;
 
   return (
     <input
@@ -66,18 +68,18 @@ export function StringInput(props: StringInputProps): JSX.Element {
         props.mode === "oninput"
           ? undefined
           : (e) => {
-            e.stopPropagation();
-            const value = elem?.value;
-            field.set(value ?? "");
-          }
+              e.stopPropagation();
+              const value = elem?.value;
+              field.set(value ?? "");
+            }
       }
       oninput={
         props.mode === "onchange"
           ? (e) => {
-            e.stopPropagation();
-            const value = elem?.value;
-            field.set(value ?? "");
-          }
+              e.stopPropagation();
+              const value = elem?.value;
+              field.set(value ?? "");
+            }
           : undefined
       }
     />

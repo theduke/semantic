@@ -31,8 +31,8 @@ function FieldErrors(props: { field: FieldAccessor<any> }): JSX.Element {
   const field = props.field;
   createEffect(() => {
     const errors = field.errors()?.errors;
-    console.debug({field, fieldErrrs: errors, form: (field as any).form})
-  })
+    console.debug({ field, fieldErrrs: errors, form: (field as any).form });
+  });
   return (
     <>
       <Show when={field.errors()?.errors?.length ?? 0 > 0}>

@@ -11,11 +11,7 @@ import { InputFloatField } from "../form/InputFloatField";
 import { InputIntField } from "../form/InputIntField";
 import { renderJobStatus } from "../job/JobStatusLoader";
 import { GenericPage } from "../util";
-import {
-  createLoader,
-  FallibleResourceLoader,
-  LoaderView,
-} from "../util/load";
+import { createLoader, FallibleResourceLoader, LoaderView } from "../util/load";
 
 interface FormData {
   similarityMin: number;

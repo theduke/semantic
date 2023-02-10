@@ -76,12 +76,14 @@ export type EntityMediaRenderer = (
 ) => [MediaHandle | null, JSX.Element];
 
 export interface AttributeFieldRendererProps {
-  field: FieldAccessor<any>,
-  attribute: Attribute,
-  cardinality: Cardinality,
+  field: FieldAccessor<any>;
+  attribute: Attribute;
+  cardinality: Cardinality;
 }
 
-export type AttributeFieldRenderer = (props: AttributeFieldRendererProps) => [JSX.Element, FormValidator<ValueMap>];
+export type AttributeFieldRenderer = (
+  props: AttributeFieldRendererProps
+) => [JSX.Element, FormValidator<ValueMap>];
 
 export type ClassMap<T> = Record<EntityType, T>;
 
@@ -96,7 +98,10 @@ export class UiRegistry {
   plugins: Record<string, UiPlugin> = {};
 
   attributeRenderers: Record<AttributeName, AttributeRenderer> = {};
-  private attributeFieldrenderers: Record<AttributeName, AttributeFieldRenderer> = {};
+  private attributeFieldrenderers: Record<
+    AttributeName,
+    AttributeFieldRenderer
+  > = {};
 
   entityTitleRenderers: ClassMap<EntityTitleRenderer> = {};
   entityContentRenderers: ClassMap<EntityContentRenderer> = {};
@@ -147,7 +152,9 @@ export class UiRegistry {
     )) {
       this.attributeRenderers[attr] = render;
     }
-    for (const [attr, render] of Object.entries(schema.attributeFieldRenderers ?? {})) {
+    for (const [attr, render] of Object.entries(
+      schema.attributeFieldRenderers ?? {}
+    )) {
       this.attributeFieldrenderers[attr] = render;
     }
 
@@ -202,7 +209,9 @@ export class UiRegistry {
 
   entityTitle(entity: ValueMap): string {
     const ty: string = entity[FACTOR_TYPE];
-    return this.entityTitleRenderers[ty]?.(entity) || genericEntityTitle(entity);
+    return (
+      this.entityTitleRenderers[ty]?.(entity) || genericEntityTitle(entity)
+    );
   }
 
   entityAttributes(ty: EntityType): [Attribute, Cardinality][] {

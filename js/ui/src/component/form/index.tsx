@@ -23,12 +23,12 @@ export interface ValidationResult {
 
 type MappedValues<Values, T> = {
   [K in keyof Values]?: Values[K] extends any[]
-  ? Values[K][number] extends object // [number] is the special sauce to get the type of array's element. More here https://github.com/Microsoft/TypeScript/pull/21316
-  ? MappedValues<Values[K][number], T>[]
-  : T[]
-  : Values[K] extends object
-  ? MappedValues<Values[K], T>
-  : T;
+    ? Values[K][number] extends object // [number] is the special sauce to get the type of array's element. More here https://github.com/Microsoft/TypeScript/pull/21316
+      ? MappedValues<Values[K][number], T>[]
+      : T[]
+    : Values[K] extends object
+    ? MappedValues<Values[K], T>
+    : T;
 };
 
 export type FieldValidations<Values> = MappedValues<Values, ValidationResult>;
@@ -62,12 +62,12 @@ export interface FormInit<Values extends Record<string, any>> {
 
 type StoreFields<Values> = {
   [K in keyof Values]?: Values[K] extends any[]
-  ? Values[K][number] extends object // [number] is the special sauce to get the type of array's element. More here https://github.com/Microsoft/TypeScript/pull/21316
-  ? StoreFields<Values[K][number]>[]
-  : FieldState<[Values[K]]>
-  : Values[K] extends object
-  ? StoreFields<Values[K]>
-  : FieldState<Values[K]>;
+    ? Values[K][number] extends object // [number] is the special sauce to get the type of array's element. More here https://github.com/Microsoft/TypeScript/pull/21316
+      ? StoreFields<Values[K][number]>[]
+      : FieldState<[Values[K]]>
+    : Values[K] extends object
+    ? StoreFields<Values[K]>
+    : FieldState<Values[K]>;
 };
 
 type StoreData<Values> = {
@@ -148,15 +148,11 @@ export class FormState<Values extends Record<string, any>> {
     const newData: FieldState<Values[K]> = {
       value,
       touched: true,
-      changed: (old?.changed === true) || value !== old?.value,
+      changed: old?.changed === true || value !== old?.value,
       validation: validations,
     };
 
-    this.setStore(
-      "fields",
-      name as any,
-      newData as any,
-    );
+    this.setStore("fields", name as any, newData as any);
 
     if (!isValid) {
       this.setStore("isValid", false);
@@ -400,6 +396,8 @@ export class MappedFieldAccessor<T, M> implements FieldAccessor<M> {
   }
 }
 
-export function createForm<Values extends Record<string, any>>(init: FormInit<Values>): FormState<Values> {
+export function createForm<Values extends Record<string, any>>(
+  init: FormInit<Values>
+): FormState<Values> {
   return new FormState(init);
 }

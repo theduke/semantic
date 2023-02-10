@@ -17,7 +17,7 @@ export function useApi(): Api {
   return useContext(ApiContext);
 }
 
-const STORAGE_KEY_SCHEMA = '_semantic_schema';
+const STORAGE_KEY_SCHEMA = "_semantic_schema";
 
 export function storageSaveSchema(schema: SemanticSchema) {
   localStorage.setItem(STORAGE_KEY_SCHEMA, JSON.stringify(schema));

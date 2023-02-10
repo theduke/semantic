@@ -12,7 +12,11 @@ import {
   ValueType,
 } from "semantic/dist/core";
 import { exprAttr, exprIn, exprLiteral, exprNotEq } from "semantic/dist/db";
-import { AttributeFieldRendererProps, UiRegistry, ValueMap } from "../../semantic/registry";
+import {
+  AttributeFieldRendererProps,
+  UiRegistry,
+  ValueMap,
+} from "../../semantic/registry";
 import {
   FACTOR_ID,
   FACTOR_IDENT,
@@ -55,13 +59,17 @@ function unionPlainOptions(variants: ValueType[]): SelectOption<Value>[] {
     } else {
       throw new Error(
         "Unsupported union type - only unions of constant values are supported " +
-        JSON.stringify(variant)
+          JSON.stringify(variant)
       );
     }
   });
 }
 
-export function makeAttributeValidator<T>(attr: string, required: boolean, validate?: (value: T, values: ValueMap) => ValidationResult | null): FormValidator<ValueMap> {
+export function makeAttributeValidator<T>(
+  attr: string,
+  required: boolean,
+  validate?: (value: T, values: ValueMap) => ValidationResult | null
+): FormValidator<ValueMap> {
   return (values) => {
     const value = values[attr];
 
@@ -105,16 +113,18 @@ function makeStringValidator(
   required: boolean,
   validate?: (value: string, values: ValueMap) => string | null
 ): FormValidator<ValueMap> {
-  const val = validate ? (value: any, values: ValueMap): ValidationResult | null => {
-    const s = validate(value.toString(), values);
-    if (s) {
-      return {
-        errors: [{ message: s }]
+  const val = validate
+    ? (value: any, values: ValueMap): ValidationResult | null => {
+        const s = validate(value.toString(), values);
+        if (s) {
+          return {
+            errors: [{ message: s }],
+          };
+        } else {
+          return null;
+        }
       }
-    } else {
-      return null;
-    }
-  } : undefined;
+    : undefined;
   return makeAttributeValidator<any>(attr, required, val);
 }
 
@@ -124,7 +134,6 @@ export function entityAttributeFormField(
   attr: Attribute,
   cardinality: Cardinality
 ): [JSX.Element, FormValidator<ValueMap>] {
-
   const attrIdent = attr["factor/ident"];
   const customRenderer = registry.attributeFieldRenderer(attrIdent);
   if (customRenderer) {
@@ -132,13 +141,13 @@ export function entityAttributeFormField(
       field: form.field(attrIdent),
       attribute: attr,
       cardinality,
-    })
+    });
   }
 
   const attributeName = attr["factor/title"] || attr["factor/ident"];
   const ty = attr["factor/valueType"];
   const isRequired = cardinality === "Required";
-  const label = isRequired ? attributeName + ' *' : attributeName;
+  const label = isRequired ? attributeName + " *" : attributeName;
 
   if (ty === "Bool") {
     let field = form.field(attrIdent) as FieldAccessor<boolean>;
@@ -171,15 +180,15 @@ export function entityAttributeFormField(
       case "Url":
         inputType = "url";
         // TODO: validate correct URL
-        val = makeStringValidator(attrIdent, isRequired, value => {
+        val = makeStringValidator(attrIdent, isRequired, (value) => {
           try {
             const u = new URL(value);
             if (!u.protocol || !u.host) {
-              return 'Invalid url: must have a scheme and a host';
+              return "Invalid url: must have a scheme and a host";
             }
             return null;
           } catch (error: any) {
-            return 'Invalid url: ' + error.toString();
+            return "Invalid url: " + error.toString();
           }
         });
         break;
@@ -231,9 +240,7 @@ export function entityAttributeFormField(
         throw new Error(`Unsupported value type: ${ty}`);
     }
 
-    const elem = (
-      <InputField type={inputType} label={label} field={field} />
-    );
+    const elem = <InputField type={inputType} label={label} field={field} />;
 
     return [elem, val];
   } else if (ty === "DateTime") {
@@ -387,13 +394,13 @@ export function entityAttributeFormField(
         },
       ];
     }
-  } else if (ty === 'Bytes') {
-    const f = <Field>
-      <div class="label">{attributeName}</div>
-      <div class="control">
-        bytes...
-      </div>
-    </Field>;
+  } else if (ty === "Bytes") {
+    const f = (
+      <Field>
+        <div class="label">{attributeName}</div>
+        <div class="control">bytes...</div>
+      </Field>
+    );
 
     return [f, () => null];
   }
@@ -512,9 +519,9 @@ export function GenericEntityForm(props: GenericEntityFormProps): JSX.Element {
   });
 
   availableAttrs.sort((a, b) => {
-    const x = a[FACTOR_TITLE] || a[FACTOR_IDENT] || a[FACTOR_ID] || '';
-    const y = b[FACTOR_TITLE] || b[FACTOR_IDENT] || a[FACTOR_ID] || '';
-    return (x < y) ? -1 : (x > y ? 1 : 0)
+    const x = a[FACTOR_TITLE] || a[FACTOR_IDENT] || a[FACTOR_ID] || "";
+    const y = b[FACTOR_TITLE] || b[FACTOR_IDENT] || a[FACTOR_ID] || "";
+    return x < y ? -1 : x > y ? 1 : 0;
   });
 
   const extraAdderSearch = (term: string): Promise<Attribute[]> => {
@@ -628,10 +635,13 @@ export function GenericEntityForm(props: GenericEntityFormProps): JSX.Element {
   );
 }
 
-export function renderAttrFieldTextArea(props: AttributeFieldRendererProps): [JSX.Element, FormValidator<ValueMap>] {
+export function renderAttrFieldTextArea(
+  props: AttributeFieldRendererProps
+): [JSX.Element, FormValidator<ValueMap>] {
   // FIXME: validator!
-  const attributeName = props.attribute["factor/title"] || props.attribute["factor/ident"];
-  const elem =  <TextAreaField field={props.field} label={attributeName} />
+  const attributeName =
+    props.attribute["factor/title"] || props.attribute["factor/ident"];
+  const elem = <TextAreaField field={props.field} label={attributeName} />;
   // TODO: validator?
-  return [elem, (_values: any) => null]
+  return [elem, (_values: any) => null];
 }

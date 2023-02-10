@@ -98,7 +98,11 @@ export function renderValue(value: any): JSX.Element {
         return null;
       } else if (Array.isArray(value)) {
         const values = value.map((v) => <li>{renderValue(v)}</li>);
-        return <div class='content'><ul>{values}</ul></div>;
+        return (
+          <div class="content">
+            <ul>{values}</ul>
+          </div>
+        );
       } else {
         // FIXME: render generic objects!
         return JSON.stringify(value, null, 2);
@@ -123,7 +127,7 @@ export function renderTypedValue(value: any, ty: ValueType): JSX.Element {
       break;
 
     case "Bool":
-      if (valty === 'boolean') {
+      if (valty === "boolean") {
         return value ? "yes" : "no";
       }
     case "Bytes":
@@ -131,11 +135,11 @@ export function renderTypedValue(value: any, ty: ValueType): JSX.Element {
         return `bytearray[len=${value.length}]`;
       }
     case "DateTime":
-      if (valty === 'number') {
+      if (valty === "number") {
         return new Temporal.Instant(BigInt(value * 1_000_000)).toLocaleString();
       }
     case "Url":
-      if (valty === 'string') {
+      if (valty === "string") {
         return (
           <a href={value} target="_blank">
             {value}
@@ -143,21 +147,23 @@ export function renderTypedValue(value: any, ty: ValueType): JSX.Element {
         );
       }
     case "Ref":
-      if (typeof value === 'string') {
+      if (typeof value === "string") {
         return <Link href={"/entity/" + value}>{value}</Link>;
       }
     default:
       break;
   }
 
-  if (typeof ty === 'object') {
-    if ('List' in ty && Array.isArray(value)) {
-      const itemTy = ty['List'];
-      console.log({ itemTy, value })
-      const items = value.map(v => <li>{renderTypedValue(v, itemTy)}</li>);
-      return (<div class="content"><ul style={{'margin-top': 0}}>
-        {items}
-      </ul></div>);
+  if (typeof ty === "object") {
+    if ("List" in ty && Array.isArray(value)) {
+      const itemTy = ty["List"];
+      console.log({ itemTy, value });
+      const items = value.map((v) => <li>{renderTypedValue(v, itemTy)}</li>);
+      return (
+        <div class="content">
+          <ul style={{ "margin-top": 0 }}>{items}</ul>
+        </div>
+      );
     }
   } else if (valty === "object") {
     if ("Map" in value) {
@@ -179,7 +185,7 @@ export function renderAttrValue(
   reg: UiRegistry,
   attr: AttributeName,
   value: any,
-  entity: ValueMap,
+  entity: ValueMap
 ): JSX.Element {
   const attrty = reg.attrs[attr];
   if (attrty) {
