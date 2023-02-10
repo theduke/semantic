@@ -12,6 +12,8 @@ use semantic_core::{
     base::{entity_title, expr_find_by_id_ident_or_title, AttrTagName, Tag},
 };
 
+use super::AsyncCliCommand;
+
 #[derive(clap::Parser)]
 pub struct CmdUpload {
     /// Run in non-interactive mode without any prompts.
@@ -73,20 +75,8 @@ struct FileItem {
 
 type Client = api::ApiClient<semantic::ApiClient>;
 
-impl CmdUpload {
-    pub fn run(self) {
-        let rt = tokio::runtime::Runtime::new().unwrap();
-
-        match rt.block_on(self.upload()) {
-            Ok(_) => {}
-            Err(err) => {
-                eprintln!("Upload failed!\n{err}");
-                std::process::exit(1);
-            }
-        }
-    }
-
-    async fn upload(self) -> Result<(), anyhow::Error> {
+impl AsyncCliCommand for CmdUpload {
+    async fn run(self) -> Result<(), anyhow::Error> {
         let cmd = self;
 
         if cmd.paths.is_empty() {

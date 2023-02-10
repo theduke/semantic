@@ -1,13 +1,12 @@
 use std::path::PathBuf;
 
 use anyhow::bail;
-use semantic::app::AppConfig;
 
-use crate::BackendOptions;
+use crate::cmd::{AsyncCliCommand, BackendOptions};
 
 /// Delete entities.
 #[derive(clap::Parser)]
-pub struct ArchiveExportCmd {
+pub struct CmdArchiveExport {
     #[clap(flatten)]
     backend: BackendOptions,
 
@@ -28,8 +27,8 @@ pub struct ArchiveExportCmd {
     path: Option<PathBuf>,
 }
 
-impl ArchiveExportCmd {
-    pub fn run(self) {
+impl AsyncCliCommand for CmdArchiveExport {
+    async fn run(self) -> Result<(), anyhow::Error> {
         let backend = self.backend.build_backend_config().unwrap();
         let app_config = semantic::app::AppConfig {
             backend: Some(backend),
@@ -40,18 +39,8 @@ impl ArchiveExportCmd {
             tmp_dir: None,
         };
 
-        let rt = tokio::runtime::Runtime::new().expect("Could not start runtime");
-        let handle = rt.handle().clone();
-        rt.block_on(self.export(app_config, handle))
-            .expect("Export failed");
-    }
-
-    async fn export(
-        self,
-        app_config: AppConfig,
-        handle: tokio::runtime::Handle,
-    ) -> Result<(), anyhow::Error> {
         tracing::debug!("opening database...");
+        let handle = tokio::runtime::Handle::current();
         let app = semantic::app::App::build(app_config, handle).await?;
 
         let compression = if self.no_gzip {

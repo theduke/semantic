@@ -6,10 +6,10 @@ use anyhow::{anyhow, bail, Context};
 use semantic::app::App;
 use semantic_core::api::DbConfig;
 
-use crate::BackendOptions;
+use crate::cmd::{BackendOptions, CliCommand};
 
 #[derive(clap::Parser)]
-pub struct LogCompactCmd {
+pub struct CmdLogCompact {
     #[clap(flatten)]
     backend: BackendOptions,
     /// The new password to use.
@@ -22,8 +22,8 @@ pub struct LogCompactCmd {
     new_path: String,
 }
 
-impl LogCompactCmd {
-    pub fn run(self) -> Result<(), anyhow::Error> {
+impl CliCommand for CmdLogCompact {
+    fn run(self) -> Result<(), anyhow::Error> {
         let cmd = self;
 
         // TODO: this should also "compact" the event log of the factordb, if allowed by config.

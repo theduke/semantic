@@ -1,8 +1,12 @@
+use crate::cmd::AsyncCliCommand;
+
+use super::ClientOptions;
+
 /// Delete entities.
 #[derive(clap::Parser)]
-pub struct DeleteCmd {
+pub struct CmdDelete {
     #[clap(flatten)]
-    client: crate::ClientOptions,
+    client: ClientOptions,
 
     /// Run in non-interactive mode without any prompts.
     #[arg(short = 'y', long)]
@@ -11,13 +15,8 @@ pub struct DeleteCmd {
     ids: Vec<factdb::Id>,
 }
 
-impl DeleteCmd {
-    pub fn run(self) {
-        let rt = tokio::runtime::Runtime::new().expect("Could not start runtime");
-        rt.block_on(self.delete());
-    }
-
-    async fn delete(self) {
+impl AsyncCliCommand for CmdDelete {
+    async fn run(self) -> Result<(), anyhow::Error> {
         let client = self.client.build_client();
 
         let mut batch = factdb::Batch::new();
@@ -25,10 +24,12 @@ impl DeleteCmd {
             batch = batch.and_delete(factdb::query::mutate::Delete { id: id.clone() });
         }
 
-        client.batch(batch).await.unwrap();
+        client.batch(batch).await?;
 
         if !self.auto_confirm {}
 
         eprintln!("{} items deleted!", self.ids.len());
+
+        Ok(())
     }
 }

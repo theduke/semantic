@@ -3,6 +3,8 @@ use std::{io::Read, path::PathBuf};
 use anyhow::Context;
 use factdb::{AttrMapExt, DataMap, Id};
 
+use crate::cmd::{AppOptions, AsyncCliCommand};
+
 /// Create entities from JSON.
 ///
 /// The import source may either be stdin or a file.
@@ -12,32 +14,26 @@ use factdb::{AttrMapExt, DataMap, Id};
 /// * A single JSON encoded entity
 /// * jsonlines with each line containing a JSON entity
 #[derive(clap::Parser)]
-pub struct CreateCmd {
+pub struct CmdCreate {
     #[clap(flatten)]
-    app: crate::AppOptions,
+    app: AppOptions,
 
     /// The path to a file containing entities.
     /// If not specified the data will be read from stdin.
     path: Option<PathBuf>,
 }
 
-impl CreateCmd {
-    pub fn run(self) {
-        let rt = tokio::runtime::Runtime::new().expect("Could not start runtime");
-        rt.block_on(self.create(rt.handle()));
-    }
-
-    async fn create(self, rt: &tokio::runtime::Handle) {
+impl AsyncCliCommand for CmdCreate {
+    async fn run(self) -> Result<(), anyhow::Error> {
         eprintln!("Reading input...");
 
         // TODO: don't require reading the entire input into memory.
         let input = if let Some(path) = self.path {
             std::fs::read_to_string(&path)
-                .with_context(|| format!("Could not read file at {}", path.display()))
-                .unwrap()
+                .with_context(|| format!("Could not read file at {}", path.display()))?
         } else {
             let mut buf = String::new();
-            std::io::stdin().lock().read_to_string(&mut buf).unwrap();
+            std::io::stdin().lock().read_to_string(&mut buf)?;
             buf
         };
 
@@ -62,12 +58,11 @@ impl CreateCmd {
 
         eprintln!("Found {} items!", items.len());
 
-        let options = self.app.build().unwrap();
+        let options = self.app.build()?;
         eprintln!("Opening app...");
-        let app = semantic::app::App::build(options, rt.clone())
-            .await
-            .unwrap();
-        let db = app.require_db().unwrap();
+        let handle = tokio::runtime::Handle::current();
+        let app = semantic::app::App::build(options, handle).await?;
+        let db = app.require_db()?;
 
         eprintln!("Creating...");
         let len = items.len();
@@ -77,8 +72,9 @@ impl CreateCmd {
             batch = batch.and_create(factdb::query::mutate::Create { id, data: item });
         }
 
-        db.batch(batch).await.unwrap();
+        db.batch(batch).await?;
 
         eprintln!("{} items created!", len);
+        Ok(())
     }
 }

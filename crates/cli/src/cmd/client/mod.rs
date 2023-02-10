@@ -1,24 +1,41 @@
 use futures::future::BoxFuture;
 use semantic_core::api;
 
+use super::CliCommand;
+
 mod delete;
 mod sql;
 
-#[derive(clap::Subcommand)]
-pub(crate) enum ClientCommand {
-    Delete(delete::DeleteCmd),
-    Sql(sql::SqlCmd),
+#[derive(clap::Parser, Clone)]
+pub struct ClientOptions {
+    /// Server address.
+    ///
+    /// Defaults to "http://localhost:3000".
+    #[arg(short = 'a', long)]
+    address: Option<url::Url>,
 }
 
-impl ClientCommand {
-    pub fn run(self) {
+impl ClientOptions {
+    fn build_client(&self) -> ReqwestApiClient {
+        let endpoint = self
+            .address
+            .clone()
+            .unwrap_or_else(|| "http://localhost:3000".parse().unwrap());
+        ReqwestApiClient::new(ReqwestExecutor::new(endpoint))
+    }
+}
+
+#[derive(clap::Subcommand)]
+pub enum CmdClient {
+    Delete(delete::CmdDelete),
+    Sql(sql::CmdSql),
+}
+
+impl CliCommand for CmdClient {
+    fn run(self) -> Result<(), anyhow::Error> {
         match self {
-            Self::Delete(cmd) => {
-                cmd.run();
-            }
-            Self::Sql(cmd) => {
-                cmd.run();
-            }
+            Self::Delete(cmd) => cmd.run(),
+            Self::Sql(cmd) => cmd.run(),
         }
     }
 }
