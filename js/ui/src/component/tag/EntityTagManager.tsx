@@ -5,7 +5,7 @@ import {
   SEMANTIC_TAGS,
   SEMANTIC_TAG_NAME,
 } from "semantic/dist/schema";
-import { Box, DeletableTag, Tag, Tags } from "solid-bulma";
+import { Box, DeletableTag, Tags } from "solid-bulma";
 import { createEffect, createSignal, For, JSX, Show } from "solid-js";
 import { buildTagSelect } from ".";
 import { Modal } from "../bulma/modal";
@@ -95,7 +95,7 @@ export function EntityTagManager(props: EntityTagManagerProps): JSX.Element {
 
           if (ops.length > 0) {
             try {
-              const out = await runWithLoader(
+              await runWithLoader(
                 setPersistState,
                 api.mutate({
                   Patch: { id: props.entity[FACTOR_ID], patch: ops },
@@ -186,7 +186,7 @@ export function EntityTagManager(props: EntityTagManagerProps): JSX.Element {
               <Button onclick={() => props.onFinished?.(null)}>Cancel</Button>
             </Buttons>
 
-            <Show when={loadAsError(persistState())}>{renderError}</Show>
+            <Show when={loadAsError(persistState())} keyed>{renderError}</Show>
           </div>
         );
 

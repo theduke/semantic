@@ -20,6 +20,7 @@ export function EntitySearcher(props: EntitySearcherProps): JSX.Element {
   return (
     <Show
       when={activeItem()}
+      keyed
       fallback={
         <EntityPicker
           autoFocus={props.autoFocus}

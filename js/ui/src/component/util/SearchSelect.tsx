@@ -75,7 +75,7 @@ export function SearchSelect<T>(props: SearchSelectProps<T>): JSX.Element {
       <div>
         <ErrorBoundary fallback={renderError}>
           <Switch>
-            <Match when={res()}>
+            <Match when={res()} keyed>
               {(items) => (
                 <Show when={items.length > 0} fallback={noResultsFallback}>
                   <ItemWrapper>

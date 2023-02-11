@@ -7,6 +7,7 @@ import {
   SEMANTIC_TAG_NAME,
   SEMANTIC_TEXT_FORMAT,
   SEMANTIC_TITLE,
+  SEMANTIC_URL,
   TY_SEMANTIC_AUDIO,
   TY_SEMANTIC_IMAGE,
   TY_SEMANTIC_TAG,
@@ -17,7 +18,6 @@ import { renderVideo, renderVideoMedia } from "./video";
 import { renderAudio, renderAudioMedia } from "./audio";
 import {
   renderAttrFieldTextArea,
-  renderAttrImageLink,
 } from "../../component/entity/entity_form";
 import { ValueMap } from "../registry";
 import { JSX } from "solid-js";
@@ -55,12 +55,18 @@ export function basePlugin(): UiPlugin {
             value: any,
             item: ValueMap
           ): JSX.Element => {
-            return (
+            const img = (
               <img
                 src={value}
                 style={{ "max-width": "100%", "max-height": "300px" }}
               />
             );
+            const url = item[SEMANTIC_URL];
+            if (url) {
+              return <a href={url}>{img}</a>;
+            } else {
+              return img;
+            }
           },
         },
         attributeFieldRenderers: {

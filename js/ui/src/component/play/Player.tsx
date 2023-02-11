@@ -189,7 +189,7 @@ export class Player {
     const mediaRenderer = this.registry.mediaRenderer(ty);
 
     return runWithOwner(this.renderScope, () => {
-      let content: JSX.Element | undefined;
+      let content: JSX.Element;
       let mediaHandle: MediaHandle | null = null;
       if (mediaRenderer) {
         [mediaHandle, content] = mediaRenderer({
@@ -230,7 +230,7 @@ export class Player {
         content = this.registry.renderEntity(item, { preview: true });
       }
       return [content, mediaHandle];
-    });
+    })!;
   }
 
   goto(index: number): void {

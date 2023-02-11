@@ -391,8 +391,8 @@ function QueueItem(props: QueueItemProps): JSX.Element {
             </Show>
           </div>
         </div>
-        <Show when={loadAsError(item.loader[0]())}>
-          {(error) => (
+        <Show when={loadAsError(item.loader[0]())} keyed>
+          {(error: string) => (
             <div class="mt-3">
               <NotificationError>{error}</NotificationError>
             </div>

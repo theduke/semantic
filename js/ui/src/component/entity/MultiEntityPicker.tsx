@@ -1,6 +1,5 @@
 import { ValueMap } from "semantic/dist/api";
 import { Expr } from "semantic/dist/core";
-import { FACTOR_ID, SEMANTIC_TITLE } from "semantic/dist/schema";
 import { DeletableTag, Tag, Tags } from "solid-bulma";
 import { For, JSX } from "solid-js";
 import { searchEntities } from ".";

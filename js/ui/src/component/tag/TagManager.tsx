@@ -95,7 +95,7 @@ function TagManager(props: TagManagerProps): JSX.Element {
   return (
     <div>
       <Switch>
-        <Match when={tagDelete()}>
+        <Match when={tagDelete()} keyed>
           {(tag) => {
             return (
               <EntityDeleterModal
@@ -110,7 +110,7 @@ function TagManager(props: TagManagerProps): JSX.Element {
           }}
         </Match>
 
-        <Match when={merging()}>
+        <Match when={merging()} keyed>
           {(sourceTag) => (
             <Modal onClose={() => setMerging(null)}>
               <Box>

@@ -107,7 +107,7 @@ export function PlayerBar(props: PlayerBarProps): JSX.Element {
           ]}
         </ButtonGroup>
 
-        <Show when={state.activeItem}>
+        <Show keyed when={state.activeItem}>
           {(item) => (
             <Buttons class="ml-4" attach>
               <Button disabled>{`${item.index + 1}/${state.itemCount}`}</Button>
@@ -129,7 +129,7 @@ export function PlayerBar(props: PlayerBarProps): JSX.Element {
       >
         <ButtonGroup style={{ "max-width": "100%" }}>
           {[
-            <Show when={state.activeItem}>
+            <Show when={state.activeItem} keyed>
               {(item) => (
                 <Button
                   disabled={props.isFullscreen?.()}

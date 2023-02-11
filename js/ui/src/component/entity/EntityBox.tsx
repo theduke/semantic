@@ -24,10 +24,12 @@ export interface EntityBoxProps {
   children?: JSX.Element;
 }
 
+interface ActiveAction {
+  index: number;
+}
+
 export function EntityBox(props: EntityBoxProps): JSX.Element {
-  const [activeAction, setActiveAction] = createSignal<{
-    index: number;
-  } | null>(null);
+  const [activeAction, setActiveAction] = createSignal<ActiveAction | null>(null);
   const actionRenderProps: EntityActionRenderProps = {
     close: () => {
       setActiveAction(null);
@@ -88,8 +90,8 @@ export function EntityBox(props: EntityBoxProps): JSX.Element {
         class="card-content"
         style={{ width: "100%", "max-width": "100%", "overflow-y": "scroll" }}
       >
-        <Show when={activeAction()} fallback={() => props.children}>
-          {(index) => {
+        <Show when={activeAction()} keyed fallback={() => props.children}>
+          {(index: ActiveAction) => {
             const action = props.actions?.[index.index];
             if (!action) {
               throw new Error("invalid action index");

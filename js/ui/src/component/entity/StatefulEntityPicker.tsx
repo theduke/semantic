@@ -48,6 +48,7 @@ export function StatefulEntityPicker(
     <div>
       <Show
         when={item()}
+        keyed
         fallback={() => {
           return (
             <Switch>

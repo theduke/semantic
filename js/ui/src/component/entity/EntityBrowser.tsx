@@ -24,7 +24,6 @@ import { FACTOR_ID } from "semantic/dist/schema";
 import { ToggleableEntityFilter } from "./filter/ToggleableEntityFilter";
 import { buildFilterDataSelect, EntityFilter, newFilterData } from "./filter";
 import { Button } from "../bulma/button";
-import { Select } from "semantic/dist/core";
 
 // const STORAGE_KEY_BROWSE_PAGE_FILTER_EXPANDED = "browse-page-filter-expanded";
 
@@ -119,8 +118,8 @@ export function EntityBrowser(props: EntityBrowserProps): JSX.Element {
         <Suspense fallback={SPINNER}>
           <Switch>
             <Match when={page.loading}>{SPINNER}</Match>
-            <Match when={page.error}>{(error) => renderError(error)}</Match>
-            <Match when={page()}>
+            <Match when={page.error} keyed>{(error) => renderError(error)}</Match>
+            <Match when={page()} keyed>
               {(page) => {
                 const f = filter();
 

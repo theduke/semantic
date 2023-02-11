@@ -292,7 +292,7 @@ export function entityAttributeFormField(
     );
     const elem = (
       <FieldHorizontal label={label}>
-        <Show when={field.get()?.value} fallback={picker}>
+        <Show when={field.get()?.value} fallback={picker} keyed>
           {(id) => {
             return (
               <div>

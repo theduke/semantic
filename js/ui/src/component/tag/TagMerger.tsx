@@ -43,6 +43,7 @@ export function TagMerger(props: TagMergerProps): JSX.Element {
 
       <Show
         when={targetTag()}
+        keyed
         fallback={
           <EntityPicker
             buildFilter={exprSearchTagByName}
