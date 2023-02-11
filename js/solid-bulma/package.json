@@ -8,10 +8,10 @@
   },
   "main": "src/index.js",
   "devDependencies": {
-    "prettier": "^2.7.1",
-    "vite": "^3.0.2"
+    "prettier": "^2.8.4",
+    "vite": "^4.1.1"
   },
   "dependencies": {
-    "solid-js": "^1.4.7"
+    "solid-js": "^1.6.10"
   }
 }
