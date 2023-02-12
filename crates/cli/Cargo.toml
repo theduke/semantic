@@ -32,3 +32,4 @@ reqwest = { version = "0.11.12", default-features = false, features = ["rustls-t
 is-terminal = "0.3.0"
 indicatif = "0.17.1"
 human-sort = "0.2.2"
+rpassword = "7.2.0"

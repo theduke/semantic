@@ -15,7 +15,20 @@ pub struct CmdServe {
 }
 
 impl AsyncCliCommand for CmdServe {
-    async fn run(self) -> Result<(), anyhow::Error> {
+    async fn run(mut self) -> Result<(), anyhow::Error> {
+        if self.app.backend.key.is_none() {
+            loop {
+                if let Ok(key) = rpassword::prompt_password("Key: ") {
+                    if key.trim().is_empty() {
+                        eprintln!("Key cannot be empty");
+                    } else {
+                        self.app.backend.key = Some(key);
+                        break;
+                    }
+                }
+            }
+        }
+
         let app_config = self.app.build().unwrap();
         let config = semantic::server::ServerConfig {
             // Enable authentication when no backend is provided.
