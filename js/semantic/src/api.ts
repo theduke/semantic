@@ -3,7 +3,7 @@ const API_ENDPOINT = "/api/query";
 import * as core from "./core";
 import { exprEq } from "./db";
 
-import crossFetch from 'cross-fetch';
+import crossFetch from "cross-fetch";
 
 // import { ValueMap } from "./semantic/registry";
 import { BaseEntity, FACTOR_ID, SemanticFile, SemanticTag } from "./schema";
@@ -38,7 +38,7 @@ export class Api {
   }
 
   private async fetchApi<R>(key: ReplyKeys, query: core.Query): Promise<R> {
-    const res = await crossFetch(this.host + '/api/query', {
+    const res = await crossFetch(this.host + "/api/query", {
       body: JSON.stringify(query),
       method: "POST",
     });
@@ -49,7 +49,7 @@ export class Api {
     // TODO: typecheck with yup?
     const responseData: core.ApiResponse = (await res.json()) as any;
     if ("Ok" in responseData) {
-      const data = responseData['Ok'];
+      const data = responseData["Ok"];
       if (!(key in (data as object))) {
         throw new Error(
           `API returned malformed response: exptected ${key.toString()}`
@@ -65,11 +65,15 @@ export class Api {
   }
 
   async serverStatus(): Promise<core.ServerStatus> {
-    return this.fetchApi<core.ServerStatus>("ServerStatus", { ServerStatus: null });
+    return this.fetchApi<core.ServerStatus>("ServerStatus", {
+      ServerStatus: null,
+    });
   }
 
   async initialize(config: core.BackendConfig): Promise<core.SemanticSchema> {
-    return this.fetchApi<core.SemanticSchema>("Initialize", { Initialize: config });
+    return this.fetchApi<core.SemanticSchema>("Initialize", {
+      Initialize: config,
+    });
   }
 
   async closeBackend(): Promise<void> {
@@ -77,11 +81,14 @@ export class Api {
   }
 
   // TODO: typing for buffer
-  async uploadFile(buffer: any, metadata: FileUploadMetadata): Promise<FileUploadReply> {
+  async uploadFile(
+    buffer: any,
+    metadata: FileUploadMetadata
+  ): Promise<FileUploadReply> {
     const header = btoa(JSON.stringify(metadata));
 
-    const res = await crossFetch(this.host + '/api/upload-file', {
-      method: 'POST',
+    const res = await crossFetch(this.host + "/api/upload-file", {
+      method: "POST",
       headers: { ["X-SEMANTIC-FILE-META"]: header },
       body: buffer,
     });
@@ -90,11 +97,11 @@ export class Api {
     }
     const rawData = await res.json();
     if (!("Ok" in rawData)) {
-      throw new Error(`API error: ${JSON.stringify(rawData)}`)
+      throw new Error(`API error: ${JSON.stringify(rawData)}`);
     }
 
     // TODO: validation
-    const data = rawData['Ok'];
+    const data = rawData["Ok"];
     return data;
   }
 
@@ -159,7 +166,9 @@ export class Api {
   async pluginSourceValidate(
     param: core.PluginSource
   ): Promise<core.PluginSource> {
-    return this.fetchApi("PluginSourceValidate", { PluginSourceValidate: param });
+    return this.fetchApi("PluginSourceValidate", {
+      PluginSourceValidate: param,
+    });
   }
 
   async pluginDelete(param: core.PluginDelete): Promise<void> {
@@ -189,13 +198,17 @@ export class Api {
   async fileDiscardUnOptimized(
     param: core.FileDiscardUnOptimized
   ): Promise<void> {
-    return this.fetchApi("FileDiscardOptimised", { FileDiscardUnOptimized: param });
+    return this.fetchApi("FileDiscardOptimised", {
+      FileDiscardUnOptimized: param,
+    });
   }
 
   async fileDiscardOptimised(
     param: core.FileDiscardUnOptimized
   ): Promise<void> {
-    return this.fetchApi("FileDiscardOptimised", { FileDiscardOptimised: param });
+    return this.fetchApi("FileDiscardOptimised", {
+      FileDiscardOptimised: param,
+    });
   }
 
   async fileCreatePreviewImageBlob(
@@ -213,13 +226,17 @@ export class Api {
   }
 
   async jobStatus(param: string): Promise<core.Job> {
-    const job = await this.fetchApi<core.Job>("JobStatus", { JobStatus: param });
+    const job = await this.fetchApi<core.Job>("JobStatus", {
+      JobStatus: param,
+    });
     console.log({ apiJob: job });
     return job;
   }
 
   async jobEvents(jobId: string): Promise<core.JobEvent[]> {
-    const events = await this.fetchApi<core.JobEvent[]>("JobEvents", { JobEvents: jobId });
+    const events = await this.fetchApi<core.JobEvent[]>("JobEvents", {
+      JobEvents: jobId,
+    });
     return events;
   }
 
@@ -229,7 +246,9 @@ export class Api {
 
   // FIXME: change APi to the return here is a custom struct instead of a plain enum variant
   async findUnusedBlobs(): Promise<BlobInfo[]> {
-    const out: { items: BlobInfo[] } = await this.fetchApi("FindUnusedBlobs", { FindUnusedBlobs: null });
+    const out: { items: BlobInfo[] } = await this.fetchApi("FindUnusedBlobs", {
+      FindUnusedBlobs: null,
+    });
     return out.items;
   }
 
@@ -248,7 +267,9 @@ export class Api {
 
   async tagMerge(source: string, target: string): Promise<void> {
     // TODO: type check of returned data?
-    return this.fetchApi("TagMerge", { TagMerge: { target_tag: target, source_tag: source } });
+    return this.fetchApi("TagMerge", {
+      TagMerge: { target_tag: target, source_tag: source },
+    });
   }
 
   async startMediaAnalysis(): Promise<Job> {
@@ -256,8 +277,18 @@ export class Api {
     return this.fetchApi("AnalyzeMedia", { AnalyzeMedia: { force: false } });
   }
 
-  async findSimilarImages(maxCount: number, similarityMin: number, similarityMax: number): Promise<Job> {
+  async findSimilarImages(
+    maxCount: number,
+    similarityMin: number,
+    similarityMax: number
+  ): Promise<Job> {
     // TODO: type check of returned data?
-    return this.fetchApi("FindSimilarImages", { FindSimilarImages: { max_results: maxCount as any, similarity_min: similarityMin, similarity_max: similarityMax } });
+    return this.fetchApi("FindSimilarImages", {
+      FindSimilarImages: {
+        max_results: maxCount as any,
+        similarity_min: similarityMin,
+        similarity_max: similarityMax,
+      },
+    });
   }
 }

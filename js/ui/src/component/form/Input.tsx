@@ -53,7 +53,14 @@ export function Input<T>(props: InputProps<T>): JSX.Element {
           : (e) => {
               e.stopPropagation();
               const value = elem?.value;
-              field.set(value ?? "");
+              if (value) {
+                try {
+                  const parsed = props.parse(value);
+                  field.set(parsed);
+                } catch (err) {
+                  // TODO: set error on field, but how?
+                }
+              }
             }
       }
       oninput={
@@ -61,7 +68,15 @@ export function Input<T>(props: InputProps<T>): JSX.Element {
           ? (e) => {
               e.stopPropagation();
               const value = elem?.value;
-              field.set(value ?? "");
+              if (value) {
+                try {
+                  const parsed = props.parse(value);
+                  field.set(parsed);
+                } catch (err) {
+                  // TODO: set error on field, but how?
+                }
+              } else {
+              }
             }
           : undefined
       }

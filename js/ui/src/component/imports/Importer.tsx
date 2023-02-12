@@ -8,6 +8,7 @@ import { Box } from "solid-bulma";
 import {
   createResource,
   createSignal,
+  ErrorBoundary,
   For,
   JSX,
   Match,
@@ -183,7 +184,7 @@ export function Importer(props: ImporterProps): JSX.Element {
 
   const urlField = form.field("url");
 
-  return (
+  const out = (
     <div>
       <Box>
         <form
@@ -228,7 +229,7 @@ export function Importer(props: ImporterProps): JSX.Element {
           <Match when={results().state === "idle"}>
             <Notification>Enter a url...</Notification>
           </Match>
-          <Match when={loadAsError(results())}>
+          <Match when={loadAsError(results())} keyed>
             {(err) => {
               console.trace(err);
               return renderError(err);
@@ -282,7 +283,7 @@ export function Importer(props: ImporterProps): JSX.Element {
                           </Button>
                         </Buttons>
 
-                        <Show when={item.oldEntity}>
+                        <Show when={item.oldEntity} keyed>
                           {(old) => {
                             return (
                               <NotificationWarning>
@@ -295,7 +296,7 @@ export function Importer(props: ImporterProps): JSX.Element {
                           }}
                         </Show>
 
-                        <Show when={loadAsError(item.loader[0]())}>
+                        <Show when={loadAsError(item.loader[0]())} keyed>
                           {(err) => (
                             <NotificationError>{err}</NotificationError>
                           )}
@@ -311,7 +312,7 @@ export function Importer(props: ImporterProps): JSX.Element {
               </div>
             </Show>
 
-            <Show when={fetchOutput()}>
+            <Show when={fetchOutput()} keyed>
               {(out) => (
                 <RelatedLinks
                   currentUrl={query()?.url || ""}
@@ -353,6 +354,8 @@ export function Importer(props: ImporterProps): JSX.Element {
       </div>
     </div>
   );
+
+  return <ErrorBoundary fallback={out}>{out}</ErrorBoundary>;
 }
 
 function RelatedLinks(props: {

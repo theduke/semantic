@@ -29,7 +29,9 @@ interface ActiveAction {
 }
 
 export function EntityBox(props: EntityBoxProps): JSX.Element {
-  const [activeAction, setActiveAction] = createSignal<ActiveAction | null>(null);
+  const [activeAction, setActiveAction] = createSignal<ActiveAction | null>(
+    null
+  );
   const actionRenderProps: EntityActionRenderProps = {
     close: () => {
       setActiveAction(null);

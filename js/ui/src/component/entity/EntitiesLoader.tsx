@@ -2,7 +2,8 @@ import { JSX } from "solid-js/jsx-runtime";
 import { useApi } from "../../context";
 import { Select } from "semantic/dist/core";
 import { ValueMap } from "../../semantic/registry";
-import { BoundarySuspenseLoader } from "../util/load";
+import { ResourceViewer } from "../util/load";
+import { createResource } from "solid-js";
 
 export interface EntititesLoaderProps {
   select: Select;
@@ -12,6 +13,8 @@ export interface EntititesLoaderProps {
 
 export function EntitiesLoader(props: EntititesLoaderProps): JSX.Element {
   const api = useApi();
+
+  const [res] = createResource(() => api.select(props.select));
 
   const renderer = props.emptyFallback
     ? (values: ValueMap[]) => {
@@ -23,10 +26,5 @@ export function EntitiesLoader(props: EntititesLoaderProps): JSX.Element {
       }
     : props.children;
 
-  return (
-    <BoundarySuspenseLoader<ValueMap[]>
-      load={() => api.select(props.select)}
-      render={renderer}
-    />
-  );
+  return <ResourceViewer resource={res} children={renderer} />;
 }

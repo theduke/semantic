@@ -13,14 +13,12 @@ import {
   ResourceFetcher,
   ResourceOptions,
 } from "solid-js";
-import { createStore } from "solid-js/store";
 import {
   Accessor,
   ResourceActions,
   ResourceSource,
   Setter,
 } from "solid-js/types/reactive/signal";
-import { setErrorMap } from "zod";
 import { NotificationError } from "../bulma/notification";
 
 export type FallibleResource<O> = Resource<O> & { caughtError?: any };
@@ -226,8 +224,12 @@ export function LoaderView<T>(props: LoaderViewProps<T>): JSX.Element {
   return (
     <Switch>
       <Match when={props.loader().state === "loading"}>{SPINNER}</Match>
-      <Match when={loadAsError(props.loader())}>{renderError}</Match>
-      <Match when={loadAsSuccess(props.loader())}>{props.children}</Match>
+      <Match when={loadAsError(props.loader())} keyed>
+        {renderError}
+      </Match>
+      <Match when={loadAsSuccess(props.loader())} keyed>
+        {props.children}
+      </Match>
     </Switch>
   );
 }
@@ -243,10 +245,12 @@ export function FallibleResource<T>(
   return (
     <Switch>
       <Match when={props.resource.loading}>{SPINNER}</Match>
-      <Match when={props.resource.caughtError}>
+      <Match when={props.resource.caughtError} keyed>
         {renderError(props.resource.caughtError)}
       </Match>
-      <Match when={props.resource()}>{(data) => props.children(data)}</Match>
+      <Match when={props.resource()} keyed>
+        {(data) => props.children(data)}
+      </Match>
     </Switch>
   );
 }
@@ -263,40 +267,13 @@ export function FallibleResourceLoader<T>(
   return (
     <Switch>
       <Match when={data.loading}>{SPINNER}</Match>
-      <Match when={data.caughtError}>{renderError(data.caughtError)}</Match>
-      <Match when={data()}>
+      <Match when={data.caughtError} keyed>
+        {renderError(data.caughtError)}
+      </Match>
+      <Match when={data()} keyed>
         {(data) => props.children(data, actions as any)}
       </Match>
     </Switch>
-  );
-}
-
-export type BoundarySuspenseLoaderProps<T> = {
-  load: () => Promise<T>;
-  render: (data: T) => JSX.Element;
-};
-
-export function BoundarySuspenseLoader<T>(
-  props: BoundarySuspenseLoaderProps<T>
-): JSX.Element {
-  const [data] = createFallibleResource(props.load);
-  return (
-    <ErrorBoundary fallback={renderError}>
-      <Suspense fallback={SPINNER}>
-        {() => {
-          const out = data();
-          return out ? props.render(out) : null;
-        }}
-      </Suspense>
-    </ErrorBoundary>
-  );
-}
-
-export function BoundarySuspense(props: ParentProps): JSX.Element {
-  return (
-    <ErrorBoundary fallback={renderError}>
-      <Suspense fallback={SPINNER}>{props.children}</Suspense>
-    </ErrorBoundary>
   );
 }
 
@@ -308,14 +285,14 @@ export interface ResourceViewerProps<T> {
 
 export function ResourceViewer<T>(props: ResourceViewerProps<T>): JSX.Element {
   return (
-    <ErrorBoundary fallback={renderError}>
-      <Switch fallback={props.fallback}>
-        <Match when={props.resource.loading}>{SPINNER}</Match>
-        <Match when={props.resource.error}>
-          {(error) => <NotificationError>{error.toString()}</NotificationError>}
-        </Match>
-        <Match when={props.resource()}>{(data) => props.children(data)}</Match>
-      </Switch>
-    </ErrorBoundary>
+    <Switch fallback={props.fallback}>
+      <Match when={props.resource.loading}>{SPINNER}</Match>
+      <Match when={props.resource.error} keyed>
+        {(error) => <NotificationError>{error.toString()}</NotificationError>}
+      </Match>
+      <Match when={props.resource()} keyed>
+        {(data) => props.children(data)}
+      </Match>
+    </Switch>
   );
 }

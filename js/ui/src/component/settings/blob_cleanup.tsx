@@ -1,4 +1,4 @@
-import { createResource, For, JSX, Show } from "solid-js";
+import { For, JSX, Show } from "solid-js";
 import { useApi } from "../../context";
 import {
   FallibleResourceLoader,
@@ -9,15 +9,6 @@ import {
 import { Notification } from "../bulma/notification";
 import { GenericPage, prettyPrintByteSize } from "../util";
 import { Button, Buttons } from "../bulma/button";
-import { BlobInfo } from "semantic/dist/core";
-
-function UnusedBlobLoader(props: {
-  children: (info: BlobInfo[]) => JSX.Element;
-}): JSX.Element {
-  const api = useApi();
-  const load = () => api.findUnusedBlobs();
-  return <FallibleResourceLoader load={load} children={props.children} />;
-}
 
 export function BlobCleaner(): JSX.Element {
   const api = useApi();

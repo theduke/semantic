@@ -6708,6 +6708,8 @@ __metadata:
 "semantic-workspace@workspace:.":
   version: 0.0.0-use.local
   resolution: "semantic-workspace@workspace:."
+  dependencies:
+    prettier: ^2.8.4
   languageName: unknown
   linkType: soft
 

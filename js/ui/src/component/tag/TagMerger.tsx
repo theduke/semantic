@@ -57,7 +57,9 @@ export function TagMerger(props: TagMergerProps): JSX.Element {
         {(selectedTag) => {
           return (
             <div>
-              <Show when={loadAsError(loader())}>{renderError}</Show>
+              <Show when={loadAsError(loader())} keyed>
+                {renderError}
+              </Show>
 
               <Button
                 loading={loader().state === "loading"}

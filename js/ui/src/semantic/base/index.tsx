@@ -16,9 +16,7 @@ import {
 import { renderImage, renderImageMedia } from "./image";
 import { renderVideo, renderVideoMedia } from "./video";
 import { renderAudio, renderAudioMedia } from "./audio";
-import {
-  renderAttrFieldTextArea,
-} from "../../component/entity/entity_form";
+import { renderAttrFieldTextArea } from "../../component/entity/entity_form";
 import { ValueMap } from "../registry";
 import { JSX } from "solid-js";
 import SolidMarkdown from "solid-markdown";

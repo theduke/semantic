@@ -1,9 +1,8 @@
-import { Show } from "solid-js";
 import { JSX } from "solid-js/jsx-runtime";
 import { Api } from "semantic/dist/api";
 import { useApi } from "../context";
 import { SemanticSchema } from "semantic/dist/core";
-import { BoundarySuspenseLoader, FallibleResourceLoader } from "./util/load";
+import { FallibleResourceLoader } from "./util/load";
 
 export interface LoginPageProps {
   onLogin: (schema: SemanticSchema) => void;

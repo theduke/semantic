@@ -46,7 +46,7 @@ export function EntitySearcherModalToggle(
         <Icon icon="search" />
       </Button>
 
-      <Show when={active()}>
+      <Show when={active()} keyed>
         {(_) => (
           <Portal>
             <Modal onClose={() => setActive(false)}>

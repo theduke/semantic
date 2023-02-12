@@ -1,5 +1,5 @@
 import { Link, LinkProps } from "solid-app-router";
-import { Accessor, createSignal, JSX, PropsWithChildren } from "solid-js";
+import { Accessor, createSignal, JSX, ParentProps } from "solid-js";
 
 export interface NavbarBrandProps {
   children: JSX.Element;
@@ -42,15 +42,15 @@ export function NavbarMenu(props: NavbarMenuProps): JSX.Element {
   );
 }
 
-export function NavbarStart(props: PropsWithChildren): JSX.Element {
+export function NavbarStart(props: ParentProps): JSX.Element {
   return <div class="navbar-start">{props.children}</div>;
 }
 
-export function NavbarEnd(props: PropsWithChildren): JSX.Element {
+export function NavbarEnd(props: ParentProps): JSX.Element {
   return <div class="navbar-end">{props.children}</div>;
 }
 
-export function NavbarItem(props: PropsWithChildren): JSX.Element {
+export function NavbarItem(props: ParentProps): JSX.Element {
   return <div class="navbar-item">{props.children}</div>;
 }
 

@@ -1,3 +1,4 @@
+import { api } from "semantic";
 import { FileUploadMetadata, FileUploadReply } from "semantic/dist/core";
 import { exprIsEntityType } from "semantic/dist/db";
 import {
@@ -10,14 +11,21 @@ import {
 } from "semantic/dist/schema";
 import { Box, FileInput } from "solid-bulma";
 import {
-  createEffect,
+  Accessor,
+  createResource,
   createSignal,
+  ErrorBoundary,
   For,
   JSX,
+  Match,
   onCleanup,
   onMount,
+  Resource,
+  ResourceActions,
+  Setter,
   Show,
   Signal,
+  Switch,
 } from "solid-js";
 import { useApi, useRegistry } from "../../context";
 import { Button, Buttons, IconButton } from "../bulma/button";
@@ -25,13 +33,7 @@ import { FieldHorizontal } from "../bulma/form";
 import { Notification, NotificationError } from "../bulma/notification";
 import { StatefulEntityPicker } from "../entity/StatefulEntityPicker";
 import { prettyPrintByteSize } from "../util";
-import {
-  LoadState,
-  createLoader,
-  startLoader,
-  loadAsError,
-  SPINNER,
-} from "../util/load";
+import { SPINNER } from "../util/load";
 
 export interface UploaderProps {}
 
@@ -40,48 +42,176 @@ type QueueId = number;
 interface QueueItem {
   id: QueueId;
   file: File;
-  loader: Signal<LoadState<FileUploadReply>>;
+  uploading: Signal<boolean>;
+  resource: Resource<FileUploadReply>;
+  actions: ResourceActions<FileUploadReply | undefined>;
+}
+
+type Status = "idle" | "uploadingItem" | "uploadingAll" | "aborted";
+
+class State {
+  private api: api.Api;
+
+  status: Accessor<Status>;
+  private setStatus: Setter<Status>;
+
+  queue: Accessor<QueueItem[]>;
+  private setQueue: Setter<QueueItem[]>;
+
+  metaFormVisible: Accessor<boolean>;
+  setMetaFormVisible: Setter<boolean>;
+
+  metadata: MetaFormValues;
+  private nextQueueId: number;
+
+  constructor(api: api.Api) {
+    this.api = api;
+
+    const [status, setStatus] = createSignal<Status>("idle");
+    this.status = status;
+    this.setStatus = setStatus;
+
+    const [queue, setQueue] = createSignal<QueueItem[]>([]);
+    this.queue = queue;
+    this.setQueue = setQueue;
+
+    const [metaFormVisible, setMetaFormVisible] = createSignal<boolean>(false);
+    this.metaFormVisible = metaFormVisible;
+    this.setMetaFormVisible = setMetaFormVisible;
+
+    this.metadata = {};
+    this.nextQueueId = 0;
+  }
+
+  toggleMetaFormVisible() {
+    this.setMetaFormVisible((v) => !v);
+  }
+
+  addFiles(files: FileList) {
+    const newFiles = Array.from(files).map((file): QueueItem => {
+      const uploading = createSignal<boolean>(false);
+
+      const id = this.nextQueueId++;
+
+      const [resource, actions] = createResource<
+        FileUploadReply,
+        Accessor<boolean>
+      >(uploading[0], async (_) => {
+        const meta: FileUploadMetadata = {
+          filename: file.name,
+          title: null,
+          ident: null,
+          url: null,
+          parent: this.metadata.parent?.[FACTOR_ID] ?? null,
+          collection_id: this.metadata.collection?.[FACTOR_ID] ?? null,
+          tag_ids: [],
+        };
+        console.log("starting upload", { id, file, meta });
+        try {
+          const res = await this.api.uploadFile(file, meta);
+          console.log("upload finished", { id, file, meta, res });
+
+          if (this.status() === "uploadingAll") {
+            this.uploadAll();
+          } else {
+            this.setStatus("idle");
+          }
+
+          this.setQueue((q) => [...q]);
+
+          return res;
+        } catch (err) {
+          console.error("upload failed", { id, file, meta, err });
+
+          this.setStatus("idle");
+
+          throw err;
+        }
+      });
+
+      return { id, file, uploading, resource, actions };
+    });
+    this.setQueue((queue) => [...queue, ...newFiles]);
+  }
+
+  removeItem(item: QueueItem) {
+    this.setQueue((queue) => queue.filter((i) => i.id !== item.id));
+  }
+
+  abort() {
+    this.setStatus("aborted");
+  }
+
+  startItemUpload(item: QueueItem, all: boolean) {
+    if (!item.uploading[0]()) {
+      if (item.resource.error) {
+        item.actions.refetch();
+      } else {
+        item.uploading[1](true);
+      }
+    }
+    if (!all) {
+      this.setStatus("uploadingItem");
+    }
+  }
+
+  async uploadAll() {
+    while (this.status() !== "aborted") {
+      const item = this.queue().find(
+        (i) => !i.resource.loading && i.resource.latest
+      );
+      if (!item) {
+        this.setStatus("idle");
+        break;
+      }
+      this.setStatus("uploadingAll");
+      this.startItemUpload(item, true);
+    }
+  }
+
+  reset() {
+    this.setQueue([]);
+    this.metadata = {};
+    this.setMetaFormVisible(false);
+  }
+
+  hasUploaded() {
+    return this.queue().some((i) => i.resource.state === "ready");
+  }
+
+  clearQueue() {
+    this.setQueue([]);
+  }
+
+  uploadedReplies(): FileUploadReply[] {
+    const replies = [];
+    for (const item of this.queue()) {
+      if (item.resource.state === "ready" && item.resource.latest) {
+        replies.push(item.resource.latest);
+      }
+    }
+    return replies;
+  }
 }
 
 export function Uploader(_props: UploaderProps): JSX.Element {
   const reg = useRegistry();
-  const api = useApi();
-
-  let queueId = 0;
-  let metadata: MetaFormValues = {};
-
-  const [queue, setQueue] = createSignal<QueueItem[]>([]);
-  const [uploaded, setUploaded] = createSignal<FileUploadReply[]>([]);
-  const [metaFormVisible, setMetaFormVisible] = createSignal(false);
-
-  const addFiles = (files: FileList) => {
-    const newFiles = Array.from(files).map(
-      (file): QueueItem => ({ id: queueId++, file, loader: createLoader() })
-    );
-    setQueue((queue) => [...queue, ...newFiles]);
-  };
+  const state = new State(useApi());
 
   const onInputChange = (files: FileList | null) => {
     if (files) {
-      addFiles(files);
+      state.addFiles(files);
     }
   };
 
-  const removeQueueItem = (item: QueueItem) => {
-    setQueue((queue) => queue.filter((i) => i.id !== item.id));
-  };
-
-  const [status, setStatus] = createSignal<"idle" | "uploading" | "aborted">(
-    "idle"
-  );
   onCleanup(() => {
-    setStatus("aborted");
+    state.abort();
   });
 
   const pasteHandler = (e: ClipboardEvent) => {
     const files = e.clipboardData?.files;
     if (files) {
-      addFiles(files);
+      state.addFiles(files);
     }
   };
   onMount(() => {
@@ -90,58 +220,6 @@ export function Uploader(_props: UploaderProps): JSX.Element {
   onCleanup(() => {
     document.removeEventListener("paste", pasteHandler);
   });
-
-  const doUpload = (
-    item: QueueItem
-  ): Promise<LoadState<FileUploadReply>> | null => {
-    console.log("uploading item", { item });
-
-    if (item.loader[0]().state === "loading") {
-      return null;
-    }
-
-    setStatus("uploading");
-    return startLoader(item.loader, async () => {
-      const meta: FileUploadMetadata = {
-        filename: item.file.name,
-        title: null,
-        ident: null,
-        url: null,
-        parent: metadata?.parent?.[FACTOR_ID] ?? null,
-        collection_id: metadata?.collection?.[FACTOR_ID] ?? null,
-        tag_ids: [],
-      };
-      console.log("starting upload", { item, meta });
-      const res = await api.uploadFile(item.file, meta);
-      console.log("upload finished", { item, meta, res });
-
-      if (status() !== "aborted") {
-        setQueue((queue) => queue.filter((i) => i.id !== item.id));
-        setUploaded((uploaded) => [...uploaded, res]);
-        setStatus("idle");
-      }
-      return res;
-    });
-  };
-
-  const uploadAll = async () => {
-    while (status() !== "aborted") {
-      const item = queue().find((i) => i.loader[0]().state === "idle");
-      if (!item) {
-        setStatus("idle");
-        break;
-      }
-      await doUpload(item);
-    }
-  };
-
-  const reset = () => {
-    setQueue([]);
-    setUploaded([]);
-    metadata = {};
-    setMetaFormVisible(false);
-    // TODO: clear metadata
-  };
 
   return (
     <div>
@@ -169,20 +247,19 @@ export function Uploader(_props: UploaderProps): JSX.Element {
           <IconButton
             icon="pencil"
             size="is-medium"
-            disabled={metaFormVisible()}
-            onclick={() => setMetaFormVisible(true)}
+            disabled={state.metaFormVisible()}
+            onclick={() => state.toggleMetaFormVisible()}
           >
             Add Metadata
           </IconButton>
 
           <Button
             size="is-medium"
-            onClick={reset}
+            onClick={() => state.reset()}
             disabled={
-              status() === "idle" &&
-              queue().length < 1 &&
-              uploaded().length < 1 &&
-              !metaFormVisible()
+              state.status() === "idle" &&
+              state.queue().length < 1 &&
+              !state.metaFormVisible()
             }
           >
             Reset
@@ -190,85 +267,61 @@ export function Uploader(_props: UploaderProps): JSX.Element {
         </Buttons>
       </Box>
 
-      <Show when={metaFormVisible()}>
+      <Show when={state.metaFormVisible()}>
         <div class="mt-4 mb-4">
           <UploaderMetaForm
             onChange={(data) => {
-              metadata = data;
+              state.metadata = data;
             }}
-            onCancel={() => setMetaFormVisible(false)}
+            onCancel={() => state.setMetaFormVisible(false)}
           />
         </div>
       </Show>
 
-      <Show when={queue().length > 0}>
+      <Show when={state.queue().length > 0}>
         <h4 class="title is-4">Queue</h4>
 
         <Buttons>
           <Show
-            when={status() === "idle"}
-            fallback={() => {
-              return (
-                <div>
-                  {SPINNER}
-                  <span>Uploading {queue().length} files...</span>
-                </div>
-              );
-            }}
+            when={state.queue().find((x) => {
+              const res = x.resource;
+              return res.loading || !res.latest;
+            })}
           >
-            <IconButton icon="upload" size="is-medium" onclick={uploadAll}>
-              Upload All ({queue().length})
+            <IconButton
+              loading={state.status() === "uploadingAll"}
+              icon="upload"
+              size="is-medium"
+              onclick={() => state.uploadAll()}
+            >
+              Upload all ({state.queue().length})
             </IconButton>
 
             <IconButton
               icon="trash"
               size="is-medium"
-              onclick={() => setQueue([])}
+              disabled={
+                state.status() === "uploadingAll" ||
+                state.status() === "uploadingItem"
+              }
+              onclick={() => state.clearQueue()}
             >
               Clear
             </IconButton>
           </Show>
         </Buttons>
         <For
-          each={queue()}
+          each={state.queue()}
           fallback={<Notification>Select files above...</Notification>}
         >
           {(item: QueueItem) => (
             <QueueItem
               item={item}
-              onRemove={removeQueueItem}
-              startUpload={doUpload}
+              onRemove={(x) => state.removeItem(x)}
+              startUpload={(x) => state.startItemUpload(x, false)}
             />
           )}
         </For>
-      </Show>
-
-      <Show when={uploaded().length > 0}>
-        <h4 class="title is-4">Uploaded</h4>
-        <Buttons>
-          <Button
-            size="is-medium"
-            disabled={uploaded().length < 1}
-            onclick={() => {
-              setUploaded([]);
-            }}
-          >
-            Clear
-          </Button>
-        </Buttons>
-
-        <div
-          style={{ display: "flex", "flex-direction": "column", gap: "1rem" }}
-        >
-          <For
-            each={uploaded()}
-            fallback={<Notification>No files uploaded yet...</Notification>}
-          >
-            {(item) => {
-              return reg.renderEntity(item.file, { preview: true });
-            }}
-          </For>
-        </div>
       </Show>
     </div>
   );
@@ -340,65 +393,64 @@ interface QueueItemProps {
 }
 
 function QueueItem(props: QueueItemProps): JSX.Element {
-  const { item, onRemove, startUpload } = props;
-
-  const [loading, setLoading] = createSignal(
-    item.loader[0]().state === "loading"
-  );
-
-  createEffect(() => {
-    const sig = item.loader[0]();
-    setLoading(sig.state === "loading");
-  });
+  const reg = useRegistry();
 
   return (
-    <Box>
-      <div>
-        <div class="columns">
-          <div class="column is-flex-grow-1">
-            <div class="mb-2">
-              <b>{item.file.name}</b>
+    <Switch>
+      <Match when={props.item.resource.latest} keyed>
+        {(reply) => reg.renderEntity(reply.file, { preview: true })}
+      </Match>
+
+      <Match when={true}>
+        <Box>
+          <div>
+            <div class="columns">
+              <div class="column is-flex-grow-1">
+                <div class="mb-2">
+                  <b>{props.item.file.name}</b>
+                </div>
+                <div>
+                  <span>{props.item.file.type}</span>
+                  <span class="pl-2">
+                    {prettyPrintByteSize(props.item.file.size)}
+                  </span>
+                </div>
+              </div>
+              <div class="column">
+                <Show
+                  when={props.item.resource.loading}
+                  fallback={
+                    <Buttons class="is-justify-content-flex-end">
+                      <IconButton
+                        icon="upload"
+                        onClick={() => props.startUpload(props.item)}
+                      >
+                        Upload
+                      </IconButton>
+                      <IconButton
+                        icon="trash"
+                        onclick={() => props.onRemove(props.item)}
+                      >
+                        Remove
+                      </IconButton>
+                    </Buttons>
+                  }
+                >
+                  {/* TODO: show progress */}
+                  <Button loading={true} />
+                </Show>
+              </div>
             </div>
-            <div>
-              <span>{item.file.type}</span>
-              <span class="pl-2">{prettyPrintByteSize(item.file.size)}</span>
-            </div>
-          </div>
-          <div class="column">
-            <Show
-              when={loading()}
-              fallback={
-                <Buttons class="is-justify-content-flex-end">
-                  <IconButton
-                    icon="upload"
-                    loading={loading()}
-                    onClick={() => startUpload(item)}
-                  >
-                    Upload
-                  </IconButton>
-                  <IconButton
-                    icon="trash"
-                    onclick={() => onRemove(item)}
-                    disabled={loading()}
-                  >
-                    Remove
-                  </IconButton>
-                </Buttons>
-              }
-            >
-              {/* TODO: show progress */}
-              <Button loading={true} />
+            <Show when={props.item.resource.error} keyed>
+              {(error: any) => (
+                <div class="mt-3">
+                  <NotificationError>{error.toString()}</NotificationError>
+                </div>
+              )}
             </Show>
           </div>
-        </div>
-        <Show when={loadAsError(item.loader[0]())} keyed>
-          {(error: string) => (
-            <div class="mt-3">
-              <NotificationError>{error}</NotificationError>
-            </div>
-          )}
-        </Show>
-      </div>
-    </Box>
+        </Box>
+      </Match>
+    </Switch>
   );
 }

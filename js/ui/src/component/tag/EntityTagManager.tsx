@@ -186,7 +186,9 @@ export function EntityTagManager(props: EntityTagManagerProps): JSX.Element {
               <Button onclick={() => props.onFinished?.(null)}>Cancel</Button>
             </Buttons>
 
-            <Show when={loadAsError(persistState())} keyed>{renderError}</Show>
+            <Show when={loadAsError(persistState())} keyed>
+              {renderError}
+            </Show>
           </div>
         );
 

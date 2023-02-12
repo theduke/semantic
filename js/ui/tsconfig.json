@@ -14,7 +14,11 @@
     "noEmit": true,
     "isolatedModules": true
   },
-  "exclude": ["**/vite-plugin-solid/**/*"],
+  "exclude": [
+    "**/vite-plugin-solid/**/*",
+    "../node_modules/vite-plugin-solid/**/*",
+    "./src/component/util/load.tsx"
+  ],
   "references": [
     {"path": "../solid-bulma"},
     {"path": "../semantic"}

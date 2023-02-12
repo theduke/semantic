@@ -14,5 +14,10 @@
     // "isolatedModules": true,
     // Required for Typescript project references to work.
     "composite": true
-  }
+  },
+  "exclude": [
+    "**/vite-plugin-solid/**/*",
+    "../node_modules/vite-plugin-solid/**/*",
+    "../node_modules/vite-plugin-solid/dist/types/index.d.ts"
+  ]
 }

@@ -118,7 +118,9 @@ export function EntityBrowser(props: EntityBrowserProps): JSX.Element {
         <Suspense fallback={SPINNER}>
           <Switch>
             <Match when={page.loading}>{SPINNER}</Match>
-            <Match when={page.error} keyed>{(error) => renderError(error)}</Match>
+            <Match when={page.error} keyed>
+              {(error) => renderError(error)}
+            </Match>
             <Match when={page()} keyed>
               {(page) => {
                 const f = filter();

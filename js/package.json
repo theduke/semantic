@@ -3,11 +3,17 @@
   "version": "0.1.0",
   "private": true,
   "license": "MIT",
+  "scripts": {
+    "fmt": "prettier --write {semantic,ui,solid-bulma/webextebsion}/src/**/*.{ts,tsx,json}"
+  },
   "workspaces": [
     "solid-bulma",
     "ui",
     "semantic",
     "webextension"
   ],
-  "packageManager": "yarn@3.4.1"
+  "packageManager": "yarn@3.4.1",
+  "devDependencies": {
+    "prettier": "^2.8.4"
+  }
 }

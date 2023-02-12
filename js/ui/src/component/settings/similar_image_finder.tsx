@@ -53,6 +53,7 @@ export function SimilarImageFinder(): JSX.Element {
   return (
     <Show
       when={filter()}
+      keyed
       fallback={() => {
         return (
           <Box>

@@ -51,7 +51,6 @@ export function PlayPage(): JSX.Element {
     entityTypes: [TY_SEMANTIC_AUDIO, TY_SEMANTIC_VIDEO, TY_SEMANTIC_IMAGE],
   };
   const [filterChanged, setFilterChanged] = createSignal(false);
-
   // const [filter, setFilter] = createSignal<EntityFilter>(emptyEntityFilter());
 
   let wrapperDiv: HTMLDivElement | undefined;
@@ -158,7 +157,7 @@ export function PlayPage(): JSX.Element {
         overflow: "hidden",
       }}
     >
-      <Show when={entityModalItem()}>
+      <Show when={entityModalItem()} keyed>
         {(item) => {
           const content = reg.renderEditableEntity(
             item,
@@ -219,11 +218,11 @@ export function PlayPage(): JSX.Element {
 
           <Match when={loader().state === "loading"}>{SPINNER}</Match>
 
-          <Match when={loadAsError(loader())}>
+          <Match when={loadAsError(loader())} keyed>
             {(err) => renderError(err)}
           </Match>
 
-          <Match when={player.state.activeItem}>
+          <Match when={player.state.activeItem} keyed>
             {(item) => {
               return item.rendered;
             }}
