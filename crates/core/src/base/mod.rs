@@ -1,6 +1,9 @@
 mod file;
 use std::collections::HashSet;
 
+mod task;
+pub use task::*;
+
 mod container;
 pub use self::container::*;
 
@@ -105,6 +108,10 @@ pub struct AttrParentSortOrder(i64);
 pub struct AttrEmbeddedInParent(bool);
 
 #[derive(Attribute)]
+#[factor(namespace = "semantic", name = "markdown_body", title = "Body")]
+pub struct AttrMarkdownBody(String);
+
+#[derive(Attribute)]
 #[factor(
     namespace = "semantic",
     title = "Visit count",
@@ -130,19 +137,6 @@ pub struct AttrLastVisitTime(Timestamp);
     index
 )]
 pub struct AttrImportUrl(url::Url);
-
-pub fn entity_title(data: &DataMap) -> String {
-    data.get_attr::<AttrTitle>()
-        .or_else(|| data.get_id().map(|x| x.to_string()))
-        .and_then(|x| if x.trim().is_empty() { None } else { Some(x) })
-        .unwrap_or_else(|| {
-            if let Some(id) = data.get_id() {
-                id.to_string()
-            } else {
-                "<No Title>".to_string()
-            }
-        })
-}
 
 #[derive(Attribute)]
 #[factor(namespace = "semantic", title = "Description")]
@@ -179,6 +173,10 @@ pub struct AttrDateTime(Timestamp);
 #[derive(Attribute)]
 #[factor(namespace = "semantic", title = "Username")]
 pub struct AttrUsername(String);
+
+#[derive(Attribute)]
+#[factor(namespace = "semantic", namespace = "semantic", title = "sort_order")]
+pub struct AttrSortOrder(i64);
 
 #[derive(Attribute)]
 #[factor(namespace = "semantic", name = "imported_at", title = "Imported at")]
@@ -236,6 +234,19 @@ pub enum OneOrMany<T> {
     Many(Vec<T>),
 }
 
+pub fn entity_title(data: &DataMap) -> String {
+    data.get_attr::<AttrTitle>()
+        .or_else(|| data.get_id().map(|x| x.to_string()))
+        .and_then(|x| if x.trim().is_empty() { None } else { Some(x) })
+        .unwrap_or_else(|| {
+            if let Some(id) = data.get_id() {
+                id.to_string()
+            } else {
+                "<No Title>".to_string()
+            }
+        })
+}
+
 pub struct SemanticBasePlugin;
 
 impl PluginDescriptor for SemanticBasePlugin {
@@ -276,6 +287,8 @@ impl Plugin for SemanticBasePlugin {
                     AttrParent::schema(),
                     AttrEmbeddedInParent::schema(),
                     AttrImportedAt::schema(),
+                    AttrMarkdownBody::schema(),
+                    AttrSortOrder::schema(),
                     // file
                     AttrBlobUri::schema(),
                     AttrBlobUriWeb::schema(),
@@ -303,6 +316,10 @@ impl Plugin for SemanticBasePlugin {
                     tags::AttrTagName::schema(),
                     tags::AttrTagParent::schema(),
                     tags::AttrTags::schema(),
+                    // Task.
+                    AttrTaskDueDate::schema(),
+                    AttrTaskPriority::schema(),
+                    AttrTaskCompletedAt::schema(),
                     // Person
                     person::AttrGivenName::schema(),
                     person::AttrFamilyName::schema(),
@@ -327,6 +344,8 @@ impl Plugin for SemanticBasePlugin {
                     collection::Collection::schema(),
                     // tags
                     tags::Tag::schema(),
+                    // tasks
+                    Task::schema(),
                     // person
                     person::Person::schema(),
                     // Bookmarks.
@@ -1326,6 +1345,74 @@ impl Plugin for SemanticBasePlugin {
                 strict: false,
             });
 
+        let create_sort_order = Migration::with_name("create_sort_order").attr_create(
+            Attribute::new(AttrSortOrder::QUALIFIED_NAME, ValueType::Int),
+        );
+
+        let create_markdown_body = Migration::with_name("create_markdown_body").attr_create(
+            Attribute::new(AttrMarkdownBody::QUALIFIED_NAME, ValueType::String).with_title("Body"),
+        );
+
+        let create_task = Migration::with_name("create_task")
+            .attr_create(
+                Attribute::new(AttrTaskPriority::QUALIFIED_NAME, ValueType::Int)
+                    .with_title("Priority"),
+            )
+            .attr_create(
+                Attribute::new(AttrTaskCompletedAt::QUALIFIED_NAME, ValueType::DateTime)
+                    .with_title("Completed at"),
+            )
+            .attr_create(
+                Attribute::new(AttrTaskDueDate::QUALIFIED_NAME, ValueType::DateTime)
+                    .with_title("Due at"),
+            )
+            .entity_create(Class {
+                id: Id::nil(),
+                ident: Task::QUALIFIED_NAME.to_string(),
+                title: Some("Task".to_string()),
+                description: None,
+                attributes: vec![
+                    ClassAttribute {
+                        attribute: AttrTitle::QUALIFIED_NAME.to_string(),
+                        required: true,
+                    },
+                    ClassAttribute {
+                        attribute: AttrMarkdownBody::QUALIFIED_NAME.to_string(),
+                        required: false,
+                    },
+                    ClassAttribute {
+                        attribute: TextFormat::QUALIFIED_NAME.to_string(),
+                        required: false,
+                    },
+                    ClassAttribute {
+                        attribute: AttrCreatedAt::QUALIFIED_NAME.to_string(),
+                        required: false,
+                    },
+                    ClassAttribute {
+                        attribute: AttrUpdatedAt::QUALIFIED_NAME.to_string(),
+                        required: false,
+                    },
+                    ClassAttribute {
+                        attribute: AttrSortOrder::QUALIFIED_NAME.to_string(),
+                        required: false,
+                    },
+                    ClassAttribute {
+                        attribute: AttrTaskCompletedAt::QUALIFIED_NAME.to_string(),
+                        required: false,
+                    },
+                    ClassAttribute {
+                        attribute: AttrTaskPriority::QUALIFIED_NAME.to_string(),
+                        required: false,
+                    },
+                    ClassAttribute {
+                        attribute: AttrTaskDueDate::QUALIFIED_NAME.to_string(),
+                        required: false,
+                    },
+                ],
+                extends: Vec::new(),
+                strict: false,
+            });
+
         vec![
             rollup,
             create_like_count,
@@ -1341,6 +1428,9 @@ impl Plugin for SemanticBasePlugin {
             create_visual_hash,
             add_description_to_socialmediaaccount,
             create_import_mapping,
+            create_sort_order,
+            create_markdown_body,
+            create_task,
         ]
     }
 }
