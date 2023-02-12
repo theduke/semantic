@@ -421,6 +421,7 @@ pub enum Query {
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[cfg_attr(feature = "schema", derive(ts_rs::TS))]
 pub struct ImportRaw {
+    #[cfg_attr(feature = "schema", ts(type = "any"))]
     pub data: serde_json::Value,
 }
 
