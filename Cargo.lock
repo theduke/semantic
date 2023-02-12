@@ -219,7 +219,7 @@ checksum = "bef38d45163c2f1dde094a7dfd33ccf595c92905c8f8f4fdc18d06fb1037718a"
 [[package]]
 name = "blobfs"
 version = "0.1.0"
-source = "git+https://github.com/theduke/blobfs.git#5e1bb131e067af8c46275beb9f514a3effd69c8b"
+source = "git+https://github.com/theduke/blobfs.git#a4cb5653868470c50c9a32b5f1eca41893c4ca3e"
 dependencies = [
  "aead",
  "base64 0.21.0",
@@ -245,7 +245,7 @@ dependencies = [
 [[package]]
 name = "blobfs_async"
 version = "0.1.0"
-source = "git+https://github.com/theduke/blobfs.git#5e1bb131e067af8c46275beb9f514a3effd69c8b"
+source = "git+https://github.com/theduke/blobfs.git#a4cb5653868470c50c9a32b5f1eca41893c4ca3e"
 dependencies = [
  "blobfs",
  "bytes",

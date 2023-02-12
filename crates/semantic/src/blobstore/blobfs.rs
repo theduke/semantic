@@ -80,7 +80,7 @@ impl BlobStore for blobfs_async::AsyncRepo<TokioSpawner> {
 
             if let Some(mut offset) = offset {
                 while offset > 0 {
-                    while let Some(res) = iter.next() {
+                    if let Some(res) = iter.next() {
                         let mut chunk = res?;
                         let chunk_len = chunk.len() as u64;
                         if chunk_len > offset {
@@ -98,6 +98,9 @@ impl BlobStore for blobfs_async::AsyncRepo<TokioSpawner> {
                             break;
                         }
                         offset = offset.checked_sub(chunk.len() as u64).unwrap();
+                    } else {
+                        // End of iterator, no point in continuing.
+                        return Ok(());
                     }
                 }
             }
@@ -114,7 +117,7 @@ impl BlobStore for blobfs_async::AsyncRepo<TokioSpawner> {
                     if (*to_take) < chunk_len {
                         chunk.truncate(*to_take as usize);
                     }
-                    (*to_take) -= chunk_len;
+                    *to_take = to_take.saturating_sub(chunk_len);
                 }
 
                 tx.blocking_send(Ok(chunk))?;
