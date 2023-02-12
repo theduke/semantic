@@ -26,6 +26,7 @@ export function loadFilter(
     }
   } else {
     const select = buildFilterDataSelect(filter);
+    select.limit = 100000 as any;
     return api.select(select);
   }
 }
