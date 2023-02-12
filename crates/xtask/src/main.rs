@@ -82,7 +82,7 @@ fn cmd_watch_server(default_backend: bool) -> Result<(), anyhow::Error> {
 
     let mut cmd = Command::new("cargo");
     cmd.current_dir(root_path()?)
-        .args(["run", "--bin", "semantic", "--", "server"])
+        .args(["run", "--bin", "semantic", "--", "serve"])
         // .arg("--deno-plugin-dir")
         // .arg(root_path()?.join("lib").join("contrib"))
         ;
