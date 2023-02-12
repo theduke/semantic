@@ -164,7 +164,7 @@ export function PlayPage(): JSX.Element {
             {
               preview: false,
             },
-            (newItem) => {}
+            (newItem) => { }
           );
           return (
             <Portal>
@@ -193,27 +193,31 @@ export function PlayPage(): JSX.Element {
       >
         <Switch>
           <Match when={filterActive()}>
-            <Box>
-              <EntityFilterForm
-                initialFilter={filter}
-                onChange={onFilterChange}
-              />
+            <div style={{ 'overflow-y': 'scroll', height: '100%' }}>
+              <Box>
+                <EntityFilterForm
+                  initialFilter={filter}
+                  onChange={onFilterChange}
+                />
 
-              <Buttons>
-                <Button
-                  loading={loader().state === "loading"}
-                  onclick={() => doLoadFilter(true)}
-                >
-                  Replace
-                </Button>
-                <Button
-                  loading={loader().state === "loading"}
-                  onclick={() => doLoadFilter(false)}
-                >
-                  Add
-                </Button>
-              </Buttons>
-            </Box>
+                <hr />
+
+                <Buttons class="mt-3">
+                  <Button
+                    loading={loader().state === "loading"}
+                    onclick={() => doLoadFilter(true)}
+                  >
+                    Replace
+                  </Button>
+                  <Button
+                    loading={loader().state === "loading"}
+                    onclick={() => doLoadFilter(false)}
+                  >
+                    Add
+                  </Button>
+                </Buttons>
+              </Box>
+            </div>
           </Match>
 
           <Match when={loader().state === "loading"}>{SPINNER}</Match>
