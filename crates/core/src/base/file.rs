@@ -8,8 +8,8 @@ use factdb::{
 use serde::{Deserialize, Serialize};
 
 use super::{
-    AttrCreatedAt, AttrImportedAt, AttrPreviewImageBlobUri, AttrPreviewImageUrl, AttrTitle,
-    AttrUpdatedAt, AttrUrl,
+    id_is_nil, AttrCreatedAt, AttrImportedAt, AttrPreviewImageBlobUri, AttrPreviewImageUrl,
+    AttrTitle, AttrUpdatedAt, AttrUrl,
 };
 
 /// A hash, prefixed by the hash type.
@@ -172,7 +172,7 @@ pub const ATTR_DATA_URL: &str = "semantic/data_url";
 #[factor(namespace = "semantic")]
 pub struct File {
     #[factor(attr = AttrId)]
-    #[serde(rename = "factor/id")]
+    #[serde(rename = "factor/id", skip_serializing_if = "id_is_nil")]
     pub id: Id,
 
     #[factor(attr = AttrIdent)]

@@ -1442,3 +1442,7 @@ pub fn expr_find_by_id_ident_or_title(ident: &str) -> Expr {
         Expr::eq(AttrIdent::expr(), ident).or_with(Expr::contains(AttrTitle::expr(), ident.trim()))
     }
 }
+
+pub fn id_is_nil(id: &Id) -> bool {
+    id.is_nil()
+}
