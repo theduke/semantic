@@ -176,67 +176,91 @@ pub struct File {
     pub id: Id,
 
     #[factor(attr = AttrIdent)]
-    #[serde(rename = "factor/ident")]
+    #[serde(rename = "factor/ident", skip_serializing_if = "Option::is_none")]
     pub ident: Option<String>,
 
     #[factor(attr = AttrTitle)]
-    #[serde(rename = "semantic/title")]
+    #[serde(rename = "semantic/title", skip_serializing_if = "Option::is_none")]
     pub title: Option<String>,
 
     #[factor(attr = AttrFileName)]
-    #[serde(rename = "semantic/filename")]
+    #[serde(rename = "semantic/filename", skip_serializing_if = "Option::is_none")]
     pub filename: Option<String>,
 
     #[factor(attr = AttrFileSize)]
-    #[serde(rename = "semantic/file_size")]
+    #[serde(rename = "semantic/file_size", skip_serializing_if = "Option::is_none")]
     pub size: Option<u64>,
 
     #[factor(attr = AttrMimeType)]
-    #[serde(rename = "semantic/mime_type")]
+    #[serde(rename = "semantic/mime_type", skip_serializing_if = "Option::is_none")]
     pub mime_type: Option<String>,
 
     #[factor(attr = AttrHash)]
-    #[serde(rename = "semantic/hash")]
+    #[serde(rename = "semantic/hash", skip_serializing_if = "Option::is_none")]
     pub hash: Option<UniversalHash>,
 
     #[factor(attr = AttrOriginalHash)]
-    #[serde(rename = "semantic/original_hash")]
+    #[serde(
+        rename = "semantic/original_hash",
+        skip_serializing_if = "Option::is_none"
+    )]
     pub original_hash: Option<UniversalHash>,
 
     #[factor(attr = AttrUrl)]
-    #[serde(rename = "semantic/url")]
+    #[serde(rename = "semantic/url", skip_serializing_if = "Option::is_none")]
     pub url: Option<url::Url>,
 
     #[factor(attr = AttrDownloadUrl)]
-    #[serde(rename = "semantic/download_url")]
+    #[serde(
+        rename = "semantic/download_url",
+        skip_serializing_if = "Option::is_none"
+    )]
     pub download_url: Option<url::Url>,
 
     #[factor(attr = AttrPreviewImageUrl)]
-    #[serde(rename = "semantic/preview_image_url")]
+    #[serde(
+        rename = "semantic/preview_image_url",
+        skip_serializing_if = "Option::is_none"
+    )]
     pub preview_image_url: Option<url::Url>,
 
     #[factor(attr = AttrPreviewImageBlobUri)]
-    #[serde(rename = "semantic/preview_image_blob_uri")]
+    #[serde(
+        rename = "semantic/preview_image_blob_uri",
+        skip_serializing_if = "Option::is_none"
+    )]
     pub preview_image_blob_uri: Option<String>,
 
     #[factor(attr = AttrBlobUri)]
-    #[serde(rename = "semantic/blob_uri")]
+    #[serde(rename = "semantic/blob_uri", skip_serializing_if = "Option::is_none")]
     pub blob_uri: Option<String>,
 
     #[factor(attr = AttrBlobUriWeb)]
-    #[serde(rename = "semantic/blob_uri_web")]
+    #[serde(
+        rename = "semantic/blob_uri_web",
+        skip_serializing_if = "Option::is_none"
+    )]
     pub blob_uri_web: Option<String>,
 
     #[factor(attr = AttrCreatedAt)]
-    #[serde(rename = "semantic/created_at")]
+    #[serde(
+        rename = "semantic/created_at",
+        skip_serializing_if = "Option::is_none"
+    )]
     pub created_at: Option<Timestamp>,
 
     #[factor(attr = AttrUpdatedAt)]
-    #[serde(rename = "semantic/updated_at")]
+    #[serde(
+        rename = "semantic/updated_at",
+        skip_serializing_if = "Option::is_none"
+    )]
     pub updated_at: Option<Timestamp>,
 
     #[factor(attr = AttrImportedAt)]
-    #[serde(rename = "semantic/imported_at")]
+    #[serde(
+        rename = "semantic/imported_at",
+        skip_serializing_if = "Option::is_none"
+    )]
     pub imported_at: Option<Timestamp>,
 
     #[factor(ignore)]
@@ -344,15 +368,24 @@ pub struct Image {
     pub file: File,
 
     #[factor(attr = AttrPixelWidth)]
-    #[serde(rename = "semantic/pixel_width")]
+    #[serde(
+        rename = "semantic/pixel_width",
+        skip_serializing_if = "Option::is_none"
+    )]
     pub width: Option<u64>,
 
     #[factor(attr = AttrPixelHeight)]
-    #[serde(rename = "semantic/pixel_height")]
+    #[serde(
+        rename = "semantic/pixel_height",
+        skip_serializing_if = "Option::is_none"
+    )]
     pub height: Option<u64>,
 
     #[factor(attr = AttrVisualHash)]
-    #[serde(rename = "semantic/visual_hash")]
+    #[serde(
+        rename = "semantic/visual_hash",
+        skip_serializing_if = "Option::is_none"
+    )]
     pub visual_hash: Option<Vec<u8>>,
 }
 
@@ -364,19 +397,28 @@ pub struct Video {
     pub file: File,
 
     #[factor(attr = AttrDuration)]
-    #[serde(rename = "semantic/duration")]
+    #[serde(rename = "semantic/duration", skip_serializing_if = "Option::is_none")]
     pub duration: Option<u64>,
 
     #[factor(attr = AttrVideoHasSound)]
-    #[serde(rename = "semantic/video_has_sound")]
+    #[serde(
+        rename = "semantic/video_has_sound",
+        skip_serializing_if = "Option::is_none"
+    )]
     pub video_has_sound: Option<bool>,
 
     #[factor(attr = AttrPixelWidth)]
-    #[serde(rename = "semantic/pixel_width")]
+    #[serde(
+        rename = "semantic/pixel_width",
+        skip_serializing_if = "Option::is_none"
+    )]
     pub width: Option<u64>,
 
     #[factor(attr = AttrPixelHeight)]
-    #[serde(rename = "semantic/pixel_height")]
+    #[serde(
+        rename = "semantic/pixel_height",
+        skip_serializing_if = "Option::is_none"
+    )]
     pub height: Option<u64>,
 }
 
