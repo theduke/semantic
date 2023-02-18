@@ -916,8 +916,18 @@ impl App {
         let mut files_with_data = Vec::new();
 
         for mut item in all_entities {
-            let is_file = item.get_type().map(|x| x.to_string()).unwrap_or_default()
-                == semantic_core::base::File::QUALIFIED_NAME;
+            let is_file = match item
+                .get_type()
+                .map(|x| x.to_string())
+                .unwrap_or_default()
+                .as_str()
+            {
+                semantic_core::base::File::QUALIFIED_NAME => true,
+                semantic_core::base::Image::QUALIFIED_NAME => true,
+                semantic_core::base::Video::QUALIFIED_NAME => true,
+                semantic_core::base::Audio::QUALIFIED_NAME => true,
+                _ => false,
+            };
 
             if is_file {
                 let data_url = item.remove(ATTR_DATA_URL).and_then(|x| {
