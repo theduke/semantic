@@ -759,6 +759,14 @@ impl<E: ApiClientExecutor> ApiClient<E> {
         }
     }
 
+    pub async fn import_raw(&self, job: ImportRaw) -> Result<ImportRawReply, anyhow::Error> {
+        match self.exec.execute(Query::ImportRaw(job)).await {
+            Ok(Reply::ImportRaw(output)) => Ok(output),
+            Ok(_other) => Err(anyhow::anyhow!("API returned invalid data")),
+            Err(err) => Err(err),
+        }
+    }
+
     pub async fn job(&self, job_id: JobId) -> Result<Job, anyhow::Error> {
         match self.exec.execute(Query::JobStatus(job_id)).await {
             Ok(Reply::JobStatus(output)) => Ok(output),
