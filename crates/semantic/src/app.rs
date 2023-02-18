@@ -930,22 +930,18 @@ impl App {
             };
 
             if is_file {
-                let data_url = item.remove(ATTR_DATA_URL).and_then(|x| {
-                    if let Value::String(s) = x {
-                        Some(s)
-                    } else {
-                        None
-                    }
-                });
-                if let Some(s) = data_url {
-                    if let Some((_, raw)) = s.split_once("data:;base64,") {
+                if let Some(data_url) = item
+                    .remove(ATTR_DATA_URL)
+                    .and_then(|x| x.as_str().map(|x| x.to_string()))
+                {
+                    if let Some((_, raw)) = data_url.split_once("data:;base64,") {
                         let data = base64::decode(raw)?;
                         files_with_data.push((item.clone(), data));
                     } else {
                         tracing::warn!(?item, "trying to import file item with invalid data url");
                     }
                 }
-            }
+            };
 
             entities.push(item);
         }
@@ -969,25 +965,6 @@ impl App {
 
         db.batch(batch).await?;
 
-        let entities = if import_media {
-            let client = reqwest::Client::new();
-
-            let tasks = futures::stream::FuturesUnordered::new();
-
-            // NOTE: if the download fails, the file still ends up in the database.
-
-            for id in entity_ids {
-                let task = self
-                    .clone()
-                    .download_entity_blob_content(id, client.clone());
-                tasks.push(task);
-            }
-
-            tasks.try_collect::<Vec<_>>().await?
-        } else {
-            entities
-        };
-
         let mut entities = entities;
         for (item, data) in files_with_data {
             let new_item = self.persist_entity_blob_content(item, data, None).await?;
@@ -997,6 +974,24 @@ impl App {
                 }
             }
         }
+
+        let entities = if import_media {
+            let client = reqwest::Client::new();
+
+            // NOTE: if the download fails, the file still ends up in the database.
+            let tasks = futures::stream::FuturesUnordered::new();
+
+            for id in entity_ids {
+                let task = self
+                    .clone()
+                    .download_entity_blob_content(id, client.clone(), false);
+                tasks.push(task);
+            }
+
+            tasks.try_collect::<Vec<_>>().await?
+        } else {
+            entities
+        };
 
         tracing::trace!("import complete");
 
@@ -1021,11 +1016,20 @@ impl App {
         self,
         id: Id,
         client: reqwest::Client,
+        force: bool,
     ) -> Result<DataMap, anyhow::Error> {
         let db = self.require_db()?;
         tracing::trace!(entity_id=%id, "starting entity blob content download");
 
         let item = db.entity(id).await?;
+
+        if item.get_attr::<AttrBlobUri>().is_some() {
+            if !force {
+                // Already have a blob, no need to re-download it.
+                tracing::debug!(entity_id=%id, "skipping entity download - entity already has a blob");
+                return Ok(item);
+            }
+        }
 
         if let Some(_blob_uri) = item.get_attr::<AttrBlobUri>() {
             // TODO: check if blob exists.
