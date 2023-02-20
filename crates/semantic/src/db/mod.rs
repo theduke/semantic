@@ -678,7 +678,6 @@ mod tests {
         ];
 
         let items = entity_id_ident_fixup(&db, items).await.unwrap();
-        dbg!(&items);
 
         let id = items[1].get_id().unwrap();
         let parent = items[0].get_attr::<AttrParent>().unwrap();
