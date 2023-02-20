@@ -7,7 +7,7 @@ use std::{
 use anyhow::{anyhow, bail, Context};
 use factdb::{
     query, AttrMapExt, AttrType, AttributeMeta, ClassContainer, ClassMeta, DataMap, Db, Expr, Id,
-    Item, Mutate, Patch, Select, Timestamp, Value, ValueMap,
+    Item, Mutate, Patch, Select, Timestamp, ValueMap,
 };
 use futures::TryStreamExt;
 use semantic_core::{
@@ -859,14 +859,8 @@ impl App {
             mappings.items.into_iter().find_map(|item| {
                 let map = ImportUrlMapping::try_from_map(item.data).ok()?;
 
-                if dbg!(map.source_url.trim()) == dbg!(domain) {
-                    let raw = format!(
-                        "{}/{}/{}?{}",
-                        map.target_url,
-                        url.domain().unwrap_or_default(),
-                        url.path(),
-                        url.query().unwrap_or_default(),
-                    );
+                if map.source_url.trim() == domain {
+                    let raw = format!("{}/{}", map.target_url, url,);
                     url::Url::parse(&raw).ok()
                 } else {
                     None
@@ -976,7 +970,10 @@ impl App {
         }
 
         let entities = if import_media {
-            let client = reqwest::Client::new();
+            let client = reqwest::Client::builder()
+                .danger_accept_invalid_certs(true)
+                .build()
+                .unwrap();
 
             // NOTE: if the download fails, the file still ends up in the database.
             let tasks = futures::stream::FuturesUnordered::new();
