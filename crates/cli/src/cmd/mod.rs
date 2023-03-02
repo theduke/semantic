@@ -9,6 +9,7 @@ pub mod archive;
 pub mod client;
 pub mod db;
 pub mod generate_typescript;
+pub mod import;
 pub mod import_files;
 pub mod serve;
 pub mod upload;
@@ -30,6 +31,7 @@ impl Args {
             SubCmd::Upload(cmd) => CliCommand::run(cmd),
             SubCmd::Db(cmd) => cmd.run(),
             SubCmd::Client(cmd) => cmd.run(),
+            SubCmd::Import(cmd) => CliCommand::run(cmd),
         }
     }
 }
@@ -47,6 +49,7 @@ enum SubCmd {
     #[command(subcommand)]
     Archive(archive::CmdArchive),
     Upload(upload::CmdUpload),
+    Import(import::CmdImport),
 }
 
 #[derive(clap::Parser, Clone)]
