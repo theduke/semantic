@@ -16,7 +16,8 @@ import {
 
 export function loadFilter(
   api: Api,
-  filter: EntityFilter
+  filter: EntityFilter,
+
 ): Promise<ValueMap[]> {
   if (filter.type === "sql") {
     if (filter.sql.trim()) {
@@ -26,7 +27,6 @@ export function loadFilter(
     }
   } else {
     const select = buildFilterDataSelect(filter);
-    select.limit = 100000 as any;
     return api.select(select);
   }
 }
@@ -42,11 +42,15 @@ export function emptyEntityFilter(): EntityFilter {
 export interface EntityFilterFormProps {
   initialFilter?: EntityFilter;
 
+  builderExtra?: JSX.Element;
+
   onChange: (filter: EntityFilter) => void;
 }
 
 export function EntityFilterForm(props: EntityFilterFormProps): JSX.Element {
   const initialFilter = props.initialFilter ?? newFilterData();
+
+  console.log({builderExtra: props.builderExtra});
 
   const [filter, setFilter] = createSignal<EntityFilter>(initialFilter);
 
@@ -89,7 +93,7 @@ export function EntityFilterForm(props: EntityFilterFormProps): JSX.Element {
 
       <Switch>
         <Match when={filter().type === "data"}>
-          <FilterBuilder filter={filter as any} setFilter={setFilter} />
+          <FilterBuilder filter={filter as any} setFilter={setFilter} extra={props.builderExtra} />
         </Match>
 
         <Match when={filter().type === "sql"}>

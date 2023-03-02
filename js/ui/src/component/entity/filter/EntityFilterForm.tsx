@@ -1,4 +1,4 @@
-import { Accessor, createSignal, JSX, Setter, untrack } from "solid-js";
+import { Accessor, JSX, Setter, untrack } from "solid-js";
 import { useRegistry } from "../../../context";
 import { FACTOR_ID, FACTOR_IDENT, FACTOR_TITLE } from "semantic/dist/schema";
 import { FieldHorizontal } from "../../bulma/form";
@@ -15,6 +15,8 @@ export interface FilterBuilderProps {
   setFilter: Setter<EntityFilterData>;
 
   autoUpdate?: boolean;
+
+  extra?: JSX.Element;
 }
 
 interface EntityTypeOption extends SelectOption<EntityType> {
@@ -22,8 +24,10 @@ interface EntityTypeOption extends SelectOption<EntityType> {
 }
 
 export function FilterBuilder(props: FilterBuilderProps): JSX.Element {
-  const [editingType, setEditingType] = createSignal<boolean>(false);
   const reg = useRegistry();
+
+  console.log({filterBuildExtra: props.extra});
+
 
   const entityTypes: EntityTypeOption[] = Object.values(reg.classes).map(
     (type) => ({
@@ -127,6 +131,9 @@ export function FilterBuilder(props: FilterBuilderProps): JSX.Element {
           />
         </div>
       </FieldHorizontal>
+
+      {props.extra}
+
     </div>
   );
 }

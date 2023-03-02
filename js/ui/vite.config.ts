@@ -1,6 +1,9 @@
 import { defineConfig } from "vite";
 import solidPlugin from "vite-plugin-solid";
 
+// const apiUrl = 'http://127.0.0.1:3000';
+const apiUrl = 'http://192.168.0.66:8888';
+
 export default defineConfig({
   plugins: [solidPlugin()],
   build: {
@@ -8,8 +11,8 @@ export default defineConfig({
   },
   server: {
     proxy: {
-      "/api": "http://127.0.0.1:3000",
-      "/blob": "http://127.0.0.1:3000",
+      "/api": apiUrl,
+      "/blob": apiUrl,
     },
   },
 });

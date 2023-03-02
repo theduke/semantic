@@ -1,5 +1,10 @@
-import { ValueMap } from "semantic/dist/api";
+import { Api, ValueMap, newSelect } from "semantic/dist/api";
+import { Expr, Select } from "semantic/dist/core";
+import { exprAnd, exprAttr, exprIn, exprList, exprLiteral, exprNot } from "semantic/dist/db";
 import {
+  FACTOR_ID,
+  FACTOR_TYPE,
+  SEMANTIC_PARENT,
   TY_SEMANTIC_AUDIO,
   TY_SEMANTIC_IMAGE,
   TY_SEMANTIC_VIDEO,
@@ -18,6 +23,7 @@ import {
 import { Portal } from "solid-js/web";
 import { useApi, useRegistry } from "../../context";
 import { Button, Buttons } from "../bulma/button";
+import { FieldHorizontal } from "../bulma/form";
 import { Modal } from "../bulma/modal";
 import { EntityFilter } from "../entity/filter";
 import { EntityFilterForm, loadFilter } from "../entity/filter/EntityFilter";
@@ -49,8 +55,9 @@ export function PlayPage(): JSX.Element {
     type: "data",
     searchTerm: "",
     entityTypes: [TY_SEMANTIC_AUDIO, TY_SEMANTIC_VIDEO, TY_SEMANTIC_IMAGE],
+    limit: 100_000,
   };
-  const [filterChanged, setFilterChanged] = createSignal(false);
+  const [_filterChanged, setFilterChanged] = createSignal(false);
   // const [filter, setFilter] = createSignal<EntityFilter>(emptyEntityFilter());
 
   let wrapperDiv: HTMLDivElement | undefined;
@@ -72,16 +79,35 @@ export function PlayPage(): JSX.Element {
     null
   );
 
+  const [expandToMedia, setExpandToMedia] = createSignal(false);
+
+  const builderExtra = (
+    <FieldHorizontal smallLabel label='Expand to media items'>
+      <label class="checkbox">
+        <input
+          type="checkbox"
+          onchange={(e) => {
+            const selected = e.currentTarget.checked;
+            setExpandToMedia(selected);
+          }}
+        />
+        {" "}
+        {"Yes/No"}
+      </label>
+    </FieldHorizontal>
+  );
+
   const onFilterChange = (newFilter: EntityFilter) => {
     filter = newFilter;
     setFilterChanged(true);
   };
+
   const doLoadFilter = (replace: boolean) => {
     if (loader().state === "loading") {
       return;
     }
     startLoader(loaderSignal, async () => {
-      const items = await loadFilter(api, filter);
+      const items = await load(api, filter, { expandToMedia: expandToMedia() });
       if (replace) {
         player.replaceItems(items);
       } else {
@@ -198,6 +224,7 @@ export function PlayPage(): JSX.Element {
                 <EntityFilterForm
                   initialFilter={filter}
                   onChange={onFilterChange}
+                  builderExtra={builderExtra}
                 />
 
                 <hr />
@@ -235,4 +262,71 @@ export function PlayPage(): JSX.Element {
       </div>
     </div>
   );
+}
+
+interface LoadOptions {
+  expandToMedia: boolean;
+}
+
+export async function load(
+  api: Api,
+  filter: EntityFilter,
+  options: LoadOptions,
+): Promise<ValueMap[]> {
+  const items = await loadFilter(api, filter);
+
+  if (options.expandToMedia) {
+    return loadExpand(api, items);
+  } else {
+    return items;
+  }
+}
+
+async function loadExpand(api: Api, items: ValueMap[], ignoredIds?: Expr[]): Promise<ValueMap[]> {
+  const mediaItems: ValueMap[] = [];
+  const expandIds: Expr[] = [];
+
+  ignoredIds = ignoredIds ?? [];
+
+  for (const item of items) {
+    let id: string | undefined;
+
+    switch (item[FACTOR_TYPE]) {
+      case TY_SEMANTIC_IMAGE:
+      case TY_SEMANTIC_VIDEO:
+      case TY_SEMANTIC_AUDIO:
+        id = item[FACTOR_ID];
+        if (id) {
+          ignoredIds.push(exprLiteral(id));
+        }
+        mediaItems.push(item);
+        break;
+      default:
+        id = item[FACTOR_ID];
+        if (id) {
+          expandIds.push(exprLiteral(id));
+        }
+    }
+  }
+
+  const query: Select = {
+    ...newSelect(),
+    filter: exprAnd(
+      exprIn(exprAttr(SEMANTIC_PARENT), exprList(expandIds)),
+      exprNot(exprIn(exprAttr(FACTOR_ID), exprList(ignoredIds))),
+    ),
+    // TODO: no any
+    limit: 1_000 as any,
+  };
+
+  console.debug('expanding fetched items', { expandQuery: query });
+  const newItems = await api.select(query);
+  console.debug('expanded fetched items', { count: newItems.length })
+
+  if (newItems.length > 0) {
+    const recurseNewItems = await loadExpand(api, newItems, ignoredIds);
+    return [...mediaItems, ...recurseNewItems];
+  } else {
+    return mediaItems;
+  }
 }

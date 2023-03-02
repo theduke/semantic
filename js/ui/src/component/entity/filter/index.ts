@@ -5,7 +5,6 @@ import {
   exprAttr,
   exprContains,
   exprIsInEntityTypes,
-  exprList,
   exprLiteral,
 } from "semantic/dist/db";
 import {
@@ -42,6 +41,7 @@ export interface EntityFilterData {
   tags?: Id[];
   sortAttr?: Ident;
   sortOrder?: Order;
+  limit?: number;
 }
 
 export function newFilterData(): EntityFilterData {
@@ -74,6 +74,8 @@ export function buildFilterDataSelect(filter: EntityFilterData): Select {
   return {
     ...newSelect(),
     filter: exprAndMany(exprs),
+    // TODO: no any!
+    limit: filter.limit as any ?? 1000,
   };
 }
 

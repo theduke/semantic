@@ -1,4 +1,4 @@
-import { BinaryOp, Expr, Value } from "./core";
+import { BinaryOp, Expr, UnaryOp, Value } from "./core";
 import { FACTOR_TYPE } from "./schema";
 
 export function exprBinary(op: BinaryOp, left: Expr, right: Expr): Expr {
@@ -15,6 +15,14 @@ export function exprNotEq(left: Expr, right: Expr): Expr {
 
 export function exprAnd(left: Expr, right: Expr): Expr {
   return exprBinary("And", left, right);
+}
+
+export function exprUnary(op: UnaryOp, expr: Expr): Expr {
+  return { UnaryOp: { op, expr } };
+}
+
+export function exprNot(inner: Expr): Expr {
+  return { UnaryOp: { op: "Not", expr: inner } }
 }
 
 export function exprList(items: Expr[]): Expr {

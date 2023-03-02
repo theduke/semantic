@@ -276,7 +276,7 @@ function defaultRenderer<V>(props: MultiSelectRenderProps<V>): JSX.Element {
       <PanelBlock>
         <Control class="has-icons-left">
           <input
-            onchange={(e) => {
+            oninput={(e) => {
               props.onTermChange(e.currentTarget.value);
             }}
             value={props.searchTerm()}
