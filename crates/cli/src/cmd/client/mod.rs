@@ -3,10 +3,11 @@ use semantic_core::api;
 
 use super::CliCommand;
 
+mod create;
 mod delete;
 mod sql;
 
-#[derive(clap::Parser, Clone)]
+#[derive(clap::Parser, Clone, Debug)]
 pub struct ClientOptions {
     /// Server address.
     ///
@@ -29,6 +30,7 @@ impl ClientOptions {
 pub enum CmdClient {
     Delete(delete::CmdDelete),
     Sql(sql::CmdSql),
+    Create(create::CmdClientCreate),
 }
 
 impl CliCommand for CmdClient {
@@ -36,6 +38,7 @@ impl CliCommand for CmdClient {
         match self {
             Self::Delete(cmd) => cmd.run(),
             Self::Sql(cmd) => cmd.run(),
+            Self::Create(cmd) => cmd.run(),
         }
     }
 }
