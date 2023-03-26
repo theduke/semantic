@@ -2,7 +2,7 @@
   description = "fabric";
 
   inputs = {
-    # nixpkgs.url = github:NixOS/nixpkgs/nixos-unstable;
+    nixpkgs.url = github:NixOS/nixpkgs/nixos-unstable;
     flakeutils = {
       url = "github:numtide/flake-utils";
       inputs.nixpkgs.follows = "nixpkgs";
@@ -180,22 +180,28 @@
           '';
         };
 
-        devShell = pkgs.stdenv.mkDerivation {
+        devShell = pkgs.stdenv.mkDerivation rec {
           name = "semantics";
           src = self;
-          buildInputs = with pkgs; [
+
+          nativeBuildInputs = with pkgs; [
             pkg-config
             cargo-watch
+            # dioxus-cli
             llvmPackages_latest.clang
             mold
-            zlib
+            gnumake
+          ];
 
-          ] ++ uiBuildInputs ++ runtimeDeps;
-          propagatedBuildInputs = with pkgs; [
+          buildInputs = with pkgs; [
+            zlib
             openssl
             gtk3
             glib
-            gnumake
+            bzip2
+
+          ] ++ uiBuildInputs ++ runtimeDeps;
+          propagatedBuildInputs = with pkgs; [
 
             # glib-networking
             # webkitgtk
@@ -211,7 +217,7 @@
 
           # Allow `cargo run` etc to find ssl lib.
           # LD_LIBRARY_PATH = "${pkgs.openssl.out}/lib:${pkgs.gtk3}/lib:${pkgs.webkitgtk}/lib:${pkgs.glib.out}/lib:${pkgs.stdenv.cc.cc.lib}/lib64:${pkgs.glib-networking}/lib";
-          LD_LIBRARY_PATH = "${pkgs.zlib}/lib";
+          LD_LIBRARY_PATH = pkgs.lib.makeLibraryPath buildInputs;
           RUST_BACKTRACE = "1";
           # Use lld linker for speedup.
           RUST_LOG = "semantic=trace";
@@ -224,6 +230,10 @@
           # Needed because font rendering in webviewis messed up with wayland 
           # backend.
           GDK_BACKENND = "x11";
+
+          # Use mold linker for faster builds.
+          # CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_LINKER = "clang";
+          # RUSTFLAGS = "-C link-arg=-fuse-ld=mold";
         };
 
       }
