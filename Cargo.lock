@@ -3887,6 +3887,7 @@ dependencies = [
  "dioxus-router",
  "dioxus-web",
  "factdb",
+ "futures",
  "getrandom",
  "js-sys",
  "semantic_core 0.1.0 (git+https://github.com/theduke/semantic)",
