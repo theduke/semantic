@@ -65,16 +65,16 @@ export function StringInput(props: StringInputProps): JSX.Element {
       min={numProps?.min}
       max={numProps?.max}
       onchange={
-        props.mode === "oninput"
-          ? undefined
-          : (e) => {
+        props.mode === "onchange"
+          ? (e) => {
               e.stopPropagation();
               const value = elem?.value;
               field.set(value ?? "");
             }
+          : undefined
       }
       oninput={
-        props.mode === "onchange"
+        props.mode === "oninput"
           ? (e) => {
               e.stopPropagation();
               const value = elem?.value;

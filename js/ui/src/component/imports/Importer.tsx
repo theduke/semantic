@@ -100,7 +100,7 @@ export function Importer(props: ImporterProps): JSX.Element {
   });
 
   const onValueChange = throttle((values: FormValues) => {
-    const url = values.url;
+    const url = values.url.trim();
     if (url && query()?.url !== url) {
       setQuery({ url });
     } else if (values.skipExisting === true) {
