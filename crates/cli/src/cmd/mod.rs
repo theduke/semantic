@@ -3,7 +3,7 @@ use std::path::PathBuf;
 use anyhow::{anyhow, Context};
 
 use semantic::app::{self, AppConfig};
-use semantic_core::api::{self, DbConfig};
+use semantic_core::api::{self, DbConfig, SecretString};
 
 pub mod archive;
 pub mod client;
@@ -111,7 +111,10 @@ impl BackendOptions {
                 .clone()
                 .context("--key must be specified for blobfs")?;
 
-            api::DbConfig::BlobFs(api::BlobFsConfig { path, password })
+            api::DbConfig::BlobFs(api::BlobFsConfig {
+                path,
+                password: SecretString(password),
+            })
         } else {
             DbConfig::Crypto(api::BackendCryptoConfig {
                 offset,

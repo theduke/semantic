@@ -326,7 +326,7 @@ impl App {
                 let init = blobfs::RepoInit {
                     root_path: b.path.clone().into(),
                     name: None,
-                    password: b.password.clone(),
+                    password: b.password.as_ref().to_string(),
                     key_name: None,
                 };
                 let repo = blobfs_async::AsyncRepo::open(init, TokioSpawner {}).await?;

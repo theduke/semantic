@@ -1,4 +1,7 @@
-use std::{collections::HashMap, ops::Deref};
+use std::{
+    collections::HashMap,
+    ops::{Deref, DerefMut},
+};
 
 use factdb::{ClassContainer, DataMap, Id, IdOrIdent, Mutate, Timestamp};
 use url::Url;
@@ -60,6 +63,35 @@ impl std::fmt::Debug for BackendCryptoConfig {
     }
 }
 
+#[derive(serde::Serialize, serde::Deserialize, PartialEq, Eq, Clone)]
+pub struct SecretString(pub String);
+
+impl Deref for SecretString {
+    type Target = String;
+
+    fn deref(&self) -> &Self::Target {
+        &self.0
+    }
+}
+
+impl DerefMut for SecretString {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.0
+    }
+}
+
+impl AsRef<str> for SecretString {
+    fn as_ref(&self) -> &str {
+        &self.0
+    }
+}
+
+impl std::fmt::Debug for SecretString {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_tuple("SecretString").finish()
+    }
+}
+
 #[derive(serde::Serialize, serde::Deserialize, PartialEq, Eq, Clone, Debug)]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[cfg_attr(feature = "schema", derive(ts_rs::TS))]
@@ -74,7 +106,7 @@ pub enum DbConfig {
 #[cfg_attr(feature = "schema", derive(ts_rs::TS))]
 pub struct BlobFsConfig {
     pub path: String,
-    pub password: String,
+    pub password: SecretString,
 }
 
 impl DbConfig {
