@@ -1,20 +1,20 @@
-import { BinaryOp, Expr, UnaryOp, Value } from "./core";
-import { FACTOR_TYPE } from "./schema";
+import { BinaryOp, Expr, UnaryOp, Value } from './core';
+import { FACTOR_TYPE } from './schema';
 
 export function exprBinary(op: BinaryOp, left: Expr, right: Expr): Expr {
   return { BinaryOp: { op, left, right } };
 }
 
 export function exprEq(left: Expr, right: Expr): Expr {
-  return exprBinary("Eq", left, right);
+  return exprBinary('Eq', left, right);
 }
 
 export function exprNotEq(left: Expr, right: Expr): Expr {
-  return exprBinary("Neq", left, right);
+  return exprBinary('Neq', left, right);
 }
 
 export function exprAnd(left: Expr, right: Expr): Expr {
-  return exprBinary("And", left, right);
+  return exprBinary('And', left, right);
 }
 
 export function exprUnary(op: UnaryOp, expr: Expr): Expr {
@@ -22,7 +22,7 @@ export function exprUnary(op: UnaryOp, expr: Expr): Expr {
 }
 
 export function exprNot(inner: Expr): Expr {
-  return { UnaryOp: { op: "Not", expr: inner } }
+  return { UnaryOp: { op: 'Not', expr: inner } };
 }
 
 export function exprList(items: Expr[]): Expr {
@@ -48,24 +48,24 @@ export function exprAndMany(exprs: Expr[]): Expr | null {
 }
 
 export function exprOr(left: Expr, right: Expr): Expr {
-  return exprBinary("Or", left, right);
+  return exprBinary('Or', left, right);
 }
 
 export function exprContains(left: Expr, right: Expr): Expr {
-  return exprBinary("Contains", left, right);
+  return exprBinary('Contains', left, right);
 }
 
 export function exprRegexMatch(left: Expr, regex: string): Expr {
-  return exprBinary("RegexMatch", left, exprLiteral(regex));
+  return exprBinary('RegexMatch', left, exprLiteral(regex));
 }
 
 // Case-insensitive regex match.
 export function exprRegexIMatch(left: Expr, regex: string): Expr {
-  return exprBinary("RegexMatchCaseInsensitive", left, exprLiteral(regex));
+  return exprBinary('RegexMatchCaseInsensitive', left, exprLiteral(regex));
 }
 
 export function exprIn(left: Expr, right: Expr): Expr {
-  return exprBinary("In", left, right);
+  return exprBinary('In', left, right);
 }
 
 export function exprAttr(attrName: string): Expr {
