@@ -1,6 +1,10 @@
 import { BinaryOp, Expr, UnaryOp, Value } from './core';
 import { FACTOR_TYPE } from './schema';
 
+export type EntityType = string;
+export type AttrName = string;
+export type ValueMap = Record<string, any>;
+
 export function exprBinary(op: BinaryOp, left: Expr, right: Expr): Expr {
   return { BinaryOp: { op, left, right } };
 }

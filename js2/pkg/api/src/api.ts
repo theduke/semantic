@@ -1,15 +1,13 @@
 const API_ENDPOINT = '/api/query';
 
 import * as core from './core';
-import { exprEq } from './db';
+import { ValueMap, exprEq } from './db';
 
 // import crossFetch from "cross-fetch";
 
 // import { ValueMap } from "./semantic/registry";
-import { BaseEntity, FACTOR_ID, SemanticFile, SemanticTag } from './schema';
+import { FACTOR_ID, SemanticTag } from './schema';
 import { BlobInfo, FileUploadMetadata, FileUploadReply, Job } from './core';
-
-export type ValueMap = Record<string, any>;
 
 export function newSelect(): core.Select {
   return {
@@ -38,7 +36,7 @@ export class Api {
   }
 
   private async fetchApi<R>(key: ReplyKeys, query: core.Query): Promise<R> {
-    const res = await fetch(this.host + '/api/query', {
+    const res = await fetch(this.host + API_ENDPOINT, {
       body: JSON.stringify(query),
       method: 'POST',
     });
@@ -87,7 +85,7 @@ export class Api {
   ): Promise<FileUploadReply> {
     const header = btoa(JSON.stringify(metadata));
 
-    const res = await crossFetch(this.host + '/api/upload-file', {
+    const res = await fetch(this.host + '/api/upload-file', {
       method: 'POST',
       headers: { ['X-SEMANTIC-FILE-META']: header },
       body: buffer,

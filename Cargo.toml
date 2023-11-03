@@ -9,7 +9,6 @@ members = [
 
     "crates/ui_core",
     "crates/ui",
-    "crates/ui2",
     # "crates/contrib",
 
     "crates/plugins/extra",

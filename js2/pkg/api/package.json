@@ -1,6 +1,6 @@
 {
-  "name": "@semantic/core",
-  "version": "1.0.0",
+  "name": "@semantic/api",
+  "version": "0.1.0",
   "description": "",
   "main": "src/index.js",
   "scripts": {
