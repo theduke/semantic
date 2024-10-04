@@ -54,7 +54,7 @@ sha2 = "0.10.6"
 serde_path_to_error = "0.1.8"
 
 oxipng = { version = "6.0.1", optional = true, default-features = false, features = ["parallel", "zopfli"] }
-mozjpeg = { version = "0.9.4", optional = true }
+mozjpeg = { version = "0.10.10", optional = true }
 
 semantic_core = { path = "../core" }
 semantic_extra = { version = "0.1", path = "../plugins/extra", default-features = false }

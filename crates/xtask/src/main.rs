@@ -230,14 +230,21 @@ fn build_styles() -> Result<(), anyhow::Error> {
 fn build_ui_v2() -> Result<(), anyhow::Error> {
     eprintln!("Building UI v2...");
 
-    let js_path = root_path()?.join("js").join("ui");
-
+    // First build the semantic package.
+    let js_path = root_path()?.join("js");
     Command::new("yarn")
-        .args(["build"])
-        .current_dir(&js_path)
+        .args(["run", "build"])
+        .current_dir(js_path.join("semantic"))
         .run()?;
 
-    let build_path = js_path.join("dist");
+    let ui_path = js_path.join("ui");
+
+    Command::new("npm")
+        .args(["run", "build"])
+        .current_dir(&ui_path)
+        .run()?;
+
+    let build_path = ui_path.join("dist");
     let target_path = root_path()?.join("target/ui2");
 
     std::fs::create_dir_all(target_path.parent().unwrap())?;

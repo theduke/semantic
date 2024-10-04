@@ -12,8 +12,8 @@
     "semantic",
     "webextension"
   ],
-  "packageManager": "yarn@3.4.1",
   "devDependencies": {
     "prettier": "^2.8.4"
-  }
+  },
+  "packageManager": "yarn@3.4.1"
 }
