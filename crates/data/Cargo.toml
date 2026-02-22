@@ -1,0 +1,20 @@
+[package]
+name = "semantic_data"
+authors.workspace = true
+keywords.workspace = true
+repository.workspace = true
+homepage.workspace = true
+license.workspace = true
+readme.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+categories.workspace = true
+version.workspace = true
+
+[dependencies]
+bytes = { workspace = true }
+facet = { version = "0.43.2", features = ["time", "uuid", "bytes"]}
+facet-json = "0.43.2"
+ordered-float = { workspace = true }
+time = { workspace = true, features = ["formatting", "parsing"] }
+uuid = { workspace = true }

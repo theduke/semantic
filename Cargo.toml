@@ -1,0 +1,32 @@
+[workspace]
+resolver = "3"
+members = ["crates/*"]
+exclude = [
+  # ...
+]
+
+[workspace.package]
+authors = ["Christoph Herzog <chris@theduke.at>"]
+keywords = []
+repository = "https://github.com/semantiverse/semantic"
+homepage = "https://semantiverse.io"
+license = "MIT"
+readme = "README.md"
+edition = "2024"
+rust-version = "1.90"
+categories = []
+
+version = "0.0.1"
+
+[workspace.dependencies]
+
+# Repo-local
+semantic_data = { path = "crates/data" }
+
+
+# crates.io
+
+time = "0.3.47"
+bytes = "1.11.1"
+ordered-float = "5.1.0"
+uuid = "1.21.0"
