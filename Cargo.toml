@@ -26,6 +26,8 @@ semantic_data = { path = "crates/data" }
 
 # crates.io
 
+serde = "1.0.228"
+serde_json = "1.0.145"
 time = "0.3.47"
 bytes = "1.11.1"
 ordered-float = "5.1.0"

@@ -1,5 +1,5 @@
 [package]
-name = "semantic_db_core"
+name = "semantic_db_kv"
 authors.workspace = true
 keywords.workspace = true
 repository.workspace = true
@@ -12,8 +12,9 @@ categories.workspace = true
 version.workspace = true
 
 [dependencies]
-semantic_data = { workspace = true }
-facet = { version = "0.43.2", features = ["time", "uuid", "bytes"] }
-futures = "0.3.31"
-fnv = "1.0.7"
+base64 = "0.22.1"
 thiserror = "2.0.17"
+facet = { version = "0.43.2", features = ["time", "uuid", "bytes"] }
+facet-json = "0.43.2"
+semantic_data = { workspace = true }
+semantic_db_core = { path = "../db_core" }

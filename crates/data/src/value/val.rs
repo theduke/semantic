@@ -5,7 +5,7 @@ use facet::Facet;
 pub type OrderedF32 = ordered_float::OrderedFloat<f32>;
 pub type OrderedF64 = ordered_float::OrderedFloat<f64>;
 
-use super::{Date, DateTime, Duration, Map, Object, Time, Uuid, ValueRef};
+use super::{Date, DateTime, Duration, Map, Object, Time, Uuid, ValueRef, VariantValue};
 
 #[derive(Facet)]
 #[facet(transparent)]
@@ -97,6 +97,7 @@ pub enum Value {
 
     Map(Map),
     Object(Object),
+    Variant(Box<VariantValue>),
 }
 
 // Generic methods.
@@ -133,7 +134,74 @@ impl Value {
 
             Self::Map(map) => ValueRef::Map(map),
             Self::Object(object) => ValueRef::Object(object),
+            Self::Variant(variant) => ValueRef::Variant(super::variant::VariantValueRef {
+                r#type: variant.r#type.as_deref(),
+                variant: variant.variant.as_str(),
+                value: &variant.value,
+            }),
         }
+    }
+
+    pub fn get_field(&self, field: &str) -> Option<&Value> {
+        match self {
+            Self::Object(object) => object.get(field),
+            _ => None,
+        }
+    }
+
+    pub fn get_index(&self, index: usize) -> Option<&Value> {
+        match self {
+            Self::List(values) => values.get(index),
+            _ => None,
+        }
+    }
+
+    pub fn as_bool(&self) -> Option<bool> {
+        match self {
+            Self::Bool(value) => Some(*value),
+            _ => None,
+        }
+    }
+
+    pub fn as_i64(&self) -> Option<i64> {
+        match self {
+            Self::I8(value) => Some((*value).into()),
+            Self::I16(value) => Some((*value).into()),
+            Self::I32(value) => Some((*value).into()),
+            Self::I64(value) => Some(*value),
+            Self::U8(value) => Some((*value).into()),
+            Self::U16(value) => Some((*value).into()),
+            Self::U32(value) => Some((*value).into()),
+            Self::U64(value) => i64::try_from(*value).ok(),
+            _ => None,
+        }
+    }
+
+    pub fn as_f64(&self) -> Option<f64> {
+        match self {
+            Self::F32(value) => Some(value.into_inner().into()),
+            Self::F64(value) => Some(value.into_inner()),
+            Self::I8(value) => Some((*value).into()),
+            Self::I16(value) => Some((*value).into()),
+            Self::I32(value) => Some((*value).into()),
+            Self::I64(value) => Some(*value as f64),
+            Self::U8(value) => Some((*value).into()),
+            Self::U16(value) => Some((*value).into()),
+            Self::U32(value) => Some((*value).into()),
+            Self::U64(value) => Some(*value as f64),
+            _ => None,
+        }
+    }
+
+    pub fn as_str(&self) -> Option<&str> {
+        match self {
+            Self::String(value) => Some(value.as_str()),
+            _ => None,
+        }
+    }
+
+    pub fn is_nullish(&self) -> bool {
+        matches!(self, Self::Null | Self::Void)
     }
 }
 
@@ -225,6 +293,9 @@ impl Ord for Value {
 
             (Self::Object(a), Self::Object(b)) => a.cmp(b),
             (Self::Object(_), _) => Ordering::Less,
+
+            (Self::Variant(a), Self::Variant(b)) => a.cmp(b),
+            (Self::Variant(_), _) => Ordering::Less,
         }
     }
 }
@@ -263,6 +334,7 @@ impl PartialEq for Value {
             (Self::Map(a), Self::Map(b)) => a == b,
 
             (Self::Object(a), Self::Object(b)) => a == b,
+            (Self::Variant(a), Self::Variant(b)) => a == b,
 
             _ => false,
         }

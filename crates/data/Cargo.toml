@@ -16,5 +16,9 @@ bytes = { workspace = true }
 facet = { version = "0.43.2", features = ["time", "uuid", "bytes"]}
 facet-json = "0.43.2"
 ordered-float = { workspace = true }
+serde = { workspace = true, features = ["derive"] }
 time = { workspace = true, features = ["formatting", "parsing"] }
 uuid = { workspace = true }
+
+[dev-dependencies]
+serde_json = { workspace = true }

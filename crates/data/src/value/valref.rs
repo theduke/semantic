@@ -1,3 +1,5 @@
+use crate::value::variant::VariantValueRef;
+
 use super::{Date, DateTime, Duration, Map, Object, OrderedF32, OrderedF64, Time, Uuid, Value};
 
 #[derive(Clone, Debug)]
@@ -35,6 +37,7 @@ pub enum ValueRef<'a> {
     String(&'a str),
     Map(&'a Map),
     Object(&'a Object),
+    Variant(VariantValueRef<'a>),
 }
 
 impl<'a> ValueRef<'a> {
@@ -72,6 +75,7 @@ impl<'a> ValueRef<'a> {
             Self::String(string) => Value::String(string.to_owned()),
             Self::Map(map) => Value::Map(map.clone()),
             Self::Object(object) => Value::Object(object.clone()),
+            Self::Variant(variant) => Value::Variant(Box::new(variant.into_owned())),
         }
     }
 }

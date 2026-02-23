@@ -6,7 +6,7 @@ pub struct Meta {
     pub description: Option<String>,
 
     pub id: Option<String>,
-    pub deprecated: bool,
+    pub deprecated: Option<Deprecation>,
 
     pub aliases: Vec<String>,
     pub examples: Vec<crate::schema::core::literal_value::LiteralValue>,
@@ -15,4 +15,9 @@ pub struct Meta {
     pub docs_url: Option<String>,
 
     pub annotations: BTreeMap<String, String>,
+}
+
+#[derive(facet::Facet, Clone, Debug, Default, PartialEq)]
+pub struct Deprecation {
+    pub note: Option<String>,
 }

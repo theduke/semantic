@@ -1,5 +1,5 @@
 [package]
-name = "semantic_db_core"
+name = "semantic_db_redb"
 authors.workspace = true
 keywords.workspace = true
 repository.workspace = true
@@ -12,8 +12,6 @@ categories.workspace = true
 version.workspace = true
 
 [dependencies]
+redb = "2.6.3"
+semantic_db_kv = { path = "../db_kv" }
 semantic_data = { workspace = true }
-facet = { version = "0.43.2", features = ["time", "uuid", "bytes"] }
-futures = "0.3.31"
-fnv = "1.0.7"
-thiserror = "2.0.17"

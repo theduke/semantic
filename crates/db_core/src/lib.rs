@@ -1,14 +1,16 @@
-pub fn add(left: u64, right: u64) -> u64 {
-    left + right
-}
+mod canonical;
+pub mod catalog;
+mod context;
+mod ddl;
+mod plan;
+mod query;
+mod transaction;
+mod validation;
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn it_works() {
-        let result = add(2, 2);
-        assert_eq!(result, 4);
-    }
-}
+pub use canonical::*;
+pub use context::*;
+pub use ddl::*;
+pub use plan::*;
+pub use query::*;
+pub use transaction::*;
+pub use validation::*;
