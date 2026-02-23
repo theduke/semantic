@@ -1,13 +1,17 @@
 use std::path::Path;
+use std::sync::{Arc, RwLock};
 
+use async_trait::async_trait;
 use redb::{ReadableTable, TableDefinition};
+use semantic_data::value::Object;
+use semantic_db::Backend;
 use semantic_db_kv::{DbError, KvCommitOutcome, KvEngine, KvTransactionCapabilities, KvWriteOp};
 
 const KV_TABLE: TableDefinition<&[u8], &[u8]> = TableDefinition::new("kv");
 const META_REV_KEY: &[u8] = b"__semantic/revision";
 
 pub struct RedbKvEngine {
-    db: redb::Database,
+    db: Arc<redb::Database>,
 }
 
 impl std::fmt::Debug for RedbKvEngine {
@@ -24,7 +28,7 @@ impl RedbKvEngine {
             let _ = write_txn.open_table(KV_TABLE).map_err(storage_err)?;
             write_txn.commit().map_err(storage_err)?;
         }
-        Ok(Self { db })
+        Ok(Self { db: Arc::new(db) })
     }
 }
 
@@ -185,6 +189,147 @@ fn read_revision_table(
 
 pub type RedbDatabase = semantic_db_kv::Database<RedbKvEngine>;
 
+pub struct RedbBackend {
+    db: Arc<RwLock<RedbDatabase>>,
+}
+
+impl RedbBackend {
+    pub fn open(path: impl AsRef<Path>) -> std::result::Result<Self, DbError> {
+        let engine = RedbKvEngine::open(path)?;
+        let db = RedbDatabase::open(engine)?;
+        Ok(Self::new(db))
+    }
+
+    pub fn new(db: RedbDatabase) -> Self {
+        Self {
+            db: Arc::new(RwLock::new(db)),
+        }
+    }
+
+    async fn with_db_read<T, F>(&self, call: F) -> std::result::Result<T, DbError>
+    where
+        T: Send + 'static,
+        F: FnOnce(&RedbDatabase) -> std::result::Result<T, DbError> + Send + 'static,
+    {
+        let db = Arc::clone(&self.db);
+        tokio::task::spawn_blocking(move || {
+            let db = db
+                .read()
+                .map_err(|_| DbError::Storage("redb backend rwlock poisoned".to_string()))?;
+            call(&db)
+        })
+        .await
+        .map_err(|err| DbError::Storage(format!("redb blocking task failed: {err}")))?
+    }
+
+    async fn with_db_write<T, F>(&self, call: F) -> std::result::Result<T, DbError>
+    where
+        T: Send + 'static,
+        F: FnOnce(&mut RedbDatabase) -> std::result::Result<T, DbError> + Send + 'static,
+    {
+        let db = Arc::clone(&self.db);
+        tokio::task::spawn_blocking(move || {
+            let mut db = db
+                .write()
+                .map_err(|_| DbError::Storage("redb backend rwlock poisoned".to_string()))?;
+            call(&mut db)
+        })
+        .await
+        .map_err(|err| DbError::Storage(format!("redb blocking task failed: {err}")))?
+    }
+}
+
+#[async_trait]
+impl Backend for RedbBackend {
+    async fn catalog(&self) -> std::result::Result<Arc<semantic_db::Catalog>, DbError> {
+        self.with_db_read(|db| Ok(db.catalog())).await
+    }
+
+    async fn create_collection(
+        &self,
+        name: String,
+        kind: semantic_db::CollectionKind,
+    ) -> std::result::Result<semantic_db::LocalCollectionId, DbError> {
+        self.with_db_write(move |db| db.create_collection(name, kind))
+            .await
+    }
+
+    async fn insert(
+        &self,
+        collection: String,
+        id: String,
+        object: Object,
+    ) -> std::result::Result<(), DbError> {
+        self.with_db_write(move |db| db.insert(&collection, id, object))
+            .await
+    }
+
+    async fn get(
+        &self,
+        collection: String,
+        id: String,
+    ) -> std::result::Result<Option<semantic_db::EntityRecord>, DbError> {
+        self.with_db_read(move |db| db.get(&collection, &id)).await
+    }
+
+    async fn delete(&self, collection: String, id: String) -> std::result::Result<(), DbError> {
+        self.with_db_write(move |db| db.delete(&collection, &id))
+            .await
+    }
+
+    async fn query(
+        &self,
+        collection: String,
+        query: semantic_db::SelectQuery,
+    ) -> std::result::Result<Vec<Object>, DbError> {
+        self.with_db_read(move |db| db.query(&collection, query))
+            .await
+    }
+
+    async fn explain_query(
+        &self,
+        collection: String,
+        query: semantic_db::SelectQuery,
+    ) -> std::result::Result<semantic_db::QueryExplain, DbError> {
+        self.with_db_read(move |db| db.explain_query(&collection, query))
+            .await
+    }
+
+    async fn plan_query(
+        &self,
+        collection: String,
+        query: semantic_db::SelectQuery,
+    ) -> std::result::Result<semantic_db::QueryPlan, DbError> {
+        self.with_db_read(move |db| db.plan_query(&collection, query))
+            .await
+    }
+
+    async fn update_where(
+        &self,
+        collection: String,
+        query: semantic_db::UpdateQuery,
+    ) -> std::result::Result<semantic_db::MutationStats, DbError> {
+        self.with_db_write(move |db| db.update_where(&collection, query))
+            .await
+    }
+
+    async fn delete_where(
+        &self,
+        collection: String,
+        query: semantic_db::DeleteQuery,
+    ) -> std::result::Result<usize, DbError> {
+        self.with_db_write(move |db| db.delete_where(&collection, query))
+            .await
+    }
+
+    async fn execute_batch(
+        &self,
+        batch: semantic_db::Batch,
+    ) -> std::result::Result<semantic_db::BatchOutcome, DbError> {
+        self.with_db_write(move |db| db.execute_batch(batch)).await
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use semantic_data::value::{Object, Value};
@@ -209,6 +354,7 @@ mod tests {
                 .unwrap();
 
             let mut obj = Object::new();
+            obj.insert("id", Value::String("id1".into()));
             obj.insert("name", Value::String("n".into()));
             db.insert("items", "id1", obj).unwrap();
         }

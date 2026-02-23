@@ -2,8 +2,13 @@ use std::collections::BTreeMap;
 
 use fnv::FnvHashMap;
 use semantic_data::schema::{
-    IndexKind, attribute::attribute_type::AttributeType, class::class_type::ClassType,
-    collections::key_path::KeyPath, record::record_type::RecordType,
+    IndexKind,
+    attribute::attribute_type::AttributeType,
+    class::class_type::ClassType,
+    collections::key_path::KeyPath,
+    core::{meta::Meta, type_kind::TypeKind, type_node::Type},
+    primitives::string_type::StringType,
+    record::record_type::RecordType,
 };
 
 use crate::catalog::{
@@ -23,6 +28,11 @@ pub struct Catalog {
     collection_indexes: FnvHashMap<LocalCollectionId, Vec<LocalIndexId>>,
     next_field_id: usize,
 }
+
+pub const PRIMARY_ID_FIELD: &str = "id";
+pub const OBJECT_TYPE_FIELD: &str = "__type";
+pub const PRIMARY_ID_INDEX_NAME: &str = "__builtin_pk_id";
+pub const OBJECT_TYPE_INDEX_NAME: &str = "__builtin_type";
 
 impl Catalog {
     pub fn new() -> Self {
@@ -203,6 +213,9 @@ impl Catalog {
         )?;
 
         self.collections.insert_fixed(lid, name, schema);
+        // Ensure builtin indexes are always present and flow through normal index machinery.
+        let _ = self.upsert_index(PRIMARY_ID_INDEX_NAME, lid, PRIMARY_ID_FIELD, true)?;
+        let _ = self.upsert_index(OBJECT_TYPE_INDEX_NAME, lid, OBJECT_TYPE_FIELD, false)?;
         Ok(lid)
     }
 
@@ -497,6 +510,24 @@ impl Catalog {
                 }
             }
         }
+        let collection_ids = catalog
+            .collections()
+            .map(|(collection_id, _)| collection_id)
+            .collect::<Vec<_>>();
+        for collection_id in collection_ids {
+            let _ = catalog.upsert_index(
+                PRIMARY_ID_INDEX_NAME,
+                collection_id,
+                PRIMARY_ID_FIELD,
+                true,
+            )?;
+            let _ = catalog.upsert_index(
+                OBJECT_TYPE_INDEX_NAME,
+                collection_id,
+                OBJECT_TYPE_FIELD,
+                false,
+            )?;
+        }
 
         catalog.next_field_id = catalog.next_field_id.max(snapshot.next_field_id);
         Ok(catalog)
@@ -509,7 +540,7 @@ impl Catalog {
         kind: CollectionKind,
         fixed_field_ids: Option<&FnvHashMap<String, LocalFieldId>>,
     ) -> Result<CollectionSchema, CatalogError> {
-        let (field_aliases, field_types, field_attrs, closed_fields) = match &kind {
+        let (field_aliases, mut field_types, field_attrs, closed_fields) = match &kind {
             CollectionKind::Untyped => (
                 FnvHashMap::default(),
                 FnvHashMap::default(),
@@ -557,6 +588,21 @@ impl Catalog {
         let mut field_ids = FnvHashMap::default();
         let mut field_names_by_id = FnvHashMap::default();
         let mut attr_by_field_id = FnvHashMap::default();
+        let system_string = Type {
+            kind: TypeKind::String(StringType {
+                format: None,
+                normalization: None,
+            }),
+            constraints: vec![],
+            annotations: vec![],
+            meta: Meta::default(),
+        };
+        field_types
+            .entry(PRIMARY_ID_FIELD.to_string())
+            .or_insert_with(|| system_string.clone());
+        field_types
+            .entry(OBJECT_TYPE_FIELD.to_string())
+            .or_insert(system_string);
 
         let mut field_names = field_types.keys().cloned().collect::<Vec<_>>();
         field_names.sort();

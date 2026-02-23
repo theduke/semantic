@@ -1,15 +1,15 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use semantic_data::value::{FieldPath, Object, Value, ValueRef};
+use semantic_db_core::DbError;
+use semantic_db_core::{
+    Batch, BatchOperation, BatchOutcome, DeleteQuery, MutationStats, SelectQuery, UpdateQuery,
+    canonicalize_delete_query, canonicalize_select_query, canonicalize_update_query, execute_batch,
+    normalize_object_for_collection, touched_collections,
+};
 
 use crate::{
-    error::DbError,
-    query::{
-        Batch, BatchOperation, DeleteQuery, MutationStats, SelectQuery, UpdateQuery,
-        canonicalize_delete_query, canonicalize_select_query, canonicalize_update_query,
-        execute_batch, normalize_object_for_collection,
-    },
-    schema_store::{catalog_snapshot_key, catalog_write_op, decode_catalog},
+    schema_store::{catalog_write_ops, load_catalog},
     storage::{
         EntityStore, KvCommitOutcome, KvEngine, KvTransactionCapabilities, KvWriteOp,
         MemoryKvEngine, StoredEntity, StoredEntityKind,
@@ -17,11 +17,11 @@ use crate::{
 };
 use semantic_db_core::catalog::{
     Catalog, CollectionKind, CollectionSchema, LocalAttrId, LocalCollectionId, LocalFieldId,
-    SharedCatalog,
+    OBJECT_TYPE_FIELD, SharedCatalog,
 };
 use semantic_db_core::{
     DdlBatch, DdlOperation, DdlOutcome, QueryContext, TransactionConcurrency, TransactionOptions,
-    apply_ddl_batch, run_with_transaction_retries,
+    apply_ddl_batch, fresh_catalog_with_core_schema, run_with_transaction_retries,
 };
 
 #[derive(facet::Facet, Debug, Clone, PartialEq, Eq)]
@@ -90,13 +90,14 @@ impl<E: KvEngine> Database<E> {
 
     pub fn open(engine: E) -> std::result::Result<Self, DbError> {
         let mut store = EntityStore::new(engine);
-        let catalog = if let Some(bytes) = store.get_raw(&catalog_snapshot_key())? {
-            decode_catalog(&bytes)?
-        } else {
-            let catalog = Catalog::new();
-            let op = catalog_write_op(&catalog)?;
-            store.write_batch(&[op])?;
+        let bootstrap_catalog = fresh_catalog_with_core_schema()
+            .map_err(|err| DbError::InvalidQuery(err.to_string()))?;
+        let catalog = if let Some(catalog) = load_catalog(&store, &bootstrap_catalog)? {
             catalog
+        } else {
+            let ops = catalog_write_ops(&store, &bootstrap_catalog)?;
+            store.write_batch(&ops)?;
+            bootstrap_catalog
         };
 
         Ok(Self {
@@ -370,10 +371,7 @@ impl<E: KvEngine> Database<E> {
         Ok(out.stats.deleted)
     }
 
-    pub fn transact(
-        &mut self,
-        batch: Batch,
-    ) -> std::result::Result<crate::query::BatchOutcome, DbError> {
+    pub fn transact(&mut self, batch: Batch) -> std::result::Result<BatchOutcome, DbError> {
         self.transact_with_options(batch, TransactionOptions::default())
     }
 
@@ -381,7 +379,7 @@ impl<E: KvEngine> Database<E> {
         &mut self,
         batch: Batch,
         options: TransactionOptions,
-    ) -> std::result::Result<crate::query::BatchOutcome, DbError> {
+    ) -> std::result::Result<BatchOutcome, DbError> {
         let caps = self.store.tx_capabilities();
         if options.concurrency == TransactionConcurrency::Mvcc && !caps.mvcc {
             return Err(DbError::InvalidQuery(
@@ -432,10 +430,7 @@ impl<E: KvEngine> Database<E> {
         Ok(txn_result.value)
     }
 
-    pub fn execute_batch(
-        &mut self,
-        batch: Batch,
-    ) -> std::result::Result<crate::query::BatchOutcome, DbError> {
+    pub fn execute_batch(&mut self, batch: Batch) -> std::result::Result<BatchOutcome, DbError> {
         self.transact_with_options(batch, TransactionOptions::default())
     }
 
@@ -458,7 +453,7 @@ impl<E: KvEngine> Database<E> {
                     .map_err(|err| DbError::InvalidQuery(err.to_string()))?;
             let mut extra_ops =
                 self.ddl_cleanup_ops(catalog_snapshot.catalog.as_ref(), &next_catalog)?;
-            extra_ops.push(catalog_write_op(&next_catalog)?);
+            extra_ops.extend(catalog_write_ops(&self.store, &next_catalog)?);
 
             let dataset = BTreeMap::new();
             match self.persist_dataset_delta(
@@ -621,7 +616,7 @@ impl<E: KvEngine> Database<E> {
         read_revision: Option<u64>,
     ) -> std::result::Result<BTreeMap<String, BTreeMap<String, Object>>, DbError> {
         let mut dataset = BTreeMap::new();
-        for collection_name in crate::query::touched_collections(batch) {
+        for collection_name in touched_collections(batch) {
             let collection = catalog
                 .collection_by_name(&collection_name)
                 .ok_or_else(|| DbError::UnknownCollectionByName {
@@ -669,7 +664,9 @@ impl<E: KvEngine> Database<E> {
             let mut normalized_rows = BTreeMap::<String, Object>::new();
             for (id, object) in new_rows {
                 let mut object = object.clone();
+                self.ensure_system_fields(&collection_schema, &mut object)?;
                 normalize_object_for_collection(&collection_schema, &mut object)?;
+                self.validate_primary_id(&collection_schema, id, &object)?;
                 normalized_rows.insert(id.clone(), object);
             }
             self.validate_unique_indexes(catalog, &collection_schema, &normalized_rows)?;
@@ -770,6 +767,69 @@ impl<E: KvEngine> Database<E> {
             }
         }
 
+        Ok(())
+    }
+
+    fn validate_primary_id(
+        &self,
+        collection: &CollectionSchema,
+        id: &str,
+        object: &Object,
+    ) -> std::result::Result<(), DbError> {
+        let canonical_id = collection.canonical_field_name("id").to_string();
+        let Some(value) = object.get(&canonical_id) else {
+            return Err(DbError::InvalidQuery(format!(
+                "collection '{}' requires primary key field '{}'",
+                collection.name, canonical_id
+            )));
+        };
+        let Some(object_id) = value.as_str() else {
+            return Err(DbError::InvalidQuery(format!(
+                "collection '{}' primary key field '{}' must be a string",
+                collection.name, canonical_id
+            )));
+        };
+        if object_id != id {
+            return Err(DbError::InvalidQuery(format!(
+                "primary key mismatch in collection '{}': object id '{}' does not match row id '{}'",
+                collection.name, object_id, id
+            )));
+        }
+        Ok(())
+    }
+
+    fn ensure_system_fields(
+        &self,
+        collection: &CollectionSchema,
+        object: &mut Object,
+    ) -> std::result::Result<(), DbError> {
+        let expected_type = match collection.kind {
+            CollectionKind::Untyped => "untyped",
+            CollectionKind::Record { .. } => "record",
+            CollectionKind::Class { .. } => "class",
+        };
+        let canonical_type_field = collection
+            .canonical_field_name(OBJECT_TYPE_FIELD)
+            .to_string();
+        if let Some(value) = object.get(&canonical_type_field) {
+            let Some(existing) = value.as_str() else {
+                return Err(DbError::InvalidQuery(format!(
+                    "collection '{}' system field '{}' must be a string",
+                    collection.name, canonical_type_field
+                )));
+            };
+            if existing != expected_type {
+                return Err(DbError::InvalidQuery(format!(
+                    "collection '{}' system field '{}' must be '{}'",
+                    collection.name, canonical_type_field, expected_type
+                )));
+            }
+        } else {
+            object.insert(
+                canonical_type_field,
+                Value::String(expected_type.to_string()),
+            );
+        }
         Ok(())
     }
 
@@ -1219,15 +1279,11 @@ mod tests {
         value::{FieldPath, Object, Value},
     };
 
-    use crate::{
-        CollectionKind,
-        query::{
-            CompareOp, DdlBatch, DdlCollectionKind, DdlOperation, Operand, OrderBy, Predicate,
-            QueryField, SelectQuery, SortDirection,
-        },
-        storage::FileKvEngine,
+    use crate::CollectionKind;
+    use semantic_db_core::{
+        CompareOp, DdlBatch, DdlCollectionKind, DdlOperation, Operand, OrderBy, Predicate,
+        QueryField, SelectQuery, SortDirection, TransactionConcurrency, TransactionOptions,
     };
-    use semantic_db_core::{TransactionConcurrency, TransactionOptions};
 
     use super::{Database, QueryPlan};
 
@@ -1238,11 +1294,13 @@ mod tests {
             .unwrap();
 
         let mut a = Object::new();
+        a.insert("id", Value::String("a".to_string()));
         a.insert("kind", Value::String("music".to_string()));
         a.insert("score", Value::I64(10));
         db.insert("events", "a", a).unwrap();
 
         let mut b = Object::new();
+        b.insert("id", Value::String("b".to_string()));
         b.insert("kind", Value::String("video".to_string()));
         b.insert("score", Value::I64(2));
         db.insert("events", "b", b).unwrap();
@@ -1312,6 +1370,7 @@ mod tests {
         .unwrap();
 
         let mut object = Object::new();
+        object.insert("id", Value::String("art-1".to_string()));
         object.insert("title", Value::String("Hello".to_string()));
         db.insert("articles", "art-1", object).unwrap();
 
@@ -1407,11 +1466,13 @@ mod tests {
             .unwrap();
 
         let mut p1 = Object::new();
+        p1.insert("id", Value::String("p1".to_string()));
         p1.insert("email", Value::String("a@example.com".to_string()));
         p1.insert("name", Value::String("A".to_string()));
         db.insert("people", "p1", p1).unwrap();
 
         let mut p2 = Object::new();
+        p2.insert("id", Value::String("p2".to_string()));
         p2.insert("email", Value::String("b@example.com".to_string()));
         p2.insert("name", Value::String("B".to_string()));
         db.insert("people", "p2", p2).unwrap();
@@ -1426,6 +1487,7 @@ mod tests {
         assert_eq!(rows[0].get("name"), Some(&Value::String("A".to_string())));
 
         let mut p3 = Object::new();
+        p3.insert("id", Value::String("p3".to_string()));
         p3.insert("email", Value::String("a@example.com".to_string()));
         p3.insert("name", Value::String("C".to_string()));
         let err = db.insert("people", "p3", p3).unwrap_err();
@@ -1442,6 +1504,7 @@ mod tests {
             .unwrap();
 
         let mut e = Object::new();
+        e.insert("id", Value::String("e1".to_string()));
         e.insert("kind", Value::String("music".to_string()));
         db.insert("events", "e1", e).unwrap();
 
@@ -1453,6 +1516,7 @@ mod tests {
         assert_eq!(db.query("events", q_music).unwrap().len(), 1);
 
         let mut updated = Object::new();
+        updated.insert("id", Value::String("e1".to_string()));
         updated.insert("kind", Value::String("video".to_string()));
         db.insert("events", "e1", updated).unwrap();
 
@@ -1480,56 +1544,23 @@ mod tests {
     }
 
     #[test]
-    fn file_kv_engine_persists_data() {
-        let path = std::env::temp_dir().join(format!(
-            "semantic-db-core-test-{}.json",
-            std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap()
-                .as_nanos()
-        ));
-
-        {
-            let engine = FileKvEngine::open(&path).unwrap();
-            let mut db = Database::new(engine);
-            db.create_collection("items", CollectionKind::Untyped)
-                .unwrap();
-
-            let mut obj = Object::new();
-            obj.insert("name", Value::String("persisted".to_string()));
-            db.insert("items", "i1", obj).unwrap();
-        }
-
-        {
-            let engine = FileKvEngine::open(&path).unwrap();
-            let db = Database::new(engine);
-            assert!(db.catalog().collection_by_name("items").is_some());
-
-            let item = db.get("items", "i1").unwrap().unwrap();
-            assert_eq!(
-                item.object.get("name"),
-                Some(&Value::String("persisted".to_string()))
-            );
-        }
-
-        let _ = std::fs::remove_file(path);
-    }
-
-    #[test]
     fn query_order_by_sorts_rows() {
         let mut db = Database::in_memory();
         db.create_collection("events", CollectionKind::Untyped)
             .unwrap();
 
         let mut a = Object::new();
+        a.insert("id", Value::String("a".to_string()));
         a.insert("score", Value::I64(7));
         db.insert("events", "a", a).unwrap();
 
         let mut b = Object::new();
+        b.insert("id", Value::String("b".to_string()));
         b.insert("score", Value::I64(2));
         db.insert("events", "b", b).unwrap();
 
         let mut c = Object::new();
+        c.insert("id", Value::String("c".to_string()));
         c.insert("score", Value::I64(9));
         db.insert("events", "c", c).unwrap();
 

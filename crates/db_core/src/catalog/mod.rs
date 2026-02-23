@@ -6,7 +6,9 @@ mod schema;
 mod shared;
 mod snapshot;
 
-pub use catalog::Catalog;
+pub use catalog::{
+    Catalog, OBJECT_TYPE_FIELD, OBJECT_TYPE_INDEX_NAME, PRIMARY_ID_FIELD, PRIMARY_ID_INDEX_NAME,
+};
 pub use error::CatalogError;
 pub use id_map::IdMap;
 pub use ids::{
