@@ -1,13 +1,14 @@
 use semantic_data::value::{Object, Value};
 use semantic_db_core::DbError;
 use semantic_db_core::catalog::{
-    Catalog, CatalogStorageSnapshot, StoredAttribute, StoredClass, StoredCollection, StoredIndex,
-    StoredRecordType,
+    Catalog, StoredAttribute, StoredClass, StoredCollection, StoredCollectionKind, StoredFieldId,
+    StoredIndex, StoredRecordType, StoredTypeDef,
 };
 use semantic_db_core::{
     CORE_CATALOG_ATTRIBUTES_COLLECTION, CORE_CATALOG_CLASSES_COLLECTION,
     CORE_CATALOG_COLLECTIONS_COLLECTION, CORE_CATALOG_INDEXES_COLLECTION,
-    CORE_CATALOG_META_COLLECTION, CORE_CATALOG_RECORD_TYPES_COLLECTION, catalog::OBJECT_TYPE_FIELD,
+    CORE_CATALOG_META_COLLECTION, CORE_CATALOG_RECORD_TYPES_COLLECTION,
+    CORE_CATALOG_TYPE_DEFS_COLLECTION, catalog::OBJECT_TYPE_FIELD,
 };
 
 use crate::storage::{
@@ -16,17 +17,22 @@ use crate::storage::{
 };
 
 const META_ROW_ID: &str = "__catalog_meta__";
-const PAYLOAD_FIELD: &str = "payload";
 const LID_FIELD: &str = "lid";
 const ID_FIELD: &str = "id";
-
-#[derive(facet::Facet, Debug, Clone, PartialEq, Eq)]
-struct CatalogMetaRow {
-    next_field_id: usize,
-}
+const ATTRIBUTE_FIELD: &str = "attribute";
+const TYPE_DEF_FIELD: &str = "type_def";
+const RECORD_FIELD: &str = "record";
+const CLASS_FIELD: &str = "class";
+const COLLECTION_KIND_FIELD: &str = "collection_kind";
+const FIELD_IDS_FIELD: &str = "field_ids";
+const COLLECTION_FIELD: &str = "collection";
+const FIELD_FIELD: &str = "field";
+const UNIQUE_FIELD: &str = "unique";
+const NEXT_FIELD_ID_FIELD: &str = "next_field_id";
 
 struct CatalogCollections {
     attributes: semantic_db_core::catalog::LocalCollectionId,
+    type_defs: semantic_db_core::catalog::LocalCollectionId,
     record_types: semantic_db_core::catalog::LocalCollectionId,
     classes: semantic_db_core::catalog::LocalCollectionId,
     collections: semantic_db_core::catalog::LocalCollectionId,
@@ -45,6 +51,7 @@ fn core_collection_ids(catalog: &Catalog) -> std::result::Result<CatalogCollecti
     };
     Ok(CatalogCollections {
         attributes: collection_lid(CORE_CATALOG_ATTRIBUTES_COLLECTION)?,
+        type_defs: collection_lid(CORE_CATALOG_TYPE_DEFS_COLLECTION)?,
         record_types: collection_lid(CORE_CATALOG_RECORD_TYPES_COLLECTION)?,
         classes: collection_lid(CORE_CATALOG_CLASSES_COLLECTION)?,
         collections: collection_lid(CORE_CATALOG_COLLECTIONS_COLLECTION)?,
@@ -53,18 +60,10 @@ fn core_collection_ids(catalog: &Catalog) -> std::result::Result<CatalogCollecti
     })
 }
 
-fn payload_from_object(object: &Object) -> std::result::Result<&str, DbError> {
-    object
-        .get(PAYLOAD_FIELD)
-        .and_then(Value::as_str)
-        .ok_or_else(|| DbError::Deserialization("missing catalog payload".to_string()))
-}
-
-fn encode_entity_payload(
+fn encode_entity_base(
     collection: semantic_db_core::catalog::LocalCollectionId,
     id: String,
     lid: usize,
-    payload: String,
 ) -> StoredEntity {
     let mut object = Object::new();
     object.insert(ID_FIELD.to_string(), Value::String(id.clone()));
@@ -73,7 +72,6 @@ fn encode_entity_payload(
         OBJECT_TYPE_FIELD.to_string(),
         Value::String("class".to_string()),
     );
-    object.insert(PAYLOAD_FIELD.to_string(), Value::String(payload));
     StoredEntity {
         id,
         collection: collection.0,
@@ -91,6 +89,12 @@ pub fn load_catalog<E: KvEngine>(
         store,
         bootstrap_catalog,
         core.attributes,
+        StoredEntityKind::Class,
+    )?;
+    let type_defs_rows = load_rows_by_type(
+        store,
+        bootstrap_catalog,
+        core.type_defs,
         StoredEntityKind::Class,
     )?;
     let record_types_rows = load_rows_by_type(
@@ -121,6 +125,7 @@ pub fn load_catalog<E: KvEngine>(
         load_rows_by_type(store, bootstrap_catalog, core.meta, StoredEntityKind::Class)?;
 
     if attributes_rows.is_empty()
+        && type_defs_rows.is_empty()
         && record_types_rows.is_empty()
         && classes_rows.is_empty()
         && collections_rows.is_empty()
@@ -132,60 +137,88 @@ pub fn load_catalog<E: KvEngine>(
 
     let mut attributes = Vec::<StoredAttribute>::new();
     for row in &attributes_rows {
-        attributes.push(
-            facet_json::from_str::<StoredAttribute>(payload_from_object(&row.object)?)
-                .map_err(|err| DbError::Deserialization(err.to_string()))?,
-        );
+        let lid = object_lid(&row.object)?;
+        let attribute: semantic_data::schema::AttributeType =
+            object_json_field(&row.object, ATTRIBUTE_FIELD)?;
+        attributes.push(StoredAttribute { lid, attribute });
+    }
+    let mut type_defs = Vec::<StoredTypeDef>::new();
+    for row in &type_defs_rows {
+        let lid = object_lid(&row.object)?;
+        let type_def: semantic_data::schema::TypeDef =
+            object_json_field(&row.object, TYPE_DEF_FIELD)?;
+        type_defs.push(StoredTypeDef { lid, type_def });
     }
     let mut record_types = Vec::<StoredRecordType>::new();
     for row in &record_types_rows {
-        record_types.push(
-            facet_json::from_str::<StoredRecordType>(payload_from_object(&row.object)?)
-                .map_err(|err| DbError::Deserialization(err.to_string()))?,
-        );
+        let lid = object_lid(&row.object)?;
+        let id = object_string_field(&row.object, ID_FIELD)?;
+        let name = object_string_field(&row.object, "name")?;
+        let record: semantic_data::schema::RecordType =
+            object_json_field(&row.object, RECORD_FIELD)?;
+        record_types.push(StoredRecordType {
+            lid,
+            id,
+            name,
+            record,
+        });
     }
     let mut classes = Vec::<StoredClass>::new();
     for row in &classes_rows {
-        classes.push(
-            facet_json::from_str::<StoredClass>(payload_from_object(&row.object)?)
-                .map_err(|err| DbError::Deserialization(err.to_string()))?,
-        );
+        let lid = object_lid(&row.object)?;
+        let class: semantic_data::schema::ClassType = object_json_field(&row.object, CLASS_FIELD)?;
+        classes.push(StoredClass { lid, class });
     }
     let mut collections = Vec::<StoredCollection>::new();
     for row in &collections_rows {
-        collections.push(
-            facet_json::from_str::<StoredCollection>(payload_from_object(&row.object)?)
-                .map_err(|err| DbError::Deserialization(err.to_string()))?,
-        );
+        let lid = object_lid(&row.object)?;
+        let name = object_string_field(&row.object, "name")?;
+        let kind: StoredCollectionKind = object_json_field(&row.object, COLLECTION_KIND_FIELD)?;
+        let field_ids: Vec<StoredFieldId> = object_json_field(&row.object, FIELD_IDS_FIELD)?;
+        collections.push(StoredCollection {
+            lid,
+            name,
+            kind,
+            field_ids,
+        });
     }
     let mut indexes = Vec::<StoredIndex>::new();
     for row in &indexes_rows {
-        indexes.push(
-            facet_json::from_str::<StoredIndex>(payload_from_object(&row.object)?)
-                .map_err(|err| DbError::Deserialization(err.to_string()))?,
-        );
+        let lid = object_lid(&row.object)?;
+        let name = object_string_field(&row.object, "name")?;
+        let collection = semantic_db_core::catalog::LocalCollectionId(object_usize_field(
+            &row.object,
+            COLLECTION_FIELD,
+        )?);
+        let field = object_string_field(&row.object, FIELD_FIELD)?;
+        let unique = object_bool_field(&row.object, UNIQUE_FIELD)?;
+        indexes.push(StoredIndex {
+            lid,
+            name,
+            collection,
+            field,
+            unique,
+        });
     }
 
     let mut next_field_id = 0usize;
     for row in &meta_rows {
         if row.id == META_ROW_ID {
-            next_field_id =
-                facet_json::from_str::<CatalogMetaRow>(payload_from_object(&row.object)?)
-                    .map_err(|err| DbError::Deserialization(err.to_string()))?
-                    .next_field_id;
+            next_field_id = object_usize_field(&row.object, NEXT_FIELD_ID_FIELD)?;
             break;
         }
     }
 
-    let snapshot = CatalogStorageSnapshot {
+    let catalog = Catalog::from_stored_rows(
         attributes,
+        type_defs,
         record_types,
         classes,
         collections,
         indexes,
         next_field_id,
-    };
-    let catalog = Catalog::from_storage_snapshot(snapshot).map_err(DbError::from)?;
+    )
+    .map_err(DbError::from)?;
     Ok(Some(catalog))
 }
 
@@ -197,6 +230,9 @@ pub fn catalog_write_ops<E: KvEngine>(
     let mut ops = Vec::<KvWriteOp>::new();
 
     for key in store.collection_keys(core.attributes)? {
+        ops.push(KvWriteOp::Delete { key });
+    }
+    for key in store.collection_keys(core.type_defs)? {
         ops.push(KvWriteOp::Delete { key });
     }
     for key in store.collection_keys(core.record_types)? {
@@ -215,6 +251,11 @@ pub fn catalog_write_ops<E: KvEngine>(
         ops.push(KvWriteOp::Delete { key });
     }
     for index in catalog.indexes_for_collection(core.attributes) {
+        for key in store.index_keys(index.lid)? {
+            ops.push(KvWriteOp::Delete { key });
+        }
+    }
+    for index in catalog.indexes_for_collection(core.type_defs) {
         for key in store.index_keys(index.lid)? {
             ops.push(KvWriteOp::Delete { key });
         }
@@ -245,62 +286,185 @@ pub fn catalog_write_ops<E: KvEngine>(
         }
     }
 
-    let snapshot = catalog.to_storage_snapshot();
-    for item in &snapshot.attributes {
-        let payload =
-            facet_json::to_string(item).map_err(|err| DbError::Serialization(err.to_string()))?;
-        let entity = encode_entity_payload(
-            core.attributes,
-            item.attribute.id.clone(),
-            item.lid.0,
-            payload,
+    for (lid, item) in catalog.attributes() {
+        let mut entity = encode_entity_base(core.attributes, item.attribute.id.clone(), lid.0);
+        entity.object.insert(
+            ATTRIBUTE_FIELD.to_string(),
+            Value::String(
+                facet_json::to_string(&item.attribute)
+                    .map_err(|err| DbError::Serialization(err.to_string()))?,
+            ),
         );
         push_entity_with_indexes(catalog, &entity, &mut ops)?;
     }
-    for item in &snapshot.record_types {
-        let payload =
-            facet_json::to_string(item).map_err(|err| DbError::Serialization(err.to_string()))?;
-        let entity = encode_entity_payload(core.record_types, item.id.clone(), item.lid.0, payload);
+    for (lid, item) in catalog.type_defs() {
+        let mut entity = encode_entity_base(core.type_defs, item.type_def.name.clone(), lid.0);
+        entity.object.insert(
+            TYPE_DEF_FIELD.to_string(),
+            Value::String(
+                facet_json::to_string(&item.type_def)
+                    .map_err(|err| DbError::Serialization(err.to_string()))?,
+            ),
+        );
         push_entity_with_indexes(catalog, &entity, &mut ops)?;
     }
-    for item in &snapshot.classes {
-        let payload =
-            facet_json::to_string(item).map_err(|err| DbError::Serialization(err.to_string()))?;
-        let entity =
-            encode_entity_payload(core.classes, item.class.id.clone(), item.lid.0, payload);
+    for (lid, item) in catalog.record_types() {
+        let mut entity = encode_entity_base(core.record_types, item.id.clone(), lid.0);
+        entity
+            .object
+            .insert("name".to_string(), Value::String(item.name.clone()));
+        entity.object.insert(
+            RECORD_FIELD.to_string(),
+            Value::String(
+                facet_json::to_string(&item.record)
+                    .map_err(|err| DbError::Serialization(err.to_string()))?,
+            ),
+        );
         push_entity_with_indexes(catalog, &entity, &mut ops)?;
     }
-    for item in &snapshot.collections {
-        let payload =
-            facet_json::to_string(item).map_err(|err| DbError::Serialization(err.to_string()))?;
-        let entity =
-            encode_entity_payload(core.collections, item.name.clone(), item.lid.0, payload);
+    for (lid, item) in catalog.classes() {
+        let mut entity = encode_entity_base(core.classes, item.class.id.clone(), lid.0);
+        entity.object.insert(
+            CLASS_FIELD.to_string(),
+            Value::String(
+                facet_json::to_string(&item.class)
+                    .map_err(|err| DbError::Serialization(err.to_string()))?,
+            ),
+        );
         push_entity_with_indexes(catalog, &entity, &mut ops)?;
     }
-    for item in &snapshot.indexes {
-        let payload =
-            facet_json::to_string(item).map_err(|err| DbError::Serialization(err.to_string()))?;
-        let entity = encode_entity_payload(
+    for (lid, item) in catalog.collections() {
+        let mut entity = encode_entity_base(core.collections, item.name.clone(), lid.0);
+        entity
+            .object
+            .insert("name".to_string(), Value::String(item.name.clone()));
+        let stored_kind = match item.kind {
+            semantic_db_core::catalog::CollectionKind::Untyped => StoredCollectionKind::Untyped,
+            semantic_db_core::catalog::CollectionKind::Record { record_type } => {
+                StoredCollectionKind::Record { record_type }
+            }
+            semantic_db_core::catalog::CollectionKind::Class { class } => {
+                StoredCollectionKind::Class { class }
+            }
+        };
+        let field_ids = item
+            .fields()
+            .map(|(field_id, canonical_field)| StoredFieldId {
+                field_id,
+                canonical_field: canonical_field.to_string(),
+            })
+            .collect::<Vec<_>>();
+        entity.object.insert(
+            COLLECTION_KIND_FIELD.to_string(),
+            Value::String(
+                facet_json::to_string(&stored_kind)
+                    .map_err(|err| DbError::Serialization(err.to_string()))?,
+            ),
+        );
+        entity.object.insert(
+            FIELD_IDS_FIELD.to_string(),
+            Value::String(
+                facet_json::to_string(&field_ids)
+                    .map_err(|err| DbError::Serialization(err.to_string()))?,
+            ),
+        );
+        push_entity_with_indexes(catalog, &entity, &mut ops)?;
+    }
+    for (lid, item) in catalog.indexes() {
+        let mut entity = encode_entity_base(
             core.indexes,
-            format!("{}::{}", item.collection.0, item.name),
-            item.lid.0,
-            payload,
+            format!("{}::{}", item.collection.0, item.schema.name),
+            lid.0,
         );
+        entity
+            .object
+            .insert("name".to_string(), Value::String(item.schema.name.clone()));
+        entity.object.insert(
+            COLLECTION_FIELD.to_string(),
+            Value::U64(item.collection.0 as u64),
+        );
+        entity.object.insert(
+            FIELD_FIELD.to_string(),
+            Value::String(item.canonical_field.clone()),
+        );
+        entity
+            .object
+            .insert(UNIQUE_FIELD.to_string(), Value::Bool(item.schema.unique));
         push_entity_with_indexes(catalog, &entity, &mut ops)?;
     }
 
-    let meta_entity = encode_entity_payload(
-        core.meta,
-        META_ROW_ID.to_string(),
-        0,
-        facet_json::to_string(&CatalogMetaRow {
-            next_field_id: snapshot.next_field_id,
-        })
-        .map_err(|err| DbError::Serialization(err.to_string()))?,
+    let mut meta_entity = encode_entity_base(core.meta, META_ROW_ID.to_string(), 0);
+    meta_entity.object.insert(
+        NEXT_FIELD_ID_FIELD.to_string(),
+        Value::U64(catalog.next_field_id() as u64),
     );
     push_entity_with_indexes(catalog, &meta_entity, &mut ops)?;
 
     Ok(ops)
+}
+
+fn object_string_field(object: &Object, field: &str) -> std::result::Result<String, DbError> {
+    object
+        .get(field)
+        .and_then(Value::as_str)
+        .map(ToString::to_string)
+        .ok_or_else(|| DbError::Deserialization(format!("missing string field '{field}'")))
+}
+
+fn object_u64_field(object: &Object, field: &str) -> std::result::Result<u64, DbError> {
+    let Some(value) = object.get(field) else {
+        return Err(DbError::Deserialization(format!(
+            "missing u64 field '{field}'"
+        )));
+    };
+    match value {
+        Value::U8(v) => Ok(u64::from(*v)),
+        Value::U16(v) => Ok(u64::from(*v)),
+        Value::U32(v) => Ok(u64::from(*v)),
+        Value::U64(v) => Ok(*v),
+        Value::I8(v) => u64::try_from(*v).map_err(|_| {
+            DbError::Deserialization(format!("field '{field}' must be a non-negative integer"))
+        }),
+        Value::I16(v) => u64::try_from(*v).map_err(|_| {
+            DbError::Deserialization(format!("field '{field}' must be a non-negative integer"))
+        }),
+        Value::I32(v) => u64::try_from(*v).map_err(|_| {
+            DbError::Deserialization(format!("field '{field}' must be a non-negative integer"))
+        }),
+        Value::I64(v) => u64::try_from(*v).map_err(|_| {
+            DbError::Deserialization(format!("field '{field}' must be a non-negative integer"))
+        }),
+        _ => Err(DbError::Deserialization(format!(
+            "field '{field}' must be an integer"
+        ))),
+    }
+}
+
+fn object_usize_field(object: &Object, field: &str) -> std::result::Result<usize, DbError> {
+    usize::try_from(object_u64_field(object, field)?)
+        .map_err(|_| DbError::Deserialization(format!("field '{field}' does not fit usize")))
+}
+
+fn object_lid<T>(object: &Object) -> std::result::Result<T, DbError>
+where
+    T: From<usize>,
+{
+    Ok(T::from(object_usize_field(object, LID_FIELD)?))
+}
+
+fn object_bool_field(object: &Object, field: &str) -> std::result::Result<bool, DbError> {
+    object
+        .get(field)
+        .and_then(Value::as_bool)
+        .ok_or_else(|| DbError::Deserialization(format!("missing bool field '{field}'")))
+}
+
+fn object_json_field<T>(object: &Object, field: &str) -> std::result::Result<T, DbError>
+where
+    T: facet::Facet<'static>,
+{
+    let json = object_string_field(object, field)?;
+    facet_json::from_str::<T>(&json).map_err(|err| DbError::Deserialization(err.to_string()))
 }
 
 fn load_rows_by_type<E: KvEngine>(

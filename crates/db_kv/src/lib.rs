@@ -9,7 +9,7 @@ pub use crate::storage::{
 pub use semantic_db_core::DbError;
 pub use semantic_db_core::catalog::{
     Catalog, CatalogError, CollectionKind, CollectionSchema, LocalAttrId, LocalClassId,
-    LocalCollectionId, LocalIndexId, LocalRecordTypeId, SharedCatalog,
+    LocalCollectionId, LocalIndexId, LocalRecordTypeId, LocalTypeDefId, SharedCatalog,
 };
 pub use semantic_db_core::{
     Assignment, Batch, BatchOperation, BinaryOp, CompareOp, DeleteQuery, Expr, MutationStats,

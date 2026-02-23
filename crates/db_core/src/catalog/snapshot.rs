@@ -1,15 +1,17 @@
 use semantic_data::schema::{
     attribute::attribute_type::AttributeType, class::class_type::ClassType,
-    record::record_type::RecordType,
+    core::type_def::TypeDef, record::record_type::RecordType,
 };
 
 use crate::catalog::{
     LocalAttrId, LocalClassId, LocalCollectionId, LocalFieldId, LocalIndexId, LocalRecordTypeId,
+    LocalTypeDefId,
 };
 
 #[derive(facet::Facet, Debug, Clone, PartialEq)]
 pub struct CatalogStorageSnapshot {
     pub attributes: Vec<StoredAttribute>,
+    pub type_defs: Vec<StoredTypeDef>,
     pub record_types: Vec<StoredRecordType>,
     pub classes: Vec<StoredClass>,
     pub collections: Vec<StoredCollection>,
@@ -21,6 +23,12 @@ pub struct CatalogStorageSnapshot {
 pub struct StoredAttribute {
     pub lid: LocalAttrId,
     pub attribute: AttributeType,
+}
+
+#[derive(facet::Facet, Debug, Clone, PartialEq)]
+pub struct StoredTypeDef {
+    pub lid: LocalTypeDefId,
+    pub type_def: TypeDef,
 }
 
 #[derive(facet::Facet, Debug, Clone, PartialEq)]

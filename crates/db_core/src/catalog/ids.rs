@@ -19,6 +19,7 @@ macro_rules! local_id {
 
 local_id!(LocalAttrId);
 local_id!(LocalFieldId);
+local_id!(LocalTypeDefId);
 local_id!(LocalRecordTypeId);
 local_id!(LocalClassId);
 local_id!(LocalCollectionId);

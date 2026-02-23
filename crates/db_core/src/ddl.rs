@@ -5,7 +5,8 @@ use semantic_data::schema::{
     class::class_type::ClassType,
     core::{meta::Meta, type_kind::TypeKind, type_node::Type},
     primitives::{
-        any_type::AnyType, number_type::NumberType, string_type::StringType, uint_width::UIntWidth,
+        any_type::AnyType, bool_type::BoolType, number_type::NumberType, string_type::StringType,
+        uint_width::UIntWidth,
     },
     record::record_type::RecordType,
 };
@@ -224,6 +225,7 @@ pub fn apply_ddl_batch(
 
 pub const CORE_CATALOG_ENTRY_CLASS_ID: &str = "semantic.catalog.entry";
 pub const CORE_CATALOG_ATTRIBUTES_COLLECTION: &str = "__semantic.catalog.attributes";
+pub const CORE_CATALOG_TYPE_DEFS_COLLECTION: &str = "__semantic.catalog.type_defs";
 pub const CORE_CATALOG_RECORD_TYPES_COLLECTION: &str = "__semantic.catalog.record_types";
 pub const CORE_CATALOG_CLASSES_COLLECTION: &str = "__semantic.catalog.classes";
 pub const CORE_CATALOG_COLLECTIONS_COLLECTION: &str = "__semantic.catalog.collections";
@@ -232,7 +234,17 @@ pub const CORE_CATALOG_META_COLLECTION: &str = "__semantic.catalog.meta";
 
 const CORE_CATALOG_ATTR_ID: &str = "semantic.catalog.id";
 const CORE_CATALOG_ATTR_LID: &str = "semantic.catalog.lid";
-const CORE_CATALOG_ATTR_PAYLOAD: &str = "semantic.catalog.payload";
+const CORE_CATALOG_ATTR_ATTRIBUTE: &str = "semantic.catalog.attribute";
+const CORE_CATALOG_ATTR_TYPE_DEF: &str = "semantic.catalog.type_def";
+const CORE_CATALOG_ATTR_RECORD: &str = "semantic.catalog.record";
+const CORE_CATALOG_ATTR_CLASS: &str = "semantic.catalog.class";
+const CORE_CATALOG_ATTR_NAME: &str = "semantic.catalog.name";
+const CORE_CATALOG_ATTR_COLLECTION_KIND: &str = "semantic.catalog.collection_kind";
+const CORE_CATALOG_ATTR_FIELD_IDS: &str = "semantic.catalog.field_ids";
+const CORE_CATALOG_ATTR_COLLECTION: &str = "semantic.catalog.collection";
+const CORE_CATALOG_ATTR_FIELD: &str = "semantic.catalog.field";
+const CORE_CATALOG_ATTR_UNIQUE: &str = "semantic.catalog.unique";
+const CORE_CATALOG_ATTR_NEXT_FIELD_ID: &str = "semantic.catalog.next_field_id";
 
 pub fn core_catalog_schema_batch() -> DdlBatch {
     let mut attrs = std::collections::BTreeMap::new();
@@ -259,12 +271,122 @@ pub fn core_catalog_schema_batch() -> DdlBatch {
         },
     );
     attrs.insert(
-        "payload".to_string(),
+        "attribute".to_string(),
         ClassAttribute {
             attribute: AttributeRef {
-                id: CORE_CATALOG_ATTR_PAYLOAD.to_string(),
+                id: CORE_CATALOG_ATTR_ATTRIBUTE.to_string(),
             },
-            required: true,
+            required: false,
+            constraints: vec![],
+            meta: Meta::default(),
+        },
+    );
+    attrs.insert(
+        "type_def".to_string(),
+        ClassAttribute {
+            attribute: AttributeRef {
+                id: CORE_CATALOG_ATTR_TYPE_DEF.to_string(),
+            },
+            required: false,
+            constraints: vec![],
+            meta: Meta::default(),
+        },
+    );
+    attrs.insert(
+        "record".to_string(),
+        ClassAttribute {
+            attribute: AttributeRef {
+                id: CORE_CATALOG_ATTR_RECORD.to_string(),
+            },
+            required: false,
+            constraints: vec![],
+            meta: Meta::default(),
+        },
+    );
+    attrs.insert(
+        "class".to_string(),
+        ClassAttribute {
+            attribute: AttributeRef {
+                id: CORE_CATALOG_ATTR_CLASS.to_string(),
+            },
+            required: false,
+            constraints: vec![],
+            meta: Meta::default(),
+        },
+    );
+    attrs.insert(
+        "name".to_string(),
+        ClassAttribute {
+            attribute: AttributeRef {
+                id: CORE_CATALOG_ATTR_NAME.to_string(),
+            },
+            required: false,
+            constraints: vec![],
+            meta: Meta::default(),
+        },
+    );
+    attrs.insert(
+        "collection_kind".to_string(),
+        ClassAttribute {
+            attribute: AttributeRef {
+                id: CORE_CATALOG_ATTR_COLLECTION_KIND.to_string(),
+            },
+            required: false,
+            constraints: vec![],
+            meta: Meta::default(),
+        },
+    );
+    attrs.insert(
+        "field_ids".to_string(),
+        ClassAttribute {
+            attribute: AttributeRef {
+                id: CORE_CATALOG_ATTR_FIELD_IDS.to_string(),
+            },
+            required: false,
+            constraints: vec![],
+            meta: Meta::default(),
+        },
+    );
+    attrs.insert(
+        "collection".to_string(),
+        ClassAttribute {
+            attribute: AttributeRef {
+                id: CORE_CATALOG_ATTR_COLLECTION.to_string(),
+            },
+            required: false,
+            constraints: vec![],
+            meta: Meta::default(),
+        },
+    );
+    attrs.insert(
+        "field".to_string(),
+        ClassAttribute {
+            attribute: AttributeRef {
+                id: CORE_CATALOG_ATTR_FIELD.to_string(),
+            },
+            required: false,
+            constraints: vec![],
+            meta: Meta::default(),
+        },
+    );
+    attrs.insert(
+        "unique".to_string(),
+        ClassAttribute {
+            attribute: AttributeRef {
+                id: CORE_CATALOG_ATTR_UNIQUE.to_string(),
+            },
+            required: false,
+            constraints: vec![],
+            meta: Meta::default(),
+        },
+    );
+    attrs.insert(
+        "next_field_id".to_string(),
+        ClassAttribute {
+            attribute: AttributeRef {
+                id: CORE_CATALOG_ATTR_NEXT_FIELD_ID.to_string(),
+            },
+            required: false,
             constraints: vec![],
             meta: Meta::default(),
         },
@@ -314,10 +436,156 @@ pub fn core_catalog_schema_batch() -> DdlBatch {
         })
         .with_op(DdlOperation::UpsertAttribute {
             attribute: AttributeType {
-                id: CORE_CATALOG_ATTR_PAYLOAD.to_string(),
-                name: "payload".to_string(),
+                id: CORE_CATALOG_ATTR_ATTRIBUTE.to_string(),
+                name: "attribute".to_string(),
                 ty: Type {
                     kind: TypeKind::Any(AnyType),
+                    constraints: vec![],
+                    annotations: vec![],
+                    meta: Meta::default(),
+                },
+                constraints: vec![],
+                meta: Meta::default(),
+            },
+        })
+        .with_op(DdlOperation::UpsertAttribute {
+            attribute: AttributeType {
+                id: CORE_CATALOG_ATTR_TYPE_DEF.to_string(),
+                name: "type_def".to_string(),
+                ty: Type {
+                    kind: TypeKind::Any(AnyType),
+                    constraints: vec![],
+                    annotations: vec![],
+                    meta: Meta::default(),
+                },
+                constraints: vec![],
+                meta: Meta::default(),
+            },
+        })
+        .with_op(DdlOperation::UpsertAttribute {
+            attribute: AttributeType {
+                id: CORE_CATALOG_ATTR_RECORD.to_string(),
+                name: "record".to_string(),
+                ty: Type {
+                    kind: TypeKind::Any(AnyType),
+                    constraints: vec![],
+                    annotations: vec![],
+                    meta: Meta::default(),
+                },
+                constraints: vec![],
+                meta: Meta::default(),
+            },
+        })
+        .with_op(DdlOperation::UpsertAttribute {
+            attribute: AttributeType {
+                id: CORE_CATALOG_ATTR_CLASS.to_string(),
+                name: "class".to_string(),
+                ty: Type {
+                    kind: TypeKind::Any(AnyType),
+                    constraints: vec![],
+                    annotations: vec![],
+                    meta: Meta::default(),
+                },
+                constraints: vec![],
+                meta: Meta::default(),
+            },
+        })
+        .with_op(DdlOperation::UpsertAttribute {
+            attribute: AttributeType {
+                id: CORE_CATALOG_ATTR_NAME.to_string(),
+                name: "name".to_string(),
+                ty: Type {
+                    kind: TypeKind::String(StringType {
+                        format: None,
+                        normalization: None,
+                    }),
+                    constraints: vec![],
+                    annotations: vec![],
+                    meta: Meta::default(),
+                },
+                constraints: vec![],
+                meta: Meta::default(),
+            },
+        })
+        .with_op(DdlOperation::UpsertAttribute {
+            attribute: AttributeType {
+                id: CORE_CATALOG_ATTR_COLLECTION_KIND.to_string(),
+                name: "collection_kind".to_string(),
+                ty: Type {
+                    kind: TypeKind::Any(AnyType),
+                    constraints: vec![],
+                    annotations: vec![],
+                    meta: Meta::default(),
+                },
+                constraints: vec![],
+                meta: Meta::default(),
+            },
+        })
+        .with_op(DdlOperation::UpsertAttribute {
+            attribute: AttributeType {
+                id: CORE_CATALOG_ATTR_FIELD_IDS.to_string(),
+                name: "field_ids".to_string(),
+                ty: Type {
+                    kind: TypeKind::Any(AnyType),
+                    constraints: vec![],
+                    annotations: vec![],
+                    meta: Meta::default(),
+                },
+                constraints: vec![],
+                meta: Meta::default(),
+            },
+        })
+        .with_op(DdlOperation::UpsertAttribute {
+            attribute: AttributeType {
+                id: CORE_CATALOG_ATTR_COLLECTION.to_string(),
+                name: "collection".to_string(),
+                ty: Type {
+                    kind: TypeKind::Number(NumberType::UInt(UIntWidth::U64)),
+                    constraints: vec![],
+                    annotations: vec![],
+                    meta: Meta::default(),
+                },
+                constraints: vec![],
+                meta: Meta::default(),
+            },
+        })
+        .with_op(DdlOperation::UpsertAttribute {
+            attribute: AttributeType {
+                id: CORE_CATALOG_ATTR_FIELD.to_string(),
+                name: "field".to_string(),
+                ty: Type {
+                    kind: TypeKind::String(StringType {
+                        format: None,
+                        normalization: None,
+                    }),
+                    constraints: vec![],
+                    annotations: vec![],
+                    meta: Meta::default(),
+                },
+                constraints: vec![],
+                meta: Meta::default(),
+            },
+        })
+        .with_op(DdlOperation::UpsertAttribute {
+            attribute: AttributeType {
+                id: CORE_CATALOG_ATTR_UNIQUE.to_string(),
+                name: "unique".to_string(),
+                ty: Type {
+                    kind: TypeKind::Bool(BoolType),
+                    constraints: vec![],
+                    annotations: vec![],
+                    meta: Meta::default(),
+                },
+                constraints: vec![],
+                meta: Meta::default(),
+            },
+        })
+        .with_op(DdlOperation::UpsertAttribute {
+            attribute: AttributeType {
+                id: CORE_CATALOG_ATTR_NEXT_FIELD_ID.to_string(),
+                name: "next_field_id".to_string(),
+                ty: Type {
+                    kind: TypeKind::Number(NumberType::UInt(UIntWidth::U64)),
                     constraints: vec![],
                     annotations: vec![],
                     meta: Meta::default(),
@@ -329,6 +597,12 @@ pub fn core_catalog_schema_batch() -> DdlBatch {
         .with_op(DdlOperation::UpsertClass { class: core_entry })
         .with_op(DdlOperation::UpsertCollection {
             name: CORE_CATALOG_ATTRIBUTES_COLLECTION.to_string(),
+            kind: DdlCollectionKind::Class {
+                class: CORE_CATALOG_ENTRY_CLASS_ID.to_string(),
+            },
+        })
+        .with_op(DdlOperation::UpsertCollection {
+            name: CORE_CATALOG_TYPE_DEFS_COLLECTION.to_string(),
             kind: DdlCollectionKind::Class {
                 class: CORE_CATALOG_ENTRY_CLASS_ID.to_string(),
             },

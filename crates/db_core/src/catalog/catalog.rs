@@ -6,7 +6,10 @@ use semantic_data::schema::{
     attribute::attribute_type::AttributeType,
     class::class_type::ClassType,
     collections::key_path::KeyPath,
-    core::{meta::Meta, type_kind::TypeKind, type_node::Type},
+    core::{
+        meta::Meta, type_def::TypeDef, type_kind::TypeKind, type_node::Type, type_param::TypeParam,
+        visibility::Visibility,
+    },
     primitives::string_type::StringType,
     record::record_type::RecordType,
 };
@@ -14,13 +17,15 @@ use semantic_data::schema::{
 use crate::catalog::{
     AttributeSchema, CatalogError, CatalogStorageSnapshot, ClassSchema, CollectionKind,
     CollectionSchema, IdMap, IndexSchema, LocalAttrId, LocalClassId, LocalCollectionId,
-    LocalFieldId, LocalIndexId, LocalRecordTypeId, RecordTypeSchema, StoredAttribute, StoredClass,
-    StoredCollection, StoredCollectionKind, StoredFieldId, StoredIndex, StoredRecordType,
+    LocalFieldId, LocalIndexId, LocalRecordTypeId, LocalTypeDefId, RecordTypeSchema,
+    StoredAttribute, StoredClass, StoredCollection, StoredCollectionKind, StoredFieldId,
+    StoredIndex, StoredRecordType, StoredTypeDef, TypeDefSchema,
 };
 
 #[derive(Debug, Clone)]
 pub struct Catalog {
     attributes: IdMap<LocalAttrId, AttributeSchema>,
+    type_defs: IdMap<LocalTypeDefId, TypeDefSchema>,
     record_types: IdMap<LocalRecordTypeId, RecordTypeSchema>,
     classes: IdMap<LocalClassId, ClassSchema>,
     collections: IdMap<LocalCollectionId, CollectionSchema>,
@@ -38,6 +43,7 @@ impl Catalog {
     pub fn new() -> Self {
         Self {
             attributes: IdMap::new(),
+            type_defs: IdMap::new(),
             record_types: IdMap::new(),
             classes: IdMap::new(),
             collections: IdMap::new(),
@@ -65,6 +71,10 @@ impl Catalog {
         self.record_types.iter()
     }
 
+    pub fn type_defs(&self) -> impl Iterator<Item = (LocalTypeDefId, &TypeDefSchema)> {
+        self.type_defs.iter()
+    }
+
     pub fn classes(&self) -> impl Iterator<Item = (LocalClassId, &ClassSchema)> {
         self.classes.iter()
     }
@@ -79,14 +89,20 @@ impl Catalog {
 
     pub fn upsert_attribute(&mut self, attr: AttributeType) -> LocalAttrId {
         let key = attr.id.clone();
-        self.attributes.insert(key, |lid| AttributeSchema {
+        let lid = self.attributes.insert(key, |lid| AttributeSchema {
             lid,
-            attribute: attr,
-        })
+            attribute: attr.clone(),
+        });
+        self.upsert_type_def(type_def_from_attribute(&attr));
+        lid
     }
 
     pub fn delete_attribute(&mut self, id: &str) -> bool {
-        self.attributes.remove_key(id).is_some()
+        let removed = self.attributes.remove_key(id).is_some();
+        if removed {
+            let _ = self.delete_type_def(id);
+        }
+        removed
     }
 
     pub fn attribute_id(&self, id: &str) -> Option<LocalAttrId> {
@@ -99,6 +115,32 @@ impl Catalog {
 
     pub fn attribute_by_lid(&self, lid: LocalAttrId) -> Option<&AttributeSchema> {
         self.attributes.get(lid)
+    }
+
+    pub fn register_type_def(&mut self, type_def: TypeDef) -> LocalTypeDefId {
+        self.upsert_type_def(type_def)
+    }
+
+    pub fn upsert_type_def(&mut self, type_def: TypeDef) -> LocalTypeDefId {
+        let key = type_def.name.clone();
+        self.type_defs
+            .insert(key, |lid| TypeDefSchema { lid, type_def })
+    }
+
+    pub fn delete_type_def(&mut self, name: &str) -> bool {
+        self.type_defs.remove_key(name).is_some()
+    }
+
+    pub fn type_def_id(&self, name: &str) -> Option<LocalTypeDefId> {
+        self.type_defs.get_key_id(name)
+    }
+
+    pub fn type_def_by_name(&self, name: &str) -> Option<&TypeDefSchema> {
+        self.type_defs.get_key(name)
+    }
+
+    pub fn type_def_by_lid(&self, lid: LocalTypeDefId) -> Option<&TypeDefSchema> {
+        self.type_defs.get(lid)
     }
 
     pub fn register_record_type(
@@ -118,17 +160,24 @@ impl Catalog {
     ) -> LocalRecordTypeId {
         let id = id.into();
         let name = name.into();
-        self.record_types
+        let lid = self
+            .record_types
             .insert(id.clone(), |lid| RecordTypeSchema {
                 lid,
-                id,
-                name,
-                record,
-            })
+                id: id.clone(),
+                name: name.clone(),
+                record: record.clone(),
+            });
+        self.upsert_type_def(type_def_from_record_type(id, name, record));
+        lid
     }
 
     pub fn delete_record_type(&mut self, id: &str) -> bool {
-        self.record_types.remove_key(id).is_some()
+        let removed = self.record_types.remove_key(id).is_some();
+        if removed {
+            let _ = self.delete_type_def(id);
+        }
+        removed
     }
 
     pub fn record_type_id(&self, id: &str) -> Option<LocalRecordTypeId> {
@@ -157,15 +206,21 @@ impl Catalog {
         }
 
         let key = class.id.clone();
-        Ok(self.classes.insert(key, |lid| ClassSchema {
+        let lid = self.classes.insert(key, |lid| ClassSchema {
             lid,
-            class,
+            class: class.clone(),
             attributes,
-        }))
+        });
+        self.upsert_type_def(type_def_from_class(class));
+        Ok(lid)
     }
 
     pub fn delete_class(&mut self, id: &str) -> bool {
-        self.classes.remove_key(id).is_some()
+        let removed = self.classes.remove_key(id).is_some();
+        if removed {
+            let _ = self.delete_type_def(id);
+        }
+        removed
     }
 
     pub fn class_id(&self, id: &str) -> Option<LocalClassId> {
@@ -350,6 +405,10 @@ impl Catalog {
         })
     }
 
+    pub fn next_field_id(&self) -> usize {
+        self.next_field_id
+    }
+
     pub fn to_storage_snapshot(&self) -> CatalogStorageSnapshot {
         CatalogStorageSnapshot {
             attributes: self
@@ -357,6 +416,13 @@ impl Catalog {
                 .map(|(lid, attr)| StoredAttribute {
                     lid,
                     attribute: attr.attribute.clone(),
+                })
+                .collect(),
+            type_defs: self
+                .type_defs()
+                .map(|(lid, type_def)| StoredTypeDef {
+                    lid,
+                    type_def: type_def.type_def.clone(),
                 })
                 .collect(),
             record_types: self
@@ -411,9 +477,29 @@ impl Catalog {
     }
 
     pub fn from_storage_snapshot(snapshot: CatalogStorageSnapshot) -> Result<Self, CatalogError> {
+        Self::from_stored_rows(
+            snapshot.attributes,
+            snapshot.type_defs,
+            snapshot.record_types,
+            snapshot.classes,
+            snapshot.collections,
+            snapshot.indexes,
+            snapshot.next_field_id,
+        )
+    }
+
+    pub fn from_stored_rows(
+        attributes: Vec<StoredAttribute>,
+        type_defs: Vec<StoredTypeDef>,
+        record_types: Vec<StoredRecordType>,
+        classes: Vec<StoredClass>,
+        collections: Vec<StoredCollection>,
+        indexes: Vec<StoredIndex>,
+        next_field_id: usize,
+    ) -> Result<Self, CatalogError> {
         let mut catalog = Self::new();
 
-        for item in snapshot.attributes {
+        for item in attributes {
             let key = item.attribute.id.clone();
             catalog.attributes.insert_fixed(
                 item.lid,
@@ -425,7 +511,19 @@ impl Catalog {
             );
         }
 
-        for item in snapshot.record_types {
+        for item in type_defs {
+            let key = item.type_def.name.clone();
+            catalog.type_defs.insert_fixed(
+                item.lid,
+                key,
+                TypeDefSchema {
+                    lid: item.lid,
+                    type_def: item.type_def,
+                },
+            );
+        }
+
+        for item in record_types {
             let key = item.id.clone();
             catalog.record_types.insert_fixed(
                 item.lid,
@@ -439,7 +537,7 @@ impl Catalog {
             );
         }
 
-        for item in snapshot.classes {
+        for item in classes {
             let lid = item.lid;
             let class = item.class;
             let mut attributes = BTreeMap::new();
@@ -464,7 +562,7 @@ impl Catalog {
             );
         }
 
-        for item in snapshot.collections {
+        for item in collections {
             let field_ids = item
                 .field_ids
                 .into_iter()
@@ -490,7 +588,7 @@ impl Catalog {
             }
         }
 
-        for item in snapshot.indexes {
+        for item in indexes {
             let key = {
                 let collection = catalog
                     .collection_by_lid(item.collection)
@@ -529,7 +627,7 @@ impl Catalog {
             )?;
         }
 
-        catalog.next_field_id = catalog.next_field_id.max(snapshot.next_field_id);
+        catalog.next_field_id = catalog.next_field_id.max(next_field_id);
         Ok(catalog)
     }
 
@@ -641,5 +739,56 @@ impl Catalog {
 impl Default for Catalog {
     fn default() -> Self {
         Self::new()
+    }
+}
+
+fn type_def_from_attribute(attribute: &AttributeType) -> TypeDef {
+    TypeDef {
+        name: attribute.id.clone(),
+        params: Vec::<TypeParam>::new(),
+        ty: Type {
+            kind: TypeKind::Attribute(Box::new(attribute.clone())),
+            constraints: vec![],
+            annotations: vec![],
+            meta: Meta::default(),
+        },
+        visibility: Visibility::Public,
+        meta: Meta::default(),
+    }
+}
+
+fn type_def_from_record_type(id: String, name: String, record: RecordType) -> TypeDef {
+    TypeDef {
+        name: id,
+        params: Vec::<TypeParam>::new(),
+        ty: Type {
+            kind: TypeKind::Record(record),
+            constraints: vec![],
+            annotations: vec![],
+            meta: Meta::default(),
+        },
+        visibility: Visibility::Public,
+        meta: Meta {
+            title: Some(name),
+            ..Meta::default()
+        },
+    }
+}
+
+fn type_def_from_class(class: ClassType) -> TypeDef {
+    TypeDef {
+        name: class.id.clone(),
+        params: Vec::<TypeParam>::new(),
+        ty: Type {
+            kind: TypeKind::Class(class.clone()),
+            constraints: vec![],
+            annotations: vec![],
+            meta: Meta::default(),
+        },
+        visibility: Visibility::Public,
+        meta: Meta {
+            title: Some(class.name),
+            ..Meta::default()
+        },
     }
 }

@@ -13,12 +13,14 @@ pub use error::CatalogError;
 pub use id_map::IdMap;
 pub use ids::{
     LocalAttrId, LocalClassId, LocalCollectionId, LocalFieldId, LocalIndexId, LocalRecordTypeId,
+    LocalTypeDefId,
 };
 pub use schema::{
     AttributeSchema, ClassSchema, CollectionKind, CollectionSchema, IndexSchema, RecordTypeSchema,
+    TypeDefSchema,
 };
 pub use shared::{CatalogSnapshot, CatalogVersionMismatch, SharedCatalog};
 pub use snapshot::{
     CatalogStorageSnapshot, StoredAttribute, StoredClass, StoredCollection, StoredCollectionKind,
-    StoredFieldId, StoredIndex, StoredRecordType,
+    StoredFieldId, StoredIndex, StoredRecordType, StoredTypeDef,
 };

@@ -3,11 +3,13 @@ use std::collections::BTreeMap;
 use fnv::FnvHashMap;
 use semantic_data::schema::{
     IndexSchema as DataIndexSchema, attribute::attribute_type::AttributeType,
-    class::class_type::ClassType, core::type_node::Type, record::record_type::RecordType,
+    class::class_type::ClassType, core::type_def::TypeDef, core::type_node::Type,
+    record::record_type::RecordType,
 };
 
 use crate::catalog::{
     LocalAttrId, LocalClassId, LocalCollectionId, LocalFieldId, LocalIndexId, LocalRecordTypeId,
+    LocalTypeDefId,
 };
 
 #[derive(Debug, Clone)]
@@ -22,6 +24,12 @@ pub struct RecordTypeSchema {
     pub id: String,
     pub name: String,
     pub record: RecordType,
+}
+
+#[derive(Debug, Clone)]
+pub struct TypeDefSchema {
+    pub lid: LocalTypeDefId,
+    pub type_def: TypeDef,
 }
 
 #[derive(Debug, Clone)]
