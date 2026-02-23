@@ -471,7 +471,6 @@ dependencies = [
  "facet-json",
  "semantic_data",
  "semantic_db_core",
- "thiserror",
 ]
 
 [[package]]

@@ -7,7 +7,7 @@ use base64::{Engine, engine::general_purpose::URL_SAFE_NO_PAD};
 use semantic_data::value::{Object, Value};
 use semantic_db_core::catalog::{LocalCollectionId, LocalIndexId};
 
-use crate::error::{DbError, Result};
+use crate::error::DbError;
 
 #[derive(facet::Facet, Debug, Clone, PartialEq, Eq)]
 #[repr(C)]
@@ -67,16 +67,16 @@ pub enum KvCommitOutcome {
 }
 
 pub trait KvEngine: std::fmt::Debug + Send + Sync + 'static {
-    fn get(&self, key: &[u8]) -> Result<Option<Vec<u8>>>;
-    fn put(&mut self, key: Vec<u8>, value: Vec<u8>) -> Result<()>;
-    fn delete(&mut self, key: &[u8]) -> Result<()>;
-    fn scan_prefix(&self, prefix: &[u8]) -> Result<Vec<(Vec<u8>, Vec<u8>)>>;
+    fn get(&self, key: &[u8]) -> std::result::Result<Option<Vec<u8>>, DbError>;
+    fn put(&mut self, key: Vec<u8>, value: Vec<u8>) -> std::result::Result<(), DbError>;
+    fn delete(&mut self, key: &[u8]) -> std::result::Result<(), DbError>;
+    fn scan_prefix(&self, prefix: &[u8]) -> std::result::Result<Vec<(Vec<u8>, Vec<u8>)>, DbError>;
 
     fn tx_capabilities(&self) -> KvTransactionCapabilities {
         KvTransactionCapabilities::default()
     }
 
-    fn current_revision(&self) -> Result<Option<u64>> {
+    fn current_revision(&self) -> std::result::Result<Option<u64>, DbError> {
         Ok(None)
     }
 
@@ -84,7 +84,7 @@ pub trait KvEngine: std::fmt::Debug + Send + Sync + 'static {
         &self,
         prefix: &[u8],
         _revision: u64,
-    ) -> Result<Vec<(Vec<u8>, Vec<u8>)>> {
+    ) -> std::result::Result<Vec<(Vec<u8>, Vec<u8>)>, DbError> {
         self.scan_prefix(prefix)
     }
 
@@ -92,14 +92,14 @@ pub trait KvEngine: std::fmt::Debug + Send + Sync + 'static {
         &mut self,
         ops: &[KvWriteOp],
         _expected_revision: Option<u64>,
-    ) -> Result<KvCommitOutcome> {
+    ) -> std::result::Result<KvCommitOutcome, DbError> {
         self.write_batch(ops)?;
         Ok(KvCommitOutcome::Committed {
             revision: self.current_revision()?,
         })
     }
 
-    fn write_batch(&mut self, ops: &[KvWriteOp]) -> Result<()> {
+    fn write_batch(&mut self, ops: &[KvWriteOp]) -> std::result::Result<(), DbError> {
         for op in ops {
             match op {
                 KvWriteOp::Put { key, value } => self.put(key.clone(), value.clone())?,
@@ -153,23 +153,23 @@ impl MemoryKvEngine {
 }
 
 impl KvEngine for MemoryKvEngine {
-    fn get(&self, key: &[u8]) -> Result<Option<Vec<u8>>> {
+    fn get(&self, key: &[u8]) -> std::result::Result<Option<Vec<u8>>, DbError> {
         Ok(self.map.get(key).cloned())
     }
 
-    fn put(&mut self, key: Vec<u8>, value: Vec<u8>) -> Result<()> {
+    fn put(&mut self, key: Vec<u8>, value: Vec<u8>) -> std::result::Result<(), DbError> {
         self.map.insert(key, value);
         self.bump_revision();
         Ok(())
     }
 
-    fn delete(&mut self, key: &[u8]) -> Result<()> {
+    fn delete(&mut self, key: &[u8]) -> std::result::Result<(), DbError> {
         self.map.remove(key);
         self.bump_revision();
         Ok(())
     }
 
-    fn scan_prefix(&self, prefix: &[u8]) -> Result<Vec<(Vec<u8>, Vec<u8>)>> {
+    fn scan_prefix(&self, prefix: &[u8]) -> std::result::Result<Vec<(Vec<u8>, Vec<u8>)>, DbError> {
         Ok(self
             .map
             .iter()
@@ -178,7 +178,7 @@ impl KvEngine for MemoryKvEngine {
             .collect())
     }
 
-    fn write_batch(&mut self, ops: &[KvWriteOp]) -> Result<()> {
+    fn write_batch(&mut self, ops: &[KvWriteOp]) -> std::result::Result<(), DbError> {
         for op in ops {
             match op {
                 KvWriteOp::Put { key, value } => {
@@ -203,7 +203,7 @@ impl KvEngine for MemoryKvEngine {
         }
     }
 
-    fn current_revision(&self) -> Result<Option<u64>> {
+    fn current_revision(&self) -> std::result::Result<Option<u64>, DbError> {
         Ok(Some(self.revision))
     }
 
@@ -211,7 +211,7 @@ impl KvEngine for MemoryKvEngine {
         &self,
         prefix: &[u8],
         revision: u64,
-    ) -> Result<Vec<(Vec<u8>, Vec<u8>)>> {
+    ) -> std::result::Result<Vec<(Vec<u8>, Vec<u8>)>, DbError> {
         if revision == self.revision {
             return self.scan_prefix(prefix);
         }
@@ -236,15 +236,15 @@ impl KvEngine for MemoryKvEngine {
         &mut self,
         ops: &[KvWriteOp],
         expected_revision: Option<u64>,
-    ) -> Result<KvCommitOutcome> {
+    ) -> std::result::Result<KvCommitOutcome, DbError> {
         let actual = Some(self.revision);
-        if let Some(expected) = expected_revision {
-            if actual != Some(expected) {
-                return Ok(KvCommitOutcome::Conflict {
-                    expected_revision: Some(expected),
-                    actual_revision: actual,
-                });
-            }
+        if let Some(expected) = expected_revision
+            && actual != Some(expected)
+        {
+            return Ok(KvCommitOutcome::Conflict {
+                expected_revision: Some(expected),
+                actual_revision: actual,
+            });
         }
         self.write_batch(ops)?;
         Ok(KvCommitOutcome::Committed {
@@ -270,11 +270,14 @@ pub struct FileKvEngine {
 }
 
 impl FileKvEngine {
-    pub fn open(path: impl Into<PathBuf>) -> Result<Self> {
+    pub fn open(path: impl Into<PathBuf>) -> std::result::Result<Self, DbError> {
         Self::open_with_config(path, FileKvConfig::default())
     }
 
-    pub fn open_with_config(path: impl Into<PathBuf>, config: FileKvConfig) -> Result<Self> {
+    pub fn open_with_config(
+        path: impl Into<PathBuf>,
+        config: FileKvConfig,
+    ) -> std::result::Result<Self, DbError> {
         let path = path.into();
         let (map, revision) = if path.exists() {
             load_snapshot(&path)?
@@ -319,7 +322,7 @@ impl FileKvEngine {
         }
     }
 
-    fn persist(&self) -> Result<()> {
+    fn persist(&self) -> std::result::Result<(), DbError> {
         let snapshot = FileKvSnapshot {
             revision: self.revision,
             entries: self
@@ -339,23 +342,23 @@ impl FileKvEngine {
 }
 
 impl KvEngine for FileKvEngine {
-    fn get(&self, key: &[u8]) -> Result<Option<Vec<u8>>> {
+    fn get(&self, key: &[u8]) -> std::result::Result<Option<Vec<u8>>, DbError> {
         Ok(self.map.get(key).cloned())
     }
 
-    fn put(&mut self, key: Vec<u8>, value: Vec<u8>) -> Result<()> {
+    fn put(&mut self, key: Vec<u8>, value: Vec<u8>) -> std::result::Result<(), DbError> {
         self.map.insert(key, value);
         self.bump_revision();
         self.persist()
     }
 
-    fn delete(&mut self, key: &[u8]) -> Result<()> {
+    fn delete(&mut self, key: &[u8]) -> std::result::Result<(), DbError> {
         self.map.remove(key);
         self.bump_revision();
         self.persist()
     }
 
-    fn scan_prefix(&self, prefix: &[u8]) -> Result<Vec<(Vec<u8>, Vec<u8>)>> {
+    fn scan_prefix(&self, prefix: &[u8]) -> std::result::Result<Vec<(Vec<u8>, Vec<u8>)>, DbError> {
         Ok(self
             .map
             .iter()
@@ -364,7 +367,7 @@ impl KvEngine for FileKvEngine {
             .collect())
     }
 
-    fn write_batch(&mut self, ops: &[KvWriteOp]) -> Result<()> {
+    fn write_batch(&mut self, ops: &[KvWriteOp]) -> std::result::Result<(), DbError> {
         for op in ops {
             match op {
                 KvWriteOp::Put { key, value } => {
@@ -389,7 +392,7 @@ impl KvEngine for FileKvEngine {
         }
     }
 
-    fn current_revision(&self) -> Result<Option<u64>> {
+    fn current_revision(&self) -> std::result::Result<Option<u64>, DbError> {
         Ok(Some(self.revision))
     }
 
@@ -397,7 +400,7 @@ impl KvEngine for FileKvEngine {
         &self,
         prefix: &[u8],
         revision: u64,
-    ) -> Result<Vec<(Vec<u8>, Vec<u8>)>> {
+    ) -> std::result::Result<Vec<(Vec<u8>, Vec<u8>)>, DbError> {
         if revision == self.revision {
             return self.scan_prefix(prefix);
         }
@@ -422,7 +425,7 @@ impl KvEngine for FileKvEngine {
         &mut self,
         ops: &[KvWriteOp],
         expected_revision: Option<u64>,
-    ) -> Result<KvCommitOutcome> {
+    ) -> std::result::Result<KvCommitOutcome, DbError> {
         let actual = Some(self.revision);
         if let Some(expected) = expected_revision {
             if actual != Some(expected) {
@@ -465,19 +468,19 @@ impl<E: KvEngine> EntityStore<E> {
         self.engine.tx_capabilities()
     }
 
-    pub fn current_revision(&self) -> Result<Option<u64>> {
+    pub fn current_revision(&self) -> std::result::Result<Option<u64>, DbError> {
         self.engine.current_revision()
     }
 
-    pub fn get_raw(&self, key: &[u8]) -> Result<Option<Vec<u8>>> {
+    pub fn get_raw(&self, key: &[u8]) -> std::result::Result<Option<Vec<u8>>, DbError> {
         self.engine.get(key)
     }
 
-    pub fn put_raw(&mut self, key: Vec<u8>, value: Vec<u8>) -> Result<()> {
+    pub fn put_raw(&mut self, key: Vec<u8>, value: Vec<u8>) -> std::result::Result<(), DbError> {
         self.engine.put(key, value)
     }
 
-    pub fn put_entity(&mut self, entity: &StoredEntity) -> Result<()> {
+    pub fn put_entity(&mut self, entity: &StoredEntity) -> std::result::Result<(), DbError> {
         let key = entity_key(LocalCollectionId(entity.collection), &entity.id);
         let payload = encode_entity(entity)?;
         self.engine.put(key, payload)
@@ -487,7 +490,7 @@ impl<E: KvEngine> EntityStore<E> {
         &self,
         collection: LocalCollectionId,
         id: &str,
-    ) -> Result<Option<StoredEntity>> {
+    ) -> std::result::Result<Option<StoredEntity>, DbError> {
         let key = entity_key(collection, id);
         let Some(payload) = self.engine.get(&key)? else {
             return Ok(None);
@@ -495,12 +498,19 @@ impl<E: KvEngine> EntityStore<E> {
         decode_entity(&payload).map(Some)
     }
 
-    pub fn delete_entity(&mut self, collection: LocalCollectionId, id: &str) -> Result<()> {
+    pub fn delete_entity(
+        &mut self,
+        collection: LocalCollectionId,
+        id: &str,
+    ) -> std::result::Result<(), DbError> {
         let key = entity_key(collection, id);
         self.engine.delete(&key)
     }
 
-    pub fn scan_collection(&self, collection: LocalCollectionId) -> Result<Vec<StoredEntity>> {
+    pub fn scan_collection(
+        &self,
+        collection: LocalCollectionId,
+    ) -> std::result::Result<Vec<StoredEntity>, DbError> {
         let prefix = entity_prefix(collection);
         let pairs = self.engine.scan_prefix(&prefix)?;
         pairs
@@ -513,7 +523,7 @@ impl<E: KvEngine> EntityStore<E> {
         &self,
         collection: LocalCollectionId,
         revision: u64,
-    ) -> Result<Vec<StoredEntity>> {
+    ) -> std::result::Result<Vec<StoredEntity>, DbError> {
         let prefix = entity_prefix(collection);
         let pairs = self.engine.scan_prefix_at_revision(&prefix, revision)?;
         pairs
@@ -527,7 +537,7 @@ impl<E: KvEngine> EntityStore<E> {
         index: LocalIndexId,
         value: &Value,
         entity_id: &str,
-    ) -> Result<()> {
+    ) -> std::result::Result<(), DbError> {
         let key = index_key(index, value, entity_id)?;
         self.engine.put(key, Vec::new())
     }
@@ -537,12 +547,16 @@ impl<E: KvEngine> EntityStore<E> {
         index: LocalIndexId,
         value: &Value,
         entity_id: &str,
-    ) -> Result<()> {
+    ) -> std::result::Result<(), DbError> {
         let key = index_key(index, value, entity_id)?;
         self.engine.delete(&key)
     }
 
-    pub fn scan_index_value(&self, index: LocalIndexId, value: &Value) -> Result<Vec<String>> {
+    pub fn scan_index_value(
+        &self,
+        index: LocalIndexId,
+        value: &Value,
+    ) -> std::result::Result<Vec<String>, DbError> {
         let prefix = index_value_prefix(index, value)?;
         let pairs = self.engine.scan_prefix(&prefix)?;
         let mut ids = BTreeSet::new();
@@ -554,19 +568,22 @@ impl<E: KvEngine> EntityStore<E> {
         Ok(ids.into_iter().collect())
     }
 
-    pub fn collection_keys(&self, collection: LocalCollectionId) -> Result<Vec<Vec<u8>>> {
+    pub fn collection_keys(
+        &self,
+        collection: LocalCollectionId,
+    ) -> std::result::Result<Vec<Vec<u8>>, DbError> {
         let prefix = entity_prefix(collection);
         let pairs = self.engine.scan_prefix(&prefix)?;
         Ok(pairs.into_iter().map(|(k, _)| k).collect())
     }
 
-    pub fn index_keys(&self, index: LocalIndexId) -> Result<Vec<Vec<u8>>> {
+    pub fn index_keys(&self, index: LocalIndexId) -> std::result::Result<Vec<Vec<u8>>, DbError> {
         let prefix = index_prefix(index);
         let pairs = self.engine.scan_prefix(&prefix)?;
         Ok(pairs.into_iter().map(|(k, _)| k).collect())
     }
 
-    pub fn write_batch(&mut self, ops: &[KvWriteOp]) -> Result<()> {
+    pub fn write_batch(&mut self, ops: &[KvWriteOp]) -> std::result::Result<(), DbError> {
         self.engine.write_batch(ops)
     }
 
@@ -574,16 +591,16 @@ impl<E: KvEngine> EntityStore<E> {
         &mut self,
         ops: &[KvWriteOp],
         expected_revision: Option<u64>,
-    ) -> Result<KvCommitOutcome> {
+    ) -> std::result::Result<KvCommitOutcome, DbError> {
         self.engine.write_batch_conditional(ops, expected_revision)
     }
 }
 
-fn decode_entity(payload: &[u8]) -> Result<StoredEntity> {
+fn decode_entity(payload: &[u8]) -> std::result::Result<StoredEntity, DbError> {
     facet_json::from_slice(payload).map_err(|err| DbError::Deserialization(err.to_string()))
 }
 
-pub(crate) fn encode_entity(entity: &StoredEntity) -> Result<Vec<u8>> {
+pub(crate) fn encode_entity(entity: &StoredEntity) -> std::result::Result<Vec<u8>, DbError> {
     facet_json::to_vec(entity).map_err(|err| DbError::Serialization(err.to_string()))
 }
 
@@ -595,14 +612,18 @@ pub(crate) fn entity_key(collection: LocalCollectionId, id: &str) -> Vec<u8> {
     format!("c/{}/e/{}", collection.0, id).into_bytes()
 }
 
-fn index_value_prefix(index: LocalIndexId, value: &Value) -> Result<Vec<u8>> {
+fn index_value_prefix(index: LocalIndexId, value: &Value) -> std::result::Result<Vec<u8>, DbError> {
     let value_bytes =
         facet_json::to_vec(value).map_err(|err| DbError::Serialization(err.to_string()))?;
     let token = URL_SAFE_NO_PAD.encode(value_bytes);
     Ok(format!("i/{}/v/{}/e/", index.0, token).into_bytes())
 }
 
-pub(crate) fn index_key(index: LocalIndexId, value: &Value, entity_id: &str) -> Result<Vec<u8>> {
+pub(crate) fn index_key(
+    index: LocalIndexId,
+    value: &Value,
+    entity_id: &str,
+) -> std::result::Result<Vec<u8>, DbError> {
     let mut key = index_value_prefix(index, value)?;
     key.extend_from_slice(entity_id.as_bytes());
     Ok(key)
@@ -631,7 +652,7 @@ struct KvEntry {
     value: Vec<u8>,
 }
 
-fn load_snapshot(path: &Path) -> Result<(BTreeMap<Vec<u8>, Vec<u8>>, u64)> {
+fn load_snapshot(path: &Path) -> std::result::Result<(BTreeMap<Vec<u8>, Vec<u8>>, u64), DbError> {
     let bytes = std::fs::read(path).map_err(|err| DbError::Storage(err.to_string()))?;
     if bytes.is_empty() {
         return Ok((BTreeMap::new(), 0));

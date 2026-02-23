@@ -3,7 +3,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use semantic_data::value::{FieldPath, Object, Value, ValueRef};
 
 use crate::{
-    error::{DbError, Result},
+    error::DbError,
     query::{
         Batch, BatchOperation, DeleteQuery, MutationStats, SelectQuery, UpdateQuery,
         canonicalize_delete_query, canonicalize_select_query, canonicalize_update_query,
@@ -88,7 +88,7 @@ impl<E: KvEngine> Database<E> {
         Self::open(engine).expect("database initialization failed")
     }
 
-    pub fn open(engine: E) -> Result<Self> {
+    pub fn open(engine: E) -> std::result::Result<Self, DbError> {
         let mut store = EntityStore::new(engine);
         let catalog = if let Some(bytes) = store.get_raw(&catalog_snapshot_key())? {
             decode_catalog(&bytes)?
@@ -117,7 +117,7 @@ impl<E: KvEngine> Database<E> {
         &mut self,
         name: impl Into<String>,
         kind: CollectionKind,
-    ) -> Result<LocalCollectionId> {
+    ) -> std::result::Result<LocalCollectionId, DbError> {
         let name = name.into();
         let ddl = DdlBatch::new().with_op(DdlOperation::UpsertCollection {
             name: name.clone(),
@@ -156,7 +156,7 @@ impl<E: KvEngine> Database<E> {
         collection: LocalCollectionId,
         field: impl Into<String>,
         unique: bool,
-    ) -> Result<()> {
+    ) -> std::result::Result<(), DbError> {
         let snapshot = self.catalog();
         let collection_name = snapshot
             .collection_by_lid(collection)
@@ -182,7 +182,7 @@ impl<E: KvEngine> Database<E> {
         collection: &str,
         id: impl Into<String>,
         object: Object,
-    ) -> Result<()> {
+    ) -> std::result::Result<(), DbError> {
         let id = id.into();
         self.execute_batch(Batch::new().with_op(BatchOperation::Upsert {
             collection: collection.to_string(),
@@ -192,7 +192,11 @@ impl<E: KvEngine> Database<E> {
         Ok(())
     }
 
-    pub fn get(&self, collection: &str, id: &str) -> Result<Option<EntityRecord>> {
+    pub fn get(
+        &self,
+        collection: &str,
+        id: &str,
+    ) -> std::result::Result<Option<EntityRecord>, DbError> {
         let catalog = self.catalog();
         let collection_schema = catalog.collection_by_name(collection).ok_or_else(|| {
             DbError::UnknownCollectionByName {
@@ -211,7 +215,7 @@ impl<E: KvEngine> Database<E> {
         }))
     }
 
-    pub fn delete(&mut self, collection: &str, id: &str) -> Result<()> {
+    pub fn delete(&mut self, collection: &str, id: &str) -> std::result::Result<(), DbError> {
         self.execute_batch(Batch::new().with_op(BatchOperation::DeleteById {
             collection: collection.to_string(),
             id: id.to_string(),
@@ -219,7 +223,11 @@ impl<E: KvEngine> Database<E> {
         Ok(())
     }
 
-    pub fn query(&self, collection: &str, query: SelectQuery) -> Result<Vec<Object>> {
+    pub fn query(
+        &self,
+        collection: &str,
+        query: SelectQuery,
+    ) -> std::result::Result<Vec<Object>, DbError> {
         let catalog = self.catalog();
         let collection = catalog.collection_by_name(collection).ok_or_else(|| {
             DbError::UnknownCollectionByName {
@@ -241,7 +249,11 @@ impl<E: KvEngine> Database<E> {
         self.execute_physical_plan(&pair.physical, Some(collection.name.as_str()))
     }
 
-    pub fn plan_query(&self, collection: &str, query: SelectQuery) -> Result<QueryPlan> {
+    pub fn plan_query(
+        &self,
+        collection: &str,
+        query: SelectQuery,
+    ) -> std::result::Result<QueryPlan, DbError> {
         let explain = self.explain_query(collection, query)?;
         match explain.access_path {
             AccessPath::FullScan => Ok(QueryPlan::FullScan {
@@ -260,7 +272,11 @@ impl<E: KvEngine> Database<E> {
         }
     }
 
-    pub fn explain_query(&self, collection: &str, query: SelectQuery) -> Result<QueryExplain> {
+    pub fn explain_query(
+        &self,
+        collection: &str,
+        query: SelectQuery,
+    ) -> std::result::Result<QueryExplain, DbError> {
         let catalog = self.catalog();
         let collection = catalog.collection_by_name(collection).ok_or_else(|| {
             DbError::UnknownCollectionByName {
@@ -292,7 +308,7 @@ impl<E: KvEngine> Database<E> {
         &self,
         plan: &semantic_db_core::PhysicalPlan,
         default_collection: Option<&str>,
-    ) -> Result<Vec<Object>> {
+    ) -> std::result::Result<Vec<Object>, DbError> {
         let context = self.query_context();
         let source = KvPhysicalDataSource {
             db: self,
@@ -303,7 +319,11 @@ impl<E: KvEngine> Database<E> {
             .map_err(|err| DbError::InvalidQuery(err.to_string()))
     }
 
-    pub fn update_where(&mut self, collection: &str, query: UpdateQuery) -> Result<MutationStats> {
+    pub fn update_where(
+        &mut self,
+        collection: &str,
+        query: UpdateQuery,
+    ) -> std::result::Result<MutationStats, DbError> {
         let catalog = self.catalog();
         let collection_schema = catalog
             .collection_by_name(collection)
@@ -326,7 +346,11 @@ impl<E: KvEngine> Database<E> {
         })
     }
 
-    pub fn delete_where(&mut self, collection: &str, query: DeleteQuery) -> Result<usize> {
+    pub fn delete_where(
+        &mut self,
+        collection: &str,
+        query: DeleteQuery,
+    ) -> std::result::Result<usize, DbError> {
         let catalog = self.catalog();
         let collection_schema = catalog
             .collection_by_name(collection)
@@ -346,7 +370,10 @@ impl<E: KvEngine> Database<E> {
         Ok(out.stats.deleted)
     }
 
-    pub fn transact(&mut self, batch: Batch) -> Result<crate::query::BatchOutcome> {
+    pub fn transact(
+        &mut self,
+        batch: Batch,
+    ) -> std::result::Result<crate::query::BatchOutcome, DbError> {
         self.transact_with_options(batch, TransactionOptions::default())
     }
 
@@ -354,7 +381,7 @@ impl<E: KvEngine> Database<E> {
         &mut self,
         batch: Batch,
         options: TransactionOptions,
-    ) -> Result<crate::query::BatchOutcome> {
+    ) -> std::result::Result<crate::query::BatchOutcome, DbError> {
         let caps = self.store.tx_capabilities();
         if options.concurrency == TransactionConcurrency::Mvcc && !caps.mvcc {
             return Err(DbError::InvalidQuery(
@@ -405,7 +432,10 @@ impl<E: KvEngine> Database<E> {
         Ok(txn_result.value)
     }
 
-    pub fn execute_batch(&mut self, batch: Batch) -> Result<crate::query::BatchOutcome> {
+    pub fn execute_batch(
+        &mut self,
+        batch: Batch,
+    ) -> std::result::Result<crate::query::BatchOutcome, DbError> {
         self.transact_with_options(batch, TransactionOptions::default())
     }
 
@@ -413,7 +443,7 @@ impl<E: KvEngine> Database<E> {
         &mut self,
         ddl: DdlBatch,
         options: TransactionOptions,
-    ) -> Result<DdlOutcome> {
+    ) -> std::result::Result<DdlOutcome, DbError> {
         if options.read_only && !ddl.operations.is_empty() {
             return Err(DbError::InvalidQuery(
                 "read-only transaction cannot contain ddl operations".to_string(),
@@ -462,11 +492,15 @@ impl<E: KvEngine> Database<E> {
         Ok(txn_result.value)
     }
 
-    pub fn transact_ddl(&mut self, ddl: DdlBatch) -> Result<DdlOutcome> {
+    pub fn transact_ddl(&mut self, ddl: DdlBatch) -> std::result::Result<DdlOutcome, DbError> {
         self.transact_ddl_with_options(ddl, TransactionOptions::default())
     }
 
-    fn canonicalize_batch(&self, batch: &Batch, catalog: &Catalog) -> Result<Batch> {
+    fn canonicalize_batch(
+        &self,
+        batch: &Batch,
+        catalog: &Catalog,
+    ) -> std::result::Result<Batch, DbError> {
         let mut canonical_ops = Vec::with_capacity(batch.operations.len());
         for op in batch.operations.iter().cloned() {
             match op {
@@ -528,7 +562,11 @@ impl<E: KvEngine> Database<E> {
         })
     }
 
-    fn ddl_cleanup_ops(&self, before: &Catalog, after: &Catalog) -> Result<Vec<KvWriteOp>> {
+    fn ddl_cleanup_ops(
+        &self,
+        before: &Catalog,
+        after: &Catalog,
+    ) -> std::result::Result<Vec<KvWriteOp>, DbError> {
         let mut ops = Vec::new();
 
         for (index_lid, _) in before.indexes() {
@@ -550,7 +588,10 @@ impl<E: KvEngine> Database<E> {
         Ok(ops)
     }
 
-    pub fn collection_rows(&self, collection: LocalCollectionId) -> Result<Vec<EntityRecord>> {
+    pub fn collection_rows(
+        &self,
+        collection: LocalCollectionId,
+    ) -> std::result::Result<Vec<EntityRecord>, DbError> {
         let catalog = self.catalog();
         let collection_schema = catalog
             .collection_by_lid(collection)
@@ -578,7 +619,7 @@ impl<E: KvEngine> Database<E> {
         catalog: &Catalog,
         batch: &Batch,
         read_revision: Option<u64>,
-    ) -> Result<BTreeMap<String, BTreeMap<String, Object>>> {
+    ) -> std::result::Result<BTreeMap<String, BTreeMap<String, Object>>, DbError> {
         let mut dataset = BTreeMap::new();
         for collection_name in crate::query::touched_collections(batch) {
             let collection = catalog
@@ -614,7 +655,7 @@ impl<E: KvEngine> Database<E> {
         after: &BTreeMap<String, BTreeMap<String, Object>>,
         expected_revision: Option<u64>,
         additional_ops: &[KvWriteOp],
-    ) -> Result<KvCommitOutcome> {
+    ) -> std::result::Result<KvCommitOutcome, DbError> {
         let mut ops = Vec::<KvWriteOp>::new();
 
         for (collection_name, new_rows) in after {
@@ -691,7 +732,11 @@ impl<E: KvEngine> Database<E> {
         }
     }
 
-    fn push_entity_ops(&self, ops: &mut Vec<KvWriteOp>, entity: &StoredEntity) -> Result<()> {
+    fn push_entity_ops(
+        &self,
+        ops: &mut Vec<KvWriteOp>,
+        entity: &StoredEntity,
+    ) -> std::result::Result<(), DbError> {
         let key = crate::storage::entity_key(LocalCollectionId(entity.collection), &entity.id);
         let value = crate::storage::encode_entity(entity)?;
         ops.push(KvWriteOp::Put { key, value });
@@ -703,7 +748,7 @@ impl<E: KvEngine> Database<E> {
         catalog: &Catalog,
         collection: &CollectionSchema,
         rows: &BTreeMap<String, Object>,
-    ) -> Result<()> {
+    ) -> std::result::Result<(), DbError> {
         let indexes: Vec<_> = catalog
             .indexes_for_collection(collection.lid)
             .filter(|idx| idx.schema.unique)
@@ -731,7 +776,7 @@ impl<E: KvEngine> Database<E> {
     fn stats_for_collection(
         &self,
         collection: &CollectionSchema,
-    ) -> Result<CollectionStatsSnapshot> {
+    ) -> std::result::Result<CollectionStatsSnapshot, DbError> {
         let row_count = self.store.scan_collection(collection.lid)?.len() as f64;
         let mut indexed_fields = BTreeSet::new();
         let mut unique_fields = BTreeSet::new();
@@ -856,7 +901,7 @@ impl<E: KvEngine> KvPhysicalDataSource<'_, E> {
     fn resolve_collection<'a>(
         &'a self,
         source: &'a semantic_db_core::SourceRef,
-    ) -> Result<&'a CollectionSchema> {
+    ) -> std::result::Result<&'a CollectionSchema, DbError> {
         if let Some(collection_id) = source.collection_id {
             return self
                 .catalog

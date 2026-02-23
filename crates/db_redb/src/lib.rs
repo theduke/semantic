@@ -1,9 +1,7 @@
 use std::path::Path;
 
 use redb::{ReadableTable, TableDefinition};
-use semantic_db_kv::{
-    DbError, KvCommitOutcome, KvEngine, KvTransactionCapabilities, KvWriteOp, Result,
-};
+use semantic_db_kv::{DbError, KvCommitOutcome, KvEngine, KvTransactionCapabilities, KvWriteOp};
 
 const KV_TABLE: TableDefinition<&[u8], &[u8]> = TableDefinition::new("kv");
 const META_REV_KEY: &[u8] = b"__semantic/revision";
@@ -19,7 +17,7 @@ impl std::fmt::Debug for RedbKvEngine {
 }
 
 impl RedbKvEngine {
-    pub fn open(path: impl AsRef<Path>) -> Result<Self> {
+    pub fn open(path: impl AsRef<Path>) -> std::result::Result<Self, DbError> {
         let db = redb::Database::create(path).map_err(storage_err)?;
         {
             let write_txn = db.begin_write().map_err(storage_err)?;
@@ -31,7 +29,7 @@ impl RedbKvEngine {
 }
 
 impl KvEngine for RedbKvEngine {
-    fn get(&self, key: &[u8]) -> Result<Option<Vec<u8>>> {
+    fn get(&self, key: &[u8]) -> std::result::Result<Option<Vec<u8>>, DbError> {
         let read_txn = self.db.begin_read().map_err(storage_err)?;
         let table = read_txn.open_table(KV_TABLE).map_err(storage_err)?;
         // TODO: prevent cloning?
@@ -42,7 +40,7 @@ impl KvEngine for RedbKvEngine {
         Ok(value)
     }
 
-    fn put(&mut self, key: Vec<u8>, value: Vec<u8>) -> Result<()> {
+    fn put(&mut self, key: Vec<u8>, value: Vec<u8>) -> std::result::Result<(), DbError> {
         let write_txn = self.db.begin_write().map_err(storage_err)?;
         {
             let mut table = write_txn.open_table(KV_TABLE).map_err(storage_err)?;
@@ -54,7 +52,7 @@ impl KvEngine for RedbKvEngine {
         Ok(())
     }
 
-    fn delete(&mut self, key: &[u8]) -> Result<()> {
+    fn delete(&mut self, key: &[u8]) -> std::result::Result<(), DbError> {
         let write_txn = self.db.begin_write().map_err(storage_err)?;
         {
             let mut table = write_txn.open_table(KV_TABLE).map_err(storage_err)?;
@@ -64,7 +62,7 @@ impl KvEngine for RedbKvEngine {
         Ok(())
     }
 
-    fn scan_prefix(&self, prefix: &[u8]) -> Result<Vec<(Vec<u8>, Vec<u8>)>> {
+    fn scan_prefix(&self, prefix: &[u8]) -> std::result::Result<Vec<(Vec<u8>, Vec<u8>)>, DbError> {
         let read_txn = self.db.begin_read().map_err(storage_err)?;
         let table = read_txn.open_table(KV_TABLE).map_err(storage_err)?;
         let iter = table.iter().map_err(storage_err)?;
@@ -82,7 +80,7 @@ impl KvEngine for RedbKvEngine {
         Ok(out)
     }
 
-    fn write_batch(&mut self, ops: &[KvWriteOp]) -> Result<()> {
+    fn write_batch(&mut self, ops: &[KvWriteOp]) -> std::result::Result<(), DbError> {
         let write_txn = self.db.begin_write().map_err(storage_err)?;
         {
             let mut table = write_txn.open_table(KV_TABLE).map_err(storage_err)?;
@@ -115,7 +113,7 @@ impl KvEngine for RedbKvEngine {
         }
     }
 
-    fn current_revision(&self) -> Result<Option<u64>> {
+    fn current_revision(&self) -> std::result::Result<Option<u64>, DbError> {
         let read_txn = self.db.begin_read().map_err(storage_err)?;
         let table = read_txn.open_table(KV_TABLE).map_err(storage_err)?;
         read_revision_table(&table)
@@ -125,7 +123,7 @@ impl KvEngine for RedbKvEngine {
         &mut self,
         ops: &[KvWriteOp],
         expected_revision: Option<u64>,
-    ) -> Result<KvCommitOutcome> {
+    ) -> std::result::Result<KvCommitOutcome, DbError> {
         let write_txn = self.db.begin_write().map_err(storage_err)?;
         let next_revision;
         {
@@ -170,7 +168,7 @@ fn storage_err(err: impl std::fmt::Display) -> DbError {
 
 fn read_revision_table(
     table: &impl ReadableTable<&'static [u8], &'static [u8]>,
-) -> Result<Option<u64>> {
+) -> std::result::Result<Option<u64>, DbError> {
     let Some(value) = table.get(META_REV_KEY).map_err(storage_err)? else {
         return Ok(Some(0));
     };

@@ -342,3 +342,55 @@ impl PartialEq for Value {
 }
 
 impl Eq for Value {}
+
+macro_rules! impl_primitive {
+    ($($ty:ty => $variant:ident ,)*) => {
+        $(
+            impl From<$ty> for Value {
+                fn from(value: $ty) -> Self {
+                    Self::$variant(value)
+                }
+            }
+        )*
+    };
+}
+
+impl_primitive!(
+    bool => Bool,
+    i8 => I8,
+    i16 => I16,
+    i32 => I32,
+    i64 => I64,
+    i128 => I128,
+    u8 => U8,
+    u16 => U16,
+    u32 => U32,
+    u64 => U64,
+    u128 => U128,
+
+    OrderedF32 => F32,
+    OrderedF64 => F64,
+
+    Uuid => Uuid,
+    std::net::IpAddr => IpAddr,
+    Duration => Duration,
+    Time => Time,
+    Date => Date,
+    DateTime => DateTime,
+    bytes::Bytes => Bytes,
+    String => String,
+    Map => Map,
+    Object => Object,
+);
+
+impl From<f32> for Value {
+    fn from(value: f32) -> Self {
+        Self::F32(OrderedF32::from(value))
+    }
+}
+
+impl From<f64> for Value {
+    fn from(value: f64) -> Self {
+        Self::F64(OrderedF64::from(value))
+    }
+}

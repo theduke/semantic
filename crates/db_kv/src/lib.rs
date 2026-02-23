@@ -5,7 +5,7 @@ mod schema_store;
 pub mod storage;
 
 pub use crate::db::{AccessPath, Database, EntityRecord, QueryExplain, QueryPlan};
-pub use crate::error::{DbError, Result};
+pub use crate::error::DbError;
 pub use crate::query::{
     Assignment, Batch, BatchOperation, BinaryOp, CompareOp, DeleteQuery, Expr, MutationStats,
     ObjectNormalizationError, Operand, OrderBy, Predicate, QueryCanonicalizationError, QueryField,
