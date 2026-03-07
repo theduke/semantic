@@ -89,20 +89,13 @@ impl Catalog {
 
     pub fn upsert_attribute(&mut self, attr: AttributeType) -> LocalAttrId {
         let key = attr.id.clone();
-        let lid = self.attributes.insert(key, |lid| AttributeSchema {
-            lid,
-            attribute: attr.clone(),
-        });
         self.upsert_type_def(type_def_from_attribute(&attr));
-        lid
+        self.attribute_id(&key)
+            .expect("attribute projection must exist for attribute type-def")
     }
 
     pub fn delete_attribute(&mut self, id: &str) -> bool {
-        let removed = self.attributes.remove_key(id).is_some();
-        if removed {
-            let _ = self.delete_type_def(id);
-        }
-        removed
+        self.delete_type_def(id)
     }
 
     pub fn attribute_id(&self, id: &str) -> Option<LocalAttrId> {
@@ -123,12 +116,65 @@ impl Catalog {
 
     pub fn upsert_type_def(&mut self, type_def: TypeDef) -> LocalTypeDefId {
         let key = type_def.name.clone();
+        match &type_def.ty.kind {
+            TypeKind::Attribute(attribute) => {
+                self.attributes.insert(key.clone(), |lid| AttributeSchema {
+                    lid,
+                    attribute: (*attribute.clone()),
+                });
+                let _ = self.record_types.remove_key(&key);
+                let _ = self.classes.remove_key(&key);
+            }
+            TypeKind::Record(record) => {
+                self.record_types
+                    .insert(key.clone(), |lid| RecordTypeSchema {
+                        lid,
+                        id: key.clone(),
+                        name: type_def.meta.title.clone().unwrap_or_else(|| key.clone()),
+                        record: record.clone(),
+                    });
+                let _ = self.attributes.remove_key(&key);
+                let _ = self.classes.remove_key(&key);
+            }
+            TypeKind::Class(class) => {
+                let mut class_attributes = BTreeMap::new();
+                let mut unresolved = false;
+                for (alias, class_attr) in &class.attributes {
+                    let Some(attr) = self.attribute_by_id(&class_attr.attribute.id) else {
+                        unresolved = true;
+                        break;
+                    };
+                    class_attributes.insert(alias.clone(), attr.lid);
+                    class_attributes.insert(class_attr.attribute.id.clone(), attr.lid);
+                }
+                if unresolved {
+                    let _ = self.classes.remove_key(&key);
+                } else {
+                    self.classes.insert(key.clone(), |lid| ClassSchema {
+                        lid,
+                        class: class.clone(),
+                        attributes: class_attributes,
+                    });
+                }
+                let _ = self.attributes.remove_key(&key);
+                let _ = self.record_types.remove_key(&key);
+            }
+            _ => {
+                let _ = self.attributes.remove_key(&key);
+                let _ = self.record_types.remove_key(&key);
+                let _ = self.classes.remove_key(&key);
+            }
+        }
         self.type_defs
             .insert(key, |lid| TypeDefSchema { lid, type_def })
     }
 
     pub fn delete_type_def(&mut self, name: &str) -> bool {
-        self.type_defs.remove_key(name).is_some()
+        let removed = self.type_defs.remove_key(name).is_some();
+        let _ = self.attributes.remove_key(name);
+        let _ = self.record_types.remove_key(name);
+        let _ = self.classes.remove_key(name);
+        removed
     }
 
     pub fn type_def_id(&self, name: &str) -> Option<LocalTypeDefId> {
@@ -159,25 +205,15 @@ impl Catalog {
         record: RecordType,
     ) -> LocalRecordTypeId {
         let id = id.into();
+        let key = id.clone();
         let name = name.into();
-        let lid = self
-            .record_types
-            .insert(id.clone(), |lid| RecordTypeSchema {
-                lid,
-                id: id.clone(),
-                name: name.clone(),
-                record: record.clone(),
-            });
         self.upsert_type_def(type_def_from_record_type(id, name, record));
-        lid
+        self.record_type_id(&key)
+            .expect("record projection must exist for record type-def")
     }
 
     pub fn delete_record_type(&mut self, id: &str) -> bool {
-        let removed = self.record_types.remove_key(id).is_some();
-        if removed {
-            let _ = self.delete_type_def(id);
-        }
-        removed
+        self.delete_type_def(id)
     }
 
     pub fn record_type_id(&self, id: &str) -> Option<LocalRecordTypeId> {
@@ -193,34 +229,22 @@ impl Catalog {
     }
 
     pub fn upsert_class(&mut self, class: ClassType) -> Result<LocalClassId, CatalogError> {
-        let mut attributes = BTreeMap::new();
-
-        for (alias, class_attr) in &class.attributes {
-            let Some(attr) = self.attribute_by_id(&class_attr.attribute.id) else {
+        for class_attr in class.attributes.values() {
+            if self.attribute_by_id(&class_attr.attribute.id).is_none() {
                 return Err(CatalogError::UnknownAttribute {
                     id: class_attr.attribute.id.clone(),
                 });
-            };
-            attributes.insert(alias.clone(), attr.lid);
-            attributes.insert(class_attr.attribute.id.clone(), attr.lid);
+            }
         }
-
         let key = class.id.clone();
-        let lid = self.classes.insert(key, |lid| ClassSchema {
-            lid,
-            class: class.clone(),
-            attributes,
-        });
         self.upsert_type_def(type_def_from_class(class));
-        Ok(lid)
+        self.class_id(&key).ok_or(CatalogError::InvalidSchema(
+            "class projection must have local id".to_string(),
+        ))
     }
 
     pub fn delete_class(&mut self, id: &str) -> bool {
-        let removed = self.classes.remove_key(id).is_some();
-        if removed {
-            let _ = self.delete_type_def(id);
-        }
-        removed
+        self.delete_type_def(id)
     }
 
     pub fn class_id(&self, id: &str) -> Option<LocalClassId> {
@@ -499,18 +523,6 @@ impl Catalog {
     ) -> Result<Self, CatalogError> {
         let mut catalog = Self::new();
 
-        for item in attributes {
-            let key = item.attribute.id.clone();
-            catalog.attributes.insert_fixed(
-                item.lid,
-                key,
-                AttributeSchema {
-                    lid: item.lid,
-                    attribute: item.attribute,
-                },
-            );
-        }
-
         for item in type_defs {
             let key = item.type_def.name.clone();
             catalog.type_defs.insert_fixed(
@@ -523,43 +535,174 @@ impl Catalog {
             );
         }
 
-        for item in record_types {
-            let key = item.id.clone();
-            catalog.record_types.insert_fixed(
-                item.lid,
-                key,
-                RecordTypeSchema {
-                    lid: item.lid,
-                    id: item.id,
-                    name: item.name,
-                    record: item.record,
-                },
-            );
+        let mut legacy_attr_ids = FnvHashMap::default();
+        for item in &attributes {
+            legacy_attr_ids.insert(item.attribute.id.clone(), item.lid);
+        }
+        let mut legacy_record_ids = FnvHashMap::default();
+        for item in &record_types {
+            legacy_record_ids.insert(item.id.clone(), item.lid);
+        }
+        let mut legacy_class_ids = FnvHashMap::default();
+        for item in &classes {
+            legacy_class_ids.insert(item.class.id.clone(), item.lid);
         }
 
-        for item in classes {
-            let lid = item.lid;
-            let class = item.class;
-            let mut attributes = BTreeMap::new();
-            for (alias, class_attr) in &class.attributes {
-                let Some(attr) = catalog.attribute_by_id(&class_attr.attribute.id) else {
-                    return Err(CatalogError::UnknownAttribute {
-                        id: class_attr.attribute.id.clone(),
-                    });
-                };
-                attributes.insert(alias.clone(), attr.lid);
-                attributes.insert(class_attr.attribute.id.clone(), attr.lid);
+        if catalog.type_defs().next().is_some() {
+            let projected_attrs = catalog
+                .type_defs()
+                .filter_map(|(_, type_def)| match &type_def.type_def.ty.kind {
+                    TypeKind::Attribute(attr) => {
+                        Some((type_def.type_def.name.clone(), *attr.clone()))
+                    }
+                    _ => None,
+                })
+                .collect::<Vec<_>>();
+            for (id, attribute) in projected_attrs {
+                let lid = legacy_attr_ids
+                    .get(&id)
+                    .copied()
+                    .unwrap_or(catalog.attributes.next_id());
+                catalog
+                    .attributes
+                    .insert_fixed(lid, id, AttributeSchema { lid, attribute });
             }
-            let key = class.id.clone();
-            catalog.classes.insert_fixed(
-                lid,
-                key,
-                ClassSchema {
+
+            let projected_records = catalog
+                .type_defs()
+                .filter_map(|(_, type_def)| match &type_def.type_def.ty.kind {
+                    TypeKind::Record(record) => Some((
+                        type_def.type_def.name.clone(),
+                        type_def
+                            .type_def
+                            .meta
+                            .title
+                            .clone()
+                            .unwrap_or_else(|| type_def.type_def.name.clone()),
+                        record.clone(),
+                    )),
+                    _ => None,
+                })
+                .collect::<Vec<_>>();
+            for (id, name, record) in projected_records {
+                let lid = legacy_record_ids
+                    .get(&id)
+                    .copied()
+                    .unwrap_or(catalog.record_types.next_id());
+                catalog.record_types.insert_fixed(
                     lid,
-                    class,
-                    attributes,
-                },
-            );
+                    id.clone(),
+                    RecordTypeSchema {
+                        lid,
+                        id,
+                        name,
+                        record,
+                    },
+                );
+            }
+
+            let projected_classes = catalog
+                .type_defs()
+                .filter_map(|(_, type_def)| match &type_def.type_def.ty.kind {
+                    TypeKind::Class(class) => Some(class.clone()),
+                    _ => None,
+                })
+                .collect::<Vec<_>>();
+            for class in projected_classes {
+                let lid = legacy_class_ids
+                    .get(&class.id)
+                    .copied()
+                    .unwrap_or(catalog.classes.next_id());
+                let mut class_attributes = BTreeMap::new();
+                for (alias, class_attr) in &class.attributes {
+                    let Some(attr) = catalog.attribute_by_id(&class_attr.attribute.id) else {
+                        return Err(CatalogError::UnknownAttribute {
+                            id: class_attr.attribute.id.clone(),
+                        });
+                    };
+                    class_attributes.insert(alias.clone(), attr.lid);
+                    class_attributes.insert(class_attr.attribute.id.clone(), attr.lid);
+                }
+                catalog.classes.insert_fixed(
+                    lid,
+                    class.id.clone(),
+                    ClassSchema {
+                        lid,
+                        class,
+                        attributes: class_attributes,
+                    },
+                );
+            }
+        } else {
+            for item in attributes {
+                let key = item.attribute.id.clone();
+                catalog.attributes.insert_fixed(
+                    item.lid,
+                    key,
+                    AttributeSchema {
+                        lid: item.lid,
+                        attribute: item.attribute,
+                    },
+                );
+            }
+
+            for item in record_types {
+                let key = item.id.clone();
+                catalog.record_types.insert_fixed(
+                    item.lid,
+                    key,
+                    RecordTypeSchema {
+                        lid: item.lid,
+                        id: item.id,
+                        name: item.name,
+                        record: item.record,
+                    },
+                );
+            }
+
+            for item in classes {
+                let lid = item.lid;
+                let class = item.class;
+                let mut class_attributes = BTreeMap::new();
+                for (alias, class_attr) in &class.attributes {
+                    let Some(attr) = catalog.attribute_by_id(&class_attr.attribute.id) else {
+                        return Err(CatalogError::UnknownAttribute {
+                            id: class_attr.attribute.id.clone(),
+                        });
+                    };
+                    class_attributes.insert(alias.clone(), attr.lid);
+                    class_attributes.insert(class_attr.attribute.id.clone(), attr.lid);
+                }
+                let key = class.id.clone();
+                catalog.classes.insert_fixed(
+                    lid,
+                    key,
+                    ClassSchema {
+                        lid,
+                        class,
+                        attributes: class_attributes,
+                    },
+                );
+            }
+
+            let generated_defs = catalog
+                .attributes()
+                .map(|(_, attr)| type_def_from_attribute(&attr.attribute))
+                .chain(catalog.record_types().map(|(_, rec)| {
+                    type_def_from_record_type(rec.id.clone(), rec.name.clone(), rec.record.clone())
+                }))
+                .chain(
+                    catalog
+                        .classes()
+                        .map(|(_, class)| type_def_from_class(class.class.clone())),
+                )
+                .collect::<Vec<_>>();
+            for type_def in generated_defs {
+                let key = type_def.name.clone();
+                let _ = catalog
+                    .type_defs
+                    .insert(key, |lid| TypeDefSchema { lid, type_def });
+            }
         }
 
         for item in collections {
