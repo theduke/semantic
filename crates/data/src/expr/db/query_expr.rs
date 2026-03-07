@@ -1,17 +1,17 @@
 #[derive(facet::Facet, Clone, Debug, PartialEq)]
 #[repr(C)]
 #[facet(rename_all = "snake_case")]
-pub enum QueryExpr {
-    Select(SelectQuery),
+pub enum Query {
+    Select(Select),
 }
 
 #[derive(facet::Facet, Clone, Debug, PartialEq)]
 pub struct SubqueryExpr {
-    pub query: Box<SelectQuery>,
+    pub query: Box<Select>,
 }
 
 #[derive(facet::Facet, Clone, Debug, PartialEq)]
-pub struct SelectQuery {
+pub struct Select {
     pub projection: Vec<SelectExpr>,
     pub from: Vec<FromItem>,
     pub selection: Option<crate::expr::Expr>,
@@ -38,7 +38,7 @@ pub enum FromItem {
         alias: Option<String>,
     },
     Subquery {
-        query: Box<SelectQuery>,
+        query: Box<Select>,
         alias: String,
     },
     Join(JoinExpr),

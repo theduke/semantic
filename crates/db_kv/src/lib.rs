@@ -1,8 +1,10 @@
+mod backend;
 pub mod db;
 mod schema_store;
 pub mod storage;
 
-pub use crate::db::{AccessPath, Database, EntityRecord, QueryExplain, QueryPlan};
+pub use crate::backend::KvBackend;
+pub use crate::db::Database;
 pub use crate::storage::{
     EntityStore, KvCommitOutcome, KvEngine, KvTransactionCapabilities, KvWriteOp, MemoryKvEngine,
 };

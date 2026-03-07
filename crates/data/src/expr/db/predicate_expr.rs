@@ -18,7 +18,7 @@ pub struct InExpr {
 #[facet(rename_all = "snake_case")]
 pub enum InSet {
     Exprs(Vec<crate::expr::Expr>),
-    Subquery(Box<crate::expr::SelectQuery>),
+    Subquery(Box<crate::expr::Select>),
 }
 
 #[derive(facet::Facet, Clone, Debug, PartialEq)]
@@ -38,6 +38,6 @@ pub struct IsNullExpr {
 
 #[derive(facet::Facet, Clone, Debug, PartialEq)]
 pub struct ExistsExpr {
-    pub query: Box<crate::expr::SelectQuery>,
+    pub query: Box<crate::expr::Select>,
     pub negated: bool,
 }

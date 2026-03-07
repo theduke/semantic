@@ -30,6 +30,6 @@ pub enum Expr {
     IsNull(Box<crate::expr::IsNullExpr>),
     Exists(Box<crate::expr::ExistsExpr>),
 
-    Query(Box<crate::expr::QueryExpr>),
+    Query(Box<crate::expr::Query>),
     Subquery(Box<crate::expr::SubqueryExpr>),
 }

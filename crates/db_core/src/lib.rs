@@ -1,3 +1,4 @@
+mod backend;
 mod canonical;
 pub mod catalog;
 mod context;
@@ -8,6 +9,7 @@ mod query;
 mod transaction;
 mod validation;
 
+pub use backend::*;
 pub use canonical::*;
 pub use context::*;
 pub use ddl::*;

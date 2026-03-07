@@ -3,8 +3,9 @@ use std::collections::{BTreeMap, BTreeSet};
 use semantic_data::value::{FieldPath, Object, Value, ValueRef};
 use semantic_db_core::DbError;
 use semantic_db_core::{
-    Batch, BatchOperation, BatchOutcome, DeleteQuery, MutationStats, SelectQuery, UpdateQuery,
-    canonicalize_delete_query, canonicalize_select_query, canonicalize_update_query, execute_batch,
+    AccessPath, Batch, BatchOperation, BatchOutcome, DeleteQuery, EntityRecord, MutationStats,
+    QueryExplain, QueryPlan, SelectQuery, UpdateQuery, canonicalize_delete_query,
+    canonicalize_select_query, canonicalize_update_query, execute_batch,
     normalize_object_for_collection, touched_collections,
 };
 
@@ -23,45 +24,6 @@ use semantic_db_core::{
     DdlBatch, DdlOperation, DdlOutcome, QueryContext, TransactionConcurrency, TransactionOptions,
     apply_ddl_batch, fresh_catalog_with_core_schema, run_with_transaction_retries,
 };
-
-#[derive(facet::Facet, Debug, Clone, PartialEq, Eq)]
-pub struct EntityRecord {
-    pub id: String,
-    pub collection: String,
-    pub object: Object,
-}
-
-#[derive(facet::Facet, Debug, Clone, PartialEq, Eq)]
-#[repr(C)]
-#[facet(rename_all = "snake_case")]
-pub enum QueryPlan {
-    FullScan {
-        collection: String,
-    },
-    IndexLookup {
-        collection: String,
-        index_name: String,
-        field: String,
-        value: Value,
-    },
-}
-
-#[derive(Debug, Clone, PartialEq)]
-pub enum AccessPath {
-    FullScan,
-    IndexLookup {
-        index_name: String,
-        field: String,
-        value: Value,
-    },
-}
-
-#[derive(Debug, Clone, PartialEq)]
-pub struct QueryExplain {
-    pub logical: semantic_db_core::LogicalPlan,
-    pub physical: semantic_db_core::PhysicalPlan,
-    pub access_path: AccessPath,
-}
 
 #[derive(Debug)]
 pub struct Database<E: KvEngine> {

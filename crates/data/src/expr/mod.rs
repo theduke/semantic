@@ -17,8 +17,8 @@ pub use control::{CaseBranch, CaseExpr, IfExpr, LambdaExpr, LambdaParam, LetBind
 pub use core::Expr;
 pub use db::{
     BetweenExpr, ExistsExpr, FromItem, InExpr, InSet, IsNullExpr, JoinExpr, JoinKind, LikeExpr,
-    NullsOrder, OrderByExpr, QueryExpr, SelectExpr, SelectQuery, SortDirection, SubqueryExpr,
-    WindowFrame, WindowFrameBound, WindowFrameUnits, WindowSpec,
+    NullsOrder, OrderByExpr, Query, Select, SelectExpr, SortDirection, SubqueryExpr, WindowFrame,
+    WindowFrameBound, WindowFrameUnits, WindowSpec,
 };
 pub use literal::LiteralExpr;
 pub use ops::{BinaryExpr, BinaryOperator, UnaryExpr, UnaryOperator};

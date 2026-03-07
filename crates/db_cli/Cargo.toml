@@ -1,5 +1,5 @@
 [package]
-name = "semantic_db"
+name = "semantic_db_cli"
 authors.workspace = true
 keywords.workspace = true
 repository.workspace = true

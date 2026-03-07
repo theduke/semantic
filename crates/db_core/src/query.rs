@@ -29,15 +29,19 @@ impl ValueAccess for ValueRef<'_> {
 
 pub trait ObjectAccess: Send + Sync {
     fn value_at_path_ref<'a>(&'a self, path: &FieldPath) -> Option<ValueRef<'a>>;
+
     fn value_at_attr_ref<'a>(&'a self, _attr: LocalAttrId) -> Option<ValueRef<'a>> {
         None
     }
+
     fn value_at_field_ref<'a>(&'a self, _field: LocalFieldId) -> Option<ValueRef<'a>> {
         None
     }
+
     fn collection_id(&self) -> Option<LocalCollectionId> {
         None
     }
+
     fn to_object(&self) -> Object;
 }
 

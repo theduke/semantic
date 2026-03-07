@@ -1,15 +1,52 @@
 use std::sync::Arc;
 
 use async_trait::async_trait;
-use tokio::sync::Mutex;
+use semantic_data::value::{Object, Value};
 
-use semantic_data::value::Object;
-use semantic_db_core::BatchOutcome;
-use semantic_db_core::catalog::{Catalog, CollectionKind, LocalCollectionId};
-use semantic_db_kv::{
-    Batch, DbError, DeleteQuery, EntityRecord, KvEngine, MutationStats, QueryExplain, QueryPlan,
+use crate::catalog::{Catalog, CollectionKind, LocalCollectionId};
+use crate::{
+    Batch, BatchOutcome, DbError, DeleteQuery, LogicalPlan, MutationStats, PhysicalPlan,
     SelectQuery, UpdateQuery,
 };
+
+#[derive(facet::Facet, Debug, Clone, PartialEq, Eq)]
+pub struct EntityRecord {
+    pub id: String,
+    pub collection: String,
+    pub object: Object,
+}
+
+#[derive(facet::Facet, Debug, Clone, PartialEq, Eq)]
+#[repr(C)]
+#[facet(rename_all = "snake_case")]
+pub enum QueryPlan {
+    FullScan {
+        collection: String,
+    },
+    IndexLookup {
+        collection: String,
+        index_name: String,
+        field: String,
+        value: Value,
+    },
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub enum AccessPath {
+    FullScan,
+    IndexLookup {
+        index_name: String,
+        field: String,
+        value: Value,
+    },
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct QueryExplain {
+    pub logical: LogicalPlan,
+    pub physical: PhysicalPlan,
+    pub access_path: AccessPath,
+}
 
 #[async_trait]
 pub trait Backend: Send + Sync {
@@ -161,106 +198,5 @@ impl Database {
 
     pub async fn execute_batch(&self, batch: Batch) -> std::result::Result<BatchOutcome, DbError> {
         self.backend.execute_batch(batch).await
-    }
-}
-
-pub struct KvBackend<E: KvEngine> {
-    db: Mutex<semantic_db_kv::Database<E>>,
-}
-
-impl<E: KvEngine> KvBackend<E> {
-    pub fn new(db: semantic_db_kv::Database<E>) -> Self {
-        Self { db: Mutex::new(db) }
-    }
-}
-
-#[async_trait]
-impl<E: KvEngine> Backend for KvBackend<E> {
-    async fn catalog(&self) -> std::result::Result<Arc<Catalog>, DbError> {
-        let db = self.db.lock().await;
-        Ok(db.catalog())
-    }
-
-    async fn create_collection(
-        &self,
-        name: String,
-        kind: CollectionKind,
-    ) -> std::result::Result<LocalCollectionId, DbError> {
-        let mut db = self.db.lock().await;
-        db.create_collection(name, kind)
-    }
-
-    async fn insert(
-        &self,
-        collection: String,
-        id: String,
-        object: Object,
-    ) -> std::result::Result<(), DbError> {
-        let mut db = self.db.lock().await;
-        db.insert(&collection, id, object)
-    }
-
-    async fn get(
-        &self,
-        collection: String,
-        id: String,
-    ) -> std::result::Result<Option<EntityRecord>, DbError> {
-        let db = self.db.lock().await;
-        db.get(&collection, &id)
-    }
-
-    async fn delete(&self, collection: String, id: String) -> std::result::Result<(), DbError> {
-        let mut db = self.db.lock().await;
-        db.delete(&collection, &id)
-    }
-
-    async fn query(
-        &self,
-        collection: String,
-        query: SelectQuery,
-    ) -> std::result::Result<Vec<Object>, DbError> {
-        let db = self.db.lock().await;
-        db.query(&collection, query)
-    }
-
-    async fn explain_query(
-        &self,
-        collection: String,
-        query: SelectQuery,
-    ) -> std::result::Result<QueryExplain, DbError> {
-        let db = self.db.lock().await;
-        db.explain_query(&collection, query)
-    }
-
-    async fn plan_query(
-        &self,
-        collection: String,
-        query: SelectQuery,
-    ) -> std::result::Result<QueryPlan, DbError> {
-        let db = self.db.lock().await;
-        db.plan_query(&collection, query)
-    }
-
-    async fn update_where(
-        &self,
-        collection: String,
-        query: UpdateQuery,
-    ) -> std::result::Result<MutationStats, DbError> {
-        let mut db = self.db.lock().await;
-        db.update_where(&collection, query)
-    }
-
-    async fn delete_where(
-        &self,
-        collection: String,
-        query: DeleteQuery,
-    ) -> std::result::Result<usize, DbError> {
-        let mut db = self.db.lock().await;
-        db.delete_where(&collection, query)
-    }
-
-    async fn execute_batch(&self, batch: Batch) -> std::result::Result<BatchOutcome, DbError> {
-        let mut db = self.db.lock().await;
-        db.execute_batch(batch)
     }
 }

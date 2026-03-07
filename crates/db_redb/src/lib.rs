@@ -4,7 +4,11 @@ use std::sync::{Arc, RwLock};
 use async_trait::async_trait;
 use redb::{ReadableTable, TableDefinition};
 use semantic_data::value::Object;
-use semantic_db::Backend;
+use semantic_db_core::catalog::{Catalog, CollectionKind, LocalCollectionId};
+use semantic_db_core::{
+    Backend, Batch, BatchOutcome, DeleteQuery, EntityRecord, MutationStats, QueryExplain,
+    QueryPlan, SelectQuery, UpdateQuery,
+};
 use semantic_db_kv::{DbError, KvCommitOutcome, KvEngine, KvTransactionCapabilities, KvWriteOp};
 
 const KV_TABLE: TableDefinition<&[u8], &[u8]> = TableDefinition::new("kv");
@@ -241,15 +245,15 @@ impl RedbBackend {
 
 #[async_trait]
 impl Backend for RedbBackend {
-    async fn catalog(&self) -> std::result::Result<Arc<semantic_db::Catalog>, DbError> {
+    async fn catalog(&self) -> std::result::Result<Arc<Catalog>, DbError> {
         self.with_db_read(|db| Ok(db.catalog())).await
     }
 
     async fn create_collection(
         &self,
         name: String,
-        kind: semantic_db::CollectionKind,
-    ) -> std::result::Result<semantic_db::LocalCollectionId, DbError> {
+        kind: CollectionKind,
+    ) -> std::result::Result<LocalCollectionId, DbError> {
         self.with_db_write(move |db| db.create_collection(name, kind))
             .await
     }
@@ -268,7 +272,7 @@ impl Backend for RedbBackend {
         &self,
         collection: String,
         id: String,
-    ) -> std::result::Result<Option<semantic_db::EntityRecord>, DbError> {
+    ) -> std::result::Result<Option<EntityRecord>, DbError> {
         self.with_db_read(move |db| db.get(&collection, &id)).await
     }
 
@@ -280,7 +284,7 @@ impl Backend for RedbBackend {
     async fn query(
         &self,
         collection: String,
-        query: semantic_db::SelectQuery,
+        query: SelectQuery,
     ) -> std::result::Result<Vec<Object>, DbError> {
         self.with_db_read(move |db| db.query(&collection, query))
             .await
@@ -289,8 +293,8 @@ impl Backend for RedbBackend {
     async fn explain_query(
         &self,
         collection: String,
-        query: semantic_db::SelectQuery,
-    ) -> std::result::Result<semantic_db::QueryExplain, DbError> {
+        query: SelectQuery,
+    ) -> std::result::Result<QueryExplain, DbError> {
         self.with_db_read(move |db| db.explain_query(&collection, query))
             .await
     }
@@ -298,8 +302,8 @@ impl Backend for RedbBackend {
     async fn plan_query(
         &self,
         collection: String,
-        query: semantic_db::SelectQuery,
-    ) -> std::result::Result<semantic_db::QueryPlan, DbError> {
+        query: SelectQuery,
+    ) -> std::result::Result<QueryPlan, DbError> {
         self.with_db_read(move |db| db.plan_query(&collection, query))
             .await
     }
@@ -307,8 +311,8 @@ impl Backend for RedbBackend {
     async fn update_where(
         &self,
         collection: String,
-        query: semantic_db::UpdateQuery,
-    ) -> std::result::Result<semantic_db::MutationStats, DbError> {
+        query: UpdateQuery,
+    ) -> std::result::Result<MutationStats, DbError> {
         self.with_db_write(move |db| db.update_where(&collection, query))
             .await
     }
@@ -316,16 +320,13 @@ impl Backend for RedbBackend {
     async fn delete_where(
         &self,
         collection: String,
-        query: semantic_db::DeleteQuery,
+        query: DeleteQuery,
     ) -> std::result::Result<usize, DbError> {
         self.with_db_write(move |db| db.delete_where(&collection, query))
             .await
     }
 
-    async fn execute_batch(
-        &self,
-        batch: semantic_db::Batch,
-    ) -> std::result::Result<semantic_db::BatchOutcome, DbError> {
+    async fn execute_batch(&self, batch: Batch) -> std::result::Result<BatchOutcome, DbError> {
         self.with_db_write(move |db| db.execute_batch(batch)).await
     }
 }

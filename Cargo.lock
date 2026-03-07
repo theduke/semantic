@@ -465,18 +465,16 @@ dependencies = [
 [[package]]
 name = "semantic_db"
 version = "0.0.1"
-dependencies = [
- "async-trait",
- "semantic_data",
- "semantic_db_core",
- "semantic_db_kv",
- "tokio",
-]
+
+[[package]]
+name = "semantic_db_cli"
+version = "0.0.1"
 
 [[package]]
 name = "semantic_db_core"
 version = "0.0.1"
 dependencies = [
+ "async-trait",
  "facet",
  "fnv",
  "futures",
@@ -488,6 +486,7 @@ dependencies = [
 name = "semantic_db_kv"
 version = "0.0.1"
 dependencies = [
+ "async-trait",
  "base64",
  "facet",
  "facet-json",
@@ -502,7 +501,7 @@ dependencies = [
  "async-trait",
  "redb",
  "semantic_data",
- "semantic_db",
+ "semantic_db_core",
  "semantic_db_kv",
  "tokio",
 ]

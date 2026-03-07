@@ -12,6 +12,7 @@ categories.workspace = true
 version.workspace = true
 
 [dependencies]
+async-trait = "0.1.89"
 base64 = "0.22.1"
 facet = { version = "0.43.2", features = ["time", "uuid", "bytes"] }
 facet-json = "0.43.2"

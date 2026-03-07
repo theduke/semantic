@@ -1,10 +1,11 @@
-use semantic_db::Database;
-use semantic_db::{CollectionKind, CompareOp, Expr, Operand, Predicate, SelectQuery, UpdateQuery};
-use semantic_db::{FieldPath, Object, Value};
+use semantic_data::value::{FieldPath, Object, Value};
+use semantic_db_core::{
+    CollectionKind, CompareOp, Database, Expr, Operand, Predicate, SelectQuery, UpdateQuery,
+};
 use semantic_db_redb::RedbBackend;
 
 #[tokio::main(flavor = "multi_thread")]
-async fn main() -> std::result::Result<(), semantic_db::DbError> {
+async fn main() -> std::result::Result<(), semantic_db_core::DbError> {
     let path = std::env::temp_dir().join(format!(
         "semantic-redb-example-{}.db",
         std::time::SystemTime::now()
