@@ -357,6 +357,22 @@ fn canonicalize_expr(
             query: query.clone(),
             negated: *negated,
         }),
+        Expr::RelationExists {
+            relation,
+            source,
+            target,
+            transitive,
+            max_depth,
+        } => Ok(Expr::RelationExists {
+            relation: Box::new(canonicalize_expr(relation, collection, context)?),
+            source: Box::new(canonicalize_expr(source, collection, context)?),
+            target: Box::new(canonicalize_expr(target, collection, context)?),
+            transitive: *transitive,
+            max_depth: max_depth
+                .as_ref()
+                .map(|value| canonicalize_expr(value, collection, context).map(Box::new))
+                .transpose()?,
+        }),
     }
 }
 

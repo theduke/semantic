@@ -6,12 +6,14 @@ use semantic_data::query::{
     QueryInput as PublicQueryInput, SelectQuery as PublicSelectQuery,
     TextQueryFormat as PublicTextQueryFormat, UpdateQuery as PublicUpdateQuery,
 };
+use semantic_data::schema::RelationType;
 use semantic_data::value::{Object, Value};
 
 use crate::catalog::{Catalog, CollectionKind, LocalCollectionId};
 use crate::{
-    Batch, BatchOutcome, DbError, DeleteQuery, LogicalPlan, MutationStats, PhysicalPlan, Query,
-    QueryResult, SqlDialectKind, TextQueryFormat, TextQueryInput, UpdateQuery, prql, sql,
+    Batch, BatchOutcome, DbError, DdlBatch, DdlOutcome, DeleteQuery, LogicalPlan, MutationStats,
+    PhysicalPlan, Query, QueryResult, SqlDialectKind, TextQueryFormat, TextQueryInput, UpdateQuery,
+    prql, sql,
 };
 
 pub const DEFAULT_COLLECTION: &str = "entities";
@@ -114,6 +116,15 @@ pub trait Backend: Send + Sync {
         name: String,
         kind: CollectionKind,
     ) -> std::result::Result<LocalCollectionId, DbError>;
+
+    async fn execute_ddl(&self, ddl: DdlBatch) -> std::result::Result<DdlOutcome, DbError>;
+
+    async fn upsert_relationship(
+        &self,
+        relationship: RelationType,
+    ) -> std::result::Result<(), DbError>;
+
+    async fn delete_relationship(&self, id: String) -> std::result::Result<(), DbError>;
 
     async fn insert(
         &self,
@@ -231,6 +242,24 @@ impl Db {
         kind: CollectionKind,
     ) -> std::result::Result<LocalCollectionId, DbError> {
         self.backend.create_collection(name.into(), kind).await
+    }
+
+    pub async fn execute_ddl(&self, ddl: DdlBatch) -> std::result::Result<DdlOutcome, DbError> {
+        self.backend.execute_ddl(ddl).await
+    }
+
+    pub async fn upsert_relationship(
+        &self,
+        relationship: RelationType,
+    ) -> std::result::Result<(), DbError> {
+        self.backend.upsert_relationship(relationship).await
+    }
+
+    pub async fn delete_relationship(
+        &self,
+        id: impl Into<String>,
+    ) -> std::result::Result<(), DbError> {
+        self.backend.delete_relationship(id.into()).await
     }
 
     pub async fn insert(

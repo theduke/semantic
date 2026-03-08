@@ -468,6 +468,9 @@ fn choose_scan_source(
     stats: Option<&dyn StatsProvider>,
     context: &QueryContext,
 ) -> PhysicalPlan {
+    if predicate_contains_relationship_expr(&predicate) {
+        return PhysicalPlan::Source(PhysicalSource::FilteredScan { source, predicate });
+    }
     let Some((field_path, value)) = extract_equality_lookup(&predicate) else {
         return PhysicalPlan::Source(PhysicalSource::FilteredScan { source, predicate });
     };
@@ -769,5 +772,63 @@ fn remove_single_lookup_predicate(
             }
         }
         other => Some(other),
+    }
+}
+
+fn predicate_contains_relationship_expr(predicate: &Predicate) -> bool {
+    match predicate {
+        Predicate::Compare { .. } | Predicate::Exists(_) => false,
+        Predicate::Expr(expr) => expr_contains_relationship_expr(expr),
+        Predicate::And(items) | Predicate::Or(items) => {
+            items.iter().any(predicate_contains_relationship_expr)
+        }
+        Predicate::Not(inner) => predicate_contains_relationship_expr(inner),
+    }
+}
+
+fn expr_contains_relationship_expr(expr: &crate::query::Expr) -> bool {
+    match expr {
+        crate::query::Expr::RelationExists { .. } => true,
+        crate::query::Expr::Operand(_) => false,
+        crate::query::Expr::Unary { expr, .. } => expr_contains_relationship_expr(expr),
+        crate::query::Expr::Binary { left, right, .. } => {
+            expr_contains_relationship_expr(left) || expr_contains_relationship_expr(right)
+        }
+        crate::query::Expr::IfElse {
+            cond,
+            then_expr,
+            else_expr,
+        } => {
+            expr_contains_relationship_expr(cond)
+                || expr_contains_relationship_expr(then_expr)
+                || expr_contains_relationship_expr(else_expr)
+        }
+        crate::query::Expr::Coalesce(items) => items.iter().any(expr_contains_relationship_expr),
+        crate::query::Expr::Function { args, .. } => args.iter().any(|arg| match arg {
+            crate::FunctionArg::Expr(expr) => expr_contains_relationship_expr(expr),
+            crate::FunctionArg::Wildcard => false,
+        }),
+        crate::query::Expr::Aggregate { arg, .. } => match arg.as_ref() {
+            crate::FunctionArg::Expr(expr) => expr_contains_relationship_expr(expr),
+            crate::FunctionArg::Wildcard => false,
+        },
+        crate::query::Expr::InList { expr, list, .. } => {
+            expr_contains_relationship_expr(expr)
+                || list.iter().any(expr_contains_relationship_expr)
+        }
+        crate::query::Expr::InSubquery { expr, .. } => expr_contains_relationship_expr(expr),
+        crate::query::Expr::Between {
+            expr, low, high, ..
+        } => {
+            expr_contains_relationship_expr(expr)
+                || expr_contains_relationship_expr(low)
+                || expr_contains_relationship_expr(high)
+        }
+        crate::query::Expr::PatternMatch { expr, pattern, .. }
+        | crate::query::Expr::RegexMatch { expr, pattern, .. } => {
+            expr_contains_relationship_expr(expr) || expr_contains_relationship_expr(pattern)
+        }
+        crate::query::Expr::IsNull { expr, .. } => expr_contains_relationship_expr(expr),
+        crate::query::Expr::Exists { .. } => false,
     }
 }

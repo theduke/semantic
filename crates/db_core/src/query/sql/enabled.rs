@@ -1032,12 +1032,60 @@ fn parse_function_expr(function: sqlparser::ast::Function) -> Result<Expr, SqlQu
             exprs.push(expr);
         }
         Ok(Expr::Coalesce(exprs))
+    } else if function
+        .name
+        .to_string()
+        .eq_ignore_ascii_case("has_relation")
+    {
+        parse_relation_function_expr(args, false)
+    } else if function
+        .name
+        .to_string()
+        .eq_ignore_ascii_case("has_relation_path")
+    {
+        parse_relation_function_expr(args, true)
     } else {
         Ok(Expr::Function {
             name: function.name.to_string(),
             args,
         })
     }
+}
+
+fn parse_relation_function_expr(
+    args: Vec<FunctionArg>,
+    transitive: bool,
+) -> Result<Expr, SqlQueryError> {
+    if args.len() < 3 || args.len() > 4 {
+        return Err(SqlQueryError::Unsupported(
+            "relationship function expects 3 or 4 arguments".to_string(),
+        ));
+    }
+    let mut args = args.into_iter();
+    let take_expr = |arg: FunctionArg| -> Result<Expr, SqlQueryError> {
+        match arg {
+            FunctionArg::Expr(expr) => Ok(expr),
+            FunctionArg::Wildcard => Err(SqlQueryError::Unsupported(
+                "relationship function does not support wildcard args".to_string(),
+            )),
+        }
+    };
+    let relation = take_expr(args.next().expect("validated len"))?;
+    let source = take_expr(args.next().expect("validated len"))?;
+    let target = take_expr(args.next().expect("validated len"))?;
+    let max_depth = args.next().map(take_expr).transpose()?.map(Box::new);
+    if !transitive && max_depth.is_some() {
+        return Err(SqlQueryError::Unsupported(
+            "has_relation does not support max_depth; use has_relation_path".to_string(),
+        ));
+    }
+    Ok(Expr::RelationExists {
+        relation: Box::new(relation),
+        source: Box::new(source),
+        target: Box::new(target),
+        transitive,
+        max_depth,
+    })
 }
 
 fn aggregate_op_from_name(name: &str) -> Option<AggregateOp> {
@@ -1663,6 +1711,31 @@ fn expr_to_sql(expr: &Expr) -> Result<String, SqlQueryError> {
             if *negated { "NOT " } else { "" },
             select_to_sql(query, query.collection_or_default())?
         )),
+        Expr::RelationExists {
+            relation,
+            source,
+            target,
+            transitive,
+            max_depth,
+        } => {
+            let mut out = String::new();
+            out.push_str(if *transitive {
+                "has_relation_path("
+            } else {
+                "has_relation("
+            });
+            out.push_str(&expr_to_sql(relation)?);
+            out.push_str(", ");
+            out.push_str(&expr_to_sql(source)?);
+            out.push_str(", ");
+            out.push_str(&expr_to_sql(target)?);
+            if let Some(max_depth) = max_depth {
+                out.push_str(", ");
+                out.push_str(&expr_to_sql(max_depth)?);
+            }
+            out.push(')');
+            Ok(out)
+        }
     }
 }
 

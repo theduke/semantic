@@ -9,7 +9,7 @@ use semantic_data::schema::{
 
 use crate::catalog::{
     LocalAttrId, LocalClassId, LocalCollectionId, LocalFieldId, LocalIndexId, LocalRecordTypeId,
-    LocalTypeDefId,
+    LocalRelationId, LocalTypeDefId,
 };
 
 #[derive(Debug, Clone)]
@@ -132,4 +132,10 @@ pub struct IndexSchema {
     pub canonical_field: String,
     pub field_id: Option<LocalFieldId>,
     pub attr_id: Option<LocalAttrId>,
+}
+
+#[derive(Debug, Clone)]
+pub struct RelationshipSchema {
+    pub lid: LocalRelationId,
+    pub relationship: semantic_data::schema::RelationType,
 }

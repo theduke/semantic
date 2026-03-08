@@ -161,6 +161,13 @@ pub enum Expr {
         query: Box<SelectQuery>,
         negated: bool,
     },
+    RelationExists {
+        relation: Box<Expr>,
+        source: Box<Expr>,
+        target: Box<Expr>,
+        transitive: bool,
+        max_depth: Option<Box<Expr>>,
+    },
 }
 
 impl From<usize> for Expr {

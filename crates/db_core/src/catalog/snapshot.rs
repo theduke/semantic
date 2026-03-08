@@ -5,7 +5,7 @@ use semantic_data::schema::{
 
 use crate::catalog::{
     LocalAttrId, LocalClassId, LocalCollectionId, LocalFieldId, LocalIndexId, LocalRecordTypeId,
-    LocalTypeDefId,
+    LocalRelationId, LocalTypeDefId,
 };
 
 #[derive(facet::Facet, Debug, Clone, PartialEq)]
@@ -16,6 +16,7 @@ pub struct CatalogStorageSnapshot {
     pub classes: Vec<StoredClass>,
     pub collections: Vec<StoredCollection>,
     pub indexes: Vec<StoredIndex>,
+    pub relationships: Vec<StoredRelationship>,
     pub next_field_id: usize,
     pub auto_index_enabled: bool,
 }
@@ -77,4 +78,10 @@ pub struct StoredIndex {
     pub field: String,
     pub unique: bool,
     pub kind: semantic_data::schema::IndexKind,
+}
+
+#[derive(facet::Facet, Debug, Clone, PartialEq)]
+pub struct StoredRelationship {
+    pub lid: LocalRelationId,
+    pub relationship: semantic_data::schema::RelationType,
 }

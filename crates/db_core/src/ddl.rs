@@ -3,17 +3,18 @@ use semantic_data::schema::{
     attribute::attribute_type::AttributeType,
     class::class_attribute::ClassAttribute,
     class::class_type::ClassType,
-    core::{meta::Meta, type_kind::TypeKind, type_node::Type},
+    core::{meta::Meta, type_kind::TypeKind, type_node::Type, type_ref::TypeRef},
     primitives::{
         any_type::AnyType, bool_type::BoolType, number_type::NumberType, string_type::StringType,
         uint_width::UIntWidth,
     },
     record::record_type::RecordType,
+    relation::relation_type::RelationType,
 };
 
 use crate::{
     CoreError,
-    catalog::{Catalog, CollectionKind},
+    catalog::{Catalog, CollectionKind, RELATION_CLASS_ID},
 };
 
 #[derive(facet::Facet, Debug, Clone, PartialEq)]
@@ -89,6 +90,12 @@ pub enum DdlOperation {
     DeleteIndex {
         name: String,
         collection: String,
+    },
+    UpsertRelationship {
+        relationship: RelationType,
+    },
+    DeleteRelationship {
+        id: String,
     },
     SetAutoIndex {
         enabled: bool,
@@ -220,6 +227,17 @@ pub fn apply_ddl_batch(
                     stats.deleted += 1;
                 }
             }
+            DdlOperation::UpsertRelationship { relationship } => {
+                catalog
+                    .upsert_relationship(relationship.clone())
+                    .map_err(|e| CoreError::new(e.to_string()))?;
+                stats.upserted += 1;
+            }
+            DdlOperation::DeleteRelationship { id } => {
+                if catalog.delete_relationship(id) {
+                    stats.deleted += 1;
+                }
+            }
             DdlOperation::SetAutoIndex { enabled } => {
                 catalog.set_auto_index_enabled(*enabled);
                 stats.upserted += 1;
@@ -254,6 +272,9 @@ const CORE_CATALOG_ATTR_INDEX_KIND: &str = "semantic.catalog.index_kind";
 const CORE_CATALOG_ATTR_UNIQUE: &str = "semantic.catalog.unique";
 const CORE_CATALOG_ATTR_NEXT_FIELD_ID: &str = "semantic.catalog.next_field_id";
 const CORE_CATALOG_ATTR_AUTO_INDEX_ENABLED: &str = "semantic.catalog.auto_index_enabled";
+const RELATION_ATTR_RELATION: &str = "semantic.relation.relation";
+const RELATION_ATTR_FROM: &str = "semantic.relation.from";
+const RELATION_ATTR_TO: &str = "semantic.relation.to";
 
 pub fn core_catalog_schema_batch() -> DdlBatch {
     let mut attrs = std::collections::BTreeMap::new();
@@ -429,6 +450,50 @@ pub fn core_catalog_schema_batch() -> DdlBatch {
         inherits: None,
         extends: vec![],
         attributes: attrs,
+        constraints: vec![],
+        meta: Meta::default(),
+    };
+
+    let mut relation_attrs = std::collections::BTreeMap::new();
+    relation_attrs.insert(
+        "relation".to_string(),
+        ClassAttribute {
+            attribute: AttributeRef {
+                id: RELATION_ATTR_RELATION.to_string(),
+            },
+            required: true,
+            constraints: vec![],
+            meta: Meta::default(),
+        },
+    );
+    relation_attrs.insert(
+        "from".to_string(),
+        ClassAttribute {
+            attribute: AttributeRef {
+                id: RELATION_ATTR_FROM.to_string(),
+            },
+            required: true,
+            constraints: vec![],
+            meta: Meta::default(),
+        },
+    );
+    relation_attrs.insert(
+        "to".to_string(),
+        ClassAttribute {
+            attribute: AttributeRef {
+                id: RELATION_ATTR_TO.to_string(),
+            },
+            required: true,
+            constraints: vec![],
+            meta: Meta::default(),
+        },
+    );
+    let relation_class = ClassType {
+        id: RELATION_CLASS_ID.to_string(),
+        name: "Relation".to_string(),
+        inherits: None,
+        extends: vec![],
+        attributes: relation_attrs,
         constraints: vec![],
         meta: Meta::default(),
     };
@@ -655,6 +720,77 @@ pub fn core_catalog_schema_batch() -> DdlBatch {
                 constraints: vec![],
                 meta: Meta::default(),
             },
+        })
+        .with_op(DdlOperation::UpsertAttribute {
+            attribute: AttributeType {
+                id: "parent".to_string(),
+                name: "parent".to_string(),
+                ty: Type {
+                    kind: TypeKind::Ref(TypeRef {
+                        name: "id".to_string(),
+                        args: vec![],
+                    }),
+                    constraints: vec![],
+                    annotations: vec![],
+                    meta: Meta::default(),
+                },
+                constraints: vec![],
+                meta: Meta::default(),
+            },
+        })
+        .with_op(DdlOperation::UpsertAttribute {
+            attribute: AttributeType {
+                id: RELATION_ATTR_RELATION.to_string(),
+                name: "relation".to_string(),
+                ty: Type {
+                    kind: TypeKind::String(StringType {
+                        format: None,
+                        normalization: None,
+                    }),
+                    constraints: vec![],
+                    annotations: vec![],
+                    meta: Meta::default(),
+                },
+                constraints: vec![],
+                meta: Meta::default(),
+            },
+        })
+        .with_op(DdlOperation::UpsertAttribute {
+            attribute: AttributeType {
+                id: RELATION_ATTR_FROM.to_string(),
+                name: "from".to_string(),
+                ty: Type {
+                    kind: TypeKind::Ref(TypeRef {
+                        name: "id".to_string(),
+                        args: vec![],
+                    }),
+                    constraints: vec![],
+                    annotations: vec![],
+                    meta: Meta::default(),
+                },
+                constraints: vec![],
+                meta: Meta::default(),
+            },
+        })
+        .with_op(DdlOperation::UpsertAttribute {
+            attribute: AttributeType {
+                id: RELATION_ATTR_TO.to_string(),
+                name: "to".to_string(),
+                ty: Type {
+                    kind: TypeKind::Ref(TypeRef {
+                        name: "id".to_string(),
+                        args: vec![],
+                    }),
+                    constraints: vec![],
+                    annotations: vec![],
+                    meta: Meta::default(),
+                },
+                constraints: vec![],
+                meta: Meta::default(),
+            },
+        })
+        .with_op(DdlOperation::UpsertClass {
+            class: relation_class,
         })
         .with_op(DdlOperation::UpsertClass { class: core_entry })
         .with_op(DdlOperation::UpsertCollection {

@@ -303,6 +303,20 @@ fn expr_has_aggregate(expr: &Expr) -> bool {
             expr_has_aggregate(expr) || expr_has_aggregate(pattern)
         }
         Expr::IsNull { expr, .. } => expr_has_aggregate(expr),
+        Expr::RelationExists {
+            relation,
+            source,
+            target,
+            max_depth,
+            ..
+        } => {
+            expr_has_aggregate(relation)
+                || expr_has_aggregate(source)
+                || expr_has_aggregate(target)
+                || max_depth
+                    .as_ref()
+                    .is_some_and(|depth| expr_has_aggregate(depth))
+        }
         Expr::InSubquery { .. } | Expr::Exists { .. } | Expr::Operand(_) => false,
     }
 }

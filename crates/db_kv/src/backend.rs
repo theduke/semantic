@@ -1,11 +1,12 @@
 use std::sync::{Arc, RwLock};
 
 use async_trait::async_trait;
+use semantic_data::schema::RelationType;
 use semantic_data::value::Object;
 use semantic_db_core::catalog::{Catalog, CollectionKind, LocalCollectionId};
 use semantic_db_core::{
-    Backend, Batch, BatchOutcome, DbError, DeleteQuery, EntityRecord, MutationStats, Query,
-    QueryExplain, QueryPlan, QueryResult, TextQueryInput, UpdateQuery,
+    Backend, Batch, BatchOutcome, DbError, DdlBatch, DdlOutcome, DeleteQuery, EntityRecord,
+    MutationStats, Query, QueryExplain, QueryPlan, QueryResult, TextQueryInput, UpdateQuery,
 };
 
 use crate::{DefaultKvBackendSpawner, KvBackendSpawner, KvDb, KvEngine};
@@ -56,6 +57,39 @@ impl<E: KvEngine, S: KvBackendSpawner> Backend for KvBackend<E, S> {
             .spawn_blocking(move || {
                 let mut db = db.write().map_err(|_| lock_poisoned_error())?;
                 db.create_collection(name, kind)
+            })
+            .await
+    }
+
+    async fn execute_ddl(&self, ddl: DdlBatch) -> std::result::Result<DdlOutcome, DbError> {
+        let db = Arc::clone(&self.db);
+        self.spawner
+            .spawn_blocking(move || {
+                let mut db = db.write().map_err(|_| lock_poisoned_error())?;
+                db.transact_ddl(ddl)
+            })
+            .await
+    }
+
+    async fn upsert_relationship(
+        &self,
+        relationship: RelationType,
+    ) -> std::result::Result<(), DbError> {
+        let db = Arc::clone(&self.db);
+        self.spawner
+            .spawn_blocking(move || {
+                let mut db = db.write().map_err(|_| lock_poisoned_error())?;
+                db.upsert_relationship(relationship)
+            })
+            .await
+    }
+
+    async fn delete_relationship(&self, id: String) -> std::result::Result<(), DbError> {
+        let db = Arc::clone(&self.db);
+        self.spawner
+            .spawn_blocking(move || {
+                let mut db = db.write().map_err(|_| lock_poisoned_error())?;
+                db.delete_relationship(&id)
             })
             .await
     }

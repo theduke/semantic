@@ -1,4 +1,4 @@
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 use fnv::FnvHashMap;
 use semantic_data::schema::{
@@ -8,18 +8,21 @@ use semantic_data::schema::{
     collections::key_path::KeyPath,
     core::{
         meta::Meta, type_def::TypeDef, type_kind::TypeKind, type_node::Type, type_param::TypeParam,
-        visibility::Visibility,
+        type_ref::TypeRef, visibility::Visibility,
     },
     primitives::string_type::StringType,
     record::record_type::RecordType,
+    relation::relation_mode::RelationMode,
+    relation::relation_type::RelationType,
 };
 
 use crate::catalog::{
     AttributeSchema, CatalogError, CatalogStorageSnapshot, ClassSchema, CollectionKind,
     CollectionSchema, IdMap, IndexSchema, LocalAttrId, LocalClassId, LocalCollectionId,
-    LocalFieldId, LocalIndexId, LocalRecordTypeId, LocalTypeDefId, RecordTypeSchema,
-    StoredAttribute, StoredClass, StoredCollection, StoredCollectionKind, StoredFieldId,
-    StoredIndex, StoredRecordType, StoredTypeDef, TypeDefSchema,
+    LocalFieldId, LocalIndexId, LocalRecordTypeId, LocalRelationId, LocalTypeDefId,
+    RecordTypeSchema, RelationshipSchema, StoredAttribute, StoredClass, StoredCollection,
+    StoredCollectionKind, StoredFieldId, StoredIndex, StoredRecordType, StoredRelationship,
+    StoredTypeDef, TypeDefSchema,
 };
 
 #[derive(Debug, Clone)]
@@ -30,6 +33,7 @@ pub struct Catalog {
     classes: IdMap<LocalClassId, ClassSchema>,
     collections: IdMap<LocalCollectionId, CollectionSchema>,
     indexes: IdMap<LocalIndexId, IndexSchema>,
+    relationships: IdMap<LocalRelationId, RelationshipSchema>,
     collection_indexes: FnvHashMap<LocalCollectionId, Vec<LocalIndexId>>,
     next_field_id: usize,
     auto_index_enabled: bool,
@@ -37,8 +41,14 @@ pub struct Catalog {
 
 pub const PRIMARY_ID_FIELD: &str = "id";
 pub const OBJECT_TYPE_FIELD: &str = "type";
+pub const PARENT_RELATION_FIELD: &str = "parent";
+pub const PARENT_RELATION_ATTRIBUTE: &str = "parent";
 pub const PRIMARY_ID_INDEX_NAME: &str = "__builtin_pk_id";
 pub const OBJECT_TYPE_INDEX_NAME: &str = "__builtin_type";
+pub const BUILTIN_PARENT_RELATION_ID: &str = "__builtin.parent";
+pub const RELATION_CLASS_ID: &str = "semantic.relation";
+pub const RELATION_FROM_ATTRIBUTE: &str = "semantic.relation.from";
+pub const RELATION_TO_ATTRIBUTE: &str = "semantic.relation.to";
 pub const AUTO_PATH_INDEX_NAME: &str = "__auto_index_all_paths";
 pub const AUTO_PATH_INDEX_FIELD: &str = "__path__";
 
@@ -51,6 +61,7 @@ impl Catalog {
             classes: IdMap::new(),
             collections: IdMap::new(),
             indexes: IdMap::new(),
+            relationships: IdMap::new(),
             collection_indexes: FnvHashMap::default(),
             next_field_id: 0,
             auto_index_enabled: true,
@@ -85,6 +96,10 @@ impl Catalog {
 
     pub fn indexes(&self) -> impl Iterator<Item = (LocalIndexId, &IndexSchema)> {
         self.indexes.iter()
+    }
+
+    pub fn relationships(&self) -> impl Iterator<Item = (LocalRelationId, &RelationshipSchema)> {
+        self.relationships.iter()
     }
 
     pub fn register_attribute(&mut self, attr: AttributeType) -> LocalAttrId {
@@ -302,6 +317,7 @@ impl Catalog {
         if self.auto_index_enabled {
             let _ = self.upsert_path_index(lid)?;
         }
+        let _ = self.upsert_builtin_parent_relationship(lid)?;
         Ok(lid)
     }
 
@@ -319,6 +335,88 @@ impl Catalog {
             }
         }
         self.collections.remove_key(name).is_some()
+    }
+
+    pub fn upsert_relationship(
+        &mut self,
+        relationship: RelationType,
+    ) -> Result<LocalRelationId, CatalogError> {
+        let source_collection = self
+            .collection_by_name(&relationship.source_collection)
+            .ok_or_else(|| {
+                CatalogError::InvalidSchema(format!(
+                    "relationship '{}' references unknown source collection '{}'",
+                    relationship.id, relationship.source_collection
+                ))
+            })?
+            .clone();
+        match &relationship.mode {
+            RelationMode::Embedded { attribute } => {
+                let attr = self.attribute_by_id(attribute).ok_or_else(|| {
+                    CatalogError::InvalidSchema(format!(
+                        "relationship '{}' references unknown attribute '{}'",
+                        relationship.id, attribute
+                    ))
+                })?;
+                if !matches!(attr.attribute.ty.kind, TypeKind::Ref(_)) {
+                    return Err(CatalogError::InvalidSchema(format!(
+                        "relationship '{}' requires embedded attribute '{}' to have type 'ref'",
+                        relationship.id, attribute
+                    )));
+                }
+                let canonical = source_collection.canonical_field_name(attribute);
+                if source_collection.is_closed_field_set()
+                    && !source_collection.knows_field(canonical)
+                {
+                    return Err(CatalogError::InvalidSchema(format!(
+                        "relationship '{}' references unknown embedded field '{}' in source collection '{}'",
+                        relationship.id, canonical, source_collection.name
+                    )));
+                }
+            }
+            RelationMode::External => {
+                let CollectionKind::Class { class } = source_collection.kind else {
+                    return Err(CatalogError::InvalidSchema(format!(
+                        "external relationship '{}' requires a class collection source",
+                        relationship.id
+                    )));
+                };
+                let class = self
+                    .class_by_lid(class)
+                    .ok_or(CatalogError::UnknownClass(class))?;
+                let inherits_relation = class.class.id == RELATION_CLASS_ID
+                    || self.class_inherits(class.lid, RELATION_CLASS_ID);
+                if !inherits_relation {
+                    return Err(CatalogError::InvalidSchema(format!(
+                        "external relationship '{}' requires source class '{}' to inherit from '{}'",
+                        relationship.id, class.class.id, RELATION_CLASS_ID
+                    )));
+                }
+                for field in [RELATION_FROM_ATTRIBUTE, RELATION_TO_ATTRIBUTE] {
+                    let canonical = source_collection.canonical_field_name(field);
+                    if source_collection.is_closed_field_set()
+                        && !source_collection.knows_field(canonical)
+                    {
+                        return Err(CatalogError::InvalidSchema(format!(
+                            "external relationship '{}' requires field '{}' in source collection '{}'",
+                            relationship.id, canonical, source_collection.name
+                        )));
+                    }
+                }
+            }
+        }
+        let key = relationship.id.clone();
+        Ok(self
+            .relationships
+            .insert(key, |lid| RelationshipSchema { lid, relationship }))
+    }
+
+    pub fn delete_relationship(&mut self, id: &str) -> bool {
+        self.relationships.remove_key(id).is_some()
+    }
+
+    pub fn relationship_by_id(&self, id: &str) -> Option<&RelationshipSchema> {
+        self.relationships.get_key(id)
     }
 
     pub fn collection_by_name(&self, name: &str) -> Option<&CollectionSchema> {
@@ -542,6 +640,13 @@ impl Catalog {
                     kind: index.schema.kind,
                 })
                 .collect(),
+            relationships: self
+                .relationships()
+                .map(|(lid, relationship)| StoredRelationship {
+                    lid,
+                    relationship: relationship.relationship.clone(),
+                })
+                .collect(),
             next_field_id: self.next_field_id,
             auto_index_enabled: self.auto_index_enabled,
         }
@@ -555,6 +660,7 @@ impl Catalog {
             snapshot.classes,
             snapshot.collections,
             snapshot.indexes,
+            snapshot.relationships,
             snapshot.next_field_id,
             snapshot.auto_index_enabled,
         )
@@ -567,6 +673,7 @@ impl Catalog {
         classes: Vec<StoredClass>,
         collections: Vec<StoredCollection>,
         indexes: Vec<StoredIndex>,
+        relationships: Vec<StoredRelationship>,
         next_field_id: usize,
         auto_index_enabled: bool,
     ) -> Result<Self, CatalogError> {
@@ -806,6 +913,15 @@ impl Catalog {
                 }
             }
         }
+        for item in relationships {
+            let _ = catalog.upsert_relationship(item.relationship.clone())?;
+            if let Some(existing) = catalog.relationship_by_id(&item.relationship.id) {
+                let value = existing.clone();
+                catalog
+                    .relationships
+                    .insert_fixed(item.lid, item.relationship.id, value);
+            }
+        }
         let collection_ids = catalog
             .collections()
             .map(|(collection_id, _)| collection_id)
@@ -823,6 +939,7 @@ impl Catalog {
                 OBJECT_TYPE_FIELD,
                 false,
             )?;
+            let _ = catalog.upsert_builtin_parent_relationship(collection_id)?;
         }
 
         catalog.next_field_id = catalog.next_field_id.max(next_field_id);
@@ -842,6 +959,27 @@ impl Catalog {
             false,
             IndexKind::PathEquality,
         )
+    }
+
+    fn upsert_builtin_parent_relationship(
+        &mut self,
+        collection: LocalCollectionId,
+    ) -> Result<LocalRelationId, CatalogError> {
+        let collection_name = self
+            .collection_by_lid(collection)
+            .ok_or(CatalogError::UnknownCollection(collection))?
+            .name
+            .clone();
+        self.upsert_relationship(RelationType {
+            id: format!("{BUILTIN_PARENT_RELATION_ID}.{collection_name}"),
+            name: "parent".to_string(),
+            source_collection: collection_name,
+            mode: RelationMode::Embedded {
+                attribute: PARENT_RELATION_ATTRIBUTE.to_string(),
+            },
+            indexing_mode: semantic_data::schema::RelationIndexingMode::Enabled,
+            meta: Meta::default(),
+        })
     }
 
     fn sync_auto_path_indexes(&mut self) -> Result<(), CatalogError> {
@@ -890,23 +1028,15 @@ impl Catalog {
                 )
             }
             CollectionKind::Class { class } => {
-                let class = self
-                    .classes
-                    .get(*class)
-                    .ok_or(CatalogError::UnknownClass(*class))?;
                 let mut field_aliases = FnvHashMap::default();
                 let mut field_types = FnvHashMap::default();
                 let mut field_attrs = FnvHashMap::default();
-
-                for (alias, attr_lid) in &class.attributes {
-                    let attr = self
-                        .attributes
-                        .get(*attr_lid)
-                        .expect("attribute must exist");
-                    field_aliases.insert(alias.clone(), attr.attribute.id.clone());
-                    field_types.insert(attr.attribute.id.clone(), attr.attribute.ty.clone());
-                    field_attrs.insert(attr.attribute.id.clone(), *attr_lid);
-                }
+                self.collect_class_fields(
+                    *class,
+                    &mut field_aliases,
+                    &mut field_types,
+                    &mut field_attrs,
+                )?;
                 (field_aliases, field_types, field_attrs, true)
             }
         };
@@ -929,6 +1059,17 @@ impl Catalog {
         field_types
             .entry(OBJECT_TYPE_FIELD.to_string())
             .or_insert(system_string);
+        field_types
+            .entry(PARENT_RELATION_FIELD.to_string())
+            .or_insert_with(|| Type {
+                kind: TypeKind::Ref(TypeRef {
+                    name: PRIMARY_ID_FIELD.to_string(),
+                    args: vec![],
+                }),
+                constraints: vec![],
+                annotations: vec![],
+                meta: Meta::default(),
+            });
 
         let mut field_names = field_types.keys().cloned().collect::<Vec<_>>();
         field_names.sort();
@@ -961,6 +1102,120 @@ impl Catalog {
 
     fn index_key(collection_name: &str, index_name: &str) -> String {
         format!("{collection_name}::{index_name}")
+    }
+
+    fn collect_class_fields(
+        &self,
+        class_lid: LocalClassId,
+        field_aliases: &mut FnvHashMap<String, String>,
+        field_types: &mut FnvHashMap<String, Type>,
+        field_attrs: &mut FnvHashMap<String, LocalAttrId>,
+    ) -> Result<(), CatalogError> {
+        fn visit(
+            catalog: &Catalog,
+            class_lid: LocalClassId,
+            visited: &mut BTreeSet<LocalClassId>,
+            field_aliases: &mut FnvHashMap<String, String>,
+            field_types: &mut FnvHashMap<String, Type>,
+            field_attrs: &mut FnvHashMap<String, LocalAttrId>,
+        ) -> Result<(), CatalogError> {
+            if !visited.insert(class_lid) {
+                return Ok(());
+            }
+            let class = catalog
+                .classes
+                .get(class_lid)
+                .ok_or(CatalogError::UnknownClass(class_lid))?;
+            if let Some(inherits) = &class.class.inherits {
+                let Some(base_lid) = catalog.class_id(&inherits.id) else {
+                    return Err(CatalogError::InvalidSchema(format!(
+                        "class '{}' inherits unknown class '{}'",
+                        class.class.id, inherits.id
+                    )));
+                };
+                visit(
+                    catalog,
+                    base_lid,
+                    visited,
+                    field_aliases,
+                    field_types,
+                    field_attrs,
+                )?;
+            }
+            for ext in &class.class.extends {
+                let Some(ext_lid) = catalog.class_id(&ext.id) else {
+                    return Err(CatalogError::InvalidSchema(format!(
+                        "class '{}' extends unknown class '{}'",
+                        class.class.id, ext.id
+                    )));
+                };
+                visit(
+                    catalog,
+                    ext_lid,
+                    visited,
+                    field_aliases,
+                    field_types,
+                    field_attrs,
+                )?;
+            }
+            for (alias, class_attr) in &class.class.attributes {
+                let Some(attr) = catalog.attribute_by_id(&class_attr.attribute.id) else {
+                    return Err(CatalogError::UnknownAttribute {
+                        id: class_attr.attribute.id.clone(),
+                    });
+                };
+                field_aliases.insert(alias.clone(), attr.attribute.id.clone());
+                field_types.insert(attr.attribute.id.clone(), attr.attribute.ty.clone());
+                field_attrs.insert(attr.attribute.id.clone(), attr.lid);
+            }
+            Ok(())
+        }
+
+        let mut visited = BTreeSet::new();
+        visit(
+            self,
+            class_lid,
+            &mut visited,
+            field_aliases,
+            field_types,
+            field_attrs,
+        )
+    }
+
+    fn class_inherits(&self, class_lid: LocalClassId, target_class_id: &str) -> bool {
+        fn visit(
+            catalog: &Catalog,
+            class_lid: LocalClassId,
+            target_class_id: &str,
+            seen: &mut BTreeSet<LocalClassId>,
+        ) -> bool {
+            if !seen.insert(class_lid) {
+                return false;
+            }
+            let Some(class) = catalog.class_by_lid(class_lid) else {
+                return false;
+            };
+            if class.class.id == target_class_id {
+                return true;
+            }
+            if let Some(inherits) = &class.class.inherits
+                && let Some(base_lid) = catalog.class_id(&inherits.id)
+                && visit(catalog, base_lid, target_class_id, seen)
+            {
+                return true;
+            }
+            for ext in &class.class.extends {
+                if let Some(ext_lid) = catalog.class_id(&ext.id)
+                    && visit(catalog, ext_lid, target_class_id, seen)
+                {
+                    return true;
+                }
+            }
+            false
+        }
+
+        let mut seen = BTreeSet::new();
+        visit(self, class_lid, target_class_id, &mut seen)
     }
 }
 

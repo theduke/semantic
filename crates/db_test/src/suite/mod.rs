@@ -6,8 +6,16 @@ use semantic_data::query::{
     JoinSource, JoinType, Operand, OrderBy, PatternMatchKind, Predicate, QueryField, QueryInput,
     SelectQuery, SortDirection, TextQueryFormat, UpdateQuery,
 };
+use semantic_data::schema::{
+    ClassAttribute, ClassType, Meta, RelationIndexingMode, RelationMode, RelationType, StringType,
+    Type, TypeKind,
+    attribute::{attribute_ref::AttributeRef, attribute_type::AttributeType},
+};
 use semantic_data::value::{FieldPath, Object, Value};
-use semantic_db_core::{Db, DbError, QueryResult, catalog::CollectionKind};
+use semantic_db_core::{
+    Db, DbError, DdlBatch, DdlCollectionKind, DdlOperation, QueryResult,
+    catalog::{CollectionKind, RELATION_CLASS_ID},
+};
 
 trait DbTextQueryExt {
     fn query_text<'a>(
@@ -44,6 +52,8 @@ pub async fn test_db(db: &Db) {
     test_ast_aggregation_distinct_grouping(db).await;
     test_sql_aggregation_distinct_grouping(db).await;
     test_text_query_formats(db).await;
+    test_relationships_generic_embedded(db).await;
+    test_relationships_generic_external(db).await;
 }
 
 async fn test_schema_registration(db: &Db) {
@@ -1194,6 +1204,288 @@ async fn test_sql_limit_offset_variants(db: &Db) {
         panic!("sql limit/offset expression query should return SELECT rows");
     };
     assert_eq!(row_ids(&rows), vec!["sql-lim-c", "sql-lim-d"]);
+}
+
+async fn test_relationships_generic_embedded(db: &Db) {
+    db.create_collection("shared_suite_rel_nodes", CollectionKind::Untyped)
+        .await
+        .expect("relationship nodes collection creation should succeed");
+    db.execute_ddl(
+        DdlBatch::new()
+            .with_op(DdlOperation::UpsertAttribute {
+                attribute: AttributeType {
+                    id: "shared.rel.parent_ref".to_string(),
+                    name: "parent_ref".to_string(),
+                    ty: Type {
+                        kind: TypeKind::Ref(semantic_data::schema::core::type_ref::TypeRef {
+                            name: "id".to_string(),
+                            args: vec![],
+                        }),
+                        constraints: vec![],
+                        annotations: vec![],
+                        meta: Meta::default(),
+                    },
+                    constraints: vec![],
+                    meta: Meta::default(),
+                },
+            })
+            .with_op(DdlOperation::UpsertRelationship {
+                relationship: RelationType {
+                    id: "shared.rel.parent".to_string(),
+                    name: "parent".to_string(),
+                    source_collection: "shared_suite_rel_nodes".to_string(),
+                    mode: RelationMode::Embedded {
+                        attribute: "shared.rel.parent_ref".to_string(),
+                    },
+                    indexing_mode: RelationIndexingMode::Enabled,
+                    meta: Meta::default(),
+                },
+            }),
+    )
+    .await
+    .expect("embedded relationship DDL should succeed");
+
+    let mut a = Object::new();
+    a.insert("id", Value::String("a".to_string()));
+    db.insert("shared_suite_rel_nodes", "a", a)
+        .await
+        .expect("insert a should succeed");
+    let mut b = Object::new();
+    b.insert("id", Value::String("b".to_string()));
+    b.insert("shared.rel.parent_ref", Value::String("a".to_string()));
+    db.insert("shared_suite_rel_nodes", "b", b)
+        .await
+        .expect("insert b should succeed");
+    let mut c = Object::new();
+    c.insert("id", Value::String("c".to_string()));
+    c.insert("shared.rel.parent_ref", Value::String("b".to_string()));
+    db.insert("shared_suite_rel_nodes", "c", c)
+        .await
+        .expect("insert c should succeed");
+    let mut d = Object::new();
+    d.insert("id", Value::String("d".to_string()));
+    db.insert("shared_suite_rel_nodes", "d", d)
+        .await
+        .expect("insert d should succeed");
+
+    let ast_rows = db
+        .select(
+            SelectQuery::new()
+                .with_collection("shared_suite_rel_nodes")
+                .with_predicate(Predicate::Expr(Expr::RelationExists {
+                    relation: Box::new(Expr::Operand(Operand::Literal(Value::String(
+                        "shared.rel.parent".to_string(),
+                    )))),
+                    source: Box::new(Expr::Operand(Operand::Field(FieldPath::from_fields([
+                        "id",
+                    ])))),
+                    target: Box::new(Expr::Operand(Operand::Literal(Value::String(
+                        "a".to_string(),
+                    )))),
+                    transitive: true,
+                    max_depth: None,
+                }))
+                .with_order_by(vec![OrderBy {
+                    expr: Expr::Operand(Operand::Field(FieldPath::from_fields(["id"]))),
+                    direction: SortDirection::Asc,
+                }]),
+        )
+        .await
+        .expect("ast relation query should succeed");
+    assert_eq!(row_ids(&ast_rows), vec!["b", "c"]);
+
+    let direct_rows = db
+        .select(
+            SelectQuery::new()
+                .with_collection("shared_suite_rel_nodes")
+                .with_predicate(Predicate::Expr(Expr::RelationExists {
+                    relation: Box::new(Expr::Operand(Operand::Literal(Value::String(
+                        "shared.rel.parent".to_string(),
+                    )))),
+                    source: Box::new(Expr::Operand(Operand::Field(FieldPath::from_fields([
+                        "id",
+                    ])))),
+                    target: Box::new(Expr::Operand(Operand::Literal(Value::String(
+                        "a".to_string(),
+                    )))),
+                    transitive: false,
+                    max_depth: None,
+                })),
+        )
+        .await
+        .expect("direct relation query should succeed");
+    assert_eq!(row_ids(&direct_rows), vec!["b"]);
+
+    let update_stats = db
+        .update_where(
+            UpdateQuery::new()
+                .with_collection("shared_suite_rel_nodes")
+                .with_predicate(Predicate::Compare {
+                    op: CompareOp::Eq,
+                    left: Operand::Field(FieldPath::from_fields(["id"])),
+                    right: Operand::Literal(Value::String("c".to_string())),
+                })
+                .set(
+                    FieldPath::from_fields(["shared.rel.parent_ref"]),
+                    Expr::Operand(Operand::Literal(Value::Null)),
+                ),
+        )
+        .await
+        .expect("relationship update should succeed");
+    assert_eq!(update_stats.affected, 1);
+
+    let after_update = db
+        .select(
+            SelectQuery::new()
+                .with_collection("shared_suite_rel_nodes")
+                .with_predicate(Predicate::Expr(Expr::RelationExists {
+                    relation: Box::new(Expr::Operand(Operand::Literal(Value::String(
+                        "shared.rel.parent".to_string(),
+                    )))),
+                    source: Box::new(Expr::Operand(Operand::Field(FieldPath::from_fields([
+                        "id",
+                    ])))),
+                    target: Box::new(Expr::Operand(Operand::Literal(Value::String(
+                        "a".to_string(),
+                    )))),
+                    transitive: true,
+                    max_depth: None,
+                }))
+                .with_order_by(vec![OrderBy {
+                    expr: Expr::Operand(Operand::Field(FieldPath::from_fields(["id"]))),
+                    direction: SortDirection::Asc,
+                }]),
+        )
+        .await
+        .expect("relationship query after update should succeed");
+    assert_eq!(row_ids(&after_update), vec!["b"]);
+
+    if db
+        .supported_text_query_formats()
+        .contains(&TextQueryFormat::Sql)
+    {
+        let sql = db
+            .query_text(
+                TextQueryFormat::Sql,
+                "SELECT id FROM shared_suite_rel_nodes WHERE has_relation_path('shared.rel.parent', id, 'a') ORDER BY id",
+            )
+            .await
+            .expect("sql relationship function query should succeed");
+        let QueryResult::Select(sql_rows) = sql else {
+            panic!("sql relationship function query should return SELECT rows");
+        };
+        assert_eq!(row_ids(&sql_rows), vec!["b"]);
+    }
+}
+
+async fn test_relationships_generic_external(db: &Db) {
+    db.execute_ddl(
+        DdlBatch::new()
+            .with_op(DdlOperation::UpsertAttribute {
+                attribute: AttributeType {
+                    id: "shared.rel.weight".to_string(),
+                    name: "weight".to_string(),
+                    ty: Type {
+                        kind: TypeKind::String(StringType {
+                            format: None,
+                            normalization: None,
+                        }),
+                        constraints: vec![],
+                        annotations: vec![],
+                        meta: Meta::default(),
+                    },
+                    constraints: vec![],
+                    meta: Meta::default(),
+                },
+            })
+            .with_op(DdlOperation::UpsertClass {
+                class: ClassType {
+                    id: "shared.rel.weighted".to_string(),
+                    name: "WeightedRelation".to_string(),
+                    inherits: Some(semantic_data::schema::ClassRef {
+                        id: RELATION_CLASS_ID.to_string(),
+                    }),
+                    extends: vec![],
+                    attributes: std::collections::BTreeMap::from([(
+                        "weight".to_string(),
+                        ClassAttribute {
+                            attribute: AttributeRef {
+                                id: "shared.rel.weight".to_string(),
+                            },
+                            required: false,
+                            constraints: vec![],
+                            meta: Meta::default(),
+                        },
+                    )]),
+                    constraints: vec![],
+                    meta: Meta::default(),
+                },
+            })
+            .with_op(DdlOperation::UpsertCollection {
+                name: "shared_suite_rel_docs".to_string(),
+                kind: DdlCollectionKind::Class {
+                    class: "shared.rel.weighted".to_string(),
+                },
+            })
+            .with_op(DdlOperation::UpsertRelationship {
+                relationship: RelationType {
+                    id: "shared.rel.weighted".to_string(),
+                    name: "weighted".to_string(),
+                    source_collection: "shared_suite_rel_docs".to_string(),
+                    mode: RelationMode::External,
+                    indexing_mode: RelationIndexingMode::Enabled,
+                    meta: Meta::default(),
+                },
+            }),
+    )
+    .await
+    .expect("external relationship ddl should succeed");
+
+    db.create_collection("shared_suite_rel_docs_nodes", CollectionKind::Untyped)
+        .await
+        .expect("doc relationship node collection creation should succeed");
+    for id in ["x", "y"] {
+        let mut node = Object::new();
+        node.insert("id", Value::String(id.to_string()));
+        db.insert("shared_suite_rel_docs_nodes", id, node)
+            .await
+            .expect("node insert for document relationship should succeed");
+    }
+
+    let mut rel = Object::new();
+    rel.insert("id", Value::String("r1".to_string()));
+    rel.insert("from", Value::String("x".to_string()));
+    rel.insert("to", Value::String("y".to_string()));
+    rel.insert("weight", Value::String("5".to_string()));
+    db.insert("shared_suite_rel_docs", "r1", rel)
+        .await
+        .expect("document relation row insert should succeed");
+
+    let edge_rows = db
+        .select(
+            SelectQuery::new()
+                .with_collection("__semantic.relationship_edges")
+                .with_predicate(Predicate::And(vec![
+                    Predicate::Compare {
+                        op: CompareOp::Eq,
+                        left: Operand::Field(FieldPath::from_fields(["relation"])),
+                        right: Operand::Literal(Value::String("shared.rel.weighted".to_string())),
+                    },
+                    Predicate::Compare {
+                        op: CompareOp::Eq,
+                        left: Operand::Field(FieldPath::from_fields(["source"])),
+                        right: Operand::Literal(Value::String("r1".to_string())),
+                    },
+                    Predicate::Compare {
+                        op: CompareOp::Eq,
+                        left: Operand::Field(FieldPath::from_fields(["target"])),
+                        right: Operand::Literal(Value::String("y".to_string())),
+                    },
+                ])),
+        )
+        .await
+        .expect("document relationship edge materialization query should succeed");
+    assert_eq!(edge_rows.len(), 1);
 }
 
 fn row(id: &str, kind: &str, score: i64) -> Object {

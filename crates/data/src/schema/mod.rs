@@ -14,6 +14,7 @@ pub mod module;
 pub mod package;
 pub mod primitives;
 pub mod record;
+pub mod relation;
 pub mod union;
 pub mod variant;
 
@@ -107,6 +108,9 @@ pub use primitives::unknown_type::UnknownType;
 pub use record::field::Field;
 pub use record::field_name::FieldName;
 pub use record::record_type::RecordType;
+pub use relation::relation_indexing_mode::RelationIndexingMode;
+pub use relation::relation_mode::RelationMode;
+pub use relation::relation_type::RelationType;
 pub use union::union_type::UnionType;
 pub use variant::variant_case::VariantCase;
 pub use variant::variant_payload::VariantPayload;

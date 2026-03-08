@@ -2,7 +2,7 @@ use semantic_data::value::{Object, Value};
 use semantic_db_core::DbError;
 use semantic_db_core::catalog::{
     Catalog, StoredAttribute, StoredClass, StoredCollection, StoredCollectionKind, StoredFieldId,
-    StoredIndex, StoredRecordType, StoredTypeDef,
+    StoredIndex, StoredRecordType, StoredRelationship, StoredTypeDef,
 };
 use semantic_db_core::{
     CORE_CATALOG_ATTRIBUTES_COLLECTION, CORE_CATALOG_CLASSES_COLLECTION,
@@ -31,6 +31,7 @@ const INDEX_KIND_FIELD: &str = "index_kind";
 const UNIQUE_FIELD: &str = "unique";
 const NEXT_FIELD_ID_FIELD: &str = "next_field_id";
 const AUTO_INDEX_ENABLED_FIELD: &str = "auto_index_enabled";
+const RELATIONSHIPS_FIELD: &str = "relationships";
 
 struct CatalogCollections {
     attributes: semantic_db_core::catalog::LocalCollectionId,
@@ -211,11 +212,14 @@ pub fn load_catalog<E: KvEngine>(
 
     let mut next_field_id = 0usize;
     let mut auto_index_enabled = false;
+    let mut relationships = Vec::<StoredRelationship>::new();
     for row in &meta_rows {
         if row.id == META_ROW_ID {
             next_field_id = object_usize_field(&row.object, NEXT_FIELD_ID_FIELD)?;
             auto_index_enabled =
                 object_bool_field_default(&row.object, AUTO_INDEX_ENABLED_FIELD, false);
+            relationships =
+                object_json_field_default(&row.object, RELATIONSHIPS_FIELD, Vec::new())?;
             break;
         }
     }
@@ -227,6 +231,7 @@ pub fn load_catalog<E: KvEngine>(
         classes,
         collections,
         indexes,
+        relationships,
         next_field_id,
         auto_index_enabled,
     )
@@ -420,6 +425,20 @@ pub fn catalog_write_ops<E: KvEngine>(
     meta_entity.object.insert(
         AUTO_INDEX_ENABLED_FIELD.to_string(),
         Value::Bool(catalog.auto_index_enabled()),
+    );
+    let relationships = catalog
+        .relationships()
+        .map(|(lid, relationship)| StoredRelationship {
+            lid,
+            relationship: relationship.relationship.clone(),
+        })
+        .collect::<Vec<_>>();
+    meta_entity.object.insert(
+        RELATIONSHIPS_FIELD.to_string(),
+        Value::String(
+            facet_json::to_string(&relationships)
+                .map_err(|err| DbError::Serialization(err.to_string()))?,
+        ),
     );
     push_entity_with_indexes(catalog, &meta_entity, &mut ops)?;
 

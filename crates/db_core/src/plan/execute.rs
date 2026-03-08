@@ -880,6 +880,20 @@ fn expr_contains_aggregate(expr: &Expr) -> bool {
             expr_contains_aggregate(expr) || expr_contains_aggregate(pattern)
         }
         Expr::IsNull { expr, .. } => expr_contains_aggregate(expr),
+        Expr::RelationExists {
+            relation,
+            source,
+            target,
+            max_depth,
+            ..
+        } => {
+            expr_contains_aggregate(relation)
+                || expr_contains_aggregate(source)
+                || expr_contains_aggregate(target)
+                || max_depth
+                    .as_ref()
+                    .is_some_and(|depth| expr_contains_aggregate(depth))
+        }
         Expr::InSubquery { .. } | Expr::Exists { .. } | Expr::Operand(_) => false,
     }
 }

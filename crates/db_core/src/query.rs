@@ -270,6 +270,13 @@ pub enum Expr {
         query: Box<SelectQuery>,
         negated: bool,
     },
+    RelationExists {
+        relation: Box<Expr>,
+        source: Box<Expr>,
+        target: Box<Expr>,
+        transitive: bool,
+        max_depth: Option<Box<Expr>>,
+    },
 }
 
 impl From<usize> for Expr {
@@ -515,6 +522,19 @@ impl From<public_query::Expr> for Expr {
             public_query::Expr::Exists { query, negated } => Self::Exists {
                 query: Box::new((*query).into()),
                 negated,
+            },
+            public_query::Expr::RelationExists {
+                relation,
+                source,
+                target,
+                transitive,
+                max_depth,
+            } => Self::RelationExists {
+                relation: Box::new((*relation).into()),
+                source: Box::new((*source).into()),
+                target: Box::new((*target).into()),
+                transitive,
+                max_depth: max_depth.map(|value| Box::new((*value).into())),
             },
         }
     }
@@ -1476,7 +1496,7 @@ pub fn evaluate_expr<T: ObjectAccess + ?Sized>(value: &T, expr: &Expr) -> Option
             }
             Some(Value::Bool(if *negated { !found } else { found }))
         }
-        Expr::InSubquery { .. } | Expr::Exists { .. } => None,
+        Expr::InSubquery { .. } | Expr::Exists { .. } | Expr::RelationExists { .. } => None,
         Expr::Between {
             expr,
             low,

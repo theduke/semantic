@@ -1,6 +1,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use semantic_data::schema::IndexKind;
+use semantic_data::schema::{RelationIndexingMode, RelationMode, RelationType};
 use semantic_data::value::{FieldPath, Object, PathSegment, Value, ValueRef};
 use semantic_db_core::DbError;
 use semantic_db_core::{
@@ -21,12 +22,22 @@ use crate::{
 };
 use semantic_db_core::catalog::{
     Catalog, CollectionKind, CollectionSchema, LocalAttrId, LocalCollectionId, LocalFieldId,
-    SharedCatalog,
+    RELATION_TO_ATTRIBUTE, SharedCatalog,
 };
 use semantic_db_core::{
     DdlBatch, DdlOperation, DdlOutcome, QueryContext, TransactionConcurrency, TransactionOptions,
     apply_ddl_batch, fresh_catalog_with_core_schema, run_with_transaction_retries,
 };
+
+const RELATION_EDGES_COLLECTION: &str = "__semantic.relationship_edges";
+const REL_EDGE_RELATION_FIELD: &str = "relation";
+const REL_EDGE_SOURCE_FIELD: &str = "source";
+const REL_EDGE_TARGET_FIELD: &str = "target";
+const REL_EDGE_DEPTH_FIELD: &str = "depth";
+const REL_EDGE_SOURCE_KEY_FIELD: &str = "relation_source";
+const REL_EDGE_TARGET_KEY_FIELD: &str = "relation_target";
+const REL_EDGE_SOURCE_INDEX_NAME: &str = "__rel_source_idx";
+const REL_EDGE_TARGET_INDEX_NAME: &str = "__rel_target_idx";
 
 #[derive(Debug)]
 pub struct KvDb<E: KvEngine> {
@@ -74,6 +85,39 @@ impl<E: KvEngine> KvDb<E> {
             .is_none()
         {
             db.create_collection(DEFAULT_COLLECTION, CollectionKind::Untyped)?;
+        }
+        if db
+            .catalog()
+            .collection_by_name(RELATION_EDGES_COLLECTION)
+            .is_none()
+        {
+            db.create_collection(RELATION_EDGES_COLLECTION, CollectionKind::Untyped)?;
+        }
+        if let Some(collection) = db.catalog().collection_by_name(RELATION_EDGES_COLLECTION) {
+            if db
+                .catalog()
+                .find_equality_index(collection.lid, REL_EDGE_SOURCE_KEY_FIELD)
+                .is_none()
+            {
+                db.create_index(
+                    REL_EDGE_SOURCE_INDEX_NAME,
+                    collection.lid,
+                    REL_EDGE_SOURCE_KEY_FIELD,
+                    false,
+                )?;
+            }
+            if db
+                .catalog()
+                .find_equality_index(collection.lid, REL_EDGE_TARGET_KEY_FIELD)
+                .is_none()
+            {
+                db.create_index(
+                    REL_EDGE_TARGET_INDEX_NAME,
+                    collection.lid,
+                    REL_EDGE_TARGET_KEY_FIELD,
+                    false,
+                )?;
+            }
         }
         Ok(db)
     }
@@ -148,6 +192,21 @@ impl<E: KvEngine> KvDb<E> {
 
     pub fn set_auto_index_enabled(&mut self, enabled: bool) -> std::result::Result<(), DbError> {
         let ddl = DdlBatch::new().with_op(DdlOperation::SetAutoIndex { enabled });
+        self.transact_ddl(ddl)?;
+        Ok(())
+    }
+
+    pub fn upsert_relationship(
+        &mut self,
+        relationship: RelationType,
+    ) -> std::result::Result<(), DbError> {
+        let ddl = DdlBatch::new().with_op(DdlOperation::UpsertRelationship { relationship });
+        self.transact_ddl(ddl)?;
+        Ok(())
+    }
+
+    pub fn delete_relationship(&mut self, id: &str) -> std::result::Result<(), DbError> {
+        let ddl = DdlBatch::new().with_op(DdlOperation::DeleteRelationship { id: id.to_string() });
         self.transact_ddl(ddl)?;
         Ok(())
     }
@@ -797,6 +856,7 @@ impl<E: KvEngine> KvDb<E> {
             let mut extra_ops =
                 self.ddl_cleanup_ops(catalog_snapshot.catalog.as_ref(), &next_catalog)?;
             extra_ops.extend(catalog_write_ops(&self.store, &next_catalog)?);
+            self.rebuild_relationship_edges(&next_catalog, &BTreeMap::new(), &mut extra_ops)?;
 
             let dataset = BTreeMap::new();
             match self.persist_dataset_delta(
@@ -995,6 +1055,7 @@ impl<E: KvEngine> KvDb<E> {
         additional_ops: &[KvWriteOp],
     ) -> std::result::Result<KvCommitOutcome, DbError> {
         let mut ops = Vec::<KvWriteOp>::new();
+        let mut normalized_after = BTreeMap::<String, BTreeMap<String, Object>>::new();
 
         for (collection_name, new_rows) in after {
             let collection_schema = catalog
@@ -1012,6 +1073,7 @@ impl<E: KvEngine> KvDb<E> {
                 normalized_rows.insert(id.clone(), object);
             }
             self.validate_unique_indexes(catalog, &collection_schema, &normalized_rows)?;
+            normalized_after.insert(collection_name.clone(), normalized_rows.clone());
 
             let old_rows = before.get(collection_name);
             if old_rows == Some(&normalized_rows) {
@@ -1058,6 +1120,7 @@ impl<E: KvEngine> KvDb<E> {
             }
         }
 
+        self.rebuild_relationship_edges(catalog, &normalized_after, &mut ops)?;
         ops.extend_from_slice(additional_ops);
 
         if self.store.tx_capabilities().conflict_detection {
@@ -1202,6 +1265,197 @@ impl<E: KvEngine> KvDb<E> {
             )));
         };
         Ok(id.to_string())
+    }
+
+    fn rebuild_relationship_edges(
+        &self,
+        catalog: &Catalog,
+        after: &BTreeMap<String, BTreeMap<String, Object>>,
+        ops: &mut Vec<KvWriteOp>,
+    ) -> std::result::Result<(), DbError> {
+        let Some(rel_collection) = catalog.collection_by_name(RELATION_EDGES_COLLECTION) else {
+            return Ok(());
+        };
+        for key in self.store.collection_keys(rel_collection.lid)? {
+            ops.push(KvWriteOp::Delete { key });
+        }
+        let indexes: Vec<_> = catalog
+            .indexes_for_collection(rel_collection.lid)
+            .cloned()
+            .collect();
+        for index in &indexes {
+            for key in self.store.index_keys(index.lid)? {
+                ops.push(KvWriteOp::Delete { key });
+            }
+        }
+        for index in &indexes {
+            ops.push(KvWriteOp::Put {
+                key: crate::storage::index_format_key(index.lid),
+                value: crate::storage::index_format_value(),
+            });
+        }
+
+        let rows = self.compute_relationship_edges(catalog, after)?;
+        for (id, object) in rows {
+            let entity = StoredEntity {
+                id: id.clone(),
+                collection: rel_collection.lid.0,
+                kind: StoredEntityKind::Untyped,
+                object,
+            };
+            self.push_entity_ops(ops, &entity)?;
+            for index in &indexes {
+                self.push_index_ops(ops, index, &id, &entity.object)?;
+            }
+        }
+        Ok(())
+    }
+
+    fn compute_relationship_edges(
+        &self,
+        catalog: &Catalog,
+        after: &BTreeMap<String, BTreeMap<String, Object>>,
+    ) -> std::result::Result<Vec<(String, Object)>, DbError> {
+        let mut out = Vec::new();
+        for (_, rel_schema) in catalog.relationships() {
+            let relationship = &rel_schema.relationship;
+            if relationship.source_collection == RELATION_EDGES_COLLECTION {
+                continue;
+            }
+            let source_collection = catalog
+                .collection_by_name(&relationship.source_collection)
+                .ok_or_else(|| {
+                    DbError::InvalidQuery(format!(
+                        "relationship '{}' references unknown source collection '{}'",
+                        relationship.id, relationship.source_collection
+                    ))
+                })?;
+            let source_rows = if let Some(rows) = after.get(&relationship.source_collection) {
+                rows.iter()
+                    .map(|(id, object)| (id.clone(), object.clone()))
+                    .collect::<Vec<_>>()
+            } else {
+                self.store
+                    .scan_collection(source_collection.lid)?
+                    .into_iter()
+                    .map(|row| (row.id, row.object))
+                    .collect::<Vec<_>>()
+            };
+            let mut direct = Vec::<(String, String)>::new();
+            match &relationship.mode {
+                RelationMode::Embedded { attribute } => {
+                    let canonical_field = source_collection
+                        .canonical_field_name(attribute)
+                        .to_string();
+                    for (source_id, object) in &source_rows {
+                        let Some(target_id) = object
+                            .get(&canonical_field)
+                            .and_then(Value::as_str)
+                            .map(ToString::to_string)
+                        else {
+                            continue;
+                        };
+                        if target_id.is_empty() {
+                            continue;
+                        }
+                        direct.push((source_id.clone(), target_id));
+                    }
+                }
+                RelationMode::External => {
+                    let target_field = source_collection
+                        .canonical_field_name(RELATION_TO_ATTRIBUTE)
+                        .to_string();
+                    for (doc_id, object) in &source_rows {
+                        let Some(target_id) = object
+                            .get(&target_field)
+                            .and_then(Value::as_str)
+                            .map(ToString::to_string)
+                        else {
+                            continue;
+                        };
+                        if doc_id.is_empty() || target_id.is_empty() {
+                            continue;
+                        }
+                        direct.push((doc_id.clone(), target_id));
+                    }
+                }
+            }
+            let mut shortest = BTreeMap::<(String, String), usize>::new();
+            if relationship.indexing_mode == RelationIndexingMode::Enabled {
+                let mut adjacency = BTreeMap::<String, Vec<String>>::new();
+                for (source, target) in &direct {
+                    adjacency
+                        .entry(source.clone())
+                        .or_default()
+                        .push(target.clone());
+                    let key = (source.clone(), target.clone());
+                    shortest
+                        .entry(key)
+                        .and_modify(|depth| *depth = (*depth).min(1))
+                        .or_insert(1);
+                }
+                for source in adjacency.keys() {
+                    let mut queue = std::collections::VecDeque::new();
+                    let mut seen = BTreeMap::<String, usize>::new();
+                    queue.push_back((source.clone(), 0usize));
+                    seen.insert(source.clone(), 0);
+                    while let Some((node, depth)) = queue.pop_front() {
+                        let Some(targets) = adjacency.get(&node) else {
+                            continue;
+                        };
+                        for next in targets {
+                            let next_depth = depth.saturating_add(1);
+                            let entry = seen.get(next).copied();
+                            if entry.is_none_or(|existing| next_depth < existing) {
+                                seen.insert(next.clone(), next_depth);
+                                queue.push_back((next.clone(), next_depth));
+                                let key = (source.clone(), next.clone());
+                                shortest
+                                    .entry(key)
+                                    .and_modify(|existing| *existing = (*existing).min(next_depth))
+                                    .or_insert(next_depth);
+                            }
+                        }
+                    }
+                }
+            } else {
+                for (source, target) in &direct {
+                    let key = (source.clone(), target.clone());
+                    shortest
+                        .entry(key)
+                        .and_modify(|depth| *depth = (*depth).min(1))
+                        .or_insert(1);
+                }
+            }
+            for ((source, target), depth) in shortest {
+                let id = format!("{}|{}|{}", relationship.id, source, target);
+                let mut object = Object::new();
+                object.insert("id", Value::String(id.clone()));
+                object.insert(
+                    REL_EDGE_RELATION_FIELD.to_string(),
+                    Value::String(relationship.id.clone()),
+                );
+                object.insert(
+                    REL_EDGE_SOURCE_FIELD.to_string(),
+                    Value::String(source.clone()),
+                );
+                object.insert(
+                    REL_EDGE_TARGET_FIELD.to_string(),
+                    Value::String(target.clone()),
+                );
+                object.insert(REL_EDGE_DEPTH_FIELD.to_string(), Value::U64(depth as u64));
+                object.insert(
+                    REL_EDGE_SOURCE_KEY_FIELD.to_string(),
+                    Value::String(format!("{}|{}", relationship.id, source)),
+                );
+                object.insert(
+                    REL_EDGE_TARGET_KEY_FIELD.to_string(),
+                    Value::String(format!("{}|{}", relationship.id, target)),
+                );
+                out.push((id, object));
+            }
+        }
+        Ok(out)
     }
 
     fn stats_for_collection(
@@ -1357,6 +1611,129 @@ struct KvPhysicalDataSource<'a, E: KvEngine> {
 }
 
 impl<E: KvEngine> KvPhysicalDataSource<'_, E> {
+    fn try_relation_lookup_ids(
+        &self,
+        source_collection: &CollectionSchema,
+        predicate: &semantic_db_core::Predicate,
+    ) -> semantic_db_core::CoreResult<Option<Vec<String>>> {
+        let semantic_db_core::Predicate::Expr(semantic_db_core::Expr::RelationExists {
+            relation,
+            source,
+            target,
+            transitive,
+            max_depth,
+        }) = predicate
+        else {
+            return Ok(None);
+        };
+        let relation_id = semantic_db_core::evaluate_expr(&Object::new(), relation)
+            .and_then(|value| value.as_str().map(ToString::to_string));
+        let max_depth = max_depth
+            .as_ref()
+            .map(|expr| {
+                semantic_db_core::evaluate_expr(&Object::new(), expr)
+                    .and_then(|value| value_to_usize(&value))
+            })
+            .flatten();
+        let Some(relation_id) = relation_id else {
+            return Ok(None);
+        };
+        let Some(rel_collection) = self.catalog.collection_by_name(RELATION_EDGES_COLLECTION)
+        else {
+            return Ok(Some(Vec::new()));
+        };
+
+        let source_is_row_id = is_row_id_expr(source, source_collection);
+        let target_is_row_id = is_row_id_expr(target, source_collection);
+        if source_is_row_id && !target_is_row_id {
+            let Some(target_id) = semantic_db_core::evaluate_expr(&Object::new(), target)
+                .and_then(|value| value.as_str().map(ToString::to_string))
+            else {
+                return Ok(None);
+            };
+            let ids = self.lookup_edge_endpoint_ids(
+                rel_collection.lid,
+                REL_EDGE_TARGET_KEY_FIELD,
+                format!("{relation_id}|{target_id}"),
+                REL_EDGE_SOURCE_FIELD,
+                *transitive,
+                max_depth,
+            )?;
+            return Ok(Some(ids));
+        }
+        if target_is_row_id && !source_is_row_id {
+            let Some(source_id) = semantic_db_core::evaluate_expr(&Object::new(), source)
+                .and_then(|value| value.as_str().map(ToString::to_string))
+            else {
+                return Ok(None);
+            };
+            let ids = self.lookup_edge_endpoint_ids(
+                rel_collection.lid,
+                REL_EDGE_SOURCE_KEY_FIELD,
+                format!("{relation_id}|{source_id}"),
+                REL_EDGE_TARGET_FIELD,
+                *transitive,
+                max_depth,
+            )?;
+            return Ok(Some(ids));
+        }
+
+        Ok(None)
+    }
+
+    fn lookup_edge_endpoint_ids(
+        &self,
+        rel_collection: LocalCollectionId,
+        key_field: &str,
+        key_value: String,
+        endpoint_field: &str,
+        transitive: bool,
+        max_depth: Option<usize>,
+    ) -> semantic_db_core::CoreResult<Vec<String>> {
+        let ids = if let Some(index) = self.catalog.find_equality_index(rel_collection, key_field) {
+            self.db
+                .store
+                .scan_index_value(index.lid, None, &Value::String(key_value))
+                .map_err(|err| semantic_db_core::CoreError::new(err.to_string()))?
+        } else {
+            self.db
+                .store
+                .scan_collection(rel_collection)
+                .map_err(|err| semantic_db_core::CoreError::new(err.to_string()))?
+                .into_iter()
+                .map(|entity| entity.id)
+                .collect()
+        };
+        let mut out = BTreeSet::new();
+        for id in ids {
+            let Some(edge) = self
+                .db
+                .store
+                .get_entity(rel_collection, &id)
+                .map_err(|err| semantic_db_core::CoreError::new(err.to_string()))?
+            else {
+                continue;
+            };
+            let depth = edge
+                .object
+                .get(REL_EDGE_DEPTH_FIELD)
+                .and_then(value_to_usize)
+                .unwrap_or(usize::MAX);
+            if !transitive && depth != 1 {
+                continue;
+            }
+            if let Some(max_depth) = max_depth
+                && depth > max_depth
+            {
+                continue;
+            }
+            if let Some(endpoint_id) = edge.object.get(endpoint_field).and_then(Value::as_str) {
+                out.insert(endpoint_id.to_string());
+            }
+        }
+        Ok(out.into_iter().collect())
+    }
+
     fn source_name<'a>(&'a self, source: &'a semantic_db_core::SourceRef) -> Option<&'a str> {
         source
             .source_name
@@ -1417,6 +1794,170 @@ impl<E: KvEngine> KvPhysicalDataSource<'_, E> {
     fn is_all_alias_source(&self, source: &semantic_db_core::SourceRef) -> bool {
         self.source_name(source)
             .is_some_and(is_all_collection_alias)
+    }
+
+    fn evaluate_predicate_with_relationships(
+        &self,
+        row: &dyn semantic_db_core::ObjectAccess,
+        predicate: &semantic_db_core::Predicate,
+    ) -> semantic_db_core::CoreResult<bool> {
+        match predicate {
+            semantic_db_core::Predicate::Expr(semantic_db_core::Expr::RelationExists {
+                relation,
+                source,
+                target,
+                transitive,
+                max_depth,
+            }) => {
+                let relation_id = semantic_db_core::evaluate_expr(row, relation)
+                    .and_then(|value| value.as_str().map(ToString::to_string))
+                    .ok_or_else(|| {
+                        semantic_db_core::CoreError::new(
+                            "relationship expression requires string relation id",
+                        )
+                    })?;
+                let source_id = semantic_db_core::evaluate_expr(row, source)
+                    .and_then(|value| value.as_str().map(ToString::to_string))
+                    .ok_or_else(|| {
+                        semantic_db_core::CoreError::new(
+                            "relationship expression requires string source id",
+                        )
+                    })?;
+                let target_id = semantic_db_core::evaluate_expr(row, target)
+                    .and_then(|value| value.as_str().map(ToString::to_string))
+                    .ok_or_else(|| {
+                        semantic_db_core::CoreError::new(
+                            "relationship expression requires string target id",
+                        )
+                    })?;
+                let max_depth = max_depth
+                    .as_ref()
+                    .map(|expr| {
+                        semantic_db_core::evaluate_expr(row, expr)
+                            .and_then(|value| value_to_usize(&value))
+                            .ok_or_else(|| {
+                                semantic_db_core::CoreError::new(
+                                    "relationship expression max_depth must be a positive integer",
+                                )
+                            })
+                    })
+                    .transpose()?;
+                self.relationship_exists(
+                    &relation_id,
+                    &source_id,
+                    &target_id,
+                    *transitive,
+                    max_depth,
+                )
+            }
+            semantic_db_core::Predicate::And(items) => {
+                for item in items {
+                    if !self.evaluate_predicate_with_relationships(row, item)? {
+                        return Ok(false);
+                    }
+                }
+                Ok(true)
+            }
+            semantic_db_core::Predicate::Or(items) => {
+                for item in items {
+                    if self.evaluate_predicate_with_relationships(row, item)? {
+                        return Ok(true);
+                    }
+                }
+                Ok(false)
+            }
+            semantic_db_core::Predicate::Not(inner) => {
+                Ok(!self.evaluate_predicate_with_relationships(row, inner)?)
+            }
+            other => Ok(semantic_db_core::evaluate_predicate(row, other)),
+        }
+    }
+
+    fn relationship_exists(
+        &self,
+        relation_id: &str,
+        source_id: &str,
+        target_id: &str,
+        transitive: bool,
+        max_depth: Option<usize>,
+    ) -> semantic_db_core::CoreResult<bool> {
+        let Some(rel_collection) = self.catalog.collection_by_name(RELATION_EDGES_COLLECTION)
+        else {
+            return Ok(false);
+        };
+        let source_key = Value::String(format!("{relation_id}|{source_id}"));
+        let candidate_ids = if let Some(index) = self
+            .catalog
+            .find_equality_index(rel_collection.lid, REL_EDGE_SOURCE_KEY_FIELD)
+        {
+            self.db
+                .store
+                .scan_index_value(index.lid, None, &source_key)
+                .map_err(|err| semantic_db_core::CoreError::new(err.to_string()))?
+        } else {
+            self.db
+                .store
+                .scan_collection(rel_collection.lid)
+                .map_err(|err| semantic_db_core::CoreError::new(err.to_string()))?
+                .into_iter()
+                .map(|entity| entity.id)
+                .collect()
+        };
+        for candidate_id in candidate_ids {
+            let Some(edge) = self
+                .db
+                .store
+                .get_entity(rel_collection.lid, &candidate_id)
+                .map_err(|err| semantic_db_core::CoreError::new(err.to_string()))?
+            else {
+                continue;
+            };
+            let Some(edge_relation) = edge
+                .object
+                .get(REL_EDGE_RELATION_FIELD)
+                .and_then(Value::as_str)
+            else {
+                continue;
+            };
+            if edge_relation != relation_id {
+                continue;
+            }
+            let Some(edge_source) = edge
+                .object
+                .get(REL_EDGE_SOURCE_FIELD)
+                .and_then(Value::as_str)
+            else {
+                continue;
+            };
+            if edge_source != source_id {
+                continue;
+            }
+            let Some(edge_target) = edge
+                .object
+                .get(REL_EDGE_TARGET_FIELD)
+                .and_then(Value::as_str)
+            else {
+                continue;
+            };
+            if edge_target != target_id {
+                continue;
+            }
+            let depth = edge
+                .object
+                .get(REL_EDGE_DEPTH_FIELD)
+                .and_then(value_to_usize)
+                .unwrap_or(usize::MAX);
+            if !transitive && depth != 1 {
+                continue;
+            }
+            if let Some(max_depth) = max_depth
+                && depth > max_depth
+            {
+                continue;
+            }
+            return Ok(true);
+        }
+        Ok(false)
     }
 }
 #[derive(Clone)]
@@ -1488,6 +2029,26 @@ impl<E: KvEngine> semantic_db_core::PhysicalDataSource for KvPhysicalDataSource<
                 }) as semantic_db_core::DynObject
             })
             .collect())
+    }
+
+    fn scan_filtered(
+        &self,
+        source: &semantic_db_core::SourceRef,
+        predicate: &semantic_db_core::Predicate,
+    ) -> semantic_db_core::CoreResult<Vec<semantic_db_core::DynObject>> {
+        if let Ok(collection) = self.resolve_collection(source)
+            && let Some(ids) = self.try_relation_lookup_ids(collection, predicate)?
+        {
+            return self.materialize_ids(collection, ids);
+        }
+        let all = self.scan(source)?;
+        let mut out = Vec::new();
+        for row in all {
+            if self.evaluate_predicate_with_relationships(row.as_ref(), predicate)? {
+                out.push(row);
+            }
+        }
+        Ok(out)
     }
 
     fn index_lookup(
@@ -1575,6 +2136,32 @@ impl<E: KvEngine> semantic_db_core::PhysicalDataSource for KvPhysicalDataSource<
 
         self.materialize_ids(collection, ids)
     }
+}
+
+fn value_to_usize(value: &Value) -> Option<usize> {
+    match value {
+        Value::U8(v) => Some((*v).into()),
+        Value::U16(v) => Some((*v).into()),
+        Value::U32(v) => usize::try_from(*v).ok(),
+        Value::U64(v) => usize::try_from(*v).ok(),
+        Value::U128(v) => usize::try_from(*v).ok(),
+        Value::I8(v) => usize::try_from(*v).ok(),
+        Value::I16(v) => usize::try_from(*v).ok(),
+        Value::I32(v) => usize::try_from(*v).ok(),
+        Value::I64(v) => usize::try_from(*v).ok(),
+        Value::I128(v) => usize::try_from(*v).ok(),
+        _ => None,
+    }
+}
+
+fn is_row_id_expr(expr: &semantic_db_core::Expr, source_collection: &CollectionSchema) -> bool {
+    let semantic_db_core::Expr::Operand(semantic_db_core::Operand::Field(path)) = expr else {
+        return false;
+    };
+    let Some(PathSegment::Field(first)) = path.segments().first() else {
+        return false;
+    };
+    path.segments().len() == 1 && source_collection.canonical_field_name(first) == "id"
 }
 
 impl<E: KvEngine> KvPhysicalDataSource<'_, E> {
