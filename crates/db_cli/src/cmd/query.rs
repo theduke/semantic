@@ -1,5 +1,5 @@
 use clap::{Args, ValueEnum};
-use semantic_data::query::TextQueryFormat;
+use semantic_data::query::{QueryInput, TextQueryFormat};
 use semantic_data::value::serde::FlatValueRef;
 use semantic_data::value::{Object, ValueRef};
 use semantic_db_core::Db;
@@ -70,11 +70,21 @@ pub(crate) async fn execute_text_or_explain(
 ) -> std::result::Result<String, CliError> {
     let output = match parse_query_action(query)? {
         QueryAction::Execute(query) => {
-            let result = db.query_text(query_format, query).await?;
+            let result = db
+                .query(QueryInput::Text {
+                    format: query_format,
+                    query,
+                })
+                .await?;
             format_query_result(&result, output_format)?
         }
         QueryAction::Explain(query) => {
-            let plan = db.plan_query_text(query_format, query).await?;
+            let plan = db
+                .plan(QueryInput::Text {
+                    format: query_format,
+                    query,
+                })
+                .await?;
             format_plan(&plan, output_format)?
         }
     };

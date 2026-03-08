@@ -5,7 +5,7 @@ use semantic_data::value::Object;
 use semantic_db_core::catalog::{Catalog, CollectionKind, LocalCollectionId};
 use semantic_db_core::{
     Backend, Batch, BatchOutcome, DbError, DeleteQuery, EntityRecord, MutationStats, Query,
-    QueryExplain, QueryPlan, QueryResult, UpdateQuery,
+    QueryExplain, QueryPlan, QueryResult, TextQueryInput, UpdateQuery,
 };
 
 use crate::{DefaultKvBackendSpawner, KvBackendSpawner, KvDb, KvEngine};
@@ -99,7 +99,11 @@ impl<E: KvEngine, S: KvBackendSpawner> Backend for KvBackend<E, S> {
             .await
     }
 
-    async fn query(&self, query: Query) -> std::result::Result<QueryResult, DbError> {
+    async fn query(&self, query: TextQueryInput) -> std::result::Result<QueryResult, DbError> {
+        let query = match query {
+            TextQueryInput::Ast(query) => query,
+            TextQueryInput::Text { format, query } => self.parse_text_query(format, &query).await?,
+        };
         let db = Arc::clone(&self.db);
         self.spawner
             .spawn_blocking(move || match query {
@@ -115,7 +119,11 @@ impl<E: KvEngine, S: KvBackendSpawner> Backend for KvBackend<E, S> {
             .await
     }
 
-    async fn explain_query(&self, query: Query) -> std::result::Result<QueryExplain, DbError> {
+    async fn explain(&self, query: TextQueryInput) -> std::result::Result<QueryExplain, DbError> {
+        let query = match query {
+            TextQueryInput::Ast(query) => query,
+            TextQueryInput::Text { format, query } => self.parse_text_query(format, &query).await?,
+        };
         let db = Arc::clone(&self.db);
         self.spawner
             .spawn_blocking(move || {
@@ -125,7 +133,11 @@ impl<E: KvEngine, S: KvBackendSpawner> Backend for KvBackend<E, S> {
             .await
     }
 
-    async fn plan_query(&self, query: Query) -> std::result::Result<QueryPlan, DbError> {
+    async fn plan(&self, query: TextQueryInput) -> std::result::Result<QueryPlan, DbError> {
+        let query = match query {
+            TextQueryInput::Ast(query) => query,
+            TextQueryInput::Text { format, query } => self.parse_text_query(format, &query).await?,
+        };
         let db = Arc::clone(&self.db);
         self.spawner
             .spawn_blocking(move || {

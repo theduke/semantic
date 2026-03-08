@@ -1,10 +1,32 @@
+use std::future::Future;
+use std::pin::Pin;
+
 use semantic_data::query::{
     AggregateOp, BinaryOp, CompareOp, DeleteQuery, Expr, FunctionArg, Operand, OrderBy,
-    PatternMatchKind, Predicate, QueryField, SelectQuery, SortDirection, TextQueryFormat,
-    UpdateQuery,
+    PatternMatchKind, Predicate, QueryField, QueryInput, SelectQuery, SortDirection,
+    TextQueryFormat, UpdateQuery,
 };
 use semantic_data::value::{FieldPath, Object, Value};
-use semantic_db_core::{Db, QueryResult, catalog::CollectionKind};
+use semantic_db_core::{Db, DbError, QueryResult, catalog::CollectionKind};
+
+trait DbTextQueryExt {
+    fn query_text<'a>(
+        &'a self,
+        format: TextQueryFormat,
+        query: impl Into<String>,
+    ) -> Pin<Box<dyn Future<Output = std::result::Result<QueryResult, DbError>> + 'a>>;
+}
+
+impl DbTextQueryExt for Db {
+    fn query_text<'a>(
+        &'a self,
+        format: TextQueryFormat,
+        query: impl Into<String>,
+    ) -> Pin<Box<dyn Future<Output = std::result::Result<QueryResult, DbError>> + 'a>> {
+        let query = query.into();
+        Box::pin(async move { self.query(QueryInput::Text { format, query }).await })
+    }
+}
 
 pub async fn test_db(db: &Db) {
     test_schema_registration(db).await;

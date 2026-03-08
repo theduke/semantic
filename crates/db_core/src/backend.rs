@@ -130,7 +130,7 @@ pub trait Backend: Send + Sync {
 
     async fn delete(&self, collection: String, id: String) -> std::result::Result<(), DbError>;
 
-    async fn query(&self, query: Query) -> std::result::Result<QueryResult, DbError>;
+    async fn query(&self, query: TextQueryInput) -> std::result::Result<QueryResult, DbError>;
 
     fn sql_dialect(&self) -> SqlDialectKind {
         SqlDialectKind::Generic
@@ -172,108 +172,9 @@ pub trait Backend: Send + Sync {
         }
     }
 
-    async fn query_input(
-        &self,
-        query: TextQueryInput,
-    ) -> std::result::Result<QueryResult, DbError> {
-        match query {
-            TextQueryInput::Ast(query) => self.query(query).await,
-            TextQueryInput::Text { format, query } => {
-                let parsed = self.parse_text_query(format, &query).await?;
-                self.query(parsed).await
-            }
-        }
-    }
+    async fn explain(&self, query: TextQueryInput) -> std::result::Result<QueryExplain, DbError>;
 
-    async fn query_sql(&self, sql_query: String) -> std::result::Result<QueryResult, DbError> {
-        self.query_text(TextQueryFormat::Sql, sql_query).await
-    }
-
-    async fn query_prql(&self, prql_query: String) -> std::result::Result<QueryResult, DbError> {
-        self.query_text(TextQueryFormat::Prql, prql_query).await
-    }
-
-    async fn query_text(
-        &self,
-        format: TextQueryFormat,
-        query: String,
-    ) -> std::result::Result<QueryResult, DbError> {
-        let parsed = self.parse_text_query(format, &query).await?;
-        self.query(parsed).await
-    }
-
-    async fn explain_query(&self, query: Query) -> std::result::Result<QueryExplain, DbError>;
-
-    async fn explain_query_input(
-        &self,
-        query: TextQueryInput,
-    ) -> std::result::Result<QueryExplain, DbError> {
-        match query {
-            TextQueryInput::Ast(query) => self.explain_query(query).await,
-            TextQueryInput::Text { format, query } => {
-                let parsed = self.parse_text_query(format, &query).await?;
-                self.explain_query(parsed).await
-            }
-        }
-    }
-
-    async fn explain_query_sql(
-        &self,
-        sql_query: String,
-    ) -> std::result::Result<QueryExplain, DbError> {
-        self.explain_query_text(TextQueryFormat::Sql, sql_query)
-            .await
-    }
-
-    async fn explain_query_prql(
-        &self,
-        prql_query: String,
-    ) -> std::result::Result<QueryExplain, DbError> {
-        self.explain_query_text(TextQueryFormat::Prql, prql_query)
-            .await
-    }
-
-    async fn explain_query_text(
-        &self,
-        format: TextQueryFormat,
-        query: String,
-    ) -> std::result::Result<QueryExplain, DbError> {
-        let parsed = self.parse_text_query(format, &query).await?;
-        self.explain_query(parsed).await
-    }
-
-    async fn plan_query(&self, query: Query) -> std::result::Result<QueryPlan, DbError>;
-
-    async fn plan_query_input(
-        &self,
-        query: TextQueryInput,
-    ) -> std::result::Result<QueryPlan, DbError> {
-        match query {
-            TextQueryInput::Ast(query) => self.plan_query(query).await,
-            TextQueryInput::Text { format, query } => {
-                let parsed = self.parse_text_query(format, &query).await?;
-                self.plan_query(parsed).await
-            }
-        }
-    }
-
-    async fn plan_query_sql(&self, sql_query: String) -> std::result::Result<QueryPlan, DbError> {
-        self.plan_query_text(TextQueryFormat::Sql, sql_query).await
-    }
-
-    async fn plan_query_prql(&self, prql_query: String) -> std::result::Result<QueryPlan, DbError> {
-        self.plan_query_text(TextQueryFormat::Prql, prql_query)
-            .await
-    }
-
-    async fn plan_query_text(
-        &self,
-        format: TextQueryFormat,
-        query: String,
-    ) -> std::result::Result<QueryPlan, DbError> {
-        let parsed = self.parse_text_query(format, &query).await?;
-        self.plan_query(parsed).await
-    }
+    async fn plan(&self, query: TextQueryInput) -> std::result::Result<QueryPlan, DbError>;
 
     fn query_to_sql(&self, query: &Query) -> std::result::Result<String, DbError> {
         sql::query_to_sql(query).map_err(|err| DbError::InvalidQuery(err.to_string()))
@@ -283,7 +184,10 @@ pub trait Backend: Send + Sync {
         &self,
         query: UpdateQuery,
     ) -> std::result::Result<MutationStats, DbError> {
-        match self.query(Query::Update(query)).await? {
+        match self
+            .query(TextQueryInput::Ast(Query::Update(query)))
+            .await?
+        {
             QueryResult::Update(result) => Ok(result.stats),
             _ => Err(DbError::InvalidQuery(
                 "backend returned non-update result for update query".to_string(),
@@ -292,7 +196,10 @@ pub trait Backend: Send + Sync {
     }
 
     async fn delete_where(&self, query: DeleteQuery) -> std::result::Result<usize, DbError> {
-        match self.query(Query::Delete(query)).await? {
+        match self
+            .query(TextQueryInput::Ast(Query::Delete(query)))
+            .await?
+        {
             QueryResult::Delete(result) => Ok(result.deleted),
             _ => Err(DbError::InvalidQuery(
                 "backend returned non-delete result for delete query".to_string(),
@@ -364,46 +271,22 @@ impl Db {
             .collect()
     }
 
-    pub async fn query(&self, query: PublicQuery) -> std::result::Result<QueryResult, DbError> {
-        self.backend
-            .query_input(TextQueryInput::Ast(query.into()))
-            .await
-    }
-
-    pub async fn query_input(
+    pub async fn query(
         &self,
         query: impl Into<PublicQueryInput>,
     ) -> std::result::Result<QueryResult, DbError> {
-        self.backend.query_input(query.into().into()).await
-    }
-
-    pub async fn query_sql(
-        &self,
-        sql_query: impl Into<String>,
-    ) -> std::result::Result<QueryResult, DbError> {
-        self.backend.query_sql(sql_query.into()).await
-    }
-
-    pub async fn query_prql(
-        &self,
-        prql_query: impl Into<String>,
-    ) -> std::result::Result<QueryResult, DbError> {
-        self.backend.query_prql(prql_query.into()).await
-    }
-
-    pub async fn query_text(
-        &self,
-        format: PublicTextQueryFormat,
-        query: impl Into<String>,
-    ) -> std::result::Result<QueryResult, DbError> {
-        self.backend.query_text(format.into(), query.into()).await
+        self.backend.query(query.into().into()).await
     }
 
     pub async fn select(
         &self,
         query: PublicSelectQuery,
     ) -> std::result::Result<Vec<Object>, DbError> {
-        match self.backend.query(Query::Select(query.into())).await? {
+        match self
+            .backend
+            .query(TextQueryInput::Ast(Query::Select(query.into())))
+            .await?
+        {
             QueryResult::Select(rows) => Ok(rows),
             _ => Err(DbError::InvalidQuery(
                 "backend returned non-select result for select query".to_string(),
@@ -411,81 +294,18 @@ impl Db {
         }
     }
 
-    pub async fn explain_query(
-        &self,
-        query: PublicQuery,
-    ) -> std::result::Result<QueryExplain, DbError> {
-        self.backend
-            .explain_query_input(TextQueryInput::Ast(query.into()))
-            .await
-    }
-
-    pub async fn explain_query_input(
+    pub async fn explain(
         &self,
         query: impl Into<PublicQueryInput>,
     ) -> std::result::Result<QueryExplain, DbError> {
-        self.backend.explain_query_input(query.into().into()).await
+        self.backend.explain(query.into().into()).await
     }
 
-    pub async fn explain_query_sql(
-        &self,
-        sql_query: impl Into<String>,
-    ) -> std::result::Result<QueryExplain, DbError> {
-        self.backend.explain_query_sql(sql_query.into()).await
-    }
-
-    pub async fn explain_query_prql(
-        &self,
-        prql_query: impl Into<String>,
-    ) -> std::result::Result<QueryExplain, DbError> {
-        self.backend.explain_query_prql(prql_query.into()).await
-    }
-
-    pub async fn explain_query_text(
-        &self,
-        format: PublicTextQueryFormat,
-        query: impl Into<String>,
-    ) -> std::result::Result<QueryExplain, DbError> {
-        self.backend
-            .explain_query_text(format.into(), query.into())
-            .await
-    }
-
-    pub async fn plan_query(&self, query: PublicQuery) -> std::result::Result<QueryPlan, DbError> {
-        self.backend
-            .plan_query_input(TextQueryInput::Ast(query.into()))
-            .await
-    }
-
-    pub async fn plan_query_input(
+    pub async fn plan(
         &self,
         query: impl Into<PublicQueryInput>,
     ) -> std::result::Result<QueryPlan, DbError> {
-        self.backend.plan_query_input(query.into().into()).await
-    }
-
-    pub async fn plan_query_sql(
-        &self,
-        sql_query: impl Into<String>,
-    ) -> std::result::Result<QueryPlan, DbError> {
-        self.backend.plan_query_sql(sql_query.into()).await
-    }
-
-    pub async fn plan_query_prql(
-        &self,
-        prql_query: impl Into<String>,
-    ) -> std::result::Result<QueryPlan, DbError> {
-        self.backend.plan_query_prql(prql_query.into()).await
-    }
-
-    pub async fn plan_query_text(
-        &self,
-        format: PublicTextQueryFormat,
-        query: impl Into<String>,
-    ) -> std::result::Result<QueryPlan, DbError> {
-        self.backend
-            .plan_query_text(format.into(), query.into())
-            .await
+        self.backend.plan(query.into().into()).await
     }
 
     pub fn query_to_sql(&self, query: &PublicQuery) -> std::result::Result<String, DbError> {
@@ -496,7 +316,11 @@ impl Db {
         &self,
         query: PublicUpdateQuery,
     ) -> std::result::Result<MutationStats, DbError> {
-        match self.backend.query(Query::Update(query.into())).await? {
+        match self
+            .backend
+            .query(TextQueryInput::Ast(Query::Update(query.into())))
+            .await?
+        {
             QueryResult::Update(result) => Ok(result.stats),
             _ => Err(DbError::InvalidQuery(
                 "backend returned non-update result for update query".to_string(),
@@ -508,7 +332,11 @@ impl Db {
         &self,
         query: PublicDeleteQuery,
     ) -> std::result::Result<usize, DbError> {
-        match self.backend.query(Query::Delete(query.into())).await? {
+        match self
+            .backend
+            .query(TextQueryInput::Ast(Query::Delete(query.into())))
+            .await?
+        {
             QueryResult::Delete(result) => Ok(result.deleted),
             _ => Err(DbError::InvalidQuery(
                 "backend returned non-delete result for delete query".to_string(),
