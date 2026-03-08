@@ -1511,6 +1511,18 @@ version = "0.0.1"
 [[package]]
 name = "semantic_db_cli"
 version = "0.0.1"
+dependencies = [
+ "clap",
+ "facet-json",
+ "semantic_data",
+ "semantic_db_core",
+ "semantic_db_redb",
+ "serde",
+ "serde_json",
+ "serde_yaml",
+ "thiserror",
+ "tokio",
+]
 
 [[package]]
 name = "semantic_db_core"
