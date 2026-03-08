@@ -41,9 +41,15 @@ pub struct ClassSchema {
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum CollectionKind {
-    Untyped,
-    Record { record_type: LocalRecordTypeId },
-    Class { class: LocalClassId },
+    Polymorphic,
+}
+
+#[derive(facet::Facet, Debug, Clone, Copy, PartialEq, Eq)]
+#[repr(C)]
+#[facet(rename_all = "snake_case")]
+pub enum IntegrityMode {
+    Permissive,
+    StrictRegisteredSchema,
 }
 
 #[derive(Debug, Clone)]
@@ -51,6 +57,7 @@ pub struct CollectionSchema {
     pub lid: LocalCollectionId,
     pub name: String,
     pub kind: CollectionKind,
+    pub integrity_mode: IntegrityMode,
 
     field_aliases: FnvHashMap<String, String>,
     field_types: FnvHashMap<String, Type>,
@@ -65,6 +72,7 @@ impl CollectionSchema {
         lid: LocalCollectionId,
         name: String,
         kind: CollectionKind,
+        integrity_mode: IntegrityMode,
         field_aliases: FnvHashMap<String, String>,
         field_types: FnvHashMap<String, Type>,
         field_ids: FnvHashMap<String, LocalFieldId>,
@@ -76,6 +84,7 @@ impl CollectionSchema {
             lid,
             name,
             kind,
+            integrity_mode,
             field_aliases,
             field_types,
             field_ids,

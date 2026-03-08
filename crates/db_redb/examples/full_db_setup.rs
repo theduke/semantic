@@ -16,7 +16,7 @@ async fn main() -> std::result::Result<(), semantic_db_core::DbError> {
 
     let backend = open_backend(&path, DbOpenMode::AutoCreate)?;
     let db = Db::new(backend);
-    db.create_collection("users", CollectionKind::Untyped)
+    db.create_collection("users", CollectionKind::Polymorphic)
         .await?;
 
     let mut alice = Object::new();

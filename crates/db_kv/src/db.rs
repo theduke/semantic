@@ -21,8 +21,8 @@ use crate::{
     },
 };
 use semantic_db_core::catalog::{
-    Catalog, CollectionKind, CollectionSchema, LocalAttrId, LocalCollectionId, LocalFieldId,
-    RELATION_TO_ATTRIBUTE, SharedCatalog,
+    Catalog, CollectionKind, CollectionSchema, IntegrityMode, LocalAttrId, LocalCollectionId,
+    LocalFieldId, OBJECT_TYPE_FIELD, RELATION_TO_ATTRIBUTE, SharedCatalog,
 };
 use semantic_db_core::{
     DdlBatch, DdlOperation, DdlOutcome, QueryContext, TransactionConcurrency, TransactionOptions,
@@ -84,14 +84,14 @@ impl<E: KvEngine> KvDb<E> {
             .collection_by_name(DEFAULT_COLLECTION)
             .is_none()
         {
-            db.create_collection(DEFAULT_COLLECTION, CollectionKind::Untyped)?;
+            db.create_collection(DEFAULT_COLLECTION, CollectionKind::Polymorphic)?;
         }
         if db
             .catalog()
             .collection_by_name(RELATION_EDGES_COLLECTION)
             .is_none()
         {
-            db.create_collection(RELATION_EDGES_COLLECTION, CollectionKind::Untyped)?;
+            db.create_collection(RELATION_EDGES_COLLECTION, CollectionKind::Polymorphic)?;
         }
         if let Some(collection) = db.catalog().collection_by_name(RELATION_EDGES_COLLECTION) {
             if db
@@ -133,32 +133,13 @@ impl<E: KvEngine> KvDb<E> {
     pub fn create_collection(
         &mut self,
         name: impl Into<String>,
-        kind: CollectionKind,
+        _kind: CollectionKind,
     ) -> std::result::Result<LocalCollectionId, DbError> {
         let name = name.into();
         let ddl = DdlBatch::new().with_op(DdlOperation::UpsertCollection {
             name: name.clone(),
-            kind: match kind {
-                CollectionKind::Untyped => semantic_db_core::DdlCollectionKind::Untyped,
-                CollectionKind::Record { record_type } => {
-                    let snapshot = self.catalog();
-                    let ty = snapshot
-                        .record_type_by_lid(record_type)
-                        .ok_or(DbError::UnknownRecordType(record_type))?;
-                    semantic_db_core::DdlCollectionKind::Record {
-                        record_type: ty.id.clone(),
-                    }
-                }
-                CollectionKind::Class { class } => {
-                    let snapshot = self.catalog();
-                    let class = snapshot
-                        .class_by_lid(class)
-                        .ok_or(DbError::UnknownClass(class))?;
-                    semantic_db_core::DdlCollectionKind::Class {
-                        class: class.class.id.clone(),
-                    }
-                }
-            },
+            kind: semantic_db_core::DdlCollectionKind::Polymorphic,
+            integrity_mode: IntegrityMode::Permissive,
         });
         self.transact_ddl(ddl)?;
         self.catalog()
@@ -1068,7 +1049,7 @@ impl<E: KvEngine> KvDb<E> {
             let mut normalized_rows = BTreeMap::<String, Object>::new();
             for (id, object) in new_rows {
                 let mut object = object.clone();
-                normalize_object_for_collection(&collection_schema, &mut object)?;
+                normalize_object_for_collection(catalog, &collection_schema, &mut object)?;
                 self.validate_primary_id(&collection_schema, id, &object)?;
                 normalized_rows.insert(id.clone(), object);
             }
@@ -1094,11 +1075,6 @@ impl<E: KvEngine> KvDb<E> {
                 }
             }
 
-            let kind = match collection_schema.kind {
-                CollectionKind::Untyped => StoredEntityKind::Untyped,
-                CollectionKind::Record { .. } => StoredEntityKind::Record,
-                CollectionKind::Class { .. } => StoredEntityKind::Class,
-            };
             for index in &indexes {
                 ops.push(KvWriteOp::Put {
                     key: crate::storage::index_format_key(index.lid),
@@ -1110,7 +1086,7 @@ impl<E: KvEngine> KvDb<E> {
                 let entity = StoredEntity {
                     id: id.clone(),
                     collection: collection_schema.lid.0,
-                    kind: kind.clone(),
+                    kind: infer_entity_kind(catalog, object),
                     object: object.clone(),
                 };
                 self.push_entity_ops(&mut ops, &entity)?;
@@ -1602,6 +1578,20 @@ fn infer_project_key_for_insert(expr: &semantic_db_core::Expr) -> String {
         }
     }
     "value".to_string()
+}
+
+fn infer_entity_kind(catalog: &Catalog, object: &Object) -> StoredEntityKind {
+    let Some(object_type) = object.get(OBJECT_TYPE_FIELD).and_then(Value::as_str) else {
+        return StoredEntityKind::Untyped;
+    };
+
+    if catalog.class_id(object_type).is_some() {
+        StoredEntityKind::Class
+    } else if catalog.record_type_id(object_type).is_some() {
+        StoredEntityKind::Record
+    } else {
+        StoredEntityKind::Untyped
+    }
 }
 
 fn equality_expr(path: FieldPath, value: Value) -> semantic_db_core::Expr {
@@ -2377,7 +2367,7 @@ mod tests {
     };
 
     use semantic_data::query::{BinaryOp, SortDirection};
-    use semantic_db_core::catalog::CollectionKind;
+    use semantic_db_core::catalog::{CollectionKind, IntegrityMode};
     use semantic_db_core::{
         ALL_COLLECTION_ALIAS, DEFAULT_COLLECTION, DdlBatch, DdlCollectionKind, DdlOperation, Expr,
         Operand, OrderBy, Query, QueryField, QueryResult, SelectQuery, TransactionConcurrency,
@@ -2405,7 +2395,7 @@ mod tests {
     #[test]
     fn untyped_query_works() {
         let mut db = KvDb::in_memory();
-        db.create_collection("events", CollectionKind::Untyped)
+        db.create_collection("events", CollectionKind::Polymorphic)
             .unwrap();
 
         let mut a = Object::new();
@@ -2433,9 +2423,9 @@ mod tests {
     #[test]
     fn select_from_all_collection_alias_combines_collections() {
         let mut db = KvDb::in_memory();
-        db.create_collection("events", CollectionKind::Untyped)
+        db.create_collection("events", CollectionKind::Polymorphic)
             .unwrap();
-        db.create_collection("articles", CollectionKind::Untyped)
+        db.create_collection("articles", CollectionKind::Polymorphic)
             .unwrap();
 
         let mut event = Object::new();
@@ -2459,7 +2449,7 @@ mod tests {
     }
 
     #[test]
-    fn class_collection_normalizes_aliases_and_queries_by_alias() {
+    fn typed_class_rows_normalize_aliases_and_store_class_kind() {
         let mut db = KvDb::in_memory();
 
         let title_attr = AttributeType {
@@ -2505,14 +2495,14 @@ mod tests {
             .unwrap();
         db.transact_ddl(DdlBatch::new().with_op(DdlOperation::UpsertCollection {
             name: "articles".to_string(),
-            kind: DdlCollectionKind::Class {
-                class: "core.article".to_string(),
-            },
+            kind: DdlCollectionKind::Polymorphic,
+            integrity_mode: IntegrityMode::Permissive,
         }))
         .unwrap();
 
         let mut object = Object::new();
         object.insert("id", Value::String("art-1".to_string()));
+        object.insert("type", Value::String("core.article".to_string()));
         object.insert("title", Value::String("Hello".to_string()));
         db.insert("articles", "art-1", object).unwrap();
 
@@ -2522,26 +2512,22 @@ mod tests {
             Some(&Value::String("Hello".to_string()))
         );
         assert!(row.object.get("title").is_none());
+        assert_eq!(
+            row.object.get("type"),
+            Some(&Value::String("core.article".to_string()))
+        );
 
-        let query = SelectQuery::new()
-            .with_predicate(eq_predicate(
-                FieldPath::from_fields(["title"]),
-                Value::String("Hello".to_string()),
-            ))
-            .with_projection(vec![QueryField {
-                expr: Box::new(Expr::Operand(Operand::Field(FieldPath::from_fields([
-                    "title",
-                ])))),
-                alias: Some("t".to_string()),
-            }]);
-
-        let rows = db.select(query.with_collection("articles")).unwrap();
-        assert_eq!(rows.len(), 1);
-        assert_eq!(rows[0].get("t"), Some(&Value::String("Hello".to_string())));
+        let collection = db.catalog().collection_by_name("articles").unwrap().clone();
+        let stored = db
+            .store
+            .get_entity(collection.lid, "art-1")
+            .unwrap()
+            .unwrap();
+        assert_eq!(stored.kind, crate::storage::StoredEntityKind::Class);
     }
 
     #[test]
-    fn closed_record_collection_rejects_unknown_fields() {
+    fn typed_closed_record_rows_reject_unknown_fields() {
         let mut db = KvDb::in_memory();
 
         let mut fields = BTreeMap::new();
@@ -2584,13 +2570,14 @@ mod tests {
         .unwrap();
         db.transact_ddl(DdlBatch::new().with_op(DdlOperation::UpsertCollection {
             name: "people".to_string(),
-            kind: DdlCollectionKind::Record {
-                record_type: "person.record".to_string(),
-            },
+            kind: DdlCollectionKind::Polymorphic,
+            integrity_mode: IntegrityMode::Permissive,
         }))
         .unwrap();
 
         let mut obj = Object::new();
+        obj.insert("id", Value::String("p1".to_string()));
+        obj.insert("type", Value::String("person.record".to_string()));
         obj.insert("name", Value::String("Ada".to_string()));
         obj.insert("active", Value::Bool(true));
         obj.insert("extra", Value::Bool(true));
@@ -2603,7 +2590,7 @@ mod tests {
     fn indexed_equality_query_and_unique_enforcement() {
         let mut db = KvDb::in_memory();
         let people = db
-            .create_collection("people", CollectionKind::Untyped)
+            .create_collection("people", CollectionKind::Polymorphic)
             .unwrap();
         db.create_index("people_email_uq", people, "email", true)
             .unwrap();
@@ -2640,7 +2627,7 @@ mod tests {
     fn index_entries_update_on_upsert_and_delete() {
         let mut db = KvDb::in_memory();
         let events = db
-            .create_collection("events", CollectionKind::Untyped)
+            .create_collection("events", CollectionKind::Polymorphic)
             .unwrap();
         db.create_index("events_kind_idx", events, "kind", false)
             .unwrap();
@@ -2696,7 +2683,7 @@ mod tests {
     #[test]
     fn query_order_by_sorts_rows() {
         let mut db = KvDb::in_memory();
-        db.create_collection("events", CollectionKind::Untyped)
+        db.create_collection("events", CollectionKind::Polymorphic)
             .unwrap();
 
         let mut a = Object::new();
@@ -2735,7 +2722,7 @@ mod tests {
     fn planner_reports_index_lookup() {
         let mut db = KvDb::in_memory();
         let events = db
-            .create_collection("events", CollectionKind::Untyped)
+            .create_collection("events", CollectionKind::Polymorphic)
             .unwrap();
         db.create_index("events_kind_idx", events, "kind", false)
             .unwrap();
@@ -2759,7 +2746,7 @@ mod tests {
     #[test]
     fn planner_uses_auto_index_for_simple_equality_without_explicit_index() {
         let mut db = KvDb::in_memory();
-        db.create_collection("events", CollectionKind::Untyped)
+        db.create_collection("events", CollectionKind::Polymorphic)
             .unwrap();
         db.set_auto_index_enabled(true).unwrap();
 
@@ -2782,7 +2769,7 @@ mod tests {
     #[test]
     fn auto_index_simple_equality_query_returns_matching_entities() {
         let mut db = KvDb::in_memory();
-        db.create_collection("events", CollectionKind::Untyped)
+        db.create_collection("events", CollectionKind::Polymorphic)
             .unwrap();
         db.set_auto_index_enabled(true).unwrap();
 
@@ -2819,7 +2806,7 @@ mod tests {
     #[test]
     fn auto_index_nested_paths_work_with_planner_and_mutations() {
         let mut db = KvDb::in_memory();
-        db.create_collection("events", CollectionKind::Untyped)
+        db.create_collection("events", CollectionKind::Polymorphic)
             .unwrap();
         db.set_auto_index_enabled(true).unwrap();
 
@@ -2887,7 +2874,7 @@ mod tests {
     #[test]
     fn update_query_supports_returning_projection() {
         let mut db = KvDb::in_memory();
-        db.create_collection("items", CollectionKind::Untyped)
+        db.create_collection("items", CollectionKind::Polymorphic)
             .unwrap();
 
         let mut row = Object::new();
@@ -2926,7 +2913,7 @@ mod tests {
     #[test]
     fn delete_query_supports_returning_projection() {
         let mut db = KvDb::in_memory();
-        db.create_collection("items", CollectionKind::Untyped)
+        db.create_collection("items", CollectionKind::Polymorphic)
             .unwrap();
 
         let mut row = Object::new();
@@ -2963,7 +2950,7 @@ mod tests {
     #[test]
     fn mvcc_transaction_requires_mvcc_backend() {
         let mut db = KvDb::in_memory();
-        db.create_collection("events", CollectionKind::Untyped)
+        db.create_collection("events", CollectionKind::Polymorphic)
             .unwrap();
 
         let err = db

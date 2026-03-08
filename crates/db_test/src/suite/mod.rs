@@ -14,7 +14,7 @@ use semantic_data::schema::{
 use semantic_data::value::{FieldPath, Object, Value};
 use semantic_db_core::{
     Db, DbError, DdlBatch, DdlCollectionKind, DdlOperation, QueryResult,
-    catalog::{CollectionKind, RELATION_CLASS_ID},
+    catalog::{CollectionKind, IntegrityMode, RELATION_CLASS_ID},
 };
 
 trait DbTextQueryExt {
@@ -58,7 +58,7 @@ pub async fn test_db(db: &Db) {
 }
 
 async fn test_schema_registration(db: &Db) {
-    db.create_collection("shared_suite_schema", CollectionKind::Untyped)
+    db.create_collection("shared_suite_schema", CollectionKind::Polymorphic)
         .await
         .expect("schema registration should succeed");
 
@@ -69,11 +69,11 @@ async fn test_schema_registration(db: &Db) {
     let collection = catalog
         .collection_by_name("shared_suite_schema")
         .expect("registered collection should be present in catalog");
-    assert!(matches!(collection.kind, CollectionKind::Untyped));
+    assert!(matches!(collection.kind, CollectionKind::Polymorphic));
 }
 
 async fn test_select_query(db: &Db) {
-    db.create_collection("shared_suite_select", CollectionKind::Untyped)
+    db.create_collection("shared_suite_select", CollectionKind::Polymorphic)
         .await
         .expect("select test collection creation should succeed");
 
@@ -101,7 +101,7 @@ async fn test_select_query(db: &Db) {
 }
 
 async fn test_update_query(db: &Db) {
-    db.create_collection("shared_suite_update", CollectionKind::Untyped)
+    db.create_collection("shared_suite_update", CollectionKind::Polymorphic)
         .await
         .expect("update test collection creation should succeed");
     db.insert("shared_suite_update", "item-1", row("item-1", "music", 1))
@@ -143,7 +143,7 @@ async fn test_sql_insert_query(db: &Db) {
         return;
     }
 
-    db.create_collection("shared_suite_sql_insert", CollectionKind::Untyped)
+    db.create_collection("shared_suite_sql_insert", CollectionKind::Polymorphic)
         .await
         .expect("sql insert test collection creation should succeed");
 
@@ -192,7 +192,7 @@ async fn test_sql_insert_query(db: &Db) {
 }
 
 async fn test_delete_query(db: &Db) {
-    db.create_collection("shared_suite_delete", CollectionKind::Untyped)
+    db.create_collection("shared_suite_delete", CollectionKind::Polymorphic)
         .await
         .expect("delete test collection creation should succeed");
     db.insert("shared_suite_delete", "gone-1", row("gone-1", "temp", 0))
@@ -268,7 +268,7 @@ async fn test_text_query_formats(db: &Db) {
 }
 
 async fn test_ast_predicate_constructs(db: &Db) {
-    db.create_collection("shared_suite_ast_predicates", CollectionKind::Untyped)
+    db.create_collection("shared_suite_ast_predicates", CollectionKind::Polymorphic)
         .await
         .expect("ast predicate test collection creation should succeed");
 
@@ -507,7 +507,7 @@ async fn test_sql_predicate_constructs(db: &Db) {
         return;
     }
 
-    db.create_collection("shared_suite_sql_predicates", CollectionKind::Untyped)
+    db.create_collection("shared_suite_sql_predicates", CollectionKind::Polymorphic)
         .await
         .expect("sql predicate test collection creation should succeed");
 
@@ -671,10 +671,10 @@ async fn test_sql_predicate_constructs(db: &Db) {
 }
 
 async fn test_subquery_patterns(db: &Db) {
-    db.create_collection("shared_suite_subquery_outer", CollectionKind::Untyped)
+    db.create_collection("shared_suite_subquery_outer", CollectionKind::Polymorphic)
         .await
         .expect("subquery outer collection creation should succeed");
-    db.create_collection("shared_suite_subquery_inner", CollectionKind::Untyped)
+    db.create_collection("shared_suite_subquery_inner", CollectionKind::Polymorphic)
         .await
         .expect("subquery inner collection creation should succeed");
 
@@ -898,10 +898,10 @@ async fn test_subquery_patterns(db: &Db) {
 }
 
 async fn test_join_semantics(db: &Db) {
-    db.create_collection("shared_suite_join_items", CollectionKind::Untyped)
+    db.create_collection("shared_suite_join_items", CollectionKind::Polymorphic)
         .await
         .expect("join source collection creation should succeed");
-    db.create_collection("shared_suite_join_profiles", CollectionKind::Untyped)
+    db.create_collection("shared_suite_join_profiles", CollectionKind::Polymorphic)
         .await
         .expect("join profile collection creation should succeed");
 
@@ -1034,7 +1034,7 @@ async fn test_join_semantics(db: &Db) {
 }
 
 async fn test_ast_aggregation_distinct_grouping(db: &Db) {
-    db.create_collection("shared_suite_ast_agg", CollectionKind::Untyped)
+    db.create_collection("shared_suite_ast_agg", CollectionKind::Polymorphic)
         .await
         .expect("ast aggregation test collection creation should succeed");
     for (id, kind, score) in [
@@ -1167,7 +1167,7 @@ async fn test_sql_aggregation_distinct_grouping(db: &Db) {
     {
         return;
     }
-    db.create_collection("shared_suite_sql_agg", CollectionKind::Untyped)
+    db.create_collection("shared_suite_sql_agg", CollectionKind::Polymorphic)
         .await
         .expect("sql aggregation test collection creation should succeed");
     for (id, kind, score) in [
@@ -1236,7 +1236,7 @@ async fn test_sql_aggregation_distinct_grouping(db: &Db) {
 }
 
 async fn test_ast_ordering_variants(db: &Db) {
-    db.create_collection("shared_suite_ordering_ast", CollectionKind::Untyped)
+    db.create_collection("shared_suite_ordering_ast", CollectionKind::Polymorphic)
         .await
         .expect("ast ordering test collection creation should succeed");
 
@@ -1320,7 +1320,7 @@ async fn test_sql_ordering_variants(db: &Db) {
         return;
     }
 
-    db.create_collection("shared_suite_ordering_sql", CollectionKind::Untyped)
+    db.create_collection("shared_suite_ordering_sql", CollectionKind::Polymorphic)
         .await
         .expect("sql ordering test collection creation should succeed");
 
@@ -1352,7 +1352,7 @@ async fn test_sql_ordering_variants(db: &Db) {
 }
 
 async fn test_ast_limit_offset_variants(db: &Db) {
-    db.create_collection("shared_suite_limit_ast", CollectionKind::Untyped)
+    db.create_collection("shared_suite_limit_ast", CollectionKind::Polymorphic)
         .await
         .expect("ast limit/offset test collection creation should succeed");
 
@@ -1399,7 +1399,7 @@ async fn test_sql_limit_offset_variants(db: &Db) {
         return;
     }
 
-    db.create_collection("shared_suite_limit_sql", CollectionKind::Untyped)
+    db.create_collection("shared_suite_limit_sql", CollectionKind::Polymorphic)
         .await
         .expect("sql limit/offset test collection creation should succeed");
 
@@ -1428,7 +1428,7 @@ async fn test_sql_limit_offset_variants(db: &Db) {
 }
 
 async fn test_relationships_generic_embedded(db: &Db) {
-    db.create_collection("shared_suite_rel_nodes", CollectionKind::Untyped)
+    db.create_collection("shared_suite_rel_nodes", CollectionKind::Polymorphic)
         .await
         .expect("relationship nodes collection creation should succeed");
     db.execute_ddl(
@@ -1643,9 +1643,8 @@ async fn test_relationships_generic_external(db: &Db) {
             })
             .with_op(DdlOperation::UpsertCollection {
                 name: "shared_suite_rel_docs".to_string(),
-                kind: DdlCollectionKind::Class {
-                    class: "shared.rel.weighted".to_string(),
-                },
+                kind: DdlCollectionKind::Polymorphic,
+                integrity_mode: IntegrityMode::Permissive,
             })
             .with_op(DdlOperation::UpsertRelationship {
                 relationship: RelationType {
@@ -1661,7 +1660,7 @@ async fn test_relationships_generic_external(db: &Db) {
     .await
     .expect("external relationship ddl should succeed");
 
-    db.create_collection("shared_suite_rel_docs_nodes", CollectionKind::Untyped)
+    db.create_collection("shared_suite_rel_docs_nodes", CollectionKind::Polymorphic)
         .await
         .expect("doc relationship node collection creation should succeed");
     for id in ["x", "y"] {
@@ -1674,6 +1673,7 @@ async fn test_relationships_generic_external(db: &Db) {
 
     let mut rel = Object::new();
     rel.insert("id", Value::String("r1".to_string()));
+    rel.insert("type", Value::String("shared.rel.weighted".to_string()));
     rel.insert("from", Value::String("x".to_string()));
     rel.insert("to", Value::String("y".to_string()));
     rel.insert("weight", Value::String("5".to_string()));

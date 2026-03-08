@@ -18,10 +18,10 @@ use semantic_data::schema::{
 
 use crate::catalog::{
     AttributeSchema, CatalogError, CatalogStorageSnapshot, ClassSchema, CollectionKind,
-    CollectionSchema, IdMap, IndexSchema, LocalAttrId, LocalClassId, LocalCollectionId,
-    LocalFieldId, LocalIndexId, LocalRecordTypeId, LocalRelationId, LocalTypeDefId,
-    RecordTypeSchema, RelationshipSchema, StoredAttribute, StoredClass, StoredCollection,
-    StoredCollectionKind, StoredFieldId, StoredIndex, StoredRecordType, StoredRelationship,
+    CollectionSchema, IdMap, IndexSchema, IntegrityMode, LocalAttrId, LocalClassId,
+    LocalCollectionId, LocalFieldId, LocalIndexId, LocalRecordTypeId, LocalRelationId,
+    LocalTypeDefId, RecordTypeSchema, RelationshipSchema, StoredAttribute, StoredClass,
+    StoredCollection, StoredFieldId, StoredIndex, StoredRecordType, StoredRelationship,
     StoredTypeDef, TypeDefSchema,
 };
 
@@ -283,13 +283,14 @@ impl Catalog {
         if self.collections.contains_key(&name) {
             return Err(CatalogError::CollectionAlreadyExists { name });
         }
-        self.upsert_collection(name, kind)
+        self.upsert_collection(name, kind, IntegrityMode::Permissive)
     }
 
     pub fn upsert_collection(
         &mut self,
         name: impl Into<String>,
         kind: CollectionKind,
+        integrity_mode: IntegrityMode,
     ) -> Result<LocalCollectionId, CatalogError> {
         let name = name.into();
         let existing_lid = self.collections.get_key_id(&name);
@@ -307,6 +308,7 @@ impl Catalog {
             lid,
             name.clone(),
             kind,
+            integrity_mode,
             existing_field_ids.as_ref(),
         )?;
 
@@ -375,23 +377,6 @@ impl Catalog {
                 }
             }
             RelationMode::External => {
-                let CollectionKind::Class { class } = source_collection.kind else {
-                    return Err(CatalogError::InvalidSchema(format!(
-                        "external relationship '{}' requires a class collection source",
-                        relationship.id
-                    )));
-                };
-                let class = self
-                    .class_by_lid(class)
-                    .ok_or(CatalogError::UnknownClass(class))?;
-                let inherits_relation = class.class.id == RELATION_CLASS_ID
-                    || self.class_inherits(class.lid, RELATION_CLASS_ID);
-                if !inherits_relation {
-                    return Err(CatalogError::InvalidSchema(format!(
-                        "external relationship '{}' requires source class '{}' to inherit from '{}'",
-                        relationship.id, class.class.id, RELATION_CLASS_ID
-                    )));
-                }
                 for field in [RELATION_FROM_ATTRIBUTE, RELATION_TO_ATTRIBUTE] {
                     let canonical = source_collection.canonical_field_name(field);
                     if source_collection.is_closed_field_set()
@@ -613,13 +598,7 @@ impl Catalog {
                 .map(|(lid, col)| StoredCollection {
                     lid,
                     name: col.name.clone(),
-                    kind: match col.kind {
-                        CollectionKind::Untyped => StoredCollectionKind::Untyped,
-                        CollectionKind::Record { record_type } => {
-                            StoredCollectionKind::Record { record_type }
-                        }
-                        CollectionKind::Class { class } => StoredCollectionKind::Class { class },
-                    },
+                    integrity_mode: col.integrity_mode,
                     field_ids: col
                         .fields()
                         .map(|(field_id, name)| StoredFieldId {
@@ -870,13 +849,8 @@ impl Catalog {
             let schema = catalog.build_collection_schema_for_lid(
                 item.lid,
                 item.name.clone(),
-                match item.kind {
-                    StoredCollectionKind::Untyped => CollectionKind::Untyped,
-                    StoredCollectionKind::Record { record_type } => {
-                        CollectionKind::Record { record_type }
-                    }
-                    StoredCollectionKind::Class { class } => CollectionKind::Class { class },
-                },
+                CollectionKind::Polymorphic,
+                item.integrity_mode,
                 Some(&field_ids),
             )?;
             catalog
@@ -1002,44 +976,13 @@ impl Catalog {
         lid: LocalCollectionId,
         name: String,
         kind: CollectionKind,
+        integrity_mode: IntegrityMode,
         fixed_field_ids: Option<&FnvHashMap<String, LocalFieldId>>,
     ) -> Result<CollectionSchema, CatalogError> {
-        let (field_aliases, mut field_types, field_attrs, closed_fields) = match &kind {
-            CollectionKind::Untyped => (
-                FnvHashMap::default(),
-                FnvHashMap::default(),
-                FnvHashMap::default(),
-                false,
-            ),
-            CollectionKind::Record { record_type } => {
-                let record = self
-                    .record_types
-                    .get(*record_type)
-                    .ok_or(CatalogError::UnknownRecordType(*record_type))?;
-                let mut field_types = FnvHashMap::default();
-                for (field_name, field) in &record.record.fields {
-                    field_types.insert(field_name.clone(), field.ty.clone());
-                }
-                (
-                    FnvHashMap::default(),
-                    field_types,
-                    FnvHashMap::default(),
-                    !record.record.open,
-                )
-            }
-            CollectionKind::Class { class } => {
-                let mut field_aliases = FnvHashMap::default();
-                let mut field_types = FnvHashMap::default();
-                let mut field_attrs = FnvHashMap::default();
-                self.collect_class_fields(
-                    *class,
-                    &mut field_aliases,
-                    &mut field_types,
-                    &mut field_attrs,
-                )?;
-                (field_aliases, field_types, field_attrs, true)
-            }
-        };
+        let field_aliases = FnvHashMap::default();
+        let mut field_types = FnvHashMap::default();
+        let field_attrs = FnvHashMap::<String, LocalAttrId>::default();
+        let closed_fields = false;
 
         let mut field_ids = FnvHashMap::default();
         let mut field_names_by_id = FnvHashMap::default();
@@ -1091,6 +1034,7 @@ impl Catalog {
             lid,
             name,
             kind,
+            integrity_mode,
             field_aliases,
             field_types,
             field_ids,

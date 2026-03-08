@@ -18,11 +18,11 @@ pub use ids::{
     LocalRelationId, LocalTypeDefId,
 };
 pub use schema::{
-    AttributeSchema, ClassSchema, CollectionKind, CollectionSchema, IndexSchema, RecordTypeSchema,
-    RelationshipSchema, TypeDefSchema,
+    AttributeSchema, ClassSchema, CollectionKind, CollectionSchema, IndexSchema, IntegrityMode,
+    RecordTypeSchema, RelationshipSchema, TypeDefSchema,
 };
 pub use shared::{CatalogSnapshot, CatalogVersionMismatch, SharedCatalog};
 pub use snapshot::{
-    CatalogStorageSnapshot, StoredAttribute, StoredClass, StoredCollection, StoredCollectionKind,
-    StoredFieldId, StoredIndex, StoredRecordType, StoredRelationship, StoredTypeDef,
+    CatalogStorageSnapshot, StoredAttribute, StoredClass, StoredCollection, StoredFieldId,
+    StoredIndex, StoredRecordType, StoredRelationship, StoredTypeDef,
 };

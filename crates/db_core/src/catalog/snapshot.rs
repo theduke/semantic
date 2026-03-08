@@ -4,8 +4,8 @@ use semantic_data::schema::{
 };
 
 use crate::catalog::{
-    LocalAttrId, LocalClassId, LocalCollectionId, LocalFieldId, LocalIndexId, LocalRecordTypeId,
-    LocalRelationId, LocalTypeDefId,
+    IntegrityMode, LocalAttrId, LocalClassId, LocalCollectionId, LocalFieldId, LocalIndexId,
+    LocalRecordTypeId, LocalRelationId, LocalTypeDefId,
 };
 
 #[derive(facet::Facet, Debug, Clone, PartialEq)]
@@ -51,17 +51,8 @@ pub struct StoredClass {
 pub struct StoredCollection {
     pub lid: LocalCollectionId,
     pub name: String,
-    pub kind: StoredCollectionKind,
+    pub integrity_mode: IntegrityMode,
     pub field_ids: Vec<StoredFieldId>,
-}
-
-#[derive(facet::Facet, Debug, Clone, PartialEq)]
-#[repr(C)]
-#[facet(rename_all = "snake_case")]
-pub enum StoredCollectionKind {
-    Untyped,
-    Record { record_type: LocalRecordTypeId },
-    Class { class: LocalClassId },
 }
 
 #[derive(facet::Facet, Debug, Clone, PartialEq)]

@@ -1,10 +1,13 @@
+use std::collections::BTreeSet;
+
+use fnv::FnvHashMap;
 use semantic_data::{
     schema::{core::type_kind::TypeKind, core::type_node::Type},
     value::{Object, Value},
 };
 use thiserror::Error;
 
-use crate::catalog::CollectionSchema;
+use crate::catalog::{Catalog, CollectionSchema, IntegrityMode, LocalClassId, OBJECT_TYPE_FIELD};
 
 #[derive(Debug, Error, Clone, PartialEq, Eq)]
 pub enum ObjectNormalizationError {
@@ -27,20 +30,91 @@ pub enum ObjectNormalizationError {
         expected: String,
         actual: String,
     },
+    #[error("collection '{collection}' requires a registered object type")]
+    MissingObjectType { collection: String },
+    #[error("collection '{collection}' references unknown object type '{object_type}'")]
+    UnknownObjectType {
+        collection: String,
+        object_type: String,
+    },
 }
 
 pub type ObjectNormalizationResult<T> = std::result::Result<T, ObjectNormalizationError>;
 
 pub fn normalize_object_for_collection(
+    catalog: &Catalog,
     collection: &CollectionSchema,
     object: &mut Object,
 ) -> ObjectNormalizationResult<()> {
+    normalize_aliases(collection, object, |key| {
+        Some(collection.canonical_field_name(key).to_string())
+    })?;
+
+    let mut registered_field_types = FnvHashMap::default();
+    let mut reject_unknown_fields = collection.is_closed_field_set();
+
+    match object.get(OBJECT_TYPE_FIELD).and_then(Value::as_str) {
+        Some(object_type) => {
+            if let Some(class_lid) = catalog.class_id(object_type) {
+                let mut class_aliases = FnvHashMap::default();
+                collect_class_fields(
+                    catalog,
+                    class_lid,
+                    &mut class_aliases,
+                    &mut registered_field_types,
+                );
+                normalize_aliases(collection, object, |key| class_aliases.get(key).cloned())?;
+                reject_unknown_fields |=
+                    collection.integrity_mode == IntegrityMode::StrictRegisteredSchema;
+            } else if let Some(record_lid) = catalog.record_type_id(object_type) {
+                let record_type = catalog
+                    .record_type_by_lid(record_lid)
+                    .expect("record type id must resolve");
+                for (field_name, field) in &record_type.record.fields {
+                    registered_field_types.insert(field_name.clone(), field.ty.clone());
+                }
+                reject_unknown_fields |= collection.integrity_mode
+                    == IntegrityMode::StrictRegisteredSchema
+                    || !record_type.record.open;
+            } else if collection.integrity_mode == IntegrityMode::StrictRegisteredSchema {
+                return Err(ObjectNormalizationError::UnknownObjectType {
+                    collection: collection.name.clone(),
+                    object_type: object_type.to_string(),
+                });
+            }
+        }
+        None if collection.integrity_mode == IntegrityMode::StrictRegisteredSchema => {
+            return Err(ObjectNormalizationError::MissingObjectType {
+                collection: collection.name.clone(),
+            });
+        }
+        None => {}
+    }
+
+    validate_object_fields(
+        collection,
+        object,
+        &registered_field_types,
+        reject_unknown_fields,
+    )
+}
+
+fn normalize_aliases<F>(
+    collection: &CollectionSchema,
+    object: &mut Object,
+    canonicalize: F,
+) -> ObjectNormalizationResult<()>
+where
+    F: Fn(&str) -> Option<String>,
+{
     let mut moved = Vec::<(String, String)>::new();
 
     for key in object.keys() {
-        let canonical = collection.canonical_field_name(key);
-        if canonical != key {
-            moved.push((key.clone(), canonical.to_string()));
+        let Some(canonical) = canonicalize(key) else {
+            continue;
+        };
+        if canonical.as_str() != key {
+            moved.push((key.clone(), canonical));
         }
     }
 
@@ -56,9 +130,60 @@ pub fn normalize_object_for_collection(
         object.insert(to, value);
     }
 
-    if collection.is_closed_field_set() {
+    Ok(())
+}
+
+fn collect_class_fields(
+    catalog: &Catalog,
+    class_lid: LocalClassId,
+    field_aliases: &mut FnvHashMap<String, String>,
+    field_types: &mut FnvHashMap<String, Type>,
+) {
+    fn visit(
+        catalog: &Catalog,
+        class_lid: LocalClassId,
+        visited: &mut BTreeSet<LocalClassId>,
+        field_aliases: &mut FnvHashMap<String, String>,
+        field_types: &mut FnvHashMap<String, Type>,
+    ) {
+        if !visited.insert(class_lid) {
+            return;
+        }
+        let class = catalog
+            .class_by_lid(class_lid)
+            .expect("class id must resolve in catalog");
+        if let Some(inherits) = &class.class.inherits
+            && let Some(base_lid) = catalog.class_id(&inherits.id)
+        {
+            visit(catalog, base_lid, visited, field_aliases, field_types);
+        }
+        for ext in &class.class.extends {
+            if let Some(ext_lid) = catalog.class_id(&ext.id) {
+                visit(catalog, ext_lid, visited, field_aliases, field_types);
+            }
+        }
+        for (alias, class_attr) in &class.class.attributes {
+            let attr = catalog
+                .attribute_by_id(&class_attr.attribute.id)
+                .expect("class attribute must resolve in catalog");
+            field_aliases.insert(alias.clone(), attr.attribute.id.clone());
+            field_types.insert(attr.attribute.id.clone(), attr.attribute.ty.clone());
+        }
+    }
+
+    let mut visited = BTreeSet::new();
+    visit(catalog, class_lid, &mut visited, field_aliases, field_types);
+}
+
+fn validate_object_fields(
+    collection: &CollectionSchema,
+    object: &Object,
+    registered_field_types: &FnvHashMap<String, Type>,
+    reject_unknown_fields: bool,
+) -> ObjectNormalizationResult<()> {
+    if reject_unknown_fields {
         for key in object.keys() {
-            if !collection.knows_field(key) {
+            if !collection.knows_field(key) && !registered_field_types.contains_key(key) {
                 return Err(ObjectNormalizationError::UnknownField {
                     collection: collection.name.clone(),
                     field: key.clone(),
@@ -68,15 +193,18 @@ pub fn normalize_object_for_collection(
     }
 
     for (key, value) in object.iter() {
-        if let Some(ty) = collection.field_type(key) {
-            if !type_matches_value(ty, value) {
-                return Err(ObjectNormalizationError::TypeMismatch {
-                    collection: collection.name.clone(),
-                    field: key.clone(),
-                    expected: describe_type(ty),
-                    actual: describe_value(value),
-                });
-            }
+        let ty = collection
+            .field_type(key)
+            .or_else(|| registered_field_types.get(key));
+        if let Some(ty) = ty
+            && !type_matches_value(ty, value)
+        {
+            return Err(ObjectNormalizationError::TypeMismatch {
+                collection: collection.name.clone(),
+                field: key.clone(),
+                expected: describe_type(ty),
+                actual: describe_value(value),
+            });
         }
     }
 

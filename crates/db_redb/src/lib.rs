@@ -229,7 +229,7 @@ mod tests {
         {
             let engine = RedbKvEngine::open(&path, DbOpenMode::AutoCreate).unwrap();
             let mut db = RedbDatabase::new(engine);
-            db.create_collection("items", CollectionKind::Untyped)
+            db.create_collection("items", CollectionKind::Polymorphic)
                 .unwrap();
 
             let mut obj = Object::new();
@@ -241,7 +241,7 @@ mod tests {
         {
             let engine = RedbKvEngine::open(path, DbOpenMode::OpenExisting).unwrap();
             let mut db = RedbDatabase::new(engine);
-            db.create_collection("items", CollectionKind::Untyped)
+            db.create_collection("items", CollectionKind::Polymorphic)
                 .unwrap();
             let out = db
                 .select(SelectQuery::new().with_collection("items"))

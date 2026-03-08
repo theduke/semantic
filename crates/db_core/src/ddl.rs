@@ -1,4 +1,5 @@
 use semantic_data::schema::{
+    ClassRef,
     attribute::attribute_ref::AttributeRef,
     attribute::attribute_type::AttributeType,
     class::class_attribute::ClassAttribute,
@@ -14,7 +15,7 @@ use semantic_data::schema::{
 
 use crate::{
     CoreError,
-    catalog::{Catalog, CollectionKind, RELATION_CLASS_ID},
+    catalog::{Catalog, CollectionKind, IntegrityMode, RELATION_CLASS_ID},
 };
 
 #[derive(facet::Facet, Debug, Clone, PartialEq)]
@@ -45,9 +46,7 @@ impl Default for DdlBatch {
 #[repr(C)]
 #[facet(rename_all = "snake_case")]
 pub enum DdlCollectionKind {
-    Untyped,
-    Record { record_type: String },
-    Class { class: String },
+    Polymorphic,
 }
 
 #[derive(facet::Facet, Debug, Clone, PartialEq)]
@@ -77,6 +76,7 @@ pub enum DdlOperation {
     UpsertCollection {
         name: String,
         kind: DdlCollectionKind,
+        integrity_mode: IntegrityMode,
     },
     DeleteCollection {
         name: String,
@@ -148,19 +148,6 @@ pub fn apply_ddl_batch(
                 stats.upserted += 1;
             }
             DdlOperation::DeleteRecordType { id } => {
-                if let Some(record_lid) = catalog.record_type_id(id) {
-                    for (_, collection) in catalog.collections() {
-                        if matches!(
-                            collection.kind,
-                            CollectionKind::Record { record_type } if record_type == record_lid
-                        ) {
-                            return Err(CoreError::new(format!(
-                                "cannot delete record type '{id}': referenced by collection '{}'",
-                                collection.name
-                            )));
-                        }
-                    }
-                }
                 if catalog.delete_record_type(id) {
                     stats.deleted += 1;
                 }
@@ -172,27 +159,18 @@ pub fn apply_ddl_batch(
                 stats.upserted += 1;
             }
             DdlOperation::DeleteClass { id } => {
-                if let Some(class_lid) = catalog.class_id(id) {
-                    for (_, collection) in catalog.collections() {
-                        if matches!(
-                            collection.kind,
-                            CollectionKind::Class { class } if class == class_lid
-                        ) {
-                            return Err(CoreError::new(format!(
-                                "cannot delete class '{id}': referenced by collection '{}'",
-                                collection.name
-                            )));
-                        }
-                    }
-                }
                 if catalog.delete_class(id) {
                     stats.deleted += 1;
                 }
             }
-            DdlOperation::UpsertCollection { name, kind } => {
+            DdlOperation::UpsertCollection {
+                name,
+                kind,
+                integrity_mode,
+            } => {
                 let kind = resolve_collection_kind(&catalog, kind)?;
                 catalog
-                    .upsert_collection(name.clone(), kind)
+                    .upsert_collection(name.clone(), kind, *integrity_mode)
                     .map_err(|e| CoreError::new(e.to_string()))?;
                 stats.upserted += 1;
             }
@@ -249,13 +227,21 @@ pub fn apply_ddl_batch(
 }
 
 pub const CORE_CATALOG_ENTRY_CLASS_ID: &str = "semantic.catalog.entry";
-pub const CORE_CATALOG_ATTRIBUTES_COLLECTION: &str = "__semantic.catalog.attributes";
-pub const CORE_CATALOG_TYPE_DEFS_COLLECTION: &str = "__semantic.catalog.type_defs";
-pub const CORE_CATALOG_RECORD_TYPES_COLLECTION: &str = "__semantic.catalog.record_types";
-pub const CORE_CATALOG_CLASSES_COLLECTION: &str = "__semantic.catalog.classes";
-pub const CORE_CATALOG_COLLECTIONS_COLLECTION: &str = "__semantic.catalog.collections";
-pub const CORE_CATALOG_INDEXES_COLLECTION: &str = "__semantic.catalog.indexes";
-pub const CORE_CATALOG_META_COLLECTION: &str = "__semantic.catalog.meta";
+pub const CORE_CATALOG_ATTRIBUTE_ENTRY_CLASS_ID: &str = "semantic.catalog.entry.attribute";
+pub const CORE_CATALOG_TYPE_DEF_ENTRY_CLASS_ID: &str = "semantic.catalog.entry.type_def";
+pub const CORE_CATALOG_RECORD_TYPE_ENTRY_CLASS_ID: &str = "semantic.catalog.entry.record_type";
+pub const CORE_CATALOG_CLASS_ENTRY_CLASS_ID: &str = "semantic.catalog.entry.class";
+pub const CORE_CATALOG_COLLECTION_ENTRY_CLASS_ID: &str = "semantic.catalog.entry.collection";
+pub const CORE_CATALOG_INDEX_ENTRY_CLASS_ID: &str = "semantic.catalog.entry.index";
+pub const CORE_CATALOG_META_ENTRY_CLASS_ID: &str = "semantic.catalog.entry.meta";
+pub const CORE_CATALOG_SCHEMA_COLLECTION: &str = "__semantic.catalog.schema";
+pub const CORE_CATALOG_ATTRIBUTES_COLLECTION: &str = CORE_CATALOG_SCHEMA_COLLECTION;
+pub const CORE_CATALOG_TYPE_DEFS_COLLECTION: &str = CORE_CATALOG_SCHEMA_COLLECTION;
+pub const CORE_CATALOG_RECORD_TYPES_COLLECTION: &str = CORE_CATALOG_SCHEMA_COLLECTION;
+pub const CORE_CATALOG_CLASSES_COLLECTION: &str = CORE_CATALOG_SCHEMA_COLLECTION;
+pub const CORE_CATALOG_COLLECTIONS_COLLECTION: &str = CORE_CATALOG_SCHEMA_COLLECTION;
+pub const CORE_CATALOG_INDEXES_COLLECTION: &str = CORE_CATALOG_SCHEMA_COLLECTION;
+pub const CORE_CATALOG_META_COLLECTION: &str = CORE_CATALOG_SCHEMA_COLLECTION;
 
 const CORE_CATALOG_ATTR_ID: &str = "semantic.catalog.id";
 const CORE_CATALOG_ATTR_LID: &str = "semantic.catalog.lid";
@@ -264,7 +250,7 @@ const CORE_CATALOG_ATTR_TYPE_DEF: &str = "semantic.catalog.type_def";
 const CORE_CATALOG_ATTR_RECORD: &str = "semantic.catalog.record";
 const CORE_CATALOG_ATTR_CLASS: &str = "semantic.catalog.class";
 const CORE_CATALOG_ATTR_NAME: &str = "semantic.catalog.name";
-const CORE_CATALOG_ATTR_COLLECTION_KIND: &str = "semantic.catalog.collection_kind";
+const CORE_CATALOG_ATTR_INTEGRITY_MODE: &str = "semantic.catalog.integrity_mode";
 const CORE_CATALOG_ATTR_FIELD_IDS: &str = "semantic.catalog.field_ids";
 const CORE_CATALOG_ATTR_COLLECTION: &str = "semantic.catalog.collection";
 const CORE_CATALOG_ATTR_FIELD: &str = "semantic.catalog.field";
@@ -356,10 +342,10 @@ pub fn core_catalog_schema_batch() -> DdlBatch {
         },
     );
     attrs.insert(
-        "collection_kind".to_string(),
+        "integrity_mode".to_string(),
         ClassAttribute {
             attribute: AttributeRef {
-                id: CORE_CATALOG_ATTR_COLLECTION_KIND.to_string(),
+                id: CORE_CATALOG_ATTR_INTEGRITY_MODE.to_string(),
             },
             required: false,
             constraints: vec![],
@@ -453,6 +439,27 @@ pub fn core_catalog_schema_batch() -> DdlBatch {
         constraints: vec![],
         meta: Meta::default(),
     };
+    let catalog_entry_kind = |id: &str, name: &str| ClassType {
+        id: id.to_string(),
+        name: name.to_string(),
+        inherits: Some(ClassRef {
+            id: CORE_CATALOG_ENTRY_CLASS_ID.to_string(),
+        }),
+        extends: vec![],
+        attributes: std::collections::BTreeMap::new(),
+        constraints: vec![],
+        meta: Meta::default(),
+    };
+    let attribute_entry =
+        catalog_entry_kind(CORE_CATALOG_ATTRIBUTE_ENTRY_CLASS_ID, "CatalogAttribute");
+    let type_def_entry = catalog_entry_kind(CORE_CATALOG_TYPE_DEF_ENTRY_CLASS_ID, "CatalogTypeDef");
+    let record_type_entry =
+        catalog_entry_kind(CORE_CATALOG_RECORD_TYPE_ENTRY_CLASS_ID, "CatalogRecordType");
+    let class_entry = catalog_entry_kind(CORE_CATALOG_CLASS_ENTRY_CLASS_ID, "CatalogClass");
+    let collection_entry =
+        catalog_entry_kind(CORE_CATALOG_COLLECTION_ENTRY_CLASS_ID, "CatalogCollection");
+    let index_entry = catalog_entry_kind(CORE_CATALOG_INDEX_ENTRY_CLASS_ID, "CatalogIndex");
+    let meta_entry = catalog_entry_kind(CORE_CATALOG_META_ENTRY_CLASS_ID, "CatalogMeta");
 
     let mut relation_attrs = std::collections::BTreeMap::new();
     relation_attrs.insert(
@@ -605,8 +612,8 @@ pub fn core_catalog_schema_batch() -> DdlBatch {
         })
         .with_op(DdlOperation::UpsertAttribute {
             attribute: AttributeType {
-                id: CORE_CATALOG_ATTR_COLLECTION_KIND.to_string(),
-                name: "collection_kind".to_string(),
+                id: CORE_CATALOG_ATTR_INTEGRITY_MODE.to_string(),
+                name: "integrity_mode".to_string(),
                 ty: Type {
                     kind: TypeKind::Any(AnyType),
                     constraints: vec![],
@@ -793,47 +800,25 @@ pub fn core_catalog_schema_batch() -> DdlBatch {
             class: relation_class,
         })
         .with_op(DdlOperation::UpsertClass { class: core_entry })
-        .with_op(DdlOperation::UpsertCollection {
-            name: CORE_CATALOG_ATTRIBUTES_COLLECTION.to_string(),
-            kind: DdlCollectionKind::Class {
-                class: CORE_CATALOG_ENTRY_CLASS_ID.to_string(),
-            },
+        .with_op(DdlOperation::UpsertClass {
+            class: attribute_entry,
         })
-        .with_op(DdlOperation::UpsertCollection {
-            name: CORE_CATALOG_TYPE_DEFS_COLLECTION.to_string(),
-            kind: DdlCollectionKind::Class {
-                class: CORE_CATALOG_ENTRY_CLASS_ID.to_string(),
-            },
+        .with_op(DdlOperation::UpsertClass {
+            class: type_def_entry,
         })
-        .with_op(DdlOperation::UpsertCollection {
-            name: CORE_CATALOG_RECORD_TYPES_COLLECTION.to_string(),
-            kind: DdlCollectionKind::Class {
-                class: CORE_CATALOG_ENTRY_CLASS_ID.to_string(),
-            },
+        .with_op(DdlOperation::UpsertClass {
+            class: record_type_entry,
         })
-        .with_op(DdlOperation::UpsertCollection {
-            name: CORE_CATALOG_CLASSES_COLLECTION.to_string(),
-            kind: DdlCollectionKind::Class {
-                class: CORE_CATALOG_ENTRY_CLASS_ID.to_string(),
-            },
+        .with_op(DdlOperation::UpsertClass { class: class_entry })
+        .with_op(DdlOperation::UpsertClass {
+            class: collection_entry,
         })
+        .with_op(DdlOperation::UpsertClass { class: index_entry })
+        .with_op(DdlOperation::UpsertClass { class: meta_entry })
         .with_op(DdlOperation::UpsertCollection {
-            name: CORE_CATALOG_COLLECTIONS_COLLECTION.to_string(),
-            kind: DdlCollectionKind::Class {
-                class: CORE_CATALOG_ENTRY_CLASS_ID.to_string(),
-            },
-        })
-        .with_op(DdlOperation::UpsertCollection {
-            name: CORE_CATALOG_INDEXES_COLLECTION.to_string(),
-            kind: DdlCollectionKind::Class {
-                class: CORE_CATALOG_ENTRY_CLASS_ID.to_string(),
-            },
-        })
-        .with_op(DdlOperation::UpsertCollection {
-            name: CORE_CATALOG_META_COLLECTION.to_string(),
-            kind: DdlCollectionKind::Class {
-                class: CORE_CATALOG_ENTRY_CLASS_ID.to_string(),
-            },
+            name: CORE_CATALOG_SCHEMA_COLLECTION.to_string(),
+            kind: DdlCollectionKind::Polymorphic,
+            integrity_mode: IntegrityMode::StrictRegisteredSchema,
         })
 }
 
@@ -843,26 +828,10 @@ pub fn fresh_catalog_with_core_schema() -> Result<Catalog, CoreError> {
 }
 
 fn resolve_collection_kind(
-    catalog: &Catalog,
+    _catalog: &Catalog,
     kind: &DdlCollectionKind,
 ) -> Result<CollectionKind, CoreError> {
     match kind {
-        DdlCollectionKind::Untyped => Ok(CollectionKind::Untyped),
-        DdlCollectionKind::Record { record_type } => {
-            let Some(record_lid) = catalog.record_type_id(record_type) else {
-                return Err(CoreError::new(format!(
-                    "record type '{record_type}' not found"
-                )));
-            };
-            Ok(CollectionKind::Record {
-                record_type: record_lid,
-            })
-        }
-        DdlCollectionKind::Class { class } => {
-            let Some(class_lid) = catalog.class_id(class) else {
-                return Err(CoreError::new(format!("class '{class}' not found")));
-            };
-            Ok(CollectionKind::Class { class: class_lid })
-        }
+        DdlCollectionKind::Polymorphic => Ok(CollectionKind::Polymorphic),
     }
 }

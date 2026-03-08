@@ -1,14 +1,15 @@
 use semantic_data::value::{Object, Value};
 use semantic_db_core::DbError;
 use semantic_db_core::catalog::{
-    Catalog, StoredAttribute, StoredClass, StoredCollection, StoredCollectionKind, StoredFieldId,
+    Catalog, IntegrityMode, StoredAttribute, StoredClass, StoredCollection, StoredFieldId,
     StoredIndex, StoredRecordType, StoredRelationship, StoredTypeDef,
 };
 use semantic_db_core::{
-    CORE_CATALOG_ATTRIBUTES_COLLECTION, CORE_CATALOG_CLASSES_COLLECTION,
-    CORE_CATALOG_COLLECTIONS_COLLECTION, CORE_CATALOG_INDEXES_COLLECTION,
-    CORE_CATALOG_META_COLLECTION, CORE_CATALOG_RECORD_TYPES_COLLECTION,
-    CORE_CATALOG_TYPE_DEFS_COLLECTION, catalog::OBJECT_TYPE_FIELD,
+    CORE_CATALOG_ATTRIBUTE_ENTRY_CLASS_ID, CORE_CATALOG_CLASS_ENTRY_CLASS_ID,
+    CORE_CATALOG_COLLECTION_ENTRY_CLASS_ID, CORE_CATALOG_INDEX_ENTRY_CLASS_ID,
+    CORE_CATALOG_META_ENTRY_CLASS_ID, CORE_CATALOG_RECORD_TYPE_ENTRY_CLASS_ID,
+    CORE_CATALOG_SCHEMA_COLLECTION, CORE_CATALOG_TYPE_DEF_ENTRY_CLASS_ID,
+    catalog::OBJECT_TYPE_FIELD,
 };
 
 use crate::storage::{
@@ -23,7 +24,7 @@ const ATTRIBUTE_FIELD: &str = "attribute";
 const TYPE_DEF_FIELD: &str = "type_def";
 const RECORD_FIELD: &str = "record";
 const CLASS_FIELD: &str = "class";
-const COLLECTION_KIND_FIELD: &str = "collection_kind";
+const INTEGRITY_MODE_FIELD: &str = "integrity_mode";
 const FIELD_IDS_FIELD: &str = "field_ids";
 const COLLECTION_FIELD: &str = "collection";
 const FIELD_FIELD: &str = "field";
@@ -34,37 +35,34 @@ const AUTO_INDEX_ENABLED_FIELD: &str = "auto_index_enabled";
 const RELATIONSHIPS_FIELD: &str = "relationships";
 
 struct CatalogCollections {
-    attributes: semantic_db_core::catalog::LocalCollectionId,
-    type_defs: semantic_db_core::catalog::LocalCollectionId,
-    record_types: semantic_db_core::catalog::LocalCollectionId,
-    classes: semantic_db_core::catalog::LocalCollectionId,
-    collections: semantic_db_core::catalog::LocalCollectionId,
-    indexes: semantic_db_core::catalog::LocalCollectionId,
-    meta: semantic_db_core::catalog::LocalCollectionId,
+    schema: semantic_db_core::catalog::LocalCollectionId,
 }
 
 fn core_collection_ids(catalog: &Catalog) -> std::result::Result<CatalogCollections, DbError> {
-    let collection_lid = |name: &str| -> std::result::Result<_, DbError> {
-        catalog
-            .collection_by_name(name)
-            .map(|schema| schema.lid)
-            .ok_or_else(|| {
-                DbError::InvalidQuery(format!("missing core catalog collection '{name}'"))
-            })
-    };
+    let collection_lid = catalog
+        .collection_by_name(CORE_CATALOG_SCHEMA_COLLECTION)
+        .map(|schema| schema.lid)
+        .ok_or_else(|| {
+            DbError::InvalidQuery(format!(
+                "missing core catalog collection '{CORE_CATALOG_SCHEMA_COLLECTION}'"
+            ))
+        })?;
     Ok(CatalogCollections {
-        attributes: collection_lid(CORE_CATALOG_ATTRIBUTES_COLLECTION)?,
-        type_defs: collection_lid(CORE_CATALOG_TYPE_DEFS_COLLECTION)?,
-        record_types: collection_lid(CORE_CATALOG_RECORD_TYPES_COLLECTION)?,
-        classes: collection_lid(CORE_CATALOG_CLASSES_COLLECTION)?,
-        collections: collection_lid(CORE_CATALOG_COLLECTIONS_COLLECTION)?,
-        indexes: collection_lid(CORE_CATALOG_INDEXES_COLLECTION)?,
-        meta: collection_lid(CORE_CATALOG_META_COLLECTION)?,
+        schema: collection_lid,
     })
 }
 
+const ENTRY_TYPE_ATTRIBUTE: &str = CORE_CATALOG_ATTRIBUTE_ENTRY_CLASS_ID;
+const ENTRY_TYPE_TYPE_DEF: &str = CORE_CATALOG_TYPE_DEF_ENTRY_CLASS_ID;
+const ENTRY_TYPE_RECORD_TYPE: &str = CORE_CATALOG_RECORD_TYPE_ENTRY_CLASS_ID;
+const ENTRY_TYPE_CLASS: &str = CORE_CATALOG_CLASS_ENTRY_CLASS_ID;
+const ENTRY_TYPE_COLLECTION: &str = CORE_CATALOG_COLLECTION_ENTRY_CLASS_ID;
+const ENTRY_TYPE_INDEX: &str = CORE_CATALOG_INDEX_ENTRY_CLASS_ID;
+const ENTRY_TYPE_META: &str = CORE_CATALOG_META_ENTRY_CLASS_ID;
+
 fn encode_entity_base(
     collection: semantic_db_core::catalog::LocalCollectionId,
+    entry_type: &str,
     id: String,
     lid: usize,
 ) -> StoredEntity {
@@ -73,11 +71,12 @@ fn encode_entity_base(
     object.insert(LID_FIELD.to_string(), Value::U64(lid as u64));
     object.insert(
         OBJECT_TYPE_FIELD.to_string(),
-        Value::String("class".to_string()),
+        Value::String(entry_type.to_string()),
     );
     StoredEntity {
         id,
         collection: collection.0,
+        // Catalog rows always carry a registered catalog entry class in `type`.
         kind: StoredEntityKind::Class,
         object,
     }
@@ -88,44 +87,24 @@ pub fn load_catalog<E: KvEngine>(
     bootstrap_catalog: &Catalog,
 ) -> std::result::Result<Option<Catalog>, DbError> {
     let core = core_collection_ids(bootstrap_catalog)?;
-    let attributes_rows = load_rows_by_type(
+    let attributes_rows =
+        load_rows_by_entry_type(store, bootstrap_catalog, core.schema, ENTRY_TYPE_ATTRIBUTE)?;
+    let type_defs_rows =
+        load_rows_by_entry_type(store, bootstrap_catalog, core.schema, ENTRY_TYPE_TYPE_DEF)?;
+    let record_types_rows = load_rows_by_entry_type(
         store,
         bootstrap_catalog,
-        core.attributes,
-        StoredEntityKind::Class,
+        core.schema,
+        ENTRY_TYPE_RECORD_TYPE,
     )?;
-    let type_defs_rows = load_rows_by_type(
-        store,
-        bootstrap_catalog,
-        core.type_defs,
-        StoredEntityKind::Class,
-    )?;
-    let record_types_rows = load_rows_by_type(
-        store,
-        bootstrap_catalog,
-        core.record_types,
-        StoredEntityKind::Class,
-    )?;
-    let classes_rows = load_rows_by_type(
-        store,
-        bootstrap_catalog,
-        core.classes,
-        StoredEntityKind::Class,
-    )?;
-    let collections_rows = load_rows_by_type(
-        store,
-        bootstrap_catalog,
-        core.collections,
-        StoredEntityKind::Class,
-    )?;
-    let indexes_rows = load_rows_by_type(
-        store,
-        bootstrap_catalog,
-        core.indexes,
-        StoredEntityKind::Class,
-    )?;
+    let classes_rows =
+        load_rows_by_entry_type(store, bootstrap_catalog, core.schema, ENTRY_TYPE_CLASS)?;
+    let collections_rows =
+        load_rows_by_entry_type(store, bootstrap_catalog, core.schema, ENTRY_TYPE_COLLECTION)?;
+    let indexes_rows =
+        load_rows_by_entry_type(store, bootstrap_catalog, core.schema, ENTRY_TYPE_INDEX)?;
     let meta_rows =
-        load_rows_by_type(store, bootstrap_catalog, core.meta, StoredEntityKind::Class)?;
+        load_rows_by_entry_type(store, bootstrap_catalog, core.schema, ENTRY_TYPE_META)?;
 
     if attributes_rows.is_empty()
         && type_defs_rows.is_empty()
@@ -176,12 +155,12 @@ pub fn load_catalog<E: KvEngine>(
     for row in &collections_rows {
         let lid = object_lid(&row.object)?;
         let name = object_string_field(&row.object, "name")?;
-        let kind: StoredCollectionKind = object_json_field(&row.object, COLLECTION_KIND_FIELD)?;
+        let integrity_mode: IntegrityMode = object_json_field(&row.object, INTEGRITY_MODE_FIELD)?;
         let field_ids: Vec<StoredFieldId> = object_json_field(&row.object, FIELD_IDS_FIELD)?;
         collections.push(StoredCollection {
             lid,
             name,
-            kind,
+            integrity_mode,
             field_ids,
         });
     }
@@ -246,65 +225,22 @@ pub fn catalog_write_ops<E: KvEngine>(
     let core = core_collection_ids(catalog)?;
     let mut ops = Vec::<KvWriteOp>::new();
 
-    for key in store.collection_keys(core.attributes)? {
+    for key in store.collection_keys(core.schema)? {
         ops.push(KvWriteOp::Delete { key });
     }
-    for key in store.collection_keys(core.type_defs)? {
-        ops.push(KvWriteOp::Delete { key });
-    }
-    for key in store.collection_keys(core.record_types)? {
-        ops.push(KvWriteOp::Delete { key });
-    }
-    for key in store.collection_keys(core.classes)? {
-        ops.push(KvWriteOp::Delete { key });
-    }
-    for key in store.collection_keys(core.collections)? {
-        ops.push(KvWriteOp::Delete { key });
-    }
-    for key in store.collection_keys(core.indexes)? {
-        ops.push(KvWriteOp::Delete { key });
-    }
-    for key in store.collection_keys(core.meta)? {
-        ops.push(KvWriteOp::Delete { key });
-    }
-    for index in catalog.indexes_for_collection(core.attributes) {
-        for key in store.index_keys(index.lid)? {
-            ops.push(KvWriteOp::Delete { key });
-        }
-    }
-    for index in catalog.indexes_for_collection(core.type_defs) {
-        for key in store.index_keys(index.lid)? {
-            ops.push(KvWriteOp::Delete { key });
-        }
-    }
-    for index in catalog.indexes_for_collection(core.record_types) {
-        for key in store.index_keys(index.lid)? {
-            ops.push(KvWriteOp::Delete { key });
-        }
-    }
-    for index in catalog.indexes_for_collection(core.classes) {
-        for key in store.index_keys(index.lid)? {
-            ops.push(KvWriteOp::Delete { key });
-        }
-    }
-    for index in catalog.indexes_for_collection(core.collections) {
-        for key in store.index_keys(index.lid)? {
-            ops.push(KvWriteOp::Delete { key });
-        }
-    }
-    for index in catalog.indexes_for_collection(core.indexes) {
-        for key in store.index_keys(index.lid)? {
-            ops.push(KvWriteOp::Delete { key });
-        }
-    }
-    for index in catalog.indexes_for_collection(core.meta) {
+    for index in catalog.indexes_for_collection(core.schema) {
         for key in store.index_keys(index.lid)? {
             ops.push(KvWriteOp::Delete { key });
         }
     }
 
     for (lid, item) in catalog.attributes() {
-        let mut entity = encode_entity_base(core.attributes, item.attribute.id.clone(), lid.0);
+        let mut entity = encode_entity_base(
+            core.schema,
+            ENTRY_TYPE_ATTRIBUTE,
+            item.attribute.id.clone(),
+            lid.0,
+        );
         entity.object.insert(
             ATTRIBUTE_FIELD.to_string(),
             Value::String(
@@ -315,7 +251,12 @@ pub fn catalog_write_ops<E: KvEngine>(
         push_entity_with_indexes(catalog, &entity, &mut ops)?;
     }
     for (lid, item) in catalog.type_defs() {
-        let mut entity = encode_entity_base(core.type_defs, item.type_def.name.clone(), lid.0);
+        let mut entity = encode_entity_base(
+            core.schema,
+            ENTRY_TYPE_TYPE_DEF,
+            item.type_def.name.clone(),
+            lid.0,
+        );
         entity.object.insert(
             TYPE_DEF_FIELD.to_string(),
             Value::String(
@@ -326,7 +267,8 @@ pub fn catalog_write_ops<E: KvEngine>(
         push_entity_with_indexes(catalog, &entity, &mut ops)?;
     }
     for (lid, item) in catalog.record_types() {
-        let mut entity = encode_entity_base(core.record_types, item.id.clone(), lid.0);
+        let mut entity =
+            encode_entity_base(core.schema, ENTRY_TYPE_RECORD_TYPE, item.id.clone(), lid.0);
         entity
             .object
             .insert("name".to_string(), Value::String(item.name.clone()));
@@ -340,7 +282,8 @@ pub fn catalog_write_ops<E: KvEngine>(
         push_entity_with_indexes(catalog, &entity, &mut ops)?;
     }
     for (lid, item) in catalog.classes() {
-        let mut entity = encode_entity_base(core.classes, item.class.id.clone(), lid.0);
+        let mut entity =
+            encode_entity_base(core.schema, ENTRY_TYPE_CLASS, item.class.id.clone(), lid.0);
         entity.object.insert(
             CLASS_FIELD.to_string(),
             Value::String(
@@ -351,19 +294,11 @@ pub fn catalog_write_ops<E: KvEngine>(
         push_entity_with_indexes(catalog, &entity, &mut ops)?;
     }
     for (lid, item) in catalog.collections() {
-        let mut entity = encode_entity_base(core.collections, item.name.clone(), lid.0);
+        let mut entity =
+            encode_entity_base(core.schema, ENTRY_TYPE_COLLECTION, item.name.clone(), lid.0);
         entity
             .object
             .insert("name".to_string(), Value::String(item.name.clone()));
-        let stored_kind = match item.kind {
-            semantic_db_core::catalog::CollectionKind::Untyped => StoredCollectionKind::Untyped,
-            semantic_db_core::catalog::CollectionKind::Record { record_type } => {
-                StoredCollectionKind::Record { record_type }
-            }
-            semantic_db_core::catalog::CollectionKind::Class { class } => {
-                StoredCollectionKind::Class { class }
-            }
-        };
         let field_ids = item
             .fields()
             .map(|(field_id, canonical_field)| StoredFieldId {
@@ -372,9 +307,9 @@ pub fn catalog_write_ops<E: KvEngine>(
             })
             .collect::<Vec<_>>();
         entity.object.insert(
-            COLLECTION_KIND_FIELD.to_string(),
+            INTEGRITY_MODE_FIELD.to_string(),
             Value::String(
-                facet_json::to_string(&stored_kind)
+                facet_json::to_string(&item.integrity_mode)
                     .map_err(|err| DbError::Serialization(err.to_string()))?,
             ),
         );
@@ -389,7 +324,8 @@ pub fn catalog_write_ops<E: KvEngine>(
     }
     for (lid, item) in catalog.indexes() {
         let mut entity = encode_entity_base(
-            core.indexes,
+            core.schema,
+            ENTRY_TYPE_INDEX,
             format!("{}::{}", item.collection.0, item.schema.name),
             lid.0,
         );
@@ -417,7 +353,8 @@ pub fn catalog_write_ops<E: KvEngine>(
         push_entity_with_indexes(catalog, &entity, &mut ops)?;
     }
 
-    let mut meta_entity = encode_entity_base(core.meta, META_ROW_ID.to_string(), 0);
+    let mut meta_entity =
+        encode_entity_base(core.schema, ENTRY_TYPE_META, META_ROW_ID.to_string(), 0);
     meta_entity.object.insert(
         NEXT_FIELD_ID_FIELD.to_string(),
         Value::U64(catalog.next_field_id() as u64),
@@ -530,31 +467,19 @@ where
     facet_json::from_str::<T>(value).map_err(|err| DbError::Deserialization(err.to_string()))
 }
 
-fn load_rows_by_type<E: KvEngine>(
+fn load_rows_by_entry_type<E: KvEngine>(
     store: &EntityStore<E>,
-    catalog: &Catalog,
+    _catalog: &Catalog,
     collection: semantic_db_core::catalog::LocalCollectionId,
-    kind: StoredEntityKind,
+    entry_type: &str,
 ) -> std::result::Result<Vec<StoredEntity>, DbError> {
-    let type_value = Value::String(
-        match kind {
-            StoredEntityKind::Untyped => "untyped",
-            StoredEntityKind::Record => "record",
-            StoredEntityKind::Class => "class",
-        }
-        .to_string(),
-    );
-    let Some(index) = catalog.find_equality_index(collection, OBJECT_TYPE_FIELD) else {
-        return Ok(store.scan_collection(collection)?);
-    };
-    let ids = store.scan_index_value(index.lid, None, &type_value)?;
-    let mut out = Vec::new();
-    for id in ids {
-        if let Some(entity) = store.get_entity(collection, &id)? {
-            out.push(entity);
-        }
-    }
-    Ok(out)
+    Ok(store
+        .scan_collection(collection)?
+        .into_iter()
+        .filter(|entity| {
+            entity.object.get(OBJECT_TYPE_FIELD).and_then(Value::as_str) == Some(entry_type)
+        })
+        .collect())
 }
 
 fn push_entity_with_indexes(
