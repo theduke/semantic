@@ -49,6 +49,7 @@ pub async fn test_db(db: &Db) {
     test_sql_predicate_constructs(db).await;
     test_subquery_patterns(db).await;
     test_join_semantics(db).await;
+    test_nested_ref_field_access(db).await;
     test_ast_ordering_variants(db).await;
     test_sql_ordering_variants(db).await;
     test_ast_limit_offset_variants(db).await;
@@ -1115,6 +1116,107 @@ async fn test_join_semantics(db: &Db) {
         row_strings(&ast_join_where, "sid"),
         vec!["song-1".to_string()]
     );
+}
+
+async fn test_nested_ref_field_access(db: &Db) {
+    db.create_collection("shared_suite_ref_paths", CollectionKind::Polymorphic)
+        .await
+        .expect("ref path test collection creation should succeed");
+
+    let mut grand = Object::new();
+    grand.insert("id", Value::String("ref-grand".to_string()));
+    grand.insert("kind", Value::String("top".to_string()));
+    grand.insert("title", Value::String("root".to_string()));
+    db.insert("shared_suite_ref_paths", "ref-grand", grand)
+        .await
+        .expect("grand row insert should succeed");
+
+    let mut parent = Object::new();
+    parent.insert("id", Value::String("ref-parent".to_string()));
+    parent.insert("kind", Value::String("blah".to_string()));
+    parent.insert("title", Value::String("abc".to_string()));
+    parent.insert("parent", Value::String("ref-grand".to_string()));
+    db.insert("shared_suite_ref_paths", "ref-parent", parent)
+        .await
+        .expect("parent row insert should succeed");
+
+    let mut child = Object::new();
+    child.insert("id", Value::String("ref-child".to_string()));
+    child.insert("kind", Value::String("leaf".to_string()));
+    child.insert("parent", Value::String("ref-parent".to_string()));
+    // "manager" is intentionally unregistered so this must use ad-hoc fallback.
+    child.insert("manager", Value::String("ref-parent".to_string()));
+    db.insert("shared_suite_ref_paths", "ref-child", child)
+        .await
+        .expect("child row insert should succeed");
+
+    let via_parent = db
+        .select(
+            SelectQuery::new()
+                .with_collection("shared_suite_ref_paths")
+                .with_predicate(eq_predicate(
+                    FieldPath::from_fields(["parent", "title"]),
+                    Value::String("abc".to_string()),
+                ))
+                .with_projection(vec![QueryField {
+                    expr: Box::new(Expr::Operand(Operand::Field(FieldPath::from_fields([
+                        "id",
+                    ])))),
+                    alias: Some("id".to_string()),
+                }]),
+        )
+        .await
+        .expect("single-hop ref path query should succeed");
+    assert_eq!(row_ids(&via_parent), vec!["ref-child"]);
+
+    let nested = db
+        .select(
+            SelectQuery::new()
+                .with_collection("shared_suite_ref_paths")
+                .with_predicate(eq_predicate(
+                    FieldPath::from_fields(["parent", "kind"]),
+                    Value::String("blah".to_string()),
+                ))
+                .with_projection(vec![QueryField {
+                    expr: Box::new(Expr::Operand(Operand::Field(FieldPath::from_fields([
+                        "parent", "parent", "id",
+                    ])))),
+                    alias: Some("ancestor".to_string()),
+                }]),
+        )
+        .await
+        .expect("nested ref path query should succeed");
+    assert_eq!(
+        row_strings(&nested, "ancestor"),
+        vec!["ref-grand".to_string()]
+    );
+
+    let fallback = db
+        .select(
+            SelectQuery::new()
+                .with_collection("shared_suite_ref_paths")
+                .with_predicate(Expr::Binary {
+                    op: BinaryOp::Eq,
+                    left: Box::new(Expr::Function {
+                        name: "LOWER".to_string(),
+                        args: vec![FunctionArg::Expr(Expr::Operand(Operand::Field(
+                            FieldPath::from_fields(["manager", "title"]),
+                        )))],
+                    }),
+                    right: Box::new(Expr::Operand(Operand::Literal(Value::String(
+                        "abc".to_string(),
+                    )))),
+                })
+                .with_projection(vec![QueryField {
+                    expr: Box::new(Expr::Operand(Operand::Field(FieldPath::from_fields([
+                        "id",
+                    ])))),
+                    alias: Some("id".to_string()),
+                }]),
+        )
+        .await
+        .expect("ad-hoc nested ref fallback query should succeed");
+    assert_eq!(row_ids(&fallback), vec!["ref-child"]);
 }
 
 async fn test_ast_aggregation_distinct_grouping(db: &Db) {

@@ -1,4 +1,5 @@
 use std::collections::{BTreeMap, BTreeSet};
+use std::sync::Arc;
 
 use semantic_data::schema::IndexKind;
 use semantic_data::schema::{
@@ -2030,6 +2031,7 @@ impl<E: KvEngine> KvPhysicalDataSource<'_, E> {
                 .store
                 .scan_collection(collection.lid)
                 .map_err(|err| semantic_db_core::CoreError::new(err.to_string()))?;
+            let local_ref_lookup = build_local_ref_lookup(&rows);
             let mut field_names = BTreeMap::new();
             let mut attr_names = BTreeMap::new();
             for (field_id, name) in collection.fields() {
@@ -2044,6 +2046,7 @@ impl<E: KvEngine> KvPhysicalDataSource<'_, E> {
                     collection_id: collection.lid,
                     field_names: field_names.clone(),
                     attr_names: attr_names.clone(),
+                    local_ref_lookup: Some(local_ref_lookup.clone()),
                 }) as semantic_db_core::DynObject);
             }
         }
@@ -2242,11 +2245,19 @@ struct KvObjectView {
     collection_id: LocalCollectionId,
     field_names: BTreeMap<LocalFieldId, String>,
     attr_names: BTreeMap<LocalAttrId, String>,
+    local_ref_lookup: Option<Arc<BTreeMap<String, Object>>>,
 }
 
 impl semantic_db_core::ObjectAccess for KvObjectView {
     fn value_at_path_ref<'a>(&'a self, path: &FieldPath) -> Option<ValueRef<'a>> {
-        semantic_db_core::ObjectAccess::value_at_path_ref(&self.object, path)
+        if let Some(value) = semantic_db_core::ObjectAccess::value_at_path_ref(&self.object, path) {
+            return Some(value);
+        }
+        if path.segments().len() < 2 {
+            return None;
+        }
+        resolve_path_with_local_refs(&self.object, path, self.local_ref_lookup.as_deref())
+            .map(ValueRef::Owned)
     }
 
     fn value_at_attr_ref<'a>(&'a self, attr: LocalAttrId) -> Option<ValueRef<'a>> {
@@ -2270,6 +2281,40 @@ impl semantic_db_core::ObjectAccess for KvObjectView {
     }
 }
 
+fn build_local_ref_lookup(rows: &[StoredEntity]) -> Arc<BTreeMap<String, Object>> {
+    let mut lookup = BTreeMap::new();
+    for row in rows {
+        if let Some(id) = row.object.get("id").and_then(Value::as_str) {
+            lookup.insert(id.to_string(), row.object.clone());
+        }
+    }
+    Arc::new(lookup)
+}
+
+fn resolve_path_with_local_refs(
+    object: &Object,
+    path: &FieldPath,
+    lookup: Option<&BTreeMap<String, Object>>,
+) -> Option<Value> {
+    let mut current = match path.segments().first()? {
+        PathSegment::Field(field) => object.get(field)?.clone(),
+        PathSegment::Index(_) => return None,
+    };
+    for segment in path.segments().iter().skip(1) {
+        current = match (&current, segment) {
+            (Value::Object(map), PathSegment::Field(field)) => map.get(field)?.clone(),
+            (Value::List(items), PathSegment::Index(index)) => items.get(*index)?.clone(),
+            // Fallback: treat string ids as same-collection refs.
+            (Value::String(id), PathSegment::Field(field)) => {
+                let target = lookup?.get(id)?;
+                target.get(field)?.clone()
+            }
+            _ => return None,
+        };
+    }
+    Some(current)
+}
+
 impl<E: KvEngine> semantic_db_core::PhysicalDataSource for KvPhysicalDataSource<'_, E> {
     fn scan(
         &self,
@@ -2286,6 +2331,7 @@ impl<E: KvEngine> semantic_db_core::PhysicalDataSource for KvPhysicalDataSource<
             .store
             .scan_collection(collection.lid)
             .map_err(|err| semantic_db_core::CoreError::new(err.to_string()))?;
+        let local_ref_lookup = build_local_ref_lookup(&rows);
         let mut field_names = BTreeMap::new();
         let mut attr_names = BTreeMap::new();
         for (field_id, name) in collection.fields() {
@@ -2302,6 +2348,7 @@ impl<E: KvEngine> semantic_db_core::PhysicalDataSource for KvPhysicalDataSource<
                     collection_id: collection.lid,
                     field_names: field_names.clone(),
                     attr_names: attr_names.clone(),
+                    local_ref_lookup: Some(local_ref_lookup.clone()),
                 }) as semantic_db_core::DynObject
             })
             .collect())
@@ -2447,6 +2494,7 @@ impl<E: KvEngine> KvPhysicalDataSource<'_, E> {
                     collection_id: collection.lid,
                     field_names: field_names.clone(),
                     attr_names: attr_names.clone(),
+                    local_ref_lookup: None,
                 }) as semantic_db_core::DynObject);
             }
         }

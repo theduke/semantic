@@ -1,5 +1,7 @@
 use semantic_data::{
     query::BinaryOp,
+    query::JoinType,
+    schema::core::type_kind::TypeKind,
     value::{FieldPath, PathSegment, Value},
 };
 
@@ -53,6 +55,7 @@ impl Optimizer {
     pub fn core() -> Self {
         Self::new()
             .add_logical_pass(FlattenBooleanPass)
+            .add_logical_pass(RefPathJoinLiftPass)
             .add_logical_pass(FilterLiftPass)
             .add_logical_pass(ProjectCollapsePass)
             .add_logical_pass(JoinPredicatePushdownPass)
@@ -267,6 +270,483 @@ impl LogicalRewritePass for JoinPredicatePushdownPass {
             }
             other => other,
         })
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct RefPathJoinLiftPass;
+
+impl LogicalRewritePass for RefPathJoinLiftPass {
+    fn name(&self) -> &'static str {
+        "ref_path_join_lift"
+    }
+
+    fn rewrite(&self, plan: LogicalPlan, context: &QueryContext) -> LogicalPlan {
+        rewrite_plan(plan, &|node| rewrite_node_with_ref_lift(node, context))
+    }
+}
+
+fn rewrite_node_with_ref_lift(plan: LogicalPlan, context: &QueryContext) -> LogicalPlan {
+    match plan {
+        LogicalPlan::Filter {
+            mut input,
+            mut predicate,
+        } => {
+            if let Some(mut lifter) = RefPathJoinLifter::new(&input, context) {
+                lifter.rewrite_expr(&mut predicate);
+                input = Box::new(lifter.into_plan(*input));
+            }
+            LogicalPlan::Filter { input, predicate }
+        }
+        LogicalPlan::Sort {
+            mut input,
+            mut order_by,
+        } => {
+            if let Some(mut lifter) = RefPathJoinLifter::new(&input, context) {
+                for item in &mut order_by {
+                    lifter.rewrite_expr(&mut item.expr);
+                }
+                input = Box::new(lifter.into_plan(*input));
+            }
+            LogicalPlan::Sort { input, order_by }
+        }
+        LogicalPlan::Project {
+            mut input,
+            mut projection,
+        } => {
+            if let Some(mut lifter) = RefPathJoinLifter::new(&input, context) {
+                for field in &mut projection {
+                    lifter.rewrite_expr(&mut field.expr);
+                }
+                input = Box::new(lifter.into_plan(*input));
+            }
+            LogicalPlan::Project { input, projection }
+        }
+        LogicalPlan::Aggregate {
+            mut input,
+            mut group_by,
+            mut projection,
+            mut having,
+        } => {
+            if let Some(mut lifter) = RefPathJoinLifter::new(&input, context) {
+                for expr in &mut group_by {
+                    lifter.rewrite_expr(expr);
+                }
+                for field in &mut projection {
+                    lifter.rewrite_expr(&mut field.expr);
+                }
+                if let Some(having) = &mut having {
+                    lifter.rewrite_expr(having);
+                }
+                input = Box::new(lifter.into_plan(*input));
+            }
+            LogicalPlan::Aggregate {
+                input,
+                group_by,
+                projection,
+                having,
+            }
+        }
+        other => other,
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+struct JoinKey {
+    from_binding: String,
+    field: String,
+}
+
+#[derive(Debug, Clone)]
+struct BindingInfo {
+    source_name: Option<String>,
+    collection_id: Option<crate::catalog::LocalCollectionId>,
+}
+
+struct RefPathJoinLifter<'a> {
+    context: &'a QueryContext,
+    bindings: std::collections::HashMap<String, BindingInfo>,
+    join_aliases: std::collections::HashMap<JoinKey, String>,
+    pending: Vec<(JoinKey, BindingInfo, Option<String>)>,
+    base_binding: String,
+    alias_counter: usize,
+}
+
+impl<'a> RefPathJoinLifter<'a> {
+    fn new(input: &LogicalPlan, context: &'a QueryContext) -> Option<Self> {
+        let mut bindings = std::collections::HashMap::new();
+        let mut base_binding = None::<String>;
+        collect_plan_bindings(input, &mut bindings, &mut base_binding);
+        let base_binding = base_binding?;
+
+        let mut join_aliases = std::collections::HashMap::new();
+        collect_existing_ref_joins(input, &base_binding, &mut join_aliases);
+        let alias_counter = join_aliases
+            .values()
+            .filter_map(|alias| alias.strip_prefix("__ref_"))
+            .filter_map(|suffix| suffix.parse::<usize>().ok())
+            .max()
+            .map(|value| value.saturating_add(1))
+            .unwrap_or(0);
+
+        Some(Self {
+            context,
+            bindings,
+            join_aliases,
+            pending: Vec::new(),
+            base_binding,
+            alias_counter,
+        })
+    }
+
+    fn rewrite_expr(&mut self, expr: &mut Expr) {
+        match expr {
+            Expr::Operand(Operand::Field(path)) => {
+                if let Some(rewritten) = self.rewrite_path(path) {
+                    *path = rewritten;
+                }
+            }
+            Expr::Unary { expr, .. } => self.rewrite_expr(expr),
+            Expr::Binary { left, right, .. } => {
+                self.rewrite_expr(left);
+                self.rewrite_expr(right);
+            }
+            Expr::IfElse {
+                cond,
+                then_expr,
+                else_expr,
+            } => {
+                self.rewrite_expr(cond);
+                self.rewrite_expr(then_expr);
+                self.rewrite_expr(else_expr);
+            }
+            Expr::Coalesce(items) => {
+                for item in items {
+                    self.rewrite_expr(item);
+                }
+            }
+            Expr::Function { args, .. } => {
+                for arg in args {
+                    if let crate::FunctionArg::Expr(expr) = arg {
+                        self.rewrite_expr(expr);
+                    }
+                }
+            }
+            Expr::Aggregate { arg, .. } => {
+                if let crate::FunctionArg::Expr(expr) = arg.as_mut() {
+                    self.rewrite_expr(expr);
+                }
+            }
+            Expr::InList { expr, list, .. } => {
+                self.rewrite_expr(expr);
+                for item in list {
+                    self.rewrite_expr(item);
+                }
+            }
+            Expr::Between {
+                expr, low, high, ..
+            } => {
+                self.rewrite_expr(expr);
+                self.rewrite_expr(low);
+                self.rewrite_expr(high);
+            }
+            Expr::PatternMatch { expr, pattern, .. } | Expr::RegexMatch { expr, pattern, .. } => {
+                self.rewrite_expr(expr);
+                self.rewrite_expr(pattern);
+            }
+            Expr::IsNull { expr, .. } => self.rewrite_expr(expr),
+            Expr::RelationExists {
+                relation,
+                source,
+                target,
+                max_depth,
+                ..
+            } => {
+                self.rewrite_expr(relation);
+                self.rewrite_expr(source);
+                self.rewrite_expr(target);
+                if let Some(max_depth) = max_depth {
+                    self.rewrite_expr(max_depth);
+                }
+            }
+            Expr::Subquery(_) | Expr::Exists { .. } | Expr::Operand(Operand::Literal(_)) => {}
+        }
+    }
+
+    fn rewrite_path(&mut self, path: &FieldPath) -> Option<FieldPath> {
+        let segments = path.segments();
+        if segments.len() < 2 {
+            return None;
+        }
+
+        let mut from_binding = self.base_binding.clone();
+        let mut rest_start = 0usize;
+        if let Some(PathSegment::Field(first)) = segments.first()
+            && self.bindings.contains_key(first)
+            && segments.len() >= 3
+        {
+            from_binding = first.clone();
+            rest_start = 1;
+        }
+
+        let rest = &segments[rest_start..];
+        if rest.len() < 2 {
+            return None;
+        }
+
+        let mut current_binding = from_binding;
+        let mut current_source = self.bindings.get(&current_binding)?.clone();
+        let mut consumed = 0usize;
+
+        while consumed + 1 < rest.len() {
+            let field = match &rest[consumed] {
+                PathSegment::Field(name) => name.clone(),
+                PathSegment::Index(_) => break,
+            };
+            let Some((canonical_field, target_source, target_class)) =
+                self.try_ref_target(&current_source, &field)
+            else {
+                break;
+            };
+            let key = JoinKey {
+                from_binding: current_binding.clone(),
+                field: canonical_field,
+            };
+            let alias = if let Some(existing) = self.join_aliases.get(&key) {
+                existing.clone()
+            } else {
+                let alias = self.next_alias();
+                self.join_aliases.insert(key.clone(), alias.clone());
+                self.pending
+                    .push((key, target_source.clone(), target_class));
+                alias
+            };
+            self.bindings.insert(alias.clone(), target_source.clone());
+            current_binding = alias;
+            current_source = target_source;
+            consumed += 1;
+        }
+
+        if consumed == 0 {
+            return None;
+        }
+
+        let mut rewritten = Vec::new();
+        rewritten.push(PathSegment::Field(current_binding));
+        rewritten.extend(rest[consumed..].iter().cloned());
+        Some(FieldPath::from(rewritten))
+    }
+
+    fn try_ref_target(
+        &self,
+        source: &BindingInfo,
+        field_name: &str,
+    ) -> Option<(String, BindingInfo, Option<String>)> {
+        let schema = resolve_collection_schema_for_binding(self.context, source)?;
+        let canonical = schema.canonical_field_name(field_name).to_string();
+        let field_type = schema.field_type(&canonical)?;
+        let TypeKind::Ref(type_ref) = &field_type.kind else {
+            return None;
+        };
+
+        let mut target = source.clone();
+        let target_class = if self.context.catalog().class_id(&type_ref.name).is_some() {
+            Some(type_ref.name.clone())
+        } else {
+            None
+        };
+        if target.collection_id.is_none()
+            && let Some(name) = &target.source_name
+        {
+            target.collection_id = self
+                .context
+                .catalog()
+                .collection_by_name(name)
+                .map(|c| c.lid);
+        }
+        Some((canonical, target, target_class))
+    }
+
+    fn next_alias(&mut self) -> String {
+        let alias = format!("__ref_{}", self.alias_counter);
+        self.alias_counter += 1;
+        alias
+    }
+
+    fn into_plan(self, mut input: LogicalPlan) -> LogicalPlan {
+        for (join_key, right_source, right_class) in self.pending {
+            let right_binding = self
+                .join_aliases
+                .get(&join_key)
+                .cloned()
+                .unwrap_or_else(|| "__ref_fallback".to_string());
+            let right = LogicalPlan::Source {
+                source: SourceRef {
+                    source_name: right_source.source_name.clone(),
+                    collection_id: right_source.collection_id,
+                    binding: Some(right_binding.clone()),
+                    backend_tag: None,
+                },
+                pushed_predicate: right_class.map(|class_name| Expr::Binary {
+                    op: BinaryOp::Eq,
+                    left: Box::new(Expr::Operand(Operand::Field(FieldPath::from_fields([
+                        "type",
+                    ])))),
+                    right: Box::new(Expr::Operand(Operand::Literal(Value::String(class_name)))),
+                }),
+            };
+
+            let left_path = if join_key.from_binding == self.base_binding {
+                FieldPath::from_fields([join_key.field.as_str()])
+            } else {
+                FieldPath::from_fields([join_key.from_binding.as_str(), join_key.field.as_str()])
+            };
+            let right_path = FieldPath::from_fields(["id"]);
+            input = LogicalPlan::Join(LogicalJoinPlan {
+                left: Box::new(input),
+                right: Box::new(right),
+                join_type: JoinType::Left,
+                condition: LogicalJoinCondition::UsingFields {
+                    left: left_path,
+                    right: right_path,
+                },
+                left_binding: join_key.from_binding,
+                right_binding,
+            });
+        }
+        input
+    }
+}
+
+fn resolve_collection_schema_for_binding<'a>(
+    context: &'a QueryContext,
+    source: &BindingInfo,
+) -> Option<&'a CollectionSchema> {
+    if let Some(collection_id) = source.collection_id {
+        return context.catalog().collection_by_lid(collection_id);
+    }
+    source
+        .source_name
+        .as_deref()
+        .and_then(|name| context.catalog().collection_by_name(name))
+}
+
+fn collect_plan_bindings(
+    plan: &LogicalPlan,
+    bindings: &mut std::collections::HashMap<String, BindingInfo>,
+    base_binding: &mut Option<String>,
+) {
+    match plan {
+        LogicalPlan::Source { source, .. } => {
+            let binding = source
+                .binding
+                .clone()
+                .or_else(|| source.source_name.clone())
+                .unwrap_or_else(|| "left".to_string());
+            if base_binding.is_none() {
+                *base_binding = Some(binding.clone());
+            }
+            bindings.insert(
+                binding,
+                BindingInfo {
+                    source_name: source.source_name.clone(),
+                    collection_id: source.collection_id,
+                },
+            );
+        }
+        LogicalPlan::Join(join) => {
+            collect_plan_bindings(&join.left, bindings, base_binding);
+            if let LogicalPlan::Source { source, .. } = join.right.as_ref() {
+                bindings.insert(
+                    join.right_binding.clone(),
+                    BindingInfo {
+                        source_name: source.source_name.clone(),
+                        collection_id: source.collection_id,
+                    },
+                );
+            } else {
+                collect_plan_bindings(&join.right, bindings, base_binding);
+            }
+        }
+        LogicalPlan::Filter { input, .. }
+        | LogicalPlan::Sort { input, .. }
+        | LogicalPlan::Project { input, .. }
+        | LogicalPlan::Distinct { input }
+        | LogicalPlan::Limit { input, .. }
+        | LogicalPlan::Exchange { input, .. }
+        | LogicalPlan::RepartitionHash { input, .. }
+        | LogicalPlan::ApplyExists { input, .. }
+        | LogicalPlan::ApplyInSubquery { input, .. }
+        | LogicalPlan::Aggregate { input, .. } => {
+            collect_plan_bindings(input, bindings, base_binding)
+        }
+        LogicalPlan::Union { inputs, .. } => {
+            if let Some(first) = inputs.first() {
+                collect_plan_bindings(first, bindings, base_binding);
+            }
+        }
+        LogicalPlan::Values { .. } => {}
+    }
+}
+
+fn collect_existing_ref_joins(
+    plan: &LogicalPlan,
+    base_binding: &str,
+    out: &mut std::collections::HashMap<JoinKey, String>,
+) {
+    match plan {
+        LogicalPlan::Join(join) => {
+            collect_existing_ref_joins(&join.left, base_binding, out);
+            collect_existing_ref_joins(&join.right, base_binding, out);
+            let LogicalJoinCondition::UsingFields { left, right } = &join.condition else {
+                return;
+            };
+            let left_segments = left.segments();
+            let right_segments = right.segments();
+            if right_segments.is_empty() {
+                return;
+            }
+            let (from_binding, field) = match left_segments {
+                [PathSegment::Field(field)] => (base_binding.to_string(), field.clone()),
+                [PathSegment::Field(from_binding), PathSegment::Field(field)] => {
+                    (from_binding.clone(), field.clone())
+                }
+                _ => return,
+            };
+            let right_id = match right_segments {
+                [PathSegment::Field(field)] => field,
+                [PathSegment::Field(_binding), PathSegment::Field(field)] => field,
+                _ => return,
+            };
+            if right_id != "id" {
+                return;
+            }
+            out.insert(
+                JoinKey {
+                    from_binding,
+                    field,
+                },
+                join.right_binding.clone(),
+            );
+        }
+        LogicalPlan::Filter { input, .. }
+        | LogicalPlan::Sort { input, .. }
+        | LogicalPlan::Project { input, .. }
+        | LogicalPlan::Distinct { input }
+        | LogicalPlan::Limit { input, .. }
+        | LogicalPlan::Exchange { input, .. }
+        | LogicalPlan::RepartitionHash { input, .. }
+        | LogicalPlan::ApplyExists { input, .. }
+        | LogicalPlan::ApplyInSubquery { input, .. }
+        | LogicalPlan::Aggregate { input, .. } => {
+            collect_existing_ref_joins(input, base_binding, out)
+        }
+        LogicalPlan::Union { inputs, .. } => {
+            for input in inputs {
+                collect_existing_ref_joins(input, base_binding, out);
+            }
+        }
+        LogicalPlan::Source { .. } | LogicalPlan::Values { .. } => {}
     }
 }
 
@@ -854,5 +1334,110 @@ fn collect_binary_terms(expr: Expr, target_op: BinaryOp, out: &mut Vec<Expr>) {
             collect_binary_terms(*right, target_op, out);
         }
         other => out.push(flatten_boolean_expr(other)),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::sync::Arc;
+
+    use semantic_data::query::BinaryOp;
+    use semantic_data::value::{FieldPath, Value};
+
+    use super::*;
+    use crate::catalog::{CollectionKind, IntegrityMode};
+    use crate::query::{Operand, QueryField, SelectQuery};
+
+    fn context_with_collection(name: &str) -> QueryContext {
+        let mut catalog = crate::fresh_catalog_with_core_schema().expect("core schema");
+        catalog
+            .upsert_collection(name, CollectionKind::Polymorphic, IntegrityMode::Permissive)
+            .expect("collection");
+        QueryContext::new(Arc::new(catalog))
+    }
+
+    fn count_ref_joins(plan: &LogicalPlan) -> usize {
+        match plan {
+            LogicalPlan::Join(join) => {
+                let mut count = usize::from(join.right_binding.starts_with("__ref_"));
+                count += count_ref_joins(&join.left);
+                count += count_ref_joins(&join.right);
+                count
+            }
+            LogicalPlan::Filter { input, .. }
+            | LogicalPlan::Sort { input, .. }
+            | LogicalPlan::Project { input, .. }
+            | LogicalPlan::Distinct { input }
+            | LogicalPlan::Limit { input, .. }
+            | LogicalPlan::Aggregate { input, .. }
+            | LogicalPlan::Exchange { input, .. }
+            | LogicalPlan::RepartitionHash { input, .. }
+            | LogicalPlan::ApplyExists { input, .. }
+            | LogicalPlan::ApplyInSubquery { input, .. } => count_ref_joins(input),
+            LogicalPlan::Union { inputs, .. } => inputs.iter().map(count_ref_joins).sum(),
+            LogicalPlan::Source { .. } | LogicalPlan::Values { .. } => 0,
+        }
+    }
+
+    #[test]
+    fn lifts_single_ref_path_in_filter_to_join() {
+        let context = context_with_collection("events");
+        let query = SelectQuery::new()
+            .with_collection("events")
+            .with_predicate(Expr::Binary {
+                op: BinaryOp::Eq,
+                left: Box::new(Expr::Operand(Operand::Field(FieldPath::from_fields([
+                    "parent", "title",
+                ])))),
+                right: Box::new(Expr::Operand(Operand::Literal(Value::String(
+                    "abc".to_string(),
+                )))),
+            });
+        let plan =
+            Optimizer::core().optimize_query(&query, Some("events".to_string()), None, &context);
+        assert_eq!(count_ref_joins(&plan.logical), 1);
+        let LogicalPlan::Filter { predicate, .. } = &plan.logical else {
+            panic!("expected filter over lifted join");
+        };
+        let Expr::Binary { left, .. } = predicate else {
+            panic!("expected binary predicate");
+        };
+        let Expr::Operand(Operand::Field(path)) = left.as_ref() else {
+            panic!("expected field operand");
+        };
+        assert_eq!(path, &FieldPath::from_fields(["__ref_0", "title"]));
+    }
+
+    #[test]
+    fn lifts_nested_ref_paths_to_multiple_joins() {
+        let context = context_with_collection("events");
+        let query = SelectQuery::new()
+            .with_collection("events")
+            .with_predicate(Expr::Binary {
+                op: BinaryOp::Eq,
+                left: Box::new(Expr::Operand(Operand::Field(FieldPath::from_fields([
+                    "parent", "kind",
+                ])))),
+                right: Box::new(Expr::Operand(Operand::Literal(Value::String(
+                    "blah".to_string(),
+                )))),
+            })
+            .with_projection(vec![QueryField {
+                expr: Box::new(Expr::Operand(Operand::Field(FieldPath::from_fields([
+                    "parent", "parent", "id",
+                ])))),
+                alias: Some("gp".to_string()),
+            }]);
+        let plan =
+            Optimizer::core().optimize_query(&query, Some("events".to_string()), None, &context);
+        assert_eq!(count_ref_joins(&plan.logical), 2);
+
+        let LogicalPlan::Project { projection, .. } = &plan.logical else {
+            panic!("expected project at root");
+        };
+        let Expr::Operand(Operand::Field(path)) = projection[0].expr.as_ref() else {
+            panic!("expected field projection");
+        };
+        assert_eq!(path, &FieldPath::from_fields(["__ref_1", "id"]));
     }
 }
