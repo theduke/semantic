@@ -1,14 +1,19 @@
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 
 use base64::{Engine, engine::general_purpose::URL_SAFE_NO_PAD};
+use semantic_data::value::serde::typed::{TypedRef, TypedValue};
 use semantic_data::value::{Object, Value};
 use semantic_db_core::DbError;
 use semantic_db_core::catalog::{LocalCollectionId, LocalIndexId};
+use serde::{Deserialize, Serialize};
 
 pub mod memory;
 pub use memory::MemoryKvEngine;
 
-#[derive(facet::Facet, Debug, Clone, PartialEq, Eq)]
+const ENTITY_FORMAT_VERSION_PREFIX_LEN: usize = std::mem::size_of::<u16>();
+const ENTITY_FORMAT_VERSION_V1_MSGPACK: u16 = 1;
+
+#[derive(facet::Facet, Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
 #[repr(C)]
 #[facet(rename_all = "snake_case")]
 pub enum StoredEntityKind {
@@ -25,7 +30,7 @@ pub struct StoredEntity {
     pub object: Object,
 }
 
-#[derive(facet::Facet, Debug, Clone, PartialEq, Eq)]
+#[derive(facet::Facet, Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
 #[repr(C)]
 #[facet(rename_all = "snake_case")]
 pub enum KvWriteOp {
@@ -33,7 +38,7 @@ pub enum KvWriteOp {
     Delete { key: Vec<u8> },
 }
 
-#[derive(facet::Facet, Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(facet::Facet, Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq)]
 #[repr(C)]
 #[facet(rename_all = "snake_case")]
 pub struct KvTransactionCapabilities {
@@ -52,7 +57,7 @@ impl Default for KvTransactionCapabilities {
     }
 }
 
-#[derive(facet::Facet, Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(facet::Facet, Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq)]
 #[repr(C)]
 #[facet(rename_all = "snake_case")]
 pub enum KvCommitOutcome {
@@ -271,11 +276,35 @@ impl<E: KvEngine> EntityStore<E> {
 }
 
 fn decode_entity(payload: &[u8]) -> std::result::Result<StoredEntity, DbError> {
-    facet_json::from_slice(payload).map_err(|err| DbError::Deserialization(err.to_string()))
+    let Some((version, body)) = split_entity_payload_prefix(payload) else {
+        return Err(DbError::Deserialization(
+            "entity payload missing format version prefix".to_string(),
+        ));
+    };
+    match version {
+        ENTITY_FORMAT_VERSION_V1_MSGPACK => decode_msgpack_entity_v1(body),
+        _ => Err(DbError::Deserialization(format!(
+            "unsupported entity payload format version: {version}"
+        ))),
+    }
 }
 
 pub(crate) fn encode_entity(entity: &StoredEntity) -> std::result::Result<Vec<u8>, DbError> {
-    facet_json::to_vec(entity).map_err(|err| DbError::Serialization(err.to_string()))
+    let wire = StoredEntityWire {
+        id: entity.id.clone(),
+        collection: entity.collection,
+        kind: entity.kind.clone(),
+        object: entity
+            .object
+            .iter()
+            .map(|(k, v)| (k.clone(), TypedValue(v.clone())))
+            .collect(),
+    };
+    let body = rmp_serde::to_vec(&wire).map_err(|err| DbError::Serialization(err.to_string()))?;
+    let mut out = Vec::with_capacity(ENTITY_FORMAT_VERSION_PREFIX_LEN + body.len());
+    out.extend_from_slice(&ENTITY_FORMAT_VERSION_V1_MSGPACK.to_le_bytes());
+    out.extend_from_slice(&body);
+    Ok(out)
 }
 
 fn entity_prefix(collection: LocalCollectionId) -> Vec<u8> {
@@ -287,8 +316,8 @@ pub(crate) fn entity_key(collection: LocalCollectionId, id: &str) -> Vec<u8> {
 }
 
 fn index_value_prefix(index: LocalIndexId, value: &Value) -> std::result::Result<Vec<u8>, DbError> {
-    let value_bytes =
-        facet_json::to_vec(value).map_err(|err| DbError::Serialization(err.to_string()))?;
+    let value_bytes = rmp_serde::to_vec(&TypedRef(value))
+        .map_err(|err| DbError::Serialization(err.to_string()))?;
     let token = URL_SAFE_NO_PAD.encode(value_bytes);
     Ok(format!("i/{}/v/{}/e/", index.0, token).into_bytes())
 }
@@ -312,4 +341,37 @@ fn extract_index_entity_id(key: &[u8]) -> Option<String> {
     let pos = key.windows(marker.len()).position(|w| w == marker)?;
     let id = &key[(pos + marker.len())..];
     std::str::from_utf8(id).ok().map(|s| s.to_string())
+}
+
+#[derive(Serialize, Deserialize)]
+struct StoredEntityWire {
+    id: String,
+    collection: usize,
+    kind: StoredEntityKind,
+    object: BTreeMap<String, TypedValue>,
+}
+
+fn decode_msgpack_entity_v1(payload: &[u8]) -> std::result::Result<StoredEntity, DbError> {
+    let wire: StoredEntityWire =
+        rmp_serde::from_slice(payload).map_err(|err| DbError::Deserialization(err.to_string()))?;
+    let mut object = Object::new();
+    for (field, value) in wire.object {
+        object.insert(field, value.0);
+    }
+    Ok(StoredEntity {
+        id: wire.id,
+        collection: wire.collection,
+        kind: wire.kind,
+        object,
+    })
+}
+
+fn split_entity_payload_prefix(payload: &[u8]) -> Option<(u16, &[u8])> {
+    if payload.len() < ENTITY_FORMAT_VERSION_PREFIX_LEN {
+        return None;
+    }
+    let mut prefix = [0u8; ENTITY_FORMAT_VERSION_PREFIX_LEN];
+    prefix.copy_from_slice(&payload[..ENTITY_FORMAT_VERSION_PREFIX_LEN]);
+    let version = u16::from_le_bytes(prefix);
+    Some((version, &payload[ENTITY_FORMAT_VERSION_PREFIX_LEN..]))
 }
