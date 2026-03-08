@@ -6,6 +6,84 @@ pub mod sql;
 #[path = "query/sql/disabled.rs"]
 pub mod sql;
 
+#[cfg(feature = "prql")]
+#[path = "query/prql/enabled.rs"]
+pub mod prql;
+
+#[cfg(not(feature = "prql"))]
+#[path = "query/prql/disabled.rs"]
+pub mod prql;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum TextQueryFormat {
+    Sql,
+    Prql,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub enum TextQueryInput {
+    Ast(Query),
+    Text {
+        format: TextQueryFormat,
+        query: String,
+    },
+}
+
+impl TextQueryInput {
+    pub fn sql(query: impl Into<String>) -> Self {
+        Self::Text {
+            format: TextQueryFormat::Sql,
+            query: query.into(),
+        }
+    }
+
+    pub fn prql(query: impl Into<String>) -> Self {
+        Self::Text {
+            format: TextQueryFormat::Prql,
+            query: query.into(),
+        }
+    }
+}
+
+impl From<Query> for TextQueryInput {
+    fn from(value: Query) -> Self {
+        Self::Ast(value)
+    }
+}
+
+impl From<SelectQuery> for TextQueryInput {
+    fn from(value: SelectQuery) -> Self {
+        Self::Ast(Query::Select(value))
+    }
+}
+
+impl From<UpdateQuery> for TextQueryInput {
+    fn from(value: UpdateQuery) -> Self {
+        Self::Ast(Query::Update(value))
+    }
+}
+
+impl From<DeleteQuery> for TextQueryInput {
+    fn from(value: DeleteQuery) -> Self {
+        Self::Ast(Query::Delete(value))
+    }
+}
+
+impl From<String> for TextQueryInput {
+    fn from(value: String) -> Self {
+        Self::sql(value)
+    }
+}
+
+impl From<&str> for TextQueryInput {
+    fn from(value: &str) -> Self {
+        Self::sql(value.to_string())
+    }
+}
+
+pub type QueryInput = TextQueryInput;
+
+pub use prql::*;
 pub use sql::*;
 
 use std::{

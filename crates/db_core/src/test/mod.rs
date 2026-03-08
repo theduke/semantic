@@ -1,12 +1,16 @@
 use semantic_data::value::{FieldPath, Object, Value};
 
-use crate::{CompareOp, Db, Operand, Predicate, SelectQuery, UpdateQuery, catalog::CollectionKind};
+use crate::{
+    CompareOp, Db, DbError, Operand, Predicate, QueryResult, SelectQuery, TextQueryFormat,
+    UpdateQuery, catalog::CollectionKind,
+};
 
 pub async fn test_db(db: &Db) {
     test_schema_registration(db).await;
     test_select_query(db).await;
     test_update_query(db).await;
     test_delete_query(db).await;
+    test_text_query_formats(db).await;
 }
 
 async fn test_schema_registration(db: &Db) {
@@ -126,6 +130,47 @@ async fn test_delete_query(db: &Db) {
             .expect("remaining row lookup should succeed")
             .is_some()
     );
+}
+
+async fn test_text_query_formats(db: &Db) {
+    if let Err(err) = db
+        .create_collection("entities", CollectionKind::Untyped)
+        .await
+    {
+        if !matches!(err, DbError::CollectionAlreadyExists { .. }) {
+            panic!("default text query collection creation should succeed: {err}");
+        }
+    }
+    db.insert("entities", "fmt-a", row("fmt-a", "music", 7))
+        .await
+        .expect("text query row insert should succeed");
+    db.insert("entities", "fmt-b", row("fmt-b", "video", 1))
+        .await
+        .expect("text query control row insert should succeed");
+
+    for format in db.supported_text_query_formats() {
+        let query = match format {
+            TextQueryFormat::Sql => "SELECT id, score FROM entities WHERE kind = 'music'",
+            TextQueryFormat::Prql => "filter kind == \"music\" | select {id, score}",
+        };
+        let result = db
+            .query_text(format, query)
+            .await
+            .expect("text query execution should succeed");
+        let QueryResult::Select(rows) = result else {
+            panic!("text query should return SELECT rows");
+        };
+        assert_eq!(
+            rows.len(),
+            1,
+            "text query format {format:?} should return exactly one row"
+        );
+        assert_eq!(
+            rows[0].get("id"),
+            Some(&Value::String("fmt-a".to_string())),
+            "text query format {format:?} should return the matching row",
+        );
+    }
 }
 
 fn row(id: &str, kind: &str, score: i64) -> Object {

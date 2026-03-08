@@ -16,6 +16,7 @@ pub use context::*;
 pub use ddl::*;
 pub use error::*;
 pub use plan::*;
+pub use query::prql;
 pub use query::sql;
 pub use query::*;
 pub use transaction::*;

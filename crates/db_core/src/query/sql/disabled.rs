@@ -1,6 +1,6 @@
 use thiserror::Error;
 
-use crate::{DeleteQuery, Query, SelectQuery, UpdateQuery};
+use crate::Query;
 
 const SQL_FEATURE_DISABLED: &str = "sql support is disabled (enable feature `sql`)";
 
@@ -16,48 +16,6 @@ pub enum SqlDialectKind {
 #[derive(Debug, Clone, PartialEq)]
 pub struct ParsedSqlQuery {
     pub query: Query,
-}
-
-#[derive(Debug, Clone, PartialEq)]
-pub enum QueryInput {
-    Ast(Query),
-    Sql(String),
-}
-
-impl From<Query> for QueryInput {
-    fn from(value: Query) -> Self {
-        Self::Ast(value)
-    }
-}
-
-impl From<SelectQuery> for QueryInput {
-    fn from(value: SelectQuery) -> Self {
-        Self::Ast(Query::Select(value))
-    }
-}
-
-impl From<UpdateQuery> for QueryInput {
-    fn from(value: UpdateQuery) -> Self {
-        Self::Ast(Query::Update(value))
-    }
-}
-
-impl From<DeleteQuery> for QueryInput {
-    fn from(value: DeleteQuery) -> Self {
-        Self::Ast(Query::Delete(value))
-    }
-}
-
-impl From<String> for QueryInput {
-    fn from(value: String) -> Self {
-        Self::Sql(value)
-    }
-}
-
-impl From<&str> for QueryInput {
-    fn from(value: &str) -> Self {
-        Self::Sql(value.to_string())
-    }
 }
 
 #[derive(Debug, Error, Clone, PartialEq, Eq)]
