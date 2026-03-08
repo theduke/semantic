@@ -1,9 +1,7 @@
-use semantic_data::query::CompareOp;
+use semantic_data::query::{CompareOp, Expr, Operand, Predicate, SelectQuery, UpdateQuery};
 use semantic_data::schema::DbOpenMode;
 use semantic_data::value::{FieldPath, Object, Value};
-use semantic_db_core::{
-    Db, Expr, Operand, Predicate, SelectQuery, UpdateQuery, catalog::CollectionKind,
-};
+use semantic_db_core::{Db, catalog::CollectionKind};
 use semantic_db_redb::open_backend;
 
 #[tokio::main(flavor = "multi_thread")]

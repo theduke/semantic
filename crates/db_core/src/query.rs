@@ -87,6 +87,36 @@ impl From<&str> for TextQueryInput {
     }
 }
 
+impl From<public_query::TextQueryFormat> for TextQueryFormat {
+    fn from(value: public_query::TextQueryFormat) -> Self {
+        match value {
+            public_query::TextQueryFormat::Sql => Self::Sql,
+            public_query::TextQueryFormat::Prql => Self::Prql,
+        }
+    }
+}
+
+impl From<TextQueryFormat> for public_query::TextQueryFormat {
+    fn from(value: TextQueryFormat) -> Self {
+        match value {
+            TextQueryFormat::Sql => Self::Sql,
+            TextQueryFormat::Prql => Self::Prql,
+        }
+    }
+}
+
+impl From<public_query::QueryInput> for TextQueryInput {
+    fn from(value: public_query::QueryInput) -> Self {
+        match value {
+            public_query::QueryInput::Ast(query) => Self::Ast(query.into()),
+            public_query::QueryInput::Text { format, query } => Self::Text {
+                format: format.into(),
+                query,
+            },
+        }
+    }
+}
+
 pub type QueryInput = TextQueryInput;
 
 pub use prql::*;
@@ -98,6 +128,7 @@ use std::{
 };
 
 use regex::RegexBuilder;
+use semantic_data::query as public_query;
 use semantic_data::query::{
     BinaryOp, CompareOp, JoinType, PatternMatchKind, SortDirection, UnaryOp,
 };
@@ -323,6 +354,299 @@ impl From<InsertQuery> for Query {
 impl From<DeleteQuery> for Query {
     fn from(value: DeleteQuery) -> Self {
         Self::Delete(value)
+    }
+}
+
+impl From<public_query::Operand> for Operand {
+    fn from(value: public_query::Operand) -> Self {
+        match value {
+            public_query::Operand::Field(path) => Self::Field(path),
+            public_query::Operand::Literal(value) => Self::Literal(value),
+        }
+    }
+}
+
+impl From<public_query::Expr> for Expr {
+    fn from(value: public_query::Expr) -> Self {
+        match value {
+            public_query::Expr::Operand(operand) => Self::Operand(operand.into()),
+            public_query::Expr::Unary { op, expr } => Self::Unary {
+                op,
+                expr: Box::new((*expr).into()),
+            },
+            public_query::Expr::Binary { op, left, right } => Self::Binary {
+                op,
+                left: Box::new((*left).into()),
+                right: Box::new((*right).into()),
+            },
+            public_query::Expr::IfElse {
+                cond,
+                then_expr,
+                else_expr,
+            } => Self::IfElse {
+                cond: Box::new((*cond).into()),
+                then_expr: Box::new((*then_expr).into()),
+                else_expr: Box::new((*else_expr).into()),
+            },
+            public_query::Expr::Coalesce(items) => {
+                Self::Coalesce(items.into_iter().map(Into::into).collect())
+            }
+            public_query::Expr::Function { name, args } => Self::Function {
+                name,
+                args: args
+                    .into_iter()
+                    .map(|arg| match arg {
+                        public_query::FunctionArg::Expr(expr) => FunctionArg::Expr(expr.into()),
+                        public_query::FunctionArg::Wildcard => FunctionArg::Wildcard,
+                    })
+                    .collect(),
+            },
+            public_query::Expr::InList {
+                expr,
+                list,
+                negated,
+            } => Self::InList {
+                expr: Box::new((*expr).into()),
+                list: list.into_iter().map(Into::into).collect(),
+                negated,
+            },
+            public_query::Expr::InSubquery {
+                expr,
+                query,
+                negated,
+            } => Self::InSubquery {
+                expr: Box::new((*expr).into()),
+                query: Box::new((*query).into()),
+                negated,
+            },
+            public_query::Expr::Between {
+                expr,
+                low,
+                high,
+                negated,
+            } => Self::Between {
+                expr: Box::new((*expr).into()),
+                low: Box::new((*low).into()),
+                high: Box::new((*high).into()),
+                negated,
+            },
+            public_query::Expr::PatternMatch {
+                kind,
+                expr,
+                pattern,
+                case_insensitive,
+                negated,
+            } => Self::PatternMatch {
+                kind,
+                expr: Box::new((*expr).into()),
+                pattern: Box::new((*pattern).into()),
+                case_insensitive,
+                negated,
+            },
+            public_query::Expr::RegexMatch {
+                expr,
+                pattern,
+                case_insensitive,
+                negated,
+            } => Self::RegexMatch {
+                expr: Box::new((*expr).into()),
+                pattern: Box::new((*pattern).into()),
+                case_insensitive,
+                negated,
+            },
+            public_query::Expr::IsNull { expr, negated } => Self::IsNull {
+                expr: Box::new((*expr).into()),
+                negated,
+            },
+            public_query::Expr::Exists { query, negated } => Self::Exists {
+                query: Box::new((*query).into()),
+                negated,
+            },
+        }
+    }
+}
+
+impl From<public_query::Predicate> for Predicate {
+    fn from(value: public_query::Predicate) -> Self {
+        match value {
+            public_query::Predicate::Compare { op, left, right } => Self::Compare {
+                op,
+                left: left.into(),
+                right: right.into(),
+            },
+            public_query::Predicate::Expr(expr) => Self::Expr(expr.into()),
+            public_query::Predicate::Exists(path) => Self::Exists(path),
+            public_query::Predicate::And(items) => {
+                Self::And(items.into_iter().map(Into::into).collect())
+            }
+            public_query::Predicate::Or(items) => {
+                Self::Or(items.into_iter().map(Into::into).collect())
+            }
+            public_query::Predicate::Not(item) => Self::Not(Box::new((*item).into())),
+        }
+    }
+}
+
+impl From<public_query::QueryField> for QueryField {
+    fn from(value: public_query::QueryField) -> Self {
+        Self {
+            path: value.path,
+            alias: value.alias,
+        }
+    }
+}
+
+impl From<public_query::OrderBy> for OrderBy {
+    fn from(value: public_query::OrderBy) -> Self {
+        Self {
+            path: value.path,
+            direction: value.direction,
+        }
+    }
+}
+
+impl From<public_query::JoinCondition> for JoinCondition {
+    fn from(value: public_query::JoinCondition) -> Self {
+        match value {
+            public_query::JoinCondition::OnPredicate(predicate) => {
+                Self::OnPredicate(predicate.into())
+            }
+            public_query::JoinCondition::UsingFields { left, right } => {
+                Self::UsingFields { left, right }
+            }
+        }
+    }
+}
+
+impl From<public_query::JoinQuery> for JoinQuery {
+    fn from(value: public_query::JoinQuery) -> Self {
+        Self {
+            source: value.source,
+            alias: value.alias,
+            join_type: value.join_type,
+            condition: value.condition.into(),
+        }
+    }
+}
+
+impl From<public_query::SelectQuery> for SelectQuery {
+    fn from(value: public_query::SelectQuery) -> Self {
+        Self {
+            collection: value.collection,
+            source_alias: value.source_alias,
+            joins: value.joins.into_iter().map(Into::into).collect(),
+            predicate: value.predicate.map(Into::into),
+            projection: value.projection.into_iter().map(Into::into).collect(),
+            order_by: value.order_by.into_iter().map(Into::into).collect(),
+            offset: value.offset,
+            limit: value.limit,
+        }
+    }
+}
+
+impl From<public_query::Assignment> for Assignment {
+    fn from(value: public_query::Assignment) -> Self {
+        Self {
+            path: value.path,
+            value: value.value.into(),
+        }
+    }
+}
+
+impl From<public_query::InsertSource> for InsertSource {
+    fn from(value: public_query::InsertSource) -> Self {
+        match value {
+            public_query::InsertSource::Objects(objects) => Self::Objects(objects),
+            public_query::InsertSource::Values(rows) => Self::Values(
+                rows.into_iter()
+                    .map(|row| row.into_iter().map(Into::into).collect())
+                    .collect(),
+            ),
+            public_query::InsertSource::Select(query) => Self::Select(query.into()),
+        }
+    }
+}
+
+impl From<public_query::InsertQuery> for InsertQuery {
+    fn from(value: public_query::InsertQuery) -> Self {
+        Self {
+            collection: value.collection,
+            columns: value.columns,
+            source: value.source.into(),
+            returning: value.returning.into_iter().map(Into::into).collect(),
+        }
+    }
+}
+
+impl From<public_query::UpdateQuery> for UpdateQuery {
+    fn from(value: public_query::UpdateQuery) -> Self {
+        Self {
+            collection: value.collection,
+            predicate: value.predicate.map(Into::into),
+            assignments: value.assignments.into_iter().map(Into::into).collect(),
+            limit: value.limit,
+            returning: value.returning.into_iter().map(Into::into).collect(),
+        }
+    }
+}
+
+impl From<public_query::DeleteQuery> for DeleteQuery {
+    fn from(value: public_query::DeleteQuery) -> Self {
+        Self {
+            collection: value.collection,
+            predicate: value.predicate.map(Into::into),
+            limit: value.limit,
+            returning: value.returning.into_iter().map(Into::into).collect(),
+        }
+    }
+}
+
+impl From<public_query::Query> for Query {
+    fn from(value: public_query::Query) -> Self {
+        match value {
+            public_query::Query::Select(query) => Self::Select(query.into()),
+            public_query::Query::Insert(query) => Self::Insert(query.into()),
+            public_query::Query::Update(query) => Self::Update(query.into()),
+            public_query::Query::Delete(query) => Self::Delete(query.into()),
+        }
+    }
+}
+
+impl From<public_query::BatchOperation> for BatchOperation {
+    fn from(value: public_query::BatchOperation) -> Self {
+        match value {
+            public_query::BatchOperation::Upsert {
+                collection,
+                id,
+                object,
+            } => Self::Upsert {
+                collection,
+                id,
+                object,
+            },
+            public_query::BatchOperation::DeleteById { collection, id } => {
+                Self::DeleteById { collection, id }
+            }
+            public_query::BatchOperation::DeleteByIds { collection, ids } => {
+                Self::DeleteByIds { collection, ids }
+            }
+            public_query::BatchOperation::Update { collection, query } => Self::Update {
+                collection,
+                query: query.into(),
+            },
+            public_query::BatchOperation::Delete { collection, query } => Self::Delete {
+                collection,
+                query: query.into(),
+            },
+        }
+    }
+}
+
+impl From<public_query::Batch> for Batch {
+    fn from(value: public_query::Batch) -> Self {
+        Self {
+            operations: value.operations.into_iter().map(Into::into).collect(),
+        }
     }
 }
 

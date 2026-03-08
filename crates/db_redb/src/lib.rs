@@ -1,6 +1,7 @@
 use redb::{ReadableTable, TableDefinition};
 use semantic_data::schema::DbOpenMode;
-use semantic_db_kv::{DbError, KvCommitOutcome, KvEngine, KvTransactionCapabilities, KvWriteOp};
+use semantic_db_core::DbError;
+use semantic_db_kv::{KvCommitOutcome, KvEngine, KvTransactionCapabilities, KvWriteOp};
 use std::path::Path;
 use std::sync::Arc;
 
@@ -215,8 +216,8 @@ pub fn open_backend(
 #[cfg(test)]
 mod tests {
     use semantic_data::value::{Object, Value};
-    use semantic_db_core::Db;
-    use semantic_db_kv::CollectionKind;
+    use semantic_db_core::catalog::CollectionKind;
+    use semantic_db_core::{Db, SelectQuery};
 
     use super::{DbOpenMode, RedbDatabase, RedbKvEngine, open_backend};
 
@@ -243,7 +244,7 @@ mod tests {
             db.create_collection("items", CollectionKind::Untyped)
                 .unwrap();
             let out = db
-                .select(semantic_db_core::SelectQuery::new().with_collection("items"))
+                .select(SelectQuery::new().with_collection("items"))
                 .unwrap();
             assert_eq!(out.len(), 1);
             assert_eq!(out[0].get("name"), Some(&Value::String("n".into())));

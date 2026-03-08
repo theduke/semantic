@@ -1,9 +1,9 @@
-use semantic_data::query::{BinaryOp, CompareOp, PatternMatchKind};
-use semantic_data::value::{FieldPath, Object, Value};
-use semantic_db_core::{
-    Db, DeleteQuery, Expr, FunctionArg, Operand, Predicate, QueryResult, SelectQuery,
-    TextQueryFormat, UpdateQuery, catalog::CollectionKind,
+use semantic_data::query::{
+    BinaryOp, CompareOp, DeleteQuery, Expr, FunctionArg, Operand, PatternMatchKind, Predicate,
+    SelectQuery, TextQueryFormat, UpdateQuery,
 };
+use semantic_data::value::{FieldPath, Object, Value};
+use semantic_db_core::{Db, QueryResult, catalog::CollectionKind};
 
 pub async fn test_db(db: &Db) {
     test_schema_registration(db).await;

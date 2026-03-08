@@ -1,7 +1,8 @@
 use clap::{Args, ValueEnum};
+use semantic_data::query::TextQueryFormat;
 use semantic_data::value::serde::FlatValueRef;
 use semantic_data::value::{Object, ValueRef};
-use semantic_db_core::{Db, TextQueryFormat};
+use semantic_db_core::Db;
 use serde::Serialize;
 
 use crate::{CliError, CommonArgs, open_db};

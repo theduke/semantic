@@ -1761,8 +1761,8 @@ mod tests {
         value::{FieldPath, Object, PathSegment, Value},
     };
 
-    use crate::CollectionKind;
     use semantic_data::query::{CompareOp, SortDirection};
+    use semantic_db_core::catalog::CollectionKind;
     use semantic_db_core::{
         ALL_COLLECTION_ALIAS, DEFAULT_COLLECTION, DdlBatch, DdlCollectionKind, DdlOperation, Expr,
         Operand, OrderBy, Predicate, Query, QueryField, QueryResult, SelectQuery,
