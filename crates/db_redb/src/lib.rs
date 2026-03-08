@@ -342,19 +342,15 @@ impl Backend for RedbBackend {
 #[cfg(test)]
 mod tests {
     use semantic_data::value::{Object, Value};
+    use semantic_db_core::Db;
     use semantic_db_kv::CollectionKind;
 
-    use super::{RedbDatabase, RedbKvEngine};
+    use super::{RedbBackend, RedbDatabase, RedbKvEngine};
 
     #[test]
     fn redb_backend_roundtrip() {
-        let path = std::env::temp_dir().join(format!(
-            "semantic-redb-test-{}.db",
-            std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap()
-                .as_nanos()
-        ));
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("db");
 
         {
             let engine = RedbKvEngine::open(&path).unwrap();
@@ -369,7 +365,7 @@ mod tests {
         }
 
         {
-            let engine = RedbKvEngine::open(&path).unwrap();
+            let engine = RedbKvEngine::open(path).unwrap();
             let mut db = RedbDatabase::new(engine);
             db.create_collection("items", CollectionKind::Untyped)
                 .unwrap();
@@ -379,7 +375,14 @@ mod tests {
             assert_eq!(out.len(), 1);
             assert_eq!(out[0].get("name"), Some(&Value::String("n".into())));
         }
+    }
 
-        let _ = std::fs::remove_file(path);
+    #[tokio::test(flavor = "multi_thread")]
+    async fn test_redb_backend_testsuite() {
+        let dir = tempfile::tempdir().unwrap();
+        let backend = RedbBackend::open(dir.path().join("db")).unwrap();
+        let db = Db::new(backend);
+
+        semantic_db_core::test::test_db(&db).await;
     }
 }
