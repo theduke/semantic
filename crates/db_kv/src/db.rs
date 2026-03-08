@@ -10,11 +10,10 @@ use semantic_db_core::{
     ALL_COLLECTION_ALIAS, AccessPath, AppliedMigration, Batch, BatchOperation, BatchOutcome,
     DEFAULT_COLLECTION, DeleteQuery, EntityRecord, InsertQuery, InsertSource, MutationStats,
     PackageRegistrationOutcome, Query, QueryExplain, QueryPlan, QueryResult, SelectQuery,
-    UpdateQuery, apply_migration_ddl_operation, canonicalize_delete_query,
-    canonicalize_insert_query, canonicalize_query, canonicalize_select_query,
-    canonicalize_update_query, execute_batch, is_all_collection_alias,
-    normalize_object_for_collection, normalize_package_definition, touched_collections,
-    validate_package_migrations,
+    UpdateQuery, apply_migration_ddl_batch, canonicalize_delete_query, canonicalize_insert_query,
+    canonicalize_query, canonicalize_select_query, canonicalize_update_query, execute_batch,
+    is_all_collection_alias, normalize_object_for_collection, normalize_package_definition,
+    touched_collections, validate_package_migrations,
 };
 
 use crate::{
@@ -965,21 +964,26 @@ impl<E: KvEngine> KvDb<E> {
                 continue;
             }
 
+            let mut pending_ddl = Vec::new();
             for operation in &migration.operations {
                 match operation {
                     MigrationOperation::Ddl(operation) => {
-                        apply_migration_ddl_operation(
-                            &mut next_catalog,
-                            &migration.module,
-                            operation,
-                        )
-                        .map_err(|err| DbError::InvalidQuery(err.to_string()))?;
+                        pending_ddl.push(operation);
                     }
                     MigrationOperation::Insert {
                         collection,
                         id,
                         object,
                     } => {
+                        if !pending_ddl.is_empty() {
+                            apply_migration_ddl_batch(
+                                &mut next_catalog,
+                                &migration.module,
+                                pending_ddl.iter().copied(),
+                            )
+                            .map_err(|err| DbError::InvalidQuery(err.to_string()))?;
+                            pending_ddl.clear();
+                        }
                         let batch = Batch::new().with_op(BatchOperation::Upsert {
                             collection: collection.clone(),
                             id: id.clone(),
@@ -995,6 +999,15 @@ impl<E: KvEngine> KvDb<E> {
                         )?;
                     }
                     MigrationOperation::Update { query } => {
+                        if !pending_ddl.is_empty() {
+                            apply_migration_ddl_batch(
+                                &mut next_catalog,
+                                &migration.module,
+                                pending_ddl.iter().copied(),
+                            )
+                            .map_err(|err| DbError::InvalidQuery(err.to_string()))?;
+                            pending_ddl.clear();
+                        }
                         let query: UpdateQuery = query.clone().into();
                         let batch = Batch::new().with_op(BatchOperation::Update {
                             collection: query.collection_or_default().to_string(),
@@ -1010,6 +1023,15 @@ impl<E: KvEngine> KvDb<E> {
                         )?;
                     }
                     MigrationOperation::Delete { query } => {
+                        if !pending_ddl.is_empty() {
+                            apply_migration_ddl_batch(
+                                &mut next_catalog,
+                                &migration.module,
+                                pending_ddl.iter().copied(),
+                            )
+                            .map_err(|err| DbError::InvalidQuery(err.to_string()))?;
+                            pending_ddl.clear();
+                        }
                         let query: DeleteQuery = query.clone().into();
                         let batch = Batch::new().with_op(BatchOperation::Delete {
                             collection: query.collection_or_default().to_string(),
@@ -1025,6 +1047,14 @@ impl<E: KvEngine> KvDb<E> {
                         )?;
                     }
                 }
+            }
+            if !pending_ddl.is_empty() {
+                apply_migration_ddl_batch(
+                    &mut next_catalog,
+                    &migration.module,
+                    pending_ddl.iter().copied(),
+                )
+                .map_err(|err| DbError::InvalidQuery(err.to_string()))?;
             }
 
             let applied = AppliedMigration {

@@ -8,7 +8,7 @@ use semantic_data::schema::{
 
 use crate::{
     CoreError,
-    catalog::{Catalog, CollectionKind, IntegrityMode},
+    catalog::{Catalog, CatalogBatchOperation, CollectionKind, IntegrityMode},
     fresh_catalog_with_core_schema,
 };
 
@@ -54,11 +54,17 @@ pub fn validate_package_migrations(package: &Package) -> Result<(), CoreError> {
                 package.name, migration.module, migration.name, migration.module
             )));
         }
-        for operation in &migration.operations {
-            if let MigrationOperation::Ddl(operation) = operation {
-                apply_migration_ddl_operation(&mut catalog, &migration.module, operation)?;
-            }
-        }
+        apply_migration_ddl_batch(
+            &mut catalog,
+            &migration.module,
+            migration
+                .operations
+                .iter()
+                .filter_map(|operation| match operation {
+                    MigrationOperation::Ddl(operation) => Some(operation),
+                    _ => None,
+                }),
+        )?;
     }
 
     for module in modules.values() {
@@ -95,12 +101,49 @@ pub fn apply_migration_ddl_operation(
     module: &str,
     operation: &MigrationDdlOperation,
 ) -> Result<(), CoreError> {
+    apply_migration_ddl_batch(catalog, module, std::iter::once(operation))
+}
+
+pub fn apply_migration_ddl_batch<'a>(
+    catalog: &mut Catalog,
+    module: &str,
+    operations: impl IntoIterator<Item = &'a MigrationDdlOperation>,
+) -> Result<(), CoreError> {
+    let catalog_ops = operations
+        .into_iter()
+        .map(|operation| migration_catalog_batch_operation(module, operation))
+        .collect::<Result<Vec<_>, _>>()?;
+    catalog
+        .apply_batch(&catalog_ops)
+        .map_err(|err| CoreError::new(err.to_string()))
+}
+
+fn migration_collection_kind(kind: MigrationCollectionKind) -> CollectionKind {
+    match kind {
+        MigrationCollectionKind::Polymorphic => CollectionKind::Polymorphic,
+    }
+}
+
+fn migration_integrity_mode(mode: MigrationIntegrityMode) -> IntegrityMode {
+    match mode {
+        MigrationIntegrityMode::Permissive => IntegrityMode::Permissive,
+        MigrationIntegrityMode::StrictRegisteredSchema => IntegrityMode::StrictRegisteredSchema,
+    }
+}
+
+fn migration_catalog_batch_operation(
+    module: &str,
+    operation: &MigrationDdlOperation,
+) -> Result<CatalogBatchOperation, CoreError> {
     match operation {
         MigrationDdlOperation::UpsertAttribute { attribute } => {
-            catalog.upsert_attribute_with_module(attribute.clone(), Some(module.to_string()));
+            Ok(CatalogBatchOperation::UpsertAttribute {
+                attribute: attribute.clone(),
+                module: Some(module.to_string()),
+            })
         }
         MigrationDdlOperation::DeleteAttribute { id } => {
-            let _ = catalog.delete_attribute(id);
+            Ok(CatalogBatchOperation::DeleteAttribute { id: id.clone() })
         }
         MigrationDdlOperation::UpsertTypeDef { type_def } => {
             let mut type_def = type_def.clone();
@@ -114,94 +157,69 @@ pub fn apply_migration_ddl_operation(
                 Some(_) => {}
                 None => type_def.module = Some(module.to_string()),
             }
-            let _ = catalog.upsert_type_def(type_def);
+            Ok(CatalogBatchOperation::UpsertTypeDef { type_def })
         }
         MigrationDdlOperation::DeleteTypeDef { name } => {
-            let _ = catalog.delete_type_def(name);
+            Ok(CatalogBatchOperation::DeleteTypeDef { name: name.clone() })
         }
         MigrationDdlOperation::UpsertRecordType { id, name, record } => {
-            catalog.upsert_record_type_with_module(
-                id.clone(),
-                name.clone(),
-                record.clone(),
-                Some(module.to_string()),
-            );
+            Ok(CatalogBatchOperation::UpsertRecordType {
+                id: id.clone(),
+                name: name.clone(),
+                record: record.clone(),
+                module: Some(module.to_string()),
+            })
         }
         MigrationDdlOperation::DeleteRecordType { id } => {
-            let _ = catalog.delete_record_type(id);
+            Ok(CatalogBatchOperation::DeleteRecordType { id: id.clone() })
         }
-        MigrationDdlOperation::UpsertClass { class } => {
-            catalog
-                .upsert_class_with_module(class.clone(), Some(module.to_string()))
-                .map_err(|err| CoreError::new(err.to_string()))?;
-        }
+        MigrationDdlOperation::UpsertClass { class } => Ok(CatalogBatchOperation::UpsertClass {
+            class: class.clone(),
+            module: Some(module.to_string()),
+        }),
         MigrationDdlOperation::DeleteClass { id } => {
-            let _ = catalog.delete_class(id);
+            Ok(CatalogBatchOperation::DeleteClass { id: id.clone() })
         }
         MigrationDdlOperation::UpsertCollection {
             name,
             kind,
             integrity_mode,
-        } => {
-            catalog
-                .upsert_collection(
-                    name.clone(),
-                    migration_collection_kind(*kind),
-                    migration_integrity_mode(*integrity_mode),
-                )
-                .map_err(|err| CoreError::new(err.to_string()))?;
-        }
+        } => Ok(CatalogBatchOperation::UpsertCollection {
+            name: name.clone(),
+            kind: migration_collection_kind(*kind),
+            integrity_mode: migration_integrity_mode(*integrity_mode),
+        }),
         MigrationDdlOperation::DeleteCollection { name } => {
-            let _ = catalog.delete_collection(name);
+            Ok(CatalogBatchOperation::DeleteCollection { name: name.clone() })
         }
         MigrationDdlOperation::UpsertIndex {
             name,
             collection,
             field,
             unique,
-        } => {
-            let Some(collection_schema) = catalog.collection_by_name(collection) else {
-                return Err(CoreError::new(format!(
-                    "collection '{collection}' not found"
-                )));
-            };
-            let _ = catalog
-                .upsert_index(name.clone(), collection_schema.lid, field.clone(), *unique)
-                .map_err(|err| CoreError::new(err.to_string()))?;
-        }
+        } => Ok(CatalogBatchOperation::UpsertIndex {
+            name: name.clone(),
+            collection: collection.clone(),
+            field: field.clone(),
+            unique: *unique,
+        }),
         MigrationDdlOperation::DeleteIndex { name, collection } => {
-            let Some(collection_schema) = catalog.collection_by_name(collection) else {
-                return Err(CoreError::new(format!(
-                    "collection '{collection}' not found"
-                )));
-            };
-            let _ = catalog.delete_index(collection_schema.lid, name);
+            Ok(CatalogBatchOperation::DeleteIndex {
+                name: name.clone(),
+                collection: collection.clone(),
+            })
         }
         MigrationDdlOperation::UpsertRelationship { relationship } => {
-            let _ = catalog
-                .upsert_relationship(relationship.clone())
-                .map_err(|err| CoreError::new(err.to_string()))?;
+            Ok(CatalogBatchOperation::UpsertRelationship {
+                relationship: relationship.clone(),
+            })
         }
         MigrationDdlOperation::DeleteRelationship { id } => {
-            let _ = catalog.delete_relationship(id);
+            Ok(CatalogBatchOperation::DeleteRelationship { id: id.clone() })
         }
         MigrationDdlOperation::SetAutoIndex { enabled } => {
-            catalog.set_auto_index_enabled(*enabled);
+            Ok(CatalogBatchOperation::SetAutoIndex { enabled: *enabled })
         }
-    }
-    Ok(())
-}
-
-fn migration_collection_kind(kind: MigrationCollectionKind) -> CollectionKind {
-    match kind {
-        MigrationCollectionKind::Polymorphic => CollectionKind::Polymorphic,
-    }
-}
-
-fn migration_integrity_mode(mode: MigrationIntegrityMode) -> IntegrityMode {
-    match mode {
-        MigrationIntegrityMode::Permissive => IntegrityMode::Permissive,
-        MigrationIntegrityMode::StrictRegisteredSchema => IntegrityMode::StrictRegisteredSchema,
     }
 }
 
@@ -280,4 +298,153 @@ fn actual_module_classes(
             }
         })
         .collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use std::collections::BTreeMap;
+
+    use semantic_data::schema::{
+        AttributeRef, ClassAttribute, Migration, MigrationOperation, Module,
+        collections::list_type::ListType,
+        core::{meta::Meta, type_node::Type, type_ref::TypeRef, visibility::Visibility},
+        package::package::Package,
+        record::{field::Field, record_type::RecordType},
+    };
+
+    use super::*;
+
+    #[test]
+    fn validate_package_migrations_supports_recursive_schema_batches() {
+        let package = Package {
+            name: "suite.tree".to_string(),
+            root: Module {
+                name: "tree".to_string(),
+                constants: BTreeMap::new(),
+                types: BTreeMap::from([(
+                    "suite.tree.payload_type".to_string(),
+                    recursive_payload_type_def(Some("tree".to_string())),
+                )]),
+                attributes: BTreeMap::from([(
+                    "suite.tree.payload".to_string(),
+                    recursive_payload_attribute(),
+                )]),
+                classes: BTreeMap::from([("suite.tree.node".to_string(), recursive_node_class())]),
+                interfaces: BTreeMap::new(),
+                contracts: BTreeMap::new(),
+                meta: Meta::default(),
+            },
+            modules: BTreeMap::new(),
+            migrations: vec![Migration {
+                module: "tree".to_string(),
+                name: "001_init".to_string(),
+                description: None,
+                operations: vec![
+                    MigrationOperation::Ddl(MigrationDdlOperation::UpsertClass {
+                        class: recursive_node_class(),
+                    }),
+                    MigrationOperation::Ddl(MigrationDdlOperation::UpsertAttribute {
+                        attribute: recursive_payload_attribute(),
+                    }),
+                    MigrationOperation::Ddl(MigrationDdlOperation::UpsertTypeDef {
+                        type_def: recursive_payload_type_def(Some("tree".to_string())),
+                    }),
+                ],
+                meta: Meta::default(),
+            }],
+            version: None,
+            meta: Meta::default(),
+        };
+
+        validate_package_migrations(&package).unwrap();
+    }
+
+    fn recursive_node_class() -> semantic_data::schema::ClassType {
+        semantic_data::schema::ClassType {
+            id: "suite.tree.node".to_string(),
+            name: "TreeNode".to_string(),
+            inherits: None,
+            extends: vec![],
+            attributes: BTreeMap::from([(
+                "payload".to_string(),
+                ClassAttribute {
+                    attribute: AttributeRef {
+                        id: "suite.tree.payload".to_string(),
+                    },
+                    required: false,
+                    constraints: vec![],
+                    meta: Meta::default(),
+                },
+            )]),
+            constraints: vec![],
+            meta: Meta::default(),
+        }
+    }
+
+    fn recursive_payload_attribute() -> semantic_data::schema::AttributeType {
+        semantic_data::schema::AttributeType {
+            id: "suite.tree.payload".to_string(),
+            name: "payload".to_string(),
+            ty: Type {
+                kind: TypeKind::Ref(TypeRef {
+                    name: "suite.tree.payload_type".to_string(),
+                    args: vec![],
+                }),
+                constraints: vec![],
+                annotations: vec![],
+                meta: Meta::default(),
+            },
+            constraints: vec![],
+            meta: Meta::default(),
+        }
+    }
+
+    fn recursive_payload_type_def(module: Option<String>) -> TypeDef {
+        TypeDef {
+            name: "suite.tree.payload_type".to_string(),
+            module,
+            params: Vec::new(),
+            ty: Type {
+                kind: TypeKind::Record(RecordType {
+                    fields: BTreeMap::from([(
+                        "children".to_string(),
+                        Field {
+                            ty: Type {
+                                kind: TypeKind::List(ListType {
+                                    items: Box::new(Type {
+                                        kind: TypeKind::Ref(TypeRef {
+                                            name: "suite.tree.payload_type".to_string(),
+                                            args: vec![],
+                                        }),
+                                        constraints: vec![],
+                                        annotations: vec![],
+                                        meta: Meta::default(),
+                                    }),
+                                }),
+                                constraints: vec![],
+                                annotations: vec![],
+                                meta: Meta::default(),
+                            },
+                            required: false,
+                            readonly: false,
+                            writeonly: false,
+                            default: None,
+                            meta: Meta::default(),
+                        },
+                    )]),
+                    open: false,
+                    additional: None,
+                    required_order: None,
+                }),
+                constraints: vec![],
+                annotations: vec![],
+                meta: Meta::default(),
+            },
+            visibility: Visibility::Public,
+            meta: Meta {
+                title: Some("TreePayload".to_string()),
+                ..Meta::default()
+            },
+        }
+    }
 }

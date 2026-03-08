@@ -17,7 +17,7 @@ use semantic_data::schema::{
 
 use crate::{
     CoreError,
-    catalog::{Catalog, CollectionKind, IntegrityMode, RELATION_CLASS_ID},
+    catalog::{Catalog, CatalogBatchOperation, CollectionKind, IntegrityMode, RELATION_CLASS_ID},
 };
 
 #[derive(facet::Facet, Debug, Clone, PartialEq)]
@@ -126,115 +126,35 @@ pub fn apply_ddl_batch(
     batch: &DdlBatch,
 ) -> Result<(Catalog, DdlOutcome), CoreError> {
     let mut catalog = catalog.clone();
-    let mut stats = DdlStats::default();
+    let catalog_ops = batch
+        .operations
+        .iter()
+        .map(|op| catalog_batch_operation(&catalog, op))
+        .collect::<Result<Vec<_>, _>>()?;
+    catalog
+        .apply_batch(&catalog_ops)
+        .map_err(|err| CoreError::new(err.to_string()))?;
 
+    let mut stats = DdlStats::default();
     for op in &batch.operations {
         match op {
-            DdlOperation::UpsertAttribute { attribute } => {
-                catalog.upsert_attribute(attribute.clone());
-                stats.upserted += 1;
+            DdlOperation::DeleteAttribute { .. }
+            | DdlOperation::DeleteTypeDef { .. }
+            | DdlOperation::DeleteRecordType { .. }
+            | DdlOperation::DeleteClass { .. }
+            | DdlOperation::DeleteCollection { .. }
+            | DdlOperation::DeleteIndex { .. }
+            | DdlOperation::DeleteRelationship { .. } => {
+                stats.deleted += 1;
             }
-            DdlOperation::DeleteAttribute { id } => {
-                for (_, class) in catalog.classes() {
-                    if class.attributes.values().any(|attr| {
-                        catalog
-                            .attribute_by_lid(*attr)
-                            .is_some_and(|a| a.attribute.id == *id)
-                    }) {
-                        return Err(CoreError::new(format!(
-                            "cannot delete attribute '{id}': referenced by class '{}'",
-                            class.class.id
-                        )));
-                    }
-                }
-                if catalog.delete_attribute(id) {
-                    stats.deleted += 1;
-                }
-            }
-            DdlOperation::UpsertTypeDef { type_def } => {
-                catalog.upsert_type_def(type_def.clone());
-                stats.upserted += 1;
-            }
-            DdlOperation::DeleteTypeDef { name } => {
-                if catalog.delete_type_def(name) {
-                    stats.deleted += 1;
-                }
-            }
-            DdlOperation::UpsertRecordType { id, name, record } => {
-                catalog.upsert_record_type(id.clone(), name.clone(), record.clone());
-                stats.upserted += 1;
-            }
-            DdlOperation::DeleteRecordType { id } => {
-                if catalog.delete_record_type(id) {
-                    stats.deleted += 1;
-                }
-            }
-            DdlOperation::UpsertClass { class } => {
-                catalog
-                    .upsert_class(class.clone())
-                    .map_err(|e| CoreError::new(e.to_string()))?;
-                stats.upserted += 1;
-            }
-            DdlOperation::DeleteClass { id } => {
-                if catalog.delete_class(id) {
-                    stats.deleted += 1;
-                }
-            }
-            DdlOperation::UpsertCollection {
-                name,
-                kind,
-                integrity_mode,
-            } => {
-                let kind = resolve_collection_kind(&catalog, kind)?;
-                catalog
-                    .upsert_collection(name.clone(), kind, *integrity_mode)
-                    .map_err(|e| CoreError::new(e.to_string()))?;
-                stats.upserted += 1;
-            }
-            DdlOperation::DeleteCollection { name } => {
-                if catalog.delete_collection(name) {
-                    stats.deleted += 1;
-                }
-            }
-            DdlOperation::UpsertIndex {
-                name,
-                collection,
-                field,
-                unique,
-            } => {
-                let Some(collection_schema) = catalog.collection_by_name(collection) else {
-                    return Err(CoreError::new(format!(
-                        "collection '{collection}' not found"
-                    )));
-                };
-                catalog
-                    .upsert_index(name.clone(), collection_schema.lid, field.clone(), *unique)
-                    .map_err(|e| CoreError::new(e.to_string()))?;
-                stats.upserted += 1;
-            }
-            DdlOperation::DeleteIndex { name, collection } => {
-                let Some(collection_schema) = catalog.collection_by_name(collection) else {
-                    return Err(CoreError::new(format!(
-                        "collection '{collection}' not found"
-                    )));
-                };
-                if catalog.delete_index(collection_schema.lid, name) {
-                    stats.deleted += 1;
-                }
-            }
-            DdlOperation::UpsertRelationship { relationship } => {
-                catalog
-                    .upsert_relationship(relationship.clone())
-                    .map_err(|e| CoreError::new(e.to_string()))?;
-                stats.upserted += 1;
-            }
-            DdlOperation::DeleteRelationship { id } => {
-                if catalog.delete_relationship(id) {
-                    stats.deleted += 1;
-                }
-            }
-            DdlOperation::SetAutoIndex { enabled } => {
-                catalog.set_auto_index_enabled(*enabled);
+            DdlOperation::UpsertAttribute { .. }
+            | DdlOperation::UpsertTypeDef { .. }
+            | DdlOperation::UpsertRecordType { .. }
+            | DdlOperation::UpsertClass { .. }
+            | DdlOperation::UpsertCollection { .. }
+            | DdlOperation::UpsertIndex { .. }
+            | DdlOperation::UpsertRelationship { .. }
+            | DdlOperation::SetAutoIndex { .. } => {
                 stats.upserted += 1;
             }
         }
@@ -902,5 +822,209 @@ fn resolve_collection_kind(
 ) -> Result<CollectionKind, CoreError> {
     match kind {
         DdlCollectionKind::Polymorphic => Ok(CollectionKind::Polymorphic),
+    }
+}
+
+fn catalog_batch_operation(
+    catalog: &Catalog,
+    operation: &DdlOperation,
+) -> Result<CatalogBatchOperation, CoreError> {
+    match operation {
+        DdlOperation::UpsertAttribute { attribute } => Ok(CatalogBatchOperation::UpsertAttribute {
+            attribute: attribute.clone(),
+            module: None,
+        }),
+        DdlOperation::DeleteAttribute { id } => {
+            Ok(CatalogBatchOperation::DeleteAttribute { id: id.clone() })
+        }
+        DdlOperation::UpsertTypeDef { type_def } => Ok(CatalogBatchOperation::UpsertTypeDef {
+            type_def: type_def.clone(),
+        }),
+        DdlOperation::DeleteTypeDef { name } => {
+            Ok(CatalogBatchOperation::DeleteTypeDef { name: name.clone() })
+        }
+        DdlOperation::UpsertRecordType { id, name, record } => {
+            Ok(CatalogBatchOperation::UpsertRecordType {
+                id: id.clone(),
+                name: name.clone(),
+                record: record.clone(),
+                module: None,
+            })
+        }
+        DdlOperation::DeleteRecordType { id } => {
+            Ok(CatalogBatchOperation::DeleteRecordType { id: id.clone() })
+        }
+        DdlOperation::UpsertClass { class } => Ok(CatalogBatchOperation::UpsertClass {
+            class: class.clone(),
+            module: None,
+        }),
+        DdlOperation::DeleteClass { id } => {
+            Ok(CatalogBatchOperation::DeleteClass { id: id.clone() })
+        }
+        DdlOperation::UpsertCollection {
+            name,
+            kind,
+            integrity_mode,
+        } => Ok(CatalogBatchOperation::UpsertCollection {
+            name: name.clone(),
+            kind: resolve_collection_kind(catalog, kind)?,
+            integrity_mode: *integrity_mode,
+        }),
+        DdlOperation::DeleteCollection { name } => {
+            Ok(CatalogBatchOperation::DeleteCollection { name: name.clone() })
+        }
+        DdlOperation::UpsertIndex {
+            name,
+            collection,
+            field,
+            unique,
+        } => Ok(CatalogBatchOperation::UpsertIndex {
+            name: name.clone(),
+            collection: collection.clone(),
+            field: field.clone(),
+            unique: *unique,
+        }),
+        DdlOperation::DeleteIndex { name, collection } => Ok(CatalogBatchOperation::DeleteIndex {
+            name: name.clone(),
+            collection: collection.clone(),
+        }),
+        DdlOperation::UpsertRelationship { relationship } => {
+            Ok(CatalogBatchOperation::UpsertRelationship {
+                relationship: relationship.clone(),
+            })
+        }
+        DdlOperation::DeleteRelationship { id } => {
+            Ok(CatalogBatchOperation::DeleteRelationship { id: id.clone() })
+        }
+        DdlOperation::SetAutoIndex { enabled } => {
+            Ok(CatalogBatchOperation::SetAutoIndex { enabled: *enabled })
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::collections::BTreeMap;
+
+    use semantic_data::schema::{
+        AttributeRef, ClassAttribute, collections::list_type::ListType,
+        core::visibility::Visibility, record::field::Field,
+    };
+
+    use super::*;
+
+    #[test]
+    fn ddl_batch_registers_recursive_types_in_multiple_steps() {
+        let batch = DdlBatch::new()
+            .with_op(DdlOperation::UpsertClass {
+                class: recursive_node_class(),
+            })
+            .with_op(DdlOperation::UpsertAttribute {
+                attribute: recursive_payload_attribute(),
+            })
+            .with_op(DdlOperation::UpsertTypeDef {
+                type_def: recursive_payload_type_def(None),
+            });
+
+        let (catalog, outcome) = apply_ddl_batch(&Catalog::new(), &batch).unwrap();
+
+        assert_eq!(outcome.stats.upserted, 3);
+        assert!(catalog.attribute_id("suite.tree.payload").is_some());
+        assert!(catalog.record_type_id("suite.tree.payload_type").is_some());
+        let class_id = catalog.class_id("suite.tree.node").unwrap();
+        let class = catalog.class_by_lid(class_id).unwrap();
+        assert_eq!(
+            class.attributes.get("payload"),
+            catalog.attribute_id("suite.tree.payload").as_ref()
+        );
+    }
+
+    fn recursive_node_class() -> ClassType {
+        ClassType {
+            id: "suite.tree.node".to_string(),
+            name: "TreeNode".to_string(),
+            inherits: None,
+            extends: vec![],
+            attributes: BTreeMap::from([(
+                "payload".to_string(),
+                ClassAttribute {
+                    attribute: AttributeRef {
+                        id: "suite.tree.payload".to_string(),
+                    },
+                    required: false,
+                    constraints: vec![],
+                    meta: Meta::default(),
+                },
+            )]),
+            constraints: vec![],
+            meta: Meta::default(),
+        }
+    }
+
+    fn recursive_payload_attribute() -> AttributeType {
+        AttributeType {
+            id: "suite.tree.payload".to_string(),
+            name: "payload".to_string(),
+            ty: Type {
+                kind: TypeKind::Ref(TypeRef {
+                    name: "suite.tree.payload_type".to_string(),
+                    args: vec![],
+                }),
+                constraints: vec![],
+                annotations: vec![],
+                meta: Meta::default(),
+            },
+            constraints: vec![],
+            meta: Meta::default(),
+        }
+    }
+
+    fn recursive_payload_type_def(module: Option<String>) -> TypeDef {
+        TypeDef {
+            name: "suite.tree.payload_type".to_string(),
+            module,
+            params: Vec::new(),
+            ty: Type {
+                kind: TypeKind::Record(RecordType {
+                    fields: BTreeMap::from([(
+                        "children".to_string(),
+                        Field {
+                            ty: Type {
+                                kind: TypeKind::List(ListType {
+                                    items: Box::new(Type {
+                                        kind: TypeKind::Ref(TypeRef {
+                                            name: "suite.tree.payload_type".to_string(),
+                                            args: vec![],
+                                        }),
+                                        constraints: vec![],
+                                        annotations: vec![],
+                                        meta: Meta::default(),
+                                    }),
+                                }),
+                                constraints: vec![],
+                                annotations: vec![],
+                                meta: Meta::default(),
+                            },
+                            required: false,
+                            readonly: false,
+                            writeonly: false,
+                            default: None,
+                            meta: Meta::default(),
+                        },
+                    )]),
+                    open: false,
+                    additional: None,
+                    required_order: None,
+                }),
+                constraints: vec![],
+                annotations: vec![],
+                meta: Meta::default(),
+            },
+            visibility: Visibility::Public,
+            meta: Meta {
+                title: Some("TreePayload".to_string()),
+                ..Meta::default()
+            },
+        }
     }
 }

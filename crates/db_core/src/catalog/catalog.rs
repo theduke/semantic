@@ -55,6 +55,66 @@ pub const RELATION_TO_ATTRIBUTE: &str = "semantic.relation.to";
 pub const AUTO_PATH_INDEX_NAME: &str = "__auto_index_all_paths";
 pub const AUTO_PATH_INDEX_FIELD: &str = "__path__";
 
+#[derive(Debug, Clone, PartialEq)]
+pub enum CatalogBatchOperation {
+    UpsertAttribute {
+        attribute: AttributeType,
+        module: Option<String>,
+    },
+    DeleteAttribute {
+        id: String,
+    },
+    UpsertTypeDef {
+        type_def: TypeDef,
+    },
+    DeleteTypeDef {
+        name: String,
+    },
+    UpsertRecordType {
+        id: String,
+        name: String,
+        record: RecordType,
+        module: Option<String>,
+    },
+    DeleteRecordType {
+        id: String,
+    },
+    UpsertClass {
+        class: ClassType,
+        module: Option<String>,
+    },
+    DeleteClass {
+        id: String,
+    },
+    UpsertCollection {
+        name: String,
+        kind: CollectionKind,
+        integrity_mode: IntegrityMode,
+    },
+    DeleteCollection {
+        name: String,
+    },
+    UpsertIndex {
+        name: String,
+        collection: String,
+        field: String,
+        unique: bool,
+    },
+    DeleteIndex {
+        name: String,
+        collection: String,
+    },
+    UpsertRelationship {
+        relationship: RelationType,
+    },
+    DeleteRelationship {
+        id: String,
+    },
+    SetAutoIndex {
+        enabled: bool,
+    },
+}
+
 impl Catalog {
     pub fn new() -> Self {
         Self {
@@ -135,6 +195,83 @@ impl Catalog {
 
     pub fn record_applied_migration(&mut self, applied: AppliedMigration) {
         let _ = self.applied_migrations.insert(applied.key(), applied);
+    }
+
+    pub fn apply_batch(
+        &mut self,
+        operations: &[CatalogBatchOperation],
+    ) -> Result<(), CatalogError> {
+        let mut pending_type_ops = Vec::<&CatalogBatchOperation>::new();
+        for operation in operations {
+            if Self::is_type_operation(operation) {
+                pending_type_ops.push(operation);
+                continue;
+            }
+
+            self.flush_pending_type_operations(&mut pending_type_ops)?;
+
+            match operation {
+                CatalogBatchOperation::UpsertCollection {
+                    name,
+                    kind,
+                    integrity_mode,
+                } => {
+                    let _ = self.upsert_collection(name.clone(), kind.clone(), *integrity_mode)?;
+                }
+                CatalogBatchOperation::DeleteCollection { name } => {
+                    let _ = self.delete_collection(name);
+                }
+                CatalogBatchOperation::UpsertIndex {
+                    name,
+                    collection,
+                    field,
+                    unique,
+                } => {
+                    let collection_schema =
+                        self.collection_by_name(collection).ok_or_else(|| {
+                            CatalogError::InvalidSchema(format!(
+                                "collection '{collection}' not found"
+                            ))
+                        })?;
+                    let _ = self.upsert_index(
+                        name.clone(),
+                        collection_schema.lid,
+                        field.clone(),
+                        *unique,
+                    )?;
+                }
+                CatalogBatchOperation::DeleteIndex { name, collection } => {
+                    let collection_schema =
+                        self.collection_by_name(collection).ok_or_else(|| {
+                            CatalogError::InvalidSchema(format!(
+                                "collection '{collection}' not found"
+                            ))
+                        })?;
+                    let _ = self.delete_index(collection_schema.lid, name);
+                }
+                CatalogBatchOperation::UpsertRelationship { relationship } => {
+                    let _ = self.upsert_relationship(relationship.clone())?;
+                }
+                CatalogBatchOperation::DeleteRelationship { id } => {
+                    let _ = self.delete_relationship(id);
+                }
+                CatalogBatchOperation::SetAutoIndex { enabled } => {
+                    self.set_auto_index_enabled(*enabled);
+                }
+                CatalogBatchOperation::UpsertAttribute { .. }
+                | CatalogBatchOperation::DeleteAttribute { .. }
+                | CatalogBatchOperation::UpsertTypeDef { .. }
+                | CatalogBatchOperation::DeleteTypeDef { .. }
+                | CatalogBatchOperation::UpsertRecordType { .. }
+                | CatalogBatchOperation::DeleteRecordType { .. }
+                | CatalogBatchOperation::UpsertClass { .. }
+                | CatalogBatchOperation::DeleteClass { .. } => {
+                    unreachable!("type operations are flushed before immediate catalog ops");
+                }
+            }
+        }
+
+        self.flush_pending_type_operations(&mut pending_type_ops)
     }
 
     pub fn register_attribute(&mut self, attr: AttributeType) -> LocalAttrId {
@@ -1134,6 +1271,199 @@ impl Catalog {
 
     fn index_key(collection_name: &str, index_name: &str) -> String {
         format!("{collection_name}::{index_name}")
+    }
+
+    fn is_type_operation(operation: &CatalogBatchOperation) -> bool {
+        matches!(
+            operation,
+            CatalogBatchOperation::UpsertAttribute { .. }
+                | CatalogBatchOperation::DeleteAttribute { .. }
+                | CatalogBatchOperation::UpsertTypeDef { .. }
+                | CatalogBatchOperation::DeleteTypeDef { .. }
+                | CatalogBatchOperation::UpsertRecordType { .. }
+                | CatalogBatchOperation::DeleteRecordType { .. }
+                | CatalogBatchOperation::UpsertClass { .. }
+                | CatalogBatchOperation::DeleteClass { .. }
+        )
+    }
+
+    fn flush_pending_type_operations(
+        &mut self,
+        pending_type_ops: &mut Vec<&CatalogBatchOperation>,
+    ) -> Result<(), CatalogError> {
+        if pending_type_ops.is_empty() {
+            return Ok(());
+        }
+
+        for operation in pending_type_ops.iter().copied() {
+            match operation {
+                CatalogBatchOperation::UpsertAttribute { attribute, module } => {
+                    let _ = self
+                        .upsert_type_def_raw(type_def_from_attribute(attribute, module.clone()));
+                }
+                CatalogBatchOperation::DeleteAttribute { id } => {
+                    let _ = self.delete_type_def_raw(id);
+                }
+                CatalogBatchOperation::UpsertTypeDef { type_def } => {
+                    let _ = self.upsert_type_def_raw(type_def.clone());
+                }
+                CatalogBatchOperation::DeleteTypeDef { name } => {
+                    let _ = self.delete_type_def_raw(name);
+                }
+                CatalogBatchOperation::UpsertRecordType {
+                    id,
+                    name,
+                    record,
+                    module,
+                } => {
+                    let _ = self.upsert_type_def_raw(type_def_from_record_type(
+                        id.clone(),
+                        name.clone(),
+                        record.clone(),
+                        module.clone(),
+                    ));
+                }
+                CatalogBatchOperation::DeleteRecordType { id } => {
+                    let _ = self.delete_type_def_raw(id);
+                }
+                CatalogBatchOperation::UpsertClass { class, module } => {
+                    let _ = self
+                        .upsert_type_def_raw(type_def_from_class(class.clone(), module.clone()));
+                }
+                CatalogBatchOperation::DeleteClass { id } => {
+                    let _ = self.delete_type_def_raw(id);
+                }
+                CatalogBatchOperation::UpsertCollection { .. }
+                | CatalogBatchOperation::DeleteCollection { .. }
+                | CatalogBatchOperation::UpsertIndex { .. }
+                | CatalogBatchOperation::DeleteIndex { .. }
+                | CatalogBatchOperation::UpsertRelationship { .. }
+                | CatalogBatchOperation::DeleteRelationship { .. }
+                | CatalogBatchOperation::SetAutoIndex { .. } => {
+                    unreachable!("non-type operations must not be flushed as type operations");
+                }
+            }
+        }
+
+        self.rebuild_type_projections()?;
+        pending_type_ops.clear();
+        Ok(())
+    }
+
+    fn upsert_type_def_raw(&mut self, type_def: TypeDef) -> LocalTypeDefId {
+        let key = type_def.name.clone();
+        self.type_defs
+            .insert(key, |lid| TypeDefSchema { lid, type_def })
+    }
+
+    fn delete_type_def_raw(&mut self, name: &str) -> bool {
+        self.type_defs.remove_key(name).is_some()
+    }
+
+    fn rebuild_type_projections(&mut self) -> Result<(), CatalogError> {
+        let legacy_attr_ids = self
+            .attributes()
+            .map(|(lid, attr)| (attr.attribute.id.clone(), lid))
+            .collect::<FnvHashMap<_, _>>();
+        let legacy_record_ids = self
+            .record_types()
+            .map(|(lid, record)| (record.id.clone(), lid))
+            .collect::<FnvHashMap<_, _>>();
+        let legacy_class_ids = self
+            .classes()
+            .map(|(lid, class)| (class.class.id.clone(), lid))
+            .collect::<FnvHashMap<_, _>>();
+
+        let projected_attrs = self
+            .type_defs()
+            .filter_map(|(_, type_def)| match &type_def.type_def.ty.kind {
+                TypeKind::Attribute(attribute) => {
+                    Some((type_def.type_def.name.clone(), *attribute.clone()))
+                }
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+        let projected_records = self
+            .type_defs()
+            .filter_map(|(_, type_def)| match &type_def.type_def.ty.kind {
+                TypeKind::Record(record) => Some((
+                    type_def.type_def.name.clone(),
+                    type_def
+                        .type_def
+                        .meta
+                        .title
+                        .clone()
+                        .unwrap_or_else(|| type_def.type_def.name.clone()),
+                    record.clone(),
+                )),
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+        let projected_classes = self
+            .type_defs()
+            .filter_map(|(_, type_def)| match &type_def.type_def.ty.kind {
+                TypeKind::Class(class) => Some(class.clone()),
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+
+        self.attributes = IdMap::new();
+        self.record_types = IdMap::new();
+        self.classes = IdMap::new();
+
+        for (id, attribute) in projected_attrs {
+            let lid = legacy_attr_ids
+                .get(&id)
+                .copied()
+                .unwrap_or(self.attributes.next_id());
+            self.attributes
+                .insert_fixed(lid, id, AttributeSchema { lid, attribute });
+        }
+
+        for (id, name, record) in projected_records {
+            let lid = legacy_record_ids
+                .get(&id)
+                .copied()
+                .unwrap_or(self.record_types.next_id());
+            self.record_types.insert_fixed(
+                lid,
+                id.clone(),
+                RecordTypeSchema {
+                    lid,
+                    id,
+                    name,
+                    record,
+                },
+            );
+        }
+
+        for class in projected_classes {
+            let lid = legacy_class_ids
+                .get(&class.id)
+                .copied()
+                .unwrap_or(self.classes.next_id());
+            let mut class_attributes = BTreeMap::new();
+            for (alias, class_attr) in &class.attributes {
+                let Some(attr) = self.attribute_by_id(&class_attr.attribute.id) else {
+                    return Err(CatalogError::UnknownAttribute {
+                        id: class_attr.attribute.id.clone(),
+                    });
+                };
+                class_attributes.insert(alias.clone(), attr.lid);
+                class_attributes.insert(class_attr.attribute.id.clone(), attr.lid);
+            }
+            self.classes.insert_fixed(
+                lid,
+                class.id.clone(),
+                ClassSchema {
+                    lid,
+                    class,
+                    attributes: class_attributes,
+                },
+            );
+        }
+
+        Ok(())
     }
 
     fn collect_class_fields(
