@@ -1,4 +1,4 @@
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, RwLock};
 
 use async_trait::async_trait;
 use semantic_data::value::Object;
@@ -11,25 +11,24 @@ use semantic_db_core::{
 use crate::{KvDb, KvEngine};
 
 pub struct KvBackend<E: KvEngine> {
-    db: Mutex<KvDb<E>>,
+    db: RwLock<KvDb<E>>,
 }
 
 impl<E: KvEngine> KvBackend<E> {
     pub fn new(db: KvDb<E>) -> Self {
-        Self { db: Mutex::new(db) }
-    }
-
-    fn lock_db(&self) -> std::result::Result<std::sync::MutexGuard<'_, KvDb<E>>, DbError> {
-        self.db
-            .lock()
-            .map_err(|_| DbError::Storage("kv backend mutex poisoned".to_string()))
+        Self {
+            db: RwLock::new(db),
+        }
     }
 }
 
 #[async_trait]
 impl<E: KvEngine> Backend for KvBackend<E> {
     async fn catalog(&self) -> std::result::Result<Arc<Catalog>, DbError> {
-        let db = self.lock_db()?;
+        let db = self
+            .db
+            .read()
+            .map_err(|_| DbError::Storage("kv backend rwlock poisoned".to_string()))?;
         Ok(db.catalog())
     }
 
@@ -38,7 +37,10 @@ impl<E: KvEngine> Backend for KvBackend<E> {
         name: String,
         kind: CollectionKind,
     ) -> std::result::Result<LocalCollectionId, DbError> {
-        let mut db = self.lock_db()?;
+        let mut db = self
+            .db
+            .write()
+            .map_err(|_| DbError::Storage("kv backend rwlock poisoned".to_string()))?;
         db.create_collection(name, kind)
     }
 
@@ -48,7 +50,10 @@ impl<E: KvEngine> Backend for KvBackend<E> {
         id: String,
         object: Object,
     ) -> std::result::Result<(), DbError> {
-        let mut db = self.lock_db()?;
+        let mut db = self
+            .db
+            .write()
+            .map_err(|_| DbError::Storage("kv backend rwlock poisoned".to_string()))?;
         db.insert(&collection, id, object)
     }
 
@@ -57,27 +62,53 @@ impl<E: KvEngine> Backend for KvBackend<E> {
         collection: String,
         id: String,
     ) -> std::result::Result<Option<EntityRecord>, DbError> {
-        let db = self.lock_db()?;
+        let db = self
+            .db
+            .read()
+            .map_err(|_| DbError::Storage("kv backend rwlock poisoned".to_string()))?;
         db.get(&collection, &id)
     }
 
     async fn delete(&self, collection: String, id: String) -> std::result::Result<(), DbError> {
-        let mut db = self.lock_db()?;
+        let mut db = self
+            .db
+            .write()
+            .map_err(|_| DbError::Storage("kv backend rwlock poisoned".to_string()))?;
         db.delete(&collection, &id)
     }
 
     async fn query(&self, query: Query) -> std::result::Result<QueryResult, DbError> {
-        let mut db = self.lock_db()?;
-        db.query(query)
+        match query {
+            Query::Select(query) => {
+                let db = self
+                    .db
+                    .read()
+                    .map_err(|_| DbError::Storage("kv backend rwlock poisoned".to_string()))?;
+                db.select(query).map(QueryResult::Select)
+            }
+            query => {
+                let mut db = self
+                    .db
+                    .write()
+                    .map_err(|_| DbError::Storage("kv backend rwlock poisoned".to_string()))?;
+                db.query(query)
+            }
+        }
     }
 
     async fn explain_query(&self, query: Query) -> std::result::Result<QueryExplain, DbError> {
-        let db = self.lock_db()?;
+        let db = self
+            .db
+            .read()
+            .map_err(|_| DbError::Storage("kv backend rwlock poisoned".to_string()))?;
         db.explain_query(query)
     }
 
     async fn plan_query(&self, query: Query) -> std::result::Result<QueryPlan, DbError> {
-        let db = self.lock_db()?;
+        let db = self
+            .db
+            .read()
+            .map_err(|_| DbError::Storage("kv backend rwlock poisoned".to_string()))?;
         db.plan_query(query)
     }
 
@@ -85,17 +116,41 @@ impl<E: KvEngine> Backend for KvBackend<E> {
         &self,
         query: UpdateQuery,
     ) -> std::result::Result<MutationStats, DbError> {
-        let mut db = self.lock_db()?;
+        let mut db = self
+            .db
+            .write()
+            .map_err(|_| DbError::Storage("kv backend rwlock poisoned".to_string()))?;
         db.update_where(query)
     }
 
     async fn delete_where(&self, query: DeleteQuery) -> std::result::Result<usize, DbError> {
-        let mut db = self.lock_db()?;
+        let mut db = self
+            .db
+            .write()
+            .map_err(|_| DbError::Storage("kv backend rwlock poisoned".to_string()))?;
         db.delete_where(query)
     }
 
     async fn execute_batch(&self, batch: Batch) -> std::result::Result<BatchOutcome, DbError> {
-        let mut db = self.lock_db()?;
+        let mut db = self
+            .db
+            .write()
+            .map_err(|_| DbError::Storage("kv backend rwlock poisoned".to_string()))?;
         db.execute_batch(batch)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use semantic_db_core::Backend;
+
+    use super::*;
+    use crate::MemoryKvEngine;
+
+    fn assert_backend_impl<T: Backend>() {}
+
+    #[test]
+    fn kv_backend_blanket_impl_compiles() {
+        assert_backend_impl::<KvBackend<MemoryKvEngine>>();
     }
 }

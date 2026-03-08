@@ -2,7 +2,7 @@ use semantic_data::value::{FieldPath, Object, Value};
 use semantic_db_core::{
     CompareOp, Db, Expr, Operand, Predicate, SelectQuery, UpdateQuery, catalog::CollectionKind,
 };
-use semantic_db_redb::RedbBackend;
+use semantic_db_redb::open_backend;
 
 #[tokio::main(flavor = "multi_thread")]
 async fn main() -> std::result::Result<(), semantic_db_core::DbError> {
@@ -14,7 +14,7 @@ async fn main() -> std::result::Result<(), semantic_db_core::DbError> {
             .as_nanos()
     ));
 
-    let backend = RedbBackend::open(&path)?;
+    let backend = open_backend(&path)?;
     let db = Db::new(backend);
     db.create_collection("users", CollectionKind::Untyped)
         .await?;

@@ -1,15 +1,7 @@
-use std::path::Path;
-use std::sync::{Arc, RwLock};
-
-use async_trait::async_trait;
 use redb::{ReadableTable, TableDefinition};
-use semantic_data::value::Object;
-use semantic_db_core::catalog::{Catalog, CollectionKind, LocalCollectionId};
-use semantic_db_core::{
-    Backend, Batch, BatchOutcome, DeleteQuery, EntityRecord, MutationStats, Query, QueryExplain,
-    QueryPlan, QueryResult, UpdateQuery,
-};
 use semantic_db_kv::{DbError, KvCommitOutcome, KvEngine, KvTransactionCapabilities, KvWriteOp};
+use std::path::Path;
+use std::sync::Arc;
 
 const KV_TABLE: TableDefinition<&[u8], &[u8]> = TableDefinition::new("kv");
 const META_REV_KEY: &[u8] = b"__semantic/revision";
@@ -192,127 +184,12 @@ fn read_revision_table(
 }
 
 pub type RedbDatabase = semantic_db_kv::KvDb<RedbKvEngine>;
+pub type RedbBackend = semantic_db_kv::KvBackend<RedbKvEngine>;
 
-pub struct RedbBackend {
-    db: Arc<RwLock<RedbDatabase>>,
-}
-
-impl RedbBackend {
-    pub fn open(path: impl AsRef<Path>) -> std::result::Result<Self, DbError> {
-        let engine = RedbKvEngine::open(path)?;
-        let db = RedbDatabase::open(engine)?;
-        Ok(Self::new(db))
-    }
-
-    pub fn new(db: RedbDatabase) -> Self {
-        Self {
-            db: Arc::new(RwLock::new(db)),
-        }
-    }
-
-    async fn with_db_read<T, F>(&self, call: F) -> std::result::Result<T, DbError>
-    where
-        T: Send + 'static,
-        F: FnOnce(&RedbDatabase) -> std::result::Result<T, DbError> + Send + 'static,
-    {
-        let db = Arc::clone(&self.db);
-        tokio::task::spawn_blocking(move || {
-            let db = db
-                .read()
-                .map_err(|_| DbError::Storage("redb backend rwlock poisoned".to_string()))?;
-            call(&db)
-        })
-        .await
-        .map_err(|err| DbError::Storage(format!("redb blocking task failed: {err}")))?
-    }
-
-    async fn with_db_write<T, F>(&self, call: F) -> std::result::Result<T, DbError>
-    where
-        T: Send + 'static,
-        F: FnOnce(&mut RedbDatabase) -> std::result::Result<T, DbError> + Send + 'static,
-    {
-        let db = Arc::clone(&self.db);
-        tokio::task::spawn_blocking(move || {
-            let mut db = db
-                .write()
-                .map_err(|_| DbError::Storage("redb backend rwlock poisoned".to_string()))?;
-            call(&mut db)
-        })
-        .await
-        .map_err(|err| DbError::Storage(format!("redb blocking task failed: {err}")))?
-    }
-}
-
-#[async_trait]
-impl Backend for RedbBackend {
-    async fn catalog(&self) -> std::result::Result<Arc<Catalog>, DbError> {
-        self.with_db_read(|db| Ok(db.catalog())).await
-    }
-
-    async fn create_collection(
-        &self,
-        name: String,
-        kind: CollectionKind,
-    ) -> std::result::Result<LocalCollectionId, DbError> {
-        self.with_db_write(move |db| db.create_collection(name, kind))
-            .await
-    }
-
-    async fn insert(
-        &self,
-        collection: String,
-        id: String,
-        object: Object,
-    ) -> std::result::Result<(), DbError> {
-        self.with_db_write(move |db| db.insert(&collection, id, object))
-            .await
-    }
-
-    async fn get(
-        &self,
-        collection: String,
-        id: String,
-    ) -> std::result::Result<Option<EntityRecord>, DbError> {
-        self.with_db_read(move |db| db.get(&collection, &id)).await
-    }
-
-    async fn delete(&self, collection: String, id: String) -> std::result::Result<(), DbError> {
-        self.with_db_write(move |db| db.delete(&collection, &id))
-            .await
-    }
-
-    async fn query(&self, query: Query) -> std::result::Result<QueryResult, DbError> {
-        match query {
-            Query::Select(select) => {
-                self.with_db_read(move |db| db.select(select).map(QueryResult::Select))
-                    .await
-            }
-            query => self.with_db_write(move |db| db.query(query)).await,
-        }
-    }
-
-    async fn explain_query(&self, query: Query) -> std::result::Result<QueryExplain, DbError> {
-        self.with_db_read(move |db| db.explain_query(query)).await
-    }
-
-    async fn plan_query(&self, query: Query) -> std::result::Result<QueryPlan, DbError> {
-        self.with_db_read(move |db| db.plan_query(query)).await
-    }
-
-    async fn update_where(
-        &self,
-        query: UpdateQuery,
-    ) -> std::result::Result<MutationStats, DbError> {
-        self.with_db_write(move |db| db.update_where(query)).await
-    }
-
-    async fn delete_where(&self, query: DeleteQuery) -> std::result::Result<usize, DbError> {
-        self.with_db_write(move |db| db.delete_where(query)).await
-    }
-
-    async fn execute_batch(&self, batch: Batch) -> std::result::Result<BatchOutcome, DbError> {
-        self.with_db_write(move |db| db.execute_batch(batch)).await
-    }
+pub fn open_backend(path: impl AsRef<Path>) -> std::result::Result<RedbBackend, DbError> {
+    let engine = RedbKvEngine::open(path)?;
+    let db = RedbDatabase::open(engine)?;
+    Ok(RedbBackend::new(db))
 }
 
 #[cfg(test)]
@@ -321,7 +198,7 @@ mod tests {
     use semantic_db_core::Db;
     use semantic_db_kv::CollectionKind;
 
-    use super::{RedbBackend, RedbDatabase, RedbKvEngine};
+    use super::{RedbDatabase, RedbKvEngine, open_backend};
 
     #[test]
     fn redb_backend_roundtrip() {
@@ -356,7 +233,7 @@ mod tests {
     #[tokio::test(flavor = "multi_thread")]
     async fn test_redb_backend_testsuite() {
         let dir = tempfile::tempdir().unwrap();
-        let backend = RedbBackend::open(dir.path().join("db")).unwrap();
+        let backend = open_backend(dir.path().join("db")).unwrap();
         let db = Db::new(backend);
 
         semantic_db_core::test::test_db(&db).await;
