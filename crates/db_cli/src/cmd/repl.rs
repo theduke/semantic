@@ -27,10 +27,17 @@ pub async fn run(args: ReplArgs) -> std::result::Result<(), CliError> {
 
     let mut editor = DefaultEditor::new()
         .map_err(|err| CliError::Message(format!("failed to initialize REPL editor: {err}")))?;
-    let history_path = history_path();
-    if let Some(path) = history_path.as_deref() {
-        // Missing history is expected on first run.
-        let _ = editor.load_history(path);
+    let history_path = Some(history_path()?);
+
+    // Missing history is expected on first run.
+    if let Some(path) = history_path.as_deref()
+        && path.exists()
+        && let Err(err) = editor.load_history(path)
+    {
+        tracing::debug!(
+            "failed to load REPL history from '{}': {err}",
+            path.display()
+        );
     }
 
     loop {
@@ -69,8 +76,10 @@ pub async fn run(args: ReplArgs) -> std::result::Result<(), CliError> {
         }
     }
 
-    if let Some(path) = history_path.as_deref() {
-        let _ = editor.save_history(path);
+    if let Some(path) = &history_path
+        && let Err(err) = editor.save_history(path)
+    {
+        tracing::debug!("failed to save REPL history to '{}': {err}", path.display());
     }
 
     Ok(())
@@ -116,10 +125,13 @@ async fn run_non_interactive(
     Ok(())
 }
 
-fn history_path() -> Option<PathBuf> {
-    std::env::var_os("HOME").map(|home| {
-        let mut path = PathBuf::from(home);
-        path.push(".semantic_db_cli_history");
-        path
-    })
+fn history_path() -> Result<PathBuf, std::io::Error> {
+    let home = std::env::home_dir().ok_or_else(|| {
+        std::io::Error::new(std::io::ErrorKind::NotFound, "home directory not found")
+    })?;
+    let semdir = home.join(".local/share/semantic");
+
+    std::fs::create_dir_all(&semdir)?;
+
+    Ok(semdir.join("repl_history"))
 }

@@ -1,5 +1,5 @@
 [package]
-name = "semantic_db_redb"
+name = "semantic_db_test"
 authors.workspace = true
 keywords.workspace = true
 repository.workspace = true
@@ -12,13 +12,5 @@ categories.workspace = true
 version.workspace = true
 
 [dependencies]
-async-trait = "0.1.89"
-redb = "2.6.3"
-semantic_db_core = { path = "../db_core" }
-semantic_db_kv = { path = "../db_kv" }
 semantic_data = { workspace = true }
-tokio = { version = "1.48.0", features = ["rt-multi-thread", "macros"] }
-
-[dev-dependencies]
-semantic_db_test = { path = "../db_test" }
-tempfile = "3.26.0"
+semantic_db_core = { path = "../db_core" }

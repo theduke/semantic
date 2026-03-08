@@ -6,7 +6,6 @@ mod ddl;
 mod error;
 mod plan;
 mod query;
-pub mod test;
 mod transaction;
 mod validation;
 

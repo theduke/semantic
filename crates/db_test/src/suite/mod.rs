@@ -1,8 +1,7 @@
 use semantic_data::value::{FieldPath, Object, Value};
-
-use crate::{
-    CompareOp, Db, Operand, Predicate, QueryResult, SelectQuery, TextQueryFormat, UpdateQuery,
-    catalog::CollectionKind,
+use semantic_db_core::{
+    CompareOp, Db, DeleteQuery, Expr, Operand, Predicate, QueryResult, SelectQuery,
+    TextQueryFormat, UpdateQuery, catalog::CollectionKind,
 };
 
 pub async fn test_db(db: &Db) {
@@ -77,7 +76,7 @@ async fn test_update_query(db: &Db) {
                 })
                 .set(
                     FieldPath::from_fields(["score"]),
-                    crate::Expr::Operand(Operand::Literal(Value::I64(99))),
+                    Expr::Operand(Operand::Literal(Value::I64(99))),
                 ),
         )
         .await
@@ -163,7 +162,7 @@ async fn test_delete_query(db: &Db) {
 
     let deleted = db
         .delete_where(
-            crate::DeleteQuery::new()
+            DeleteQuery::new()
                 .with_collection("shared_suite_delete")
                 .with_predicate(Predicate::Compare {
                     op: CompareOp::Eq,

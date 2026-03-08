@@ -256,6 +256,6 @@ mod tests {
         let backend = open_backend(dir.path().join("db"), DbOpenMode::AutoCreate).unwrap();
         let db = Db::new(backend);
 
-        semantic_db_core::test::test_db(&db).await;
+        semantic_db_test::suite::test_db(&db).await;
     }
 }

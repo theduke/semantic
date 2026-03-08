@@ -53,7 +53,7 @@ impl Catalog {
             indexes: IdMap::new(),
             collection_indexes: FnvHashMap::default(),
             next_field_id: 0,
-            auto_index_enabled: false,
+            auto_index_enabled: true,
         }
     }
 

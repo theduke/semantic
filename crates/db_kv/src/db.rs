@@ -1781,6 +1781,12 @@ mod tests {
     }
 
     #[test]
+    fn initialization_enables_auto_indexing() {
+        let db = KvDb::in_memory();
+        assert!(db.auto_index_enabled());
+    }
+
+    #[test]
     fn untyped_query_works() {
         let mut db = KvDb::in_memory();
         db.create_collection("events", CollectionKind::Untyped)
