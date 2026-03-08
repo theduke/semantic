@@ -44,6 +44,7 @@ pub async fn test_db(db: &Db) {
     test_delete_query(db).await;
     test_ast_predicate_constructs(db).await;
     test_sql_predicate_constructs(db).await;
+    test_subquery_patterns(db).await;
     test_join_semantics(db).await;
     test_ast_ordering_variants(db).await;
     test_sql_ordering_variants(db).await;
@@ -667,6 +668,233 @@ async fn test_sql_predicate_constructs(db: &Db) {
         panic!("sql function query should return SELECT rows");
     };
     assert_eq!(function_rows.len(), 1);
+}
+
+async fn test_subquery_patterns(db: &Db) {
+    db.create_collection("shared_suite_subquery_outer", CollectionKind::Untyped)
+        .await
+        .expect("subquery outer collection creation should succeed");
+    db.create_collection("shared_suite_subquery_inner", CollectionKind::Untyped)
+        .await
+        .expect("subquery inner collection creation should succeed");
+
+    for (id, score) in [("sq-a", 1), ("sq-b", 2), ("sq-c", 3)] {
+        let mut row = Object::new();
+        row.insert("id", Value::String(id.to_string()));
+        row.insert("score", Value::I64(score));
+        db.insert("shared_suite_subquery_outer", id, row)
+            .await
+            .expect("subquery outer seed insert should succeed");
+    }
+    for (id, value, tag) in [
+        ("in-1", 2, "in"),
+        ("in-2", 3, "in"),
+        ("out-1", 1, "out"),
+        ("only-1", 3, "only"),
+    ] {
+        let mut row = Object::new();
+        row.insert("id", Value::String(id.to_string()));
+        row.insert("value", Value::I64(value));
+        row.insert("tag", Value::String(tag.to_string()));
+        db.insert("shared_suite_subquery_inner", id, row)
+            .await
+            .expect("subquery inner seed insert should succeed");
+    }
+
+    let in_subquery_rows = db
+        .select(
+            SelectQuery::new()
+                .with_collection("shared_suite_subquery_outer")
+                .with_predicate(Expr::Binary {
+                    op: BinaryOp::In,
+                    left: Box::new(Expr::Operand(Operand::Field(FieldPath::from_fields([
+                        "score",
+                    ])))),
+                    right: Box::new(Expr::Subquery(Box::new(
+                        SelectQuery::new()
+                            .with_collection("shared_suite_subquery_inner")
+                            .with_predicate(eq_predicate(
+                                FieldPath::from_fields(["tag"]),
+                                Value::String("in".to_string()),
+                            ))
+                            .with_projection(vec![QueryField {
+                                expr: Box::new(Expr::Operand(Operand::Field(
+                                    FieldPath::from_fields(["value"]),
+                                ))),
+                                alias: None,
+                            }]),
+                    ))),
+                })
+                .with_order_by(vec![OrderBy {
+                    expr: Expr::Operand(Operand::Field(FieldPath::from_fields(["id"]))),
+                    direction: SortDirection::Asc,
+                }]),
+        )
+        .await
+        .expect("ast IN subquery query should succeed");
+    assert_eq!(row_ids(&in_subquery_rows), vec!["sq-b", "sq-c"]);
+
+    let not_in_subquery_rows = db
+        .select(
+            SelectQuery::new()
+                .with_collection("shared_suite_subquery_outer")
+                .with_predicate(Expr::Unary {
+                    op: semantic_data::query::UnaryOp::Not,
+                    expr: Box::new(Expr::Binary {
+                        op: BinaryOp::In,
+                        left: Box::new(Expr::Operand(Operand::Field(FieldPath::from_fields([
+                            "score",
+                        ])))),
+                        right: Box::new(Expr::Subquery(Box::new(
+                            SelectQuery::new()
+                                .with_collection("shared_suite_subquery_inner")
+                                .with_predicate(eq_predicate(
+                                    FieldPath::from_fields(["tag"]),
+                                    Value::String("in".to_string()),
+                                ))
+                                .with_projection(vec![QueryField {
+                                    expr: Box::new(Expr::Operand(Operand::Field(
+                                        FieldPath::from_fields(["value"]),
+                                    ))),
+                                    alias: None,
+                                }]),
+                        ))),
+                    }),
+                }),
+        )
+        .await
+        .expect("ast NOT IN subquery query should succeed");
+    assert_eq!(row_ids(&not_in_subquery_rows), vec!["sq-a"]);
+
+    let scalar_subquery_predicate_rows = db
+        .select(
+            SelectQuery::new()
+                .with_collection("shared_suite_subquery_outer")
+                .with_predicate(Expr::Binary {
+                    op: BinaryOp::Eq,
+                    left: Box::new(Expr::Operand(Operand::Field(FieldPath::from_fields([
+                        "score",
+                    ])))),
+                    right: Box::new(Expr::Subquery(Box::new(
+                        SelectQuery::new()
+                            .with_collection("shared_suite_subquery_inner")
+                            .with_predicate(eq_predicate(
+                                FieldPath::from_fields(["tag"]),
+                                Value::String("only".to_string()),
+                            ))
+                            .with_projection(vec![QueryField {
+                                expr: Box::new(Expr::Operand(Operand::Field(
+                                    FieldPath::from_fields(["value"]),
+                                ))),
+                                alias: None,
+                            }]),
+                    ))),
+                }),
+        )
+        .await
+        .expect("ast scalar subquery predicate should succeed");
+    assert_eq!(row_ids(&scalar_subquery_predicate_rows), vec!["sq-c"]);
+
+    let scalar_subquery_projection = db
+        .select(
+            SelectQuery::new()
+                .with_collection("shared_suite_subquery_outer")
+                .with_order_by(vec![OrderBy {
+                    expr: Expr::Operand(Operand::Field(FieldPath::from_fields(["id"]))),
+                    direction: SortDirection::Asc,
+                }])
+                .with_projection(vec![
+                    QueryField {
+                        expr: Box::new(Expr::Operand(Operand::Field(FieldPath::from_fields([
+                            "id",
+                        ])))),
+                        alias: Some("id".to_string()),
+                    },
+                    QueryField {
+                        expr: Box::new(Expr::Subquery(Box::new(
+                            SelectQuery::new()
+                                .with_collection("shared_suite_subquery_inner")
+                                .with_predicate(eq_predicate(
+                                    FieldPath::from_fields(["tag"]),
+                                    Value::String("only".to_string()),
+                                ))
+                                .with_projection(vec![QueryField {
+                                    expr: Box::new(Expr::Operand(Operand::Field(
+                                        FieldPath::from_fields(["value"]),
+                                    ))),
+                                    alias: None,
+                                }]),
+                        ))),
+                        alias: Some("cutoff".to_string()),
+                    },
+                ]),
+        )
+        .await
+        .expect("ast scalar subquery projection should succeed");
+    assert_eq!(scalar_subquery_projection.len(), 3);
+    assert!(
+        scalar_subquery_projection
+            .iter()
+            .all(|row| row.get("cutoff") == Some(&Value::I64(3)))
+    );
+
+    if db
+        .supported_text_query_formats()
+        .contains(&TextQueryFormat::Sql)
+    {
+        let in_sql = db
+            .query_text(
+                TextQueryFormat::Sql,
+                "SELECT id FROM shared_suite_subquery_outer WHERE score IN (SELECT value FROM shared_suite_subquery_inner WHERE tag = 'in') ORDER BY id",
+            )
+            .await
+            .expect("sql IN subquery query should succeed");
+        let QueryResult::Select(in_sql_rows) = in_sql else {
+            panic!("sql IN subquery query should return SELECT rows");
+        };
+        assert_eq!(row_ids(&in_sql_rows), vec!["sq-b", "sq-c"]);
+
+        let not_in_sql = db
+            .query_text(
+                TextQueryFormat::Sql,
+                "SELECT id FROM shared_suite_subquery_outer WHERE score NOT IN (SELECT value FROM shared_suite_subquery_inner WHERE tag = 'in') ORDER BY id",
+            )
+            .await
+            .expect("sql NOT IN subquery query should succeed");
+        let QueryResult::Select(not_in_sql_rows) = not_in_sql else {
+            panic!("sql NOT IN subquery query should return SELECT rows");
+        };
+        assert_eq!(row_ids(&not_in_sql_rows), vec!["sq-a"]);
+
+        let scalar_predicate_sql = db
+            .query_text(
+                TextQueryFormat::Sql,
+                "SELECT id FROM shared_suite_subquery_outer WHERE score = (SELECT value FROM shared_suite_subquery_inner WHERE tag = 'only')",
+            )
+            .await
+            .expect("sql scalar subquery predicate should succeed");
+        let QueryResult::Select(scalar_predicate_rows) = scalar_predicate_sql else {
+            panic!("sql scalar subquery predicate should return SELECT rows");
+        };
+        assert_eq!(row_ids(&scalar_predicate_rows), vec!["sq-c"]);
+
+        let scalar_projection_sql = db
+            .query_text(
+                TextQueryFormat::Sql,
+                "SELECT id, (SELECT value FROM shared_suite_subquery_inner WHERE tag = 'only') AS cutoff FROM shared_suite_subquery_outer ORDER BY id",
+            )
+            .await
+            .expect("sql scalar subquery projection should succeed");
+        let QueryResult::Select(scalar_projection_rows) = scalar_projection_sql else {
+            panic!("sql scalar subquery projection should return SELECT rows");
+        };
+        assert_eq!(scalar_projection_rows.len(), 3);
+        assert!(
+            scalar_projection_rows
+                .iter()
+                .all(|row| row.get("cutoff") == Some(&Value::I64(3)))
+        );
+    }
 }
 
 async fn test_join_semantics(db: &Db) {

@@ -238,11 +238,7 @@ pub enum Expr {
         list: Vec<Expr>,
         negated: bool,
     },
-    InSubquery {
-        expr: Box<Expr>,
-        query: Box<SelectQuery>,
-        negated: bool,
-    },
+    Subquery(Box<SelectQuery>),
     Between {
         expr: Box<Expr>,
         low: Box<Expr>,
@@ -455,15 +451,7 @@ impl From<public_query::Expr> for Expr {
                 list: list.into_iter().map(Into::into).collect(),
                 negated,
             },
-            public_query::Expr::InSubquery {
-                expr,
-                query,
-                negated,
-            } => Self::InSubquery {
-                expr: Box::new((*expr).into()),
-                query: Box::new((*query).into()),
-                negated,
-            },
+            public_query::Expr::Subquery(query) => Self::Subquery(Box::new((*query).into())),
             public_query::Expr::Between {
                 expr,
                 low,
@@ -1440,7 +1428,7 @@ pub fn evaluate_expr<T: ObjectAccess + ?Sized>(value: &T, expr: &Expr) -> Option
             }
             Some(Value::Bool(if *negated { !found } else { found }))
         }
-        Expr::InSubquery { .. } | Expr::Exists { .. } | Expr::RelationExists { .. } => None,
+        Expr::Subquery(_) | Expr::Exists { .. } | Expr::RelationExists { .. } => None,
         Expr::Between {
             expr,
             low,
@@ -1773,6 +1761,10 @@ fn eval_binary(op: BinaryOp, left: Value, right: Value) -> Option<Value> {
         BinaryOp::Lte => Some(Value::Bool(left <= right)),
         BinaryOp::Gt => Some(Value::Bool(left > right)),
         BinaryOp::Gte => Some(Value::Bool(left >= right)),
+        BinaryOp::In => match right {
+            Value::List(items) => Some(Value::Bool(items.into_iter().any(|item| item == left))),
+            _ => None,
+        },
     }
 }
 

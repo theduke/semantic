@@ -830,7 +830,7 @@ fn expr_contains_relationship_expr(expr: &crate::query::Expr) -> bool {
             expr_contains_relationship_expr(expr)
                 || list.iter().any(expr_contains_relationship_expr)
         }
-        crate::query::Expr::InSubquery { expr, .. } => expr_contains_relationship_expr(expr),
+        crate::query::Expr::Subquery(_) => false,
         crate::query::Expr::Between {
             expr, low, high, ..
         } => {

@@ -779,11 +779,24 @@ fn parse_expr(expr: SqlExpr) -> Result<Expr, SqlQueryError> {
             expr,
             subquery,
             negated,
-        } => Ok(Expr::InSubquery {
-            expr: Box::new(parse_expr(*expr)?),
-            query: Box::new(parse_select_subquery(*subquery)?),
-            negated,
-        }),
+        } => {
+            let in_expr = Expr::Binary {
+                op: BinaryOp::In,
+                left: Box::new(parse_expr(*expr)?),
+                right: Box::new(Expr::Subquery(Box::new(parse_select_subquery(*subquery)?))),
+            };
+            if negated {
+                Ok(Expr::Unary {
+                    op: UnaryOp::Not,
+                    expr: Box::new(in_expr),
+                })
+            } else {
+                Ok(in_expr)
+            }
+        }
+        SqlExpr::Subquery(subquery) => {
+            Ok(Expr::Subquery(Box::new(parse_select_subquery(*subquery)?)))
+        }
         SqlExpr::Between {
             expr,
             negated,
@@ -1533,14 +1546,8 @@ fn expr_to_sql(expr: &Expr) -> Result<String, SqlQueryError> {
             out.push(')');
             Ok(out)
         }
-        Expr::InSubquery {
-            expr,
-            query,
-            negated,
-        } => Ok(format!(
-            "{} {}IN ({})",
-            expr_to_sql(expr)?,
-            if *negated { "NOT " } else { "" },
+        Expr::Subquery(query) => Ok(format!(
+            "({})",
             select_to_sql(query, query.collection_or_default())?
         )),
         Expr::Between {
@@ -1710,6 +1717,7 @@ fn binary_to_sql(op: BinaryOp) -> &'static str {
         BinaryOp::Lte => "<=",
         BinaryOp::Gt => ">",
         BinaryOp::Gte => ">=",
+        BinaryOp::In => "IN",
     }
 }
 
@@ -1893,5 +1901,26 @@ mod tests {
         assert_eq!(select.joins[2].source.class.as_deref(), None);
         assert_eq!(select.joins[3].source.collection.as_deref(), Some("other"));
         assert_eq!(select.joins[3].source.class.as_deref(), Some("User"));
+    }
+
+    #[test]
+    fn parse_in_subquery_as_binary_in() {
+        let parsed = parse_sql_query(
+            "SELECT id FROM items WHERE id IN (SELECT id FROM other_items)",
+            SqlDialectKind::Generic,
+        )
+        .unwrap();
+        let Query::Select(select) = parsed.query else {
+            panic!("expected select");
+        };
+        let predicate = select.predicate.expect("predicate expected");
+        assert!(matches!(
+            predicate,
+            Expr::Binary {
+                op: BinaryOp::In,
+                right,
+                ..
+            } if matches!(right.as_ref(), Expr::Subquery(_))
+        ));
     }
 }

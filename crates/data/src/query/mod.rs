@@ -16,6 +16,7 @@ pub enum BinaryOp {
     Lte,
     Gt,
     Gte,
+    In,
 }
 
 #[derive(facet::Facet, Debug, Clone, Copy, PartialEq, Eq)]
@@ -117,11 +118,7 @@ pub enum Expr {
         list: Vec<Expr>,
         negated: bool,
     },
-    InSubquery {
-        expr: Box<Expr>,
-        query: Box<SelectQuery>,
-        negated: bool,
-    },
+    Subquery(Box<SelectQuery>),
     Between {
         expr: Box<Expr>,
         low: Box<Expr>,

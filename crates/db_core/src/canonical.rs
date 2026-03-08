@@ -271,15 +271,7 @@ fn canonicalize_expr(
                 .collect::<CanonicalResult<Vec<_>>>()?,
             negated: *negated,
         }),
-        Expr::InSubquery {
-            expr,
-            query,
-            negated,
-        } => Ok(Expr::InSubquery {
-            expr: Box::new(canonicalize_expr(expr, collection, context)?),
-            query: query.clone(),
-            negated: *negated,
-        }),
+        Expr::Subquery(query) => Ok(Expr::Subquery(query.clone())),
         Expr::Between {
             expr,
             low,

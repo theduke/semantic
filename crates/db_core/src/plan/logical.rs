@@ -329,7 +329,7 @@ fn expr_has_aggregate(expr: &Expr) -> bool {
                     .as_ref()
                     .is_some_and(|depth| expr_has_aggregate(depth))
         }
-        Expr::InSubquery { .. } | Expr::Exists { .. } | Expr::Operand(_) => false,
+        Expr::Subquery(_) | Expr::Exists { .. } | Expr::Operand(_) => false,
     }
 }
 
@@ -365,15 +365,42 @@ fn expr_to_apply(predicate: &Expr) -> Option<SubqueryApply> {
             subquery: query.as_ref().clone(),
             negated: *negated,
         }),
-        Expr::InSubquery {
+        Expr::Binary {
+            op: semantic_data::query::BinaryOp::In,
+            left,
+            right,
+        } => {
+            if let Expr::Subquery(query) = right.as_ref() {
+                Some(SubqueryApply::InSubquery {
+                    left: left.as_ref().clone(),
+                    subquery: query.as_ref().clone(),
+                    negated: false,
+                })
+            } else {
+                None
+            }
+        }
+        Expr::Unary {
+            op: semantic_data::query::UnaryOp::Not,
             expr,
-            query,
-            negated,
-        } => Some(SubqueryApply::InSubquery {
-            left: expr.as_ref().clone(),
-            subquery: query.as_ref().clone(),
-            negated: *negated,
-        }),
+        } => match expr.as_ref() {
+            Expr::Binary {
+                op: semantic_data::query::BinaryOp::In,
+                left,
+                right,
+            } => {
+                if let Expr::Subquery(query) = right.as_ref() {
+                    Some(SubqueryApply::InSubquery {
+                        left: left.as_ref().clone(),
+                        subquery: query.as_ref().clone(),
+                        negated: true,
+                    })
+                } else {
+                    None
+                }
+            }
+            _ => None,
+        },
         _ => None,
     }
 }
