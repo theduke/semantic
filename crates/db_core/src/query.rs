@@ -1,3 +1,13 @@
+#[cfg(feature = "sql")]
+#[path = "query/sql/enabled.rs"]
+pub mod sql;
+
+#[cfg(not(feature = "sql"))]
+#[path = "query/sql/disabled.rs"]
+pub mod sql;
+
+pub use sql::*;
+
 use std::{
     cmp::Ordering,
     collections::{BTreeMap, BTreeSet},
