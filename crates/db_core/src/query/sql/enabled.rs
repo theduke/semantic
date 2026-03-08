@@ -7,7 +7,7 @@
 /// Currently unsupported operations and constructs:
 ///
 /// - Statement-level:
-///   - Any statement other than `SELECT`, `UPDATE`, `DELETE`.
+///   - Any statement other than `SELECT`, `INSERT`, `UPDATE`, `DELETE`.
 ///   - Multiple statements in one SQL string.
 ///
 /// - `SELECT`:
@@ -63,17 +63,18 @@
 use semantic_data::value::{FieldPath, PathSegment, Value};
 use sqlparser::ast::{
     Assignment, AssignmentTarget, BinaryOperator, Expr as SqlExpr, FromTable, FunctionArguments,
-    Join, JoinConstraint, JoinOperator, LimitClause, ObjectName, Offset, OrderByExpr, OrderByKind,
-    Query as SqlQuery, Select, SelectItem, SetExpr, Statement, TableAlias, TableFactor,
-    TableWithJoins, UnaryOperator, ValueWithSpan,
+    Insert as SqlInsert, Join, JoinConstraint, JoinOperator, LimitClause, ObjectName, Offset,
+    OrderByExpr, OrderByKind, Query as SqlQuery, Select, SelectItem, SetExpr, Statement,
+    TableAlias, TableFactor, TableObject, TableWithJoins, UnaryOperator, ValueWithSpan, Values,
 };
 use sqlparser::dialect::{Dialect, GenericDialect, MySqlDialect, PostgreSqlDialect, SQLiteDialect};
 use sqlparser::parser::Parser;
 use thiserror::Error;
 
 use crate::{
-    BinaryOp, CompareOp, DeleteQuery, Expr, JoinCondition, JoinQuery, JoinType, Operand,
-    OrderBy as DbOrderBy, Predicate, Query, QueryField, SelectQuery, SortDirection, UpdateQuery,
+    BinaryOp, CompareOp, DeleteQuery, Expr, InsertQuery, InsertSource, JoinCondition, JoinQuery,
+    JoinType, Operand, OrderBy as DbOrderBy, Predicate, Query, QueryField, SelectQuery,
+    SortDirection, UpdateQuery,
 };
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -150,6 +151,7 @@ pub fn parse_sql_query_for_collection(
 pub fn query_to_sql(query: &Query) -> Result<String, SqlQueryError> {
     match query {
         Query::Select(select) => select_to_sql(select, select.collection_or_default()),
+        Query::Insert(insert) => insert_to_sql(insert, insert.collection_or_default()),
         Query::Update(update) => update_to_sql(update, update.collection_or_default()),
         Query::Delete(delete) => delete_to_sql(delete, delete.collection_or_default()),
     }
@@ -158,6 +160,7 @@ pub fn query_to_sql(query: &Query) -> Result<String, SqlQueryError> {
 fn parse_statement(stmt: Statement) -> Result<ParsedSqlQuery, SqlQueryError> {
     match stmt {
         Statement::Query(query) => parse_select_stmt(*query),
+        Statement::Insert(insert) => parse_insert_stmt(insert),
         Statement::Update(update) => parse_update_stmt(update),
         Statement::Delete(delete) => parse_delete_stmt(delete),
         other => Err(SqlQueryError::Unsupported(format!(
@@ -261,6 +264,119 @@ fn parse_select(
             limit,
         }),
     })
+}
+
+fn parse_insert_stmt(insert: SqlInsert) -> Result<ParsedSqlQuery, SqlQueryError> {
+    if insert.optimizer_hint.is_some()
+        || insert.or.is_some()
+        || insert.ignore
+        || insert.overwrite
+        || !insert.assignments.is_empty()
+        || insert.partitioned.is_some()
+        || !insert.after_columns.is_empty()
+        || insert.has_table_keyword
+        || insert.on.is_some()
+        || insert.replace_into
+        || insert.priority.is_some()
+        || insert.insert_alias.is_some()
+        || insert.settings.is_some()
+        || insert.format_clause.is_some()
+        || insert.table_alias.is_some()
+    {
+        return Err(SqlQueryError::Unsupported(
+            "advanced INSERT forms are not supported".to_string(),
+        ));
+    }
+
+    let collection = parse_insert_table_name(insert.table)?;
+    let columns = insert
+        .columns
+        .into_iter()
+        .map(|ident| ident.value)
+        .collect::<Vec<_>>();
+    let returning = insert
+        .returning
+        .map(parse_projection)
+        .transpose()?
+        .unwrap_or_default();
+    let source_query = insert.source.ok_or_else(|| {
+        SqlQueryError::Unsupported("INSERT DEFAULT VALUES is not supported".to_string())
+    })?;
+    let source = parse_insert_source(*source_query)?;
+
+    Ok(ParsedSqlQuery {
+        query: Query::Insert(InsertQuery {
+            collection: Some(collection),
+            columns,
+            source,
+            returning,
+        }),
+    })
+}
+
+fn parse_insert_source(source: SqlQuery) -> Result<InsertSource, SqlQueryError> {
+    let SqlQuery {
+        with,
+        body,
+        order_by,
+        limit_clause,
+        fetch,
+        locks,
+        for_clause,
+        settings,
+        format_clause,
+        pipe_operators,
+    } = source;
+
+    let has_query_clauses = with.is_some()
+        || fetch.is_some()
+        || !locks.is_empty()
+        || for_clause.is_some()
+        || settings.is_some()
+        || format_clause.is_some()
+        || !pipe_operators.is_empty();
+    if has_query_clauses {
+        return Err(SqlQueryError::Unsupported(
+            "advanced INSERT source queries are not supported".to_string(),
+        ));
+    }
+
+    match *body {
+        SetExpr::Values(values) => {
+            if order_by.is_some() || limit_clause.is_some() {
+                return Err(SqlQueryError::Unsupported(
+                    "ORDER BY / LIMIT are not supported for VALUES insert sources".to_string(),
+                ));
+            }
+            parse_insert_values(values)
+        }
+        SetExpr::Select(select) => {
+            let parsed = parse_select(order_by, limit_clause, *select)?;
+            let Query::Select(select_query) = parsed.query else {
+                return Err(SqlQueryError::Invalid(
+                    "failed to parse INSERT SELECT source".to_string(),
+                ));
+            };
+            Ok(InsertSource::Select(select_query))
+        }
+        other => Err(SqlQueryError::Unsupported(format!(
+            "insert source '{}' is not supported",
+            other
+        ))),
+    }
+}
+
+fn parse_insert_values(values: Values) -> Result<InsertSource, SqlQueryError> {
+    let rows = values
+        .rows
+        .into_iter()
+        .map(|row| {
+            row.into_iter()
+                .map(parse_expr)
+                .collect::<Result<Vec<_>, _>>()
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+    Ok(InsertSource::Values(rows))
 }
 
 fn parse_update_stmt(update: sqlparser::ast::Update) -> Result<ParsedSqlQuery, SqlQueryError> {
@@ -750,6 +866,16 @@ fn parse_base_table_name(factor: &TableFactor) -> Result<String, SqlQueryError> 
     }
 }
 
+fn parse_insert_table_name(table: TableObject) -> Result<String, SqlQueryError> {
+    match table {
+        TableObject::TableName(name) => object_name_to_string(&name),
+        TableObject::TableFunction(function) => Err(SqlQueryError::Unsupported(format!(
+            "table function '{}' is not supported for INSERT target",
+            function
+        ))),
+    }
+}
+
 fn table_alias(factor: &TableFactor) -> Option<String> {
     match factor {
         TableFactor::Table { alias, .. } => alias_name(alias),
@@ -826,6 +952,12 @@ fn with_query_collection_if_missing(query: Query, collection: String) -> Query {
                 select.collection = Some(collection);
             }
             Query::Select(select)
+        }
+        Query::Insert(mut insert) => {
+            if insert.collection.is_none() {
+                insert.collection = Some(collection);
+            }
+            Query::Insert(insert)
         }
         Query::Update(mut update) => {
             if update.collection.is_none() {
@@ -945,6 +1077,49 @@ fn select_to_sql(query: &SelectQuery, collection: &str) -> Result<String, SqlQue
     if query.offset > 0 {
         sql.push_str(" OFFSET ");
         sql.push_str(&query.offset.to_string());
+    }
+    Ok(sql)
+}
+
+fn insert_to_sql(query: &InsertQuery, collection: &str) -> Result<String, SqlQueryError> {
+    let mut sql = String::new();
+    sql.push_str("INSERT INTO ");
+    sql.push_str(collection);
+    if !query.columns.is_empty() {
+        sql.push_str(" (");
+        sql.push_str(&query.columns.join(", "));
+        sql.push(')');
+    }
+    sql.push(' ');
+    match &query.source {
+        InsertSource::Objects(_) => {
+            return Err(SqlQueryError::Unsupported(
+                "object insert source is not representable in SQL text".to_string(),
+            ));
+        }
+        InsertSource::Values(rows) => {
+            sql.push_str("VALUES ");
+            for (row_idx, row) in rows.iter().enumerate() {
+                if row_idx > 0 {
+                    sql.push_str(", ");
+                }
+                sql.push('(');
+                for (idx, expr) in row.iter().enumerate() {
+                    if idx > 0 {
+                        sql.push_str(", ");
+                    }
+                    sql.push_str(&expr_to_sql(expr)?);
+                }
+                sql.push(')');
+            }
+        }
+        InsertSource::Select(select) => {
+            sql.push_str(&select_to_sql(select, select.collection_or_default())?);
+        }
+    }
+    if !query.returning.is_empty() {
+        sql.push_str(" RETURNING ");
+        sql.push_str(&projection_to_sql(&query.returning)?);
     }
     Ok(sql)
 }
@@ -1216,6 +1391,45 @@ mod tests {
     }
 
     #[test]
+    fn parse_insert_values_and_print() {
+        let parsed = parse_sql_query(
+            "INSERT INTO items (id, kind, score) VALUES ('a', 'music', 1), ('b', 'video', 2) RETURNING id",
+            SqlDialectKind::Generic,
+        )
+        .unwrap();
+        let Query::Insert(insert) = parsed.query else {
+            panic!("expected insert");
+        };
+        assert_eq!(insert.collection.as_deref(), Some("items"));
+        assert_eq!(insert.columns, vec!["id", "kind", "score"]);
+        let InsertSource::Values(rows) = &insert.source else {
+            panic!("expected values source");
+        };
+        assert_eq!(rows.len(), 2);
+
+        let sql = query_to_sql(&Query::Insert(insert)).unwrap();
+        assert!(sql.starts_with("INSERT INTO items (id, kind, score) VALUES"));
+        assert!(sql.contains("RETURNING id"));
+    }
+
+    #[test]
+    fn parse_insert_select_source() {
+        let parsed = parse_sql_query(
+            "INSERT INTO items (id, kind) SELECT id, kind FROM source_items WHERE score > 0",
+            SqlDialectKind::Generic,
+        )
+        .unwrap();
+        let Query::Insert(insert) = parsed.query else {
+            panic!("expected insert");
+        };
+        let InsertSource::Select(select) = insert.source else {
+            panic!("expected select source");
+        };
+        assert_eq!(select.collection.as_deref(), Some("source_items"));
+        assert_eq!(select.projection.len(), 2);
+    }
+
+    #[test]
     fn parse_collection_scoped_select_without_from() {
         let query = parse_sql_query_for_collection(
             "SELECT * WHERE kind = 'music'",
@@ -1227,6 +1441,15 @@ mod tests {
             panic!("expected select");
         };
         assert!(select.predicate.is_some());
+    }
+
+    #[test]
+    fn parse_select_from_all_collection_alias() {
+        let query = parse_sql_query("SELECT id FROM all", SqlDialectKind::Generic).unwrap();
+        let Query::Select(select) = query.query else {
+            panic!("expected select");
+        };
+        assert_eq!(select.collection.as_deref(), Some("all"));
     }
 
     #[test]

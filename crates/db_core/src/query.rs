@@ -69,6 +69,12 @@ impl From<DeleteQuery> for TextQueryInput {
     }
 }
 
+impl From<InsertQuery> for TextQueryInput {
+    fn from(value: InsertQuery) -> Self {
+        Self::Ast(Query::Insert(value))
+    }
+}
+
 impl From<String> for TextQueryInput {
     fn from(value: String) -> Self {
         Self::sql(value)
@@ -302,6 +308,7 @@ pub struct SelectQuery {
 #[facet(rename_all = "snake_case")]
 pub enum Query {
     Select(SelectQuery),
+    Insert(InsertQuery),
     Update(UpdateQuery),
     Delete(DeleteQuery),
 }
@@ -315,6 +322,12 @@ impl From<SelectQuery> for Query {
 impl From<UpdateQuery> for Query {
     fn from(value: UpdateQuery) -> Self {
         Self::Update(value)
+    }
+}
+
+impl From<InsertQuery> for Query {
+    fn from(value: InsertQuery) -> Self {
+        Self::Insert(value)
     }
 }
 
@@ -505,6 +518,66 @@ pub struct Assignment {
 }
 
 #[derive(facet::Facet, Debug, Clone, PartialEq)]
+#[repr(C)]
+#[facet(rename_all = "snake_case")]
+pub enum InsertSource {
+    Objects(Vec<Object>),
+    Values(Vec<Vec<Expr>>),
+    Select(SelectQuery),
+}
+
+#[derive(facet::Facet, Debug, Clone, PartialEq)]
+pub struct InsertQuery {
+    pub collection: Option<String>,
+    pub columns: Vec<String>,
+    pub source: InsertSource,
+    pub returning: Vec<QueryField>,
+}
+
+impl InsertQuery {
+    pub fn new() -> Self {
+        Self {
+            collection: None,
+            columns: Vec::new(),
+            source: InsertSource::Objects(Vec::new()),
+            returning: Vec::new(),
+        }
+    }
+
+    pub fn with_collection(mut self, collection: impl Into<String>) -> Self {
+        self.collection = Some(collection.into());
+        self
+    }
+
+    pub fn collection_or_default(&self) -> &str {
+        self.collection
+            .as_deref()
+            .unwrap_or(crate::DEFAULT_COLLECTION)
+    }
+
+    pub fn with_columns(mut self, columns: Vec<String>) -> Self {
+        self.columns = columns;
+        self
+    }
+
+    pub fn with_source(mut self, source: InsertSource) -> Self {
+        self.source = source;
+        self
+    }
+
+    pub fn with_returning(mut self, projection: Vec<QueryField>) -> Self {
+        self.returning = projection;
+        self
+    }
+}
+
+impl Default for InsertQuery {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+#[derive(facet::Facet, Debug, Clone, PartialEq)]
 pub struct UpdateQuery {
     pub collection: Option<String>,
     pub predicate: Option<Predicate>,
@@ -617,6 +690,7 @@ impl Query {
     pub fn collection(&self) -> Option<&str> {
         match self {
             Self::Select(query) => query.collection.as_deref(),
+            Self::Insert(query) => query.collection.as_deref(),
             Self::Update(query) => query.collection.as_deref(),
             Self::Delete(query) => query.collection.as_deref(),
         }
@@ -631,6 +705,12 @@ impl Query {
 pub struct MutationStats {
     pub matched: usize,
     pub affected: usize,
+}
+
+#[derive(facet::Facet, Debug, Clone, PartialEq)]
+pub struct InsertResult {
+    pub inserted: usize,
+    pub returning: Vec<Object>,
 }
 
 #[derive(facet::Facet, Debug, Clone, PartialEq)]
@@ -650,6 +730,7 @@ pub struct DeleteResult {
 #[facet(rename_all = "snake_case")]
 pub enum QueryResult {
     Select(Vec<Object>),
+    Insert(InsertResult),
     Update(UpdateResult),
     Delete(DeleteResult),
 }

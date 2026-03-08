@@ -11,6 +11,11 @@ use crate::{
 };
 
 pub const DEFAULT_COLLECTION: &str = "entities";
+pub const ALL_COLLECTION_ALIAS: &str = "all";
+
+pub fn is_all_collection_alias(name: &str) -> bool {
+    name.eq_ignore_ascii_case(ALL_COLLECTION_ALIAS)
+}
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum CollectionInput {

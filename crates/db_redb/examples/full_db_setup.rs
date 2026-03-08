@@ -1,3 +1,4 @@
+use semantic_data::schema::DbOpenMode;
 use semantic_data::value::{FieldPath, Object, Value};
 use semantic_db_core::{
     CompareOp, Db, Expr, Operand, Predicate, SelectQuery, UpdateQuery, catalog::CollectionKind,
@@ -14,7 +15,7 @@ async fn main() -> std::result::Result<(), semantic_db_core::DbError> {
             .as_nanos()
     ));
 
-    let backend = open_backend(&path)?;
+    let backend = open_backend(&path, DbOpenMode::AutoCreate)?;
     let db = Db::new(backend);
     db.create_collection("users", CollectionKind::Untyped)
         .await?;

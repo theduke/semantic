@@ -86,6 +86,12 @@ fn with_query_collection_if_missing(query: Query, collection: String) -> Query {
             }
             Query::Select(select)
         }
+        Query::Insert(mut insert) => {
+            if insert.collection.is_none() {
+                insert.collection = Some(collection);
+            }
+            Query::Insert(insert)
+        }
         Query::Update(mut update) => {
             if update.collection.is_none() {
                 update.collection = Some(collection);

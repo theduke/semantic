@@ -2,8 +2,8 @@ use semantic_data::value::{FieldPath, PathSegment};
 use thiserror::Error;
 
 use crate::{
-    Assignment, DeleteQuery, Expr, Operand, OrderBy, Predicate, Query, QueryField, SelectQuery,
-    UpdateQuery, catalog::CollectionSchema,
+    Assignment, DeleteQuery, Expr, InsertQuery, Operand, OrderBy, Predicate, Query, QueryField,
+    SelectQuery, UpdateQuery, catalog::CollectionSchema,
 };
 
 #[derive(Debug, Error, Clone, PartialEq, Eq)]
@@ -67,9 +67,33 @@ pub fn canonicalize_select_query(
 pub fn canonicalize_query(query: &Query, collection: &CollectionSchema) -> CanonicalResult<Query> {
     match query {
         Query::Select(query) => canonicalize_select_query(query, collection).map(Query::Select),
+        Query::Insert(query) => canonicalize_insert_query(query, collection).map(Query::Insert),
         Query::Update(query) => canonicalize_update_query(query, collection).map(Query::Update),
         Query::Delete(query) => canonicalize_delete_query(query, collection).map(Query::Delete),
     }
+}
+
+pub fn canonicalize_insert_query(
+    query: &InsertQuery,
+    collection: &CollectionSchema,
+) -> CanonicalResult<InsertQuery> {
+    let returning = query
+        .returning
+        .iter()
+        .map(|field| {
+            Ok(QueryField {
+                path: canonicalize_path(&field.path, collection, "insert returning")?,
+                alias: field.alias.clone(),
+            })
+        })
+        .collect::<CanonicalResult<Vec<_>>>()?;
+
+    Ok(InsertQuery {
+        collection: query.collection.clone(),
+        columns: query.columns.clone(),
+        source: query.source.clone(),
+        returning,
+    })
 }
 
 pub fn canonicalize_update_query(

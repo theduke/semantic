@@ -36,7 +36,7 @@ pub struct Catalog {
 }
 
 pub const PRIMARY_ID_FIELD: &str = "id";
-pub const OBJECT_TYPE_FIELD: &str = "__type";
+pub const OBJECT_TYPE_FIELD: &str = "type";
 pub const PRIMARY_ID_INDEX_NAME: &str = "__builtin_pk_id";
 pub const OBJECT_TYPE_INDEX_NAME: &str = "__builtin_type";
 pub const AUTO_PATH_INDEX_NAME: &str = "__auto_index_all_paths";

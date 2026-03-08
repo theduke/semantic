@@ -1,5 +1,8 @@
 use clap::{Args, ValueEnum};
+use semantic_data::value::serde::FlatValueRef;
+use semantic_data::value::{Object, ValueRef};
 use semantic_db_core::{Db, TextQueryFormat};
+use serde::Serialize;
 
 use crate::{CliError, CommonArgs, open_db};
 
@@ -7,6 +10,12 @@ use crate::{CliError, CommonArgs, open_db};
 pub enum QueryFormat {
     Sql,
     Prql,
+}
+
+#[derive(Debug, Clone, Copy, ValueEnum)]
+pub enum OutputFormat {
+    JsonTyped,
+    JsonLinesUntyped,
 }
 
 impl From<QueryFormat> for TextQueryFormat {
@@ -22,8 +31,10 @@ impl From<QueryFormat> for TextQueryFormat {
 pub struct QueryArgs {
     #[clap(flatten)]
     pub common: CommonArgs,
-    #[arg(long, value_enum, default_value_t = QueryFormat::Sql)]
-    pub format: QueryFormat,
+    #[arg(long = "query-format", short = 'l', value_enum, default_value_t = QueryFormat::Sql)]
+    pub query_format: QueryFormat,
+    #[arg(long, value_enum, default_value_t = OutputFormat::JsonLinesUntyped)]
+    pub format: OutputFormat,
     #[arg(value_name = "QUERY")]
     pub query: String,
 }
@@ -52,26 +63,87 @@ fn parse_query_action(query: String) -> std::result::Result<QueryAction, CliErro
 
 pub(crate) async fn execute_text_or_explain(
     db: &Db,
-    format: TextQueryFormat,
+    query_format: TextQueryFormat,
+    output_format: OutputFormat,
     query: String,
 ) -> std::result::Result<String, CliError> {
-    let json = match parse_query_action(query)? {
+    let output = match parse_query_action(query)? {
         QueryAction::Execute(query) => {
-            let result = db.query_text(format, query).await?;
-            facet_json::to_string(&result).map_err(|err| CliError::Message(err.to_string()))?
+            let result = db.query_text(query_format, query).await?;
+            format_query_result(&result, output_format)?
         }
         QueryAction::Explain(query) => {
-            let plan = db.plan_query_text(format, query).await?;
-            facet_json::to_string(&plan).map_err(|err| CliError::Message(err.to_string()))?
+            let plan = db.plan_query_text(query_format, query).await?;
+            format_plan(&plan, output_format)?
         }
     };
 
-    Ok(json)
+    Ok(output)
 }
 
 pub async fn run(args: QueryArgs) -> std::result::Result<(), CliError> {
     let db = open_db(&args.common.db_uri)?;
-    let json = execute_text_or_explain(&db, args.format.into(), args.query).await?;
+    let json =
+        execute_text_or_explain(&db, args.query_format.into(), args.format, args.query).await?;
     println!("{json}");
     Ok(())
+}
+
+fn format_query_result(
+    result: &semantic_db_core::QueryResult,
+    format: OutputFormat,
+) -> std::result::Result<String, CliError> {
+    match format {
+        OutputFormat::JsonTyped => {
+            facet_json::to_string(result).map_err(|err| CliError::Message(err.to_string()))
+        }
+        OutputFormat::JsonLinesUntyped => format_query_result_json_lines_untyped(result),
+    }
+}
+
+fn format_plan(
+    plan: &semantic_db_core::QueryPlan,
+    format: OutputFormat,
+) -> std::result::Result<String, CliError> {
+    match format {
+        OutputFormat::JsonTyped | OutputFormat::JsonLinesUntyped => {
+            facet_json::to_string(plan).map_err(|err| CliError::Message(err.to_string()))
+        }
+    }
+}
+
+fn format_query_result_json_lines_untyped(
+    result: &semantic_db_core::QueryResult,
+) -> std::result::Result<String, CliError> {
+    match result {
+        semantic_db_core::QueryResult::Select(rows) => {
+            let mut out = String::new();
+            for (index, row) in rows.iter().enumerate() {
+                if index > 0 {
+                    out.push('\n');
+                }
+                out.push_str(&serde_json::to_string(&UntypedObjectRef(row))?);
+            }
+            Ok(out)
+        }
+        _ => facet_json::to_string(result).map_err(|err| CliError::Message(err.to_string())),
+    }
+}
+
+#[derive(Debug, Clone, Copy)]
+struct UntypedObjectRef<'a>(&'a Object);
+
+impl Serialize for UntypedObjectRef<'_> {
+    fn serialize<S>(&self, serializer: S) -> std::result::Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        use serde::ser::SerializeMap;
+
+        let mut map = serializer.serialize_map(Some(self.0.len()))?;
+        for (field, value) in self.0.iter() {
+            map.serialize_entry(field, &FlatValueRef(ValueRef::Ref(value)))?;
+        }
+        map.end()
+    }
 }

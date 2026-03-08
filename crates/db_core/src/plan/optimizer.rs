@@ -90,6 +90,7 @@ impl Optimizer {
     ) -> PlanPair {
         let collection_id = source
             .as_ref()
+            .filter(|name| !crate::is_all_collection_alias(name))
             .and_then(|name| context.catalog().collection_by_name(name))
             .map(|c| c.lid);
         let source_ref =

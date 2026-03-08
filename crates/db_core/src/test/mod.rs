@@ -1,13 +1,14 @@
 use semantic_data::value::{FieldPath, Object, Value};
 
 use crate::{
-    CompareOp, Db, DbError, Operand, Predicate, QueryResult, SelectQuery, TextQueryFormat,
-    UpdateQuery, catalog::CollectionKind,
+    CompareOp, Db, Operand, Predicate, QueryResult, SelectQuery, TextQueryFormat, UpdateQuery,
+    catalog::CollectionKind,
 };
 
 pub async fn test_db(db: &Db) {
     test_schema_registration(db).await;
     test_select_query(db).await;
+    test_sql_insert_query(db).await;
     test_update_query(db).await;
     test_delete_query(db).await;
     test_text_query_formats(db).await;
@@ -93,6 +94,62 @@ async fn test_update_query(db: &Db) {
     assert_eq!(row.object.get("score"), Some(&Value::I64(99)));
 }
 
+async fn test_sql_insert_query(db: &Db) {
+    if !db
+        .supported_text_query_formats()
+        .contains(&TextQueryFormat::Sql)
+    {
+        return;
+    }
+
+    db.create_collection("shared_suite_sql_insert", CollectionKind::Untyped)
+        .await
+        .expect("sql insert test collection creation should succeed");
+
+    let _ = db
+        .query_text(
+            TextQueryFormat::Sql,
+            "INSERT INTO shared_suite_sql_insert (id, kind, score) VALUES ('sql-ins-a', 'music', 4), ('sql-ins-b', 'video', 9)",
+        )
+        .await
+        .expect("sql insert query should succeed");
+
+    let result = db
+        .query_text(
+            TextQueryFormat::Sql,
+            "SELECT id, kind, score FROM shared_suite_sql_insert ORDER BY id",
+        )
+        .await
+        .expect("sql select query should succeed after insert");
+    let QueryResult::Select(rows) = result else {
+        panic!("sql select query should return SELECT rows");
+    };
+
+    assert_eq!(
+        rows.len(),
+        2,
+        "sql insert should persist both inserted rows"
+    );
+    assert_eq!(
+        rows[0].get("id"),
+        Some(&Value::String("sql-ins-a".to_string()))
+    );
+    assert_eq!(
+        rows[0].get("kind"),
+        Some(&Value::String("music".to_string()))
+    );
+    assert_eq!(rows[0].get("score"), Some(&Value::I64(4)));
+    assert_eq!(
+        rows[1].get("id"),
+        Some(&Value::String("sql-ins-b".to_string()))
+    );
+    assert_eq!(
+        rows[1].get("kind"),
+        Some(&Value::String("video".to_string()))
+    );
+    assert_eq!(rows[1].get("score"), Some(&Value::I64(9)));
+}
+
 async fn test_delete_query(db: &Db) {
     db.create_collection("shared_suite_delete", CollectionKind::Untyped)
         .await
@@ -133,14 +190,11 @@ async fn test_delete_query(db: &Db) {
 }
 
 async fn test_text_query_formats(db: &Db) {
-    if let Err(err) = db
-        .create_collection("entities", CollectionKind::Untyped)
-        .await
-    {
-        if !matches!(err, DbError::CollectionAlreadyExists { .. }) {
-            panic!("default text query collection creation should succeed: {err}");
-        }
-    }
+    let catalog = db.catalog().await.expect("catalog fetch should succeed");
+    assert!(
+        catalog.collection_by_name("entities").is_some(),
+        "default entities collection should be created during db initialization",
+    );
     db.insert("entities", "fmt-a", row("fmt-a", "music", 7))
         .await
         .expect("text query row insert should succeed");

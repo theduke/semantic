@@ -1,6 +1,7 @@
 mod cmd;
 
 use clap::{Args, Parser, Subcommand};
+use semantic_data::schema::DbOpenMode;
 use semantic_db_core::Db;
 use thiserror::Error;
 
@@ -64,7 +65,7 @@ pub(crate) fn open_db(db_uri: &str) -> std::result::Result<Db, CliError> {
                     "invalid redb uri '{db_uri}': missing database path"
                 )));
             }
-            let backend = semantic_db_redb::open_backend(rest)?;
+            let backend = semantic_db_redb::open_backend(rest, DbOpenMode::AutoCreate)?;
             Ok(Db::new(backend))
         }
         _ => Err(CliError::Message(format!(

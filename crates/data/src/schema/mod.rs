@@ -17,6 +17,12 @@ pub mod record;
 pub mod union;
 pub mod variant;
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DbOpenMode {
+    OpenExisting,
+    AutoCreate,
+}
+
 pub use algebraic::result_type::ResultType;
 pub use attribute::attribute_ref::AttributeRef;
 pub use attribute::attribute_type::AttributeType;

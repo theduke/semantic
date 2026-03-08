@@ -1,4 +1,5 @@
 use redb::{ReadableTable, TableDefinition};
+use semantic_data::schema::DbOpenMode;
 use semantic_db_kv::{DbError, KvCommitOutcome, KvEngine, KvTransactionCapabilities, KvWriteOp};
 use std::path::Path;
 use std::sync::Arc;
@@ -17,8 +18,24 @@ impl std::fmt::Debug for RedbKvEngine {
 }
 
 impl RedbKvEngine {
-    pub fn open(path: impl AsRef<Path>) -> std::result::Result<Self, DbError> {
-        let db = redb::Database::create(path).map_err(storage_err)?;
+    pub fn open(path: impl AsRef<Path>, mode: DbOpenMode) -> std::result::Result<Self, DbError> {
+        let path = path.as_ref();
+        let db = match mode {
+            DbOpenMode::OpenExisting => redb::Database::open(path).map_err(storage_err)?,
+            DbOpenMode::AutoCreate => {
+                if let Some(parent) = path.parent() {
+                    if !parent.as_os_str().is_empty() {
+                        std::fs::create_dir_all(parent).map_err(storage_err)?;
+                    }
+                }
+
+                if path.exists() {
+                    redb::Database::open(path).map_err(storage_err)?
+                } else {
+                    redb::Database::create(path).map_err(storage_err)?
+                }
+            }
+        };
         {
             let write_txn = db.begin_write().map_err(storage_err)?;
             let _ = write_txn.open_table(KV_TABLE).map_err(storage_err)?;
@@ -186,8 +203,11 @@ fn read_revision_table(
 pub type RedbDatabase = semantic_db_kv::KvDb<RedbKvEngine>;
 pub type RedbBackend = semantic_db_kv::KvBackend<RedbKvEngine>;
 
-pub fn open_backend(path: impl AsRef<Path>) -> std::result::Result<RedbBackend, DbError> {
-    let engine = RedbKvEngine::open(path)?;
+pub fn open_backend(
+    path: impl AsRef<Path>,
+    mode: DbOpenMode,
+) -> std::result::Result<RedbBackend, DbError> {
+    let engine = RedbKvEngine::open(path, mode)?;
     let db = RedbDatabase::open(engine)?;
     Ok(RedbBackend::new(db))
 }
@@ -198,7 +218,7 @@ mod tests {
     use semantic_db_core::Db;
     use semantic_db_kv::CollectionKind;
 
-    use super::{RedbDatabase, RedbKvEngine, open_backend};
+    use super::{DbOpenMode, RedbDatabase, RedbKvEngine, open_backend};
 
     #[test]
     fn redb_backend_roundtrip() {
@@ -206,7 +226,7 @@ mod tests {
         let path = dir.path().join("db");
 
         {
-            let engine = RedbKvEngine::open(&path).unwrap();
+            let engine = RedbKvEngine::open(&path, DbOpenMode::AutoCreate).unwrap();
             let mut db = RedbDatabase::new(engine);
             db.create_collection("items", CollectionKind::Untyped)
                 .unwrap();
@@ -218,7 +238,7 @@ mod tests {
         }
 
         {
-            let engine = RedbKvEngine::open(path).unwrap();
+            let engine = RedbKvEngine::open(path, DbOpenMode::OpenExisting).unwrap();
             let mut db = RedbDatabase::new(engine);
             db.create_collection("items", CollectionKind::Untyped)
                 .unwrap();
@@ -233,7 +253,7 @@ mod tests {
     #[tokio::test(flavor = "multi_thread")]
     async fn test_redb_backend_testsuite() {
         let dir = tempfile::tempdir().unwrap();
-        let backend = open_backend(dir.path().join("db")).unwrap();
+        let backend = open_backend(dir.path().join("db"), DbOpenMode::AutoCreate).unwrap();
         let db = Db::new(backend);
 
         semantic_db_core::test::test_db(&db).await;

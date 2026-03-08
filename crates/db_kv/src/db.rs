@@ -4,10 +4,12 @@ use semantic_data::schema::IndexKind;
 use semantic_data::value::{FieldPath, Object, PathSegment, Value, ValueRef};
 use semantic_db_core::DbError;
 use semantic_db_core::{
-    AccessPath, Batch, BatchOperation, BatchOutcome, DeleteQuery, EntityRecord, MutationStats,
-    Query, QueryExplain, QueryPlan, QueryResult, SelectQuery, UpdateQuery,
-    canonicalize_delete_query, canonicalize_query, canonicalize_select_query,
-    canonicalize_update_query, execute_batch, normalize_object_for_collection, touched_collections,
+    ALL_COLLECTION_ALIAS, AccessPath, Batch, BatchOperation, BatchOutcome, DEFAULT_COLLECTION,
+    DeleteQuery, EntityRecord, InsertQuery, InsertSource, MutationStats, Query, QueryExplain,
+    QueryPlan, QueryResult, SelectQuery, UpdateQuery, canonicalize_delete_query,
+    canonicalize_insert_query, canonicalize_query, canonicalize_select_query,
+    canonicalize_update_query, execute_batch, is_all_collection_alias,
+    normalize_object_for_collection, touched_collections,
 };
 
 use crate::{
@@ -19,7 +21,7 @@ use crate::{
 };
 use semantic_db_core::catalog::{
     Catalog, CollectionKind, CollectionSchema, LocalAttrId, LocalCollectionId, LocalFieldId,
-    OBJECT_TYPE_FIELD, SharedCatalog,
+    SharedCatalog,
 };
 use semantic_db_core::{
     DdlBatch, DdlOperation, DdlOutcome, QueryContext, TransactionConcurrency, TransactionOptions,
@@ -62,11 +64,18 @@ impl<E: KvEngine> KvDb<E> {
             store.write_batch(&ops)?;
             bootstrap_catalog
         };
-
-        Ok(Self {
+        let mut db = Self {
             catalog: SharedCatalog::new(catalog),
             store,
-        })
+        };
+        if db
+            .catalog()
+            .collection_by_name(DEFAULT_COLLECTION)
+            .is_none()
+        {
+            db.create_collection(DEFAULT_COLLECTION, CollectionKind::Untyped)?;
+        }
+        Ok(db)
     }
 
     pub fn catalog(&self) -> std::sync::Arc<Catalog> {
@@ -200,6 +209,7 @@ impl<E: KvEngine> KvDb<E> {
     pub fn query(&mut self, query: Query) -> std::result::Result<QueryResult, DbError> {
         match query {
             Query::Select(query) => self.select(query).map(QueryResult::Select),
+            Query::Insert(query) => self.insert_query(query).map(QueryResult::Insert),
             Query::Update(query) => self.update_where_returning(query).map(QueryResult::Update),
             Query::Delete(query) => self.delete_where_returning(query).map(QueryResult::Delete),
         }
@@ -207,25 +217,28 @@ impl<E: KvEngine> KvDb<E> {
 
     pub fn select(&self, query: SelectQuery) -> std::result::Result<Vec<Object>, DbError> {
         let collection_name = query.collection_or_default().to_string();
-        let catalog = self.catalog();
-        let collection = catalog
-            .collection_by_name(&collection_name)
-            .ok_or_else(|| DbError::UnknownCollectionByName {
-                name: collection_name.clone(),
-            })?;
-
-        let query = canonicalize_select_query(&query, collection)?;
-
+        let (query, stats, source) = if is_all_collection_alias(&collection_name) {
+            (query, None, ALL_COLLECTION_ALIAS.to_string())
+        } else {
+            let catalog = self.catalog();
+            let collection = catalog
+                .collection_by_name(&collection_name)
+                .ok_or_else(|| DbError::UnknownCollectionByName {
+                    name: collection_name.clone(),
+                })?;
+            (
+                canonicalize_select_query(&query, collection)?,
+                Some(self.stats_for_collection(collection)?),
+                collection.name.clone(),
+            )
+        };
         let optimizer = semantic_db_core::Optimizer::core();
-        let stats = self.stats_for_collection(collection)?;
         let context = self.query_context();
-        let pair = optimizer.optimize_query(
-            &query,
-            Some(collection.name.clone()),
-            Some(&stats),
-            &context,
-        );
-        self.execute_physical_plan(&pair.physical, Some(collection.name.as_str()))
+        let stats_provider = stats
+            .as_ref()
+            .map(|value| value as &dyn semantic_db_core::StatsProvider);
+        let pair = optimizer.optimize_query(&query, Some(source.clone()), stats_provider, &context);
+        self.execute_physical_plan(&pair.physical, Some(source.as_str()))
     }
 
     pub fn plan_query(&self, query: Query) -> std::result::Result<QueryPlan, DbError> {
@@ -248,53 +261,242 @@ impl<E: KvEngine> KvDb<E> {
 
     pub fn explain_query(&self, query: Query) -> std::result::Result<QueryExplain, DbError> {
         let collection_name = query.collection_or_default().to_string();
-        let catalog = self.catalog();
-        let collection = catalog
-            .collection_by_name(&collection_name)
-            .ok_or_else(|| DbError::UnknownCollectionByName {
-                name: collection_name.clone(),
-            })?;
+        let (select, stats, source, collection_for_access_path) =
+            if is_all_collection_alias(&collection_name) {
+                let Query::Select(select) = query else {
+                    return Err(DbError::InvalidQuery(format!(
+                        "collection alias '{ALL_COLLECTION_ALIAS}' is only supported for SELECT"
+                    )));
+                };
+                (select, None, ALL_COLLECTION_ALIAS.to_string(), None)
+            } else {
+                let catalog = self.catalog();
+                let collection = catalog
+                    .collection_by_name(&collection_name)
+                    .ok_or_else(|| DbError::UnknownCollectionByName {
+                        name: collection_name.clone(),
+                    })?;
 
-        let select = match canonicalize_query(&query, collection)? {
-            Query::Select(query) => query,
-            Query::Update(query) => SelectQuery {
-                collection: query.collection,
-                source_alias: None,
-                joins: Vec::new(),
-                predicate: query.predicate,
-                projection: query.returning,
-                order_by: Vec::new(),
-                offset: 0,
-                limit: query.limit,
-            },
-            Query::Delete(query) => SelectQuery {
-                collection: query.collection,
-                source_alias: None,
-                joins: Vec::new(),
-                predicate: query.predicate,
-                projection: query.returning,
-                order_by: Vec::new(),
-                offset: 0,
-                limit: query.limit,
-            },
-        };
+                let select = match canonicalize_query(&query, collection)? {
+                    Query::Select(query) => query,
+                    Query::Insert(_) => {
+                        return Err(DbError::InvalidQuery(
+                            "query planning/explain is not supported for INSERT".to_string(),
+                        ));
+                    }
+                    Query::Update(query) => SelectQuery {
+                        collection: query.collection,
+                        source_alias: None,
+                        joins: Vec::new(),
+                        predicate: query.predicate,
+                        projection: query.returning,
+                        order_by: Vec::new(),
+                        offset: 0,
+                        limit: query.limit,
+                    },
+                    Query::Delete(query) => SelectQuery {
+                        collection: query.collection,
+                        source_alias: None,
+                        joins: Vec::new(),
+                        predicate: query.predicate,
+                        projection: query.returning,
+                        order_by: Vec::new(),
+                        offset: 0,
+                        limit: query.limit,
+                    },
+                };
+                (
+                    select,
+                    Some(self.stats_for_collection(collection)?),
+                    collection.name.clone(),
+                    Some(collection.lid),
+                )
+            };
 
         let optimizer = semantic_db_core::Optimizer::core();
-        let stats = self.stats_for_collection(collection)?;
         let context = self.query_context();
-        let pair = optimizer.optimize_query(
-            &select,
-            Some(collection.name.clone()),
-            Some(&stats),
-            &context,
-        );
-        let access_path = self.access_path_from_physical(collection, &pair.physical);
+        let stats_provider = stats
+            .as_ref()
+            .map(|value| value as &dyn semantic_db_core::StatsProvider);
+        let pair = optimizer.optimize_query(&select, Some(source), stats_provider, &context);
+        let access_path = if let Some(collection_lid) = collection_for_access_path {
+            if let Some(collection) = self.catalog().collection_by_lid(collection_lid) {
+                self.access_path_from_physical(collection, &pair.physical)
+            } else {
+                AccessPath::FullScan
+            }
+        } else {
+            AccessPath::FullScan
+        };
 
         Ok(QueryExplain {
             logical: pair.logical,
             physical: pair.physical,
             access_path,
         })
+    }
+
+    pub fn insert_query(
+        &mut self,
+        query: InsertQuery,
+    ) -> std::result::Result<semantic_db_core::InsertResult, DbError> {
+        let collection_name = query.collection_or_default().to_string();
+        let catalog = self.catalog();
+        let collection = catalog
+            .collection_by_name(&collection_name)
+            .ok_or_else(|| DbError::UnknownCollectionByName {
+                name: collection_name.clone(),
+            })?
+            .clone();
+        let query = canonicalize_insert_query(&query, &collection)?;
+        let target_columns = query
+            .columns
+            .iter()
+            .map(|column| collection.canonical_field_name(column).to_string())
+            .collect::<Vec<_>>();
+        let InsertQuery {
+            source, returning, ..
+        } = query;
+        let rows = self.materialize_insert_rows(&collection, &target_columns, source)?;
+        if rows.is_empty() {
+            return Err(DbError::InvalidQuery(
+                "INSERT requires at least one row".to_string(),
+            ));
+        }
+        let inserted = rows.len();
+
+        let mut batch = Batch::new();
+        let mut returning_rows = Vec::new();
+        for object in rows {
+            let id = self.extract_insert_id(&collection, &object)?;
+            if !returning.is_empty() {
+                returning_rows.push(semantic_db_core::project_object(&object, &returning));
+            }
+            batch = batch.with_op(BatchOperation::Upsert {
+                collection: collection.name.clone(),
+                id,
+                object,
+            });
+        }
+
+        self.execute_batch(batch)?;
+        Ok(semantic_db_core::InsertResult {
+            inserted,
+            returning: returning_rows,
+        })
+    }
+
+    fn materialize_insert_rows(
+        &self,
+        collection: &CollectionSchema,
+        target_columns: &[String],
+        source: InsertSource,
+    ) -> std::result::Result<Vec<Object>, DbError> {
+        match source {
+            InsertSource::Objects(rows) => {
+                if !target_columns.is_empty() {
+                    return Err(DbError::InvalidQuery(
+                        "column list is not supported with object insert source".to_string(),
+                    ));
+                }
+                Ok(rows)
+            }
+            InsertSource::Values(rows) => {
+                self.materialize_insert_value_rows(collection, target_columns, rows)
+            }
+            InsertSource::Select(select) => {
+                self.materialize_insert_select_rows(target_columns, select)
+            }
+        }
+    }
+
+    fn materialize_insert_value_rows(
+        &self,
+        collection: &CollectionSchema,
+        target_columns: &[String],
+        rows: Vec<Vec<semantic_db_core::Expr>>,
+    ) -> std::result::Result<Vec<Object>, DbError> {
+        if target_columns.is_empty() {
+            return Err(DbError::InvalidQuery(format!(
+                "INSERT into '{}' with VALUES requires explicit target columns",
+                collection.name
+            )));
+        }
+        let mut out = Vec::with_capacity(rows.len());
+        for row in rows {
+            if row.len() != target_columns.len() {
+                return Err(DbError::InvalidQuery(format!(
+                    "VALUES row has {} expressions but INSERT specifies {} columns",
+                    row.len(),
+                    target_columns.len()
+                )));
+            }
+            let mut object = Object::new();
+            for (idx, expr) in row.iter().enumerate() {
+                let value =
+                    semantic_db_core::evaluate_expr(&Object::new(), expr).ok_or_else(|| {
+                        DbError::InvalidQuery(format!(
+                            "failed to evaluate INSERT value expression for column '{}'",
+                            target_columns[idx]
+                        ))
+                    })?;
+                object.insert(target_columns[idx].clone(), value);
+            }
+            out.push(object);
+        }
+        Ok(out)
+    }
+
+    fn materialize_insert_select_rows(
+        &self,
+        target_columns: &[String],
+        select: SelectQuery,
+    ) -> std::result::Result<Vec<Object>, DbError> {
+        let source_projection = select.projection.clone();
+        let source_rows = self.select(select)?;
+
+        if target_columns.is_empty() {
+            return Ok(source_rows);
+        }
+        if source_projection.is_empty() {
+            return Err(DbError::InvalidQuery(
+                "INSERT ... SELECT with target columns requires explicit SELECT projection"
+                    .to_string(),
+            ));
+        }
+        if source_projection.len() != target_columns.len() {
+            return Err(DbError::InvalidQuery(format!(
+                "INSERT has {} target columns but SELECT returns {} projected columns",
+                target_columns.len(),
+                source_projection.len()
+            )));
+        }
+
+        let source_keys = source_projection
+            .iter()
+            .map(|field| {
+                field
+                    .alias
+                    .clone()
+                    .unwrap_or_else(|| infer_project_key_for_insert(&field.path))
+            })
+            .collect::<Vec<_>>();
+
+        let mut out = Vec::with_capacity(source_rows.len());
+        for row in source_rows {
+            let mut object = Object::new();
+            for (idx, source_key) in source_keys.iter().enumerate() {
+                let value = row.get(source_key).ok_or_else(|| {
+                    DbError::InvalidQuery(format!(
+                        "INSERT ... SELECT expected source column '{}' in SELECT row",
+                        source_key
+                    ))
+                })?;
+                object.insert(target_columns[idx].clone(), value.clone());
+            }
+            out.push(object);
+        }
+        Ok(out)
     }
 
     pub fn execute_physical_plan(
@@ -789,7 +991,6 @@ impl<E: KvEngine> KvDb<E> {
             let mut normalized_rows = BTreeMap::<String, Object>::new();
             for (id, object) in new_rows {
                 let mut object = object.clone();
-                self.ensure_system_fields(&collection_schema, &mut object)?;
                 normalize_object_for_collection(&collection_schema, &mut object)?;
                 self.validate_primary_id(&collection_schema, id, &object)?;
                 normalized_rows.insert(id.clone(), object);
@@ -953,39 +1154,38 @@ impl<E: KvEngine> KvDb<E> {
         Ok(())
     }
 
-    fn ensure_system_fields(
+    fn extract_insert_id(
         &self,
         collection: &CollectionSchema,
-        object: &mut Object,
-    ) -> std::result::Result<(), DbError> {
-        let expected_type = match collection.kind {
-            CollectionKind::Untyped => "untyped",
-            CollectionKind::Record { .. } => "record",
-            CollectionKind::Class { .. } => "class",
-        };
-        let canonical_type_field = collection
-            .canonical_field_name(OBJECT_TYPE_FIELD)
-            .to_string();
-        if let Some(value) = object.get(&canonical_type_field) {
-            let Some(existing) = value.as_str() else {
-                return Err(DbError::InvalidQuery(format!(
-                    "collection '{}' system field '{}' must be a string",
-                    collection.name, canonical_type_field
-                )));
-            };
-            if existing != expected_type {
-                return Err(DbError::InvalidQuery(format!(
-                    "collection '{}' system field '{}' must be '{}'",
-                    collection.name, canonical_type_field, expected_type
-                )));
+        object: &Object,
+    ) -> std::result::Result<String, DbError> {
+        let canonical_id = collection.canonical_field_name("id");
+        let mut id_value = None;
+        for (field, value) in object {
+            if collection.canonical_field_name(field) == canonical_id {
+                if id_value.is_some() {
+                    return Err(DbError::InvalidQuery(format!(
+                        "insert row for collection '{}' provides multiple primary key aliases",
+                        collection.name
+                    )));
+                }
+                id_value = Some(value);
             }
-        } else {
-            object.insert(
-                canonical_type_field,
-                Value::String(expected_type.to_string()),
-            );
         }
-        Ok(())
+
+        let Some(value) = id_value else {
+            return Err(DbError::InvalidQuery(format!(
+                "collection '{}' requires primary key field '{}'",
+                collection.name, canonical_id
+            )));
+        };
+        let Some(id) = value.as_str() else {
+            return Err(DbError::InvalidQuery(format!(
+                "collection '{}' primary key field '{}' must be a string",
+                collection.name, canonical_id
+            )));
+        };
+        Ok(id.to_string())
     }
 
     fn stats_for_collection(
@@ -1122,6 +1322,15 @@ impl<E: KvEngine> KvDb<E> {
     }
 }
 
+fn infer_project_key_for_insert(path: &FieldPath) -> String {
+    for segment in path.segments().iter().rev() {
+        if let PathSegment::Field(name) = segment {
+            return name.clone();
+        }
+    }
+    "value".to_string()
+}
+
 struct KvPhysicalDataSource<'a, E: KvEngine> {
     db: &'a KvDb<E>,
     catalog: std::sync::Arc<Catalog>,
@@ -1129,6 +1338,13 @@ struct KvPhysicalDataSource<'a, E: KvEngine> {
 }
 
 impl<E: KvEngine> KvPhysicalDataSource<'_, E> {
+    fn source_name<'a>(&'a self, source: &'a semantic_db_core::SourceRef) -> Option<&'a str> {
+        source
+            .source_name
+            .as_deref()
+            .or(self.default_collection.as_deref())
+    }
+
     fn resolve_collection<'a>(
         &'a self,
         source: &'a semantic_db_core::SourceRef,
@@ -1139,21 +1355,51 @@ impl<E: KvEngine> KvPhysicalDataSource<'_, E> {
                 .collection_by_lid(collection_id)
                 .ok_or(DbError::UnknownCollection(collection_id));
         }
-        let name = source
-            .source_name
-            .as_deref()
-            .or(self.default_collection.as_deref())
-            .ok_or_else(|| {
-                DbError::InvalidQuery("physical source did not specify a collection".to_string())
-            })?;
+        let name = self.source_name(source).ok_or_else(|| {
+            DbError::InvalidQuery("physical source did not specify a collection".to_string())
+        })?;
         self.catalog
             .collection_by_name(name)
             .ok_or_else(|| DbError::UnknownCollectionByName {
                 name: name.to_string(),
             })
     }
-}
 
+    fn scan_all_collections(
+        &self,
+    ) -> semantic_db_core::CoreResult<Vec<semantic_db_core::DynObject>> {
+        let mut out = Vec::<semantic_db_core::DynObject>::new();
+        for (_, collection) in self.catalog.collections() {
+            let rows = self
+                .db
+                .store
+                .scan_collection(collection.lid)
+                .map_err(|err| semantic_db_core::CoreError::new(err.to_string()))?;
+            let mut field_names = BTreeMap::new();
+            let mut attr_names = BTreeMap::new();
+            for (field_id, name) in collection.fields() {
+                field_names.insert(field_id, name.to_string());
+                if let Some(attr_id) = collection.attr_for_field_id(field_id) {
+                    attr_names.insert(attr_id, name.to_string());
+                }
+            }
+            for row in rows {
+                out.push(Box::new(KvObjectView {
+                    object: row.object,
+                    collection_id: collection.lid,
+                    field_names: field_names.clone(),
+                    attr_names: attr_names.clone(),
+                }) as semantic_db_core::DynObject);
+            }
+        }
+        Ok(out)
+    }
+
+    fn is_all_alias_source(&self, source: &semantic_db_core::SourceRef) -> bool {
+        self.source_name(source)
+            .is_some_and(is_all_collection_alias)
+    }
+}
 #[derive(Clone)]
 struct KvObjectView {
     object: Object,
@@ -1193,6 +1439,9 @@ impl<E: KvEngine> semantic_db_core::PhysicalDataSource for KvPhysicalDataSource<
         &self,
         source: &semantic_db_core::SourceRef,
     ) -> semantic_db_core::CoreResult<Vec<semantic_db_core::DynObject>> {
+        if self.is_all_alias_source(source) {
+            return self.scan_all_collections();
+        }
         let collection = self
             .resolve_collection(source)
             .map_err(|err| semantic_db_core::CoreError::new(err.to_string()))?;
@@ -1514,12 +1763,22 @@ mod tests {
 
     use crate::CollectionKind;
     use semantic_db_core::{
-        CompareOp, DdlBatch, DdlCollectionKind, DdlOperation, Expr, Operand, OrderBy, Predicate,
-        Query, QueryField, QueryResult, SelectQuery, SortDirection, TransactionConcurrency,
-        TransactionOptions, UpdateQuery,
+        ALL_COLLECTION_ALIAS, CompareOp, DEFAULT_COLLECTION, DdlBatch, DdlCollectionKind,
+        DdlOperation, Expr, Operand, OrderBy, Predicate, Query, QueryField, QueryResult,
+        SelectQuery, SortDirection, TransactionConcurrency, TransactionOptions, UpdateQuery,
     };
 
     use super::{KvDb, QueryPlan};
+
+    #[test]
+    fn initialization_creates_default_entities_collection() {
+        let db = KvDb::in_memory();
+        assert!(
+            db.catalog()
+                .collection_by_name(DEFAULT_COLLECTION)
+                .is_some()
+        );
+    }
 
     #[test]
     fn untyped_query_works() {
@@ -1548,6 +1807,35 @@ mod tests {
         let rows = db.select(query.with_collection("events")).unwrap();
         assert_eq!(rows.len(), 1);
         assert_eq!(rows[0].get("score"), Some(&Value::I64(10)));
+    }
+
+    #[test]
+    fn select_from_all_collection_alias_combines_collections() {
+        let mut db = KvDb::in_memory();
+        db.create_collection("events", CollectionKind::Untyped)
+            .unwrap();
+        db.create_collection("articles", CollectionKind::Untyped)
+            .unwrap();
+
+        let mut event = Object::new();
+        event.insert("id", Value::String("e1".to_string()));
+        event.insert("kind", Value::String("music".to_string()));
+        db.insert("events", "e1", event).unwrap();
+
+        let mut article = Object::new();
+        article.insert("id", Value::String("a1".to_string()));
+        article.insert("kind", Value::String("music".to_string()));
+        db.insert("articles", "a1", article).unwrap();
+
+        let query = SelectQuery::new()
+            .with_collection(ALL_COLLECTION_ALIAS)
+            .with_predicate(Predicate::Compare {
+                op: CompareOp::Eq,
+                left: Operand::Field(FieldPath::from_fields(["kind"])),
+                right: Operand::Literal(Value::String("music".to_string())),
+            });
+        let rows = db.select(query).unwrap();
+        assert_eq!(rows.len(), 2);
     }
 
     #[test]

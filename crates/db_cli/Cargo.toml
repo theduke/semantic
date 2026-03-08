@@ -14,6 +14,7 @@ version.workspace = true
 [dependencies]
 clap = { version = "4.5.48", features = ["derive", "env"] }
 facet-json = "0.43.2"
+rustyline = "17.0.2"
 semantic_data = { workspace = true }
 semantic_db_core = { path = "../db_core" }
 semantic_db_redb = { path = "../db_redb" }
