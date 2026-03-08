@@ -35,7 +35,11 @@ pub fn canonicalize_select_query(
         .iter()
         .map(|field| {
             Ok(QueryField {
-                path: canonicalize_path(&field.path, collection, "select projection")?,
+                expr: Box::new(canonicalize_expr(
+                    &field.expr,
+                    collection,
+                    "select projection",
+                )?),
                 alias: field.alias.clone(),
             })
         })
@@ -58,9 +62,24 @@ pub fn canonicalize_select_query(
         joins: query.joins.clone(),
         predicate,
         projection,
+        distinct: query.distinct,
+        group_by: query
+            .group_by
+            .iter()
+            .map(|expr| canonicalize_expr(expr, collection, "select group_by"))
+            .collect::<CanonicalResult<Vec<_>>>()?,
+        having: query
+            .having
+            .as_ref()
+            .map(|predicate| canonicalize_predicate(predicate, collection, "select having"))
+            .transpose()?,
         order_by,
-        offset: query.offset,
-        limit: query.limit,
+        offset: canonicalize_expr(&query.offset, collection, "select offset")?,
+        limit: query
+            .limit
+            .as_ref()
+            .map(|expr| canonicalize_expr(expr, collection, "select limit"))
+            .transpose()?,
     })
 }
 
@@ -82,7 +101,11 @@ pub fn canonicalize_insert_query(
         .iter()
         .map(|field| {
             Ok(QueryField {
-                path: canonicalize_path(&field.path, collection, "insert returning")?,
+                expr: Box::new(canonicalize_expr(
+                    &field.expr,
+                    collection,
+                    "insert returning",
+                )?),
                 alias: field.alias.clone(),
             })
         })
@@ -122,7 +145,11 @@ pub fn canonicalize_update_query(
         .iter()
         .map(|field| {
             Ok(QueryField {
-                path: canonicalize_path(&field.path, collection, "update returning")?,
+                expr: Box::new(canonicalize_expr(
+                    &field.expr,
+                    collection,
+                    "update returning",
+                )?),
                 alias: field.alias.clone(),
             })
         })
@@ -132,7 +159,11 @@ pub fn canonicalize_update_query(
         collection: query.collection.clone(),
         predicate,
         assignments,
-        limit: query.limit,
+        limit: query
+            .limit
+            .as_ref()
+            .map(|expr| canonicalize_expr(expr, collection, "update limit"))
+            .transpose()?,
         returning,
     })
 }
@@ -152,7 +183,11 @@ pub fn canonicalize_delete_query(
         .iter()
         .map(|field| {
             Ok(QueryField {
-                path: canonicalize_path(&field.path, collection, "delete returning")?,
+                expr: Box::new(canonicalize_expr(
+                    &field.expr,
+                    collection,
+                    "delete returning",
+                )?),
                 alias: field.alias.clone(),
             })
         })
@@ -161,7 +196,11 @@ pub fn canonicalize_delete_query(
     Ok(DeleteQuery {
         collection: query.collection.clone(),
         predicate,
-        limit: query.limit,
+        limit: query
+            .limit
+            .as_ref()
+            .map(|expr| canonicalize_expr(expr, collection, "delete limit"))
+            .transpose()?,
         returning,
     })
 }
@@ -243,6 +282,16 @@ fn canonicalize_expr(
                     crate::FunctionArg::Wildcard => Ok(crate::FunctionArg::Wildcard),
                 })
                 .collect::<CanonicalResult<Vec<_>>>()?,
+        }),
+        Expr::Aggregate { op, distinct, arg } => Ok(Expr::Aggregate {
+            op: *op,
+            distinct: *distinct,
+            arg: Box::new(match arg.as_ref() {
+                crate::FunctionArg::Expr(expr) => {
+                    crate::FunctionArg::Expr(canonicalize_expr(expr, collection, context)?)
+                }
+                crate::FunctionArg::Wildcard => crate::FunctionArg::Wildcard,
+            }),
         }),
         Expr::InList {
             expr,

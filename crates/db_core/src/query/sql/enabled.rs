@@ -12,9 +12,8 @@
 ///
 /// - `SELECT`:
 ///   - `WITH` / CTEs.
-///   - `DISTINCT`.
 ///   - Set operations (`UNION`, `INTERSECT`, `EXCEPT`).
-///   - `GROUP BY`, `HAVING`, window/named window clauses.
+///   - window/named window clauses.
 ///   - `QUALIFY`, `PREWHERE`, `CLUSTER BY`, `DISTRIBUTE BY`, `SORT BY`.
 ///   - `SELECT ... INTO`, `EXCLUDE`, value-table mode.
 ///   - `FETCH`, locking clauses (`FOR UPDATE`, etc), query settings/format/pipe operators.
@@ -61,7 +60,7 @@
 ///   - Many non-scalar SQL literal forms.
 ///   - Many non-scalar `semantic_data::Value` variants in SQL printer output.
 use semantic_data::query::{
-    BinaryOp, CompareOp, JoinType, PatternMatchKind, SortDirection, UnaryOp,
+    AggregateOp, BinaryOp, CompareOp, JoinType, PatternMatchKind, SortDirection, UnaryOp,
 };
 use semantic_data::value::{FieldPath, PathSegment, Value};
 use sqlparser::ast::{
@@ -77,6 +76,7 @@ use thiserror::Error;
 use crate::{
     DeleteQuery, Expr, FunctionArg, InsertQuery, InsertSource, JoinCondition, JoinQuery, Operand,
     OrderBy as DbOrderBy, Predicate, Query, QueryField, SelectQuery, UpdateQuery,
+    evaluate_usize_expr,
 };
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -218,20 +218,14 @@ fn parse_select(
     limit_clause: Option<LimitClause>,
     select: Select,
 ) -> Result<ParsedSqlQuery, SqlQueryError> {
-    if select.distinct.is_some() {
-        return Err(SqlQueryError::Unsupported(
-            "SELECT DISTINCT is not supported".to_string(),
-        ));
-    }
+    let distinct = parse_select_distinct(select.distinct.as_ref())?;
     if select.into.is_some()
         || !select.lateral_views.is_empty()
         || select.prewhere.is_some()
         || !select.connect_by.is_empty()
-        || !matches!(select.group_by, sqlparser::ast::GroupByExpr::Expressions(exprs, _) if exprs.is_empty())
         || !select.cluster_by.is_empty()
         || !select.distribute_by.is_empty()
         || !select.sort_by.is_empty()
-        || select.having.is_some()
         || !select.named_window.is_empty()
         || select.qualify.is_some()
         || select.value_table_mode.is_some()
@@ -261,6 +255,8 @@ fn parse_select(
     };
     let projection = parse_projection(select.projection)?;
     let predicate = select.selection.map(parse_predicate).transpose()?;
+    let group_by = parse_group_by(select.group_by)?;
+    let having = select.having.map(parse_predicate).transpose()?;
     let order_by = parse_order_by(order_by)?;
     let (limit, offset) = parse_limit_clause(limit_clause)?;
 
@@ -271,11 +267,39 @@ fn parse_select(
             joins,
             predicate,
             projection,
+            distinct,
+            group_by,
+            having,
             order_by,
             offset,
             limit,
         }),
     })
+}
+
+fn parse_select_distinct(
+    distinct: Option<&sqlparser::ast::Distinct>,
+) -> Result<bool, SqlQueryError> {
+    let Some(distinct) = distinct else {
+        return Ok(false);
+    };
+    match distinct {
+        sqlparser::ast::Distinct::Distinct => Ok(true),
+        other => Err(SqlQueryError::Unsupported(format!(
+            "SELECT distinct mode '{other:?}' is not supported"
+        ))),
+    }
+}
+
+fn parse_group_by(group_by: sqlparser::ast::GroupByExpr) -> Result<Vec<Expr>, SqlQueryError> {
+    match group_by {
+        sqlparser::ast::GroupByExpr::Expressions(exprs, _) => {
+            exprs.into_iter().map(parse_expr).collect()
+        }
+        other => Err(SqlQueryError::Unsupported(format!(
+            "GROUP BY form '{other:?}' is not supported"
+        ))),
+    }
 }
 
 fn parse_insert_stmt(insert: SqlInsert) -> Result<ParsedSqlQuery, SqlQueryError> {
@@ -419,7 +443,7 @@ fn parse_update_stmt(update: sqlparser::ast::Update) -> Result<ParsedSqlQuery, S
         .map(parse_projection)
         .transpose()?
         .unwrap_or_default();
-    let limit = update.limit.map(parse_usize_expr).transpose()?;
+    let limit = update.limit.map(parse_expr).transpose()?;
 
     Ok(ParsedSqlQuery {
         query: Query::Update(UpdateQuery {
@@ -470,7 +494,7 @@ fn parse_delete_stmt(delete: sqlparser::ast::Delete) -> Result<ParsedSqlQuery, S
         .map(parse_projection)
         .transpose()?
         .unwrap_or_default();
-    let limit = delete.limit.map(parse_usize_expr).transpose()?;
+    let limit = delete.limit.map(parse_expr).transpose()?;
 
     Ok(ParsedSqlQuery {
         query: Query::Delete(DeleteQuery {
@@ -555,11 +579,11 @@ fn parse_projection(items: Vec<SelectItem>) -> Result<Vec<QueryField>, SqlQueryE
         .into_iter()
         .map(|item| match item {
             SelectItem::UnnamedExpr(expr) => Ok(QueryField {
-                path: parse_field_expr(&expr)?,
+                expr: Box::new(parse_expr(expr)?),
                 alias: None,
             }),
             SelectItem::ExprWithAlias { expr, alias } => Ok(QueryField {
-                path: parse_field_expr(&expr)?,
+                expr: Box::new(parse_expr(expr)?),
                 alias: Some(alias.value),
             }),
             SelectItem::QualifiedWildcard(_, _) => Err(SqlQueryError::Unsupported(
@@ -607,9 +631,9 @@ fn parse_order_item(item: OrderByExpr) -> Result<DbOrderBy, SqlQueryError> {
 
 fn parse_limit_clause(
     limit_clause: Option<LimitClause>,
-) -> Result<(Option<usize>, usize), SqlQueryError> {
+) -> Result<(Option<Expr>, Expr), SqlQueryError> {
     let Some(limit_clause) = limit_clause else {
-        return Ok((None, 0));
+        return Ok((None, Expr::from(0usize)));
     };
     match limit_clause {
         LimitClause::LimitOffset {
@@ -622,19 +646,22 @@ fn parse_limit_clause(
                     "LIMIT BY is not supported".to_string(),
                 ));
             }
-            let limit = limit.map(parse_usize_expr).transpose()?;
-            let offset = offset.map(parse_offset).transpose()?.unwrap_or(0);
+            let limit = limit.map(parse_expr).transpose()?;
+            let offset = offset
+                .map(parse_offset)
+                .transpose()?
+                .unwrap_or_else(|| Expr::from(0usize));
             Ok((limit, offset))
         }
         LimitClause::OffsetCommaLimit { offset, limit } => {
-            Ok((Some(parse_usize_expr(limit)?), parse_usize_expr(offset)?))
+            Ok((Some(parse_expr(limit)?), parse_expr(offset)?))
         }
     }
 }
 
-fn parse_offset(offset: Offset) -> Result<usize, SqlQueryError> {
+fn parse_offset(offset: Offset) -> Result<Expr, SqlQueryError> {
     let _ = offset.rows;
-    parse_usize_expr(offset.value)
+    parse_expr(offset.value)
 }
 
 fn parse_assignment(assign: Assignment) -> Result<crate::Assignment, SqlQueryError> {
@@ -917,6 +944,12 @@ fn parse_expr(expr: SqlExpr) -> Result<Expr, SqlQueryError> {
 }
 
 fn parse_function_expr(function: sqlparser::ast::Function) -> Result<Expr, SqlQueryError> {
+    if function.over.is_some() || !function.within_group.is_empty() || function.filter.is_some() {
+        return Err(SqlQueryError::Unsupported(format!(
+            "window/filter modifiers are not supported for function '{}'",
+            function.name
+        )));
+    }
     let mut args = Vec::new();
     let FunctionArguments::List(argument_list) = function.args else {
         return Err(SqlQueryError::Unsupported(format!(
@@ -940,6 +973,27 @@ fn parse_function_expr(function: sqlparser::ast::Function) -> Result<Expr, SqlQu
             }
         }
     }
+    let distinct = matches!(
+        argument_list.duplicate_treatment,
+        Some(sqlparser::ast::DuplicateTreatment::Distinct)
+    );
+    if let Some(op) = aggregate_op_from_name(&function.name.to_string()) {
+        let arg = if args.len() == 1 {
+            args.into_iter().next().expect("checked len")
+        } else if args.is_empty() && matches!(op, AggregateOp::Count) {
+            FunctionArg::Wildcard
+        } else {
+            return Err(SqlQueryError::Unsupported(format!(
+                "aggregate '{}' expects exactly one argument",
+                function.name
+            )));
+        };
+        return Ok(Expr::Aggregate {
+            op,
+            distinct,
+            arg: Box::new(arg),
+        });
+    }
     if function.name.to_string().eq_ignore_ascii_case("coalesce") {
         let mut exprs = Vec::new();
         for arg in args {
@@ -956,6 +1010,22 @@ fn parse_function_expr(function: sqlparser::ast::Function) -> Result<Expr, SqlQu
             name: function.name.to_string(),
             args,
         })
+    }
+}
+
+fn aggregate_op_from_name(name: &str) -> Option<AggregateOp> {
+    if name.eq_ignore_ascii_case("count") {
+        Some(AggregateOp::Count)
+    } else if name.eq_ignore_ascii_case("sum") {
+        Some(AggregateOp::Sum)
+    } else if name.eq_ignore_ascii_case("avg") {
+        Some(AggregateOp::Avg)
+    } else if name.eq_ignore_ascii_case("min") {
+        Some(AggregateOp::Min)
+    } else if name.eq_ignore_ascii_case("max") {
+        Some(AggregateOp::Max)
+    } else {
+        None
     }
 }
 
@@ -1011,37 +1081,6 @@ fn parse_literal(value: ValueWithSpan) -> Result<Value, SqlQueryError> {
         | SqlValue::TripleDoubleQuotedRawStringLiteral(s) => Ok(Value::String(s)),
         other => Err(SqlQueryError::Unsupported(format!(
             "literal '{other:?}' is not supported"
-        ))),
-    }
-}
-
-fn parse_field_expr(expr: &SqlExpr) -> Result<FieldPath, SqlQueryError> {
-    match expr {
-        SqlExpr::Identifier(ident) => Ok(FieldPath::from_fields([ident.value.as_str()])),
-        SqlExpr::CompoundIdentifier(idents) => idents_to_path(idents),
-        other => Err(SqlQueryError::Unsupported(format!(
-            "field expression '{other}' is not supported"
-        ))),
-    }
-}
-
-fn parse_usize_expr(expr: SqlExpr) -> Result<usize, SqlQueryError> {
-    match expr {
-        SqlExpr::Value(value) => {
-            if let sqlparser::ast::Value::Number(raw, _) = value.value {
-                raw.parse::<usize>().map_err(|_| {
-                    SqlQueryError::Invalid(format!(
-                        "expected non-negative integer literal, found '{raw}'"
-                    ))
-                })
-            } else {
-                Err(SqlQueryError::Invalid(
-                    "expected numeric literal for limit/offset".to_string(),
-                ))
-            }
-        }
-        other => Err(SqlQueryError::Unsupported(format!(
-            "non-literal limit/offset expression '{other}' is not supported"
         ))),
     }
 }
@@ -1190,6 +1229,9 @@ fn starts_with_keyword(input: &str, keyword: &str) -> bool {
 fn select_to_sql(query: &SelectQuery, collection: &str) -> Result<String, SqlQueryError> {
     let mut sql = String::new();
     sql.push_str("SELECT ");
+    if query.distinct {
+        sql.push_str("DISTINCT ");
+    }
     if query.projection.is_empty() {
         sql.push('*');
     } else {
@@ -1199,7 +1241,7 @@ fn select_to_sql(query: &SelectQuery, collection: &str) -> Result<String, SqlQue
                 sql.push_str(", ");
             }
             first = false;
-            sql.push_str(&path_to_sql(&item.path)?);
+            sql.push_str(&expr_to_sql(&item.expr)?);
             if let Some(alias) = &item.alias {
                 sql.push_str(" AS ");
                 sql.push_str(alias);
@@ -1243,6 +1285,20 @@ fn select_to_sql(query: &SelectQuery, collection: &str) -> Result<String, SqlQue
         sql.push_str(&predicate_to_sql(predicate)?);
     }
 
+    if !query.group_by.is_empty() {
+        sql.push_str(" GROUP BY ");
+        for (idx, expr) in query.group_by.iter().enumerate() {
+            if idx > 0 {
+                sql.push_str(", ");
+            }
+            sql.push_str(&expr_to_sql(expr)?);
+        }
+    }
+    if let Some(having) = &query.having {
+        sql.push_str(" HAVING ");
+        sql.push_str(&predicate_to_sql(having)?);
+    }
+
     if !query.order_by.is_empty() {
         sql.push_str(" ORDER BY ");
         let mut first = true;
@@ -1259,13 +1315,13 @@ fn select_to_sql(query: &SelectQuery, collection: &str) -> Result<String, SqlQue
         }
     }
 
-    if let Some(limit) = query.limit {
+    if let Some(limit) = &query.limit {
         sql.push_str(" LIMIT ");
-        sql.push_str(&limit.to_string());
+        sql.push_str(&expr_to_sql(limit)?);
     }
-    if query.offset > 0 {
+    if evaluate_usize_expr(&query.offset) != Some(0) {
         sql.push_str(" OFFSET ");
-        sql.push_str(&query.offset.to_string());
+        sql.push_str(&expr_to_sql(&query.offset)?);
     }
     Ok(sql)
 }
@@ -1332,9 +1388,9 @@ fn update_to_sql(query: &UpdateQuery, collection: &str) -> Result<String, SqlQue
         sql.push_str(" WHERE ");
         sql.push_str(&predicate_to_sql(predicate)?);
     }
-    if let Some(limit) = query.limit {
+    if let Some(limit) = &query.limit {
         sql.push_str(" LIMIT ");
-        sql.push_str(&limit.to_string());
+        sql.push_str(&expr_to_sql(limit)?);
     }
     if !query.returning.is_empty() {
         sql.push_str(" RETURNING ");
@@ -1351,9 +1407,9 @@ fn delete_to_sql(query: &DeleteQuery, collection: &str) -> Result<String, SqlQue
         sql.push_str(" WHERE ");
         sql.push_str(&predicate_to_sql(predicate)?);
     }
-    if let Some(limit) = query.limit {
+    if let Some(limit) = &query.limit {
         sql.push_str(" LIMIT ");
-        sql.push_str(&limit.to_string());
+        sql.push_str(&expr_to_sql(limit)?);
     }
     if !query.returning.is_empty() {
         sql.push_str(" RETURNING ");
@@ -1373,7 +1429,7 @@ fn projection_to_sql(projection: &[QueryField]) -> Result<String, SqlQueryError>
             out.push_str(", ");
         }
         first = false;
-        out.push_str(&path_to_sql(&field.path)?);
+        out.push_str(&expr_to_sql(&field.expr)?);
         if let Some(alias) = &field.alias {
             out.push_str(" AS ");
             out.push_str(alias);
@@ -1459,6 +1515,24 @@ fn expr_to_sql(expr: &Expr) -> Result<String, SqlQueryError> {
                 }
                 out.push_str(&function_arg_to_sql(arg)?);
             }
+            out.push(')');
+            Ok(out)
+        }
+        Expr::Aggregate { op, distinct, arg } => {
+            let name = match op {
+                AggregateOp::Count => "COUNT",
+                AggregateOp::Sum => "SUM",
+                AggregateOp::Avg => "AVG",
+                AggregateOp::Min => "MIN",
+                AggregateOp::Max => "MAX",
+            };
+            let mut out = String::new();
+            out.push_str(name);
+            out.push('(');
+            if *distinct {
+                out.push_str("DISTINCT ");
+            }
+            out.push_str(&function_arg_to_sql(arg)?);
             out.push(')');
             Ok(out)
         }
@@ -1673,8 +1747,14 @@ mod tests {
         assert_eq!(select.collection.as_deref(), Some("items"));
         assert_eq!(select.projection.len(), 2);
         assert_eq!(select.order_by.len(), 1);
-        assert_eq!(select.limit, Some(5));
-        assert_eq!(select.offset, 2);
+        assert!(matches!(
+            select.limit,
+            Some(Expr::Operand(Operand::Literal(Value::I64(5))))
+        ));
+        assert!(matches!(
+            select.offset,
+            Expr::Operand(Operand::Literal(Value::I64(2)))
+        ));
     }
 
     #[test]

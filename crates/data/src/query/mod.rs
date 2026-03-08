@@ -46,6 +46,17 @@ pub enum PatternMatchKind {
     SimilarTo,
 }
 
+#[derive(facet::Facet, Debug, Clone, Copy, PartialEq, Eq)]
+#[repr(C)]
+#[facet(rename_all = "snake_case")]
+pub enum AggregateOp {
+    Count,
+    Sum,
+    Avg,
+    Min,
+    Max,
+}
+
 #[derive(facet::Facet, Debug, Clone, PartialEq)]
 #[repr(C)]
 #[facet(rename_all = "snake_case")]
@@ -108,6 +119,11 @@ pub enum Expr {
         name: String,
         args: Vec<FunctionArg<Expr>>,
     },
+    Aggregate {
+        op: AggregateOp,
+        distinct: bool,
+        arg: Box<FunctionArg<Expr>>,
+    },
     InList {
         expr: Box<Expr>,
         list: Vec<Expr>,
@@ -147,6 +163,12 @@ pub enum Expr {
     },
 }
 
+impl From<usize> for Expr {
+    fn from(value: usize) -> Self {
+        Self::Operand(Operand::Literal(Value::U64(value as u64)))
+    }
+}
+
 #[derive(facet::Facet, Debug, Clone, PartialEq)]
 #[repr(C)]
 #[facet(rename_all = "snake_case")]
@@ -163,9 +185,9 @@ pub enum Predicate {
     Not(Box<Predicate>),
 }
 
-#[derive(facet::Facet, Debug, Clone, PartialEq, Eq)]
+#[derive(facet::Facet, Debug, Clone, PartialEq)]
 pub struct QueryField {
-    pub path: FieldPath,
+    pub expr: Box<Expr>,
     pub alias: Option<String>,
 }
 
@@ -198,9 +220,12 @@ pub struct SelectQuery {
     pub joins: Vec<JoinQuery>,
     pub predicate: Option<Predicate>,
     pub projection: Vec<QueryField>,
+    pub distinct: bool,
+    pub group_by: Vec<Expr>,
+    pub having: Option<Predicate>,
     pub order_by: Vec<OrderBy>,
-    pub offset: usize,
-    pub limit: Option<usize>,
+    pub offset: Expr,
+    pub limit: Option<Expr>,
 }
 
 impl SelectQuery {
@@ -211,8 +236,11 @@ impl SelectQuery {
             joins: Vec::new(),
             predicate: None,
             projection: Vec::new(),
+            distinct: false,
+            group_by: Vec::new(),
+            having: None,
             order_by: Vec::new(),
-            offset: 0,
+            offset: Expr::from(0usize),
             limit: None,
         }
     }
@@ -242,18 +270,33 @@ impl SelectQuery {
         self
     }
 
+    pub fn with_distinct(mut self, distinct: bool) -> Self {
+        self.distinct = distinct;
+        self
+    }
+
+    pub fn with_group_by(mut self, group_by: Vec<Expr>) -> Self {
+        self.group_by = group_by;
+        self
+    }
+
+    pub fn with_having(mut self, having: Predicate) -> Self {
+        self.having = Some(having);
+        self
+    }
+
     pub fn with_order_by(mut self, order_by: Vec<OrderBy>) -> Self {
         self.order_by = order_by;
         self
     }
 
-    pub fn with_limit(mut self, limit: usize) -> Self {
-        self.limit = Some(limit);
+    pub fn with_limit(mut self, limit: impl Into<Expr>) -> Self {
+        self.limit = Some(limit.into());
         self
     }
 
-    pub fn with_offset(mut self, offset: usize) -> Self {
-        self.offset = offset;
+    pub fn with_offset(mut self, offset: impl Into<Expr>) -> Self {
+        self.offset = offset.into();
         self
     }
 }
@@ -329,7 +372,7 @@ pub struct UpdateQuery {
     pub collection: Option<String>,
     pub predicate: Option<Predicate>,
     pub assignments: Vec<Assignment>,
-    pub limit: Option<usize>,
+    pub limit: Option<Expr>,
     pub returning: Vec<QueryField>,
 }
 
@@ -359,8 +402,8 @@ impl UpdateQuery {
         self
     }
 
-    pub fn with_limit(mut self, limit: usize) -> Self {
-        self.limit = Some(limit);
+    pub fn with_limit(mut self, limit: impl Into<Expr>) -> Self {
+        self.limit = Some(limit.into());
         self
     }
 
@@ -380,7 +423,7 @@ impl Default for UpdateQuery {
 pub struct DeleteQuery {
     pub collection: Option<String>,
     pub predicate: Option<Predicate>,
-    pub limit: Option<usize>,
+    pub limit: Option<Expr>,
     pub returning: Vec<QueryField>,
 }
 
@@ -404,8 +447,8 @@ impl DeleteQuery {
         self
     }
 
-    pub fn with_limit(mut self, limit: usize) -> Self {
-        self.limit = Some(limit);
+    pub fn with_limit(mut self, limit: impl Into<Expr>) -> Self {
+        self.limit = Some(limit.into());
         self
     }
 

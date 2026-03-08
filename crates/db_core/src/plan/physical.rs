@@ -35,8 +35,9 @@ pub enum FieldRef {
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct PhysicalProjectionField {
-    pub field: FieldRef,
-    pub source_path: FieldPath,
+    pub expr: crate::query::Expr,
+    pub field: Option<FieldRef>,
+    pub source_path: Option<FieldPath>,
     pub alias: Option<String>,
 }
 
@@ -115,10 +116,16 @@ pub enum PhysicalPlan {
         input: Box<PhysicalPlan>,
         projection: Vec<PhysicalProjectionField>,
     },
+    Aggregate {
+        input: Box<PhysicalPlan>,
+        group_by: Vec<crate::query::Expr>,
+        projection: Vec<PhysicalProjectionField>,
+        having: Option<Predicate>,
+    },
     Limit {
         input: Box<PhysicalPlan>,
-        offset: usize,
-        limit: Option<usize>,
+        offset: crate::query::Expr,
+        limit: Option<crate::query::Expr>,
     },
     Distinct {
         input: Box<PhysicalPlan>,

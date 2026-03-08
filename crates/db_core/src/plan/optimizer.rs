@@ -326,14 +326,28 @@ impl PhysicalLoweringPass for CoreLoweringPass {
                     .map(|item| to_projection_field(item, context))
                     .collect(),
             },
+            LogicalPlan::Aggregate {
+                input: inner,
+                group_by,
+                projection,
+                having,
+            } => PhysicalPlan::Aggregate {
+                input: Box::new(input(inner)),
+                group_by: group_by.clone(),
+                projection: projection
+                    .iter()
+                    .map(|item| to_projection_field(item, context))
+                    .collect(),
+                having: having.clone(),
+            },
             LogicalPlan::Limit {
                 input: inner,
                 offset,
                 limit,
             } => PhysicalPlan::Limit {
                 input: Box::new(input(inner)),
-                offset: *offset,
-                limit: *limit,
+                offset: offset.clone(),
+                limit: limit.clone(),
             },
             LogicalPlan::Distinct { input: inner } => PhysicalPlan::Distinct {
                 input: Box::new(input(inner)),
@@ -404,9 +418,17 @@ impl PhysicalLoweringPass for CoreLoweringPass {
 }
 
 fn to_projection_field(field: &QueryField, context: &QueryContext) -> PhysicalProjectionField {
+    let (field_ref, source_path) = match field.expr.as_ref() {
+        crate::query::Expr::Operand(crate::query::Operand::Field(path)) => (
+            Some(resolve_field_ref_for_path(context, path)),
+            Some(path.clone()),
+        ),
+        _ => (None, None),
+    };
     PhysicalProjectionField {
-        field: resolve_field_ref_for_path(context, &field.path),
-        source_path: field.path.clone(),
+        expr: (*field.expr).clone(),
+        field: field_ref,
+        source_path,
         alias: field.alias.clone(),
     }
 }
@@ -599,6 +621,17 @@ fn rewrite_plan(plan: LogicalPlan, f: &dyn Fn(LogicalPlan) -> LogicalPlan) -> Lo
         LogicalPlan::Project { input, projection } => LogicalPlan::Project {
             input: Box::new(rewrite_plan(*input, f)),
             projection,
+        },
+        LogicalPlan::Aggregate {
+            input,
+            group_by,
+            projection,
+            having,
+        } => LogicalPlan::Aggregate {
+            input: Box::new(rewrite_plan(*input, f)),
+            group_by,
+            projection,
+            having,
         },
         LogicalPlan::Limit {
             input,

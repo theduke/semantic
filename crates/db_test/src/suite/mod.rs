@@ -1,6 +1,7 @@
 use semantic_data::query::{
-    BinaryOp, CompareOp, DeleteQuery, Expr, FunctionArg, Operand, OrderBy, PatternMatchKind,
-    Predicate, SelectQuery, SortDirection, TextQueryFormat, UpdateQuery,
+    AggregateOp, BinaryOp, CompareOp, DeleteQuery, Expr, FunctionArg, Operand, OrderBy,
+    PatternMatchKind, Predicate, QueryField, SelectQuery, SortDirection, TextQueryFormat,
+    UpdateQuery,
 };
 use semantic_data::value::{FieldPath, Object, Value};
 use semantic_db_core::{Db, QueryResult, catalog::CollectionKind};
@@ -15,6 +16,10 @@ pub async fn test_db(db: &Db) {
     test_sql_predicate_constructs(db).await;
     test_ast_ordering_variants(db).await;
     test_sql_ordering_variants(db).await;
+    test_ast_limit_offset_variants(db).await;
+    test_sql_limit_offset_variants(db).await;
+    test_ast_aggregation_distinct_grouping(db).await;
+    test_sql_aggregation_distinct_grouping(db).await;
     test_text_query_formats(db).await;
 }
 
@@ -462,70 +467,6 @@ async fn test_ast_predicate_constructs(db: &Db) {
         .await
         .expect("ast LOWER function query should succeed");
     assert_eq!(func_rows.len(), 1);
-
-    let aggregate_like_rows = db
-        .select(
-            SelectQuery::new()
-                .with_collection("shared_suite_ast_predicates")
-                .with_predicate(Predicate::And(vec![
-                    Predicate::Compare {
-                        op: CompareOp::Eq,
-                        left: Operand::Field(FieldPath::from_fields(["id"])),
-                        right: Operand::Literal(Value::String("ast-a".to_string())),
-                    },
-                    Predicate::Expr(Expr::Binary {
-                        op: BinaryOp::Eq,
-                        left: Box::new(Expr::Function {
-                            name: "SUM".to_string(),
-                            args: vec![FunctionArg::Expr(Expr::Operand(Operand::Field(
-                                FieldPath::from_fields(["score"]),
-                            )))],
-                        }),
-                        right: Box::new(Expr::Operand(Operand::Field(FieldPath::from_fields([
-                            "score",
-                        ])))),
-                    }),
-                    Predicate::Expr(Expr::Binary {
-                        op: BinaryOp::Eq,
-                        left: Box::new(Expr::Function {
-                            name: "AVG".to_string(),
-                            args: vec![FunctionArg::Expr(Expr::Operand(Operand::Field(
-                                FieldPath::from_fields(["score"]),
-                            )))],
-                        }),
-                        right: Box::new(Expr::Operand(Operand::Field(FieldPath::from_fields([
-                            "score",
-                        ])))),
-                    }),
-                    Predicate::Expr(Expr::Binary {
-                        op: BinaryOp::Eq,
-                        left: Box::new(Expr::Function {
-                            name: "MIN".to_string(),
-                            args: vec![FunctionArg::Expr(Expr::Operand(Operand::Field(
-                                FieldPath::from_fields(["score"]),
-                            )))],
-                        }),
-                        right: Box::new(Expr::Operand(Operand::Field(FieldPath::from_fields([
-                            "score",
-                        ])))),
-                    }),
-                    Predicate::Expr(Expr::Binary {
-                        op: BinaryOp::Eq,
-                        left: Box::new(Expr::Function {
-                            name: "MAX".to_string(),
-                            args: vec![FunctionArg::Expr(Expr::Operand(Operand::Field(
-                                FieldPath::from_fields(["score"]),
-                            )))],
-                        }),
-                        right: Box::new(Expr::Operand(Operand::Field(FieldPath::from_fields([
-                            "score",
-                        ])))),
-                    }),
-                ])),
-        )
-        .await
-        .expect("ast SUM/AVG/MIN/MAX function query should succeed");
-    assert_eq!(aggregate_like_rows.len(), 1);
 }
 
 async fn test_sql_predicate_constructs(db: &Db) {
@@ -689,7 +630,7 @@ async fn test_sql_predicate_constructs(db: &Db) {
     let function_result = db
         .query_text(
             TextQueryFormat::Sql,
-            "SELECT id FROM shared_suite_sql_predicates WHERE id = 'sql-a' AND LOWER(kind) = 'music' AND UPPER(kind) = 'MUSIC' AND COUNT(*) = 1 AND SUM(score) = score AND AVG(score) = score AND MIN(score) = score AND MAX(score) = score",
+            "SELECT id FROM shared_suite_sql_predicates WHERE id = 'sql-a' AND LOWER(kind) = 'music' AND UPPER(kind) = 'MUSIC'",
         )
         .await
         .expect("sql function query should succeed");
@@ -697,6 +638,208 @@ async fn test_sql_predicate_constructs(db: &Db) {
         panic!("sql function query should return SELECT rows");
     };
     assert_eq!(function_rows.len(), 1);
+}
+
+async fn test_ast_aggregation_distinct_grouping(db: &Db) {
+    db.create_collection("shared_suite_ast_agg", CollectionKind::Untyped)
+        .await
+        .expect("ast aggregation test collection creation should succeed");
+    for (id, kind, score) in [
+        ("agg-a", "music", 10),
+        ("agg-b", "music", 20),
+        ("agg-c", "video", 5),
+        ("agg-d", "video", 5),
+    ] {
+        db.insert("shared_suite_ast_agg", id, row(id, kind, score))
+            .await
+            .expect("ast aggregation seed insert should succeed");
+    }
+
+    let grouped = db
+        .select(
+            SelectQuery::new()
+                .with_collection("shared_suite_ast_agg")
+                .with_group_by(vec![Expr::Operand(Operand::Field(FieldPath::from_fields(
+                    ["kind"],
+                )))])
+                .with_projection(vec![
+                    QueryField {
+                        expr: Box::new(Expr::Operand(Operand::Field(FieldPath::from_fields([
+                            "kind",
+                        ])))),
+                        alias: Some("kind".to_string()),
+                    },
+                    QueryField {
+                        expr: Box::new(Expr::Aggregate {
+                            op: AggregateOp::Count,
+                            distinct: false,
+                            arg: Box::new(FunctionArg::Wildcard),
+                        }),
+                        alias: Some("n".to_string()),
+                    },
+                    QueryField {
+                        expr: Box::new(Expr::Aggregate {
+                            op: AggregateOp::Sum,
+                            distinct: false,
+                            arg: Box::new(FunctionArg::Expr(Expr::Operand(Operand::Field(
+                                FieldPath::from_fields(["score"]),
+                            )))),
+                        }),
+                        alias: Some("total".to_string()),
+                    },
+                ])
+                .with_having(Predicate::Expr(Expr::Binary {
+                    op: BinaryOp::Gt,
+                    left: Box::new(Expr::Aggregate {
+                        op: AggregateOp::Sum,
+                        distinct: false,
+                        arg: Box::new(FunctionArg::Expr(Expr::Operand(Operand::Field(
+                            FieldPath::from_fields(["score"]),
+                        )))),
+                    }),
+                    right: Box::new(Expr::Operand(Operand::Literal(Value::F64(10.0.into())))),
+                })),
+        )
+        .await
+        .expect("ast grouped aggregate query should succeed");
+    assert_eq!(grouped.len(), 1);
+    assert_eq!(
+        grouped[0].get("kind"),
+        Some(&Value::String("music".to_string()))
+    );
+    assert_eq!(grouped[0].get("n"), Some(&Value::I64(2)));
+    assert_eq!(grouped[0].get("total"), Some(&Value::F64(30.0.into())));
+
+    let distinct_kinds = db
+        .select(
+            SelectQuery::new()
+                .with_collection("shared_suite_ast_agg")
+                .with_projection(vec![QueryField {
+                    expr: Box::new(Expr::Operand(Operand::Field(FieldPath::from_fields([
+                        "kind",
+                    ])))),
+                    alias: Some("kind".to_string()),
+                }])
+                .with_distinct(true)
+                .with_order_by(vec![OrderBy {
+                    expr: Expr::Operand(Operand::Field(FieldPath::from_fields(["kind"]))),
+                    direction: SortDirection::Asc,
+                }]),
+        )
+        .await
+        .expect("ast distinct query should succeed");
+    assert_eq!(
+        row_strings(&distinct_kinds, "kind"),
+        vec!["music".to_string(), "video".to_string()]
+    );
+
+    let global = db
+        .select(
+            SelectQuery::new()
+                .with_collection("shared_suite_ast_agg")
+                .with_projection(vec![
+                    QueryField {
+                        expr: Box::new(Expr::Aggregate {
+                            op: AggregateOp::Count,
+                            distinct: true,
+                            arg: Box::new(FunctionArg::Expr(Expr::Operand(Operand::Field(
+                                FieldPath::from_fields(["kind"]),
+                            )))),
+                        }),
+                        alias: Some("kinds".to_string()),
+                    },
+                    QueryField {
+                        expr: Box::new(Expr::Aggregate {
+                            op: AggregateOp::Sum,
+                            distinct: true,
+                            arg: Box::new(FunctionArg::Expr(Expr::Operand(Operand::Field(
+                                FieldPath::from_fields(["score"]),
+                            )))),
+                        }),
+                        alias: Some("uniq_total".to_string()),
+                    },
+                ]),
+        )
+        .await
+        .expect("ast global aggregate query should succeed");
+    assert_eq!(global.len(), 1);
+    assert_eq!(global[0].get("kinds"), Some(&Value::I64(2)));
+    assert_eq!(global[0].get("uniq_total"), Some(&Value::F64(35.0.into())));
+}
+
+async fn test_sql_aggregation_distinct_grouping(db: &Db) {
+    if !db
+        .supported_text_query_formats()
+        .contains(&TextQueryFormat::Sql)
+    {
+        return;
+    }
+    db.create_collection("shared_suite_sql_agg", CollectionKind::Untyped)
+        .await
+        .expect("sql aggregation test collection creation should succeed");
+    for (id, kind, score) in [
+        ("sql-agg-a", "music", 10),
+        ("sql-agg-b", "music", 20),
+        ("sql-agg-c", "video", 5),
+        ("sql-agg-d", "video", 5),
+    ] {
+        db.insert("shared_suite_sql_agg", id, row(id, kind, score))
+            .await
+            .expect("sql aggregation seed insert should succeed");
+    }
+
+    let grouped = db
+        .query_text(
+            TextQueryFormat::Sql,
+            "SELECT kind, COUNT(*) AS n, SUM(score) AS total, AVG(score) AS avg, MIN(score) AS mn, MAX(score) AS mx FROM shared_suite_sql_agg GROUP BY kind HAVING SUM(score) > 10.0 ORDER BY total DESC",
+        )
+        .await
+        .expect("sql grouped aggregate query should succeed");
+    let QueryResult::Select(grouped_rows) = grouped else {
+        panic!("sql grouped aggregate query should return SELECT rows");
+    };
+    assert_eq!(grouped_rows.len(), 1);
+    assert_eq!(
+        grouped_rows[0].get("kind"),
+        Some(&Value::String("music".to_string()))
+    );
+    assert_eq!(grouped_rows[0].get("n"), Some(&Value::I64(2)));
+    assert_eq!(grouped_rows[0].get("total"), Some(&Value::F64(30.0.into())));
+    assert_eq!(grouped_rows[0].get("avg"), Some(&Value::F64(15.0.into())));
+    assert_eq!(grouped_rows[0].get("mn"), Some(&Value::I64(10)));
+    assert_eq!(grouped_rows[0].get("mx"), Some(&Value::I64(20)));
+
+    let distinct = db
+        .query_text(
+            TextQueryFormat::Sql,
+            "SELECT DISTINCT kind FROM shared_suite_sql_agg ORDER BY kind ASC",
+        )
+        .await
+        .expect("sql distinct query should succeed");
+    let QueryResult::Select(distinct_rows) = distinct else {
+        panic!("sql distinct query should return SELECT rows");
+    };
+    assert_eq!(
+        row_strings(&distinct_rows, "kind"),
+        vec!["music".to_string(), "video".to_string()]
+    );
+
+    let global = db
+        .query_text(
+            TextQueryFormat::Sql,
+            "SELECT COUNT(DISTINCT kind) AS kinds, SUM(DISTINCT score) AS uniq_total FROM shared_suite_sql_agg",
+        )
+        .await
+        .expect("sql global aggregate query should succeed");
+    let QueryResult::Select(global_rows) = global else {
+        panic!("sql global aggregate query should return SELECT rows");
+    };
+    assert_eq!(global_rows.len(), 1);
+    assert_eq!(global_rows[0].get("kinds"), Some(&Value::I64(2)));
+    assert_eq!(
+        global_rows[0].get("uniq_total"),
+        Some(&Value::F64(35.0.into()))
+    );
 }
 
 async fn test_ast_ordering_variants(db: &Db) {
@@ -815,6 +958,82 @@ async fn test_sql_ordering_variants(db: &Db) {
     );
 }
 
+async fn test_ast_limit_offset_variants(db: &Db) {
+    db.create_collection("shared_suite_limit_ast", CollectionKind::Untyped)
+        .await
+        .expect("ast limit/offset test collection creation should succeed");
+
+    for (id, kind, score) in [
+        ("lim-a", "music", 1),
+        ("lim-b", "video", 2),
+        ("lim-c", "music", 3),
+        ("lim-d", "podcast", 4),
+    ] {
+        db.insert("shared_suite_limit_ast", id, row(id, kind, score))
+            .await
+            .expect("ast limit/offset seed insert should succeed");
+    }
+
+    let rows = db
+        .select(
+            SelectQuery::new()
+                .with_collection("shared_suite_limit_ast")
+                .with_order_by(vec![OrderBy {
+                    expr: Expr::Operand(Operand::Field(FieldPath::from_fields(["id"]))),
+                    direction: SortDirection::Asc,
+                }])
+                .with_offset(Expr::Binary {
+                    op: BinaryOp::Add,
+                    left: Box::new(Expr::Operand(Operand::Literal(Value::I64(1)))),
+                    right: Box::new(Expr::Operand(Operand::Literal(Value::I64(1)))),
+                })
+                .with_limit(Expr::Binary {
+                    op: BinaryOp::Mul,
+                    left: Box::new(Expr::Operand(Operand::Literal(Value::I64(1)))),
+                    right: Box::new(Expr::Operand(Operand::Literal(Value::I64(2)))),
+                }),
+        )
+        .await
+        .expect("ast limit/offset expression query should succeed");
+    assert_eq!(row_ids(&rows), vec!["lim-c", "lim-d"]);
+}
+
+async fn test_sql_limit_offset_variants(db: &Db) {
+    if !db
+        .supported_text_query_formats()
+        .contains(&TextQueryFormat::Sql)
+    {
+        return;
+    }
+
+    db.create_collection("shared_suite_limit_sql", CollectionKind::Untyped)
+        .await
+        .expect("sql limit/offset test collection creation should succeed");
+
+    for (id, kind, score) in [
+        ("sql-lim-a", "music", 1),
+        ("sql-lim-b", "video", 2),
+        ("sql-lim-c", "music", 3),
+        ("sql-lim-d", "podcast", 4),
+    ] {
+        db.insert("shared_suite_limit_sql", id, row(id, kind, score))
+            .await
+            .expect("sql limit/offset seed insert should succeed");
+    }
+
+    let result = db
+        .query_text(
+            TextQueryFormat::Sql,
+            "SELECT id FROM shared_suite_limit_sql ORDER BY id ASC LIMIT 1 + 1 OFFSET 1 + 1",
+        )
+        .await
+        .expect("sql limit/offset expression query should succeed");
+    let QueryResult::Select(rows) = result else {
+        panic!("sql limit/offset expression query should return SELECT rows");
+    };
+    assert_eq!(row_ids(&rows), vec!["sql-lim-c", "sql-lim-d"]);
+}
+
 fn row(id: &str, kind: &str, score: i64) -> Object {
     let mut row = Object::new();
     row.insert("id", Value::String(id.to_string()));
@@ -824,10 +1043,14 @@ fn row(id: &str, kind: &str, score: i64) -> Object {
 }
 
 fn row_ids(rows: &[Object]) -> Vec<String> {
+    row_strings(rows, "id")
+}
+
+fn row_strings(rows: &[Object], key: &str) -> Vec<String> {
     rows.iter()
-        .map(|row| match row.get("id") {
-            Some(Value::String(id)) => id.clone(),
-            other => panic!("expected string id field, got {other:?}"),
+        .map(|row| match row.get(key) {
+            Some(Value::String(value)) => value.clone(),
+            other => panic!("expected string {key} field, got {other:?}"),
         })
         .collect()
 }

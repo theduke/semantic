@@ -3,7 +3,7 @@ use std::collections::{BTreeSet, HashMap};
 use std::hash::Hash;
 
 use futures::{FutureExt, TryStreamExt, future::BoxFuture, stream::BoxStream};
-use semantic_data::query::JoinType;
+use semantic_data::query::{AggregateOp, CompareOp, JoinType};
 use semantic_data::value::{FieldPath, Object, Value, ValueRef};
 
 use crate::QueryContext;
@@ -12,8 +12,8 @@ use crate::plan::{
     PhysicalOrderField, PhysicalPlan, PhysicalProjectionField, PhysicalSource, SourceRef,
 };
 use crate::query::{
-    CoreError, CoreResult, ObjectAccess as QueryObjectAccess, Predicate, compare_objects_for_plan,
-    evaluate_expr, evaluate_predicate,
+    CoreError, CoreResult, Expr, FunctionArg, ObjectAccess as QueryObjectAccess, Operand,
+    Predicate, compare_objects_for_plan, evaluate_expr, evaluate_predicate, evaluate_usize_expr,
 };
 
 pub type DynObject = Box<dyn QueryObjectAccess>;
@@ -165,16 +165,36 @@ fn execute_physical_dyn(
             .into_iter()
             .map(|row| Box::new(project_dyn_object(row.as_ref(), projection)) as DynObject)
             .collect()),
+        PhysicalPlan::Aggregate {
+            input,
+            group_by,
+            projection,
+            having,
+        } => execute_aggregate(
+            execute_physical_dyn(input, source)?,
+            group_by,
+            projection,
+            having,
+        ),
         PhysicalPlan::Limit {
             input,
             offset,
             limit,
         } => {
+            let offset = evaluate_usize_expr(offset)
+                .ok_or_else(|| CoreError::new("failed to evaluate OFFSET expression"))?;
+            let limit = limit
+                .as_ref()
+                .map(|expr| {
+                    evaluate_usize_expr(expr)
+                        .ok_or_else(|| CoreError::new("failed to evaluate LIMIT expression"))
+                })
+                .transpose()?;
             let iter = execute_physical_dyn(input, source)?
                 .into_iter()
-                .skip(*offset);
+                .skip(offset);
             if let Some(limit) = limit {
-                Ok(iter.take(*limit).collect())
+                Ok(iter.take(limit).collect())
             } else {
                 Ok(iter.collect())
             }
@@ -290,17 +310,37 @@ fn execute_physical_dyn_async<'a>(
                     .map(|row| Box::new(project_dyn_object(row.as_ref(), projection)) as DynObject)
                     .collect())
             }
+            PhysicalPlan::Aggregate {
+                input,
+                group_by,
+                projection,
+                having,
+            } => execute_aggregate(
+                execute_physical_dyn_async(input, source, options).await?,
+                group_by,
+                projection,
+                having,
+            ),
             PhysicalPlan::Limit {
                 input,
                 offset,
                 limit,
             } => {
+                let offset = evaluate_usize_expr(offset)
+                    .ok_or_else(|| CoreError::new("failed to evaluate OFFSET expression"))?;
+                let limit = limit
+                    .as_ref()
+                    .map(|expr| {
+                        evaluate_usize_expr(expr)
+                            .ok_or_else(|| CoreError::new("failed to evaluate LIMIT expression"))
+                    })
+                    .transpose()?;
                 let iter = execute_physical_dyn_async(input, source, options)
                     .await?
                     .into_iter()
-                    .skip(*offset);
+                    .skip(offset);
                 if let Some(limit) = limit {
-                    Ok(iter.take(*limit).collect())
+                    Ok(iter.take(limit).collect())
                 } else {
                     Ok(iter.collect())
                 }
@@ -583,14 +623,22 @@ fn project_dyn_object(
 ) -> Object {
     let mut out = Object::new();
     for project in projection {
-        let Some(v) = value_ref_for_field(value, &project.field, Some(&project.source_path)) else {
+        let projected = if let Some(field) = &project.field {
+            value_ref_for_field(value, field, project.source_path.as_ref()).map(|v| v.into_owned())
+        } else {
+            evaluate_expr(value, &project.expr)
+        };
+        let Some(v) = projected else {
             continue;
         };
-        let key = project
-            .alias
-            .clone()
-            .unwrap_or_else(|| infer_project_key(&project.source_path));
-        out.insert(key, v.into_owned());
+        let key = project.alias.clone().unwrap_or_else(|| {
+            project
+                .source_path
+                .as_ref()
+                .map(infer_project_key)
+                .unwrap_or_else(|| infer_expr_key(&project.expr))
+        });
+        out.insert(key, v);
     }
     out
 }
@@ -609,6 +657,346 @@ fn value_ref_for_join_key<'a>(
     key: &PhysicalJoinKey,
 ) -> Option<ValueRef<'a>> {
     value_ref_for_field(row, &key.field, Some(&key.source_path))
+}
+
+fn execute_aggregate(
+    input_rows: Vec<DynObject>,
+    group_by: &[crate::query::Expr],
+    projection: &[PhysicalProjectionField],
+    having: &Option<Predicate>,
+) -> CoreResult<Vec<DynObject>> {
+    let owned_rows = input_rows
+        .into_iter()
+        .map(|row| row.to_object())
+        .collect::<Vec<_>>();
+    let mut groups = std::collections::BTreeMap::<Vec<Value>, Vec<Object>>::new();
+    if group_by.is_empty() {
+        groups.insert(Vec::new(), owned_rows);
+    } else {
+        for row in owned_rows {
+            let key = group_by
+                .iter()
+                .map(|expr| evaluate_expr(&row, expr).unwrap_or(Value::Null))
+                .collect::<Vec<_>>();
+            groups.entry(key).or_default().push(row);
+        }
+    }
+
+    let mut out = Vec::<DynObject>::new();
+    for (_key, rows) in groups {
+        if let Some(having) = having
+            && !evaluate_group_predicate(&rows, having)
+        {
+            continue;
+        }
+        let mut projected = Object::new();
+        for field in projection {
+            let value = evaluate_group_expr(&rows, &field.expr);
+            let Some(value) = value else {
+                continue;
+            };
+            let key = field.alias.clone().unwrap_or_else(|| {
+                field
+                    .source_path
+                    .as_ref()
+                    .map(infer_project_key)
+                    .unwrap_or_else(|| infer_expr_key(&field.expr))
+            });
+            projected.insert(key, value);
+        }
+        out.push(Box::new(projected) as DynObject);
+    }
+    Ok(out)
+}
+
+fn evaluate_group_predicate(rows: &[Object], predicate: &Predicate) -> bool {
+    match predicate {
+        Predicate::Compare { op, left, right } => {
+            let left = evaluate_group_operand(rows, left);
+            let right = evaluate_group_operand(rows, right);
+            compare_group_values(*op, left.as_ref(), right.as_ref())
+        }
+        Predicate::Expr(expr) => evaluate_group_expr(rows, expr)
+            .as_ref()
+            .is_some_and(|value| match value {
+                Value::Bool(v) => *v,
+                Value::Null | Value::Void => false,
+                _ => true,
+            }),
+        Predicate::Exists(path) => rows
+            .first()
+            .and_then(|row| row.value_at_path_ref(path))
+            .is_some(),
+        Predicate::And(items) => items
+            .iter()
+            .all(|item| evaluate_group_predicate(rows, item)),
+        Predicate::Or(items) => items
+            .iter()
+            .any(|item| evaluate_group_predicate(rows, item)),
+        Predicate::Not(inner) => !evaluate_group_predicate(rows, inner),
+    }
+}
+
+fn evaluate_group_operand(rows: &[Object], operand: &Operand) -> Option<Value> {
+    match operand {
+        Operand::Literal(value) => Some(value.clone()),
+        Operand::Field(path) => rows
+            .first()
+            .and_then(|row| row.value_at_path_ref(path))
+            .map(|value| value.into_owned()),
+    }
+}
+
+fn compare_group_values(op: CompareOp, left: Option<&Value>, right: Option<&Value>) -> bool {
+    let (Some(left), Some(right)) = (left, right) else {
+        return false;
+    };
+    match op {
+        CompareOp::Eq => left == right,
+        CompareOp::NotEq => left != right,
+        CompareOp::Lt => left < right,
+        CompareOp::Lte => left <= right,
+        CompareOp::Gt => left > right,
+        CompareOp::Gte => left >= right,
+    }
+}
+
+fn evaluate_group_expr(rows: &[Object], expr: &Expr) -> Option<Value> {
+    match expr {
+        Expr::Aggregate { op, distinct, arg } => evaluate_aggregate_expr(rows, *op, *distinct, arg),
+        Expr::Unary { op, expr } => {
+            let one = rows.first()?;
+            evaluate_expr(
+                one,
+                &Expr::Unary {
+                    op: *op,
+                    expr: Box::new(rewrite_group_expr(rows, expr)?),
+                },
+            )
+        }
+        Expr::Binary { op, left, right } => {
+            let one = rows.first()?;
+            evaluate_expr(
+                one,
+                &Expr::Binary {
+                    op: *op,
+                    left: Box::new(rewrite_group_expr(rows, left)?),
+                    right: Box::new(rewrite_group_expr(rows, right)?),
+                },
+            )
+        }
+        Expr::IfElse {
+            cond,
+            then_expr,
+            else_expr,
+        } => {
+            let one = rows.first()?;
+            evaluate_expr(
+                one,
+                &Expr::IfElse {
+                    cond: Box::new(rewrite_group_expr(rows, cond)?),
+                    then_expr: Box::new(rewrite_group_expr(rows, then_expr)?),
+                    else_expr: Box::new(rewrite_group_expr(rows, else_expr)?),
+                },
+            )
+        }
+        Expr::Coalesce(items) => {
+            let mut rewritten = Vec::with_capacity(items.len());
+            for item in items {
+                rewritten.push(rewrite_group_expr(rows, item)?);
+            }
+            evaluate_expr(rows.first()?, &Expr::Coalesce(rewritten))
+        }
+        Expr::Function { name, args } => {
+            let mut rewritten = Vec::with_capacity(args.len());
+            for arg in args {
+                rewritten.push(match arg {
+                    FunctionArg::Expr(expr) => FunctionArg::Expr(rewrite_group_expr(rows, expr)?),
+                    FunctionArg::Wildcard => FunctionArg::Wildcard,
+                });
+            }
+            evaluate_expr(
+                rows.first()?,
+                &Expr::Function {
+                    name: name.clone(),
+                    args: rewritten,
+                },
+            )
+        }
+        _ => rows.first().and_then(|row| evaluate_expr(row, expr)),
+    }
+}
+
+fn rewrite_group_expr(rows: &[Object], expr: &Expr) -> Option<Expr> {
+    if expr_contains_aggregate(expr) {
+        evaluate_group_expr(rows, expr).map(|value| Expr::Operand(Operand::Literal(value)))
+    } else {
+        Some(expr.clone())
+    }
+}
+
+fn expr_contains_aggregate(expr: &Expr) -> bool {
+    match expr {
+        Expr::Aggregate { .. } => true,
+        Expr::Unary { expr, .. } => expr_contains_aggregate(expr),
+        Expr::Binary { left, right, .. } => {
+            expr_contains_aggregate(left) || expr_contains_aggregate(right)
+        }
+        Expr::IfElse {
+            cond,
+            then_expr,
+            else_expr,
+        } => {
+            expr_contains_aggregate(cond)
+                || expr_contains_aggregate(then_expr)
+                || expr_contains_aggregate(else_expr)
+        }
+        Expr::Coalesce(items) => items.iter().any(expr_contains_aggregate),
+        Expr::Function { args, .. } => args.iter().any(|arg| match arg {
+            FunctionArg::Expr(expr) => expr_contains_aggregate(expr),
+            FunctionArg::Wildcard => false,
+        }),
+        Expr::InList { expr, list, .. } => {
+            expr_contains_aggregate(expr) || list.iter().any(expr_contains_aggregate)
+        }
+        Expr::Between {
+            expr, low, high, ..
+        } => {
+            expr_contains_aggregate(expr)
+                || expr_contains_aggregate(low)
+                || expr_contains_aggregate(high)
+        }
+        Expr::PatternMatch { expr, pattern, .. } | Expr::RegexMatch { expr, pattern, .. } => {
+            expr_contains_aggregate(expr) || expr_contains_aggregate(pattern)
+        }
+        Expr::IsNull { expr, .. } => expr_contains_aggregate(expr),
+        Expr::InSubquery { .. } | Expr::Exists { .. } | Expr::Operand(_) => false,
+    }
+}
+
+fn evaluate_aggregate_expr(
+    rows: &[Object],
+    op: AggregateOp,
+    distinct: bool,
+    arg: &FunctionArg,
+) -> Option<Value> {
+    match op {
+        AggregateOp::Count => {
+            if matches!(arg, FunctionArg::Wildcard) {
+                return Some(Value::I64(rows.len() as i64));
+            }
+            let FunctionArg::Expr(expr) = arg else {
+                return Some(Value::I64(0));
+            };
+            let mut seen = BTreeSet::new();
+            let mut count = 0i64;
+            for row in rows {
+                let Some(value) = evaluate_expr(row, expr) else {
+                    continue;
+                };
+                if value.is_nullish() {
+                    continue;
+                }
+                if distinct && !seen.insert(value.clone()) {
+                    continue;
+                }
+                count += 1;
+            }
+            Some(Value::I64(count))
+        }
+        AggregateOp::Sum => {
+            let FunctionArg::Expr(expr) = arg else {
+                return None;
+            };
+            let mut seen = BTreeSet::new();
+            let mut sum = 0.0f64;
+            let mut found = false;
+            for row in rows {
+                let Some(value) = evaluate_expr(row, expr) else {
+                    continue;
+                };
+                if value.is_nullish() {
+                    continue;
+                }
+                if distinct && !seen.insert(value.clone()) {
+                    continue;
+                }
+                let number = value.as_f64()?;
+                sum += number;
+                found = true;
+            }
+            if found {
+                Some(Value::F64(sum.into()))
+            } else {
+                Some(Value::Null)
+            }
+        }
+        AggregateOp::Avg => {
+            let FunctionArg::Expr(expr) = arg else {
+                return None;
+            };
+            let mut seen = BTreeSet::new();
+            let mut sum = 0.0f64;
+            let mut count = 0usize;
+            for row in rows {
+                let Some(value) = evaluate_expr(row, expr) else {
+                    continue;
+                };
+                if value.is_nullish() {
+                    continue;
+                }
+                if distinct && !seen.insert(value.clone()) {
+                    continue;
+                }
+                sum += value.as_f64()?;
+                count += 1;
+            }
+            if count == 0 {
+                Some(Value::Null)
+            } else {
+                Some(Value::F64((sum / count as f64).into()))
+            }
+        }
+        AggregateOp::Min | AggregateOp::Max => {
+            let FunctionArg::Expr(expr) = arg else {
+                return None;
+            };
+            let mut seen = BTreeSet::new();
+            let mut best: Option<Value> = None;
+            for row in rows {
+                let Some(value) = evaluate_expr(row, expr) else {
+                    continue;
+                };
+                if value.is_nullish() {
+                    continue;
+                }
+                if distinct && !seen.insert(value.clone()) {
+                    continue;
+                }
+                match &best {
+                    None => best = Some(value),
+                    Some(current) => {
+                        let replace = match op {
+                            AggregateOp::Min => value < *current,
+                            AggregateOp::Max => value > *current,
+                            _ => false,
+                        };
+                        if replace {
+                            best = Some(value);
+                        }
+                    }
+                }
+            }
+            Some(best.unwrap_or(Value::Null))
+        }
+    }
+}
+
+fn infer_expr_key(expr: &Expr) -> String {
+    match expr {
+        Expr::Operand(Operand::Field(path)) => infer_project_key(path),
+        _ => "value".to_string(),
+    }
 }
 
 fn value_ref_for_field<'a>(

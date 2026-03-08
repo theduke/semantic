@@ -3,7 +3,9 @@ use semantic_data::value::{FieldPath, Object};
 
 use crate::catalog::LocalCollectionId;
 use crate::plan::SourceRef;
-use crate::query::{Expr, JoinCondition, OrderBy, Predicate, QueryField, SelectQuery};
+use crate::query::{
+    Expr, JoinCondition, OrderBy, Predicate, QueryField, SelectQuery, evaluate_usize_expr,
+};
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum LogicalJoinCondition {
@@ -52,10 +54,16 @@ pub enum LogicalPlan {
         input: Box<LogicalPlan>,
         projection: Vec<QueryField>,
     },
+    Aggregate {
+        input: Box<LogicalPlan>,
+        group_by: Vec<Expr>,
+        projection: Vec<QueryField>,
+        having: Option<Predicate>,
+    },
     Limit {
         input: Box<LogicalPlan>,
-        offset: usize,
-        limit: Option<usize>,
+        offset: Expr,
+        limit: Option<Expr>,
     },
     Distinct {
         input: Box<LogicalPlan>,
@@ -176,29 +184,99 @@ pub fn build_logical_plan(query: &SelectQuery, source: SourceRef) -> LogicalPlan
         }
     }
 
-    if !query.order_by.is_empty() {
-        plan = LogicalPlan::Sort {
+    let aggregate_required =
+        !query.group_by.is_empty() || query.having.is_some() || projection_has_aggregate(query);
+    if aggregate_required {
+        plan = LogicalPlan::Aggregate {
             input: Box::new(plan),
-            order_by: query.order_by.clone(),
-        };
-    }
-
-    if !query.projection.is_empty() {
-        plan = LogicalPlan::Project {
-            input: Box::new(plan),
+            group_by: query.group_by.clone(),
             projection: query.projection.clone(),
+            having: query.having.clone(),
         };
+        if query.distinct {
+            plan = LogicalPlan::Distinct {
+                input: Box::new(plan),
+            };
+        }
+        if !query.order_by.is_empty() {
+            plan = LogicalPlan::Sort {
+                input: Box::new(plan),
+                order_by: query.order_by.clone(),
+            };
+        }
+    } else {
+        if !query.order_by.is_empty() {
+            plan = LogicalPlan::Sort {
+                input: Box::new(plan),
+                order_by: query.order_by.clone(),
+            };
+        }
+        if !query.projection.is_empty() {
+            plan = LogicalPlan::Project {
+                input: Box::new(plan),
+                projection: query.projection.clone(),
+            };
+        }
+        if query.distinct {
+            plan = LogicalPlan::Distinct {
+                input: Box::new(plan),
+            };
+        }
     }
 
-    if query.offset != 0 || query.limit.is_some() {
+    if query.limit.is_some()
+        || evaluate_usize_expr(&query.offset)
+            .map(|offset| offset > 0)
+            .unwrap_or(true)
+    {
         plan = LogicalPlan::Limit {
             input: Box::new(plan),
-            offset: query.offset,
-            limit: query.limit,
+            offset: query.offset.clone(),
+            limit: query.limit.clone(),
         };
     }
 
     plan
+}
+
+fn projection_has_aggregate(query: &SelectQuery) -> bool {
+    query
+        .projection
+        .iter()
+        .any(|field| expr_has_aggregate(&field.expr))
+}
+
+fn expr_has_aggregate(expr: &Expr) -> bool {
+    match expr {
+        Expr::Aggregate { .. } => true,
+        Expr::Unary { expr, .. } => expr_has_aggregate(expr),
+        Expr::Binary { left, right, .. } => expr_has_aggregate(left) || expr_has_aggregate(right),
+        Expr::IfElse {
+            cond,
+            then_expr,
+            else_expr,
+        } => {
+            expr_has_aggregate(cond)
+                || expr_has_aggregate(then_expr)
+                || expr_has_aggregate(else_expr)
+        }
+        Expr::Coalesce(items) => items.iter().any(expr_has_aggregate),
+        Expr::Function { args, .. } => args.iter().any(|arg| match arg {
+            crate::FunctionArg::Expr(expr) => expr_has_aggregate(expr),
+            crate::FunctionArg::Wildcard => false,
+        }),
+        Expr::InList { expr, list, .. } => {
+            expr_has_aggregate(expr) || list.iter().any(expr_has_aggregate)
+        }
+        Expr::Between {
+            expr, low, high, ..
+        } => expr_has_aggregate(expr) || expr_has_aggregate(low) || expr_has_aggregate(high),
+        Expr::PatternMatch { expr, pattern, .. } | Expr::RegexMatch { expr, pattern, .. } => {
+            expr_has_aggregate(expr) || expr_has_aggregate(pattern)
+        }
+        Expr::IsNull { expr, .. } => expr_has_aggregate(expr),
+        Expr::InSubquery { .. } | Expr::Exists { .. } | Expr::Operand(_) => false,
+    }
 }
 
 #[derive(Debug, Clone, PartialEq)]

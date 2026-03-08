@@ -130,7 +130,7 @@ use std::{
 use regex::RegexBuilder;
 use semantic_data::query as public_query;
 use semantic_data::query::{
-    BinaryOp, CompareOp, JoinType, PatternMatchKind, SortDirection, UnaryOp,
+    AggregateOp, BinaryOp, CompareOp, JoinType, PatternMatchKind, SortDirection, UnaryOp,
 };
 use semantic_data::value::{FieldPath, Object, PathSegment, Value, ValueRef};
 
@@ -228,6 +228,11 @@ pub enum Expr {
         name: String,
         args: Vec<FunctionArg>,
     },
+    Aggregate {
+        op: AggregateOp,
+        distinct: bool,
+        arg: Box<FunctionArg>,
+    },
     InList {
         expr: Box<Expr>,
         list: Vec<Expr>,
@@ -267,6 +272,12 @@ pub enum Expr {
     },
 }
 
+impl From<usize> for Expr {
+    fn from(value: usize) -> Self {
+        Self::Operand(Operand::Literal(Value::U64(value as u64)))
+    }
+}
+
 #[derive(facet::Facet, Debug, Clone, PartialEq)]
 #[repr(C)]
 #[facet(rename_all = "snake_case")]
@@ -283,9 +294,9 @@ pub enum Predicate {
     Not(Box<Predicate>),
 }
 
-#[derive(facet::Facet, Debug, Clone, PartialEq, Eq)]
+#[derive(facet::Facet, Debug, Clone, PartialEq)]
 pub struct QueryField {
-    pub path: FieldPath,
+    pub expr: Box<Expr>,
     pub alias: Option<String>,
 }
 
@@ -318,9 +329,12 @@ pub struct SelectQuery {
     pub joins: Vec<JoinQuery>,
     pub predicate: Option<Predicate>,
     pub projection: Vec<QueryField>,
+    pub distinct: bool,
+    pub group_by: Vec<Expr>,
+    pub having: Option<Predicate>,
     pub order_by: Vec<OrderBy>,
-    pub offset: usize,
-    pub limit: Option<usize>,
+    pub offset: Expr,
+    pub limit: Option<Expr>,
 }
 
 #[derive(facet::Facet, Debug, Clone, PartialEq)]
@@ -400,6 +414,14 @@ impl From<public_query::Expr> for Expr {
                         public_query::FunctionArg::Wildcard => FunctionArg::Wildcard,
                     })
                     .collect(),
+            },
+            public_query::Expr::Aggregate { op, distinct, arg } => Self::Aggregate {
+                op,
+                distinct,
+                arg: Box::new(match *arg {
+                    public_query::FunctionArg::Expr(expr) => FunctionArg::Expr(expr.into()),
+                    public_query::FunctionArg::Wildcard => FunctionArg::Wildcard,
+                }),
             },
             public_query::Expr::InList {
                 expr,
@@ -490,7 +512,7 @@ impl From<public_query::Predicate> for Predicate {
 impl From<public_query::QueryField> for QueryField {
     fn from(value: public_query::QueryField) -> Self {
         Self {
-            path: value.path,
+            expr: Box::new((*value.expr).into()),
             alias: value.alias,
         }
     }
@@ -537,9 +559,12 @@ impl From<public_query::SelectQuery> for SelectQuery {
             joins: value.joins.into_iter().map(Into::into).collect(),
             predicate: value.predicate.map(Into::into),
             projection: value.projection.into_iter().map(Into::into).collect(),
+            distinct: value.distinct,
+            group_by: value.group_by.into_iter().map(Into::into).collect(),
+            having: value.having.map(Into::into),
             order_by: value.order_by.into_iter().map(Into::into).collect(),
-            offset: value.offset,
-            limit: value.limit,
+            offset: value.offset.into(),
+            limit: value.limit.map(Into::into),
         }
     }
 }
@@ -584,7 +609,7 @@ impl From<public_query::UpdateQuery> for UpdateQuery {
             collection: value.collection,
             predicate: value.predicate.map(Into::into),
             assignments: value.assignments.into_iter().map(Into::into).collect(),
-            limit: value.limit,
+            limit: value.limit.map(Into::into),
             returning: value.returning.into_iter().map(Into::into).collect(),
         }
     }
@@ -595,7 +620,7 @@ impl From<public_query::DeleteQuery> for DeleteQuery {
         Self {
             collection: value.collection,
             predicate: value.predicate.map(Into::into),
-            limit: value.limit,
+            limit: value.limit.map(Into::into),
             returning: value.returning.into_iter().map(Into::into).collect(),
         }
     }
@@ -658,8 +683,11 @@ impl SelectQuery {
             joins: Vec::new(),
             predicate: None,
             projection: Vec::new(),
+            distinct: false,
+            group_by: Vec::new(),
+            having: None,
             order_by: Vec::new(),
-            offset: 0,
+            offset: Expr::from(0usize),
             limit: None,
         }
     }
@@ -695,18 +723,33 @@ impl SelectQuery {
         self
     }
 
+    pub fn with_distinct(mut self, distinct: bool) -> Self {
+        self.distinct = distinct;
+        self
+    }
+
+    pub fn with_group_by(mut self, group_by: Vec<Expr>) -> Self {
+        self.group_by = group_by;
+        self
+    }
+
+    pub fn with_having(mut self, having: Predicate) -> Self {
+        self.having = Some(having);
+        self
+    }
+
     pub fn with_order_by(mut self, order_by: Vec<OrderBy>) -> Self {
         self.order_by = order_by;
         self
     }
 
-    pub fn with_limit(mut self, limit: usize) -> Self {
-        self.limit = Some(limit);
+    pub fn with_limit(mut self, limit: impl Into<Expr>) -> Self {
+        self.limit = Some(limit.into());
         self
     }
 
-    pub fn with_offset(mut self, offset: usize) -> Self {
-        self.offset = offset;
+    pub fn with_offset(mut self, offset: impl Into<Expr>) -> Self {
+        self.offset = offset.into();
         self
     }
 }
@@ -751,6 +794,8 @@ impl QueryStateMachine {
             && self
                 .query
                 .limit
+                .as_ref()
+                .and_then(evaluate_usize_expr)
                 .map(|limit| self.produced >= limit)
                 .unwrap_or(false)
     }
@@ -793,12 +838,13 @@ impl QueryStateMachine {
     }
 
     fn push_result_row(&mut self, row: Object) {
-        if self.consumed_offset < self.query.offset {
+        let offset = evaluate_usize_expr(&self.query.offset).unwrap_or(0);
+        if self.consumed_offset < offset {
             self.consumed_offset += 1;
             return;
         }
 
-        if let Some(limit) = self.query.limit {
+        if let Some(limit) = self.query.limit.as_ref().and_then(evaluate_usize_expr) {
             if self.produced >= limit {
                 return;
             }
@@ -895,7 +941,7 @@ pub struct UpdateQuery {
     pub collection: Option<String>,
     pub predicate: Option<Predicate>,
     pub assignments: Vec<Assignment>,
-    pub limit: Option<usize>,
+    pub limit: Option<Expr>,
     pub returning: Vec<QueryField>,
 }
 
@@ -931,8 +977,8 @@ impl UpdateQuery {
         self
     }
 
-    pub fn with_limit(mut self, limit: usize) -> Self {
-        self.limit = Some(limit);
+    pub fn with_limit(mut self, limit: impl Into<Expr>) -> Self {
+        self.limit = Some(limit.into());
         self
     }
 
@@ -952,7 +998,7 @@ impl Default for UpdateQuery {
 pub struct DeleteQuery {
     pub collection: Option<String>,
     pub predicate: Option<Predicate>,
-    pub limit: Option<usize>,
+    pub limit: Option<Expr>,
     pub returning: Vec<QueryField>,
 }
 
@@ -982,8 +1028,8 @@ impl DeleteQuery {
         self
     }
 
-    pub fn with_limit(mut self, limit: usize) -> Self {
-        self.limit = Some(limit);
+    pub fn with_limit(mut self, limit: impl Into<Expr>) -> Self {
+        self.limit = Some(limit.into());
         self
     }
 
@@ -1236,13 +1282,14 @@ pub fn apply_update_with_returning(
     let mut matched = 0usize;
     let mut affected = 0usize;
     let mut returning = Vec::new();
+    let limit = query.limit.as_ref().and_then(evaluate_usize_expr);
 
     for entity in entities.iter_mut() {
         if !row_matches(&entity.object, &query.predicate) {
             continue;
         }
 
-        if let Some(limit) = query.limit {
+        if let Some(limit) = limit {
             if matched >= limit {
                 break;
             }
@@ -1294,10 +1341,11 @@ fn apply_delete_plan(query: &DeleteQuery, entities: Vec<Entity>) -> DeletePlanRe
     let mut deleted = 0usize;
     let mut remaining = Vec::with_capacity(entities.len());
     let mut returning = Vec::new();
+    let limit = query.limit.as_ref().and_then(evaluate_usize_expr);
 
     for entity in entities {
         if row_matches(&entity.object, &query.predicate)
-            && query.limit.map(|limit| deleted < limit).unwrap_or(true)
+            && limit.map(|value| deleted < value).unwrap_or(true)
         {
             deleted += 1;
             if !query.returning.is_empty() {
@@ -1371,6 +1419,7 @@ pub fn evaluate_expr<T: ObjectAccess + ?Sized>(value: &T, expr: &Expr) -> Option
             Some(Value::Null)
         }
         Expr::Function { name, args } => evaluate_function(value, name, args),
+        Expr::Aggregate { .. } => None,
         Expr::InList {
             expr,
             list,
@@ -1452,15 +1501,15 @@ pub fn evaluate_expr<T: ObjectAccess + ?Sized>(value: &T, expr: &Expr) -> Option
 pub fn project_object<T: ObjectAccess + ?Sized>(value: &T, projection: &[QueryField]) -> Object {
     let mut out = Object::new();
     for project in projection {
-        let Some(v) = value.value_at_path_ref(&project.path) else {
+        let Some(v) = evaluate_expr(value, &project.expr) else {
             continue;
         };
 
         let key = project
             .alias
             .clone()
-            .unwrap_or_else(|| infer_project_key(&project.path));
-        out.insert(key, v.into_owned());
+            .unwrap_or_else(|| infer_project_key(&project.expr));
+        out.insert(key, v);
     }
 
     out
@@ -1608,6 +1657,47 @@ fn compare_objects<A: ObjectAccess + ?Sized, B: ObjectAccess + ?Sized>(
     Ordering::Equal
 }
 
+pub fn evaluate_usize_expr(expr: &Expr) -> Option<usize> {
+    let value = evaluate_expr(&Object::new(), expr)?;
+    match value {
+        Value::I8(v) => usize::try_from(v).ok(),
+        Value::I16(v) => usize::try_from(v).ok(),
+        Value::I32(v) => usize::try_from(v).ok(),
+        Value::I64(v) => usize::try_from(v).ok(),
+        Value::I128(v) => usize::try_from(v).ok(),
+        Value::U8(v) => Some(v as usize),
+        Value::U16(v) => Some(v as usize),
+        Value::U32(v) => usize::try_from(v).ok(),
+        Value::U64(v) => usize::try_from(v).ok(),
+        Value::U128(v) => usize::try_from(v).ok(),
+        Value::F32(v) => {
+            let value = v.into_inner();
+            if value.is_finite()
+                && value >= 0.0
+                && value.fract() == 0.0
+                && value <= usize::MAX as f32
+            {
+                Some(value as usize)
+            } else {
+                None
+            }
+        }
+        Value::F64(v) => {
+            let value = v.into_inner();
+            if value.is_finite()
+                && value >= 0.0
+                && value.fract() == 0.0
+                && value <= usize::MAX as f64
+            {
+                Some(value as usize)
+            } else {
+                None
+            }
+        }
+        _ => None,
+    }
+}
+
 fn resolve_operand<'a, T: ObjectAccess + ?Sized>(
     value: &'a T,
     operand: &'a Operand,
@@ -1635,10 +1725,12 @@ fn compare_values(op: CompareOp, left: Option<ValueRef<'_>>, right: Option<Value
     }
 }
 
-fn infer_project_key(path: &FieldPath) -> String {
-    for segment in path.segments().iter().rev() {
-        if let PathSegment::Field(name) = segment {
-            return name.clone();
+fn infer_project_key(expr: &Expr) -> String {
+    if let Expr::Operand(Operand::Field(path)) = expr {
+        for segment in path.segments().iter().rev() {
+            if let PathSegment::Field(name) = segment {
+                return name.clone();
+            }
         }
     }
     "value".to_string()
@@ -1731,7 +1823,6 @@ fn evaluate_function<T: ObjectAccess + ?Sized>(
                 Some(Value::I64(count as i64))
             }
         }
-        "sum" | "avg" | "min" | "max" => evaluated.first().cloned().flatten(),
         _ => None,
     }
 }
@@ -1889,7 +1980,9 @@ mod tests {
                 right: Operand::Literal(Value::String("music".into())),
             })
             .with_projection(vec![QueryField {
-                path: FieldPath::from_fields(["score"]),
+                expr: Box::new(Expr::Operand(Operand::Field(FieldPath::from_fields([
+                    "score",
+                ])))),
                 alias: Some("s".into()),
             }]);
 

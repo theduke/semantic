@@ -290,8 +290,11 @@ impl<E: KvEngine> KvDb<E> {
                         joins: Vec::new(),
                         predicate: query.predicate,
                         projection: query.returning,
+                        distinct: false,
+                        group_by: Vec::new(),
+                        having: None,
                         order_by: Vec::new(),
-                        offset: 0,
+                        offset: semantic_db_core::Expr::from(0usize),
                         limit: query.limit,
                     },
                     Query::Delete(query) => SelectQuery {
@@ -300,8 +303,11 @@ impl<E: KvEngine> KvDb<E> {
                         joins: Vec::new(),
                         predicate: query.predicate,
                         projection: query.returning,
+                        distinct: false,
+                        group_by: Vec::new(),
+                        having: None,
                         order_by: Vec::new(),
-                        offset: 0,
+                        offset: semantic_db_core::Expr::from(0usize),
                         limit: query.limit,
                     },
                 };
@@ -478,7 +484,7 @@ impl<E: KvEngine> KvDb<E> {
                 field
                     .alias
                     .clone()
-                    .unwrap_or_else(|| infer_project_key_for_insert(&field.path))
+                    .unwrap_or_else(|| infer_project_key_for_insert(&field.expr))
             })
             .collect::<Vec<_>>();
 
@@ -653,7 +659,7 @@ impl<E: KvEngine> KvDb<E> {
                 let stripped = DeleteQuery {
                     collection: query.collection.clone(),
                     predicate: query.predicate.clone(),
-                    limit: query.limit,
+                    limit: query.limit.clone(),
                     returning: Vec::new(),
                 };
                 let (remaining, _) = semantic_db_core::apply_delete(
@@ -1249,6 +1255,7 @@ impl<E: KvEngine> KvDb<E> {
                 semantic_db_core::PhysicalPlan::Filter { input, .. }
                 | semantic_db_core::PhysicalPlan::Sort { input, .. }
                 | semantic_db_core::PhysicalPlan::Project { input, .. }
+                | semantic_db_core::PhysicalPlan::Aggregate { input, .. }
                 | semantic_db_core::PhysicalPlan::Limit { input, .. }
                 | semantic_db_core::PhysicalPlan::Distinct { input, .. }
                 | semantic_db_core::PhysicalPlan::Materialize { input, .. }
@@ -1322,10 +1329,12 @@ impl<E: KvEngine> KvDb<E> {
     }
 }
 
-fn infer_project_key_for_insert(path: &FieldPath) -> String {
-    for segment in path.segments().iter().rev() {
-        if let PathSegment::Field(name) = segment {
-            return name.clone();
+fn infer_project_key_for_insert(expr: &semantic_db_core::Expr) -> String {
+    if let semantic_db_core::Expr::Operand(semantic_db_core::Operand::Field(path)) = expr {
+        for segment in path.segments().iter().rev() {
+            if let PathSegment::Field(name) = segment {
+                return name.clone();
+            }
         }
     }
     "value".to_string()
@@ -1917,7 +1926,9 @@ mod tests {
                 right: Operand::Literal(Value::String("Hello".to_string())),
             })
             .with_projection(vec![QueryField {
-                path: FieldPath::from_fields(["title"]),
+                expr: Box::new(Expr::Operand(Operand::Field(FieldPath::from_fields([
+                    "title",
+                ])))),
                 alias: Some("t".to_string()),
             }]);
 
@@ -2302,7 +2313,9 @@ mod tests {
                 Expr::Operand(Operand::Literal(Value::I64(9))),
             )
             .with_returning(vec![QueryField {
-                path: FieldPath::from_fields(["score"]),
+                expr: Box::new(Expr::Operand(Operand::Field(FieldPath::from_fields([
+                    "score",
+                ])))),
                 alias: Some("new_score".to_string()),
             }]);
 
@@ -2336,7 +2349,9 @@ mod tests {
                 right: Operand::Literal(Value::String("music".to_string())),
             })
             .with_returning(vec![QueryField {
-                path: FieldPath::from_fields(["id"]),
+                expr: Box::new(Expr::Operand(Operand::Field(FieldPath::from_fields([
+                    "id",
+                ])))),
                 alias: None,
             }]);
 
