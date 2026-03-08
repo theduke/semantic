@@ -1,16 +1,20 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use semantic_data::schema::IndexKind;
-use semantic_data::schema::{RelationIndexingMode, RelationMode, RelationType};
+use semantic_data::schema::{
+    MigrationOperation, Package, RelationIndexingMode, RelationMode, RelationType,
+};
 use semantic_data::value::{FieldPath, Object, PathSegment, Value, ValueRef};
 use semantic_db_core::DbError;
 use semantic_db_core::{
-    ALL_COLLECTION_ALIAS, AccessPath, Batch, BatchOperation, BatchOutcome, DEFAULT_COLLECTION,
-    DeleteQuery, EntityRecord, InsertQuery, InsertSource, MutationStats, Query, QueryExplain,
-    QueryPlan, QueryResult, SelectQuery, UpdateQuery, canonicalize_delete_query,
+    ALL_COLLECTION_ALIAS, AccessPath, AppliedMigration, Batch, BatchOperation, BatchOutcome,
+    DEFAULT_COLLECTION, DeleteQuery, EntityRecord, InsertQuery, InsertSource, MutationStats,
+    PackageRegistrationOutcome, Query, QueryExplain, QueryPlan, QueryResult, SelectQuery,
+    UpdateQuery, apply_migration_ddl_operation, canonicalize_delete_query,
     canonicalize_insert_query, canonicalize_query, canonicalize_select_query,
     canonicalize_update_query, execute_batch, is_all_collection_alias,
-    normalize_object_for_collection, touched_collections,
+    normalize_object_for_collection, normalize_package_definition, touched_collections,
+    validate_package_migrations,
 };
 
 use crate::{
@@ -190,6 +194,60 @@ impl<E: KvEngine> KvDb<E> {
         let ddl = DdlBatch::new().with_op(DdlOperation::DeleteRelationship { id: id.to_string() });
         self.transact_ddl(ddl)?;
         Ok(())
+    }
+
+    pub fn upsert_package(
+        &mut self,
+        package: Package,
+    ) -> std::result::Result<PackageRegistrationOutcome, DbError> {
+        validate_package_migrations(&package)
+            .map_err(|err| DbError::InvalidQuery(err.to_string()))?;
+        let package = normalize_package_definition(&package)
+            .map_err(|err| DbError::InvalidQuery(err.to_string()))?;
+
+        let txn_result = run_with_transaction_retries(TransactionOptions::default(), |_| {
+            let catalog_snapshot = self.catalog.snapshot();
+            let read_revision = self.store.current_revision()?;
+            let (next_catalog, before, after, executed_migrations) = self.apply_package_update(
+                catalog_snapshot.catalog.as_ref(),
+                read_revision,
+                &package,
+            )?;
+            let mut extra_ops =
+                self.ddl_cleanup_ops(catalog_snapshot.catalog.as_ref(), &next_catalog)?;
+            extra_ops.extend(catalog_write_ops(&self.store, &next_catalog)?);
+
+            match self.persist_dataset_delta(
+                &next_catalog,
+                &before,
+                &after,
+                read_revision,
+                &extra_ops,
+            )? {
+                KvCommitOutcome::Committed { .. } => {
+                    self.catalog
+                        .compare_and_swap(catalog_snapshot.version, next_catalog)
+                        .map_err(|mismatch| {
+                            DbError::TransactionConflict(format!(
+                                "catalog version changed: expected {}, actual {}",
+                                mismatch.expected, mismatch.actual
+                            ))
+                        })?;
+                    Ok(PackageRegistrationOutcome {
+                        executed_migrations,
+                    })
+                }
+                KvCommitOutcome::Conflict {
+                    expected_revision,
+                    actual_revision,
+                } => Err(DbError::TransactionConflict(format!(
+                    "expected revision {:?}, found {:?}",
+                    expected_revision, actual_revision
+                ))),
+            }
+        })?;
+
+        Ok(txn_result.value)
     }
 
     pub fn auto_index_enabled(&self) -> bool {
@@ -873,6 +931,175 @@ impl<E: KvEngine> KvDb<E> {
 
     pub fn transact_ddl(&mut self, ddl: DdlBatch) -> std::result::Result<DdlOutcome, DbError> {
         self.transact_ddl_with_options(ddl, TransactionOptions::default())
+    }
+
+    fn apply_package_update(
+        &self,
+        base_catalog: &Catalog,
+        read_revision: Option<u64>,
+        package: &Package,
+    ) -> std::result::Result<
+        (
+            Catalog,
+            BTreeMap<String, BTreeMap<String, Object>>,
+            BTreeMap<String, BTreeMap<String, Object>>,
+            Vec<AppliedMigration>,
+        ),
+        DbError,
+    > {
+        let mut next_catalog = base_catalog.clone();
+        let mut before = BTreeMap::<String, BTreeMap<String, Object>>::new();
+        let mut after = BTreeMap::<String, BTreeMap<String, Object>>::new();
+        let mut executed_migrations = Vec::<AppliedMigration>::new();
+
+        for migration in &package.migrations {
+            if let Some(applied) =
+                next_catalog.applied_migration(&package.name, &migration.module, &migration.name)
+            {
+                if applied.migration != *migration {
+                    return Err(DbError::InvalidQuery(format!(
+                        "applied migration '{}::{}' for package '{}' differs from the stored definition",
+                        migration.module, migration.name, package.name
+                    )));
+                }
+                continue;
+            }
+
+            for operation in &migration.operations {
+                match operation {
+                    MigrationOperation::Ddl(operation) => {
+                        apply_migration_ddl_operation(
+                            &mut next_catalog,
+                            &migration.module,
+                            operation,
+                        )
+                        .map_err(|err| DbError::InvalidQuery(err.to_string()))?;
+                    }
+                    MigrationOperation::Insert {
+                        collection,
+                        id,
+                        object,
+                    } => {
+                        let batch = Batch::new().with_op(BatchOperation::Upsert {
+                            collection: collection.clone(),
+                            id: id.clone(),
+                            object: object.clone(),
+                        });
+                        self.apply_package_data_batch(
+                            base_catalog,
+                            &next_catalog,
+                            read_revision,
+                            batch,
+                            &mut before,
+                            &mut after,
+                        )?;
+                    }
+                    MigrationOperation::Update { query } => {
+                        let query: UpdateQuery = query.clone().into();
+                        let batch = Batch::new().with_op(BatchOperation::Update {
+                            collection: query.collection_or_default().to_string(),
+                            query,
+                        });
+                        self.apply_package_data_batch(
+                            base_catalog,
+                            &next_catalog,
+                            read_revision,
+                            batch,
+                            &mut before,
+                            &mut after,
+                        )?;
+                    }
+                    MigrationOperation::Delete { query } => {
+                        let query: DeleteQuery = query.clone().into();
+                        let batch = Batch::new().with_op(BatchOperation::Delete {
+                            collection: query.collection_or_default().to_string(),
+                            query,
+                        });
+                        self.apply_package_data_batch(
+                            base_catalog,
+                            &next_catalog,
+                            read_revision,
+                            batch,
+                            &mut before,
+                            &mut after,
+                        )?;
+                    }
+                }
+            }
+
+            let applied = AppliedMigration {
+                package: package.name.clone(),
+                migration: migration.clone(),
+            };
+            next_catalog.record_applied_migration(applied.clone());
+            executed_migrations.push(applied);
+        }
+
+        next_catalog.upsert_package(package.clone());
+
+        Ok((next_catalog, before, after, executed_migrations))
+    }
+
+    fn apply_package_data_batch(
+        &self,
+        base_catalog: &Catalog,
+        current_catalog: &Catalog,
+        read_revision: Option<u64>,
+        batch: Batch,
+        before: &mut BTreeMap<String, BTreeMap<String, Object>>,
+        after: &mut BTreeMap<String, BTreeMap<String, Object>>,
+    ) -> std::result::Result<(), DbError> {
+        let batch = self.canonicalize_batch(&batch, current_catalog)?;
+        let touched = touched_collections(&batch);
+        for collection_name in &touched {
+            if !before.contains_key(collection_name) {
+                let rows =
+                    self.load_collection_dataset(base_catalog, collection_name, read_revision)?;
+                before.insert(collection_name.clone(), rows.clone());
+                after.insert(collection_name.clone(), rows);
+            }
+        }
+
+        let dataset = touched
+            .iter()
+            .map(|collection_name| {
+                (
+                    collection_name.clone(),
+                    after.get(collection_name).cloned().unwrap_or_default(),
+                )
+            })
+            .collect::<BTreeMap<_, _>>();
+        let out = execute_batch(&dataset, &batch)
+            .map_err(|err| DbError::InvalidQuery(err.to_string()))?;
+        for (collection_name, rows) in out.dataset {
+            after.insert(collection_name, rows);
+        }
+        Ok(())
+    }
+
+    fn load_collection_dataset(
+        &self,
+        catalog: &Catalog,
+        collection_name: &str,
+        read_revision: Option<u64>,
+    ) -> std::result::Result<BTreeMap<String, Object>, DbError> {
+        let Some(collection) = catalog.collection_by_name(collection_name) else {
+            return Ok(BTreeMap::new());
+        };
+        let rows = if self.store.tx_capabilities().snapshot_reads {
+            if let Some(revision) = read_revision {
+                self.store
+                    .scan_collection_at_revision(collection.lid, revision)?
+            } else {
+                self.store.scan_collection(collection.lid)?
+            }
+        } else {
+            self.store.scan_collection(collection.lid)?
+        };
+        Ok(rows
+            .into_iter()
+            .map(|row| (row.id, row.object))
+            .collect::<BTreeMap<_, _>>())
     }
 
     fn canonicalize_batch(

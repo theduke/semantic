@@ -23,6 +23,6 @@ pub use schema::{
 };
 pub use shared::{CatalogSnapshot, CatalogVersionMismatch, SharedCatalog};
 pub use snapshot::{
-    CatalogStorageSnapshot, StoredAttribute, StoredClass, StoredCollection, StoredFieldId,
-    StoredIndex, StoredRecordType, StoredRelationship, StoredTypeDef,
+    CatalogStorageSnapshot, StoredAppliedMigration, StoredAttribute, StoredClass, StoredCollection,
+    StoredFieldId, StoredIndex, StoredPackage, StoredRecordType, StoredRelationship, StoredTypeDef,
 };

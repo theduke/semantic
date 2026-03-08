@@ -6,14 +6,14 @@ use semantic_data::query::{
     QueryInput as PublicQueryInput, SelectQuery as PublicSelectQuery,
     TextQueryFormat as PublicTextQueryFormat, UpdateQuery as PublicUpdateQuery,
 };
-use semantic_data::schema::RelationType;
+use semantic_data::schema::{Package, RelationType};
 use semantic_data::value::{Object, Value};
 
 use crate::catalog::{Catalog, CollectionKind, LocalCollectionId};
 use crate::{
     Batch, BatchOutcome, DbError, DdlBatch, DdlOutcome, DeleteQuery, LogicalPlan, MutationStats,
-    PhysicalPlan, Query, QueryResult, SqlDialectKind, TextQueryFormat, TextQueryInput, UpdateQuery,
-    prql, sql,
+    PackageRegistrationOutcome, PhysicalPlan, Query, QueryResult, SqlDialectKind, TextQueryFormat,
+    TextQueryInput, UpdateQuery, prql, sql,
 };
 
 pub const DEFAULT_COLLECTION: &str = "entities";
@@ -118,6 +118,11 @@ pub trait Backend: Send + Sync {
     ) -> std::result::Result<LocalCollectionId, DbError>;
 
     async fn execute_ddl(&self, ddl: DdlBatch) -> std::result::Result<DdlOutcome, DbError>;
+
+    async fn upsert_package(
+        &self,
+        package: Package,
+    ) -> std::result::Result<PackageRegistrationOutcome, DbError>;
 
     async fn upsert_relationship(
         &self,
@@ -246,6 +251,13 @@ impl Db {
 
     pub async fn execute_ddl(&self, ddl: DdlBatch) -> std::result::Result<DdlOutcome, DbError> {
         self.backend.execute_ddl(ddl).await
+    }
+
+    pub async fn upsert_package(
+        &self,
+        package: Package,
+    ) -> std::result::Result<PackageRegistrationOutcome, DbError> {
+        self.backend.upsert_package(package).await
     }
 
     pub async fn upsert_relationship(

@@ -1,12 +1,13 @@
 use std::sync::{Arc, RwLock};
 
 use async_trait::async_trait;
-use semantic_data::schema::RelationType;
+use semantic_data::schema::{Package, RelationType};
 use semantic_data::value::Object;
 use semantic_db_core::catalog::{Catalog, CollectionKind, LocalCollectionId};
 use semantic_db_core::{
     Backend, Batch, BatchOutcome, DbError, DdlBatch, DdlOutcome, DeleteQuery, EntityRecord,
-    MutationStats, Query, QueryExplain, QueryPlan, QueryResult, TextQueryInput, UpdateQuery,
+    MutationStats, PackageRegistrationOutcome, Query, QueryExplain, QueryPlan, QueryResult,
+    TextQueryInput, UpdateQuery,
 };
 
 use crate::{DefaultKvBackendSpawner, KvBackendSpawner, KvDb, KvEngine};
@@ -67,6 +68,19 @@ impl<E: KvEngine, S: KvBackendSpawner> Backend for KvBackend<E, S> {
             .spawn_blocking(move || {
                 let mut db = db.write().map_err(|_| lock_poisoned_error())?;
                 db.transact_ddl(ddl)
+            })
+            .await
+    }
+
+    async fn upsert_package(
+        &self,
+        package: Package,
+    ) -> std::result::Result<PackageRegistrationOutcome, DbError> {
+        let db = Arc::clone(&self.db);
+        self.spawner
+            .spawn_blocking(move || {
+                let mut db = db.write().map_err(|_| lock_poisoned_error())?;
+                db.upsert_package(package)
             })
             .await
     }

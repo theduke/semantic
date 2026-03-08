@@ -2,7 +2,7 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use fnv::FnvHashMap;
 use semantic_data::schema::{
-    IndexKind,
+    IndexKind, Package,
     attribute::attribute_type::AttributeType,
     class::class_type::ClassType,
     collections::key_path::KeyPath,
@@ -16,13 +16,14 @@ use semantic_data::schema::{
     relation::relation_type::RelationType,
 };
 
+use crate::AppliedMigration;
 use crate::catalog::{
     AttributeSchema, CatalogError, CatalogStorageSnapshot, ClassSchema, CollectionKind,
     CollectionSchema, IdMap, IndexSchema, IntegrityMode, LocalAttrId, LocalClassId,
     LocalCollectionId, LocalFieldId, LocalIndexId, LocalRecordTypeId, LocalRelationId,
-    LocalTypeDefId, RecordTypeSchema, RelationshipSchema, StoredAttribute, StoredClass,
-    StoredCollection, StoredFieldId, StoredIndex, StoredRecordType, StoredRelationship,
-    StoredTypeDef, TypeDefSchema,
+    LocalTypeDefId, RecordTypeSchema, RelationshipSchema, StoredAppliedMigration, StoredAttribute,
+    StoredClass, StoredCollection, StoredFieldId, StoredIndex, StoredPackage, StoredRecordType,
+    StoredRelationship, StoredTypeDef, TypeDefSchema,
 };
 
 #[derive(Debug, Clone)]
@@ -34,6 +35,8 @@ pub struct Catalog {
     collections: IdMap<LocalCollectionId, CollectionSchema>,
     indexes: IdMap<LocalIndexId, IndexSchema>,
     relationships: IdMap<LocalRelationId, RelationshipSchema>,
+    packages: BTreeMap<String, Package>,
+    applied_migrations: BTreeMap<String, AppliedMigration>,
     collection_indexes: FnvHashMap<LocalCollectionId, Vec<LocalIndexId>>,
     next_field_id: usize,
     auto_index_enabled: bool,
@@ -62,6 +65,8 @@ impl Catalog {
             collections: IdMap::new(),
             indexes: IdMap::new(),
             relationships: IdMap::new(),
+            packages: BTreeMap::new(),
+            applied_migrations: BTreeMap::new(),
             collection_indexes: FnvHashMap::default(),
             next_field_id: 0,
             auto_index_enabled: true,
@@ -102,13 +107,51 @@ impl Catalog {
         self.relationships.iter()
     }
 
+    pub fn packages(&self) -> impl Iterator<Item = (&String, &Package)> {
+        self.packages.iter()
+    }
+
+    pub fn package_by_name(&self, name: &str) -> Option<&Package> {
+        self.packages.get(name)
+    }
+
+    pub fn upsert_package(&mut self, package: Package) {
+        let _ = self.packages.insert(package.name.clone(), package);
+    }
+
+    pub fn applied_migrations(&self) -> impl Iterator<Item = (&String, &AppliedMigration)> {
+        self.applied_migrations.iter()
+    }
+
+    pub fn applied_migration(
+        &self,
+        package: &str,
+        module: &str,
+        name: &str,
+    ) -> Option<&AppliedMigration> {
+        self.applied_migrations
+            .get(&crate::applied_migration_key(package, module, name))
+    }
+
+    pub fn record_applied_migration(&mut self, applied: AppliedMigration) {
+        let _ = self.applied_migrations.insert(applied.key(), applied);
+    }
+
     pub fn register_attribute(&mut self, attr: AttributeType) -> LocalAttrId {
         self.upsert_attribute(attr)
     }
 
     pub fn upsert_attribute(&mut self, attr: AttributeType) -> LocalAttrId {
+        self.upsert_attribute_with_module(attr, None)
+    }
+
+    pub fn upsert_attribute_with_module(
+        &mut self,
+        attr: AttributeType,
+        module: Option<String>,
+    ) -> LocalAttrId {
         let key = attr.id.clone();
-        self.upsert_type_def(type_def_from_attribute(&attr));
+        self.upsert_type_def(type_def_from_attribute(&attr, module));
         self.attribute_id(&key)
             .expect("attribute projection must exist for attribute type-def")
     }
@@ -223,10 +266,20 @@ impl Catalog {
         name: impl Into<String>,
         record: RecordType,
     ) -> LocalRecordTypeId {
+        self.upsert_record_type_with_module(id, name, record, None)
+    }
+
+    pub fn upsert_record_type_with_module(
+        &mut self,
+        id: impl Into<String>,
+        name: impl Into<String>,
+        record: RecordType,
+        module: Option<String>,
+    ) -> LocalRecordTypeId {
         let id = id.into();
         let key = id.clone();
         let name = name.into();
-        self.upsert_type_def(type_def_from_record_type(id, name, record));
+        self.upsert_type_def(type_def_from_record_type(id, name, record, module));
         self.record_type_id(&key)
             .expect("record projection must exist for record type-def")
     }
@@ -248,6 +301,14 @@ impl Catalog {
     }
 
     pub fn upsert_class(&mut self, class: ClassType) -> Result<LocalClassId, CatalogError> {
+        self.upsert_class_with_module(class, None)
+    }
+
+    pub fn upsert_class_with_module(
+        &mut self,
+        class: ClassType,
+        module: Option<String>,
+    ) -> Result<LocalClassId, CatalogError> {
         for class_attr in class.attributes.values() {
             if self.attribute_by_id(&class_attr.attribute.id).is_none() {
                 return Err(CatalogError::UnknownAttribute {
@@ -256,7 +317,7 @@ impl Catalog {
             }
         }
         let key = class.id.clone();
-        self.upsert_type_def(type_def_from_class(class));
+        self.upsert_type_def(type_def_from_class(class, module));
         self.class_id(&key).ok_or(CatalogError::InvalidSchema(
             "class projection must have local id".to_string(),
         ))
@@ -626,6 +687,18 @@ impl Catalog {
                     relationship: relationship.relationship.clone(),
                 })
                 .collect(),
+            packages: self
+                .packages()
+                .map(|(_, package)| StoredPackage {
+                    package: package.clone(),
+                })
+                .collect(),
+            applied_migrations: self
+                .applied_migrations()
+                .map(|(_, applied)| StoredAppliedMigration {
+                    applied: applied.clone(),
+                })
+                .collect(),
             next_field_id: self.next_field_id,
             auto_index_enabled: self.auto_index_enabled,
         }
@@ -640,6 +713,8 @@ impl Catalog {
             snapshot.collections,
             snapshot.indexes,
             snapshot.relationships,
+            snapshot.packages,
+            snapshot.applied_migrations,
             snapshot.next_field_id,
             snapshot.auto_index_enabled,
         )
@@ -653,6 +728,8 @@ impl Catalog {
         collections: Vec<StoredCollection>,
         indexes: Vec<StoredIndex>,
         relationships: Vec<StoredRelationship>,
+        packages: Vec<StoredPackage>,
+        applied_migrations: Vec<StoredAppliedMigration>,
         next_field_id: usize,
         auto_index_enabled: bool,
     ) -> Result<Self, CatalogError> {
@@ -822,14 +899,19 @@ impl Catalog {
 
             let generated_defs = catalog
                 .attributes()
-                .map(|(_, attr)| type_def_from_attribute(&attr.attribute))
+                .map(|(_, attr)| type_def_from_attribute(&attr.attribute, None))
                 .chain(catalog.record_types().map(|(_, rec)| {
-                    type_def_from_record_type(rec.id.clone(), rec.name.clone(), rec.record.clone())
+                    type_def_from_record_type(
+                        rec.id.clone(),
+                        rec.name.clone(),
+                        rec.record.clone(),
+                        None,
+                    )
                 }))
                 .chain(
                     catalog
                         .classes()
-                        .map(|(_, class)| type_def_from_class(class.class.clone())),
+                        .map(|(_, class)| type_def_from_class(class.class.clone(), None)),
                 )
                 .collect::<Vec<_>>();
             for type_def in generated_defs {
@@ -895,6 +977,12 @@ impl Catalog {
                     .relationships
                     .insert_fixed(item.lid, item.relationship.id, value);
             }
+        }
+        for item in packages {
+            catalog.upsert_package(item.package);
+        }
+        for item in applied_migrations {
+            catalog.record_applied_migration(item.applied);
         }
         let collection_ids = catalog
             .collections()
@@ -1169,9 +1257,10 @@ impl Default for Catalog {
     }
 }
 
-fn type_def_from_attribute(attribute: &AttributeType) -> TypeDef {
+fn type_def_from_attribute(attribute: &AttributeType, module: Option<String>) -> TypeDef {
     TypeDef {
         name: attribute.id.clone(),
+        module,
         params: Vec::<TypeParam>::new(),
         ty: Type {
             kind: TypeKind::Attribute(Box::new(attribute.clone())),
@@ -1184,9 +1273,15 @@ fn type_def_from_attribute(attribute: &AttributeType) -> TypeDef {
     }
 }
 
-fn type_def_from_record_type(id: String, name: String, record: RecordType) -> TypeDef {
+fn type_def_from_record_type(
+    id: String,
+    name: String,
+    record: RecordType,
+    module: Option<String>,
+) -> TypeDef {
     TypeDef {
         name: id,
+        module,
         params: Vec::<TypeParam>::new(),
         ty: Type {
             kind: TypeKind::Record(record),
@@ -1202,9 +1297,10 @@ fn type_def_from_record_type(id: String, name: String, record: RecordType) -> Ty
     }
 }
 
-fn type_def_from_class(class: ClassType) -> TypeDef {
+fn type_def_from_class(class: ClassType, module: Option<String>) -> TypeDef {
     TypeDef {
         name: class.id.clone(),
+        module,
         params: Vec::<TypeParam>::new(),
         ty: Type {
             kind: TypeKind::Class(class.clone()),

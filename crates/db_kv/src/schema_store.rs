@@ -1,8 +1,8 @@
 use semantic_data::value::{Object, Value};
 use semantic_db_core::DbError;
 use semantic_db_core::catalog::{
-    Catalog, IntegrityMode, StoredAttribute, StoredClass, StoredCollection, StoredFieldId,
-    StoredIndex, StoredRecordType, StoredRelationship, StoredTypeDef,
+    Catalog, IntegrityMode, StoredAppliedMigration, StoredAttribute, StoredClass, StoredCollection,
+    StoredFieldId, StoredIndex, StoredPackage, StoredRecordType, StoredRelationship, StoredTypeDef,
 };
 use semantic_db_core::{
     CORE_CATALOG_ATTRIBUTE_ENTRY_CLASS_ID, CORE_CATALOG_CLASS_ENTRY_CLASS_ID,
@@ -33,6 +33,8 @@ const UNIQUE_FIELD: &str = "unique";
 const NEXT_FIELD_ID_FIELD: &str = "next_field_id";
 const AUTO_INDEX_ENABLED_FIELD: &str = "auto_index_enabled";
 const RELATIONSHIPS_FIELD: &str = "relationships";
+const PACKAGES_FIELD: &str = "packages";
+const APPLIED_MIGRATIONS_FIELD: &str = "applied_migrations";
 
 struct CatalogCollections {
     schema: semantic_db_core::catalog::LocalCollectionId,
@@ -192,6 +194,8 @@ pub fn load_catalog<E: KvEngine>(
     let mut next_field_id = 0usize;
     let mut auto_index_enabled = false;
     let mut relationships = Vec::<StoredRelationship>::new();
+    let mut packages = Vec::<StoredPackage>::new();
+    let mut applied_migrations = Vec::<StoredAppliedMigration>::new();
     for row in &meta_rows {
         if row.id == META_ROW_ID {
             next_field_id = object_usize_field(&row.object, NEXT_FIELD_ID_FIELD)?;
@@ -199,6 +203,9 @@ pub fn load_catalog<E: KvEngine>(
                 object_bool_field_default(&row.object, AUTO_INDEX_ENABLED_FIELD, false);
             relationships =
                 object_json_field_default(&row.object, RELATIONSHIPS_FIELD, Vec::new())?;
+            packages = object_json_field_default(&row.object, PACKAGES_FIELD, Vec::new())?;
+            applied_migrations =
+                object_json_field_default(&row.object, APPLIED_MIGRATIONS_FIELD, Vec::new())?;
             break;
         }
     }
@@ -211,6 +218,8 @@ pub fn load_catalog<E: KvEngine>(
         collections,
         indexes,
         relationships,
+        packages,
+        applied_migrations,
         next_field_id,
         auto_index_enabled,
     )
@@ -374,6 +383,32 @@ pub fn catalog_write_ops<E: KvEngine>(
         RELATIONSHIPS_FIELD.to_string(),
         Value::String(
             facet_json::to_string(&relationships)
+                .map_err(|err| DbError::Serialization(err.to_string()))?,
+        ),
+    );
+    let packages = catalog
+        .packages()
+        .map(|(_, package)| StoredPackage {
+            package: package.clone(),
+        })
+        .collect::<Vec<_>>();
+    meta_entity.object.insert(
+        PACKAGES_FIELD.to_string(),
+        Value::String(
+            facet_json::to_string(&packages)
+                .map_err(|err| DbError::Serialization(err.to_string()))?,
+        ),
+    );
+    let applied_migrations = catalog
+        .applied_migrations()
+        .map(|(_, applied)| StoredAppliedMigration {
+            applied: applied.clone(),
+        })
+        .collect::<Vec<_>>();
+    meta_entity.object.insert(
+        APPLIED_MIGRATIONS_FIELD.to_string(),
+        Value::String(
+            facet_json::to_string(&applied_migrations)
                 .map_err(|err| DbError::Serialization(err.to_string()))?,
         ),
     );

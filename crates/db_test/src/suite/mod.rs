@@ -1,3 +1,4 @@
+use std::collections::BTreeMap;
 use std::future::Future;
 use std::pin::Pin;
 
@@ -7,8 +8,9 @@ use semantic_data::query::{
     SortDirection, TextQueryFormat, UpdateQuery,
 };
 use semantic_data::schema::{
-    ClassAttribute, ClassType, Meta, RelationIndexingMode, RelationMode, RelationType, StringType,
-    Type, TypeKind,
+    ClassAttribute, ClassType, Meta, Migration, MigrationCollectionKind, MigrationDdlOperation,
+    MigrationIntegrityMode, MigrationOperation, Module, Package, RelationIndexingMode,
+    RelationMode, RelationType, StringType, Type, TypeDef, TypeKind, Visibility,
     attribute::{attribute_ref::AttributeRef, attribute_type::AttributeType},
 };
 use semantic_data::value::{FieldPath, Object, Value};
@@ -38,6 +40,7 @@ impl DbTextQueryExt for Db {
 
 pub async fn test_db(db: &Db) {
     test_schema_registration(db).await;
+    test_package_migrations(db).await;
     test_select_query(db).await;
     test_sql_insert_query(db).await;
     test_update_query(db).await;
@@ -70,6 +73,87 @@ async fn test_schema_registration(db: &Db) {
         .collection_by_name("shared_suite_schema")
         .expect("registered collection should be present in catalog");
     assert!(matches!(collection.kind, CollectionKind::Polymorphic));
+}
+
+async fn test_package_migrations(db: &Db) {
+    let package_v1 = blog_package_v1();
+    let outcome_v1 = db
+        .upsert_package(package_v1.clone())
+        .await
+        .expect("initial package registration should succeed");
+    assert_eq!(outcome_v1.executed_migrations.len(), 1);
+
+    let catalog = db
+        .catalog()
+        .await
+        .expect("catalog fetch after package registration should succeed");
+    let stored_package = catalog
+        .package_by_name(&package_v1.name)
+        .expect("package should be stored in catalog");
+    assert_eq!(
+        stored_package.root.types["shared.blog.status"]
+            .module
+            .as_deref(),
+        Some("blog")
+    );
+    assert_eq!(
+        catalog
+            .type_def_by_name("shared.blog.status")
+            .expect("type definition should be registered")
+            .type_def
+            .module
+            .as_deref(),
+        Some("blog")
+    );
+    assert!(
+        catalog
+            .applied_migration("shared.blog", "blog", "001_init")
+            .is_some(),
+        "executed migration should be tracked in the catalog",
+    );
+
+    let seeded = db
+        .get("shared_suite_blog_posts", "seed")
+        .await
+        .expect("seeded row lookup should succeed")
+        .expect("initial migration should insert a seed row");
+    assert_eq!(
+        seeded.object.get("shared.blog.title"),
+        Some(&Value::String("Hello".to_string()))
+    );
+
+    let package_v2 = blog_package_v2();
+    let outcome_v2 = db
+        .upsert_package(package_v2.clone())
+        .await
+        .expect("package update with a new migration should succeed");
+    assert_eq!(outcome_v2.executed_migrations.len(), 1);
+    assert_eq!(outcome_v2.executed_migrations[0].migration.name, "002_body");
+
+    let catalog = db
+        .catalog()
+        .await
+        .expect("catalog fetch after package update should succeed");
+    let stored_package = catalog
+        .package_by_name(&package_v2.name)
+        .expect("updated package should still be stored in catalog");
+    assert_eq!(stored_package, &package_v2);
+    assert!(
+        catalog
+            .applied_migration("shared.blog", "blog", "002_body")
+            .is_some(),
+        "newly executed migration should be tracked in the catalog",
+    );
+
+    let updated = db
+        .get("shared_suite_blog_posts", "seed")
+        .await
+        .expect("updated seed row lookup should succeed")
+        .expect("seed row should still exist after package update");
+    assert_eq!(
+        updated.object.get("shared.blog.body"),
+        Some(&Value::String("World".to_string()))
+    );
 }
 
 async fn test_select_query(db: &Db) {
@@ -1703,6 +1787,183 @@ async fn test_relationships_generic_external(db: &Db) {
         .await
         .expect("document relationship edge materialization query should succeed");
     assert_eq!(edge_rows.len(), 1);
+}
+
+fn blog_package_v1() -> Package {
+    let title_attr = blog_string_attribute("shared.blog.title", "title");
+    let post_class = blog_post_class(false);
+    let mut seed = Object::new();
+    seed.insert("id", Value::String("seed".to_string()));
+    seed.insert("type", Value::String("shared.blog.post".to_string()));
+    seed.insert("title", Value::String("Hello".to_string()));
+
+    Package {
+        name: "shared.blog".to_string(),
+        root: Module {
+            name: "blog".to_string(),
+            constants: BTreeMap::new(),
+            types: BTreeMap::from([(
+                "shared.blog.status".to_string(),
+                TypeDef {
+                    name: "shared.blog.status".to_string(),
+                    module: Some("blog".to_string()),
+                    params: Vec::new(),
+                    ty: Type {
+                        kind: TypeKind::String(StringType {
+                            format: None,
+                            normalization: None,
+                        }),
+                        constraints: vec![],
+                        annotations: vec![],
+                        meta: Meta::default(),
+                    },
+                    visibility: Visibility::Public,
+                    meta: Meta::default(),
+                },
+            )]),
+            attributes: BTreeMap::from([(title_attr.id.clone(), title_attr.clone())]),
+            classes: BTreeMap::from([(post_class.id.clone(), post_class.clone())]),
+            interfaces: BTreeMap::new(),
+            contracts: BTreeMap::new(),
+            meta: Meta::default(),
+        },
+        modules: BTreeMap::new(),
+        migrations: vec![Migration {
+            module: "blog".to_string(),
+            name: "001_init".to_string(),
+            description: Some("Create the initial blog schema.".to_string()),
+            operations: vec![
+                MigrationOperation::Ddl(MigrationDdlOperation::UpsertAttribute {
+                    attribute: title_attr,
+                }),
+                MigrationOperation::Ddl(MigrationDdlOperation::UpsertTypeDef {
+                    type_def: TypeDef {
+                        name: "shared.blog.status".to_string(),
+                        module: Some("blog".to_string()),
+                        params: Vec::new(),
+                        ty: Type {
+                            kind: TypeKind::String(StringType {
+                                format: None,
+                                normalization: None,
+                            }),
+                            constraints: vec![],
+                            annotations: vec![],
+                            meta: Meta::default(),
+                        },
+                        visibility: Visibility::Public,
+                        meta: Meta::default(),
+                    },
+                }),
+                MigrationOperation::Ddl(MigrationDdlOperation::UpsertClass { class: post_class }),
+                MigrationOperation::Ddl(MigrationDdlOperation::UpsertCollection {
+                    name: "shared_suite_blog_posts".to_string(),
+                    kind: MigrationCollectionKind::Polymorphic,
+                    integrity_mode: MigrationIntegrityMode::StrictRegisteredSchema,
+                }),
+                MigrationOperation::Insert {
+                    collection: "shared_suite_blog_posts".to_string(),
+                    id: "seed".to_string(),
+                    object: seed,
+                },
+            ],
+            meta: Meta::default(),
+        }],
+        version: None,
+        meta: Meta::default(),
+    }
+}
+
+fn blog_package_v2() -> Package {
+    let mut package = blog_package_v1();
+    let body_attr = blog_string_attribute("shared.blog.body", "body");
+    let post_class = blog_post_class(true);
+    package
+        .root
+        .attributes
+        .insert(body_attr.id.clone(), body_attr.clone());
+    package
+        .root
+        .classes
+        .insert(post_class.id.clone(), post_class.clone());
+    package.migrations.push(Migration {
+        module: "blog".to_string(),
+        name: "002_body".to_string(),
+        description: Some("Extend blog posts with a body field.".to_string()),
+        operations: vec![
+            MigrationOperation::Ddl(MigrationDdlOperation::UpsertAttribute {
+                attribute: body_attr,
+            }),
+            MigrationOperation::Ddl(MigrationDdlOperation::UpsertClass { class: post_class }),
+            MigrationOperation::Update {
+                query: UpdateQuery::new()
+                    .with_collection("shared_suite_blog_posts")
+                    .with_predicate(eq_predicate(
+                        FieldPath::from_fields(["id"]),
+                        Value::String("seed".to_string()),
+                    ))
+                    .set(
+                        FieldPath::from_fields(["body"]),
+                        Expr::Operand(Operand::Literal(Value::String("World".to_string()))),
+                    ),
+            },
+        ],
+        meta: Meta::default(),
+    });
+    package
+}
+
+fn blog_string_attribute(id: &str, name: &str) -> AttributeType {
+    AttributeType {
+        id: id.to_string(),
+        name: name.to_string(),
+        ty: Type {
+            kind: TypeKind::String(StringType {
+                format: None,
+                normalization: None,
+            }),
+            constraints: vec![],
+            annotations: vec![],
+            meta: Meta::default(),
+        },
+        constraints: vec![],
+        meta: Meta::default(),
+    }
+}
+
+fn blog_post_class(include_body: bool) -> ClassType {
+    let mut attributes = BTreeMap::from([(
+        "title".to_string(),
+        ClassAttribute {
+            attribute: AttributeRef {
+                id: "shared.blog.title".to_string(),
+            },
+            required: true,
+            constraints: vec![],
+            meta: Meta::default(),
+        },
+    )]);
+    if include_body {
+        attributes.insert(
+            "body".to_string(),
+            ClassAttribute {
+                attribute: AttributeRef {
+                    id: "shared.blog.body".to_string(),
+                },
+                required: false,
+                constraints: vec![],
+                meta: Meta::default(),
+            },
+        );
+    }
+    ClassType {
+        id: "shared.blog.post".to_string(),
+        name: "BlogPost".to_string(),
+        inherits: None,
+        extends: vec![],
+        attributes,
+        constraints: vec![],
+        meta: Meta::default(),
+    }
 }
 
 fn row(id: &str, kind: &str, score: i64) -> Object {

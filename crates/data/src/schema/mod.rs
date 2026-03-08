@@ -10,6 +10,7 @@ pub mod r#enum;
 pub mod handle;
 pub mod index;
 pub mod intersection;
+pub mod migration;
 pub mod module;
 pub mod package;
 pub mod primitives;
@@ -76,6 +77,10 @@ pub use handle::handle_type::HandleType;
 pub use index::IndexKind;
 pub use index::IndexSchema;
 pub use intersection::intersection_type::IntersectionType;
+pub use migration::{
+    Migration, MigrationCollectionKind, MigrationDdlOperation, MigrationIntegrityMode,
+    MigrationOperation,
+};
 pub use module::module::Module;
 pub use package::package::Package;
 pub use primitives::any_type::AnyType;

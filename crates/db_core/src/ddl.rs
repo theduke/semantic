@@ -4,7 +4,9 @@ use semantic_data::schema::{
     attribute::attribute_type::AttributeType,
     class::class_attribute::ClassAttribute,
     class::class_type::ClassType,
-    core::{meta::Meta, type_kind::TypeKind, type_node::Type, type_ref::TypeRef},
+    core::{
+        meta::Meta, type_def::TypeDef, type_kind::TypeKind, type_node::Type, type_ref::TypeRef,
+    },
     primitives::{
         any_type::AnyType, bool_type::BoolType, number_type::NumberType, string_type::StringType,
         uint_width::UIntWidth,
@@ -58,6 +60,12 @@ pub enum DdlOperation {
     },
     DeleteAttribute {
         id: String,
+    },
+    UpsertTypeDef {
+        type_def: TypeDef,
+    },
+    DeleteTypeDef {
+        name: String,
     },
     UpsertRecordType {
         id: String,
@@ -140,6 +148,15 @@ pub fn apply_ddl_batch(
                     }
                 }
                 if catalog.delete_attribute(id) {
+                    stats.deleted += 1;
+                }
+            }
+            DdlOperation::UpsertTypeDef { type_def } => {
+                catalog.upsert_type_def(type_def.clone());
+                stats.upserted += 1;
+            }
+            DdlOperation::DeleteTypeDef { name } => {
+                if catalog.delete_type_def(name) {
                     stats.deleted += 1;
                 }
             }
@@ -258,6 +275,8 @@ const CORE_CATALOG_ATTR_INDEX_KIND: &str = "semantic.catalog.index_kind";
 const CORE_CATALOG_ATTR_UNIQUE: &str = "semantic.catalog.unique";
 const CORE_CATALOG_ATTR_NEXT_FIELD_ID: &str = "semantic.catalog.next_field_id";
 const CORE_CATALOG_ATTR_AUTO_INDEX_ENABLED: &str = "semantic.catalog.auto_index_enabled";
+const CORE_CATALOG_ATTR_PACKAGES: &str = "semantic.catalog.packages";
+const CORE_CATALOG_ATTR_APPLIED_MIGRATIONS: &str = "semantic.catalog.applied_migrations";
 const RELATION_ATTR_RELATION: &str = "semantic.relation.relation";
 const RELATION_ATTR_FROM: &str = "semantic.relation.from";
 const RELATION_ATTR_TO: &str = "semantic.relation.to";
@@ -423,6 +442,28 @@ pub fn core_catalog_schema_batch() -> DdlBatch {
         ClassAttribute {
             attribute: AttributeRef {
                 id: CORE_CATALOG_ATTR_AUTO_INDEX_ENABLED.to_string(),
+            },
+            required: false,
+            constraints: vec![],
+            meta: Meta::default(),
+        },
+    );
+    attrs.insert(
+        "packages".to_string(),
+        ClassAttribute {
+            attribute: AttributeRef {
+                id: CORE_CATALOG_ATTR_PACKAGES.to_string(),
+            },
+            required: false,
+            constraints: vec![],
+            meta: Meta::default(),
+        },
+    );
+    attrs.insert(
+        "applied_migrations".to_string(),
+        ClassAttribute {
+            attribute: AttributeRef {
+                id: CORE_CATALOG_ATTR_APPLIED_MIGRATIONS.to_string(),
             },
             required: false,
             constraints: vec![],
@@ -720,6 +761,34 @@ pub fn core_catalog_schema_batch() -> DdlBatch {
                 name: "auto_index_enabled".to_string(),
                 ty: Type {
                     kind: TypeKind::Bool(BoolType),
+                    constraints: vec![],
+                    annotations: vec![],
+                    meta: Meta::default(),
+                },
+                constraints: vec![],
+                meta: Meta::default(),
+            },
+        })
+        .with_op(DdlOperation::UpsertAttribute {
+            attribute: AttributeType {
+                id: CORE_CATALOG_ATTR_PACKAGES.to_string(),
+                name: "packages".to_string(),
+                ty: Type {
+                    kind: TypeKind::Any(AnyType),
+                    constraints: vec![],
+                    annotations: vec![],
+                    meta: Meta::default(),
+                },
+                constraints: vec![],
+                meta: Meta::default(),
+            },
+        })
+        .with_op(DdlOperation::UpsertAttribute {
+            attribute: AttributeType {
+                id: CORE_CATALOG_ATTR_APPLIED_MIGRATIONS.to_string(),
+                name: "applied_migrations".to_string(),
+                ty: Type {
+                    kind: TypeKind::Any(AnyType),
                     constraints: vec![],
                     annotations: vec![],
                     meta: Meta::default(),
