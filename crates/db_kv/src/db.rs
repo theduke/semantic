@@ -26,12 +26,12 @@ use semantic_db_core::{
 };
 
 #[derive(Debug)]
-pub struct Database<E: KvEngine> {
+pub struct KvDb<E: KvEngine> {
     catalog: SharedCatalog,
     store: EntityStore<E>,
 }
 
-impl Database<MemoryKvEngine> {
+impl KvDb<MemoryKvEngine> {
     pub fn in_memory() -> Self {
         Self::new(MemoryKvEngine::new())
     }
@@ -41,7 +41,7 @@ impl Database<MemoryKvEngine> {
     }
 }
 
-impl<E: KvEngine> Database<E> {
+impl<E: KvEngine> KvDb<E> {
     fn query_context(&self) -> QueryContext {
         QueryContext::from_shared(&self.catalog)
     }
@@ -1087,7 +1087,7 @@ impl<E: KvEngine> Database<E> {
 }
 
 struct KvPhysicalDataSource<'a, E: KvEngine> {
-    db: &'a Database<E>,
+    db: &'a KvDb<E>,
     catalog: std::sync::Arc<Catalog>,
     default_collection: Option<String>,
 }
@@ -1421,11 +1421,11 @@ mod tests {
         TransactionOptions, UpdateQuery,
     };
 
-    use super::{Database, QueryPlan};
+    use super::{KvDb, QueryPlan};
 
     #[test]
     fn untyped_query_works() {
-        let mut db = Database::in_memory();
+        let mut db = KvDb::in_memory();
         db.create_collection("events", CollectionKind::Untyped)
             .unwrap();
 
@@ -1454,7 +1454,7 @@ mod tests {
 
     #[test]
     fn class_collection_normalizes_aliases_and_queries_by_alias() {
-        let mut db = Database::in_memory();
+        let mut db = KvDb::in_memory();
 
         let title_attr = AttributeType {
             id: "core.title".to_string(),
@@ -1535,7 +1535,7 @@ mod tests {
 
     #[test]
     fn closed_record_collection_rejects_unknown_fields() {
-        let mut db = Database::in_memory();
+        let mut db = KvDb::in_memory();
 
         let mut fields = BTreeMap::new();
         fields.insert(
@@ -1594,7 +1594,7 @@ mod tests {
 
     #[test]
     fn indexed_equality_query_and_unique_enforcement() {
-        let mut db = Database::in_memory();
+        let mut db = KvDb::in_memory();
         let people = db
             .create_collection("people", CollectionKind::Untyped)
             .unwrap();
@@ -1632,7 +1632,7 @@ mod tests {
 
     #[test]
     fn index_entries_update_on_upsert_and_delete() {
-        let mut db = Database::in_memory();
+        let mut db = KvDb::in_memory();
         let events = db
             .create_collection("events", CollectionKind::Untyped)
             .unwrap();
@@ -1681,7 +1681,7 @@ mod tests {
 
     #[test]
     fn query_order_by_sorts_rows() {
-        let mut db = Database::in_memory();
+        let mut db = KvDb::in_memory();
         db.create_collection("events", CollectionKind::Untyped)
             .unwrap();
 
@@ -1719,7 +1719,7 @@ mod tests {
 
     #[test]
     fn planner_reports_index_lookup() {
-        let mut db = Database::in_memory();
+        let mut db = KvDb::in_memory();
         let events = db
             .create_collection("events", CollectionKind::Untyped)
             .unwrap();
@@ -1743,7 +1743,7 @@ mod tests {
 
     #[test]
     fn update_query_supports_returning_projection() {
-        let mut db = Database::in_memory();
+        let mut db = KvDb::in_memory();
         db.create_collection("items", CollectionKind::Untyped)
             .unwrap();
 
@@ -1779,7 +1779,7 @@ mod tests {
 
     #[test]
     fn delete_query_supports_returning_projection() {
-        let mut db = Database::in_memory();
+        let mut db = KvDb::in_memory();
         db.create_collection("items", CollectionKind::Untyped)
             .unwrap();
 
@@ -1813,7 +1813,7 @@ mod tests {
 
     #[test]
     fn mvcc_transaction_requires_mvcc_backend() {
-        let mut db = Database::in_memory();
+        let mut db = KvDb::in_memory();
         db.create_collection("events", CollectionKind::Untyped)
             .unwrap();
 

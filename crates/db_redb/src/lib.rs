@@ -191,7 +191,7 @@ fn read_revision_table(
     Ok(Some(u64::from_be_bytes(buf)))
 }
 
-pub type RedbDatabase = semantic_db_kv::Database<RedbKvEngine>;
+pub type RedbDatabase = semantic_db_kv::KvDb<RedbKvEngine>;
 
 pub struct RedbBackend {
     db: Arc<RwLock<RedbDatabase>>,

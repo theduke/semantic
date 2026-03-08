@@ -120,11 +120,11 @@ pub trait Backend: Send + Sync {
     async fn execute_batch(&self, batch: Batch) -> std::result::Result<BatchOutcome, DbError>;
 }
 
-pub struct Database {
+pub struct Db {
     backend: Box<dyn Backend>,
 }
 
-impl Database {
+impl Db {
     pub fn new(backend: impl Backend + 'static) -> Self {
         Self {
             backend: Box::new(backend),

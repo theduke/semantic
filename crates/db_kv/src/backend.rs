@@ -8,18 +8,18 @@ use semantic_db_core::{
     QueryExplain, QueryPlan, QueryResult, UpdateQuery,
 };
 
-use crate::{Database, KvEngine};
+use crate::{KvDb, KvEngine};
 
 pub struct KvBackend<E: KvEngine> {
-    db: Mutex<Database<E>>,
+    db: Mutex<KvDb<E>>,
 }
 
 impl<E: KvEngine> KvBackend<E> {
-    pub fn new(db: Database<E>) -> Self {
+    pub fn new(db: KvDb<E>) -> Self {
         Self { db: Mutex::new(db) }
     }
 
-    fn lock_db(&self) -> std::result::Result<std::sync::MutexGuard<'_, Database<E>>, DbError> {
+    fn lock_db(&self) -> std::result::Result<std::sync::MutexGuard<'_, KvDb<E>>, DbError> {
         self.db
             .lock()
             .map_err(|_| DbError::Storage("kv backend mutex poisoned".to_string()))

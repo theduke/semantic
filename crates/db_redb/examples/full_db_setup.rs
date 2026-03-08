@@ -1,7 +1,6 @@
 use semantic_data::value::{FieldPath, Object, Value};
 use semantic_db_core::{
-    CompareOp, Database, Expr, Operand, Predicate, SelectQuery, UpdateQuery,
-    catalog::CollectionKind,
+    CompareOp, Db, Expr, Operand, Predicate, SelectQuery, UpdateQuery, catalog::CollectionKind,
 };
 use semantic_db_redb::RedbBackend;
 
@@ -16,7 +15,7 @@ async fn main() -> std::result::Result<(), semantic_db_core::DbError> {
     ));
 
     let backend = RedbBackend::open(&path)?;
-    let db = Database::new(backend);
+    let db = Db::new(backend);
     db.create_collection("users", CollectionKind::Untyped)
         .await?;
 
