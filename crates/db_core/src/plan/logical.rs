@@ -2,7 +2,7 @@ use semantic_data::value::{FieldPath, Object};
 
 use crate::catalog::LocalCollectionId;
 use crate::plan::SourceRef;
-use crate::query::{JoinCondition, JoinType, OrderBy, Predicate, QueryField, SelectQuery};
+use crate::query::{Expr, JoinCondition, JoinType, OrderBy, Predicate, QueryField, SelectQuery};
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum LogicalJoinCondition {
@@ -71,7 +71,7 @@ pub enum LogicalPlan {
     },
     ApplyInSubquery {
         input: Box<LogicalPlan>,
-        left: FieldPath,
+        left: Expr,
         subquery: Box<LogicalPlan>,
         negated: bool,
     },
@@ -133,10 +133,46 @@ pub fn build_logical_plan(query: &SelectQuery, source: SourceRef) -> LogicalPlan
     }
 
     if let Some(predicate) = &query.predicate {
-        plan = LogicalPlan::Filter {
-            input: Box::new(plan),
-            predicate: predicate.clone(),
-        };
+        let (applies, residual) = extract_subquery_apply(predicate.clone());
+        if let Some(predicate) = residual {
+            plan = LogicalPlan::Filter {
+                input: Box::new(plan),
+                predicate,
+            };
+        }
+        for apply in applies {
+            plan = match apply {
+                SubqueryApply::Exists { subquery, negated } => {
+                    let source = source_ref_for_collection(
+                        subquery.collection.clone(),
+                        subquery.source_alias.clone(),
+                        None,
+                    );
+                    LogicalPlan::ApplyExists {
+                        input: Box::new(plan),
+                        subquery: Box::new(build_logical_plan(&subquery, source)),
+                        negated,
+                    }
+                }
+                SubqueryApply::InSubquery {
+                    left,
+                    subquery,
+                    negated,
+                } => {
+                    let source = source_ref_for_collection(
+                        subquery.collection.clone(),
+                        subquery.source_alias.clone(),
+                        None,
+                    );
+                    LogicalPlan::ApplyInSubquery {
+                        input: Box::new(plan),
+                        left,
+                        subquery: Box::new(build_logical_plan(&subquery, source)),
+                        negated,
+                    }
+                }
+            };
+        }
     }
 
     if !query.order_by.is_empty() {
@@ -162,4 +198,65 @@ pub fn build_logical_plan(query: &SelectQuery, source: SourceRef) -> LogicalPlan
     }
 
     plan
+}
+
+#[derive(Debug, Clone, PartialEq)]
+enum SubqueryApply {
+    Exists {
+        subquery: SelectQuery,
+        negated: bool,
+    },
+    InSubquery {
+        left: Expr,
+        subquery: SelectQuery,
+        negated: bool,
+    },
+}
+
+fn extract_subquery_apply(predicate: Predicate) -> (Vec<SubqueryApply>, Option<Predicate>) {
+    match predicate {
+        Predicate::And(items) => {
+            let mut applies = Vec::new();
+            let mut residual = Vec::new();
+            for item in items {
+                if let Some(apply) = predicate_to_apply(&item) {
+                    applies.push(apply);
+                } else {
+                    residual.push(item);
+                }
+            }
+            let residual = match residual.len() {
+                0 => None,
+                1 => residual.into_iter().next(),
+                _ => Some(Predicate::And(residual)),
+            };
+            (applies, residual)
+        }
+        other => {
+            if let Some(apply) = predicate_to_apply(&other) {
+                (vec![apply], None)
+            } else {
+                (Vec::new(), Some(other))
+            }
+        }
+    }
+}
+
+fn predicate_to_apply(predicate: &Predicate) -> Option<SubqueryApply> {
+    match predicate {
+        Predicate::Expr(Expr::Exists { query, negated }) => Some(SubqueryApply::Exists {
+            subquery: query.as_ref().clone(),
+            negated: *negated,
+        }),
+        Predicate::Expr(Expr::InSubquery {
+            expr,
+            query,
+            negated,
+        }) => Some(SubqueryApply::InSubquery {
+            left: expr.as_ref().clone(),
+            subquery: query.as_ref().clone(),
+            negated: *negated,
+        }),
+        _ => None,
+    }
 }

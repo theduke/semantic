@@ -1,3 +1,11 @@
+#[derive(facet::Facet, Clone, Debug, PartialEq, Eq)]
+#[repr(C)]
+#[facet(rename_all = "snake_case")]
+pub enum LikeKind {
+    Like,
+    SimilarTo,
+}
+
 #[derive(facet::Facet, Clone, Debug, PartialEq)]
 pub struct BetweenExpr {
     pub value: crate::expr::Expr,
@@ -23,6 +31,7 @@ pub enum InSet {
 
 #[derive(facet::Facet, Clone, Debug, PartialEq)]
 pub struct LikeExpr {
+    pub kind: LikeKind,
     pub value: crate::expr::Expr,
     pub pattern: crate::expr::Expr,
     pub escape: Option<crate::expr::Expr>,
@@ -39,5 +48,13 @@ pub struct IsNullExpr {
 #[derive(facet::Facet, Clone, Debug, PartialEq)]
 pub struct ExistsExpr {
     pub query: Box<crate::expr::Select>,
+    pub negated: bool,
+}
+
+#[derive(facet::Facet, Clone, Debug, PartialEq)]
+pub struct RegexExpr {
+    pub value: crate::expr::Expr,
+    pub pattern: crate::expr::Expr,
+    pub case_insensitive: bool,
     pub negated: bool,
 }

@@ -27,6 +27,7 @@ pub enum Expr {
     Between(Box<crate::expr::BetweenExpr>),
     In(Box<crate::expr::InExpr>),
     Like(Box<crate::expr::LikeExpr>),
+    Regex(Box<crate::expr::RegexExpr>),
     IsNull(Box<crate::expr::IsNullExpr>),
     Exists(Box<crate::expr::ExistsExpr>),
 

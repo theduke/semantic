@@ -12,7 +12,7 @@ use crate::plan::{
 };
 use crate::query::{
     CoreError, CoreResult, ObjectAccess as QueryObjectAccess, Predicate, compare_objects_for_plan,
-    evaluate_predicate,
+    evaluate_expr, evaluate_predicate,
 };
 
 pub type DynObject = Box<dyn QueryObjectAccess>;
@@ -230,8 +230,8 @@ fn execute_physical_dyn(
             Ok(execute_physical_dyn(input, source)?
                 .into_iter()
                 .filter(|row| {
-                    let contains = value_ref_for_join_key(row.as_ref(), left)
-                        .map(|v| sub_values.contains(&v.into_owned()))
+                    let contains = evaluate_expr(row.as_ref(), left)
+                        .map(|v| sub_values.contains(&v))
                         .unwrap_or(false);
                     if *negated { !contains } else { contains }
                 })

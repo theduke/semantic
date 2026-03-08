@@ -1636,6 +1636,7 @@ dependencies = [
  "fnv",
  "futures",
  "prqlc",
+ "regex",
  "semantic_data",
  "sqlparser 0.61.0",
  "thiserror",

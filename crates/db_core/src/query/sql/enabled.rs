@@ -72,9 +72,9 @@ use sqlparser::parser::Parser;
 use thiserror::Error;
 
 use crate::{
-    BinaryOp, CompareOp, DeleteQuery, Expr, InsertQuery, InsertSource, JoinCondition, JoinQuery,
-    JoinType, Operand, OrderBy as DbOrderBy, Predicate, Query, QueryField, SelectQuery,
-    SortDirection, UpdateQuery,
+    BinaryOp, CompareOp, DeleteQuery, Expr, FunctionArg, InsertQuery, InsertSource, JoinCondition,
+    JoinQuery, JoinType, Operand, OrderBy as DbOrderBy, PatternMatchKind, Predicate, Query,
+    QueryField, SelectQuery, SortDirection, UpdateQuery,
 };
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -199,6 +199,16 @@ fn parse_select_stmt(query: SqlQuery) -> Result<ParsedSqlQuery, SqlQueryError> {
         ));
     };
     parse_select(query.order_by, query.limit_clause, *select)
+}
+
+fn parse_select_subquery(query: SqlQuery) -> Result<SelectQuery, SqlQueryError> {
+    let parsed = parse_select_stmt(query)?;
+    match parsed.query {
+        Query::Select(select) => Ok(select),
+        _ => Err(SqlQueryError::Invalid(
+            "expected SELECT subquery expression".to_string(),
+        )),
+    }
 }
 
 fn parse_select(
@@ -656,12 +666,12 @@ fn expr_to_predicate(parsed: Expr) -> Result<Predicate, SqlQueryError> {
                 expr_to_predicate(*left)?,
                 expr_to_predicate(*right)?,
             ])),
-            BinaryOp::Eq => predicate_compare(CompareOp::Eq, *left, *right),
-            BinaryOp::NotEq => predicate_compare(CompareOp::NotEq, *left, *right),
-            BinaryOp::Lt => predicate_compare(CompareOp::Lt, *left, *right),
-            BinaryOp::Lte => predicate_compare(CompareOp::Lte, *left, *right),
-            BinaryOp::Gt => predicate_compare(CompareOp::Gt, *left, *right),
-            BinaryOp::Gte => predicate_compare(CompareOp::Gte, *left, *right),
+            BinaryOp::Eq => predicate_compare_or_expr(CompareOp::Eq, *left, *right),
+            BinaryOp::NotEq => predicate_compare_or_expr(CompareOp::NotEq, *left, *right),
+            BinaryOp::Lt => predicate_compare_or_expr(CompareOp::Lt, *left, *right),
+            BinaryOp::Lte => predicate_compare_or_expr(CompareOp::Lte, *left, *right),
+            BinaryOp::Gt => predicate_compare_or_expr(CompareOp::Gt, *left, *right),
+            BinaryOp::Gte => predicate_compare_or_expr(CompareOp::Gte, *left, *right),
             _ => Ok(Predicate::Expr(Expr::Binary { op, left, right })),
         },
         Expr::Unary {
@@ -677,6 +687,34 @@ fn predicate_compare(op: CompareOp, left: Expr, right: Expr) -> Result<Predicate
     let left = expr_to_operand(left)?;
     let right = expr_to_operand(right)?;
     Ok(Predicate::Compare { op, left, right })
+}
+
+fn predicate_compare_or_expr(
+    op: CompareOp,
+    left: Expr,
+    right: Expr,
+) -> Result<Predicate, SqlQueryError> {
+    let left_keep = left.clone();
+    let right_keep = right.clone();
+    match predicate_compare(op, left, right) {
+        Ok(pred) => Ok(pred),
+        Err(_) => Ok(Predicate::Expr(Expr::Binary {
+            op: compare_to_binary(op),
+            left: Box::new(left_keep),
+            right: Box::new(right_keep),
+        })),
+    }
+}
+
+fn compare_to_binary(op: CompareOp) -> BinaryOp {
+    match op {
+        CompareOp::Eq => BinaryOp::Eq,
+        CompareOp::NotEq => BinaryOp::NotEq,
+        CompareOp::Lt => BinaryOp::Lt,
+        CompareOp::Lte => BinaryOp::Lte,
+        CompareOp::Gt => BinaryOp::Gt,
+        CompareOp::Gte => BinaryOp::Gte,
+    }
 }
 
 fn expr_to_operand(expr: Expr) -> Result<Operand, SqlQueryError> {
@@ -710,39 +748,145 @@ fn parse_expr(expr: SqlExpr) -> Result<Expr, SqlQueryError> {
             },
             expr: Box::new(parse_expr(*expr)?),
         }),
-        SqlExpr::BinaryOp { left, op, right } => Ok(Expr::Binary {
-            op: parse_binary_op(op)?,
-            left: Box::new(parse_expr(*left)?),
-            right: Box::new(parse_expr(*right)?),
-        }),
-        SqlExpr::Function(function) => {
-            if function.name.to_string().eq_ignore_ascii_case("coalesce") {
-                let mut args = Vec::new();
-                let FunctionArguments::List(argument_list) = function.args else {
-                    return Err(SqlQueryError::Unsupported(
-                        "COALESCE argument form is not supported".to_string(),
-                    ));
-                };
-                for arg in argument_list.args {
-                    match arg {
-                        sqlparser::ast::FunctionArg::Unnamed(
-                            sqlparser::ast::FunctionArgExpr::Expr(expr),
-                        ) => args.push(parse_expr(expr)?),
-                        _ => {
-                            return Err(SqlQueryError::Unsupported(
-                                "COALESCE only supports plain expression arguments".to_string(),
-                            ));
-                        }
-                    }
-                }
-                Ok(Expr::Coalesce(args))
-            } else {
-                Err(SqlQueryError::Unsupported(format!(
-                    "function '{}' is not supported",
-                    function.name
-                )))
+        SqlExpr::BinaryOp { left, op, right } => {
+            let left_expr = parse_expr(*left)?;
+            let right_expr = parse_expr(*right)?;
+            match op {
+                BinaryOperator::PGRegexMatch => Ok(Expr::RegexMatch {
+                    expr: Box::new(left_expr),
+                    pattern: Box::new(right_expr),
+                    case_insensitive: false,
+                    negated: false,
+                }),
+                BinaryOperator::PGRegexIMatch => Ok(Expr::RegexMatch {
+                    expr: Box::new(left_expr),
+                    pattern: Box::new(right_expr),
+                    case_insensitive: true,
+                    negated: false,
+                }),
+                BinaryOperator::PGRegexNotMatch => Ok(Expr::RegexMatch {
+                    expr: Box::new(left_expr),
+                    pattern: Box::new(right_expr),
+                    case_insensitive: false,
+                    negated: true,
+                }),
+                BinaryOperator::PGRegexNotIMatch => Ok(Expr::RegexMatch {
+                    expr: Box::new(left_expr),
+                    pattern: Box::new(right_expr),
+                    case_insensitive: true,
+                    negated: true,
+                }),
+                _ => Ok(Expr::Binary {
+                    op: parse_binary_op(op)?,
+                    left: Box::new(left_expr),
+                    right: Box::new(right_expr),
+                }),
             }
         }
+        SqlExpr::InList {
+            expr,
+            list,
+            negated,
+        } => Ok(Expr::InList {
+            expr: Box::new(parse_expr(*expr)?),
+            list: list
+                .into_iter()
+                .map(parse_expr)
+                .collect::<Result<Vec<_>, _>>()?,
+            negated,
+        }),
+        SqlExpr::InSubquery {
+            expr,
+            subquery,
+            negated,
+        } => Ok(Expr::InSubquery {
+            expr: Box::new(parse_expr(*expr)?),
+            query: Box::new(parse_select_subquery(*subquery)?),
+            negated,
+        }),
+        SqlExpr::Between {
+            expr,
+            negated,
+            low,
+            high,
+        } => Ok(Expr::Between {
+            expr: Box::new(parse_expr(*expr)?),
+            low: Box::new(parse_expr(*low)?),
+            high: Box::new(parse_expr(*high)?),
+            negated,
+        }),
+        SqlExpr::Like {
+            negated,
+            expr,
+            pattern,
+            escape_char,
+            ..
+        } => {
+            if escape_char.is_some() {
+                return Err(SqlQueryError::Unsupported(
+                    "LIKE ESCAPE is not supported".to_string(),
+                ));
+            }
+            Ok(Expr::PatternMatch {
+                kind: PatternMatchKind::Like,
+                expr: Box::new(parse_expr(*expr)?),
+                pattern: Box::new(parse_expr(*pattern)?),
+                case_insensitive: false,
+                negated,
+            })
+        }
+        SqlExpr::ILike {
+            negated,
+            expr,
+            pattern,
+            escape_char,
+            ..
+        } => {
+            if escape_char.is_some() {
+                return Err(SqlQueryError::Unsupported(
+                    "ILIKE ESCAPE is not supported".to_string(),
+                ));
+            }
+            Ok(Expr::PatternMatch {
+                kind: PatternMatchKind::Like,
+                expr: Box::new(parse_expr(*expr)?),
+                pattern: Box::new(parse_expr(*pattern)?),
+                case_insensitive: true,
+                negated,
+            })
+        }
+        SqlExpr::SimilarTo {
+            negated,
+            expr,
+            pattern,
+            escape_char,
+        } => {
+            if escape_char.is_some() {
+                return Err(SqlQueryError::Unsupported(
+                    "SIMILAR TO ESCAPE is not supported".to_string(),
+                ));
+            }
+            Ok(Expr::PatternMatch {
+                kind: PatternMatchKind::SimilarTo,
+                expr: Box::new(parse_expr(*expr)?),
+                pattern: Box::new(parse_expr(*pattern)?),
+                case_insensitive: false,
+                negated,
+            })
+        }
+        SqlExpr::IsNull(expr) => Ok(Expr::IsNull {
+            expr: Box::new(parse_expr(*expr)?),
+            negated: false,
+        }),
+        SqlExpr::IsNotNull(expr) => Ok(Expr::IsNull {
+            expr: Box::new(parse_expr(*expr)?),
+            negated: true,
+        }),
+        SqlExpr::Exists { subquery, negated } => Ok(Expr::Exists {
+            query: Box::new(parse_select_subquery(*subquery)?),
+            negated,
+        }),
+        SqlExpr::Function(function) => parse_function_expr(function),
         SqlExpr::Case {
             operand,
             conditions,
@@ -767,6 +911,49 @@ fn parse_expr(expr: SqlExpr) -> Result<Expr, SqlQueryError> {
         other => Err(SqlQueryError::Unsupported(format!(
             "expression '{other}' is not supported"
         ))),
+    }
+}
+
+fn parse_function_expr(function: sqlparser::ast::Function) -> Result<Expr, SqlQueryError> {
+    let mut args = Vec::new();
+    let FunctionArguments::List(argument_list) = function.args else {
+        return Err(SqlQueryError::Unsupported(format!(
+            "function '{}' argument form is not supported",
+            function.name
+        )));
+    };
+    for arg in argument_list.args {
+        match arg {
+            sqlparser::ast::FunctionArg::Unnamed(sqlparser::ast::FunctionArgExpr::Expr(expr)) => {
+                args.push(FunctionArg::Expr(parse_expr(expr)?));
+            }
+            sqlparser::ast::FunctionArg::Unnamed(sqlparser::ast::FunctionArgExpr::Wildcard) => {
+                args.push(FunctionArg::Wildcard);
+            }
+            _ => {
+                return Err(SqlQueryError::Unsupported(format!(
+                    "function '{}' only supports plain expression or '*' args",
+                    function.name
+                )));
+            }
+        }
+    }
+    if function.name.to_string().eq_ignore_ascii_case("coalesce") {
+        let mut exprs = Vec::new();
+        for arg in args {
+            let FunctionArg::Expr(expr) = arg else {
+                return Err(SqlQueryError::Unsupported(
+                    "COALESCE does not support wildcard args".to_string(),
+                ));
+            };
+            exprs.push(expr);
+        }
+        Ok(Expr::Coalesce(exprs))
+    } else {
+        Ok(Expr::Function {
+            name: function.name.to_string(),
+            args,
+        })
     }
 }
 
@@ -1260,6 +1447,116 @@ fn expr_to_sql(expr: &Expr) -> Result<String, SqlQueryError> {
             out.push(')');
             Ok(out)
         }
+        Expr::Function { name, args } => {
+            let mut out = String::new();
+            out.push_str(name);
+            out.push('(');
+            for (idx, arg) in args.iter().enumerate() {
+                if idx > 0 {
+                    out.push_str(", ");
+                }
+                out.push_str(&function_arg_to_sql(arg)?);
+            }
+            out.push(')');
+            Ok(out)
+        }
+        Expr::InList {
+            expr,
+            list,
+            negated,
+        } => {
+            let mut out = format!(
+                "{} {}IN (",
+                expr_to_sql(expr)?,
+                if *negated { "NOT " } else { "" }
+            );
+            for (idx, item) in list.iter().enumerate() {
+                if idx > 0 {
+                    out.push_str(", ");
+                }
+                out.push_str(&expr_to_sql(item)?);
+            }
+            out.push(')');
+            Ok(out)
+        }
+        Expr::InSubquery {
+            expr,
+            query,
+            negated,
+        } => Ok(format!(
+            "{} {}IN ({})",
+            expr_to_sql(expr)?,
+            if *negated { "NOT " } else { "" },
+            select_to_sql(query, query.collection_or_default())?
+        )),
+        Expr::Between {
+            expr,
+            low,
+            high,
+            negated,
+        } => Ok(format!(
+            "{} {}BETWEEN {} AND {}",
+            expr_to_sql(expr)?,
+            if *negated { "NOT " } else { "" },
+            expr_to_sql(low)?,
+            expr_to_sql(high)?
+        )),
+        Expr::PatternMatch {
+            kind,
+            expr,
+            pattern,
+            case_insensitive,
+            negated,
+        } => {
+            let op = match (kind, *case_insensitive) {
+                (PatternMatchKind::Like, false) => "LIKE",
+                (PatternMatchKind::Like, true) => "ILIKE",
+                (PatternMatchKind::SimilarTo, _) => "SIMILAR TO",
+            };
+            Ok(format!(
+                "{} {}{} {}",
+                expr_to_sql(expr)?,
+                if *negated { "NOT " } else { "" },
+                op,
+                expr_to_sql(pattern)?
+            ))
+        }
+        Expr::RegexMatch {
+            expr,
+            pattern,
+            case_insensitive,
+            negated,
+        } => {
+            let op = match (*case_insensitive, *negated) {
+                (false, false) => "~",
+                (true, false) => "~*",
+                (false, true) => "!~",
+                (true, true) => "!~*",
+            };
+            Ok(format!(
+                "{} {} {}",
+                expr_to_sql(expr)?,
+                op,
+                expr_to_sql(pattern)?
+            ))
+        }
+        Expr::IsNull { expr, negated } => Ok(format!(
+            "{} IS {}NULL",
+            expr_to_sql(expr)?,
+            if *negated { "NOT " } else { "" }
+        )),
+        Expr::Exists { query, negated } => Ok(format!(
+            "{}EXISTS ({})",
+            if *negated { "NOT " } else { "" },
+            select_to_sql(query, query.collection_or_default())?
+        )),
+    }
+}
+
+fn function_arg_to_sql(arg: &FunctionArg) -> Result<String, SqlQueryError> {
+    match arg {
+        FunctionArg::Expr(expr) => expr_to_sql(expr),
+        FunctionArg::Wildcard => Ok("*".to_string()),
     }
 }
 

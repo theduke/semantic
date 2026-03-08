@@ -97,6 +97,7 @@ use std::{
     collections::{BTreeMap, BTreeSet},
 };
 
+use regex::RegexBuilder;
 use semantic_data::value::{FieldPath, Object, PathSegment, Value, ValueRef};
 
 use crate::catalog::{LocalAttrId, LocalCollectionId, LocalFieldId};
@@ -199,12 +200,28 @@ pub enum UnaryOp {
     Neg,
 }
 
+#[derive(facet::Facet, Debug, Clone, Copy, PartialEq, Eq)]
+#[repr(C)]
+#[facet(rename_all = "snake_case")]
+pub enum PatternMatchKind {
+    Like,
+    SimilarTo,
+}
+
 #[derive(facet::Facet, Debug, Clone, PartialEq)]
 #[repr(C)]
 #[facet(rename_all = "snake_case")]
 pub enum Operand {
     Field(FieldPath),
     Literal(Value),
+}
+
+#[derive(facet::Facet, Debug, Clone, PartialEq)]
+#[repr(C)]
+#[facet(rename_all = "snake_case")]
+pub enum FunctionArg {
+    Expr(Expr),
+    Wildcard,
 }
 
 #[derive(facet::Facet, Debug, Clone, PartialEq)]
@@ -227,6 +244,47 @@ pub enum Expr {
         else_expr: Box<Expr>,
     },
     Coalesce(Vec<Expr>),
+    Function {
+        name: String,
+        args: Vec<FunctionArg>,
+    },
+    InList {
+        expr: Box<Expr>,
+        list: Vec<Expr>,
+        negated: bool,
+    },
+    InSubquery {
+        expr: Box<Expr>,
+        query: Box<SelectQuery>,
+        negated: bool,
+    },
+    Between {
+        expr: Box<Expr>,
+        low: Box<Expr>,
+        high: Box<Expr>,
+        negated: bool,
+    },
+    PatternMatch {
+        kind: PatternMatchKind,
+        expr: Box<Expr>,
+        pattern: Box<Expr>,
+        case_insensitive: bool,
+        negated: bool,
+    },
+    RegexMatch {
+        expr: Box<Expr>,
+        pattern: Box<Expr>,
+        case_insensitive: bool,
+        negated: bool,
+    },
+    IsNull {
+        expr: Box<Expr>,
+        negated: bool,
+    },
+    Exists {
+        query: Box<SelectQuery>,
+        negated: bool,
+    },
 }
 
 #[derive(facet::Facet, Debug, Clone, PartialEq)]
@@ -1057,6 +1115,82 @@ pub fn evaluate_expr<T: ObjectAccess + ?Sized>(value: &T, expr: &Expr) -> Option
             }
             Some(Value::Null)
         }
+        Expr::Function { name, args } => evaluate_function(value, name, args),
+        Expr::InList {
+            expr,
+            list,
+            negated,
+        } => {
+            let Some(target) = evaluate_expr(value, expr) else {
+                return Some(Value::Bool(false));
+            };
+            let mut found = false;
+            for item in list {
+                let Some(candidate) = evaluate_expr(value, item) else {
+                    continue;
+                };
+                if candidate == target {
+                    found = true;
+                    break;
+                }
+            }
+            Some(Value::Bool(if *negated { !found } else { found }))
+        }
+        Expr::InSubquery { .. } | Expr::Exists { .. } => None,
+        Expr::Between {
+            expr,
+            low,
+            high,
+            negated,
+        } => {
+            let Some(v) = evaluate_expr(value, expr) else {
+                return Some(Value::Bool(false));
+            };
+            let Some(lo) = evaluate_expr(value, low) else {
+                return Some(Value::Bool(false));
+            };
+            let Some(hi) = evaluate_expr(value, high) else {
+                return Some(Value::Bool(false));
+            };
+            let in_range = v >= lo && v <= hi;
+            Some(Value::Bool(if *negated { !in_range } else { in_range }))
+        }
+        Expr::PatternMatch {
+            kind,
+            expr,
+            pattern,
+            case_insensitive,
+            negated,
+        } => {
+            let matched = evaluate_expr(value, expr)
+                .and_then(|v| v.as_str().map(ToOwned::to_owned))
+                .zip(evaluate_expr(value, pattern).and_then(|v| v.as_str().map(ToOwned::to_owned)))
+                .is_some_and(|(input, pattern)| match kind {
+                    PatternMatchKind::Like => like_match(&input, &pattern, *case_insensitive),
+                    PatternMatchKind::SimilarTo => {
+                        similar_to_match(&input, &pattern, *case_insensitive)
+                    }
+                });
+            Some(Value::Bool(if *negated { !matched } else { matched }))
+        }
+        Expr::RegexMatch {
+            expr,
+            pattern,
+            case_insensitive,
+            negated,
+        } => {
+            let matched = evaluate_expr(value, expr)
+                .and_then(|v| v.as_str().map(ToOwned::to_owned))
+                .zip(evaluate_expr(value, pattern).and_then(|v| v.as_str().map(ToOwned::to_owned)))
+                .is_some_and(|(input, pattern)| {
+                    regex_match(&input, &pattern, *case_insensitive).unwrap_or(false)
+                });
+            Some(Value::Bool(if *negated { !matched } else { matched }))
+        }
+        Expr::IsNull { expr, negated } => {
+            let is_null = evaluate_expr(value, expr).is_none_or(|v| v.is_nullish());
+            Some(Value::Bool(if *negated { !is_null } else { is_null }))
+        }
     }
 }
 
@@ -1304,6 +1438,98 @@ fn eval_binary(op: BinaryOp, left: Value, right: Value) -> Option<Value> {
         BinaryOp::Gt => Some(Value::Bool(left > right)),
         BinaryOp::Gte => Some(Value::Bool(left >= right)),
     }
+}
+
+fn evaluate_function<T: ObjectAccess + ?Sized>(
+    value: &T,
+    name: &str,
+    args: &[FunctionArg],
+) -> Option<Value> {
+    let evaluated = args
+        .iter()
+        .map(|arg| match arg {
+            FunctionArg::Expr(expr) => evaluate_expr(value, expr),
+            FunctionArg::Wildcard => Some(Value::Bool(true)),
+        })
+        .collect::<Vec<_>>();
+    match name.to_ascii_lowercase().as_str() {
+        "coalesce" => evaluated.into_iter().flatten().find(|v| !v.is_nullish()),
+        "lower" => evaluated
+            .first()
+            .and_then(|v| v.as_ref())
+            .and_then(Value::as_str)
+            .map(|s| Value::String(s.to_ascii_lowercase())),
+        "upper" => evaluated
+            .first()
+            .and_then(|v| v.as_ref())
+            .and_then(Value::as_str)
+            .map(|s| Value::String(s.to_ascii_uppercase())),
+        "count" => {
+            if args.iter().any(|arg| matches!(arg, FunctionArg::Wildcard)) {
+                Some(Value::I64(1))
+            } else {
+                let count = evaluated
+                    .into_iter()
+                    .flatten()
+                    .filter(|v| !v.is_nullish())
+                    .count();
+                Some(Value::I64(count as i64))
+            }
+        }
+        "sum" | "avg" | "min" | "max" => evaluated.first().cloned().flatten(),
+        _ => None,
+    }
+}
+
+fn like_match(input: &str, pattern: &str, case_insensitive: bool) -> bool {
+    let (input, pattern) = if case_insensitive {
+        (input.to_ascii_lowercase(), pattern.to_ascii_lowercase())
+    } else {
+        (input.to_string(), pattern.to_string())
+    };
+    like_match_inner(input.as_bytes(), pattern.as_bytes())
+}
+
+fn like_match_inner(input: &[u8], pattern: &[u8]) -> bool {
+    if pattern.is_empty() {
+        return input.is_empty();
+    }
+    match pattern[0] {
+        b'%' => {
+            for i in 0..=input.len() {
+                if like_match_inner(&input[i..], &pattern[1..]) {
+                    return true;
+                }
+            }
+            false
+        }
+        b'_' => {
+            if input.is_empty() {
+                false
+            } else {
+                like_match_inner(&input[1..], &pattern[1..])
+            }
+        }
+        c => {
+            if input.first().copied() == Some(c) {
+                like_match_inner(&input[1..], &pattern[1..])
+            } else {
+                false
+            }
+        }
+    }
+}
+
+fn similar_to_match(input: &str, pattern: &str, case_insensitive: bool) -> bool {
+    like_match(input, pattern, case_insensitive)
+}
+
+fn regex_match(input: &str, pattern: &str, case_insensitive: bool) -> Option<bool> {
+    let re = RegexBuilder::new(pattern)
+        .case_insensitive(case_insensitive)
+        .build()
+        .ok()?;
+    Some(re.is_match(input))
 }
 
 fn value_truthy(value: &Value) -> bool {

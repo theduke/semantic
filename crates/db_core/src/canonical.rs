@@ -232,6 +232,82 @@ fn canonicalize_expr(
             .map(|item| canonicalize_expr(item, collection, context))
             .collect::<CanonicalResult<Vec<_>>>()
             .map(Expr::Coalesce),
+        Expr::Function { name, args } => Ok(Expr::Function {
+            name: name.clone(),
+            args: args
+                .iter()
+                .map(|arg| match arg {
+                    crate::FunctionArg::Expr(expr) => {
+                        canonicalize_expr(expr, collection, context).map(crate::FunctionArg::Expr)
+                    }
+                    crate::FunctionArg::Wildcard => Ok(crate::FunctionArg::Wildcard),
+                })
+                .collect::<CanonicalResult<Vec<_>>>()?,
+        }),
+        Expr::InList {
+            expr,
+            list,
+            negated,
+        } => Ok(Expr::InList {
+            expr: Box::new(canonicalize_expr(expr, collection, context)?),
+            list: list
+                .iter()
+                .map(|item| canonicalize_expr(item, collection, context))
+                .collect::<CanonicalResult<Vec<_>>>()?,
+            negated: *negated,
+        }),
+        Expr::InSubquery {
+            expr,
+            query,
+            negated,
+        } => Ok(Expr::InSubquery {
+            expr: Box::new(canonicalize_expr(expr, collection, context)?),
+            query: query.clone(),
+            negated: *negated,
+        }),
+        Expr::Between {
+            expr,
+            low,
+            high,
+            negated,
+        } => Ok(Expr::Between {
+            expr: Box::new(canonicalize_expr(expr, collection, context)?),
+            low: Box::new(canonicalize_expr(low, collection, context)?),
+            high: Box::new(canonicalize_expr(high, collection, context)?),
+            negated: *negated,
+        }),
+        Expr::PatternMatch {
+            kind,
+            expr,
+            pattern,
+            case_insensitive,
+            negated,
+        } => Ok(Expr::PatternMatch {
+            kind: *kind,
+            expr: Box::new(canonicalize_expr(expr, collection, context)?),
+            pattern: Box::new(canonicalize_expr(pattern, collection, context)?),
+            case_insensitive: *case_insensitive,
+            negated: *negated,
+        }),
+        Expr::RegexMatch {
+            expr,
+            pattern,
+            case_insensitive,
+            negated,
+        } => Ok(Expr::RegexMatch {
+            expr: Box::new(canonicalize_expr(expr, collection, context)?),
+            pattern: Box::new(canonicalize_expr(pattern, collection, context)?),
+            case_insensitive: *case_insensitive,
+            negated: *negated,
+        }),
+        Expr::IsNull { expr, negated } => Ok(Expr::IsNull {
+            expr: Box::new(canonicalize_expr(expr, collection, context)?),
+            negated: *negated,
+        }),
+        Expr::Exists { query, negated } => Ok(Expr::Exists {
+            query: query.clone(),
+            negated: *negated,
+        }),
     }
 }
 

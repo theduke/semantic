@@ -133,7 +133,7 @@ pub enum PhysicalPlan {
     },
     ApplyInSubquery {
         input: Box<PhysicalPlan>,
-        left: PhysicalJoinKey,
+        left: crate::query::Expr,
         subquery: Box<PhysicalPlan>,
         negated: bool,
     },

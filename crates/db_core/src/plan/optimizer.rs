@@ -369,10 +369,7 @@ impl PhysicalLoweringPass for CoreLoweringPass {
                 negated,
             } => PhysicalPlan::ApplyInSubquery {
                 input: Box::new(input(inner)),
-                left: PhysicalJoinKey {
-                    field: FieldRef::Path(left.clone()),
-                    source_path: left.clone(),
-                },
+                left: left.clone(),
                 subquery: Box::new(input(subquery)),
                 negated: *negated,
             },
