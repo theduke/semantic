@@ -2,7 +2,7 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use base64::{Engine, engine::general_purpose::URL_SAFE_NO_PAD};
 use semantic_data::value::serde::typed::{TypedRef, TypedValue};
-use semantic_data::value::{Object, Value};
+use semantic_data::value::{FieldPath, Object, PathSegment, Value};
 use semantic_db_core::DbError;
 use semantic_db_core::catalog::{LocalCollectionId, LocalIndexId};
 use serde::{Deserialize, Serialize};
@@ -12,6 +12,7 @@ pub use memory::MemoryKvEngine;
 
 const ENTITY_FORMAT_VERSION_PREFIX_LEN: usize = std::mem::size_of::<u16>();
 const ENTITY_FORMAT_VERSION_V1_MSGPACK: u16 = 1;
+const INDEX_FORMAT_VERSION_V1_MSGPACK: u16 = 1;
 
 #[derive(facet::Facet, Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
 #[repr(C)]
@@ -217,7 +218,7 @@ impl<E: KvEngine> EntityStore<E> {
         value: &Value,
         entity_id: &str,
     ) -> std::result::Result<(), DbError> {
-        let key = index_key(index, value, entity_id)?;
+        let key = index_key(index, None, value, entity_id)?;
         self.engine.put(key, Vec::new())
     }
 
@@ -227,16 +228,17 @@ impl<E: KvEngine> EntityStore<E> {
         value: &Value,
         entity_id: &str,
     ) -> std::result::Result<(), DbError> {
-        let key = index_key(index, value, entity_id)?;
+        let key = index_key(index, None, value, entity_id)?;
         self.engine.delete(&key)
     }
 
     pub fn scan_index_value(
         &self,
         index: LocalIndexId,
+        path: Option<&FieldPath>,
         value: &Value,
     ) -> std::result::Result<Vec<String>, DbError> {
-        let prefix = index_value_prefix(index, value)?;
+        let prefix = index_value_prefix(index, path, value)?;
         let pairs = self.engine.scan_prefix(&prefix)?;
         let mut ids = BTreeSet::new();
         for (key, _) in pairs {
@@ -315,25 +317,75 @@ pub(crate) fn entity_key(collection: LocalCollectionId, id: &str) -> Vec<u8> {
     format!("c/{}/e/{}", collection.0, id).into_bytes()
 }
 
-fn index_value_prefix(index: LocalIndexId, value: &Value) -> std::result::Result<Vec<u8>, DbError> {
-    let value_bytes = rmp_serde::to_vec(&TypedRef(value))
-        .map_err(|err| DbError::Serialization(err.to_string()))?;
-    let token = URL_SAFE_NO_PAD.encode(value_bytes);
-    Ok(format!("i/{}/v/{}/e/", index.0, token).into_bytes())
+fn index_value_prefix(
+    index: LocalIndexId,
+    path: Option<&FieldPath>,
+    value: &Value,
+) -> std::result::Result<Vec<u8>, DbError> {
+    let mut key = index_path_prefix(index, path)?;
+    key.extend_from_slice(b"v/");
+    key.extend_from_slice(encode_index_value_token(value)?.as_bytes());
+    key.extend_from_slice(b"/e/");
+    Ok(key)
 }
 
 pub(crate) fn index_key(
     index: LocalIndexId,
+    path: Option<&FieldPath>,
     value: &Value,
     entity_id: &str,
 ) -> std::result::Result<Vec<u8>, DbError> {
-    let mut key = index_value_prefix(index, value)?;
+    let mut key = index_value_prefix(index, path, value)?;
     key.extend_from_slice(entity_id.as_bytes());
     Ok(key)
 }
 
 pub(crate) fn index_prefix(index: LocalIndexId) -> Vec<u8> {
-    format!("i/{}/v/", index.0).into_bytes()
+    format!("i/{}/", index.0).into_bytes()
+}
+
+fn index_path_prefix(
+    index: LocalIndexId,
+    path: Option<&FieldPath>,
+) -> std::result::Result<Vec<u8>, DbError> {
+    if let Some(path) = path {
+        let path_value = field_path_to_value(path);
+        let path_token = encode_index_value_token(&path_value)?;
+        Ok(format!("i/{}/p/{}/", index.0, path_token).into_bytes())
+    } else {
+        Ok(format!("i/{}/", index.0).into_bytes())
+    }
+}
+
+pub(crate) fn index_format_key(index: LocalIndexId) -> Vec<u8> {
+    format!("i/{}/fmt", index.0).into_bytes()
+}
+
+pub(crate) fn index_format_value() -> Vec<u8> {
+    INDEX_FORMAT_VERSION_V1_MSGPACK.to_le_bytes().to_vec()
+}
+
+fn encode_index_value_token(value: &Value) -> std::result::Result<String, DbError> {
+    let value_bytes = rmp_serde::to_vec(&TypedRef(value))
+        .map_err(|err| DbError::Serialization(err.to_string()))?;
+    Ok(URL_SAFE_NO_PAD.encode(value_bytes))
+}
+
+fn field_path_to_value(path: &FieldPath) -> Value {
+    let mut segments = Vec::with_capacity(path.segments().len());
+    for segment in path.segments() {
+        match segment {
+            PathSegment::Field(field) => segments.push(Value::List(vec![
+                Value::String("f".to_string()),
+                Value::String(field.clone()),
+            ])),
+            PathSegment::Index(index) => segments.push(Value::List(vec![
+                Value::String("i".to_string()),
+                Value::U64(*index as u64),
+            ])),
+        }
+    }
+    Value::List(segments)
 }
 
 fn extract_index_entity_id(key: &[u8]) -> Option<String> {
@@ -341,6 +393,37 @@ fn extract_index_entity_id(key: &[u8]) -> Option<String> {
     let pos = key.windows(marker.len()).position(|w| w == marker)?;
     let id = &key[(pos + marker.len())..];
     std::str::from_utf8(id).ok().map(|s| s.to_string())
+}
+
+pub(crate) fn collect_index_entries(object: &Object) -> Vec<(FieldPath, Value)> {
+    let mut out = Vec::new();
+    for (field, value) in object {
+        let mut path = FieldPath::new();
+        path.push_field(field.clone());
+        collect_value_entries(value, &mut path, &mut out);
+    }
+    out
+}
+
+fn collect_value_entries(value: &Value, path: &mut FieldPath, out: &mut Vec<(FieldPath, Value)>) {
+    out.push((path.clone(), value.clone()));
+    match value {
+        Value::Object(object) => {
+            for (field, nested) in object {
+                path.push_field(field.clone());
+                collect_value_entries(nested, path, out);
+                path.0.pop();
+            }
+        }
+        Value::List(items) => {
+            for (idx, nested) in items.iter().enumerate() {
+                path.push_index(idx);
+                collect_value_entries(nested, path, out);
+                path.0.pop();
+            }
+        }
+        _ => {}
+    }
 }
 
 #[derive(Serialize, Deserialize)]

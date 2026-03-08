@@ -573,13 +573,14 @@ fn resolve_field_ref_for_schema(schema: &CollectionSchema, path: &FieldPath) -> 
     let Some(PathSegment::Field(first)) = path.segments().first() else {
         return FieldRef::Path(path.clone());
     };
-    if path.segments().len() == 1 {
-        if let Some(field_id) = schema.field_id(first) {
-            if let Some(attr_id) = schema.attr_for_field_id(field_id) {
-                return FieldRef::AttrId(attr_id);
-            }
-            return FieldRef::FieldId(field_id);
+    if path.segments().len() > 1 {
+        return FieldRef::Path(path.clone());
+    }
+    if let Some(field_id) = schema.field_id(first) {
+        if let Some(attr_id) = schema.attr_for_field_id(field_id) {
+            return FieldRef::AttrId(attr_id);
         }
+        return FieldRef::FieldId(field_id);
     }
     let canonical = schema.canonical_field_name(first).to_string();
     FieldRef::CanonicalName(canonical)

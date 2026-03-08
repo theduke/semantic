@@ -3,6 +3,7 @@
 #[facet(rename_all = "snake_case")]
 pub enum IndexKind {
     Equality,
+    PathEquality,
     Range,
     FullText,
 }

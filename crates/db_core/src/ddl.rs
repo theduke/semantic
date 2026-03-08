@@ -90,6 +90,9 @@ pub enum DdlOperation {
         name: String,
         collection: String,
     },
+    SetAutoIndex {
+        enabled: bool,
+    },
 }
 
 #[derive(facet::Facet, Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -217,6 +220,10 @@ pub fn apply_ddl_batch(
                     stats.deleted += 1;
                 }
             }
+            DdlOperation::SetAutoIndex { enabled } => {
+                catalog.set_auto_index_enabled(*enabled);
+                stats.upserted += 1;
+            }
         }
     }
 
@@ -243,8 +250,10 @@ const CORE_CATALOG_ATTR_COLLECTION_KIND: &str = "semantic.catalog.collection_kin
 const CORE_CATALOG_ATTR_FIELD_IDS: &str = "semantic.catalog.field_ids";
 const CORE_CATALOG_ATTR_COLLECTION: &str = "semantic.catalog.collection";
 const CORE_CATALOG_ATTR_FIELD: &str = "semantic.catalog.field";
+const CORE_CATALOG_ATTR_INDEX_KIND: &str = "semantic.catalog.index_kind";
 const CORE_CATALOG_ATTR_UNIQUE: &str = "semantic.catalog.unique";
 const CORE_CATALOG_ATTR_NEXT_FIELD_ID: &str = "semantic.catalog.next_field_id";
+const CORE_CATALOG_ATTR_AUTO_INDEX_ENABLED: &str = "semantic.catalog.auto_index_enabled";
 
 pub fn core_catalog_schema_batch() -> DdlBatch {
     let mut attrs = std::collections::BTreeMap::new();
@@ -370,6 +379,17 @@ pub fn core_catalog_schema_batch() -> DdlBatch {
         },
     );
     attrs.insert(
+        "index_kind".to_string(),
+        ClassAttribute {
+            attribute: AttributeRef {
+                id: CORE_CATALOG_ATTR_INDEX_KIND.to_string(),
+            },
+            required: false,
+            constraints: vec![],
+            meta: Meta::default(),
+        },
+    );
+    attrs.insert(
         "unique".to_string(),
         ClassAttribute {
             attribute: AttributeRef {
@@ -385,6 +405,17 @@ pub fn core_catalog_schema_batch() -> DdlBatch {
         ClassAttribute {
             attribute: AttributeRef {
                 id: CORE_CATALOG_ATTR_NEXT_FIELD_ID.to_string(),
+            },
+            required: false,
+            constraints: vec![],
+            meta: Meta::default(),
+        },
+    );
+    attrs.insert(
+        "auto_index_enabled".to_string(),
+        ClassAttribute {
+            attribute: AttributeRef {
+                id: CORE_CATALOG_ATTR_AUTO_INDEX_ENABLED.to_string(),
             },
             required: false,
             constraints: vec![],
@@ -568,6 +599,23 @@ pub fn core_catalog_schema_batch() -> DdlBatch {
         })
         .with_op(DdlOperation::UpsertAttribute {
             attribute: AttributeType {
+                id: CORE_CATALOG_ATTR_INDEX_KIND.to_string(),
+                name: "index_kind".to_string(),
+                ty: Type {
+                    kind: TypeKind::String(StringType {
+                        format: None,
+                        normalization: None,
+                    }),
+                    constraints: vec![],
+                    annotations: vec![],
+                    meta: Meta::default(),
+                },
+                constraints: vec![],
+                meta: Meta::default(),
+            },
+        })
+        .with_op(DdlOperation::UpsertAttribute {
+            attribute: AttributeType {
                 id: CORE_CATALOG_ATTR_UNIQUE.to_string(),
                 name: "unique".to_string(),
                 ty: Type {
@@ -586,6 +634,20 @@ pub fn core_catalog_schema_batch() -> DdlBatch {
                 name: "next_field_id".to_string(),
                 ty: Type {
                     kind: TypeKind::Number(NumberType::UInt(UIntWidth::U64)),
+                    constraints: vec![],
+                    annotations: vec![],
+                    meta: Meta::default(),
+                },
+                constraints: vec![],
+                meta: Meta::default(),
+            },
+        })
+        .with_op(DdlOperation::UpsertAttribute {
+            attribute: AttributeType {
+                id: CORE_CATALOG_ATTR_AUTO_INDEX_ENABLED.to_string(),
+                name: "auto_index_enabled".to_string(),
+                ty: Type {
+                    kind: TypeKind::Bool(BoolType),
                     constraints: vec![],
                     annotations: vec![],
                     meta: Meta::default(),

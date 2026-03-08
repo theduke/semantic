@@ -32,12 +32,15 @@ pub struct Catalog {
     indexes: IdMap<LocalIndexId, IndexSchema>,
     collection_indexes: FnvHashMap<LocalCollectionId, Vec<LocalIndexId>>,
     next_field_id: usize,
+    auto_index_enabled: bool,
 }
 
 pub const PRIMARY_ID_FIELD: &str = "id";
 pub const OBJECT_TYPE_FIELD: &str = "__type";
 pub const PRIMARY_ID_INDEX_NAME: &str = "__builtin_pk_id";
 pub const OBJECT_TYPE_INDEX_NAME: &str = "__builtin_type";
+pub const AUTO_PATH_INDEX_NAME: &str = "__auto_index_all_paths";
+pub const AUTO_PATH_INDEX_FIELD: &str = "__path__";
 
 impl Catalog {
     pub fn new() -> Self {
@@ -50,6 +53,7 @@ impl Catalog {
             indexes: IdMap::new(),
             collection_indexes: FnvHashMap::default(),
             next_field_id: 0,
+            auto_index_enabled: false,
         }
     }
 
@@ -295,6 +299,9 @@ impl Catalog {
         // Ensure builtin indexes are always present and flow through normal index machinery.
         let _ = self.upsert_index(PRIMARY_ID_INDEX_NAME, lid, PRIMARY_ID_FIELD, true)?;
         let _ = self.upsert_index(OBJECT_TYPE_INDEX_NAME, lid, OBJECT_TYPE_FIELD, false)?;
+        if self.auto_index_enabled {
+            let _ = self.upsert_path_index(lid)?;
+        }
         Ok(lid)
     }
 
@@ -343,13 +350,25 @@ impl Catalog {
         field: impl Into<String>,
         unique: bool,
     ) -> Result<LocalIndexId, CatalogError> {
+        self.upsert_index_with_kind(name, collection, field, unique, IndexKind::Equality)
+    }
+
+    pub fn upsert_index_with_kind(
+        &mut self,
+        name: impl Into<String>,
+        collection: LocalCollectionId,
+        field: impl Into<String>,
+        unique: bool,
+        kind: IndexKind,
+    ) -> Result<LocalIndexId, CatalogError> {
         let collection_schema = self
             .collections
             .get(collection)
             .ok_or(CatalogError::UnknownCollection(collection))?;
         let field = field.into();
         let canonical_field = collection_schema.canonical_field_name(&field).to_string();
-        if collection_schema.is_closed_field_set()
+        if kind == IndexKind::Equality
+            && collection_schema.is_closed_field_set()
             && !collection_schema.knows_field(&canonical_field)
         {
             return Err(CatalogError::InvalidSchema(format!(
@@ -367,19 +386,31 @@ impl Catalog {
             schema: semantic_data::schema::IndexSchema {
                 id: format!("{}.{}", collection_schema.name, name),
                 name: name.clone(),
-                kind: IndexKind::Equality,
+                kind,
                 collection: collection_schema.name.clone(),
                 key_path: KeyPath {
-                    segments: vec![canonical_field.clone()],
+                    segments: if kind == IndexKind::PathEquality {
+                        vec![AUTO_PATH_INDEX_FIELD.to_string()]
+                    } else {
+                        vec![canonical_field.clone()]
+                    },
                 },
                 unique,
             },
             collection,
             canonical_field,
-            field_id: collection_schema.field_id(&field),
-            attr_id: collection_schema
-                .field_id(&field)
-                .and_then(|field_id| collection_schema.attr_for_field_id(field_id)),
+            field_id: if kind == IndexKind::PathEquality {
+                None
+            } else {
+                collection_schema.field_id(&field)
+            },
+            attr_id: if kind == IndexKind::PathEquality {
+                None
+            } else {
+                collection_schema
+                    .field_id(&field)
+                    .and_then(|field_id| collection_schema.attr_for_field_id(field_id))
+            },
         };
 
         self.indexes.insert_fixed(lid, key, index);
@@ -429,8 +460,22 @@ impl Catalog {
         })
     }
 
+    pub fn find_path_equality_index(&self, collection: LocalCollectionId) -> Option<&IndexSchema> {
+        self.indexes_for_collection(collection)
+            .find(|index| index.schema.kind == IndexKind::PathEquality)
+    }
+
     pub fn next_field_id(&self) -> usize {
         self.next_field_id
+    }
+
+    pub fn auto_index_enabled(&self) -> bool {
+        self.auto_index_enabled
+    }
+
+    pub fn set_auto_index_enabled(&mut self, enabled: bool) {
+        self.auto_index_enabled = enabled;
+        let _ = self.sync_auto_path_indexes();
     }
 
     pub fn to_storage_snapshot(&self) -> CatalogStorageSnapshot {
@@ -494,9 +539,11 @@ impl Catalog {
                     collection: index.collection,
                     field: index.canonical_field.clone(),
                     unique: index.schema.unique,
+                    kind: index.schema.kind,
                 })
                 .collect(),
             next_field_id: self.next_field_id,
+            auto_index_enabled: self.auto_index_enabled,
         }
     }
 
@@ -509,6 +556,7 @@ impl Catalog {
             snapshot.collections,
             snapshot.indexes,
             snapshot.next_field_id,
+            snapshot.auto_index_enabled,
         )
     }
 
@@ -520,6 +568,7 @@ impl Catalog {
         collections: Vec<StoredCollection>,
         indexes: Vec<StoredIndex>,
         next_field_id: usize,
+        auto_index_enabled: bool,
     ) -> Result<Self, CatalogError> {
         let mut catalog = Self::new();
 
@@ -738,7 +787,13 @@ impl Catalog {
                     .ok_or(CatalogError::UnknownCollection(item.collection))?;
                 Self::index_key(&collection.name, &item.name)
             };
-            let _ = catalog.upsert_index(item.name, item.collection, item.field, item.unique)?;
+            let _ = catalog.upsert_index_with_kind(
+                item.name,
+                item.collection,
+                item.field,
+                item.unique,
+                item.kind,
+            )?;
             if let Some(index) = catalog.indexes.get_key(&key) {
                 let index_value = index.clone();
                 catalog.indexes.insert_fixed(item.lid, key, index_value);
@@ -771,7 +826,37 @@ impl Catalog {
         }
 
         catalog.next_field_id = catalog.next_field_id.max(next_field_id);
+        catalog.auto_index_enabled = auto_index_enabled;
+        let _ = catalog.sync_auto_path_indexes()?;
         Ok(catalog)
+    }
+
+    fn upsert_path_index(
+        &mut self,
+        collection: LocalCollectionId,
+    ) -> Result<LocalIndexId, CatalogError> {
+        self.upsert_index_with_kind(
+            AUTO_PATH_INDEX_NAME,
+            collection,
+            AUTO_PATH_INDEX_FIELD,
+            false,
+            IndexKind::PathEquality,
+        )
+    }
+
+    fn sync_auto_path_indexes(&mut self) -> Result<(), CatalogError> {
+        let collection_ids = self
+            .collections()
+            .map(|(collection_id, _)| collection_id)
+            .collect::<Vec<_>>();
+        for collection_id in collection_ids {
+            if self.auto_index_enabled {
+                let _ = self.upsert_path_index(collection_id)?;
+            } else {
+                let _ = self.delete_index(collection_id, AUTO_PATH_INDEX_NAME);
+            }
+        }
+        Ok(())
     }
 
     fn build_collection_schema_for_lid(

@@ -17,6 +17,7 @@ pub struct CatalogStorageSnapshot {
     pub collections: Vec<StoredCollection>,
     pub indexes: Vec<StoredIndex>,
     pub next_field_id: usize,
+    pub auto_index_enabled: bool,
 }
 
 #[derive(facet::Facet, Debug, Clone, PartialEq)]
@@ -75,4 +76,5 @@ pub struct StoredIndex {
     pub collection: LocalCollectionId,
     pub field: String,
     pub unique: bool,
+    pub kind: semantic_data::schema::IndexKind,
 }

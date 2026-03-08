@@ -1,6 +1,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 
-use semantic_data::value::{FieldPath, Object, Value, ValueRef};
+use semantic_data::schema::IndexKind;
+use semantic_data::value::{FieldPath, Object, PathSegment, Value, ValueRef};
 use semantic_db_core::DbError;
 use semantic_db_core::{
     AccessPath, Batch, BatchOperation, BatchOutcome, DeleteQuery, EntityRecord, MutationStats,
@@ -134,6 +135,16 @@ impl<E: KvEngine> KvDb<E> {
         });
         self.transact_ddl(ddl)?;
         Ok(())
+    }
+
+    pub fn set_auto_index_enabled(&mut self, enabled: bool) -> std::result::Result<(), DbError> {
+        let ddl = DdlBatch::new().with_op(DdlOperation::SetAutoIndex { enabled });
+        self.transact_ddl(ddl)?;
+        Ok(())
+    }
+
+    pub fn auto_index_enabled(&self) -> bool {
+        self.catalog().auto_index_enabled()
     }
 
     pub fn into_parts(self) -> (SharedCatalog, E) {
@@ -809,6 +820,12 @@ impl<E: KvEngine> KvDb<E> {
                 CollectionKind::Record { .. } => StoredEntityKind::Record,
                 CollectionKind::Class { .. } => StoredEntityKind::Class,
             };
+            for index in &indexes {
+                ops.push(KvWriteOp::Put {
+                    key: crate::storage::index_format_key(index.lid),
+                    value: crate::storage::index_format_value(),
+                });
+            }
 
             for (id, object) in &normalized_rows {
                 let entity = StoredEntity {
@@ -818,15 +835,8 @@ impl<E: KvEngine> KvDb<E> {
                     object: object.clone(),
                 };
                 self.push_entity_ops(&mut ops, &entity)?;
-
                 for index in &indexes {
-                    if let Some(value) = object.get(&index.canonical_field) {
-                        let key = crate::storage::index_key(index.lid, value, id)?;
-                        ops.push(KvWriteOp::Put {
-                            key,
-                            value: Vec::new(),
-                        });
-                    }
+                    self.push_index_ops(&mut ops, index, id, object)?;
                 }
             }
         }
@@ -854,6 +864,37 @@ impl<E: KvEngine> KvDb<E> {
         Ok(())
     }
 
+    fn push_index_ops(
+        &self,
+        ops: &mut Vec<KvWriteOp>,
+        index: &semantic_db_core::catalog::IndexSchema,
+        entity_id: &str,
+        object: &Object,
+    ) -> std::result::Result<(), DbError> {
+        match index.schema.kind {
+            IndexKind::Equality => {
+                if let Some(value) = object.get(&index.canonical_field) {
+                    let key = crate::storage::index_key(index.lid, None, value, entity_id)?;
+                    ops.push(KvWriteOp::Put {
+                        key,
+                        value: Vec::new(),
+                    });
+                }
+            }
+            IndexKind::PathEquality => {
+                for (path, value) in crate::storage::collect_index_entries(object) {
+                    let key = crate::storage::index_key(index.lid, Some(&path), &value, entity_id)?;
+                    ops.push(KvWriteOp::Put {
+                        key,
+                        value: Vec::new(),
+                    });
+                }
+            }
+            IndexKind::Range | IndexKind::FullText => {}
+        }
+        Ok(())
+    }
+
     fn validate_unique_indexes(
         &self,
         catalog: &Catalog,
@@ -862,7 +903,7 @@ impl<E: KvEngine> KvDb<E> {
     ) -> std::result::Result<(), DbError> {
         let indexes: Vec<_> = catalog
             .indexes_for_collection(collection.lid)
-            .filter(|idx| idx.schema.unique)
+            .filter(|idx| idx.schema.unique && idx.schema.kind == IndexKind::Equality)
             .cloned()
             .collect();
 
@@ -989,6 +1030,7 @@ impl<E: KvEngine> KvDb<E> {
             indexed_attr_ids,
             unique_attr_ids,
             collection_id: collection.lid,
+            has_path_equality_index: catalog.find_path_equality_index(collection.lid).is_some(),
         })
     }
 
@@ -1027,41 +1069,56 @@ impl<E: KvEngine> KvDb<E> {
             return AccessPath::FullScan;
         };
 
-        let field = match field_ref {
-            semantic_db_core::FieldRef::CanonicalName(name) => name.clone(),
+        let field_path = match field_ref {
+            semantic_db_core::FieldRef::CanonicalName(name) => Some(FieldPath::from_fields([name])),
             semantic_db_core::FieldRef::FieldId(field_id) => collection
                 .field_name_by_id(*field_id)
-                .unwrap_or_default()
-                .to_string(),
+                .map(|name| FieldPath::from_fields([name])),
             semantic_db_core::FieldRef::AttrId(attr_id) => {
                 let mut out = None;
                 for (field_id, _) in collection.fields() {
                     if collection.attr_for_field_id(field_id) == Some(*attr_id) {
-                        out = collection.field_name_by_id(field_id).map(ToOwned::to_owned);
+                        out = collection
+                            .field_name_by_id(field_id)
+                            .map(|name| FieldPath::from_fields([name]));
                         break;
                     }
                 }
-                out.unwrap_or_default()
+                out
             }
-            semantic_db_core::FieldRef::Path(path) => match path.segments().first() {
-                Some(semantic_data::value::PathSegment::Field(field)) => field.clone(),
-                _ => String::new(),
-            },
+            semantic_db_core::FieldRef::Path(path) => Some(path.clone()),
         };
-        if field.is_empty() {
+        let Some(field_path) = field_path else {
             return AccessPath::FullScan;
-        }
+        };
 
         let catalog = self.catalog();
-        let Some(index) = catalog.find_equality_index(collection.lid, &field) else {
-            return AccessPath::FullScan;
-        };
-
-        AccessPath::IndexLookup {
-            index_name: index.schema.name.clone(),
-            field: field.to_string(),
-            value: value.clone(),
+        let top_level = field_path
+            .segments()
+            .first()
+            .and_then(|segment| match segment {
+                PathSegment::Field(field) => Some(field.as_str()),
+                _ => None,
+            })
+            .unwrap_or_default();
+        if !top_level.is_empty()
+            && field_path.segments().len() == 1
+            && let Some(index) = catalog.find_equality_index(collection.lid, top_level)
+        {
+            return AccessPath::IndexLookup {
+                index_name: index.schema.name.clone(),
+                field: format_field_path(&field_path),
+                value: value.clone(),
+            };
         }
+        if let Some(index) = catalog.find_path_equality_index(collection.lid) {
+            return AccessPath::IndexLookup {
+                index_name: index.schema.name.clone(),
+                field: format_field_path(&field_path),
+                value: value.clone(),
+            };
+        }
+        AccessPath::FullScan
     }
 }
 
@@ -1175,63 +1232,89 @@ impl<E: KvEngine> semantic_db_core::PhysicalDataSource for KvPhysicalDataSource<
             .resolve_collection(source)
             .map_err(|err| semantic_db_core::CoreError::new(err.to_string()))?;
 
-        let canonical_field = match field {
-            semantic_db_core::FieldRef::CanonicalName(name) => Some(name.as_str()),
-            semantic_db_core::FieldRef::FieldId(field_id) => collection.field_name_by_id(*field_id),
+        let field_path = match field {
+            semantic_db_core::FieldRef::CanonicalName(name) => Some(FieldPath::from_fields([name])),
+            semantic_db_core::FieldRef::FieldId(field_id) => collection
+                .field_name_by_id(*field_id)
+                .map(|name| FieldPath::from_fields([name])),
             semantic_db_core::FieldRef::AttrId(attr_id) => {
                 let mut found = None;
                 for (field_id, _) in collection.fields() {
                     if collection.attr_for_field_id(field_id) == Some(*attr_id) {
-                        found = collection.field_name_by_id(field_id);
+                        found = collection
+                            .field_name_by_id(field_id)
+                            .map(|name| FieldPath::from_fields([name]));
                         break;
                     }
                 }
                 found
             }
-            semantic_db_core::FieldRef::Path(path) => match path.segments().first() {
-                Some(semantic_data::value::PathSegment::Field(field)) => Some(field.as_str()),
-                _ => None,
-            },
+            semantic_db_core::FieldRef::Path(path) => Some(path.clone()),
+        };
+        let Some(field_path) = field_path else {
+            return semantic_db_core::PhysicalDataSource::scan(self, source);
         };
 
-        let Some(canonical_field) = canonical_field else {
-            if let semantic_db_core::FieldRef::Path(path) = field {
+        let top_level = field_path
+            .segments()
+            .first()
+            .and_then(|segment| match segment {
+                PathSegment::Field(field) => Some(field.as_str()),
+                _ => None,
+            });
+        let ids = if let Some(top_level) = top_level {
+            if field_path.segments().len() == 1 {
+                if let Some(index) = self.catalog.find_equality_index(collection.lid, top_level) {
+                    self.db
+                        .store
+                        .scan_index_value(index.lid, None, value)
+                        .map_err(|err| semantic_db_core::CoreError::new(err.to_string()))?
+                } else if let Some(index) = self.catalog.find_path_equality_index(collection.lid) {
+                    self.db
+                        .store
+                        .scan_index_value(index.lid, Some(&field_path), value)
+                        .map_err(|err| semantic_db_core::CoreError::new(err.to_string()))?
+                } else {
+                    return semantic_db_core::PhysicalDataSource::scan_filtered(
+                        self,
+                        source,
+                        &semantic_db_core::Predicate::Compare {
+                            op: semantic_db_core::CompareOp::Eq,
+                            left: semantic_db_core::Operand::Field(field_path),
+                            right: semantic_db_core::Operand::Literal(value.clone()),
+                        },
+                    );
+                }
+            } else if let Some(index) = self.catalog.find_path_equality_index(collection.lid) {
+                self.db
+                    .store
+                    .scan_index_value(index.lid, Some(&field_path), value)
+                    .map_err(|err| semantic_db_core::CoreError::new(err.to_string()))?
+            } else {
                 return semantic_db_core::PhysicalDataSource::scan_filtered(
                     self,
                     source,
                     &semantic_db_core::Predicate::Compare {
                         op: semantic_db_core::CompareOp::Eq,
-                        left: semantic_db_core::Operand::Field(path.clone()),
+                        left: semantic_db_core::Operand::Field(field_path),
                         right: semantic_db_core::Operand::Literal(value.clone()),
                     },
                 );
             }
+        } else {
             return semantic_db_core::PhysicalDataSource::scan(self, source);
         };
 
-        let Some(index) = self
-            .catalog
-            .find_equality_index(collection.lid, canonical_field)
-        else {
-            return semantic_db_core::PhysicalDataSource::scan_filtered(
-                self,
-                source,
-                &semantic_db_core::Predicate::Compare {
-                    op: semantic_db_core::CompareOp::Eq,
-                    left: semantic_db_core::Operand::Field(
-                        semantic_data::value::FieldPath::from_fields([canonical_field]),
-                    ),
-                    right: semantic_db_core::Operand::Literal(value.clone()),
-                },
-            );
-        };
+        self.materialize_ids(collection, ids)
+    }
+}
 
-        let ids = self
-            .db
-            .store
-            .scan_index_value(index.lid, value)
-            .map_err(|err| semantic_db_core::CoreError::new(err.to_string()))?;
-
+impl<E: KvEngine> KvPhysicalDataSource<'_, E> {
+    fn materialize_ids(
+        &self,
+        collection: &CollectionSchema,
+        ids: Vec<String>,
+    ) -> semantic_db_core::CoreResult<Vec<semantic_db_core::DynObject>> {
         let mut out = Vec::with_capacity(ids.len());
         let mut field_names = BTreeMap::new();
         let mut attr_names = BTreeMap::new();
@@ -1270,6 +1353,7 @@ struct CollectionStatsSnapshot {
     unique_field_ids: BTreeSet<LocalFieldId>,
     indexed_attr_ids: BTreeSet<LocalAttrId>,
     unique_attr_ids: BTreeSet<LocalAttrId>,
+    has_path_equality_index: bool,
 }
 
 impl semantic_db_core::StatsProvider for CollectionStatsSnapshot {
@@ -1322,19 +1406,25 @@ impl semantic_db_core::StatsProvider for CollectionStatsSnapshot {
         }
 
         let indexed = match field {
-            semantic_db_core::FieldRef::CanonicalName(name) => self.indexed_fields.contains(name),
-            semantic_db_core::FieldRef::FieldId(field_id) => {
-                self.indexed_field_ids.contains(field_id)
+            semantic_db_core::FieldRef::CanonicalName(name) => {
+                self.indexed_fields.contains(name) || self.has_path_equality_index
             }
-            semantic_db_core::FieldRef::AttrId(attr_id) => self.indexed_attr_ids.contains(attr_id),
-            semantic_db_core::FieldRef::Path(path) => path
-                .segments()
-                .first()
-                .and_then(|segment| match segment {
-                    semantic_data::value::PathSegment::Field(name) => Some(name),
-                    _ => None,
-                })
-                .is_some_and(|name| self.indexed_fields.contains(name)),
+            semantic_db_core::FieldRef::FieldId(field_id) => {
+                self.indexed_field_ids.contains(field_id) || self.has_path_equality_index
+            }
+            semantic_db_core::FieldRef::AttrId(attr_id) => {
+                self.indexed_attr_ids.contains(attr_id) || self.has_path_equality_index
+            }
+            semantic_db_core::FieldRef::Path(path) => {
+                path.segments()
+                    .first()
+                    .and_then(|segment| match segment {
+                        semantic_data::value::PathSegment::Field(name) => Some(name),
+                        _ => None,
+                    })
+                    .is_some_and(|name| self.indexed_fields.contains(name))
+                    || self.has_path_equality_index
+            }
         };
         if indexed {
             return Some(semantic_db_core::FieldStats {
@@ -1357,22 +1447,51 @@ impl semantic_db_core::StatsProvider for CollectionStatsSnapshot {
             return None;
         }
         let indexed = match field {
-            semantic_db_core::FieldRef::CanonicalName(name) => self.indexed_fields.contains(name),
-            semantic_db_core::FieldRef::FieldId(field_id) => {
-                self.indexed_field_ids.contains(field_id)
+            semantic_db_core::FieldRef::CanonicalName(name) => {
+                self.indexed_fields.contains(name) || self.has_path_equality_index
             }
-            semantic_db_core::FieldRef::AttrId(attr_id) => self.indexed_attr_ids.contains(attr_id),
-            semantic_db_core::FieldRef::Path(path) => path
-                .segments()
-                .first()
-                .and_then(|segment| match segment {
-                    semantic_data::value::PathSegment::Field(name) => Some(name),
-                    _ => None,
-                })
-                .is_some_and(|name| self.indexed_fields.contains(name)),
+            semantic_db_core::FieldRef::FieldId(field_id) => {
+                self.indexed_field_ids.contains(field_id) || self.has_path_equality_index
+            }
+            semantic_db_core::FieldRef::AttrId(attr_id) => {
+                self.indexed_attr_ids.contains(attr_id) || self.has_path_equality_index
+            }
+            semantic_db_core::FieldRef::Path(path) => {
+                path.segments()
+                    .first()
+                    .and_then(|segment| match segment {
+                        semantic_data::value::PathSegment::Field(name) => Some(name),
+                        _ => None,
+                    })
+                    .is_some_and(|name| self.indexed_fields.contains(name))
+                    || self.has_path_equality_index
+            }
         };
         Some(indexed)
     }
+}
+
+fn format_field_path(path: &FieldPath) -> String {
+    if path.segments().is_empty() {
+        return "<empty>".to_string();
+    }
+    let mut out = String::new();
+    for segment in path.segments() {
+        match segment {
+            PathSegment::Field(field) => {
+                if !out.is_empty() {
+                    out.push('.');
+                }
+                out.push_str(field);
+            }
+            PathSegment::Index(index) => {
+                out.push('[');
+                out.push_str(&index.to_string());
+                out.push(']');
+            }
+        }
+    }
+    out
 }
 
 #[cfg(test)]
@@ -1390,7 +1509,7 @@ mod tests {
             record::field::Field,
             record::record_type::RecordType,
         },
-        value::{FieldPath, Object, Value},
+        value::{FieldPath, Object, PathSegment, Value},
     };
 
     use crate::CollectionKind;
@@ -1732,6 +1851,138 @@ mod tests {
             }
             _ => panic!("expected index lookup plan"),
         }
+    }
+
+    #[test]
+    fn planner_uses_auto_index_for_simple_equality_without_explicit_index() {
+        let mut db = KvDb::in_memory();
+        db.create_collection("events", CollectionKind::Untyped)
+            .unwrap();
+        db.set_auto_index_enabled(true).unwrap();
+
+        let q = SelectQuery::new().with_predicate(Predicate::Compare {
+            op: CompareOp::Eq,
+            left: Operand::Field(FieldPath::from_fields(["kind"])),
+            right: Operand::Literal(Value::String("music".to_string())),
+        });
+
+        let plan = db
+            .plan_query(Query::Select(q.with_collection("events")))
+            .unwrap();
+        match plan {
+            QueryPlan::IndexLookup { index_name, .. } => {
+                assert_eq!(index_name, semantic_db_core::catalog::AUTO_PATH_INDEX_NAME);
+            }
+            _ => panic!("expected index lookup plan"),
+        }
+    }
+
+    #[test]
+    fn auto_index_simple_equality_query_returns_matching_entities() {
+        let mut db = KvDb::in_memory();
+        db.create_collection("events", CollectionKind::Untyped)
+            .unwrap();
+        db.set_auto_index_enabled(true).unwrap();
+
+        let mut e1 = Object::new();
+        e1.insert("id", Value::String("e1".to_string()));
+        e1.insert("kind", Value::String("music".to_string()));
+        db.insert("events", "e1", e1).unwrap();
+
+        let mut e2 = Object::new();
+        e2.insert("id", Value::String("e2".to_string()));
+        e2.insert("kind", Value::String("music".to_string()));
+        db.insert("events", "e2", e2).unwrap();
+
+        let mut e3 = Object::new();
+        e3.insert("id", Value::String("e3".to_string()));
+        e3.insert("kind", Value::String("video".to_string()));
+        db.insert("events", "e3", e3).unwrap();
+
+        let q = SelectQuery::new().with_predicate(Predicate::Compare {
+            op: CompareOp::Eq,
+            left: Operand::Field(FieldPath::from_fields(["kind"])),
+            right: Operand::Literal(Value::String("music".to_string())),
+        });
+        let rows = db.select(q.with_collection("events")).unwrap();
+        assert_eq!(rows.len(), 2);
+        let mut ids = rows
+            .iter()
+            .filter_map(|row| row.get("id").and_then(Value::as_str))
+            .map(ToString::to_string)
+            .collect::<Vec<_>>();
+        ids.sort();
+        assert_eq!(ids, vec!["e1".to_string(), "e2".to_string()]);
+    }
+
+    #[test]
+    fn auto_index_nested_paths_work_with_planner_and_mutations() {
+        let mut db = KvDb::in_memory();
+        db.create_collection("events", CollectionKind::Untyped)
+            .unwrap();
+        db.set_auto_index_enabled(true).unwrap();
+
+        let mut nested_obj = Object::new();
+        nested_obj.insert("nestkey", Value::String("nestvalue".to_string()));
+        let mut row = Object::new();
+        row.insert("id", Value::String("e1".to_string()));
+        row.insert("mylist", Value::List(vec![Value::Object(nested_obj)]));
+        db.insert("events", "e1", row).unwrap();
+
+        let nested_path = FieldPath::from(vec![
+            PathSegment::Field("mylist".to_string()),
+            PathSegment::Index(0),
+            PathSegment::Field("nestkey".to_string()),
+        ]);
+        let q_nested = SelectQuery::new().with_predicate(Predicate::Compare {
+            op: CompareOp::Eq,
+            left: Operand::Field(nested_path.clone()),
+            right: Operand::Literal(Value::String("nestvalue".to_string())),
+        });
+        assert_eq!(
+            db.select(q_nested.clone().with_collection("events"))
+                .unwrap()
+                .len(),
+            1
+        );
+        let plan = db
+            .plan_query(Query::Select(q_nested.clone().with_collection("events")))
+            .unwrap();
+        match plan {
+            QueryPlan::IndexLookup { index_name, .. } => {
+                assert_eq!(index_name, semantic_db_core::catalog::AUTO_PATH_INDEX_NAME);
+            }
+            _ => panic!("expected index lookup plan"),
+        }
+
+        let mut updated_nested_obj = Object::new();
+        updated_nested_obj.insert("nestkey", Value::String("newvalue".to_string()));
+        let mut updated_row = Object::new();
+        updated_row.insert("id", Value::String("e1".to_string()));
+        updated_row.insert(
+            "mylist",
+            Value::List(vec![Value::Object(updated_nested_obj)]),
+        );
+        db.insert("events", "e1", updated_row).unwrap();
+
+        assert_eq!(
+            db.select(q_nested.with_collection("events")).unwrap().len(),
+            0
+        );
+        let q_new = SelectQuery::new().with_predicate(Predicate::Compare {
+            op: CompareOp::Eq,
+            left: Operand::Field(nested_path),
+            right: Operand::Literal(Value::String("newvalue".to_string())),
+        });
+        assert_eq!(
+            db.select(q_new.clone().with_collection("events"))
+                .unwrap()
+                .len(),
+            1
+        );
+
+        db.delete("events", "e1").unwrap();
+        assert_eq!(db.select(q_new.with_collection("events")).unwrap().len(), 0);
     }
 
     #[test]

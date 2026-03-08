@@ -12,8 +12,8 @@ use semantic_db_core::{
 };
 
 use crate::storage::{
-    EntityStore, KvEngine, KvWriteOp, StoredEntity, StoredEntityKind, encode_entity, entity_key,
-    index_key,
+    EntityStore, KvEngine, KvWriteOp, StoredEntity, StoredEntityKind, collect_index_entries,
+    encode_entity, entity_key, index_key,
 };
 
 const META_ROW_ID: &str = "__catalog_meta__";
@@ -27,8 +27,10 @@ const COLLECTION_KIND_FIELD: &str = "collection_kind";
 const FIELD_IDS_FIELD: &str = "field_ids";
 const COLLECTION_FIELD: &str = "collection";
 const FIELD_FIELD: &str = "field";
+const INDEX_KIND_FIELD: &str = "index_kind";
 const UNIQUE_FIELD: &str = "unique";
 const NEXT_FIELD_ID_FIELD: &str = "next_field_id";
+const AUTO_INDEX_ENABLED_FIELD: &str = "auto_index_enabled";
 
 struct CatalogCollections {
     attributes: semantic_db_core::catalog::LocalCollectionId,
@@ -191,6 +193,11 @@ pub fn load_catalog<E: KvEngine>(
             COLLECTION_FIELD,
         )?);
         let field = object_string_field(&row.object, FIELD_FIELD)?;
+        let kind: semantic_data::schema::IndexKind = object_json_field_default(
+            &row.object,
+            INDEX_KIND_FIELD,
+            semantic_data::schema::IndexKind::Equality,
+        )?;
         let unique = object_bool_field(&row.object, UNIQUE_FIELD)?;
         indexes.push(StoredIndex {
             lid,
@@ -198,13 +205,17 @@ pub fn load_catalog<E: KvEngine>(
             collection,
             field,
             unique,
+            kind,
         });
     }
 
     let mut next_field_id = 0usize;
+    let mut auto_index_enabled = false;
     for row in &meta_rows {
         if row.id == META_ROW_ID {
             next_field_id = object_usize_field(&row.object, NEXT_FIELD_ID_FIELD)?;
+            auto_index_enabled =
+                object_bool_field_default(&row.object, AUTO_INDEX_ENABLED_FIELD, false);
             break;
         }
     }
@@ -217,6 +228,7 @@ pub fn load_catalog<E: KvEngine>(
         collections,
         indexes,
         next_field_id,
+        auto_index_enabled,
     )
     .map_err(DbError::from)?;
     Ok(Some(catalog))
@@ -387,6 +399,13 @@ pub fn catalog_write_ops<E: KvEngine>(
             FIELD_FIELD.to_string(),
             Value::String(item.canonical_field.clone()),
         );
+        entity.object.insert(
+            INDEX_KIND_FIELD.to_string(),
+            Value::String(
+                facet_json::to_string(&item.schema.kind)
+                    .map_err(|err| DbError::Serialization(err.to_string()))?,
+            ),
+        );
         entity
             .object
             .insert(UNIQUE_FIELD.to_string(), Value::Bool(item.schema.unique));
@@ -397,6 +416,10 @@ pub fn catalog_write_ops<E: KvEngine>(
     meta_entity.object.insert(
         NEXT_FIELD_ID_FIELD.to_string(),
         Value::U64(catalog.next_field_id() as u64),
+    );
+    meta_entity.object.insert(
+        AUTO_INDEX_ENABLED_FIELD.to_string(),
+        Value::Bool(catalog.auto_index_enabled()),
     );
     push_entity_with_indexes(catalog, &meta_entity, &mut ops)?;
 
@@ -459,12 +482,33 @@ fn object_bool_field(object: &Object, field: &str) -> std::result::Result<bool, 
         .ok_or_else(|| DbError::Deserialization(format!("missing bool field '{field}'")))
 }
 
+fn object_bool_field_default(object: &Object, field: &str, default: bool) -> bool {
+    object
+        .get(field)
+        .and_then(Value::as_bool)
+        .unwrap_or(default)
+}
+
 fn object_json_field<T>(object: &Object, field: &str) -> std::result::Result<T, DbError>
 where
     T: facet::Facet<'static>,
 {
     let json = object_string_field(object, field)?;
     facet_json::from_str::<T>(&json).map_err(|err| DbError::Deserialization(err.to_string()))
+}
+
+fn object_json_field_default<T>(
+    object: &Object,
+    field: &str,
+    default: T,
+) -> std::result::Result<T, DbError>
+where
+    T: facet::Facet<'static>,
+{
+    let Some(value) = object.get(field).and_then(Value::as_str) else {
+        return Ok(default);
+    };
+    facet_json::from_str::<T>(value).map_err(|err| DbError::Deserialization(err.to_string()))
 }
 
 fn load_rows_by_type<E: KvEngine>(
@@ -484,7 +528,7 @@ fn load_rows_by_type<E: KvEngine>(
     let Some(index) = catalog.find_equality_index(collection, OBJECT_TYPE_FIELD) else {
         return Ok(store.scan_collection(collection)?);
     };
-    let ids = store.scan_index_value(index.lid, &type_value)?;
+    let ids = store.scan_index_value(index.lid, None, &type_value)?;
     let mut out = Vec::new();
     for id in ids {
         if let Some(entity) = store.get_entity(collection, &id)? {
@@ -505,11 +549,29 @@ fn push_entity_with_indexes(
         value: encode_entity(entity)?,
     });
     for index in catalog.indexes_for_collection(collection) {
-        if let Some(value) = entity.object.get(&index.canonical_field) {
-            ops.push(KvWriteOp::Put {
-                key: index_key(index.lid, value, &entity.id)?,
-                value: Vec::new(),
-            });
+        ops.push(KvWriteOp::Put {
+            key: crate::storage::index_format_key(index.lid),
+            value: crate::storage::index_format_value(),
+        });
+        match index.schema.kind {
+            semantic_data::schema::IndexKind::Equality => {
+                if let Some(value) = entity.object.get(&index.canonical_field) {
+                    ops.push(KvWriteOp::Put {
+                        key: index_key(index.lid, None, value, &entity.id)?,
+                        value: Vec::new(),
+                    });
+                }
+            }
+            semantic_data::schema::IndexKind::PathEquality => {
+                for (path, value) in collect_index_entries(&entity.object) {
+                    ops.push(KvWriteOp::Put {
+                        key: index_key(index.lid, Some(&path), &value, &entity.id)?,
+                        value: Vec::new(),
+                    });
+                }
+            }
+            semantic_data::schema::IndexKind::Range
+            | semantic_data::schema::IndexKind::FullText => {}
         }
     }
     Ok(())
