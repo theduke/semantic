@@ -1550,6 +1550,7 @@ dependencies = [
  "semantic_data",
  "semantic_db_core",
  "serde",
+ "tokio",
 ]
 
 [[package]]
