@@ -46,7 +46,7 @@ pub fn canonicalize_select_query(
         .iter()
         .map(|order| {
             Ok(OrderBy {
-                path: canonicalize_path(&order.path, collection, "select order_by")?,
+                expr: canonicalize_expr(&order.expr, collection, "select order_by")?,
                 direction: order.direction,
             })
         })

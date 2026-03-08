@@ -600,7 +600,7 @@ fn parse_order_item(item: OrderByExpr) -> Result<DbOrderBy, SqlQueryError> {
         _ => SortDirection::Asc,
     };
     Ok(DbOrderBy {
-        path: parse_field_expr(&item.expr)?,
+        expr: parse_expr(item.expr)?,
         direction,
     })
 }
@@ -1251,7 +1251,7 @@ fn select_to_sql(query: &SelectQuery, collection: &str) -> Result<String, SqlQue
                 sql.push_str(", ");
             }
             first = false;
-            sql.push_str(&path_to_sql(&item.path)?);
+            sql.push_str(&expr_to_sql(&item.expr)?);
             sql.push_str(match item.direction {
                 SortDirection::Asc => " ASC",
                 SortDirection::Desc => " DESC",
@@ -1675,6 +1675,29 @@ mod tests {
         assert_eq!(select.order_by.len(), 1);
         assert_eq!(select.limit, Some(5));
         assert_eq!(select.offset, 2);
+    }
+
+    #[test]
+    fn parse_select_order_by_expression() {
+        let parsed = parse_sql_query(
+            "SELECT id FROM items ORDER BY score + 1 DESC",
+            SqlDialectKind::Generic,
+        )
+        .unwrap();
+        let Query::Select(select) = parsed.query else {
+            panic!("expected select");
+        };
+        assert_eq!(select.order_by.len(), 1);
+        assert!(matches!(
+            select.order_by[0].expr,
+            Expr::Binary {
+                op: BinaryOp::Add,
+                ..
+            }
+        ));
+
+        let sql = query_to_sql(&Query::Select(select)).unwrap();
+        assert!(sql.contains("ORDER BY (score) + (1) DESC"));
     }
 
     #[test]

@@ -1,6 +1,6 @@
 use semantic_data::query::{
-    BinaryOp, CompareOp, DeleteQuery, Expr, FunctionArg, Operand, PatternMatchKind, Predicate,
-    SelectQuery, TextQueryFormat, UpdateQuery,
+    BinaryOp, CompareOp, DeleteQuery, Expr, FunctionArg, Operand, OrderBy, PatternMatchKind,
+    Predicate, SelectQuery, SortDirection, TextQueryFormat, UpdateQuery,
 };
 use semantic_data::value::{FieldPath, Object, Value};
 use semantic_db_core::{Db, QueryResult, catalog::CollectionKind};
@@ -13,6 +13,8 @@ pub async fn test_db(db: &Db) {
     test_delete_query(db).await;
     test_ast_predicate_constructs(db).await;
     test_sql_predicate_constructs(db).await;
+    test_ast_ordering_variants(db).await;
+    test_sql_ordering_variants(db).await;
     test_text_query_formats(db).await;
 }
 
@@ -697,10 +699,135 @@ async fn test_sql_predicate_constructs(db: &Db) {
     assert_eq!(function_rows.len(), 1);
 }
 
+async fn test_ast_ordering_variants(db: &Db) {
+    db.create_collection("shared_suite_ordering_ast", CollectionKind::Untyped)
+        .await
+        .expect("ast ordering test collection creation should succeed");
+
+    for (id, kind, score) in [
+        ("ord-a", "music", 7),
+        ("ord-b", "video", 2),
+        ("ord-c", "music", 7),
+        ("ord-d", "podcast", 10),
+    ] {
+        db.insert("shared_suite_ordering_ast", id, row(id, kind, score))
+            .await
+            .expect("ast ordering seed insert should succeed");
+    }
+
+    let score_asc = db
+        .select(
+            SelectQuery::new()
+                .with_collection("shared_suite_ordering_ast")
+                .with_order_by(vec![OrderBy {
+                    expr: Expr::Operand(Operand::Field(FieldPath::from_fields(["score"]))),
+                    direction: SortDirection::Asc,
+                }]),
+        )
+        .await
+        .expect("ast score ASC ordering query should succeed");
+    assert_eq!(
+        row_ids(&score_asc),
+        vec!["ord-b", "ord-a", "ord-c", "ord-d"]
+    );
+
+    let score_desc_expr = db
+        .select(
+            SelectQuery::new()
+                .with_collection("shared_suite_ordering_ast")
+                .with_order_by(vec![OrderBy {
+                    expr: Expr::Binary {
+                        op: BinaryOp::Mul,
+                        left: Box::new(Expr::Operand(Operand::Field(FieldPath::from_fields([
+                            "score",
+                        ])))),
+                        right: Box::new(Expr::Operand(Operand::Literal(Value::I64(-1)))),
+                    },
+                    direction: SortDirection::Asc,
+                }]),
+        )
+        .await
+        .expect("ast expression ordering query should succeed");
+    assert_eq!(
+        row_ids(&score_desc_expr),
+        vec!["ord-d", "ord-a", "ord-c", "ord-b"]
+    );
+
+    let multi_key = db
+        .select(
+            SelectQuery::new()
+                .with_collection("shared_suite_ordering_ast")
+                .with_order_by(vec![
+                    OrderBy {
+                        expr: Expr::Operand(Operand::Field(FieldPath::from_fields(["score"]))),
+                        direction: SortDirection::Desc,
+                    },
+                    OrderBy {
+                        expr: Expr::Operand(Operand::Field(FieldPath::from_fields(["id"]))),
+                        direction: SortDirection::Asc,
+                    },
+                ]),
+        )
+        .await
+        .expect("ast multi-key ordering query should succeed");
+    assert_eq!(
+        row_ids(&multi_key),
+        vec!["ord-d", "ord-a", "ord-c", "ord-b"]
+    );
+}
+
+async fn test_sql_ordering_variants(db: &Db) {
+    if !db
+        .supported_text_query_formats()
+        .contains(&TextQueryFormat::Sql)
+    {
+        return;
+    }
+
+    db.create_collection("shared_suite_ordering_sql", CollectionKind::Untyped)
+        .await
+        .expect("sql ordering test collection creation should succeed");
+
+    for (id, kind, score) in [
+        ("sql-ord-a", "music", 5),
+        ("sql-ord-b", "video", 1),
+        ("sql-ord-c", "music", 5),
+        ("sql-ord-d", "podcast", 9),
+    ] {
+        db.insert("shared_suite_ordering_sql", id, row(id, kind, score))
+            .await
+            .expect("sql ordering seed insert should succeed");
+    }
+
+    let by_expr = db
+        .query_text(
+            TextQueryFormat::Sql,
+            "SELECT id FROM shared_suite_ordering_sql ORDER BY score + 1 DESC, id ASC",
+        )
+        .await
+        .expect("sql expression ordering query should succeed");
+    let QueryResult::Select(by_expr_rows) = by_expr else {
+        panic!("sql expression ordering query should return SELECT rows");
+    };
+    assert_eq!(
+        row_ids(&by_expr_rows),
+        vec!["sql-ord-d", "sql-ord-a", "sql-ord-c", "sql-ord-b"]
+    );
+}
+
 fn row(id: &str, kind: &str, score: i64) -> Object {
     let mut row = Object::new();
     row.insert("id", Value::String(id.to_string()));
     row.insert("kind", Value::String(kind.to_string()));
     row.insert("score", Value::I64(score));
     row
+}
+
+fn row_ids(rows: &[Object]) -> Vec<String> {
+    rows.iter()
+        .map(|row| match row.get("id") {
+            Some(Value::String(id)) => id.clone(),
+            other => panic!("expected string id field, got {other:?}"),
+        })
+        .collect()
 }

@@ -570,7 +570,7 @@ fn compare_dyn_objects(
     let legacy: Vec<_> = order_by
         .iter()
         .map(|item| crate::query::OrderBy {
-            path: item.source_path.clone(),
+            expr: item.expr.clone(),
             direction: item.direction,
         })
         .collect();

@@ -311,8 +311,7 @@ impl PhysicalLoweringPass for CoreLoweringPass {
                 order_by: order_by
                     .iter()
                     .map(|item| PhysicalOrderField {
-                        field: FieldRef::Path(item.path.clone()),
-                        source_path: item.path.clone(),
+                        expr: item.expr.clone(),
                         direction: item.direction,
                     })
                     .collect(),

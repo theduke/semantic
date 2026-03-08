@@ -40,10 +40,9 @@ pub struct PhysicalProjectionField {
     pub alias: Option<String>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct PhysicalOrderField {
-    pub field: FieldRef,
-    pub source_path: FieldPath,
+    pub expr: crate::query::Expr,
     pub direction: SortDirection,
 }
 

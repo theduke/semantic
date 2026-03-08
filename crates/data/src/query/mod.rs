@@ -169,9 +169,9 @@ pub struct QueryField {
     pub alias: Option<String>,
 }
 
-#[derive(facet::Facet, Debug, Clone, PartialEq, Eq)]
+#[derive(facet::Facet, Debug, Clone, PartialEq)]
 pub struct OrderBy {
-    pub path: FieldPath,
+    pub expr: Expr,
     pub direction: SortDirection,
 }
 

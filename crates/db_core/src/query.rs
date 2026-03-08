@@ -289,9 +289,9 @@ pub struct QueryField {
     pub alias: Option<String>,
 }
 
-#[derive(facet::Facet, Debug, Clone, PartialEq, Eq)]
+#[derive(facet::Facet, Debug, Clone, PartialEq)]
 pub struct OrderBy {
-    pub path: FieldPath,
+    pub expr: Expr,
     pub direction: SortDirection,
 }
 
@@ -499,7 +499,7 @@ impl From<public_query::QueryField> for QueryField {
 impl From<public_query::OrderBy> for OrderBy {
     fn from(value: public_query::OrderBy) -> Self {
         Self {
-            path: value.path,
+            expr: value.expr.into(),
             direction: value.direction,
         }
     }
@@ -1587,11 +1587,11 @@ fn compare_objects<A: ObjectAccess + ?Sized, B: ObjectAccess + ?Sized>(
     order_by: &[OrderBy],
 ) -> Ordering {
     for order in order_by {
-        let av = a.value_at_path_ref(&order.path);
-        let bv = b.value_at_path_ref(&order.path);
+        let av = evaluate_expr(a, &order.expr);
+        let bv = evaluate_expr(b, &order.expr);
 
         let ord = match (av.as_ref(), bv.as_ref()) {
-            (Some(av), Some(bv)) => av.clone().into_owned().cmp(&bv.clone().into_owned()),
+            (Some(av), Some(bv)) => av.cmp(bv),
             (None, Some(_)) => Ordering::Less,
             (Some(_), None) => Ordering::Greater,
             (None, None) => Ordering::Equal,
@@ -1915,6 +1915,37 @@ mod tests {
         let out = machine.drain_ready();
         assert_eq!(out.len(), 1);
         assert_eq!(out[0].get("id"), Some(&Value::String("a".into())));
+    }
+
+    #[test]
+    fn execute_query_sorts_by_expression() {
+        let mut a = Object::new();
+        a.insert("id", Value::String("a".into()));
+        a.insert("score", Value::I64(3));
+
+        let mut b = Object::new();
+        b.insert("id", Value::String("b".into()));
+        b.insert("score", Value::I64(10));
+
+        let mut c = Object::new();
+        c.insert("id", Value::String("c".into()));
+        c.insert("score", Value::I64(6));
+
+        let query = SelectQuery::new().with_order_by(vec![OrderBy {
+            expr: Expr::Binary {
+                op: BinaryOp::Mul,
+                left: Box::new(Expr::Operand(Operand::Field(FieldPath::from_fields([
+                    "score",
+                ])))),
+                right: Box::new(Expr::Operand(Operand::Literal(Value::I64(-1)))),
+            },
+            direction: SortDirection::Asc,
+        }]);
+
+        let out = execute_query(&query, vec![a, b, c]);
+        assert_eq!(out[0].get("id"), Some(&Value::String("b".into())));
+        assert_eq!(out[1].get("id"), Some(&Value::String("c".into())));
+        assert_eq!(out[2].get("id"), Some(&Value::String("a".into())));
     }
 
     #[test]

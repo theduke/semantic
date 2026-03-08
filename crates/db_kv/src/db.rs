@@ -2106,7 +2106,7 @@ mod tests {
         db.insert("events", "c", c).unwrap();
 
         let asc = SelectQuery::new().with_order_by(vec![OrderBy {
-            path: FieldPath::from_fields(["score"]),
+            expr: Expr::Operand(Operand::Field(FieldPath::from_fields(["score"]))),
             direction: SortDirection::Asc,
         }]);
         let asc_rows = db.select(asc.with_collection("events")).unwrap();
@@ -2114,7 +2114,7 @@ mod tests {
         assert_eq!(asc_rows[2].get("score"), Some(&Value::I64(9)));
 
         let desc = SelectQuery::new().with_order_by(vec![OrderBy {
-            path: FieldPath::from_fields(["score"]),
+            expr: Expr::Operand(Operand::Field(FieldPath::from_fields(["score"]))),
             direction: SortDirection::Desc,
         }]);
         let desc_rows = db.select(desc.with_collection("events")).unwrap();
