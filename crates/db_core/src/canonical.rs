@@ -2,7 +2,7 @@ use semantic_data::value::{FieldPath, PathSegment};
 use thiserror::Error;
 
 use crate::{
-    Assignment, DeleteQuery, Expr, Operand, OrderBy, Predicate, QueryField, SelectQuery,
+    Assignment, DeleteQuery, Expr, Operand, OrderBy, Predicate, Query, QueryField, SelectQuery,
     UpdateQuery, catalog::CollectionSchema,
 };
 
@@ -63,6 +63,14 @@ pub fn canonicalize_select_query(
     })
 }
 
+pub fn canonicalize_query(query: &Query, collection: &CollectionSchema) -> CanonicalResult<Query> {
+    match query {
+        Query::Select(query) => canonicalize_select_query(query, collection).map(Query::Select),
+        Query::Update(query) => canonicalize_update_query(query, collection).map(Query::Update),
+        Query::Delete(query) => canonicalize_delete_query(query, collection).map(Query::Delete),
+    }
+}
+
 pub fn canonicalize_update_query(
     query: &UpdateQuery,
     collection: &CollectionSchema,
@@ -84,10 +92,22 @@ pub fn canonicalize_update_query(
         })
         .collect::<CanonicalResult<Vec<_>>>()?;
 
+    let returning = query
+        .returning
+        .iter()
+        .map(|field| {
+            Ok(QueryField {
+                path: canonicalize_path(&field.path, collection, "update returning")?,
+                alias: field.alias.clone(),
+            })
+        })
+        .collect::<CanonicalResult<Vec<_>>>()?;
+
     Ok(UpdateQuery {
         predicate,
         assignments,
         limit: query.limit,
+        returning,
     })
 }
 
@@ -101,9 +121,21 @@ pub fn canonicalize_delete_query(
         .map(|predicate| canonicalize_predicate(predicate, collection, "delete predicate"))
         .transpose()?;
 
+    let returning = query
+        .returning
+        .iter()
+        .map(|field| {
+            Ok(QueryField {
+                path: canonicalize_path(&field.path, collection, "delete returning")?,
+                alias: field.alias.clone(),
+            })
+        })
+        .collect::<CanonicalResult<Vec<_>>>()?;
+
     Ok(DeleteQuery {
         predicate,
         limit: query.limit,
+        returning,
     })
 }
 

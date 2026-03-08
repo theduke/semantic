@@ -14,7 +14,8 @@ pub use semantic_db_core::catalog::{
     LocalCollectionId, LocalIndexId, LocalRecordTypeId, LocalTypeDefId, SharedCatalog,
 };
 pub use semantic_db_core::{
-    Assignment, Batch, BatchOperation, BinaryOp, CompareOp, DeleteQuery, Expr, MutationStats,
-    ObjectNormalizationError, Operand, OrderBy, Predicate, QueryCanonicalizationError, QueryField,
-    SelectQuery, SortDirection, TransactionOptions, UnaryOp, UpdateQuery,
+    Assignment, Batch, BatchOperation, BinaryOp, CompareOp, DeleteQuery, DeleteResult, Expr,
+    MutationStats, ObjectNormalizationError, Operand, OrderBy, Predicate, Query,
+    QueryCanonicalizationError, QueryField, QueryResult, SelectQuery, SortDirection,
+    TransactionOptions, UnaryOp, UpdateQuery, UpdateResult,
 };

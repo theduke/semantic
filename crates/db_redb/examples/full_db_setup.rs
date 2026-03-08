@@ -1,6 +1,7 @@
 use semantic_data::value::{FieldPath, Object, Value};
 use semantic_db_core::{
-    CollectionKind, CompareOp, Database, Expr, Operand, Predicate, SelectQuery, UpdateQuery,
+    CompareOp, Database, Expr, Operand, Predicate, SelectQuery, UpdateQuery,
+    catalog::CollectionKind,
 };
 use semantic_db_redb::RedbBackend;
 
@@ -30,7 +31,7 @@ async fn main() -> std::result::Result<(), semantic_db_core::DbError> {
     db.insert("users", "u2", bob).await?;
 
     let admins = db
-        .query(
+        .select(
             "users",
             SelectQuery::new().with_predicate(Predicate::Compare {
                 op: CompareOp::Eq,
@@ -61,7 +62,7 @@ async fn main() -> std::result::Result<(), semantic_db_core::DbError> {
     .await?;
 
     let owners = db
-        .query(
+        .select(
             "users",
             SelectQuery::new().with_predicate(Predicate::Compare {
                 op: CompareOp::Eq,
@@ -79,7 +80,7 @@ async fn main() -> std::result::Result<(), semantic_db_core::DbError> {
     db.delete("users", "u2").await?;
 
     let bob_rows = db
-        .query(
+        .select(
             "users",
             SelectQuery::new().with_predicate(Predicate::Compare {
                 op: CompareOp::Eq,

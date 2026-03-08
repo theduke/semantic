@@ -6,8 +6,8 @@ use redb::{ReadableTable, TableDefinition};
 use semantic_data::value::Object;
 use semantic_db_core::catalog::{Catalog, CollectionKind, LocalCollectionId};
 use semantic_db_core::{
-    Backend, Batch, BatchOutcome, DeleteQuery, EntityRecord, MutationStats, QueryExplain,
-    QueryPlan, SelectQuery, UpdateQuery,
+    Backend, Batch, BatchOutcome, DeleteQuery, EntityRecord, MutationStats, Query, QueryExplain,
+    QueryPlan, QueryResult, UpdateQuery,
 };
 use semantic_db_kv::{DbError, KvCommitOutcome, KvEngine, KvTransactionCapabilities, KvWriteOp};
 
@@ -284,16 +284,24 @@ impl Backend for RedbBackend {
     async fn query(
         &self,
         collection: String,
-        query: SelectQuery,
-    ) -> std::result::Result<Vec<Object>, DbError> {
-        self.with_db_read(move |db| db.query(&collection, query))
-            .await
+        query: Query,
+    ) -> std::result::Result<QueryResult, DbError> {
+        match query {
+            Query::Select(select) => {
+                self.with_db_read(move |db| db.select(&collection, select).map(QueryResult::Select))
+                    .await
+            }
+            query => {
+                self.with_db_write(move |db| db.query(&collection, query))
+                    .await
+            }
+        }
     }
 
     async fn explain_query(
         &self,
         collection: String,
-        query: SelectQuery,
+        query: Query,
     ) -> std::result::Result<QueryExplain, DbError> {
         self.with_db_read(move |db| db.explain_query(&collection, query))
             .await
@@ -302,7 +310,7 @@ impl Backend for RedbBackend {
     async fn plan_query(
         &self,
         collection: String,
-        query: SelectQuery,
+        query: Query,
     ) -> std::result::Result<QueryPlan, DbError> {
         self.with_db_read(move |db| db.plan_query(&collection, query))
             .await
@@ -334,7 +342,7 @@ impl Backend for RedbBackend {
 #[cfg(test)]
 mod tests {
     use semantic_data::value::{Object, Value};
-    use semantic_db_kv::{CollectionKind, SelectQuery};
+    use semantic_db_kv::CollectionKind;
 
     use super::{RedbDatabase, RedbKvEngine};
 
@@ -365,7 +373,9 @@ mod tests {
             let mut db = RedbDatabase::new(engine);
             db.create_collection("items", CollectionKind::Untyped)
                 .unwrap();
-            let out = db.query("items", SelectQuery::new()).unwrap();
+            let out = db
+                .select("items", semantic_db_core::SelectQuery::new())
+                .unwrap();
             assert_eq!(out.len(), 1);
             assert_eq!(out[0].get("name"), Some(&Value::String("n".into())));
         }

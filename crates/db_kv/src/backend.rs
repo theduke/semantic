@@ -4,8 +4,8 @@ use async_trait::async_trait;
 use semantic_data::value::Object;
 use semantic_db_core::catalog::{Catalog, CollectionKind, LocalCollectionId};
 use semantic_db_core::{
-    Backend, Batch, BatchOutcome, DbError, DeleteQuery, EntityRecord, MutationStats, QueryExplain,
-    QueryPlan, SelectQuery, UpdateQuery,
+    Backend, Batch, BatchOutcome, DbError, DeleteQuery, EntityRecord, MutationStats, Query,
+    QueryExplain, QueryPlan, QueryResult, UpdateQuery,
 };
 
 use crate::{Database, KvEngine};
@@ -69,16 +69,16 @@ impl<E: KvEngine> Backend for KvBackend<E> {
     async fn query(
         &self,
         collection: String,
-        query: SelectQuery,
-    ) -> std::result::Result<Vec<Object>, DbError> {
-        let db = self.lock_db()?;
+        query: Query,
+    ) -> std::result::Result<QueryResult, DbError> {
+        let mut db = self.lock_db()?;
         db.query(&collection, query)
     }
 
     async fn explain_query(
         &self,
         collection: String,
-        query: SelectQuery,
+        query: Query,
     ) -> std::result::Result<QueryExplain, DbError> {
         let db = self.lock_db()?;
         db.explain_query(&collection, query)
@@ -87,7 +87,7 @@ impl<E: KvEngine> Backend for KvBackend<E> {
     async fn plan_query(
         &self,
         collection: String,
-        query: SelectQuery,
+        query: Query,
     ) -> std::result::Result<QueryPlan, DbError> {
         let db = self.lock_db()?;
         db.plan_query(&collection, query)

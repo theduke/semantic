@@ -4,9 +4,9 @@ use semantic_data::value::{FieldPath, Object, Value, ValueRef};
 use semantic_db_core::DbError;
 use semantic_db_core::{
     AccessPath, Batch, BatchOperation, BatchOutcome, DeleteQuery, EntityRecord, MutationStats,
-    QueryExplain, QueryPlan, SelectQuery, UpdateQuery, canonicalize_delete_query,
-    canonicalize_select_query, canonicalize_update_query, execute_batch,
-    normalize_object_for_collection, touched_collections,
+    Query, QueryExplain, QueryPlan, QueryResult, SelectQuery, UpdateQuery,
+    canonicalize_delete_query, canonicalize_query, canonicalize_select_query,
+    canonicalize_update_query, execute_batch, normalize_object_for_collection, touched_collections,
 };
 
 use crate::{
@@ -187,6 +187,22 @@ impl<E: KvEngine> Database<E> {
     }
 
     pub fn query(
+        &mut self,
+        collection: &str,
+        query: Query,
+    ) -> std::result::Result<QueryResult, DbError> {
+        match query {
+            Query::Select(query) => self.select(collection, query).map(QueryResult::Select),
+            Query::Update(query) => self
+                .update_where_returning(collection, query)
+                .map(QueryResult::Update),
+            Query::Delete(query) => self
+                .delete_where_returning(collection, query)
+                .map(QueryResult::Delete),
+        }
+    }
+
+    pub fn select(
         &self,
         collection: &str,
         query: SelectQuery,
@@ -215,7 +231,7 @@ impl<E: KvEngine> Database<E> {
     pub fn plan_query(
         &self,
         collection: &str,
-        query: SelectQuery,
+        query: Query,
     ) -> std::result::Result<QueryPlan, DbError> {
         let explain = self.explain_query(collection, query)?;
         match explain.access_path {
@@ -238,7 +254,7 @@ impl<E: KvEngine> Database<E> {
     pub fn explain_query(
         &self,
         collection: &str,
-        query: SelectQuery,
+        query: Query,
     ) -> std::result::Result<QueryExplain, DbError> {
         let catalog = self.catalog();
         let collection = catalog.collection_by_name(collection).ok_or_else(|| {
@@ -247,13 +263,33 @@ impl<E: KvEngine> Database<E> {
             }
         })?;
 
-        let query = canonicalize_select_query(&query, collection)?;
+        let select = match canonicalize_query(&query, collection)? {
+            Query::Select(query) => query,
+            Query::Update(query) => SelectQuery {
+                source_alias: None,
+                joins: Vec::new(),
+                predicate: query.predicate,
+                projection: query.returning,
+                order_by: Vec::new(),
+                offset: 0,
+                limit: query.limit,
+            },
+            Query::Delete(query) => SelectQuery {
+                source_alias: None,
+                joins: Vec::new(),
+                predicate: query.predicate,
+                projection: query.returning,
+                order_by: Vec::new(),
+                offset: 0,
+                limit: query.limit,
+            },
+        };
 
         let optimizer = semantic_db_core::Optimizer::core();
         let stats = self.stats_for_collection(collection)?;
         let context = self.query_context();
         let pair = optimizer.optimize_query(
-            &query,
+            &select,
             Some(collection.name.clone()),
             Some(&stats),
             &context,
@@ -287,6 +323,15 @@ impl<E: KvEngine> Database<E> {
         collection: &str,
         query: UpdateQuery,
     ) -> std::result::Result<MutationStats, DbError> {
+        self.update_where_returning(collection, query)
+            .map(|result| result.stats)
+    }
+
+    pub fn update_where_returning(
+        &mut self,
+        collection: &str,
+        query: UpdateQuery,
+    ) -> std::result::Result<semantic_db_core::UpdateResult, DbError> {
         let catalog = self.catalog();
         let collection_schema = catalog
             .collection_by_name(collection)
@@ -296,17 +341,69 @@ impl<E: KvEngine> Database<E> {
             .clone();
 
         let query = canonicalize_update_query(&query, &collection_schema)?;
-
-        let mut batch = Batch::new();
-        batch.operations.push(BatchOperation::Update {
-            collection: collection.to_string(),
-            query,
+        let collection_name = collection_schema.name.clone();
+        let touched = Batch::new().with_op(BatchOperation::Update {
+            collection: collection_name.clone(),
+            query: query.clone(),
         });
-        let out = self.execute_batch(batch)?;
-        Ok(MutationStats {
-            matched: out.stats.updated,
-            affected: out.stats.updated,
-        })
+        let txn_result = run_with_transaction_retries(TransactionOptions::default(), |_| {
+            let catalog_snapshot = self.catalog.snapshot();
+            let read_revision = self.store.current_revision()?;
+            let before = self.load_dataset_for_batch(
+                catalog_snapshot.catalog.as_ref(),
+                &touched,
+                read_revision,
+            )?;
+            let mut after = before.clone();
+
+            let mut result = semantic_db_core::UpdateResult {
+                stats: MutationStats {
+                    matched: 0,
+                    affected: 0,
+                },
+                returning: Vec::new(),
+            };
+            if let Some(coll) = after.get_mut(&collection_name) {
+                let mut entities = coll
+                    .iter()
+                    .map(|(id, object)| semantic_db_core::Entity {
+                        id: id.clone(),
+                        collection: collection_name.clone(),
+                        object: object.clone(),
+                    })
+                    .collect::<Vec<_>>();
+                result = semantic_db_core::apply_update_with_returning(&query, &mut entities)
+                    .map_err(|err| DbError::InvalidQuery(err.to_string()))?;
+                coll.clear();
+                for entity in entities {
+                    coll.insert(entity.id, entity.object);
+                }
+            }
+
+            if self.catalog.snapshot().version != catalog_snapshot.version {
+                return Err(DbError::TransactionConflict(
+                    "catalog changed during transaction".to_string(),
+                ));
+            }
+
+            match self.persist_dataset_delta(
+                catalog_snapshot.catalog.as_ref(),
+                &before,
+                &after,
+                read_revision,
+                &[],
+            )? {
+                KvCommitOutcome::Committed { .. } => Ok(result),
+                KvCommitOutcome::Conflict {
+                    expected_revision,
+                    actual_revision,
+                } => Err(DbError::TransactionConflict(format!(
+                    "expected revision {:?}, found {:?}",
+                    expected_revision, actual_revision
+                ))),
+            }
+        })?;
+        Ok(txn_result.value)
     }
 
     pub fn delete_where(
@@ -314,6 +411,15 @@ impl<E: KvEngine> Database<E> {
         collection: &str,
         query: DeleteQuery,
     ) -> std::result::Result<usize, DbError> {
+        self.delete_where_returning(collection, query)
+            .map(|result| result.deleted)
+    }
+
+    pub fn delete_where_returning(
+        &mut self,
+        collection: &str,
+        query: DeleteQuery,
+    ) -> std::result::Result<semantic_db_core::DeleteResult, DbError> {
         let catalog = self.catalog();
         let collection_schema = catalog
             .collection_by_name(collection)
@@ -323,14 +429,81 @@ impl<E: KvEngine> Database<E> {
             .clone();
 
         let query = canonicalize_delete_query(&query, &collection_schema)?;
-
-        let mut batch = Batch::new();
-        batch.operations.push(BatchOperation::Delete {
-            collection: collection.to_string(),
-            query,
+        let collection_name = collection_schema.name.clone();
+        let touched = Batch::new().with_op(BatchOperation::Delete {
+            collection: collection_name.clone(),
+            query: query.clone(),
         });
-        let out = self.execute_batch(batch)?;
-        Ok(out.stats.deleted)
+        let txn_result = run_with_transaction_retries(TransactionOptions::default(), |_| {
+            let catalog_snapshot = self.catalog.snapshot();
+            let read_revision = self.store.current_revision()?;
+            let before = self.load_dataset_for_batch(
+                catalog_snapshot.catalog.as_ref(),
+                &touched,
+                read_revision,
+            )?;
+            let mut after = before.clone();
+
+            let mut result = semantic_db_core::DeleteResult {
+                deleted: 0,
+                returning: Vec::new(),
+            };
+            if let Some(coll) = after.get_mut(&collection_name) {
+                let entities = coll
+                    .iter()
+                    .map(|(id, object)| semantic_db_core::Entity {
+                        id: id.clone(),
+                        collection: collection_name.clone(),
+                        object: object.clone(),
+                    })
+                    .collect::<Vec<_>>();
+                result = semantic_db_core::apply_delete_with_returning(&query, entities);
+
+                let stripped = DeleteQuery {
+                    predicate: query.predicate.clone(),
+                    limit: query.limit,
+                    returning: Vec::new(),
+                };
+                let (remaining, _) = semantic_db_core::apply_delete(
+                    &stripped,
+                    coll.iter()
+                        .map(|(id, object)| semantic_db_core::Entity {
+                            id: id.clone(),
+                            collection: collection_name.clone(),
+                            object: object.clone(),
+                        })
+                        .collect(),
+                );
+                coll.clear();
+                for entity in remaining {
+                    coll.insert(entity.id, entity.object);
+                }
+            }
+
+            if self.catalog.snapshot().version != catalog_snapshot.version {
+                return Err(DbError::TransactionConflict(
+                    "catalog changed during transaction".to_string(),
+                ));
+            }
+
+            match self.persist_dataset_delta(
+                catalog_snapshot.catalog.as_ref(),
+                &before,
+                &after,
+                read_revision,
+                &[],
+            )? {
+                KvCommitOutcome::Committed { .. } => Ok(result),
+                KvCommitOutcome::Conflict {
+                    expected_revision,
+                    actual_revision,
+                } => Err(DbError::TransactionConflict(format!(
+                    "expected revision {:?}, found {:?}",
+                    expected_revision, actual_revision
+                ))),
+            }
+        })?;
+        Ok(txn_result.value)
     }
 
     pub fn transact(&mut self, batch: Batch) -> std::result::Result<BatchOutcome, DbError> {
@@ -1243,8 +1416,9 @@ mod tests {
 
     use crate::CollectionKind;
     use semantic_db_core::{
-        CompareOp, DdlBatch, DdlCollectionKind, DdlOperation, Operand, OrderBy, Predicate,
-        QueryField, SelectQuery, SortDirection, TransactionConcurrency, TransactionOptions,
+        CompareOp, DdlBatch, DdlCollectionKind, DdlOperation, Expr, Operand, OrderBy, Predicate,
+        Query, QueryField, QueryResult, SelectQuery, SortDirection, TransactionConcurrency,
+        TransactionOptions, UpdateQuery,
     };
 
     use super::{Database, QueryPlan};
@@ -1273,7 +1447,7 @@ mod tests {
             right: Operand::Literal(Value::String("music".to_string())),
         });
 
-        let rows = db.query("events", query).unwrap();
+        let rows = db.select("events", query).unwrap();
         assert_eq!(rows.len(), 1);
         assert_eq!(rows[0].get("score"), Some(&Value::I64(10)));
     }
@@ -1354,7 +1528,7 @@ mod tests {
                 alias: Some("t".to_string()),
             }]);
 
-        let rows = db.query("articles", query).unwrap();
+        let rows = db.select("articles", query).unwrap();
         assert_eq!(rows.len(), 1);
         assert_eq!(rows[0].get("t"), Some(&Value::String("Hello".to_string())));
     }
@@ -1444,7 +1618,7 @@ mod tests {
             left: Operand::Field(FieldPath::from_fields(["email"])),
             right: Operand::Literal(Value::String("a@example.com".to_string())),
         });
-        let rows = db.query("people", q).unwrap();
+        let rows = db.select("people", q).unwrap();
         assert_eq!(rows.len(), 1);
         assert_eq!(rows[0].get("name"), Some(&Value::String("A".to_string())));
 
@@ -1475,7 +1649,7 @@ mod tests {
             left: Operand::Field(FieldPath::from_fields(["kind"])),
             right: Operand::Literal(Value::String("music".to_string())),
         });
-        assert_eq!(db.query("events", q_music).unwrap().len(), 1);
+        assert_eq!(db.select("events", q_music).unwrap().len(), 1);
 
         let mut updated = Object::new();
         updated.insert("id", Value::String("e1".to_string()));
@@ -1487,14 +1661,14 @@ mod tests {
             left: Operand::Field(FieldPath::from_fields(["kind"])),
             right: Operand::Literal(Value::String("music".to_string())),
         });
-        assert_eq!(db.query("events", q_music).unwrap().len(), 0);
+        assert_eq!(db.select("events", q_music).unwrap().len(), 0);
 
         let q_video = SelectQuery::new().with_predicate(Predicate::Compare {
             op: CompareOp::Eq,
             left: Operand::Field(FieldPath::from_fields(["kind"])),
             right: Operand::Literal(Value::String("video".to_string())),
         });
-        assert_eq!(db.query("events", q_video).unwrap().len(), 1);
+        assert_eq!(db.select("events", q_video).unwrap().len(), 1);
 
         db.delete("events", "e1").unwrap();
         let q_video = SelectQuery::new().with_predicate(Predicate::Compare {
@@ -1502,7 +1676,7 @@ mod tests {
             left: Operand::Field(FieldPath::from_fields(["kind"])),
             right: Operand::Literal(Value::String("video".to_string())),
         });
-        assert_eq!(db.query("events", q_video).unwrap().len(), 0);
+        assert_eq!(db.select("events", q_video).unwrap().len(), 0);
     }
 
     #[test]
@@ -1530,7 +1704,7 @@ mod tests {
             path: FieldPath::from_fields(["score"]),
             direction: SortDirection::Asc,
         }]);
-        let asc_rows = db.query("events", asc).unwrap();
+        let asc_rows = db.select("events", asc).unwrap();
         assert_eq!(asc_rows[0].get("score"), Some(&Value::I64(2)));
         assert_eq!(asc_rows[2].get("score"), Some(&Value::I64(9)));
 
@@ -1538,7 +1712,7 @@ mod tests {
             path: FieldPath::from_fields(["score"]),
             direction: SortDirection::Desc,
         }]);
-        let desc_rows = db.query("events", desc).unwrap();
+        let desc_rows = db.select("events", desc).unwrap();
         assert_eq!(desc_rows[0].get("score"), Some(&Value::I64(9)));
         assert_eq!(desc_rows[2].get("score"), Some(&Value::I64(2)));
     }
@@ -1558,13 +1732,83 @@ mod tests {
             right: Operand::Literal(Value::String("music".to_string())),
         });
 
-        let plan = db.plan_query("events", q).unwrap();
+        let plan = db.plan_query("events", Query::Select(q)).unwrap();
         match plan {
             QueryPlan::IndexLookup { index_name, .. } => {
                 assert_eq!(index_name, "events_kind_idx");
             }
             _ => panic!("expected index lookup plan"),
         }
+    }
+
+    #[test]
+    fn update_query_supports_returning_projection() {
+        let mut db = Database::in_memory();
+        db.create_collection("items", CollectionKind::Untyped)
+            .unwrap();
+
+        let mut row = Object::new();
+        row.insert("id", Value::String("i1".to_string()));
+        row.insert("score", Value::I64(2));
+        db.insert("items", "i1", row).unwrap();
+
+        let update = UpdateQuery::new()
+            .with_predicate(Predicate::Compare {
+                op: CompareOp::Eq,
+                left: Operand::Field(FieldPath::from_fields(["id"])),
+                right: Operand::Literal(Value::String("i1".to_string())),
+            })
+            .set(
+                FieldPath::from_fields(["score"]),
+                Expr::Operand(Operand::Literal(Value::I64(9))),
+            )
+            .with_returning(vec![QueryField {
+                path: FieldPath::from_fields(["score"]),
+                alias: Some("new_score".to_string()),
+            }]);
+
+        let out = db.query("items", Query::Update(update)).unwrap();
+        let QueryResult::Update(out) = out else {
+            panic!("expected update result");
+        };
+        assert_eq!(out.stats.matched, 1);
+        assert_eq!(out.stats.affected, 1);
+        assert_eq!(out.returning.len(), 1);
+        assert_eq!(out.returning[0].get("new_score"), Some(&Value::I64(9)),);
+    }
+
+    #[test]
+    fn delete_query_supports_returning_projection() {
+        let mut db = Database::in_memory();
+        db.create_collection("items", CollectionKind::Untyped)
+            .unwrap();
+
+        let mut row = Object::new();
+        row.insert("id", Value::String("i1".to_string()));
+        row.insert("kind", Value::String("music".to_string()));
+        db.insert("items", "i1", row).unwrap();
+
+        let delete = semantic_db_core::DeleteQuery::new()
+            .with_predicate(Predicate::Compare {
+                op: CompareOp::Eq,
+                left: Operand::Field(FieldPath::from_fields(["kind"])),
+                right: Operand::Literal(Value::String("music".to_string())),
+            })
+            .with_returning(vec![QueryField {
+                path: FieldPath::from_fields(["id"]),
+                alias: None,
+            }]);
+
+        let out = db.query("items", Query::Delete(delete)).unwrap();
+        let QueryResult::Delete(out) = out else {
+            panic!("expected delete result");
+        };
+        assert_eq!(out.deleted, 1);
+        assert_eq!(out.returning.len(), 1);
+        assert_eq!(
+            out.returning[0].get("id"),
+            Some(&Value::String("i1".to_string())),
+        );
     }
 
     #[test]

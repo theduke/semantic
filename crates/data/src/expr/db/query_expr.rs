@@ -3,6 +3,8 @@
 #[facet(rename_all = "snake_case")]
 pub enum Query {
     Select(Select),
+    Update(Update),
+    Delete(Delete),
 }
 
 #[derive(facet::Facet, Clone, Debug, PartialEq)]
@@ -21,6 +23,29 @@ pub struct Select {
     pub limit: Option<u64>,
     pub offset: Option<u64>,
     pub distinct: bool,
+}
+
+#[derive(facet::Facet, Clone, Debug, PartialEq)]
+pub struct Update {
+    pub table: Vec<String>,
+    pub assignments: Vec<UpdateAssignment>,
+    pub selection: Option<crate::expr::Expr>,
+    pub returning: Vec<SelectExpr>,
+    pub limit: Option<u64>,
+}
+
+#[derive(facet::Facet, Clone, Debug, PartialEq)]
+pub struct UpdateAssignment {
+    pub target: Vec<String>,
+    pub value: crate::expr::Expr,
+}
+
+#[derive(facet::Facet, Clone, Debug, PartialEq)]
+pub struct Delete {
+    pub from: Vec<String>,
+    pub selection: Option<crate::expr::Expr>,
+    pub returning: Vec<SelectExpr>,
+    pub limit: Option<u64>,
 }
 
 #[derive(facet::Facet, Clone, Debug, PartialEq)]

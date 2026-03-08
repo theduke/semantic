@@ -208,6 +208,33 @@ pub struct SelectQuery {
     pub limit: Option<usize>,
 }
 
+#[derive(facet::Facet, Debug, Clone, PartialEq)]
+#[repr(C)]
+#[facet(rename_all = "snake_case")]
+pub enum Query {
+    Select(SelectQuery),
+    Update(UpdateQuery),
+    Delete(DeleteQuery),
+}
+
+impl From<SelectQuery> for Query {
+    fn from(value: SelectQuery) -> Self {
+        Self::Select(value)
+    }
+}
+
+impl From<UpdateQuery> for Query {
+    fn from(value: UpdateQuery) -> Self {
+        Self::Update(value)
+    }
+}
+
+impl From<DeleteQuery> for Query {
+    fn from(value: DeleteQuery) -> Self {
+        Self::Delete(value)
+    }
+}
+
 impl SelectQuery {
     pub fn new() -> Self {
         Self {
@@ -381,6 +408,7 @@ pub struct UpdateQuery {
     pub predicate: Option<Predicate>,
     pub assignments: Vec<Assignment>,
     pub limit: Option<usize>,
+    pub returning: Vec<QueryField>,
 }
 
 impl UpdateQuery {
@@ -389,6 +417,7 @@ impl UpdateQuery {
             predicate: None,
             assignments: Vec::new(),
             limit: None,
+            returning: Vec::new(),
         }
     }
 
@@ -406,6 +435,11 @@ impl UpdateQuery {
         self.limit = Some(limit);
         self
     }
+
+    pub fn with_returning(mut self, projection: Vec<QueryField>) -> Self {
+        self.returning = projection;
+        self
+    }
 }
 
 impl Default for UpdateQuery {
@@ -418,6 +452,7 @@ impl Default for UpdateQuery {
 pub struct DeleteQuery {
     pub predicate: Option<Predicate>,
     pub limit: Option<usize>,
+    pub returning: Vec<QueryField>,
 }
 
 impl DeleteQuery {
@@ -425,6 +460,7 @@ impl DeleteQuery {
         Self {
             predicate: None,
             limit: None,
+            returning: Vec::new(),
         }
     }
 
@@ -435,6 +471,11 @@ impl DeleteQuery {
 
     pub fn with_limit(mut self, limit: usize) -> Self {
         self.limit = Some(limit);
+        self
+    }
+
+    pub fn with_returning(mut self, projection: Vec<QueryField>) -> Self {
+        self.returning = projection;
         self
     }
 }
@@ -449,6 +490,27 @@ impl Default for DeleteQuery {
 pub struct MutationStats {
     pub matched: usize,
     pub affected: usize,
+}
+
+#[derive(facet::Facet, Debug, Clone, PartialEq)]
+pub struct UpdateResult {
+    pub stats: MutationStats,
+    pub returning: Vec<Object>,
+}
+
+#[derive(facet::Facet, Debug, Clone, PartialEq, Eq)]
+pub struct DeleteResult {
+    pub deleted: usize,
+    pub returning: Vec<Object>,
+}
+
+#[derive(facet::Facet, Debug, Clone, PartialEq)]
+#[repr(C)]
+#[facet(rename_all = "snake_case")]
+pub enum QueryResult {
+    Select(Vec<Object>),
+    Update(UpdateResult),
+    Delete(DeleteResult),
 }
 
 #[derive(facet::Facet, Debug, Clone, PartialEq, Eq)]
@@ -629,8 +691,16 @@ pub fn execute_batch(input: &Dataset, batch: &Batch) -> CoreResult<BatchOutcome>
 }
 
 pub fn apply_update(query: &UpdateQuery, entities: &mut [Entity]) -> CoreResult<MutationStats> {
+    apply_update_with_returning(query, entities).map(|result| result.stats)
+}
+
+pub fn apply_update_with_returning(
+    query: &UpdateQuery,
+    entities: &mut [Entity],
+) -> CoreResult<UpdateResult> {
     let mut matched = 0usize;
     let mut affected = 0usize;
+    let mut returning = Vec::new();
 
     for entity in entities.iter_mut() {
         if !row_matches(&entity.object, &query.predicate) {
@@ -652,29 +722,62 @@ pub fn apply_update(query: &UpdateQuery, entities: &mut [Entity]) -> CoreResult<
             set_value_at_path(&mut entity.object, &assignment.path, value)?;
         }
 
+        if !query.returning.is_empty() {
+            returning.push(project_object(&entity.object, &query.returning));
+        }
+
         if entity.object != before {
             affected += 1;
         }
     }
 
-    Ok(MutationStats { matched, affected })
+    Ok(UpdateResult {
+        stats: MutationStats { matched, affected },
+        returning,
+    })
 }
 
 pub fn apply_delete(query: &DeleteQuery, entities: Vec<Entity>) -> (Vec<Entity>, usize) {
+    let result = apply_delete_plan(query, entities);
+    (result.remaining, result.deleted)
+}
+
+struct DeletePlanResult {
+    remaining: Vec<Entity>,
+    deleted: usize,
+    returning: Vec<Object>,
+}
+
+pub fn apply_delete_with_returning(query: &DeleteQuery, entities: Vec<Entity>) -> DeleteResult {
+    let DeletePlanResult {
+        deleted, returning, ..
+    } = apply_delete_plan(query, entities);
+    DeleteResult { deleted, returning }
+}
+
+fn apply_delete_plan(query: &DeleteQuery, entities: Vec<Entity>) -> DeletePlanResult {
     let mut deleted = 0usize;
     let mut remaining = Vec::with_capacity(entities.len());
+    let mut returning = Vec::new();
 
     for entity in entities {
         if row_matches(&entity.object, &query.predicate)
             && query.limit.map(|limit| deleted < limit).unwrap_or(true)
         {
             deleted += 1;
+            if !query.returning.is_empty() {
+                returning.push(project_object(&entity.object, &query.returning));
+            }
         } else {
             remaining.push(entity);
         }
     }
 
-    (remaining, deleted)
+    DeletePlanResult {
+        remaining,
+        deleted,
+        returning,
+    }
 }
 
 pub fn evaluate_predicate<T: ObjectAccess + ?Sized>(value: &T, predicate: &Predicate) -> bool {

@@ -5,8 +5,8 @@ use semantic_data::value::{Object, Value};
 
 use crate::catalog::{Catalog, CollectionKind, LocalCollectionId};
 use crate::{
-    Batch, BatchOutcome, DbError, DeleteQuery, LogicalPlan, MutationStats, PhysicalPlan,
-    SelectQuery, UpdateQuery,
+    Batch, BatchOutcome, DbError, DeleteQuery, LogicalPlan, MutationStats, PhysicalPlan, Query,
+    QueryResult, SelectQuery, UpdateQuery,
 };
 
 #[derive(facet::Facet, Debug, Clone, PartialEq, Eq)]
@@ -76,32 +76,46 @@ pub trait Backend: Send + Sync {
     async fn query(
         &self,
         collection: String,
-        query: SelectQuery,
-    ) -> std::result::Result<Vec<Object>, DbError>;
+        query: Query,
+    ) -> std::result::Result<QueryResult, DbError>;
 
     async fn explain_query(
         &self,
         collection: String,
-        query: SelectQuery,
+        query: Query,
     ) -> std::result::Result<QueryExplain, DbError>;
 
     async fn plan_query(
         &self,
         collection: String,
-        query: SelectQuery,
+        query: Query,
     ) -> std::result::Result<QueryPlan, DbError>;
 
     async fn update_where(
         &self,
         collection: String,
         query: UpdateQuery,
-    ) -> std::result::Result<MutationStats, DbError>;
+    ) -> std::result::Result<MutationStats, DbError> {
+        match self.query(collection, Query::Update(query)).await? {
+            QueryResult::Update(result) => Ok(result.stats),
+            _ => Err(DbError::InvalidQuery(
+                "backend returned non-update result for update query".to_string(),
+            )),
+        }
+    }
 
     async fn delete_where(
         &self,
         collection: String,
         query: DeleteQuery,
-    ) -> std::result::Result<usize, DbError>;
+    ) -> std::result::Result<usize, DbError> {
+        match self.query(collection, Query::Delete(query)).await? {
+            QueryResult::Delete(result) => Ok(result.deleted),
+            _ => Err(DbError::InvalidQuery(
+                "backend returned non-delete result for delete query".to_string(),
+            )),
+        }
+    }
 
     async fn execute_batch(&self, batch: Batch) -> std::result::Result<BatchOutcome, DbError>;
 }
@@ -159,15 +173,32 @@ impl Database {
     pub async fn query(
         &self,
         collection: impl Into<String>,
+        query: Query,
+    ) -> std::result::Result<QueryResult, DbError> {
+        self.backend.query(collection.into(), query).await
+    }
+
+    pub async fn select(
+        &self,
+        collection: impl Into<String>,
         query: SelectQuery,
     ) -> std::result::Result<Vec<Object>, DbError> {
-        self.backend.query(collection.into(), query).await
+        match self
+            .backend
+            .query(collection.into(), Query::Select(query))
+            .await?
+        {
+            QueryResult::Select(rows) => Ok(rows),
+            _ => Err(DbError::InvalidQuery(
+                "backend returned non-select result for select query".to_string(),
+            )),
+        }
     }
 
     pub async fn explain_query(
         &self,
         collection: impl Into<String>,
-        query: SelectQuery,
+        query: Query,
     ) -> std::result::Result<QueryExplain, DbError> {
         self.backend.explain_query(collection.into(), query).await
     }
@@ -175,7 +206,7 @@ impl Database {
     pub async fn plan_query(
         &self,
         collection: impl Into<String>,
-        query: SelectQuery,
+        query: Query,
     ) -> std::result::Result<QueryPlan, DbError> {
         self.backend.plan_query(collection.into(), query).await
     }
@@ -185,7 +216,16 @@ impl Database {
         collection: impl Into<String>,
         query: UpdateQuery,
     ) -> std::result::Result<MutationStats, DbError> {
-        self.backend.update_where(collection.into(), query).await
+        match self
+            .backend
+            .query(collection.into(), Query::Update(query))
+            .await?
+        {
+            QueryResult::Update(result) => Ok(result.stats),
+            _ => Err(DbError::InvalidQuery(
+                "backend returned non-update result for update query".to_string(),
+            )),
+        }
     }
 
     pub async fn delete_where(
@@ -193,7 +233,16 @@ impl Database {
         collection: impl Into<String>,
         query: DeleteQuery,
     ) -> std::result::Result<usize, DbError> {
-        self.backend.delete_where(collection.into(), query).await
+        match self
+            .backend
+            .query(collection.into(), Query::Delete(query))
+            .await?
+        {
+            QueryResult::Delete(result) => Ok(result.deleted),
+            _ => Err(DbError::InvalidQuery(
+                "backend returned non-delete result for delete query".to_string(),
+            )),
+        }
     }
 
     pub async fn execute_batch(&self, batch: Batch) -> std::result::Result<BatchOutcome, DbError> {
