@@ -1,4 +1,7 @@
-use semantic_data::value::{FieldPath, PathSegment, Value};
+use semantic_data::{
+    query::CompareOp,
+    value::{FieldPath, PathSegment, Value},
+};
 
 use crate::QueryContext;
 use crate::catalog::CollectionSchema;
@@ -8,7 +11,7 @@ use crate::plan::{
     PhysicalProjectionField, PhysicalSource, SourceRef, StatsProvider, build_logical_plan,
     source_ref_for_collection,
 };
-use crate::query::{CompareOp, Operand, Predicate, QueryField, SelectQuery};
+use crate::query::{Operand, Predicate, QueryField, SelectQuery};
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct PlanPair {

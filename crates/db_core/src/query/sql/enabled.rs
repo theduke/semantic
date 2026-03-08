@@ -60,6 +60,9 @@
 /// - Literal / value mapping:
 ///   - Many non-scalar SQL literal forms.
 ///   - Many non-scalar `semantic_data::Value` variants in SQL printer output.
+use semantic_data::query::{
+    BinaryOp, CompareOp, JoinType, PatternMatchKind, SortDirection, UnaryOp,
+};
 use semantic_data::value::{FieldPath, PathSegment, Value};
 use sqlparser::ast::{
     Assignment, AssignmentTarget, BinaryOperator, Expr as SqlExpr, FromTable, FunctionArguments,
@@ -72,9 +75,8 @@ use sqlparser::parser::Parser;
 use thiserror::Error;
 
 use crate::{
-    BinaryOp, CompareOp, DeleteQuery, Expr, FunctionArg, InsertQuery, InsertSource, JoinCondition,
-    JoinQuery, JoinType, Operand, OrderBy as DbOrderBy, PatternMatchKind, Predicate, Query,
-    QueryField, SelectQuery, SortDirection, UpdateQuery,
+    DeleteQuery, Expr, FunctionArg, InsertQuery, InsertSource, JoinCondition, JoinQuery, Operand,
+    OrderBy as DbOrderBy, Predicate, Query, QueryField, SelectQuery, UpdateQuery,
 };
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -675,7 +677,7 @@ fn expr_to_predicate(parsed: Expr) -> Result<Predicate, SqlQueryError> {
             _ => Ok(Predicate::Expr(Expr::Binary { op, left, right })),
         },
         Expr::Unary {
-            op: crate::UnaryOp::Not,
+            op: UnaryOp::Not,
             expr,
         } => Ok(Predicate::Not(Box::new(expr_to_predicate(*expr)?))),
         Expr::Operand(Operand::Field(path)) => Ok(Predicate::Exists(path)),
@@ -738,8 +740,8 @@ fn parse_expr(expr: SqlExpr) -> Result<Expr, SqlQueryError> {
         SqlExpr::Nested(expr) => parse_expr(*expr),
         SqlExpr::UnaryOp { op, expr } => Ok(Expr::Unary {
             op: match op {
-                UnaryOperator::Not => crate::UnaryOp::Not,
-                UnaryOperator::Minus => crate::UnaryOp::Neg,
+                UnaryOperator::Not => UnaryOp::Not,
+                UnaryOperator::Minus => UnaryOp::Neg,
                 other => {
                     return Err(SqlQueryError::Unsupported(format!(
                         "unary operator '{other:?}' is not supported"
@@ -1415,8 +1417,8 @@ fn expr_to_sql(expr: &Expr) -> Result<String, SqlQueryError> {
     match expr {
         Expr::Operand(operand) => operand_to_sql(operand),
         Expr::Unary { op, expr } => Ok(match op {
-            crate::UnaryOp::Not => format!("NOT ({})", expr_to_sql(expr)?),
-            crate::UnaryOp::Neg => format!("-({})", expr_to_sql(expr)?),
+            UnaryOp::Not => format!("NOT ({})", expr_to_sql(expr)?),
+            UnaryOp::Neg => format!("-({})", expr_to_sql(expr)?),
         }),
         Expr::Binary { op, left, right } => Ok(format!(
             "({}) {} ({})",

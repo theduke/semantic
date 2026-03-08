@@ -12,14 +12,14 @@ pub use crate::spawner::{DefaultKvBackendSpawner, InlineSpawner, KvBackendSpawne
 pub use crate::storage::{
     EntityStore, KvCommitOutcome, KvEngine, KvTransactionCapabilities, KvWriteOp, MemoryKvEngine,
 };
+pub use semantic_data::query::{BinaryOp, CompareOp, SortDirection, UnaryOp};
 pub use semantic_db_core::DbError;
 pub use semantic_db_core::catalog::{
     Catalog, CatalogError, CollectionKind, CollectionSchema, LocalAttrId, LocalClassId,
     LocalCollectionId, LocalIndexId, LocalRecordTypeId, LocalTypeDefId, SharedCatalog,
 };
 pub use semantic_db_core::{
-    Assignment, Batch, BatchOperation, BinaryOp, CompareOp, DeleteQuery, DeleteResult, Expr,
-    MutationStats, ObjectNormalizationError, Operand, OrderBy, Predicate, Query,
-    QueryCanonicalizationError, QueryField, QueryResult, SelectQuery, SortDirection,
-    TransactionOptions, UnaryOp, UpdateQuery, UpdateResult,
+    Assignment, Batch, BatchOperation, DeleteQuery, DeleteResult, Expr, MutationStats,
+    ObjectNormalizationError, Operand, OrderBy, Predicate, Query, QueryCanonicalizationError,
+    QueryField, QueryResult, SelectQuery, TransactionOptions, UpdateQuery, UpdateResult,
 };

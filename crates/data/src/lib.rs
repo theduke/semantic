@@ -2,6 +2,7 @@ pub mod value;
 pub use value::*;
 
 pub mod expr;
+pub mod query;
 
 pub mod schema;
 

@@ -1,8 +1,9 @@
+use semantic_data::query::JoinType;
 use semantic_data::value::{FieldPath, Object};
 
 use crate::catalog::LocalCollectionId;
 use crate::plan::SourceRef;
-use crate::query::{Expr, JoinCondition, JoinType, OrderBy, Predicate, QueryField, SelectQuery};
+use crate::query::{Expr, JoinCondition, OrderBy, Predicate, QueryField, SelectQuery};
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum LogicalJoinCondition {

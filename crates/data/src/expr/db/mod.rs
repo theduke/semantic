@@ -5,6 +5,6 @@ pub use predicate_expr::{
     BetweenExpr, ExistsExpr, InExpr, InSet, IsNullExpr, LikeExpr, LikeKind, RegexExpr,
 };
 pub use query_expr::{
-    FromItem, JoinExpr, JoinKind, NullsOrder, OrderByExpr, Query, Select, SelectExpr,
-    SortDirection, SubqueryExpr, WindowFrame, WindowFrameBound, WindowFrameUnits, WindowSpec,
+    FromItem, JoinExpr, JoinKind, NullsOrder, OrderByExpr, Query, Select, SelectExpr, SubqueryExpr,
+    WindowFrame, WindowFrameBound, WindowFrameUnits, WindowSpec,
 };

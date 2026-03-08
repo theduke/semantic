@@ -98,6 +98,9 @@ use std::{
 };
 
 use regex::RegexBuilder;
+use semantic_data::query::{
+    BinaryOp, CompareOp, JoinType, PatternMatchKind, SortDirection, UnaryOp,
+};
 use semantic_data::value::{FieldPath, Object, PathSegment, Value, ValueRef};
 
 use crate::catalog::{LocalAttrId, LocalCollectionId, LocalFieldId};
@@ -160,54 +163,6 @@ impl ObjectAccess for BTreeMap<String, Value> {
     }
 }
 
-#[derive(facet::Facet, Debug, Clone, Copy, PartialEq, Eq)]
-#[repr(C)]
-#[facet(rename_all = "snake_case")]
-pub enum CompareOp {
-    Eq,
-    NotEq,
-    Lt,
-    Lte,
-    Gt,
-    Gte,
-}
-
-#[derive(facet::Facet, Debug, Clone, Copy, PartialEq, Eq)]
-#[repr(C)]
-#[facet(rename_all = "snake_case")]
-pub enum BinaryOp {
-    Add,
-    Sub,
-    Mul,
-    Div,
-    Mod,
-    Concat,
-    And,
-    Or,
-    Eq,
-    NotEq,
-    Lt,
-    Lte,
-    Gt,
-    Gte,
-}
-
-#[derive(facet::Facet, Debug, Clone, Copy, PartialEq, Eq)]
-#[repr(C)]
-#[facet(rename_all = "snake_case")]
-pub enum UnaryOp {
-    Not,
-    Neg,
-}
-
-#[derive(facet::Facet, Debug, Clone, Copy, PartialEq, Eq)]
-#[repr(C)]
-#[facet(rename_all = "snake_case")]
-pub enum PatternMatchKind {
-    Like,
-    SimilarTo,
-}
-
 #[derive(facet::Facet, Debug, Clone, PartialEq)]
 #[repr(C)]
 #[facet(rename_all = "snake_case")]
@@ -216,13 +171,7 @@ pub enum Operand {
     Literal(Value),
 }
 
-#[derive(facet::Facet, Debug, Clone, PartialEq)]
-#[repr(C)]
-#[facet(rename_all = "snake_case")]
-pub enum FunctionArg {
-    Expr(Expr),
-    Wildcard,
-}
+pub type FunctionArg = semantic_data::query::FunctionArg<Expr>;
 
 #[derive(facet::Facet, Debug, Clone, PartialEq)]
 #[repr(C)]
@@ -309,28 +258,10 @@ pub struct QueryField {
     pub alias: Option<String>,
 }
 
-#[derive(facet::Facet, Debug, Clone, Copy, PartialEq, Eq)]
-#[repr(C)]
-#[facet(rename_all = "snake_case")]
-pub enum SortDirection {
-    Asc,
-    Desc,
-}
-
 #[derive(facet::Facet, Debug, Clone, PartialEq, Eq)]
 pub struct OrderBy {
     pub path: FieldPath,
     pub direction: SortDirection,
-}
-
-#[derive(facet::Facet, Debug, Clone, Copy, PartialEq, Eq)]
-#[repr(C)]
-#[facet(rename_all = "snake_case")]
-pub enum JoinType {
-    Inner,
-    Left,
-    Right,
-    Full,
 }
 
 #[derive(facet::Facet, Debug, Clone, PartialEq)]

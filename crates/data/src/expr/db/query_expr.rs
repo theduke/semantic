@@ -91,16 +91,8 @@ pub enum JoinKind {
 #[derive(facet::Facet, Clone, Debug, PartialEq)]
 pub struct OrderByExpr {
     pub expr: crate::expr::Expr,
-    pub direction: SortDirection,
+    pub direction: crate::query::SortDirection,
     pub nulls: Option<NullsOrder>,
-}
-
-#[derive(facet::Facet, Clone, Debug, PartialEq, Eq)]
-#[repr(C)]
-#[facet(rename_all = "snake_case")]
-pub enum SortDirection {
-    Asc,
-    Desc,
 }
 
 #[derive(facet::Facet, Clone, Debug, PartialEq, Eq)]

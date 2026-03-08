@@ -1,7 +1,10 @@
-use semantic_data::value::{FieldPath, Value};
+use semantic_data::{
+    query::{JoinType, SortDirection},
+    value::{FieldPath, Value},
+};
 
 use crate::catalog::{LocalAttrId, LocalCollectionId, LocalFieldId};
-use crate::query::{Predicate, SortDirection};
+use crate::query::Predicate;
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct SourceRef {
@@ -88,7 +91,7 @@ pub enum PhysicalSource {
 pub struct PhysicalJoinPlan {
     pub left: Box<PhysicalPlan>,
     pub right: Box<PhysicalPlan>,
-    pub join_type: crate::query::JoinType,
+    pub join_type: JoinType,
     pub algorithm: PhysicalJoinAlgorithm,
     pub condition: PhysicalJoinCondition,
     pub left_binding: String,

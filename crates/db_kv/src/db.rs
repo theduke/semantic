@@ -1528,7 +1528,7 @@ impl<E: KvEngine> semantic_db_core::PhysicalDataSource for KvPhysicalDataSource<
                         self,
                         source,
                         &semantic_db_core::Predicate::Compare {
-                            op: semantic_db_core::CompareOp::Eq,
+                            op: semantic_data::query::CompareOp::Eq,
                             left: semantic_db_core::Operand::Field(field_path),
                             right: semantic_db_core::Operand::Literal(value.clone()),
                         },
@@ -1544,7 +1544,7 @@ impl<E: KvEngine> semantic_db_core::PhysicalDataSource for KvPhysicalDataSource<
                     self,
                     source,
                     &semantic_db_core::Predicate::Compare {
-                        op: semantic_db_core::CompareOp::Eq,
+                        op: semantic_data::query::CompareOp::Eq,
                         left: semantic_db_core::Operand::Field(field_path),
                         right: semantic_db_core::Operand::Literal(value.clone()),
                     },
@@ -1762,10 +1762,11 @@ mod tests {
     };
 
     use crate::CollectionKind;
+    use semantic_data::query::{CompareOp, SortDirection};
     use semantic_db_core::{
-        ALL_COLLECTION_ALIAS, CompareOp, DEFAULT_COLLECTION, DdlBatch, DdlCollectionKind,
-        DdlOperation, Expr, Operand, OrderBy, Predicate, Query, QueryField, QueryResult,
-        SelectQuery, SortDirection, TransactionConcurrency, TransactionOptions, UpdateQuery,
+        ALL_COLLECTION_ALIAS, DEFAULT_COLLECTION, DdlBatch, DdlCollectionKind, DdlOperation, Expr,
+        Operand, OrderBy, Predicate, Query, QueryField, QueryResult, SelectQuery,
+        TransactionConcurrency, TransactionOptions, UpdateQuery,
     };
 
     use super::{KvDb, QueryPlan};

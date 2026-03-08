@@ -1,7 +1,8 @@
+use semantic_data::query::{BinaryOp, CompareOp, PatternMatchKind};
 use semantic_data::value::{FieldPath, Object, Value};
 use semantic_db_core::{
-    CompareOp, Db, DeleteQuery, Expr, FunctionArg, Operand, PatternMatchKind, Predicate,
-    QueryResult, SelectQuery, TextQueryFormat, UpdateQuery, catalog::CollectionKind,
+    Db, DeleteQuery, Expr, FunctionArg, Operand, Predicate, QueryResult, SelectQuery,
+    TextQueryFormat, UpdateQuery, catalog::CollectionKind,
 };
 
 pub async fn test_db(db: &Db) {
@@ -444,7 +445,7 @@ async fn test_ast_predicate_constructs(db: &Db) {
             SelectQuery::new()
                 .with_collection("shared_suite_ast_predicates")
                 .with_predicate(Predicate::Expr(Expr::Binary {
-                    op: semantic_db_core::BinaryOp::Eq,
+                    op: BinaryOp::Eq,
                     left: Box::new(Expr::Function {
                         name: "LOWER".to_string(),
                         args: vec![FunctionArg::Expr(Expr::Operand(Operand::Field(
@@ -471,7 +472,7 @@ async fn test_ast_predicate_constructs(db: &Db) {
                         right: Operand::Literal(Value::String("ast-a".to_string())),
                     },
                     Predicate::Expr(Expr::Binary {
-                        op: semantic_db_core::BinaryOp::Eq,
+                        op: BinaryOp::Eq,
                         left: Box::new(Expr::Function {
                             name: "SUM".to_string(),
                             args: vec![FunctionArg::Expr(Expr::Operand(Operand::Field(
@@ -483,7 +484,7 @@ async fn test_ast_predicate_constructs(db: &Db) {
                         ])))),
                     }),
                     Predicate::Expr(Expr::Binary {
-                        op: semantic_db_core::BinaryOp::Eq,
+                        op: BinaryOp::Eq,
                         left: Box::new(Expr::Function {
                             name: "AVG".to_string(),
                             args: vec![FunctionArg::Expr(Expr::Operand(Operand::Field(
@@ -495,7 +496,7 @@ async fn test_ast_predicate_constructs(db: &Db) {
                         ])))),
                     }),
                     Predicate::Expr(Expr::Binary {
-                        op: semantic_db_core::BinaryOp::Eq,
+                        op: BinaryOp::Eq,
                         left: Box::new(Expr::Function {
                             name: "MIN".to_string(),
                             args: vec![FunctionArg::Expr(Expr::Operand(Operand::Field(
@@ -507,7 +508,7 @@ async fn test_ast_predicate_constructs(db: &Db) {
                         ])))),
                     }),
                     Predicate::Expr(Expr::Binary {
-                        op: semantic_db_core::BinaryOp::Eq,
+                        op: BinaryOp::Eq,
                         left: Box::new(Expr::Function {
                             name: "MAX".to_string(),
                             args: vec![FunctionArg::Expr(Expr::Operand(Operand::Field(

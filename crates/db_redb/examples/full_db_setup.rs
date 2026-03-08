@@ -1,7 +1,8 @@
+use semantic_data::query::CompareOp;
 use semantic_data::schema::DbOpenMode;
 use semantic_data::value::{FieldPath, Object, Value};
 use semantic_db_core::{
-    CompareOp, Db, Expr, Operand, Predicate, SelectQuery, UpdateQuery, catalog::CollectionKind,
+    Db, Expr, Operand, Predicate, SelectQuery, UpdateQuery, catalog::CollectionKind,
 };
 use semantic_db_redb::open_backend;
 

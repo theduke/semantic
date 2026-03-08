@@ -3,6 +3,7 @@ use std::collections::{BTreeSet, HashMap};
 use std::hash::Hash;
 
 use futures::{FutureExt, TryStreamExt, future::BoxFuture, stream::BoxStream};
+use semantic_data::query::JoinType;
 use semantic_data::value::{FieldPath, Object, Value, ValueRef};
 
 use crate::QueryContext;
@@ -392,10 +393,7 @@ fn execute_hash_join(
         let Some(left_key) =
             value_ref_for_join_key(left_row.as_ref(), left).map(ValueKey::from_ref)
         else {
-            if matches!(
-                join.join_type,
-                crate::query::JoinType::Left | crate::query::JoinType::Full
-            ) {
+            if matches!(join.join_type, JoinType::Left | JoinType::Full) {
                 out.push(Box::new(bind_join_result(
                     Some(left_row.as_ref()),
                     None,
@@ -416,10 +414,7 @@ fn execute_hash_join(
                     &join.right_binding,
                 )) as DynObject);
             }
-        } else if matches!(
-            join.join_type,
-            crate::query::JoinType::Left | crate::query::JoinType::Full
-        ) {
+        } else if matches!(join.join_type, JoinType::Left | JoinType::Full) {
             out.push(Box::new(bind_join_result(
                 Some(left_row.as_ref()),
                 None,
@@ -429,10 +424,7 @@ fn execute_hash_join(
         }
     }
 
-    if matches!(
-        join.join_type,
-        crate::query::JoinType::Right | crate::query::JoinType::Full
-    ) {
+    if matches!(join.join_type, JoinType::Right | JoinType::Full) {
         for (idx, right_row) in right_rows.iter().enumerate() {
             if right_matched[idx] {
                 continue;
@@ -472,12 +464,7 @@ fn execute_nested_loop_join(
             }
         }
 
-        if !matched_any
-            && matches!(
-                join.join_type,
-                crate::query::JoinType::Left | crate::query::JoinType::Full
-            )
-        {
+        if !matched_any && matches!(join.join_type, JoinType::Left | JoinType::Full) {
             out.push(Box::new(bind_join_result(
                 Some(left_row.as_ref()),
                 None,
@@ -487,10 +474,7 @@ fn execute_nested_loop_join(
         }
     }
 
-    if matches!(
-        join.join_type,
-        crate::query::JoinType::Right | crate::query::JoinType::Full
-    ) {
+    if matches!(join.join_type, JoinType::Right | JoinType::Full) {
         for (idx, right_row) in right_rows.iter().enumerate() {
             if right_matched[idx] {
                 continue;
@@ -660,7 +644,8 @@ impl ValueKey {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::query::{CompareOp, Operand};
+    use crate::query::Operand;
+    use semantic_data::query::CompareOp;
 
     struct InlineSource {
         left: Vec<Object>,
@@ -708,7 +693,7 @@ mod tests {
                     backend_tag: None,
                 },
             })),
-            join_type: crate::query::JoinType::Inner,
+            join_type: JoinType::Inner,
             algorithm: PhysicalJoinAlgorithm::Hash,
             condition: PhysicalJoinCondition::Eq {
                 left: PhysicalJoinKey {
