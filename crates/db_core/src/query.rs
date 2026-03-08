@@ -315,11 +315,43 @@ pub enum JoinCondition {
 }
 
 #[derive(facet::Facet, Debug, Clone, PartialEq)]
+pub struct JoinSource {
+    pub collection: Option<String>,
+    pub class: Option<String>,
+}
+
+impl JoinSource {
+    pub fn relation_name(&self) -> String {
+        match (&self.collection, &self.class) {
+            (None, None) => "_".to_string(),
+            (None, Some(class)) => class.clone(),
+            (Some(collection), None) => format!("{collection}._"),
+            (Some(collection), Some(class)) => format!("{collection}.{class}"),
+        }
+    }
+
+    pub fn default_binding(&self) -> String {
+        self.alias_seed().to_string()
+    }
+
+    fn alias_seed(&self) -> &str {
+        if let Some(class) = self.class.as_deref() {
+            class
+        } else if let Some(collection) = self.collection.as_deref() {
+            collection
+        } else {
+            "_"
+        }
+    }
+}
+
+#[derive(facet::Facet, Debug, Clone, PartialEq)]
 pub struct JoinQuery {
-    pub source: String,
+    pub source: JoinSource,
     pub alias: Option<String>,
     pub join_type: JoinType,
     pub condition: JoinCondition,
+    pub predicate: Option<Predicate>,
 }
 
 #[derive(facet::Facet, Debug, Clone, PartialEq)]
@@ -543,10 +575,14 @@ impl From<public_query::JoinCondition> for JoinCondition {
 impl From<public_query::JoinQuery> for JoinQuery {
     fn from(value: public_query::JoinQuery) -> Self {
         Self {
-            source: value.source,
+            source: JoinSource {
+                collection: value.source.collection,
+                class: value.source.class,
+            },
             alias: value.alias,
             join_type: value.join_type,
             condition: value.condition.into(),
+            predicate: value.predicate.map(Into::into),
         }
     }
 }

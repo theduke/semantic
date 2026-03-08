@@ -21,12 +21,7 @@ pub fn parse_prql_query(
     prql: &str,
     dialect: SqlDialectKind,
 ) -> Result<ParsedPrqlQuery, PrqlQueryError> {
-    let maybe_rewritten = rewrite_implicit_collection_prql(prql, crate::DEFAULT_COLLECTION);
-    let source = maybe_rewritten.as_deref().unwrap_or(prql);
-    let sql = compile_prql_to_sql(source)?;
-    let parsed = sql::parse_sql_query(&sql, dialect).map_err(map_sql_error)?;
-    let query =
-        with_query_collection_if_missing(parsed.query, crate::DEFAULT_COLLECTION.to_string());
+    let query = parse_prql_query_with_sql_fallback(prql, dialect)?;
     Ok(ParsedPrqlQuery { query })
 }
 
@@ -35,23 +30,70 @@ pub fn parse_prql_query_for_collection(
     expected_collection: &str,
     dialect: SqlDialectKind,
 ) -> Result<Query, PrqlQueryError> {
-    let maybe_rewritten = rewrite_implicit_collection_prql(prql, expected_collection);
+    parse_prql_query_for_collection_with_sql_fallback(prql, expected_collection, dialect)
+}
+
+fn parse_prql_query_with_sql_fallback(
+    prql: &str,
+    dialect: SqlDialectKind,
+) -> Result<Query, PrqlQueryError> {
+    let maybe_rewritten = rewrite_implicit_collection_prql(prql, crate::DEFAULT_COLLECTION);
     let source = maybe_rewritten.as_deref().unwrap_or(prql);
-    let sql = compile_prql_to_sql(source)?;
-    let parsed = sql::parse_sql_query(&sql, dialect).map_err(map_sql_error)?;
-    let collection = parsed.query.collection().map(ToOwned::to_owned);
-    if let Some(collection) = collection {
-        if collection != expected_collection {
-            return Err(PrqlQueryError::Invalid(format!(
-                "collection mismatch: PRQL query targets '{}', expected '{}'",
-                collection, expected_collection
-            )));
+    match compile_prql_to_sql(source) {
+        Ok(compiled_sql) => {
+            let parsed = sql::parse_sql_query(&compiled_sql, dialect).map_err(map_sql_error)?;
+            Ok(with_query_collection_if_missing(
+                parsed.query,
+                crate::DEFAULT_COLLECTION.to_string(),
+            ))
+        }
+        Err(prql_error) => {
+            if let Ok(parsed) = sql::parse_sql_query(prql, dialect) {
+                return Ok(parsed.query);
+            }
+            match sql::parse_sql_query_for_collection(prql, crate::DEFAULT_COLLECTION, dialect) {
+                Ok(query) => Ok(query),
+                Err(sql_error) => Err(PrqlQueryError::Invalid(format!(
+                    "failed to parse query as PRQL ({prql_error}) or SQL ({sql_error})"
+                ))),
+            }
         }
     }
-    Ok(with_query_collection_if_missing(
-        parsed.query,
-        expected_collection.to_string(),
-    ))
+}
+
+fn parse_prql_query_for_collection_with_sql_fallback(
+    prql: &str,
+    expected_collection: &str,
+    dialect: SqlDialectKind,
+) -> Result<Query, PrqlQueryError> {
+    let maybe_rewritten = rewrite_implicit_collection_prql(prql, expected_collection);
+    let source = maybe_rewritten.as_deref().unwrap_or(prql);
+    match compile_prql_to_sql(source) {
+        Ok(compiled_sql) => {
+            let parsed = sql::parse_sql_query(&compiled_sql, dialect).map_err(map_sql_error)?;
+            let collection = parsed.query.collection().map(ToOwned::to_owned);
+            if let Some(collection) = collection {
+                if collection != expected_collection {
+                    return Err(PrqlQueryError::Invalid(format!(
+                        "collection mismatch: PRQL query targets '{}', expected '{}'",
+                        collection, expected_collection
+                    )));
+                }
+            }
+            Ok(with_query_collection_if_missing(
+                parsed.query,
+                expected_collection.to_string(),
+            ))
+        }
+        Err(prql_error) => {
+            match sql::parse_sql_query_for_collection(prql, expected_collection, dialect) {
+                Ok(query) => Ok(query),
+                Err(sql_error) => Err(PrqlQueryError::Invalid(format!(
+                    "failed to parse query as PRQL ({prql_error}) or SQL ({sql_error})"
+                ))),
+            }
+        }
+    }
 }
 
 fn compile_prql_to_sql(prql: &str) -> Result<String, PrqlQueryError> {
@@ -151,5 +193,49 @@ mod tests {
             panic!("expected select");
         };
         assert_eq!(select.collection.as_deref(), Some("items"));
+    }
+
+    #[test]
+    fn parse_collection_scoped_sql_fallback_for_update() {
+        let query = parse_prql_query_for_collection(
+            "UPDATE SET score = 10 WHERE id = 'a'",
+            "items",
+            SqlDialectKind::Generic,
+        )
+        .unwrap();
+        let Query::Update(update) = query else {
+            panic!("expected update");
+        };
+        assert_eq!(update.collection.as_deref(), Some("items"));
+        assert_eq!(update.assignments.len(), 1);
+    }
+
+    #[test]
+    fn parse_collection_scoped_sql_fallback_for_delete() {
+        let query = parse_prql_query_for_collection(
+            "DELETE WHERE id = 'a'",
+            "items",
+            SqlDialectKind::Generic,
+        )
+        .unwrap();
+        let Query::Delete(delete) = query else {
+            panic!("expected delete");
+        };
+        assert_eq!(delete.collection.as_deref(), Some("items"));
+        assert!(delete.predicate.is_some());
+    }
+
+    #[test]
+    fn parse_sql_fallback_insert() {
+        let parsed = parse_prql_query(
+            "INSERT INTO items (id, kind, score) VALUES ('a', 'music', 1) RETURNING id",
+            SqlDialectKind::Generic,
+        )
+        .unwrap();
+        let Query::Insert(insert) = parsed.query else {
+            panic!("expected insert");
+        };
+        assert_eq!(insert.collection.as_deref(), Some("items"));
+        assert_eq!(insert.columns, vec!["id", "kind", "score"]);
     }
 }

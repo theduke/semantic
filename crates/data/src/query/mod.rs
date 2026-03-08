@@ -206,11 +206,18 @@ pub enum JoinCondition {
 }
 
 #[derive(facet::Facet, Debug, Clone, PartialEq)]
+pub struct JoinSource {
+    pub collection: Option<String>,
+    pub class: Option<String>,
+}
+
+#[derive(facet::Facet, Debug, Clone, PartialEq)]
 pub struct JoinQuery {
-    pub source: String,
+    pub source: JoinSource,
     pub alias: Option<String>,
     pub join_type: JoinType,
     pub condition: JoinCondition,
+    pub predicate: Option<Predicate>,
 }
 
 #[derive(facet::Facet, Debug, Clone, PartialEq)]

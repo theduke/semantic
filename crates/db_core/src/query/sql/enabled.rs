@@ -74,9 +74,9 @@ use sqlparser::parser::Parser;
 use thiserror::Error;
 
 use crate::{
-    DeleteQuery, Expr, FunctionArg, InsertQuery, InsertSource, JoinCondition, JoinQuery, Operand,
-    OrderBy as DbOrderBy, Predicate, Query, QueryField, SelectQuery, UpdateQuery,
-    evaluate_usize_expr,
+    DeleteQuery, Expr, FunctionArg, InsertQuery, InsertSource, JoinCondition, JoinQuery,
+    JoinSource, Operand, OrderBy as DbOrderBy, Predicate, Query, QueryField, SelectQuery,
+    UpdateQuery, evaluate_usize_expr,
 };
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -520,7 +520,7 @@ fn parse_from_clause(
 }
 
 fn parse_join(join: Join) -> Result<JoinQuery, SqlQueryError> {
-    let source = parse_base_table_name(&join.relation)?;
+    let source = parse_join_source(&join.relation)?;
     let alias = table_alias(&join.relation);
 
     let (join_type, constraint) = match join.join_operator {
@@ -564,7 +564,34 @@ fn parse_join(join: Join) -> Result<JoinQuery, SqlQueryError> {
         alias,
         join_type,
         condition,
+        predicate: None,
     })
+}
+
+fn parse_join_source(factor: &TableFactor) -> Result<JoinSource, SqlQueryError> {
+    let name = parse_base_table_name(factor)?;
+    let parts = name.split('.').collect::<Vec<_>>();
+    match parts.as_slice() {
+        ["_"] => Ok(JoinSource {
+            collection: None,
+            class: None,
+        }),
+        [class] => Ok(JoinSource {
+            collection: None,
+            class: Some((*class).to_string()),
+        }),
+        [collection, "_"] => Ok(JoinSource {
+            collection: Some((*collection).to_string()),
+            class: None,
+        }),
+        [collection, class] => Ok(JoinSource {
+            collection: Some((*collection).to_string()),
+            class: Some((*class).to_string()),
+        }),
+        _ => Err(SqlQueryError::Unsupported(format!(
+            "join source '{name}' is not supported; expected _, <class>, <collection>._, or <collection>.<class>"
+        ))),
+    }
 }
 
 fn parse_projection(items: Vec<SelectItem>) -> Result<Vec<QueryField>, SqlQueryError> {
@@ -1139,15 +1166,19 @@ fn object_name_to_path(name: &ObjectName) -> Result<FieldPath, SqlQueryError> {
 }
 
 fn object_name_to_string(name: &ObjectName) -> Result<String, SqlQueryError> {
-    if name.0.len() != 1 {
-        return Err(SqlQueryError::Unsupported(format!(
-            "multipart table names are not supported: '{name}'"
-        )));
+    if name.0.is_empty() {
+        return Err(SqlQueryError::Invalid(
+            "empty object name is not supported".to_string(),
+        ));
     }
-    let ident = name.0[0].as_ident().ok_or_else(|| {
-        SqlQueryError::Unsupported("object name function parts are not supported".to_string())
-    })?;
-    Ok(ident.value.clone())
+    let mut parts = Vec::with_capacity(name.0.len());
+    for part in &name.0 {
+        let ident = part.as_ident().ok_or_else(|| {
+            SqlQueryError::Unsupported("object name function parts are not supported".to_string())
+        })?;
+        parts.push(ident.value.clone());
+    }
+    Ok(parts.join("."))
 }
 
 fn rewrite_implicit_collection_sql(sql: &str, collection: &str) -> Option<String> {
@@ -1264,19 +1295,25 @@ fn select_to_sql(query: &SelectQuery, collection: &str) -> Result<String, SqlQue
             JoinType::Right => "RIGHT JOIN ",
             JoinType::Full => "FULL OUTER JOIN ",
         });
-        sql.push_str(&join.source);
+        sql.push_str(&join.source.relation_name());
         if let Some(alias) = &join.alias {
             sql.push_str(" AS ");
             sql.push_str(alias);
         }
         sql.push_str(" ON ");
-        match &join.condition {
-            JoinCondition::OnPredicate(predicate) => sql.push_str(&predicate_to_sql(predicate)?),
+        let condition_sql = match &join.condition {
+            JoinCondition::OnPredicate(predicate) => predicate_to_sql(predicate)?,
             JoinCondition::UsingFields { left, right } => {
-                sql.push_str(&path_to_sql(left)?);
-                sql.push_str(" = ");
-                sql.push_str(&path_to_sql(right)?);
+                format!("{} = {}", path_to_sql(left)?, path_to_sql(right)?)
             }
+        };
+        if let Some(predicate) = &join.predicate {
+            sql.push_str(&format!(
+                "({condition_sql}) AND ({})",
+                predicate_to_sql(predicate)?
+            ));
+        } else {
+            sql.push_str(&condition_sql);
         }
     }
 
@@ -1880,5 +1917,26 @@ mod tests {
             panic!("expected delete");
         };
         assert!(delete.predicate.is_some());
+    }
+
+    #[test]
+    fn parse_join_source_variants() {
+        let parsed = parse_sql_query(
+            "SELECT * FROM items AS s JOIN _ AS c ON s.id = c.id JOIN Song AS song ON s.id = song.id JOIN other._ AS o ON s.id = o.id JOIN other.User AS u ON s.id = u.id",
+            SqlDialectKind::Generic,
+        )
+        .unwrap();
+        let Query::Select(select) = parsed.query else {
+            panic!("expected select");
+        };
+        assert_eq!(select.joins.len(), 4);
+        assert_eq!(select.joins[0].source.collection.as_deref(), None);
+        assert_eq!(select.joins[0].source.class.as_deref(), None);
+        assert_eq!(select.joins[1].source.collection.as_deref(), None);
+        assert_eq!(select.joins[1].source.class.as_deref(), Some("Song"));
+        assert_eq!(select.joins[2].source.collection.as_deref(), Some("other"));
+        assert_eq!(select.joins[2].source.class.as_deref(), None);
+        assert_eq!(select.joins[3].source.collection.as_deref(), Some("other"));
+        assert_eq!(select.joins[3].source.class.as_deref(), Some("User"));
     }
 }

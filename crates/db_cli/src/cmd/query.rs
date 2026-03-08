@@ -7,7 +7,7 @@ use serde::Serialize;
 
 use crate::{CliError, CommonArgs, open_db};
 
-#[derive(Debug, Clone, Copy, ValueEnum)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
 pub enum QueryFormat {
     Sql,
     Prql,

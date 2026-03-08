@@ -4,7 +4,7 @@ use semantic_data::value::{FieldPath, Object};
 use crate::catalog::LocalCollectionId;
 use crate::plan::SourceRef;
 use crate::query::{
-    Expr, JoinCondition, OrderBy, Predicate, QueryField, SelectQuery, evaluate_usize_expr,
+    Expr, JoinCondition, Operand, OrderBy, Predicate, QueryField, SelectQuery, evaluate_usize_expr,
 };
 
 #[derive(Debug, Clone, PartialEq)]
@@ -121,15 +121,24 @@ pub fn build_logical_plan(query: &SelectQuery, source: SourceRef) -> LogicalPlan
         .unwrap_or_else(|| "left".to_string());
 
     for join in &query.joins {
-        let right_binding = join.alias.clone().unwrap_or_else(|| join.source.clone());
+        let right_binding = join
+            .alias
+            .clone()
+            .unwrap_or_else(|| join.source.default_binding());
+        let right_source_name = join
+            .source
+            .collection
+            .clone()
+            .or_else(|| source.source_name.clone());
+        let right_predicate = join_source_predicate(join);
         let right_source = LogicalPlan::Source {
             source: SourceRef {
-                source_name: Some(join.source.clone()),
+                source_name: right_source_name,
                 collection_id: None,
                 binding: Some(right_binding.clone()),
                 backend_tag: None,
             },
-            pushed_predicate: None,
+            pushed_predicate: right_predicate,
         };
         plan = LogicalPlan::Join(LogicalJoinPlan {
             left: Box::new(plan),
@@ -237,6 +246,25 @@ pub fn build_logical_plan(query: &SelectQuery, source: SourceRef) -> LogicalPlan
     }
 
     plan
+}
+
+fn join_source_predicate(join: &crate::JoinQuery) -> Option<Predicate> {
+    let mut predicates = Vec::new();
+    if let Some(class_name) = &join.source.class {
+        predicates.push(Predicate::Compare {
+            op: semantic_data::query::CompareOp::Eq,
+            left: Operand::Field(FieldPath::from_fields(["type"])),
+            right: Operand::Literal(semantic_data::value::Value::String(class_name.clone())),
+        });
+    }
+    if let Some(predicate) = &join.predicate {
+        predicates.push(predicate.clone());
+    }
+    match predicates.len() {
+        0 => None,
+        1 => predicates.into_iter().next(),
+        _ => Some(Predicate::And(predicates)),
+    }
 }
 
 fn projection_has_aggregate(query: &SelectQuery) -> bool {

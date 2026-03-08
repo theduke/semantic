@@ -2,9 +2,9 @@ use std::future::Future;
 use std::pin::Pin;
 
 use semantic_data::query::{
-    AggregateOp, BinaryOp, CompareOp, DeleteQuery, Expr, FunctionArg, Operand, OrderBy,
-    PatternMatchKind, Predicate, QueryField, QueryInput, SelectQuery, SortDirection,
-    TextQueryFormat, UpdateQuery,
+    AggregateOp, BinaryOp, CompareOp, DeleteQuery, Expr, FunctionArg, JoinCondition, JoinQuery,
+    JoinSource, JoinType, Operand, OrderBy, PatternMatchKind, Predicate, QueryField, QueryInput,
+    SelectQuery, SortDirection, TextQueryFormat, UpdateQuery,
 };
 use semantic_data::value::{FieldPath, Object, Value};
 use semantic_db_core::{Db, DbError, QueryResult, catalog::CollectionKind};
@@ -36,6 +36,7 @@ pub async fn test_db(db: &Db) {
     test_delete_query(db).await;
     test_ast_predicate_constructs(db).await;
     test_sql_predicate_constructs(db).await;
+    test_join_semantics(db).await;
     test_ast_ordering_variants(db).await;
     test_sql_ordering_variants(db).await;
     test_ast_limit_offset_variants(db).await;
@@ -660,6 +661,145 @@ async fn test_sql_predicate_constructs(db: &Db) {
         panic!("sql function query should return SELECT rows");
     };
     assert_eq!(function_rows.len(), 1);
+}
+
+async fn test_join_semantics(db: &Db) {
+    db.create_collection("shared_suite_join_items", CollectionKind::Untyped)
+        .await
+        .expect("join source collection creation should succeed");
+    db.create_collection("shared_suite_join_profiles", CollectionKind::Untyped)
+        .await
+        .expect("join profile collection creation should succeed");
+
+    let mut artist = Object::new();
+    artist.insert("id", Value::String("artist-1".to_string()));
+    artist.insert("type", Value::String("Artist".to_string()));
+    artist.insert("name", Value::String("Mia".to_string()));
+    db.insert("shared_suite_join_items", "artist-1", artist)
+        .await
+        .expect("artist insert should succeed");
+
+    let mut song = Object::new();
+    song.insert("id", Value::String("song-1".to_string()));
+    song.insert("type", Value::String("Song".to_string()));
+    song.insert("artist_id", Value::String("artist-1".to_string()));
+    db.insert("shared_suite_join_items", "song-1", song)
+        .await
+        .expect("song insert should succeed");
+
+    let mut profile = Object::new();
+    profile.insert("id", Value::String("artist-1".to_string()));
+    profile.insert("kind", Value::String("featured".to_string()));
+    db.insert("shared_suite_join_profiles", "artist-1", profile)
+        .await
+        .expect("profile insert should succeed");
+
+    if db
+        .supported_text_query_formats()
+        .contains(&TextQueryFormat::Sql)
+    {
+        let same_collection_all = db
+            .query_text(
+                TextQueryFormat::Sql,
+                "SELECT s.id AS sid, a.name AS artist_name FROM shared_suite_join_items AS s INNER JOIN _ AS a ON s.artist_id = a.id WHERE s.type = 'Song' AND a.type = 'Artist'",
+            )
+            .await
+            .expect("sql same-collection join should succeed");
+        let QueryResult::Select(same_collection_rows) = same_collection_all else {
+            panic!("sql same-collection join should return SELECT rows");
+        };
+        assert_eq!(same_collection_rows.len(), 1);
+        assert_eq!(
+            same_collection_rows[0].get("artist_name"),
+            Some(&Value::String("Mia".to_string()))
+        );
+
+        let class_join = db
+            .query_text(
+                TextQueryFormat::Sql,
+                "SELECT s.id AS sid, a.name AS artist_name FROM shared_suite_join_items AS s INNER JOIN Artist AS a ON s.artist_id = a.id WHERE s.type = 'Song'",
+            )
+            .await
+            .expect("sql class join should succeed");
+        let QueryResult::Select(class_rows) = class_join else {
+            panic!("sql class join should return SELECT rows");
+        };
+        assert_eq!(class_rows.len(), 1);
+        assert_eq!(
+            class_rows[0].get("artist_name"),
+            Some(&Value::String("Mia".to_string()))
+        );
+
+        let cross_collection_join = db
+            .query_text(
+                TextQueryFormat::Sql,
+                "SELECT s.id AS sid, p.kind AS profile_kind FROM shared_suite_join_items AS s INNER JOIN shared_suite_join_profiles._ AS p ON s.artist_id = p.id WHERE s.type = 'Song'",
+            )
+            .await
+            .expect("sql cross-collection join should succeed");
+        let QueryResult::Select(cross_rows) = cross_collection_join else {
+            panic!("sql cross-collection join should return SELECT rows");
+        };
+        assert_eq!(cross_rows.len(), 1);
+        assert_eq!(
+            cross_rows[0].get("profile_kind"),
+            Some(&Value::String("featured".to_string()))
+        );
+
+        let custom_join_predicate = db
+            .query_text(
+                TextQueryFormat::Sql,
+                "SELECT s.id AS sid FROM shared_suite_join_items AS s INNER JOIN shared_suite_join_profiles._ AS p ON s.artist_id = p.id AND p.kind = 'featured' WHERE s.type = 'Song'",
+            )
+            .await
+            .expect("sql join with custom ON predicate should succeed");
+        let QueryResult::Select(custom_rows) = custom_join_predicate else {
+            panic!("sql join with custom ON predicate should return SELECT rows");
+        };
+        assert_eq!(row_strings(&custom_rows, "sid"), vec!["song-1".to_string()]);
+    }
+
+    let ast_join_where = db
+        .select(
+            SelectQuery::new()
+                .with_collection("shared_suite_join_items")
+                .with_source_alias("s")
+                .with_predicate(Predicate::Compare {
+                    op: CompareOp::Eq,
+                    left: Operand::Field(FieldPath::from_fields(["s", "type"])),
+                    right: Operand::Literal(Value::String("Song".to_string())),
+                })
+                .with_joins(vec![JoinQuery {
+                    source: JoinSource {
+                        collection: Some("shared_suite_join_profiles".to_string()),
+                        class: None,
+                    },
+                    alias: Some("p".to_string()),
+                    join_type: JoinType::Inner,
+                    condition: JoinCondition::OnPredicate(Predicate::Compare {
+                        op: CompareOp::Eq,
+                        left: Operand::Field(FieldPath::from_fields(["s", "artist_id"])),
+                        right: Operand::Field(FieldPath::from_fields(["p", "id"])),
+                    }),
+                    predicate: Some(Predicate::Compare {
+                        op: CompareOp::Eq,
+                        left: Operand::Field(FieldPath::from_fields(["kind"])),
+                        right: Operand::Literal(Value::String("featured".to_string())),
+                    }),
+                }])
+                .with_projection(vec![QueryField {
+                    expr: Box::new(Expr::Operand(Operand::Field(FieldPath::from_fields([
+                        "s", "id",
+                    ])))),
+                    alias: Some("sid".to_string()),
+                }]),
+        )
+        .await
+        .expect("ast join with join-local predicate should succeed");
+    assert_eq!(
+        row_strings(&ast_join_where, "sid"),
+        vec!["song-1".to_string()]
+    );
 }
 
 async fn test_ast_aggregation_distinct_grouping(db: &Db) {

@@ -564,13 +564,18 @@ fn bind_join_result(
     left_binding: &str,
     right_binding: &str,
 ) -> Object {
-    let mut out = Object::new();
-    match left {
-        Some(left) => {
-            out.insert(left_binding.to_string(), Value::Object(left.to_object()));
-        }
-        None => {
-            out.insert(left_binding.to_string(), Value::Null);
+    let mut out = match left {
+        Some(left) => left.to_object(),
+        None => Object::new(),
+    };
+    if !out.contains_key(left_binding) {
+        match left {
+            Some(left) => {
+                out.insert(left_binding.to_string(), Value::Object(left.to_object()));
+            }
+            None => {
+                out.insert(left_binding.to_string(), Value::Null);
+            }
         }
     }
     match right {
@@ -590,11 +595,16 @@ fn bind_join_result_obj(
     left_binding: &str,
     right_binding: &str,
 ) -> Object {
-    let mut out = Object::new();
-    match left {
-        Some(left) => out.insert(left_binding.to_string(), Value::Object(left.to_object())),
-        None => out.insert(left_binding.to_string(), Value::Null),
+    let mut out = match left {
+        Some(left) => left.to_object(),
+        None => Object::new(),
     };
+    if !out.contains_key(left_binding) {
+        match left {
+            Some(left) => out.insert(left_binding.to_string(), Value::Object(left.to_object())),
+            None => out.insert(left_binding.to_string(), Value::Null),
+        };
+    }
     match right {
         Some(right) => out.insert(right_binding.to_string(), Value::Object(right.clone())),
         None => out.insert(right_binding.to_string(), Value::Null),

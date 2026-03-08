@@ -227,7 +227,11 @@ impl<E: KvEngine> KvDb<E> {
                     name: collection_name.clone(),
                 })?;
             (
-                canonicalize_select_query(&query, collection)?,
+                if query.joins.is_empty() {
+                    canonicalize_select_query(&query, collection)?
+                } else {
+                    query
+                },
                 Some(self.stats_for_collection(collection)?),
                 collection.name.clone(),
             )
@@ -261,63 +265,69 @@ impl<E: KvEngine> KvDb<E> {
 
     pub fn explain_query(&self, query: Query) -> std::result::Result<QueryExplain, DbError> {
         let collection_name = query.collection_or_default().to_string();
-        let (select, stats, source, collection_for_access_path) =
-            if is_all_collection_alias(&collection_name) {
-                let Query::Select(select) = query else {
-                    return Err(DbError::InvalidQuery(format!(
-                        "collection alias '{ALL_COLLECTION_ALIAS}' is only supported for SELECT"
-                    )));
-                };
-                (select, None, ALL_COLLECTION_ALIAS.to_string(), None)
-            } else {
-                let catalog = self.catalog();
-                let collection = catalog
-                    .collection_by_name(&collection_name)
-                    .ok_or_else(|| DbError::UnknownCollectionByName {
-                        name: collection_name.clone(),
-                    })?;
-
-                let select = match canonicalize_query(&query, collection)? {
-                    Query::Select(query) => query,
-                    Query::Insert(_) => {
-                        return Err(DbError::InvalidQuery(
-                            "query planning/explain is not supported for INSERT".to_string(),
-                        ));
-                    }
-                    Query::Update(query) => SelectQuery {
-                        collection: query.collection,
-                        source_alias: None,
-                        joins: Vec::new(),
-                        predicate: query.predicate,
-                        projection: query.returning,
-                        distinct: false,
-                        group_by: Vec::new(),
-                        having: None,
-                        order_by: Vec::new(),
-                        offset: semantic_db_core::Expr::from(0usize),
-                        limit: query.limit,
-                    },
-                    Query::Delete(query) => SelectQuery {
-                        collection: query.collection,
-                        source_alias: None,
-                        joins: Vec::new(),
-                        predicate: query.predicate,
-                        projection: query.returning,
-                        distinct: false,
-                        group_by: Vec::new(),
-                        having: None,
-                        order_by: Vec::new(),
-                        offset: semantic_db_core::Expr::from(0usize),
-                        limit: query.limit,
-                    },
-                };
-                (
-                    select,
-                    Some(self.stats_for_collection(collection)?),
-                    collection.name.clone(),
-                    Some(collection.lid),
-                )
+        let (select, stats, source, collection_for_access_path) = if is_all_collection_alias(
+            &collection_name,
+        ) {
+            let Query::Select(select) = query else {
+                return Err(DbError::InvalidQuery(format!(
+                    "collection alias '{ALL_COLLECTION_ALIAS}' is only supported for SELECT"
+                )));
             };
+            (select, None, ALL_COLLECTION_ALIAS.to_string(), None)
+        } else {
+            let catalog = self.catalog();
+            let collection = catalog
+                .collection_by_name(&collection_name)
+                .ok_or_else(|| DbError::UnknownCollectionByName {
+                    name: collection_name.clone(),
+                })?;
+
+            let select = match if matches!(&query, Query::Select(select) if !select.joins.is_empty())
+            {
+                query.clone()
+            } else {
+                canonicalize_query(&query, collection)?
+            } {
+                Query::Select(query) => query,
+                Query::Insert(_) => {
+                    return Err(DbError::InvalidQuery(
+                        "query planning/explain is not supported for INSERT".to_string(),
+                    ));
+                }
+                Query::Update(query) => SelectQuery {
+                    collection: query.collection,
+                    source_alias: None,
+                    joins: Vec::new(),
+                    predicate: query.predicate,
+                    projection: query.returning,
+                    distinct: false,
+                    group_by: Vec::new(),
+                    having: None,
+                    order_by: Vec::new(),
+                    offset: semantic_db_core::Expr::from(0usize),
+                    limit: query.limit,
+                },
+                Query::Delete(query) => SelectQuery {
+                    collection: query.collection,
+                    source_alias: None,
+                    joins: Vec::new(),
+                    predicate: query.predicate,
+                    projection: query.returning,
+                    distinct: false,
+                    group_by: Vec::new(),
+                    having: None,
+                    order_by: Vec::new(),
+                    offset: semantic_db_core::Expr::from(0usize),
+                    limit: query.limit,
+                },
+            };
+            (
+                select,
+                Some(self.stats_for_collection(collection)?),
+                collection.name.clone(),
+                Some(collection.lid),
+            )
+        };
 
         let optimizer = semantic_db_core::Optimizer::core();
         let context = self.query_context();
