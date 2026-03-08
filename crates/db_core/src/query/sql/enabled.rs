@@ -60,7 +60,7 @@
 ///   - Many non-scalar SQL literal forms.
 ///   - Many non-scalar `semantic_data::Value` variants in SQL printer output.
 use semantic_data::query::{
-    AggregateOp, BinaryOp, CompareOp, JoinType, PatternMatchKind, SortDirection, UnaryOp,
+    AggregateOp, BinaryOp, JoinType, PatternMatchKind, SortDirection, UnaryOp,
 };
 use semantic_data::value::{FieldPath, PathSegment, Value};
 use sqlparser::ast::{
@@ -75,8 +75,8 @@ use thiserror::Error;
 
 use crate::{
     DeleteQuery, Expr, FunctionArg, InsertQuery, InsertSource, JoinCondition, JoinQuery,
-    JoinSource, Operand, OrderBy as DbOrderBy, Predicate, Query, QueryField, SelectQuery,
-    UpdateQuery, evaluate_usize_expr,
+    JoinSource, Operand, OrderBy as DbOrderBy, Query, QueryField, SelectQuery, UpdateQuery,
+    evaluate_usize_expr,
 };
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -254,9 +254,9 @@ fn parse_select(
         (Some(collection), source_alias, joins)
     };
     let projection = parse_projection(select.projection)?;
-    let predicate = select.selection.map(parse_predicate).transpose()?;
+    let predicate = select.selection.map(parse_expr).transpose()?;
     let group_by = parse_group_by(select.group_by)?;
-    let having = select.having.map(parse_predicate).transpose()?;
+    let having = select.having.map(parse_expr).transpose()?;
     let order_by = parse_order_by(order_by)?;
     let (limit, offset) = parse_limit_clause(limit_clause)?;
 
@@ -437,7 +437,7 @@ fn parse_update_stmt(update: sqlparser::ast::Update) -> Result<ParsedSqlQuery, S
         .into_iter()
         .map(parse_assignment)
         .collect::<Result<Vec<_>, _>>()?;
-    let predicate = update.selection.map(parse_predicate).transpose()?;
+    let predicate = update.selection.map(parse_expr).transpose()?;
     let returning = update
         .returning
         .map(parse_projection)
@@ -488,7 +488,7 @@ fn parse_delete_stmt(delete: sqlparser::ast::Delete) -> Result<ParsedSqlQuery, S
         ));
     }
     let collection = parse_base_table_name(&table.relation)?;
-    let predicate = delete.selection.map(parse_predicate).transpose()?;
+    let predicate = delete.selection.map(parse_expr).transpose()?;
     let returning = delete
         .returning
         .map(parse_projection)
@@ -536,7 +536,7 @@ fn parse_join(join: Join) -> Result<JoinQuery, SqlQueryError> {
     };
 
     let condition = match constraint {
-        JoinConstraint::On(expr) => JoinCondition::OnPredicate(parse_predicate(expr)?),
+        JoinConstraint::On(expr) => JoinCondition::OnExpr(parse_expr(expr)?),
         JoinConstraint::Using(fields) => {
             if fields.len() != 2 {
                 return Err(SqlQueryError::Unsupported(
@@ -704,82 +704,6 @@ fn parse_assignment(assign: Assignment) -> Result<crate::Assignment, SqlQueryErr
         path,
         value: parse_expr(assign.value)?,
     })
-}
-
-fn parse_predicate(expr: SqlExpr) -> Result<Predicate, SqlQueryError> {
-    let parsed = parse_expr(expr)?;
-    expr_to_predicate(parsed)
-}
-
-fn expr_to_predicate(parsed: Expr) -> Result<Predicate, SqlQueryError> {
-    match parsed {
-        Expr::Binary { op, left, right } => match op {
-            BinaryOp::And => Ok(Predicate::And(vec![
-                expr_to_predicate(*left)?,
-                expr_to_predicate(*right)?,
-            ])),
-            BinaryOp::Or => Ok(Predicate::Or(vec![
-                expr_to_predicate(*left)?,
-                expr_to_predicate(*right)?,
-            ])),
-            BinaryOp::Eq => predicate_compare_or_expr(CompareOp::Eq, *left, *right),
-            BinaryOp::NotEq => predicate_compare_or_expr(CompareOp::NotEq, *left, *right),
-            BinaryOp::Lt => predicate_compare_or_expr(CompareOp::Lt, *left, *right),
-            BinaryOp::Lte => predicate_compare_or_expr(CompareOp::Lte, *left, *right),
-            BinaryOp::Gt => predicate_compare_or_expr(CompareOp::Gt, *left, *right),
-            BinaryOp::Gte => predicate_compare_or_expr(CompareOp::Gte, *left, *right),
-            _ => Ok(Predicate::Expr(Expr::Binary { op, left, right })),
-        },
-        Expr::Unary {
-            op: UnaryOp::Not,
-            expr,
-        } => Ok(Predicate::Not(Box::new(expr_to_predicate(*expr)?))),
-        Expr::Operand(Operand::Field(path)) => Ok(Predicate::Exists(path)),
-        other => Ok(Predicate::Expr(other)),
-    }
-}
-
-fn predicate_compare(op: CompareOp, left: Expr, right: Expr) -> Result<Predicate, SqlQueryError> {
-    let left = expr_to_operand(left)?;
-    let right = expr_to_operand(right)?;
-    Ok(Predicate::Compare { op, left, right })
-}
-
-fn predicate_compare_or_expr(
-    op: CompareOp,
-    left: Expr,
-    right: Expr,
-) -> Result<Predicate, SqlQueryError> {
-    let left_keep = left.clone();
-    let right_keep = right.clone();
-    match predicate_compare(op, left, right) {
-        Ok(pred) => Ok(pred),
-        Err(_) => Ok(Predicate::Expr(Expr::Binary {
-            op: compare_to_binary(op),
-            left: Box::new(left_keep),
-            right: Box::new(right_keep),
-        })),
-    }
-}
-
-fn compare_to_binary(op: CompareOp) -> BinaryOp {
-    match op {
-        CompareOp::Eq => BinaryOp::Eq,
-        CompareOp::NotEq => BinaryOp::NotEq,
-        CompareOp::Lt => BinaryOp::Lt,
-        CompareOp::Lte => BinaryOp::Lte,
-        CompareOp::Gt => BinaryOp::Gt,
-        CompareOp::Gte => BinaryOp::Gte,
-    }
-}
-
-fn expr_to_operand(expr: Expr) -> Result<Operand, SqlQueryError> {
-    match expr {
-        Expr::Operand(operand) => Ok(operand),
-        other => Err(SqlQueryError::Unsupported(format!(
-            "predicate side must be a field or literal, found '{other:?}'"
-        ))),
-    }
 }
 
 fn parse_expr(expr: SqlExpr) -> Result<Expr, SqlQueryError> {
@@ -1350,7 +1274,7 @@ fn select_to_sql(query: &SelectQuery, collection: &str) -> Result<String, SqlQue
         }
         sql.push_str(" ON ");
         let condition_sql = match &join.condition {
-            JoinCondition::OnPredicate(predicate) => predicate_to_sql(predicate)?,
+            JoinCondition::OnExpr(predicate) => expr_to_sql(predicate)?,
             JoinCondition::UsingFields { left, right } => {
                 format!("{} = {}", path_to_sql(left)?, path_to_sql(right)?)
             }
@@ -1358,7 +1282,7 @@ fn select_to_sql(query: &SelectQuery, collection: &str) -> Result<String, SqlQue
         if let Some(predicate) = &join.predicate {
             sql.push_str(&format!(
                 "({condition_sql}) AND ({})",
-                predicate_to_sql(predicate)?
+                expr_to_sql(predicate)?
             ));
         } else {
             sql.push_str(&condition_sql);
@@ -1367,7 +1291,7 @@ fn select_to_sql(query: &SelectQuery, collection: &str) -> Result<String, SqlQue
 
     if let Some(predicate) = &query.predicate {
         sql.push_str(" WHERE ");
-        sql.push_str(&predicate_to_sql(predicate)?);
+        sql.push_str(&expr_to_sql(predicate)?);
     }
 
     if !query.group_by.is_empty() {
@@ -1381,7 +1305,7 @@ fn select_to_sql(query: &SelectQuery, collection: &str) -> Result<String, SqlQue
     }
     if let Some(having) = &query.having {
         sql.push_str(" HAVING ");
-        sql.push_str(&predicate_to_sql(having)?);
+        sql.push_str(&expr_to_sql(having)?);
     }
 
     if !query.order_by.is_empty() {
@@ -1471,7 +1395,7 @@ fn update_to_sql(query: &UpdateQuery, collection: &str) -> Result<String, SqlQue
     }
     if let Some(predicate) = &query.predicate {
         sql.push_str(" WHERE ");
-        sql.push_str(&predicate_to_sql(predicate)?);
+        sql.push_str(&expr_to_sql(predicate)?);
     }
     if let Some(limit) = &query.limit {
         sql.push_str(" LIMIT ");
@@ -1490,7 +1414,7 @@ fn delete_to_sql(query: &DeleteQuery, collection: &str) -> Result<String, SqlQue
     sql.push_str(collection);
     if let Some(predicate) = &query.predicate {
         sql.push_str(" WHERE ");
-        sql.push_str(&predicate_to_sql(predicate)?);
+        sql.push_str(&expr_to_sql(predicate)?);
     }
     if let Some(limit) = &query.limit {
         sql.push_str(" LIMIT ");
@@ -1519,37 +1443,6 @@ fn projection_to_sql(projection: &[QueryField]) -> Result<String, SqlQueryError>
             out.push_str(" AS ");
             out.push_str(alias);
         }
-    }
-    Ok(out)
-}
-
-fn predicate_to_sql(predicate: &Predicate) -> Result<String, SqlQueryError> {
-    match predicate {
-        Predicate::Compare { op, left, right } => Ok(format!(
-            "{} {} {}",
-            operand_to_sql(left)?,
-            compare_to_sql(*op),
-            operand_to_sql(right)?
-        )),
-        Predicate::Expr(expr) => expr_to_sql(expr),
-        Predicate::Exists(path) => Ok(path_to_sql(path)?),
-        Predicate::And(items) => join_predicates(items, " AND "),
-        Predicate::Or(items) => join_predicates(items, " OR "),
-        Predicate::Not(inner) => Ok(format!("NOT ({})", predicate_to_sql(inner)?)),
-    }
-}
-
-fn join_predicates(items: &[Predicate], sep: &str) -> Result<String, SqlQueryError> {
-    let mut out = String::new();
-    let mut first = true;
-    for item in items {
-        if !first {
-            out.push_str(sep);
-        }
-        first = false;
-        out.push('(');
-        out.push_str(&predicate_to_sql(item)?);
-        out.push(')');
     }
     Ok(out)
 }
@@ -1798,17 +1691,6 @@ fn value_to_sql(value: &Value) -> Result<String, SqlQueryError> {
         other => Err(SqlQueryError::Unsupported(format!(
             "literal value '{other:?}' is not supported in SQL printer"
         ))),
-    }
-}
-
-fn compare_to_sql(op: CompareOp) -> &'static str {
-    match op {
-        CompareOp::Eq => "=",
-        CompareOp::NotEq => "!=",
-        CompareOp::Lt => "<",
-        CompareOp::Lte => "<=",
-        CompareOp::Gt => ">",
-        CompareOp::Gte => ">=",
     }
 }
 

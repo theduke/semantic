@@ -1604,6 +1604,18 @@ fn infer_project_key_for_insert(expr: &semantic_db_core::Expr) -> String {
     "value".to_string()
 }
 
+fn equality_expr(path: FieldPath, value: Value) -> semantic_db_core::Expr {
+    semantic_db_core::Expr::Binary {
+        op: semantic_data::query::BinaryOp::Eq,
+        left: Box::new(semantic_db_core::Expr::Operand(
+            semantic_db_core::Operand::Field(path),
+        )),
+        right: Box::new(semantic_db_core::Expr::Operand(
+            semantic_db_core::Operand::Literal(value),
+        )),
+    }
+}
+
 struct KvPhysicalDataSource<'a, E: KvEngine> {
     db: &'a KvDb<E>,
     catalog: std::sync::Arc<Catalog>,
@@ -1614,15 +1626,15 @@ impl<E: KvEngine> KvPhysicalDataSource<'_, E> {
     fn try_relation_lookup_ids(
         &self,
         source_collection: &CollectionSchema,
-        predicate: &semantic_db_core::Predicate,
+        predicate: &semantic_db_core::Expr,
     ) -> semantic_db_core::CoreResult<Option<Vec<String>>> {
-        let semantic_db_core::Predicate::Expr(semantic_db_core::Expr::RelationExists {
+        let semantic_db_core::Expr::RelationExists {
             relation,
             source,
             target,
             transitive,
             max_depth,
-        }) = predicate
+        } = predicate
         else {
             return Ok(None);
         };
@@ -1799,16 +1811,16 @@ impl<E: KvEngine> KvPhysicalDataSource<'_, E> {
     fn evaluate_predicate_with_relationships(
         &self,
         row: &dyn semantic_db_core::ObjectAccess,
-        predicate: &semantic_db_core::Predicate,
+        predicate: &semantic_db_core::Expr,
     ) -> semantic_db_core::CoreResult<bool> {
         match predicate {
-            semantic_db_core::Predicate::Expr(semantic_db_core::Expr::RelationExists {
+            semantic_db_core::Expr::RelationExists {
                 relation,
                 source,
                 target,
                 transitive,
                 max_depth,
-            }) => {
+            } => {
                 let relation_id = semantic_db_core::evaluate_expr(row, relation)
                     .and_then(|value| value.as_str().map(ToString::to_string))
                     .ok_or_else(|| {
@@ -1850,27 +1862,44 @@ impl<E: KvEngine> KvPhysicalDataSource<'_, E> {
                     max_depth,
                 )
             }
-            semantic_db_core::Predicate::And(items) => {
-                for item in items {
-                    if !self.evaluate_predicate_with_relationships(row, item)? {
-                        return Ok(false);
-                    }
-                }
-                Ok(true)
-            }
-            semantic_db_core::Predicate::Or(items) => {
-                for item in items {
-                    if self.evaluate_predicate_with_relationships(row, item)? {
-                        return Ok(true);
-                    }
-                }
-                Ok(false)
-            }
-            semantic_db_core::Predicate::Not(inner) => {
-                Ok(!self.evaluate_predicate_with_relationships(row, inner)?)
-            }
-            other => Ok(semantic_db_core::evaluate_predicate(row, other)),
+            semantic_db_core::Expr::Binary {
+                op: semantic_data::query::BinaryOp::And,
+                left,
+                right,
+            } => Ok(self.evaluate_predicate_with_relationships(row, left)?
+                && self.evaluate_predicate_with_relationships(row, right)?),
+            semantic_db_core::Expr::Binary {
+                op: semantic_data::query::BinaryOp::Or,
+                left,
+                right,
+            } => Ok(self.evaluate_predicate_with_relationships(row, left)?
+                || self.evaluate_predicate_with_relationships(row, right)?),
+            semantic_db_core::Expr::Unary {
+                op: semantic_data::query::UnaryOp::Not,
+                expr,
+            } => Ok(!self.evaluate_predicate_with_relationships(row, expr)?),
+            _ => Ok(semantic_db_core::evaluate_filter_expr(row, predicate)),
         }
+    }
+
+    fn scan_filtered_with_relationships(
+        &self,
+        source: &semantic_db_core::SourceRef,
+        predicate: &semantic_db_core::Expr,
+    ) -> semantic_db_core::CoreResult<Vec<semantic_db_core::DynObject>> {
+        if let Ok(collection) = self.resolve_collection(source)
+            && let Some(ids) = self.try_relation_lookup_ids(collection, predicate)?
+        {
+            return self.materialize_ids(collection, ids);
+        }
+        let all = semantic_db_core::PhysicalDataSource::scan(self, source)?;
+        let mut out = Vec::new();
+        for row in all {
+            if self.evaluate_predicate_with_relationships(row.as_ref(), predicate)? {
+                out.push(row);
+            }
+        }
+        Ok(out)
     }
 
     fn relationship_exists(
@@ -2034,21 +2063,9 @@ impl<E: KvEngine> semantic_db_core::PhysicalDataSource for KvPhysicalDataSource<
     fn scan_filtered(
         &self,
         source: &semantic_db_core::SourceRef,
-        predicate: &semantic_db_core::Predicate,
+        predicate: &semantic_db_core::Expr,
     ) -> semantic_db_core::CoreResult<Vec<semantic_db_core::DynObject>> {
-        if let Ok(collection) = self.resolve_collection(source)
-            && let Some(ids) = self.try_relation_lookup_ids(collection, predicate)?
-        {
-            return self.materialize_ids(collection, ids);
-        }
-        let all = self.scan(source)?;
-        let mut out = Vec::new();
-        for row in all {
-            if self.evaluate_predicate_with_relationships(row.as_ref(), predicate)? {
-                out.push(row);
-            }
-        }
-        Ok(out)
+        self.scan_filtered_with_relationships(source, predicate)
     }
 
     fn index_lookup(
@@ -2107,11 +2124,7 @@ impl<E: KvEngine> semantic_db_core::PhysicalDataSource for KvPhysicalDataSource<
                     return semantic_db_core::PhysicalDataSource::scan_filtered(
                         self,
                         source,
-                        &semantic_db_core::Predicate::Compare {
-                            op: semantic_data::query::CompareOp::Eq,
-                            left: semantic_db_core::Operand::Field(field_path),
-                            right: semantic_db_core::Operand::Literal(value.clone()),
-                        },
+                        &equality_expr(field_path, value.clone()),
                     );
                 }
             } else if let Some(index) = self.catalog.find_path_equality_index(collection.lid) {
@@ -2123,11 +2136,7 @@ impl<E: KvEngine> semantic_db_core::PhysicalDataSource for KvPhysicalDataSource<
                 return semantic_db_core::PhysicalDataSource::scan_filtered(
                     self,
                     source,
-                    &semantic_db_core::Predicate::Compare {
-                        op: semantic_data::query::CompareOp::Eq,
-                        left: semantic_db_core::Operand::Field(field_path),
-                        right: semantic_db_core::Operand::Literal(value.clone()),
-                    },
+                    &equality_expr(field_path, value.clone()),
                 );
             }
         } else {
@@ -2367,12 +2376,12 @@ mod tests {
         value::{FieldPath, Object, PathSegment, Value},
     };
 
-    use semantic_data::query::{CompareOp, SortDirection};
+    use semantic_data::query::{BinaryOp, SortDirection};
     use semantic_db_core::catalog::CollectionKind;
     use semantic_db_core::{
         ALL_COLLECTION_ALIAS, DEFAULT_COLLECTION, DdlBatch, DdlCollectionKind, DdlOperation, Expr,
-        Operand, OrderBy, Predicate, Query, QueryField, QueryResult, SelectQuery,
-        TransactionConcurrency, TransactionOptions, UpdateQuery,
+        Operand, OrderBy, Query, QueryField, QueryResult, SelectQuery, TransactionConcurrency,
+        TransactionOptions, UpdateQuery,
     };
 
     use super::{KvDb, QueryPlan};
@@ -2411,11 +2420,10 @@ mod tests {
         b.insert("score", Value::I64(2));
         db.insert("events", "b", b).unwrap();
 
-        let query = SelectQuery::new().with_predicate(Predicate::Compare {
-            op: CompareOp::Eq,
-            left: Operand::Field(FieldPath::from_fields(["kind"])),
-            right: Operand::Literal(Value::String("music".to_string())),
-        });
+        let query = SelectQuery::new().with_predicate(eq_predicate(
+            FieldPath::from_fields(["kind"]),
+            Value::String("music".to_string()),
+        ));
 
         let rows = db.select(query.with_collection("events")).unwrap();
         assert_eq!(rows.len(), 1);
@@ -2442,11 +2450,10 @@ mod tests {
 
         let query = SelectQuery::new()
             .with_collection(ALL_COLLECTION_ALIAS)
-            .with_predicate(Predicate::Compare {
-                op: CompareOp::Eq,
-                left: Operand::Field(FieldPath::from_fields(["kind"])),
-                right: Operand::Literal(Value::String("music".to_string())),
-            });
+            .with_predicate(eq_predicate(
+                FieldPath::from_fields(["kind"]),
+                Value::String("music".to_string()),
+            ));
         let rows = db.select(query).unwrap();
         assert_eq!(rows.len(), 2);
     }
@@ -2517,11 +2524,10 @@ mod tests {
         assert!(row.object.get("title").is_none());
 
         let query = SelectQuery::new()
-            .with_predicate(Predicate::Compare {
-                op: CompareOp::Eq,
-                left: Operand::Field(FieldPath::from_fields(["title"])),
-                right: Operand::Literal(Value::String("Hello".to_string())),
-            })
+            .with_predicate(eq_predicate(
+                FieldPath::from_fields(["title"]),
+                Value::String("Hello".to_string()),
+            ))
             .with_projection(vec![QueryField {
                 expr: Box::new(Expr::Operand(Operand::Field(FieldPath::from_fields([
                     "title",
@@ -2614,11 +2620,10 @@ mod tests {
         p2.insert("name", Value::String("B".to_string()));
         db.insert("people", "p2", p2).unwrap();
 
-        let q = SelectQuery::new().with_predicate(Predicate::Compare {
-            op: CompareOp::Eq,
-            left: Operand::Field(FieldPath::from_fields(["email"])),
-            right: Operand::Literal(Value::String("a@example.com".to_string())),
-        });
+        let q = SelectQuery::new().with_predicate(eq_predicate(
+            FieldPath::from_fields(["email"]),
+            Value::String("a@example.com".to_string()),
+        ));
         let rows = db.select(q.with_collection("people")).unwrap();
         assert_eq!(rows.len(), 1);
         assert_eq!(rows[0].get("name"), Some(&Value::String("A".to_string())));
@@ -2645,11 +2650,10 @@ mod tests {
         e.insert("kind", Value::String("music".to_string()));
         db.insert("events", "e1", e).unwrap();
 
-        let q_music = SelectQuery::new().with_predicate(Predicate::Compare {
-            op: CompareOp::Eq,
-            left: Operand::Field(FieldPath::from_fields(["kind"])),
-            right: Operand::Literal(Value::String("music".to_string())),
-        });
+        let q_music = SelectQuery::new().with_predicate(eq_predicate(
+            FieldPath::from_fields(["kind"]),
+            Value::String("music".to_string()),
+        ));
         assert_eq!(
             db.select(q_music.with_collection("events")).unwrap().len(),
             1
@@ -2660,32 +2664,29 @@ mod tests {
         updated.insert("kind", Value::String("video".to_string()));
         db.insert("events", "e1", updated).unwrap();
 
-        let q_music = SelectQuery::new().with_predicate(Predicate::Compare {
-            op: CompareOp::Eq,
-            left: Operand::Field(FieldPath::from_fields(["kind"])),
-            right: Operand::Literal(Value::String("music".to_string())),
-        });
+        let q_music = SelectQuery::new().with_predicate(eq_predicate(
+            FieldPath::from_fields(["kind"]),
+            Value::String("music".to_string()),
+        ));
         assert_eq!(
             db.select(q_music.with_collection("events")).unwrap().len(),
             0
         );
 
-        let q_video = SelectQuery::new().with_predicate(Predicate::Compare {
-            op: CompareOp::Eq,
-            left: Operand::Field(FieldPath::from_fields(["kind"])),
-            right: Operand::Literal(Value::String("video".to_string())),
-        });
+        let q_video = SelectQuery::new().with_predicate(eq_predicate(
+            FieldPath::from_fields(["kind"]),
+            Value::String("video".to_string()),
+        ));
         assert_eq!(
             db.select(q_video.with_collection("events")).unwrap().len(),
             1
         );
 
         db.delete("events", "e1").unwrap();
-        let q_video = SelectQuery::new().with_predicate(Predicate::Compare {
-            op: CompareOp::Eq,
-            left: Operand::Field(FieldPath::from_fields(["kind"])),
-            right: Operand::Literal(Value::String("video".to_string())),
-        });
+        let q_video = SelectQuery::new().with_predicate(eq_predicate(
+            FieldPath::from_fields(["kind"]),
+            Value::String("video".to_string()),
+        ));
         assert_eq!(
             db.select(q_video.with_collection("events")).unwrap().len(),
             0
@@ -2739,11 +2740,10 @@ mod tests {
         db.create_index("events_kind_idx", events, "kind", false)
             .unwrap();
 
-        let q = SelectQuery::new().with_predicate(Predicate::Compare {
-            op: CompareOp::Eq,
-            left: Operand::Field(FieldPath::from_fields(["kind"])),
-            right: Operand::Literal(Value::String("music".to_string())),
-        });
+        let q = SelectQuery::new().with_predicate(eq_predicate(
+            FieldPath::from_fields(["kind"]),
+            Value::String("music".to_string()),
+        ));
 
         let plan = db
             .plan_query(Query::Select(q.with_collection("events")))
@@ -2763,11 +2763,10 @@ mod tests {
             .unwrap();
         db.set_auto_index_enabled(true).unwrap();
 
-        let q = SelectQuery::new().with_predicate(Predicate::Compare {
-            op: CompareOp::Eq,
-            left: Operand::Field(FieldPath::from_fields(["kind"])),
-            right: Operand::Literal(Value::String("music".to_string())),
-        });
+        let q = SelectQuery::new().with_predicate(eq_predicate(
+            FieldPath::from_fields(["kind"]),
+            Value::String("music".to_string()),
+        ));
 
         let plan = db
             .plan_query(Query::Select(q.with_collection("events")))
@@ -2802,11 +2801,10 @@ mod tests {
         e3.insert("kind", Value::String("video".to_string()));
         db.insert("events", "e3", e3).unwrap();
 
-        let q = SelectQuery::new().with_predicate(Predicate::Compare {
-            op: CompareOp::Eq,
-            left: Operand::Field(FieldPath::from_fields(["kind"])),
-            right: Operand::Literal(Value::String("music".to_string())),
-        });
+        let q = SelectQuery::new().with_predicate(eq_predicate(
+            FieldPath::from_fields(["kind"]),
+            Value::String("music".to_string()),
+        ));
         let rows = db.select(q.with_collection("events")).unwrap();
         assert_eq!(rows.len(), 2);
         let mut ids = rows
@@ -2837,11 +2835,10 @@ mod tests {
             PathSegment::Index(0),
             PathSegment::Field("nestkey".to_string()),
         ]);
-        let q_nested = SelectQuery::new().with_predicate(Predicate::Compare {
-            op: CompareOp::Eq,
-            left: Operand::Field(nested_path.clone()),
-            right: Operand::Literal(Value::String("nestvalue".to_string())),
-        });
+        let q_nested = SelectQuery::new().with_predicate(eq_predicate(
+            nested_path.clone(),
+            Value::String("nestvalue".to_string()),
+        ));
         assert_eq!(
             db.select(q_nested.clone().with_collection("events"))
                 .unwrap()
@@ -2872,11 +2869,10 @@ mod tests {
             db.select(q_nested.with_collection("events")).unwrap().len(),
             0
         );
-        let q_new = SelectQuery::new().with_predicate(Predicate::Compare {
-            op: CompareOp::Eq,
-            left: Operand::Field(nested_path),
-            right: Operand::Literal(Value::String("newvalue".to_string())),
-        });
+        let q_new = SelectQuery::new().with_predicate(eq_predicate(
+            nested_path,
+            Value::String("newvalue".to_string()),
+        ));
         assert_eq!(
             db.select(q_new.clone().with_collection("events"))
                 .unwrap()
@@ -2900,11 +2896,10 @@ mod tests {
         db.insert("items", "i1", row).unwrap();
 
         let update = UpdateQuery::new()
-            .with_predicate(Predicate::Compare {
-                op: CompareOp::Eq,
-                left: Operand::Field(FieldPath::from_fields(["id"])),
-                right: Operand::Literal(Value::String("i1".to_string())),
-            })
+            .with_predicate(eq_predicate(
+                FieldPath::from_fields(["id"]),
+                Value::String("i1".to_string()),
+            ))
             .set(
                 FieldPath::from_fields(["score"]),
                 Expr::Operand(Operand::Literal(Value::I64(9))),
@@ -2940,11 +2935,10 @@ mod tests {
         db.insert("items", "i1", row).unwrap();
 
         let delete = semantic_db_core::DeleteQuery::new()
-            .with_predicate(Predicate::Compare {
-                op: CompareOp::Eq,
-                left: Operand::Field(FieldPath::from_fields(["kind"])),
-                right: Operand::Literal(Value::String("music".to_string())),
-            })
+            .with_predicate(eq_predicate(
+                FieldPath::from_fields(["kind"]),
+                Value::String("music".to_string()),
+            ))
             .with_returning(vec![QueryField {
                 expr: Box::new(Expr::Operand(Operand::Field(FieldPath::from_fields([
                     "id",
@@ -2990,6 +2984,14 @@ mod tests {
             constraints: vec![],
             annotations: vec![],
             meta: Meta::default(),
+        }
+    }
+
+    fn eq_predicate(path: FieldPath, value: Value) -> Expr {
+        Expr::Binary {
+            op: BinaryOp::Eq,
+            left: Box::new(Expr::Operand(Operand::Field(path))),
+            right: Box::new(Expr::Operand(Operand::Literal(value))),
         }
     }
 }

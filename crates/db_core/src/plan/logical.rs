@@ -4,20 +4,20 @@ use semantic_data::value::{FieldPath, Object};
 use crate::catalog::LocalCollectionId;
 use crate::plan::SourceRef;
 use crate::query::{
-    Expr, JoinCondition, Operand, OrderBy, Predicate, QueryField, SelectQuery, evaluate_usize_expr,
+    Expr, JoinCondition, Operand, OrderBy, QueryField, SelectQuery, evaluate_usize_expr,
 };
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum LogicalJoinCondition {
     True,
-    Predicate(Predicate),
+    Predicate(Expr),
     UsingFields { left: FieldPath, right: FieldPath },
 }
 
 impl From<JoinCondition> for LogicalJoinCondition {
     fn from(value: JoinCondition) -> Self {
         match value {
-            JoinCondition::OnPredicate(predicate) => Self::Predicate(predicate),
+            JoinCondition::OnExpr(predicate) => Self::Predicate(predicate),
             JoinCondition::UsingFields { left, right } => Self::UsingFields { left, right },
         }
     }
@@ -37,14 +37,14 @@ pub struct LogicalJoinPlan {
 pub enum LogicalPlan {
     Source {
         source: SourceRef,
-        pushed_predicate: Option<Predicate>,
+        pushed_predicate: Option<Expr>,
     },
     Values {
         values: Vec<Object>,
     },
     Filter {
         input: Box<LogicalPlan>,
-        predicate: Predicate,
+        predicate: Expr,
     },
     Sort {
         input: Box<LogicalPlan>,
@@ -58,7 +58,7 @@ pub enum LogicalPlan {
         input: Box<LogicalPlan>,
         group_by: Vec<Expr>,
         projection: Vec<QueryField>,
-        having: Option<Predicate>,
+        having: Option<Expr>,
     },
     Limit {
         input: Box<LogicalPlan>,
@@ -248,13 +248,17 @@ pub fn build_logical_plan(query: &SelectQuery, source: SourceRef) -> LogicalPlan
     plan
 }
 
-fn join_source_predicate(join: &crate::JoinQuery) -> Option<Predicate> {
+fn join_source_predicate(join: &crate::JoinQuery) -> Option<Expr> {
     let mut predicates = Vec::new();
     if let Some(class_name) = &join.source.class {
-        predicates.push(Predicate::Compare {
-            op: semantic_data::query::CompareOp::Eq,
-            left: Operand::Field(FieldPath::from_fields(["type"])),
-            right: Operand::Literal(semantic_data::value::Value::String(class_name.clone())),
+        predicates.push(Expr::Binary {
+            op: semantic_data::query::BinaryOp::Eq,
+            left: Box::new(Expr::Operand(Operand::Field(FieldPath::from_fields([
+                "type",
+            ])))),
+            right: Box::new(Expr::Operand(Operand::Literal(
+                semantic_data::value::Value::String(class_name.clone()),
+            ))),
         });
     }
     if let Some(predicate) = &join.predicate {
@@ -263,7 +267,15 @@ fn join_source_predicate(join: &crate::JoinQuery) -> Option<Predicate> {
     match predicates.len() {
         0 => None,
         1 => predicates.into_iter().next(),
-        _ => Some(Predicate::And(predicates)),
+        _ => {
+            let mut iter = predicates.into_iter();
+            let first = iter.next().expect("checked non-empty");
+            Some(iter.fold(first, |left, right| Expr::Binary {
+                op: semantic_data::query::BinaryOp::And,
+                left: Box::new(left),
+                right: Box::new(right),
+            }))
+        }
     }
 }
 
@@ -334,50 +346,61 @@ enum SubqueryApply {
     },
 }
 
-fn extract_subquery_apply(predicate: Predicate) -> (Vec<SubqueryApply>, Option<Predicate>) {
-    match predicate {
-        Predicate::And(items) => {
-            let mut applies = Vec::new();
-            let mut residual = Vec::new();
-            for item in items {
-                if let Some(apply) = predicate_to_apply(&item) {
-                    applies.push(apply);
-                } else {
-                    residual.push(item);
-                }
-            }
-            let residual = match residual.len() {
-                0 => None,
-                1 => residual.into_iter().next(),
-                _ => Some(Predicate::And(residual)),
-            };
-            (applies, residual)
-        }
-        other => {
-            if let Some(apply) = predicate_to_apply(&other) {
-                (vec![apply], None)
-            } else {
-                (Vec::new(), Some(other))
-            }
+fn extract_subquery_apply(predicate: Expr) -> (Vec<SubqueryApply>, Option<Expr>) {
+    let mut applies = Vec::new();
+    let mut residual = Vec::new();
+    for item in split_conjuncts(predicate) {
+        if let Some(apply) = expr_to_apply(&item) {
+            applies.push(apply);
+        } else {
+            residual.push(item);
         }
     }
+    (applies, combine_conjuncts(residual))
 }
 
-fn predicate_to_apply(predicate: &Predicate) -> Option<SubqueryApply> {
+fn expr_to_apply(predicate: &Expr) -> Option<SubqueryApply> {
     match predicate {
-        Predicate::Expr(Expr::Exists { query, negated }) => Some(SubqueryApply::Exists {
+        Expr::Exists { query, negated } => Some(SubqueryApply::Exists {
             subquery: query.as_ref().clone(),
             negated: *negated,
         }),
-        Predicate::Expr(Expr::InSubquery {
+        Expr::InSubquery {
             expr,
             query,
             negated,
-        }) => Some(SubqueryApply::InSubquery {
+        } => Some(SubqueryApply::InSubquery {
             left: expr.as_ref().clone(),
             subquery: query.as_ref().clone(),
             negated: *negated,
         }),
         _ => None,
     }
+}
+
+fn split_conjuncts(expr: Expr) -> Vec<Expr> {
+    match expr {
+        Expr::Binary {
+            op: semantic_data::query::BinaryOp::And,
+            left,
+            right,
+        } => {
+            let mut out = split_conjuncts(*left);
+            out.extend(split_conjuncts(*right));
+            out
+        }
+        other => vec![other],
+    }
+}
+
+fn combine_conjuncts(mut items: Vec<Expr>) -> Option<Expr> {
+    if items.is_empty() {
+        return None;
+    }
+    let first = items.remove(0);
+    Some(items.into_iter().fold(first, |left, right| Expr::Binary {
+        op: semantic_data::query::BinaryOp::And,
+        left: Box::new(left),
+        right: Box::new(right),
+    }))
 }

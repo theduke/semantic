@@ -3,7 +3,7 @@ use std::collections::{BTreeSet, HashMap};
 use std::hash::Hash;
 
 use futures::{FutureExt, TryStreamExt, future::BoxFuture, stream::BoxStream};
-use semantic_data::query::{AggregateOp, CompareOp, JoinType};
+use semantic_data::query::{AggregateOp, JoinType};
 use semantic_data::value::{FieldPath, Object, Value, ValueRef};
 
 use crate::QueryContext;
@@ -13,7 +13,7 @@ use crate::plan::{
 };
 use crate::query::{
     CoreError, CoreResult, Expr, FunctionArg, ObjectAccess as QueryObjectAccess, Operand,
-    Predicate, compare_objects_for_plan, evaluate_expr, evaluate_predicate, evaluate_usize_expr,
+    compare_objects_for_plan, evaluate_expr, evaluate_filter_expr, evaluate_usize_expr,
 };
 
 pub type DynObject = Box<dyn QueryObjectAccess>;
@@ -34,15 +34,11 @@ impl Default for ExecutionOptions {
 pub trait PhysicalDataSource: Send + Sync {
     fn scan(&self, source: &SourceRef) -> CoreResult<Vec<DynObject>>;
 
-    fn scan_filtered(
-        &self,
-        source: &SourceRef,
-        predicate: &Predicate,
-    ) -> CoreResult<Vec<DynObject>> {
+    fn scan_filtered(&self, source: &SourceRef, predicate: &Expr) -> CoreResult<Vec<DynObject>> {
         let items = self.scan(source)?;
         Ok(items
             .into_iter()
-            .filter(|item| evaluate_predicate(item.as_ref(), predicate))
+            .filter(|item| evaluate_filter_expr(item.as_ref(), predicate))
             .collect())
     }
 
@@ -141,7 +137,7 @@ fn execute_physical_dyn(
             if let Some(residual) = residual_predicate {
                 Ok(items
                     .into_iter()
-                    .filter(|item| evaluate_predicate(item.as_ref(), residual))
+                    .filter(|item| evaluate_filter_expr(item.as_ref(), residual))
                     .collect())
             } else {
                 Ok(items)
@@ -154,7 +150,7 @@ fn execute_physical_dyn(
             .collect()),
         PhysicalPlan::Filter { input, predicate } => Ok(execute_physical_dyn(input, source)?
             .into_iter()
-            .filter(|row| evaluate_predicate(row.as_ref(), predicate))
+            .filter(|row| evaluate_filter_expr(row.as_ref(), predicate))
             .collect()),
         PhysicalPlan::Sort { input, order_by } => {
             let mut out = execute_physical_dyn(input, source)?;
@@ -280,7 +276,7 @@ fn execute_physical_dyn_async<'a>(
             }) => source.scan(source_ref).await.map(|items| {
                 items
                     .into_iter()
-                    .filter(|item| evaluate_predicate(item.as_ref(), predicate))
+                    .filter(|item| evaluate_filter_expr(item.as_ref(), predicate))
                     .collect()
             }),
             PhysicalPlan::Source(PhysicalSource::IndexLookup {
@@ -295,7 +291,7 @@ fn execute_physical_dyn_async<'a>(
                 Ok(execute_physical_dyn_async(input, source, options)
                     .await?
                     .into_iter()
-                    .filter(|row| evaluate_predicate(row.as_ref(), predicate))
+                    .filter(|row| evaluate_filter_expr(row.as_ref(), predicate))
                     .collect())
             }
             PhysicalPlan::Sort { input, order_by } => {
@@ -545,7 +541,7 @@ fn join_pair_matches(
                 &join.left_binding,
                 &join.right_binding,
             );
-            evaluate_predicate(&merged, predicate)
+            evaluate_filter_expr(&merged, predicate)
         }
         PhysicalJoinCondition::Eq { left: l, right: r } => {
             let lv = value_ref_for_join_key(left, l);
@@ -673,7 +669,7 @@ fn execute_aggregate(
     input_rows: Vec<DynObject>,
     group_by: &[crate::query::Expr],
     projection: &[PhysicalProjectionField],
-    having: &Option<Predicate>,
+    having: &Option<Expr>,
 ) -> CoreResult<Vec<DynObject>> {
     let owned_rows = input_rows
         .into_iter()
@@ -719,56 +715,14 @@ fn execute_aggregate(
     Ok(out)
 }
 
-fn evaluate_group_predicate(rows: &[Object], predicate: &Predicate) -> bool {
-    match predicate {
-        Predicate::Compare { op, left, right } => {
-            let left = evaluate_group_operand(rows, left);
-            let right = evaluate_group_operand(rows, right);
-            compare_group_values(*op, left.as_ref(), right.as_ref())
-        }
-        Predicate::Expr(expr) => evaluate_group_expr(rows, expr)
-            .as_ref()
-            .is_some_and(|value| match value {
-                Value::Bool(v) => *v,
-                Value::Null | Value::Void => false,
-                _ => true,
-            }),
-        Predicate::Exists(path) => rows
-            .first()
-            .and_then(|row| row.value_at_path_ref(path))
-            .is_some(),
-        Predicate::And(items) => items
-            .iter()
-            .all(|item| evaluate_group_predicate(rows, item)),
-        Predicate::Or(items) => items
-            .iter()
-            .any(|item| evaluate_group_predicate(rows, item)),
-        Predicate::Not(inner) => !evaluate_group_predicate(rows, inner),
-    }
-}
-
-fn evaluate_group_operand(rows: &[Object], operand: &Operand) -> Option<Value> {
-    match operand {
-        Operand::Literal(value) => Some(value.clone()),
-        Operand::Field(path) => rows
-            .first()
-            .and_then(|row| row.value_at_path_ref(path))
-            .map(|value| value.into_owned()),
-    }
-}
-
-fn compare_group_values(op: CompareOp, left: Option<&Value>, right: Option<&Value>) -> bool {
-    let (Some(left), Some(right)) = (left, right) else {
-        return false;
-    };
-    match op {
-        CompareOp::Eq => left == right,
-        CompareOp::NotEq => left != right,
-        CompareOp::Lt => left < right,
-        CompareOp::Lte => left <= right,
-        CompareOp::Gt => left > right,
-        CompareOp::Gte => left >= right,
-    }
+fn evaluate_group_predicate(rows: &[Object], predicate: &Expr) -> bool {
+    evaluate_group_expr(rows, predicate)
+        .as_ref()
+        .is_some_and(|value| match value {
+            Value::Bool(v) => *v,
+            Value::Null | Value::Void => false,
+            _ => true,
+        })
 }
 
 fn evaluate_group_expr(rows: &[Object], expr: &Expr) -> Option<Value> {
@@ -1057,7 +1011,6 @@ impl ValueKey {
 mod tests {
     use super::*;
     use crate::query::Operand;
-    use semantic_data::query::CompareOp;
 
     struct InlineSource {
         left: Vec<Object>,
@@ -1157,10 +1110,10 @@ mod tests {
                     binding: None,
                     backend_tag: None,
                 },
-                predicate: Predicate::Compare {
-                    op: CompareOp::Eq,
-                    left: Operand::Field(FieldPath::from_fields(["x"])),
-                    right: Operand::Literal(Value::I64(1)),
+                predicate: Expr::Binary {
+                    op: semantic_data::query::BinaryOp::Eq,
+                    left: Box::new(Expr::Operand(Operand::Field(FieldPath::from_fields(["x"])))),
+                    right: Box::new(Expr::Operand(Operand::Literal(Value::I64(1)))),
                 },
             })),
             negated: false,

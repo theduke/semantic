@@ -1,4 +1,4 @@
-use semantic_data::query::{CompareOp, Expr, Operand, Predicate, SelectQuery, UpdateQuery};
+use semantic_data::query::{BinaryOp, Expr, Operand, SelectQuery, UpdateQuery};
 use semantic_data::schema::DbOpenMode;
 use semantic_data::value::{FieldPath, Object, Value};
 use semantic_db_core::{Db, catalog::CollectionKind};
@@ -33,11 +33,10 @@ async fn main() -> std::result::Result<(), semantic_db_core::DbError> {
         .select(
             SelectQuery::new()
                 .with_collection("users")
-                .with_predicate(Predicate::Compare {
-                    op: CompareOp::Eq,
-                    left: Operand::Field(FieldPath::from_fields(["role"])),
-                    right: Operand::Literal(Value::String("admin".to_string())),
-                }),
+                .with_predicate(eq_predicate(
+                    FieldPath::from_fields(["role"]),
+                    Value::String("admin".to_string()),
+                )),
         )
         .await?;
     assert_eq!(admins.len(), 1);
@@ -49,11 +48,10 @@ async fn main() -> std::result::Result<(), semantic_db_core::DbError> {
     db.update_where(
         UpdateQuery::new()
             .with_collection("users")
-            .with_predicate(Predicate::Compare {
-                op: CompareOp::Eq,
-                left: Operand::Field(FieldPath::from_fields(["username"])),
-                right: Operand::Literal(Value::String("alice".to_string())),
-            })
+            .with_predicate(eq_predicate(
+                FieldPath::from_fields(["username"]),
+                Value::String("alice".to_string()),
+            ))
             .set(
                 FieldPath::from_fields(["role"]),
                 Expr::Operand(Operand::Literal(Value::String("owner".to_string()))),
@@ -65,11 +63,10 @@ async fn main() -> std::result::Result<(), semantic_db_core::DbError> {
         .select(
             SelectQuery::new()
                 .with_collection("users")
-                .with_predicate(Predicate::Compare {
-                    op: CompareOp::Eq,
-                    left: Operand::Field(FieldPath::from_fields(["role"])),
-                    right: Operand::Literal(Value::String("owner".to_string())),
-                }),
+                .with_predicate(eq_predicate(
+                    FieldPath::from_fields(["role"]),
+                    Value::String("owner".to_string()),
+                )),
         )
         .await?;
     assert_eq!(owners.len(), 1);
@@ -84,15 +81,22 @@ async fn main() -> std::result::Result<(), semantic_db_core::DbError> {
         .select(
             SelectQuery::new()
                 .with_collection("users")
-                .with_predicate(Predicate::Compare {
-                    op: CompareOp::Eq,
-                    left: Operand::Field(FieldPath::from_fields(["username"])),
-                    right: Operand::Literal(Value::String("bob".to_string())),
-                }),
+                .with_predicate(eq_predicate(
+                    FieldPath::from_fields(["username"]),
+                    Value::String("bob".to_string()),
+                )),
         )
         .await?;
     assert!(bob_rows.is_empty());
 
     let _ = std::fs::remove_file(path);
     Ok(())
+}
+
+fn eq_predicate(path: FieldPath, value: Value) -> Expr {
+    Expr::Binary {
+        op: BinaryOp::Eq,
+        left: Box::new(Expr::Operand(Operand::Field(path))),
+        right: Box::new(Expr::Operand(Operand::Literal(value))),
+    }
 }

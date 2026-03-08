@@ -2,8 +2,8 @@ use semantic_data::value::{FieldPath, PathSegment};
 use thiserror::Error;
 
 use crate::{
-    Assignment, DeleteQuery, Expr, InsertQuery, Operand, OrderBy, Predicate, Query, QueryField,
-    SelectQuery, UpdateQuery, catalog::CollectionSchema,
+    Assignment, DeleteQuery, Expr, InsertQuery, Operand, OrderBy, Query, QueryField, SelectQuery,
+    UpdateQuery, catalog::CollectionSchema,
 };
 
 #[derive(Debug, Error, Clone, PartialEq, Eq)]
@@ -27,7 +27,7 @@ pub fn canonicalize_select_query(
     let predicate = query
         .predicate
         .as_ref()
-        .map(|predicate| canonicalize_predicate(predicate, collection, "select predicate"))
+        .map(|predicate| canonicalize_expr(predicate, collection, "select predicate"))
         .transpose()?;
 
     let projection = query
@@ -71,7 +71,7 @@ pub fn canonicalize_select_query(
         having: query
             .having
             .as_ref()
-            .map(|predicate| canonicalize_predicate(predicate, collection, "select having"))
+            .map(|predicate| canonicalize_expr(predicate, collection, "select having"))
             .transpose()?,
         order_by,
         offset: canonicalize_expr(&query.offset, collection, "select offset")?,
@@ -126,7 +126,7 @@ pub fn canonicalize_update_query(
     let predicate = query
         .predicate
         .as_ref()
-        .map(|predicate| canonicalize_predicate(predicate, collection, "update predicate"))
+        .map(|predicate| canonicalize_expr(predicate, collection, "update predicate"))
         .transpose()?;
 
     let assignments = query
@@ -175,7 +175,7 @@ pub fn canonicalize_delete_query(
     let predicate = query
         .predicate
         .as_ref()
-        .map(|predicate| canonicalize_predicate(predicate, collection, "delete predicate"))
+        .map(|predicate| canonicalize_expr(predicate, collection, "delete predicate"))
         .transpose()?;
 
     let returning = query
@@ -203,40 +203,6 @@ pub fn canonicalize_delete_query(
             .transpose()?,
         returning,
     })
-}
-
-fn canonicalize_predicate(
-    predicate: &Predicate,
-    collection: &CollectionSchema,
-    context: &'static str,
-) -> CanonicalResult<Predicate> {
-    match predicate {
-        Predicate::Compare { op, left, right } => {
-            let left = canonicalize_operand(left, collection, context)?;
-            let right = canonicalize_operand(right, collection, context)?;
-            Ok(Predicate::Compare {
-                op: *op,
-                left,
-                right,
-            })
-        }
-        Predicate::Expr(expr) => canonicalize_expr(expr, collection, context).map(Predicate::Expr),
-        Predicate::Exists(path) => {
-            canonicalize_path(path, collection, context).map(Predicate::Exists)
-        }
-        Predicate::And(items) => items
-            .iter()
-            .map(|item| canonicalize_predicate(item, collection, context))
-            .collect::<CanonicalResult<Vec<_>>>()
-            .map(Predicate::And),
-        Predicate::Or(items) => items
-            .iter()
-            .map(|item| canonicalize_predicate(item, collection, context))
-            .collect::<CanonicalResult<Vec<_>>>()
-            .map(Predicate::Or),
-        Predicate::Not(item) => canonicalize_predicate(item, collection, context)
-            .map(|item| Predicate::Not(Box::new(item))),
-    }
 }
 
 fn canonicalize_expr(

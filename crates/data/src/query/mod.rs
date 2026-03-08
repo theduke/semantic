@@ -1,18 +1,6 @@
 #[derive(facet::Facet, Debug, Clone, Copy, PartialEq, Eq)]
 #[repr(C)]
 #[facet(rename_all = "snake_case")]
-pub enum CompareOp {
-    Eq,
-    NotEq,
-    Lt,
-    Lte,
-    Gt,
-    Gte,
-}
-
-#[derive(facet::Facet, Debug, Clone, Copy, PartialEq, Eq)]
-#[repr(C)]
-#[facet(rename_all = "snake_case")]
 pub enum BinaryOp {
     Add,
     Sub,
@@ -177,22 +165,6 @@ impl From<usize> for Expr {
 }
 
 #[derive(facet::Facet, Debug, Clone, PartialEq)]
-#[repr(C)]
-#[facet(rename_all = "snake_case")]
-pub enum Predicate {
-    Compare {
-        op: CompareOp,
-        left: Operand,
-        right: Operand,
-    },
-    Expr(Expr),
-    Exists(FieldPath),
-    And(Vec<Predicate>),
-    Or(Vec<Predicate>),
-    Not(Box<Predicate>),
-}
-
-#[derive(facet::Facet, Debug, Clone, PartialEq)]
 pub struct QueryField {
     pub expr: Box<Expr>,
     pub alias: Option<String>,
@@ -208,7 +180,7 @@ pub struct OrderBy {
 #[repr(C)]
 #[facet(rename_all = "snake_case")]
 pub enum JoinCondition {
-    OnPredicate(Predicate),
+    OnExpr(Expr),
     UsingFields { left: FieldPath, right: FieldPath },
 }
 
@@ -224,7 +196,7 @@ pub struct JoinQuery {
     pub alias: Option<String>,
     pub join_type: JoinType,
     pub condition: JoinCondition,
-    pub predicate: Option<Predicate>,
+    pub predicate: Option<Expr>,
 }
 
 #[derive(facet::Facet, Debug, Clone, PartialEq)]
@@ -232,11 +204,11 @@ pub struct SelectQuery {
     pub collection: Option<String>,
     pub source_alias: Option<String>,
     pub joins: Vec<JoinQuery>,
-    pub predicate: Option<Predicate>,
+    pub predicate: Option<Expr>,
     pub projection: Vec<QueryField>,
     pub distinct: bool,
     pub group_by: Vec<Expr>,
-    pub having: Option<Predicate>,
+    pub having: Option<Expr>,
     pub order_by: Vec<OrderBy>,
     pub offset: Expr,
     pub limit: Option<Expr>,
@@ -264,7 +236,7 @@ impl SelectQuery {
         self
     }
 
-    pub fn with_predicate(mut self, predicate: Predicate) -> Self {
+    pub fn with_predicate(mut self, predicate: Expr) -> Self {
         self.predicate = Some(predicate);
         self
     }
@@ -294,7 +266,7 @@ impl SelectQuery {
         self
     }
 
-    pub fn with_having(mut self, having: Predicate) -> Self {
+    pub fn with_having(mut self, having: Expr) -> Self {
         self.having = Some(having);
         self
     }
@@ -384,7 +356,7 @@ impl Default for InsertQuery {
 #[derive(facet::Facet, Debug, Clone, PartialEq)]
 pub struct UpdateQuery {
     pub collection: Option<String>,
-    pub predicate: Option<Predicate>,
+    pub predicate: Option<Expr>,
     pub assignments: Vec<Assignment>,
     pub limit: Option<Expr>,
     pub returning: Vec<QueryField>,
@@ -406,7 +378,7 @@ impl UpdateQuery {
         self
     }
 
-    pub fn with_predicate(mut self, predicate: Predicate) -> Self {
+    pub fn with_predicate(mut self, predicate: Expr) -> Self {
         self.predicate = Some(predicate);
         self
     }
@@ -436,7 +408,7 @@ impl Default for UpdateQuery {
 #[derive(facet::Facet, Debug, Clone, PartialEq)]
 pub struct DeleteQuery {
     pub collection: Option<String>,
-    pub predicate: Option<Predicate>,
+    pub predicate: Option<Expr>,
     pub limit: Option<Expr>,
     pub returning: Vec<QueryField>,
 }
@@ -456,7 +428,7 @@ impl DeleteQuery {
         self
     }
 
-    pub fn with_predicate(mut self, predicate: Predicate) -> Self {
+    pub fn with_predicate(mut self, predicate: Expr) -> Self {
         self.predicate = Some(predicate);
         self
     }

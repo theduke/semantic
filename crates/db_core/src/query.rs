@@ -130,7 +130,7 @@ use std::{
 use regex::RegexBuilder;
 use semantic_data::query as public_query;
 use semantic_data::query::{
-    AggregateOp, BinaryOp, CompareOp, JoinType, PatternMatchKind, SortDirection, UnaryOp,
+    AggregateOp, BinaryOp, JoinType, PatternMatchKind, SortDirection, UnaryOp,
 };
 use semantic_data::value::{FieldPath, Object, PathSegment, Value, ValueRef};
 
@@ -286,22 +286,6 @@ impl From<usize> for Expr {
 }
 
 #[derive(facet::Facet, Debug, Clone, PartialEq)]
-#[repr(C)]
-#[facet(rename_all = "snake_case")]
-pub enum Predicate {
-    Compare {
-        op: CompareOp,
-        left: Operand,
-        right: Operand,
-    },
-    Expr(Expr),
-    Exists(FieldPath),
-    And(Vec<Predicate>),
-    Or(Vec<Predicate>),
-    Not(Box<Predicate>),
-}
-
-#[derive(facet::Facet, Debug, Clone, PartialEq)]
 pub struct QueryField {
     pub expr: Box<Expr>,
     pub alias: Option<String>,
@@ -317,7 +301,7 @@ pub struct OrderBy {
 #[repr(C)]
 #[facet(rename_all = "snake_case")]
 pub enum JoinCondition {
-    OnPredicate(Predicate),
+    OnExpr(Expr),
     UsingFields { left: FieldPath, right: FieldPath },
 }
 
@@ -358,7 +342,7 @@ pub struct JoinQuery {
     pub alias: Option<String>,
     pub join_type: JoinType,
     pub condition: JoinCondition,
-    pub predicate: Option<Predicate>,
+    pub predicate: Option<Expr>,
 }
 
 #[derive(facet::Facet, Debug, Clone, PartialEq)]
@@ -366,11 +350,11 @@ pub struct SelectQuery {
     pub collection: Option<String>,
     pub source_alias: Option<String>,
     pub joins: Vec<JoinQuery>,
-    pub predicate: Option<Predicate>,
+    pub predicate: Option<Expr>,
     pub projection: Vec<QueryField>,
     pub distinct: bool,
     pub group_by: Vec<Expr>,
-    pub having: Option<Predicate>,
+    pub having: Option<Expr>,
     pub order_by: Vec<OrderBy>,
     pub offset: Expr,
     pub limit: Option<Expr>,
@@ -540,27 +524,6 @@ impl From<public_query::Expr> for Expr {
     }
 }
 
-impl From<public_query::Predicate> for Predicate {
-    fn from(value: public_query::Predicate) -> Self {
-        match value {
-            public_query::Predicate::Compare { op, left, right } => Self::Compare {
-                op,
-                left: left.into(),
-                right: right.into(),
-            },
-            public_query::Predicate::Expr(expr) => Self::Expr(expr.into()),
-            public_query::Predicate::Exists(path) => Self::Exists(path),
-            public_query::Predicate::And(items) => {
-                Self::And(items.into_iter().map(Into::into).collect())
-            }
-            public_query::Predicate::Or(items) => {
-                Self::Or(items.into_iter().map(Into::into).collect())
-            }
-            public_query::Predicate::Not(item) => Self::Not(Box::new((*item).into())),
-        }
-    }
-}
-
 impl From<public_query::QueryField> for QueryField {
     fn from(value: public_query::QueryField) -> Self {
         Self {
@@ -582,9 +545,7 @@ impl From<public_query::OrderBy> for OrderBy {
 impl From<public_query::JoinCondition> for JoinCondition {
     fn from(value: public_query::JoinCondition) -> Self {
         match value {
-            public_query::JoinCondition::OnPredicate(predicate) => {
-                Self::OnPredicate(predicate.into())
-            }
+            public_query::JoinCondition::OnExpr(expr) => Self::OnExpr(expr.into()),
             public_query::JoinCondition::UsingFields { left, right } => {
                 Self::UsingFields { left, right }
             }
@@ -759,7 +720,7 @@ impl SelectQuery {
             .unwrap_or(crate::DEFAULT_COLLECTION)
     }
 
-    pub fn with_predicate(mut self, predicate: Predicate) -> Self {
+    pub fn with_predicate(mut self, predicate: Expr) -> Self {
         self.predicate = Some(predicate);
         self
     }
@@ -789,7 +750,7 @@ impl SelectQuery {
         self
     }
 
-    pub fn with_having(mut self, having: Predicate) -> Self {
+    pub fn with_having(mut self, having: Expr) -> Self {
         self.having = Some(having);
         self
     }
@@ -995,7 +956,7 @@ impl Default for InsertQuery {
 #[derive(facet::Facet, Debug, Clone, PartialEq)]
 pub struct UpdateQuery {
     pub collection: Option<String>,
-    pub predicate: Option<Predicate>,
+    pub predicate: Option<Expr>,
     pub assignments: Vec<Assignment>,
     pub limit: Option<Expr>,
     pub returning: Vec<QueryField>,
@@ -1023,7 +984,7 @@ impl UpdateQuery {
             .unwrap_or(crate::DEFAULT_COLLECTION)
     }
 
-    pub fn with_predicate(mut self, predicate: Predicate) -> Self {
+    pub fn with_predicate(mut self, predicate: Expr) -> Self {
         self.predicate = Some(predicate);
         self
     }
@@ -1053,7 +1014,7 @@ impl Default for UpdateQuery {
 #[derive(facet::Facet, Debug, Clone, PartialEq)]
 pub struct DeleteQuery {
     pub collection: Option<String>,
-    pub predicate: Option<Predicate>,
+    pub predicate: Option<Expr>,
     pub limit: Option<Expr>,
     pub returning: Vec<QueryField>,
 }
@@ -1079,7 +1040,7 @@ impl DeleteQuery {
             .unwrap_or(crate::DEFAULT_COLLECTION)
     }
 
-    pub fn with_predicate(mut self, predicate: Predicate) -> Self {
+    pub fn with_predicate(mut self, predicate: Expr) -> Self {
         self.predicate = Some(predicate);
         self
     }
@@ -1419,23 +1380,6 @@ fn apply_delete_plan(query: &DeleteQuery, entities: Vec<Entity>) -> DeletePlanRe
     }
 }
 
-pub fn evaluate_predicate<T: ObjectAccess + ?Sized>(value: &T, predicate: &Predicate) -> bool {
-    match predicate {
-        Predicate::Compare { op, left, right } => {
-            let left = resolve_operand(value, left);
-            let right = resolve_operand(value, right);
-            compare_values(*op, left, right)
-        }
-        Predicate::Expr(expr) => evaluate_expr(value, expr)
-            .as_ref()
-            .is_some_and(value_truthy),
-        Predicate::Exists(path) => value.value_at_path_ref(path).is_some(),
-        Predicate::And(items) => items.iter().all(|item| evaluate_predicate(value, item)),
-        Predicate::Or(items) => items.iter().any(|item| evaluate_predicate(value, item)),
-        Predicate::Not(item) => !evaluate_predicate(value, item),
-    }
-}
-
 pub fn evaluate_expr<T: ObjectAccess + ?Sized>(value: &T, expr: &Expr) -> Option<Value> {
     match expr {
         Expr::Operand(operand) => resolve_operand(value, operand).map(|v| v.into_owned()),
@@ -1571,11 +1515,17 @@ pub fn project_object<T: ObjectAccess + ?Sized>(value: &T, projection: &[QueryFi
     out
 }
 
-pub fn row_matches<T: ObjectAccess + ?Sized>(row: &T, predicate: &Option<Predicate>) -> bool {
+pub fn row_matches<T: ObjectAccess + ?Sized>(row: &T, predicate: &Option<Expr>) -> bool {
     match predicate {
-        Some(predicate) => evaluate_predicate(row, predicate),
+        Some(predicate) => evaluate_filter_expr(row, predicate),
         None => true,
     }
+}
+
+pub fn evaluate_filter_expr<T: ObjectAccess + ?Sized>(row: &T, predicate: &Expr) -> bool {
+    evaluate_expr(row, predicate)
+        .as_ref()
+        .is_some_and(value_truthy)
 }
 
 pub fn set_value_at_path(object: &mut Object, path: &FieldPath, value: Value) -> CoreResult<()> {
@@ -1761,23 +1711,6 @@ fn resolve_operand<'a, T: ObjectAccess + ?Sized>(
     match operand {
         Operand::Field(path) => value.value_at_path_ref(path),
         Operand::Literal(value) => Some(ValueRef::Ref(value)),
-    }
-}
-
-fn compare_values(op: CompareOp, left: Option<ValueRef<'_>>, right: Option<ValueRef<'_>>) -> bool {
-    let (Some(left), Some(right)) = (left, right) else {
-        return false;
-    };
-    let left = left.into_owned();
-    let right = right.into_owned();
-
-    match op {
-        CompareOp::Eq => left == right,
-        CompareOp::NotEq => left != right,
-        CompareOp::Lt => left < right,
-        CompareOp::Lte => left <= right,
-        CompareOp::Gt => left > right,
-        CompareOp::Gte => left >= right,
     }
 }
 
@@ -1978,23 +1911,30 @@ fn map_value_at_path_ref<'a>(
     Some(ValueRef::Ref(current))
 }
 
-pub fn first_indexable_equality_predicate(predicate: &Predicate) -> Option<(String, Value)> {
+pub fn first_indexable_equality_predicate(predicate: &Expr) -> Option<(String, Value)> {
     match predicate {
-        Predicate::Compare {
-            op: CompareOp::Eq,
+        Expr::Binary {
+            op: BinaryOp::Eq,
             left,
             right,
-        } => match (left, right) {
-            (Operand::Field(path), Operand::Literal(value))
-            | (Operand::Literal(value), Operand::Field(path)) => match path.segments().first() {
-                Some(PathSegment::Field(field)) if path.segments().len() == 1 => {
-                    Some((field.clone(), value.clone()))
+        } => match (&**left, &**right) {
+            (Expr::Operand(Operand::Field(path)), Expr::Operand(Operand::Literal(value)))
+            | (Expr::Operand(Operand::Literal(value)), Expr::Operand(Operand::Field(path))) => {
+                match path.segments().first() {
+                    Some(PathSegment::Field(field)) if path.segments().len() == 1 => {
+                        Some((field.clone(), value.clone()))
+                    }
+                    _ => None,
                 }
-                _ => None,
-            },
+            }
             _ => None,
         },
-        Predicate::And(items) => items.iter().find_map(first_indexable_equality_predicate),
+        Expr::Binary {
+            op: BinaryOp::And,
+            left,
+            right,
+        } => first_indexable_equality_predicate(left)
+            .or_else(|| first_indexable_equality_predicate(right)),
         _ => None,
     }
 }
@@ -2030,10 +1970,14 @@ mod tests {
         b.insert("score", Value::I64(2));
 
         let query = SelectQuery::new()
-            .with_predicate(Predicate::Compare {
-                op: CompareOp::Eq,
-                left: Operand::Field(FieldPath::from_fields(["kind"])),
-                right: Operand::Literal(Value::String("music".into())),
+            .with_predicate(Expr::Binary {
+                op: BinaryOp::Eq,
+                left: Box::new(Expr::Operand(Operand::Field(FieldPath::from_fields([
+                    "kind",
+                ])))),
+                right: Box::new(Expr::Operand(Operand::Literal(Value::String(
+                    "music".into(),
+                )))),
             })
             .with_projection(vec![QueryField {
                 expr: Box::new(Expr::Operand(Operand::Field(FieldPath::from_fields([

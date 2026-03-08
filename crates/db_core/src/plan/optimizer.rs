@@ -1,5 +1,5 @@
 use semantic_data::{
-    query::CompareOp,
+    query::BinaryOp,
     value::{FieldPath, PathSegment, Value},
 };
 
@@ -11,7 +11,7 @@ use crate::plan::{
     PhysicalProjectionField, PhysicalSource, SourceRef, StatsProvider, build_logical_plan,
     source_ref_for_collection,
 };
-use crate::query::{Operand, Predicate, QueryField, SelectQuery};
+use crate::query::{Expr, Operand, QueryField, SelectQuery};
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct PlanPair {
@@ -180,7 +180,7 @@ impl LogicalRewritePass for FlattenBooleanPass {
         rewrite_plan(plan, &|node| match node {
             LogicalPlan::Filter { input, predicate } => LogicalPlan::Filter {
                 input,
-                predicate: flatten_predicate(predicate),
+                predicate: flatten_boolean_expr(predicate),
             },
             other => other,
         })
@@ -203,7 +203,11 @@ impl LogicalRewritePass for FilterLiftPass {
                     predicate: nested_predicate,
                 } => LogicalPlan::Filter {
                     input: nested_input,
-                    predicate: Predicate::And(vec![nested_predicate, predicate]),
+                    predicate: Expr::Binary {
+                        op: BinaryOp::And,
+                        left: Box::new(nested_predicate),
+                        right: Box::new(predicate),
+                    },
                 },
                 LogicalPlan::Source {
                     source,
@@ -255,10 +259,9 @@ impl LogicalRewritePass for JoinPredicatePushdownPass {
     fn rewrite(&self, plan: LogicalPlan, _context: &QueryContext) -> LogicalPlan {
         rewrite_plan(plan, &|node| match node {
             LogicalPlan::Join(mut join) => {
-                if let LogicalJoinCondition::Predicate(Predicate::And(items)) = &join.condition {
-                    if items.len() == 1 {
-                        join.condition = LogicalJoinCondition::Predicate(items[0].clone());
-                    }
+                if let LogicalJoinCondition::Predicate(predicate) = &join.condition {
+                    join.condition =
+                        LogicalJoinCondition::Predicate(flatten_boolean_expr(predicate.clone()));
                 }
                 LogicalPlan::Join(join)
             }
@@ -464,11 +467,11 @@ fn lower_join_condition(join: &LogicalJoinPlan, context: &QueryContext) -> Physi
 
 fn choose_scan_source(
     source: SourceRef,
-    predicate: Predicate,
+    predicate: Expr,
     stats: Option<&dyn StatsProvider>,
     context: &QueryContext,
 ) -> PhysicalPlan {
-    if predicate_contains_relationship_expr(&predicate) {
+    if expr_contains_relationship_expr(&predicate) {
         return PhysicalPlan::Source(PhysicalSource::FilteredScan { source, predicate });
     }
     let Some((field_path, value)) = extract_equality_lookup(&predicate) else {
@@ -701,88 +704,99 @@ fn rewrite_plan(plan: LogicalPlan, f: &dyn Fn(LogicalPlan) -> LogicalPlan) -> Lo
     f(rewritten_children)
 }
 
-fn flatten_predicate(predicate: Predicate) -> Predicate {
-    match predicate {
-        Predicate::And(items) => {
-            let mut out = Vec::new();
-            for item in items {
-                match flatten_predicate(item) {
-                    Predicate::And(nested) => out.extend(nested),
-                    other => out.push(other),
-                }
-            }
-            Predicate::And(out)
+fn flatten_boolean_expr(expr: Expr) -> Expr {
+    match expr {
+        Expr::Binary { op, left, right } if op == BinaryOp::And || op == BinaryOp::Or => {
+            let mut items = Vec::new();
+            collect_binary_terms(*left, op, &mut items);
+            collect_binary_terms(*right, op, &mut items);
+            let mut iter = items.into_iter();
+            let first = iter.next().expect("binary tree has at least one term");
+            iter.fold(first, |left, right| Expr::Binary {
+                op,
+                left: Box::new(left),
+                right: Box::new(right),
+            })
         }
-        Predicate::Or(items) => {
-            let mut out = Vec::new();
-            for item in items {
-                match flatten_predicate(item) {
-                    Predicate::Or(nested) => out.extend(nested),
-                    other => out.push(other),
-                }
-            }
-            Predicate::Or(out)
-        }
-        Predicate::Not(inner) => Predicate::Not(Box::new(flatten_predicate(*inner))),
+        Expr::Unary {
+            op: semantic_data::query::UnaryOp::Not,
+            expr,
+        } => Expr::Unary {
+            op: semantic_data::query::UnaryOp::Not,
+            expr: Box::new(flatten_boolean_expr(*expr)),
+        },
         other => other,
     }
 }
 
-fn extract_equality_lookup(predicate: &Predicate) -> Option<(FieldPath, Value)> {
+fn extract_equality_lookup(predicate: &Expr) -> Option<(FieldPath, Value)> {
     match predicate {
-        Predicate::Compare {
-            op: CompareOp::Eq,
+        Expr::Binary {
+            op: BinaryOp::Eq,
             left,
             right,
-        } => match (left, right) {
-            (Operand::Field(path), Operand::Literal(v))
-            | (Operand::Literal(v), Operand::Field(path)) => Some((path.clone(), v.clone())),
+        } => match (&**left, &**right) {
+            (Expr::Operand(Operand::Field(path)), Expr::Operand(Operand::Literal(v)))
+            | (Expr::Operand(Operand::Literal(v)), Expr::Operand(Operand::Field(path))) => {
+                Some((path.clone(), v.clone()))
+            }
             _ => None,
         },
-        Predicate::And(items) => items.iter().find_map(extract_equality_lookup),
+        Expr::Binary {
+            op: BinaryOp::And,
+            left,
+            right,
+        } => extract_equality_lookup(left).or_else(|| extract_equality_lookup(right)),
         _ => None,
     }
 }
 
 fn remove_single_lookup_predicate(
-    predicate: Predicate,
+    predicate: Expr,
     target_path: &FieldPath,
     target_value: &Value,
-) -> Option<Predicate> {
+) -> Option<Expr> {
     match predicate {
-        Predicate::Compare {
-            op: CompareOp::Eq,
-            left: Operand::Field(path),
-            right: Operand::Literal(value),
+        Expr::Binary {
+            op: BinaryOp::Eq,
+            left,
+            right,
+        } => {
+            let matches_target = match (&*left, &*right) {
+                (Expr::Operand(Operand::Field(path)), Expr::Operand(Operand::Literal(value)))
+                | (Expr::Operand(Operand::Literal(value)), Expr::Operand(Operand::Field(path))) => {
+                    path == target_path && value == target_value
+                }
+                _ => false,
+            };
+            if matches_target {
+                None
+            } else {
+                Some(Expr::Binary {
+                    op: BinaryOp::Eq,
+                    left,
+                    right,
+                })
+            }
         }
-        | Predicate::Compare {
-            op: CompareOp::Eq,
-            left: Operand::Literal(value),
-            right: Operand::Field(path),
-        } if path == *target_path && value == *target_value => None,
-        Predicate::And(items) => {
-            let remaining = items
-                .into_iter()
-                .filter_map(|item| remove_single_lookup_predicate(item, target_path, target_value))
-                .collect::<Vec<_>>();
-            match remaining.len() {
-                0 => None,
-                1 => remaining.into_iter().next(),
-                _ => Some(Predicate::And(remaining)),
+        Expr::Binary {
+            op: BinaryOp::And,
+            left,
+            right,
+        } => {
+            let left = remove_single_lookup_predicate(*left, target_path, target_value);
+            let right = remove_single_lookup_predicate(*right, target_path, target_value);
+            match (left, right) {
+                (None, None) => None,
+                (Some(expr), None) | (None, Some(expr)) => Some(expr),
+                (Some(left), Some(right)) => Some(Expr::Binary {
+                    op: BinaryOp::And,
+                    left: Box::new(left),
+                    right: Box::new(right),
+                }),
             }
         }
         other => Some(other),
-    }
-}
-
-fn predicate_contains_relationship_expr(predicate: &Predicate) -> bool {
-    match predicate {
-        Predicate::Compare { .. } | Predicate::Exists(_) => false,
-        Predicate::Expr(expr) => expr_contains_relationship_expr(expr),
-        Predicate::And(items) | Predicate::Or(items) => {
-            items.iter().any(predicate_contains_relationship_expr)
-        }
-        Predicate::Not(inner) => predicate_contains_relationship_expr(inner),
     }
 }
 
@@ -830,5 +844,15 @@ fn expr_contains_relationship_expr(expr: &crate::query::Expr) -> bool {
         }
         crate::query::Expr::IsNull { expr, .. } => expr_contains_relationship_expr(expr),
         crate::query::Expr::Exists { .. } => false,
+    }
+}
+
+fn collect_binary_terms(expr: Expr, target_op: BinaryOp, out: &mut Vec<Expr>) {
+    match expr {
+        Expr::Binary { op, left, right } if op == target_op => {
+            collect_binary_terms(*left, target_op, out);
+            collect_binary_terms(*right, target_op, out);
+        }
+        other => out.push(flatten_boolean_expr(other)),
     }
 }

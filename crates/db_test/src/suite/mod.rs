@@ -2,9 +2,9 @@ use std::future::Future;
 use std::pin::Pin;
 
 use semantic_data::query::{
-    AggregateOp, BinaryOp, CompareOp, DeleteQuery, Expr, FunctionArg, JoinCondition, JoinQuery,
-    JoinSource, JoinType, Operand, OrderBy, PatternMatchKind, Predicate, QueryField, QueryInput,
-    SelectQuery, SortDirection, TextQueryFormat, UpdateQuery,
+    AggregateOp, BinaryOp, DeleteQuery, Expr, FunctionArg, JoinCondition, JoinQuery, JoinSource,
+    JoinType, Operand, OrderBy, PatternMatchKind, QueryField, QueryInput, SelectQuery,
+    SortDirection, TextQueryFormat, UpdateQuery,
 };
 use semantic_data::schema::{
     ClassAttribute, ClassType, Meta, RelationIndexingMode, RelationMode, RelationType, StringType,
@@ -87,11 +87,10 @@ async fn test_select_query(db: &Db) {
         .select(
             SelectQuery::new()
                 .with_collection("shared_suite_select")
-                .with_predicate(Predicate::Compare {
-                    op: CompareOp::Eq,
-                    left: Operand::Field(FieldPath::from_fields(["kind"])),
-                    right: Operand::Literal(Value::String("music".to_string())),
-                }),
+                .with_predicate(eq_predicate(
+                    FieldPath::from_fields(["kind"]),
+                    Value::String("music".to_string()),
+                )),
         )
         .await
         .expect("select query should succeed");
@@ -112,11 +111,10 @@ async fn test_update_query(db: &Db) {
         .update_where(
             UpdateQuery::new()
                 .with_collection("shared_suite_update")
-                .with_predicate(Predicate::Compare {
-                    op: CompareOp::Eq,
-                    left: Operand::Field(FieldPath::from_fields(["id"])),
-                    right: Operand::Literal(Value::String("item-1".to_string())),
-                })
+                .with_predicate(eq_predicate(
+                    FieldPath::from_fields(["id"]),
+                    Value::String("item-1".to_string()),
+                ))
                 .set(
                     FieldPath::from_fields(["score"]),
                     Expr::Operand(Operand::Literal(Value::I64(99))),
@@ -207,11 +205,10 @@ async fn test_delete_query(db: &Db) {
         .delete_where(
             DeleteQuery::new()
                 .with_collection("shared_suite_delete")
-                .with_predicate(Predicate::Compare {
-                    op: CompareOp::Eq,
-                    left: Operand::Field(FieldPath::from_fields(["kind"])),
-                    right: Operand::Literal(Value::String("temp".to_string())),
-                }),
+                .with_predicate(eq_predicate(
+                    FieldPath::from_fields(["kind"]),
+                    Value::String("temp".to_string()),
+                )),
         )
         .await
         .expect("delete query should succeed");
@@ -292,7 +289,7 @@ async fn test_ast_predicate_constructs(db: &Db) {
         .select(
             SelectQuery::new()
                 .with_collection("shared_suite_ast_predicates")
-                .with_predicate(Predicate::Expr(Expr::InList {
+                .with_predicate(Expr::InList {
                     expr: Box::new(Expr::Operand(Operand::Field(FieldPath::from_fields([
                         "kind",
                     ])))),
@@ -301,7 +298,7 @@ async fn test_ast_predicate_constructs(db: &Db) {
                         Expr::Operand(Operand::Literal(Value::String("podcast".to_string()))),
                     ],
                     negated: false,
-                })),
+                }),
         )
         .await
         .expect("ast IN query should succeed");
@@ -315,7 +312,7 @@ async fn test_ast_predicate_constructs(db: &Db) {
         .select(
             SelectQuery::new()
                 .with_collection("shared_suite_ast_predicates")
-                .with_predicate(Predicate::Expr(Expr::InList {
+                .with_predicate(Expr::InList {
                     expr: Box::new(Expr::Operand(Operand::Field(FieldPath::from_fields([
                         "kind",
                     ])))),
@@ -323,7 +320,7 @@ async fn test_ast_predicate_constructs(db: &Db) {
                         "Music".to_string(),
                     )))],
                     negated: true,
-                })),
+                }),
         )
         .await
         .expect("ast NOT IN query should succeed");
@@ -337,7 +334,7 @@ async fn test_ast_predicate_constructs(db: &Db) {
         .select(
             SelectQuery::new()
                 .with_collection("shared_suite_ast_predicates")
-                .with_predicate(Predicate::Expr(Expr::PatternMatch {
+                .with_predicate(Expr::PatternMatch {
                     kind: PatternMatchKind::Like,
                     expr: Box::new(Expr::Operand(Operand::Field(FieldPath::from_fields([
                         "note",
@@ -347,7 +344,7 @@ async fn test_ast_predicate_constructs(db: &Db) {
                     )))),
                     case_insensitive: false,
                     negated: false,
-                })),
+                }),
         )
         .await
         .expect("ast LIKE query should succeed");
@@ -357,7 +354,7 @@ async fn test_ast_predicate_constructs(db: &Db) {
         .select(
             SelectQuery::new()
                 .with_collection("shared_suite_ast_predicates")
-                .with_predicate(Predicate::Expr(Expr::PatternMatch {
+                .with_predicate(Expr::PatternMatch {
                     kind: PatternMatchKind::Like,
                     expr: Box::new(Expr::Operand(Operand::Field(FieldPath::from_fields([
                         "kind",
@@ -367,7 +364,7 @@ async fn test_ast_predicate_constructs(db: &Db) {
                     )))),
                     case_insensitive: true,
                     negated: false,
-                })),
+                }),
         )
         .await
         .expect("ast ILIKE query should succeed");
@@ -377,7 +374,7 @@ async fn test_ast_predicate_constructs(db: &Db) {
         .select(
             SelectQuery::new()
                 .with_collection("shared_suite_ast_predicates")
-                .with_predicate(Predicate::Expr(Expr::PatternMatch {
+                .with_predicate(Expr::PatternMatch {
                     kind: PatternMatchKind::SimilarTo,
                     expr: Box::new(Expr::Operand(Operand::Field(FieldPath::from_fields([
                         "note",
@@ -387,7 +384,7 @@ async fn test_ast_predicate_constructs(db: &Db) {
                     )))),
                     case_insensitive: false,
                     negated: false,
-                })),
+                }),
         )
         .await
         .expect("ast SIMILAR TO query should succeed");
@@ -397,7 +394,7 @@ async fn test_ast_predicate_constructs(db: &Db) {
         .select(
             SelectQuery::new()
                 .with_collection("shared_suite_ast_predicates")
-                .with_predicate(Predicate::Expr(Expr::RegexMatch {
+                .with_predicate(Expr::RegexMatch {
                     expr: Box::new(Expr::Operand(Operand::Field(FieldPath::from_fields([
                         "note",
                     ])))),
@@ -406,7 +403,7 @@ async fn test_ast_predicate_constructs(db: &Db) {
                     )))),
                     case_insensitive: false,
                     negated: false,
-                })),
+                }),
         )
         .await
         .expect("ast regex query should succeed");
@@ -416,14 +413,14 @@ async fn test_ast_predicate_constructs(db: &Db) {
         .select(
             SelectQuery::new()
                 .with_collection("shared_suite_ast_predicates")
-                .with_predicate(Predicate::Expr(Expr::Between {
+                .with_predicate(Expr::Between {
                     expr: Box::new(Expr::Operand(Operand::Field(FieldPath::from_fields([
                         "score",
                     ])))),
                     low: Box::new(Expr::Operand(Operand::Literal(Value::I64(5)))),
                     high: Box::new(Expr::Operand(Operand::Literal(Value::I64(12)))),
                     negated: false,
-                })),
+                }),
         )
         .await
         .expect("ast BETWEEN query should succeed");
@@ -433,12 +430,12 @@ async fn test_ast_predicate_constructs(db: &Db) {
         .select(
             SelectQuery::new()
                 .with_collection("shared_suite_ast_predicates")
-                .with_predicate(Predicate::Expr(Expr::IsNull {
+                .with_predicate(Expr::IsNull {
                     expr: Box::new(Expr::Operand(Operand::Field(FieldPath::from_fields([
                         "opt",
                     ])))),
                     negated: false,
-                })),
+                }),
         )
         .await
         .expect("ast IS NULL query should succeed");
@@ -448,12 +445,12 @@ async fn test_ast_predicate_constructs(db: &Db) {
         .select(
             SelectQuery::new()
                 .with_collection("shared_suite_ast_predicates")
-                .with_predicate(Predicate::Expr(Expr::IsNull {
+                .with_predicate(Expr::IsNull {
                     expr: Box::new(Expr::Operand(Operand::Field(FieldPath::from_fields([
                         "opt",
                     ])))),
                     negated: true,
-                })),
+                }),
         )
         .await
         .expect("ast IS NOT NULL query should succeed");
@@ -463,18 +460,17 @@ async fn test_ast_predicate_constructs(db: &Db) {
         .select(
             SelectQuery::new()
                 .with_collection("shared_suite_ast_predicates")
-                .with_predicate(Predicate::Expr(Expr::Exists {
+                .with_predicate(Expr::Exists {
                     query: Box::new(
                         SelectQuery::new()
                             .with_collection("shared_suite_ast_predicates")
-                            .with_predicate(Predicate::Compare {
-                                op: CompareOp::Eq,
-                                left: Operand::Field(FieldPath::from_fields(["id"])),
-                                right: Operand::Literal(Value::String("ast-a".to_string())),
-                            }),
+                            .with_predicate(eq_predicate(
+                                FieldPath::from_fields(["id"]),
+                                Value::String("ast-a".to_string()),
+                            )),
                     ),
                     negated: false,
-                })),
+                }),
         )
         .await
         .expect("ast EXISTS query should succeed");
@@ -484,7 +480,7 @@ async fn test_ast_predicate_constructs(db: &Db) {
         .select(
             SelectQuery::new()
                 .with_collection("shared_suite_ast_predicates")
-                .with_predicate(Predicate::Expr(Expr::Binary {
+                .with_predicate(Expr::Binary {
                     op: BinaryOp::Eq,
                     left: Box::new(Expr::Function {
                         name: "LOWER".to_string(),
@@ -495,7 +491,7 @@ async fn test_ast_predicate_constructs(db: &Db) {
                     right: Box::new(Expr::Operand(Operand::Literal(Value::String(
                         "music".to_string(),
                     )))),
-                })),
+                }),
         )
         .await
         .expect("ast LOWER function query should succeed");
@@ -774,11 +770,10 @@ async fn test_join_semantics(db: &Db) {
             SelectQuery::new()
                 .with_collection("shared_suite_join_items")
                 .with_source_alias("s")
-                .with_predicate(Predicate::Compare {
-                    op: CompareOp::Eq,
-                    left: Operand::Field(FieldPath::from_fields(["s", "type"])),
-                    right: Operand::Literal(Value::String("Song".to_string())),
-                })
+                .with_predicate(eq_predicate(
+                    FieldPath::from_fields(["s", "type"]),
+                    Value::String("Song".to_string()),
+                ))
                 .with_joins(vec![JoinQuery {
                     source: JoinSource {
                         collection: Some("shared_suite_join_profiles".to_string()),
@@ -786,16 +781,14 @@ async fn test_join_semantics(db: &Db) {
                     },
                     alias: Some("p".to_string()),
                     join_type: JoinType::Inner,
-                    condition: JoinCondition::OnPredicate(Predicate::Compare {
-                        op: CompareOp::Eq,
-                        left: Operand::Field(FieldPath::from_fields(["s", "artist_id"])),
-                        right: Operand::Field(FieldPath::from_fields(["p", "id"])),
-                    }),
-                    predicate: Some(Predicate::Compare {
-                        op: CompareOp::Eq,
-                        left: Operand::Field(FieldPath::from_fields(["kind"])),
-                        right: Operand::Literal(Value::String("featured".to_string())),
-                    }),
+                    condition: JoinCondition::OnExpr(eq_predicate_exprs(
+                        Expr::Operand(Operand::Field(FieldPath::from_fields(["s", "artist_id"]))),
+                        Expr::Operand(Operand::Field(FieldPath::from_fields(["p", "id"]))),
+                    )),
+                    predicate: Some(eq_predicate(
+                        FieldPath::from_fields(["kind"]),
+                        Value::String("featured".to_string()),
+                    )),
                 }])
                 .with_projection(vec![QueryField {
                     expr: Box::new(Expr::Operand(Operand::Field(FieldPath::from_fields([
@@ -860,7 +853,7 @@ async fn test_ast_aggregation_distinct_grouping(db: &Db) {
                         alias: Some("total".to_string()),
                     },
                 ])
-                .with_having(Predicate::Expr(Expr::Binary {
+                .with_having(Expr::Binary {
                     op: BinaryOp::Gt,
                     left: Box::new(Expr::Aggregate {
                         op: AggregateOp::Sum,
@@ -870,7 +863,7 @@ async fn test_ast_aggregation_distinct_grouping(db: &Db) {
                         )))),
                     }),
                     right: Box::new(Expr::Operand(Operand::Literal(Value::F64(10.0.into())))),
-                })),
+                }),
         )
         .await
         .expect("ast grouped aggregate query should succeed");
@@ -1272,7 +1265,7 @@ async fn test_relationships_generic_embedded(db: &Db) {
         .select(
             SelectQuery::new()
                 .with_collection("shared_suite_rel_nodes")
-                .with_predicate(Predicate::Expr(Expr::RelationExists {
+                .with_predicate(Expr::RelationExists {
                     relation: Box::new(Expr::Operand(Operand::Literal(Value::String(
                         "shared.rel.parent".to_string(),
                     )))),
@@ -1284,7 +1277,7 @@ async fn test_relationships_generic_embedded(db: &Db) {
                     )))),
                     transitive: true,
                     max_depth: None,
-                }))
+                })
                 .with_order_by(vec![OrderBy {
                     expr: Expr::Operand(Operand::Field(FieldPath::from_fields(["id"]))),
                     direction: SortDirection::Asc,
@@ -1298,7 +1291,7 @@ async fn test_relationships_generic_embedded(db: &Db) {
         .select(
             SelectQuery::new()
                 .with_collection("shared_suite_rel_nodes")
-                .with_predicate(Predicate::Expr(Expr::RelationExists {
+                .with_predicate(Expr::RelationExists {
                     relation: Box::new(Expr::Operand(Operand::Literal(Value::String(
                         "shared.rel.parent".to_string(),
                     )))),
@@ -1310,7 +1303,7 @@ async fn test_relationships_generic_embedded(db: &Db) {
                     )))),
                     transitive: false,
                     max_depth: None,
-                })),
+                }),
         )
         .await
         .expect("direct relation query should succeed");
@@ -1320,11 +1313,10 @@ async fn test_relationships_generic_embedded(db: &Db) {
         .update_where(
             UpdateQuery::new()
                 .with_collection("shared_suite_rel_nodes")
-                .with_predicate(Predicate::Compare {
-                    op: CompareOp::Eq,
-                    left: Operand::Field(FieldPath::from_fields(["id"])),
-                    right: Operand::Literal(Value::String("c".to_string())),
-                })
+                .with_predicate(eq_predicate(
+                    FieldPath::from_fields(["id"]),
+                    Value::String("c".to_string()),
+                ))
                 .set(
                     FieldPath::from_fields(["shared.rel.parent_ref"]),
                     Expr::Operand(Operand::Literal(Value::Null)),
@@ -1338,7 +1330,7 @@ async fn test_relationships_generic_embedded(db: &Db) {
         .select(
             SelectQuery::new()
                 .with_collection("shared_suite_rel_nodes")
-                .with_predicate(Predicate::Expr(Expr::RelationExists {
+                .with_predicate(Expr::RelationExists {
                     relation: Box::new(Expr::Operand(Operand::Literal(Value::String(
                         "shared.rel.parent".to_string(),
                     )))),
@@ -1350,7 +1342,7 @@ async fn test_relationships_generic_embedded(db: &Db) {
                     )))),
                     transitive: true,
                     max_depth: None,
-                }))
+                })
                 .with_order_by(vec![OrderBy {
                     expr: Expr::Operand(Operand::Field(FieldPath::from_fields(["id"]))),
                     direction: SortDirection::Asc,
@@ -1465,22 +1457,19 @@ async fn test_relationships_generic_external(db: &Db) {
         .select(
             SelectQuery::new()
                 .with_collection("__semantic.relationship_edges")
-                .with_predicate(Predicate::And(vec![
-                    Predicate::Compare {
-                        op: CompareOp::Eq,
-                        left: Operand::Field(FieldPath::from_fields(["relation"])),
-                        right: Operand::Literal(Value::String("shared.rel.weighted".to_string())),
-                    },
-                    Predicate::Compare {
-                        op: CompareOp::Eq,
-                        left: Operand::Field(FieldPath::from_fields(["source"])),
-                        right: Operand::Literal(Value::String("r1".to_string())),
-                    },
-                    Predicate::Compare {
-                        op: CompareOp::Eq,
-                        left: Operand::Field(FieldPath::from_fields(["target"])),
-                        right: Operand::Literal(Value::String("y".to_string())),
-                    },
+                .with_predicate(and_all(vec![
+                    eq_predicate(
+                        FieldPath::from_fields(["relation"]),
+                        Value::String("shared.rel.weighted".to_string()),
+                    ),
+                    eq_predicate(
+                        FieldPath::from_fields(["source"]),
+                        Value::String("r1".to_string()),
+                    ),
+                    eq_predicate(
+                        FieldPath::from_fields(["target"]),
+                        Value::String("y".to_string()),
+                    ),
                 ])),
         )
         .await
@@ -1507,4 +1496,28 @@ fn row_strings(rows: &[Object], key: &str) -> Vec<String> {
             other => panic!("expected string {key} field, got {other:?}"),
         })
         .collect()
+}
+
+fn eq_predicate(path: FieldPath, value: Value) -> Expr {
+    eq_predicate_exprs(
+        Expr::Operand(Operand::Field(path)),
+        Expr::Operand(Operand::Literal(value)),
+    )
+}
+
+fn eq_predicate_exprs(left: Expr, right: Expr) -> Expr {
+    Expr::Binary {
+        op: BinaryOp::Eq,
+        left: Box::new(left),
+        right: Box::new(right),
+    }
+}
+
+fn and_all(mut items: Vec<Expr>) -> Expr {
+    let first = items.remove(0);
+    items.into_iter().fold(first, |left, right| Expr::Binary {
+        op: BinaryOp::And,
+        left: Box::new(left),
+        right: Box::new(right),
+    })
 }

@@ -4,7 +4,7 @@ use semantic_data::{
 };
 
 use crate::catalog::{LocalAttrId, LocalCollectionId, LocalFieldId};
-use crate::query::Predicate;
+use crate::query::Expr;
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct SourceRef {
@@ -63,7 +63,7 @@ pub enum PhysicalJoinAlgorithm {
 #[derive(Debug, Clone, PartialEq)]
 pub enum PhysicalJoinCondition {
     True,
-    Predicate(Predicate),
+    Predicate(Expr),
     Eq {
         left: PhysicalJoinKey,
         right: PhysicalJoinKey,
@@ -77,13 +77,13 @@ pub enum PhysicalSource {
     },
     FilteredScan {
         source: SourceRef,
-        predicate: Predicate,
+        predicate: Expr,
     },
     IndexLookup {
         source: SourceRef,
         field: FieldRef,
         value: Value,
-        residual_predicate: Option<Predicate>,
+        residual_predicate: Option<Expr>,
     },
 }
 
@@ -106,7 +106,7 @@ pub enum PhysicalPlan {
     },
     Filter {
         input: Box<PhysicalPlan>,
-        predicate: Predicate,
+        predicate: Expr,
     },
     Sort {
         input: Box<PhysicalPlan>,
@@ -120,7 +120,7 @@ pub enum PhysicalPlan {
         input: Box<PhysicalPlan>,
         group_by: Vec<crate::query::Expr>,
         projection: Vec<PhysicalProjectionField>,
-        having: Option<Predicate>,
+        having: Option<Expr>,
     },
     Limit {
         input: Box<PhysicalPlan>,
