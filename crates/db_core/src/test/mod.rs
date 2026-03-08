@@ -38,12 +38,13 @@ async fn test_select_query(db: &Db) {
 
     let rows = db
         .select(
-            "shared_suite_select",
-            SelectQuery::new().with_predicate(Predicate::Compare {
-                op: CompareOp::Eq,
-                left: Operand::Field(FieldPath::from_fields(["kind"])),
-                right: Operand::Literal(Value::String("music".to_string())),
-            }),
+            SelectQuery::new()
+                .with_collection("shared_suite_select")
+                .with_predicate(Predicate::Compare {
+                    op: CompareOp::Eq,
+                    left: Operand::Field(FieldPath::from_fields(["kind"])),
+                    right: Operand::Literal(Value::String("music".to_string())),
+                }),
         )
         .await
         .expect("select query should succeed");
@@ -62,8 +63,8 @@ async fn test_update_query(db: &Db) {
 
     let stats = db
         .update_where(
-            "shared_suite_update",
             UpdateQuery::new()
+                .with_collection("shared_suite_update")
                 .with_predicate(Predicate::Compare {
                     op: CompareOp::Eq,
                     left: Operand::Field(FieldPath::from_fields(["id"])),
@@ -101,12 +102,13 @@ async fn test_delete_query(db: &Db) {
 
     let deleted = db
         .delete_where(
-            "shared_suite_delete",
-            crate::DeleteQuery::new().with_predicate(Predicate::Compare {
-                op: CompareOp::Eq,
-                left: Operand::Field(FieldPath::from_fields(["kind"])),
-                right: Operand::Literal(Value::String("temp".to_string())),
-            }),
+            crate::DeleteQuery::new()
+                .with_collection("shared_suite_delete")
+                .with_predicate(Predicate::Compare {
+                    op: CompareOp::Eq,
+                    left: Operand::Field(FieldPath::from_fields(["kind"])),
+                    right: Operand::Literal(Value::String("temp".to_string())),
+                }),
         )
         .await
         .expect("delete query should succeed");

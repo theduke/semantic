@@ -199,6 +199,7 @@ pub struct JoinQuery {
 
 #[derive(facet::Facet, Debug, Clone, PartialEq)]
 pub struct SelectQuery {
+    pub collection: Option<String>,
     pub source_alias: Option<String>,
     pub joins: Vec<JoinQuery>,
     pub predicate: Option<Predicate>,
@@ -238,6 +239,7 @@ impl From<DeleteQuery> for Query {
 impl SelectQuery {
     pub fn new() -> Self {
         Self {
+            collection: None,
             source_alias: None,
             joins: Vec::new(),
             predicate: None,
@@ -246,6 +248,17 @@ impl SelectQuery {
             offset: 0,
             limit: None,
         }
+    }
+
+    pub fn with_collection(mut self, collection: impl Into<String>) -> Self {
+        self.collection = Some(collection.into());
+        self
+    }
+
+    pub fn collection_or_default(&self) -> &str {
+        self.collection
+            .as_deref()
+            .unwrap_or(crate::DEFAULT_COLLECTION)
     }
 
     pub fn with_predicate(mut self, predicate: Predicate) -> Self {
@@ -405,6 +418,7 @@ pub struct Assignment {
 
 #[derive(facet::Facet, Debug, Clone, PartialEq)]
 pub struct UpdateQuery {
+    pub collection: Option<String>,
     pub predicate: Option<Predicate>,
     pub assignments: Vec<Assignment>,
     pub limit: Option<usize>,
@@ -414,11 +428,23 @@ pub struct UpdateQuery {
 impl UpdateQuery {
     pub fn new() -> Self {
         Self {
+            collection: None,
             predicate: None,
             assignments: Vec::new(),
             limit: None,
             returning: Vec::new(),
         }
+    }
+
+    pub fn with_collection(mut self, collection: impl Into<String>) -> Self {
+        self.collection = Some(collection.into());
+        self
+    }
+
+    pub fn collection_or_default(&self) -> &str {
+        self.collection
+            .as_deref()
+            .unwrap_or(crate::DEFAULT_COLLECTION)
     }
 
     pub fn with_predicate(mut self, predicate: Predicate) -> Self {
@@ -450,6 +476,7 @@ impl Default for UpdateQuery {
 
 #[derive(facet::Facet, Debug, Clone, PartialEq)]
 pub struct DeleteQuery {
+    pub collection: Option<String>,
     pub predicate: Option<Predicate>,
     pub limit: Option<usize>,
     pub returning: Vec<QueryField>,
@@ -458,10 +485,22 @@ pub struct DeleteQuery {
 impl DeleteQuery {
     pub fn new() -> Self {
         Self {
+            collection: None,
             predicate: None,
             limit: None,
             returning: Vec::new(),
         }
+    }
+
+    pub fn with_collection(mut self, collection: impl Into<String>) -> Self {
+        self.collection = Some(collection.into());
+        self
+    }
+
+    pub fn collection_or_default(&self) -> &str {
+        self.collection
+            .as_deref()
+            .unwrap_or(crate::DEFAULT_COLLECTION)
     }
 
     pub fn with_predicate(mut self, predicate: Predicate) -> Self {
@@ -483,6 +522,20 @@ impl DeleteQuery {
 impl Default for DeleteQuery {
     fn default() -> Self {
         Self::new()
+    }
+}
+
+impl Query {
+    pub fn collection(&self) -> Option<&str> {
+        match self {
+            Self::Select(query) => query.collection.as_deref(),
+            Self::Update(query) => query.collection.as_deref(),
+            Self::Delete(query) => query.collection.as_deref(),
+        }
+    }
+
+    pub fn collection_or_default(&self) -> &str {
+        self.collection().unwrap_or(crate::DEFAULT_COLLECTION)
     }
 }
 

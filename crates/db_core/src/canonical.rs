@@ -53,6 +53,7 @@ pub fn canonicalize_select_query(
         .collect::<CanonicalResult<Vec<_>>>()?;
 
     Ok(SelectQuery {
+        collection: query.collection.clone(),
         source_alias: query.source_alias.clone(),
         joins: query.joins.clone(),
         predicate,
@@ -104,6 +105,7 @@ pub fn canonicalize_update_query(
         .collect::<CanonicalResult<Vec<_>>>()?;
 
     Ok(UpdateQuery {
+        collection: query.collection.clone(),
         predicate,
         assignments,
         limit: query.limit,
@@ -133,6 +135,7 @@ pub fn canonicalize_delete_query(
         .collect::<CanonicalResult<Vec<_>>>()?;
 
     Ok(DeleteQuery {
+        collection: query.collection.clone(),
         predicate,
         limit: query.limit,
         returning,

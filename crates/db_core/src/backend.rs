@@ -4,10 +4,58 @@ use async_trait::async_trait;
 use semantic_data::value::{Object, Value};
 
 use crate::catalog::{Catalog, CollectionKind, LocalCollectionId};
+use crate::sql::{self, QueryInput, SqlDialectKind};
 use crate::{
     Batch, BatchOutcome, DbError, DeleteQuery, LogicalPlan, MutationStats, PhysicalPlan, Query,
     QueryResult, SelectQuery, UpdateQuery,
 };
+
+pub const DEFAULT_COLLECTION: &str = "entities";
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum CollectionInput {
+    Named(String),
+    Default,
+}
+
+impl CollectionInput {
+    pub fn into_collection(self) -> String {
+        match self {
+            Self::Named(name) => name,
+            Self::Default => DEFAULT_COLLECTION.to_string(),
+        }
+    }
+}
+
+impl From<String> for CollectionInput {
+    fn from(value: String) -> Self {
+        Self::Named(value)
+    }
+}
+
+impl From<&str> for CollectionInput {
+    fn from(value: &str) -> Self {
+        Self::Named(value.to_string())
+    }
+}
+
+impl From<Option<String>> for CollectionInput {
+    fn from(value: Option<String>) -> Self {
+        match value {
+            Some(value) => Self::Named(value),
+            None => Self::Default,
+        }
+    }
+}
+
+impl From<Option<&str>> for CollectionInput {
+    fn from(value: Option<&str>) -> Self {
+        match value {
+            Some(value) => Self::Named(value.to_string()),
+            None => Self::Default,
+        }
+    }
+}
 
 #[derive(facet::Facet, Debug, Clone, PartialEq, Eq)]
 pub struct EntityRecord {
@@ -73,30 +121,84 @@ pub trait Backend: Send + Sync {
 
     async fn delete(&self, collection: String, id: String) -> std::result::Result<(), DbError>;
 
-    async fn query(
-        &self,
-        collection: String,
-        query: Query,
-    ) -> std::result::Result<QueryResult, DbError>;
+    async fn query(&self, query: Query) -> std::result::Result<QueryResult, DbError>;
 
-    async fn explain_query(
-        &self,
-        collection: String,
-        query: Query,
-    ) -> std::result::Result<QueryExplain, DbError>;
+    fn sql_dialect(&self) -> SqlDialectKind {
+        SqlDialectKind::Generic
+    }
 
-    async fn plan_query(
+    async fn parse_sql_query(
         &self,
-        collection: String,
-        query: Query,
-    ) -> std::result::Result<QueryPlan, DbError>;
+        sql_query: &str,
+    ) -> std::result::Result<sql::ParsedSqlQuery, DbError> {
+        sql::parse_sql_query(sql_query, self.sql_dialect())
+            .map_err(|err| DbError::InvalidQuery(err.to_string()))
+    }
+
+    async fn query_input(&self, query: QueryInput) -> std::result::Result<QueryResult, DbError> {
+        match query {
+            QueryInput::Ast(query) => self.query(query).await,
+            QueryInput::Sql(sql_query) => {
+                let parsed = self.parse_sql_query(&sql_query).await?;
+                self.query(parsed.query).await
+            }
+        }
+    }
+
+    async fn query_sql(&self, sql_query: String) -> std::result::Result<QueryResult, DbError> {
+        let parsed = self.parse_sql_query(&sql_query).await?;
+        self.query(parsed.query).await
+    }
+
+    async fn explain_query(&self, query: Query) -> std::result::Result<QueryExplain, DbError>;
+
+    async fn explain_query_input(
+        &self,
+        query: QueryInput,
+    ) -> std::result::Result<QueryExplain, DbError> {
+        match query {
+            QueryInput::Ast(query) => self.explain_query(query).await,
+            QueryInput::Sql(sql_query) => {
+                let parsed = self.parse_sql_query(&sql_query).await?;
+                self.explain_query(parsed.query).await
+            }
+        }
+    }
+
+    async fn explain_query_sql(
+        &self,
+        sql_query: String,
+    ) -> std::result::Result<QueryExplain, DbError> {
+        let parsed = self.parse_sql_query(&sql_query).await?;
+        self.explain_query(parsed.query).await
+    }
+
+    async fn plan_query(&self, query: Query) -> std::result::Result<QueryPlan, DbError>;
+
+    async fn plan_query_input(&self, query: QueryInput) -> std::result::Result<QueryPlan, DbError> {
+        match query {
+            QueryInput::Ast(query) => self.plan_query(query).await,
+            QueryInput::Sql(sql_query) => {
+                let parsed = self.parse_sql_query(&sql_query).await?;
+                self.plan_query(parsed.query).await
+            }
+        }
+    }
+
+    async fn plan_query_sql(&self, sql_query: String) -> std::result::Result<QueryPlan, DbError> {
+        let parsed = self.parse_sql_query(&sql_query).await?;
+        self.plan_query(parsed.query).await
+    }
+
+    fn query_to_sql(&self, query: &Query) -> std::result::Result<String, DbError> {
+        sql::query_to_sql(query).map_err(|err| DbError::InvalidQuery(err.to_string()))
+    }
 
     async fn update_where(
         &self,
-        collection: String,
         query: UpdateQuery,
     ) -> std::result::Result<MutationStats, DbError> {
-        match self.query(collection, Query::Update(query)).await? {
+        match self.query(Query::Update(query)).await? {
             QueryResult::Update(result) => Ok(result.stats),
             _ => Err(DbError::InvalidQuery(
                 "backend returned non-update result for update query".to_string(),
@@ -104,12 +206,8 @@ pub trait Backend: Send + Sync {
         }
     }
 
-    async fn delete_where(
-        &self,
-        collection: String,
-        query: DeleteQuery,
-    ) -> std::result::Result<usize, DbError> {
-        match self.query(collection, Query::Delete(query)).await? {
+    async fn delete_where(&self, query: DeleteQuery) -> std::result::Result<usize, DbError> {
+        match self.query(Query::Delete(query)).await? {
             QueryResult::Delete(result) => Ok(result.deleted),
             _ => Err(DbError::InvalidQuery(
                 "backend returned non-delete result for delete query".to_string(),
@@ -145,49 +243,54 @@ impl Db {
 
     pub async fn insert(
         &self,
-        collection: impl Into<String>,
+        collection: impl Into<CollectionInput>,
         id: impl Into<String>,
         object: Object,
     ) -> std::result::Result<(), DbError> {
-        self.backend
-            .insert(collection.into(), id.into(), object)
-            .await
+        let collection = collection.into().into_collection();
+        self.backend.insert(collection, id.into(), object).await
     }
 
     pub async fn get(
         &self,
-        collection: impl Into<String>,
+        collection: impl Into<CollectionInput>,
         id: impl Into<String>,
     ) -> std::result::Result<Option<EntityRecord>, DbError> {
-        self.backend.get(collection.into(), id.into()).await
+        self.backend
+            .get(collection.into().into_collection(), id.into())
+            .await
     }
 
     pub async fn delete(
         &self,
-        collection: impl Into<String>,
+        collection: impl Into<CollectionInput>,
         id: impl Into<String>,
     ) -> std::result::Result<(), DbError> {
-        self.backend.delete(collection.into(), id.into()).await
+        self.backend
+            .delete(collection.into().into_collection(), id.into())
+            .await
     }
 
-    pub async fn query(
+    pub async fn query(&self, query: Query) -> std::result::Result<QueryResult, DbError> {
+        self.backend.query_input(QueryInput::Ast(query)).await
+    }
+
+    pub async fn query_input(
         &self,
-        collection: impl Into<String>,
-        query: Query,
+        query: impl Into<QueryInput>,
     ) -> std::result::Result<QueryResult, DbError> {
-        self.backend.query(collection.into(), query).await
+        self.backend.query_input(query.into()).await
     }
 
-    pub async fn select(
+    pub async fn query_sql(
         &self,
-        collection: impl Into<String>,
-        query: SelectQuery,
-    ) -> std::result::Result<Vec<Object>, DbError> {
-        match self
-            .backend
-            .query(collection.into(), Query::Select(query))
-            .await?
-        {
+        sql_query: impl Into<String>,
+    ) -> std::result::Result<QueryResult, DbError> {
+        self.backend.query_sql(sql_query.into()).await
+    }
+
+    pub async fn select(&self, query: SelectQuery) -> std::result::Result<Vec<Object>, DbError> {
+        match self.backend.query(Query::Select(query)).await? {
             QueryResult::Select(rows) => Ok(rows),
             _ => Err(DbError::InvalidQuery(
                 "backend returned non-select result for select query".to_string(),
@@ -195,32 +298,53 @@ impl Db {
         }
     }
 
-    pub async fn explain_query(
-        &self,
-        collection: impl Into<String>,
-        query: Query,
-    ) -> std::result::Result<QueryExplain, DbError> {
-        self.backend.explain_query(collection.into(), query).await
+    pub async fn explain_query(&self, query: Query) -> std::result::Result<QueryExplain, DbError> {
+        self.backend
+            .explain_query_input(QueryInput::Ast(query))
+            .await
     }
 
-    pub async fn plan_query(
+    pub async fn explain_query_input(
         &self,
-        collection: impl Into<String>,
-        query: Query,
+        query: impl Into<QueryInput>,
+    ) -> std::result::Result<QueryExplain, DbError> {
+        self.backend.explain_query_input(query.into()).await
+    }
+
+    pub async fn explain_query_sql(
+        &self,
+        sql_query: impl Into<String>,
+    ) -> std::result::Result<QueryExplain, DbError> {
+        self.backend.explain_query_sql(sql_query.into()).await
+    }
+
+    pub async fn plan_query(&self, query: Query) -> std::result::Result<QueryPlan, DbError> {
+        self.backend.plan_query_input(QueryInput::Ast(query)).await
+    }
+
+    pub async fn plan_query_input(
+        &self,
+        query: impl Into<QueryInput>,
     ) -> std::result::Result<QueryPlan, DbError> {
-        self.backend.plan_query(collection.into(), query).await
+        self.backend.plan_query_input(query.into()).await
+    }
+
+    pub async fn plan_query_sql(
+        &self,
+        sql_query: impl Into<String>,
+    ) -> std::result::Result<QueryPlan, DbError> {
+        self.backend.plan_query_sql(sql_query.into()).await
+    }
+
+    pub fn query_to_sql(&self, query: &Query) -> std::result::Result<String, DbError> {
+        self.backend.query_to_sql(query)
     }
 
     pub async fn update_where(
         &self,
-        collection: impl Into<String>,
         query: UpdateQuery,
     ) -> std::result::Result<MutationStats, DbError> {
-        match self
-            .backend
-            .query(collection.into(), Query::Update(query))
-            .await?
-        {
+        match self.backend.query(Query::Update(query)).await? {
             QueryResult::Update(result) => Ok(result.stats),
             _ => Err(DbError::InvalidQuery(
                 "backend returned non-update result for update query".to_string(),
@@ -228,16 +352,8 @@ impl Db {
         }
     }
 
-    pub async fn delete_where(
-        &self,
-        collection: impl Into<String>,
-        query: DeleteQuery,
-    ) -> std::result::Result<usize, DbError> {
-        match self
-            .backend
-            .query(collection.into(), Query::Delete(query))
-            .await?
-        {
+    pub async fn delete_where(&self, query: DeleteQuery) -> std::result::Result<usize, DbError> {
+        match self.backend.query(Query::Delete(query)).await? {
             QueryResult::Delete(result) => Ok(result.deleted),
             _ => Err(DbError::InvalidQuery(
                 "backend returned non-delete result for delete query".to_string(),

@@ -18,3 +18,4 @@ facet = { version = "0.43.2", features = ["time", "uuid", "bytes"] }
 futures = "0.3.31"
 fnv = "1.0.7"
 thiserror = "2.0.17"
+sqlparser = "0.61.0"

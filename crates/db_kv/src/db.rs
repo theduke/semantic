@@ -186,33 +186,22 @@ impl<E: KvEngine> KvDb<E> {
         Ok(())
     }
 
-    pub fn query(
-        &mut self,
-        collection: &str,
-        query: Query,
-    ) -> std::result::Result<QueryResult, DbError> {
+    pub fn query(&mut self, query: Query) -> std::result::Result<QueryResult, DbError> {
         match query {
-            Query::Select(query) => self.select(collection, query).map(QueryResult::Select),
-            Query::Update(query) => self
-                .update_where_returning(collection, query)
-                .map(QueryResult::Update),
-            Query::Delete(query) => self
-                .delete_where_returning(collection, query)
-                .map(QueryResult::Delete),
+            Query::Select(query) => self.select(query).map(QueryResult::Select),
+            Query::Update(query) => self.update_where_returning(query).map(QueryResult::Update),
+            Query::Delete(query) => self.delete_where_returning(query).map(QueryResult::Delete),
         }
     }
 
-    pub fn select(
-        &self,
-        collection: &str,
-        query: SelectQuery,
-    ) -> std::result::Result<Vec<Object>, DbError> {
+    pub fn select(&self, query: SelectQuery) -> std::result::Result<Vec<Object>, DbError> {
+        let collection_name = query.collection_or_default().to_string();
         let catalog = self.catalog();
-        let collection = catalog.collection_by_name(collection).ok_or_else(|| {
-            DbError::UnknownCollectionByName {
-                name: collection.to_string(),
-            }
-        })?;
+        let collection = catalog
+            .collection_by_name(&collection_name)
+            .ok_or_else(|| DbError::UnknownCollectionByName {
+                name: collection_name.clone(),
+            })?;
 
         let query = canonicalize_select_query(&query, collection)?;
 
@@ -228,22 +217,17 @@ impl<E: KvEngine> KvDb<E> {
         self.execute_physical_plan(&pair.physical, Some(collection.name.as_str()))
     }
 
-    pub fn plan_query(
-        &self,
-        collection: &str,
-        query: Query,
-    ) -> std::result::Result<QueryPlan, DbError> {
-        let explain = self.explain_query(collection, query)?;
+    pub fn plan_query(&self, query: Query) -> std::result::Result<QueryPlan, DbError> {
+        let collection = query.collection_or_default().to_string();
+        let explain = self.explain_query(query)?;
         match explain.access_path {
-            AccessPath::FullScan => Ok(QueryPlan::FullScan {
-                collection: collection.to_string(),
-            }),
+            AccessPath::FullScan => Ok(QueryPlan::FullScan { collection }),
             AccessPath::IndexLookup {
                 index_name,
                 field,
                 value,
             } => Ok(QueryPlan::IndexLookup {
-                collection: collection.to_string(),
+                collection,
                 index_name,
                 field,
                 value,
@@ -251,21 +235,19 @@ impl<E: KvEngine> KvDb<E> {
         }
     }
 
-    pub fn explain_query(
-        &self,
-        collection: &str,
-        query: Query,
-    ) -> std::result::Result<QueryExplain, DbError> {
+    pub fn explain_query(&self, query: Query) -> std::result::Result<QueryExplain, DbError> {
+        let collection_name = query.collection_or_default().to_string();
         let catalog = self.catalog();
-        let collection = catalog.collection_by_name(collection).ok_or_else(|| {
-            DbError::UnknownCollectionByName {
-                name: collection.to_string(),
-            }
-        })?;
+        let collection = catalog
+            .collection_by_name(&collection_name)
+            .ok_or_else(|| DbError::UnknownCollectionByName {
+                name: collection_name.clone(),
+            })?;
 
         let select = match canonicalize_query(&query, collection)? {
             Query::Select(query) => query,
             Query::Update(query) => SelectQuery {
+                collection: query.collection,
                 source_alias: None,
                 joins: Vec::new(),
                 predicate: query.predicate,
@@ -275,6 +257,7 @@ impl<E: KvEngine> KvDb<E> {
                 limit: query.limit,
             },
             Query::Delete(query) => SelectQuery {
+                collection: query.collection,
                 source_alias: None,
                 joins: Vec::new(),
                 predicate: query.predicate,
@@ -320,23 +303,22 @@ impl<E: KvEngine> KvDb<E> {
 
     pub fn update_where(
         &mut self,
-        collection: &str,
         query: UpdateQuery,
     ) -> std::result::Result<MutationStats, DbError> {
-        self.update_where_returning(collection, query)
+        self.update_where_returning(query)
             .map(|result| result.stats)
     }
 
     pub fn update_where_returning(
         &mut self,
-        collection: &str,
         query: UpdateQuery,
     ) -> std::result::Result<semantic_db_core::UpdateResult, DbError> {
+        let collection = query.collection_or_default().to_string();
         let catalog = self.catalog();
         let collection_schema = catalog
-            .collection_by_name(collection)
+            .collection_by_name(&collection)
             .ok_or_else(|| DbError::UnknownCollectionByName {
-                name: collection.to_string(),
+                name: collection.clone(),
             })?
             .clone();
 
@@ -406,25 +388,21 @@ impl<E: KvEngine> KvDb<E> {
         Ok(txn_result.value)
     }
 
-    pub fn delete_where(
-        &mut self,
-        collection: &str,
-        query: DeleteQuery,
-    ) -> std::result::Result<usize, DbError> {
-        self.delete_where_returning(collection, query)
+    pub fn delete_where(&mut self, query: DeleteQuery) -> std::result::Result<usize, DbError> {
+        self.delete_where_returning(query)
             .map(|result| result.deleted)
     }
 
     pub fn delete_where_returning(
         &mut self,
-        collection: &str,
         query: DeleteQuery,
     ) -> std::result::Result<semantic_db_core::DeleteResult, DbError> {
+        let collection = query.collection_or_default().to_string();
         let catalog = self.catalog();
         let collection_schema = catalog
-            .collection_by_name(collection)
+            .collection_by_name(&collection)
             .ok_or_else(|| DbError::UnknownCollectionByName {
-                name: collection.to_string(),
+                name: collection.clone(),
             })?
             .clone();
 
@@ -460,6 +438,7 @@ impl<E: KvEngine> KvDb<E> {
                 result = semantic_db_core::apply_delete_with_returning(&query, entities);
 
                 let stripped = DeleteQuery {
+                    collection: query.collection.clone(),
                     predicate: query.predicate.clone(),
                     limit: query.limit,
                     returning: Vec::new(),
@@ -1447,7 +1426,7 @@ mod tests {
             right: Operand::Literal(Value::String("music".to_string())),
         });
 
-        let rows = db.select("events", query).unwrap();
+        let rows = db.select(query.with_collection("events")).unwrap();
         assert_eq!(rows.len(), 1);
         assert_eq!(rows[0].get("score"), Some(&Value::I64(10)));
     }
@@ -1528,7 +1507,7 @@ mod tests {
                 alias: Some("t".to_string()),
             }]);
 
-        let rows = db.select("articles", query).unwrap();
+        let rows = db.select(query.with_collection("articles")).unwrap();
         assert_eq!(rows.len(), 1);
         assert_eq!(rows[0].get("t"), Some(&Value::String("Hello".to_string())));
     }
@@ -1618,7 +1597,7 @@ mod tests {
             left: Operand::Field(FieldPath::from_fields(["email"])),
             right: Operand::Literal(Value::String("a@example.com".to_string())),
         });
-        let rows = db.select("people", q).unwrap();
+        let rows = db.select(q.with_collection("people")).unwrap();
         assert_eq!(rows.len(), 1);
         assert_eq!(rows[0].get("name"), Some(&Value::String("A".to_string())));
 
@@ -1649,7 +1628,10 @@ mod tests {
             left: Operand::Field(FieldPath::from_fields(["kind"])),
             right: Operand::Literal(Value::String("music".to_string())),
         });
-        assert_eq!(db.select("events", q_music).unwrap().len(), 1);
+        assert_eq!(
+            db.select(q_music.with_collection("events")).unwrap().len(),
+            1
+        );
 
         let mut updated = Object::new();
         updated.insert("id", Value::String("e1".to_string()));
@@ -1661,14 +1643,20 @@ mod tests {
             left: Operand::Field(FieldPath::from_fields(["kind"])),
             right: Operand::Literal(Value::String("music".to_string())),
         });
-        assert_eq!(db.select("events", q_music).unwrap().len(), 0);
+        assert_eq!(
+            db.select(q_music.with_collection("events")).unwrap().len(),
+            0
+        );
 
         let q_video = SelectQuery::new().with_predicate(Predicate::Compare {
             op: CompareOp::Eq,
             left: Operand::Field(FieldPath::from_fields(["kind"])),
             right: Operand::Literal(Value::String("video".to_string())),
         });
-        assert_eq!(db.select("events", q_video).unwrap().len(), 1);
+        assert_eq!(
+            db.select(q_video.with_collection("events")).unwrap().len(),
+            1
+        );
 
         db.delete("events", "e1").unwrap();
         let q_video = SelectQuery::new().with_predicate(Predicate::Compare {
@@ -1676,7 +1664,10 @@ mod tests {
             left: Operand::Field(FieldPath::from_fields(["kind"])),
             right: Operand::Literal(Value::String("video".to_string())),
         });
-        assert_eq!(db.select("events", q_video).unwrap().len(), 0);
+        assert_eq!(
+            db.select(q_video.with_collection("events")).unwrap().len(),
+            0
+        );
     }
 
     #[test]
@@ -1704,7 +1695,7 @@ mod tests {
             path: FieldPath::from_fields(["score"]),
             direction: SortDirection::Asc,
         }]);
-        let asc_rows = db.select("events", asc).unwrap();
+        let asc_rows = db.select(asc.with_collection("events")).unwrap();
         assert_eq!(asc_rows[0].get("score"), Some(&Value::I64(2)));
         assert_eq!(asc_rows[2].get("score"), Some(&Value::I64(9)));
 
@@ -1712,7 +1703,7 @@ mod tests {
             path: FieldPath::from_fields(["score"]),
             direction: SortDirection::Desc,
         }]);
-        let desc_rows = db.select("events", desc).unwrap();
+        let desc_rows = db.select(desc.with_collection("events")).unwrap();
         assert_eq!(desc_rows[0].get("score"), Some(&Value::I64(9)));
         assert_eq!(desc_rows[2].get("score"), Some(&Value::I64(2)));
     }
@@ -1732,7 +1723,9 @@ mod tests {
             right: Operand::Literal(Value::String("music".to_string())),
         });
 
-        let plan = db.plan_query("events", Query::Select(q)).unwrap();
+        let plan = db
+            .plan_query(Query::Select(q.with_collection("events")))
+            .unwrap();
         match plan {
             QueryPlan::IndexLookup { index_name, .. } => {
                 assert_eq!(index_name, "events_kind_idx");
@@ -1767,7 +1760,9 @@ mod tests {
                 alias: Some("new_score".to_string()),
             }]);
 
-        let out = db.query("items", Query::Update(update)).unwrap();
+        let out = db
+            .query(Query::Update(update.with_collection("items")))
+            .unwrap();
         let QueryResult::Update(out) = out else {
             panic!("expected update result");
         };
@@ -1799,7 +1794,9 @@ mod tests {
                 alias: None,
             }]);
 
-        let out = db.query("items", Query::Delete(delete)).unwrap();
+        let out = db
+            .query(Query::Delete(delete.with_collection("items")))
+            .unwrap();
         let QueryResult::Delete(out) = out else {
             panic!("expected delete result");
         };

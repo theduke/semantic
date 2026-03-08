@@ -31,12 +31,13 @@ async fn main() -> std::result::Result<(), semantic_db_core::DbError> {
 
     let admins = db
         .select(
-            "users",
-            SelectQuery::new().with_predicate(Predicate::Compare {
-                op: CompareOp::Eq,
-                left: Operand::Field(FieldPath::from_fields(["role"])),
-                right: Operand::Literal(Value::String("admin".to_string())),
-            }),
+            SelectQuery::new()
+                .with_collection("users")
+                .with_predicate(Predicate::Compare {
+                    op: CompareOp::Eq,
+                    left: Operand::Field(FieldPath::from_fields(["role"])),
+                    right: Operand::Literal(Value::String("admin".to_string())),
+                }),
         )
         .await?;
     assert_eq!(admins.len(), 1);
@@ -46,8 +47,8 @@ async fn main() -> std::result::Result<(), semantic_db_core::DbError> {
     );
 
     db.update_where(
-        "users",
         UpdateQuery::new()
+            .with_collection("users")
             .with_predicate(Predicate::Compare {
                 op: CompareOp::Eq,
                 left: Operand::Field(FieldPath::from_fields(["username"])),
@@ -62,12 +63,13 @@ async fn main() -> std::result::Result<(), semantic_db_core::DbError> {
 
     let owners = db
         .select(
-            "users",
-            SelectQuery::new().with_predicate(Predicate::Compare {
-                op: CompareOp::Eq,
-                left: Operand::Field(FieldPath::from_fields(["role"])),
-                right: Operand::Literal(Value::String("owner".to_string())),
-            }),
+            SelectQuery::new()
+                .with_collection("users")
+                .with_predicate(Predicate::Compare {
+                    op: CompareOp::Eq,
+                    left: Operand::Field(FieldPath::from_fields(["role"])),
+                    right: Operand::Literal(Value::String("owner".to_string())),
+                }),
         )
         .await?;
     assert_eq!(owners.len(), 1);
@@ -80,12 +82,13 @@ async fn main() -> std::result::Result<(), semantic_db_core::DbError> {
 
     let bob_rows = db
         .select(
-            "users",
-            SelectQuery::new().with_predicate(Predicate::Compare {
-                op: CompareOp::Eq,
-                left: Operand::Field(FieldPath::from_fields(["username"])),
-                right: Operand::Literal(Value::String("bob".to_string())),
-            }),
+            SelectQuery::new()
+                .with_collection("users")
+                .with_predicate(Predicate::Compare {
+                    op: CompareOp::Eq,
+                    left: Operand::Field(FieldPath::from_fields(["username"])),
+                    right: Operand::Literal(Value::String("bob".to_string())),
+                }),
         )
         .await?;
     assert!(bob_rows.is_empty());

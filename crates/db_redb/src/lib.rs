@@ -281,57 +281,33 @@ impl Backend for RedbBackend {
             .await
     }
 
-    async fn query(
-        &self,
-        collection: String,
-        query: Query,
-    ) -> std::result::Result<QueryResult, DbError> {
+    async fn query(&self, query: Query) -> std::result::Result<QueryResult, DbError> {
         match query {
             Query::Select(select) => {
-                self.with_db_read(move |db| db.select(&collection, select).map(QueryResult::Select))
+                self.with_db_read(move |db| db.select(select).map(QueryResult::Select))
                     .await
             }
-            query => {
-                self.with_db_write(move |db| db.query(&collection, query))
-                    .await
-            }
+            query => self.with_db_write(move |db| db.query(query)).await,
         }
     }
 
-    async fn explain_query(
-        &self,
-        collection: String,
-        query: Query,
-    ) -> std::result::Result<QueryExplain, DbError> {
-        self.with_db_read(move |db| db.explain_query(&collection, query))
-            .await
+    async fn explain_query(&self, query: Query) -> std::result::Result<QueryExplain, DbError> {
+        self.with_db_read(move |db| db.explain_query(query)).await
     }
 
-    async fn plan_query(
-        &self,
-        collection: String,
-        query: Query,
-    ) -> std::result::Result<QueryPlan, DbError> {
-        self.with_db_read(move |db| db.plan_query(&collection, query))
-            .await
+    async fn plan_query(&self, query: Query) -> std::result::Result<QueryPlan, DbError> {
+        self.with_db_read(move |db| db.plan_query(query)).await
     }
 
     async fn update_where(
         &self,
-        collection: String,
         query: UpdateQuery,
     ) -> std::result::Result<MutationStats, DbError> {
-        self.with_db_write(move |db| db.update_where(&collection, query))
-            .await
+        self.with_db_write(move |db| db.update_where(query)).await
     }
 
-    async fn delete_where(
-        &self,
-        collection: String,
-        query: DeleteQuery,
-    ) -> std::result::Result<usize, DbError> {
-        self.with_db_write(move |db| db.delete_where(&collection, query))
-            .await
+    async fn delete_where(&self, query: DeleteQuery) -> std::result::Result<usize, DbError> {
+        self.with_db_write(move |db| db.delete_where(query)).await
     }
 
     async fn execute_batch(&self, batch: Batch) -> std::result::Result<BatchOutcome, DbError> {
@@ -370,7 +346,7 @@ mod tests {
             db.create_collection("items", CollectionKind::Untyped)
                 .unwrap();
             let out = db
-                .select("items", semantic_db_core::SelectQuery::new())
+                .select(semantic_db_core::SelectQuery::new().with_collection("items"))
                 .unwrap();
             assert_eq!(out.len(), 1);
             assert_eq!(out[0].get("name"), Some(&Value::String("n".into())));

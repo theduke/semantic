@@ -66,49 +66,32 @@ impl<E: KvEngine> Backend for KvBackend<E> {
         db.delete(&collection, &id)
     }
 
-    async fn query(
-        &self,
-        collection: String,
-        query: Query,
-    ) -> std::result::Result<QueryResult, DbError> {
+    async fn query(&self, query: Query) -> std::result::Result<QueryResult, DbError> {
         let mut db = self.lock_db()?;
-        db.query(&collection, query)
+        db.query(query)
     }
 
-    async fn explain_query(
-        &self,
-        collection: String,
-        query: Query,
-    ) -> std::result::Result<QueryExplain, DbError> {
+    async fn explain_query(&self, query: Query) -> std::result::Result<QueryExplain, DbError> {
         let db = self.lock_db()?;
-        db.explain_query(&collection, query)
+        db.explain_query(query)
     }
 
-    async fn plan_query(
-        &self,
-        collection: String,
-        query: Query,
-    ) -> std::result::Result<QueryPlan, DbError> {
+    async fn plan_query(&self, query: Query) -> std::result::Result<QueryPlan, DbError> {
         let db = self.lock_db()?;
-        db.plan_query(&collection, query)
+        db.plan_query(query)
     }
 
     async fn update_where(
         &self,
-        collection: String,
         query: UpdateQuery,
     ) -> std::result::Result<MutationStats, DbError> {
         let mut db = self.lock_db()?;
-        db.update_where(&collection, query)
+        db.update_where(query)
     }
 
-    async fn delete_where(
-        &self,
-        collection: String,
-        query: DeleteQuery,
-    ) -> std::result::Result<usize, DbError> {
+    async fn delete_where(&self, query: DeleteQuery) -> std::result::Result<usize, DbError> {
         let mut db = self.lock_db()?;
-        db.delete_where(&collection, query)
+        db.delete_where(query)
     }
 
     async fn execute_batch(&self, batch: Batch) -> std::result::Result<BatchOutcome, DbError> {
