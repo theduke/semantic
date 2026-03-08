@@ -25,3 +25,7 @@ serde = { workspace = true, features = ["derive"] }
 semantic_data = { workspace = true }
 semantic_db_core = { path = "../db_core" }
 tokio = { version = "1.48.0", features = ["rt"], optional = true }
+
+[dev-dependencies]
+semantic_db_test = { path = "../db_test" }
+tokio = { version = "1.48.0", features = ["rt-multi-thread", "macros"] }

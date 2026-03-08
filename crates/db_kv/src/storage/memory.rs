@@ -201,4 +201,17 @@ mod tests {
         assert_eq!(past.len(), 1);
         assert_eq!(past[0].1, b"one".to_vec());
     }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn memory_backend_testsuite() {
+        use crate::{KvBackend, KvDb};
+        use semantic_db_core::Db;
+
+        let engine = MemoryKvEngine::new();
+        let db = KvDb::open(engine).unwrap();
+        let backend = KvBackend::new(db);
+        let db = Db::new(backend);
+
+        semantic_db_test::suite::test_db(&db).await;
+    }
 }

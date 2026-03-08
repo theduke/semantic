@@ -1653,6 +1653,7 @@ dependencies = [
  "rmp-serde",
  "semantic_data",
  "semantic_db_core",
+ "semantic_db_test",
  "serde",
  "tokio",
 ]
