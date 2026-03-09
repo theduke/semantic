@@ -9,12 +9,13 @@ use semantic_data::value::{FieldPath, Object, PathSegment, Value, ValueRef};
 use semantic_db_core::DbError;
 use semantic_db_core::{
     ALL_COLLECTION_ALIAS, AccessPath, AppliedMigration, Batch, BatchOperation, BatchOutcome,
-    DEFAULT_COLLECTION, DeleteQuery, EntityRecord, InsertQuery, InsertSource, MutationStats,
-    PackageRegistrationOutcome, Query, QueryExplain, QueryPlan, QueryResult, SelectQuery,
-    UpdateQuery, apply_migration_ddl_batch, canonicalize_delete_query, canonicalize_insert_query,
-    canonicalize_query, canonicalize_select_query, canonicalize_update_query, execute_batch,
-    is_all_collection_alias, normalize_object_for_collection, normalize_package_definition,
-    touched_collections, validate_package_migrations,
+    DEFAULT_COLLECTION, DeleteQuery, EntityRecord, FieldFormat, InsertQuery, InsertSource,
+    MutationStats, PackageRegistrationOutcome, Query, QueryExplain, QueryPlan, QueryResult,
+    SelectQuery, UpdateQuery, apply_migration_ddl_batch, canonicalize_delete_query,
+    canonicalize_insert_query, canonicalize_query, canonicalize_select_query,
+    canonicalize_update_query, execute_batch, is_all_collection_alias,
+    normalize_object_for_collection, normalize_package_definition, touched_collections,
+    validate_package_migrations,
 };
 
 use crate::{
@@ -137,12 +138,17 @@ impl<E: KvEngine> KvDb<E> {
     pub fn create_collection(
         &mut self,
         name: impl Into<String>,
-        _kind: CollectionKind,
+        kind: CollectionKind,
     ) -> std::result::Result<LocalCollectionId, DbError> {
         let name = name.into();
+        let ddl_kind = match kind {
+            CollectionKind::Untyped => semantic_db_core::DdlCollectionKind::Untyped,
+            CollectionKind::Schema => semantic_db_core::DdlCollectionKind::Schema,
+            CollectionKind::Polymorphic => semantic_db_core::DdlCollectionKind::Polymorphic,
+        };
         let ddl = DdlBatch::new().with_op(DdlOperation::UpsertCollection {
             name: name.clone(),
-            kind: semantic_db_core::DdlCollectionKind::Polymorphic,
+            kind: ddl_kind,
             integrity_mode: IntegrityMode::Permissive,
         });
         self.transact_ddl(ddl)?;
@@ -325,11 +331,7 @@ impl<E: KvEngine> KvDb<E> {
                     name: collection_name.clone(),
                 })?;
             (
-                if query.joins.is_empty() {
-                    canonicalize_select_query(&query, collection)?
-                } else {
-                    query
-                },
+                canonicalize_select_query(&query, catalog.as_ref(), collection)?,
                 Some(self.stats_for_collection(collection)?),
                 collection.name.clone(),
             )
@@ -340,7 +342,9 @@ impl<E: KvEngine> KvDb<E> {
             .as_ref()
             .map(|value| value as &dyn semantic_db_core::StatsProvider);
         let pair = optimizer.optimize_query(&query, Some(source.clone()), stats_provider, &context);
-        self.execute_physical_plan(&pair.physical, Some(source.as_str()))
+        let rows = self.execute_physical_plan(&pair.physical, Some(source.as_str()))?;
+        let catalog = self.catalog();
+        Ok(self.format_output_rows(catalog.as_ref(), rows, query.field_format))
     }
 
     pub fn plan_query(&self, query: Query) -> std::result::Result<QueryPlan, DbError> {
@@ -363,69 +367,65 @@ impl<E: KvEngine> KvDb<E> {
 
     pub fn explain_query(&self, query: Query) -> std::result::Result<QueryExplain, DbError> {
         let collection_name = query.collection_or_default().to_string();
-        let (select, stats, source, collection_for_access_path) = if is_all_collection_alias(
-            &collection_name,
-        ) {
-            let Query::Select(select) = query else {
-                return Err(DbError::InvalidQuery(format!(
-                    "collection alias '{ALL_COLLECTION_ALIAS}' is only supported for SELECT"
-                )));
-            };
-            (select, None, ALL_COLLECTION_ALIAS.to_string(), None)
-        } else {
-            let catalog = self.catalog();
-            let collection = catalog
-                .collection_by_name(&collection_name)
-                .ok_or_else(|| DbError::UnknownCollectionByName {
-                    name: collection_name.clone(),
-                })?;
-
-            let select = match if matches!(&query, Query::Select(select) if !select.joins.is_empty())
-            {
-                query.clone()
+        let (select, stats, source, collection_for_access_path) =
+            if is_all_collection_alias(&collection_name) {
+                let Query::Select(select) = query else {
+                    return Err(DbError::InvalidQuery(format!(
+                        "collection alias '{ALL_COLLECTION_ALIAS}' is only supported for SELECT"
+                    )));
+                };
+                (select, None, ALL_COLLECTION_ALIAS.to_string(), None)
             } else {
-                canonicalize_query(&query, collection)?
-            } {
-                Query::Select(query) => query,
-                Query::Insert(_) => {
-                    return Err(DbError::InvalidQuery(
-                        "query planning/explain is not supported for INSERT".to_string(),
-                    ));
-                }
-                Query::Update(query) => SelectQuery {
-                    collection: query.collection,
-                    source_alias: None,
-                    joins: Vec::new(),
-                    predicate: query.predicate,
-                    projection: query.returning,
-                    distinct: false,
-                    group_by: Vec::new(),
-                    having: None,
-                    order_by: Vec::new(),
-                    offset: semantic_db_core::Expr::from(0usize),
-                    limit: query.limit,
-                },
-                Query::Delete(query) => SelectQuery {
-                    collection: query.collection,
-                    source_alias: None,
-                    joins: Vec::new(),
-                    predicate: query.predicate,
-                    projection: query.returning,
-                    distinct: false,
-                    group_by: Vec::new(),
-                    having: None,
-                    order_by: Vec::new(),
-                    offset: semantic_db_core::Expr::from(0usize),
-                    limit: query.limit,
-                },
+                let catalog = self.catalog();
+                let collection = catalog
+                    .collection_by_name(&collection_name)
+                    .ok_or_else(|| DbError::UnknownCollectionByName {
+                        name: collection_name.clone(),
+                    })?;
+
+                let select = match canonicalize_query(&query, catalog.as_ref(), collection)? {
+                    Query::Select(query) => query,
+                    Query::Insert(_) => {
+                        return Err(DbError::InvalidQuery(
+                            "query planning/explain is not supported for INSERT".to_string(),
+                        ));
+                    }
+                    Query::Update(query) => SelectQuery {
+                        collection: query.collection,
+                        source_alias: None,
+                        joins: Vec::new(),
+                        predicate: query.predicate,
+                        projection: query.returning,
+                        distinct: false,
+                        group_by: Vec::new(),
+                        having: None,
+                        order_by: Vec::new(),
+                        offset: semantic_db_core::Expr::from(0usize),
+                        limit: query.limit,
+                        field_format: query.field_format,
+                    },
+                    Query::Delete(query) => SelectQuery {
+                        collection: query.collection,
+                        source_alias: None,
+                        joins: Vec::new(),
+                        predicate: query.predicate,
+                        projection: query.returning,
+                        distinct: false,
+                        group_by: Vec::new(),
+                        having: None,
+                        order_by: Vec::new(),
+                        offset: semantic_db_core::Expr::from(0usize),
+                        limit: query.limit,
+                        field_format: query.field_format,
+                    },
+                };
+                (
+                    select,
+                    Some(self.stats_for_collection(collection)?),
+                    collection.name.clone(),
+                    Some(collection.lid),
+                )
             };
-            (
-                select,
-                Some(self.stats_for_collection(collection)?),
-                collection.name.clone(),
-                Some(collection.lid),
-            )
-        };
 
         let optimizer = semantic_db_core::Optimizer::core();
         let context = self.query_context();
@@ -462,7 +462,7 @@ impl<E: KvEngine> KvDb<E> {
                 name: collection_name.clone(),
             })?
             .clone();
-        let query = canonicalize_insert_query(&query, &collection)?;
+        let query = canonicalize_insert_query(&query, catalog.as_ref(), &collection)?;
         let target_columns = query
             .columns
             .iter()
@@ -496,7 +496,11 @@ impl<E: KvEngine> KvDb<E> {
         self.execute_batch(batch)?;
         Ok(semantic_db_core::InsertResult {
             inserted,
-            returning: returning_rows,
+            returning: self.format_output_rows(
+                catalog.as_ref(),
+                returning_rows,
+                query.field_format,
+            ),
         })
     }
 
@@ -649,7 +653,7 @@ impl<E: KvEngine> KvDb<E> {
             })?
             .clone();
 
-        let query = canonicalize_update_query(&query, &collection_schema)?;
+        let query = canonicalize_update_query(&query, catalog.as_ref(), &collection_schema)?;
         let collection_name = collection_schema.name.clone();
         let touched = Batch::new().with_op(BatchOperation::Update {
             collection: collection_name.clone(),
@@ -712,7 +716,11 @@ impl<E: KvEngine> KvDb<E> {
                 ))),
             }
         })?;
-        Ok(txn_result.value)
+        let mut value = txn_result.value;
+        let catalog = self.catalog();
+        value.returning =
+            self.format_output_rows(catalog.as_ref(), value.returning, query.field_format);
+        Ok(value)
     }
 
     pub fn delete_where(&mut self, query: DeleteQuery) -> std::result::Result<usize, DbError> {
@@ -733,7 +741,7 @@ impl<E: KvEngine> KvDb<E> {
             })?
             .clone();
 
-        let query = canonicalize_delete_query(&query, &collection_schema)?;
+        let query = canonicalize_delete_query(&query, catalog.as_ref(), &collection_schema)?;
         let collection_name = collection_schema.name.clone();
         let touched = Batch::new().with_op(BatchOperation::Delete {
             collection: collection_name.clone(),
@@ -769,6 +777,7 @@ impl<E: KvEngine> KvDb<E> {
                     predicate: query.predicate.clone(),
                     limit: query.limit.clone(),
                     returning: Vec::new(),
+                    field_format: query.field_format,
                 };
                 let (remaining, _) = semantic_db_core::apply_delete(
                     &stripped,
@@ -809,7 +818,11 @@ impl<E: KvEngine> KvDb<E> {
                 ))),
             }
         })?;
-        Ok(txn_result.value)
+        let mut value = txn_result.value;
+        let catalog = self.catalog();
+        value.returning =
+            self.format_output_rows(catalog.as_ref(), value.returning, query.field_format);
+        Ok(value)
     }
 
     pub fn transact(&mut self, batch: Batch) -> std::result::Result<BatchOutcome, DbError> {
@@ -1179,7 +1192,7 @@ impl<E: KvEngine> KvDb<E> {
                             name: collection.clone(),
                         }
                     })?;
-                    let query = canonicalize_update_query(&query, schema)?;
+                    let query = canonicalize_update_query(&query, catalog, schema)?;
                     canonical_ops.push(BatchOperation::Update { collection, query });
                 }
                 BatchOperation::Delete { collection, query } => {
@@ -1188,7 +1201,7 @@ impl<E: KvEngine> KvDb<E> {
                             name: collection.clone(),
                         }
                     })?;
-                    let query = canonicalize_delete_query(&query, schema)?;
+                    let query = canonicalize_delete_query(&query, catalog, schema)?;
                     canonical_ops.push(BatchOperation::Delete { collection, query });
                 }
             }
@@ -1197,6 +1210,43 @@ impl<E: KvEngine> KvDb<E> {
         Ok(Batch {
             operations: canonical_ops,
         })
+    }
+
+    fn format_output_rows(
+        &self,
+        catalog: &Catalog,
+        rows: Vec<Object>,
+        format: FieldFormat,
+    ) -> Vec<Object> {
+        rows.into_iter()
+            .map(|row| self.format_output_object(catalog, row, format))
+            .collect()
+    }
+
+    fn format_output_object(
+        &self,
+        catalog: &Catalog,
+        object: Object,
+        format: FieldFormat,
+    ) -> Object {
+        if format == FieldFormat::Qualified {
+            return object;
+        }
+
+        let mut out = Object::new();
+        for (key, value) in object {
+            let next_key = if let Some(attribute) = catalog.attribute_by_id(&key) {
+                match format {
+                    FieldFormat::Qualified => attribute.names.qualified_name.clone(),
+                    FieldFormat::Underscore => attribute.names.underscore_name.clone(),
+                    FieldFormat::Plain => attribute.names.plain_name.clone(),
+                }
+            } else {
+                key
+            };
+            out.insert(next_key, value);
+        }
+        out
     }
 
     fn ddl_cleanup_ops(
@@ -2031,7 +2081,7 @@ impl<E: KvEngine> KvPhysicalDataSource<'_, E> {
                 .store
                 .scan_collection(collection.lid)
                 .map_err(|err| semantic_db_core::CoreError::new(err.to_string()))?;
-            let local_ref_lookup = build_local_ref_lookup(&rows);
+            let local_ref_lookup = build_local_ref_lookup(collection, &rows);
             let mut field_names = BTreeMap::new();
             let mut attr_names = BTreeMap::new();
             for (field_id, name) in collection.fields() {
@@ -2281,10 +2331,19 @@ impl semantic_db_core::ObjectAccess for KvObjectView {
     }
 }
 
-fn build_local_ref_lookup(rows: &[StoredEntity]) -> Arc<BTreeMap<String, Object>> {
+fn build_local_ref_lookup(
+    collection: &CollectionSchema,
+    rows: &[StoredEntity],
+) -> Arc<BTreeMap<String, Object>> {
     let mut lookup = BTreeMap::new();
+    let canonical_id = collection.canonical_field_name("id");
     for row in rows {
-        if let Some(id) = row.object.get("id").and_then(Value::as_str) {
+        let id = row
+            .object
+            .get(canonical_id)
+            .and_then(Value::as_str)
+            .or_else(|| row.object.get("id").and_then(Value::as_str));
+        if let Some(id) = id {
             lookup.insert(id.to_string(), row.object.clone());
         }
     }
@@ -2331,7 +2390,7 @@ impl<E: KvEngine> semantic_db_core::PhysicalDataSource for KvPhysicalDataSource<
             .store
             .scan_collection(collection.lid)
             .map_err(|err| semantic_db_core::CoreError::new(err.to_string()))?;
-        let local_ref_lookup = build_local_ref_lookup(&rows);
+        let local_ref_lookup = build_local_ref_lookup(collection, &rows);
         let mut field_names = BTreeMap::new();
         let mut attr_names = BTreeMap::new();
         for (field_id, name) in collection.fields() {
@@ -2675,8 +2734,8 @@ mod tests {
     use semantic_db_core::catalog::{CollectionKind, IntegrityMode};
     use semantic_db_core::{
         ALL_COLLECTION_ALIAS, DEFAULT_COLLECTION, DdlBatch, DdlCollectionKind, DdlOperation, Expr,
-        Operand, OrderBy, Query, QueryField, QueryResult, SelectQuery, TransactionConcurrency,
-        TransactionOptions, UpdateQuery,
+        FieldFormat, Operand, OrderBy, Query, QueryField, QueryResult, SelectQuery,
+        TransactionConcurrency, TransactionOptions, UpdateQuery,
     };
 
     use super::{KvDb, QueryPlan};
@@ -2813,13 +2872,13 @@ mod tests {
 
         let row = db.get("articles", "art-1").unwrap().unwrap();
         assert_eq!(
-            row.object.get("core.title"),
+            row.object.get("core:title"),
             Some(&Value::String("Hello".to_string()))
         );
         assert!(row.object.get("title").is_none());
         assert_eq!(
             row.object.get("type"),
-            Some(&Value::String("core.article".to_string()))
+            Some(&Value::String("core:article".to_string()))
         );
 
         let collection = db.catalog().collection_by_name("articles").unwrap().clone();
@@ -3268,6 +3327,55 @@ mod tests {
             )
             .unwrap_err();
         assert!(err.to_string().contains("mvcc transaction requested"));
+    }
+
+    #[test]
+    fn select_output_field_format_rewrites_registered_attribute_keys() {
+        let mut db = KvDb::in_memory();
+        db.create_collection("items", CollectionKind::Schema)
+            .unwrap();
+        db.transact_ddl(DdlBatch::new().with_op(DdlOperation::UpsertAttribute {
+            attribute: AttributeType {
+                id: "semantic:title".to_string(),
+                name: "title".to_string(),
+                ty: ty(TypeKind::String(StringType {
+                    format: None,
+                    normalization: None,
+                })),
+                constraints: vec![],
+                meta: Meta::default(),
+            },
+        }))
+        .unwrap();
+
+        let mut row = Object::new();
+        row.insert("id", Value::String("i1".to_string()));
+        row.insert("semantic:title", Value::String("hello".to_string()));
+        db.insert("items", "i1", row).unwrap();
+
+        let plain = db
+            .select(
+                SelectQuery::new()
+                    .with_collection("items")
+                    .with_field_format(FieldFormat::Plain),
+            )
+            .unwrap();
+        assert_eq!(
+            plain[0].get("title"),
+            Some(&Value::String("hello".to_string()))
+        );
+
+        let underscore = db
+            .select(
+                SelectQuery::new()
+                    .with_collection("items")
+                    .with_field_format(FieldFormat::Underscore),
+            )
+            .unwrap();
+        assert_eq!(
+            underscore[0].get("semantic_title"),
+            Some(&Value::String("hello".to_string()))
+        );
     }
 
     fn ty(kind: TypeKind) -> Type {

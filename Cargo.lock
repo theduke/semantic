@@ -1591,6 +1591,10 @@ dependencies = [
 ]
 
 [[package]]
+name = "semantic_app"
+version = "0.0.1"
+
+[[package]]
 name = "semantic_data"
 version = "0.0.1"
 dependencies = [
@@ -1679,6 +1683,10 @@ dependencies = [
  "semantic_data",
  "semantic_db_core",
 ]
+
+[[package]]
+name = "semantic_server"
+version = "0.0.1"
 
 [[package]]
 name = "semver"

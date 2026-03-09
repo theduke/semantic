@@ -12,15 +12,24 @@ use crate::catalog::{
     LocalRelationId, LocalTypeDefId,
 };
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct NameSet {
+    pub qualified_name: String,
+    pub plain_name: String,
+    pub underscore_name: String,
+}
+
 #[derive(Debug, Clone)]
 pub struct AttributeSchema {
     pub lid: LocalAttrId,
+    pub names: NameSet,
     pub attribute: AttributeType,
 }
 
 #[derive(Debug, Clone)]
 pub struct RecordTypeSchema {
     pub lid: LocalRecordTypeId,
+    pub names: NameSet,
     pub id: String,
     pub name: String,
     pub record: RecordType,
@@ -29,18 +38,22 @@ pub struct RecordTypeSchema {
 #[derive(Debug, Clone)]
 pub struct TypeDefSchema {
     pub lid: LocalTypeDefId,
+    pub names: NameSet,
     pub type_def: TypeDef,
 }
 
 #[derive(Debug, Clone)]
 pub struct ClassSchema {
     pub lid: LocalClassId,
+    pub names: NameSet,
     pub class: ClassType,
     pub attributes: BTreeMap<String, LocalAttrId>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum CollectionKind {
+    Untyped,
+    Schema,
     Polymorphic,
 }
 

@@ -48,6 +48,8 @@ impl Default for DdlBatch {
 #[repr(C)]
 #[facet(rename_all = "snake_case")]
 pub enum DdlCollectionKind {
+    Untyped,
+    Schema,
     Polymorphic,
 }
 
@@ -163,14 +165,14 @@ pub fn apply_ddl_batch(
     Ok((catalog, DdlOutcome { stats }))
 }
 
-pub const CORE_CATALOG_ENTRY_CLASS_ID: &str = "semantic.catalog.entry";
-pub const CORE_CATALOG_ATTRIBUTE_ENTRY_CLASS_ID: &str = "semantic.catalog.entry.attribute";
-pub const CORE_CATALOG_TYPE_DEF_ENTRY_CLASS_ID: &str = "semantic.catalog.entry.type_def";
-pub const CORE_CATALOG_RECORD_TYPE_ENTRY_CLASS_ID: &str = "semantic.catalog.entry.record_type";
-pub const CORE_CATALOG_CLASS_ENTRY_CLASS_ID: &str = "semantic.catalog.entry.class";
-pub const CORE_CATALOG_COLLECTION_ENTRY_CLASS_ID: &str = "semantic.catalog.entry.collection";
-pub const CORE_CATALOG_INDEX_ENTRY_CLASS_ID: &str = "semantic.catalog.entry.index";
-pub const CORE_CATALOG_META_ENTRY_CLASS_ID: &str = "semantic.catalog.entry.meta";
+pub const CORE_CATALOG_ENTRY_CLASS_ID: &str = "semantic:catalog:entry";
+pub const CORE_CATALOG_ATTRIBUTE_ENTRY_CLASS_ID: &str = "semantic:catalog:entry:attribute";
+pub const CORE_CATALOG_TYPE_DEF_ENTRY_CLASS_ID: &str = "semantic:catalog:entry:type_def";
+pub const CORE_CATALOG_RECORD_TYPE_ENTRY_CLASS_ID: &str = "semantic:catalog:entry:record_type";
+pub const CORE_CATALOG_CLASS_ENTRY_CLASS_ID: &str = "semantic:catalog:entry:class";
+pub const CORE_CATALOG_COLLECTION_ENTRY_CLASS_ID: &str = "semantic:catalog:entry:collection";
+pub const CORE_CATALOG_INDEX_ENTRY_CLASS_ID: &str = "semantic:catalog:entry:index";
+pub const CORE_CATALOG_META_ENTRY_CLASS_ID: &str = "semantic:catalog:entry:meta";
 pub const CORE_CATALOG_SCHEMA_COLLECTION: &str = "__semantic.catalog.schema";
 pub const CORE_CATALOG_ATTRIBUTES_COLLECTION: &str = CORE_CATALOG_SCHEMA_COLLECTION;
 pub const CORE_CATALOG_TYPE_DEFS_COLLECTION: &str = CORE_CATALOG_SCHEMA_COLLECTION;
@@ -180,26 +182,26 @@ pub const CORE_CATALOG_COLLECTIONS_COLLECTION: &str = CORE_CATALOG_SCHEMA_COLLEC
 pub const CORE_CATALOG_INDEXES_COLLECTION: &str = CORE_CATALOG_SCHEMA_COLLECTION;
 pub const CORE_CATALOG_META_COLLECTION: &str = CORE_CATALOG_SCHEMA_COLLECTION;
 
-const CORE_CATALOG_ATTR_ID: &str = "semantic.catalog.id";
-const CORE_CATALOG_ATTR_LID: &str = "semantic.catalog.lid";
-const CORE_CATALOG_ATTR_ATTRIBUTE: &str = "semantic.catalog.attribute";
-const CORE_CATALOG_ATTR_TYPE_DEF: &str = "semantic.catalog.type_def";
-const CORE_CATALOG_ATTR_RECORD: &str = "semantic.catalog.record";
-const CORE_CATALOG_ATTR_CLASS: &str = "semantic.catalog.class";
-const CORE_CATALOG_ATTR_NAME: &str = "semantic.catalog.name";
-const CORE_CATALOG_ATTR_INTEGRITY_MODE: &str = "semantic.catalog.integrity_mode";
-const CORE_CATALOG_ATTR_FIELD_IDS: &str = "semantic.catalog.field_ids";
-const CORE_CATALOG_ATTR_COLLECTION: &str = "semantic.catalog.collection";
-const CORE_CATALOG_ATTR_FIELD: &str = "semantic.catalog.field";
-const CORE_CATALOG_ATTR_INDEX_KIND: &str = "semantic.catalog.index_kind";
-const CORE_CATALOG_ATTR_UNIQUE: &str = "semantic.catalog.unique";
-const CORE_CATALOG_ATTR_NEXT_FIELD_ID: &str = "semantic.catalog.next_field_id";
-const CORE_CATALOG_ATTR_AUTO_INDEX_ENABLED: &str = "semantic.catalog.auto_index_enabled";
-const CORE_CATALOG_ATTR_PACKAGES: &str = "semantic.catalog.packages";
-const CORE_CATALOG_ATTR_APPLIED_MIGRATIONS: &str = "semantic.catalog.applied_migrations";
-const RELATION_ATTR_RELATION: &str = "semantic.relation.relation";
-const RELATION_ATTR_FROM: &str = "semantic.relation.from";
-const RELATION_ATTR_TO: &str = "semantic.relation.to";
+const CORE_CATALOG_ATTR_ID: &str = "semantic:catalog:id";
+const CORE_CATALOG_ATTR_LID: &str = "semantic:catalog:lid";
+const CORE_CATALOG_ATTR_ATTRIBUTE: &str = "semantic:catalog:attribute";
+const CORE_CATALOG_ATTR_TYPE_DEF: &str = "semantic:catalog:type_def";
+const CORE_CATALOG_ATTR_RECORD: &str = "semantic:catalog:record";
+const CORE_CATALOG_ATTR_CLASS: &str = "semantic:catalog:class";
+const CORE_CATALOG_ATTR_NAME: &str = "semantic:catalog:name";
+const CORE_CATALOG_ATTR_INTEGRITY_MODE: &str = "semantic:catalog:integrity_mode";
+const CORE_CATALOG_ATTR_FIELD_IDS: &str = "semantic:catalog:field_ids";
+const CORE_CATALOG_ATTR_COLLECTION: &str = "semantic:catalog:collection";
+const CORE_CATALOG_ATTR_FIELD: &str = "semantic:catalog:field";
+const CORE_CATALOG_ATTR_INDEX_KIND: &str = "semantic:catalog:index_kind";
+const CORE_CATALOG_ATTR_UNIQUE: &str = "semantic:catalog:unique";
+const CORE_CATALOG_ATTR_NEXT_FIELD_ID: &str = "semantic:catalog:next_field_id";
+const CORE_CATALOG_ATTR_AUTO_INDEX_ENABLED: &str = "semantic:catalog:auto_index_enabled";
+const CORE_CATALOG_ATTR_PACKAGES: &str = "semantic:catalog:packages";
+const CORE_CATALOG_ATTR_APPLIED_MIGRATIONS: &str = "semantic:catalog:applied_migrations";
+const RELATION_ATTR_RELATION: &str = "semantic:relation:relation";
+const RELATION_ATTR_FROM: &str = "semantic:relation:from";
+const RELATION_ATTR_TO: &str = "semantic:relation:to";
 
 pub fn core_catalog_schema_batch() -> DdlBatch {
     let mut attrs = std::collections::BTreeMap::new();
@@ -821,6 +823,8 @@ fn resolve_collection_kind(
     kind: &DdlCollectionKind,
 ) -> Result<CollectionKind, CoreError> {
     match kind {
+        DdlCollectionKind::Untyped => Ok(CollectionKind::Untyped),
+        DdlCollectionKind::Schema => Ok(CollectionKind::Schema),
         DdlCollectionKind::Polymorphic => Ok(CollectionKind::Polymorphic),
     }
 }

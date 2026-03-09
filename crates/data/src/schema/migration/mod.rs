@@ -14,6 +14,8 @@ pub struct Migration {
 #[repr(C)]
 #[facet(rename_all = "snake_case")]
 pub enum MigrationCollectionKind {
+    Untyped,
+    Schema,
     Polymorphic,
 }
 

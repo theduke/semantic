@@ -7,7 +7,10 @@ use semantic_data::{
 };
 use thiserror::Error;
 
-use crate::catalog::{Catalog, CollectionSchema, IntegrityMode, LocalClassId, OBJECT_TYPE_FIELD};
+use crate::catalog::{
+    Catalog, CollectionKind, CollectionSchema, IntegrityMode, LocalClassId, OBJECT_TYPE_FIELD,
+    is_special_builtin_field,
+};
 
 #[derive(Debug, Error, Clone, PartialEq, Eq)]
 pub enum ObjectNormalizationError {
@@ -37,6 +40,13 @@ pub enum ObjectNormalizationError {
         collection: String,
         object_type: String,
     },
+    #[error("collection '{collection}' has ambiguous object type alias '{object_type}'")]
+    AmbiguousObjectType {
+        collection: String,
+        object_type: String,
+    },
+    #[error("field alias '{alias}' is ambiguous in collection '{collection}'")]
+    AmbiguousFieldAlias { collection: String, alias: String },
 }
 
 pub type ObjectNormalizationResult<T> = std::result::Result<T, ObjectNormalizationError>;
@@ -46,6 +56,16 @@ pub fn normalize_object_for_collection(
     collection: &CollectionSchema,
     object: &mut Object,
 ) -> ObjectNormalizationResult<()> {
+    for key in object.keys() {
+        let attr_ids = catalog.attribute_ids(key);
+        if attr_ids.len() > 1 && !is_special_builtin_field(key) {
+            return Err(ObjectNormalizationError::AmbiguousFieldAlias {
+                collection: collection.name.clone(),
+                alias: key.clone(),
+            });
+        }
+    }
+
     normalize_aliases(collection, object, |key| {
         Some(collection.canonical_field_name(key).to_string())
     })?;
@@ -53,9 +73,34 @@ pub fn normalize_object_for_collection(
     let mut registered_field_types = FnvHashMap::default();
     let mut reject_unknown_fields = collection.is_closed_field_set();
 
+    if collection.kind == CollectionKind::Untyped {
+        return validate_object_fields(
+            collection,
+            object,
+            &registered_field_types,
+            reject_unknown_fields,
+        );
+    }
+
     match object.get(OBJECT_TYPE_FIELD).and_then(Value::as_str) {
         Some(object_type) => {
-            if let Some(class_lid) = catalog.class_id(object_type) {
+            let class_ids = catalog.class_ids(object_type);
+            let record_ids = catalog.record_type_ids(object_type);
+            if class_ids.len() + record_ids.len() > 1 {
+                return Err(ObjectNormalizationError::AmbiguousObjectType {
+                    collection: collection.name.clone(),
+                    object_type: object_type.to_string(),
+                });
+            }
+            if let Some(class_lid) = class_ids.first().copied() {
+                if let Some(class) = catalog.class_by_lid(class_lid) {
+                    if should_canonicalize_object_type(object_type) {
+                        object.insert(
+                            OBJECT_TYPE_FIELD.to_string(),
+                            Value::String(class.class.id.clone()),
+                        );
+                    }
+                }
                 let mut class_aliases = FnvHashMap::default();
                 collect_class_fields(
                     catalog,
@@ -66,10 +111,16 @@ pub fn normalize_object_for_collection(
                 normalize_aliases(collection, object, |key| class_aliases.get(key).cloned())?;
                 reject_unknown_fields |=
                     collection.integrity_mode == IntegrityMode::StrictRegisteredSchema;
-            } else if let Some(record_lid) = catalog.record_type_id(object_type) {
+            } else if let Some(record_lid) = record_ids.first().copied() {
                 let record_type = catalog
                     .record_type_by_lid(record_lid)
                     .expect("record type id must resolve");
+                if should_canonicalize_object_type(object_type) {
+                    object.insert(
+                        OBJECT_TYPE_FIELD.to_string(),
+                        Value::String(record_type.id.clone()),
+                    );
+                }
                 for (field_name, field) in &record_type.record.fields {
                     registered_field_types.insert(field_name.clone(), field.ty.clone());
                 }
@@ -88,7 +139,9 @@ pub fn normalize_object_for_collection(
                 collection: collection.name.clone(),
             });
         }
-        None => {}
+        None => {
+            best_effort_normalize_registered_attributes(catalog, collection, object)?;
+        }
     }
 
     validate_object_fields(
@@ -97,6 +150,54 @@ pub fn normalize_object_for_collection(
         &registered_field_types,
         reject_unknown_fields,
     )
+}
+
+fn best_effort_normalize_registered_attributes(
+    catalog: &Catalog,
+    collection: &CollectionSchema,
+    object: &mut Object,
+) -> ObjectNormalizationResult<()> {
+    let mut moved = Vec::<(String, String)>::new();
+    for (key, value) in object.iter() {
+        let attr_ids = catalog.attribute_ids(key);
+        if attr_ids.len() > 1 && !is_special_builtin_field(key) {
+            return Err(ObjectNormalizationError::AmbiguousFieldAlias {
+                collection: collection.name.clone(),
+                alias: key.clone(),
+            });
+        }
+        let Some(attr_id) = attr_ids.first().copied() else {
+            continue;
+        };
+        let Some(attribute) = catalog.attribute_by_lid(attr_id) else {
+            continue;
+        };
+        let canonical = attribute.attribute.id.clone();
+        if canonical == *key {
+            continue;
+        }
+        if !type_matches_value(&attribute.attribute.ty, value) {
+            continue;
+        }
+        moved.push((key.clone(), canonical));
+    }
+
+    for (from, to) in moved {
+        if object.contains_key(&to) {
+            return Err(ObjectNormalizationError::AliasConflict {
+                collection: collection.name.clone(),
+                alias: from,
+                canonical: to,
+            });
+        }
+        let value = object.remove(&from).expect("key must exist");
+        object.insert(to, value);
+    }
+    Ok(())
+}
+
+fn should_canonicalize_object_type(value: &str) -> bool {
+    value.contains(':') || value.contains('.') || value.contains('_')
 }
 
 fn normalize_aliases<F>(
@@ -167,6 +268,11 @@ fn collect_class_fields(
                 .attribute_by_id(&class_attr.attribute.id)
                 .expect("class attribute must resolve in catalog");
             field_aliases.insert(alias.clone(), attr.attribute.id.clone());
+            field_aliases.insert(attr.names.plain_name.clone(), attr.attribute.id.clone());
+            field_aliases.insert(
+                attr.names.underscore_name.clone(),
+                attr.attribute.id.clone(),
+            );
             field_types.insert(attr.attribute.id.clone(), attr.attribute.ty.clone());
         }
     }
@@ -349,5 +455,157 @@ fn type_matches_value(ty: &Type, value: &Value) -> bool {
         | TypeKind::Extension(_)
         | TypeKind::Attribute(_)
         | TypeKind::Ref(_) => true,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::collections::BTreeMap;
+
+    use semantic_data::schema::{
+        attribute::attribute_ref::AttributeRef,
+        class::{class_attribute::ClassAttribute, class_type::ClassType},
+        core::{meta::Meta, type_kind::TypeKind, type_node::Type},
+        primitives::string_type::StringType,
+    };
+
+    use crate::catalog::{Catalog, CollectionKind, IntegrityMode, OBJECT_TYPE_FIELD};
+
+    use super::{ObjectNormalizationError, normalize_object_for_collection};
+
+    fn string_type() -> Type {
+        Type {
+            kind: TypeKind::String(StringType {
+                format: None,
+                normalization: None,
+            }),
+            constraints: vec![],
+            annotations: vec![],
+            meta: Meta::default(),
+        }
+    }
+
+    #[test]
+    fn normalizes_schema_object_by_class_and_aliases() {
+        let mut catalog = Catalog::new();
+        let _ = catalog.upsert_attribute(semantic_data::schema::AttributeType {
+            id: "semantic:title".to_string(),
+            name: "title".to_string(),
+            ty: string_type(),
+            constraints: vec![],
+            meta: Meta::default(),
+        });
+        let _ = catalog
+            .upsert_class(ClassType {
+                id: "semantic:article".to_string(),
+                name: "Article".to_string(),
+                inherits: None,
+                extends: vec![],
+                attributes: BTreeMap::from([(
+                    "title".to_string(),
+                    ClassAttribute {
+                        attribute: AttributeRef {
+                            id: "semantic:title".to_string(),
+                        },
+                        required: false,
+                        constraints: vec![],
+                        meta: Meta::default(),
+                    },
+                )]),
+                constraints: vec![],
+                meta: Meta::default(),
+            })
+            .unwrap();
+        let _ = catalog
+            .upsert_collection(
+                "items",
+                CollectionKind::Schema,
+                IntegrityMode::StrictRegisteredSchema,
+            )
+            .unwrap();
+        let collection = catalog.collection_by_name("items").unwrap();
+
+        let mut object = semantic_data::value::Object::new();
+        object.insert(
+            OBJECT_TYPE_FIELD.to_string(),
+            semantic_data::value::Value::String("semantic_article".to_string()),
+        );
+        object.insert(
+            "title".to_string(),
+            semantic_data::value::Value::String("hello".to_string()),
+        );
+
+        normalize_object_for_collection(&catalog, collection, &mut object).unwrap();
+
+        assert_eq!(
+            object
+                .get(OBJECT_TYPE_FIELD)
+                .and_then(semantic_data::value::Value::as_str),
+            Some("semantic:article")
+        );
+        assert_eq!(
+            object
+                .get("semantic:title")
+                .and_then(semantic_data::value::Value::as_str),
+            Some("hello")
+        );
+    }
+
+    #[test]
+    fn permissive_best_effort_normalizes_known_attribute_without_class() {
+        let mut catalog = Catalog::new();
+        let _ = catalog.upsert_attribute(semantic_data::schema::AttributeType {
+            id: "semantic:title".to_string(),
+            name: "title".to_string(),
+            ty: string_type(),
+            constraints: vec![],
+            meta: Meta::default(),
+        });
+        let _ = catalog
+            .upsert_collection("items", CollectionKind::Schema, IntegrityMode::Permissive)
+            .unwrap();
+        let collection = catalog.collection_by_name("items").unwrap();
+
+        let mut object = semantic_data::value::Object::new();
+        object.insert(
+            "semantic_title".to_string(),
+            semantic_data::value::Value::String("hello".to_string()),
+        );
+        normalize_object_for_collection(&catalog, collection, &mut object).unwrap();
+        assert!(object.contains_key("semantic:title"));
+    }
+
+    #[test]
+    fn permissive_insert_rejects_ambiguous_plain_attribute_alias() {
+        let mut catalog = Catalog::new();
+        let _ = catalog.upsert_attribute(semantic_data::schema::AttributeType {
+            id: "semantic:title".to_string(),
+            name: "title".to_string(),
+            ty: string_type(),
+            constraints: vec![],
+            meta: Meta::default(),
+        });
+        let _ = catalog.upsert_attribute(semantic_data::schema::AttributeType {
+            id: "shared:blog:title".to_string(),
+            name: "title".to_string(),
+            ty: string_type(),
+            constraints: vec![],
+            meta: Meta::default(),
+        });
+        let _ = catalog
+            .upsert_collection("items", CollectionKind::Schema, IntegrityMode::Permissive)
+            .unwrap();
+        let collection = catalog.collection_by_name("items").unwrap();
+
+        let mut object = semantic_data::value::Object::new();
+        object.insert(
+            "title".to_string(),
+            semantic_data::value::Value::String("hello".to_string()),
+        );
+        let err = normalize_object_for_collection(&catalog, collection, &mut object).unwrap_err();
+        assert!(matches!(
+            err,
+            ObjectNormalizationError::AmbiguousFieldAlias { alias, .. } if alias == "title"
+        ));
     }
 }

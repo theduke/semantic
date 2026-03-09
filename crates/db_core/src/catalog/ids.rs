@@ -25,3 +25,4 @@ local_id!(LocalClassId);
 local_id!(LocalCollectionId);
 local_id!(LocalIndexId);
 local_id!(LocalRelationId);
+local_id!(LocalPackageId);

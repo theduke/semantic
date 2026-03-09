@@ -19,11 +19,12 @@ use semantic_data::schema::{
 use crate::AppliedMigration;
 use crate::catalog::{
     AttributeSchema, CatalogError, CatalogStorageSnapshot, ClassSchema, CollectionKind,
-    CollectionSchema, IdMap, IndexSchema, IntegrityMode, LocalAttrId, LocalClassId,
-    LocalCollectionId, LocalFieldId, LocalIndexId, LocalRecordTypeId, LocalRelationId,
-    LocalTypeDefId, RecordTypeSchema, RelationshipSchema, StoredAppliedMigration, StoredAttribute,
-    StoredClass, StoredCollection, StoredFieldId, StoredIndex, StoredPackage, StoredRecordType,
-    StoredRelationship, StoredTypeDef, TypeDefSchema,
+    CollectionSchema, IMPLICIT_ROOT_PACKAGE, IdMap, IndexSchema, IntegrityMode, LocalAttrId,
+    LocalClassId, LocalCollectionId, LocalFieldId, LocalIndexId, LocalPackageId, LocalRecordTypeId,
+    LocalRelationId, LocalTypeDefId, NameSet, RecordTypeSchema, RelationshipSchema,
+    StoredAppliedMigration, StoredAttribute, StoredClass, StoredCollection, StoredFieldId,
+    StoredIndex, StoredPackage, StoredRecordType, StoredRelationship, StoredTypeDef, TypeDefSchema,
+    nameset_for_identifier, nameset_for_qualified,
 };
 
 #[derive(Debug, Clone)]
@@ -35,7 +36,7 @@ pub struct Catalog {
     collections: IdMap<LocalCollectionId, CollectionSchema>,
     indexes: IdMap<LocalIndexId, IndexSchema>,
     relationships: IdMap<LocalRelationId, RelationshipSchema>,
-    packages: BTreeMap<String, Package>,
+    packages: IdMap<LocalPackageId, Package>,
     applied_migrations: BTreeMap<String, AppliedMigration>,
     collection_indexes: FnvHashMap<LocalCollectionId, Vec<LocalIndexId>>,
     next_field_id: usize,
@@ -49,9 +50,9 @@ pub const PARENT_RELATION_ATTRIBUTE: &str = "parent";
 pub const PRIMARY_ID_INDEX_NAME: &str = "__builtin_pk_id";
 pub const OBJECT_TYPE_INDEX_NAME: &str = "__builtin_type";
 pub const BUILTIN_PARENT_RELATION_ID: &str = "__builtin.parent";
-pub const RELATION_CLASS_ID: &str = "semantic.relation";
-pub const RELATION_FROM_ATTRIBUTE: &str = "semantic.relation.from";
-pub const RELATION_TO_ATTRIBUTE: &str = "semantic.relation.to";
+pub const RELATION_CLASS_ID: &str = "semantic:relation";
+pub const RELATION_FROM_ATTRIBUTE: &str = "semantic:relation:from";
+pub const RELATION_TO_ATTRIBUTE: &str = "semantic:relation:to";
 pub const AUTO_PATH_INDEX_NAME: &str = "__auto_index_all_paths";
 pub const AUTO_PATH_INDEX_FIELD: &str = "__path__";
 
@@ -125,7 +126,7 @@ impl Catalog {
             collections: IdMap::new(),
             indexes: IdMap::new(),
             relationships: IdMap::new(),
-            packages: BTreeMap::new(),
+            packages: IdMap::new(),
             applied_migrations: BTreeMap::new(),
             collection_indexes: FnvHashMap::default(),
             next_field_id: 0,
@@ -167,16 +168,17 @@ impl Catalog {
         self.relationships.iter()
     }
 
-    pub fn packages(&self) -> impl Iterator<Item = (&String, &Package)> {
+    pub fn packages(&self) -> impl Iterator<Item = (LocalPackageId, &Package)> {
         self.packages.iter()
     }
 
     pub fn package_by_name(&self, name: &str) -> Option<&Package> {
-        self.packages.get(name)
+        self.packages.get_key(name)
     }
 
     pub fn upsert_package(&mut self, package: Package) {
-        let _ = self.packages.insert(package.name.clone(), package);
+        let names = package_nameset(&package.name);
+        let _ = self.packages.insert(names, |_| package);
     }
 
     pub fn applied_migrations(&self) -> impl Iterator<Item = (&String, &AppliedMigration)> {
@@ -301,6 +303,10 @@ impl Catalog {
         self.attributes.get_key_id(id)
     }
 
+    pub fn attribute_ids(&self, id: &str) -> Vec<LocalAttrId> {
+        self.attributes.get_key_ids(id)
+    }
+
     pub fn attribute_by_id(&self, id: &str) -> Option<&AttributeSchema> {
         self.attributes.get_key(id)
     }
@@ -314,20 +320,26 @@ impl Catalog {
     }
 
     pub fn upsert_type_def(&mut self, type_def: TypeDef) -> LocalTypeDefId {
+        let type_def = normalize_type_def(type_def);
         let key = type_def.name.clone();
+        let key_names = nameset_for_qualified(&key);
         match &type_def.ty.kind {
             TypeKind::Attribute(attribute) => {
-                self.attributes.insert(key.clone(), |lid| AttributeSchema {
+                let attr_names = nameset_for_qualified(&key);
+                self.attributes.insert(attr_names, |lid| AttributeSchema {
                     lid,
+                    names: nameset_for_qualified(&key),
                     attribute: (*attribute.clone()),
                 });
                 let _ = self.record_types.remove_key(&key);
                 let _ = self.classes.remove_key(&key);
             }
             TypeKind::Record(record) => {
+                let record_names = nameset_for_qualified(&key);
                 self.record_types
-                    .insert(key.clone(), |lid| RecordTypeSchema {
+                    .insert(record_names, |lid| RecordTypeSchema {
                         lid,
+                        names: nameset_for_qualified(&key),
                         id: key.clone(),
                         name: type_def.meta.title.clone().unwrap_or_else(|| key.clone()),
                         record: record.clone(),
@@ -345,12 +357,16 @@ impl Catalog {
                     };
                     class_attributes.insert(alias.clone(), attr.lid);
                     class_attributes.insert(class_attr.attribute.id.clone(), attr.lid);
+                    class_attributes.insert(attr.names.plain_name.clone(), attr.lid);
+                    class_attributes.insert(attr.names.underscore_name.clone(), attr.lid);
                 }
                 if unresolved {
                     let _ = self.classes.remove_key(&key);
                 } else {
-                    self.classes.insert(key.clone(), |lid| ClassSchema {
+                    let class_names = nameset_for_qualified(&key);
+                    self.classes.insert(class_names, |lid| ClassSchema {
                         lid,
+                        names: nameset_for_qualified(&key),
                         class: class.clone(),
                         attributes: class_attributes,
                     });
@@ -365,7 +381,11 @@ impl Catalog {
             }
         }
         self.type_defs
-            .insert(key, |lid| TypeDefSchema { lid, type_def })
+            .insert(key_names.clone(), |lid| TypeDefSchema {
+                lid,
+                names: key_names.clone(),
+                type_def,
+            })
     }
 
     pub fn delete_type_def(&mut self, name: &str) -> bool {
@@ -429,6 +449,10 @@ impl Catalog {
         self.record_types.get_key_id(id)
     }
 
+    pub fn record_type_ids(&self, id: &str) -> Vec<LocalRecordTypeId> {
+        self.record_types.get_key_ids(id)
+    }
+
     pub fn record_type_by_lid(&self, lid: LocalRecordTypeId) -> Option<&RecordTypeSchema> {
         self.record_types.get(lid)
     }
@@ -466,6 +490,10 @@ impl Catalog {
 
     pub fn class_id(&self, id: &str) -> Option<LocalClassId> {
         self.classes.get_key_id(id)
+    }
+
+    pub fn class_ids(&self, id: &str) -> Vec<LocalClassId> {
+        self.classes.get_key_ids(id)
     }
 
     pub fn class_by_lid(&self, lid: LocalClassId) -> Option<&ClassSchema> {
@@ -510,7 +538,8 @@ impl Catalog {
             existing_field_ids.as_ref(),
         )?;
 
-        self.collections.insert_fixed(lid, name, schema);
+        self.collections
+            .insert_fixed(lid, verbatim_nameset(&name), schema);
         // Ensure builtin indexes are always present and flow through normal index machinery.
         let _ = self.upsert_index(PRIMARY_ID_INDEX_NAME, lid, PRIMARY_ID_FIELD, true)?;
         let _ = self.upsert_index(OBJECT_TYPE_INDEX_NAME, lid, OBJECT_TYPE_FIELD, false)?;
@@ -591,7 +620,10 @@ impl Catalog {
         let key = relationship.id.clone();
         Ok(self
             .relationships
-            .insert(key, |lid| RelationshipSchema { lid, relationship }))
+            .insert(verbatim_nameset(&key), |lid| RelationshipSchema {
+                lid,
+                relationship,
+            }))
     }
 
     pub fn delete_relationship(&mut self, id: &str) -> bool {
@@ -694,7 +726,8 @@ impl Catalog {
             },
         };
 
-        self.indexes.insert_fixed(lid, key, index);
+        self.indexes
+            .insert_fixed(lid, verbatim_nameset(&key), index);
         let ids = self.collection_indexes.entry(collection).or_default();
         if !ids.contains(&lid) {
             ids.push(lid);
@@ -874,11 +907,13 @@ impl Catalog {
 
         for item in type_defs {
             let key = item.type_def.name.clone();
+            let names = nameset_for_qualified(&key);
             catalog.type_defs.insert_fixed(
                 item.lid,
-                key,
+                names.clone(),
                 TypeDefSchema {
                     lid: item.lid,
+                    names,
                     type_def: item.type_def,
                 },
             );
@@ -912,9 +947,15 @@ impl Catalog {
                     .get(&id)
                     .copied()
                     .unwrap_or(catalog.attributes.next_id());
-                catalog
-                    .attributes
-                    .insert_fixed(lid, id, AttributeSchema { lid, attribute });
+                catalog.attributes.insert_fixed(
+                    lid,
+                    nameset_for_qualified(&id),
+                    AttributeSchema {
+                        lid,
+                        names: nameset_for_qualified(&id),
+                        attribute,
+                    },
+                );
             }
 
             let projected_records = catalog
@@ -940,9 +981,10 @@ impl Catalog {
                     .unwrap_or(catalog.record_types.next_id());
                 catalog.record_types.insert_fixed(
                     lid,
-                    id.clone(),
+                    nameset_for_qualified(&id),
                     RecordTypeSchema {
                         lid,
+                        names: nameset_for_qualified(&id),
                         id,
                         name,
                         record,
@@ -971,12 +1013,15 @@ impl Catalog {
                     };
                     class_attributes.insert(alias.clone(), attr.lid);
                     class_attributes.insert(class_attr.attribute.id.clone(), attr.lid);
+                    class_attributes.insert(attr.names.plain_name.clone(), attr.lid);
+                    class_attributes.insert(attr.names.underscore_name.clone(), attr.lid);
                 }
                 catalog.classes.insert_fixed(
                     lid,
-                    class.id.clone(),
+                    nameset_for_qualified(&class.id),
                     ClassSchema {
                         lid,
+                        names: nameset_for_qualified(&class.id),
                         class,
                         attributes: class_attributes,
                     },
@@ -987,9 +1032,10 @@ impl Catalog {
                 let key = item.attribute.id.clone();
                 catalog.attributes.insert_fixed(
                     item.lid,
-                    key,
+                    nameset_for_qualified(&key),
                     AttributeSchema {
                         lid: item.lid,
+                        names: nameset_for_qualified(&key),
                         attribute: item.attribute,
                     },
                 );
@@ -999,9 +1045,10 @@ impl Catalog {
                 let key = item.id.clone();
                 catalog.record_types.insert_fixed(
                     item.lid,
-                    key,
+                    nameset_for_qualified(&key),
                     RecordTypeSchema {
                         lid: item.lid,
+                        names: nameset_for_qualified(&key),
                         id: item.id,
                         name: item.name,
                         record: item.record,
@@ -1021,13 +1068,16 @@ impl Catalog {
                     };
                     class_attributes.insert(alias.clone(), attr.lid);
                     class_attributes.insert(class_attr.attribute.id.clone(), attr.lid);
+                    class_attributes.insert(attr.names.plain_name.clone(), attr.lid);
+                    class_attributes.insert(attr.names.underscore_name.clone(), attr.lid);
                 }
                 let key = class.id.clone();
                 catalog.classes.insert_fixed(
                     lid,
-                    key,
+                    nameset_for_qualified(&key),
                     ClassSchema {
                         lid,
+                        names: nameset_for_qualified(&key),
                         class,
                         attributes: class_attributes,
                     },
@@ -1055,7 +1105,11 @@ impl Catalog {
                 let key = type_def.name.clone();
                 let _ = catalog
                     .type_defs
-                    .insert(key, |lid| TypeDefSchema { lid, type_def });
+                    .insert(nameset_for_qualified(&key), |lid| TypeDefSchema {
+                        lid,
+                        names: nameset_for_qualified(&key),
+                        type_def,
+                    });
             }
         }
 
@@ -1068,13 +1122,13 @@ impl Catalog {
             let schema = catalog.build_collection_schema_for_lid(
                 item.lid,
                 item.name.clone(),
-                CollectionKind::Polymorphic,
+                CollectionKind::Schema,
                 item.integrity_mode,
                 Some(&field_ids),
             )?;
             catalog
                 .collections
-                .insert_fixed(item.lid, item.name.clone(), schema);
+                .insert_fixed(item.lid, verbatim_nameset(&item.name), schema);
             for field_id in field_ids.values() {
                 catalog.ensure_next_field_id(*field_id);
             }
@@ -1096,7 +1150,9 @@ impl Catalog {
             )?;
             if let Some(index) = catalog.indexes.get_key(&key) {
                 let index_value = index.clone();
-                catalog.indexes.insert_fixed(item.lid, key, index_value);
+                catalog
+                    .indexes
+                    .insert_fixed(item.lid, verbatim_nameset(&key), index_value);
                 let ids = catalog
                     .collection_indexes
                     .entry(item.collection)
@@ -1110,9 +1166,11 @@ impl Catalog {
             let _ = catalog.upsert_relationship(item.relationship.clone())?;
             if let Some(existing) = catalog.relationship_by_id(&item.relationship.id) {
                 let value = existing.clone();
-                catalog
-                    .relationships
-                    .insert_fixed(item.lid, item.relationship.id, value);
+                catalog.relationships.insert_fixed(
+                    item.lid,
+                    verbatim_nameset(&item.relationship.id),
+                    value,
+                );
             }
         }
         for item in packages {
@@ -1163,13 +1221,16 @@ impl Catalog {
     fn upsert_builtin_parent_relationship(
         &mut self,
         collection: LocalCollectionId,
-    ) -> Result<LocalRelationId, CatalogError> {
+    ) -> Result<(), CatalogError> {
+        if self.attribute_by_id(PARENT_RELATION_ATTRIBUTE).is_none() {
+            return Ok(());
+        }
         let collection_name = self
             .collection_by_lid(collection)
             .ok_or(CatalogError::UnknownCollection(collection))?
             .name
             .clone();
-        self.upsert_relationship(RelationType {
+        let _ = self.upsert_relationship(RelationType {
             id: format!("{BUILTIN_PARENT_RELATION_ID}.{collection_name}"),
             name: "parent".to_string(),
             source_collection: collection_name,
@@ -1178,7 +1239,8 @@ impl Catalog {
             },
             indexing_mode: semantic_data::schema::RelationIndexingMode::Enabled,
             meta: Meta::default(),
-        })
+        })?;
+        Ok(())
     }
 
     fn sync_auto_path_indexes(&mut self) -> Result<(), CatalogError> {
@@ -1204,10 +1266,12 @@ impl Catalog {
         integrity_mode: IntegrityMode,
         fixed_field_ids: Option<&FnvHashMap<String, LocalFieldId>>,
     ) -> Result<CollectionSchema, CatalogError> {
-        let field_aliases = FnvHashMap::default();
+        let mut field_aliases = FnvHashMap::default();
         let mut field_types = FnvHashMap::default();
-        let field_attrs = FnvHashMap::<String, LocalAttrId>::default();
-        let closed_fields = false;
+        let mut field_attrs = FnvHashMap::<String, LocalAttrId>::default();
+        let schema_driven = matches!(kind, CollectionKind::Schema | CollectionKind::Polymorphic);
+        let closed_fields =
+            schema_driven && integrity_mode == IntegrityMode::StrictRegisteredSchema;
 
         let mut field_ids = FnvHashMap::default();
         let mut field_names_by_id = FnvHashMap::default();
@@ -1238,6 +1302,31 @@ impl Catalog {
                 annotations: vec![],
                 meta: Meta::default(),
             });
+
+        if schema_driven {
+            for (_, attr) in self.attributes() {
+                field_types
+                    .entry(attr.attribute.id.clone())
+                    .or_insert_with(|| attr.attribute.ty.clone());
+                field_attrs.insert(attr.attribute.id.clone(), attr.lid);
+                field_aliases
+                    .entry(attr.names.plain_name.clone())
+                    .or_insert_with(|| attr.attribute.id.clone());
+                field_aliases
+                    .entry(attr.names.underscore_name.clone())
+                    .or_insert_with(|| attr.attribute.id.clone());
+            }
+        }
+
+        for canonical in field_types.keys() {
+            let names = nameset_for_qualified(canonical);
+            field_aliases
+                .entry(names.plain_name)
+                .or_insert_with(|| canonical.clone());
+            field_aliases
+                .entry(names.underscore_name)
+                .or_insert_with(|| canonical.clone());
+        }
 
         let mut field_names = field_types.keys().cloned().collect::<Vec<_>>();
         field_names.sort();
@@ -1346,14 +1435,20 @@ impl Catalog {
         }
 
         self.rebuild_type_projections()?;
+        self.rebuild_collection_projections()?;
         pending_type_ops.clear();
         Ok(())
     }
 
     fn upsert_type_def_raw(&mut self, type_def: TypeDef) -> LocalTypeDefId {
+        let type_def = normalize_type_def(type_def);
         let key = type_def.name.clone();
         self.type_defs
-            .insert(key, |lid| TypeDefSchema { lid, type_def })
+            .insert(nameset_for_qualified(&key), |lid| TypeDefSchema {
+                lid,
+                names: nameset_for_qualified(&key),
+                type_def,
+            })
     }
 
     fn delete_type_def_raw(&mut self, name: &str) -> bool {
@@ -1416,8 +1511,15 @@ impl Catalog {
                 .get(&id)
                 .copied()
                 .unwrap_or(self.attributes.next_id());
-            self.attributes
-                .insert_fixed(lid, id, AttributeSchema { lid, attribute });
+            self.attributes.insert_fixed(
+                lid,
+                nameset_for_qualified(&id),
+                AttributeSchema {
+                    lid,
+                    names: nameset_for_qualified(&id),
+                    attribute,
+                },
+            );
         }
 
         for (id, name, record) in projected_records {
@@ -1427,9 +1529,10 @@ impl Catalog {
                 .unwrap_or(self.record_types.next_id());
             self.record_types.insert_fixed(
                 lid,
-                id.clone(),
+                nameset_for_qualified(&id),
                 RecordTypeSchema {
                     lid,
+                    names: nameset_for_qualified(&id),
                     id,
                     name,
                     record,
@@ -1451,18 +1554,52 @@ impl Catalog {
                 };
                 class_attributes.insert(alias.clone(), attr.lid);
                 class_attributes.insert(class_attr.attribute.id.clone(), attr.lid);
+                class_attributes.insert(attr.names.plain_name.clone(), attr.lid);
+                class_attributes.insert(attr.names.underscore_name.clone(), attr.lid);
             }
             self.classes.insert_fixed(
                 lid,
-                class.id.clone(),
+                nameset_for_qualified(&class.id),
                 ClassSchema {
                     lid,
+                    names: nameset_for_qualified(&class.id),
                     class,
                     attributes: class_attributes,
                 },
             );
         }
 
+        Ok(())
+    }
+
+    fn rebuild_collection_projections(&mut self) -> Result<(), CatalogError> {
+        let collections = self
+            .collections()
+            .map(|(lid, schema)| {
+                (
+                    lid,
+                    schema.name.clone(),
+                    schema.kind.clone(),
+                    schema.integrity_mode,
+                    schema
+                        .fields()
+                        .map(|(field_id, name)| (name.to_string(), field_id))
+                        .collect::<FnvHashMap<_, _>>(),
+                )
+            })
+            .collect::<Vec<_>>();
+
+        for (lid, name, kind, integrity_mode, field_ids) in collections {
+            let schema = self.build_collection_schema_for_lid(
+                lid,
+                name.clone(),
+                kind,
+                integrity_mode,
+                Some(&field_ids),
+            )?;
+            self.collections
+                .insert_fixed(lid, verbatim_nameset(&name), schema);
+        }
         Ok(())
     }
 
@@ -1527,6 +1664,11 @@ impl Catalog {
                     });
                 };
                 field_aliases.insert(alias.clone(), attr.attribute.id.clone());
+                field_aliases.insert(attr.names.plain_name.clone(), attr.attribute.id.clone());
+                field_aliases.insert(
+                    attr.names.underscore_name.clone(),
+                    attr.attribute.id.clone(),
+                );
                 field_types.insert(attr.attribute.id.clone(), attr.attribute.ty.clone());
                 field_attrs.insert(attr.attribute.id.clone(), attr.lid);
             }
@@ -1588,12 +1730,14 @@ impl Default for Catalog {
 }
 
 fn type_def_from_attribute(attribute: &AttributeType, module: Option<String>) -> TypeDef {
+    let mut attribute = attribute.clone();
+    attribute.id = nameset_for_identifier(&attribute.id, module.as_deref()).qualified_name;
     TypeDef {
         name: attribute.id.clone(),
-        module,
+        module: module.clone(),
         params: Vec::<TypeParam>::new(),
         ty: Type {
-            kind: TypeKind::Attribute(Box::new(attribute.clone())),
+            kind: TypeKind::Attribute(Box::new(attribute)),
             constraints: vec![],
             annotations: vec![],
             meta: Meta::default(),
@@ -1609,9 +1753,10 @@ fn type_def_from_record_type(
     record: RecordType,
     module: Option<String>,
 ) -> TypeDef {
+    let id = nameset_for_identifier(&id, module.as_deref()).qualified_name;
     TypeDef {
         name: id,
-        module,
+        module: module.clone(),
         params: Vec::<TypeParam>::new(),
         ty: Type {
             kind: TypeKind::Record(record),
@@ -1628,9 +1773,10 @@ fn type_def_from_record_type(
 }
 
 fn type_def_from_class(class: ClassType, module: Option<String>) -> TypeDef {
+    let class = normalize_class_type(class, module.as_deref());
     TypeDef {
         name: class.id.clone(),
-        module,
+        module: module.clone(),
         params: Vec::<TypeParam>::new(),
         ty: Type {
             kind: TypeKind::Class(class.clone()),
@@ -1643,5 +1789,98 @@ fn type_def_from_class(class: ClassType, module: Option<String>) -> TypeDef {
             title: Some(class.name),
             ..Meta::default()
         },
+    }
+}
+
+fn normalize_type_def(mut type_def: TypeDef) -> TypeDef {
+    let module = type_def.module.clone();
+    let names = nameset_for_identifier(&type_def.name, module.as_deref());
+    type_def.name = names.qualified_name.clone();
+
+    type_def.ty = normalize_type(type_def.ty, module.as_deref());
+    match &mut type_def.ty.kind {
+        TypeKind::Attribute(attribute) => {
+            attribute.id = names.qualified_name;
+            attribute.ty = normalize_type(attribute.ty.clone(), module.as_deref());
+        }
+        TypeKind::Class(class) => {
+            *class = normalize_class_type(class.clone(), module.as_deref());
+        }
+        _ => {}
+    }
+    type_def
+}
+
+fn normalize_class_type(mut class: ClassType, module: Option<&str>) -> ClassType {
+    class.id = nameset_for_identifier(&class.id, module).qualified_name;
+    if let Some(inherits) = class.inherits.as_mut() {
+        inherits.id = nameset_for_identifier(&inherits.id, module).qualified_name;
+    }
+    for ext in &mut class.extends {
+        ext.id = nameset_for_identifier(&ext.id, module).qualified_name;
+    }
+    for class_attr in class.attributes.values_mut() {
+        class_attr.attribute.id =
+            nameset_for_identifier(&class_attr.attribute.id, module).qualified_name;
+    }
+    class
+}
+
+fn normalize_type(mut ty: Type, module: Option<&str>) -> Type {
+    ty.kind = match ty.kind {
+        TypeKind::Optional(mut optional) => {
+            optional.inner = Box::new(normalize_type(*optional.inner, module));
+            TypeKind::Optional(optional)
+        }
+        TypeKind::Array(mut array) => {
+            array.items = Box::new(normalize_type(*array.items, module));
+            TypeKind::Array(array)
+        }
+        TypeKind::List(mut list) => {
+            list.items = Box::new(normalize_type(*list.items, module));
+            TypeKind::List(list)
+        }
+        TypeKind::Tuple(mut tuple) => {
+            tuple.items = tuple
+                .items
+                .into_iter()
+                .map(|item| normalize_type(item, module))
+                .collect();
+            tuple.rest = tuple
+                .rest
+                .map(|rest| Box::new(normalize_type(*rest, module)));
+            TypeKind::Tuple(tuple)
+        }
+        TypeKind::Map(mut map) => {
+            map.keys = Box::new(normalize_type(*map.keys, module));
+            map.values = Box::new(normalize_type(*map.values, module));
+            TypeKind::Map(map)
+        }
+        TypeKind::Ref(mut type_ref) => {
+            type_ref.name = nameset_for_identifier(&type_ref.name, module).qualified_name;
+            TypeKind::Ref(type_ref)
+        }
+        kind => kind,
+    };
+    ty
+}
+
+fn package_nameset(name: &str) -> NameSet {
+    verbatim_nameset(name)
+}
+
+fn verbatim_nameset(name: &str) -> NameSet {
+    if name.is_empty() {
+        return NameSet {
+            qualified_name: IMPLICIT_ROOT_PACKAGE.to_string(),
+            plain_name: IMPLICIT_ROOT_PACKAGE.to_string(),
+            underscore_name: IMPLICIT_ROOT_PACKAGE.to_string(),
+        };
+    }
+
+    NameSet {
+        qualified_name: name.to_string(),
+        plain_name: name.to_string(),
+        underscore_name: name.replace(':', "_"),
     }
 }

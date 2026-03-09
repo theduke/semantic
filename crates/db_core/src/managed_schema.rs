@@ -8,7 +8,9 @@ use semantic_data::schema::{
 
 use crate::{
     CoreError,
-    catalog::{Catalog, CatalogBatchOperation, CollectionKind, IntegrityMode},
+    catalog::{
+        Catalog, CatalogBatchOperation, CollectionKind, IntegrityMode, nameset_for_identifier,
+    },
     fresh_catalog_with_core_schema,
 };
 
@@ -35,9 +37,9 @@ pub fn applied_migration_key(package: &str, module: &str, name: &str) -> String 
 
 pub fn normalize_package_definition(package: &Package) -> Result<Package, CoreError> {
     let mut package = package.clone();
-    normalize_module_type_defs(&mut package.root)?;
+    normalize_module(&mut package.root)?;
     for module in package.modules.values_mut() {
-        normalize_module_type_defs(module)?;
+        normalize_module(module)?;
     }
     Ok(package)
 }
@@ -120,7 +122,9 @@ pub fn apply_migration_ddl_batch<'a>(
 
 fn migration_collection_kind(kind: MigrationCollectionKind) -> CollectionKind {
     match kind {
-        MigrationCollectionKind::Polymorphic => CollectionKind::Polymorphic,
+        MigrationCollectionKind::Untyped => CollectionKind::Untyped,
+        MigrationCollectionKind::Schema => CollectionKind::Schema,
+        MigrationCollectionKind::Polymorphic => CollectionKind::Schema,
     }
 }
 
@@ -223,8 +227,16 @@ fn migration_catalog_batch_operation(
     }
 }
 
+fn normalize_module(module: &mut Module) -> Result<(), CoreError> {
+    normalize_module_type_defs(module)?;
+    normalize_module_attributes(module);
+    normalize_module_classes(module);
+    Ok(())
+}
+
 fn normalize_module_type_defs(module: &mut Module) -> Result<(), CoreError> {
-    for type_def in module.types.values_mut() {
+    let mut normalized = BTreeMap::new();
+    for (_, mut type_def) in std::mem::take(&mut module.types) {
         match &type_def.module {
             Some(existing) if existing != &module.name => {
                 return Err(CoreError::new(format!(
@@ -235,8 +247,90 @@ fn normalize_module_type_defs(module: &mut Module) -> Result<(), CoreError> {
             Some(_) => {}
             None => type_def.module = Some(module.name.clone()),
         }
+        type_def = normalize_type_def(type_def, &module.name);
+        normalized.insert(type_def.name.clone(), type_def);
     }
+    module.types = normalized;
     Ok(())
+}
+
+fn normalize_module_attributes(module: &mut Module) {
+    let mut normalized = BTreeMap::new();
+    for (_, mut attribute) in std::mem::take(&mut module.attributes) {
+        attribute.id = nameset_for_identifier(&attribute.id, Some(&module.name)).qualified_name;
+        attribute.ty = normalize_type(attribute.ty, &module.name);
+        normalized.insert(attribute.id.clone(), attribute);
+    }
+    module.attributes = normalized;
+}
+
+fn normalize_module_classes(module: &mut Module) {
+    let mut normalized = BTreeMap::new();
+    for (_, mut class) in std::mem::take(&mut module.classes) {
+        class.id = nameset_for_identifier(&class.id, Some(&module.name)).qualified_name;
+        if let Some(inherits) = class.inherits.as_mut() {
+            inherits.id = nameset_for_identifier(&inherits.id, Some(&module.name)).qualified_name;
+        }
+        for ext in &mut class.extends {
+            ext.id = nameset_for_identifier(&ext.id, Some(&module.name)).qualified_name;
+        }
+        for class_attr in class.attributes.values_mut() {
+            class_attr.attribute.id =
+                nameset_for_identifier(&class_attr.attribute.id, Some(&module.name)).qualified_name;
+        }
+        normalized.insert(class.id.clone(), class);
+    }
+    module.classes = normalized;
+}
+
+fn normalize_type_def(mut type_def: TypeDef, module: &str) -> TypeDef {
+    type_def.name = nameset_for_identifier(&type_def.name, Some(module)).qualified_name;
+    type_def.ty = normalize_type(type_def.ty, module);
+    type_def
+}
+
+fn normalize_type(
+    mut ty: semantic_data::schema::Type,
+    module: &str,
+) -> semantic_data::schema::Type {
+    use semantic_data::schema::core::type_kind::TypeKind;
+
+    ty.kind = match ty.kind {
+        TypeKind::Optional(mut optional) => {
+            optional.inner = Box::new(normalize_type(*optional.inner, module));
+            TypeKind::Optional(optional)
+        }
+        TypeKind::Array(mut array) => {
+            array.items = Box::new(normalize_type(*array.items, module));
+            TypeKind::Array(array)
+        }
+        TypeKind::List(mut list) => {
+            list.items = Box::new(normalize_type(*list.items, module));
+            TypeKind::List(list)
+        }
+        TypeKind::Tuple(mut tuple) => {
+            tuple.items = tuple
+                .items
+                .into_iter()
+                .map(|item| normalize_type(item, module))
+                .collect();
+            tuple.rest = tuple
+                .rest
+                .map(|rest| Box::new(normalize_type(*rest, module)));
+            TypeKind::Tuple(tuple)
+        }
+        TypeKind::Map(mut map) => {
+            map.keys = Box::new(normalize_type(*map.keys, module));
+            map.values = Box::new(normalize_type(*map.values, module));
+            TypeKind::Map(map)
+        }
+        TypeKind::Ref(mut type_ref) => {
+            type_ref.name = nameset_for_identifier(&type_ref.name, Some(module)).qualified_name;
+            TypeKind::Ref(type_ref)
+        }
+        kind => kind,
+    };
+    ty
 }
 
 fn package_modules<'a>(package: &'a Package) -> BTreeMap<&'a str, &'a Module> {

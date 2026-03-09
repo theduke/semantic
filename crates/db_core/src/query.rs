@@ -20,6 +20,15 @@ pub enum TextQueryFormat {
     Prql,
 }
 
+#[derive(facet::Facet, Debug, Clone, Copy, PartialEq, Eq)]
+#[repr(C)]
+#[facet(rename_all = "snake_case")]
+pub enum FieldFormat {
+    Qualified,
+    Underscore,
+    Plain,
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub enum TextQueryInput {
     Ast(Query),
@@ -101,6 +110,26 @@ impl From<TextQueryFormat> for public_query::TextQueryFormat {
         match value {
             TextQueryFormat::Sql => Self::Sql,
             TextQueryFormat::Prql => Self::Prql,
+        }
+    }
+}
+
+impl From<public_query::FieldFormat> for FieldFormat {
+    fn from(value: public_query::FieldFormat) -> Self {
+        match value {
+            public_query::FieldFormat::Qualified => Self::Qualified,
+            public_query::FieldFormat::Underscore => Self::Underscore,
+            public_query::FieldFormat::Plain => Self::Plain,
+        }
+    }
+}
+
+impl From<FieldFormat> for public_query::FieldFormat {
+    fn from(value: FieldFormat) -> Self {
+        match value {
+            FieldFormat::Qualified => Self::Qualified,
+            FieldFormat::Underscore => Self::Underscore,
+            FieldFormat::Plain => Self::Plain,
         }
     }
 }
@@ -354,6 +383,7 @@ pub struct SelectQuery {
     pub order_by: Vec<OrderBy>,
     pub offset: Expr,
     pub limit: Option<Expr>,
+    pub field_format: FieldFormat,
 }
 
 #[derive(facet::Facet, Debug, Clone, PartialEq)]
@@ -570,6 +600,7 @@ impl From<public_query::SelectQuery> for SelectQuery {
             order_by: value.order_by.into_iter().map(Into::into).collect(),
             offset: value.offset.into(),
             limit: value.limit.map(Into::into),
+            field_format: value.field_format.into(),
         }
     }
 }
@@ -604,6 +635,7 @@ impl From<public_query::InsertQuery> for InsertQuery {
             columns: value.columns,
             source: value.source.into(),
             returning: value.returning.into_iter().map(Into::into).collect(),
+            field_format: value.field_format.into(),
         }
     }
 }
@@ -616,6 +648,7 @@ impl From<public_query::UpdateQuery> for UpdateQuery {
             assignments: value.assignments.into_iter().map(Into::into).collect(),
             limit: value.limit.map(Into::into),
             returning: value.returning.into_iter().map(Into::into).collect(),
+            field_format: value.field_format.into(),
         }
     }
 }
@@ -627,6 +660,7 @@ impl From<public_query::DeleteQuery> for DeleteQuery {
             predicate: value.predicate.map(Into::into),
             limit: value.limit.map(Into::into),
             returning: value.returning.into_iter().map(Into::into).collect(),
+            field_format: value.field_format.into(),
         }
     }
 }
@@ -694,6 +728,7 @@ impl SelectQuery {
             order_by: Vec::new(),
             offset: Expr::from(0usize),
             limit: None,
+            field_format: FieldFormat::Plain,
         }
     }
 
@@ -755,6 +790,11 @@ impl SelectQuery {
 
     pub fn with_offset(mut self, offset: impl Into<Expr>) -> Self {
         self.offset = offset.into();
+        self
+    }
+
+    pub fn with_field_format(mut self, field_format: FieldFormat) -> Self {
+        self.field_format = field_format;
         self
     }
 }
@@ -896,6 +936,7 @@ pub struct InsertQuery {
     pub columns: Vec<String>,
     pub source: InsertSource,
     pub returning: Vec<QueryField>,
+    pub field_format: FieldFormat,
 }
 
 impl InsertQuery {
@@ -905,6 +946,7 @@ impl InsertQuery {
             columns: Vec::new(),
             source: InsertSource::Objects(Vec::new()),
             returning: Vec::new(),
+            field_format: FieldFormat::Plain,
         }
     }
 
@@ -933,6 +975,11 @@ impl InsertQuery {
         self.returning = projection;
         self
     }
+
+    pub fn with_field_format(mut self, field_format: FieldFormat) -> Self {
+        self.field_format = field_format;
+        self
+    }
 }
 
 impl Default for InsertQuery {
@@ -948,6 +995,7 @@ pub struct UpdateQuery {
     pub assignments: Vec<Assignment>,
     pub limit: Option<Expr>,
     pub returning: Vec<QueryField>,
+    pub field_format: FieldFormat,
 }
 
 impl UpdateQuery {
@@ -958,6 +1006,7 @@ impl UpdateQuery {
             assignments: Vec::new(),
             limit: None,
             returning: Vec::new(),
+            field_format: FieldFormat::Plain,
         }
     }
 
@@ -991,6 +1040,11 @@ impl UpdateQuery {
         self.returning = projection;
         self
     }
+
+    pub fn with_field_format(mut self, field_format: FieldFormat) -> Self {
+        self.field_format = field_format;
+        self
+    }
 }
 
 impl Default for UpdateQuery {
@@ -1005,6 +1059,7 @@ pub struct DeleteQuery {
     pub predicate: Option<Expr>,
     pub limit: Option<Expr>,
     pub returning: Vec<QueryField>,
+    pub field_format: FieldFormat,
 }
 
 impl DeleteQuery {
@@ -1014,6 +1069,7 @@ impl DeleteQuery {
             predicate: None,
             limit: None,
             returning: Vec::new(),
+            field_format: FieldFormat::Plain,
         }
     }
 
@@ -1040,6 +1096,11 @@ impl DeleteQuery {
 
     pub fn with_returning(mut self, projection: Vec<QueryField>) -> Self {
         self.returning = projection;
+        self
+    }
+
+    pub fn with_field_format(mut self, field_format: FieldFormat) -> Self {
+        self.field_format = field_format;
         self
     }
 }

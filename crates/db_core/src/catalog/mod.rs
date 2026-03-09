@@ -2,6 +2,7 @@ mod catalog;
 mod error;
 mod id_map;
 mod ids;
+mod names;
 mod schema;
 mod shared;
 mod snapshot;
@@ -14,12 +15,16 @@ pub use catalog::{
 pub use error::CatalogError;
 pub use id_map::IdMap;
 pub use ids::{
-    LocalAttrId, LocalClassId, LocalCollectionId, LocalFieldId, LocalIndexId, LocalRecordTypeId,
-    LocalRelationId, LocalTypeDefId,
+    LocalAttrId, LocalClassId, LocalCollectionId, LocalFieldId, LocalIndexId, LocalPackageId,
+    LocalRecordTypeId, LocalRelationId, LocalTypeDefId,
+};
+pub use names::{
+    IMPLICIT_ROOT_PACKAGE, SEMANTIC_PACKAGE, is_special_builtin_field, nameset_for_identifier,
+    nameset_for_qualified,
 };
 pub use schema::{
     AttributeSchema, ClassSchema, CollectionKind, CollectionSchema, IndexSchema, IntegrityMode,
-    RecordTypeSchema, RelationshipSchema, TypeDefSchema,
+    NameSet, RecordTypeSchema, RelationshipSchema, TypeDefSchema,
 };
 pub use shared::{CatalogSnapshot, CatalogVersionMismatch, SharedCatalog};
 pub use snapshot::{

@@ -74,9 +74,9 @@ use sqlparser::parser::Parser;
 use thiserror::Error;
 
 use crate::{
-    DeleteQuery, Expr, FunctionArg, InsertQuery, InsertSource, JoinCondition, JoinQuery,
-    JoinSource, Operand, OrderBy as DbOrderBy, Query, QueryField, SelectQuery, UpdateQuery,
-    evaluate_usize_expr,
+    DeleteQuery, Expr, FieldFormat, FunctionArg, InsertQuery, InsertSource, JoinCondition,
+    JoinQuery, JoinSource, Operand, OrderBy as DbOrderBy, Query, QueryField, SelectQuery,
+    UpdateQuery, evaluate_usize_expr,
 };
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -188,19 +188,24 @@ fn parse_select_stmt(query: SqlQuery) -> Result<ParsedSqlQuery, SqlQueryError> {
             "locking clauses are not supported".to_string(),
         ));
     }
-    if query.settings.is_some() || query.format_clause.is_some() || !query.pipe_operators.is_empty()
-    {
+    if query.settings.is_some() || !query.pipe_operators.is_empty() {
         return Err(SqlQueryError::Unsupported(
             "query settings/format/pipe operators are not supported".to_string(),
         ));
     }
+    let field_format = query
+        .format_clause
+        .as_ref()
+        .map(|format_clause| parse_field_format_clause(&format!("{format_clause}")))
+        .transpose()?
+        .unwrap_or(FieldFormat::Plain);
 
     let SetExpr::Select(select) = *query.body else {
         return Err(SqlQueryError::Unsupported(
             "only SELECT query bodies are supported".to_string(),
         ));
     };
-    parse_select(query.order_by, query.limit_clause, *select)
+    parse_select(query.order_by, query.limit_clause, *select, field_format)
 }
 
 fn parse_select_subquery(query: SqlQuery) -> Result<SelectQuery, SqlQueryError> {
@@ -217,6 +222,7 @@ fn parse_select(
     order_by: Option<sqlparser::ast::OrderBy>,
     limit_clause: Option<LimitClause>,
     select: Select,
+    field_format: FieldFormat,
 ) -> Result<ParsedSqlQuery, SqlQueryError> {
     let distinct = parse_select_distinct(select.distinct.as_ref())?;
     if select.into.is_some()
@@ -273,6 +279,7 @@ fn parse_select(
             order_by,
             offset,
             limit,
+            field_format,
         }),
     })
 }
@@ -346,6 +353,7 @@ fn parse_insert_stmt(insert: SqlInsert) -> Result<ParsedSqlQuery, SqlQueryError>
             columns,
             source,
             returning,
+            field_format: FieldFormat::Plain,
         }),
     })
 }
@@ -387,7 +395,7 @@ fn parse_insert_source(source: SqlQuery) -> Result<InsertSource, SqlQueryError> 
             parse_insert_values(values)
         }
         SetExpr::Select(select) => {
-            let parsed = parse_select(order_by, limit_clause, *select)?;
+            let parsed = parse_select(order_by, limit_clause, *select, FieldFormat::Plain)?;
             let Query::Select(select_query) = parsed.query else {
                 return Err(SqlQueryError::Invalid(
                     "failed to parse INSERT SELECT source".to_string(),
@@ -452,6 +460,7 @@ fn parse_update_stmt(update: sqlparser::ast::Update) -> Result<ParsedSqlQuery, S
             assignments,
             limit,
             returning,
+            field_format: FieldFormat::Plain,
         }),
     })
 }
@@ -502,6 +511,7 @@ fn parse_delete_stmt(delete: sqlparser::ast::Delete) -> Result<ParsedSqlQuery, S
             predicate,
             limit,
             returning,
+            field_format: FieldFormat::Plain,
         }),
     })
 }
@@ -1063,6 +1073,22 @@ fn parse_binary_op(op: BinaryOperator) -> Result<BinaryOp, SqlQueryError> {
     }
 }
 
+fn parse_field_format_clause(clause: &str) -> Result<FieldFormat, SqlQueryError> {
+    let normalized = clause.trim().to_ascii_lowercase();
+    let value = normalized
+        .strip_prefix("format")
+        .map(str::trim)
+        .unwrap_or(normalized.as_str());
+    match value {
+        "qualified" => Ok(FieldFormat::Qualified),
+        "underscore" => Ok(FieldFormat::Underscore),
+        "plain" => Ok(FieldFormat::Plain),
+        _ => Err(SqlQueryError::Unsupported(format!(
+            "unsupported output field format '{clause}'"
+        ))),
+    }
+}
+
 fn parse_literal(value: ValueWithSpan) -> Result<Value, SqlQueryError> {
     use sqlparser::ast::Value as SqlValue;
     match value.value {
@@ -1344,6 +1370,15 @@ fn select_to_sql(query: &SelectQuery, collection: &str) -> Result<String, SqlQue
     if evaluate_usize_expr(&query.offset) != Some(0) {
         sql.push_str(" OFFSET ");
         sql.push_str(&expr_to_sql(&query.offset)?);
+    }
+    if query.field_format != FieldFormat::Plain {
+        let format_name = match query.field_format {
+            FieldFormat::Qualified => "qualified",
+            FieldFormat::Underscore => "underscore",
+            FieldFormat::Plain => "plain",
+        };
+        sql.push_str(" FORMAT ");
+        sql.push_str(format_name);
     }
     Ok(sql)
 }
