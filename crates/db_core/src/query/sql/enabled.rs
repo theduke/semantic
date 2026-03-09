@@ -62,6 +62,10 @@
 use semantic_data::query::{
     AggregateOp, BinaryOp, JoinType, PatternMatchKind, SortDirection, UnaryOp,
 };
+use semantic_data::schema::{
+    AnyType, AttributeType, BoolType, BytesType, FloatWidth, IntWidth, Meta, NumberType,
+    StringType, Type, TypeKind, UIntWidth,
+};
 use semantic_data::value::{FieldPath, PathSegment, Value};
 use sqlparser::ast::{
     Assignment, AssignmentTarget, BinaryOperator, Expr as SqlExpr, FromTable, FunctionArguments,
@@ -74,9 +78,9 @@ use sqlparser::parser::Parser;
 use thiserror::Error;
 
 use crate::{
-    DeleteQuery, Expr, FieldFormat, FunctionArg, InsertQuery, InsertSource, JoinCondition,
-    JoinQuery, JoinSource, Operand, OrderBy as DbOrderBy, Query, QueryField, SelectQuery,
-    UpdateQuery, evaluate_usize_expr,
+    DdlBatch, DdlOperation, DdlQuery, DeleteQuery, Expr, FieldFormat, FunctionArg, InsertQuery,
+    InsertSource, JoinCondition, JoinQuery, JoinSource, Operand, OrderBy as DbOrderBy, Query,
+    QueryField, SelectQuery, UpdateQuery, evaluate_usize_expr,
 };
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -107,6 +111,10 @@ pub fn parse_sql_query(
     sql: &str,
     dialect: SqlDialectKind,
 ) -> Result<ParsedSqlQuery, SqlQueryError> {
+    if let Some(parsed) = parse_create_attribute_sql(sql)? {
+        return Ok(parsed);
+    }
+
     let dialect = dialect_impl(dialect);
     let statements = Parser::parse_sql(dialect.as_ref(), sql)
         .map_err(|err| SqlQueryError::Parse(err.to_string()))?;
@@ -135,6 +143,11 @@ pub fn parse_sql_query_for_collection(
         }
         Err(err) => return Err(err),
     };
+    if matches!(parsed.query, Query::Ddl(_)) {
+        return Err(SqlQueryError::Unsupported(
+            "collection-scoped parsing does not support DDL statements".to_string(),
+        ));
+    }
     let collection = parsed.query.collection().map(ToOwned::to_owned);
     if let Some(collection) = collection {
         if collection != expected_collection {
@@ -156,6 +169,9 @@ pub fn query_to_sql(query: &Query) -> Result<String, SqlQueryError> {
         Query::Insert(insert) => insert_to_sql(insert, insert.collection_or_default()),
         Query::Update(update) => update_to_sql(update, update.collection_or_default()),
         Query::Delete(delete) => delete_to_sql(delete, delete.collection_or_default()),
+        Query::Ddl(_) => Err(SqlQueryError::Unsupported(
+            "DDL AST query is not representable in SQL printer".to_string(),
+        )),
     }
 }
 
@@ -170,6 +186,154 @@ fn parse_statement(stmt: Statement) -> Result<ParsedSqlQuery, SqlQueryError> {
             other
         ))),
     }
+}
+
+fn parse_create_attribute_sql(sql: &str) -> Result<Option<ParsedSqlQuery>, SqlQueryError> {
+    let tokens = tokenize_sql_ddl(sql)?;
+    if tokens.is_empty() {
+        return Ok(None);
+    }
+    if tokens.len() < 4 {
+        return Ok(None);
+    }
+    if !tokens[0].eq_ignore_ascii_case("create") || !tokens[1].eq_ignore_ascii_case("attribute") {
+        return Ok(None);
+    }
+    if tokens.len() != 5 {
+        return Err(SqlQueryError::Invalid(
+            "CREATE ATTRIBUTE expects: CREATE ATTRIBUTE <id> TYPE <type>".to_string(),
+        ));
+    }
+    if !tokens[3].eq_ignore_ascii_case("type") {
+        return Err(SqlQueryError::Invalid(
+            "CREATE ATTRIBUTE requires TYPE clause".to_string(),
+        ));
+    }
+    let id = tokens[2].clone();
+    let ty = parse_sql_attribute_type(&tokens[4])?;
+    Ok(Some(ParsedSqlQuery {
+        query: Query::Ddl(DdlQuery {
+            batch: DdlBatch::new().with_op(DdlOperation::UpsertAttribute {
+                attribute: AttributeType {
+                    id: id.clone(),
+                    name: id,
+                    ty,
+                    constraints: vec![],
+                    meta: Meta::default(),
+                },
+            }),
+        }),
+    }))
+}
+
+fn tokenize_sql_ddl(sql: &str) -> Result<Vec<String>, SqlQueryError> {
+    let mut tokens = Vec::new();
+    let mut chars = sql.trim().chars().peekable();
+    while let Some(ch) = chars.peek().copied() {
+        if ch.is_whitespace() {
+            chars.next();
+            continue;
+        }
+        if ch == ';' {
+            chars.next();
+            while let Some(rem) = chars.peek().copied() {
+                if rem.is_whitespace() {
+                    chars.next();
+                } else {
+                    return Err(SqlQueryError::Invalid(
+                        "unexpected content after ';'".to_string(),
+                    ));
+                }
+            }
+            break;
+        }
+        if ch == '"' {
+            chars.next();
+            let mut value = String::new();
+            let mut closed = false;
+            while let Some(next) = chars.next() {
+                if next == '"' {
+                    if matches!(chars.peek(), Some('"')) {
+                        chars.next();
+                        value.push('"');
+                        continue;
+                    }
+                    closed = true;
+                    break;
+                }
+                value.push(next);
+            }
+            if !closed {
+                return Err(SqlQueryError::Invalid(
+                    "unterminated quoted identifier".to_string(),
+                ));
+            }
+            tokens.push(value);
+            continue;
+        }
+        let mut value = String::new();
+        while let Some(next) = chars.peek().copied() {
+            if next.is_whitespace() || next == ';' {
+                break;
+            }
+            value.push(next);
+            chars.next();
+        }
+        if !value.is_empty() {
+            tokens.push(value);
+        }
+    }
+    Ok(tokens)
+}
+
+fn parse_sql_attribute_type(value: &str) -> Result<Type, SqlQueryError> {
+    let kind = if value.eq_ignore_ascii_case("bool") || value.eq_ignore_ascii_case("boolean") {
+        TypeKind::Bool(BoolType)
+    } else if value.eq_ignore_ascii_case("string") || value.eq_ignore_ascii_case("text") {
+        TypeKind::String(StringType {
+            format: None,
+            normalization: None,
+        })
+    } else if value.eq_ignore_ascii_case("bytes") {
+        TypeKind::Bytes(BytesType { encoding: None })
+    } else if value.eq_ignore_ascii_case("any") {
+        TypeKind::Any(AnyType)
+    } else if value.eq_ignore_ascii_case("uuid") {
+        TypeKind::Uuid
+    } else if value.eq_ignore_ascii_case("json") {
+        TypeKind::Json
+    } else if value.eq_ignore_ascii_case("i8") {
+        TypeKind::Number(NumberType::Int(IntWidth::I8))
+    } else if value.eq_ignore_ascii_case("i16") {
+        TypeKind::Number(NumberType::Int(IntWidth::I16))
+    } else if value.eq_ignore_ascii_case("i32") {
+        TypeKind::Number(NumberType::Int(IntWidth::I32))
+    } else if value.eq_ignore_ascii_case("i64") {
+        TypeKind::Number(NumberType::Int(IntWidth::I64))
+    } else if value.eq_ignore_ascii_case("u8") {
+        TypeKind::Number(NumberType::UInt(UIntWidth::U8))
+    } else if value.eq_ignore_ascii_case("u16") {
+        TypeKind::Number(NumberType::UInt(UIntWidth::U16))
+    } else if value.eq_ignore_ascii_case("u32") {
+        TypeKind::Number(NumberType::UInt(UIntWidth::U32))
+    } else if value.eq_ignore_ascii_case("u64") {
+        TypeKind::Number(NumberType::UInt(UIntWidth::U64))
+    } else if value.eq_ignore_ascii_case("f32") {
+        TypeKind::Number(NumberType::Float(FloatWidth::F32))
+    } else if value.eq_ignore_ascii_case("f64") {
+        TypeKind::Number(NumberType::Float(FloatWidth::F64))
+    } else {
+        return Err(SqlQueryError::Unsupported(format!(
+            "unsupported CREATE ATTRIBUTE type '{value}'"
+        )));
+    };
+
+    Ok(Type {
+        kind,
+        constraints: vec![],
+        annotations: vec![],
+        meta: Meta::default(),
+    })
 }
 
 fn parse_select_stmt(query: SqlQuery) -> Result<ParsedSqlQuery, SqlQueryError> {
@@ -1241,6 +1405,7 @@ fn with_query_collection_if_missing(query: Query, collection: String) -> Query {
             }
             Query::Delete(delete)
         }
+        Query::Ddl(ddl) => Query::Ddl(ddl),
     }
 }
 
@@ -1956,6 +2121,28 @@ mod tests {
                 right,
                 ..
             } if matches!(right.as_ref(), Expr::Subquery(_))
+        ));
+    }
+
+    #[test]
+    fn parse_create_attribute_statement() {
+        let parsed = parse_sql_query(
+            r#"CREATE ATTRIBUTE "age" TYPE u32"#,
+            SqlDialectKind::Generic,
+        )
+        .unwrap();
+        let Query::Ddl(ddl) = parsed.query else {
+            panic!("expected ddl query");
+        };
+        assert_eq!(ddl.batch.operations.len(), 1);
+        let crate::DdlOperation::UpsertAttribute { attribute } = &ddl.batch.operations[0] else {
+            panic!("expected upsert attribute");
+        };
+        assert_eq!(attribute.id, "age");
+        assert_eq!(attribute.name, "age");
+        assert!(matches!(
+            attribute.ty.kind,
+            TypeKind::Number(NumberType::UInt(UIntWidth::U32))
         ));
     }
 }

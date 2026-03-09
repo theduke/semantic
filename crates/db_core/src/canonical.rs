@@ -152,6 +152,7 @@ pub fn canonicalize_query(
         Query::Delete(query) => {
             canonicalize_delete_query(query, catalog, collection).map(Query::Delete)
         }
+        Query::Ddl(query) => Ok(Query::Ddl(query.clone())),
     }
 }
 
@@ -521,7 +522,10 @@ fn canonicalize_path(
 
     let mut out = path.clone();
     let canonical_first = collection.canonical_field_name(first).to_string();
-    let alias_prefixed = out.0.len() >= 2 && !collection.knows_field(&canonical_first);
+    let alias_prefixed = out.0.len() >= 2
+        && first.len() <= 2
+        && matches!(out.0.get(1), Some(PathSegment::Field(_)))
+        && !collection.knows_field(&canonical_first);
     let top_level_index = if alias_prefixed { 1 } else { 0 };
 
     let Some(PathSegment::Field(top_level_field)) = out.0.get(top_level_index).cloned() else {
@@ -541,13 +545,6 @@ fn canonicalize_path(
         });
     }
     out.0[top_level_index] = PathSegment::Field(canonical_top_level);
-
-    for segment in out.0.iter_mut().skip(top_level_index + 1) {
-        if let PathSegment::Field(field) = segment {
-            let canonical = canonicalize_field_name(field, catalog, collection, context)?;
-            *field = canonical;
-        }
-    }
 
     Ok(out)
 }

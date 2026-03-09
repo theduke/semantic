@@ -1,5 +1,6 @@
 use semantic_data::schema::{
-    ClassRef,
+    ClassRef, Migration, MigrationCollectionKind, MigrationDdlOperation, MigrationIntegrityMode,
+    MigrationOperation,
     attribute::attribute_ref::AttributeRef,
     attribute::attribute_type::AttributeType,
     class::class_attribute::ClassAttribute,
@@ -16,7 +17,7 @@ use semantic_data::schema::{
 };
 
 use crate::{
-    CoreError,
+    AppliedMigration, CoreError, apply_migration_ddl_batch,
     catalog::{Catalog, CatalogBatchOperation, CollectionKind, IntegrityMode, RELATION_CLASS_ID},
 };
 
@@ -166,14 +167,14 @@ pub fn apply_ddl_batch(
 }
 
 pub const CORE_CATALOG_ENTRY_CLASS_ID: &str = "semantic:catalog:entry";
-pub const CORE_CATALOG_ATTRIBUTE_ENTRY_CLASS_ID: &str = "semantic:catalog:entry:attribute";
-pub const CORE_CATALOG_TYPE_DEF_ENTRY_CLASS_ID: &str = "semantic:catalog:entry:type_def";
-pub const CORE_CATALOG_RECORD_TYPE_ENTRY_CLASS_ID: &str = "semantic:catalog:entry:record_type";
-pub const CORE_CATALOG_CLASS_ENTRY_CLASS_ID: &str = "semantic:catalog:entry:class";
-pub const CORE_CATALOG_COLLECTION_ENTRY_CLASS_ID: &str = "semantic:catalog:entry:collection";
-pub const CORE_CATALOG_INDEX_ENTRY_CLASS_ID: &str = "semantic:catalog:entry:index";
-pub const CORE_CATALOG_META_ENTRY_CLASS_ID: &str = "semantic:catalog:entry:meta";
-pub const CORE_CATALOG_SCHEMA_COLLECTION: &str = "__semantic.catalog.schema";
+pub const CORE_CATALOG_ATTRIBUTE_ENTRY_CLASS_ID: &str = "semantic:entry:attribute";
+pub const CORE_CATALOG_TYPE_DEF_ENTRY_CLASS_ID: &str = "semantic:entry:type_def";
+pub const CORE_CATALOG_RECORD_TYPE_ENTRY_CLASS_ID: &str = "semantic:entry:record_type";
+pub const CORE_CATALOG_CLASS_ENTRY_CLASS_ID: &str = "semantic:entry:class";
+pub const CORE_CATALOG_COLLECTION_ENTRY_CLASS_ID: &str = "semantic:entry:collection";
+pub const CORE_CATALOG_INDEX_ENTRY_CLASS_ID: &str = "semantic:entry:index";
+pub const CORE_CATALOG_META_ENTRY_CLASS_ID: &str = "semantic:entry:meta";
+pub const CORE_CATALOG_SCHEMA_COLLECTION: &str = "schema";
 pub const CORE_CATALOG_ATTRIBUTES_COLLECTION: &str = CORE_CATALOG_SCHEMA_COLLECTION;
 pub const CORE_CATALOG_TYPE_DEFS_COLLECTION: &str = CORE_CATALOG_SCHEMA_COLLECTION;
 pub const CORE_CATALOG_RECORD_TYPES_COLLECTION: &str = CORE_CATALOG_SCHEMA_COLLECTION;
@@ -182,26 +183,28 @@ pub const CORE_CATALOG_COLLECTIONS_COLLECTION: &str = CORE_CATALOG_SCHEMA_COLLEC
 pub const CORE_CATALOG_INDEXES_COLLECTION: &str = CORE_CATALOG_SCHEMA_COLLECTION;
 pub const CORE_CATALOG_META_COLLECTION: &str = CORE_CATALOG_SCHEMA_COLLECTION;
 
-const CORE_CATALOG_ATTR_ID: &str = "semantic:catalog:id";
-const CORE_CATALOG_ATTR_LID: &str = "semantic:catalog:lid";
-const CORE_CATALOG_ATTR_ATTRIBUTE: &str = "semantic:catalog:attribute";
-const CORE_CATALOG_ATTR_TYPE_DEF: &str = "semantic:catalog:type_def";
-const CORE_CATALOG_ATTR_RECORD: &str = "semantic:catalog:record";
-const CORE_CATALOG_ATTR_CLASS: &str = "semantic:catalog:class";
-const CORE_CATALOG_ATTR_NAME: &str = "semantic:catalog:name";
-const CORE_CATALOG_ATTR_INTEGRITY_MODE: &str = "semantic:catalog:integrity_mode";
-const CORE_CATALOG_ATTR_FIELD_IDS: &str = "semantic:catalog:field_ids";
-const CORE_CATALOG_ATTR_COLLECTION: &str = "semantic:catalog:collection";
-const CORE_CATALOG_ATTR_FIELD: &str = "semantic:catalog:field";
-const CORE_CATALOG_ATTR_INDEX_KIND: &str = "semantic:catalog:index_kind";
-const CORE_CATALOG_ATTR_UNIQUE: &str = "semantic:catalog:unique";
-const CORE_CATALOG_ATTR_NEXT_FIELD_ID: &str = "semantic:catalog:next_field_id";
-const CORE_CATALOG_ATTR_AUTO_INDEX_ENABLED: &str = "semantic:catalog:auto_index_enabled";
-const CORE_CATALOG_ATTR_PACKAGES: &str = "semantic:catalog:packages";
-const CORE_CATALOG_ATTR_APPLIED_MIGRATIONS: &str = "semantic:catalog:applied_migrations";
+const CORE_CATALOG_ATTR_ID: &str = "semantic:id";
+const CORE_CATALOG_ATTR_LID: &str = "semantic:lid";
+const CORE_CATALOG_ATTR_ATTRIBUTE: &str = "semantic:attribute";
+const CORE_CATALOG_ATTR_TYPE_DEF: &str = "semantic:type_def";
+const CORE_CATALOG_ATTR_RECORD: &str = "semantic:record";
+const CORE_CATALOG_ATTR_CLASS: &str = "semantic:class";
+const CORE_CATALOG_ATTR_NAME: &str = "semantic:name";
+const CORE_CATALOG_ATTR_INTEGRITY_MODE: &str = "semantic:db:integrity_mode";
+const CORE_CATALOG_ATTR_FIELD_IDS: &str = "semantic:db:field_ids";
+const CORE_CATALOG_ATTR_COLLECTION: &str = "semantic:db:collection";
+const CORE_CATALOG_ATTR_FIELD: &str = "semantic:db:field";
+const CORE_CATALOG_ATTR_INDEX_KIND: &str = "semantic:db:index_kind";
+const CORE_CATALOG_ATTR_UNIQUE: &str = "semantic:db:unique";
+const CORE_CATALOG_ATTR_NEXT_FIELD_ID: &str = "semantic:db:next_field_id";
+const CORE_CATALOG_ATTR_AUTO_INDEX_ENABLED: &str = "semantic:db:auto_index_enabled";
+const CORE_CATALOG_ATTR_PACKAGES: &str = "semantic:db:packages";
+const CORE_CATALOG_ATTR_APPLIED_MIGRATIONS: &str = "semantic:db:applied_migrations";
 const RELATION_ATTR_RELATION: &str = "semantic:relation:relation";
 const RELATION_ATTR_FROM: &str = "semantic:relation:from";
 const RELATION_ATTR_TO: &str = "semantic:relation:to";
+const CORE_SCHEMA_PACKAGE: &str = "semantic";
+const CORE_SCHEMA_MODULE: &str = "core";
 
 pub fn core_catalog_schema_batch() -> DdlBatch {
     let mut attrs = std::collections::BTreeMap::new();
@@ -813,9 +816,123 @@ pub fn core_catalog_schema_batch() -> DdlBatch {
         })
 }
 
+pub fn core_schema_migrations() -> Vec<Migration> {
+    vec![Migration {
+        module: CORE_SCHEMA_MODULE.to_string(),
+        name: "001_core_catalog_schema".to_string(),
+        description: Some("Initialize core catalog schema".to_string()),
+        operations: core_catalog_schema_batch()
+            .operations
+            .into_iter()
+            .map(|operation| MigrationOperation::Ddl(ddl_to_migration_ddl(operation)))
+            .collect(),
+        meta: Meta::default(),
+    }]
+}
+
+pub fn apply_core_schema_migrations(
+    catalog: &Catalog,
+) -> Result<(Catalog, Vec<AppliedMigration>), CoreError> {
+    let mut next_catalog = catalog.clone();
+    let mut executed_migrations = Vec::<AppliedMigration>::new();
+
+    for migration in core_schema_migrations() {
+        if let Some(applied) =
+            next_catalog.applied_migration(CORE_SCHEMA_PACKAGE, &migration.module, &migration.name)
+        {
+            if applied.migration != migration {
+                return Err(CoreError::new(format!(
+                    "applied core migration '{}::{}' differs from current definition",
+                    migration.module, migration.name
+                )));
+            }
+            continue;
+        }
+
+        let ddl_operations = migration.operations.iter().filter_map(|operation| {
+            if let MigrationOperation::Ddl(operation) = operation {
+                Some(operation)
+            } else {
+                None
+            }
+        });
+        apply_migration_ddl_batch(&mut next_catalog, &migration.module, ddl_operations)?;
+
+        let applied = AppliedMigration {
+            package: CORE_SCHEMA_PACKAGE.to_string(),
+            migration: migration.clone(),
+        };
+        next_catalog.record_applied_migration(applied.clone());
+        executed_migrations.push(applied);
+    }
+
+    Ok((next_catalog, executed_migrations))
+}
+
 pub fn fresh_catalog_with_core_schema() -> Result<Catalog, CoreError> {
-    let (catalog, _) = apply_ddl_batch(&Catalog::new(), &core_catalog_schema_batch())?;
+    let (catalog, _) = apply_core_schema_migrations(&Catalog::new())?;
     Ok(catalog)
+}
+
+fn ddl_to_migration_collection_kind(kind: DdlCollectionKind) -> MigrationCollectionKind {
+    match kind {
+        DdlCollectionKind::Untyped => MigrationCollectionKind::Untyped,
+        DdlCollectionKind::Schema => MigrationCollectionKind::Schema,
+        DdlCollectionKind::Polymorphic => MigrationCollectionKind::Polymorphic,
+    }
+}
+
+fn ddl_to_migration_ddl(operation: DdlOperation) -> MigrationDdlOperation {
+    match operation {
+        DdlOperation::UpsertAttribute { attribute } => {
+            MigrationDdlOperation::UpsertAttribute { attribute }
+        }
+        DdlOperation::DeleteAttribute { id } => MigrationDdlOperation::DeleteAttribute { id },
+        DdlOperation::UpsertTypeDef { type_def } => {
+            MigrationDdlOperation::UpsertTypeDef { type_def }
+        }
+        DdlOperation::DeleteTypeDef { name } => MigrationDdlOperation::DeleteTypeDef { name },
+        DdlOperation::UpsertRecordType { id, name, record } => {
+            MigrationDdlOperation::UpsertRecordType { id, name, record }
+        }
+        DdlOperation::DeleteRecordType { id } => MigrationDdlOperation::DeleteRecordType { id },
+        DdlOperation::UpsertClass { class } => MigrationDdlOperation::UpsertClass { class },
+        DdlOperation::DeleteClass { id } => MigrationDdlOperation::DeleteClass { id },
+        DdlOperation::UpsertCollection {
+            name,
+            kind,
+            integrity_mode,
+        } => MigrationDdlOperation::UpsertCollection {
+            name,
+            kind: ddl_to_migration_collection_kind(kind),
+            integrity_mode: match integrity_mode {
+                IntegrityMode::Permissive => MigrationIntegrityMode::Permissive,
+                IntegrityMode::StrictRegisteredSchema => {
+                    MigrationIntegrityMode::StrictRegisteredSchema
+                }
+            },
+        },
+        DdlOperation::DeleteCollection { name } => MigrationDdlOperation::DeleteCollection { name },
+        DdlOperation::UpsertIndex {
+            name,
+            collection,
+            field,
+            unique,
+        } => MigrationDdlOperation::UpsertIndex {
+            name,
+            collection,
+            field,
+            unique,
+        },
+        DdlOperation::DeleteIndex { name, collection } => {
+            MigrationDdlOperation::DeleteIndex { name, collection }
+        }
+        DdlOperation::UpsertRelationship { relationship } => {
+            MigrationDdlOperation::UpsertRelationship { relationship }
+        }
+        DdlOperation::DeleteRelationship { id } => MigrationDdlOperation::DeleteRelationship { id },
+        DdlOperation::SetAutoIndex { enabled } => MigrationDdlOperation::SetAutoIndex { enabled },
+    }
 }
 
 fn resolve_collection_kind(
@@ -940,6 +1057,24 @@ mod tests {
         assert_eq!(
             class.attributes.get("payload"),
             catalog.attribute_id("suite.tree.payload").as_ref()
+        );
+    }
+
+    #[test]
+    fn core_schema_migrations_are_idempotent() {
+        let (catalog, first_run) = apply_core_schema_migrations(&Catalog::new()).unwrap();
+        assert_eq!(first_run.len(), 1);
+
+        let (_, second_run) = apply_core_schema_migrations(&catalog).unwrap();
+        assert!(second_run.is_empty());
+    }
+
+    #[test]
+    fn fresh_catalog_records_core_migrations() {
+        let catalog = fresh_catalog_with_core_schema().unwrap();
+        assert!(
+            catalog.applied_migrations().next().is_some(),
+            "fresh catalog should include applied core migrations"
         );
     }
 

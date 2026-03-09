@@ -4,7 +4,7 @@ use std::hash::Hash;
 
 use futures::{FutureExt, TryStreamExt, future::BoxFuture, stream::BoxStream};
 use semantic_data::query::{AggregateOp, JoinType};
-use semantic_data::value::{FieldPath, Object, Value, ValueRef};
+use semantic_data::value::{FieldPath, Object, PathSegment, Value, ValueRef};
 
 use crate::QueryContext;
 use crate::plan::{
@@ -1321,9 +1321,40 @@ fn value_ref_for_field<'a>(
         FieldRef::CanonicalName(name) => {
             let path = FieldPath::from_fields([name.as_str()]);
             row.value_at_path_ref(&path)
+                .or_else(|| value_ref_for_builtin_alias_path(row, &path))
                 .or_else(|| fallback_path.and_then(|path| row.value_at_path_ref(path)))
         }
-        FieldRef::Path(path) => row.value_at_path_ref(path),
+        FieldRef::Path(path) => row
+            .value_at_path_ref(path)
+            .or_else(|| value_ref_for_builtin_alias_path(row, path)),
+    }
+}
+
+fn value_ref_for_builtin_alias_path<'a>(
+    row: &'a dyn QueryObjectAccess,
+    path: &FieldPath,
+) -> Option<ValueRef<'a>> {
+    let [PathSegment::Field(field)] = path.segments() else {
+        return None;
+    };
+    for alias in builtin_field_aliases(field) {
+        if alias == field {
+            continue;
+        }
+        let alias_path = FieldPath::from_fields([*alias]);
+        if let Some(value) = row.value_at_path_ref(&alias_path) {
+            return Some(value);
+        }
+    }
+    None
+}
+
+fn builtin_field_aliases(field: &str) -> &'static [&'static str] {
+    match field {
+        "id" | "semantic:id" | "semantic:catalog:id" => {
+            &["id", "semantic:id", "semantic:catalog:id"]
+        }
+        _ => &[],
     }
 }
 

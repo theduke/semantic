@@ -134,13 +134,10 @@ pub fn normalize_object_for_collection(
                 });
             }
         }
-        None if collection.integrity_mode == IntegrityMode::StrictRegisteredSchema => {
-            return Err(ObjectNormalizationError::MissingObjectType {
-                collection: collection.name.clone(),
-            });
-        }
         None => {
             best_effort_normalize_registered_attributes(catalog, collection, object)?;
+            reject_unknown_fields |=
+                collection.integrity_mode == IntegrityMode::StrictRegisteredSchema;
         }
     }
 
@@ -159,6 +156,11 @@ fn best_effort_normalize_registered_attributes(
 ) -> ObjectNormalizationResult<()> {
     let mut moved = Vec::<(String, String)>::new();
     for (key, value) in object.iter() {
+        if is_special_builtin_field(key) {
+            // Keep builtins (for example "id"/"type") stable so fallback
+            // path traversal and collection-local semantics remain predictable.
+            continue;
+        }
         let attr_ids = catalog.attribute_ids(key);
         if attr_ids.len() > 1 && !is_special_builtin_field(key) {
             return Err(ObjectNormalizationError::AmbiguousFieldAlias {
@@ -606,6 +608,46 @@ mod tests {
         assert!(matches!(
             err,
             ObjectNormalizationError::AmbiguousFieldAlias { alias, .. } if alias == "title"
+        ));
+    }
+
+    #[test]
+    fn strict_registered_schema_allows_typeless_known_fields_and_rejects_unknown() {
+        let mut catalog = Catalog::new();
+        let _ = catalog.upsert_attribute(semantic_data::schema::AttributeType {
+            id: "semantic:title".to_string(),
+            name: "title".to_string(),
+            ty: string_type(),
+            constraints: vec![],
+            meta: Meta::default(),
+        });
+        let _ = catalog
+            .upsert_collection(
+                "items",
+                CollectionKind::Schema,
+                IntegrityMode::StrictRegisteredSchema,
+            )
+            .unwrap();
+        let collection = catalog.collection_by_name("items").unwrap();
+
+        let mut typeless_known = semantic_data::value::Object::new();
+        typeless_known.insert(
+            "semantic_title".to_string(),
+            semantic_data::value::Value::String("hello".to_string()),
+        );
+        normalize_object_for_collection(&catalog, collection, &mut typeless_known).unwrap();
+        assert!(typeless_known.contains_key("semantic:title"));
+
+        let mut typeless_unknown = semantic_data::value::Object::new();
+        typeless_unknown.insert(
+            "rogue".to_string(),
+            semantic_data::value::Value::String("x".to_string()),
+        );
+        let err = normalize_object_for_collection(&catalog, collection, &mut typeless_unknown)
+            .unwrap_err();
+        assert!(matches!(
+            err,
+            ObjectNormalizationError::UnknownField { field, .. } if field == "rogue"
         ));
     }
 }

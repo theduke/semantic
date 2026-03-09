@@ -12,6 +12,7 @@ use semantic_data::schema::{
     MigrationIntegrityMode, MigrationOperation, Module, Package, RelationIndexingMode,
     RelationMode, RelationType, StringType, Type, TypeDef, TypeKind, Visibility,
     attribute::{attribute_ref::AttributeRef, attribute_type::AttributeType},
+    primitives::{int_width::IntWidth, number_type::NumberType},
 };
 use semantic_data::value::{FieldPath, Object, Value};
 use semantic_db_core::{
@@ -59,6 +60,7 @@ pub async fn test_db(db: &Db) {
     test_text_query_formats(db).await;
     test_relationships_generic_embedded(db).await;
     test_relationships_generic_external(db).await;
+    test_strict_registered_schema_typeless_insert(db).await;
 }
 
 async fn test_schema_registration(db: &Db) {
@@ -156,6 +158,79 @@ async fn test_package_migrations(db: &Db) {
         updated.object.get("shared:blog:body"),
         Some(&Value::String("World".to_string()))
     );
+}
+
+async fn test_strict_registered_schema_typeless_insert(db: &Db) {
+    db.execute_ddl(
+        DdlBatch::new()
+            .with_op(DdlOperation::UpsertAttribute {
+                attribute: AttributeType {
+                    id: "shared:strict_typeless_title".to_string(),
+                    name: "strict_typeless_title".to_string(),
+                    ty: Type {
+                        kind: TypeKind::String(StringType {
+                            format: None,
+                            normalization: None,
+                        }),
+                        constraints: vec![],
+                        annotations: vec![],
+                        meta: Meta::default(),
+                    },
+                    constraints: vec![],
+                    meta: Meta::default(),
+                },
+            })
+            .with_op(DdlOperation::UpsertCollection {
+                name: "shared_suite_strict_typeless".to_string(),
+                kind: DdlCollectionKind::Polymorphic,
+                integrity_mode: IntegrityMode::StrictRegisteredSchema,
+            }),
+    )
+    .await
+    .expect("strict typeless schema setup should succeed");
+
+    let mut typeless_known = Object::new();
+    typeless_known.insert("id", Value::String("known".to_string()));
+    typeless_known.insert(
+        "shared:strict_typeless_title",
+        Value::String("ok".to_string()),
+    );
+    db.insert("shared_suite_strict_typeless", "known", typeless_known)
+        .await
+        .expect("strict collection should allow typeless rows with known attributes");
+
+    let mut typeless_unknown = Object::new();
+    typeless_unknown.insert("id", Value::String("unknown".to_string()));
+    typeless_unknown.insert("rogue", Value::String("x".to_string()));
+    let err = db
+        .insert("shared_suite_strict_typeless", "unknown", typeless_unknown)
+        .await
+        .expect_err("strict collection should reject unknown fields for typeless rows");
+    assert!(
+        err.to_string().contains("not allowed"),
+        "expected unknown-field rejection, got: {err}"
+    );
+
+    if db
+        .supported_text_query_formats()
+        .contains(&TextQueryFormat::Sql)
+    {
+        let ddl_out = db
+            .query_text(
+                TextQueryFormat::Sql,
+                r#"CREATE ATTRIBUTE "shared:strict_typeless_age" TYPE u32"#,
+            )
+            .await
+            .expect("sql create attribute should succeed");
+        assert!(matches!(ddl_out, QueryResult::Ddl(())));
+
+        let mut with_new_attr = Object::new();
+        with_new_attr.insert("id", Value::String("with-age".to_string()));
+        with_new_attr.insert("shared:strict_typeless_age", Value::U32(42));
+        db.insert("shared_suite_strict_typeless", "with-age", with_new_attr)
+            .await
+            .expect("strict collection should accept sql-registered attribute");
+    }
 }
 
 async fn test_select_query(db: &Db) {
@@ -321,6 +396,42 @@ async fn test_text_query_formats(db: &Db) {
         catalog.collection_by_name("entities").is_some(),
         "default entities collection should be created during db initialization",
     );
+    db.execute_ddl(
+        DdlBatch::new()
+            .with_op(DdlOperation::UpsertAttribute {
+                attribute: AttributeType {
+                    id: "shared:test:kind".to_string(),
+                    name: "kind".to_string(),
+                    ty: Type {
+                        kind: TypeKind::String(StringType {
+                            format: None,
+                            normalization: None,
+                        }),
+                        constraints: vec![],
+                        annotations: vec![],
+                        meta: Meta::default(),
+                    },
+                    constraints: vec![],
+                    meta: Meta::default(),
+                },
+            })
+            .with_op(DdlOperation::UpsertAttribute {
+                attribute: AttributeType {
+                    id: "shared:test:score".to_string(),
+                    name: "score".to_string(),
+                    ty: Type {
+                        kind: TypeKind::Number(NumberType::Int(IntWidth::I64)),
+                        constraints: vec![],
+                        annotations: vec![],
+                        meta: Meta::default(),
+                    },
+                    constraints: vec![],
+                    meta: Meta::default(),
+                },
+            }),
+    )
+    .await
+    .expect("text query strict attributes setup should succeed");
     db.insert("entities", "fmt-a", row("fmt-a", "music", 7))
         .await
         .expect("text query row insert should succeed");
@@ -1151,21 +1262,20 @@ async fn test_nested_ref_field_access(db: &Db) {
         .await
         .expect("child row insert should succeed");
 
+    let via_parent_query = SelectQuery::new()
+        .with_collection("shared_suite_ref_paths")
+        .with_predicate(eq_predicate(
+            FieldPath::from_fields(["parent", "title"]),
+            Value::String("abc".to_string()),
+        ))
+        .with_projection(vec![QueryField {
+            expr: Box::new(Expr::Operand(Operand::Field(FieldPath::from_fields([
+                "id",
+            ])))),
+            alias: Some("id".to_string()),
+        }]);
     let via_parent = db
-        .select(
-            SelectQuery::new()
-                .with_collection("shared_suite_ref_paths")
-                .with_predicate(eq_predicate(
-                    FieldPath::from_fields(["parent", "title"]),
-                    Value::String("abc".to_string()),
-                ))
-                .with_projection(vec![QueryField {
-                    expr: Box::new(Expr::Operand(Operand::Field(FieldPath::from_fields([
-                        "id",
-                    ])))),
-                    alias: Some("id".to_string()),
-                }]),
-        )
+        .select(via_parent_query)
         .await
         .expect("single-hop ref path query should succeed");
     assert_eq!(row_ids(&via_parent), vec!["ref-child"]);

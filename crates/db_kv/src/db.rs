@@ -11,9 +11,9 @@ use semantic_db_core::{
     ALL_COLLECTION_ALIAS, AccessPath, AppliedMigration, Batch, BatchOperation, BatchOutcome,
     DEFAULT_COLLECTION, DeleteQuery, EntityRecord, FieldFormat, InsertQuery, InsertSource,
     MutationStats, PackageRegistrationOutcome, Query, QueryExplain, QueryPlan, QueryResult,
-    SelectQuery, UpdateQuery, apply_migration_ddl_batch, canonicalize_delete_query,
-    canonicalize_insert_query, canonicalize_query, canonicalize_select_query,
-    canonicalize_update_query, execute_batch, is_all_collection_alias,
+    SelectQuery, UpdateQuery, apply_core_schema_migrations, apply_migration_ddl_batch,
+    canonicalize_delete_query, canonicalize_insert_query, canonicalize_query,
+    canonicalize_select_query, canonicalize_update_query, execute_batch, is_all_collection_alias,
     normalize_object_for_collection, normalize_package_definition, touched_collections,
     validate_package_migrations,
 };
@@ -30,8 +30,9 @@ use semantic_db_core::catalog::{
     LocalFieldId, OBJECT_TYPE_FIELD, RELATION_TO_ATTRIBUTE, SharedCatalog,
 };
 use semantic_db_core::{
-    DdlBatch, DdlOperation, DdlOutcome, QueryContext, TransactionConcurrency, TransactionOptions,
-    apply_ddl_batch, fresh_catalog_with_core_schema, run_with_transaction_retries,
+    DdlBatch, DdlCollectionKind, DdlOperation, DdlOutcome, QueryContext, TransactionConcurrency,
+    TransactionOptions, apply_ddl_batch, fresh_catalog_with_core_schema,
+    run_with_transaction_retries,
 };
 
 const RELATION_EDGES_COLLECTION: &str = "__semantic.relationship_edges";
@@ -73,13 +74,19 @@ impl<E: KvEngine> KvDb<E> {
         let mut store = EntityStore::new(engine);
         let bootstrap_catalog = fresh_catalog_with_core_schema()
             .map_err(|err| DbError::InvalidQuery(err.to_string()))?;
-        let catalog = if let Some(catalog) = load_catalog(&store, &bootstrap_catalog)? {
+        let loaded_catalog = if let Some(catalog) = load_catalog(&store, &bootstrap_catalog)? {
             catalog
         } else {
             let ops = catalog_write_ops(&store, &bootstrap_catalog)?;
             store.write_batch(&ops)?;
             bootstrap_catalog
         };
+        let (catalog, executed_core_migrations) = apply_core_schema_migrations(&loaded_catalog)
+            .map_err(|err| DbError::InvalidQuery(err.to_string()))?;
+        if !executed_core_migrations.is_empty() {
+            let ops = catalog_write_ops(&store, &catalog)?;
+            store.write_batch(&ops)?;
+        }
         let mut db = Self {
             catalog: SharedCatalog::new(catalog),
             store,
@@ -89,7 +96,11 @@ impl<E: KvEngine> KvDb<E> {
             .collection_by_name(DEFAULT_COLLECTION)
             .is_none()
         {
-            db.create_collection(DEFAULT_COLLECTION, CollectionKind::Polymorphic)?;
+            db.transact_ddl(DdlBatch::new().with_op(DdlOperation::UpsertCollection {
+                name: DEFAULT_COLLECTION.to_string(),
+                kind: DdlCollectionKind::Polymorphic,
+                integrity_mode: IntegrityMode::StrictRegisteredSchema,
+            }))?;
         }
         if db
             .catalog()
@@ -316,6 +327,7 @@ impl<E: KvEngine> KvDb<E> {
             Query::Insert(query) => self.insert_query(query).map(QueryResult::Insert),
             Query::Update(query) => self.update_where_returning(query).map(QueryResult::Update),
             Query::Delete(query) => self.delete_where_returning(query).map(QueryResult::Delete),
+            Query::Ddl(query) => self.transact_ddl(query.batch).map(|_| QueryResult::Ddl(())),
         }
     }
 
@@ -348,6 +360,11 @@ impl<E: KvEngine> KvDb<E> {
     }
 
     pub fn plan_query(&self, query: Query) -> std::result::Result<QueryPlan, DbError> {
+        if matches!(query, Query::Ddl(_)) {
+            return Err(DbError::InvalidQuery(
+                "query planning/explain is not supported for DDL".to_string(),
+            ));
+        }
         let collection = query.collection_or_default().to_string();
         let explain = self.explain_query(query)?;
         match explain.access_path {
@@ -366,6 +383,11 @@ impl<E: KvEngine> KvDb<E> {
     }
 
     pub fn explain_query(&self, query: Query) -> std::result::Result<QueryExplain, DbError> {
+        if matches!(query, Query::Ddl(_)) {
+            return Err(DbError::InvalidQuery(
+                "query planning/explain is not supported for DDL".to_string(),
+            ));
+        }
         let collection_name = query.collection_or_default().to_string();
         let (select, stats, source, collection_for_access_path) =
             if is_all_collection_alias(&collection_name) {
@@ -418,6 +440,11 @@ impl<E: KvEngine> KvDb<E> {
                         limit: query.limit,
                         field_format: query.field_format,
                     },
+                    Query::Ddl(_) => {
+                        return Err(DbError::InvalidQuery(
+                            "query planning/explain is not supported for DDL".to_string(),
+                        ));
+                    }
                 };
                 (
                     select,
@@ -1628,9 +1655,14 @@ impl<E: KvEngine> KvDb<E> {
             let mut direct = Vec::<(String, String)>::new();
             match &relationship.mode {
                 RelationMode::Embedded { attribute } => {
-                    let canonical_field = source_collection
-                        .canonical_field_name(attribute)
-                        .to_string();
+                    let canonical_field = catalog
+                        .attribute_by_id(attribute)
+                        .map(|attr| attr.attribute.id.clone())
+                        .unwrap_or_else(|| {
+                            source_collection
+                                .canonical_field_name(attribute)
+                                .to_string()
+                        });
                     for (source_id, object) in &source_rows {
                         let Some(target_id) = object
                             .get(&canonical_field)
@@ -1646,9 +1678,14 @@ impl<E: KvEngine> KvDb<E> {
                     }
                 }
                 RelationMode::External => {
-                    let target_field = source_collection
-                        .canonical_field_name(RELATION_TO_ATTRIBUTE)
-                        .to_string();
+                    let target_field = catalog
+                        .attribute_by_id(RELATION_TO_ATTRIBUTE)
+                        .map(|attr| attr.attribute.id.clone())
+                        .unwrap_or_else(|| {
+                            source_collection
+                                .canonical_field_name(RELATION_TO_ATTRIBUTE)
+                                .to_string()
+                        });
                     for (doc_id, object) in &source_rows {
                         let Some(target_id) = object
                             .get(&target_field)
@@ -2081,7 +2118,7 @@ impl<E: KvEngine> KvPhysicalDataSource<'_, E> {
                 .store
                 .scan_collection(collection.lid)
                 .map_err(|err| semantic_db_core::CoreError::new(err.to_string()))?;
-            let local_ref_lookup = build_local_ref_lookup(collection, &rows);
+            let local_ref_lookup = build_local_ref_lookup(self.catalog.as_ref(), collection, &rows);
             let mut field_names = BTreeMap::new();
             let mut attr_names = BTreeMap::new();
             for (field_id, name) in collection.fields() {
@@ -2303,6 +2340,11 @@ impl semantic_db_core::ObjectAccess for KvObjectView {
         if let Some(value) = semantic_db_core::ObjectAccess::value_at_path_ref(&self.object, path) {
             return Some(value);
         }
+        if let [PathSegment::Field(field)] = path.segments()
+            && let Some(value) = value_from_object_with_alias_fallback(&self.object, field)
+        {
+            return Some(ValueRef::Owned(value));
+        }
         if path.segments().len() < 2 {
             return None;
         }
@@ -2332,17 +2374,27 @@ impl semantic_db_core::ObjectAccess for KvObjectView {
 }
 
 fn build_local_ref_lookup(
+    catalog: &Catalog,
     collection: &CollectionSchema,
     rows: &[StoredEntity],
 ) -> Arc<BTreeMap<String, Object>> {
     let mut lookup = BTreeMap::new();
-    let canonical_id = collection.canonical_field_name("id");
+    let mut id_keys = vec![
+        collection.canonical_field_name("id").to_string(),
+        "id".to_string(),
+    ];
+    for attr_id in catalog.attribute_ids("id") {
+        if let Some(attr) = catalog.attribute_by_lid(attr_id) {
+            let candidate = attr.attribute.id.clone();
+            if !id_keys.contains(&candidate) {
+                id_keys.push(candidate);
+            }
+        }
+    }
     for row in rows {
-        let id = row
-            .object
-            .get(canonical_id)
-            .and_then(Value::as_str)
-            .or_else(|| row.object.get("id").and_then(Value::as_str));
+        let id = id_keys
+            .iter()
+            .find_map(|key| row.object.get(key).and_then(Value::as_str));
         if let Some(id) = id {
             lookup.insert(id.to_string(), row.object.clone());
         }
@@ -2356,22 +2408,41 @@ fn resolve_path_with_local_refs(
     lookup: Option<&BTreeMap<String, Object>>,
 ) -> Option<Value> {
     let mut current = match path.segments().first()? {
-        PathSegment::Field(field) => object.get(field)?.clone(),
+        PathSegment::Field(field) => value_from_object_with_alias_fallback(object, field)?,
         PathSegment::Index(_) => return None,
     };
     for segment in path.segments().iter().skip(1) {
         current = match (&current, segment) {
-            (Value::Object(map), PathSegment::Field(field)) => map.get(field)?.clone(),
+            (Value::Object(map), PathSegment::Field(field)) => {
+                value_from_object_with_alias_fallback(map, field)?
+            }
             (Value::List(items), PathSegment::Index(index)) => items.get(*index)?.clone(),
             // Fallback: treat string ids as same-collection refs.
             (Value::String(id), PathSegment::Field(field)) => {
                 let target = lookup?.get(id)?;
-                target.get(field)?.clone()
+                value_from_object_with_alias_fallback(target, field)?
             }
             _ => return None,
         };
     }
     Some(current)
+}
+
+fn value_from_object_with_alias_fallback(object: &Object, field: &str) -> Option<Value> {
+    if let Some(value) = object.get(field) {
+        return Some(value.clone());
+    }
+    let wanted_plain = field.rsplit(':').next().unwrap_or(field);
+    let mut matching = object.iter().filter(|(key, _)| {
+        key.rsplit(':')
+            .next()
+            .is_some_and(|plain| plain == wanted_plain)
+    });
+    let (_, value) = matching.next()?;
+    if matching.next().is_some() {
+        return None;
+    }
+    Some(value.clone())
 }
 
 impl<E: KvEngine> semantic_db_core::PhysicalDataSource for KvPhysicalDataSource<'_, E> {
@@ -2390,7 +2461,7 @@ impl<E: KvEngine> semantic_db_core::PhysicalDataSource for KvPhysicalDataSource<
             .store
             .scan_collection(collection.lid)
             .map_err(|err| semantic_db_core::CoreError::new(err.to_string()))?;
-        let local_ref_lookup = build_local_ref_lookup(collection, &rows);
+        let local_ref_lookup = build_local_ref_lookup(self.catalog.as_ref(), collection, &rows);
         let mut field_names = BTreeMap::new();
         let mut attr_names = BTreeMap::new();
         for (field_id, name) in collection.fields() {
@@ -2481,10 +2552,22 @@ impl<E: KvEngine> semantic_db_core::PhysicalDataSource for KvPhysicalDataSource<
                     );
                 }
             } else if let Some(index) = self.catalog.find_path_equality_index(collection.lid) {
-                self.db
-                    .store
-                    .scan_index_value(index.lid, Some(&field_path), value)
-                    .map_err(|err| semantic_db_core::CoreError::new(err.to_string()))?
+                let has_index_segment = field_path
+                    .segments()
+                    .iter()
+                    .any(|segment| matches!(segment, PathSegment::Index(_)));
+                if has_index_segment {
+                    self.db
+                        .store
+                        .scan_index_value(index.lid, Some(&field_path), value)
+                        .map_err(|err| semantic_db_core::CoreError::new(err.to_string()))?
+                } else {
+                    return semantic_db_core::PhysicalDataSource::scan_filtered(
+                        self,
+                        source,
+                        &equality_expr(field_path, value.clone()),
+                    );
+                }
             } else {
                 return semantic_db_core::PhysicalDataSource::scan_filtered(
                     self,
@@ -2533,6 +2616,13 @@ impl<E: KvEngine> KvPhysicalDataSource<'_, E> {
         ids: Vec<String>,
     ) -> semantic_db_core::CoreResult<Vec<semantic_db_core::DynObject>> {
         let mut out = Vec::with_capacity(ids.len());
+        let lookup_rows = self
+            .db
+            .store
+            .scan_collection(collection.lid)
+            .map_err(|err| semantic_db_core::CoreError::new(err.to_string()))?;
+        let local_ref_lookup =
+            build_local_ref_lookup(self.catalog.as_ref(), collection, &lookup_rows);
         let mut field_names = BTreeMap::new();
         let mut attr_names = BTreeMap::new();
         for (field_id, name) in collection.fields() {
@@ -2553,7 +2643,7 @@ impl<E: KvEngine> KvPhysicalDataSource<'_, E> {
                     collection_id: collection.lid,
                     field_names: field_names.clone(),
                     attr_names: attr_names.clone(),
-                    local_ref_lookup: None,
+                    local_ref_lookup: Some(local_ref_lookup.clone()),
                 }) as semantic_db_core::DynObject);
             }
         }
@@ -2723,7 +2813,10 @@ mod tests {
             class::class_attribute::ClassAttribute,
             class::class_type::ClassType,
             core::{meta::Meta, type_kind::TypeKind, type_node::Type},
-            primitives::{bool_type::BoolType, string_type::StringType},
+            primitives::{
+                bool_type::BoolType, number_type::NumberType, string_type::StringType,
+                uint_width::UIntWidth,
+            },
             record::field::Field,
             record::record_type::RecordType,
         },
@@ -2735,7 +2828,7 @@ mod tests {
     use semantic_db_core::{
         ALL_COLLECTION_ALIAS, DEFAULT_COLLECTION, DdlBatch, DdlCollectionKind, DdlOperation, Expr,
         FieldFormat, Operand, OrderBy, Query, QueryField, QueryResult, SelectQuery,
-        TransactionConcurrency, TransactionOptions, UpdateQuery,
+        TransactionConcurrency, TransactionOptions, UpdateQuery, canonicalize_select_query,
     };
 
     use super::{KvDb, QueryPlan};
@@ -2743,10 +2836,13 @@ mod tests {
     #[test]
     fn initialization_creates_default_entities_collection() {
         let db = KvDb::in_memory();
-        assert!(
-            db.catalog()
-                .collection_by_name(DEFAULT_COLLECTION)
-                .is_some()
+        let catalog = db.catalog();
+        let entities = catalog
+            .collection_by_name(DEFAULT_COLLECTION)
+            .expect("default entities collection should exist");
+        assert_eq!(
+            entities.integrity_mode,
+            IntegrityMode::StrictRegisteredSchema
         );
     }
 
@@ -2754,6 +2850,102 @@ mod tests {
     fn initialization_enables_auto_indexing() {
         let db = KvDb::in_memory();
         assert!(db.auto_index_enabled());
+    }
+
+    #[test]
+    fn query_executes_ddl_variant_and_returns_unit_result() {
+        let mut db = KvDb::in_memory();
+
+        let result = db
+            .query(Query::Ddl(semantic_db_core::DdlQuery {
+                batch: DdlBatch::new().with_op(DdlOperation::UpsertAttribute {
+                    attribute: AttributeType {
+                        id: "shared:test:age".to_string(),
+                        name: "age".to_string(),
+                        ty: Type {
+                            kind: TypeKind::Number(NumberType::UInt(UIntWidth::U32)),
+                            constraints: vec![],
+                            annotations: vec![],
+                            meta: Meta::default(),
+                        },
+                        constraints: vec![],
+                        meta: Meta::default(),
+                    },
+                }),
+            }))
+            .unwrap();
+        assert!(matches!(result, QueryResult::Ddl(())));
+        assert!(db.catalog().attribute_by_id("shared:test:age").is_some());
+    }
+
+    #[test]
+    fn nested_ref_path_lookup_matches_child_row() {
+        let mut db = KvDb::in_memory();
+        db.create_collection("ref_paths", CollectionKind::Polymorphic)
+            .unwrap();
+
+        let mut grand = Object::new();
+        grand.insert("id", Value::String("ref-grand".to_string()));
+        grand.insert("kind", Value::String("top".to_string()));
+        grand.insert("title", Value::String("root".to_string()));
+        db.insert("ref_paths", "ref-grand", grand).unwrap();
+
+        let mut parent = Object::new();
+        parent.insert("id", Value::String("ref-parent".to_string()));
+        parent.insert("kind", Value::String("blah".to_string()));
+        parent.insert("title", Value::String("abc".to_string()));
+        parent.insert("parent", Value::String("ref-grand".to_string()));
+        db.insert("ref_paths", "ref-parent", parent).unwrap();
+
+        let mut child = Object::new();
+        child.insert("id", Value::String("ref-child".to_string()));
+        child.insert("kind", Value::String("leaf".to_string()));
+        child.insert("parent", Value::String("ref-parent".to_string()));
+        db.insert("ref_paths", "ref-child", child).unwrap();
+
+        let query = SelectQuery::new()
+            .with_collection("ref_paths")
+            .with_predicate(eq_predicate(
+                FieldPath::from_fields(["parent", "title"]),
+                Value::String("abc".to_string()),
+            ))
+            .with_projection(vec![QueryField {
+                expr: Box::new(Expr::Operand(Operand::Field(FieldPath::from_fields([
+                    "id",
+                ])))),
+                alias: Some("id".to_string()),
+            }]);
+        let catalog = db.catalog();
+        let collection = catalog.collection_by_name("ref_paths").unwrap();
+        let stored_rows = db.store.scan_collection(collection.lid).unwrap();
+        let lookup = super::build_local_ref_lookup(catalog.as_ref(), collection, &stored_rows);
+        let canonical = canonicalize_select_query(&query, catalog.as_ref(), collection).unwrap();
+        let explain = db.explain_query(Query::Select(query.clone())).unwrap();
+        let rows = db.select(query).unwrap();
+
+        let ids = rows
+            .iter()
+            .filter_map(|row| row.get("id").and_then(Value::as_str))
+            .map(ToString::to_string)
+            .collect::<Vec<_>>();
+        let stored_parent = db.get("ref_paths", "ref-parent").unwrap().unwrap();
+        let stored_child = db.get("ref_paths", "ref-child").unwrap().unwrap();
+        let resolved = super::resolve_path_with_local_refs(
+            &stored_child.object,
+            &FieldPath::from_fields(["local:core:parent", "title"]),
+            Some(lookup.as_ref()),
+        );
+        assert_eq!(
+            ids,
+            vec!["ref-child".to_string()],
+            "canonical={:?}, explain={:?}, resolved={:?}, lookup_keys={:?}, parent={:?}, child={:?}",
+            canonical,
+            explain,
+            resolved,
+            lookup.keys().cloned().collect::<Vec<_>>(),
+            stored_parent.object,
+            stored_child.object
+        );
     }
 
     #[test]

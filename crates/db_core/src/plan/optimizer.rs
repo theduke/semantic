@@ -533,7 +533,19 @@ impl<'a> RefPathJoinLifter<'a> {
 
         let mut rewritten = Vec::new();
         rewritten.push(PathSegment::Field(current_binding));
-        rewritten.extend(rest[consumed..].iter().cloned());
+        if let Some(first) = rest.get(consumed) {
+            match first {
+                PathSegment::Field(name) => {
+                    let canonical =
+                        resolve_collection_schema_for_binding(self.context, &current_source)
+                            .map(|schema| schema.canonical_field_name(name).to_string())
+                            .unwrap_or_else(|| name.clone());
+                    rewritten.push(PathSegment::Field(canonical));
+                }
+                PathSegment::Index(index) => rewritten.push(PathSegment::Index(*index)),
+            }
+            rewritten.extend(rest[consumed + 1..].iter().cloned());
+        }
         Some(FieldPath::from(rewritten))
     }
 
@@ -718,7 +730,7 @@ fn collect_existing_ref_joins(
                 [PathSegment::Field(_binding), PathSegment::Field(field)] => field,
                 _ => return,
             };
-            if right_id != "id" {
+            if !is_ref_join_id_field(right_id) {
                 return;
             }
             out.insert(
@@ -748,6 +760,10 @@ fn collect_existing_ref_joins(
         }
         LogicalPlan::Source { .. } | LogicalPlan::Values { .. } => {}
     }
+}
+
+fn is_ref_join_id_field(field: &str) -> bool {
+    field == "id" || field == "semantic:catalog:id"
 }
 
 #[derive(Debug, Clone)]
@@ -1438,6 +1454,11 @@ mod tests {
         let Expr::Operand(Operand::Field(path)) = projection[0].expr.as_ref() else {
             panic!("expected field projection");
         };
-        assert_eq!(path, &FieldPath::from_fields(["__ref_1", "id"]));
+        let canonical_id = context
+            .catalog()
+            .collection_by_name("events")
+            .expect("events collection")
+            .canonical_field_name("id");
+        assert_eq!(path, &FieldPath::from_fields(["__ref_1", canonical_id]));
     }
 }

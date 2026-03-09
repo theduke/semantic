@@ -146,6 +146,7 @@ fn with_query_collection_if_missing(query: Query, collection: String) -> Query {
             }
             Query::Delete(delete)
         }
+        Query::Ddl(ddl) => Query::Ddl(ddl),
     }
 }
 

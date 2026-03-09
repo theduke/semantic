@@ -84,6 +84,12 @@ impl From<InsertQuery> for TextQueryInput {
     }
 }
 
+impl From<DdlQuery> for TextQueryInput {
+    fn from(value: DdlQuery) -> Self {
+        Self::Ast(Query::Ddl(value))
+    }
+}
+
 impl From<String> for TextQueryInput {
     fn from(value: String) -> Self {
         Self::sql(value)
@@ -163,6 +169,7 @@ use semantic_data::query::{
 };
 use semantic_data::value::{FieldPath, Object, PathSegment, Value, ValueRef};
 
+use crate::DdlBatch;
 use crate::catalog::{LocalAttrId, LocalCollectionId, LocalFieldId};
 
 pub trait ValueAccess {
@@ -387,6 +394,11 @@ pub struct SelectQuery {
 }
 
 #[derive(facet::Facet, Debug, Clone, PartialEq)]
+pub struct DdlQuery {
+    pub batch: DdlBatch,
+}
+
+#[derive(facet::Facet, Debug, Clone, PartialEq)]
 #[repr(C)]
 #[facet(rename_all = "snake_case")]
 pub enum Query {
@@ -394,6 +406,7 @@ pub enum Query {
     Insert(InsertQuery),
     Update(UpdateQuery),
     Delete(DeleteQuery),
+    Ddl(DdlQuery),
 }
 
 impl From<SelectQuery> for Query {
@@ -417,6 +430,12 @@ impl From<InsertQuery> for Query {
 impl From<DeleteQuery> for Query {
     fn from(value: DeleteQuery) -> Self {
         Self::Delete(value)
+    }
+}
+
+impl From<DdlQuery> for Query {
+    fn from(value: DdlQuery) -> Self {
+        Self::Ddl(value)
     }
 }
 
@@ -1118,6 +1137,7 @@ impl Query {
             Self::Insert(query) => query.collection.as_deref(),
             Self::Update(query) => query.collection.as_deref(),
             Self::Delete(query) => query.collection.as_deref(),
+            Self::Ddl(_) => None,
         }
     }
 
@@ -1158,6 +1178,7 @@ pub enum QueryResult {
     Insert(InsertResult),
     Update(UpdateResult),
     Delete(DeleteResult),
+    Ddl(()),
 }
 
 #[derive(facet::Facet, Debug, Clone, PartialEq, Eq)]
