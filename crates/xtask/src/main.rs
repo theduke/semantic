@@ -230,7 +230,14 @@ fn build_styles() -> Result<(), anyhow::Error> {
 fn build_ui_v2() -> Result<(), anyhow::Error> {
     eprintln!("Building UI v2...");
 
-    let js_path = root_path()?.join("js").join("ui");
+    let js_root = root_path()?.join("js");
+    let js_path = js_root.join("ui");
+
+    eprintln!("Building semantic JS package...");
+    Command::new("yarn")
+        .args(["workspace", "semantic", "build"])
+        .current_dir(&js_root)
+        .run()?;
 
     Command::new("yarn")
         .args(["build"])
@@ -362,6 +369,12 @@ fn cmd_build_typescript() -> Result<(), anyhow::Error> {
     eprintln!("Wrote core types to {}", core_path.display());
 
     eprintln!("Generating entity type schemas from database...");
+
+    // `semantic_cli` depends on the server crate, which embeds frontend assets
+    // from these target directories at compile time. Ensure they exist so
+    // schema generation does not depend on a prior UI build.
+    std::fs::create_dir_all(root_path()?.join("target/ui"))?;
+    std::fs::create_dir_all(root_path()?.join("target/ui2"))?;
 
     let res = Command::new("cargo")
         .args(["run", "-p", "semantic_cli", "--", "generate-typescript"])

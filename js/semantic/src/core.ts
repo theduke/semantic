@@ -92,7 +92,9 @@ export interface ImportRawReply { items: Array<Record<string, any>>, }
 
 export interface ImportRaw { data: any, }
 
-export interface BlobFsConfig { path: string, password: string, }
+export interface BlobFsConfig { path: string, password: SecretString, }
+
+export type SecretString = string;
 
 export interface TagCreate { name: string, }
 
