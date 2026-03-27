@@ -483,7 +483,6 @@ mod tests {
             }),
             constraints: vec![],
             annotations: vec![],
-            meta: Meta::default(),
         }
     }
 

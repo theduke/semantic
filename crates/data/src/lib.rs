@@ -1,6 +1,8 @@
 pub mod value;
 pub use value::*;
 
+pub mod attr;
+
 pub mod expr;
 pub mod query;
 

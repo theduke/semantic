@@ -332,7 +332,6 @@ fn parse_sql_attribute_type(value: &str) -> Result<Type, SqlQueryError> {
         kind,
         constraints: vec![],
         annotations: vec![],
-        meta: Meta::default(),
     })
 }
 

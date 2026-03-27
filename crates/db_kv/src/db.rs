@@ -2866,7 +2866,6 @@ mod tests {
                             kind: TypeKind::Number(NumberType::UInt(UIntWidth::U32)),
                             constraints: vec![],
                             annotations: vec![],
-                            meta: Meta::default(),
                         },
                         constraints: vec![],
                         meta: Meta::default(),
@@ -3575,7 +3574,6 @@ mod tests {
             kind,
             constraints: vec![],
             annotations: vec![],
-            meta: Meta::default(),
         }
     }
 

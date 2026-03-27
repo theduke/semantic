@@ -1283,7 +1283,6 @@ impl Catalog {
             }),
             constraints: vec![],
             annotations: vec![],
-            meta: Meta::default(),
         };
         field_types
             .entry(PRIMARY_ID_FIELD.to_string())
@@ -1300,7 +1299,6 @@ impl Catalog {
                 }),
                 constraints: vec![],
                 annotations: vec![],
-                meta: Meta::default(),
             });
 
         if schema_driven {
@@ -1740,7 +1738,6 @@ fn type_def_from_attribute(attribute: &AttributeType, module: Option<String>) ->
             kind: TypeKind::Attribute(Box::new(attribute)),
             constraints: vec![],
             annotations: vec![],
-            meta: Meta::default(),
         },
         visibility: Visibility::Public,
         meta: Meta::default(),
@@ -1762,7 +1759,6 @@ fn type_def_from_record_type(
             kind: TypeKind::Record(record),
             constraints: vec![],
             annotations: vec![],
-            meta: Meta::default(),
         },
         visibility: Visibility::Public,
         meta: Meta {
@@ -1782,7 +1778,6 @@ fn type_def_from_class(class: ClassType, module: Option<String>) -> TypeDef {
             kind: TypeKind::Class(class.clone()),
             constraints: vec![],
             annotations: vec![],
-            meta: Meta::default(),
         },
         visibility: Visibility::Public,
         meta: Meta {
