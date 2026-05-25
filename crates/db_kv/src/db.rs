@@ -1,6 +1,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
 
+use semantic_data::query::FieldFormat;
 use semantic_data::schema::IndexKind;
 use semantic_data::schema::{
     MigrationOperation, Package, RelationIndexingMode, RelationMode, RelationType,
@@ -9,9 +10,9 @@ use semantic_data::value::{FieldPath, Object, PathSegment, Value, ValueRef};
 use semantic_db_core::DbError;
 use semantic_db_core::{
     ALL_COLLECTION_ALIAS, AccessPath, AppliedMigration, Batch, BatchOperation, BatchOutcome,
-    DEFAULT_COLLECTION, DeleteQuery, EntityRecord, FieldFormat, InsertQuery, InsertSource,
-    MutationStats, PackageRegistrationOutcome, Query, QueryExplain, QueryPlan, QueryResult,
-    SelectQuery, UpdateQuery, apply_core_schema_migrations, apply_migration_ddl_batch,
+    DEFAULT_COLLECTION, DeleteQuery, EntityRecord, InsertQuery, InsertSource, MutationStats,
+    PackageRegistrationOutcome, Query, QueryExplain, QueryPlan, QueryResult, SelectQuery,
+    UpdateQuery, apply_core_schema_migrations, apply_migration_ddl_batch,
     canonicalize_delete_query, canonicalize_insert_query, canonicalize_query,
     canonicalize_select_query, canonicalize_update_query, execute_batch, is_all_collection_alias,
     normalize_object_for_collection, normalize_package_definition, touched_collections,
@@ -2823,12 +2824,12 @@ mod tests {
         value::{FieldPath, Object, PathSegment, Value},
     };
 
-    use semantic_data::query::{BinaryOp, SortDirection};
+    use semantic_data::query::{BinaryOp, FieldFormat, SortDirection};
     use semantic_db_core::catalog::{CollectionKind, IntegrityMode};
     use semantic_db_core::{
         ALL_COLLECTION_ALIAS, DEFAULT_COLLECTION, DdlBatch, DdlCollectionKind, DdlOperation, Expr,
-        FieldFormat, Operand, OrderBy, Query, QueryField, QueryResult, SelectQuery,
-        TransactionConcurrency, TransactionOptions, UpdateQuery, canonicalize_select_query,
+        Operand, OrderBy, Query, QueryField, QueryResult, SelectQuery, TransactionConcurrency,
+        TransactionOptions, UpdateQuery, canonicalize_select_query,
     };
 
     use super::{KvDb, QueryPlan};

@@ -6,3 +6,12 @@ pub struct TypeRef {
     pub name: TypeName,
     pub args: Vec<crate::schema::core::type_node::Type>,
 }
+
+impl TypeRef {
+    pub fn new(name: impl Into<TypeName>) -> Self {
+        Self {
+            name: name.into(),
+            args: Vec::new(),
+        }
+    }
+}

@@ -1,4 +1,4 @@
-use crate::schema::core::{meta::Meta, type_kind::TypeKind};
+use crate::schema::core::type_kind::TypeKind;
 
 /// The main schema type node: shape + constraints + metadata + annotations.
 #[derive(facet::Facet, Clone, Debug, PartialEq)]

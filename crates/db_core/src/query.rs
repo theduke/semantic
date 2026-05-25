@@ -20,15 +20,6 @@ pub enum TextQueryFormat {
     Prql,
 }
 
-#[derive(facet::Facet, Debug, Clone, Copy, PartialEq, Eq)]
-#[repr(C)]
-#[facet(rename_all = "snake_case")]
-pub enum FieldFormat {
-    Qualified,
-    Underscore,
-    Plain,
-}
-
 #[derive(Debug, Clone, PartialEq)]
 pub enum TextQueryInput {
     Ast(Query),
@@ -120,26 +111,6 @@ impl From<TextQueryFormat> for public_query::TextQueryFormat {
     }
 }
 
-impl From<public_query::FieldFormat> for FieldFormat {
-    fn from(value: public_query::FieldFormat) -> Self {
-        match value {
-            public_query::FieldFormat::Qualified => Self::Qualified,
-            public_query::FieldFormat::Underscore => Self::Underscore,
-            public_query::FieldFormat::Plain => Self::Plain,
-        }
-    }
-}
-
-impl From<FieldFormat> for public_query::FieldFormat {
-    fn from(value: FieldFormat) -> Self {
-        match value {
-            FieldFormat::Qualified => Self::Qualified,
-            FieldFormat::Underscore => Self::Underscore,
-            FieldFormat::Plain => Self::Plain,
-        }
-    }
-}
-
 impl From<public_query::QueryInput> for TextQueryInput {
     fn from(value: public_query::QueryInput) -> Self {
         match value {
@@ -165,7 +136,7 @@ use std::{
 use regex::RegexBuilder;
 use semantic_data::query as public_query;
 use semantic_data::query::{
-    AggregateOp, BinaryOp, JoinType, PatternMatchKind, SortDirection, UnaryOp,
+    AggregateOp, BinaryOp, FieldFormat, JoinType, PatternMatchKind, SortDirection, UnaryOp,
 };
 use semantic_data::value::{FieldPath, Object, PathSegment, Value, ValueRef};
 

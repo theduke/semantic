@@ -333,7 +333,7 @@ fn normalize_type(
     ty
 }
 
-fn package_modules<'a>(package: &'a Package) -> BTreeMap<&'a str, &'a Module> {
+fn package_modules(package: &Package) -> BTreeMap<&str, &Module> {
     let mut out = BTreeMap::new();
     let _ = out.insert(package.root.name.as_str(), &package.root);
     for module in package.modules.values() {
@@ -345,14 +345,14 @@ fn package_modules<'a>(package: &'a Package) -> BTreeMap<&'a str, &'a Module> {
 fn actual_module_types(catalog: &Catalog, module: &str) -> BTreeMap<String, TypeDef> {
     catalog
         .type_defs()
-        .filter_map(|(_, type_def)| {
-            (type_def.type_def.module.as_deref() == Some(module)
+        .filter(|&(_, type_def)| {
+            type_def.type_def.module.as_deref() == Some(module)
                 && !matches!(
                     type_def.type_def.ty.kind,
                     TypeKind::Attribute(_) | TypeKind::Class(_)
-                ))
-            .then(|| (type_def.type_def.name.clone(), type_def.type_def.clone()))
+                )
         })
+        .map(|(_, type_def)| (type_def.type_def.name.clone(), type_def.type_def.clone()))
         .collect()
 }
 

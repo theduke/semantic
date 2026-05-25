@@ -60,7 +60,7 @@
 ///   - Many non-scalar SQL literal forms.
 ///   - Many non-scalar `semantic_data::Value` variants in SQL printer output.
 use semantic_data::query::{
-    AggregateOp, BinaryOp, JoinType, PatternMatchKind, SortDirection, UnaryOp,
+    AggregateOp, BinaryOp, FieldFormat, JoinType, PatternMatchKind, SortDirection, UnaryOp,
 };
 use semantic_data::schema::{
     AnyType, AttributeType, BoolType, BytesType, FloatWidth, IntWidth, Meta, NumberType,
@@ -78,9 +78,9 @@ use sqlparser::parser::Parser;
 use thiserror::Error;
 
 use crate::{
-    DdlBatch, DdlOperation, DdlQuery, DeleteQuery, Expr, FieldFormat, FunctionArg, InsertQuery,
-    InsertSource, JoinCondition, JoinQuery, JoinSource, Operand, OrderBy as DbOrderBy, Query,
-    QueryField, SelectQuery, UpdateQuery, evaluate_usize_expr,
+    DdlBatch, DdlOperation, DdlQuery, DeleteQuery, Expr, FunctionArg, InsertQuery, InsertSource,
+    JoinCondition, JoinQuery, JoinSource, Operand, OrderBy as DbOrderBy, Query, QueryField,
+    SelectQuery, UpdateQuery, evaluate_usize_expr,
 };
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
