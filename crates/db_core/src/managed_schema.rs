@@ -466,6 +466,7 @@ mod tests {
                         id: "suite.tree.payload".to_string(),
                     },
                     required: false,
+                    computed: None,
                     constraints: vec![],
                     meta: Meta::default(),
                 },

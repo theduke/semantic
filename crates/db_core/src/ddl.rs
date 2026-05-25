@@ -128,6 +128,20 @@ pub fn apply_ddl_batch(
     catalog: &Catalog,
     batch: &DdlBatch,
 ) -> Result<(Catalog, DdlOutcome), CoreError> {
+    // Validate computed attributes before applying DDL.
+    for op in &batch.operations {
+        if let DdlOperation::UpsertClass { class } = op {
+            let errors = crate::validation::validate_class_computed_attributes(catalog, class);
+            if !errors.is_empty() {
+                let msgs: Vec<String> = errors.iter().map(|e| e.to_string()).collect();
+                return Err(CoreError::new(format!(
+                    "computed attribute validation failed: {}",
+                    msgs.join("; ")
+                )));
+            }
+        }
+    }
+
     let mut catalog = catalog.clone();
     let catalog_ops = batch
         .operations
@@ -215,6 +229,7 @@ pub fn core_catalog_schema_batch() -> DdlBatch {
                 id: CORE_CATALOG_ATTR_ID.to_string(),
             },
             required: true,
+            computed: None,
             constraints: vec![],
             meta: Meta::default(),
         },
@@ -226,6 +241,7 @@ pub fn core_catalog_schema_batch() -> DdlBatch {
                 id: CORE_CATALOG_ATTR_LID.to_string(),
             },
             required: true,
+            computed: None,
             constraints: vec![],
             meta: Meta::default(),
         },
@@ -237,6 +253,7 @@ pub fn core_catalog_schema_batch() -> DdlBatch {
                 id: CORE_CATALOG_ATTR_ATTRIBUTE.to_string(),
             },
             required: false,
+            computed: None,
             constraints: vec![],
             meta: Meta::default(),
         },
@@ -248,6 +265,7 @@ pub fn core_catalog_schema_batch() -> DdlBatch {
                 id: CORE_CATALOG_ATTR_TYPE_DEF.to_string(),
             },
             required: false,
+            computed: None,
             constraints: vec![],
             meta: Meta::default(),
         },
@@ -259,6 +277,7 @@ pub fn core_catalog_schema_batch() -> DdlBatch {
                 id: CORE_CATALOG_ATTR_RECORD.to_string(),
             },
             required: false,
+            computed: None,
             constraints: vec![],
             meta: Meta::default(),
         },
@@ -270,6 +289,7 @@ pub fn core_catalog_schema_batch() -> DdlBatch {
                 id: CORE_CATALOG_ATTR_CLASS.to_string(),
             },
             required: false,
+            computed: None,
             constraints: vec![],
             meta: Meta::default(),
         },
@@ -281,6 +301,7 @@ pub fn core_catalog_schema_batch() -> DdlBatch {
                 id: CORE_CATALOG_ATTR_NAME.to_string(),
             },
             required: false,
+            computed: None,
             constraints: vec![],
             meta: Meta::default(),
         },
@@ -292,6 +313,7 @@ pub fn core_catalog_schema_batch() -> DdlBatch {
                 id: CORE_CATALOG_ATTR_INTEGRITY_MODE.to_string(),
             },
             required: false,
+            computed: None,
             constraints: vec![],
             meta: Meta::default(),
         },
@@ -303,6 +325,7 @@ pub fn core_catalog_schema_batch() -> DdlBatch {
                 id: CORE_CATALOG_ATTR_FIELD_IDS.to_string(),
             },
             required: false,
+            computed: None,
             constraints: vec![],
             meta: Meta::default(),
         },
@@ -314,6 +337,7 @@ pub fn core_catalog_schema_batch() -> DdlBatch {
                 id: CORE_CATALOG_ATTR_COLLECTION.to_string(),
             },
             required: false,
+            computed: None,
             constraints: vec![],
             meta: Meta::default(),
         },
@@ -325,6 +349,7 @@ pub fn core_catalog_schema_batch() -> DdlBatch {
                 id: CORE_CATALOG_ATTR_FIELD.to_string(),
             },
             required: false,
+            computed: None,
             constraints: vec![],
             meta: Meta::default(),
         },
@@ -336,6 +361,7 @@ pub fn core_catalog_schema_batch() -> DdlBatch {
                 id: CORE_CATALOG_ATTR_INDEX_KIND.to_string(),
             },
             required: false,
+            computed: None,
             constraints: vec![],
             meta: Meta::default(),
         },
@@ -347,6 +373,7 @@ pub fn core_catalog_schema_batch() -> DdlBatch {
                 id: CORE_CATALOG_ATTR_UNIQUE.to_string(),
             },
             required: false,
+            computed: None,
             constraints: vec![],
             meta: Meta::default(),
         },
@@ -358,6 +385,7 @@ pub fn core_catalog_schema_batch() -> DdlBatch {
                 id: CORE_CATALOG_ATTR_NEXT_FIELD_ID.to_string(),
             },
             required: false,
+            computed: None,
             constraints: vec![],
             meta: Meta::default(),
         },
@@ -369,6 +397,7 @@ pub fn core_catalog_schema_batch() -> DdlBatch {
                 id: CORE_CATALOG_ATTR_AUTO_INDEX_ENABLED.to_string(),
             },
             required: false,
+            computed: None,
             constraints: vec![],
             meta: Meta::default(),
         },
@@ -380,6 +409,7 @@ pub fn core_catalog_schema_batch() -> DdlBatch {
                 id: CORE_CATALOG_ATTR_PACKAGES.to_string(),
             },
             required: false,
+            computed: None,
             constraints: vec![],
             meta: Meta::default(),
         },
@@ -391,6 +421,7 @@ pub fn core_catalog_schema_batch() -> DdlBatch {
                 id: CORE_CATALOG_ATTR_APPLIED_MIGRATIONS.to_string(),
             },
             required: false,
+            computed: None,
             constraints: vec![],
             meta: Meta::default(),
         },
@@ -435,6 +466,7 @@ pub fn core_catalog_schema_batch() -> DdlBatch {
                 id: RELATION_ATTR_RELATION.to_string(),
             },
             required: true,
+            computed: None,
             constraints: vec![],
             meta: Meta::default(),
         },
@@ -446,6 +478,7 @@ pub fn core_catalog_schema_batch() -> DdlBatch {
                 id: RELATION_ATTR_FROM.to_string(),
             },
             required: true,
+            computed: None,
             constraints: vec![],
             meta: Meta::default(),
         },
@@ -457,6 +490,7 @@ pub fn core_catalog_schema_batch() -> DdlBatch {
                 id: RELATION_ATTR_TO.to_string(),
             },
             required: true,
+            computed: None,
             constraints: vec![],
             meta: Meta::default(),
         },
@@ -1070,6 +1104,7 @@ mod tests {
                         id: "suite.tree.payload".to_string(),
                     },
                     required: false,
+                    computed: None,
                     constraints: vec![],
                     meta: Meta::default(),
                 },

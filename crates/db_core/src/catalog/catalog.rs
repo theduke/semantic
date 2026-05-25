@@ -1316,6 +1316,16 @@ impl Catalog {
             }
         }
 
+        // Collect computed fields from all registered classes.
+        let mut computed_fields = BTreeSet::<String>::new();
+        for (_, class) in self.classes() {
+            for (_, class_attr) in &class.class.attributes {
+                if class_attr.computed.is_some() {
+                    computed_fields.insert(class_attr.attribute.id.clone());
+                }
+            }
+        }
+
         for canonical in field_types.keys() {
             let names = nameset_for_qualified(canonical);
             field_aliases
@@ -1352,6 +1362,7 @@ impl Catalog {
             field_ids,
             field_names_by_id,
             attr_by_field_id,
+            computed_fields,
             closed_fields,
         ))
     }

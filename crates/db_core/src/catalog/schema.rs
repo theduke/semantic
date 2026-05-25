@@ -1,4 +1,4 @@
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 use fnv::FnvHashMap;
 use semantic_data::schema::{
@@ -77,6 +77,8 @@ pub struct CollectionSchema {
     field_ids: FnvHashMap<String, LocalFieldId>,
     field_names_by_id: FnvHashMap<LocalFieldId, String>,
     attr_by_field_id: FnvHashMap<LocalFieldId, LocalAttrId>,
+    /// Fields whose values are computed at read time and cannot be written.
+    pub computed_fields: BTreeSet<String>,
     closed_fields: bool,
 }
 
@@ -91,6 +93,7 @@ impl CollectionSchema {
         field_ids: FnvHashMap<String, LocalFieldId>,
         field_names_by_id: FnvHashMap<LocalFieldId, String>,
         attr_by_field_id: FnvHashMap<LocalFieldId, LocalAttrId>,
+        computed_fields: BTreeSet<String>,
         closed_fields: bool,
     ) -> Self {
         Self {
@@ -103,6 +106,7 @@ impl CollectionSchema {
             field_ids,
             field_names_by_id,
             attr_by_field_id,
+            computed_fields,
             closed_fields,
         }
     }

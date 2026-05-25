@@ -1367,6 +1367,212 @@ impl ValueKey {
     }
 }
 
+/// Evaluate a computed attribute (data model `Expr`) against an object.
+pub fn evaluate_computed_expr(
+    obj: &semantic_data::value::Object,
+    expr: &semantic_data::expr::Expr,
+) -> CoreResult<semantic_data::value::Value> {
+    use semantic_data::expr::{self, BinaryOperator};
+    use semantic_data::value::Value;
+
+    match expr {
+        expr::Expr::Literal(lit) => Ok(literal_to_value(&lit.value)),
+        expr::Expr::Ref(expr::RefExpr::Identifier(name)) if name == "self" => Err(CoreError::new(
+            "bare self reference not allowed in computed expression",
+        )),
+        expr::Expr::FieldAccess(fa) => {
+            if !matches!(
+                &fa.target,
+                expr::Expr::Ref(expr::RefExpr::Identifier(name)) if name == "self"
+            ) {
+                return Err(CoreError::new(
+                    "field access target must be 'self' in computed expression",
+                ));
+            }
+            obj.get(&fa.field).cloned().ok_or_else(|| {
+                CoreError::new(format!(
+                    "unknown field '{}' in computed expression",
+                    fa.field
+                ))
+            })
+        }
+        expr::Expr::Binary(bin) if bin.op == BinaryOperator::Concat => {
+            let left = evaluate_computed_expr(obj, &bin.left)?;
+            let right = evaluate_computed_expr(obj, &bin.right)?;
+            let left_str = value_to_display_string(&left);
+            let right_str = value_to_display_string(&right);
+            Ok(Value::String(left_str + &right_str))
+        }
+        expr::Expr::Call(call) => match &call.callee {
+            expr::Callee::Name(name) if name.as_slice() == ["stringify"] => {
+                if call.args.len() != 1 {
+                    return Err(CoreError::new("stringify expects exactly 1 argument"));
+                }
+                if let expr::CallArg::Positional(arg) = &call.args[0] {
+                    let value = evaluate_computed_expr(obj, arg)?;
+                    Ok(Value::String(value_to_display_string(&value)))
+                } else {
+                    Err(CoreError::new(
+                        "named arguments not supported in computed expressions",
+                    ))
+                }
+            }
+            _ => Err(CoreError::new(
+                "unsupported function in computed expression",
+            )),
+        },
+        expr::Expr::Unary(unary) => {
+            let operand = evaluate_computed_expr(obj, &unary.operand)?;
+            match unary.op {
+                expr::UnaryOperator::Not => match operand {
+                    Value::Bool(b) => Ok(Value::Bool(!b)),
+                    _ => Err(CoreError::new(
+                        "NOT requires boolean operand in computed expression",
+                    )),
+                },
+                expr::UnaryOperator::Minus => match operand {
+                    Value::I64(v) => Ok(Value::I64(-v)),
+                    Value::F64(v) => Ok(Value::F64((-v.into_inner()).into())),
+                    _ => Err(CoreError::new(
+                        "negation requires numeric operand in computed expression",
+                    )),
+                },
+                _ => Err(CoreError::new(
+                    "unsupported unary operator in computed expression",
+                )),
+            }
+        }
+        expr::Expr::Cast(cast) => evaluate_computed_expr(obj, &cast.expr),
+        expr::Expr::If(if_expr) => {
+            let cond = evaluate_computed_expr(obj, &if_expr.condition)?;
+            if is_value_truthy(&cond) {
+                evaluate_computed_expr(obj, &if_expr.then_expr)
+            } else {
+                evaluate_computed_expr(obj, &if_expr.else_expr)
+            }
+        }
+        _ => Err(CoreError::new(format!(
+            "unsupported expression in computed attribute: {:?}",
+            std::mem::discriminant(expr)
+        ))),
+    }
+}
+
+fn literal_to_value(lit: &semantic_data::schema::core::literal_value::LiteralValue) -> Value {
+    use semantic_data::schema::core::literal_value::LiteralValue as LV;
+    use semantic_data::value::Map;
+    match lit {
+        LV::Null => Value::Null,
+        LV::Bool(b) => Value::Bool(*b),
+        LV::Int(v) => Value::I128(*v),
+        LV::UInt(v) => Value::U128(*v),
+        LV::Float(s) => Value::String(s.clone()),
+        LV::String(s) => Value::String(s.clone()),
+        LV::Bytes(b) => Value::Bytes(b.clone().into()),
+        LV::List(items) => Value::List(items.iter().map(literal_to_value).collect()),
+        LV::Map(entries) => {
+            let mut map = Map::new();
+            for (k, v) in entries {
+                map.insert(Value::String(k.clone()), literal_to_value(v));
+            }
+            Value::Map(map)
+        }
+    }
+}
+
+fn is_value_truthy(value: &Value) -> bool {
+    match value {
+        Value::Null | Value::Void => false,
+        Value::Bool(b) => *b,
+        _ => true,
+    }
+}
+
+fn value_to_display_string(value: &Value) -> String {
+    match value {
+        Value::Null | Value::Void => "null".to_string(),
+        Value::Bool(true) => "true".to_string(),
+        Value::Bool(false) => "false".to_string(),
+        Value::I8(v) => v.to_string(),
+        Value::I16(v) => v.to_string(),
+        Value::I32(v) => v.to_string(),
+        Value::I64(v) => v.to_string(),
+        Value::I128(v) => v.to_string(),
+        Value::U8(v) => v.to_string(),
+        Value::U16(v) => v.to_string(),
+        Value::U32(v) => v.to_string(),
+        Value::U64(v) => v.to_string(),
+        Value::U128(v) => v.to_string(),
+        Value::F32(v) => v.into_inner().to_string(),
+        Value::F64(v) => v.into_inner().to_string(),
+        Value::String(s) => s.clone(),
+        Value::Bytes(b) => format!("{:02x?}", b),
+        Value::Date(d) => format!("{:?}", d),
+        Value::Time(t) => format!("{:?}", t),
+        Value::DateTime(dt) => format!("{:?}", dt),
+        Value::Duration(d) => format!("{:?}", d),
+        Value::Uuid(u) => format!("{:?}", u),
+        Value::IpAddr(ip) => ip.to_string(),
+        Value::List(items) => {
+            let strs: Vec<String> = items.iter().map(value_to_display_string).collect();
+            format!("[{}]", strs.join(", "))
+        }
+        Value::Map(map) => {
+            let strs: Vec<String> = map
+                .iter()
+                .map(|(k, v)| format!("{:?}: {}", k, value_to_display_string(v)))
+                .collect();
+            format!("{{{}}}", strs.join(", "))
+        }
+        Value::Object(o) => {
+            let strs: Vec<String> = o
+                .iter()
+                .map(|(k, v)| format!("{}: {}", k, value_to_display_string(v)))
+                .collect();
+            format!("{{{}}}", strs.join(", "))
+        }
+        Value::Variant(v) => format!("<{}:{}>", v.variant, value_to_display_string(&v.value)),
+    }
+}
+
+/// Inject computed attributes for a row based on its class type.
+pub fn inject_computed_attributes(
+    catalog: &crate::catalog::Catalog,
+    obj: &mut semantic_data::value::Object,
+) -> CoreResult<()> {
+    use semantic_data::value::Value;
+
+    let object_type = match obj
+        .get(crate::catalog::OBJECT_TYPE_FIELD)
+        .and_then(Value::as_str)
+    {
+        Some(ty) => ty,
+        None => return Ok(()),
+    };
+
+    let class_lid = match catalog.class_id(object_type) {
+        Some(lid) => lid,
+        None => return Ok(()),
+    };
+
+    let class_schema = match catalog.class_by_lid(class_lid) {
+        Some(c) => c,
+        None => return Ok(()),
+    };
+
+    for (_attr_alias, attr) in &class_schema.class.attributes {
+        if let Some(ref expr) = attr.computed {
+            let canon = &attr.attribute.id;
+            if !obj.contains_key(canon) {
+                let value = evaluate_computed_expr(obj, expr)?;
+                obj.insert(canon.clone(), value);
+            }
+        }
+    }
+
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

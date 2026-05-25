@@ -47,6 +47,8 @@ pub enum ObjectNormalizationError {
     },
     #[error("field alias '{alias}' is ambiguous in collection '{collection}'")]
     AmbiguousFieldAlias { collection: String, alias: String },
+    #[error("field '{field}' is computed and cannot be written in collection '{collection}'")]
+    ComputedFieldNotWritable { collection: String, field: String },
 }
 
 pub type ObjectNormalizationResult<T> = std::result::Result<T, ObjectNormalizationError>;
@@ -138,6 +140,19 @@ pub fn normalize_object_for_collection(
             best_effort_normalize_registered_attributes(catalog, collection, object)?;
             reject_unknown_fields |=
                 collection.integrity_mode == IntegrityMode::StrictRegisteredSchema;
+        }
+    }
+
+    // Reject writes to computed fields.
+    if !collection.computed_fields.is_empty() {
+        for key in object.keys() {
+            let canonical = collection.canonical_field_name(key);
+            if collection.computed_fields.contains(canonical) {
+                return Err(ObjectNormalizationError::ComputedFieldNotWritable {
+                    collection: collection.name.clone(),
+                    field: canonical.to_string(),
+                });
+            }
         }
     }
 
@@ -460,6 +475,632 @@ fn type_matches_value(ty: &Type, value: &Value) -> bool {
     }
 }
 
+/// Error type for computed attribute validation during DDL.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ComputedAttrValidationError {
+    pub attribute: String,
+    pub message: String,
+}
+
+impl std::fmt::Display for ComputedAttrValidationError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "computed attribute '{}': {}",
+            self.attribute, self.message
+        )
+    }
+}
+
+/// Validate all computed attributes in a class definition.
+/// Returns a list of errors (may be empty).
+pub fn validate_class_computed_attributes(
+    catalog: &Catalog,
+    class: &semantic_data::schema::class::class_type::ClassType,
+) -> Vec<ComputedAttrValidationError> {
+    // Collect all computed attributes with their expressions.
+    let computed_attrs: Vec<(
+        &String,
+        &semantic_data::schema::class::class_attribute::ClassAttribute,
+    )> = class
+        .attributes
+        .iter()
+        .filter(|(_, attr)| attr.computed.is_some())
+        .collect();
+
+    if computed_attrs.is_empty() {
+        return Vec::new();
+    }
+
+    let mut errors = Vec::new();
+    let builtins: std::collections::BTreeSet<&str> = ["stringify"].into_iter().collect();
+
+    for (attr_name, attr) in &computed_attrs {
+        let expr = attr.computed.as_ref().expect("filtered for Some");
+
+        // Validate the expression tree.
+        collect_validation_errors(catalog, class, attr_name, expr, &builtins, &mut errors);
+    }
+
+    // Cycle detection among computed attributes.
+    detect_computed_cycles(class, &computed_attrs, &mut errors);
+
+    errors
+}
+
+fn collect_validation_errors(
+    catalog: &Catalog,
+    class: &semantic_data::schema::class::class_type::ClassType,
+    attr_name: &str,
+    expr: &semantic_data::expr::Expr,
+    builtins: &std::collections::BTreeSet<&str>,
+    errors: &mut Vec<ComputedAttrValidationError>,
+) {
+    use semantic_data::expr::{self, BinaryOperator};
+
+    match expr {
+        expr::Expr::Literal(_) => {}
+        expr::Expr::Ref(ref_expr) => {
+            match ref_expr {
+                expr::RefExpr::Identifier(name) if name == "self" => {
+                    // Bare self is allowed as a null check. Not erroring here.
+                }
+                expr::RefExpr::Identifier(name) => {
+                    errors.push(ComputedAttrValidationError {
+                        attribute: attr_name.to_string(),
+                        message: format!(
+                            "unexpected reference '{}' outside 'self' in computed expression",
+                            name
+                        ),
+                    });
+                }
+                _ => {
+                    errors.push(ComputedAttrValidationError {
+                        attribute: attr_name.to_string(),
+                        message: format!(
+                            "unsupported ref variant {:?} in computed expression",
+                            ref_expr
+                        ),
+                    });
+                }
+            }
+        }
+        expr::Expr::FieldAccess(fa) => {
+            // Resolve self.field
+            if let expr::Expr::Ref(expr::RefExpr::Identifier(name)) = &fa.target {
+                if name != "self" {
+                    errors.push(ComputedAttrValidationError {
+                        attribute: attr_name.to_string(),
+                        message: format!("field access target must be 'self', got '{}'", name),
+                    });
+                }
+            } else {
+                errors.push(ComputedAttrValidationError {
+                    attribute: attr_name.to_string(),
+                    message: "field access target must be a 'self' reference".to_string(),
+                });
+            }
+
+            // Resolve the field name against class attributes (including inherited/extended).
+            let field_exists = resolve_class_field(catalog, class, &fa.field).is_some();
+            if !field_exists {
+                errors.push(ComputedAttrValidationError {
+                    attribute: attr_name.to_string(),
+                    message: format!("field '{}' not found in class '{}'", fa.field, class.id),
+                });
+            }
+        }
+        expr::Expr::Binary(bin) => {
+            // Both operands must be valid expressions.
+            collect_validation_errors(catalog, class, attr_name, &bin.left, builtins, errors);
+            collect_validation_errors(catalog, class, attr_name, &bin.right, builtins, errors);
+
+            // Type inference check for Concat.
+            if bin.op == BinaryOperator::Concat {
+                let left_ty = infer_expr_type(catalog, class, &bin.left);
+                let right_ty = infer_expr_type(catalog, class, &bin.right);
+                if !is_string_type(&left_ty) {
+                    errors.push(ComputedAttrValidationError {
+                        attribute: attr_name.to_string(),
+                        message: format!(
+                            "left operand of concat must be string, got {:?}",
+                            left_ty.map(|t| t.kind)
+                        ),
+                    });
+                }
+                if !is_string_type(&right_ty) {
+                    errors.push(ComputedAttrValidationError {
+                        attribute: attr_name.to_string(),
+                        message: format!(
+                            "right operand of concat must be string, got {:?}",
+                            right_ty.map(|t| t.kind)
+                        ),
+                    });
+                }
+            }
+        }
+        expr::Expr::Unary(unary) => {
+            collect_validation_errors(catalog, class, attr_name, &unary.operand, builtins, errors);
+        }
+        expr::Expr::Call(call) => {
+            match &call.callee {
+                expr::Callee::Name(name) if name.as_slice() == ["stringify"] => {
+                    // Validate args are position-only, single arg.
+                    if call.args.len() != 1 {
+                        errors.push(ComputedAttrValidationError {
+                            attribute: attr_name.to_string(),
+                            message: format!(
+                                "stringify expects exactly 1 argument, got {}",
+                                call.args.len()
+                            ),
+                        });
+                    }
+                    for arg in &call.args {
+                        if let expr::CallArg::Positional(e) = arg {
+                            collect_validation_errors(
+                                catalog, class, attr_name, e, builtins, errors,
+                            );
+                        } else {
+                            errors.push(ComputedAttrValidationError {
+                                attribute: attr_name.to_string(),
+                                message: "named arguments not supported in computed expressions"
+                                    .to_string(),
+                            });
+                        }
+                    }
+                }
+                expr::Callee::Name(name) => {
+                    let fn_name = name.join(".");
+                    if !builtins.contains(fn_name.as_str()) {
+                        errors.push(ComputedAttrValidationError {
+                            attribute: attr_name.to_string(),
+                            message: format!(
+                                "unknown function '{}' in computed expression",
+                                fn_name
+                            ),
+                        });
+                    }
+                }
+                expr::Callee::Expr(_) => {
+                    errors.push(ComputedAttrValidationError {
+                        attribute: attr_name.to_string(),
+                        message: "dynamic callee expressions not supported in computed expressions"
+                            .to_string(),
+                    });
+                }
+            }
+        }
+        expr::Expr::Cast(cast) => {
+            collect_validation_errors(catalog, class, attr_name, &cast.expr, builtins, errors);
+        }
+        expr::Expr::If(if_expr) => {
+            collect_validation_errors(
+                catalog,
+                class,
+                attr_name,
+                &if_expr.condition,
+                builtins,
+                errors,
+            );
+            collect_validation_errors(
+                catalog,
+                class,
+                attr_name,
+                &if_expr.then_expr,
+                builtins,
+                errors,
+            );
+            collect_validation_errors(
+                catalog,
+                class,
+                attr_name,
+                &if_expr.else_expr,
+                builtins,
+                errors,
+            );
+        }
+        expr::Expr::Case(case) => {
+            if let Some(ref operand) = case.operand {
+                collect_validation_errors(catalog, class, attr_name, operand, builtins, errors);
+            }
+            for branch in &case.branches {
+                collect_validation_errors(
+                    catalog,
+                    class,
+                    attr_name,
+                    &branch.when,
+                    builtins,
+                    errors,
+                );
+                collect_validation_errors(
+                    catalog,
+                    class,
+                    attr_name,
+                    &branch.then_expr,
+                    builtins,
+                    errors,
+                );
+            }
+            if let Some(ref else_expr) = case.else_expr {
+                collect_validation_errors(catalog, class, attr_name, else_expr, builtins, errors);
+            }
+        }
+        expr::Expr::Let(let_expr) => {
+            for binding in &let_expr.bindings {
+                collect_validation_errors(
+                    catalog,
+                    class,
+                    attr_name,
+                    &binding.value,
+                    builtins,
+                    errors,
+                );
+            }
+            collect_validation_errors(catalog, class, attr_name, &let_expr.body, builtins, errors);
+        }
+        // Reject prohibited expressions.
+        expr::Expr::Query(_)
+        | expr::Expr::Subquery(_)
+        | expr::Expr::Exists(_)
+        | expr::Expr::In(_)
+        | expr::Expr::Lambda(_)
+        | expr::Expr::Tuple(_)
+        | expr::Expr::List(_)
+        | expr::Expr::Map(_)
+        | expr::Expr::IndexAccess(_)
+        | expr::Expr::Between(_)
+        | expr::Expr::Like(_)
+        | expr::Expr::Regex(_)
+        | expr::Expr::IsNull(_) => {
+            errors.push(ComputedAttrValidationError {
+                attribute: attr_name.to_string(),
+                message: format!(
+                    "{:?} is not allowed in computed expressions",
+                    std::mem::discriminant(expr)
+                ),
+            });
+        }
+    }
+}
+
+/// Resolve a field name against a class's own attributes and inherited/extended classes.
+fn resolve_class_field(
+    catalog: &Catalog,
+    class: &semantic_data::schema::class::class_type::ClassType,
+    field_name: &str,
+) -> Option<()> {
+    use semantic_data::schema::class::class_type::ClassType;
+
+    fn visit(
+        catalog: &Catalog,
+        class: &ClassType,
+        field_name: &str,
+        visited: &mut std::collections::BTreeSet<String>,
+    ) -> Option<()> {
+        if !visited.insert(class.id.clone()) {
+            return None;
+        }
+        // Check own attributes.
+        for (alias, attr) in &class.attributes {
+            if alias == field_name || attr.attribute.id == field_name {
+                return Some(());
+            }
+            // Also check the attribute's resolved canonical id.
+            if let Some(attr_schema) = catalog.attribute_by_id(&attr.attribute.id) {
+                if attr_schema.names.plain_name == field_name
+                    || attr_schema.names.underscore_name == field_name
+                {
+                    return Some(());
+                }
+            }
+        }
+        // Check inherited class.
+        if let Some(inherits) = &class.inherits {
+            if let Some(base_lid) = catalog.class_id(&inherits.id) {
+                if let Some(base_class) = catalog.class_by_lid(base_lid) {
+                    if visit(catalog, &base_class.class, field_name, visited).is_some() {
+                        return Some(());
+                    }
+                }
+            }
+        }
+        // Check extended classes.
+        for ext in &class.extends {
+            if let Some(ext_lid) = catalog.class_id(&ext.id) {
+                if let Some(ext_class) = catalog.class_by_lid(ext_lid) {
+                    if visit(catalog, &ext_class.class, field_name, visited).is_some() {
+                        return Some(());
+                    }
+                }
+            }
+        }
+        None
+    }
+
+    let mut visited = std::collections::BTreeSet::new();
+    visit(catalog, class, field_name, &mut visited)
+}
+
+/// Minimal type inference for expressions in computed attributes.
+fn infer_expr_type(
+    catalog: &Catalog,
+    class: &semantic_data::schema::class::class_type::ClassType,
+    expr: &semantic_data::expr::Expr,
+) -> Option<semantic_data::schema::core::type_node::Type> {
+    use semantic_data::{
+        expr::{self, BinaryOperator},
+        schema::{
+            core::{type_kind::TypeKind as TK, type_node::Type},
+            primitives::string_type::StringType,
+        },
+    };
+
+    match expr {
+        expr::Expr::Literal(lit) => match &lit.value {
+            semantic_data::schema::core::literal_value::LiteralValue::String(_) => {
+                return Some(Type {
+                    kind: TK::String(StringType {
+                        format: None,
+                        normalization: None,
+                    }),
+                    constraints: vec![],
+                    annotations: vec![],
+                });
+            }
+            _ => return None,
+        },
+        expr::Expr::Ref(expr::RefExpr::Identifier(name)) if name == "self" => {
+            return None;
+        }
+        expr::Expr::FieldAccess(fa) => {
+            if let expr::Expr::Ref(expr::RefExpr::Identifier(n)) = &fa.target {
+                if n == "self" {
+                    let mut visited = std::collections::BTreeSet::new();
+                    return resolve_field_type(catalog, class, &fa.field, &mut visited);
+                }
+            }
+            return None;
+        }
+        expr::Expr::Binary(bin) => {
+            if bin.op == BinaryOperator::Concat {
+                let left = infer_expr_type(catalog, class, &bin.left);
+                let right = infer_expr_type(catalog, class, &bin.right);
+                if left.is_some() || right.is_some() {
+                    return Some(Type {
+                        kind: TK::String(StringType {
+                            format: None,
+                            normalization: None,
+                        }),
+                        constraints: vec![],
+                        annotations: vec![],
+                    });
+                }
+            }
+        }
+        expr::Expr::Call(call) => {
+            if matches!(&call.callee, expr::Callee::Name(name) if name.as_slice() == ["stringify"])
+            {
+                return Some(Type {
+                    kind: TK::String(StringType {
+                        format: None,
+                        normalization: None,
+                    }),
+                    constraints: vec![],
+                    annotations: vec![],
+                });
+            }
+        }
+        _ => {}
+    }
+    None
+}
+
+fn is_string_type(ty: &Option<Type>) -> bool {
+    ty.as_ref()
+        .is_some_and(|t| matches!(t.kind, TypeKind::String(_)))
+}
+
+fn resolve_field_type(
+    catalog: &Catalog,
+    class: &semantic_data::schema::class::class_type::ClassType,
+    field_name: &str,
+    visited: &mut std::collections::BTreeSet<String>,
+) -> Option<Type> {
+    if !visited.insert(class.id.clone()) {
+        return None;
+    }
+    // Check own attributes.
+    for (alias, attr) in &class.attributes {
+        if alias == field_name || attr.attribute.id == field_name {
+            if let Some(attr_schema) = catalog.attribute_by_id(&attr.attribute.id) {
+                return Some(attr_schema.attribute.ty.clone());
+            }
+        }
+        // Also check aliases.
+        if let Some(attr_schema) = catalog.attribute_by_id(&attr.attribute.id) {
+            if attr_schema.names.plain_name == field_name
+                || attr_schema.names.underscore_name == field_name
+            {
+                return Some(attr_schema.attribute.ty.clone());
+            }
+        }
+    }
+    // Check inherited class.
+    if let Some(inherits) = &class.inherits {
+        if let Some(base_lid) = catalog.class_id(&inherits.id) {
+            if let Some(base_class) = catalog.class_by_lid(base_lid) {
+                if let Some(ty) =
+                    resolve_field_type(catalog, &base_class.class, field_name, visited)
+                {
+                    return Some(ty);
+                }
+            }
+        }
+    }
+    // Check extended classes.
+    for ext in &class.extends {
+        if let Some(ext_lid) = catalog.class_id(&ext.id) {
+            if let Some(ext_class) = catalog.class_by_lid(ext_lid) {
+                if let Some(ty) = resolve_field_type(catalog, &ext_class.class, field_name, visited)
+                {
+                    return Some(ty);
+                }
+            }
+        }
+    }
+    None
+}
+
+/// Detect cycles among computed attributes.
+fn detect_computed_cycles(
+    _class: &semantic_data::schema::class::class_type::ClassType,
+    computed_attrs: &[(
+        &String,
+        &semantic_data::schema::class::class_attribute::ClassAttribute,
+    )],
+    errors: &mut Vec<ComputedAttrValidationError>,
+) {
+    use std::collections::{BTreeMap, BTreeSet};
+
+    // Build a dependency graph: computed_attr_name -> fields it references.
+    let mut deps: BTreeMap<String, Vec<String>> = BTreeMap::new();
+
+    for (attr_name, attr) in computed_attrs {
+        let expr = attr.computed.as_ref().expect("filtered for Some");
+        let mut refs = Vec::new();
+        collect_field_refs_owned(expr, &mut refs);
+        deps.insert(attr_name.to_string(), refs);
+    }
+
+    // Check for cycles using DFS.
+    for attr_name in deps.keys().cloned().collect::<Vec<_>>() {
+        if has_cycle_owned(&attr_name, &attr_name, &deps, &mut BTreeSet::new()) {
+            errors.push(ComputedAttrValidationError {
+                attribute: attr_name,
+                message: "computed attribute contains a cycle (directly or transitively references itself)".to_string(),
+            });
+        }
+    }
+}
+
+fn collect_field_refs_owned(expr: &semantic_data::expr::Expr, refs: &mut Vec<String>) {
+    use semantic_data::expr::{self, Expr as E};
+    match expr {
+        E::FieldAccess(fa) => {
+            if let E::Ref(expr::RefExpr::Identifier(name)) = &fa.target {
+                if name == "self" {
+                    refs.push(fa.field.clone());
+                }
+            }
+            collect_field_refs_owned(&fa.target, refs);
+        }
+        E::Literal(_) | E::Ref(_) => {}
+        E::Unary(unary) => collect_field_refs_owned(&unary.operand, refs),
+        E::Binary(bin) => {
+            collect_field_refs_owned(&bin.left, refs);
+            collect_field_refs_owned(&bin.right, refs);
+        }
+        E::Call(call) => {
+            for arg in &call.args {
+                if let expr::CallArg::Positional(e) = arg {
+                    collect_field_refs_owned(e, refs);
+                }
+            }
+        }
+        E::Cast(cast) => collect_field_refs_owned(&cast.expr, refs),
+        E::If(if_expr) => {
+            collect_field_refs_owned(&if_expr.condition, refs);
+            collect_field_refs_owned(&if_expr.then_expr, refs);
+            collect_field_refs_owned(&if_expr.else_expr, refs);
+        }
+        E::Case(case) => {
+            if let Some(ref operand) = case.operand {
+                collect_field_refs_owned(operand, refs);
+            }
+            for branch in &case.branches {
+                collect_field_refs_owned(&branch.when, refs);
+                collect_field_refs_owned(&branch.then_expr, refs);
+            }
+            if let Some(ref else_expr) = case.else_expr {
+                collect_field_refs_owned(else_expr, refs);
+            }
+        }
+        E::Let(let_expr) => {
+            for binding in &let_expr.bindings {
+                collect_field_refs_owned(&binding.value, refs);
+            }
+            collect_field_refs_owned(&let_expr.body, refs);
+        }
+        E::Tuple(tuple) => {
+            for item in &tuple.items {
+                collect_field_refs_owned(item, refs);
+            }
+        }
+        E::List(list) => {
+            for item in &list.items {
+                collect_field_refs_owned(item, refs);
+            }
+        }
+        E::Map(map) => {
+            for entry in &map.entries {
+                collect_field_refs_owned(&entry.key, refs);
+                collect_field_refs_owned(&entry.value, refs);
+            }
+        }
+        E::IndexAccess(ia) => {
+            collect_field_refs_owned(&ia.target, refs);
+            collect_field_refs_owned(&ia.index, refs);
+        }
+        E::Between(between) => {
+            collect_field_refs_owned(&between.value, refs);
+            collect_field_refs_owned(&between.lower, refs);
+            collect_field_refs_owned(&between.upper, refs);
+        }
+        E::In(in_expr) => {
+            collect_field_refs_owned(&in_expr.value, refs);
+            if let expr::InSet::Exprs(items) = &in_expr.set {
+                for item in items {
+                    collect_field_refs_owned(item, refs);
+                }
+            }
+        }
+        E::Like(like) => {
+            collect_field_refs_owned(&like.value, refs);
+            collect_field_refs_owned(&like.pattern, refs);
+        }
+        E::Regex(regex) => {
+            collect_field_refs_owned(&regex.value, refs);
+            collect_field_refs_owned(&regex.pattern, refs);
+        }
+        E::IsNull(is_null) => collect_field_refs_owned(&is_null.value, refs),
+        E::Exists(_) => {}
+        E::Query(_) | E::Subquery(_) | E::Lambda(_) => {}
+    }
+}
+
+fn has_cycle_owned(
+    start: &str,
+    current: &str,
+    deps: &std::collections::BTreeMap<String, Vec<String>>,
+    visited: &mut std::collections::BTreeSet<String>,
+) -> bool {
+    if !visited.insert(current.to_string()) {
+        return current == start;
+    }
+
+    if let Some(refs) = deps.get(current) {
+        for dep in refs {
+            if deps.contains_key(dep.as_str()) {
+                if dep == start || has_cycle_owned(start, dep, deps, visited) {
+                    return true;
+                }
+            }
+        }
+    }
+
+    false
+}
+
 #[cfg(test)]
 mod tests {
     use std::collections::BTreeMap;
@@ -509,6 +1150,7 @@ mod tests {
                             id: "semantic:title".to_string(),
                         },
                         required: false,
+                        computed: None,
                         constraints: vec![],
                         meta: Meta::default(),
                     },

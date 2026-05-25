@@ -355,8 +355,12 @@ impl<E: KvEngine> KvDb<E> {
             .as_ref()
             .map(|value| value as &dyn semantic_db_core::StatsProvider);
         let pair = optimizer.optimize_query(&query, Some(source.clone()), stats_provider, &context);
-        let rows = self.execute_physical_plan(&pair.physical, Some(source.as_str()))?;
+        let mut rows = self.execute_physical_plan(&pair.physical, Some(source.as_str()))?;
         let catalog = self.catalog();
+        // Inject computed attributes.
+        for row in &mut rows {
+            let _ = semantic_db_core::inject_computed_attributes(catalog.as_ref(), row);
+        }
         Ok(self.format_output_rows(catalog.as_ref(), rows, query.field_format))
     }
 
@@ -3032,6 +3036,7 @@ mod tests {
                     id: "core.title".to_string(),
                 },
                 required: true,
+                computed: None,
                 constraints: vec![],
                 meta: Meta::default(),
             },
