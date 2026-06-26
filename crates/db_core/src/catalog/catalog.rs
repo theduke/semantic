@@ -2,7 +2,7 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use fnv::FnvHashMap;
 use semantic_data::schema::{
-    IndexKind, Package,
+    IndexKind, Package, VariantPayload,
     attribute::attribute_type::AttributeType,
     class::class_type::ClassType,
     collections::key_path::KeyPath,
@@ -1802,6 +1802,11 @@ fn normalize_type_def(mut type_def: TypeDef) -> TypeDef {
     let module = type_def.module.clone();
     let names = nameset_for_identifier(&type_def.name, module.as_deref());
     type_def.name = names.qualified_name.clone();
+    type_def.params = type_def
+        .params
+        .into_iter()
+        .map(|param| normalize_type_param(param, module.as_deref()))
+        .collect();
 
     type_def.ty = normalize_type(type_def.ty, module.as_deref());
     match &mut type_def.ty.kind {
@@ -1846,6 +1851,10 @@ fn normalize_type(mut ty: Type, module: Option<&str>) -> Type {
             list.items = Box::new(normalize_type(*list.items, module));
             TypeKind::List(list)
         }
+        TypeKind::Set(mut set) => {
+            set.items = Box::new(normalize_type(*set.items, module));
+            TypeKind::Set(set)
+        }
         TypeKind::Tuple(mut tuple) => {
             tuple.items = tuple
                 .items
@@ -1862,13 +1871,131 @@ fn normalize_type(mut ty: Type, module: Option<&str>) -> Type {
             map.values = Box::new(normalize_type(*map.values, module));
             TypeKind::Map(map)
         }
-        TypeKind::Ref(mut type_ref) => {
-            type_ref.name = nameset_for_identifier(&type_ref.name, module).qualified_name;
-            TypeKind::Ref(type_ref)
+        TypeKind::Record(mut record) => {
+            for field in record.fields.values_mut() {
+                field.ty = normalize_type(field.ty.clone(), module);
+            }
+            record.additional = record
+                .additional
+                .map(|additional| Box::new(normalize_type(*additional, module)));
+            TypeKind::Record(record)
         }
+        TypeKind::Attribute(mut attribute) => {
+            attribute.ty = normalize_type(attribute.ty.clone(), module);
+            TypeKind::Attribute(attribute)
+        }
+        TypeKind::Class(class) => TypeKind::Class(normalize_class_type(class, module)),
+        TypeKind::Union(mut union) => {
+            union.variants = union
+                .variants
+                .into_iter()
+                .map(|variant| normalize_type(variant, module))
+                .collect();
+            TypeKind::Union(union)
+        }
+        TypeKind::Intersection(mut intersection) => {
+            intersection.variants = intersection
+                .variants
+                .into_iter()
+                .map(|variant| normalize_type(variant, module))
+                .collect();
+            TypeKind::Intersection(intersection)
+        }
+        TypeKind::Variant(mut variant) => {
+            for case in &mut variant.variants {
+                case.payload = normalize_variant_payload(case.payload.clone(), module);
+            }
+            TypeKind::Variant(variant)
+        }
+        TypeKind::Result(mut result) => {
+            result.ok = Box::new(normalize_type(*result.ok, module));
+            result.err = Box::new(normalize_type(*result.err, module));
+            TypeKind::Result(result)
+        }
+        TypeKind::Function(function) => {
+            TypeKind::Function(normalize_function_type(function, module))
+        }
+        TypeKind::Interface(mut interface) => {
+            for method in &mut interface.methods {
+                method.signature = normalize_function_type(method.signature.clone(), module);
+            }
+            TypeKind::Interface(interface)
+        }
+        TypeKind::Handle(mut handle) => {
+            handle.interface = normalize_type_ref(handle.interface, module);
+            TypeKind::Handle(handle)
+        }
+        TypeKind::Stream(mut stream) => {
+            stream.element = Box::new(normalize_type(*stream.element, module));
+            stream.end = stream.end.map(|end| Box::new(normalize_type(*end, module)));
+            TypeKind::Stream(stream)
+        }
+        TypeKind::Ref(type_ref) => TypeKind::Ref(normalize_type_ref(type_ref, module)),
         kind => kind,
     };
     ty
+}
+
+fn normalize_type_param(mut param: TypeParam, module: Option<&str>) -> TypeParam {
+    param.bounds = param
+        .bounds
+        .into_iter()
+        .map(|bound| normalize_type_ref(bound, module))
+        .collect();
+    param.default = param.default.map(|default| normalize_type(default, module));
+    param
+}
+
+fn normalize_type_ref(mut type_ref: TypeRef, module: Option<&str>) -> TypeRef {
+    type_ref.name = nameset_for_identifier(&type_ref.name, module).qualified_name;
+    type_ref.args = type_ref
+        .args
+        .into_iter()
+        .map(|arg| normalize_type(arg, module))
+        .collect();
+    type_ref
+}
+
+fn normalize_variant_payload(payload: VariantPayload, module: Option<&str>) -> VariantPayload {
+    match payload {
+        VariantPayload::Unit => VariantPayload::Unit,
+        VariantPayload::Tuple(items) => VariantPayload::Tuple(
+            items
+                .into_iter()
+                .map(|item| normalize_type(item, module))
+                .collect(),
+        ),
+        VariantPayload::Record(mut record) => {
+            for field in record.fields.values_mut() {
+                field.ty = normalize_type(field.ty.clone(), module);
+            }
+            record.additional = record
+                .additional
+                .map(|additional| Box::new(normalize_type(*additional, module)));
+            VariantPayload::Record(record)
+        }
+        VariantPayload::Newtype(inner) => {
+            VariantPayload::Newtype(Box::new(normalize_type(*inner, module)))
+        }
+    }
+}
+
+fn normalize_function_type(
+    mut function: semantic_data::schema::FunctionType,
+    module: Option<&str>,
+) -> semantic_data::schema::FunctionType {
+    for param in &mut function.params {
+        param.ty = normalize_type(param.ty.clone(), module);
+    }
+    function.results = function
+        .results
+        .into_iter()
+        .map(|result| normalize_type(result, module))
+        .collect();
+    function.throws = function
+        .throws
+        .map(|throws| Box::new(normalize_type(*throws, module)));
+    function
 }
 
 fn package_nameset(name: &str) -> NameSet {
@@ -1888,5 +2015,76 @@ fn verbatim_nameset(name: &str) -> NameSet {
         qualified_name: name.to_string(),
         plain_name: name.to_string(),
         underscore_name: name.replace(':', "_"),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use semantic_data::schema::{record::field::Field, union::union_type::UnionType};
+
+    use super::*;
+
+    #[test]
+    fn normalize_type_def_qualifies_nested_record_and_union_refs() {
+        let normalized = normalize_type_def(TypeDef {
+            name: "Container".to_string(),
+            module: Some("inventory".to_string()),
+            params: Vec::new(),
+            ty: Type {
+                kind: TypeKind::Record(RecordType {
+                    fields: BTreeMap::from([(
+                        "item".to_string(),
+                        Field {
+                            ty: ref_type("Item"),
+                            required: true,
+                            readonly: false,
+                            writeonly: false,
+                            default: None,
+                            meta: Meta::default(),
+                        },
+                    )]),
+                    open: true,
+                    additional: Some(Box::new(Type {
+                        kind: TypeKind::Union(UnionType {
+                            variants: vec![ref_type("Fallback")],
+                        }),
+                        constraints: vec![],
+                        annotations: vec![],
+                    })),
+                    required_order: None,
+                }),
+                constraints: vec![],
+                annotations: vec![],
+            },
+            visibility: Visibility::Public,
+            meta: Meta::default(),
+        });
+
+        let TypeKind::Record(record) = &normalized.ty.kind else {
+            panic!("expected record type");
+        };
+        let TypeKind::Ref(type_ref) = &record.fields["item"].ty.kind else {
+            panic!("expected record field ref");
+        };
+        assert_eq!(type_ref.name, "local:inventory:Item");
+
+        let TypeKind::Union(union) = &record.additional.as_ref().unwrap().kind else {
+            panic!("expected additional union");
+        };
+        let TypeKind::Ref(type_ref) = &union.variants[0].kind else {
+            panic!("expected union variant ref");
+        };
+        assert_eq!(type_ref.name, "local:inventory:Fallback");
+    }
+
+    fn ref_type(name: &str) -> Type {
+        Type {
+            kind: TypeKind::Ref(TypeRef {
+                name: name.to_string(),
+                args: vec![],
+            }),
+            constraints: vec![],
+            annotations: vec![],
+        }
     }
 }
