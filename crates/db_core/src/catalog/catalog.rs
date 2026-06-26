@@ -1511,6 +1511,10 @@ impl Catalog {
             })
             .collect::<Vec<_>>();
 
+        for (_, type_def) in self.type_defs() {
+            validate_type_def_invariants(&type_def.type_def)?;
+        }
+
         self.attributes = IdMap::new();
         self.record_types = IdMap::new();
         self.classes = IdMap::new();
@@ -1548,6 +1552,11 @@ impl Catalog {
                 },
             );
         }
+
+        for class in &projected_classes {
+            validate_class_attribute_resolution(&class, self)?;
+        }
+        validate_class_graph_invariants(projected_classes.iter())?;
 
         for class in projected_classes {
             let lid = legacy_class_ids
@@ -1998,6 +2007,537 @@ fn normalize_function_type(
     function
 }
 
+fn validate_type_def_invariants(type_def: &TypeDef) -> Result<(), CatalogError> {
+    validate_type_invariants(&type_def.ty, &format!("type '{}'", type_def.name))
+}
+
+fn validate_type_invariants(ty: &Type, context: &str) -> Result<(), CatalogError> {
+    validate_constraints(&ty.constraints, context)?;
+    match &ty.kind {
+        TypeKind::Number(number) => validate_number_type(number, context)?,
+        TypeKind::Array(array) => {
+            if let Some(length) = &array.length {
+                validate_length_spec(length, context)?;
+            }
+            validate_type_invariants(&array.items, &format!("{context} array item"))?;
+        }
+        TypeKind::Optional(optional) => {
+            validate_type_invariants(&optional.inner, &format!("{context} optional inner"))?;
+        }
+        TypeKind::List(list) => {
+            validate_type_invariants(&list.items, &format!("{context} list item"))?;
+        }
+        TypeKind::Set(set) => {
+            validate_type_invariants(&set.items, &format!("{context} set item"))?;
+        }
+        TypeKind::Tuple(tuple) => {
+            for (index, item) in tuple.items.iter().enumerate() {
+                validate_type_invariants(item, &format!("{context} tuple item {index}"))?;
+            }
+            if let Some(rest) = &tuple.rest {
+                validate_type_invariants(rest, &format!("{context} tuple rest"))?;
+            }
+        }
+        TypeKind::Map(map) => {
+            validate_type_invariants(&map.keys, &format!("{context} map key"))?;
+            validate_type_invariants(&map.values, &format!("{context} map value"))?;
+        }
+        TypeKind::Record(record) => validate_record_invariants(record, context)?,
+        TypeKind::Attribute(attribute) => {
+            if attribute.id.trim().is_empty() {
+                return invalid_schema(format!("{context} has an empty attribute id"));
+            }
+            validate_constraints(&attribute.constraints, context)?;
+            validate_type_invariants(&attribute.ty, &format!("{context} attribute type"))?;
+        }
+        TypeKind::Class(class) => validate_class_shape_invariants(class, context)?,
+        TypeKind::Union(union) => {
+            if union.variants.is_empty() {
+                return invalid_schema(format!("{context} union has no variants"));
+            }
+            for (index, variant) in union.variants.iter().enumerate() {
+                validate_type_invariants(variant, &format!("{context} union variant {index}"))?;
+            }
+        }
+        TypeKind::Intersection(intersection) => {
+            if intersection.variants.is_empty() {
+                return invalid_schema(format!("{context} intersection has no variants"));
+            }
+            for (index, variant) in intersection.variants.iter().enumerate() {
+                validate_type_invariants(
+                    variant,
+                    &format!("{context} intersection variant {index}"),
+                )?;
+            }
+        }
+        TypeKind::Variant(variant) => validate_variant_invariants(variant, context)?,
+        TypeKind::Enum(enum_type) => validate_enum_invariants(enum_type, context)?,
+        TypeKind::Result(result) => {
+            validate_type_invariants(&result.ok, &format!("{context} result ok"))?;
+            validate_type_invariants(&result.err, &format!("{context} result err"))?;
+        }
+        TypeKind::Function(function) => validate_function_invariants(function, context)?,
+        TypeKind::Interface(interface) => {
+            for method in &interface.methods {
+                validate_function_invariants(&method.signature, context)?;
+            }
+        }
+        TypeKind::Stream(stream) => {
+            validate_type_invariants(&stream.element, &format!("{context} stream element"))?;
+            if let Some(end) = &stream.end {
+                validate_type_invariants(end, &format!("{context} stream end"))?;
+            }
+        }
+        TypeKind::Ref(type_ref) => {
+            for arg in &type_ref.args {
+                validate_type_invariants(arg, &format!("{context} ref arg"))?;
+            }
+        }
+        TypeKind::Any(_)
+        | TypeKind::Never(_)
+        | TypeKind::Unknown(_)
+        | TypeKind::Null(_)
+        | TypeKind::Bool(_)
+        | TypeKind::Char(_)
+        | TypeKind::String(_)
+        | TypeKind::Bytes(_)
+        | TypeKind::Temporal(_)
+        | TypeKind::Uuid
+        | TypeKind::IpAddr(_)
+        | TypeKind::Json
+        | TypeKind::Handle(_)
+        | TypeKind::Opaque(_)
+        | TypeKind::Extension(_) => {}
+    }
+    Ok(())
+}
+
+fn validate_record_invariants(
+    record: &semantic_data::schema::RecordType,
+    context: &str,
+) -> Result<(), CatalogError> {
+    if !record.open && record.additional.is_some() {
+        return invalid_schema(format!(
+            "{context} is closed but declares additional fields"
+        ));
+    }
+    if let Some(required_order) = &record.required_order {
+        let mut seen = BTreeSet::new();
+        for field_name in required_order {
+            if !record.fields.contains_key(field_name) {
+                return invalid_schema(format!(
+                    "{context} required_order references unknown field '{field_name}'"
+                ));
+            }
+            if !seen.insert(field_name) {
+                return invalid_schema(format!(
+                    "{context} required_order contains duplicate field '{field_name}'"
+                ));
+            }
+        }
+    }
+    for (field_name, field) in &record.fields {
+        if field.readonly && field.writeonly {
+            return invalid_schema(format!(
+                "{context} field '{field_name}' is both readonly and writeonly"
+            ));
+        }
+        if let Some(default) = &field.default {
+            if !literal_matches_type(default, &field.ty) {
+                return invalid_schema(format!(
+                    "{context} field '{field_name}' default does not match its type"
+                ));
+            }
+        }
+        validate_type_invariants(&field.ty, &format!("{context} field '{field_name}'"))?;
+    }
+    if let Some(additional) = &record.additional {
+        validate_type_invariants(additional, &format!("{context} additional field"))?;
+    }
+    Ok(())
+}
+
+fn validate_class_shape_invariants(class: &ClassType, context: &str) -> Result<(), CatalogError> {
+    if class.id.trim().is_empty() {
+        return invalid_schema(format!("{context} has an empty class id"));
+    }
+    if class.name.trim().is_empty() {
+        return invalid_schema(format!("class '{}' has an empty name", class.id));
+    }
+    for (alias, class_attr) in &class.attributes {
+        if alias.trim().is_empty() {
+            return invalid_schema(format!("class '{}' has an empty attribute alias", class.id));
+        }
+        if class_attr.attribute.id.trim().is_empty() {
+            return invalid_schema(format!(
+                "class '{}' attribute alias '{alias}' has an empty attribute id",
+                class.id
+            ));
+        }
+        validate_constraints(
+            &class_attr.constraints,
+            &format!("class '{}' attribute '{alias}'", class.id),
+        )?;
+    }
+    Ok(())
+}
+
+fn validate_class_attribute_resolution(
+    class: &ClassType,
+    catalog: &Catalog,
+) -> Result<(), CatalogError> {
+    validate_class_shape_invariants(class, &format!("class '{}'", class.id))?;
+    let mut seen_attribute_ids = BTreeSet::new();
+    let mut seen_aliases = BTreeMap::<String, String>::new();
+    for (alias, class_attr) in &class.attributes {
+        let attr = catalog
+            .attribute_by_id(&class_attr.attribute.id)
+            .ok_or_else(|| CatalogError::UnknownAttribute {
+                id: class_attr.attribute.id.clone(),
+            })?;
+        if !seen_attribute_ids.insert(attr.attribute.id.clone()) {
+            return invalid_schema(format!(
+                "class '{}' declares attribute '{}' more than once",
+                class.id, attr.attribute.id
+            ));
+        }
+        for candidate in [
+            alias.as_str(),
+            class_attr.attribute.id.as_str(),
+            attr.names.plain_name.as_str(),
+            attr.names.underscore_name.as_str(),
+        ] {
+            if let Some(existing) = seen_aliases.get(candidate) {
+                if existing != &attr.attribute.id {
+                    return invalid_schema(format!(
+                        "class '{}' attribute alias '{}' collides between '{}' and '{}'",
+                        class.id, candidate, existing, attr.attribute.id
+                    ));
+                }
+            } else {
+                seen_aliases.insert(candidate.to_string(), attr.attribute.id.clone());
+            }
+        }
+    }
+    Ok(())
+}
+
+fn validate_class_graph_invariants<'a>(
+    classes: impl IntoIterator<Item = &'a ClassType>,
+) -> Result<(), CatalogError> {
+    let classes = classes
+        .into_iter()
+        .map(|class| (class.id.as_str(), class))
+        .collect::<BTreeMap<_, _>>();
+    let mut visited = BTreeSet::new();
+    let mut visiting = BTreeSet::new();
+    for class_id in classes.keys() {
+        validate_class_graph_visit(class_id, &classes, &mut visiting, &mut visited)?;
+    }
+    Ok(())
+}
+
+fn validate_class_graph_visit<'a>(
+    class_id: &'a str,
+    classes: &BTreeMap<&'a str, &'a ClassType>,
+    visiting: &mut BTreeSet<&'a str>,
+    visited: &mut BTreeSet<&'a str>,
+) -> Result<(), CatalogError> {
+    if visited.contains(class_id) {
+        return Ok(());
+    }
+    if !visiting.insert(class_id) {
+        return invalid_schema(format!("class inheritance cycle includes '{class_id}'"));
+    }
+    let Some(class) = classes.get(class_id) else {
+        return Ok(());
+    };
+    if let Some(inherits) = &class.inherits {
+        if classes.contains_key(inherits.id.as_str()) {
+            validate_class_graph_visit(inherits.id.as_str(), classes, visiting, visited)?;
+        }
+    }
+    for extends in &class.extends {
+        if classes.contains_key(extends.id.as_str()) {
+            validate_class_graph_visit(extends.id.as_str(), classes, visiting, visited)?;
+        }
+    }
+    visiting.remove(class_id);
+    visited.insert(class_id);
+    Ok(())
+}
+
+fn validate_enum_invariants(
+    enum_type: &semantic_data::schema::EnumType,
+    context: &str,
+) -> Result<(), CatalogError> {
+    if enum_type.variants.is_empty() {
+        return invalid_schema(format!("{context} enum has no variants"));
+    }
+    let mut names = BTreeSet::new();
+    let mut values = BTreeSet::new();
+    let mut symbols = BTreeSet::new();
+    for variant in &enum_type.variants {
+        if variant.name.trim().is_empty() {
+            return invalid_schema(format!("{context} enum has an empty variant name"));
+        }
+        if !names.insert(variant.name.as_str()) {
+            return invalid_schema(format!(
+                "{context} enum has duplicate variant '{}'",
+                variant.name
+            ));
+        }
+        if let Some(value) = variant.value {
+            if !values.insert(value) {
+                return invalid_schema(format!("{context} enum has duplicate value {value}"));
+            }
+        }
+        if let Some(symbol) = &variant.symbol {
+            if !symbols.insert(symbol.as_str()) {
+                return invalid_schema(format!("{context} enum has duplicate symbol '{symbol}'"));
+            }
+        }
+    }
+    Ok(())
+}
+
+fn validate_variant_invariants(
+    variant_type: &semantic_data::schema::VariantType,
+    context: &str,
+) -> Result<(), CatalogError> {
+    if variant_type.variants.is_empty() {
+        return invalid_schema(format!("{context} variant has no cases"));
+    }
+    let mut names = BTreeSet::new();
+    let mut discriminants = BTreeSet::new();
+    for case in &variant_type.variants {
+        if case.name.trim().is_empty() {
+            return invalid_schema(format!("{context} variant has an empty case name"));
+        }
+        if !names.insert(case.name.as_str()) {
+            return invalid_schema(format!(
+                "{context} variant has duplicate case '{}'",
+                case.name
+            ));
+        }
+        if let Some(discriminant) = &case.discriminant {
+            if !discriminants.insert(discriminant) {
+                return invalid_schema(format!(
+                    "{context} variant has duplicate discriminant for case '{}'",
+                    case.name
+                ));
+            }
+        }
+        match &case.payload {
+            VariantPayload::Unit => {}
+            VariantPayload::Tuple(items) => {
+                for (index, item) in items.iter().enumerate() {
+                    validate_type_invariants(
+                        item,
+                        &format!("{context} variant case '{}' tuple item {index}", case.name),
+                    )?;
+                }
+            }
+            VariantPayload::Record(record) => validate_record_invariants(
+                record,
+                &format!("{context} variant case '{}' record", case.name),
+            )?,
+            VariantPayload::Newtype(inner) => validate_type_invariants(
+                inner,
+                &format!("{context} variant case '{}' payload", case.name),
+            )?,
+        }
+    }
+    Ok(())
+}
+
+fn validate_function_invariants(
+    function: &semantic_data::schema::FunctionType,
+    context: &str,
+) -> Result<(), CatalogError> {
+    for param in &function.params {
+        let name = param.name.as_deref().unwrap_or("<anonymous>");
+        validate_type_invariants(&param.ty, &format!("{context} function param '{name}'"))?;
+    }
+    for (index, result) in function.results.iter().enumerate() {
+        validate_type_invariants(result, &format!("{context} function result {index}"))?;
+    }
+    if let Some(throws) = &function.throws {
+        validate_type_invariants(throws, &format!("{context} function throws"))?;
+    }
+    Ok(())
+}
+
+fn validate_number_type(
+    number: &semantic_data::schema::NumberType,
+    context: &str,
+) -> Result<(), CatalogError> {
+    match number {
+        semantic_data::schema::NumberType::BigInt(big_int) => {
+            validate_bit_range(big_int.min_bits, big_int.max_bits, context)?;
+        }
+        semantic_data::schema::NumberType::BigUInt(big_uint) => {
+            validate_bit_range(big_uint.min_bits, big_uint.max_bits, context)?;
+        }
+        semantic_data::schema::NumberType::Decimal(decimal) => {
+            if decimal.precision == Some(0) {
+                return invalid_schema(format!(
+                    "{context} decimal precision must be greater than 0"
+                ));
+            }
+            if let (Some(precision), Some(scale)) = (decimal.precision, decimal.scale) {
+                if scale >= 0 && scale as u32 > precision {
+                    return invalid_schema(format!(
+                        "{context} decimal scale must not exceed precision"
+                    ));
+                }
+            }
+        }
+        _ => {}
+    }
+    Ok(())
+}
+
+fn validate_bit_range(
+    min_bits: Option<u32>,
+    max_bits: Option<u32>,
+    context: &str,
+) -> Result<(), CatalogError> {
+    if min_bits == Some(0) || max_bits == Some(0) {
+        return invalid_schema(format!("{context} bit widths must be greater than 0"));
+    }
+    if let (Some(min), Some(max)) = (min_bits, max_bits) {
+        if min > max {
+            return invalid_schema(format!("{context} min_bits must not exceed max_bits"));
+        }
+    }
+    Ok(())
+}
+
+fn validate_constraints(
+    constraints: &[semantic_data::schema::Constraint],
+    context: &str,
+) -> Result<(), CatalogError> {
+    let mut min_items = None;
+    let mut max_items = None;
+    let mut min_properties = None;
+    let mut max_properties = None;
+    for constraint in constraints {
+        match constraint {
+            semantic_data::schema::Constraint::Length(length) => {
+                validate_length_spec(length, context)?;
+            }
+            semantic_data::schema::Constraint::Precision { precision, scale } => {
+                if *precision == 0 {
+                    return invalid_schema(format!("{context} precision must be greater than 0"));
+                }
+                if scale > precision {
+                    return invalid_schema(format!("{context} scale must not exceed precision"));
+                }
+            }
+            semantic_data::schema::Constraint::MinItems(value) => min_items = Some(*value),
+            semantic_data::schema::Constraint::MaxItems(value) => max_items = Some(*value),
+            semantic_data::schema::Constraint::MinProperties(value) => {
+                min_properties = Some(*value)
+            }
+            semantic_data::schema::Constraint::MaxProperties(value) => {
+                max_properties = Some(*value)
+            }
+            semantic_data::schema::Constraint::Index { fields, .. } => {
+                if fields.is_empty() {
+                    return invalid_schema(format!("{context} index constraint has no fields"));
+                }
+            }
+            _ => {}
+        }
+    }
+    if let (Some(min), Some(max)) = (min_items, max_items) {
+        if min > max {
+            return invalid_schema(format!("{context} MinItems must not exceed MaxItems"));
+        }
+    }
+    if let (Some(min), Some(max)) = (min_properties, max_properties) {
+        if min > max {
+            return invalid_schema(format!(
+                "{context} MinProperties must not exceed MaxProperties"
+            ));
+        }
+    }
+    Ok(())
+}
+
+fn validate_length_spec(
+    length: &semantic_data::schema::LengthSpec,
+    context: &str,
+) -> Result<(), CatalogError> {
+    if let semantic_data::schema::LengthSpec::Range {
+        min: Some(min),
+        max: Some(max),
+    } = length
+    {
+        if min > max {
+            return invalid_schema(format!("{context} length min must not exceed max"));
+        }
+    }
+    Ok(())
+}
+
+fn literal_matches_type(value: &semantic_data::schema::LiteralValue, ty: &Type) -> bool {
+    use semantic_data::schema::LiteralValue;
+
+    match (&ty.kind, value) {
+        (_, LiteralValue::Null) => matches!(
+            ty.kind,
+            TypeKind::Null(_) | TypeKind::Optional(_) | TypeKind::Any(_) | TypeKind::Unknown(_)
+        ),
+        (TypeKind::Any(_) | TypeKind::Unknown(_) | TypeKind::Json, _) => true,
+        (TypeKind::Bool(_), LiteralValue::Bool(_)) => true,
+        (TypeKind::Char(_), LiteralValue::String(value)) => value.chars().count() == 1,
+        (TypeKind::String(_), LiteralValue::String(_)) => true,
+        (TypeKind::Bytes(_), LiteralValue::Bytes(_)) => true,
+        (TypeKind::Number(number), LiteralValue::Int(_)) => !matches!(
+            number,
+            semantic_data::schema::NumberType::UInt(_)
+                | semantic_data::schema::NumberType::BigUInt(_)
+        ),
+        (TypeKind::Number(_), LiteralValue::UInt(_)) => true,
+        (TypeKind::Number(_), LiteralValue::Float(_)) => true,
+        (TypeKind::Optional(optional), value) => literal_matches_type(value, &optional.inner),
+        (TypeKind::Array(array), LiteralValue::List(_)) => {
+            matches!(
+                array.length,
+                None | Some(semantic_data::schema::LengthSpec::Range { .. })
+            )
+        }
+        (TypeKind::List(_), LiteralValue::List(_)) | (TypeKind::Set(_), LiteralValue::List(_)) => {
+            true
+        }
+        (TypeKind::Tuple(tuple), LiteralValue::List(values)) => {
+            values.len() == tuple.items.len() || tuple.rest.is_some()
+        }
+        (TypeKind::Map(_), LiteralValue::Map(_)) | (TypeKind::Record(_), LiteralValue::Map(_)) => {
+            true
+        }
+        (TypeKind::Enum(enum_type), LiteralValue::String(value)) => enum_type
+            .variants
+            .iter()
+            .any(|variant| variant.symbol.as_ref() == Some(value) || variant.name == *value),
+        (TypeKind::Enum(enum_type), LiteralValue::Int(value)) => {
+            i64::try_from(*value).ok().is_some_and(|value| {
+                enum_type
+                    .variants
+                    .iter()
+                    .any(|variant| variant.value == Some(value))
+            })
+        }
+        _ => false,
+    }
+}
+
+fn invalid_schema<T>(message: String) -> Result<T, CatalogError> {
+    Err(CatalogError::InvalidSchema(message))
+}
+
 fn package_nameset(name: &str) -> NameSet {
     verbatim_nameset(name)
 }
@@ -2020,7 +2560,11 @@ fn verbatim_nameset(name: &str) -> NameSet {
 
 #[cfg(test)]
 mod tests {
-    use semantic_data::schema::{record::field::Field, union::union_type::UnionType};
+    use semantic_data::schema::{
+        AttributeType, ClassAttribute, ClassType, EnumType, EnumVariant, VariantCase,
+        VariantPayload, VariantTag, VariantType, attribute::attribute_ref::AttributeRef,
+        record::field::Field, union::union_type::UnionType,
+    };
 
     use super::*;
 
@@ -2075,6 +2619,187 @@ mod tests {
             panic!("expected union variant ref");
         };
         assert_eq!(type_ref.name, "local:inventory:Fallback");
+    }
+
+    #[test]
+    fn apply_batch_rejects_record_required_order_unknown_field() {
+        let mut catalog = Catalog::new();
+        let err = catalog
+            .apply_batch(&[CatalogBatchOperation::UpsertRecordType {
+                id: "Broken".to_string(),
+                name: "Broken".to_string(),
+                record: RecordType {
+                    fields: BTreeMap::new(),
+                    open: true,
+                    additional: None,
+                    required_order: Some(vec!["missing".to_string()]),
+                },
+                module: Some("test".to_string()),
+            }])
+            .unwrap_err();
+
+        assert!(
+            matches!(err, CatalogError::InvalidSchema(message) if message.contains("required_order"))
+        );
+    }
+
+    #[test]
+    fn apply_batch_rejects_empty_union_and_enum() {
+        let mut catalog = Catalog::new();
+        let union_err = catalog
+            .apply_batch(&[CatalogBatchOperation::UpsertTypeDef {
+                type_def: test_type_def(
+                    "EmptyUnion",
+                    TypeKind::Union(UnionType { variants: vec![] }),
+                ),
+            }])
+            .unwrap_err();
+        assert!(
+            matches!(union_err, CatalogError::InvalidSchema(message) if message.contains("union has no variants"))
+        );
+
+        let mut catalog = Catalog::new();
+        let enum_err = catalog
+            .apply_batch(&[CatalogBatchOperation::UpsertTypeDef {
+                type_def: test_type_def(
+                    "EmptyEnum",
+                    TypeKind::Enum(EnumType {
+                        repr: semantic_data::schema::EnumRepr::String,
+                        variants: vec![],
+                    }),
+                ),
+            }])
+            .unwrap_err();
+        assert!(
+            matches!(enum_err, CatalogError::InvalidSchema(message) if message.contains("enum has no variants"))
+        );
+    }
+
+    #[test]
+    fn apply_batch_rejects_duplicate_enum_and_variant_names() {
+        let mut catalog = Catalog::new();
+        let enum_err = catalog
+            .apply_batch(&[CatalogBatchOperation::UpsertTypeDef {
+                type_def: test_type_def(
+                    "DuplicateEnum",
+                    TypeKind::Enum(EnumType {
+                        repr: semantic_data::schema::EnumRepr::String,
+                        variants: vec![enum_variant("open"), enum_variant("open")],
+                    }),
+                ),
+            }])
+            .unwrap_err();
+        assert!(
+            matches!(enum_err, CatalogError::InvalidSchema(message) if message.contains("duplicate variant"))
+        );
+
+        let mut catalog = Catalog::new();
+        let variant_err = catalog
+            .apply_batch(&[CatalogBatchOperation::UpsertTypeDef {
+                type_def: test_type_def(
+                    "DuplicateVariant",
+                    TypeKind::Variant(VariantType {
+                        tag: VariantTag::ExternallyTagged,
+                        variants: vec![variant_case("ok"), variant_case("ok")],
+                    }),
+                ),
+            }])
+            .unwrap_err();
+        assert!(
+            matches!(variant_err, CatalogError::InvalidSchema(message) if message.contains("duplicate case"))
+        );
+    }
+
+    #[test]
+    fn apply_batch_rejects_class_attribute_alias_collision() {
+        let mut catalog = Catalog::new();
+        let err = catalog
+            .apply_batch(&[
+                CatalogBatchOperation::UpsertAttribute {
+                    attribute: attribute("Title"),
+                    module: Some("test".to_string()),
+                },
+                CatalogBatchOperation::UpsertAttribute {
+                    attribute: attribute("Summary"),
+                    module: Some("test".to_string()),
+                },
+                CatalogBatchOperation::UpsertClass {
+                    class: ClassType {
+                        id: "Article".to_string(),
+                        name: "Article".to_string(),
+                        inherits: None,
+                        extends: vec![],
+                        attributes: BTreeMap::from([
+                            ("local:test:Summary".to_string(), class_attribute("Title")),
+                            ("title_alias".to_string(), class_attribute("Summary")),
+                        ]),
+                        constraints: vec![],
+                        meta: Meta::default(),
+                    },
+                    module: Some("test".to_string()),
+                },
+            ])
+            .unwrap_err();
+
+        assert!(
+            matches!(err, CatalogError::InvalidSchema(message) if message.contains("collides"))
+        );
+    }
+
+    fn test_type_def(name: &str, kind: TypeKind) -> TypeDef {
+        TypeDef {
+            name: name.to_string(),
+            module: Some("test".to_string()),
+            params: vec![],
+            ty: Type {
+                kind,
+                constraints: vec![],
+                annotations: vec![],
+            },
+            visibility: Visibility::Public,
+            meta: Meta::default(),
+        }
+    }
+
+    fn enum_variant(name: &str) -> EnumVariant {
+        EnumVariant {
+            name: name.to_string(),
+            value: None,
+            symbol: None,
+            meta: Meta::default(),
+        }
+    }
+
+    fn variant_case(name: &str) -> VariantCase {
+        VariantCase {
+            name: name.to_string(),
+            payload: VariantPayload::Unit,
+            discriminant: None,
+            meta: Meta::default(),
+        }
+    }
+
+    fn attribute(id: &str) -> AttributeType {
+        AttributeType {
+            id: id.to_string(),
+            name: id.to_string(),
+            ty: Type::new(TypeKind::String(StringType {
+                format: None,
+                normalization: None,
+            })),
+            constraints: vec![],
+            meta: Meta::default(),
+        }
+    }
+
+    fn class_attribute(id: &str) -> ClassAttribute {
+        ClassAttribute {
+            attribute: AttributeRef { id: id.to_string() },
+            required: false,
+            computed: None,
+            constraints: vec![],
+            meta: Meta::default(),
+        }
     }
 
     fn ref_type(name: &str) -> Type {
