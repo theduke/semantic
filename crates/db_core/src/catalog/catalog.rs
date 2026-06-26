@@ -2012,7 +2012,7 @@ fn validate_type_def_invariants(type_def: &TypeDef) -> Result<(), CatalogError> 
 }
 
 fn validate_type_invariants(ty: &Type, context: &str) -> Result<(), CatalogError> {
-    validate_constraints(&ty.constraints, context)?;
+    validate_constraints(&ty.constraints, &ConstraintTarget::Type(ty), context)?;
     match &ty.kind {
         TypeKind::Number(number) => validate_number_type(number, context)?,
         TypeKind::Array(array) => {
@@ -2047,7 +2047,11 @@ fn validate_type_invariants(ty: &Type, context: &str) -> Result<(), CatalogError
             if attribute.id.trim().is_empty() {
                 return invalid_schema(format!("{context} has an empty attribute id"));
             }
-            validate_constraints(&attribute.constraints, context)?;
+            validate_constraints(
+                &attribute.constraints,
+                &ConstraintTarget::Attribute(&attribute.ty),
+                context,
+            )?;
             validate_type_invariants(&attribute.ty, &format!("{context} attribute type"))?;
         }
         TypeKind::Class(class) => validate_class_shape_invariants(class, context)?,
@@ -2164,6 +2168,12 @@ fn validate_class_shape_invariants(class: &ClassType, context: &str) -> Result<(
     if class.name.trim().is_empty() {
         return invalid_schema(format!("class '{}' has an empty name", class.id));
     }
+    let fields = class
+        .attributes
+        .keys()
+        .map(String::as_str)
+        .collect::<BTreeSet<_>>();
+    validate_class_constraints(class, &fields, context)?;
     for (alias, class_attr) in &class.attributes {
         if alias.trim().is_empty() {
             return invalid_schema(format!("class '{}' has an empty attribute alias", class.id));
@@ -2176,8 +2186,48 @@ fn validate_class_shape_invariants(class: &ClassType, context: &str) -> Result<(
         }
         validate_constraints(
             &class_attr.constraints,
+            &ConstraintTarget::UnresolvedAttribute,
             &format!("class '{}' attribute '{alias}'", class.id),
         )?;
+    }
+    Ok(())
+}
+
+fn validate_class_constraints(
+    class: &ClassType,
+    fields: &BTreeSet<&str>,
+    context: &str,
+) -> Result<(), CatalogError> {
+    for constraint in &class.constraints {
+        match constraint {
+            semantic_data::schema::ClassConstraint::Field {
+                attribute,
+                constraint,
+            } => {
+                if attribute.id.trim().is_empty() {
+                    return invalid_schema(format!(
+                        "{context} class field constraint references an empty attribute"
+                    ));
+                }
+                let attribute_exists = fields.contains(attribute.id.as_str())
+                    || class
+                        .attributes
+                        .values()
+                        .any(|class_attr| class_attr.attribute.id == attribute.id);
+                if !attribute_exists {
+                    return invalid_schema(format!(
+                        "{context} class field constraint references unknown attribute '{}'",
+                        attribute.id
+                    ));
+                }
+                validate_constraints(
+                    std::slice::from_ref(constraint),
+                    &ConstraintTarget::UnresolvedAttribute,
+                    context,
+                )?;
+            }
+            semantic_data::schema::ClassConstraint::MultiFieldExpr { .. } => {}
+        }
     }
     Ok(())
 }
@@ -2201,6 +2251,11 @@ fn validate_class_attribute_resolution(
                 class.id, attr.attribute.id
             ));
         }
+        validate_constraints(
+            &class_attr.constraints,
+            &ConstraintTarget::Attribute(&attr.attribute.ty),
+            &format!("class '{}' attribute '{alias}'", class.id),
+        )?;
         for candidate in [
             alias.as_str(),
             class_attr.attribute.id.as_str(),
@@ -2414,20 +2469,73 @@ fn validate_bit_range(
     Ok(())
 }
 
+enum ConstraintTarget<'a> {
+    Type(&'a Type),
+    Attribute(&'a Type),
+    UnresolvedAttribute,
+}
+
 fn validate_constraints(
     constraints: &[semantic_data::schema::Constraint],
+    target: &ConstraintTarget<'_>,
     context: &str,
 ) -> Result<(), CatalogError> {
+    use semantic_data::schema::Constraint;
+
     let mut min_items = None;
     let mut max_items = None;
     let mut min_properties = None;
     let mut max_properties = None;
+    let mut min_number = None;
+    let mut max_number = None;
     for constraint in constraints {
         match constraint {
-            semantic_data::schema::Constraint::Length(length) => {
+            Constraint::Min(bound) => {
+                ensure_numeric_constraint_target(target, context, "Min")?;
+                min_number = Some(parse_number_bound(bound, context, "Min")?);
+            }
+            Constraint::Max(bound) => {
+                ensure_numeric_constraint_target(target, context, "Max")?;
+                max_number = Some(parse_number_bound(bound, context, "Max")?);
+            }
+            Constraint::MultipleOf(value) => {
+                ensure_numeric_constraint_target(target, context, "MultipleOf")?;
+                let value = parse_constraint_number(value, context, "MultipleOf")?;
+                if value <= 0.0 {
+                    return invalid_schema(format!("{context} MultipleOf must be greater than 0"));
+                }
+            }
+            Constraint::Length(length) => {
+                ensure_string_constraint_target(target, context, "Length")?;
                 validate_length_spec(length, context)?;
             }
-            semantic_data::schema::Constraint::Precision { precision, scale } => {
+            Constraint::Pattern(pattern) => {
+                ensure_text_pattern_constraint_target(target, context, "Pattern")?;
+                validate_regex_pattern(pattern, context, "Pattern")?;
+            }
+            Constraint::Prefix(value) => {
+                ensure_text_pattern_constraint_target(target, context, "Prefix")?;
+                if value.is_empty() {
+                    return invalid_schema(format!("{context} Prefix must not be empty"));
+                }
+            }
+            Constraint::Suffix(value) => {
+                ensure_text_pattern_constraint_target(target, context, "Suffix")?;
+                if value.is_empty() {
+                    return invalid_schema(format!("{context} Suffix must not be empty"));
+                }
+            }
+            Constraint::Charset(_) => {
+                ensure_text_pattern_constraint_target(target, context, "Charset")?;
+            }
+            Constraint::Collation(value) => {
+                ensure_text_pattern_constraint_target(target, context, "Collation")?;
+                if value.trim().is_empty() {
+                    return invalid_schema(format!("{context} Collation must not be empty"));
+                }
+            }
+            Constraint::Precision { precision, scale } => {
+                ensure_numeric_constraint_target(target, context, "Precision")?;
                 if *precision == 0 {
                     return invalid_schema(format!("{context} precision must be greater than 0"));
                 }
@@ -2435,20 +2543,64 @@ fn validate_constraints(
                     return invalid_schema(format!("{context} scale must not exceed precision"));
                 }
             }
-            semantic_data::schema::Constraint::MinItems(value) => min_items = Some(*value),
-            semantic_data::schema::Constraint::MaxItems(value) => max_items = Some(*value),
-            semantic_data::schema::Constraint::MinProperties(value) => {
+            Constraint::MinItems(value) => {
+                ensure_collection_constraint_target(target, context, "MinItems")?;
+                min_items = Some(*value);
+            }
+            Constraint::MaxItems(value) => {
+                ensure_collection_constraint_target(target, context, "MaxItems")?;
+                max_items = Some(*value);
+            }
+            Constraint::MinProperties(value) => {
+                ensure_property_constraint_target(target, context, "MinProperties")?;
                 min_properties = Some(*value)
             }
-            semantic_data::schema::Constraint::MaxProperties(value) => {
+            Constraint::MaxProperties(value) => {
+                ensure_property_constraint_target(target, context, "MaxProperties")?;
                 max_properties = Some(*value)
             }
-            semantic_data::schema::Constraint::Index { fields, .. } => {
+            Constraint::RequiredFields(fields) => {
+                ensure_property_constraint_target(target, context, "RequiredFields")?;
+                validate_field_refs(fields, target, context, "RequiredFields")?;
+            }
+            Constraint::KeyPattern(pattern) => {
+                ensure_property_constraint_target(target, context, "KeyPattern")?;
+                validate_regex_pattern(pattern, context, "KeyPattern")?;
+            }
+            Constraint::PrimaryKey => {
+                ensure_db_constraint_target(target, context, "PrimaryKey")?;
+            }
+            Constraint::ForeignKey(foreign_key) => {
+                ensure_db_constraint_target(target, context, "ForeignKey")?;
+                if foreign_key.fields.is_empty() {
+                    return invalid_schema(format!(
+                        "{context} foreign key constraint has no fields"
+                    ));
+                }
+                validate_field_refs(&foreign_key.fields, target, context, "ForeignKey")?;
+            }
+            Constraint::Index { fields, .. } => {
+                ensure_db_constraint_target(target, context, "Index")?;
                 if fields.is_empty() {
                     return invalid_schema(format!("{context} index constraint has no fields"));
                 }
+                validate_field_refs(fields, target, context, "Index")?;
+            }
+            Constraint::DefaultValue { value } => {
+                if let Some(ty) = target_value_type(target) {
+                    if !literal_matches_type(value, ty) {
+                        return invalid_schema(format!(
+                            "{context} DefaultValue does not match its target type"
+                        ));
+                    }
+                }
             }
             _ => {}
+        }
+    }
+    if let (Some(min), Some(max)) = (min_number, max_number) {
+        if min > max {
+            return invalid_schema(format!("{context} Min must not exceed Max"));
         }
     }
     if let (Some(min), Some(max)) = (min_items, max_items) {
@@ -2464,6 +2616,231 @@ fn validate_constraints(
         }
     }
     Ok(())
+}
+
+fn target_value_type<'a>(target: &'a ConstraintTarget<'a>) -> Option<&'a Type> {
+    match target {
+        ConstraintTarget::Type(ty) | ConstraintTarget::Attribute(ty) => Some(ty),
+        ConstraintTarget::UnresolvedAttribute => None,
+    }
+}
+
+fn ensure_numeric_constraint_target(
+    target: &ConstraintTarget<'_>,
+    context: &str,
+    constraint: &str,
+) -> Result<(), CatalogError> {
+    if matches!(target, ConstraintTarget::UnresolvedAttribute) {
+        return Ok(());
+    }
+    if target_value_type(target).is_some_and(is_numeric_type) {
+        return Ok(());
+    }
+    invalid_schema(format!(
+        "{context} {constraint} constraint requires a numeric target"
+    ))
+}
+
+fn ensure_string_constraint_target(
+    target: &ConstraintTarget<'_>,
+    context: &str,
+    constraint: &str,
+) -> Result<(), CatalogError> {
+    if matches!(target, ConstraintTarget::UnresolvedAttribute) {
+        return Ok(());
+    }
+    if target_value_type(target).is_some_and(is_string_like_type) {
+        return Ok(());
+    }
+    invalid_schema(format!(
+        "{context} {constraint} constraint requires a string, bytes, or char target"
+    ))
+}
+
+fn ensure_text_pattern_constraint_target(
+    target: &ConstraintTarget<'_>,
+    context: &str,
+    constraint: &str,
+) -> Result<(), CatalogError> {
+    if matches!(target, ConstraintTarget::UnresolvedAttribute) {
+        return Ok(());
+    }
+    if target_value_type(target).is_some_and(is_text_type) {
+        return Ok(());
+    }
+    invalid_schema(format!(
+        "{context} {constraint} constraint requires a string or char target"
+    ))
+}
+
+fn ensure_collection_constraint_target(
+    target: &ConstraintTarget<'_>,
+    context: &str,
+    constraint: &str,
+) -> Result<(), CatalogError> {
+    if matches!(target, ConstraintTarget::UnresolvedAttribute) {
+        return Ok(());
+    }
+    if target_value_type(target).is_some_and(is_collection_type) {
+        return Ok(());
+    }
+    invalid_schema(format!(
+        "{context} {constraint} constraint requires a collection target"
+    ))
+}
+
+fn ensure_property_constraint_target(
+    target: &ConstraintTarget<'_>,
+    context: &str,
+    constraint: &str,
+) -> Result<(), CatalogError> {
+    if matches!(target, ConstraintTarget::UnresolvedAttribute) {
+        return Ok(());
+    }
+    if target_value_type(target).is_some_and(is_property_type) {
+        return Ok(());
+    }
+    invalid_schema(format!(
+        "{context} {constraint} constraint requires a record, map, or class target"
+    ))
+}
+
+fn ensure_db_constraint_target(
+    target: &ConstraintTarget<'_>,
+    context: &str,
+    constraint: &str,
+) -> Result<(), CatalogError> {
+    if matches!(
+        target,
+        ConstraintTarget::Attribute(_) | ConstraintTarget::UnresolvedAttribute
+    ) || target_value_type(target).is_some_and(is_record_type)
+        || target_value_type(target).is_some_and(is_class_type)
+    {
+        return Ok(());
+    }
+    invalid_schema(format!(
+        "{context} {constraint} constraint requires a record, class, or attribute target"
+    ))
+}
+
+fn validate_field_refs(
+    fields: &[String],
+    target: &ConstraintTarget<'_>,
+    context: &str,
+    constraint: &str,
+) -> Result<(), CatalogError> {
+    let mut seen = BTreeSet::new();
+    for field in fields {
+        if field.trim().is_empty() {
+            return invalid_schema(format!("{context} {constraint} references an empty field"));
+        }
+        if !seen.insert(field.as_str()) {
+            return invalid_schema(format!(
+                "{context} {constraint} references duplicate field '{field}'"
+            ));
+        }
+        if !target_has_field(target, field) {
+            return invalid_schema(format!(
+                "{context} {constraint} references unknown field '{field}'"
+            ));
+        }
+    }
+    Ok(())
+}
+
+fn target_has_field(target: &ConstraintTarget<'_>, field: &str) -> bool {
+    match target {
+        ConstraintTarget::Type(ty) => match &ty.kind {
+            TypeKind::Record(record) => record.fields.contains_key(field),
+            TypeKind::Class(class) => class.attributes.contains_key(field),
+            _ => true,
+        },
+        ConstraintTarget::Attribute(_) | ConstraintTarget::UnresolvedAttribute => true,
+    }
+}
+
+fn parse_number_bound(
+    bound: &semantic_data::schema::NumberBound,
+    context: &str,
+    constraint: &str,
+) -> Result<f64, CatalogError> {
+    match bound {
+        semantic_data::schema::NumberBound::Inclusive(value)
+        | semantic_data::schema::NumberBound::Exclusive(value) => {
+            parse_constraint_number(value, context, constraint)
+        }
+    }
+}
+
+fn parse_constraint_number(
+    value: &str,
+    context: &str,
+    constraint: &str,
+) -> Result<f64, CatalogError> {
+    let parsed = value.parse::<f64>().map_err(|_| {
+        CatalogError::InvalidSchema(format!("{context} {constraint} must be a valid number"))
+    })?;
+    if !parsed.is_finite() {
+        return invalid_schema(format!("{context} {constraint} must be finite"));
+    }
+    Ok(parsed)
+}
+
+fn validate_regex_pattern(
+    pattern: &str,
+    context: &str,
+    constraint: &str,
+) -> Result<(), CatalogError> {
+    if pattern.is_empty() {
+        return invalid_schema(format!("{context} {constraint} must not be empty"));
+    }
+    regex::Regex::new(pattern).map_err(|err| {
+        CatalogError::InvalidSchema(format!(
+            "{context} {constraint} is not a valid regex: {err}"
+        ))
+    })?;
+    Ok(())
+}
+
+fn is_numeric_type(ty: &Type) -> bool {
+    matches!(ty.kind, TypeKind::Number(_))
+}
+
+fn is_string_like_type(ty: &Type) -> bool {
+    matches!(
+        ty.kind,
+        TypeKind::String(_) | TypeKind::Bytes(_) | TypeKind::Char(_)
+    )
+}
+
+fn is_text_type(ty: &Type) -> bool {
+    matches!(ty.kind, TypeKind::String(_) | TypeKind::Char(_))
+}
+
+fn is_collection_type(ty: &Type) -> bool {
+    matches!(
+        ty.kind,
+        TypeKind::Array(_)
+            | TypeKind::List(_)
+            | TypeKind::Tuple(_)
+            | TypeKind::Set(_)
+            | TypeKind::Map(_)
+    )
+}
+
+fn is_property_type(ty: &Type) -> bool {
+    matches!(
+        ty.kind,
+        TypeKind::Record(_) | TypeKind::Map(_) | TypeKind::Class(_)
+    )
+}
+
+fn is_record_type(ty: &Type) -> bool {
+    matches!(ty.kind, TypeKind::Record(_))
+}
+
+fn is_class_type(ty: &Type) -> bool {
+    matches!(ty.kind, TypeKind::Class(_))
 }
 
 fn validate_length_spec(
@@ -2561,7 +2938,8 @@ fn verbatim_nameset(name: &str) -> NameSet {
 #[cfg(test)]
 mod tests {
     use semantic_data::schema::{
-        AttributeType, ClassAttribute, ClassType, EnumType, EnumVariant, VariantCase,
+        AttributeType, ClassAttribute, ClassConstraint, ClassType, Constraint, EnumType,
+        EnumVariant, IntWidth, ListType, LiteralValue, NumberBound, NumberType, VariantCase,
         VariantPayload, VariantTag, VariantType, attribute::attribute_ref::AttributeRef,
         record::field::Field, union::union_type::UnionType,
     };
@@ -2746,14 +3124,148 @@ mod tests {
         );
     }
 
+    #[test]
+    fn apply_batch_rejects_numeric_constraint_on_string() {
+        let mut catalog = Catalog::new();
+        let err = catalog
+            .apply_batch(&[CatalogBatchOperation::UpsertTypeDef {
+                type_def: test_type_def_with_constraints(
+                    "StringWithMin",
+                    TypeKind::String(StringType {
+                        format: None,
+                        normalization: None,
+                    }),
+                    vec![Constraint::Min(NumberBound::Inclusive("1".to_string()))],
+                ),
+            }])
+            .unwrap_err();
+
+        assert!(
+            matches!(err, CatalogError::InvalidSchema(message) if message.contains("numeric target"))
+        );
+    }
+
+    #[test]
+    fn apply_batch_rejects_invalid_min_max_item_bounds() {
+        let mut catalog = Catalog::new();
+        let err = catalog
+            .apply_batch(&[CatalogBatchOperation::UpsertTypeDef {
+                type_def: test_type_def_with_constraints(
+                    "ListWithBadBounds",
+                    TypeKind::List(ListType {
+                        items: Box::new(Type::new(TypeKind::Number(NumberType::Int(
+                            IntWidth::I64,
+                        )))),
+                    }),
+                    vec![Constraint::MinItems(3), Constraint::MaxItems(2)],
+                ),
+            }])
+            .unwrap_err();
+
+        assert!(
+            matches!(err, CatalogError::InvalidSchema(message) if message.contains("MinItems"))
+        );
+    }
+
+    #[test]
+    fn apply_batch_rejects_unknown_required_and_index_fields() {
+        let record = || {
+            TypeKind::Record(RecordType {
+                fields: BTreeMap::from([(
+                    "id".to_string(),
+                    Field {
+                        ty: Type::new(TypeKind::String(StringType {
+                            format: None,
+                            normalization: None,
+                        })),
+                        required: true,
+                        readonly: false,
+                        writeonly: false,
+                        default: None,
+                        meta: Meta::default(),
+                    },
+                )]),
+                open: true,
+                additional: None,
+                required_order: None,
+            })
+        };
+
+        let mut catalog = Catalog::new();
+        let required_err = catalog
+            .apply_batch(&[CatalogBatchOperation::UpsertTypeDef {
+                type_def: test_type_def_with_constraints(
+                    "RecordWithMissingRequired",
+                    record(),
+                    vec![Constraint::RequiredFields(vec!["missing".to_string()])],
+                ),
+            }])
+            .unwrap_err();
+        assert!(
+            matches!(required_err, CatalogError::InvalidSchema(message) if message.contains("unknown field 'missing'"))
+        );
+
+        let mut catalog = Catalog::new();
+        let index_err = catalog
+            .apply_batch(&[CatalogBatchOperation::UpsertTypeDef {
+                type_def: test_type_def_with_constraints(
+                    "RecordWithMissingIndex",
+                    record(),
+                    vec![Constraint::Index {
+                        name: None,
+                        fields: vec!["missing".to_string()],
+                        unique: false,
+                    }],
+                ),
+            }])
+            .unwrap_err();
+        assert!(
+            matches!(index_err, CatalogError::InvalidSchema(message) if message.contains("unknown field 'missing'"))
+        );
+    }
+
+    #[test]
+    fn apply_batch_allows_open_ended_class_expression_constraint() {
+        let mut catalog = Catalog::new();
+        catalog
+            .apply_batch(&[CatalogBatchOperation::UpsertClass {
+                class: ClassType {
+                    id: "Article".to_string(),
+                    name: "Article".to_string(),
+                    inherits: None,
+                    extends: vec![],
+                    attributes: BTreeMap::new(),
+                    constraints: vec![ClassConstraint::MultiFieldExpr {
+                        expr: semantic_data::expr::Expr::Literal(
+                            semantic_data::expr::LiteralExpr {
+                                value: LiteralValue::Bool(true),
+                            },
+                        ),
+                        description: Some("dynamic rule owned by an extension".to_string()),
+                    }],
+                    meta: Meta::default(),
+                },
+                module: Some("test".to_string()),
+            }])
+            .unwrap();
+    }
+
     fn test_type_def(name: &str, kind: TypeKind) -> TypeDef {
+        test_type_def_with_constraints(name, kind, vec![])
+    }
+
+    fn test_type_def_with_constraints(
+        name: &str,
+        kind: TypeKind,
+        constraints: Vec<Constraint>,
+    ) -> TypeDef {
         TypeDef {
             name: name.to_string(),
             module: Some("test".to_string()),
             params: vec![],
             ty: Type {
                 kind,
-                constraints: vec![],
+                constraints,
                 annotations: vec![],
             },
             visibility: Visibility::Public,
