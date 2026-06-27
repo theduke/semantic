@@ -134,28 +134,6 @@ fn ClassFormFieldRow(
         .clone()
         .or_else(|| field.attribute.meta.title.clone())
         .unwrap_or_else(|| field.field_name.clone());
-    let current = scope.value();
-    let readonly_value = match &current {
-        Value::Object(object) => object
-            .get(&field.field_name)
-            .cloned()
-            .unwrap_or(Value::Null),
-        _ => Value::Null,
-    };
-    if field.class_attribute.computed.is_some() {
-        return rsx! {
-            div { class: "semantic-form__field semantic-form__field--readonly",
-                label { class: "semantic-form__label", "{label}" }
-                div { class: "semantic-form__control",
-                    ValueView {
-                        value: readonly_value,
-                        type_hint: Some(field.attribute.ty.clone()),
-                        mode: RenderMode::Detail
-                    }
-                }
-            }
-        };
-    }
     let field_for_spec = field.clone();
     let catalog_for_spec = catalog.clone();
     let field_handle = use_field(scope.clone(), move || {
@@ -166,6 +144,15 @@ fn ClassFormFieldRow(
             catalog_for_spec,
         )
     });
+    if field.class_attribute.computed.is_some() {
+        return rsx! {
+            ReadonlyClassFormField {
+                field: field_handle,
+                label,
+                type_hint: field.attribute.ty.clone(),
+            }
+        };
+    }
     let renderer = catalog
         .form_registry()
         .class_field_form_renderer(&class.id, &field.field_name)
@@ -198,6 +185,26 @@ fn ClassFormFieldRow(
             label { class: "semantic-form__label", "{label}" }
             div { class: "semantic-form__control", {body} }
             SemanticFormErrors { errors: field_handle.meta().errors }
+        }
+    }
+}
+
+#[component]
+fn ReadonlyClassFormField(
+    field: dxform::FieldHandle<Value, Value>,
+    label: String,
+    type_hint: semantic_data::schema::Type,
+) -> Element {
+    rsx! {
+        div { class: "semantic-form__field semantic-form__field--readonly",
+            label { class: "semantic-form__label", "{label}" }
+            div { class: "semantic-form__control",
+                ValueView {
+                    value: field.value(),
+                    type_hint: Some(type_hint),
+                    mode: RenderMode::Detail
+                }
+            }
         }
     }
 }
