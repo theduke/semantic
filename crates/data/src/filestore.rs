@@ -11,16 +11,16 @@ pub const MODULE_NAME: &str = "filestore";
 pub const INIT_MIGRATION_NAME: &str = "001_init";
 pub const GENERIC_METADATA_MIGRATION_NAME: &str = "002_generic_metadata";
 
-pub const FILE_CLASS_ID: &str = "semantic.filestore.file";
+pub const FILE_CLASS_ID: &str = "semantic:filestore:file";
 
 pub const TITLE_ATTRIBUTE_ID: &str = "semantic:title";
 pub const DESCRIPTION_ATTRIBUTE_ID: &str = "semantic:description";
-pub const FILE_FILESTORE_LOCATOR_ATTRIBUTE_ID: &str = "semantic.filestore.file.filestore_locator";
-pub const FILE_FILENAME_ATTRIBUTE_ID: &str = "semantic.filestore.file.filename";
-pub const FILE_BYTE_SIZE_ATTRIBUTE_ID: &str = "semantic.filestore.file.byte_size";
-pub const FILE_MIME_TYPE_ATTRIBUTE_ID: &str = "semantic.filestore.file.mime_type";
+pub const FILE_FILESTORE_LOCATOR_ATTRIBUTE_ID: &str = "semantic:filestore:file:filestore_locator";
+pub const FILE_FILENAME_ATTRIBUTE_ID: &str = "semantic:filestore:file:filename";
+pub const FILE_BYTE_SIZE_ATTRIBUTE_ID: &str = "semantic:filestore:file:byte_size";
+pub const FILE_MIME_TYPE_ATTRIBUTE_ID: &str = "semantic:filestore:file:mime_type";
 pub const FILE_CONTENT_HASH_SHA256_ATTRIBUTE_ID: &str =
-    "semantic.filestore.file.content_hash_sha256";
+    "semantic:filestore:file:content_hash_sha256";
 
 pub fn package() -> Package {
     Package {
@@ -238,7 +238,12 @@ fn meta_with_title(title: impl Into<String>) -> Meta {
 }
 
 fn title_from_attribute_id(attribute_id: &str) -> String {
-    title_from_name(attribute_id.rsplit('.').next().unwrap_or(attribute_id))
+    title_from_name(
+        attribute_id
+            .rsplit(['.', ':'])
+            .next()
+            .unwrap_or(attribute_id),
+    )
 }
 
 fn title_from_name(name: &str) -> String {

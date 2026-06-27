@@ -273,6 +273,10 @@ mod tests {
         .unwrap();
 
         assert!(catalog.class_by_id("semantic.base.person").is_some());
-        assert!(catalog.class_by_id("semantic.filestore.file").is_some());
+        assert!(
+            catalog
+                .class_by_id(semantic_data::filestore::FILE_CLASS_ID)
+                .is_some()
+        );
     }
 }
