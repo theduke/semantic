@@ -43,7 +43,7 @@ fn launch_standalone(args: &[String]) {
             std::process::exit(1);
         }
     };
-    let file_api_prefix = "semantic-file://".to_string();
+    let file_api_prefix = "semantic-file://localhost".to_string();
     let config = standalone_desktop_config(handle.clone());
     semantic_ui::launch_with_client_file_api_and_config(
         handle.client,
@@ -111,11 +111,11 @@ async fn read_standalone_file(
 
 #[cfg(all(feature = "desktop", feature = "standalone"))]
 fn file_id_from_custom_uri(uri: &dioxus::desktop::wry::http::Uri) -> Option<String> {
-    let raw = uri
-        .host()
-        .filter(|host| !host.is_empty())
-        .or_else(|| uri.path().trim_start_matches('/').split('/').next())
-        .filter(|value| !value.is_empty())?;
+    let raw = uri.path().trim_start_matches('/').split('/').next();
+    let raw = raw.filter(|value| !value.is_empty()).or_else(|| {
+        uri.host()
+            .filter(|host| *host != "localhost" && !host.is_empty())
+    })?;
     percent_decode(raw)
 }
 

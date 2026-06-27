@@ -158,7 +158,35 @@ impl RpcClientDyn for EmbeddedRpcClient {
     }
 
     fn file_url(&self, id: &str) -> Option<String> {
-        Some(format!("semantic-file:///{id}"))
+        Some(format!(
+            "semantic-file://localhost/{}",
+            percent_encode_path(id)
+        ))
+    }
+}
+
+fn percent_encode_path(value: &str) -> String {
+    let mut encoded = String::with_capacity(value.len());
+    for byte in value.bytes() {
+        match byte {
+            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'.' | b'_' | b'~' => {
+                encoded.push(byte as char);
+            }
+            _ => {
+                encoded.push('%');
+                encoded.push(hex_char(byte >> 4));
+                encoded.push(hex_char(byte & 0x0f));
+            }
+        }
+    }
+    encoded
+}
+
+fn hex_char(value: u8) -> char {
+    match value {
+        0..=9 => (b'0' + value) as char,
+        10..=15 => (b'A' + value - 10) as char,
+        _ => unreachable!("hex nibble out of range"),
     }
 }
 

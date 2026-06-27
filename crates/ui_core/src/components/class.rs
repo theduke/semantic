@@ -7,7 +7,7 @@ use semantic_db_core::catalog::OBJECT_TYPE_FIELD;
 
 use crate::components::{AttributeValueView, ValueView};
 use crate::form::{DynamicClassForm, class_form_field_label, mode_from_render_mode};
-use crate::ui_catalog::{ClassRenderContext, RenderMode, use_ui_catalog};
+use crate::ui_catalog::{ClassRenderContext, RenderCtx, RenderMode, use_ui_catalog};
 
 #[component]
 pub fn ClassView(
@@ -88,15 +88,39 @@ pub fn ClassView(
                                                 th { scope: "row", "{label.text}" }
                                             }
                                             td {
-                                                AttributeValueView {
-                                                    attribute: field.attribute.clone(),
-                                                    value: object
+                                                {
+                                                    let value = object
                                                         .get(&field.storage_field_name)
                                                         .or_else(|| object.get(&field.field_name))
                                                         .cloned()
-                                                        .unwrap_or(Value::Null),
-                                                    object: Some(object.clone()),
-                                                    mode
+                                                        .unwrap_or(Value::Null);
+                                                    if let Some(renderer) = catalog
+                                                        .render_registry()
+                                                        .attribute_renderer(&field.field_name)
+                                                        .or_else(|| {
+                                                            catalog
+                                                                .render_registry()
+                                                                .attribute_renderer(&field.storage_field_name)
+                                                        })
+                                                    {
+                                                        renderer(
+                                                            RenderCtx {
+                                                                settings: catalog.render_settings().clone(),
+                                                                mode,
+                                                            },
+                                                            &value,
+                                                            Some(&object),
+                                                        )
+                                                    } else {
+                                                        rsx! {
+                                                            AttributeValueView {
+                                                                attribute: field.attribute.clone(),
+                                                                value,
+                                                                object: Some(object.clone()),
+                                                                mode
+                                                            }
+                                                        }
+                                                    }
                                                 }
                                             }
                                         }
