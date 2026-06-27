@@ -15,6 +15,7 @@ pub const FILE_CLASS_ID: &str = "semantic:filestore:file";
 
 pub const TITLE_ATTRIBUTE_ID: &str = "semantic:title";
 pub const DESCRIPTION_ATTRIBUTE_ID: &str = "semantic:description";
+pub const PARENT_ATTRIBUTE_ID: &str = "parent";
 pub const FILE_FILESTORE_LOCATOR_ATTRIBUTE_ID: &str = "semantic:filestore:file:filestore_locator";
 pub const FILE_FILENAME_ATTRIBUTE_ID: &str = "semantic:filestore:file:filename";
 pub const FILE_BYTE_SIZE_ATTRIBUTE_ID: &str = "semantic:filestore:file:byte_size";
@@ -136,24 +137,28 @@ pub fn file_class() -> ClassType {
                 titled_class_attribute(DESCRIPTION_ATTRIBUTE_ID, 20, "Description"),
             ),
             (
+                "parent".to_string(),
+                class_attribute(PARENT_ATTRIBUTE_ID, 30),
+            ),
+            (
                 "filestore_locator".to_string(),
-                class_attribute(FILE_FILESTORE_LOCATOR_ATTRIBUTE_ID, 30),
+                class_attribute(FILE_FILESTORE_LOCATOR_ATTRIBUTE_ID, 40),
             ),
             (
                 "filename".to_string(),
-                class_attribute(FILE_FILENAME_ATTRIBUTE_ID, 40),
+                class_attribute(FILE_FILENAME_ATTRIBUTE_ID, 50),
             ),
             (
                 "byte_size".to_string(),
-                class_attribute(FILE_BYTE_SIZE_ATTRIBUTE_ID, 50),
+                class_attribute(FILE_BYTE_SIZE_ATTRIBUTE_ID, 60),
             ),
             (
                 "mime_type".to_string(),
-                class_attribute(FILE_MIME_TYPE_ATTRIBUTE_ID, 60),
+                class_attribute(FILE_MIME_TYPE_ATTRIBUTE_ID, 70),
             ),
             (
                 "content_hash_sha256".to_string(),
-                class_attribute(FILE_CONTENT_HASH_SHA256_ATTRIBUTE_ID, 70),
+                class_attribute(FILE_CONTENT_HASH_SHA256_ATTRIBUTE_ID, 80),
             ),
         ]),
         constraints: Vec::new(),

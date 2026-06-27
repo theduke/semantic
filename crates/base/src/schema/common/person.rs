@@ -17,6 +17,7 @@ pub const ALTERNATE_NAMES_ATTRIBUTE_ID: &str = "semantic:base:person:alternate_n
 pub const DESCRIPTION_ATTRIBUTE_ID: &str = "semantic:base:person:description";
 pub const BIRTH_DATE_ATTRIBUTE_ID: &str = "semantic:base:person:birth_date";
 pub const DEATH_DATE_ATTRIBUTE_ID: &str = "semantic:base:person:death_date";
+pub const PARENT_ATTRIBUTE_ID: &str = "parent";
 
 pub fn attributes() -> Vec<AttributeType> {
     vec![
@@ -120,6 +121,10 @@ pub fn class() -> ClassType {
             (
                 "death_date".to_string(),
                 class_attribute(DEATH_DATE_ATTRIBUTE_ID, 110),
+            ),
+            (
+                "parent".to_string(),
+                class_attribute(PARENT_ATTRIBUTE_ID, 120),
             ),
         ]),
         constraints: Vec::new(),
