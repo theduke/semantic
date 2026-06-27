@@ -1,18 +1,11 @@
 use semantic_data::schema::{
-    AttributeRef, AttributeType, ClassAttribute, Constraint, ListType, MapType, Meta, NumberType,
-    StringFormat, StringType, TemporalType, Type, TypeKind, UIntWidth,
+    AttributeRef, AttributeType, ClassAttribute, Constraint, ListType, Meta, NumberType,
+    StringType, TemporalType, Type, TypeKind, UIntWidth,
 };
 
 pub fn string_type() -> Type {
     Type::new(TypeKind::String(StringType {
         format: None,
-        normalization: None,
-    }))
-}
-
-pub fn string_format_type(format: StringFormat) -> Type {
-    Type::new(TypeKind::String(StringType {
-        format: Some(format),
         normalization: None,
     }))
 }
@@ -25,25 +18,9 @@ pub fn date_type() -> Type {
     Type::new(TypeKind::Temporal(TemporalType::Date))
 }
 
-pub fn instant_type() -> Type {
-    Type::new(TypeKind::Temporal(TemporalType::Instant))
-}
-
-pub fn json_type() -> Type {
-    Type::new(TypeKind::Json)
-}
-
 pub fn list_type(items: Type) -> Type {
     Type::new(TypeKind::List(ListType {
         items: Box::new(items),
-    }))
-}
-
-pub fn map_string_string_type() -> Type {
-    Type::new(TypeKind::Map(MapType {
-        keys: Box::new(string_type()),
-        values: Box::new(string_type()),
-        ordered: true,
     }))
 }
 
@@ -99,6 +76,8 @@ fn title_word(word: &str) -> String {
         "url" => "URL".to_string(),
         "urls" => "URLs".to_string(),
         "ui" => "UI".to_string(),
+        "mime" => "MIME".to_string(),
+        "sha256" => "SHA256".to_string(),
         _ => {
             let mut chars = word.chars();
             match chars.next() {
@@ -118,6 +97,11 @@ mod tests {
         assert_eq!(title_from_name("display_name"), "Display Name");
         assert_eq!(title_from_name("image_uri"), "Image URI");
         assert_eq!(title_from_name("urls"), "URLs");
+        assert_eq!(
+            title_from_name("content_hash_sha256"),
+            "Content Hash SHA256"
+        );
+        assert_eq!(title_from_name("mime_type"), "MIME Type");
     }
 
     #[test]
