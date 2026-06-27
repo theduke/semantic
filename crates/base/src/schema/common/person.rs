@@ -105,6 +105,10 @@ pub fn attributes() -> Vec<AttributeType> {
 }
 
 pub fn class() -> ClassType {
+    let class_attribute = |attribute_id, ui_order| {
+        helpers::class_attribute_with_ui_order(attribute_id, false, Some(ui_order))
+    };
+
     ClassType {
         id: CLASS_ID.to_string(),
         name: "Person".to_string(),
@@ -113,83 +117,80 @@ pub fn class() -> ClassType {
         attributes: BTreeMap::from([
             (
                 "display_name".to_string(),
-                helpers::class_attribute(DISPLAY_NAME_ATTRIBUTE_ID, false),
+                class_attribute(DISPLAY_NAME_ATTRIBUTE_ID, 10),
             ),
             (
                 "given_name".to_string(),
-                helpers::class_attribute(GIVEN_NAME_ATTRIBUTE_ID, false),
+                class_attribute(GIVEN_NAME_ATTRIBUTE_ID, 20),
             ),
             (
                 "family_name".to_string(),
-                helpers::class_attribute(FAMILY_NAME_ATTRIBUTE_ID, false),
+                class_attribute(FAMILY_NAME_ATTRIBUTE_ID, 30),
             ),
             (
                 "middle_name".to_string(),
-                helpers::class_attribute(MIDDLE_NAME_ATTRIBUTE_ID, false),
+                class_attribute(MIDDLE_NAME_ATTRIBUTE_ID, 40),
             ),
             (
                 "honorific_prefix".to_string(),
-                helpers::class_attribute(HONORIFIC_PREFIX_ATTRIBUTE_ID, false),
+                class_attribute(HONORIFIC_PREFIX_ATTRIBUTE_ID, 50),
             ),
             (
                 "honorific_suffix".to_string(),
-                helpers::class_attribute(HONORIFIC_SUFFIX_ATTRIBUTE_ID, false),
+                class_attribute(HONORIFIC_SUFFIX_ATTRIBUTE_ID, 60),
             ),
             (
                 "nickname".to_string(),
-                helpers::class_attribute(NICKNAME_ATTRIBUTE_ID, false),
+                class_attribute(NICKNAME_ATTRIBUTE_ID, 70),
             ),
             (
                 "pronouns".to_string(),
-                helpers::class_attribute(PRONOUNS_ATTRIBUTE_ID, false),
+                class_attribute(PRONOUNS_ATTRIBUTE_ID, 80),
             ),
             (
                 "alternate_names".to_string(),
-                helpers::class_attribute(ALTERNATE_NAMES_ATTRIBUTE_ID, false),
+                class_attribute(ALTERNATE_NAMES_ATTRIBUTE_ID, 90),
             ),
             (
                 "description".to_string(),
-                helpers::class_attribute(DESCRIPTION_ATTRIBUTE_ID, false),
+                class_attribute(DESCRIPTION_ATTRIBUTE_ID, 100),
             ),
             (
                 "birth_date".to_string(),
-                helpers::class_attribute(BIRTH_DATE_ATTRIBUTE_ID, false),
+                class_attribute(BIRTH_DATE_ATTRIBUTE_ID, 110),
             ),
             (
                 "death_date".to_string(),
-                helpers::class_attribute(DEATH_DATE_ATTRIBUTE_ID, false),
+                class_attribute(DEATH_DATE_ATTRIBUTE_ID, 120),
             ),
             (
                 "emails".to_string(),
-                helpers::class_attribute(EMAILS_ATTRIBUTE_ID, false),
+                class_attribute(EMAILS_ATTRIBUTE_ID, 130),
             ),
             (
                 "phones".to_string(),
-                helpers::class_attribute(PHONES_ATTRIBUTE_ID, false),
+                class_attribute(PHONES_ATTRIBUTE_ID, 140),
             ),
-            (
-                "urls".to_string(),
-                helpers::class_attribute(URLS_ATTRIBUTE_ID, false),
-            ),
+            ("urls".to_string(), class_attribute(URLS_ATTRIBUTE_ID, 150)),
             (
                 "image_uri".to_string(),
-                helpers::class_attribute(IMAGE_URI_ATTRIBUTE_ID, false),
+                class_attribute(IMAGE_URI_ATTRIBUTE_ID, 160),
             ),
             (
                 "locale".to_string(),
-                helpers::class_attribute(LOCALE_ATTRIBUTE_ID, false),
+                class_attribute(LOCALE_ATTRIBUTE_ID, 170),
             ),
             (
                 "timezone".to_string(),
-                helpers::class_attribute(TIMEZONE_ATTRIBUTE_ID, false),
+                class_attribute(TIMEZONE_ATTRIBUTE_ID, 180),
             ),
             (
                 "identifiers".to_string(),
-                helpers::class_attribute(IDENTIFIERS_ATTRIBUTE_ID, false),
+                class_attribute(IDENTIFIERS_ATTRIBUTE_ID, 190),
             ),
             (
                 "metadata".to_string(),
-                helpers::class_attribute(METADATA_ATTRIBUTE_ID, false),
+                class_attribute(METADATA_ATTRIBUTE_ID, 200),
             ),
         ]),
         constraints: Vec::new(),

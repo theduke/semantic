@@ -80,6 +80,7 @@ fn class_attr(id: &str, required: bool) -> ClassAttribute {
     ClassAttribute {
         attribute: AttributeRef { id: id.to_string() },
         required,
+        ui_order: None,
         computed: None,
         constraints: Vec::new(),
         meta: Meta::default(),
@@ -439,5 +440,37 @@ fn inherited_class_form_fields_are_collected_before_child_overrides() {
     assert_eq!(
         storage_names,
         vec!["attr.title".to_string(), "attr.name".to_string()]
+    );
+}
+
+#[test]
+fn class_form_fields_respect_class_attribute_ui_order() {
+    let first = attr("attr.first", "first", string_type());
+    let second = attr("attr.second", "second", string_type());
+    let third = attr("attr.third", "third", string_type());
+    let mut fields = BTreeMap::new();
+    let mut second_attr = class_attr("attr.second", false);
+    second_attr.ui_order = Some(1);
+    let mut first_attr = class_attr("attr.first", false);
+    first_attr.ui_order = Some(2);
+    fields.insert("first".to_string(), first_attr);
+    fields.insert("second".to_string(), second_attr);
+    fields.insert("third".to_string(), class_attr("attr.third", false));
+    let class = class("ordered", "Ordered", fields);
+    let catalog = catalog_with(vec![first, second, third], vec![class.clone()]);
+
+    let names = catalog
+        .class_form_fields(&class)
+        .into_iter()
+        .map(|field| field.field_name)
+        .collect::<Vec<_>>();
+
+    assert_eq!(
+        names,
+        vec![
+            "second".to_string(),
+            "first".to_string(),
+            "third".to_string()
+        ]
     );
 }

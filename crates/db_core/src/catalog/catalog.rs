@@ -3336,6 +3336,7 @@ mod tests {
         ClassAttribute {
             attribute: AttributeRef { id: id.to_string() },
             required: false,
+            ui_order: None,
             computed: None,
             constraints: vec![],
             meta: Meta::default(),

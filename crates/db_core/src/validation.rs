@@ -1150,6 +1150,7 @@ mod tests {
                             id: "semantic:title".to_string(),
                         },
                         required: false,
+                        ui_order: None,
                         computed: None,
                         constraints: vec![],
                         meta: Meta::default(),

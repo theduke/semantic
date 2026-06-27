@@ -182,6 +182,7 @@ A `ClassAttribute` wraps an `AttributeRef` with per-class overrides:
 pub struct ClassAttribute {
     pub attribute: AttributeRef,   // references an AttributeType by id
     pub required: bool,
+    pub ui_order: Option<u32>,     // optional generated UI ordering hint
     pub computed: Option<Expr>,    // computed at read time from other attrs
     pub constraints: Vec<Constraint>,
     pub meta: Meta,

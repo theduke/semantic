@@ -75,71 +75,63 @@ pub fn attributes() -> Vec<AttributeType> {
 }
 
 pub fn class() -> ClassType {
+    let class_attribute = |attribute_id, ui_order| {
+        helpers::class_attribute_with_ui_order(attribute_id, false, Some(ui_order))
+    };
+
     ClassType {
         id: CLASS_ID.to_string(),
         name: "File".to_string(),
         inherits: None,
         extends: Vec::new(),
         attributes: BTreeMap::from([
-            (
-                "name".to_string(),
-                helpers::class_attribute(NAME_ATTRIBUTE_ID, false),
-            ),
-            (
-                "path".to_string(),
-                helpers::class_attribute(PATH_ATTRIBUTE_ID, false),
-            ),
-            (
-                "uri".to_string(),
-                helpers::class_attribute(URI_ATTRIBUTE_ID, false),
-            ),
+            ("name".to_string(), class_attribute(NAME_ATTRIBUTE_ID, 10)),
+            ("path".to_string(), class_attribute(PATH_ATTRIBUTE_ID, 20)),
+            ("uri".to_string(), class_attribute(URI_ATTRIBUTE_ID, 30)),
             (
                 "media_type".to_string(),
-                helpers::class_attribute(MEDIA_TYPE_ATTRIBUTE_ID, false),
+                class_attribute(MEDIA_TYPE_ATTRIBUTE_ID, 40),
             ),
             (
                 "extension".to_string(),
-                helpers::class_attribute(EXTENSION_ATTRIBUTE_ID, false),
+                class_attribute(EXTENSION_ATTRIBUTE_ID, 50),
             ),
             (
                 "byte_size".to_string(),
-                helpers::class_attribute(BYTE_SIZE_ATTRIBUTE_ID, false),
+                class_attribute(BYTE_SIZE_ATTRIBUTE_ID, 60),
             ),
             (
                 "content_hash".to_string(),
-                helpers::class_attribute(CONTENT_HASH_ATTRIBUTE_ID, false),
+                class_attribute(CONTENT_HASH_ATTRIBUTE_ID, 70),
             ),
             (
                 "hash_algorithm".to_string(),
-                helpers::class_attribute(HASH_ALGORITHM_ATTRIBUTE_ID, false),
+                class_attribute(HASH_ALGORITHM_ATTRIBUTE_ID, 80),
             ),
             (
                 "created_at".to_string(),
-                helpers::class_attribute(CREATED_AT_ATTRIBUTE_ID, false),
+                class_attribute(CREATED_AT_ATTRIBUTE_ID, 90),
             ),
             (
                 "modified_at".to_string(),
-                helpers::class_attribute(MODIFIED_AT_ATTRIBUTE_ID, false),
+                class_attribute(MODIFIED_AT_ATTRIBUTE_ID, 100),
             ),
             (
                 "accessed_at".to_string(),
-                helpers::class_attribute(ACCESSED_AT_ATTRIBUTE_ID, false),
+                class_attribute(ACCESSED_AT_ATTRIBUTE_ID, 110),
             ),
             (
                 "encoding".to_string(),
-                helpers::class_attribute(ENCODING_ATTRIBUTE_ID, false),
+                class_attribute(ENCODING_ATTRIBUTE_ID, 120),
             ),
             (
                 "language".to_string(),
-                helpers::class_attribute(LANGUAGE_ATTRIBUTE_ID, false),
+                class_attribute(LANGUAGE_ATTRIBUTE_ID, 130),
             ),
-            (
-                "tags".to_string(),
-                helpers::class_attribute(TAGS_ATTRIBUTE_ID, false),
-            ),
+            ("tags".to_string(), class_attribute(TAGS_ATTRIBUTE_ID, 140)),
             (
                 "metadata".to_string(),
-                helpers::class_attribute(METADATA_ATTRIBUTE_ID, false),
+                class_attribute(METADATA_ATTRIBUTE_ID, 150),
             ),
         ]),
         constraints: Vec::new(),

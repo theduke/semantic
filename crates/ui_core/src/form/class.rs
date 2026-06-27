@@ -106,6 +106,12 @@ pub fn render_class_form_body(ctx: ClassFormRenderContext) -> Element {
 pub fn class_form_fields(catalog: &crate::UiCatalog, class: &ClassType) -> Vec<ClassFormField> {
     let mut fields = Vec::<ClassFormField>::new();
     collect_class_fields(catalog, class, &mut fields);
+    fields.sort_by_key(|field| {
+        (
+            field.class_attribute.ui_order.is_none(),
+            field.class_attribute.ui_order.unwrap_or(u32::MAX),
+        )
+    });
     fields
 }
 

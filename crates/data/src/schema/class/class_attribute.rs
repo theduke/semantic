@@ -2,6 +2,8 @@
 pub struct ClassAttribute {
     pub attribute: crate::schema::attribute::attribute_ref::AttributeRef,
     pub required: bool,
+    /// Optional presentation hint for sorting fields in generated UI forms.
+    pub ui_order: Option<u32>,
     /// If set, this attribute's value is computed from this expression
     /// at read time rather than stored. The expression must reference
     /// other attributes of the same class via `RefExpr::Identifier("self")`.

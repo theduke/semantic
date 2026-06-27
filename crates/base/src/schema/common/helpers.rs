@@ -57,12 +57,17 @@ pub fn attribute(id: &str, name: &str, ty: Type) -> AttributeType {
     }
 }
 
-pub fn class_attribute(attribute_id: &str, required: bool) -> ClassAttribute {
+pub fn class_attribute_with_ui_order(
+    attribute_id: &str,
+    required: bool,
+    ui_order: Option<u32>,
+) -> ClassAttribute {
     ClassAttribute {
         attribute: AttributeRef {
             id: attribute_id.to_string(),
         },
         required,
+        ui_order,
         computed: None,
         constraints: Vec::new(),
         meta: Meta::default(),
