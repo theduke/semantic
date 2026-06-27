@@ -87,10 +87,26 @@ pub struct SourceDeleteRequest {
 }
 
 #[async_trait]
-pub trait FederatedSource: Send + Sync {
+pub trait FederatedSource: Send + Sync + 'static {
     async fn catalog(&self) -> std::result::Result<Arc<Catalog>, DbError>;
 
     async fn scan(&self, request: SourceScanRequest) -> std::result::Result<Vec<Object>, DbError>;
+
+    fn scan_stream(self: Arc<Self>, request: SourceScanRequest) -> SendableRecordBatchStream {
+        stream::once(async move {
+            let rows = self
+                .scan(request)
+                .await
+                .map_err(|err| crate::CoreError::new(err.to_string()))?;
+            Ok(rows
+                .into_iter()
+                .map(|row| Box::new(row) as DynObject)
+                .collect::<Vec<_>>())
+        })
+        .map_ok(chunk_federated_rows)
+        .try_flatten()
+        .boxed()
+    }
 
     async fn insert(
         &self,
@@ -636,20 +652,7 @@ impl FederatedAsyncPhysicalDataSource {
                     .boxed();
             }
         };
-        stream::once(async move {
-            let rows = registered
-                .backend
-                .scan(request)
-                .await
-                .map_err(|err| crate::CoreError::new(err.to_string()))?;
-            Ok(rows
-                .into_iter()
-                .map(|row| Box::new(row) as DynObject)
-                .collect::<Vec<_>>())
-        })
-        .map_ok(chunk_dyn_rows)
-        .try_flatten()
-        .boxed()
+        registered.backend.scan_stream(request)
     }
 }
 
@@ -733,7 +736,7 @@ impl AsyncPhysicalDataSource for FederatedAsyncPhysicalDataSource {
     }
 }
 
-fn chunk_dyn_rows(rows: Vec<DynObject>) -> SendableRecordBatchStream {
+fn chunk_federated_rows(rows: Vec<DynObject>) -> SendableRecordBatchStream {
     let batch_size = DEFAULT_EXECUTION_BATCH_SIZE;
     stream::unfold(rows.into_iter(), move |mut iter| async move {
         let mut batch = Vec::with_capacity(batch_size);
