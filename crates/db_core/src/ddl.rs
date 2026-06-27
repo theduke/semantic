@@ -878,6 +878,14 @@ pub fn apply_core_schema_migrations(
         next_catalog.record_applied_migration(applied.clone());
         executed_migrations.push(applied);
     }
+    if next_catalog
+        .collection_by_name(CORE_CATALOG_SCHEMA_COLLECTION)
+        .is_some()
+    {
+        next_catalog
+            .set_collection_internal(CORE_CATALOG_SCHEMA_COLLECTION, true)
+            .map_err(|err| CoreError::new(err.to_string()))?;
+    }
 
     Ok((next_catalog, executed_migrations))
 }

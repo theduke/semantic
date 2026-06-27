@@ -99,6 +99,11 @@ where
         self.values.get(index).and_then(|v| v.as_ref())
     }
 
+    pub fn get_mut(&mut self, index: ID) -> Option<&mut V> {
+        let index: usize = index.into();
+        self.values.get_mut(index).and_then(|v| v.as_mut())
+    }
+
     pub fn contains_key(&self, key: &str) -> bool {
         self.get_key_id(key).is_some()
     }

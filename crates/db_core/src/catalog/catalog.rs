@@ -521,6 +521,9 @@ impl Catalog {
         let name = name.into();
         let existing_lid = self.collections.get_key_id(&name);
         let lid = existing_lid.unwrap_or(self.collections.next_id());
+        let internal = existing_lid
+            .and_then(|id| self.collections.get(id))
+            .is_some_and(|schema| schema.internal);
         let existing_field_ids =
             existing_lid
                 .and_then(|id| self.collections.get(id))
@@ -535,6 +538,7 @@ impl Catalog {
             name.clone(),
             kind,
             integrity_mode,
+            internal,
             existing_field_ids.as_ref(),
         )?;
 
@@ -548,6 +552,24 @@ impl Catalog {
         }
         let _ = self.upsert_builtin_parent_relationship(lid)?;
         Ok(lid)
+    }
+
+    pub fn set_collection_internal(
+        &mut self,
+        name: &str,
+        internal: bool,
+    ) -> Result<(), CatalogError> {
+        let lid = self
+            .collections
+            .get_key_id(name)
+            .ok_or_else(|| CatalogError::InvalidSchema(format!("unknown collection '{name}'")))?;
+        let Some(collection) = self.collections.get_mut(lid) else {
+            return Err(CatalogError::InvalidSchema(format!(
+                "unknown collection '{name}'"
+            )));
+        };
+        collection.internal = internal;
+        Ok(())
     }
 
     pub fn delete_collection(&mut self, name: &str) -> bool {
@@ -830,6 +852,7 @@ impl Catalog {
                     lid,
                     name: col.name.clone(),
                     integrity_mode: col.integrity_mode,
+                    internal: col.internal,
                     field_ids: col
                         .fields()
                         .map(|(field_id, name)| StoredFieldId {
@@ -1124,6 +1147,7 @@ impl Catalog {
                 item.name.clone(),
                 CollectionKind::Schema,
                 item.integrity_mode,
+                item.internal,
                 Some(&field_ids),
             )?;
             catalog
@@ -1264,6 +1288,7 @@ impl Catalog {
         name: String,
         kind: CollectionKind,
         integrity_mode: IntegrityMode,
+        internal: bool,
         fixed_field_ids: Option<&FnvHashMap<String, LocalFieldId>>,
     ) -> Result<CollectionSchema, CatalogError> {
         let mut field_aliases = FnvHashMap::default();
@@ -1357,6 +1382,7 @@ impl Catalog {
             name,
             kind,
             integrity_mode,
+            internal,
             field_aliases,
             field_types,
             field_ids,
@@ -1599,6 +1625,7 @@ impl Catalog {
                     schema.name.clone(),
                     schema.kind.clone(),
                     schema.integrity_mode,
+                    schema.internal,
                     schema
                         .fields()
                         .map(|(field_id, name)| (name.to_string(), field_id))
@@ -1607,12 +1634,13 @@ impl Catalog {
             })
             .collect::<Vec<_>>();
 
-        for (lid, name, kind, integrity_mode, field_ids) in collections {
+        for (lid, name, kind, integrity_mode, internal, field_ids) in collections {
             let schema = self.build_collection_schema_for_lid(
                 lid,
                 name.clone(),
                 kind,
                 integrity_mode,
+                internal,
                 Some(&field_ids),
             )?;
             self.collections

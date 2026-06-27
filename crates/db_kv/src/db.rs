@@ -10,9 +10,9 @@ use semantic_data::schema::{
 use semantic_data::value::{FieldPath, Object, PathSegment, Value, ValueRef};
 use semantic_db_core::{
     ALL_COLLECTION_ALIAS, AccessPath, AppliedMigration, Batch, BatchOperation, BatchOutcome,
-    DEFAULT_COLLECTION, DeleteQuery, EntityRecord, InsertQuery, InsertSource, MutationStats,
-    PackageRegistrationOutcome, Query, QueryExplain, QueryPlan, QueryResult, SelectQuery,
-    UpdateQuery, apply_core_schema_migrations, apply_migration_ddl_batch,
+    CORE_CATALOG_SCHEMA_COLLECTION, DEFAULT_COLLECTION, DeleteQuery, EntityRecord, InsertQuery,
+    InsertSource, MutationStats, PackageRegistrationOutcome, Query, QueryExplain, QueryPlan,
+    QueryResult, SelectQuery, UpdateQuery, apply_core_schema_migrations, apply_migration_ddl_batch,
     canonicalize_delete_query, canonicalize_insert_query, canonicalize_query,
     canonicalize_select_query, canonicalize_update_query, execute_batch, is_all_collection_alias,
     normalize_object_for_collection, normalize_package_definition, touched_collections,
@@ -96,9 +96,18 @@ impl<E: KvEngine> KvDb<E> {
             store.write_batch(&ops)?;
             bootstrap_catalog
         };
-        let (catalog, executed_core_migrations) = apply_core_schema_migrations(&loaded_catalog)
+        let core_schema_was_internal = loaded_catalog
+            .collection_by_name(CORE_CATALOG_SCHEMA_COLLECTION)
+            .is_some_and(|collection| collection.internal);
+        let (mut catalog, executed_core_migrations) = apply_core_schema_migrations(&loaded_catalog)
             .map_err(|err| DbError::InvalidQuery(err.to_string()))?;
-        if !executed_core_migrations.is_empty() {
+        let mut catalog_changed = !executed_core_migrations.is_empty();
+        catalog_changed |= !core_schema_was_internal
+            && catalog
+                .collection_by_name(CORE_CATALOG_SCHEMA_COLLECTION)
+                .is_some_and(|collection| collection.internal);
+        catalog_changed |= mark_collection_internal(&mut catalog, CORE_CATALOG_SCHEMA_COLLECTION)?;
+        if catalog_changed {
             let ops = catalog_write_ops(&store, &catalog)?;
             store.write_batch(&ops)?;
         }
@@ -125,6 +134,7 @@ impl<E: KvEngine> KvDb<E> {
         {
             db.create_collection(RELATION_EDGES_COLLECTION, CollectionKind::Polymorphic)?;
         }
+        db.mark_collection_internal(RELATION_EDGES_COLLECTION)?;
         if let Some(collection) = db.catalog().collection_by_name(RELATION_EDGES_COLLECTION) {
             if db
                 .catalog()
@@ -152,6 +162,17 @@ impl<E: KvEngine> KvDb<E> {
             }
         }
         Ok(db)
+    }
+
+    fn mark_collection_internal(&mut self, name: &str) -> std::result::Result<(), DbError> {
+        let mut catalog = self.catalog().as_ref().clone();
+        if !mark_collection_internal(&mut catalog, name)? {
+            return Ok(());
+        }
+        let ops = catalog_write_ops(&self.store, &catalog)?;
+        self.store.write_batch(&ops)?;
+        self.catalog.replace(catalog);
+        Ok(())
     }
 
     pub fn catalog(&self) -> std::sync::Arc<Catalog> {
@@ -699,6 +720,7 @@ impl<E: KvEngine> KvDb<E> {
                 name: collection.clone(),
             })?
             .clone();
+        ensure_collection_mutable(&collection_schema)?;
 
         let query = canonicalize_update_query(&query, catalog.as_ref(), &collection_schema)?;
         let collection_name = collection_schema.name.clone();
@@ -787,6 +809,7 @@ impl<E: KvEngine> KvDb<E> {
                 name: collection.clone(),
             })?
             .clone();
+        ensure_collection_mutable(&collection_schema)?;
 
         let query = canonicalize_delete_query(&query, catalog.as_ref(), &collection_schema)?;
         let collection_name = collection_schema.name.clone();
@@ -1236,11 +1259,12 @@ impl<E: KvEngine> KvDb<E> {
                     id,
                     object,
                 } => {
-                    catalog.collection_by_name(&collection).ok_or_else(|| {
+                    let schema = catalog.collection_by_name(&collection).ok_or_else(|| {
                         DbError::UnknownCollectionByName {
                             name: collection.clone(),
                         }
                     })?;
+                    ensure_collection_mutable(schema)?;
                     canonical_ops.push(BatchOperation::Upsert {
                         collection,
                         id,
@@ -1248,19 +1272,21 @@ impl<E: KvEngine> KvDb<E> {
                     });
                 }
                 BatchOperation::DeleteById { collection, id } => {
-                    catalog.collection_by_name(&collection).ok_or_else(|| {
+                    let schema = catalog.collection_by_name(&collection).ok_or_else(|| {
                         DbError::UnknownCollectionByName {
                             name: collection.clone(),
                         }
                     })?;
+                    ensure_collection_mutable(schema)?;
                     canonical_ops.push(BatchOperation::DeleteById { collection, id });
                 }
                 BatchOperation::DeleteByIds { collection, ids } => {
-                    catalog.collection_by_name(&collection).ok_or_else(|| {
+                    let schema = catalog.collection_by_name(&collection).ok_or_else(|| {
                         DbError::UnknownCollectionByName {
                             name: collection.clone(),
                         }
                     })?;
+                    ensure_collection_mutable(schema)?;
                     canonical_ops.push(BatchOperation::DeleteByIds { collection, ids });
                 }
                 BatchOperation::Update { collection, query } => {
@@ -1269,6 +1295,7 @@ impl<E: KvEngine> KvDb<E> {
                             name: collection.clone(),
                         }
                     })?;
+                    ensure_collection_mutable(schema)?;
                     let query = canonicalize_update_query(&query, catalog, schema)?;
                     canonical_ops.push(BatchOperation::Update { collection, query });
                 }
@@ -1278,6 +1305,7 @@ impl<E: KvEngine> KvDb<E> {
                             name: collection.clone(),
                         }
                     })?;
+                    ensure_collection_mutable(schema)?;
                     let query = canonicalize_delete_query(&query, catalog, schema)?;
                     canonical_ops.push(BatchOperation::Delete { collection, query });
                 }
@@ -2721,6 +2749,32 @@ fn expr_contains_relationship(expr: &semantic_db_core::Expr) -> bool {
     }
 }
 
+fn mark_collection_internal(
+    catalog: &mut Catalog,
+    name: &str,
+) -> std::result::Result<bool, DbError> {
+    let Some(collection) = catalog.collection_by_name(name) else {
+        return Ok(false);
+    };
+    if collection.internal {
+        return Ok(false);
+    }
+    catalog
+        .set_collection_internal(name, true)
+        .map_err(|err| DbError::InvalidQuery(err.to_string()))?;
+    Ok(true)
+}
+
+fn ensure_collection_mutable(collection: &CollectionSchema) -> std::result::Result<(), DbError> {
+    if collection.internal {
+        return Err(DbError::InvalidQuery(format!(
+            "collection '{}' is internal and cannot be modified directly",
+            collection.name
+        )));
+    }
+    Ok(())
+}
+
 impl<E: KvEngine> semantic_db_core::AsyncPhysicalDataSource for KvPhysicalDataSource<'_, E> {
     fn scan_stream(
         &self,
@@ -3042,13 +3096,14 @@ mod tests {
     use semantic_data::query::{BinaryOp, FieldFormat, SortDirection};
     use semantic_db_core::catalog::{CollectionKind, IntegrityMode};
     use semantic_db_core::{
-        ALL_COLLECTION_ALIAS, DEFAULT_COLLECTION, DdlBatch, DdlCollectionKind, DdlOperation, Expr,
-        Operand, OrderBy, Query, QueryField, QueryResult, SelectQuery, TransactionConcurrency,
-        TransactionOptions, UpdateQuery, canonicalize_select_query,
+        ALL_COLLECTION_ALIAS, CORE_CATALOG_SCHEMA_COLLECTION, DEFAULT_COLLECTION, DdlBatch,
+        DdlCollectionKind, DdlOperation, Expr, Operand, OrderBy, Query, QueryField, QueryResult,
+        SelectQuery, TransactionConcurrency, TransactionOptions, UpdateQuery,
+        canonicalize_select_query,
     };
     use semantic_db_core::{DbConfig, MigrationMismatchPolicy};
 
-    use super::{KvDb, QueryPlan};
+    use super::{KvDb, QueryPlan, RELATION_EDGES_COLLECTION};
 
     #[test]
     fn initialization_creates_default_entities_collection() {
@@ -3061,6 +3116,55 @@ mod tests {
             entities.integrity_mode,
             IntegrityMode::StrictRegisteredSchema
         );
+    }
+
+    #[test]
+    fn initialization_marks_kv_internal_collections() {
+        let db = KvDb::in_memory();
+        let catalog = db.catalog();
+
+        assert!(
+            catalog
+                .collection_by_name(CORE_CATALOG_SCHEMA_COLLECTION)
+                .expect("schema collection")
+                .internal
+        );
+        assert!(
+            catalog
+                .collection_by_name(RELATION_EDGES_COLLECTION)
+                .expect("relationship edges collection")
+                .internal
+        );
+        assert!(
+            !catalog
+                .collection_by_name(DEFAULT_COLLECTION)
+                .expect("default collection")
+                .internal
+        );
+    }
+
+    #[test]
+    fn rejects_direct_internal_collection_mutation() {
+        let mut db = KvDb::in_memory();
+        let err = db
+            .insert(CORE_CATALOG_SCHEMA_COLLECTION, "entry", Object::new())
+            .expect_err("internal insert should be rejected");
+
+        assert!(
+            err.to_string()
+                .contains("is internal and cannot be modified directly"),
+            "{err}"
+        );
+    }
+
+    #[test]
+    fn internal_schema_collection_remains_queryable() {
+        let db = KvDb::in_memory();
+        let rows = db
+            .select(SelectQuery::new().with_collection(CORE_CATALOG_SCHEMA_COLLECTION))
+            .expect("schema collection should remain queryable");
+
+        assert!(!rows.is_empty());
     }
 
     #[test]

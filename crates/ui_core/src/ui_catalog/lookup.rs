@@ -37,7 +37,9 @@ impl UiCatalog {
     }
 
     pub fn collections(&self) -> impl Iterator<Item = &StoredCollection> {
-        self.collections_by_name().values()
+        self.collections_by_name()
+            .values()
+            .filter(|collection| !collection.internal)
     }
 
     pub fn class_inherits(&self, class_id: &str, target_class_id: &str) -> bool {

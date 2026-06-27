@@ -55,6 +55,7 @@ pub struct StoredCollection {
     pub lid: LocalCollectionId,
     pub name: String,
     pub integrity_mode: IntegrityMode,
+    pub internal: bool,
     pub field_ids: Vec<StoredFieldId>,
 }
 

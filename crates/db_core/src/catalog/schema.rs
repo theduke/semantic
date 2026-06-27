@@ -71,6 +71,7 @@ pub struct CollectionSchema {
     pub name: String,
     pub kind: CollectionKind,
     pub integrity_mode: IntegrityMode,
+    pub internal: bool,
 
     field_aliases: FnvHashMap<String, String>,
     field_types: FnvHashMap<String, Type>,
@@ -88,6 +89,7 @@ impl CollectionSchema {
         name: String,
         kind: CollectionKind,
         integrity_mode: IntegrityMode,
+        internal: bool,
         field_aliases: FnvHashMap<String, String>,
         field_types: FnvHashMap<String, Type>,
         field_ids: FnvHashMap<String, LocalFieldId>,
@@ -101,6 +103,7 @@ impl CollectionSchema {
             name,
             kind,
             integrity_mode,
+            internal,
             field_aliases,
             field_types,
             field_ids,
