@@ -1,0 +1,34 @@
+[package]
+name = "semantic_ui"
+authors.workspace = true
+keywords.workspace = true
+repository.workspace = true
+homepage.workspace = true
+license.workspace = true
+readme.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+categories.workspace = true
+version.workspace = true
+
+[features]
+default = []
+web = ["dioxus/web", "semantic_rpc/client-ws-web"]
+desktop = ["dioxus/desktop", "dep:semantic_db_redb", "dep:semantic_server"]
+server = [
+  "dep:semantic_db_redb",
+  "dep:semantic_server",
+  "semantic_rpc/client-ws-native",
+]
+
+[dependencies]
+dioxus = { workspace = true }
+futures = "0.3.31"
+semantic_app = { path = "../app" }
+semantic_data = { workspace = true }
+semantic_db_core = { path = "../db_core" }
+semantic_db_redb = { path = "../db_redb", optional = true }
+semantic_rpc = { path = "../rpc", features = ["client"] }
+semantic_server = { path = "../server", optional = true }
+semantic_ui_core = { path = "../ui_core" }
+tokio = { workspace = true, features = ["rt-multi-thread", "net"] }

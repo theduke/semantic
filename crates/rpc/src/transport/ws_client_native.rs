@@ -10,7 +10,7 @@ use tokio::sync::Mutex;
 use tokio_tungstenite::tungstenite::Message;
 use tokio_tungstenite::{MaybeTlsStream, WebSocketStream, connect_async};
 
-use crate::client::{request, resolve_response};
+use crate::client::{RpcClient, RpcClientDyn, request, resolve_response};
 use crate::command::RpcCommandSpec;
 use crate::error::RpcClientError;
 use crate::protocol::RpcResponse;
@@ -77,6 +77,23 @@ impl WsRpcClient {
             self.invoke_value(command, payload)
         })
         .await
+    }
+}
+
+impl RpcClientDyn for WsRpcClient {
+    fn invoke_value(
+        &self,
+        command: String,
+        payload: Value,
+    ) -> futures::future::LocalBoxFuture<'static, std::result::Result<Value, RpcClientError>> {
+        let client = self.clone();
+        Box::pin(async move { client.invoke_value(command, payload).await })
+    }
+}
+
+impl From<WsRpcClient> for RpcClient {
+    fn from(value: WsRpcClient) -> Self {
+        RpcClient::new(value)
     }
 }
 

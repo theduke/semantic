@@ -22,7 +22,7 @@ mod tests {
 
     use async_trait::async_trait;
     use semantic_data::value::{Object, Value};
-    use semantic_db_core::catalog::Catalog;
+    use semantic_db_core::catalog::{Catalog, CatalogStorageSnapshot};
     use semantic_db_core::{
         Batch, BatchOutcome, DbError, EntityRecord, QueryResult, TextQueryInput,
     };
@@ -47,9 +47,7 @@ mod tests {
     #[async_trait]
     impl SemanticDb for MockDb {
         async fn catalog(&self) -> std::result::Result<Arc<Catalog>, DbError> {
-            Err(DbError::InvalidQuery(
-                "catalog not used in tests".to_string(),
-            ))
+            Ok(Arc::new(Catalog::new()))
         }
 
         async fn query(&self, _query: TextQueryInput) -> std::result::Result<QueryResult, DbError> {
@@ -374,6 +372,38 @@ mod tests {
             panic!("expected error");
         };
         assert_eq!(err.code, "unknown_scope");
+    }
+
+    #[tokio::test]
+    async fn catalog_command_returns_facet_json_snapshot() {
+        let default_db: Arc<dyn SemanticDb> = Arc::new(MockDb::new("default"));
+        let app = SemanticApp::builder()
+            .with_default_scope(DbScopeId::new("default"), default_db)
+            .register_builtin_commands()
+            .unwrap()
+            .build()
+            .unwrap();
+
+        let response = app
+            .invoke(
+                ctx(&app, Principal::system()),
+                request("semantic.db.catalog", Value::Void),
+            )
+            .await;
+
+        let RpcResult::Ok(Value::Object(object)) = response.result else {
+            panic!("expected ok object");
+        };
+        assert_eq!(
+            object.get("format"),
+            Some(&Value::String("facet-json".to_string()))
+        );
+        let Some(Value::String(catalog)) = object.get("catalog") else {
+            panic!("expected catalog string");
+        };
+        let snapshot = facet_json::from_str::<CatalogStorageSnapshot>(catalog)
+            .expect("catalog snapshot should decode");
+        assert!(snapshot.attributes.is_empty());
     }
 
     #[test]

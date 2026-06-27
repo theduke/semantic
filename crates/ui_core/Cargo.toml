@@ -1,5 +1,5 @@
 [package]
-name = "semantic_app"
+name = "semantic_ui_core"
 authors.workspace = true
 keywords.workspace = true
 repository.workspace = true
@@ -12,14 +12,10 @@ categories.workspace = true
 version.workspace = true
 
 [dependencies]
-async-trait = "0.1.89"
+dioxus = { workspace = true }
+facet-json = "0.43.2"
+futures = "0.3.31"
 semantic_data = { workspace = true }
 semantic_db_core = { path = "../db_core" }
-semantic_rpc = { path = "../rpc" }
-facet-json = "0.43.2"
-serde = { workspace = true, features = ["derive"] }
+semantic_rpc = { path = "../rpc", features = ["client"] }
 thiserror = "2.0.17"
-tokio = { workspace = true, features = ["sync", "time"] }
-
-[dev-dependencies]
-tokio = { workspace = true, features = ["macros", "rt"] }

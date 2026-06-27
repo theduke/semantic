@@ -88,6 +88,7 @@ impl SemanticAppBuilder {
         self.registry.register(ScopeUseCommand)?;
         self.registry.register(ScopeCurrentCommand)?;
         self.registry.register(ScopeListCommand)?;
+        self.registry.register(DbCatalogCommand)?;
         self.registry.register(DbQueryCommand)?;
         self.registry.register(DbGetCommand)?;
         self.registry.register(DbInsertCommand)?;
@@ -113,6 +114,7 @@ struct ScopeOpenCommand;
 struct ScopeUseCommand;
 struct ScopeCurrentCommand;
 struct ScopeListCommand;
+struct DbCatalogCommand;
 struct DbQueryCommand;
 struct DbGetCommand;
 struct DbInsertCommand;
@@ -143,6 +145,7 @@ command_spec!(ScopeOpenCommand, "semantic.scope.open");
 command_spec!(ScopeUseCommand, "semantic.scope.use");
 command_spec!(ScopeCurrentCommand, "semantic.scope.current");
 command_spec!(ScopeListCommand, "semantic.scope.list");
+command_spec!(DbCatalogCommand, "semantic.db.catalog");
 command_spec!(DbQueryCommand, "semantic.db.query");
 command_spec!(DbGetCommand, "semantic.db.get");
 command_spec!(DbInsertCommand, "semantic.db.insert");
@@ -275,6 +278,34 @@ impl RpcCommand<AppRequestContext> for ScopeListCommand {
                     .map(|info| Value::Object(scope_info_object(&info)))
                     .collect(),
             ))
+        })
+    }
+}
+
+impl RpcCommand<AppRequestContext> for DbCatalogCommand {
+    fn call<'a>(
+        &'a self,
+        ctx: &'a AppRequestContext,
+        payload: Value,
+    ) -> Pin<Box<dyn Future<Output = std::result::Result<Value, AppError>> + Send + 'a>> {
+        Box::pin(async move {
+            let scope_id = match payload {
+                Value::Null | Value::Void => None,
+                Value::Object(object) => optional_string(&object, "scope_id")?.map(DbScopeId::new),
+                _ => {
+                    return Err(AppError::InvalidRequest(
+                        "expected object, null, or void payload".to_string(),
+                    ));
+                }
+            };
+            let db = ctx.resolve_db(scope_id).await?;
+            let catalog = db.catalog().await?;
+            let catalog = facet_json::to_string(&catalog.to_storage_snapshot())
+                .map_err(|err| AppError::InvalidRequest(err.to_string()))?;
+            let mut out = Object::new();
+            out.insert("format", Value::String("facet-json".to_string()));
+            out.insert("catalog", Value::String(catalog));
+            Ok(Value::Object(out))
         })
     }
 }

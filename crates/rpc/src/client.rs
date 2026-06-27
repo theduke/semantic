@@ -1,6 +1,10 @@
 use std::future::Future;
+#[cfg(feature = "client")]
+use std::rc::Rc;
 use std::sync::atomic::{AtomicU64, Ordering};
 
+#[cfg(feature = "client")]
+use futures::future::LocalBoxFuture;
 use semantic_data::value::Value;
 
 use crate::command::RpcCommandSpec;
@@ -9,6 +13,55 @@ use crate::error::RpcClientError;
 use crate::protocol::{RpcRequest, RpcResponse, RpcResult};
 
 static NEXT_REQUEST_ID: AtomicU64 = AtomicU64::new(1);
+
+#[cfg(feature = "client")]
+#[derive(Clone)]
+pub struct RpcClient {
+    inner: Rc<dyn RpcClientDyn>,
+}
+
+#[cfg(feature = "client")]
+pub trait RpcClientDyn: 'static {
+    fn invoke_value(
+        &self,
+        command: String,
+        payload: Value,
+    ) -> LocalBoxFuture<'static, std::result::Result<Value, RpcClientError>>;
+}
+
+#[cfg(feature = "client")]
+impl RpcClient {
+    pub fn new(client: impl RpcClientDyn) -> Self {
+        Self {
+            inner: Rc::new(client),
+        }
+    }
+
+    pub fn from_rc(client: Rc<dyn RpcClientDyn>) -> Self {
+        Self { inner: client }
+    }
+
+    pub async fn invoke_value(
+        &self,
+        command: impl Into<String>,
+        payload: Value,
+    ) -> std::result::Result<Value, RpcClientError> {
+        self.inner.invoke_value(command.into(), payload).await
+    }
+
+    pub async fn invoke<C>(
+        &self,
+        payload: C::Payload,
+    ) -> std::result::Result<C::Output, RpcClientError>
+    where
+        C: RpcCommandSpec,
+    {
+        invoke_typed::<C, _, _>(payload, |command, payload| {
+            self.invoke_value(command, payload)
+        })
+        .await
+    }
+}
 
 pub fn next_request_id() -> u64 {
     NEXT_REQUEST_ID.fetch_add(1, Ordering::Relaxed)

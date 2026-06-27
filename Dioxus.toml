@@ -1,0 +1,13 @@
+[application]
+name = "semantic"
+default_platform = "desktop"
+
+[web.app]
+title = "Semantic"
+
+[web.resource]
+style = []
+script = []
+
+[web.resource.dev]
+script = []
