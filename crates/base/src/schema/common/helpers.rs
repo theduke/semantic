@@ -53,7 +53,7 @@ pub fn attribute(id: &str, name: &str, ty: Type) -> AttributeType {
         name: name.to_string(),
         ty,
         constraints: Vec::<Constraint>::new(),
-        meta: Meta::default(),
+        meta: meta_with_title(title_from_name(name)),
     }
 }
 
@@ -70,6 +70,61 @@ pub fn class_attribute_with_ui_order(
         ui_order,
         computed: None,
         constraints: Vec::new(),
-        meta: Meta::default(),
+        meta: meta_with_title(title_from_attribute_id(attribute_id)),
+    }
+}
+
+pub fn meta_with_title(title: impl Into<String>) -> Meta {
+    Meta {
+        title: Some(title.into()),
+        ..Meta::default()
+    }
+}
+
+fn title_from_attribute_id(attribute_id: &str) -> String {
+    title_from_name(attribute_id.rsplit('.').next().unwrap_or(attribute_id))
+}
+
+fn title_from_name(name: &str) -> String {
+    name.split('_')
+        .map(title_word)
+        .collect::<Vec<String>>()
+        .join(" ")
+}
+
+fn title_word(word: &str) -> String {
+    match word {
+        "id" => "ID".to_string(),
+        "uri" => "URI".to_string(),
+        "url" => "URL".to_string(),
+        "urls" => "URLs".to_string(),
+        "ui" => "UI".to_string(),
+        _ => {
+            let mut chars = word.chars();
+            match chars.next() {
+                Some(first) => first.to_uppercase().chain(chars).collect(),
+                None => String::new(),
+            }
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{title_from_attribute_id, title_from_name};
+
+    #[test]
+    fn builds_titles_from_attribute_names() {
+        assert_eq!(title_from_name("display_name"), "Display Name");
+        assert_eq!(title_from_name("image_uri"), "Image URI");
+        assert_eq!(title_from_name("urls"), "URLs");
+    }
+
+    #[test]
+    fn builds_titles_from_attribute_ids() {
+        assert_eq!(
+            title_from_attribute_id("semantic.base.file.content_hash"),
+            "Content Hash"
+        );
     }
 }

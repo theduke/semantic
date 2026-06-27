@@ -1,6 +1,6 @@
 use std::collections::BTreeMap;
 
-use semantic_data::schema::{AttributeType, ClassType, Meta, StringFormat};
+use semantic_data::schema::{AttributeType, ClassType, StringFormat};
 
 use super::helpers;
 
@@ -194,6 +194,6 @@ pub fn class() -> ClassType {
             ),
         ]),
         constraints: Vec::new(),
-        meta: Meta::default(),
+        meta: helpers::meta_with_title("Person"),
     }
 }
