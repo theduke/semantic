@@ -348,13 +348,17 @@ impl<T: Clone + PartialEq + 'static> FormRoot<T> {
                         })
                         .all(|child| child.empty);
                     node.validating |= descendants.iter().any(|child| child.validating);
-                    let mut errors = node.errors.clone();
+                    let mut errors = node.parse_errors.clone();
+                    errors.extend(node.errors.clone());
                     let mut submit_errors = node.submit_errors.clone();
                     for child in descendants {
+                        errors.extend(child.parse_errors);
                         errors.extend(child.errors);
                         submit_errors.extend(child.submit_errors);
                     }
-                    let self_invalid = !node.errors.is_empty() || !node.submit_errors.is_empty();
+                    let self_invalid = !node.parse_errors.is_empty()
+                        || !node.errors.is_empty()
+                        || !node.submit_errors.is_empty();
                     node.validity = if node.validating {
                         Validity::Validating
                     } else if self_invalid {
@@ -435,7 +439,11 @@ impl<T: Clone + PartialEq + 'static> FormRoot<T> {
                 .filter(|node| node.path.starts_with(&path))
             {
                 node.validating = false;
-                node.validity = Validity::Valid;
+                node.validity = if node.parse_errors.is_empty() {
+                    Validity::Valid
+                } else {
+                    Validity::Invalid
+                };
                 node.errors.clear();
             }
             for error in &all_errors {
@@ -452,6 +460,9 @@ impl<T: Clone + PartialEq + 'static> FormRoot<T> {
             }
         });
         self.recompute_all_meta();
+
+        let parse_errors = self.parse_errors_under(&path);
+        all_errors.extend(parse_errors);
 
         if all_errors.is_empty() {
             Ok(())
@@ -532,6 +543,17 @@ impl<T: Clone + PartialEq + 'static> FormRoot<T> {
     fn set_next_key(&self, value: u64) {
         let mut next_key = self.state.next_key;
         next_key.set(value);
+    }
+
+    fn parse_errors_under(&self, path: &FieldPath) -> Vec<FormError> {
+        self.state
+            .registry
+            .peek()
+            .nodes
+            .values()
+            .filter(|node| node.path.starts_with(path))
+            .flat_map(|node| node.parse_errors.clone())
+            .collect()
     }
 
     fn materialize_values(&self) -> T {

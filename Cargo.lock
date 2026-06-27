@@ -5965,6 +5965,7 @@ dependencies = [
  "semantic_db_core",
  "semantic_rpc",
  "thiserror 2.0.18",
+ "time",
 ]
 
 [[package]]

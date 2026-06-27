@@ -3,8 +3,8 @@ use std::rc::Rc;
 use dioxus::prelude::*;
 use dxform::{FieldHandle, FormError, FormErrorSource, FormScope, ValidationStrategy};
 use semantic_data::{
-    schema::{NumberType, StringFormat, Type, TypeKind},
-    value::Value,
+    schema::{NumberType, StringFormat, TemporalType, Type, TypeKind},
+    value::{Date, Value},
 };
 
 use crate::{
@@ -38,6 +38,9 @@ pub fn register_default_form_renderers(catalog: &mut crate::UiCatalog) {
     catalog
         .form_registry_mut()
         .register_type_form_renderer("number", Rc::new(render_number));
+    catalog
+        .form_registry_mut()
+        .register_type_form_renderer("temporal", Rc::new(render_temporal));
     catalog
         .form_registry_mut()
         .register_type_form_renderer("optional", Rc::new(render_optional));
@@ -121,22 +124,63 @@ fn render_number(ctx: ValueFormRenderContext) -> Element {
     }
 }
 
+fn render_temporal(ctx: ValueFormRenderContext) -> Element {
+    let Some(Type {
+        kind: TypeKind::Temporal(TemporalType::Date),
+        ..
+    }) = ctx.value_type.clone()
+    else {
+        return fallback_edit(ctx);
+    };
+    rsx! { DateValueInput { scope: ctx.scope } }
+}
+
+#[component]
+fn DateValueInput(scope: FormScope<Value, Value>) -> Element {
+    let field = dxform::use_field(scope, || dxform::FieldSpec {
+        name: "value".to_string(),
+        get: Rc::new(|value: &Value| value.clone()),
+        set: Rc::new(|parent: &mut Value, value: Value| *parent = value),
+        format: Rc::new(date_to_string),
+        parse: Rc::new(|value: &String| parse_date_value(value)),
+        is_empty: Rc::new(|value: &String| value.trim().is_empty()),
+        validators: Vec::new(),
+        validation: ValidationStrategy::submit(),
+    });
+    let value = field.draft();
+    rsx! {
+        input {
+            class: "semantic-form__input",
+            r#type: "date",
+            value,
+            oninput: move |event| field.set_draft(event.value()),
+        }
+    }
+}
+
 #[component]
 fn NumberValueInput(scope: FormScope<Value, Value>, value_type: Option<Type>) -> Element {
-    let field = use_value_leaf_field(scope);
     let ty = value_type.clone();
-    let value = number_to_string(&field.value());
+    let field = dxform::use_field(scope, move || {
+        let parse_ty = ty.clone();
+        dxform::FieldSpec {
+            name: "value".to_string(),
+            get: Rc::new(|value: &Value| value.clone()),
+            set: Rc::new(|parent: &mut Value, value: Value| *parent = value),
+            format: Rc::new(number_to_string),
+            parse: Rc::new(move |value: &String| parse_number_value(value, parse_ty.as_ref())),
+            is_empty: Rc::new(|value: &String| value.trim().is_empty()),
+            validators: Vec::new(),
+            validation: ValidationStrategy::submit(),
+        }
+    });
+    let value = field.draft();
     rsx! {
         input {
             class: "semantic-form__input",
             r#type: "number",
             value,
-            oninput: move |event| {
-                match parse_number_value(&event.value(), ty.as_ref()) {
-                    Ok(value) => field.set_value(value),
-                    Err(error) => field.set_value(Value::String(error.message)),
-                }
-            },
+            oninput: move |event| field.set_draft(event.value()),
         }
     }
 }
@@ -251,6 +295,8 @@ fn use_value_leaf_field(scope: FormScope<Value, Value>) -> FieldHandle<Value, Va
         name: "value".to_string(),
         get: Rc::new(|value: &Value| value.clone()),
         set: Rc::new(|parent: &mut Value, value: Value| *parent = value),
+        format: Rc::new(|value: &Value| value.clone()),
+        parse: Rc::new(|value: &Value| Ok(value.clone())),
         is_empty: Rc::new(crate::form::is_empty_value),
         validators: Vec::new(),
         validation: ValidationStrategy::submit(),
@@ -304,4 +350,50 @@ fn parse_number_value(value: &str, ty: Option<&Type>) -> std::result::Result<Val
 
 fn parse_error(err: impl std::fmt::Display) -> FormError {
     FormError::new(format!("invalid number: {err}")).with_source(FormErrorSource::Parse)
+}
+
+fn date_to_string(value: &Value) -> String {
+    let Value::Date(value) = value else {
+        return String::new();
+    };
+    let value = time::Date::from(*value);
+    format!(
+        "{:04}-{:02}-{:02}",
+        value.year(),
+        u8::from(value.month()),
+        value.day()
+    )
+}
+
+fn parse_date_value(value: &str) -> std::result::Result<Value, FormError> {
+    if value.trim().is_empty() {
+        return Ok(Value::Null);
+    }
+    let mut parts = value.split('-');
+    let year = parts
+        .next()
+        .ok_or_else(|| invalid_date("expected yyyy-mm-dd"))?
+        .parse::<i32>()
+        .map_err(invalid_date)?;
+    let month = parts
+        .next()
+        .ok_or_else(|| invalid_date("expected yyyy-mm-dd"))?
+        .parse::<u8>()
+        .map_err(invalid_date)?;
+    let day = parts
+        .next()
+        .ok_or_else(|| invalid_date("expected yyyy-mm-dd"))?
+        .parse::<u8>()
+        .map_err(invalid_date)?;
+    if parts.next().is_some() {
+        return Err(invalid_date("expected yyyy-mm-dd"));
+    }
+    let month = time::Month::try_from(month).map_err(invalid_date)?;
+    time::Date::from_calendar_date(year, month, day)
+        .map(|date| Value::Date(Date::from(date)))
+        .map_err(invalid_date)
+}
+
+fn invalid_date(err: impl std::fmt::Display) -> FormError {
+    FormError::new(format!("invalid date: {err}")).with_source(FormErrorSource::Parse)
 }

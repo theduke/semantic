@@ -31,6 +31,8 @@ pub fn value_field_spec(
         set: Rc::new(move |parent: &mut Value, value: Value| {
             set_object_field_value(parent, &set_field, value);
         }),
+        format: Rc::new(|value: &Value| value.clone()),
+        parse: Rc::new(|value: &Value| Ok(value.clone())),
         is_empty,
         validators,
         validation,
@@ -76,6 +78,8 @@ pub fn attribute_field_spec_with_storage_name(
                 set_optional_object_field_value(parent, &set_field, value);
             }
         }),
+        format: Rc::new(|value: &Value| value.clone()),
+        parse: Rc::new(|value: &Value| Ok(value.clone())),
         is_empty: Rc::new(is_empty_value),
         validators: validators_for_attribute(&attribute, &class_attribute),
         validation: ValidationStrategy::submit(),

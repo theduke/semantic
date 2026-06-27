@@ -30,6 +30,11 @@ struct HobbyBook {
     entries: Vec<HobbyEntry>,
 }
 
+#[derive(Clone, PartialEq, Debug, Default)]
+struct Appointment {
+    day: i32,
+}
+
 fn person_name_field<Root>(scope: &FormScope<Person, Root>) -> FieldHandle<String, Root>
 where
     Root: Clone + PartialEq + 'static,
@@ -414,5 +419,55 @@ fn submit_error_maps_to_nested_list_path() {
         assert!(result.is_err());
         assert_eq!(name.meta().submit_errors.len(), 1);
         assert!(form.meta().submit_failed);
+    });
+}
+
+#[test]
+fn transformed_field_retains_invalid_draft_without_changing_root_value() {
+    run_in_runtime(|| {
+        let submitted = Rc::new(RefCell::new(false));
+        let submitted_for_handler = submitted.clone();
+        let form = FormRoot::with_options(FormOptions::new(Appointment { day: 1 }).on_submit(
+            SubmitHandler::sync(move |_ctx| {
+                *submitted_for_handler.borrow_mut() = true;
+                Ok(())
+            }),
+        ));
+        let day = form.scope().field(
+            FieldSpec::new(
+                "day",
+                |appointment: &Appointment| appointment.day,
+                |appointment, value| appointment.day = value,
+            )
+            .with_draft(
+                |value| value.to_string(),
+                |draft: &String| {
+                    draft
+                        .parse::<i32>()
+                        .map_err(|err| FormError::new(format!("invalid day: {err}")))
+                },
+                |draft| draft.trim().is_empty(),
+            ),
+        );
+
+        day.set_draft("2".to_string());
+
+        assert_eq!(day.draft(), "2");
+        assert_eq!(day.value(), 2);
+        assert_eq!(form.values().day, 2);
+        assert!(day.meta().errors.is_empty());
+
+        day.set_draft("not-a-day".to_string());
+
+        assert_eq!(day.draft(), "not-a-day");
+        assert_eq!(day.value(), 2);
+        assert_eq!(form.values().day, 2);
+        assert_eq!(day.meta().errors.len(), 1);
+        assert_eq!(form.meta().errors.len(), 1);
+
+        let result = futures::executor::block_on(form.submit());
+
+        assert!(result.is_err());
+        assert!(!*submitted.borrow());
     });
 }

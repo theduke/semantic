@@ -28,6 +28,7 @@ pub(crate) struct FormNodeState<Root> {
     pub empty: bool,
     pub validating: bool,
     pub validity: Validity,
+    pub parse_errors: Vec<FormError>,
     pub errors: Vec<FormError>,
     pub submit_errors: Vec<FormError>,
     pub validation_epoch: u64,
@@ -51,6 +52,7 @@ impl<Root> Clone for FormNodeState<Root> {
             empty: self.empty,
             validating: self.validating,
             validity: self.validity,
+            parse_errors: self.parse_errors.clone(),
             errors: self.errors.clone(),
             submit_errors: self.submit_errors.clone(),
             validation_epoch: self.validation_epoch,
@@ -76,6 +78,7 @@ impl<Root> FormNodeState<Root> {
             empty: true,
             validating: false,
             validity: Validity::NotValidated,
+            parse_errors: Vec::new(),
             errors: Vec::new(),
             submit_errors: Vec::new(),
             validation_epoch: 0,
@@ -100,7 +103,7 @@ impl<Root> FormNodeState<Root> {
             empty: self.empty,
             validating: self.validating,
             validity: self.validity,
-            errors: self.errors.clone(),
+            errors: combined_errors(&self.parse_errors, &self.errors),
             submit_errors: self.submit_errors.clone(),
         }
     }
@@ -113,7 +116,7 @@ impl<Root> FormNodeState<Root> {
             empty: self.empty,
             validating: self.validating,
             validity: self.validity,
-            errors: self.errors.clone(),
+            errors: combined_errors(&self.parse_errors, &self.errors),
             submit_errors: self.submit_errors.clone(),
         }
     }
@@ -126,7 +129,7 @@ impl<Root> FormNodeState<Root> {
             empty: self.empty,
             validating: self.validating,
             validity: self.validity,
-            errors: self.errors.clone(),
+            errors: combined_errors(&self.parse_errors, &self.errors),
             submit_errors: self.submit_errors.clone(),
         }
     }
@@ -138,11 +141,21 @@ impl<Root> FormNodeState<Root> {
     }
 }
 
+fn combined_errors(parse_errors: &[FormError], validation_errors: &[FormError]) -> Vec<FormError> {
+    parse_errors
+        .iter()
+        .chain(validation_errors.iter())
+        .cloned()
+        .collect()
+}
+
 pub(crate) struct FormRegistry<Root> {
     pub nodes: BTreeMap<FieldPath, FormNodeState<Root>>,
     pub list_keys: BTreeMap<FieldPath, Vec<ListItemKey>>,
     value_signals: BTreeMap<FieldPath, Rc<dyn Any>>,
     initial_value_signals: BTreeMap<FieldPath, Rc<dyn Any>>,
+    draft_signals: BTreeMap<FieldPath, Rc<dyn Any>>,
+    initial_draft_signals: BTreeMap<FieldPath, Rc<dyn Any>>,
     list_key_signals: BTreeMap<FieldPath, Signal<Vec<ListItemKey>>>,
 }
 
@@ -153,6 +166,8 @@ impl<Root> Default for FormRegistry<Root> {
             list_keys: BTreeMap::new(),
             value_signals: BTreeMap::new(),
             initial_value_signals: BTreeMap::new(),
+            draft_signals: BTreeMap::new(),
+            initial_draft_signals: BTreeMap::new(),
             list_key_signals: BTreeMap::new(),
         }
     }
@@ -165,6 +180,8 @@ impl<Root> Clone for FormRegistry<Root> {
             list_keys: self.list_keys.clone(),
             value_signals: self.value_signals.clone(),
             initial_value_signals: self.initial_value_signals.clone(),
+            draft_signals: self.draft_signals.clone(),
+            initial_draft_signals: self.initial_draft_signals.clone(),
             list_key_signals: self.list_key_signals.clone(),
         }
     }
@@ -201,6 +218,30 @@ impl<Root> FormRegistry<Root> {
         ensure_typed_signal(&mut self.initial_value_signals, path, value, owner)
     }
 
+    pub fn ensure_draft_signal<Draft>(
+        &mut self,
+        path: &FieldPath,
+        value: Draft,
+        owner: ScopeId,
+    ) -> Signal<Draft>
+    where
+        Draft: Clone + PartialEq + 'static,
+    {
+        ensure_typed_signal(&mut self.draft_signals, path, value, owner)
+    }
+
+    pub fn ensure_initial_draft_signal<Draft>(
+        &mut self,
+        path: &FieldPath,
+        value: Draft,
+        owner: ScopeId,
+    ) -> Signal<Draft>
+    where
+        Draft: Clone + PartialEq + 'static,
+    {
+        ensure_typed_signal(&mut self.initial_draft_signals, path, value, owner)
+    }
+
     pub fn ensure_list_key_signal(
         &mut self,
         path: &FieldPath,
@@ -222,6 +263,10 @@ impl<Root> FormRegistry<Root> {
             .retain(|node_path, _| !node_path.starts_with(path));
         self.initial_value_signals
             .retain(|node_path, _| !node_path.starts_with(path));
+        self.draft_signals
+            .retain(|node_path, _| !node_path.starts_with(path));
+        self.initial_draft_signals
+            .retain(|node_path, _| !node_path.starts_with(path));
         self.list_key_signals
             .retain(|list_path, _| !list_path.starts_with(path));
     }
@@ -235,9 +280,10 @@ impl<Root> FormRegistry<Root> {
             if submit {
                 node.submit_errors.clear();
             } else {
+                node.parse_errors.clear();
                 node.errors.clear();
             }
-            if node.errors.is_empty() {
+            if node.parse_errors.is_empty() && node.errors.is_empty() {
                 node.validity = Validity::NotValidated;
             }
             node.sync_meta_signals();

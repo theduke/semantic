@@ -331,9 +331,13 @@ where
         )
     }
 
-    pub fn field<Value>(&self, spec: FieldSpec<T, Value>) -> FieldHandle<Value, Root>
+    pub fn field<Value, Draft>(
+        &self,
+        spec: FieldSpec<T, Value, Draft>,
+    ) -> FieldHandle<Value, Root, Draft>
     where
         Value: Clone + PartialEq + 'static,
+        Draft: Clone + PartialEq + 'static,
     {
         FieldHandle::new(self, spec)
     }

@@ -22,3 +22,4 @@ semantic_data = { workspace = true }
 semantic_db_core = { path = "../db_core" }
 semantic_rpc = { path = "../rpc", features = ["client"] }
 thiserror = "2.0.17"
+time = { workspace = true }
