@@ -1,0 +1,270 @@
+:root {
+  color-scheme: light;
+  --semantic-bg: #f7f8fa;
+  --semantic-surface: #ffffff;
+  --semantic-surface-muted: #f3f5f7;
+  --semantic-border: #d8dee6;
+  --semantic-border-soft: #e7ebf0;
+  --semantic-text: #17202a;
+  --semantic-text-muted: #617084;
+  --semantic-accent: #176b87;
+  --semantic-radius: 6px;
+  --semantic-space-1: 4px;
+  --semantic-space-2: 8px;
+  --semantic-space-3: 12px;
+  --semantic-space-4: 16px;
+  --semantic-space-6: 24px;
+  --semantic-font:
+    Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  --semantic-font-mono:
+    "SFMono-Regular", Consolas, "Liberation Mono", Menlo, monospace;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  background: var(--semantic-bg);
+  color: var(--semantic-text);
+  font-family: var(--semantic-font);
+  font-size: 14px;
+  line-height: 1.45;
+}
+
+button,
+input,
+select,
+textarea {
+  font: inherit;
+}
+
+button {
+  border: 1px solid var(--semantic-border);
+  border-radius: var(--semantic-radius);
+  background: var(--semantic-surface);
+  color: var(--semantic-text);
+  padding: 6px 10px;
+  cursor: pointer;
+}
+
+button:hover {
+  border-color: var(--semantic-accent);
+  color: var(--semantic-accent);
+}
+
+code,
+pre {
+  font-family: var(--semantic-font-mono);
+}
+
+.semantic-ui {
+  min-height: 100vh;
+}
+
+.semantic-ui__header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--semantic-space-4);
+  padding: var(--semantic-space-4) var(--semantic-space-6);
+  border-bottom: 1px solid var(--semantic-border);
+  background: var(--semantic-surface);
+}
+
+.semantic-ui__header h1 {
+  margin: 0;
+  font-size: 18px;
+  font-weight: 650;
+}
+
+.semantic-ui__header nav {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--semantic-space-2);
+}
+
+.semantic-ui__main {
+  width: min(1180px, 100%);
+  margin: 0 auto;
+  padding: var(--semantic-space-6);
+}
+
+.semantic-entity,
+.semantic-class,
+.semantic-object {
+  display: grid;
+  gap: var(--semantic-space-4);
+}
+
+.semantic-entity__actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: var(--semantic-space-2);
+}
+
+.semantic-class > header {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: var(--semantic-space-4);
+}
+
+.semantic-class h2 {
+  margin: 0;
+  font-size: 20px;
+  font-weight: 650;
+}
+
+.semantic-class code {
+  color: var(--semantic-text-muted);
+  font-size: 12px;
+}
+
+.semantic-table-wrap {
+  max-width: 100%;
+  overflow-x: auto;
+  border: 1px solid var(--semantic-border);
+  border-radius: var(--semantic-radius);
+  background: var(--semantic-surface);
+}
+
+.semantic-field-table {
+  width: 100%;
+  border-collapse: separate;
+  border-spacing: 0;
+}
+
+.semantic-field-table th,
+.semantic-field-table td {
+  vertical-align: top;
+  border-bottom: 1px solid var(--semantic-border-soft);
+  padding: 10px 12px;
+}
+
+.semantic-field-table tr:last-child > th,
+.semantic-field-table tr:last-child > td {
+  border-bottom: 0;
+}
+
+.semantic-field-table th {
+  width: 210px;
+  max-width: 260px;
+  background: var(--semantic-surface-muted);
+  color: var(--semantic-text-muted);
+  font-weight: 600;
+  text-align: left;
+  overflow-wrap: anywhere;
+}
+
+.semantic-field-table td {
+  min-width: 0;
+}
+
+.semantic-field-table td .semantic-table-wrap {
+  border: 0;
+  background: transparent;
+}
+
+.semantic-field-table td .semantic-field-table th,
+.semantic-field-table td .semantic-field-table td {
+  padding: 7px 9px;
+}
+
+.semantic-field-table td .semantic-field-table th {
+  background: transparent;
+  border-color: var(--semantic-border-soft);
+}
+
+.semantic-value {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.semantic-value--scalar {
+  white-space: pre-wrap;
+}
+
+.semantic-value--null {
+  color: var(--semantic-text-muted);
+  font-style: italic;
+}
+
+.semantic-value--raw {
+  margin: 0;
+  white-space: pre-wrap;
+}
+
+.semantic-list {
+  display: grid;
+  gap: var(--semantic-space-2);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.semantic-list__item {
+  display: grid;
+  grid-template-columns: minmax(32px, max-content) minmax(0, 1fr);
+  gap: var(--semantic-space-3);
+  align-items: start;
+}
+
+.semantic-list__index {
+  color: var(--semantic-text-muted);
+  font-family: var(--semantic-font-mono);
+  font-size: 12px;
+  line-height: 1.8;
+}
+
+.semantic-list__value {
+  min-width: 0;
+}
+
+.semantic-map {
+  display: grid;
+  gap: var(--semantic-space-2);
+}
+
+.semantic-map__entry {
+  display: grid;
+  grid-template-columns: minmax(120px, 28%) minmax(0, 1fr);
+  gap: var(--semantic-space-3);
+  align-items: start;
+}
+
+.semantic-map__key {
+  color: var(--semantic-text-muted);
+  font-weight: 600;
+  overflow-wrap: anywhere;
+}
+
+.semantic-map__value {
+  min-width: 0;
+}
+
+.semantic-empty,
+.semantic-loading {
+  color: var(--semantic-text-muted);
+}
+
+@media (max-width: 720px) {
+  .semantic-ui__header {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+
+  .semantic-ui__main {
+    padding: var(--semantic-space-4);
+  }
+
+  .semantic-field-table th {
+    width: 140px;
+  }
+
+  .semantic-map__entry {
+    grid-template-columns: 1fr;
+    gap: var(--semantic-space-1);
+  }
+}

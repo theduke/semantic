@@ -9,18 +9,30 @@ pub fn ObjectView(object: Object, mode: RenderMode) -> Element {
     let catalog = use_ui_catalog();
     let class = catalog.object_class(&object).cloned();
     rsx! {
-        dl { class: "semantic-object",
-            if let Some(class) = class {
-                dt { "type" }
-                dd { "{class.name}" }
-            }
-            for (key, value) in object.iter() {
-                dt { "{key}" }
-                dd {
-                    ValueView {
-                        value: value.clone(),
-                        type_hint: None,
-                        mode
+        div { class: "semantic-object",
+            div { class: "semantic-table-wrap semantic-table-wrap--object",
+                table { class: "semantic-field-table semantic-field-table--object",
+                    tbody {
+                        if let Some(class) = class {
+                            tr {
+                                th { scope: "row", "type" }
+                                td {
+                                    div { class: "semantic-value semantic-value--scalar", "{class.name}" }
+                                }
+                            }
+                        }
+                        for (key, value) in object.iter() {
+                            tr {
+                                th { scope: "row", "{key}" }
+                                td {
+                                    ValueView {
+                                        value: value.clone(),
+                                        type_hint: None,
+                                        mode
+                                    }
+                                }
+                            }
+                        }
                     }
                 }
             }

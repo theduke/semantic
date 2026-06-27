@@ -73,30 +73,38 @@ pub fn ClassView(
                     code { "{id}" }
                 }
             }
-            dl {
-                for field in fields {
-                    if field.field_name != OBJECT_TYPE_FIELD && field.storage_field_name != OBJECT_TYPE_FIELD {
-                    dt { "{field.field_name}" }
-                    dd {
-                            ValueView {
-                                value: object
-                                    .get(&field.storage_field_name)
-                                    .or_else(|| object.get(&field.field_name))
-                                    .cloned()
-                                    .unwrap_or(Value::Null),
-                                type_hint: Some(field.attribute.ty.clone()),
-                                mode
+            div { class: "semantic-table-wrap semantic-table-wrap--class",
+                table { class: "semantic-field-table semantic-field-table--class",
+                    tbody {
+                        for field in fields {
+                            if field.field_name != OBJECT_TYPE_FIELD && field.storage_field_name != OBJECT_TYPE_FIELD {
+                                tr {
+                                    th { scope: "row", "{field.field_name}" }
+                                    td {
+                                        ValueView {
+                                            value: object
+                                                .get(&field.storage_field_name)
+                                                .or_else(|| object.get(&field.field_name))
+                                                .cloned()
+                                                .unwrap_or(Value::Null),
+                                            type_hint: Some(field.attribute.ty.clone()),
+                                            mode
+                                        }
+                                    }
+                                }
                             }
-                    }
-                    }
-                }
-                for (key, value) in extra_fields {
-                    dt { class: "semantic-class__extra-field", "{key}" }
-                    dd {
-                        ValueView {
-                            value,
-                            type_hint: None,
-                            mode
+                        }
+                        for (key, value) in extra_fields {
+                            tr {
+                                th { scope: "row", class: "semantic-class__extra-field", "{key}" }
+                                td {
+                                    ValueView {
+                                        value,
+                                        type_hint: None,
+                                        mode
+                                    }
+                                }
+                            }
                         }
                     }
                 }

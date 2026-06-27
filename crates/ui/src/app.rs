@@ -4,6 +4,8 @@ use dioxus::prelude::*;
 use semantic_rpc::RpcClient;
 use semantic_ui_core::{UiCatalogProvider, provide_rpc_client, provide_ui_scope_context};
 
+const CORE_STYLES: Asset = asset!("/assets/core_styles.css");
+
 use crate::screens::{
     CatalogScreen, CollectionScreen, CreateEntityScreen, EditEntityScreen, EntityScreen,
     HomeScreen, QueryScreen,
@@ -69,6 +71,7 @@ pub fn AppRoot(props: AppRootProps) -> Element {
     provide_rpc_client(props.client);
     provide_ui_scope_context(props.initial_scope_id);
     rsx! {
+        document::Stylesheet { href: CORE_STYLES }
         UiCatalogProvider {
             AppShell {}
         }
