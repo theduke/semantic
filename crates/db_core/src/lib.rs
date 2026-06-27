@@ -1,6 +1,7 @@
 mod backend;
 mod canonical;
 pub mod catalog;
+mod config;
 mod context;
 mod ddl;
 mod error;
@@ -14,6 +15,7 @@ mod validation;
 
 pub use backend::*;
 pub use canonical::*;
+pub use config::*;
 pub use context::*;
 pub use ddl::*;
 pub use error::*;

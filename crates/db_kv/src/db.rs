@@ -5,10 +5,9 @@ use futures::{StreamExt, stream};
 use semantic_data::query::FieldFormat;
 use semantic_data::schema::IndexKind;
 use semantic_data::schema::{
-    MigrationOperation, Package, RelationIndexingMode, RelationMode, RelationType,
+    Migration, MigrationOperation, Package, RelationIndexingMode, RelationMode, RelationType,
 };
 use semantic_data::value::{FieldPath, Object, PathSegment, Value, ValueRef};
-use semantic_db_core::DbError;
 use semantic_db_core::{
     ALL_COLLECTION_ALIAS, AccessPath, AppliedMigration, Batch, BatchOperation, BatchOutcome,
     DEFAULT_COLLECTION, DeleteQuery, EntityRecord, InsertQuery, InsertSource, MutationStats,
@@ -19,6 +18,7 @@ use semantic_db_core::{
     normalize_object_for_collection, normalize_package_definition, touched_collections,
     validate_package_migrations,
 };
+use semantic_db_core::{DbConfig, DbError, MigrationMismatchPolicy};
 
 use crate::{
     schema_store::{catalog_write_ops, load_catalog},
@@ -51,11 +51,16 @@ const REL_EDGE_TARGET_INDEX_NAME: &str = "__rel_target_idx";
 pub struct KvDb<E: KvEngine> {
     catalog: SharedCatalog,
     store: EntityStore<E>,
+    config: DbConfig,
 }
 
 impl KvDb<MemoryKvEngine> {
     pub fn in_memory() -> Self {
         Self::new(MemoryKvEngine::new())
+    }
+
+    pub fn in_memory_with_config(config: DbConfig) -> Self {
+        Self::new_with_config(MemoryKvEngine::new(), config)
     }
 
     pub fn in_memory_mvcc() -> Self {
@@ -72,7 +77,15 @@ impl<E: KvEngine> KvDb<E> {
         Self::open(engine).expect("database initialization failed")
     }
 
+    pub fn new_with_config(engine: E, config: DbConfig) -> Self {
+        Self::open_with_config(engine, config).expect("database initialization failed")
+    }
+
     pub fn open(engine: E) -> std::result::Result<Self, DbError> {
+        Self::open_with_config(engine, DbConfig::default())
+    }
+
+    pub fn open_with_config(engine: E, config: DbConfig) -> std::result::Result<Self, DbError> {
         let mut store = EntityStore::new(engine);
         let bootstrap_catalog = fresh_catalog_with_core_schema()
             .map_err(|err| DbError::InvalidQuery(err.to_string()))?;
@@ -92,6 +105,7 @@ impl<E: KvEngine> KvDb<E> {
         let mut db = Self {
             catalog: SharedCatalog::new(catalog),
             store,
+            config,
         };
         if db
             .catalog()
@@ -1002,12 +1016,22 @@ impl<E: KvEngine> KvDb<E> {
             if let Some(applied) =
                 next_catalog.applied_migration(&package.name, &migration.module, &migration.name)
             {
-                if applied.migration != *migration {
-                    return Err(DbError::InvalidQuery(format!(
+                let applied_migration = applied.migration.clone();
+                if applied_migration != *migration {
+                    let message = format!(
                         "applied migration '{}::{}' for package '{}' differs from the stored definition",
                         migration.module, migration.name, package.name
-                    )));
+                    );
+                    match self.config.migration_mismatch_policy {
+                        MigrationMismatchPolicy::Fail => {
+                            return Err(DbError::InvalidQuery(message));
+                        }
+                        MigrationMismatchPolicy::Log => {
+                            tracing::error!("{message}");
+                        }
+                    }
                 }
+                Self::reconcile_applied_migration_schema(&mut next_catalog, &applied_migration)?;
                 continue;
             }
 
@@ -1115,6 +1139,26 @@ impl<E: KvEngine> KvDb<E> {
         next_catalog.upsert_package(package.clone());
 
         Ok((next_catalog, before, after, executed_migrations))
+    }
+
+    fn reconcile_applied_migration_schema(
+        catalog: &mut Catalog,
+        migration: &Migration,
+    ) -> std::result::Result<(), DbError> {
+        apply_migration_ddl_batch(
+            catalog,
+            &migration.module,
+            migration
+                .operations
+                .iter()
+                .filter_map(|operation| match operation {
+                    MigrationOperation::Ddl(operation) => Some(operation),
+                    MigrationOperation::Insert { .. }
+                    | MigrationOperation::Update { .. }
+                    | MigrationOperation::Delete { .. } => None,
+                }),
+        )
+        .map_err(|err| DbError::InvalidQuery(err.to_string()))
     }
 
     fn apply_package_data_batch(
@@ -2979,6 +3023,7 @@ mod tests {
 
     use semantic_data::{
         schema::{
+            Migration, MigrationDdlOperation, MigrationOperation, Module, Package,
             attribute::attribute_ref::AttributeRef,
             attribute::attribute_type::AttributeType,
             class::class_attribute::ClassAttribute,
@@ -3001,6 +3046,7 @@ mod tests {
         Operand, OrderBy, Query, QueryField, QueryResult, SelectQuery, TransactionConcurrency,
         TransactionOptions, UpdateQuery, canonicalize_select_query,
     };
+    use semantic_db_core::{DbConfig, MigrationMismatchPolicy};
 
     use super::{KvDb, QueryPlan};
 
@@ -3021,6 +3067,39 @@ mod tests {
     fn initialization_enables_auto_indexing() {
         let db = KvDb::in_memory();
         assert!(db.auto_index_enabled());
+    }
+
+    #[test]
+    fn applied_migration_mismatch_fails_by_default() {
+        let mut db = KvDb::in_memory();
+        let package = simple_schema_package("Original migration.");
+        db.upsert_package(package.clone()).unwrap();
+
+        let mut changed = package;
+        changed.migrations[0].description = Some("Changed migration.".to_string());
+
+        let err = db.upsert_package(changed).unwrap_err();
+        assert!(
+            err.to_string()
+                .contains("differs from the stored definition"),
+            "{err}"
+        );
+    }
+
+    #[test]
+    fn applied_migration_mismatch_can_be_logged() {
+        let mut db = KvDb::in_memory_with_config(DbConfig {
+            migration_mismatch_policy: MigrationMismatchPolicy::Log,
+        });
+        let package = simple_schema_package("Original migration.");
+        db.upsert_package(package.clone()).unwrap();
+
+        let mut changed = package;
+        changed.migrations[0].description = Some("Changed migration.".to_string());
+        let outcome = db.upsert_package(changed).unwrap();
+
+        assert!(outcome.executed_migrations.is_empty());
+        assert!(db.catalog().class_id("shared.test.note").is_some());
     }
 
     #[test]
@@ -3744,6 +3823,70 @@ mod tests {
             underscore[0].get("semantic_title"),
             Some(&Value::String("hello".to_string()))
         );
+    }
+
+    fn simple_schema_package(description: &str) -> Package {
+        let attr = AttributeType {
+            id: "shared.test.title".to_string(),
+            name: "title".to_string(),
+            ty: ty(TypeKind::String(StringType {
+                format: None,
+                normalization: None,
+            })),
+            constraints: vec![],
+            meta: Meta::default(),
+        };
+        let mut attrs = BTreeMap::new();
+        attrs.insert(
+            "title".to_string(),
+            ClassAttribute {
+                attribute: AttributeRef {
+                    id: attr.id.clone(),
+                },
+                required: false,
+                computed: None,
+                constraints: vec![],
+                meta: Meta::default(),
+            },
+        );
+        let class = ClassType {
+            id: "shared.test.note".to_string(),
+            name: "Note".to_string(),
+            inherits: None,
+            extends: vec![],
+            attributes: attrs,
+            constraints: vec![],
+            meta: Meta::default(),
+        };
+
+        Package {
+            name: "shared.test".to_string(),
+            root: Module {
+                name: "test".to_string(),
+                constants: BTreeMap::new(),
+                types: BTreeMap::new(),
+                attributes: BTreeMap::from([(attr.id.clone(), attr.clone())]),
+                classes: BTreeMap::from([(class.id.clone(), class.clone())]),
+                interfaces: BTreeMap::new(),
+                contracts: BTreeMap::new(),
+                meta: Meta::default(),
+            },
+            modules: BTreeMap::new(),
+            migrations: vec![Migration {
+                module: "test".to_string(),
+                name: "001_init".to_string(),
+                description: Some(description.to_string()),
+                operations: vec![
+                    MigrationOperation::Ddl(MigrationDdlOperation::UpsertAttribute {
+                        attribute: attr,
+                    }),
+                    MigrationOperation::Ddl(MigrationDdlOperation::UpsertClass { class }),
+                ],
+                meta: Meta::default(),
+            }],
+            version: None,
+            meta: Meta::default(),
+        }
     }
 
     fn ty(kind: TypeKind) -> Type {

@@ -1,6 +1,6 @@
 use redb::{ReadableTable, TableDefinition};
 use semantic_data::schema::DbOpenMode;
-use semantic_db_core::DbError;
+use semantic_db_core::{DbConfig, DbError};
 use semantic_db_kv::{
     BoxKvPrefixScan, KvCommitOutcome, KvEngine, KvTransactionCapabilities, KvWriteOp,
 };
@@ -246,8 +246,16 @@ pub fn open_backend(
     path: impl AsRef<Path>,
     mode: DbOpenMode,
 ) -> std::result::Result<RedbBackend, DbError> {
+    open_backend_with_config(path, mode, DbConfig::default())
+}
+
+pub fn open_backend_with_config(
+    path: impl AsRef<Path>,
+    mode: DbOpenMode,
+    config: DbConfig,
+) -> std::result::Result<RedbBackend, DbError> {
     let engine = RedbKvEngine::open(path, mode)?;
-    let db = RedbDatabase::open(engine)?;
+    let db = RedbDatabase::open_with_config(engine, config)?;
     Ok(RedbBackend::new(db))
 }
 
