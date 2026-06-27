@@ -46,13 +46,17 @@ pub struct Catalog {
 pub const PRIMARY_ID_FIELD: &str = semantic_data::builtin::ID_ATTRIBUTE_ID;
 pub const OBJECT_TYPE_FIELD: &str = semantic_data::builtin::TYPE_ATTRIBUTE_ID;
 pub const PARENT_RELATION_FIELD: &str = "parent";
-pub const PARENT_RELATION_ATTRIBUTE: &str = "parent";
+pub const PARENT_RELATION_ATTRIBUTE_ID: &str = "parent";
+pub const PARENT_RELATION_ATTRIBUTE: &str = PARENT_RELATION_ATTRIBUTE_ID;
 pub const PRIMARY_ID_INDEX_NAME: &str = "__builtin_pk_id";
 pub const OBJECT_TYPE_INDEX_NAME: &str = "__builtin_type";
 pub const BUILTIN_PARENT_RELATION_ID: &str = "__builtin.parent";
 pub const RELATION_CLASS_ID: &str = "semantic:relation";
-pub const RELATION_FROM_ATTRIBUTE: &str = "semantic:relation:from";
-pub const RELATION_TO_ATTRIBUTE: &str = "semantic:relation:to";
+pub const RELATION_RELATION_ATTRIBUTE_ID: &str = "semantic:relation:relation";
+pub const RELATION_FROM_ATTRIBUTE_ID: &str = "semantic:relation:from";
+pub const RELATION_TO_ATTRIBUTE_ID: &str = "semantic:relation:to";
+pub const RELATION_FROM_ATTRIBUTE: &str = RELATION_FROM_ATTRIBUTE_ID;
+pub const RELATION_TO_ATTRIBUTE: &str = RELATION_TO_ATTRIBUTE_ID;
 pub const AUTO_PATH_INDEX_NAME: &str = "__auto_index_all_paths";
 pub const AUTO_PATH_INDEX_FIELD: &str = "__path__";
 
