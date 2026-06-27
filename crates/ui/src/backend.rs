@@ -17,6 +17,7 @@ use semantic_rpc::{
     },
 };
 use std::sync::Arc;
+use tracing::info;
 
 #[cfg(feature = "desktop")]
 struct RedbDbProvider;
@@ -158,10 +159,14 @@ impl RpcClientDyn for EmbeddedRpcClient {
     }
 
     fn file_url(&self, id: &str) -> Option<String> {
-        Some(format!(
-            "semantic-file://localhost/{}",
-            percent_encode_path(id)
-        ))
+        let url = format!("semantic-file://localhost/{}", percent_encode_path(id));
+        info!(
+            target: "semantic_ui::standalone_file",
+            id,
+            url,
+            "generated embedded file URL"
+        );
+        Some(url)
     }
 }
 

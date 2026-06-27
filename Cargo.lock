@@ -8358,6 +8358,7 @@ dependencies = [
  "semantic_db_redb",
  "semantic_rpc",
  "semantic_ui_core",
+ "tracing",
 ]
 
 [[package]]
@@ -8376,6 +8377,7 @@ dependencies = [
  "semantic_rpc",
  "thiserror 2.0.18",
  "time",
+ "tracing",
 ]
 
 [[package]]

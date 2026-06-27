@@ -6,6 +6,7 @@ use semantic_data::filestore::{
     FILE_FILENAME_ATTRIBUTE_ID, FILE_FILESTORE_LOCATOR_ATTRIBUTE_ID, FILE_MIME_TYPE_ATTRIBUTE_ID,
 };
 use semantic_data::value::{Object, Value};
+use tracing::{info, warn};
 
 use crate::ui_catalog::{RenderCtx, RenderMode, UiCatalog, ValueRenderContext};
 
@@ -72,6 +73,15 @@ pub fn register_defaults(catalog: &mut UiCatalog) {
             .and_then(|object| object_string(object, &["filename", FILE_FILENAME_ATTRIBUTE_ID]))
             .unwrap_or(file_id);
         if ctx.settings.show_media && mime_type.starts_with("image/") {
+            info!(
+                target: "semantic_ui::file_render",
+                file_id,
+                href,
+                mime_type,
+                filename,
+                mode = ?ctx.mode,
+                "rendering file attribute as image"
+            );
             rsx! {
                 a {
                     class: "semantic-file semantic-file--image",
@@ -86,6 +96,16 @@ pub fn register_defaults(catalog: &mut UiCatalog) {
                 }
             }
         } else {
+            warn!(
+                target: "semantic_ui::file_render",
+                file_id,
+                href,
+                mime_type,
+                filename,
+                show_media = ctx.settings.show_media,
+                mode = ?ctx.mode,
+                "rendering file attribute as link"
+            );
             rsx! {
                 a {
                     class: "semantic-file semantic-file--link",

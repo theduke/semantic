@@ -56,21 +56,45 @@ fn launch_standalone(args: &[String]) {
 #[cfg(all(feature = "desktop", feature = "standalone"))]
 fn standalone_desktop_config(handle: semantic_ui::EmbeddedAppHandle) -> dioxus::desktop::Config {
     use std::borrow::Cow;
+    use tracing::{error, info};
 
     dioxus::desktop::Config::new().with_custom_protocol("semantic-file", move |_id, request| {
+        info!(
+            target: "semantic_ui::standalone_file",
+            uri = %request.uri(),
+            method = %request.method(),
+            "received semantic-file custom protocol request"
+        );
         let response = futures::executor::block_on(read_standalone_file(&handle, request.uri()));
         match response {
-            Ok((mime_type, bytes)) => dioxus::desktop::wry::http::Response::builder()
-                .status(200)
-                .header("content-type", mime_type)
-                .header("content-length", bytes.len().to_string())
-                .body(Cow::Owned(bytes))
-                .expect("valid semantic file response"),
-            Err((status, message)) => dioxus::desktop::wry::http::Response::builder()
-                .status(status)
-                .header("content-type", "text/plain; charset=utf-8")
-                .body(Cow::Owned(message.into_bytes()))
-                .expect("valid semantic file error response"),
+            Ok((file_id, mime_type, bytes)) => {
+                info!(
+                    target: "semantic_ui::standalone_file",
+                    file_id,
+                    mime_type,
+                    byte_size = bytes.len(),
+                    "serving semantic-file custom protocol response"
+                );
+                dioxus::desktop::wry::http::Response::builder()
+                    .status(200)
+                    .header("content-type", mime_type)
+                    .header("content-length", bytes.len().to_string())
+                    .body(Cow::Owned(bytes))
+                    .expect("valid semantic file response")
+            }
+            Err((status, message)) => {
+                error!(
+                    target: "semantic_ui::standalone_file",
+                    status,
+                    message,
+                    "failed to serve semantic-file custom protocol response"
+                );
+                dioxus::desktop::wry::http::Response::builder()
+                    .status(status)
+                    .header("content-type", "text/plain; charset=utf-8")
+                    .body(Cow::Owned(message.into_bytes()))
+                    .expect("valid semantic file error response")
+            }
         }
     })
 }
@@ -79,11 +103,29 @@ fn standalone_desktop_config(handle: semantic_ui::EmbeddedAppHandle) -> dioxus::
 async fn read_standalone_file(
     handle: &semantic_ui::EmbeddedAppHandle,
     uri: &dioxus::desktop::wry::http::Uri,
-) -> std::result::Result<(String, Vec<u8>), (u16, String)> {
+) -> std::result::Result<(String, String, Vec<u8>), (u16, String)> {
     use futures::StreamExt as _;
+    use tracing::{debug, error, info};
 
-    let id = file_id_from_custom_uri(uri)
-        .ok_or_else(|| (400, "semantic-file URL must contain a file id".to_string()))?;
+    let id = match file_id_from_custom_uri(uri) {
+        Some(id) => {
+            debug!(
+                target: "semantic_ui::standalone_file",
+                uri = %uri,
+                file_id = id,
+                "parsed semantic-file URI"
+            );
+            id
+        }
+        None => {
+            error!(
+                target: "semantic_ui::standalone_file",
+                uri = %uri,
+                "failed to parse semantic-file URI"
+            );
+            return Err((400, "semantic-file URL must contain a file id".to_string()));
+        }
+    };
     let ctx = semantic_app::AppRequestContext {
         app: handle.app.clone(),
         principal: handle.principal.clone(),
@@ -93,20 +135,43 @@ async fn read_standalone_file(
     let mut file = handle
         .app
         .files()
-        .read(&ctx, Some(handle.scope_id.clone()), id)
+        .read(&ctx, Some(handle.scope_id.clone()), id.clone())
         .await
-        .map_err(|err| (404, err.to_string()))?;
+        .map_err(|err| {
+            error!(
+                target: "semantic_ui::standalone_file",
+                file_id = id,
+                error = %err,
+                "file service read failed"
+            );
+            (404, err.to_string())
+        })?;
     let mut bytes = Vec::new();
     while let Some(chunk) = file.stream.next().await {
-        let chunk = chunk.map_err(|err| (500, err.to_string()))?;
+        let chunk = chunk.map_err(|err| {
+            error!(
+                target: "semantic_ui::standalone_file",
+                file_id = id,
+                error = %err,
+                "file stream read failed"
+            );
+            (500, err.to_string())
+        })?;
         bytes.extend_from_slice(&chunk);
     }
-    Ok((
-        file.mime_type
-            .take()
-            .unwrap_or_else(|| "application/octet-stream".to_string()),
-        bytes,
-    ))
+    let mime_type = file
+        .mime_type
+        .take()
+        .unwrap_or_else(|| "application/octet-stream".to_string());
+    info!(
+        target: "semantic_ui::standalone_file",
+        file_id = id,
+        filestore_locator = file.filestore_locator,
+        mime_type,
+        byte_size = bytes.len(),
+        "read standalone file bytes"
+    );
+    Ok((id, mime_type, bytes))
 }
 
 #[cfg(all(feature = "desktop", feature = "standalone"))]
