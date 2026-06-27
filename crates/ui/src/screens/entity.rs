@@ -27,7 +27,8 @@ pub fn EntityScreen(
         section { class: "semantic-entity",
             h2 { "{collection}/{id}" }
             div { class: "semantic-entity__actions",
-                button {
+                dxcomp::Button {
+                    variant: dxcomp::ButtonVariant::Outline,
                     onclick: {
                         let collection = collection.clone();
                         let id = id.clone();

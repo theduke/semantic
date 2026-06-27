@@ -22,9 +22,15 @@ pub fn HomeScreen(on_open_collection: EventHandler<String>) -> Element {
             ul {
                 for collection in collections {
                     li {
-                        button {
-                            onclick: move |_| on_open_collection.call(collection.clone()),
+                        {
+                            let collection_for_open = collection.clone();
+                            rsx! {
+                        dxcomp::Button {
+                            variant: dxcomp::ButtonVariant::Link,
+                            onclick: move |_| on_open_collection.call(collection_for_open.clone()),
                             "{collection}"
+                        }
+                            }
                         }
                     }
                 }

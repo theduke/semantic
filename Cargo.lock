@@ -8306,6 +8306,7 @@ version = "0.0.1"
 dependencies = [
  "async-trait",
  "dioxus",
+ "dxcomp",
  "futures",
  "semantic_app",
  "semantic_data",
@@ -8321,6 +8322,7 @@ version = "0.0.1"
 dependencies = [
  "bytes",
  "dioxus",
+ "dxcomp",
  "dxform",
  "facet-json",
  "futures",

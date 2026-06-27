@@ -14,6 +14,7 @@ version.workspace = true
 [dependencies]
 bytes = { workspace = true }
 dioxus = { workspace = true }
+dxcomp = { path = "../dxcomp" }
 dxform = { path = "../dxform" }
 facet-json = "0.43.2"
 futures = "0.3.31"

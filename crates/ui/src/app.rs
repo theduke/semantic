@@ -72,6 +72,7 @@ pub fn AppRoot(props: AppRootProps) -> Element {
     provide_ui_scope_context(props.initial_scope_id);
     rsx! {
         document::Stylesheet { href: CORE_STYLES }
+        dxcomp::Stylesheet {}
         UiCatalogProvider {
             AppShell {}
         }
@@ -87,11 +88,11 @@ fn AppShell() -> Element {
             header { class: "semantic-ui__header",
                 h1 { "Semantic" }
                 nav {
-                    button { onclick: move |_| page.set(Page::Home), "Home" }
-                    button { onclick: move |_| page.set(Page::Catalog), "Catalog" }
-                    button { onclick: move |_| page.set(Page::Collection("entities".to_string())), "Entities" }
-                    button { onclick: move |_| page.set(Page::CreateEntity), "Create" }
-                    button { onclick: move |_| page.set(Page::Query), "Query" }
+                    dxcomp::Button { variant: dxcomp::ButtonVariant::Ghost, onclick: move |_| page.set(Page::Home), "Home" }
+                    dxcomp::Button { variant: dxcomp::ButtonVariant::Ghost, onclick: move |_| page.set(Page::Catalog), "Catalog" }
+                    dxcomp::Button { variant: dxcomp::ButtonVariant::Ghost, onclick: move |_| page.set(Page::Collection("entities".to_string())), "Entities" }
+                    dxcomp::Button { variant: dxcomp::ButtonVariant::Ghost, onclick: move |_| page.set(Page::CreateEntity), "Create" }
+                    dxcomp::Button { variant: dxcomp::ButtonVariant::Ghost, onclick: move |_| page.set(Page::Query), "Query" }
                 }
             }
             main { class: "semantic-ui__main",

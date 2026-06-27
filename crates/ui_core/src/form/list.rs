@@ -47,12 +47,15 @@ fn ListValueForm(
     rsx! {
         div { class: "semantic-form__list",
             div { class: "semantic-form__list-actions",
-                button {
+                dxcomp::Button {
+                    size: dxcomp::ButtonSize::Sm,
                     r#type: "button",
                     onclick: list.add_handler(Rc::new(move || default_value_for_type(&new_item_type))),
                     "Add"
                 }
-                button {
+                dxcomp::Button {
+                    variant: dxcomp::ButtonVariant::Outline,
+                    size: dxcomp::ButtonSize::Sm,
                     r#type: "button",
                     disabled: list.is_empty(),
                     onclick: list.clear_handler(),
@@ -88,7 +91,9 @@ fn ListValueItem(
                 mode,
                 path,
             })}
-            button {
+            dxcomp::Button {
+                variant: dxcomp::ButtonVariant::Destructive,
+                size: dxcomp::ButtonSize::Sm,
                 r#type: "button",
                 onclick: item.remove_handler(),
                 "Remove"

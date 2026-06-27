@@ -93,12 +93,13 @@ pub fn DynamicFormActions(form: FormRoot<Value>) -> Element {
     };
     rsx! {
         div { class: "semantic-form__actions",
-            button {
+            dxcomp::Button {
                 r#type: "submit",
                 disabled: meta.submitting,
                 "Submit"
             }
-            button {
+            dxcomp::Button {
+                variant: dxcomp::ButtonVariant::Outline,
                 r#type: "button",
                 disabled: meta.submitting,
                 onclick: move |_| form.reset(),

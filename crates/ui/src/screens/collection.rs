@@ -25,7 +25,7 @@ pub fn CollectionScreen(
         section { class: "semantic-collection",
             h2 { "{collection}" }
             div { class: "semantic-collection__actions",
-                button {
+                dxcomp::Button {
                     onclick: move |_| on_create_entity.call(()),
                     "Create"
                 }
@@ -46,7 +46,8 @@ pub fn CollectionScreen(
                                 tr {
                                     td {
                                         if let Some(id) = row.get("id").and_then(Value::as_str).map(str::to_string) {
-                                            button {
+                                            dxcomp::Button {
+                                                variant: dxcomp::ButtonVariant::Link,
                                                 onclick: {
                                                     let collection = collection.clone();
                                                     let id = id.clone();
@@ -60,7 +61,9 @@ pub fn CollectionScreen(
                                     td { "{row.len()}" }
                                     td {
                                         if let Some(id) = row.get("id").and_then(Value::as_str).map(str::to_string) {
-                                            button {
+                                            dxcomp::Button {
+                                                variant: dxcomp::ButtonVariant::Outline,
+                                                size: dxcomp::ButtonSize::Sm,
                                                 onclick: {
                                                     let collection = collection.clone();
                                                     let id = id.clone();

@@ -40,6 +40,7 @@ pub fn CreateEntityScreen(on_open_entity: EventHandler<(String, String)>) -> Ele
         .cloned()
         .or_else(|| classes.first().cloned());
     let primary_id_field = primary_id_field_for_collection(&catalog, &collection);
+    let toolbar_collection = collection.clone();
 
     rsx! {
         section { class: "semantic-form-screen semantic-create-entity",
@@ -65,7 +66,7 @@ pub fn CreateEntityScreen(on_open_entity: EventHandler<(String, String)>) -> Ele
                     label {
                         span { "Collection" }
                         select {
-                            value: "{collection}",
+                            value: "{toolbar_collection}",
                             onchange: move |event| selected_collection.set(event.value()),
                             if collections.is_empty() {
                                 option { value: "entities", "entities" }
@@ -73,7 +74,7 @@ pub fn CreateEntityScreen(on_open_entity: EventHandler<(String, String)>) -> Ele
                             for option in collections.iter() {
                                 option {
                                     value: "{option}",
-                                    selected: option == &collection,
+                                    selected: option == &toolbar_collection,
                                     "{option}"
                                 }
                             }
@@ -81,9 +82,9 @@ pub fn CreateEntityScreen(on_open_entity: EventHandler<(String, String)>) -> Ele
                     }
                     label {
                         span { "ID" }
-                        input {
+                        dxcomp::Input {
                             value: "{entity_id}",
-                            oninput: move |event| id.set(event.value())
+                            oninput: move |event: FormEvent| id.set(event.value())
                         }
                     }
                 }
@@ -116,7 +117,8 @@ pub fn CreateEntityScreen(on_open_entity: EventHandler<(String, String)>) -> Ele
                     }
                 }
                 div { class: "semantic-form-screen__footer",
-                    button {
+                    dxcomp::Button {
+                        variant: dxcomp::ButtonVariant::Outline,
                         r#type: "button",
                         onclick: move |_| on_open_entity.call((collection.clone(), entity_id.clone())),
                         "Open Entity"

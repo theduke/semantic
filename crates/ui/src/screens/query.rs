@@ -14,12 +14,12 @@ pub fn QueryScreen() -> Element {
     rsx! {
         section { class: "semantic-query",
             h2 { "Query" }
-            textarea {
+            dxcomp::Textarea {
                 value: "{query}",
-                oninput: move |event| query.set(event.value())
+                oninput: move |event: FormEvent| query.set(event.value())
             }
             div {
-                button {
+                dxcomp::Button {
                     onclick: move |_| {
                         let client = client.clone();
                         let scope_id = scope_id.clone();

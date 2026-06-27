@@ -87,13 +87,12 @@ fn StringValueInput(scope: FormScope<Value, Value>, value_type: Option<Type>) ->
     let blur_field = field.clone();
     let focus_field = field.clone();
     rsx! {
-        input {
-            class: "semantic-form__input",
+        dxcomp::Input {
             r#type: "{input_type}",
             value,
-            oninput: move |event| input_field.set_value(Value::String(event.value())),
-            onblur: move |_| blur_field.set_focused(false),
-            onfocus: move |_| focus_field.set_focused(true),
+            oninput: move |event: FormEvent| input_field.set_value(Value::String(event.value())),
+            onblur: move |_event: FocusEvent| blur_field.set_focused(false),
+            onfocus: move |_event: FocusEvent| focus_field.set_focused(true),
         }
     }
 }
@@ -107,11 +106,11 @@ fn BoolValueInput(scope: FormScope<Value, Value>) -> Element {
     let field = use_value_leaf_field(scope);
     let checked = matches!(field.value(), Value::Bool(true));
     rsx! {
-        input {
+        dxcomp::Input {
             class: "semantic-form__checkbox",
             r#type: "checkbox",
             checked,
-            onchange: move |event| field.set_value(Value::Bool(event.checked())),
+            onchange: move |event: FormEvent| field.set_value(Value::Bool(event.checked())),
         }
     }
 }
@@ -155,12 +154,11 @@ fn DateValueInput(scope: FormScope<Value, Value>) -> Element {
     });
     let value = field.draft();
     rsx! {
-        input {
-            class: "semantic-form__input",
+        dxcomp::Input {
             r#type: "text",
             placeholder: "yyyy-mm-dd",
             value,
-            oninput: move |event| field.set_draft(event.value()),
+            oninput: move |event: FormEvent| field.set_draft(event.value()),
         }
     }
 }
@@ -179,12 +177,11 @@ fn DateTimeValueInput(scope: FormScope<Value, Value>) -> Element {
     });
     let value = field.draft();
     rsx! {
-        input {
-            class: "semantic-form__input",
+        dxcomp::Input {
             r#type: "text",
             placeholder: "yyyy-mm-ddThh:mm:ssZ",
             value,
-            oninput: move |event| field.set_draft(event.value()),
+            oninput: move |event: FormEvent| field.set_draft(event.value()),
         }
     }
 }
@@ -203,12 +200,11 @@ fn TimeValueInput(scope: FormScope<Value, Value>) -> Element {
     });
     let value = field.draft();
     rsx! {
-        input {
-            class: "semantic-form__input",
+        dxcomp::Input {
             r#type: "text",
             placeholder: "hh:mm:ss",
             value,
-            oninput: move |event| field.set_draft(event.value()),
+            oninput: move |event: FormEvent| field.set_draft(event.value()),
         }
     }
 }
@@ -231,11 +227,10 @@ fn NumberValueInput(scope: FormScope<Value, Value>, value_type: Option<Type>) ->
     });
     let value = field.draft();
     rsx! {
-        input {
-            class: "semantic-form__input",
+        dxcomp::Input {
             r#type: "number",
             value,
-            oninput: move |event| field.set_draft(event.value()),
+            oninput: move |event: FormEvent| field.set_draft(event.value()),
         }
     }
 }
@@ -266,7 +261,9 @@ fn render_optional(ctx: ValueFormRenderContext) -> Element {
 fn OptionalClearButton(scope: FormScope<Value, Value>) -> Element {
     let field = use_value_leaf_field(scope);
     rsx! {
-            button {
+            dxcomp::Button {
+                variant: dxcomp::ButtonVariant::Outline,
+                size: dxcomp::ButtonSize::Sm,
                 r#type: "button",
                 onclick: move |_| field.set_value(Value::Null),
                 "Clear"

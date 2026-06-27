@@ -26,6 +26,7 @@ standalone = [
 [dependencies]
 async-trait = { version = "0.1.89", optional = true }
 dioxus = { workspace = true }
+dxcomp = { path = "../dxcomp" }
 futures = "0.3.31"
 semantic_app = { path = "../app", optional = true }
 semantic_data = { workspace = true }
