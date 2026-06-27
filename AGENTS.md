@@ -14,6 +14,8 @@ don't read in too many files for context, just what you need
 * Use `cargo check --quiet --message-format=short` to check for errors
   Only use full `cargo check --quiet` when the short format does not give enough information.
 
+* When Nix is available, always run check and test commands through the Nix devshell.
+
 * When a change is finished, run the above check commands to validate
 
 * When running tests, use:
@@ -24,4 +26,3 @@ don't read in too many files for context, just what you need
 * Do NOT use Result<E> convenience aliases, use the full Result<T, E>
 
 * After finalizing a change, run checks and `cargo fmt`.
-
