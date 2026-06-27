@@ -63,7 +63,11 @@ pub fn attribute_field_spec_with_storage_name(
     class_attribute: ClassAttribute,
     _catalog: UiCatalog,
 ) -> FieldSpec<Value, Value> {
-    let fallback = crate::form::default_value_for_type(&attribute.ty);
+    let fallback = if class_attribute.required {
+        crate::form::default_value_for_type(&attribute.ty)
+    } else {
+        Value::Null
+    };
     let get_field = storage_field_name.clone();
     let set_field = storage_field_name;
     FieldSpec {

@@ -388,6 +388,10 @@ fn number_to_string(value: &Value) -> String {
 }
 
 fn parse_number_value(value: &str, ty: Option<&Type>) -> std::result::Result<Value, FormError> {
+    if value.trim().is_empty() {
+        return Ok(Value::Null);
+    }
+
     let number_type = ty.and_then(|ty| match &ty.kind {
         TypeKind::Number(number) => Some(number),
         _ => None,
@@ -565,6 +569,26 @@ mod tests {
         assert_eq!(date_to_string(&value), "2025-01-01");
         assert!(parse_date_value("2025-99-01").is_err());
         assert_eq!(parse_date_value("").expect("empty"), Value::Null);
+    }
+
+    #[test]
+    fn number_parser_treats_empty_input_as_null() {
+        let ty = Type::new(TypeKind::Number(NumberType::UInt(
+            semantic_data::schema::UIntWidth::U64,
+        )));
+
+        assert_eq!(
+            parse_number_value("", Some(&ty)).expect("empty"),
+            Value::Null
+        );
+        assert_eq!(
+            parse_number_value("  ", Some(&ty)).expect("blank"),
+            Value::Null
+        );
+        assert_eq!(
+            parse_number_value("42", Some(&ty)).expect("number"),
+            Value::U64(42)
+        );
     }
 
     #[test]

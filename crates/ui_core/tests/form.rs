@@ -5,7 +5,7 @@ use dxform::{FieldSpec, FormOptions, FormRoot, SubformSpec, SubmitHandler};
 use semantic_data::{
     schema::{
         AttributeRef, AttributeType, BoolType, ClassAttribute, ClassRef, ClassType, Constraint,
-        LengthSpec, LiteralValue, Meta, StringType, Type, TypeKind,
+        LengthSpec, LiteralValue, Meta, NumberType, StringType, Type, TypeKind, UIntWidth,
     },
     value::{Object, Value},
 };
@@ -15,7 +15,7 @@ use semantic_db_core::catalog::{
 };
 use semantic_ui_core::form::{
     attribute_field_spec, default_value_for_class, set_object_field_value,
-    set_optional_object_field_value, validate_value_constraints,
+    set_optional_object_field_value, validate_value_against_type, validate_value_constraints,
 };
 use semantic_ui_core::{
     AttributeFormRenderContext, UiCatalog, ValueFormRenderContext, default_value_for_type,
@@ -64,6 +64,10 @@ fn string_type() -> Type {
 
 fn bool_type() -> Type {
     Type::from(TypeKind::Bool(BoolType))
+}
+
+fn uint64_type() -> Type {
+    Type::from(TypeKind::Number(NumberType::UInt(UIntWidth::U64)))
 }
 
 fn attr(id: &str, name: &str, ty: Type) -> AttributeType {
@@ -216,6 +220,18 @@ fn validation_reports_required_string_shape_constraints() {
 }
 
 #[test]
+fn null_value_passes_number_type_validation() {
+    assert!(
+        validate_value_against_type(
+            dxform::FieldPath::new("byte_size"),
+            &Value::Null,
+            &uint64_type()
+        )
+        .is_empty()
+    );
+}
+
+#[test]
 fn attribute_field_spec_updates_root_object_and_meta() {
     run_in_runtime(|| {
         let attribute = attr("attr.name", "name", string_type());
@@ -237,6 +253,37 @@ fn attribute_field_spec_updates_root_object_and_meta() {
         };
         assert_eq!(object.get("name"), Some(&Value::String("Ada".to_string())));
         assert!(form.meta().dirty);
+    });
+}
+
+#[test]
+fn optional_number_attribute_uses_null_fallback_and_removes_null_values() {
+    run_in_runtime(|| {
+        let attribute = attr("attr.byte_size", "byte_size", uint64_type());
+        let class_attribute = class_attr("attr.byte_size", false);
+        let catalog = catalog_with(vec![attribute.clone()], Vec::new());
+        let form = FormRoot::new(Value::Object(Object::new()));
+        let scope = form.scope();
+        let field = scope.field(attribute_field_spec(
+            "byte_size".to_string(),
+            attribute,
+            class_attribute,
+            catalog,
+        ));
+
+        assert_eq!(field.value(), Value::Null);
+
+        field.set_value(Value::U64(42));
+        let Value::Object(object) = form.values() else {
+            panic!("expected object value");
+        };
+        assert_eq!(object.get("byte_size"), Some(&Value::U64(42)));
+
+        field.set_value(Value::Null);
+        let Value::Object(object) = form.values() else {
+            panic!("expected object value");
+        };
+        assert_eq!(object.get("byte_size"), None);
     });
 }
 
