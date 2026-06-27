@@ -3,7 +3,9 @@ use std::collections::BTreeSet;
 use dioxus::prelude::*;
 use dxform::{FormScope, use_field};
 use semantic_data::{
-    schema::{AttributeType, ClassAttribute, ClassType},
+    schema::{
+        AttributeRef, AttributeType, ClassAttribute, ClassType, Meta, StringType, Type, TypeKind,
+    },
     value::{Object, Value},
 };
 use semantic_db_core::catalog::OBJECT_TYPE_FIELD;
@@ -47,10 +49,30 @@ pub fn default_class_form_renderer(ctx: ClassFormRenderContext) -> Element {
 
 pub fn render_class_form_body(ctx: ClassFormRenderContext) -> Element {
     let catalog = use_ui_catalog();
-    let fields = catalog.class_form_fields(&ctx.class);
+    let mut fields = catalog.class_form_fields(&ctx.class);
+    let primary_id_field = ctx
+        .collection
+        .as_deref()
+        .map(|collection| primary_id_field_for_collection(&catalog, collection));
+    let primary_field = primary_id_field.as_ref().and_then(|primary_id_field| {
+        fields
+            .iter()
+            .position(|field| is_primary_id_form_field(field, primary_id_field))
+            .map(|index| fields.remove(index))
+            .or_else(|| {
+                (ctx.mode == SemanticFormMode::Create)
+                    .then(|| synthetic_id_form_field(primary_id_field.clone()))
+            })
+            .map(|field| normalize_primary_id_form_field(field, ctx.mode))
+    });
     let known_field_names = fields
         .iter()
         .flat_map(|field| [field.field_name.clone(), field.storage_field_name.clone()])
+        .chain(
+            primary_field
+                .iter()
+                .flat_map(|field| [field.field_name.clone(), field.storage_field_name.clone()]),
+        )
         .chain(std::iter::once(OBJECT_TYPE_FIELD.to_string()))
         .collect::<BTreeSet<_>>();
     let extra_fields = match ctx.scope.value() {
@@ -78,6 +100,16 @@ pub fn render_class_form_body(ctx: ClassFormRenderContext) -> Element {
             div { class: "semantic-table-wrap semantic-form__field-table-wrap",
                 table { class: "semantic-field-table semantic-form__field-table",
                     tbody {
+                        if let Some(field) = primary_field {
+                            ClassFormFieldRow {
+                                key: "{field.field_name}",
+                                scope: ctx.scope.clone(),
+                                class: ctx.class.clone(),
+                                field,
+                                mode: ctx.mode,
+                                readonly: ctx.mode == SemanticFormMode::Edit,
+                            }
+                        }
                         for field in fields {
                             if field.field_name != OBJECT_TYPE_FIELD && field.storage_field_name != OBJECT_TYPE_FIELD {
                                 {
@@ -88,6 +120,7 @@ pub fn render_class_form_body(ctx: ClassFormRenderContext) -> Element {
                                             class: ctx.class.clone(),
                                             field,
                                             mode: ctx.mode,
+                                            readonly: false,
                                         }
                                     }
                                 }
@@ -163,6 +196,7 @@ fn ClassFormFieldRow(
     class: ClassType,
     field: ClassFormField,
     mode: SemanticFormMode,
+    readonly: bool,
 ) -> Element {
     let catalog = use_ui_catalog();
     let label = field
@@ -183,7 +217,7 @@ fn ClassFormFieldRow(
             catalog_for_spec,
         )
     });
-    if field.class_attribute.computed.is_some() {
+    if readonly || field.class_attribute.computed.is_some() {
         return rsx! {
             ReadonlyClassFormField {
                 field: field_handle,
@@ -228,6 +262,84 @@ fn ClassFormFieldRow(
             }
         }
     }
+}
+
+fn primary_id_field_for_collection(catalog: &crate::UiCatalog, collection: &str) -> String {
+    catalog
+        .collection_by_name(collection)
+        .and_then(|collection| {
+            collection
+                .field_ids
+                .iter()
+                .find(|field| field.canonical_field == "semantic:id")
+                .or_else(|| {
+                    collection
+                        .field_ids
+                        .iter()
+                        .find(|field| field.canonical_field == "semantic:catalog:id")
+                })
+                .or_else(|| {
+                    collection
+                        .field_ids
+                        .iter()
+                        .find(|field| field.canonical_field == "id")
+                })
+        })
+        .map(|field| field.canonical_field.clone())
+        .unwrap_or_else(|| "id".to_string())
+}
+
+fn is_primary_id_form_field(field: &ClassFormField, primary_id_field: &str) -> bool {
+    field.storage_field_name == primary_id_field || field.field_name == primary_id_field
+}
+
+fn synthetic_id_form_field(primary_id_field: String) -> ClassFormField {
+    let meta = Meta {
+        title: Some("Id".to_string()),
+        ..Meta::default()
+    };
+    ClassFormField {
+        field_name: primary_id_field.clone(),
+        storage_field_name: primary_id_field.clone(),
+        attribute: AttributeType {
+            id: primary_id_field.clone(),
+            name: "id".to_string(),
+            ty: Type {
+                kind: TypeKind::String(StringType {
+                    format: None,
+                    normalization: None,
+                }),
+                constraints: Vec::new(),
+                annotations: Vec::new(),
+            },
+            constraints: Vec::new(),
+            meta: meta.clone(),
+        },
+        class_attribute: ClassAttribute {
+            attribute: AttributeRef {
+                id: primary_id_field.clone(),
+            },
+            required: true,
+            ui_order: Some(0),
+            computed: None,
+            constraints: Vec::new(),
+            meta,
+        },
+        declaring_class_id: String::new(),
+    }
+}
+
+fn normalize_primary_id_form_field(
+    mut field: ClassFormField,
+    mode: SemanticFormMode,
+) -> ClassFormField {
+    if mode == SemanticFormMode::Create {
+        field.class_attribute.required = true;
+    }
+    if field.class_attribute.meta.title.is_none() && field.attribute.meta.title.is_none() {
+        field.attribute.meta.title = Some("Id".to_string());
+    }
+    field
 }
 
 #[component]

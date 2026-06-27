@@ -539,7 +539,10 @@ pub fn core_catalog_schema_batch() -> DdlBatch {
                     annotations: vec![],
                 },
                 constraints: vec![],
-                meta: Meta::default(),
+                meta: Meta {
+                    title: Some("Id".to_string()),
+                    ..Meta::default()
+                },
             },
         })
         .with_op(DdlOperation::UpsertAttribute {

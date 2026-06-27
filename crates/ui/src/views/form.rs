@@ -1,16 +1,14 @@
 use dioxus::prelude::*;
+use futures::FutureExt;
 use semantic_data::{
     schema::ClassType,
     value::{Object, Value},
 };
 use semantic_ui_core::{
-    DynamicClassForm, SemanticFormMode, default_value_for_class,
+    DynamicClassForm, SemanticFormMode, SemanticFormSubmit, SubmitError, default_value_for_class,
     rpc_batch_upsert_submit_handler_with_primary_id, use_active_scope_id, use_rpc_client,
     use_ui_catalog,
 };
-
-use crate::views::Route;
-
 #[component]
 pub fn CreateEntityPage() -> Element {
     let client = use_rpc_client();
@@ -31,14 +29,12 @@ pub fn CreateEntityPage() -> Element {
         .unwrap_or_default();
     let mut selected_class_id = use_signal(|| Some(initial_class_id));
     let mut selected_collection = use_signal(|| Some(default_collection.clone()));
-    let mut id = use_signal(new_entity_id);
 
     let class_id = selected_class_id.read().clone().unwrap_or_default();
     let collection = selected_collection
         .read()
         .clone()
         .unwrap_or_else(|| default_collection.clone());
-    let entity_id = id.read().clone();
     let selected_class = classes
         .iter()
         .find(|class| class.id == class_id)
@@ -110,58 +106,35 @@ pub fn CreateEntityPage() -> Element {
                                     }
                                 }
                             }
-                            tr {
-                                th { scope: "row", "ID" }
-                                td {
-                                    dxcomp::Input {
-                                        class: "semantic-form-screen__id-input",
-                                        value: "{entity_id}",
-                                        oninput: move |event: FormEvent| id.set(event.value())
-                                    }
-                                }
-                            }
                         }
                     }
                 }
                 {
+                    let entity_id = new_entity_id();
                     let mut object = match default_value_for_class(&class, &catalog) {
                         Value::Object(object) => object,
                         _ => Object::new(),
                     };
                     object.insert("type", Value::String(class.id.clone()));
                     object.insert(primary_id_field.clone(), Value::String(entity_id.clone()));
-                    let submit = rpc_batch_upsert_submit_handler_with_primary_id(
+                    let submit = rpc_batch_upsert_submit_handler_from_primary_id_field(
                         client.clone(),
                         scope_id.clone(),
                         collection.clone(),
-                        entity_id.clone(),
                         primary_id_field.clone(),
                     );
                     rsx! {
-                        div { key: "{class.id}:{collection}:{entity_id}",
+                        div { key: "{class.id}:{collection}",
                             DynamicClassForm {
                                 class: class.clone(),
                                 object,
                                 mode: SemanticFormMode::Create,
                                 collection: Some(collection.clone()),
-                                id: Some(entity_id.clone()),
+                                id: None,
                                 scope_id: scope_id.clone(),
                                 submit: Some(submit)
                             }
                         }
-                    }
-                }
-                div { class: "semantic-form-screen__footer",
-                    dxcomp::Button {
-                        variant: dxcomp::ButtonVariant::Outline,
-                        r#type: "button",
-                        onclick: move |_| {
-                            navigator().push(Route::EntityPage {
-                                collection: collection.clone(),
-                                id: entity_id.clone(),
-                            });
-                        },
-                        "Open Entity"
                     }
                 }
             }
@@ -315,4 +288,60 @@ fn primary_id_field_for_collection(
         })
         .map(|field| field.canonical_field.clone())
         .unwrap_or_else(|| "id".to_string())
+}
+
+fn rpc_batch_upsert_submit_handler_from_primary_id_field(
+    client: semantic_rpc::RpcClient,
+    scope_id: Option<String>,
+    collection: String,
+    primary_id_field: String,
+) -> SemanticFormSubmit {
+    SemanticFormSubmit::async_(move |ctx| {
+        let client = client.clone();
+        let scope_id = scope_id.clone();
+        let collection = collection.clone();
+        let primary_id_field = primary_id_field.clone();
+        async move {
+            let Value::Object(object) = ctx.value else {
+                return Err(SubmitError::message("submitted value must be an object"));
+            };
+            let id = submitted_primary_id(&object, &primary_id_field)?;
+            let mut payload = Object::new();
+            if let Some(scope_id) = scope_id {
+                payload.insert("scope_id", Value::String(scope_id));
+            }
+            payload.insert(
+                "operations",
+                Value::List(vec![Value::Object(batch_upsert_operation(
+                    collection, id, object,
+                ))]),
+            );
+            client
+                .invoke_value("semantic.db.batch", Value::Object(payload))
+                .await
+                .map(|_| ())
+                .map_err(|err| SubmitError::message(err.to_string()))
+        }
+        .boxed_local()
+    })
+}
+
+fn submitted_primary_id(
+    object: &Object,
+    primary_id_field: &str,
+) -> std::result::Result<String, SubmitError> {
+    match object.get(primary_id_field) {
+        Some(Value::String(id)) if !id.trim().is_empty() => Ok(id.clone()),
+        Some(Value::String(_)) | None => Err(SubmitError::message("id is required")),
+        Some(_) => Err(SubmitError::message("id must be a string")),
+    }
+}
+
+fn batch_upsert_operation(collection: String, id: String, object: Object) -> Object {
+    let mut operation = Object::new();
+    operation.insert("kind", Value::String("upsert".to_string()));
+    operation.insert("collection", Value::String(collection));
+    operation.insert("id", Value::String(id));
+    operation.insert("object", Value::Object(object));
+    operation
 }
