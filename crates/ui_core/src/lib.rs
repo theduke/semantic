@@ -26,5 +26,6 @@ pub use form::{
 };
 pub use ui_catalog::{
     CatalogLoadStatus, RenderMode, RenderSettings, UiCatalog, UiCatalogContext, UiCatalogProvider,
-    UiCatalogReload, use_ui_catalog, use_ui_catalog_context, use_ui_catalog_reload,
+    UiCatalogReload, ValueRenderContext, use_ui_catalog, use_ui_catalog_context,
+    use_ui_catalog_reload,
 };

@@ -38,6 +38,7 @@ pub async fn load_catalog(
     client: RpcClient,
     scope_id: Option<String>,
     render_settings: Option<RenderSettings>,
+    configure_catalog: Option<Callback<UiCatalog, UiCatalog>>,
 ) -> std::result::Result<UiCatalog, UiCatalogError> {
     let mut payload = Object::new();
     if let Some(scope_id) = scope_id {
@@ -75,6 +76,9 @@ pub async fn load_catalog(
     if let Some(render_settings) = render_settings {
         *catalog.render_settings_mut() = render_settings;
     }
+    if let Some(configure_catalog) = configure_catalog {
+        catalog = configure_catalog.call(catalog);
+    }
     Ok(catalog)
 }
 
@@ -95,7 +99,11 @@ pub fn use_ui_catalog_reload() -> UiCatalogReload {
 }
 
 #[component]
-pub fn UiCatalogProvider(render_settings: Option<RenderSettings>, children: Element) -> Element {
+pub fn UiCatalogProvider(
+    render_settings: Option<RenderSettings>,
+    configure_catalog: Option<Callback<UiCatalog, UiCatalog>>,
+    children: Element,
+) -> Element {
     let mut catalog_signal = use_signal(|| None::<UiCatalog>);
     let mut status = use_signal(|| CatalogLoadStatus::Loading);
     let client = use_rpc_client();
@@ -104,7 +112,7 @@ pub fn UiCatalogProvider(render_settings: Option<RenderSettings>, children: Elem
         let client = client.clone();
         let scope_id = scope_id.clone();
         let render_settings = render_settings.clone();
-        async move { load_catalog(client, scope_id, render_settings).await }
+        async move { load_catalog(client, scope_id, render_settings, configure_catalog).await }
     });
     use_context_provider(|| UiCatalogContext::new(catalog_signal));
     use_context_provider(|| UiCatalogReload {

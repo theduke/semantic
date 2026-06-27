@@ -108,7 +108,7 @@ fn RefValueAutocomplete(scope: FormScope<Value, Value>, value_type: Option<Type>
     let catalog = use_ui_catalog();
     let client = use_rpc_client();
     let scope_id = use_active_scope_id();
-    let field = use_value_leaf_field(scope);
+    let field = use_value_leaf_field(scope.clone());
     let mut query = use_signal(String::new);
     let allowed_class_ids = value_type
         .as_ref()
@@ -118,14 +118,22 @@ fn RefValueAutocomplete(scope: FormScope<Value, Value>, value_type: Option<Type>
         Value::String(value) if !value.is_empty() => Some(value),
         _ => None,
     };
+    let current_id = match scope.root_value() {
+        Value::Object(object) => object
+            .get(semantic_data::builtin::ID_ATTRIBUTE_ID)
+            .and_then(Value::as_str)
+            .map(ToString::to_string),
+        _ => None,
+    };
     let options = use_resource(move || {
         let client = client.clone();
         let scope_id = scope_id.clone();
         let search = query();
         let allowed_class_ids = allowed_class_ids.clone();
+        let current_id = current_id.clone();
         async move {
             dioxus_sdk_time::sleep(Duration::from_millis(250)).await;
-            let sql = ref_autocomplete_query(&search, &allowed_class_ids);
+            let sql = ref_autocomplete_query(&search, &allowed_class_ids, current_id.as_deref());
             let mut payload = semantic_data::value::Object::new();
             if let Some(scope_id) = scope_id {
                 payload.insert("scope_id", Value::String(scope_id));
@@ -168,7 +176,11 @@ fn RefValueAutocomplete(scope: FormScope<Value, Value>, value_type: Option<Type>
     }
 }
 
-pub fn ref_autocomplete_query(search: &str, allowed_class_ids: &[String]) -> String {
+pub fn ref_autocomplete_query(
+    search: &str,
+    allowed_class_ids: &[String],
+    excluded_id: Option<&str>,
+) -> String {
     let mut predicates = Vec::new();
     let search = search.trim();
     if !search.is_empty() {
@@ -187,6 +199,13 @@ pub fn ref_autocomplete_query(search: &str, allowed_class_ids: &[String]) -> Str
             .collect::<Vec<_>>()
             .join(", ");
         predicates.push(format!("{} IN ({values})", quote_sql_ident("type")));
+    }
+    if let Some(excluded_id) = excluded_id.filter(|id| !id.is_empty()) {
+        predicates.push(format!(
+            "{} <> '{}'",
+            quote_sql_ident("id"),
+            escape_sql_string(excluded_id)
+        ));
     }
 
     let mut sql = "SELECT * FROM entities".to_string();

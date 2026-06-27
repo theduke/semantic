@@ -1,9 +1,11 @@
-use std::cell::RefCell;
+use std::{cell::RefCell, rc::Rc};
 
 use dioxus::prelude::*;
+use semantic_data::value::Value;
 use semantic_rpc::RpcClient;
 use semantic_ui_core::{
-    RenderSettings, UiCatalogProvider, provide_rpc_client, provide_ui_scope_context,
+    RenderSettings, UiCatalog, UiCatalogProvider, ValueRenderContext, provide_rpc_client,
+    provide_ui_scope_context,
 };
 
 const CORE_STYLES: Asset = asset!("/assets/core_styles.css");
@@ -98,8 +100,37 @@ pub fn AppRoot(props: AppRootProps) -> Element {
     rsx! {
         document::Stylesheet { href: CORE_STYLES }
         dxcomp::Stylesheet {}
-        UiCatalogProvider { render_settings,
+        UiCatalogProvider {
+            render_settings,
+            configure_catalog: configure_ui_catalog,
             Router::<Route> {}
+        }
+    }
+}
+
+fn configure_ui_catalog(mut catalog: UiCatalog) -> UiCatalog {
+    catalog
+        .render_registry_mut()
+        .register_type_renderer("ref", Rc::new(render_ref_link));
+    catalog
+}
+
+fn render_ref_link(ctx: ValueRenderContext) -> Element {
+    let Value::String(id) = ctx.value else {
+        let text = format!("{:?}", ctx.value);
+        return rsx! { span { class: "semantic-value semantic-value--scalar", "{text}" } };
+    };
+    if id.is_empty() {
+        return rsx! { span { class: "semantic-value semantic-value--scalar" } };
+    }
+    rsx! {
+        Link {
+            to: Route::EntityPage {
+                collection: "entities".to_string(),
+                id: id.clone(),
+            },
+            class: "semantic-ref semantic-ref--link",
+            "{id}"
         }
     }
 }

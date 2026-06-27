@@ -199,6 +199,10 @@ where
         self.value_signal.read().clone()
     }
 
+    pub fn root_value(&self) -> Root {
+        self.root.values()
+    }
+
     pub fn value_signal(&self) -> ReadSignal<T> {
         self.value_signal.into()
     }

@@ -168,6 +168,7 @@ fn ref_autocomplete_query_searches_entities_fields_and_limits() {
     let sql = semantic_ui_core::form::ref_autocomplete_query(
         "Ada",
         &["person".to_string(), "employee".to_string()],
+        Some("person-1"),
     );
 
     assert!(sql.starts_with("SELECT * FROM entities WHERE"));
@@ -175,16 +176,21 @@ fn ref_autocomplete_query_searches_entities_fields_and_limits() {
     assert!(sql.contains("\"semantic:title\" ILIKE '%Ada%'"));
     assert!(sql.contains("\"semantic:base:person:display_name\" ILIKE '%Ada%'"));
     assert!(sql.contains("\"type\" IN ('person', 'employee')"));
+    assert!(sql.contains("\"id\" <> 'person-1'"));
     assert!(sql.ends_with(" LIMIT 25"));
 }
 
 #[test]
 fn ref_autocomplete_query_escapes_search_and_class_literals() {
-    let sql =
-        semantic_ui_core::form::ref_autocomplete_query("O'Hara", &["local:person's".to_string()]);
+    let sql = semantic_ui_core::form::ref_autocomplete_query(
+        "O'Hara",
+        &["local:person's".to_string()],
+        Some("person'1"),
+    );
 
     assert!(sql.contains("%O''Hara%"));
     assert!(sql.contains("'local:person''s'"));
+    assert!(sql.contains("\"id\" <> 'person''1'"));
 }
 
 #[test]
