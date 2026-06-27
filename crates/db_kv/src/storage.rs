@@ -71,11 +71,21 @@ pub enum KvCommitOutcome {
     },
 }
 
+pub type KvScanItem = std::result::Result<(Vec<u8>, Vec<u8>), DbError>;
+pub type BoxKvPrefixScan = Box<dyn Iterator<Item = KvScanItem> + Send>;
+
 pub trait KvEngine: std::fmt::Debug + Send + Sync + 'static {
+    type PrefixScan: Iterator<Item = KvScanItem> + Send + 'static;
+
     fn get(&self, key: &[u8]) -> std::result::Result<Option<Vec<u8>>, DbError>;
     fn put(&mut self, key: Vec<u8>, value: Vec<u8>) -> std::result::Result<(), DbError>;
     fn delete(&mut self, key: &[u8]) -> std::result::Result<(), DbError>;
-    fn scan_prefix(&self, prefix: &[u8]) -> std::result::Result<Vec<(Vec<u8>, Vec<u8>)>, DbError>;
+    fn scan_prefix_stream(&self, prefix: Vec<u8>)
+    -> std::result::Result<Self::PrefixScan, DbError>;
+
+    fn scan_prefix(&self, prefix: &[u8]) -> std::result::Result<Vec<(Vec<u8>, Vec<u8>)>, DbError> {
+        self.scan_prefix_stream(prefix.to_vec())?.collect()
+    }
 
     fn tx_capabilities(&self) -> KvTransactionCapabilities {
         KvTransactionCapabilities::default()
@@ -85,12 +95,21 @@ pub trait KvEngine: std::fmt::Debug + Send + Sync + 'static {
         Ok(None)
     }
 
+    fn scan_prefix_at_revision_stream(
+        &self,
+        prefix: Vec<u8>,
+        _revision: u64,
+    ) -> std::result::Result<Self::PrefixScan, DbError> {
+        self.scan_prefix_stream(prefix)
+    }
+
     fn scan_prefix_at_revision(
         &self,
         prefix: &[u8],
-        _revision: u64,
+        revision: u64,
     ) -> std::result::Result<Vec<(Vec<u8>, Vec<u8>)>, DbError> {
-        self.scan_prefix(prefix)
+        self.scan_prefix_at_revision_stream(prefix.to_vec(), revision)?
+            .collect()
     }
 
     fn write_batch_conditional(
@@ -112,6 +131,88 @@ pub trait KvEngine: std::fmt::Debug + Send + Sync + 'static {
             }
         }
         Ok(())
+    }
+}
+
+pub struct EntityScan<I> {
+    inner: I,
+}
+
+impl<I> EntityScan<I> {
+    fn new(inner: I) -> Self {
+        Self { inner }
+    }
+}
+
+impl<I> Iterator for EntityScan<I>
+where
+    I: Iterator<Item = KvScanItem>,
+{
+    type Item = std::result::Result<StoredEntity, DbError>;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        self.inner
+            .next()
+            .map(|item| item.and_then(|(_, payload)| decode_entity(&payload)))
+    }
+}
+
+pub struct IndexEntityIdScan<I> {
+    inner: I,
+    seen: BTreeSet<String>,
+}
+
+impl<I> IndexEntityIdScan<I> {
+    fn new(inner: I) -> Self {
+        Self {
+            inner,
+            seen: BTreeSet::new(),
+        }
+    }
+}
+
+impl<I> Iterator for IndexEntityIdScan<I>
+where
+    I: Iterator<Item = KvScanItem>,
+{
+    type Item = std::result::Result<String, DbError>;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        for item in self.inner.by_ref() {
+            match item {
+                Ok((key, _)) => {
+                    let Some(id) = extract_index_entity_id(&key) else {
+                        continue;
+                    };
+                    if self.seen.insert(id.clone()) {
+                        return Some(Ok(id));
+                    }
+                }
+                Err(err) => return Some(Err(err)),
+            }
+        }
+        None
+    }
+}
+
+pub struct KvKeyScan<I> {
+    inner: I,
+}
+
+impl<I> KvKeyScan<I> {
+    fn new(inner: I) -> Self {
+        Self { inner }
+    }
+}
+
+impl<I> Iterator for KvKeyScan<I>
+where
+    I: Iterator<Item = KvScanItem>,
+{
+    type Item = std::result::Result<Vec<u8>, DbError>;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        self.inner.next().map(|item| item.map(|(key, _)| key))
     }
 }
 
@@ -153,7 +254,14 @@ impl<E: KvEngine> EntityStore<E> {
         &self,
         prefix: &[u8],
     ) -> std::result::Result<Vec<(Vec<u8>, Vec<u8>)>, DbError> {
-        self.engine.scan_prefix(prefix)
+        self.scan_raw_prefix_stream(prefix)?.collect()
+    }
+
+    pub fn scan_raw_prefix_stream(
+        &self,
+        prefix: &[u8],
+    ) -> std::result::Result<E::PrefixScan, DbError> {
+        self.engine.scan_prefix_stream(prefix.to_vec())
     }
 
     pub fn put_raw(&mut self, key: Vec<u8>, value: Vec<u8>) -> std::result::Result<(), DbError> {
@@ -191,12 +299,15 @@ impl<E: KvEngine> EntityStore<E> {
         &self,
         collection: LocalCollectionId,
     ) -> std::result::Result<Vec<StoredEntity>, DbError> {
+        self.scan_collection_stream(collection)?.collect()
+    }
+
+    pub fn scan_collection_stream(
+        &self,
+        collection: LocalCollectionId,
+    ) -> std::result::Result<EntityScan<E::PrefixScan>, DbError> {
         let prefix = entity_prefix(collection);
-        let pairs = self.engine.scan_prefix(&prefix)?;
-        pairs
-            .into_iter()
-            .map(|(_, payload)| decode_entity(&payload))
-            .collect()
+        Ok(EntityScan::new(self.engine.scan_prefix_stream(prefix)?))
     }
 
     pub fn scan_collection_at_revision(
@@ -204,12 +315,20 @@ impl<E: KvEngine> EntityStore<E> {
         collection: LocalCollectionId,
         revision: u64,
     ) -> std::result::Result<Vec<StoredEntity>, DbError> {
-        let prefix = entity_prefix(collection);
-        let pairs = self.engine.scan_prefix_at_revision(&prefix, revision)?;
-        pairs
-            .into_iter()
-            .map(|(_, payload)| decode_entity(&payload))
+        self.scan_collection_at_revision_stream(collection, revision)?
             .collect()
+    }
+
+    pub fn scan_collection_at_revision_stream(
+        &self,
+        collection: LocalCollectionId,
+        revision: u64,
+    ) -> std::result::Result<EntityScan<E::PrefixScan>, DbError> {
+        let prefix = entity_prefix(collection);
+        Ok(EntityScan::new(
+            self.engine
+                .scan_prefix_at_revision_stream(prefix, revision)?,
+        ))
     }
 
     pub fn put_index_entry(
@@ -238,30 +357,46 @@ impl<E: KvEngine> EntityStore<E> {
         path: Option<&FieldPath>,
         value: &Value,
     ) -> std::result::Result<Vec<String>, DbError> {
+        self.scan_index_value_stream(index, path, value)?.collect()
+    }
+
+    pub fn scan_index_value_stream(
+        &self,
+        index: LocalIndexId,
+        path: Option<&FieldPath>,
+        value: &Value,
+    ) -> std::result::Result<IndexEntityIdScan<E::PrefixScan>, DbError> {
         let prefix = index_value_prefix(index, path, value)?;
-        let pairs = self.engine.scan_prefix(&prefix)?;
-        let mut ids = BTreeSet::new();
-        for (key, _) in pairs {
-            if let Some(id) = extract_index_entity_id(&key) {
-                ids.insert(id);
-            }
-        }
-        Ok(ids.into_iter().collect())
+        Ok(IndexEntityIdScan::new(
+            self.engine.scan_prefix_stream(prefix)?,
+        ))
     }
 
     pub fn collection_keys(
         &self,
         collection: LocalCollectionId,
     ) -> std::result::Result<Vec<Vec<u8>>, DbError> {
+        self.collection_keys_stream(collection)?.collect()
+    }
+
+    pub fn collection_keys_stream(
+        &self,
+        collection: LocalCollectionId,
+    ) -> std::result::Result<KvKeyScan<E::PrefixScan>, DbError> {
         let prefix = entity_prefix(collection);
-        let pairs = self.engine.scan_prefix(&prefix)?;
-        Ok(pairs.into_iter().map(|(k, _)| k).collect())
+        Ok(KvKeyScan::new(self.engine.scan_prefix_stream(prefix)?))
     }
 
     pub fn index_keys(&self, index: LocalIndexId) -> std::result::Result<Vec<Vec<u8>>, DbError> {
+        self.index_keys_stream(index)?.collect()
+    }
+
+    pub fn index_keys_stream(
+        &self,
+        index: LocalIndexId,
+    ) -> std::result::Result<KvKeyScan<E::PrefixScan>, DbError> {
         let prefix = index_prefix(index);
-        let pairs = self.engine.scan_prefix(&prefix)?;
-        Ok(pairs.into_iter().map(|(k, _)| k).collect())
+        Ok(KvKeyScan::new(self.engine.scan_prefix_stream(prefix)?))
     }
 
     pub fn write_batch(&mut self, ops: &[KvWriteOp]) -> std::result::Result<(), DbError> {

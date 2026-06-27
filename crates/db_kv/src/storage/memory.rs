@@ -2,7 +2,7 @@ use std::collections::BTreeMap;
 
 use semantic_db_core::DbError;
 
-use super::{KvCommitOutcome, KvEngine, KvTransactionCapabilities, KvWriteOp};
+use super::{BoxKvPrefixScan, KvCommitOutcome, KvEngine, KvTransactionCapabilities, KvWriteOp};
 
 #[derive(Debug, Clone, Default)]
 pub struct MemoryKvEngine {
@@ -47,6 +47,8 @@ impl MemoryKvEngine {
 }
 
 impl KvEngine for MemoryKvEngine {
+    type PrefixScan = BoxKvPrefixScan;
+
     fn get(&self, key: &[u8]) -> std::result::Result<Option<Vec<u8>>, DbError> {
         Ok(self.map.get(key).cloned())
     }
@@ -63,13 +65,18 @@ impl KvEngine for MemoryKvEngine {
         Ok(())
     }
 
-    fn scan_prefix(&self, prefix: &[u8]) -> std::result::Result<Vec<(Vec<u8>, Vec<u8>)>, DbError> {
-        Ok(self
-            .map
-            .iter()
-            .filter(|(key, _)| key.starts_with(prefix))
-            .map(|(k, v)| (k.clone(), v.clone()))
-            .collect())
+    fn scan_prefix_stream(
+        &self,
+        prefix: Vec<u8>,
+    ) -> std::result::Result<Self::PrefixScan, DbError> {
+        Ok(Box::new(
+            self.map
+                .iter()
+                .filter(|(key, _)| key.starts_with(&prefix))
+                .map(|(key, value)| Ok((key.clone(), value.clone())))
+                .collect::<Vec<_>>()
+                .into_iter(),
+        ))
     }
 
     fn write_batch(&mut self, ops: &[KvWriteOp]) -> std::result::Result<(), DbError> {
@@ -101,13 +108,13 @@ impl KvEngine for MemoryKvEngine {
         Ok(Some(self.revision))
     }
 
-    fn scan_prefix_at_revision(
+    fn scan_prefix_at_revision_stream(
         &self,
-        prefix: &[u8],
+        prefix: Vec<u8>,
         revision: u64,
-    ) -> std::result::Result<Vec<(Vec<u8>, Vec<u8>)>, DbError> {
+    ) -> std::result::Result<Self::PrefixScan, DbError> {
         if revision == self.revision {
-            return self.scan_prefix(prefix);
+            return self.scan_prefix_stream(prefix);
         }
         let Some(snapshots) = &self.mvcc_snapshots else {
             return Err(DbError::Storage(
@@ -119,11 +126,14 @@ impl KvEngine for MemoryKvEngine {
                 "mvcc snapshot for revision {revision} not available"
             )));
         };
-        Ok(snapshot
-            .iter()
-            .filter(|(key, _)| key.starts_with(prefix))
-            .map(|(k, v)| (k.clone(), v.clone()))
-            .collect())
+        Ok(Box::new(
+            snapshot
+                .iter()
+                .filter(|(key, _)| key.starts_with(&prefix))
+                .map(|(key, value)| Ok((key.clone(), value.clone())))
+                .collect::<Vec<_>>()
+                .into_iter(),
+        ))
     }
 
     fn write_batch_conditional(

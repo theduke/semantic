@@ -1965,7 +1965,7 @@ struct KvPhysicalDataSource<'a, E: KvEngine> {
 
 struct KvCollectionScan {
     collection_id: LocalCollectionId,
-    rows: std::vec::IntoIter<StoredEntity>,
+    rows: Box<dyn Iterator<Item = semantic_db_core::CoreResult<StoredEntity>> + Send>,
     field_names: BTreeMap<LocalFieldId, String>,
     attr_names: BTreeMap<LocalAttrId, String>,
     local_ref_lookup: Arc<BTreeMap<String, Object>>,
@@ -2125,12 +2125,7 @@ impl<E: KvEngine> KvPhysicalDataSource<'_, E> {
     fn scan_all_collections(&self) -> semantic_db_core::CoreResult<Vec<KvCollectionScan>> {
         let mut scans = Vec::new();
         for (_, collection) in self.catalog.collections() {
-            let rows = self
-                .db
-                .store
-                .scan_collection(collection.lid)
-                .map_err(|err| semantic_db_core::CoreError::new(err.to_string()))?;
-            scans.push(self.collection_scan_from_rows(collection, rows));
+            scans.push(self.collection_scan(collection)?);
         }
         Ok(scans)
     }
@@ -2145,28 +2140,37 @@ impl<E: KvEngine> KvPhysicalDataSource<'_, E> {
         let collection = self
             .resolve_collection(source)
             .map_err(|err| semantic_db_core::CoreError::new(err.to_string()))?;
+        Ok(vec![self.collection_scan(collection)?])
+    }
+
+    fn collection_scan(
+        &self,
+        collection: &CollectionSchema,
+    ) -> semantic_db_core::CoreResult<KvCollectionScan> {
+        let lookup_rows = self
+            .db
+            .store
+            .scan_collection_stream(collection.lid)
+            .map_err(|err| semantic_db_core::CoreError::new(err.to_string()))?;
+        let local_ref_lookup =
+            build_local_ref_lookup(self.catalog.as_ref(), collection, lookup_rows)?;
+        let (field_names, attr_names) = collection_field_maps(collection);
         let rows = self
             .db
             .store
-            .scan_collection(collection.lid)
+            .scan_collection_stream(collection.lid)
             .map_err(|err| semantic_db_core::CoreError::new(err.to_string()))?;
-        Ok(vec![self.collection_scan_from_rows(collection, rows)])
-    }
-
-    fn collection_scan_from_rows(
-        &self,
-        collection: &CollectionSchema,
-        rows: Vec<StoredEntity>,
-    ) -> KvCollectionScan {
-        let local_ref_lookup = build_local_ref_lookup(self.catalog.as_ref(), collection, &rows);
-        let (field_names, attr_names) = collection_field_maps(collection);
-        KvCollectionScan {
+        Ok(KvCollectionScan {
             collection_id: collection.lid,
-            rows: rows.into_iter(),
+            rows: Box::new(
+                rows.map(|row| {
+                    row.map_err(|err| semantic_db_core::CoreError::new(err.to_string()))
+                }),
+            ),
             field_names,
             attr_names,
             local_ref_lookup,
-        }
+        })
     }
 
     fn scans_to_stream(
@@ -2188,6 +2192,10 @@ impl<E: KvEngine> KvPhysicalDataSource<'_, E> {
                     let Some(row) = scan.rows.next() else {
                         current = None;
                         continue;
+                    };
+                    let row = match row {
+                        Ok(row) => row,
+                        Err(err) => return Some((Err(err), (scans, current, predicate))),
                     };
                     let view = KvObjectView {
                         object: row.object,
@@ -2218,7 +2226,11 @@ impl<E: KvEngine> KvPhysicalDataSource<'_, E> {
         rows: Vec<StoredEntity>,
         predicate: &semantic_db_core::Expr,
     ) -> semantic_db_core::CoreResult<KvCollectionScan> {
-        let local_ref_lookup = build_local_ref_lookup(self.catalog.as_ref(), collection, &rows);
+        let local_ref_lookup = build_local_ref_lookup(
+            self.catalog.as_ref(),
+            collection,
+            rows.iter().cloned().map(Ok),
+        )?;
         let (field_names, attr_names) = collection_field_maps(collection);
         let mut filtered = Vec::new();
         for row in rows {
@@ -2235,7 +2247,7 @@ impl<E: KvEngine> KvPhysicalDataSource<'_, E> {
         }
         Ok(KvCollectionScan {
             collection_id: collection.lid,
-            rows: filtered.into_iter(),
+            rows: Box::new(filtered.into_iter().map(Ok)),
             field_names,
             attr_names,
             local_ref_lookup,
@@ -2291,10 +2303,10 @@ impl<E: KvEngine> KvPhysicalDataSource<'_, E> {
         let lookup_rows = self
             .db
             .store
-            .scan_collection(collection.lid)
+            .scan_collection_stream(collection.lid)
             .map_err(|err| semantic_db_core::CoreError::new(err.to_string()))?;
         let local_ref_lookup =
-            build_local_ref_lookup(self.catalog.as_ref(), collection, &lookup_rows);
+            build_local_ref_lookup(self.catalog.as_ref(), collection, lookup_rows)?;
         let mut rows = Vec::with_capacity(ids.len());
         for id in ids {
             if let Some(entity) = self
@@ -2309,7 +2321,7 @@ impl<E: KvEngine> KvPhysicalDataSource<'_, E> {
         let (field_names, attr_names) = collection_field_maps(collection);
         Ok(KvCollectionScan {
             collection_id: collection.lid,
-            rows: rows.into_iter(),
+            rows: Box::new(rows.into_iter().map(Ok)),
             field_names,
             attr_names,
             local_ref_lookup,
@@ -2532,8 +2544,8 @@ impl semantic_db_core::ObjectAccess for KvObjectView {
 fn build_local_ref_lookup(
     catalog: &Catalog,
     collection: &CollectionSchema,
-    rows: &[StoredEntity],
-) -> Arc<BTreeMap<String, Object>> {
+    rows: impl IntoIterator<Item = std::result::Result<StoredEntity, DbError>>,
+) -> semantic_db_core::CoreResult<Arc<BTreeMap<String, Object>>> {
     let mut lookup = BTreeMap::new();
     let mut id_keys = vec![
         collection.canonical_field_name("id").to_string(),
@@ -2548,6 +2560,7 @@ fn build_local_ref_lookup(
         }
     }
     for row in rows {
+        let row = row.map_err(|err| semantic_db_core::CoreError::new(err.to_string()))?;
         let id = id_keys
             .iter()
             .find_map(|key| row.object.get(key).and_then(Value::as_str));
@@ -2555,7 +2568,7 @@ fn build_local_ref_lookup(
             lookup.insert(id.to_string(), row.object.clone());
         }
     }
-    Arc::new(lookup)
+    Ok(Arc::new(lookup))
 }
 
 fn resolve_path_with_local_refs(
@@ -3075,7 +3088,12 @@ mod tests {
         let catalog = db.catalog();
         let collection = catalog.collection_by_name("ref_paths").unwrap();
         let stored_rows = db.store.scan_collection(collection.lid).unwrap();
-        let lookup = super::build_local_ref_lookup(catalog.as_ref(), collection, &stored_rows);
+        let lookup = super::build_local_ref_lookup(
+            catalog.as_ref(),
+            collection,
+            stored_rows.into_iter().map(Ok),
+        )
+        .unwrap();
         let canonical = canonicalize_select_query(&query, catalog.as_ref(), collection).unwrap();
         let explain = db.explain_query(Query::Select(query.clone())).unwrap();
         let rows = db.select(query).unwrap();

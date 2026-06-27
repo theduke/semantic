@@ -1,7 +1,9 @@
 use redb::{ReadableTable, TableDefinition};
 use semantic_data::schema::DbOpenMode;
 use semantic_db_core::DbError;
-use semantic_db_kv::{KvCommitOutcome, KvEngine, KvTransactionCapabilities, KvWriteOp};
+use semantic_db_kv::{
+    BoxKvPrefixScan, KvCommitOutcome, KvEngine, KvTransactionCapabilities, KvWriteOp,
+};
 use std::path::Path;
 use std::sync::Arc;
 
@@ -47,6 +49,8 @@ impl RedbKvEngine {
 }
 
 impl KvEngine for RedbKvEngine {
+    type PrefixScan = BoxKvPrefixScan;
+
     fn get(&self, key: &[u8]) -> std::result::Result<Option<Vec<u8>>, DbError> {
         let read_txn = self.db.begin_read().map_err(storage_err)?;
         let table = read_txn.open_table(KV_TABLE).map_err(storage_err)?;
@@ -80,22 +84,44 @@ impl KvEngine for RedbKvEngine {
         Ok(())
     }
 
-    fn scan_prefix(&self, prefix: &[u8]) -> std::result::Result<Vec<(Vec<u8>, Vec<u8>)>, DbError> {
+    fn scan_prefix_stream(
+        &self,
+        prefix: Vec<u8>,
+    ) -> std::result::Result<Self::PrefixScan, DbError> {
         let read_txn = self.db.begin_read().map_err(storage_err)?;
         let table = read_txn.open_table(KV_TABLE).map_err(storage_err)?;
-        let iter = table.iter().map_err(storage_err)?;
+        let iter = if let Some(end) = prefix_range_end(&prefix) {
+            table
+                .range::<&[u8]>(prefix.as_slice()..end.as_slice())
+                .map_err(storage_err)?
+        } else {
+            table
+                .range::<&[u8]>(prefix.as_slice()..)
+                .map_err(storage_err)?
+        };
 
-        let mut out = Vec::new();
-        for item in iter {
-            let (key_guard, value_guard): (redb::AccessGuard<&[u8]>, redb::AccessGuard<&[u8]>) =
-                item.map_err(storage_err)?;
+        Ok(Box::new(iter.map(move |item| {
+            let (key_guard, value_guard) = item.map_err(storage_err)?;
             let key = key_guard.value();
-            if key.starts_with(prefix) {
-                out.push((key.to_vec(), value_guard.value().to_vec()));
+            if !key.starts_with(&prefix) {
+                return Err(DbError::Storage(
+                    "redb prefix scan returned key outside requested range".to_string(),
+                ));
             }
-        }
+            Ok((key.to_vec(), value_guard.value().to_vec()))
+        })))
+    }
 
-        Ok(out)
+    fn scan_prefix(&self, prefix: &[u8]) -> std::result::Result<Vec<(Vec<u8>, Vec<u8>)>, DbError> {
+        self.scan_prefix_stream(prefix.to_vec())?.collect()
+    }
+
+    fn scan_prefix_at_revision(
+        &self,
+        prefix: &[u8],
+        _revision: u64,
+    ) -> std::result::Result<Vec<(Vec<u8>, Vec<u8>)>, DbError> {
+        self.scan_prefix(prefix)
     }
 
     fn write_batch(&mut self, ops: &[KvWriteOp]) -> std::result::Result<(), DbError> {
@@ -178,6 +204,18 @@ impl KvEngine for RedbKvEngine {
             revision: next_revision,
         })
     }
+}
+
+fn prefix_range_end(prefix: &[u8]) -> Option<Vec<u8>> {
+    let mut end = prefix.to_vec();
+    for idx in (0..end.len()).rev() {
+        if end[idx] != u8::MAX {
+            end[idx] += 1;
+            end.truncate(idx + 1);
+            return Some(end);
+        }
+    }
+    None
 }
 
 fn storage_err(err: impl std::fmt::Display) -> DbError {

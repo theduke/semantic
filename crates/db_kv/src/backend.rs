@@ -5,31 +5,39 @@ use semantic_data::schema::{Package, RelationType};
 use semantic_data::value::Object;
 use semantic_db_core::catalog::{Catalog, CollectionKind, LocalCollectionId};
 use semantic_db_core::{
-    Backend, Batch, BatchOutcome, DbError, DdlBatch, DdlOutcome, DeleteQuery, EntityRecord,
-    MutationStats, PackageRegistrationOutcome, Query, QueryExplain, QueryPlan, QueryResult,
-    TextQueryInput, UpdateQuery,
+    AsyncRuntime, Backend, Batch, BatchOutcome, DbError, DdlBatch, DdlOutcome, DeleteQuery,
+    EntityRecord, MutationStats, PackageRegistrationOutcome, Query, QueryExplain, QueryPlan,
+    QueryResult, TextQueryInput, UpdateQuery, spawn_blocking_on,
 };
 
-use crate::{DefaultKvBackendSpawner, KvBackendSpawner, KvDb, KvEngine};
+use crate::{KvDb, KvEngine};
 
-pub struct KvBackend<E: KvEngine, S: KvBackendSpawner = DefaultKvBackendSpawner> {
+pub struct KvBackend<E: KvEngine> {
     db: Arc<RwLock<KvDb<E>>>,
-    spawner: S,
+    runtime: Arc<dyn AsyncRuntime>,
 }
 
-impl<E: KvEngine> KvBackend<E, DefaultKvBackendSpawner> {
+impl<E: KvEngine> KvBackend<E> {
     pub fn new(db: KvDb<E>) -> Self {
-        Self::with_spawner(db, DefaultKvBackendSpawner::default())
+        Self::with_runtime(db, default_runtime())
     }
-}
 
-impl<E: KvEngine, S: KvBackendSpawner> KvBackend<E, S> {
-    pub fn with_spawner(db: KvDb<E>, spawner: S) -> Self {
+    pub fn with_runtime(db: KvDb<E>, runtime: Arc<dyn AsyncRuntime>) -> Self {
         Self {
             db: Arc::new(RwLock::new(db)),
-            spawner,
+            runtime,
         }
     }
+}
+
+#[cfg(feature = "tokio")]
+fn default_runtime() -> Arc<dyn AsyncRuntime> {
+    Arc::new(semantic_db_core::TokioAsyncRuntime)
+}
+
+#[cfg(not(feature = "tokio"))]
+fn default_runtime() -> Arc<dyn AsyncRuntime> {
+    Arc::new(semantic_db_core::InlineAsyncRuntime)
 }
 
 fn lock_poisoned_error() -> DbError {
@@ -37,15 +45,14 @@ fn lock_poisoned_error() -> DbError {
 }
 
 #[async_trait]
-impl<E: KvEngine, S: KvBackendSpawner> Backend for KvBackend<E, S> {
+impl<E: KvEngine> Backend for KvBackend<E> {
     async fn catalog(&self) -> std::result::Result<Arc<Catalog>, DbError> {
         let db = Arc::clone(&self.db);
-        self.spawner
-            .spawn_blocking(move || {
-                let db = db.read().map_err(|_| lock_poisoned_error())?;
-                Ok(db.catalog())
-            })
-            .await
+        spawn_blocking_on(self.runtime.as_ref(), move || {
+            let db = db.read().map_err(|_| lock_poisoned_error())?;
+            Ok(db.catalog())
+        })
+        .await
     }
 
     async fn create_collection(
@@ -54,22 +61,20 @@ impl<E: KvEngine, S: KvBackendSpawner> Backend for KvBackend<E, S> {
         kind: CollectionKind,
     ) -> std::result::Result<LocalCollectionId, DbError> {
         let db = Arc::clone(&self.db);
-        self.spawner
-            .spawn_blocking(move || {
-                let mut db = db.write().map_err(|_| lock_poisoned_error())?;
-                db.create_collection(name, kind)
-            })
-            .await
+        spawn_blocking_on(self.runtime.as_ref(), move || {
+            let mut db = db.write().map_err(|_| lock_poisoned_error())?;
+            db.create_collection(name, kind)
+        })
+        .await
     }
 
     async fn execute_ddl(&self, ddl: DdlBatch) -> std::result::Result<DdlOutcome, DbError> {
         let db = Arc::clone(&self.db);
-        self.spawner
-            .spawn_blocking(move || {
-                let mut db = db.write().map_err(|_| lock_poisoned_error())?;
-                db.transact_ddl(ddl)
-            })
-            .await
+        spawn_blocking_on(self.runtime.as_ref(), move || {
+            let mut db = db.write().map_err(|_| lock_poisoned_error())?;
+            db.transact_ddl(ddl)
+        })
+        .await
     }
 
     async fn upsert_package(
@@ -77,12 +82,11 @@ impl<E: KvEngine, S: KvBackendSpawner> Backend for KvBackend<E, S> {
         package: Package,
     ) -> std::result::Result<PackageRegistrationOutcome, DbError> {
         let db = Arc::clone(&self.db);
-        self.spawner
-            .spawn_blocking(move || {
-                let mut db = db.write().map_err(|_| lock_poisoned_error())?;
-                db.upsert_package(package)
-            })
-            .await
+        spawn_blocking_on(self.runtime.as_ref(), move || {
+            let mut db = db.write().map_err(|_| lock_poisoned_error())?;
+            db.upsert_package(package)
+        })
+        .await
     }
 
     async fn upsert_relationship(
@@ -90,22 +94,20 @@ impl<E: KvEngine, S: KvBackendSpawner> Backend for KvBackend<E, S> {
         relationship: RelationType,
     ) -> std::result::Result<(), DbError> {
         let db = Arc::clone(&self.db);
-        self.spawner
-            .spawn_blocking(move || {
-                let mut db = db.write().map_err(|_| lock_poisoned_error())?;
-                db.upsert_relationship(relationship)
-            })
-            .await
+        spawn_blocking_on(self.runtime.as_ref(), move || {
+            let mut db = db.write().map_err(|_| lock_poisoned_error())?;
+            db.upsert_relationship(relationship)
+        })
+        .await
     }
 
     async fn delete_relationship(&self, id: String) -> std::result::Result<(), DbError> {
         let db = Arc::clone(&self.db);
-        self.spawner
-            .spawn_blocking(move || {
-                let mut db = db.write().map_err(|_| lock_poisoned_error())?;
-                db.delete_relationship(&id)
-            })
-            .await
+        spawn_blocking_on(self.runtime.as_ref(), move || {
+            let mut db = db.write().map_err(|_| lock_poisoned_error())?;
+            db.delete_relationship(&id)
+        })
+        .await
     }
 
     async fn insert(
@@ -115,12 +117,11 @@ impl<E: KvEngine, S: KvBackendSpawner> Backend for KvBackend<E, S> {
         object: Object,
     ) -> std::result::Result<(), DbError> {
         let db = Arc::clone(&self.db);
-        self.spawner
-            .spawn_blocking(move || {
-                let mut db = db.write().map_err(|_| lock_poisoned_error())?;
-                db.insert(&collection, id, object)
-            })
-            .await
+        spawn_blocking_on(self.runtime.as_ref(), move || {
+            let mut db = db.write().map_err(|_| lock_poisoned_error())?;
+            db.insert(&collection, id, object)
+        })
+        .await
     }
 
     async fn get(
@@ -129,22 +130,20 @@ impl<E: KvEngine, S: KvBackendSpawner> Backend for KvBackend<E, S> {
         id: String,
     ) -> std::result::Result<Option<EntityRecord>, DbError> {
         let db = Arc::clone(&self.db);
-        self.spawner
-            .spawn_blocking(move || {
-                let db = db.read().map_err(|_| lock_poisoned_error())?;
-                db.get(&collection, &id)
-            })
-            .await
+        spawn_blocking_on(self.runtime.as_ref(), move || {
+            let db = db.read().map_err(|_| lock_poisoned_error())?;
+            db.get(&collection, &id)
+        })
+        .await
     }
 
     async fn delete(&self, collection: String, id: String) -> std::result::Result<(), DbError> {
         let db = Arc::clone(&self.db);
-        self.spawner
-            .spawn_blocking(move || {
-                let mut db = db.write().map_err(|_| lock_poisoned_error())?;
-                db.delete(&collection, &id)
-            })
-            .await
+        spawn_blocking_on(self.runtime.as_ref(), move || {
+            let mut db = db.write().map_err(|_| lock_poisoned_error())?;
+            db.delete(&collection, &id)
+        })
+        .await
     }
 
     async fn query(&self, query: TextQueryInput) -> std::result::Result<QueryResult, DbError> {
@@ -153,18 +152,17 @@ impl<E: KvEngine, S: KvBackendSpawner> Backend for KvBackend<E, S> {
             TextQueryInput::Text { format, query } => self.parse_text_query(format, &query).await?,
         };
         let db = Arc::clone(&self.db);
-        self.spawner
-            .spawn_blocking(move || match query {
-                Query::Select(query) => {
-                    let db = db.read().map_err(|_| lock_poisoned_error())?;
-                    db.select(query).map(QueryResult::Select)
-                }
-                query => {
-                    let mut db = db.write().map_err(|_| lock_poisoned_error())?;
-                    db.query(query)
-                }
-            })
-            .await
+        spawn_blocking_on(self.runtime.as_ref(), move || match query {
+            Query::Select(query) => {
+                let db = db.read().map_err(|_| lock_poisoned_error())?;
+                db.select(query).map(QueryResult::Select)
+            }
+            query => {
+                let mut db = db.write().map_err(|_| lock_poisoned_error())?;
+                db.query(query)
+            }
+        })
+        .await
     }
 
     async fn explain(&self, query: TextQueryInput) -> std::result::Result<QueryExplain, DbError> {
@@ -173,12 +171,11 @@ impl<E: KvEngine, S: KvBackendSpawner> Backend for KvBackend<E, S> {
             TextQueryInput::Text { format, query } => self.parse_text_query(format, &query).await?,
         };
         let db = Arc::clone(&self.db);
-        self.spawner
-            .spawn_blocking(move || {
-                let db = db.read().map_err(|_| lock_poisoned_error())?;
-                db.explain_query(query)
-            })
-            .await
+        spawn_blocking_on(self.runtime.as_ref(), move || {
+            let db = db.read().map_err(|_| lock_poisoned_error())?;
+            db.explain_query(query)
+        })
+        .await
     }
 
     async fn plan(&self, query: TextQueryInput) -> std::result::Result<QueryPlan, DbError> {
@@ -187,12 +184,11 @@ impl<E: KvEngine, S: KvBackendSpawner> Backend for KvBackend<E, S> {
             TextQueryInput::Text { format, query } => self.parse_text_query(format, &query).await?,
         };
         let db = Arc::clone(&self.db);
-        self.spawner
-            .spawn_blocking(move || {
-                let db = db.read().map_err(|_| lock_poisoned_error())?;
-                db.plan_query(query)
-            })
-            .await
+        spawn_blocking_on(self.runtime.as_ref(), move || {
+            let db = db.read().map_err(|_| lock_poisoned_error())?;
+            db.plan_query(query)
+        })
+        .await
     }
 
     async fn update_where(
@@ -200,32 +196,29 @@ impl<E: KvEngine, S: KvBackendSpawner> Backend for KvBackend<E, S> {
         query: UpdateQuery,
     ) -> std::result::Result<MutationStats, DbError> {
         let db = Arc::clone(&self.db);
-        self.spawner
-            .spawn_blocking(move || {
-                let mut db = db.write().map_err(|_| lock_poisoned_error())?;
-                db.update_where(query)
-            })
-            .await
+        spawn_blocking_on(self.runtime.as_ref(), move || {
+            let mut db = db.write().map_err(|_| lock_poisoned_error())?;
+            db.update_where(query)
+        })
+        .await
     }
 
     async fn delete_where(&self, query: DeleteQuery) -> std::result::Result<usize, DbError> {
         let db = Arc::clone(&self.db);
-        self.spawner
-            .spawn_blocking(move || {
-                let mut db = db.write().map_err(|_| lock_poisoned_error())?;
-                db.delete_where(query)
-            })
-            .await
+        spawn_blocking_on(self.runtime.as_ref(), move || {
+            let mut db = db.write().map_err(|_| lock_poisoned_error())?;
+            db.delete_where(query)
+        })
+        .await
     }
 
     async fn execute_batch(&self, batch: Batch) -> std::result::Result<BatchOutcome, DbError> {
         let db = Arc::clone(&self.db);
-        self.spawner
-            .spawn_blocking(move || {
-                let mut db = db.write().map_err(|_| lock_poisoned_error())?;
-                db.execute_batch(batch)
-            })
-            .await
+        spawn_blocking_on(self.runtime.as_ref(), move || {
+            let mut db = db.write().map_err(|_| lock_poisoned_error())?;
+            db.execute_batch(batch)
+        })
+        .await
     }
 }
 
@@ -234,19 +227,19 @@ mod tests {
     use semantic_db_core::Backend;
 
     use super::*;
-    use crate::{InlineSpawner, MemoryKvEngine};
+    use crate::MemoryKvEngine;
 
     fn assert_backend_impl<T: Backend>() {}
 
     #[test]
     fn kv_backend_blanket_impl_compiles() {
         assert_backend_impl::<KvBackend<MemoryKvEngine>>();
-        assert_backend_impl::<KvBackend<MemoryKvEngine, InlineSpawner>>();
     }
 
     #[cfg(feature = "tokio")]
     #[test]
-    fn kv_backend_tokio_spawner_impl_compiles() {
-        assert_backend_impl::<KvBackend<MemoryKvEngine, crate::TokioSpawner>>();
+    fn kv_backend_runtime_constructors_compile() {
+        let db = KvDb::new(MemoryKvEngine::new());
+        let _ = KvBackend::with_runtime(db, Arc::new(semantic_db_core::TokioAsyncRuntime));
     }
 }
