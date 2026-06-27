@@ -1,0 +1,24 @@
+[package]
+name = "dxcomp"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+
+[dependencies]
+dioxus = { workspace = true, features = ["router"] }
+dioxus-icons = "0.1.0"
+dioxus-primitives = { path = "/home/theduke/dev/github.com/DioxusLabs/dioxus-components/primitives" }
+palette = "0.7.6"
+time = { workspace = true, features = ["macros"] }
+
+[features]
+default = []
+web = ["dioxus/web", "dioxus-primitives/web"]
+desktop = ["dioxus/desktop"]
+fullstack = ["dioxus/fullstack"]
+server = ["dioxus/server", "dioxus/fullstack"]
+native = ["dioxus/native"]
