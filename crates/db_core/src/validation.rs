@@ -73,6 +73,7 @@ pub fn normalize_object_for_collection(
     })?;
 
     let mut registered_field_types = FnvHashMap::default();
+    let mut registered_field_required = FnvHashMap::default();
     let mut reject_unknown_fields = collection.is_closed_field_set();
 
     if collection.kind == CollectionKind::Untyped {
@@ -109,6 +110,7 @@ pub fn normalize_object_for_collection(
                     class_lid,
                     &mut class_aliases,
                     &mut registered_field_types,
+                    &mut registered_field_required,
                 );
                 normalize_aliases(collection, object, |key| class_aliases.get(key).cloned())?;
                 reject_unknown_fields |=
@@ -155,6 +157,12 @@ pub fn normalize_object_for_collection(
             }
         }
     }
+
+    prune_nullish_optional_registered_fields(
+        object,
+        &registered_field_types,
+        &registered_field_required,
+    );
 
     validate_object_fields(
         collection,
@@ -256,6 +264,7 @@ fn collect_class_fields(
     class_lid: LocalClassId,
     field_aliases: &mut FnvHashMap<String, String>,
     field_types: &mut FnvHashMap<String, Type>,
+    field_required: &mut FnvHashMap<String, bool>,
 ) {
     fn visit(
         catalog: &Catalog,
@@ -263,6 +272,7 @@ fn collect_class_fields(
         visited: &mut BTreeSet<LocalClassId>,
         field_aliases: &mut FnvHashMap<String, String>,
         field_types: &mut FnvHashMap<String, Type>,
+        field_required: &mut FnvHashMap<String, bool>,
     ) {
         if !visited.insert(class_lid) {
             return;
@@ -273,11 +283,25 @@ fn collect_class_fields(
         if let Some(inherits) = &class.class.inherits
             && let Some(base_lid) = catalog.class_id(&inherits.id)
         {
-            visit(catalog, base_lid, visited, field_aliases, field_types);
+            visit(
+                catalog,
+                base_lid,
+                visited,
+                field_aliases,
+                field_types,
+                field_required,
+            );
         }
         for ext in &class.class.extends {
             if let Some(ext_lid) = catalog.class_id(&ext.id) {
-                visit(catalog, ext_lid, visited, field_aliases, field_types);
+                visit(
+                    catalog,
+                    ext_lid,
+                    visited,
+                    field_aliases,
+                    field_types,
+                    field_required,
+                );
             }
         }
         for (alias, class_attr) in &class.class.attributes {
@@ -291,11 +315,38 @@ fn collect_class_fields(
                 attr.attribute.id.clone(),
             );
             field_types.insert(attr.attribute.id.clone(), attr.attribute.ty.clone());
+            field_required.insert(attr.attribute.id.clone(), class_attr.required);
         }
     }
 
     let mut visited = BTreeSet::new();
-    visit(catalog, class_lid, &mut visited, field_aliases, field_types);
+    visit(
+        catalog,
+        class_lid,
+        &mut visited,
+        field_aliases,
+        field_types,
+        field_required,
+    );
+}
+
+fn prune_nullish_optional_registered_fields(
+    object: &mut Object,
+    registered_field_types: &FnvHashMap<String, Type>,
+    registered_field_required: &FnvHashMap<String, bool>,
+) {
+    object.retain(|key, value| {
+        if !value.is_nullish() {
+            return true;
+        }
+        if registered_field_required.get(key).copied().unwrap_or(true) {
+            return true;
+        }
+        let Some(ty) = registered_field_types.get(key) else {
+            return true;
+        };
+        matches!(&ty.kind, TypeKind::Optional(_))
+    });
 }
 
 fn validate_object_fields(
@@ -1108,6 +1159,7 @@ mod tests {
     use semantic_data::schema::{
         attribute::attribute_ref::AttributeRef,
         class::{class_attribute::ClassAttribute, class_type::ClassType},
+        collections::optional_type::OptionalType,
         core::{meta::Meta, type_kind::TypeKind, type_node::Type},
         primitives::string_type::StringType,
     };
@@ -1121,6 +1173,16 @@ mod tests {
             kind: TypeKind::String(StringType {
                 format: None,
                 normalization: None,
+            }),
+            constraints: vec![],
+            annotations: vec![],
+        }
+    }
+
+    fn optional_string_type() -> Type {
+        Type {
+            kind: TypeKind::Optional(OptionalType {
+                inner: Box::new(string_type()),
             }),
             constraints: vec![],
             annotations: vec![],
@@ -1217,6 +1279,109 @@ mod tests {
         );
         normalize_object_for_collection(&catalog, collection, &mut object).unwrap();
         assert!(object.contains_key("semantic:title"));
+    }
+
+    #[test]
+    fn prunes_nullish_optional_class_attributes_unless_type_is_optional() {
+        let mut catalog = Catalog::new();
+        let _ = catalog.upsert_attribute(semantic_data::schema::AttributeType {
+            id: "semantic:title".to_string(),
+            name: "title".to_string(),
+            ty: string_type(),
+            constraints: vec![],
+            meta: Meta::default(),
+        });
+        let _ = catalog.upsert_attribute(semantic_data::schema::AttributeType {
+            id: "semantic:subtitle".to_string(),
+            name: "subtitle".to_string(),
+            ty: string_type(),
+            constraints: vec![],
+            meta: Meta::default(),
+        });
+        let _ = catalog.upsert_attribute(semantic_data::schema::AttributeType {
+            id: "semantic:maybe_title".to_string(),
+            name: "maybe_title".to_string(),
+            ty: optional_string_type(),
+            constraints: vec![],
+            meta: Meta::default(),
+        });
+        let _ = catalog
+            .upsert_class(ClassType {
+                id: "semantic:article".to_string(),
+                name: "Article".to_string(),
+                inherits: None,
+                extends: vec![],
+                attributes: BTreeMap::from([
+                    (
+                        "title".to_string(),
+                        ClassAttribute {
+                            attribute: AttributeRef {
+                                id: "semantic:title".to_string(),
+                            },
+                            required: false,
+                            ui_order: None,
+                            computed: None,
+                            constraints: vec![],
+                            meta: Meta::default(),
+                        },
+                    ),
+                    (
+                        "subtitle".to_string(),
+                        ClassAttribute {
+                            attribute: AttributeRef {
+                                id: "semantic:subtitle".to_string(),
+                            },
+                            required: false,
+                            ui_order: None,
+                            computed: None,
+                            constraints: vec![],
+                            meta: Meta::default(),
+                        },
+                    ),
+                    (
+                        "maybe_title".to_string(),
+                        ClassAttribute {
+                            attribute: AttributeRef {
+                                id: "semantic:maybe_title".to_string(),
+                            },
+                            required: false,
+                            ui_order: None,
+                            computed: None,
+                            constraints: vec![],
+                            meta: Meta::default(),
+                        },
+                    ),
+                ]),
+                constraints: vec![],
+                meta: Meta::default(),
+            })
+            .unwrap();
+        let _ = catalog
+            .upsert_collection(
+                "items",
+                CollectionKind::Schema,
+                IntegrityMode::StrictRegisteredSchema,
+            )
+            .unwrap();
+        let collection = catalog.collection_by_name("items").unwrap();
+
+        let mut object = semantic_data::value::Object::new();
+        object.insert(
+            OBJECT_TYPE_FIELD.to_string(),
+            semantic_data::value::Value::String("semantic:article".to_string()),
+        );
+        object.insert("title".to_string(), semantic_data::value::Value::Null);
+        object.insert("subtitle".to_string(), semantic_data::value::Value::Void);
+        object.insert("maybe_title".to_string(), semantic_data::value::Value::Null);
+
+        normalize_object_for_collection(&catalog, collection, &mut object).unwrap();
+
+        assert!(!object.contains_key("semantic:title"));
+        assert!(!object.contains_key("semantic:subtitle"));
+        assert!(matches!(
+            object.get("semantic:maybe_title"),
+            Some(semantic_data::value::Value::Null)
+        ));
     }
 
     #[test]
