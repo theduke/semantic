@@ -135,9 +135,9 @@ where
         self.root.scope_meta(&self.path)
     }
 
-    pub fn meta_signal(&self) -> Signal<ScopeMeta> {
+    pub fn meta_signal(&self) -> ReadSignal<ScopeMeta> {
         let scope = self.clone();
-        Signal::new(scope.meta())
+        Signal::new(scope.meta()).into()
     }
 
     pub fn reset(&self) {

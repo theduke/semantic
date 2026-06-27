@@ -111,16 +111,16 @@ impl<T: Clone + PartialEq + 'static> FormRoot<T> {
         self.state.values.read().clone()
     }
 
-    pub fn values_signal(&self) -> Signal<T> {
-        self.state.values
+    pub fn values_signal(&self) -> ReadSignal<T> {
+        self.state.values.into()
     }
 
     pub fn meta(&self) -> FormMeta {
         self.state.meta.read().clone()
     }
 
-    pub fn meta_signal(&self) -> Signal<FormMeta> {
-        self.state.meta
+    pub fn meta_signal(&self) -> ReadSignal<FormMeta> {
+        self.state.meta.into()
     }
 
     pub fn scope(&self) -> FormScope<T> {
@@ -262,9 +262,13 @@ impl<T: Clone + PartialEq + 'static> FormRoot<T> {
     }
 
     pub(crate) fn allocate_key(&self) -> u64 {
-        let key = *self.state.next_key.read();
-        self.set_next_key(key + 1);
-        key
+        self.allocate_keys(1)[0]
+    }
+
+    pub(crate) fn allocate_keys(&self, count: usize) -> Vec<u64> {
+        let start = *self.state.next_key.read();
+        self.set_next_key(start + count as u64);
+        (start..start + count as u64).collect()
     }
 
     pub(crate) fn mutate_values(&self, f: impl FnOnce(&mut T)) {
@@ -284,7 +288,9 @@ impl<T: Clone + PartialEq + 'static> FormRoot<T> {
     pub(crate) fn recompute_all_meta(&self) {
         let current = self.state.values.read().clone();
         let initial = self.state.initial_values.read().clone();
-        self.with_registry(|registry| {
+        let previous_meta = self.state.meta.read().clone();
+        let next_meta = self.with_registry(|registry| {
+            let mut next_meta = None;
             let paths = registry.nodes.keys().cloned().collect::<Vec<_>>();
             for path in paths.iter().rev() {
                 let descendants = registry
@@ -326,7 +332,7 @@ impl<T: Clone + PartialEq + 'static> FormRoot<T> {
                         node.validity = Validity::Invalid;
                     }
                     if node.path.is_root() {
-                        self.set_meta(FormMeta {
+                        next_meta = Some(FormMeta {
                             touched: node.touched,
                             dirty: current != initial || node.dirty,
                             empty: node.empty,
@@ -334,17 +340,21 @@ impl<T: Clone + PartialEq + 'static> FormRoot<T> {
                             validity: node.validity,
                             errors,
                             submit_errors,
-                            submitting: self.state.meta.peek().submitting,
-                            submit_count: self.state.meta.peek().submit_count,
-                            submit_attempted: self.state.meta.peek().submit_attempted,
-                            submit_succeeded: self.state.meta.peek().submit_succeeded,
-                            submit_failed: self.state.meta.peek().submit_failed,
-                            dirty_since_last_submit: self.state.meta.peek().dirty_since_last_submit,
+                            submitting: previous_meta.submitting,
+                            submit_count: previous_meta.submit_count,
+                            submit_attempted: previous_meta.submit_attempted,
+                            submit_succeeded: previous_meta.submit_succeeded,
+                            submit_failed: previous_meta.submit_failed,
+                            dirty_since_last_submit: previous_meta.dirty_since_last_submit,
                         });
                     }
                 }
             }
+            next_meta
         });
+        if let Some(next_meta) = next_meta {
+            self.set_meta(next_meta);
+        }
     }
 
     pub(crate) fn scope_meta(&self, path: &FieldPath) -> ScopeMeta {
@@ -475,27 +485,27 @@ impl<T: Clone + PartialEq + 'static> FormRoot<T> {
         registry.with_mut(f)
     }
 
-    pub(crate) fn with_meta<R>(&self, f: impl FnOnce(&mut FormMeta) -> R) -> R {
+    fn with_meta<R>(&self, f: impl FnOnce(&mut FormMeta) -> R) -> R {
         let mut meta = self.state.meta;
         meta.with_mut(f)
     }
 
-    pub(crate) fn set_meta(&self, value: FormMeta) {
+    fn set_meta(&self, value: FormMeta) {
         let mut meta = self.state.meta;
         meta.set(value);
     }
 
-    pub(crate) fn set_values_signal(&self, value: T) {
+    fn set_values_signal(&self, value: T) {
         let mut values = self.state.values;
         values.set(value);
     }
 
-    pub(crate) fn set_initial_values_signal(&self, value: T) {
+    fn set_initial_values_signal(&self, value: T) {
         let mut values = self.state.initial_values;
         values.set(value);
     }
 
-    pub(crate) fn set_next_key(&self, value: u64) {
+    fn set_next_key(&self, value: u64) {
         let mut next_key = self.state.next_key;
         next_key.set(value);
     }

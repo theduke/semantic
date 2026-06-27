@@ -171,8 +171,8 @@ where
         (self.get)(&self.root.values())
     }
 
-    pub fn value_signal(&self) -> Signal<Value> {
-        Signal::new(self.value())
+    pub fn value_signal(&self) -> ReadSignal<Value> {
+        Signal::new(self.value()).into()
     }
 
     pub fn meta(&self) -> FieldMeta {
@@ -186,8 +186,8 @@ where
             .unwrap_or_else(|| FieldMeta::new(self.path.clone()))
     }
 
-    pub fn meta_signal(&self) -> Signal<FieldMeta> {
-        Signal::new(self.meta())
+    pub fn meta_signal(&self) -> ReadSignal<FieldMeta> {
+        Signal::new(self.meta()).into()
     }
 
     pub fn set_value(&self, value: Value) {

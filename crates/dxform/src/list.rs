@@ -135,16 +135,26 @@ where
                 }) as DynValidator<Root>
             })
             .collect::<Vec<_>>();
+        let has_keys = scope
+            .root
+            .state
+            .registry
+            .read()
+            .list_keys
+            .contains_key(&path);
+        let new_keys = if has_keys {
+            Vec::new()
+        } else {
+            let len = get(&scope.root.values()).len();
+            scope.root.allocate_keys(len)
+        };
         scope.root.with_registry(|registry| {
             let node = registry
                 .nodes
                 .entry(path.clone())
                 .or_insert_with(|| FormNodeState::new(FormNodeKind::List, path.clone()));
             node.validators.extend(validators);
-            registry.list_keys.entry(path.clone()).or_insert_with(|| {
-                let len = get(&scope.root.values()).len();
-                (0..len).map(|_| scope.root.allocate_key()).collect()
-            });
+            registry.list_keys.entry(path.clone()).or_insert(new_keys);
         });
         let handle = Self {
             root: scope.root.clone(),
@@ -172,8 +182,8 @@ where
             .unwrap_or_else(|| ListMeta::new(self.path.clone()))
     }
 
-    pub fn meta_signal(&self) -> Signal<ListMeta> {
-        Signal::new(self.meta())
+    pub fn meta_signal(&self) -> ReadSignal<ListMeta> {
+        Signal::new(self.meta()).into()
     }
 
     pub fn values(&self) -> Vec<Item> {
@@ -334,12 +344,17 @@ where
 
     fn ensure_key_count(&self) {
         let len = self.values().len();
+        let current_len = self
+            .root
+            .state
+            .registry
+            .read()
+            .list_keys
+            .get(&self.path)
+            .map_or(0, Vec::len);
+        let missing = len.saturating_sub(current_len);
+        let new_keys = self.root.allocate_keys(missing);
         self.root.with_registry(|registry| {
-            let current_len = registry.list_keys.get(&self.path).map_or(0, Vec::len);
-            let missing = len.saturating_sub(current_len);
-            let new_keys = (0..missing)
-                .map(|_| self.root.allocate_key())
-                .collect::<Vec<_>>();
             let keys = registry.list_keys.entry(self.path.clone()).or_default();
             keys.truncate(len);
             keys.extend(new_keys);
