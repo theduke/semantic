@@ -29,12 +29,15 @@ pub fn CreateEntityPage() -> Element {
         .first()
         .map(|class| class.id.clone())
         .unwrap_or_default();
-    let mut selected_class_id = use_signal(|| initial_class_id);
-    let mut selected_collection = use_signal(|| default_collection);
+    let mut selected_class_id = use_signal(|| Some(initial_class_id));
+    let mut selected_collection = use_signal(|| Some(default_collection.clone()));
     let mut id = use_signal(new_entity_id);
 
-    let class_id = selected_class_id.read().clone();
-    let collection = selected_collection.read().clone();
+    let class_id = selected_class_id.read().clone().unwrap_or_default();
+    let collection = selected_collection
+        .read()
+        .clone()
+        .unwrap_or_else(|| default_collection.clone());
     let entity_id = id.read().clone();
     let selected_class = classes
         .iter()
@@ -42,7 +45,11 @@ pub fn CreateEntityPage() -> Element {
         .cloned()
         .or_else(|| classes.first().cloned());
     let primary_id_field = primary_id_field_for_collection(&catalog, &collection);
-    let toolbar_collection = collection.clone();
+    let collection_options = if collections.is_empty() {
+        vec!["entities".to_string()]
+    } else {
+        collections.clone()
+    };
 
     rsx! {
         section { class: "semantic-form-screen semantic-create-entity",
@@ -50,43 +57,69 @@ pub fn CreateEntityPage() -> Element {
             if classes.is_empty() {
                 div { class: "semantic-empty", "No classes are registered in the catalog." }
             } else if let Some(class) = selected_class {
-                div { class: "semantic-form-screen__toolbar",
-                    label {
-                        span { "Class" }
-                        select {
-                            value: "{class.id}",
-                            onchange: move |event| selected_class_id.set(event.value()),
-                            for option in classes.iter() {
-                                option {
-                                    value: "{option.id}",
-                                    selected: option.id == class.id,
-                                    "{class_label(option)}"
+                div { class: "semantic-table-wrap semantic-form-screen__meta",
+                    table { class: "semantic-field-table semantic-form-screen__meta-table",
+                        tbody {
+                            tr {
+                                th { scope: "row", "Class" }
+                                td {
+                                    dxcomp::Combobox::<String> {
+                                        value: Some(selected_class_id.into()),
+                                        on_value_change: move |value| {
+                                            if let Some(value) = value {
+                                                selected_class_id.set(Some(value));
+                                            }
+                                        },
+                                        placeholder: "Filter classes",
+                                        aria_label: "Entity class",
+                                        list_aria_label: "Entity classes",
+                                        dxcomp::ComboboxEmpty { "No class found." }
+                                        for (index, option) in classes.iter().enumerate() {
+                                            dxcomp::ComboboxOption::<String> {
+                                                index,
+                                                value: option.id.clone(),
+                                                text_value: class_label(option),
+                                                "{class_label(option)}"
+                                            }
+                                        }
+                                    }
                                 }
                             }
-                        }
-                    }
-                    label {
-                        span { "Collection" }
-                        select {
-                            value: "{toolbar_collection}",
-                            onchange: move |event| selected_collection.set(event.value()),
-                            if collections.is_empty() {
-                                option { value: "entities", "entities" }
-                            }
-                            for option in collections.iter() {
-                                option {
-                                    value: "{option}",
-                                    selected: option == &toolbar_collection,
-                                    "{option}"
+                            tr {
+                                th { scope: "row", "Collection" }
+                                td {
+                                    dxcomp::Combobox::<String> {
+                                        value: Some(selected_collection.into()),
+                                        on_value_change: move |value| {
+                                            if let Some(value) = value {
+                                                selected_collection.set(Some(value));
+                                            }
+                                        },
+                                        placeholder: "Filter collections",
+                                        aria_label: "Entity collection",
+                                        list_aria_label: "Entity collections",
+                                        dxcomp::ComboboxEmpty { "No collection found." }
+                                        for (index, option) in collection_options.iter().enumerate() {
+                                            dxcomp::ComboboxOption::<String> {
+                                                index,
+                                                value: option.clone(),
+                                                text_value: option.clone(),
+                                                "{option}"
+                                            }
+                                        }
+                                    }
                                 }
                             }
-                        }
-                    }
-                    label {
-                        span { "ID" }
-                        dxcomp::Input {
-                            value: "{entity_id}",
-                            oninput: move |event: FormEvent| id.set(event.value())
+                            tr {
+                                th { scope: "row", "ID" }
+                                td {
+                                    dxcomp::Input {
+                                        class: "semantic-form-screen__id-input",
+                                        value: "{entity_id}",
+                                        oninput: move |event: FormEvent| id.set(event.value())
+                                    }
+                                }
+                            }
                         }
                     }
                 }
@@ -162,6 +195,24 @@ pub fn EditEntityPage(collection: String, id: String) -> Element {
                     let primary_id_field = primary_id_field_for_collection(&catalog, &collection);
                     rsx! {
                         if let Some(class) = class {
+                            div { class: "semantic-table-wrap semantic-form-screen__meta",
+                                table { class: "semantic-field-table semantic-form-screen__meta-table",
+                                    tbody {
+                                        tr {
+                                            th { scope: "row", "Collection" }
+                                            td { code { "{collection}" } }
+                                        }
+                                        tr {
+                                            th { scope: "row", "ID" }
+                                            td { code { "{id}" } }
+                                        }
+                                        tr {
+                                            th { scope: "row", "Class" }
+                                            td { "{class_label(&class)}" }
+                                        }
+                                    }
+                                }
+                            }
                             DynamicClassForm {
                                 class,
                                 object: object.clone(),

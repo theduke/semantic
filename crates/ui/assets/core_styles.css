@@ -98,6 +98,87 @@ pre {
   gap: var(--semantic-space-4);
 }
 
+.semantic-form-screen,
+.semantic-form,
+.semantic-form--class {
+  display: grid;
+  gap: var(--semantic-space-4);
+}
+
+.semantic-form-screen h2,
+.semantic-form__header h2 {
+  margin: 0;
+  font-size: 20px;
+  font-weight: 650;
+}
+
+.semantic-form__header {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: var(--semantic-space-4);
+}
+
+.semantic-form__header code,
+.semantic-form-screen__meta code {
+  color: var(--semantic-text-muted);
+  font-size: 12px;
+}
+
+.semantic-form-screen__meta,
+.semantic-form__field-table-wrap {
+  overflow: visible;
+}
+
+.semantic-form-screen__meta-table th {
+  width: 170px;
+}
+
+.semantic-form-screen__meta .dx-combobox,
+.semantic-form-screen__meta .dx-combobox-input-wrapper,
+.semantic-form-screen__meta .dx-combobox-list,
+.semantic-form-screen__id-input,
+.semantic-form__control .dx-input:not([type="checkbox"]),
+.semantic-form__control .dx-combobox,
+.semantic-form__control .dx-combobox-input-wrapper,
+.semantic-form__control .dx-combobox-list {
+  width: min(100%, 520px);
+}
+
+.semantic-form__control {
+  display: grid;
+  gap: var(--semantic-space-2);
+}
+
+.semantic-form__field-table .semantic-form__control {
+  min-width: min(420px, 100%);
+}
+
+.semantic-form__actions,
+.semantic-form-screen__footer {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--semantic-space-2);
+}
+
+.semantic-form-screen__footer {
+  justify-content: flex-end;
+}
+
+.semantic-form__status {
+  color: var(--semantic-text-muted);
+  font-size: 12px;
+}
+
+.semantic-form__errors {
+  display: grid;
+  gap: var(--semantic-space-1);
+  margin: 0;
+  padding-left: var(--semantic-space-4);
+  color: #b42318;
+}
+
 .semantic-entity__actions {
   display: flex;
   justify-content: flex-end;
@@ -261,6 +342,10 @@ pre {
 
   .semantic-field-table th {
     width: 140px;
+  }
+
+  .semantic-form-screen__meta-table th {
+    width: 120px;
   }
 
   .semantic-map__entry {

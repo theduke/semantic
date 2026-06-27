@@ -75,28 +75,34 @@ pub fn render_class_form_body(ctx: ClassFormRenderContext) -> Element {
                     code { "{id}" }
                 }
             }
-            for field in fields {
-                if field.field_name != OBJECT_TYPE_FIELD && field.storage_field_name != OBJECT_TYPE_FIELD {
-                    {
-                        rsx! {
-                            ClassFormFieldRow {
-                                key: "{field.field_name}",
+            div { class: "semantic-table-wrap semantic-form__field-table-wrap",
+                table { class: "semantic-field-table semantic-form__field-table",
+                    tbody {
+                        for field in fields {
+                            if field.field_name != OBJECT_TYPE_FIELD && field.storage_field_name != OBJECT_TYPE_FIELD {
+                                {
+                                    rsx! {
+                                        ClassFormFieldRow {
+                                            key: "{field.field_name}",
+                                            scope: ctx.scope.clone(),
+                                            class: ctx.class.clone(),
+                                            field,
+                                            mode: ctx.mode,
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                        for (field_name, value) in extra_fields {
+                            ExtraClassFormFieldRow {
+                                key: "{field_name}",
                                 scope: ctx.scope.clone(),
-                                class: ctx.class.clone(),
-                                field,
+                                field_name,
+                                value,
                                 mode: ctx.mode,
                             }
                         }
                     }
-                }
-            }
-            for (field_name, value) in extra_fields {
-                ExtraClassFormFieldRow {
-                    key: "{field_name}",
-                    scope: ctx.scope.clone(),
-                    field_name,
-                    value,
-                    mode: ctx.mode,
                 }
             }
         }
@@ -214,10 +220,12 @@ fn ClassFormFieldRow(
         })
     };
     rsx! {
-        div { class: "semantic-form__field",
-            label { class: "semantic-form__label", "{label}" }
-            div { class: "semantic-form__control", {body} }
-            SemanticFormErrors { errors: field_handle.meta().errors }
+        tr { class: "semantic-form__field",
+            th { scope: "row", class: "semantic-form__label", "{label}" }
+            td { class: "semantic-form__control",
+                {body}
+                SemanticFormErrors { errors: field_handle.meta().errors }
+            }
         }
     }
 }
@@ -241,17 +249,17 @@ fn ExtraClassFormFieldRow(
     });
     let field_scope = field.scope();
     rsx! {
-        div { class: "semantic-form__field semantic-form__field--extra",
-            label { class: "semantic-form__label", "{field_name}" }
-            div { class: "semantic-form__control",
+        tr { class: "semantic-form__field semantic-form__field--extra",
+            th { scope: "row", class: "semantic-form__label", "{field_name}" }
+            td { class: "semantic-form__control",
                 {render_value_form_scope(crate::form::ValueFormRenderContext {
                     path: field.path(),
                     scope: field_scope,
                     value_type: None,
                     mode,
                 })}
+                SemanticFormErrors { errors: field.meta().errors }
             }
-            SemanticFormErrors { errors: field.meta().errors }
         }
     }
 }
@@ -263,9 +271,9 @@ fn ReadonlyClassFormField(
     type_hint: semantic_data::schema::Type,
 ) -> Element {
     rsx! {
-        div { class: "semantic-form__field semantic-form__field--readonly",
-            label { class: "semantic-form__label", "{label}" }
-            div { class: "semantic-form__control",
+        tr { class: "semantic-form__field semantic-form__field--readonly",
+            th { scope: "row", class: "semantic-form__label", "{label}" }
+            td { class: "semantic-form__control",
                 ValueView {
                     value: field.value(),
                     type_hint: Some(type_hint),
