@@ -82,15 +82,10 @@ pub fn UploadPage() -> Element {
             while let Some(command) = rx.next().await {
                 match command {
                     UploadCommand::AddFiles(files) => {
-                        let mut skipped = Vec::new();
                         let mut queue_write = queue.write();
                         for file in files {
                             let name = file.name();
                             let mime_type = normalize_mime_type(&file);
-                            if !is_supported_image(&name, mime_type.as_deref()) {
-                                skipped.push(name);
-                                continue;
-                            }
                             if queue_write.iter().any(|item| same_file(item, &file)) {
                                 continue;
                             }
@@ -113,14 +108,7 @@ pub fn UploadPage() -> Element {
                             });
                         }
                         drop(queue_write);
-                        if skipped.is_empty() {
-                            notice.set(None);
-                        } else {
-                            notice.set(Some(format!(
-                                "Skipped non-image files: {}",
-                                skipped.join(", ")
-                            )));
-                        }
+                        notice.set(None);
                     }
                     UploadCommand::Remove(id) => {
                         if !is_busy(&queue.read(), id) {
@@ -219,7 +207,7 @@ pub fn UploadPage() -> Element {
     rsx! {
         section { class: "semantic-upload",
             div { class: "semantic-upload__header",
-                h2 { "Upload Images" }
+                h2 { "Upload Files" }
                 div { class: "semantic-upload__actions",
                     dxcomp::Button {
                         disabled: busy,
@@ -243,7 +231,6 @@ pub fn UploadPage() -> Element {
             label { class: "semantic-upload__selector",
                 input {
                     r#type: "file",
-                    accept: "image/*",
                     multiple: true,
                     onchange: move |event| commands.send(UploadCommand::AddFiles(event.files()))
                 }
@@ -321,7 +308,7 @@ fn UploadQueueRow(item: UploadQueueItem, commands: Coroutine<UploadCommand>) -> 
                 div {
                     strong { "{item.name}" }
                     div { class: "semantic-upload__item-meta",
-                        span { "{item.mime_type.clone().unwrap_or_else(|| \"image/*\".to_string())}" }
+                        span { "{item.mime_type.clone().unwrap_or_else(|| \"application/octet-stream\".to_string())}" }
                         span { "{format_byte_size(item.byte_size)}" }
                         span { "{status_label(&item.status)}" }
                     }
@@ -530,12 +517,6 @@ fn normalize_mime_type(file: &FileData) -> Option<String> {
         .or_else(|| mime_from_name(&file.name()).map(str::to_string))
 }
 
-fn is_supported_image(name: &str, mime_type: Option<&str>) -> bool {
-    mime_type
-        .map(|mime| mime.starts_with("image/"))
-        .unwrap_or_else(|| mime_from_name(name).is_some())
-}
-
 fn mime_from_name(name: &str) -> Option<&'static str> {
     match name
         .rsplit('.')
@@ -611,11 +592,10 @@ mod tests {
     use super::*;
 
     #[test]
-    fn image_filter_accepts_mime_or_common_extension() {
-        assert!(is_supported_image("photo.bin", Some("image/png")));
-        assert!(is_supported_image("photo.WEBP", None));
-        assert!(!is_supported_image("notes.txt", None));
-        assert!(!is_supported_image("notes.txt", Some("text/plain")));
+    fn mime_from_name_infers_common_image_extensions() {
+        assert_eq!(mime_from_name("photo.png"), Some("image/png"));
+        assert_eq!(mime_from_name("photo.WEBP"), Some("image/webp"));
+        assert_eq!(mime_from_name("notes.txt"), None);
     }
 
     #[test]
