@@ -5767,6 +5767,7 @@ version = "0.0.1"
 dependencies = [
  "async-trait",
  "facet-json",
+ "semantic_base",
  "semantic_data",
  "semantic_db_core",
  "semantic_rpc",

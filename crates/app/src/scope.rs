@@ -68,6 +68,7 @@ struct ScopeEntry {
     request: DbOpenRequest,
     visibility: ScopeVisibility,
     db: Option<Arc<dyn SemanticDb>>,
+    schema_initialized: bool,
     retireable: bool,
     last_used: Instant,
 }
@@ -113,6 +114,7 @@ impl ScopeManager {
                 },
                 visibility: ScopeVisibility::System,
                 db: Some(db),
+                schema_initialized: false,
                 retireable: false,
                 last_used: Instant::now(),
             },
@@ -168,6 +170,7 @@ impl ScopeManager {
                     request: options.request.clone(),
                     visibility: options.visibility.clone(),
                     db: Some(db),
+                    schema_initialized: true,
                     retireable: true,
                     last_used: Instant::now(),
                 },
@@ -205,10 +208,23 @@ impl ScopeManager {
                 .get_mut(&key)
                 .ok_or_else(|| AppError::UnknownScope(scope_id.to_string()))?;
             entry.last_used = Instant::now();
-            (entry.db.clone(), entry.request.clone())
+            (
+                entry.db.clone().map(|db| (db, entry.schema_initialized)),
+                entry.request.clone(),
+            )
         };
 
-        if let Some(db) = existing {
+        if let Some((db, schema_initialized)) = existing {
+            if !schema_initialized {
+                initialize_default_db(&db).await?;
+                let mut state = self.write_state()?;
+                let entry = state
+                    .entries
+                    .get_mut(&key)
+                    .ok_or_else(|| AppError::UnknownScope(scope_id.to_string()))?;
+                entry.schema_initialized = true;
+                entry.last_used = Instant::now();
+            }
             return Ok(db);
         }
 
@@ -220,6 +236,7 @@ impl ScopeManager {
             .get_mut(&key)
             .ok_or_else(|| AppError::UnknownScope(scope_id.to_string()))?;
         entry.db = Some(Arc::clone(&db));
+        entry.schema_initialized = true;
         entry.last_used = Instant::now();
         Ok(db)
     }
@@ -335,4 +352,14 @@ fn owner_for(principal: &Principal, visibility: &ScopeVisibility) -> PrincipalId
         ScopeVisibility::Principal => principal.id.clone(),
         ScopeVisibility::System => Principal::system().id,
     }
+}
+
+async fn initialize_default_db(db: &Arc<dyn SemanticDb>) -> std::result::Result<(), AppError> {
+    #[cfg(feature = "base")]
+    db.upsert_package(semantic_base::package()).await?;
+
+    #[cfg(not(feature = "base"))]
+    let _ = db;
+
+    Ok(())
 }

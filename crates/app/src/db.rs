@@ -2,7 +2,11 @@ use std::sync::Arc;
 
 use async_trait::async_trait;
 use semantic_data::schema::DbOpenMode;
+#[cfg(feature = "base")]
+use semantic_data::schema::Package;
 use semantic_data::value::Object;
+#[cfg(feature = "base")]
+use semantic_db_core::PackageRegistrationOutcome;
 use semantic_db_core::catalog::Catalog;
 use semantic_db_core::{
     Batch, BatchOutcome, Db, DbError, EntityRecord, QueryResult, TextQueryInput,
@@ -32,6 +36,17 @@ pub trait SemanticDb: Send + Sync + 'static {
     async fn delete(&self, collection: String, id: String) -> std::result::Result<(), DbError>;
 
     async fn execute_batch(&self, batch: Batch) -> std::result::Result<BatchOutcome, DbError>;
+
+    #[cfg(feature = "base")]
+    async fn upsert_package(
+        &self,
+        package: Package,
+    ) -> std::result::Result<PackageRegistrationOutcome, DbError> {
+        let _ = package;
+        Err(DbError::InvalidQuery(
+            "package registration is not exposed by this app Db adapter".to_string(),
+        ))
+    }
 }
 
 #[async_trait]
@@ -86,6 +101,14 @@ impl SemanticDb for Db {
         Err(DbError::InvalidQuery(
             "core batch execution is not exposed by the app Db adapter yet".to_string(),
         ))
+    }
+
+    #[cfg(feature = "base")]
+    async fn upsert_package(
+        &self,
+        package: Package,
+    ) -> std::result::Result<PackageRegistrationOutcome, DbError> {
+        self.upsert_package(package).await
     }
 }
 

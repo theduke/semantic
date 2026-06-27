@@ -40,7 +40,8 @@ mod tests {
     use semantic_data::value::{Object, Value};
     use semantic_db_core::catalog::Catalog;
     use semantic_db_core::{
-        Batch, BatchOutcome, DbError, EntityRecord, QueryResult, TextQueryInput,
+        Batch, BatchOutcome, DbError, EntityRecord, PackageRegistrationOutcome, QueryResult,
+        TextQueryInput,
     };
     use semantic_rpc::{RpcRequest, RpcResponse, RpcResult};
     use tower::ServiceExt;
@@ -96,6 +97,16 @@ mod tests {
 
         async fn execute_batch(&self, _batch: Batch) -> std::result::Result<BatchOutcome, DbError> {
             Err(DbError::InvalidQuery("batch not used in tests".to_string()))
+        }
+
+        async fn upsert_package(
+            &self,
+            package: semantic_data::schema::Package,
+        ) -> std::result::Result<PackageRegistrationOutcome, DbError> {
+            assert_eq!(package.name, "semantic.base");
+            Ok(PackageRegistrationOutcome {
+                executed_migrations: vec![],
+            })
         }
     }
 

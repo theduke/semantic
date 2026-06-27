@@ -26,7 +26,8 @@ mod tests {
     use semantic_data::value::{Object, Value};
     use semantic_db_core::catalog::{Catalog, CatalogStorageSnapshot};
     use semantic_db_core::{
-        Batch, BatchOutcome, DbError, EntityRecord, QueryResult, TextQueryInput,
+        Batch, BatchOutcome, DbError, EntityRecord, PackageRegistrationOutcome, QueryResult,
+        TextQueryInput,
     };
     use semantic_rpc::{RpcRequest, RpcResponse, RpcResult};
 
@@ -35,6 +36,8 @@ mod tests {
     struct MockDb {
         name: String,
         query_count: AtomicUsize,
+        #[cfg(feature = "base")]
+        package_count: Arc<AtomicUsize>,
     }
 
     impl MockDb {
@@ -42,6 +45,17 @@ mod tests {
             Self {
                 name: name.into(),
                 query_count: AtomicUsize::new(0),
+                #[cfg(feature = "base")]
+                package_count: Arc::new(AtomicUsize::new(0)),
+            }
+        }
+
+        #[cfg(feature = "base")]
+        fn with_package_count(name: impl Into<String>, package_count: Arc<AtomicUsize>) -> Self {
+            Self {
+                name: name.into(),
+                query_count: AtomicUsize::new(0),
+                package_count,
             }
         }
     }
@@ -93,10 +107,24 @@ mod tests {
         async fn execute_batch(&self, _batch: Batch) -> std::result::Result<BatchOutcome, DbError> {
             Err(DbError::InvalidQuery("batch not used in tests".to_string()))
         }
+
+        #[cfg(feature = "base")]
+        async fn upsert_package(
+            &self,
+            package: semantic_data::schema::Package,
+        ) -> std::result::Result<PackageRegistrationOutcome, DbError> {
+            assert_eq!(package.name, semantic_base::PACKAGE_NAME);
+            self.package_count.fetch_add(1, Ordering::Relaxed);
+            Ok(PackageRegistrationOutcome {
+                executed_migrations: vec![],
+            })
+        }
     }
 
     struct MockProvider {
         opened: Arc<Mutex<Vec<String>>>,
+        #[cfg(feature = "base")]
+        package_count: Arc<AtomicUsize>,
     }
 
     #[async_trait]
@@ -111,7 +139,36 @@ mod tests {
             _principal: &Principal,
         ) -> std::result::Result<Arc<dyn SemanticDb>, AppError> {
             self.opened.lock().unwrap().push(request.uri.clone());
-            Ok(Arc::new(MockDb::new(request.uri)))
+            #[cfg(feature = "base")]
+            {
+                Ok(Arc::new(MockDb::with_package_count(
+                    request.uri,
+                    Arc::clone(&self.package_count),
+                )))
+            }
+            #[cfg(not(feature = "base"))]
+            {
+                Ok(Arc::new(MockDb::new(request.uri)))
+            }
+        }
+    }
+
+    fn mock_provider(opened: Arc<Mutex<Vec<String>>>) -> MockProvider {
+        MockProvider {
+            opened,
+            #[cfg(feature = "base")]
+            package_count: Arc::new(AtomicUsize::new(0)),
+        }
+    }
+
+    #[cfg(feature = "base")]
+    fn mock_provider_with_package_count(
+        opened: Arc<Mutex<Vec<String>>>,
+        package_count: Arc<AtomicUsize>,
+    ) -> MockProvider {
+        MockProvider {
+            opened,
+            package_count,
         }
     }
 
@@ -158,6 +215,14 @@ mod tests {
 
     #[tokio::test]
     async fn no_auth_default_scope_resolves() {
+        #[cfg(feature = "base")]
+        let package_count = Arc::new(AtomicUsize::new(0));
+        #[cfg(feature = "base")]
+        let default_db: Arc<dyn SemanticDb> = Arc::new(MockDb::with_package_count(
+            "default",
+            Arc::clone(&package_count),
+        ));
+        #[cfg(not(feature = "base"))]
         let default_db: Arc<dyn SemanticDb> = Arc::new(MockDb::new("default"));
         let app = SemanticApp::builder()
             .with_default_scope(DbScopeId::new("default"), default_db)
@@ -177,15 +242,60 @@ mod tests {
             .await;
 
         assert_eq!(select_db_name(response), "default");
+        #[cfg(feature = "base")]
+        assert_eq!(package_count.load(Ordering::Relaxed), 1);
+    }
+
+    #[cfg(feature = "base")]
+    #[tokio::test]
+    async fn opened_scope_does_not_register_base_package() {
+        let opened = Arc::new(Mutex::new(Vec::new()));
+        let package_count = Arc::new(AtomicUsize::new(0));
+        let app = SemanticApp::builder()
+            .with_provider(mock_provider_with_package_count(
+                opened,
+                Arc::clone(&package_count),
+            ))
+            .register_builtin_commands()
+            .unwrap()
+            .build()
+            .unwrap();
+
+        let response = app
+            .invoke(
+                ctx(&app, Principal::system()),
+                request(
+                    "semantic.scope.open",
+                    value_object([
+                        ("uri", Value::String("mock://opened".to_string())),
+                        ("scope_id", Value::String("opened".to_string())),
+                    ]),
+                ),
+            )
+            .await;
+        assert!(matches!(response.result, RpcResult::Ok(_)));
+
+        let response = app
+            .invoke(
+                ctx(&app, Principal::system()),
+                request(
+                    "semantic.db.query",
+                    value_object([
+                        ("scope_id", Value::String("opened".to_string())),
+                        ("query", Value::String("select * from _".to_string())),
+                    ]),
+                ),
+            )
+            .await;
+        assert_eq!(select_db_name(response), "mock://opened");
+        assert_eq!(package_count.load(Ordering::Relaxed), 0);
     }
 
     #[tokio::test]
     async fn principal_scopes_are_isolated() {
         let opened = Arc::new(Mutex::new(Vec::new()));
         let app = SemanticApp::builder()
-            .with_provider(MockProvider {
-                opened: Arc::clone(&opened),
-            })
+            .with_provider(mock_provider(Arc::clone(&opened)))
             .register_builtin_commands()
             .unwrap()
             .build()
@@ -234,7 +344,7 @@ mod tests {
     async fn scope_open_sets_session_current() {
         let opened = Arc::new(Mutex::new(Vec::new()));
         let app = SemanticApp::builder()
-            .with_provider(MockProvider { opened })
+            .with_provider(mock_provider(opened))
             .register_builtin_commands()
             .unwrap()
             .build()
@@ -315,9 +425,7 @@ mod tests {
     async fn retired_scope_reopens_from_descriptor() {
         let opened = Arc::new(Mutex::new(Vec::new()));
         let app = SemanticApp::builder()
-            .with_provider(MockProvider {
-                opened: Arc::clone(&opened),
-            })
+            .with_provider(mock_provider(Arc::clone(&opened)))
             .with_idle_ttl(Duration::ZERO)
             .register_builtin_commands()
             .unwrap()

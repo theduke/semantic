@@ -11,9 +11,14 @@ rust-version.workspace = true
 categories.workspace = true
 version.workspace = true
 
+[features]
+default = ["base"]
+base = ["dep:semantic_base"]
+
 [dependencies]
 async-trait = "0.1.89"
 semantic_data = { workspace = true }
+semantic_base = { path = "../base", optional = true }
 semantic_db_core = { path = "../db_core" }
 semantic_rpc = { path = "../rpc" }
 facet-json = "0.43.2"
