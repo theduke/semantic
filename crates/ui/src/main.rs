@@ -33,13 +33,17 @@ fn launch_standalone(args: &[String]) {
     {
         std::fs::create_dir_all(parent).expect("create semantic UI database directory");
     }
-    let (client, scope_id) = match semantic_ui::build_embedded_client(db_path) {
-        Ok(value) => value,
-        Err(err) => {
-            eprintln!("failed to open semantic database: {err}");
-            std::process::exit(1);
-        }
-    };
+    let blob_uri = app_config
+        .default_blob_uri()
+        .expect("build default semantic UI blob store uri");
+    let (client, scope_id) =
+        match semantic_ui::build_embedded_client_with_blob_store(db_path, blob_uri) {
+            Ok(value) => value,
+            Err(err) => {
+                eprintln!("failed to open semantic database: {err}");
+                std::process::exit(1);
+            }
+        };
     semantic_ui::launch_with_client(client, Some(scope_id));
 }
 

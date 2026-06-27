@@ -15,14 +15,31 @@ pub use router::SemanticServer;
 #[cfg(feature = "redb")]
 impl SemanticServer {
     pub fn local_redb(path: impl AsRef<std::path::Path>) -> std::result::Result<Self, ServerError> {
+        let app_config = semantic_app::AppConfig::from_env();
+        let blob_uri = app_config
+            .default_blob_uri()
+            .map_err(|err| ServerError::App(semantic_app::AppError::InvalidRequest(err)))?;
+        Self::local_redb_with_blob_store(path, blob_uri)
+    }
+
+    pub fn local_redb_with_blob_store(
+        path: impl AsRef<std::path::Path>,
+        blob_uri: String,
+    ) -> std::result::Result<Self, ServerError> {
         let path = path.as_ref();
         let backend =
             semantic_db_redb::open_backend(path, semantic_data::schema::DbOpenMode::AutoCreate)?;
         let db: std::sync::Arc<dyn semantic_app::SemanticDb> =
             std::sync::Arc::new(semantic_db_core::Db::new(backend));
+        let scope_id = semantic_app::DbScopeId::new("default");
         let app = semantic_app::SemanticApp::builder()
             .with_provider(RedbDbProvider)
-            .with_default_scope(semantic_app::DbScopeId::new("default"), db)
+            .with_default_scope(scope_id.clone(), db)
+            .with_default_object_store_request(
+                scope_id,
+                semantic_app::ObjectStoreId::new("default"),
+                semantic_app::ObjectStoreOpenRequest { uri: blob_uri },
+            )
             .register_builtin_commands()?
             .build()?;
         Ok(Self::new(app))

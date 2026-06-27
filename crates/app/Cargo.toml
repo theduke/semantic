@@ -17,6 +17,8 @@ base = ["dep:semantic_base"]
 
 [dependencies]
 async-trait = "0.1.89"
+objstore = { path = "../../../objstore/objstore" }
+objstore_fs = { path = "../../../objstore/objstore_fs" }
 semantic_data = { workspace = true }
 semantic_base = { path = "../base", optional = true }
 semantic_db_core = { path = "../db_core" }
@@ -25,6 +27,7 @@ facet-json = "0.43.2"
 serde = { workspace = true, features = ["derive"] }
 thiserror = "2.0.17"
 tokio = { workspace = true, features = ["sync", "time"] }
+url = "2.5.7"
 
 [dev-dependencies]
 tokio = { workspace = true, features = ["macros", "rt"] }

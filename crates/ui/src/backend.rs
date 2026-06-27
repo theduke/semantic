@@ -96,6 +96,15 @@ impl RpcClientDyn for EmbeddedRpcClient {
 pub fn build_embedded_client(
     db_path: impl AsRef<std::path::Path>,
 ) -> std::result::Result<(semantic_rpc::RpcClient, String), String> {
+    let blob_uri = semantic_app::AppConfig::from_env().default_blob_uri()?;
+    build_embedded_client_with_blob_store(db_path, blob_uri)
+}
+
+#[cfg(feature = "desktop")]
+pub fn build_embedded_client_with_blob_store(
+    db_path: impl AsRef<std::path::Path>,
+    blob_uri: String,
+) -> std::result::Result<(semantic_rpc::RpcClient, String), String> {
     let scope_id = DbScopeId::new("local");
     let db_uri = format!("redb://{}", db_path.as_ref().to_string_lossy());
     let app = SemanticApp::builder()
@@ -106,6 +115,11 @@ pub fn build_embedded_client(
                 uri: db_uri,
                 mode: DbOpenMode::AutoCreate,
             },
+        )
+        .with_default_object_store_request(
+            scope_id.clone(),
+            semantic_app::ObjectStoreId::new("default"),
+            semantic_app::ObjectStoreOpenRequest { uri: blob_uri },
         )
         .register_builtin_commands()
         .map_err(|err| err.to_string())?

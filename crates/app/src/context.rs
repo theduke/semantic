@@ -1,6 +1,8 @@
 use std::sync::Arc;
 
-use crate::{AppError, AppSession, DbScopeId, Principal, SemanticApp, SemanticDb};
+use objstore::DynObjStore;
+
+use crate::{AppError, AppSession, DbScopeId, ObjectStoreId, Principal, SemanticApp, SemanticDb};
 
 #[derive(Clone)]
 pub struct AppRequestContext {
@@ -49,5 +51,42 @@ impl AppRequestContext {
             .scopes()
             .resolve_scope(&self.principal, requested_scope, session_scope)
             .await
+    }
+
+    pub async fn resolve_object_store(
+        &self,
+        scope_id: Option<DbScopeId>,
+        store_id: Option<ObjectStoreId>,
+    ) -> std::result::Result<DynObjStore, AppError> {
+        let scope_id = self.object_store_scope_id(scope_id).await?;
+        match store_id {
+            Some(store_id) => self.app.object_stores().resolve_store(&scope_id, &store_id),
+            None => self.app.object_stores().resolve_default_store(&scope_id),
+        }
+    }
+
+    pub async fn default_object_store(&self) -> std::result::Result<DynObjStore, AppError> {
+        self.resolve_object_store(None, None).await
+    }
+
+    async fn object_store_scope_id(
+        &self,
+        scope_id: Option<DbScopeId>,
+    ) -> std::result::Result<DbScopeId, AppError> {
+        if let Some(scope_id) = scope_id {
+            return Ok(scope_id);
+        }
+        if let Some(scope_id) = &self.request_scope {
+            return Ok(scope_id.clone());
+        }
+        if let Some(session) = &self.session
+            && let Some(scope_id) = session.current_scope().await
+        {
+            return Ok(scope_id);
+        }
+        self.app
+            .scopes()
+            .default_scope()
+            .ok_or(AppError::ScopeRequired)
     }
 }

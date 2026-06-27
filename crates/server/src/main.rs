@@ -11,6 +11,12 @@ fn main() {
     let db_path = arg_value(&args, "--db")
         .map(Into::into)
         .unwrap_or_else(|| app_config.default_db_path());
+    let blob_uri = match arg_value(&args, "--blob-uri") {
+        Some(uri) => uri,
+        None => app_config
+            .default_blob_uri()
+            .expect("build default semantic blob store uri"),
+    };
     let bind = arg_value(&args, "--bind").unwrap_or_else(|| server_config.bind_address());
     if let Some(parent) = db_path.parent()
         && !parent.as_os_str().is_empty()
@@ -20,7 +26,7 @@ fn main() {
 
     let runtime = tokio::runtime::Runtime::new().expect("tokio runtime");
     runtime.block_on(async move {
-        let server = semantic_server::SemanticServer::local_redb(db_path)
+        let server = semantic_server::SemanticServer::local_redb_with_blob_store(db_path, blob_uri)
             .expect("local redb semantic server")
             .with_config(server_config);
         let listener = tokio::net::TcpListener::bind(&bind)

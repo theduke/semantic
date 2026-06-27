@@ -4,6 +4,7 @@ use std::pin::Pin;
 use std::sync::Arc;
 use std::time::Duration;
 
+use objstore::{DynObjStore, ObjStoreProvider};
 use semantic_data::schema::{DbOpenMode, FunctionType};
 use semantic_data::value::{Object, Value};
 use semantic_db_core::{
@@ -13,8 +14,9 @@ use semantic_db_core::{
 use semantic_rpc::{RpcCommand, RpcCommandSpec, RpcRegistry, RpcRequest, RpcResponse};
 
 use crate::{
-    AppError, AppRequestContext, AppSession, DbOpenRequest, DbProvider, DbScopeId, ScopeInfo,
-    ScopeManager, ScopeOpenOptions, ScopeVisibility, SemanticDb,
+    AppError, AppRequestContext, AppSession, DbOpenRequest, DbProvider, DbScopeId, ObjectStoreId,
+    ObjectStoreManager, ObjectStoreOpenRequest, ScopeInfo, ScopeManager, ScopeOpenOptions,
+    ScopeVisibility, SemanticDb,
 };
 
 #[derive(Clone)]
@@ -25,6 +27,7 @@ pub struct SemanticApp {
 pub struct SemanticAppInner {
     registry: Arc<RpcRegistry<AppRequestContext>>,
     scopes: ScopeManager,
+    object_stores: ObjectStoreManager,
 }
 
 enum DefaultScope {
@@ -32,10 +35,17 @@ enum DefaultScope {
     Request(DbScopeId, DbOpenRequest),
 }
 
+enum DefaultObjectStore {
+    Opened(DbScopeId, ObjectStoreId, String, DynObjStore),
+    Request(DbScopeId, ObjectStoreId, ObjectStoreOpenRequest),
+}
+
 pub struct SemanticAppBuilder {
     providers: BTreeMap<String, Arc<dyn DbProvider>>,
+    object_store_providers: Vec<Arc<dyn ObjStoreProvider>>,
     registry: RpcRegistry<AppRequestContext>,
     default_scope: Option<DefaultScope>,
+    default_object_store: Option<DefaultObjectStore>,
     idle_ttl: Duration,
 }
 
@@ -43,8 +53,10 @@ impl SemanticApp {
     pub fn builder() -> SemanticAppBuilder {
         SemanticAppBuilder {
             providers: BTreeMap::new(),
+            object_store_providers: Vec::new(),
             registry: RpcRegistry::new(),
             default_scope: None,
+            default_object_store: None,
             idle_ttl: Duration::from_secs(15 * 60),
         }
     }
@@ -55,6 +67,17 @@ impl SemanticApp {
 
     pub fn scopes(&self) -> &ScopeManager {
         &self.inner.scopes
+    }
+
+    pub fn object_stores(&self) -> &ObjectStoreManager {
+        &self.inner.object_stores
+    }
+
+    pub fn default_object_store(
+        &self,
+        scope_id: &DbScopeId,
+    ) -> std::result::Result<DynObjStore, AppError> {
+        self.inner.object_stores.resolve_default_store(scope_id)
     }
 
     pub fn new_session(&self, id: impl Into<String>) -> Arc<AppSession> {
@@ -69,6 +92,11 @@ impl SemanticAppBuilder {
         self
     }
 
+    pub fn with_object_store_provider(mut self, provider: impl ObjStoreProvider + 'static) -> Self {
+        self.object_store_providers.push(Arc::new(provider));
+        self
+    }
+
     pub fn with_default_scope(mut self, scope_id: DbScopeId, db: Arc<dyn SemanticDb>) -> Self {
         self.default_scope = Some(DefaultScope::Opened(scope_id, db));
         self
@@ -80,6 +108,28 @@ impl SemanticAppBuilder {
         request: DbOpenRequest,
     ) -> Self {
         self.default_scope = Some(DefaultScope::Request(scope_id, request));
+        self
+    }
+
+    pub fn with_default_object_store(
+        mut self,
+        scope_id: DbScopeId,
+        store_id: ObjectStoreId,
+        uri: String,
+        store: DynObjStore,
+    ) -> Self {
+        self.default_object_store =
+            Some(DefaultObjectStore::Opened(scope_id, store_id, uri, store));
+        self
+    }
+
+    pub fn with_default_object_store_request(
+        mut self,
+        scope_id: DbScopeId,
+        store_id: ObjectStoreId,
+        request: ObjectStoreOpenRequest,
+    ) -> Self {
+        self.default_object_store = Some(DefaultObjectStore::Request(scope_id, store_id, request));
         self
     }
 
@@ -113,6 +163,7 @@ impl SemanticAppBuilder {
 
     pub fn build(self) -> std::result::Result<SemanticApp, AppError> {
         let scopes = ScopeManager::new(self.providers, self.idle_ttl);
+        let object_stores = ObjectStoreManager::new(self.object_store_providers);
         if let Some(default_scope) = self.default_scope {
             match default_scope {
                 DefaultScope::Opened(scope_id, db) => scopes.add_default_scope(scope_id, db)?,
@@ -121,10 +172,21 @@ impl SemanticAppBuilder {
                 }
             }
         }
+        if let Some(default_object_store) = self.default_object_store {
+            match default_object_store {
+                DefaultObjectStore::Opened(scope_id, store_id, uri, store) => {
+                    object_stores.attach_store(scope_id, store_id, uri, store, true)?;
+                }
+                DefaultObjectStore::Request(scope_id, store_id, request) => {
+                    object_stores.attach_store_request(scope_id, store_id, request, true)?;
+                }
+            }
+        }
         Ok(SemanticApp {
             inner: Arc::new(SemanticAppInner {
                 registry: Arc::new(self.registry),
                 scopes,
+                object_stores,
             }),
         })
     }

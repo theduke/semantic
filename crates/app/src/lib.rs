@@ -4,6 +4,7 @@ mod config;
 mod context;
 mod db;
 mod error;
+mod object_store;
 mod scope;
 mod session;
 
@@ -13,6 +14,9 @@ pub use config::AppConfig;
 pub use context::AppRequestContext;
 pub use db::{DbOpenRequest, DbProvider, SemanticDb};
 pub use error::AppError;
+pub use object_store::{
+    ObjectStoreId, ObjectStoreInfo, ObjectStoreManager, ObjectStoreOpenRequest,
+};
 pub use scope::{DbScopeId, ScopeInfo, ScopeManager, ScopeOpenOptions, ScopeVisibility};
 pub use session::{AppSession, AppSessionId};
 
@@ -21,6 +25,7 @@ mod tests {
     use std::sync::atomic::{AtomicUsize, Ordering};
     use std::sync::{Arc, Mutex};
     use std::time::{Duration, Instant};
+    use std::time::{SystemTime, UNIX_EPOCH};
 
     use async_trait::async_trait;
     use semantic_data::value::{Object, Value};
@@ -346,6 +351,37 @@ mod tests {
 
         assert_eq!(select_db_name(response), "mock://default");
         assert_eq!(package_count.load(Ordering::Relaxed), 1);
+    }
+
+    #[tokio::test]
+    async fn default_object_store_resolves_for_default_scope() {
+        let suffix = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let data_dir = std::env::temp_dir().join(format!("semantic-app-blob-{suffix}"));
+        let config = AppConfig::new().with_data_dir(&data_dir);
+        let scope_id = DbScopeId::new("default");
+        let default_db: Arc<dyn SemanticDb> = Arc::new(MockDb::new("default"));
+        let app = SemanticApp::builder()
+            .with_default_scope(scope_id.clone(), default_db)
+            .with_default_object_store_request(
+                scope_id.clone(),
+                ObjectStoreId::new("default"),
+                ObjectStoreOpenRequest {
+                    uri: config.default_blob_uri().unwrap(),
+                },
+            )
+            .build()
+            .unwrap();
+
+        let store = ctx(&app, Principal::system())
+            .default_object_store()
+            .await
+            .unwrap();
+
+        assert_eq!(store.kind(), "objstore.fs");
+        assert!(config.default_blob_path().is_dir());
     }
 
     #[tokio::test]

@@ -6454,6 +6454,37 @@ dependencies = [
 ]
 
 [[package]]
+name = "objstore"
+version = "0.1.0-alpha.1"
+dependencies = [
+ "async-trait",
+ "bytes",
+ "futures",
+ "serde",
+ "serde_json",
+ "serde_path_to_error",
+ "time",
+ "tracing",
+ "url",
+]
+
+[[package]]
+name = "objstore_fs"
+version = "0.1.0-alpha.1"
+dependencies = [
+ "async-trait",
+ "bytes",
+ "futures",
+ "objstore",
+ "serde",
+ "sha2 0.10.9",
+ "time",
+ "tokio",
+ "tokio-util",
+ "url",
+]
+
+[[package]]
 name = "once_cell"
 version = "1.21.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -8131,6 +8162,8 @@ version = "0.0.1"
 dependencies = [
  "async-trait",
  "facet-json",
+ "objstore",
+ "objstore_fs",
  "semantic_base",
  "semantic_data",
  "semantic_db_core",
@@ -8138,6 +8171,7 @@ dependencies = [
  "serde",
  "thiserror 2.0.18",
  "tokio",
+ "url",
 ]
 
 [[package]]
