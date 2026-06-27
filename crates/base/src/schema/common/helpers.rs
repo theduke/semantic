@@ -55,7 +55,12 @@ pub fn meta_with_title(title: impl Into<String>) -> Meta {
 }
 
 fn title_from_attribute_id(attribute_id: &str) -> String {
-    title_from_name(attribute_id.rsplit('.').next().unwrap_or(attribute_id))
+    title_from_name(
+        attribute_id
+            .rsplit(['.', ':'])
+            .next()
+            .unwrap_or(attribute_id),
+    )
 }
 
 fn title_from_name(name: &str) -> String {
@@ -104,6 +109,10 @@ mod tests {
     fn builds_titles_from_attribute_ids() {
         assert_eq!(
             title_from_attribute_id("semantic.filestore.file.content_hash"),
+            "Content Hash"
+        );
+        assert_eq!(
+            title_from_attribute_id("semantic:filestore:file:content_hash"),
             "Content Hash"
         );
     }

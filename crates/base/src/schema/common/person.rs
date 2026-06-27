@@ -4,19 +4,19 @@ use semantic_data::schema::{AttributeType, ClassType};
 
 use super::helpers;
 
-pub const CLASS_ID: &str = "semantic.base.person";
+pub const CLASS_ID: &str = "semantic:base:person";
 
-pub const DISPLAY_NAME_ATTRIBUTE_ID: &str = "semantic.base.person.display_name";
-pub const GIVEN_NAME_ATTRIBUTE_ID: &str = "semantic.base.person.given_name";
-pub const FAMILY_NAME_ATTRIBUTE_ID: &str = "semantic.base.person.family_name";
-pub const MIDDLE_NAME_ATTRIBUTE_ID: &str = "semantic.base.person.middle_name";
-pub const HONORIFIC_PREFIX_ATTRIBUTE_ID: &str = "semantic.base.person.honorific_prefix";
-pub const HONORIFIC_SUFFIX_ATTRIBUTE_ID: &str = "semantic.base.person.honorific_suffix";
-pub const NICKNAME_ATTRIBUTE_ID: &str = "semantic.base.person.nickname";
-pub const ALTERNATE_NAMES_ATTRIBUTE_ID: &str = "semantic.base.person.alternate_names";
-pub const DESCRIPTION_ATTRIBUTE_ID: &str = "semantic.base.person.description";
-pub const BIRTH_DATE_ATTRIBUTE_ID: &str = "semantic.base.person.birth_date";
-pub const DEATH_DATE_ATTRIBUTE_ID: &str = "semantic.base.person.death_date";
+pub const DISPLAY_NAME_ATTRIBUTE_ID: &str = "semantic:base:person:display_name";
+pub const GIVEN_NAME_ATTRIBUTE_ID: &str = "semantic:base:person:given_name";
+pub const FAMILY_NAME_ATTRIBUTE_ID: &str = "semantic:base:person:family_name";
+pub const MIDDLE_NAME_ATTRIBUTE_ID: &str = "semantic:base:person:middle_name";
+pub const HONORIFIC_PREFIX_ATTRIBUTE_ID: &str = "semantic:base:person:honorific_prefix";
+pub const HONORIFIC_SUFFIX_ATTRIBUTE_ID: &str = "semantic:base:person:honorific_suffix";
+pub const NICKNAME_ATTRIBUTE_ID: &str = "semantic:base:person:nickname";
+pub const ALTERNATE_NAMES_ATTRIBUTE_ID: &str = "semantic:base:person:alternate_names";
+pub const DESCRIPTION_ATTRIBUTE_ID: &str = "semantic:base:person:description";
+pub const BIRTH_DATE_ATTRIBUTE_ID: &str = "semantic:base:person:birth_date";
+pub const DEATH_DATE_ATTRIBUTE_ID: &str = "semantic:base:person:death_date";
 
 pub fn attributes() -> Vec<AttributeType> {
     vec![
