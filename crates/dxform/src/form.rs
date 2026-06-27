@@ -119,11 +119,7 @@ impl<T: Clone + PartialEq + 'static> FormRoot<T> {
     }
 
     pub fn values(&self) -> T {
-        self.state.values.read().clone()
-    }
-
-    pub fn values_signal(&self) -> ReadSignal<T> {
-        self.state.values.into()
+        self.materialize_values()
     }
 
     pub fn meta(&self) -> FormMeta {
@@ -286,10 +282,9 @@ impl<T: Clone + PartialEq + 'static> FormRoot<T> {
         (start..start + count as u64).collect()
     }
 
-    pub(crate) fn mutate_values_at(&self, path: FieldPath, f: impl FnOnce(&mut T)) {
-        let mut values = self.values();
+    pub(crate) fn mutate_values_at(&self, _path: FieldPath, f: impl FnOnce(&mut T)) {
+        let mut values = self.state.initial_values.peek().clone();
         f(&mut values);
-        self.set_values_signal(values);
         self.with_meta(|meta| {
             meta.submit_succeeded = false;
             meta.dirty_since_last_submit = true;
@@ -297,7 +292,6 @@ impl<T: Clone + PartialEq + 'static> FormRoot<T> {
         if self.state.options.clear_submit_errors_on_change {
             self.clear_submit_errors();
         }
-        self.refresh_value_signals_for_change(&path);
         self.recompute_all_meta();
     }
 
@@ -333,8 +327,6 @@ impl<T: Clone + PartialEq + 'static> FormRoot<T> {
     }
 
     pub(crate) fn recompute_all_meta(&self) {
-        let current = self.state.values.peek().clone();
-        let initial = self.state.initial_values.peek().clone();
         let previous_meta = self.state.meta.peek().clone();
         let next_meta = self.with_registry(|registry| {
             let mut next_meta = None;
@@ -347,9 +339,6 @@ impl<T: Clone + PartialEq + 'static> FormRoot<T> {
                     .cloned()
                     .collect::<Vec<_>>();
                 if let Some(node) = registry.nodes.get_mut(path) {
-                    if node.path.is_root() {
-                        node.dirty = current != initial;
-                    }
                     node.touched |= descendants.iter().any(|child| child.touched);
                     node.dirty |= descendants.iter().any(|child| child.dirty);
                     node.empty = descendants
@@ -381,7 +370,7 @@ impl<T: Clone + PartialEq + 'static> FormRoot<T> {
                     if node.path.is_root() {
                         next_meta = Some(FormMeta {
                             touched: node.touched,
-                            dirty: current != initial || node.dirty,
+                            dirty: node.dirty,
                             empty: node.empty,
                             validating: node.validating,
                             validity: node.validity,
@@ -433,7 +422,7 @@ impl<T: Clone + PartialEq + 'static> FormRoot<T> {
         });
         self.recompute_all_meta();
 
-        let values = self.state.values.peek().clone();
+        let values = self.values();
         let mut all_errors = Vec::new();
         for validator in validators {
             all_errors.extend(validator(phase, values.clone()).await);
@@ -543,6 +532,34 @@ impl<T: Clone + PartialEq + 'static> FormRoot<T> {
     fn set_next_key(&self, value: u64) {
         let mut next_key = self.state.next_key;
         next_key.set(value);
+    }
+
+    fn materialize_values(&self) -> T {
+        let mut values = self.state.initial_values.peek().clone();
+        let appliers = {
+            let registry = self.state.registry.peek();
+            let mut nodes = registry
+                .nodes
+                .iter()
+                .filter_map(|(path, node)| {
+                    node.current_value_applier
+                        .clone()
+                        .map(|applier| (path.clone(), applier))
+                })
+                .collect::<Vec<_>>();
+            nodes.sort_by(|(left, _), (right, _)| {
+                let left_len = left.as_str().len();
+                let right_len = right.as_str().len();
+                left_len
+                    .cmp(&right_len)
+                    .then_with(|| left.as_str().cmp(right.as_str()))
+            });
+            nodes
+        };
+        for (_, apply) in appliers {
+            apply(&mut values);
+        }
+        values
     }
 }
 

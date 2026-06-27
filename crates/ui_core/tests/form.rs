@@ -1,7 +1,7 @@
 use std::{cell::RefCell, collections::BTreeMap, rc::Rc};
 
 use dioxus::prelude::*;
-use dxform::FormRoot;
+use dxform::{FieldSpec, FormOptions, FormRoot, SubformSpec, SubmitHandler};
 use semantic_data::{
     schema::{
         AttributeRef, AttributeType, BoolType, ClassAttribute, ClassRef, ClassType, Constraint,
@@ -160,7 +160,8 @@ fn default_class_value_sets_type_and_required_fields() {
         object.get(OBJECT_TYPE_FIELD),
         Some(&Value::String("person".to_string()))
     );
-    assert_eq!(object.get("name"), Some(&Value::Null));
+    assert_eq!(object.get("attr.name"), Some(&Value::Null));
+    assert_eq!(object.get("name"), None);
     assert_eq!(object.get("active"), None);
 }
 
@@ -239,6 +240,178 @@ fn attribute_field_spec_updates_root_object_and_meta() {
 }
 
 #[test]
+fn class_attribute_field_spec_reads_and_writes_canonical_storage_field() {
+    run_in_runtime(|| {
+        let attribute = attr("semantic:description", "description", string_type());
+        let class_attribute = class_attr("semantic:description", false);
+        let catalog = catalog_with(vec![attribute.clone()], Vec::new());
+        let mut initial = Object::new();
+        initial.insert("semantic:description", Value::String("old".to_string()));
+        let form = FormRoot::new(Value::Object(initial));
+        let scope = form.scope();
+        let field = scope.field(
+            semantic_ui_core::form::attribute_field_spec_with_storage_name(
+                "description".to_string(),
+                "semantic:description".to_string(),
+                attribute,
+                class_attribute,
+                catalog,
+            ),
+        );
+
+        assert_eq!(field.value(), Value::String("old".to_string()));
+        field.set_value(Value::String("new".to_string()));
+
+        let Value::Object(object) = form.values() else {
+            panic!("expected object value");
+        };
+        assert_eq!(
+            object.get("semantic:description"),
+            Some(&Value::String("new".to_string()))
+        );
+        assert_eq!(object.get("description"), None);
+    });
+}
+
+#[test]
+fn semantic_leaf_field_submit_receives_edited_root_object() {
+    run_in_runtime(|| {
+        let submitted = Rc::new(RefCell::new(None));
+        let submitted_for_handler = submitted.clone();
+        let form =
+            FormRoot::with_options(FormOptions::new(Value::Object(Object::new())).on_submit(
+                SubmitHandler::sync(move |ctx| {
+                    *submitted_for_handler.borrow_mut() = Some(ctx.values);
+                    Ok(())
+                }),
+            ));
+        let object_scope = form.scope();
+        let name_scope = object_scope.subform(SubformSpec {
+            name: "name".to_string(),
+            get: Rc::new(|parent: &Value| match parent {
+                Value::Object(object) => object.get("name").cloned().unwrap_or(Value::Null),
+                _ => Value::Null,
+            }),
+            set: Rc::new(|parent: &mut Value, value| {
+                set_object_field_value(parent, "name", value);
+            }),
+            is_empty: Rc::new(semantic_ui_core::form::is_empty_value),
+            validators: Vec::new(),
+            validation: dxform::ValidationStrategy::submit(),
+        });
+        let leaf = name_scope.field(FieldSpec {
+            name: "value".to_string(),
+            get: Rc::new(|value: &Value| value.clone()),
+            set: Rc::new(|parent: &mut Value, value| *parent = value),
+            is_empty: Rc::new(semantic_ui_core::form::is_empty_value),
+            validators: Vec::new(),
+            validation: dxform::ValidationStrategy::submit(),
+        });
+
+        leaf.set_value(Value::String("Ada".to_string()));
+        futures::executor::block_on(form.submit()).expect("submit should succeed");
+
+        let Some(Value::Object(object)) = submitted.borrow().clone() else {
+            panic!("expected submitted object");
+        };
+        assert_eq!(object.get("name"), Some(&Value::String("Ada".to_string())));
+    });
+}
+
+#[test]
+fn semantic_leaf_field_replaces_explicit_null_on_submit() {
+    run_in_runtime(|| {
+        let submitted = Rc::new(RefCell::new(None));
+        let submitted_for_handler = submitted.clone();
+        let mut initial = Object::new();
+        initial.insert("description", Value::Null);
+        let form = FormRoot::with_options(FormOptions::new(Value::Object(initial)).on_submit(
+            SubmitHandler::sync(move |ctx| {
+                *submitted_for_handler.borrow_mut() = Some(ctx.values);
+                Ok(())
+            }),
+        ));
+        let object_scope = form.scope();
+        let description_scope = object_scope.subform(SubformSpec {
+            name: "description".to_string(),
+            get: Rc::new(|parent: &Value| match parent {
+                Value::Object(object) => object.get("description").cloned().unwrap_or(Value::Null),
+                _ => Value::Null,
+            }),
+            set: Rc::new(|parent: &mut Value, value| {
+                set_object_field_value(parent, "description", value);
+            }),
+            is_empty: Rc::new(semantic_ui_core::form::is_empty_value),
+            validators: Vec::new(),
+            validation: dxform::ValidationStrategy::submit(),
+        });
+        let leaf = description_scope.field(FieldSpec {
+            name: "value".to_string(),
+            get: Rc::new(|value: &Value| value.clone()),
+            set: Rc::new(|parent: &mut Value, value| *parent = value),
+            is_empty: Rc::new(semantic_ui_core::form::is_empty_value),
+            validators: Vec::new(),
+            validation: dxform::ValidationStrategy::submit(),
+        });
+
+        leaf.set_value(Value::String("updated".to_string()));
+        futures::executor::block_on(form.submit()).expect("submit should succeed");
+
+        let Some(Value::Object(object)) = submitted.borrow().clone() else {
+            panic!("expected submitted object");
+        };
+        assert_eq!(
+            object.get("description"),
+            Some(&Value::String("updated".to_string()))
+        );
+    });
+}
+
+#[test]
+fn semantic_submit_preserves_extra_object_fields_while_editing_known_field() {
+    run_in_runtime(|| {
+        let submitted = Rc::new(RefCell::new(None));
+        let submitted_for_handler = submitted.clone();
+        let attribute = attr("semantic:description", "description", string_type());
+        let class_attribute = class_attr("semantic:description", false);
+        let catalog = catalog_with(vec![attribute.clone()], Vec::new());
+        let mut initial = Object::new();
+        initial.insert("semantic:description", Value::String("old".to_string()));
+        initial.insert("external:note", Value::String("keep me".to_string()));
+        let form = FormRoot::with_options(FormOptions::new(Value::Object(initial)).on_submit(
+            SubmitHandler::sync(move |ctx| {
+                *submitted_for_handler.borrow_mut() = Some(ctx.values);
+                Ok(())
+            }),
+        ));
+        let field = form.scope().field(
+            semantic_ui_core::form::attribute_field_spec_with_storage_name(
+                "description".to_string(),
+                "semantic:description".to_string(),
+                attribute,
+                class_attribute,
+                catalog,
+            ),
+        );
+
+        field.set_value(Value::String("new".to_string()));
+        futures::executor::block_on(form.submit()).expect("submit should succeed");
+
+        let Some(Value::Object(object)) = submitted.borrow().clone() else {
+            panic!("expected submitted object");
+        };
+        assert_eq!(
+            object.get("semantic:description"),
+            Some(&Value::String("new".to_string()))
+        );
+        assert_eq!(
+            object.get("external:note"),
+            Some(&Value::String("keep me".to_string()))
+        );
+    });
+}
+
+#[test]
 fn inherited_class_form_fields_are_collected_before_child_overrides() {
     let title = attr("attr.title", "title", string_type());
     let name = attr("attr.name", "name", string_type());
@@ -255,8 +428,16 @@ fn inherited_class_form_fields_are_collected_before_child_overrides() {
 
     let fields = catalog.class_form_fields(&child);
     let names = fields
-        .into_iter()
-        .map(|field| field.field_name)
+        .iter()
+        .map(|field| field.field_name.clone())
         .collect::<Vec<_>>();
     assert_eq!(names, vec!["title".to_string(), "name".to_string()]);
+    let storage_names = fields
+        .into_iter()
+        .map(|field| field.storage_field_name)
+        .collect::<Vec<_>>();
+    assert_eq!(
+        storage_names,
+        vec!["attr.title".to_string(), "attr.name".to_string()]
+    );
 }

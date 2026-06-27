@@ -64,6 +64,8 @@ where
     pub(crate) path: FieldPath,
     get: Rc<dyn Fn(&Root) -> Vec<Item>>,
     set: Rc<dyn Fn(&mut Root, Vec<Item>)>,
+    pure_get: Rc<dyn Fn(&Root) -> Vec<Item>>,
+    pure_set: Rc<dyn Fn(&mut Root, Vec<Item>)>,
     item_empty: Rc<dyn Fn(&Item) -> bool>,
     value_signal: Signal<Vec<Item>>,
     initial_value_signal: Signal<Vec<Item>>,
@@ -82,6 +84,8 @@ where
             path: self.path.clone(),
             get: self.get.clone(),
             set: self.set.clone(),
+            pure_get: self.pure_get.clone(),
+            pure_set: self.pure_set.clone(),
             item_empty: self.item_empty.clone(),
             value_signal: self.value_signal,
             initial_value_signal: self.initial_value_signal,
@@ -111,19 +115,40 @@ where
         Parent: Clone + PartialEq + 'static,
     {
         let path = scope.path.child(&spec.name);
-        let parent_get_for_child = scope.get.clone();
-        let parent_get_for_set = scope.get.clone();
+        let parent_value_signal_for_child = scope.value_signal;
+        let parent_initial_value_signal_for_child = scope.initial_value_signal;
+        let parent_value_signal_for_set = scope.value_signal;
         let parent_set = scope.set.clone();
+        let parent_pure_get_for_child = scope.pure_get.clone();
+        let parent_pure_get_for_set = scope.pure_get.clone();
+        let parent_pure_set = scope.pure_set.clone();
         let list_get = spec.get.clone();
+        let list_initial_get = spec.get.clone();
+        let list_pure_get = spec.get.clone();
         let list_set = spec.set.clone();
-        let get: Rc<dyn Fn(&Root) -> Vec<Item>> = Rc::new(move |root| {
-            let parent = parent_get_for_child(root);
+        let list_pure_set = spec.set.clone();
+        let get: Rc<dyn Fn(&Root) -> Vec<Item>> = Rc::new(move |_root| {
+            let parent = parent_value_signal_for_child.peek().clone();
             list_get(&parent)
         });
+        let initial_get: Rc<dyn Fn(&Root) -> Vec<Item>> = Rc::new(move |_root| {
+            let parent = parent_initial_value_signal_for_child.peek().clone();
+            list_initial_get(&parent)
+        });
         let set: Rc<dyn Fn(&mut Root, Vec<Item>)> = Rc::new(move |root, value| {
-            let mut parent = parent_get_for_set(root);
+            let mut parent = parent_value_signal_for_set.peek().clone();
             list_set(&mut parent, value);
+            set_signal_if_changed(parent_value_signal_for_set, parent.clone());
             parent_set(root, parent);
+        });
+        let pure_get: Rc<dyn Fn(&Root) -> Vec<Item>> = Rc::new(move |root| {
+            let parent = parent_pure_get_for_child(root);
+            list_pure_get(&parent)
+        });
+        let pure_set: Rc<dyn Fn(&mut Root, Vec<Item>)> = Rc::new(move |root, value| {
+            let mut parent = parent_pure_get_for_set(root);
+            list_pure_set(&mut parent, value);
+            parent_pure_set(root, parent);
         });
         let validators = spec
             .validators
@@ -145,7 +170,7 @@ where
             })
             .collect::<Vec<_>>();
         let current = get(&scope.root.state.values.peek());
-        let initial = get(&scope.root.state.initial_values.peek());
+        let initial = initial_get(&scope.root.state.initial_values.peek());
         let has_keys = scope
             .root
             .state
@@ -184,6 +209,12 @@ where
                     .entry(path.clone())
                     .or_insert_with(|| FormNodeState::new(FormNodeKind::List, path.clone(), owner));
                 node.validators = validators;
+                node.current_value_applier = Some({
+                    let pure_set = pure_set.clone();
+                    Rc::new(move |root: &mut Root| {
+                        pure_set(root, value_signal.peek().clone());
+                    })
+                });
                 registry.list_keys.entry(path.clone()).or_insert(new_keys);
                 node.value_refresher = Some({
                     let get = get.clone();
@@ -192,9 +223,9 @@ where
                     })
                 });
                 node.initial_value_refresher = Some({
-                    let get = get.clone();
+                    let initial_get = initial_get.clone();
                     Rc::new(move |root: &Root| {
-                        set_signal_if_changed(initial_value_signal, get(root));
+                        set_signal_if_changed(initial_value_signal, initial_get(root));
                     })
                 });
                 (
@@ -209,6 +240,8 @@ where
             path,
             get,
             set,
+            pure_get,
+            pure_set,
             item_empty: spec.item_empty,
             value_signal,
             initial_value_signal,
@@ -246,12 +279,15 @@ where
 
     pub fn items(&self) -> Vec<ListItemHandle<Item, Root>> {
         let keys = self.key_signal.read().clone();
+        let values = self.value_signal.read().clone();
         keys.into_iter()
+            .zip(values)
             .enumerate()
-            .map(|(index, key)| ListItemHandle {
+            .map(|(index, (key, value))| ListItemHandle {
                 list: self.clone(),
                 index,
                 key,
+                value,
             })
             .collect()
     }
@@ -391,7 +427,7 @@ where
     }
 
     pub fn reset(&self) {
-        let initial = (self.get)(&self.root.state.initial_values.read());
+        let initial = self.initial_value_signal.peek().clone();
         let set = self.set.clone();
         set_signal_if_changed(self.value_signal, initial.clone());
         self.root
@@ -479,7 +515,7 @@ where
     Parent: Clone + PartialEq + 'static,
     Item: Clone + PartialEq + 'static,
 {
-    use_hook(move || scope.list(spec()))
+    scope.list(spec())
 }
 
 pub struct ListItemHandle<Item, Root = Item>
@@ -490,6 +526,7 @@ where
     pub(crate) list: ListHandle<Item, Root>,
     index: usize,
     key: ListItemKey,
+    value: Item,
 }
 
 pub fn use_list_item_scope<Item, Root>(item: ListItemHandle<Item, Root>) -> FormScope<Item, Root>
@@ -497,7 +534,7 @@ where
     Root: Clone + PartialEq + 'static,
     Item: Clone + PartialEq + 'static,
 {
-    use_hook(move || item.scope())
+    item.scope()
 }
 
 impl<Item, Root> Clone for ListItemHandle<Item, Root>
@@ -510,6 +547,7 @@ where
             list: self.list.clone(),
             index: self.index,
             key: self.key,
+            value: self.value.clone(),
         }
     }
 }
@@ -542,23 +580,54 @@ where
     }
 
     pub fn scope(&self) -> FormScope<Item, Root> {
-        let list_get_for_item = self.list.get.clone();
-        let list_get_for_set = self.list.get.clone();
+        let value_signal_for_get = self.list.value_signal;
+        let value_signal_for_set = self.list.value_signal;
+        let initial_value_signal_for_get = self.list.initial_value_signal;
         let list_set = self.list.set.clone();
+        let list_pure_get_for_item = self.list.pure_get.clone();
+        let list_pure_get_for_set = self.list.pure_get.clone();
+        let list_pure_set = self.list.pure_set.clone();
         let index = self.index;
-        let get = Rc::new(move |root: &Root| list_get_for_item(root)[index].clone());
+        let fallback = self.value.clone();
+        let initial_fallback = self.value.clone();
+        let get = Rc::new(move |_root: &Root| {
+            value_signal_for_get
+                .peek()
+                .get(index)
+                .cloned()
+                .unwrap_or_else(|| fallback.clone())
+        });
+        let initial_get = Rc::new(move |_root: &Root| {
+            initial_value_signal_for_get
+                .peek()
+                .get(index)
+                .cloned()
+                .unwrap_or_else(|| initial_fallback.clone())
+        });
         let set = Rc::new(move |root: &mut Root, item: Item| {
-            let mut items = list_get_for_set(root);
+            let mut items = value_signal_for_set.peek().clone();
             if index < items.len() {
                 items[index] = item;
+                set_signal_if_changed(value_signal_for_set, items.clone());
                 list_set(root, items);
             }
         });
-        FormScope::new(
+        let pure_get = Rc::new(move |root: &Root| list_pure_get_for_item(root)[index].clone());
+        let pure_set = Rc::new(move |root: &mut Root, item: Item| {
+            let mut items = list_pure_get_for_set(root);
+            if index < items.len() {
+                items[index] = item;
+                list_pure_set(root, items);
+            }
+        });
+        FormScope::new_with_accessors(
             self.list.root.clone(),
             self.path(),
             get,
+            initial_get,
             set,
+            pure_get,
+            pure_set,
             self.list.item_empty.clone(),
         )
     }

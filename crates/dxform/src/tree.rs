@@ -17,6 +17,7 @@ pub enum FormNodeKind {
 
 pub(crate) type DynValidator<Root> =
     Rc<dyn Fn(ValidationPhase, Root) -> LocalBoxFuture<'static, Vec<FormError>>>;
+pub(crate) type ValueApplier<Root> = Rc<dyn Fn(&mut Root)>;
 
 pub(crate) struct FormNodeState<Root> {
     pub kind: FormNodeKind,
@@ -31,6 +32,7 @@ pub(crate) struct FormNodeState<Root> {
     pub submit_errors: Vec<FormError>,
     pub validation_epoch: u64,
     pub validators: Vec<DynValidator<Root>>,
+    pub current_value_applier: Option<ValueApplier<Root>>,
     pub field_meta_signal: Signal<FieldMeta>,
     pub scope_meta_signal: Signal<ScopeMeta>,
     pub list_meta_signal: Signal<ListMeta>,
@@ -53,6 +55,7 @@ impl<Root> Clone for FormNodeState<Root> {
             submit_errors: self.submit_errors.clone(),
             validation_epoch: self.validation_epoch,
             validators: self.validators.clone(),
+            current_value_applier: self.current_value_applier.clone(),
             field_meta_signal: self.field_meta_signal,
             scope_meta_signal: self.scope_meta_signal,
             list_meta_signal: self.list_meta_signal,
@@ -77,6 +80,7 @@ impl<Root> FormNodeState<Root> {
             submit_errors: Vec::new(),
             validation_epoch: 0,
             validators: Vec::new(),
+            current_value_applier: None,
             field_meta_signal: Signal::new_in_scope(FieldMeta::new(path.clone()), owner),
             scope_meta_signal: Signal::new_in_scope(ScopeMeta::new(path.clone()), owner),
             list_meta_signal: Signal::new_in_scope(ListMeta::new(path), owner),

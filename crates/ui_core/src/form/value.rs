@@ -48,6 +48,9 @@ pub fn default_value_for_class(class: &ClassType, catalog: &UiCatalog) -> Value 
         if field.class_attribute.computed.is_some() {
             continue;
         }
+        if field.field_name != field.storage_field_name {
+            object.remove(&field.field_name);
+        }
         if let Some(default) = field
             .attribute
             .constraints
@@ -55,7 +58,10 @@ pub fn default_value_for_class(class: &ClassType, catalog: &UiCatalog) -> Value 
             .chain(field.class_attribute.constraints.iter())
             .find_map(default_constraint_value)
         {
-            object.insert(field.field_name, default);
+            object.insert(field.storage_field_name, default);
+        } else if field.class_attribute.required && !object.contains_key(&field.storage_field_name)
+        {
+            object.insert(field.storage_field_name, Value::Null);
         }
     }
     Value::Object(object)

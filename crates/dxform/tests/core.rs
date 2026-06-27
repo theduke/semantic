@@ -20,6 +20,16 @@ struct Profile {
     active: bool,
 }
 
+#[derive(Clone, PartialEq, Debug, Default)]
+struct HobbyEntry {
+    hobby: Hobby,
+}
+
+#[derive(Clone, PartialEq, Debug, Default)]
+struct HobbyBook {
+    entries: Vec<HobbyEntry>,
+}
+
 fn person_name_field<Root>(scope: &FormScope<Person, Root>) -> FieldHandle<String, Root>
 where
     Root: Clone + PartialEq + 'static,
@@ -39,6 +49,17 @@ where
         "name",
         |hobby: &Hobby| hobby.name.clone(),
         |hobby, value| hobby.name = value,
+    ))
+}
+
+fn hobby_entry_hobby_scope<Root>(scope: &FormScope<HobbyEntry, Root>) -> FormScope<Hobby, Root>
+where
+    Root: Clone + PartialEq + 'static,
+{
+    scope.subform(SubformSpec::new(
+        "hobby",
+        |entry: &HobbyEntry| entry.hobby.clone(),
+        |entry, value| entry.hobby = value,
     ))
 }
 
@@ -239,6 +260,100 @@ fn reusable_nested_hobby_fields_work_inside_person_hobbies_list() {
         assert_eq!(form.values().hobbies[0].name, "gardening");
         assert!(hobby_scope.meta().dirty);
         assert!(form.meta().dirty);
+    });
+}
+
+#[test]
+fn list_item_scope_reads_after_adding_first_item() {
+    run_in_runtime(|| {
+        let form = FormRoot::new(Person::default());
+        let hobbies = form.scope().list(ListSpec::new(
+            "hobbies",
+            |person: &Person| person.hobbies.clone(),
+            |person, value| person.hobbies = value,
+        ));
+
+        hobbies.push(Hobby {
+            name: "gardening".to_string(),
+        });
+        let item = hobbies.items().remove(0);
+        let scope = item.scope();
+
+        assert_eq!(scope.value().name, "gardening");
+        assert_eq!(form.values().hobbies[0].name, "gardening");
+    });
+}
+
+#[test]
+fn nested_subform_inside_added_list_item_uses_list_item_signals() {
+    run_in_runtime(|| {
+        let form = FormRoot::new(HobbyBook::default());
+        let entries = form.scope().list(ListSpec::new(
+            "entries",
+            |book: &HobbyBook| book.entries.clone(),
+            |book, value| book.entries = value,
+        ));
+
+        entries.push(HobbyEntry {
+            hobby: Hobby {
+                name: "gardening".to_string(),
+            },
+        });
+        let entry = entries.items().remove(0);
+        let entry_scope = entry.scope();
+        let hobby_scope = hobby_entry_hobby_scope(&entry_scope);
+        let name = hobby_name_field(&hobby_scope);
+
+        name.set_value("cooking".to_string());
+        assert_eq!(form.values().entries[0].hobby.name, "cooking");
+        assert_eq!(entry_scope.value().hobby.name, "cooking");
+        assert_eq!(hobby_scope.value().name, "cooking");
+
+        hobby_scope.reset();
+
+        assert_eq!(form.values().entries[0].hobby.name, "gardening");
+        assert_eq!(entry_scope.value().hobby.name, "gardening");
+        assert_eq!(hobby_scope.value().name, "gardening");
+    });
+}
+
+#[test]
+fn submit_receives_values_from_nested_leaf_field_signal() {
+    run_in_runtime(|| {
+        let submitted = Rc::new(RefCell::new(None));
+        let submitted_for_handler = submitted.clone();
+        let form = FormRoot::with_options(FormOptions::new(Profile::default()).on_submit(
+            SubmitHandler::sync(move |ctx| {
+                *submitted_for_handler.borrow_mut() = Some(ctx.values);
+                Ok(())
+            }),
+        ));
+        let person = form.scope().subform(SubformSpec::new(
+            "person",
+            |profile: &Profile| profile.person.clone(),
+            |profile, value| profile.person = value,
+        ));
+        let name_scope = person.subform(SubformSpec::new(
+            "name",
+            |person: &Person| person.name.clone(),
+            |person, value| person.name = value,
+        ));
+        let value = name_scope.field(FieldSpec::new(
+            "value",
+            |value: &String| value.clone(),
+            |parent, value| *parent = value,
+        ));
+
+        value.set_value("Ada".to_string());
+        futures::executor::block_on(form.submit()).expect("submit should succeed");
+
+        assert_eq!(
+            submitted
+                .borrow()
+                .as_ref()
+                .map(|profile| profile.person.name.as_str()),
+            Some("Ada")
+        );
     });
 }
 

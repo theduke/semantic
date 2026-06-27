@@ -1,5 +1,7 @@
+use std::collections::BTreeSet;
+
 use dioxus::prelude::*;
-use dxform::{FormScope, use_field, use_subform};
+use dxform::{FormScope, use_field};
 use semantic_data::{
     schema::{AttributeType, ClassAttribute, ClassType},
     value::{Object, Value},
@@ -10,8 +12,8 @@ use crate::{
     ValueView,
     form::{
         AttributeFormRenderContext, ClassFormRenderContext, SemanticFormErrors, SemanticFormMode,
-        SemanticFormSubmit, attribute_field_spec, build_class_form_options,
-        render_value_form_scope,
+        SemanticFormSubmit, build_class_form_options, is_empty_value, render_value_form_scope,
+        value_field_spec,
     },
     ui_catalog::{RenderMode, use_ui_catalog},
 };
@@ -19,6 +21,7 @@ use crate::{
 #[derive(Clone, PartialEq)]
 pub struct ClassFormField {
     pub field_name: String,
+    pub storage_field_name: String,
     pub attribute: AttributeType,
     pub class_attribute: ClassAttribute,
     pub declaring_class_id: String,
@@ -45,6 +48,19 @@ pub fn default_class_form_renderer(ctx: ClassFormRenderContext) -> Element {
 pub fn render_class_form_body(ctx: ClassFormRenderContext) -> Element {
     let catalog = use_ui_catalog();
     let fields = catalog.class_form_fields(&ctx.class);
+    let known_field_names = fields
+        .iter()
+        .flat_map(|field| [field.field_name.clone(), field.storage_field_name.clone()])
+        .chain(std::iter::once(OBJECT_TYPE_FIELD.to_string()))
+        .collect::<BTreeSet<_>>();
+    let extra_fields = match ctx.scope.value() {
+        Value::Object(object) => object
+            .iter()
+            .filter(|(key, _)| !known_field_names.contains(*key))
+            .map(|(key, value)| (key.clone(), value.clone()))
+            .collect::<Vec<_>>(),
+        _ => Vec::new(),
+    };
     let title = ctx
         .class
         .meta
@@ -60,7 +76,7 @@ pub fn render_class_form_body(ctx: ClassFormRenderContext) -> Element {
                 }
             }
             for field in fields {
-                if field.field_name != OBJECT_TYPE_FIELD {
+                if field.field_name != OBJECT_TYPE_FIELD && field.storage_field_name != OBJECT_TYPE_FIELD {
                     {
                         rsx! {
                             ClassFormFieldRow {
@@ -72,6 +88,15 @@ pub fn render_class_form_body(ctx: ClassFormRenderContext) -> Element {
                             }
                         }
                     }
+                }
+            }
+            for (field_name, value) in extra_fields {
+                ExtraClassFormFieldRow {
+                    key: "{field_name}",
+                    scope: ctx.scope.clone(),
+                    field_name,
+                    value,
+                    mode: ctx.mode,
                 }
             }
         }
@@ -103,6 +128,7 @@ fn collect_class_fields(
         if let Some(attribute) = catalog.attribute_by_id(&class_attribute.attribute.id) {
             let field = ClassFormField {
                 field_name: field_name.clone(),
+                storage_field_name: attribute.id.clone(),
                 attribute: attribute.clone(),
                 class_attribute: class_attribute.clone(),
                 declaring_class_id: class.id.clone(),
@@ -137,8 +163,9 @@ fn ClassFormFieldRow(
     let field_for_spec = field.clone();
     let catalog_for_spec = catalog.clone();
     let field_handle = use_field(scope.clone(), move || {
-        attribute_field_spec(
+        crate::form::attribute_field_spec_with_storage_name(
             field_for_spec.field_name,
+            field_for_spec.storage_field_name,
             field_for_spec.attribute,
             field_for_spec.class_attribute,
             catalog_for_spec,
@@ -172,7 +199,7 @@ fn ClassFormFieldRow(
             mode,
         })
     } else {
-        let field_scope = use_field_handle_scope(scope, field_handle.clone());
+        let field_scope = field_handle.scope();
         render_value_form_scope(crate::form::ValueFormRenderContext {
             path: field_handle.path(),
             scope: field_scope,
@@ -185,6 +212,40 @@ fn ClassFormFieldRow(
             label { class: "semantic-form__label", "{label}" }
             div { class: "semantic-form__control", {body} }
             SemanticFormErrors { errors: field_handle.meta().errors }
+        }
+    }
+}
+
+#[component]
+fn ExtraClassFormFieldRow(
+    scope: FormScope<Value, Value>,
+    field_name: String,
+    value: Value,
+    mode: SemanticFormMode,
+) -> Element {
+    let field_name_for_spec = field_name.clone();
+    let field = use_field(scope, move || {
+        value_field_spec(
+            field_name_for_spec,
+            value,
+            std::rc::Rc::new(is_empty_value),
+            Vec::new(),
+            dxform::ValidationStrategy::submit(),
+        )
+    });
+    let field_scope = field.scope();
+    rsx! {
+        div { class: "semantic-form__field semantic-form__field--extra",
+            label { class: "semantic-form__label", "{field_name}" }
+            div { class: "semantic-form__control",
+                {render_value_form_scope(crate::form::ValueFormRenderContext {
+                    path: field.path(),
+                    scope: field_scope,
+                    value_type: None,
+                    mode,
+                })}
+            }
+            SemanticFormErrors { errors: field.meta().errors }
         }
     }
 }
@@ -207,32 +268,4 @@ fn ReadonlyClassFormField(
             }
         }
     }
-}
-
-fn use_field_handle_scope(
-    parent: FormScope<Value, Value>,
-    field: dxform::FieldHandle<Value, Value>,
-) -> FormScope<Value, Value> {
-    let field_name = field
-        .path()
-        .as_str()
-        .rsplit('.')
-        .next()
-        .unwrap_or("value")
-        .to_string();
-    let get_field_name = field_name.clone();
-    let set_field_name = field_name.clone();
-    use_subform(parent, move || dxform::SubformSpec {
-        name: field_name,
-        get: std::rc::Rc::new(move |parent: &Value| match parent {
-            Value::Object(object) => object.get(&get_field_name).cloned().unwrap_or(Value::Null),
-            _ => Value::Null,
-        }),
-        set: std::rc::Rc::new(move |parent: &mut Value, value: Value| {
-            crate::form::set_object_field_value(parent, &set_field_name, value);
-        }),
-        is_empty: std::rc::Rc::new(crate::form::is_empty_value),
-        validators: Vec::new(),
-        validation: dxform::ValidationStrategy::submit(),
-    })
 }

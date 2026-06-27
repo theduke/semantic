@@ -19,7 +19,7 @@ pub use context::{
     use_semantic_form_mode, use_semantic_form_root, use_semantic_form_scope,
 };
 pub use defaults::register_default_form_renderers;
-pub use field::{attribute_field_spec, value_field_spec};
+pub use field::{attribute_field_spec, attribute_field_spec_with_storage_name, value_field_spec};
 pub use list::{render_list_value_form, value_list_spec};
 pub use registry::UiFormRegistry;
 pub use renderer::{

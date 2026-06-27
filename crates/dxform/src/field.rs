@@ -64,6 +64,7 @@ where
     pub(crate) path: FieldPath,
     get: Rc<dyn Fn(&Root) -> Value>,
     set: Rc<dyn Fn(&mut Root, Value)>,
+    pure_set: Rc<dyn Fn(&mut Root, Value)>,
     is_empty: Rc<dyn Fn(&Value) -> bool>,
     value_signal: Signal<Value>,
     initial_value_signal: Signal<Value>,
@@ -81,6 +82,7 @@ where
             path: self.path.clone(),
             get: self.get.clone(),
             set: self.set.clone(),
+            pure_set: self.pure_set.clone(),
             is_empty: self.is_empty.clone(),
             value_signal: self.value_signal,
             initial_value_signal: self.initial_value_signal,
@@ -112,31 +114,46 @@ where
         Parent: Clone + PartialEq + 'static,
     {
         let path = scope.path.child(&spec.name);
-        let parent_get_for_child = scope.get.clone();
-        let parent_get_for_set = scope.get.clone();
+        let parent_value_signal_for_child = scope.value_signal;
+        let parent_initial_value_signal_for_child = scope.initial_value_signal;
+        let parent_value_signal_for_set = scope.value_signal;
         let parent_set = scope.set.clone();
+        let parent_pure_get_for_set = scope.pure_get.clone();
+        let parent_pure_set = scope.pure_set.clone();
         let field_get = spec.get.clone();
+        let field_initial_get = spec.get.clone();
         let field_set = spec.set.clone();
-        let get: Rc<dyn Fn(&Root) -> Value> = Rc::new(move |root| {
-            let parent = parent_get_for_child(root);
+        let field_pure_set = spec.set.clone();
+        let get: Rc<dyn Fn(&Root) -> Value> = Rc::new(move |_root| {
+            let parent = parent_value_signal_for_child.peek().clone();
             field_get(&parent)
         });
+        let initial_get: Rc<dyn Fn(&Root) -> Value> = Rc::new(move |_root| {
+            let parent = parent_initial_value_signal_for_child.peek().clone();
+            field_initial_get(&parent)
+        });
         let set: Rc<dyn Fn(&mut Root, Value)> = Rc::new(move |root, value| {
-            let mut parent = parent_get_for_set(root);
+            let mut parent = parent_value_signal_for_set.peek().clone();
             field_set(&mut parent, value);
+            set_signal_if_changed(parent_value_signal_for_set, parent.clone());
             parent_set(root, parent);
+        });
+        let pure_set: Rc<dyn Fn(&mut Root, Value)> = Rc::new(move |root, value| {
+            let mut parent = parent_pure_get_for_set(root);
+            field_pure_set(&mut parent, value);
+            parent_pure_set(root, parent);
         });
         let validators = spec
             .validators
             .into_iter()
             .map(|validator| {
                 let get = get.clone();
-                let parent_get = scope.get.clone();
+                let parent_value_signal = scope.value_signal;
                 let path = path.clone();
                 Rc::new(move |phase, root: Root| {
                     let validator = validator.clone();
                     let path = path.clone();
-                    let parent = parent_get(&root);
+                    let parent = parent_value_signal.peek().clone();
                     let value = get(&root);
                     async move {
                         validator
@@ -153,7 +170,7 @@ where
             })
             .collect::<Vec<_>>();
         let current = get(&scope.root.state.values.peek());
-        let initial = get(&scope.root.state.initial_values.peek());
+        let initial = initial_get(&scope.root.state.initial_values.peek());
         let owner = scope.root.state.owner;
         let (value_signal, initial_value_signal, meta_signal) =
             scope.root.with_registry(|registry| {
@@ -164,6 +181,12 @@ where
                     FormNodeState::new(FormNodeKind::Field, path.clone(), owner)
                 });
                 node.validators = validators;
+                node.current_value_applier = Some({
+                    let pure_set = pure_set.clone();
+                    Rc::new(move |root: &mut Root| {
+                        pure_set(root, value_signal.peek().clone());
+                    })
+                });
                 node.value_refresher = Some({
                     let get = get.clone();
                     Rc::new(move |root: &Root| {
@@ -171,9 +194,9 @@ where
                     })
                 });
                 node.initial_value_refresher = Some({
-                    let get = get.clone();
+                    let initial_get = initial_get.clone();
                     Rc::new(move |root: &Root| {
-                        set_signal_if_changed(initial_value_signal, get(root));
+                        set_signal_if_changed(initial_value_signal, initial_get(root));
                     })
                 });
                 (value_signal, initial_value_signal, node.field_meta_signal)
@@ -183,6 +206,7 @@ where
             path,
             get,
             set,
+            pure_set,
             is_empty: spec.is_empty,
             value_signal,
             initial_value_signal,
@@ -204,6 +228,38 @@ where
         self.value_signal.into()
     }
 
+    pub fn scope(&self) -> FormScope<Value, Root> {
+        let value_signal_for_get = self.value_signal;
+        let value_signal_for_set = self.value_signal;
+        let set = self.set.clone();
+        let pure_set = self.pure_set.clone();
+        let is_empty = self.is_empty.clone();
+        let path = self.path.clone();
+        let owner = self.root.state.owner;
+        let meta_signal = self.root.with_registry(|registry| {
+            registry
+                .nodes
+                .entry(path.clone())
+                .or_insert_with(|| FormNodeState::new(FormNodeKind::Field, path.clone(), owner))
+                .scope_meta_signal
+        });
+        FormScope {
+            root: self.root.clone(),
+            path: self.path.clone(),
+            get: Rc::new(move |_root: &Root| value_signal_for_get.peek().clone()),
+            initial_value_signal: self.initial_value_signal,
+            set: Rc::new(move |root: &mut Root, value: Value| {
+                set_signal_if_changed(value_signal_for_set, value.clone());
+                set(root, value);
+            }),
+            pure_get: Rc::new(move |_root: &Root| value_signal_for_get.peek().clone()),
+            pure_set,
+            is_empty,
+            value_signal: self.value_signal,
+            meta_signal,
+        }
+    }
+
     pub fn meta(&self) -> FieldMeta {
         self.meta_signal.read().clone()
     }
@@ -214,9 +270,10 @@ where
 
     pub fn set_value(&self, value: Value) {
         let set = self.set.clone();
-        set_signal_if_changed(self.value_signal, value.clone());
+        let root_value = value.clone();
         self.root
-            .mutate_values_at(self.path.clone(), move |root| set(root, value));
+            .mutate_values_at(self.path.clone(), move |root| set(root, root_value));
+        set_signal_if_changed(self.value_signal, value);
         self.root.with_registry(|registry| {
             if let Some(node) = registry.nodes.get_mut(&self.path) {
                 node.touched = true;
@@ -253,7 +310,7 @@ where
     }
 
     pub fn reset(&self) {
-        let initial = (self.get)(&self.root.state.initial_values.read());
+        let initial = self.initial_value_signal.peek().clone();
         self.set_value(initial);
         self.root.with_registry(|registry| {
             if let Some(node) = registry.nodes.get_mut(&self.path) {
@@ -317,5 +374,5 @@ where
     Parent: Clone + PartialEq + 'static,
     Value: Clone + PartialEq + 'static,
 {
-    use_hook(move || scope.field(spec()))
+    scope.field(spec())
 }

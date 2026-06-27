@@ -43,11 +43,27 @@ pub fn attribute_field_spec(
     field_name: String,
     attribute: AttributeType,
     class_attribute: ClassAttribute,
+    catalog: UiCatalog,
+) -> FieldSpec<Value, Value> {
+    attribute_field_spec_with_storage_name(
+        field_name.clone(),
+        field_name,
+        attribute,
+        class_attribute,
+        catalog,
+    )
+}
+
+pub fn attribute_field_spec_with_storage_name(
+    field_name: String,
+    storage_field_name: String,
+    attribute: AttributeType,
+    class_attribute: ClassAttribute,
     _catalog: UiCatalog,
 ) -> FieldSpec<Value, Value> {
     let fallback = crate::form::default_value_for_type(&attribute.ty);
-    let get_field = field_name.clone();
-    let set_field = field_name.clone();
+    let get_field = storage_field_name.clone();
+    let set_field = storage_field_name;
     FieldSpec {
         name: field_name,
         get: Rc::new(move |parent: &Value| {

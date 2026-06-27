@@ -68,10 +68,12 @@ where
     pub(crate) path: FieldPath,
     pub(crate) get: Getter<Root, T>,
     pub(crate) set: Setter<Root, T>,
+    pub(crate) pure_get: Getter<Root, T>,
+    pub(crate) pure_set: Setter<Root, T>,
     pub(crate) is_empty: Empty<T>,
-    value_signal: Signal<T>,
-    initial_value_signal: Signal<T>,
-    meta_signal: Signal<ScopeMeta>,
+    pub(crate) value_signal: Signal<T>,
+    pub(crate) initial_value_signal: Signal<T>,
+    pub(crate) meta_signal: Signal<ScopeMeta>,
 }
 
 impl<T, Root> Clone for FormScope<T, Root>
@@ -85,6 +87,8 @@ where
             path: self.path.clone(),
             get: self.get.clone(),
             set: self.set.clone(),
+            pure_get: self.pure_get.clone(),
+            pure_set: self.pure_set.clone(),
             is_empty: self.is_empty.clone(),
             value_signal: self.value_signal,
             initial_value_signal: self.initial_value_signal,
@@ -115,8 +119,33 @@ where
         set: Setter<Root, T>,
         is_empty: Empty<T>,
     ) -> Self {
+        let initial_get = get.clone();
+        let pure_get = get.clone();
+        let pure_set = set.clone();
+        Self::new_with_accessors(
+            root,
+            path,
+            get,
+            initial_get,
+            set,
+            pure_get,
+            pure_set,
+            is_empty,
+        )
+    }
+
+    pub(crate) fn new_with_accessors(
+        root: FormRoot<Root>,
+        path: FieldPath,
+        get: Getter<Root, T>,
+        initial_get: Getter<Root, T>,
+        set: Setter<Root, T>,
+        pure_get: Getter<Root, T>,
+        pure_set: Setter<Root, T>,
+        is_empty: Empty<T>,
+    ) -> Self {
         let current = get(&root.state.values.peek());
-        let initial = get(&root.state.initial_values.peek());
+        let initial = initial_get(&root.state.initial_values.peek());
         let owner = root.state.owner;
         let (value_signal, initial_value_signal, meta_signal) = root.with_registry(|registry| {
             let value_signal = registry.ensure_value_signal(&path, current.clone(), owner);
@@ -126,6 +155,12 @@ where
                 .nodes
                 .entry(path.clone())
                 .or_insert_with(|| FormNodeState::new(FormNodeKind::Scope, path.clone(), owner));
+            node.current_value_applier = Some({
+                let pure_set = pure_set.clone();
+                Rc::new(move |root: &mut Root| {
+                    pure_set(root, value_signal.peek().clone());
+                })
+            });
             node.value_refresher = Some({
                 let get = get.clone();
                 Rc::new(move |root: &Root| {
@@ -133,9 +168,9 @@ where
                 })
             });
             node.initial_value_refresher = Some({
-                let get = get.clone();
+                let initial_get = initial_get.clone();
                 Rc::new(move |root: &Root| {
-                    set_signal_if_changed(initial_value_signal, get(root));
+                    set_signal_if_changed(initial_value_signal, initial_get(root));
                 })
             });
             (value_signal, initial_value_signal, node.scope_meta_signal)
@@ -145,6 +180,8 @@ where
             path,
             get,
             set,
+            pure_get,
+            pure_set,
             is_empty,
             value_signal,
             initial_value_signal,
@@ -175,7 +212,7 @@ where
     }
 
     pub fn reset(&self) {
-        let initial = (self.get)(&self.root.state.initial_values.read());
+        let initial = self.initial_value_signal.peek().clone();
         self.set_value(initial);
         self.root.with_registry(|registry| {
             for node in registry
@@ -222,19 +259,40 @@ where
         Child: Clone + PartialEq + 'static,
     {
         let path = self.path.child(&spec.name);
-        let parent_get_for_child = self.get.clone();
-        let parent_get_for_set = self.get.clone();
+        let parent_value_signal_for_child = self.value_signal;
+        let parent_initial_value_signal_for_child = self.initial_value_signal;
+        let parent_value_signal_for_set = self.value_signal;
         let parent_set = self.set.clone();
+        let parent_pure_get_for_child = self.pure_get.clone();
+        let parent_pure_get_for_set = self.pure_get.clone();
+        let parent_pure_set = self.pure_set.clone();
         let child_get = spec.get.clone();
+        let child_initial_get = spec.get.clone();
+        let child_pure_get = spec.get.clone();
         let child_set = spec.set.clone();
-        let get: Getter<Root, Child> = Rc::new(move |root| {
-            let parent = parent_get_for_child(root);
+        let child_pure_set = spec.set.clone();
+        let get: Getter<Root, Child> = Rc::new(move |_root| {
+            let parent = parent_value_signal_for_child.peek().clone();
             child_get(&parent)
         });
+        let initial_get: Getter<Root, Child> = Rc::new(move |_root| {
+            let parent = parent_initial_value_signal_for_child.peek().clone();
+            child_initial_get(&parent)
+        });
         let set: Setter<Root, Child> = Rc::new(move |root, value| {
-            let mut parent = parent_get_for_set(root);
+            let mut parent = parent_value_signal_for_set.peek().clone();
             child_set(&mut parent, value);
+            set_signal_if_changed(parent_value_signal_for_set, parent.clone());
             parent_set(root, parent);
+        });
+        let pure_get: Getter<Root, Child> = Rc::new(move |root| {
+            let parent = parent_pure_get_for_child(root);
+            child_pure_get(&parent)
+        });
+        let pure_set: Setter<Root, Child> = Rc::new(move |root, value| {
+            let mut parent = parent_pure_get_for_set(root);
+            child_pure_set(&mut parent, value);
+            parent_pure_set(root, parent);
         });
         let validators = spec
             .validators
@@ -261,7 +319,16 @@ where
             });
             node.validators = validators;
         });
-        FormScope::new(self.root.clone(), path, get, set, spec.is_empty)
+        FormScope::new_with_accessors(
+            self.root.clone(),
+            path,
+            get,
+            initial_get,
+            set,
+            pure_get,
+            pure_set,
+            spec.is_empty,
+        )
     }
 
     pub fn field<Value>(&self, spec: FieldSpec<T, Value>) -> FieldHandle<Value, Root>
@@ -319,7 +386,7 @@ where
     Parent: Clone + PartialEq + 'static,
     Child: Clone + PartialEq + 'static,
 {
-    use_hook(move || scope.subform(spec()))
+    scope.subform(spec())
 }
 
 pub fn provide_form_scope<T, Root>(scope: FormScope<T, Root>) -> FormScope<T, Root>
