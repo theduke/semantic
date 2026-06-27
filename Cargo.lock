@@ -2458,6 +2458,7 @@ dependencies = [
  "semantic_data",
  "sqlparser 0.61.0",
  "thiserror 2.0.18",
+ "tokio",
 ]
 
 [[package]]

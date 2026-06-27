@@ -13,7 +13,7 @@ version.workspace = true
 
 [features]
 default = ["tokio"]
-tokio = ["dep:tokio"]
+tokio = ["dep:tokio", "semantic_db_core/tokio"]
 
 [dependencies]
 async-trait = "0.1.89"

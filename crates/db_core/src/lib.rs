@@ -8,6 +8,7 @@ mod federation;
 mod managed_schema;
 mod plan;
 mod query;
+mod runtime;
 mod transaction;
 mod validation;
 
@@ -22,5 +23,6 @@ pub use plan::*;
 pub use query::prql;
 pub use query::sql;
 pub use query::*;
+pub use runtime::*;
 pub use transaction::*;
 pub use validation::*;
