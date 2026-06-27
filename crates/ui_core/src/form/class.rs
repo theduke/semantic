@@ -1,5 +1,5 @@
 use dioxus::prelude::*;
-use dxform::FormScope;
+use dxform::{FormScope, use_field, use_subform};
 use semantic_data::{
     schema::{AttributeType, ClassAttribute, ClassType},
     value::{Object, Value},
@@ -64,6 +64,7 @@ pub fn render_class_form_body(ctx: ClassFormRenderContext) -> Element {
                     {
                         rsx! {
                             ClassFormFieldRow {
+                                key: "{field.field_name}",
                                 scope: ctx.scope.clone(),
                                 class: ctx.class.clone(),
                                 field,
@@ -155,13 +156,16 @@ fn ClassFormFieldRow(
             }
         };
     }
-    let spec = attribute_field_spec(
-        field.field_name.clone(),
-        field.attribute.clone(),
-        field.class_attribute.clone(),
-        catalog.clone(),
-    );
-    let field_handle = scope.field(spec);
+    let field_for_spec = field.clone();
+    let catalog_for_spec = catalog.clone();
+    let field_handle = use_field(scope.clone(), move || {
+        attribute_field_spec(
+            field_for_spec.field_name,
+            field_for_spec.attribute,
+            field_for_spec.class_attribute,
+            catalog_for_spec,
+        )
+    });
     let renderer = catalog
         .form_registry()
         .class_field_form_renderer(&class.id, &field.field_name)
@@ -181,8 +185,7 @@ fn ClassFormFieldRow(
             mode,
         })
     } else {
-        let field_scope =
-            field_handle_scope(scope, field_handle.clone(), field.attribute.ty.clone());
+        let field_scope = use_field_handle_scope(scope, field_handle.clone());
         render_value_form_scope(crate::form::ValueFormRenderContext {
             path: field_handle.path(),
             scope: field_scope,
@@ -199,10 +202,9 @@ fn ClassFormFieldRow(
     }
 }
 
-fn field_handle_scope(
+fn use_field_handle_scope(
     parent: FormScope<Value, Value>,
     field: dxform::FieldHandle<Value, Value>,
-    _ty: semantic_data::schema::Type,
 ) -> FormScope<Value, Value> {
     let field_name = field
         .path()
@@ -213,7 +215,7 @@ fn field_handle_scope(
         .to_string();
     let get_field_name = field_name.clone();
     let set_field_name = field_name.clone();
-    parent.subform(dxform::SubformSpec {
+    use_subform(parent, move || dxform::SubformSpec {
         name: field_name,
         get: std::rc::Rc::new(move |parent: &Value| match parent {
             Value::Object(object) => object.get(&get_field_name).cloned().unwrap_or(Value::Null),

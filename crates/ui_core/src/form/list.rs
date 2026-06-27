@@ -1,7 +1,7 @@
 use std::rc::Rc;
 
 use dioxus::prelude::*;
-use dxform::{ListHandle, ListSpec, ValidationStrategy};
+use dxform::{FormScope, ListSpec, ValidationStrategy};
 use semantic_data::{schema::Type, value::Value};
 
 use crate::form::{default_value_for_type, set_value_list, value_as_list};
@@ -21,13 +21,13 @@ pub fn value_list_spec(
 }
 
 pub fn render_list_value_form(
-    list: ListHandle<Value, Value>,
+    scope: FormScope<Value, Value>,
     item_type: Type,
     mode: crate::form::SemanticFormMode,
 ) -> Element {
     rsx! {
         ListValueForm {
-            list,
+            scope,
             item_type,
             mode,
         }
@@ -36,10 +36,13 @@ pub fn render_list_value_form(
 
 #[component]
 fn ListValueForm(
-    list: ListHandle<Value, Value>,
+    scope: FormScope<Value, Value>,
     item_type: Type,
     mode: crate::form::SemanticFormMode,
 ) -> Element {
+    let list = dxform::use_list(scope, || {
+        value_list_spec("items", ValidationStrategy::submit())
+    });
     let new_item_type = item_type.clone();
     rsx! {
         div { class: "semantic-form__list",
@@ -58,7 +61,7 @@ fn ListValueForm(
             }
             for item in list.items() {
                 ListValueItem {
-                    key: "{item.key()}",
+                    key: "{item.key()}:{item.index()}",
                     item,
                     item_type: item_type.clone(),
                     mode,
@@ -74,7 +77,7 @@ fn ListValueItem(
     item_type: Type,
     mode: crate::form::SemanticFormMode,
 ) -> Element {
-    let scope = item.scope();
+    let scope = dxform::use_list_item_scope(item.clone());
     let path = scope.path();
     rsx! {
         div {

@@ -144,19 +144,19 @@ where
                 }) as DynValidator<Root>
             })
             .collect::<Vec<_>>();
-        let current = get(&scope.root.values());
-        let initial = get(&scope.root.state.initial_values.read());
+        let current = get(&scope.root.state.values.peek());
+        let initial = get(&scope.root.state.initial_values.peek());
         let has_keys = scope
             .root
             .state
             .registry
-            .read()
+            .peek()
             .list_keys
             .contains_key(&path);
         let new_keys = if has_keys {
             Vec::new()
         } else {
-            let len = get(&scope.root.values()).len();
+            let len = current.len();
             scope.root.allocate_keys(len)
         };
         let initial_keys = if has_keys {
@@ -164,7 +164,7 @@ where
                 .root
                 .state
                 .registry
-                .read()
+                .peek()
                 .list_keys
                 .get(&path)
                 .cloned()
@@ -215,7 +215,8 @@ where
             key_signal,
             meta_signal,
         };
-        handle.refresh_node_state();
+        handle.rebuild_item_nodes();
+        handle.refresh_node_state_local();
         handle
     }
 
@@ -244,7 +245,6 @@ where
     }
 
     pub fn items(&self) -> Vec<ListItemHandle<Item, Root>> {
-        self.ensure_key_count();
         let keys = self.key_signal.read().clone();
         keys.into_iter()
             .enumerate()
@@ -426,7 +426,7 @@ where
             .root
             .state
             .registry
-            .read()
+            .peek()
             .list_keys
             .get(&self.path)
             .map_or(0, Vec::len);
@@ -452,17 +452,34 @@ where
     }
 
     fn refresh_node_state(&self) {
-        let current = self.values();
-        let initial = self.initial_value_signal.read().clone();
+        self.refresh_node_state_local();
+        self.root.recompute_all_meta();
+    }
+
+    fn refresh_node_state_local(&self) {
+        let current = self.value_signal.peek().clone();
+        let initial = self.initial_value_signal.peek().clone();
         self.root.with_registry(|registry| {
             let node = registry.nodes.entry(self.path.clone()).or_insert_with(|| {
                 FormNodeState::new(FormNodeKind::List, self.path.clone(), self.root.state.owner)
             });
             node.dirty = current != initial;
             node.empty = current.is_empty() || current.iter().all(|item| (self.item_empty)(item));
+            node.sync_meta_signals();
         });
-        self.root.recompute_all_meta();
     }
+}
+
+pub fn use_list<Parent, Item, Root>(
+    scope: FormScope<Parent, Root>,
+    spec: impl FnOnce() -> ListSpec<Parent, Item>,
+) -> ListHandle<Item, Root>
+where
+    Root: Clone + PartialEq + 'static,
+    Parent: Clone + PartialEq + 'static,
+    Item: Clone + PartialEq + 'static,
+{
+    use_hook(move || scope.list(spec()))
 }
 
 pub struct ListItemHandle<Item, Root = Item>
@@ -473,6 +490,14 @@ where
     pub(crate) list: ListHandle<Item, Root>,
     index: usize,
     key: ListItemKey,
+}
+
+pub fn use_list_item_scope<Item, Root>(item: ListItemHandle<Item, Root>) -> FormScope<Item, Root>
+where
+    Root: Clone + PartialEq + 'static,
+    Item: Clone + PartialEq + 'static,
+{
+    use_hook(move || item.scope())
 }
 
 impl<Item, Root> Clone for ListItemHandle<Item, Root>

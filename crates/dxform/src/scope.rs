@@ -115,8 +115,8 @@ where
         set: Setter<Root, T>,
         is_empty: Empty<T>,
     ) -> Self {
-        let current = get(&root.values());
-        let initial = get(&root.state.initial_values.read());
+        let current = get(&root.state.values.peek());
+        let initial = get(&root.state.initial_values.peek());
         let owner = root.state.owner;
         let (value_signal, initial_value_signal, meta_signal) = root.with_registry(|registry| {
             let value_signal = registry.ensure_value_signal(&path, current.clone(), owner);
@@ -150,7 +150,7 @@ where
             initial_value_signal,
             meta_signal,
         };
-        scope.refresh_node_state();
+        scope.refresh_node_state_local();
         scope
     }
 
@@ -287,8 +287,13 @@ where
     }
 
     pub(crate) fn refresh_node_state(&self) {
-        let current = self.value();
-        let initial = self.initial_value_signal.read().clone();
+        self.refresh_node_state_local();
+        self.root.recompute_all_meta();
+    }
+
+    fn refresh_node_state_local(&self) {
+        let current = self.value_signal.peek().clone();
+        let initial = self.initial_value_signal.peek().clone();
         let empty = (self.is_empty)(&current);
         self.root.with_registry(|registry| {
             let node = registry.nodes.entry(self.path.clone()).or_insert_with(|| {
@@ -300,9 +305,21 @@ where
             });
             node.dirty = current != initial;
             node.empty = empty;
+            node.sync_meta_signals();
         });
-        self.root.recompute_all_meta();
     }
+}
+
+pub fn use_subform<Parent, Child, Root>(
+    scope: FormScope<Parent, Root>,
+    spec: impl FnOnce() -> SubformSpec<Parent, Child>,
+) -> FormScope<Child, Root>
+where
+    Root: Clone + PartialEq + 'static,
+    Parent: Clone + PartialEq + 'static,
+    Child: Clone + PartialEq + 'static,
+{
+    use_hook(move || scope.subform(spec()))
 }
 
 pub fn provide_form_scope<T, Root>(scope: FormScope<T, Root>) -> FormScope<T, Root>

@@ -1,5 +1,5 @@
 use dioxus::prelude::*;
-use dxform::{FormError, FormRoot, use_form_with_options};
+use dxform::{FormError, FormRoot, use_form_scope_from_root, use_form_with_options};
 use semantic_data::value::Value;
 
 use crate::{
@@ -16,7 +16,7 @@ pub fn DynamicValueForm(options: SemanticFormOptions) -> Element {
     let catalog = use_ui_catalog();
     let form_options = build_value_form_options(&options);
     let form = use_form_with_options(move || form_options);
-    let scope = form.scope();
+    let scope = use_form_scope_from_root(form.clone());
     provide_semantic_form_root(form.clone());
     provide_semantic_form_scope(scope.clone());
     provide_semantic_form_mode(options.mode);

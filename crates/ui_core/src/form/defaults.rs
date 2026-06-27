@@ -1,7 +1,7 @@
 use std::rc::Rc;
 
 use dioxus::prelude::*;
-use dxform::{FieldHandle, FormError, FormErrorSource, ValidationStrategy};
+use dxform::{FieldHandle, FormError, FormErrorSource, FormScope, ValidationStrategy};
 use semantic_data::{
     schema::{NumberType, StringFormat, Type, TypeKind},
     value::Value,
@@ -9,9 +9,7 @@ use semantic_data::{
 
 use crate::{
     ValueView,
-    form::{
-        ValueFormRenderContext, render_list_value_form, render_value_form_scope, value_list_spec,
-    },
+    form::{ValueFormRenderContext, render_list_value_form, render_value_form_scope},
     ui_catalog::RenderMode,
 };
 
@@ -64,17 +62,17 @@ pub fn register_default_form_renderers(catalog: &mut crate::UiCatalog) {
 }
 
 fn render_string(ctx: ValueFormRenderContext) -> Element {
-    let field = value_leaf_field(ctx.scope.clone());
     rsx! {
         StringValueInput {
-            field,
+            scope: ctx.scope.clone(),
             value_type: ctx.value_type.clone(),
         }
     }
 }
 
 #[component]
-fn StringValueInput(field: FieldHandle<Value, Value>, value_type: Option<Type>) -> Element {
+fn StringValueInput(scope: FormScope<Value, Value>, value_type: Option<Type>) -> Element {
+    let field = use_value_leaf_field(scope);
     let value = match field.value() {
         Value::String(value) => value,
         Value::Null | Value::Void => String::new(),
@@ -97,12 +95,12 @@ fn StringValueInput(field: FieldHandle<Value, Value>, value_type: Option<Type>) 
 }
 
 fn render_bool(ctx: ValueFormRenderContext) -> Element {
-    let field = value_leaf_field(ctx.scope);
-    rsx! { BoolValueInput { field } }
+    rsx! { BoolValueInput { scope: ctx.scope } }
 }
 
 #[component]
-fn BoolValueInput(field: FieldHandle<Value, Value>) -> Element {
+fn BoolValueInput(scope: FormScope<Value, Value>) -> Element {
+    let field = use_value_leaf_field(scope);
     let checked = matches!(field.value(), Value::Bool(true));
     rsx! {
         input {
@@ -115,17 +113,17 @@ fn BoolValueInput(field: FieldHandle<Value, Value>) -> Element {
 }
 
 fn render_number(ctx: ValueFormRenderContext) -> Element {
-    let field = value_leaf_field(ctx.scope);
     rsx! {
         NumberValueInput {
-            field,
+            scope: ctx.scope,
             value_type: ctx.value_type.clone(),
         }
     }
 }
 
 #[component]
-fn NumberValueInput(field: FieldHandle<Value, Value>, value_type: Option<Type>) -> Element {
+fn NumberValueInput(scope: FormScope<Value, Value>, value_type: Option<Type>) -> Element {
+    let field = use_value_leaf_field(scope);
     let ty = value_type.clone();
     let value = number_to_string(&field.value());
     rsx! {
@@ -152,14 +150,9 @@ fn render_optional(ctx: ValueFormRenderContext) -> Element {
         return fallback_edit(ctx);
     };
     let inner = (*optional.inner).clone();
-    let field = value_leaf_field(ctx.scope.clone());
     rsx! {
         div { class: "semantic-form__optional",
-            button {
-                r#type: "button",
-                onclick: move |_| field.set_value(Value::Null),
-                "Clear"
-            }
+            OptionalClearButton { scope: ctx.scope.clone() }
             {render_value_form_scope(ValueFormRenderContext {
                 scope: ctx.scope,
                 value_type: Some(inner),
@@ -167,6 +160,18 @@ fn render_optional(ctx: ValueFormRenderContext) -> Element {
                 path: ctx.path,
             })}
         }
+    }
+}
+
+#[component]
+fn OptionalClearButton(scope: FormScope<Value, Value>) -> Element {
+    let field = use_value_leaf_field(scope);
+    rsx! {
+            button {
+                r#type: "button",
+                onclick: move |_| field.set_value(Value::Null),
+                "Clear"
+            }
     }
 }
 
@@ -178,10 +183,7 @@ fn render_list(ctx: ValueFormRenderContext) -> Element {
     else {
         return fallback_edit(ctx);
     };
-    let list_handle = ctx
-        .scope
-        .list(value_list_spec("items", ValidationStrategy::submit()));
-    render_list_value_form(list_handle, (*list.items).clone(), ctx.mode)
+    render_list_value_form(ctx.scope, (*list.items).clone(), ctx.mode)
 }
 
 fn render_nested_class(ctx: ValueFormRenderContext) -> Element {
@@ -244,8 +246,8 @@ fn FallbackValueDisplay(
     }
 }
 
-fn value_leaf_field(scope: dxform::FormScope<Value, Value>) -> FieldHandle<Value, Value> {
-    scope.field(dxform::FieldSpec {
+fn use_value_leaf_field(scope: FormScope<Value, Value>) -> FieldHandle<Value, Value> {
+    dxform::use_field(scope, || dxform::FieldSpec {
         name: "value".to_string(),
         get: Rc::new(|value: &Value| value.clone()),
         set: Rc::new(|parent: &mut Value, value: Value| *parent = value),

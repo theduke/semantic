@@ -83,6 +83,13 @@ where
     use_hook(|| FormRoot::with_options(options()))
 }
 
+pub fn use_form_scope_from_root<T>(form: FormRoot<T>) -> FormScope<T>
+where
+    T: Clone + PartialEq + 'static,
+{
+    use_hook(move || form.scope())
+}
+
 impl<T: Clone + PartialEq + 'static> FormRoot<T> {
     pub fn new(initial_values: T) -> Self {
         Self::with_options(FormOptions::new(initial_values))
@@ -274,7 +281,7 @@ impl<T: Clone + PartialEq + 'static> FormRoot<T> {
     }
 
     pub(crate) fn allocate_keys(&self, count: usize) -> Vec<u64> {
-        let start = *self.state.next_key.read();
+        let start = *self.state.next_key.peek();
         self.set_next_key(start + count as u64);
         (start..start + count as u64).collect()
     }
@@ -295,9 +302,9 @@ impl<T: Clone + PartialEq + 'static> FormRoot<T> {
     }
 
     pub(crate) fn refresh_value_signals_for_change(&self, path: &FieldPath) {
-        let root = self.values();
+        let root = self.state.values.peek().clone();
         let refreshers = {
-            let registry = self.state.registry.read();
+            let registry = self.state.registry.peek();
             registry
                 .nodes
                 .iter()
@@ -311,11 +318,11 @@ impl<T: Clone + PartialEq + 'static> FormRoot<T> {
     }
 
     pub(crate) fn refresh_initial_value_signals(&self) {
-        let root = self.state.initial_values.read().clone();
+        let root = self.state.initial_values.peek().clone();
         let refreshers = self
             .state
             .registry
-            .read()
+            .peek()
             .nodes
             .values()
             .filter_map(|node| node.initial_value_refresher.clone())
@@ -326,9 +333,9 @@ impl<T: Clone + PartialEq + 'static> FormRoot<T> {
     }
 
     pub(crate) fn recompute_all_meta(&self) {
-        let current = self.state.values.read().clone();
-        let initial = self.state.initial_values.read().clone();
-        let previous_meta = self.state.meta.read().clone();
+        let current = self.state.values.peek().clone();
+        let initial = self.state.initial_values.peek().clone();
+        let previous_meta = self.state.meta.peek().clone();
         let next_meta = self.with_registry(|registry| {
             let mut next_meta = None;
             let paths = registry.nodes.keys().cloned().collect::<Vec<_>>();
@@ -404,7 +411,7 @@ impl<T: Clone + PartialEq + 'static> FormRoot<T> {
         phase: ValidationPhase,
     ) -> std::result::Result<(), Vec<FormError>> {
         let validators = {
-            let registry = self.state.registry.read();
+            let registry = self.state.registry.peek();
             registry
                 .nodes
                 .iter()
@@ -426,7 +433,7 @@ impl<T: Clone + PartialEq + 'static> FormRoot<T> {
         });
         self.recompute_all_meta();
 
-        let values = self.values();
+        let values = self.state.values.peek().clone();
         let mut all_errors = Vec::new();
         for validator in validators {
             all_errors.extend(validator(phase, values.clone()).await);
@@ -526,13 +533,11 @@ impl<T: Clone + PartialEq + 'static> FormRoot<T> {
     }
 
     fn set_values_signal(&self, value: T) {
-        let mut values = self.state.values;
-        values.set(value);
+        set_signal_if_changed(self.state.values, value);
     }
 
     fn set_initial_values_signal(&self, value: T) {
-        let mut values = self.state.initial_values;
-        values.set(value);
+        set_signal_if_changed(self.state.initial_values, value);
     }
 
     fn set_next_key(&self, value: u64) {

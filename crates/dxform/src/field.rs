@@ -152,8 +152,8 @@ where
                 }) as DynValidator<Root>
             })
             .collect::<Vec<_>>();
-        let current = get(&scope.root.values());
-        let initial = get(&scope.root.state.initial_values.read());
+        let current = get(&scope.root.state.values.peek());
+        let initial = get(&scope.root.state.initial_values.peek());
         let owner = scope.root.state.owner;
         let (value_signal, initial_value_signal, meta_signal) =
             scope.root.with_registry(|registry| {
@@ -188,7 +188,7 @@ where
             initial_value_signal,
             meta_signal,
         };
-        handle.refresh_node_state();
+        handle.refresh_node_state_local();
         handle
     }
 
@@ -285,8 +285,13 @@ where
     }
 
     pub(crate) fn refresh_node_state(&self) {
-        let current = self.value();
-        let initial = self.initial_value_signal.read().clone();
+        self.refresh_node_state_local();
+        self.root.recompute_all_meta();
+    }
+
+    fn refresh_node_state_local(&self) {
+        let current = self.value_signal.peek().clone();
+        let initial = self.initial_value_signal.peek().clone();
         let empty = (self.is_empty)(&current);
         self.root.with_registry(|registry| {
             let node = registry.nodes.entry(self.path.clone()).or_insert_with(|| {
@@ -298,7 +303,19 @@ where
             });
             node.dirty = current != initial;
             node.empty = empty;
+            node.sync_meta_signals();
         });
-        self.root.recompute_all_meta();
     }
+}
+
+pub fn use_field<Parent, Value, Root>(
+    scope: FormScope<Parent, Root>,
+    spec: impl FnOnce() -> FieldSpec<Parent, Value>,
+) -> FieldHandle<Value, Root>
+where
+    Root: Clone + PartialEq + 'static,
+    Parent: Clone + PartialEq + 'static,
+    Value: Clone + PartialEq + 'static,
+{
+    use_hook(move || scope.field(spec()))
 }
