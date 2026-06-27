@@ -10,4 +10,4 @@ pub use error::ErrorView;
 pub use loading::LoadingView;
 pub use media::MediaView;
 pub use object::ObjectView;
-pub use value::ValueView;
+pub use value::{AttributeValueView, ValueView};

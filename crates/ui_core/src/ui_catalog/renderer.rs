@@ -1,7 +1,7 @@
 use std::rc::Rc;
 
 use dioxus::prelude::Element;
-use semantic_data::schema::{AttributeType, ClassType, Type};
+use semantic_data::schema::{ClassType, Type};
 use semantic_data::value::{Object, Value};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -21,11 +21,23 @@ pub struct ValueRenderContext {
 }
 
 #[derive(Clone)]
-pub struct AttributeRenderContext {
-    pub object: Object,
-    pub attribute: AttributeType,
-    pub field_alias: Option<String>,
-    pub value: Option<Value>,
+pub struct RenderSettings {
+    pub show_media: bool,
+    pub file_api_prefix: String,
+}
+
+impl Default for RenderSettings {
+    fn default() -> Self {
+        Self {
+            show_media: true,
+            file_api_prefix: "/api/v1/file".to_string(),
+        }
+    }
+}
+
+#[derive(Clone)]
+pub struct RenderCtx {
+    pub settings: RenderSettings,
     pub mode: RenderMode,
 }
 
@@ -39,5 +51,5 @@ pub struct ClassRenderContext {
 }
 
 pub type ValueRenderer = Rc<dyn Fn(ValueRenderContext) -> Element>;
-pub type AttributeRenderer = Rc<dyn Fn(AttributeRenderContext) -> Element>;
+pub type AttributeRenderer = Rc<dyn Fn(RenderCtx, &Value, Option<&Object>) -> Element>;
 pub type ClassRenderer = Rc<dyn Fn(ClassRenderContext) -> Element>;

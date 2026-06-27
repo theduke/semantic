@@ -36,7 +36,7 @@ pub fn launch_with_client(client: RpcClient, initial_scope_id: Option<String>) {
 
 #[cfg(target_arch = "wasm32")]
 pub fn launch_web() {
-    let client = semantic_rpc::transport::http_client::HttpRpcClient::new("/rpc").into();
+    let client = semantic_rpc::transport::http_client::HttpRpcClient::new("/api/v1/rpc").into();
     launch_with_client(client, Some("default".to_string()));
 }
 

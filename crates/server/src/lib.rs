@@ -236,7 +236,14 @@ mod tests {
     #[tokio::test]
     async fn http_rpc_uses_system_principal_by_default() {
         let server = SemanticServer::new(test_app());
-        let response = post_rpc(&server, "/rpc", None, "semantic.scope.current", Value::Void).await;
+        let response = post_rpc(
+            &server,
+            "/api/v1/rpc",
+            None,
+            "semantic.scope.current",
+            Value::Void,
+        )
+        .await;
         let RpcResult::Ok(Value::Object(object)) = response.result else {
             panic!("expected ok object");
         };
@@ -248,7 +255,7 @@ mod tests {
         let server = SemanticServer::new(test_app());
         let response = post_rpc(
             &server,
-            "/rpc",
+            "/api/v1/rpc",
             Some("header"),
             "semantic.db.query",
             value_object([("query", Value::String("select * from _".to_string()))]),
@@ -262,7 +269,7 @@ mod tests {
         let server = SemanticServer::new(test_app());
         let response = post_rpc(
             &server,
-            "/rpc?scope=query",
+            "/api/v1/rpc?scope=query",
             None,
             "semantic.db.query",
             value_object([("query", Value::String("select * from _".to_string()))]),
@@ -274,7 +281,14 @@ mod tests {
     #[tokio::test]
     async fn invalid_rpc_payload_returns_rpc_error() {
         let server = SemanticServer::new(test_app());
-        let response = post_rpc(&server, "/rpc", None, "semantic.db.query", Value::Void).await;
+        let response = post_rpc(
+            &server,
+            "/api/v1/rpc",
+            None,
+            "semantic.db.query",
+            Value::Void,
+        )
+        .await;
         let RpcResult::Err(err) = response.result else {
             panic!("expected rpc error");
         };

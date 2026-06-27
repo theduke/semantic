@@ -3,7 +3,7 @@ fn main() {
     let args: Vec<String> = std::env::args().collect();
     let rpc_url = arg_value(&args, "--rpc-url")
         .or_else(|| std::env::var("SEMANTIC_RPC_URL").ok())
-        .unwrap_or_else(|| "http://127.0.0.1:8888/rpc".to_string());
+        .unwrap_or_else(|| "http://127.0.0.1:8888/api/v1/rpc".to_string());
 
     if arg_flag(&args, "--standalone") {
         #[cfg(feature = "standalone")]

@@ -280,6 +280,31 @@ pre {
   white-space: pre-wrap;
 }
 
+.semantic-file {
+  display: inline-flex;
+  max-width: 100%;
+}
+
+.semantic-file--link {
+  color: var(--semantic-accent);
+  overflow-wrap: anywhere;
+}
+
+.semantic-file--image {
+  border: 1px solid var(--semantic-border-soft);
+  border-radius: var(--semantic-radius);
+  background: var(--semantic-surface);
+  overflow: hidden;
+}
+
+.semantic-file__image {
+  display: block;
+  width: auto;
+  max-width: min(420px, 100%);
+  max-height: 320px;
+  object-fit: contain;
+}
+
 .semantic-list {
   display: grid;
   gap: var(--semantic-space-2);

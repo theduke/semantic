@@ -32,7 +32,7 @@ where
     Ctx: Send + Sync + 'static,
 {
     Router::new()
-        .route("/rpc", post(rpc_http_handler::<Ctx>))
+        .route("/api/v1/rpc", post(rpc_http_handler::<Ctx>))
         .with_state(state)
 }
 

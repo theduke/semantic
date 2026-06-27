@@ -5,7 +5,7 @@ use semantic_data::schema::ClassType;
 use semantic_data::value::{Object, Value};
 use semantic_db_core::catalog::OBJECT_TYPE_FIELD;
 
-use crate::components::ValueView;
+use crate::components::{AttributeValueView, ValueView};
 use crate::form::{DynamicClassForm, class_form_field_label, mode_from_render_mode};
 use crate::ui_catalog::{ClassRenderContext, RenderMode, use_ui_catalog};
 
@@ -88,13 +88,14 @@ pub fn ClassView(
                                                 th { scope: "row", "{label.text}" }
                                             }
                                             td {
-                                                ValueView {
+                                                AttributeValueView {
+                                                    attribute: field.attribute.clone(),
                                                     value: object
                                                         .get(&field.storage_field_name)
                                                         .or_else(|| object.get(&field.field_name))
                                                         .cloned()
                                                         .unwrap_or(Value::Null),
-                                                    type_hint: Some(field.attribute.ty.clone()),
+                                                    object: Some(object.clone()),
                                                     mode
                                                 }
                                             }

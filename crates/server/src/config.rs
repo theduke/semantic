@@ -41,8 +41,8 @@ impl Default for ServerConfig {
         Self {
             interface: DEFAULT_INTERFACE.to_string(),
             port: DEFAULT_PORT,
-            rpc_path: "/rpc".to_string(),
-            ws_path: "/rpc/ws".to_string(),
+            rpc_path: "/api/v1/rpc".to_string(),
+            ws_path: "/api/v1/rpc/ws".to_string(),
             file_api_prefix: "/api/v1/file".to_string(),
             scope_header: HeaderName::from_static("x-semantic-scope"),
             file_entity_header: HeaderName::from_static("x-semantic-file-entity"),

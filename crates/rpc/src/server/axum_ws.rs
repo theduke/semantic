@@ -16,7 +16,7 @@ where
     Ctx: Send + Sync + 'static,
 {
     Router::new()
-        .route("/rpc/ws", get(rpc_ws_handler::<Ctx>))
+        .route("/api/v1/rpc/ws", get(rpc_ws_handler::<Ctx>))
         .with_state(state)
 }
 

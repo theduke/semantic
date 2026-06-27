@@ -20,6 +20,6 @@ pub use provider::{
 };
 pub use render_registry::{RenderRegistry, type_kind_key};
 pub use renderer::{
-    AttributeRenderContext, AttributeRenderer, ClassRenderContext, ClassRenderer, RenderMode,
+    AttributeRenderer, ClassRenderContext, ClassRenderer, RenderCtx, RenderMode, RenderSettings,
     ValueRenderContext, ValueRenderer,
 };

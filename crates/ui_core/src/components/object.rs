@@ -1,7 +1,7 @@
 use dioxus::prelude::*;
 use semantic_data::value::Object;
 
-use crate::components::ValueView;
+use crate::components::{AttributeValueView, ValueView};
 use crate::ui_catalog::{RenderMode, use_ui_catalog};
 
 #[component]
@@ -25,10 +25,23 @@ pub fn ObjectView(object: Object, mode: RenderMode) -> Element {
                             tr {
                                 th { scope: "row", "{key}" }
                                 td {
-                                    ValueView {
-                                        value: value.clone(),
-                                        type_hint: None,
-                                        mode
+                                    if let Some(attribute) = catalog
+                                        .attribute_by_name(key)
+                                        .or_else(|| catalog.attribute_by_id(key))
+                                        .cloned()
+                                    {
+                                        AttributeValueView {
+                                            attribute,
+                                            value: value.clone(),
+                                            object: Some(object.clone()),
+                                            mode
+                                        }
+                                    } else {
+                                        ValueView {
+                                            value: value.clone(),
+                                            type_hint: None,
+                                            mode
+                                        }
                                     }
                                 }
                             }

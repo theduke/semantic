@@ -6,7 +6,8 @@ use semantic_db_core::catalog::{CatalogStorageSnapshot, StoredCollection};
 use crate::{
     form::{UiFormRegistry, register_default_form_renderers},
     ui_catalog::{
-        MediaRendererRegistration, MenuSection, RenderRegistry, defaults::register_defaults,
+        MediaRendererRegistration, MenuSection, RenderRegistry, RenderSettings,
+        defaults::register_defaults,
     },
 };
 
@@ -25,6 +26,7 @@ pub struct UiCatalog {
     classes_by_name: BTreeMap<String, ClassType>,
     collections_by_name: BTreeMap<String, StoredCollection>,
     render_registry: RenderRegistry,
+    render_settings: RenderSettings,
     form_registry: UiFormRegistry,
     media_renderers: Vec<MediaRendererRegistration>,
     menu_sections: Vec<MenuSection>,
@@ -49,6 +51,14 @@ impl UiCatalog {
 
     pub fn render_registry_mut(&mut self) -> &mut RenderRegistry {
         &mut self.render_registry
+    }
+
+    pub fn render_settings(&self) -> &RenderSettings {
+        &self.render_settings
+    }
+
+    pub fn render_settings_mut(&mut self) -> &mut RenderSettings {
+        &mut self.render_settings
     }
 
     pub fn form_registry(&self) -> &UiFormRegistry {
@@ -137,6 +147,7 @@ impl UiCatalogBuilder {
                 classes_by_name,
                 collections_by_name,
                 render_registry: RenderRegistry::default(),
+                render_settings: RenderSettings::default(),
                 form_registry: UiFormRegistry::default(),
                 media_renderers: Vec::new(),
                 menu_sections: Vec::new(),

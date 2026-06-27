@@ -93,7 +93,14 @@ async fn load_entity(
     match response {
         Value::Null | Value::Void => Ok(None),
         Value::Object(mut response) => match response.remove("object") {
-            Some(Value::Object(object)) => Ok(Some(object)),
+            Some(Value::Object(mut object)) => {
+                if !object.contains_key("id")
+                    && let Some(Value::String(id)) = response.remove("id")
+                {
+                    object.insert("id", Value::String(id));
+                }
+                Ok(Some(object))
+            }
             _ => Err("get response missing object".to_string()),
         },
         _ => Err("get response must be an object or null".to_string()),

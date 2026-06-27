@@ -1,10 +1,39 @@
 use dioxus::prelude::*;
-use semantic_data::schema::Type;
-use semantic_data::value::Value;
+use semantic_data::schema::{AttributeType, Type};
+use semantic_data::value::{Object, Value};
 
 use crate::components::ObjectView;
 use crate::form::{DynamicValueForm, SemanticFormMode, SemanticFormOptions};
-use crate::ui_catalog::{RenderMode, ValueRenderContext, defaults::value_to_text, use_ui_catalog};
+use crate::ui_catalog::{
+    RenderCtx, RenderMode, ValueRenderContext, defaults::value_to_text, use_ui_catalog,
+};
+
+#[component]
+pub fn AttributeValueView(
+    attribute: AttributeType,
+    value: Value,
+    object: Option<Object>,
+    mode: RenderMode,
+) -> Element {
+    let catalog = use_ui_catalog();
+    if let Some(renderer) = catalog.render_registry().attribute_renderer(&attribute.id) {
+        return renderer(
+            RenderCtx {
+                settings: catalog.render_settings().clone(),
+                mode,
+            },
+            &value,
+            object.as_ref(),
+        );
+    }
+    rsx! {
+        ValueView {
+            value,
+            type_hint: Some(attribute.ty),
+            mode
+        }
+    }
+}
 
 #[component]
 pub fn ValueView(value: Value, type_hint: Option<Type>, mode: RenderMode) -> Element {
