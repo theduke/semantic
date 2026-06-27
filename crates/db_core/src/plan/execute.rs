@@ -86,7 +86,12 @@ pub fn execute_physical_plan_stream(
     context: QueryContext,
     options: ExecutionOptions,
 ) -> SendableRecordBatchStream {
-    execute_physical_dyn_stream(plan, source, context, normalize_options(options))
+    normalize_record_batch_stream(execute_physical_dyn_stream(
+        plan,
+        source,
+        context,
+        normalize_options(options),
+    ))
 }
 
 pub async fn execute_physical_plan_collect(
@@ -117,7 +122,7 @@ fn execute_physical_dyn_stream(
     context: QueryContext,
     options: ExecutionOptions,
 ) -> RecordBatchStream<'_> {
-    match plan {
+    let stream = match plan {
         PhysicalPlan::Source(PhysicalSource::Scan { source: source_ref }) => {
             source.scan_stream(source_ref)
         }
@@ -349,7 +354,9 @@ fn execute_physical_dyn_stream(
         | PhysicalPlan::Materialize { input } => {
             execute_physical_dyn_stream(*input, source, context, options)
         }
-    }
+    };
+
+    normalize_record_batch_stream(stream)
 }
 
 fn rows_to_batches(rows: Vec<DynObject>, batch_size: usize) -> SendableRecordBatchStream {
@@ -371,8 +378,16 @@ fn rows_to_batches(rows: Vec<DynObject>, batch_size: usize) -> SendableRecordBat
     .boxed()
 }
 
+fn normalize_record_batch_stream<'a>(input: RecordBatchStream<'a>) -> RecordBatchStream<'a> {
+    input
+        .filter(|item| futures::future::ready(!matches!(item, Ok(batch) if batch.is_empty())))
+        .boxed()
+}
+
 async fn collect_dyn_stream(stream: RecordBatchStream<'_>) -> CoreResult<Vec<DynObject>> {
-    let batches = stream.try_collect::<Vec<_>>().await?;
+    let batches = normalize_record_batch_stream(stream)
+        .try_collect::<Vec<_>>()
+        .await?;
     Ok(batches.into_iter().flatten().collect())
 }
 
@@ -383,10 +398,11 @@ fn filter_dyn_rows(rows: Vec<DynObject>, predicate: &Expr) -> Vec<DynObject> {
 }
 
 fn filter_batch_stream(input: RecordBatchStream<'_>, predicate: Expr) -> RecordBatchStream<'_> {
-    input
-        .map_ok(move |batch| filter_dyn_rows(batch, &predicate))
-        .filter(|item| futures::future::ready(!matches!(item, Ok(batch) if batch.is_empty())))
-        .boxed()
+    normalize_record_batch_stream(
+        input
+            .map_ok(move |batch| filter_dyn_rows(batch, &predicate))
+            .boxed(),
+    )
 }
 
 fn filter_bool_batch_stream(input: RecordBatchStream<'_>, keep: bool) -> RecordBatchStream<'_> {
@@ -399,20 +415,21 @@ fn filter_in_subquery_batch_stream(
     sub_values: BTreeSet<Value>,
     negated: bool,
 ) -> RecordBatchStream<'_> {
-    input
-        .map_ok(move |batch| {
-            batch
-                .into_iter()
-                .filter(|row| {
-                    let contains = evaluate_expr(row.as_ref(), &left)
-                        .map(|value| sub_values.contains(&value))
-                        .unwrap_or(false);
-                    if negated { !contains } else { contains }
-                })
-                .collect::<Vec<_>>()
-        })
-        .filter(|item| futures::future::ready(!matches!(item, Ok(batch) if batch.is_empty())))
-        .boxed()
+    normalize_record_batch_stream(
+        input
+            .map_ok(move |batch| {
+                batch
+                    .into_iter()
+                    .filter(|row| {
+                        let contains = evaluate_expr(row.as_ref(), &left)
+                            .map(|value| sub_values.contains(&value))
+                            .unwrap_or(false);
+                        if negated { !contains } else { contains }
+                    })
+                    .collect::<Vec<_>>()
+            })
+            .boxed(),
+    )
 }
 
 fn project_batch_stream(
@@ -2257,6 +2274,20 @@ mod tests {
         }
     }
 
+    struct EmptyBatchSource;
+
+    impl AsyncPhysicalDataSource for EmptyBatchSource {
+        fn scan_stream(&self, _source: SourceRef) -> SendableRecordBatchStream {
+            stream::iter([
+                Ok(Vec::new()),
+                Ok(vec![Box::new(obj_i64("id", 1)) as DynObject]),
+                Ok(Vec::new()),
+                Ok(vec![Box::new(obj_i64("id", 2)) as DynObject]),
+            ])
+            .boxed()
+        }
+    }
+
     fn obj_i64(field: &str, value: i64) -> Object {
         let mut row = Object::new();
         row.insert(field, Value::I64(value));
@@ -2284,6 +2315,29 @@ mod tests {
             batches.iter().map(Vec::len).collect::<Vec<_>>(),
             vec![2, 2, 1]
         );
+    }
+
+    #[test]
+    fn async_stream_boundary_drops_empty_batches() {
+        let batches = executor::block_on(
+            execute_physical_plan_stream(
+                PhysicalPlan::Source(PhysicalSource::Scan {
+                    source: SourceRef {
+                        source_name: Some("items".to_string()),
+                        collection_id: None,
+                        binding: None,
+                        backend_tag: None,
+                    },
+                }),
+                Arc::new(EmptyBatchSource),
+                QueryContext::default(),
+                ExecutionOptions::default(),
+            )
+            .try_collect::<Vec<_>>(),
+        )
+        .unwrap();
+
+        assert_eq!(batches.iter().map(Vec::len).collect::<Vec<_>>(), vec![1, 1]);
     }
 
     #[test]
