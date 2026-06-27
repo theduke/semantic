@@ -125,7 +125,6 @@ pre {
   font-size: 12px;
 }
 
-.semantic-form-screen__meta,
 .semantic-form__field-table-wrap {
   overflow: visible;
 }
@@ -209,6 +208,10 @@ pre {
   border: 1px solid var(--semantic-border);
   border-radius: var(--semantic-radius);
   background: var(--semantic-surface);
+}
+
+.semantic-table-wrap.semantic-form-screen__meta {
+  overflow: visible;
 }
 
 .semantic-field-table {

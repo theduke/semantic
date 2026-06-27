@@ -14,7 +14,7 @@ use semantic_db_core::catalog::{
     StoredClass,
 };
 use semantic_ui_core::form::{
-    attribute_field_spec, default_value_for_class, set_object_field_value,
+    attribute_field_spec, class_form_field_label, default_value_for_class, set_object_field_value,
     set_optional_object_field_value, validate_value_against_type, validate_value_constraints,
 };
 use semantic_ui_core::{
@@ -524,4 +524,49 @@ fn class_form_fields_respect_class_attribute_ui_order() {
             "third".to_string()
         ]
     );
+}
+
+#[test]
+fn class_form_field_label_uses_attribute_id_as_title_for_custom_titles() {
+    let mut attribute = attr("semantic:description", "description", string_type());
+    attribute.meta.title = Some("Description".to_string());
+    let mut fields = BTreeMap::new();
+    fields.insert(
+        "description".to_string(),
+        class_attr("semantic:description", false),
+    );
+    let class = class("document", "Document", fields);
+    let catalog = catalog_with(vec![attribute], vec![class.clone()]);
+
+    let field = catalog
+        .class_form_fields(&class)
+        .into_iter()
+        .next()
+        .expect("field should exist");
+    let label = class_form_field_label(&field);
+
+    assert_eq!(label.text, "Description");
+    assert_eq!(label.title.as_deref(), Some("semantic:description"));
+}
+
+#[test]
+fn class_form_field_label_omits_title_without_custom_title() {
+    let attribute = attr("semantic:description", "description", string_type());
+    let mut fields = BTreeMap::new();
+    fields.insert(
+        "description".to_string(),
+        class_attr("semantic:description", false),
+    );
+    let class = class("document", "Document", fields);
+    let catalog = catalog_with(vec![attribute], vec![class.clone()]);
+
+    let field = catalog
+        .class_form_fields(&class)
+        .into_iter()
+        .next()
+        .expect("field should exist");
+    let label = class_form_field_label(&field);
+
+    assert_eq!(label.text, "description");
+    assert_eq!(label.title, None);
 }

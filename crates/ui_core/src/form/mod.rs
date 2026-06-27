@@ -11,8 +11,8 @@ mod validation;
 mod value;
 
 pub use class::{
-    ClassFormField, DynamicClassForm, class_form_fields, default_class_form_renderer,
-    render_class_form_body,
+    ClassFormField, ClassFormFieldLabel, DynamicClassForm, class_form_field_label,
+    class_form_fields, default_class_form_renderer, render_class_form_body,
 };
 pub use context::{
     provide_semantic_form_mode, provide_semantic_form_root, provide_semantic_form_scope,

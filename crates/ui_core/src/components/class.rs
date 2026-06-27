@@ -6,7 +6,7 @@ use semantic_data::value::{Object, Value};
 use semantic_db_core::catalog::OBJECT_TYPE_FIELD;
 
 use crate::components::ValueView;
-use crate::form::{DynamicClassForm, mode_from_render_mode};
+use crate::form::{DynamicClassForm, class_form_field_label, mode_from_render_mode};
 use crate::ui_catalog::{ClassRenderContext, RenderMode, use_ui_catalog};
 
 #[component]
@@ -78,17 +78,26 @@ pub fn ClassView(
                     tbody {
                         for field in fields {
                             if field.field_name != OBJECT_TYPE_FIELD && field.storage_field_name != OBJECT_TYPE_FIELD {
-                                tr {
-                                    th { scope: "row", "{field.field_name}" }
-                                    td {
-                                        ValueView {
-                                            value: object
-                                                .get(&field.storage_field_name)
-                                                .or_else(|| object.get(&field.field_name))
-                                                .cloned()
-                                                .unwrap_or(Value::Null),
-                                            type_hint: Some(field.attribute.ty.clone()),
-                                            mode
+                                {
+                                    let label = class_form_field_label(&field);
+                                    rsx! {
+                                        tr {
+                                            if let Some(title) = label.title.as_ref() {
+                                                th { scope: "row", title: "{title}", "{label.text}" }
+                                            } else {
+                                                th { scope: "row", "{label.text}" }
+                                            }
+                                            td {
+                                                ValueView {
+                                                    value: object
+                                                        .get(&field.storage_field_name)
+                                                        .or_else(|| object.get(&field.field_name))
+                                                        .cloned()
+                                                        .unwrap_or(Value::Null),
+                                                    type_hint: Some(field.attribute.ty.clone()),
+                                                    mode
+                                                }
+                                            }
                                         }
                                     }
                                 }

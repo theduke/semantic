@@ -29,6 +29,32 @@ pub struct ClassFormField {
     pub declaring_class_id: String,
 }
 
+#[derive(Clone, PartialEq)]
+pub struct ClassFormFieldLabel {
+    pub text: String,
+    pub title: Option<String>,
+}
+
+pub fn class_form_field_label(field: &ClassFormField) -> ClassFormFieldLabel {
+    let custom_title = field
+        .class_attribute
+        .meta
+        .title
+        .clone()
+        .or_else(|| field.attribute.meta.title.clone());
+
+    match custom_title {
+        Some(text) => ClassFormFieldLabel {
+            text,
+            title: Some(field.attribute.id.clone()),
+        },
+        None => ClassFormFieldLabel {
+            text: field.field_name.clone(),
+            title: None,
+        },
+    }
+}
+
 #[component]
 pub fn DynamicClassForm(
     class: ClassType,
@@ -199,13 +225,7 @@ fn ClassFormFieldRow(
     readonly: bool,
 ) -> Element {
     let catalog = use_ui_catalog();
-    let label = field
-        .class_attribute
-        .meta
-        .title
-        .clone()
-        .or_else(|| field.attribute.meta.title.clone())
-        .unwrap_or_else(|| field.field_name.clone());
+    let label = class_form_field_label(&field);
     let field_for_spec = field.clone();
     let catalog_for_spec = catalog.clone();
     let field_handle = use_field(scope.clone(), move || {
@@ -255,7 +275,11 @@ fn ClassFormFieldRow(
     };
     rsx! {
         tr { class: "semantic-form__field",
-            th { scope: "row", class: "semantic-form__label", "{label}" }
+            if let Some(title) = label.title.as_ref() {
+                th { scope: "row", class: "semantic-form__label", title: "{title}", "{label.text}" }
+            } else {
+                th { scope: "row", class: "semantic-form__label", "{label.text}" }
+            }
             td { class: "semantic-form__control",
                 {body}
                 SemanticFormErrors { errors: field_handle.meta().errors }
@@ -379,12 +403,16 @@ fn ExtraClassFormFieldRow(
 #[component]
 fn ReadonlyClassFormField(
     field: dxform::FieldHandle<Value, Value>,
-    label: String,
+    label: ClassFormFieldLabel,
     type_hint: semantic_data::schema::Type,
 ) -> Element {
     rsx! {
         tr { class: "semantic-form__field semantic-form__field--readonly",
-            th { scope: "row", class: "semantic-form__label", "{label}" }
+            if let Some(title) = label.title.as_ref() {
+                th { scope: "row", class: "semantic-form__label", title: "{title}", "{label.text}" }
+            } else {
+                th { scope: "row", class: "semantic-form__label", "{label.text}" }
+            }
             td { class: "semantic-form__control",
                 ValueView {
                     value: field.value(),
