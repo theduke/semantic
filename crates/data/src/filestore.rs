@@ -3,7 +3,7 @@ use std::collections::BTreeMap;
 use crate::schema::{
     AttributeRef, AttributeType, ClassAttribute, ClassType, Constraint, Meta, Migration,
     MigrationDdlOperation, MigrationOperation, Module, NumberType, Package, StringType, Type,
-    TypeKind, UIntWidth,
+    TypeKind, TypeRef, UIntWidth,
 };
 
 pub const PACKAGE_NAME: &str = "semantic.filestore";
@@ -15,7 +15,7 @@ pub const FILE_CLASS_ID: &str = "semantic:filestore:file";
 
 pub const TITLE_ATTRIBUTE_ID: &str = "semantic:title";
 pub const DESCRIPTION_ATTRIBUTE_ID: &str = "semantic:description";
-pub const PARENT_ATTRIBUTE_ID: &str = "parent";
+pub const PARENT_ATTRIBUTE_ID: &str = "semantic:parent";
 pub const FILE_FILESTORE_LOCATOR_ATTRIBUTE_ID: &str = "semantic:filestore:file:filestore_locator";
 pub const FILE_FILENAME_ATTRIBUTE_ID: &str = "semantic:filestore:file:filename";
 pub const FILE_BYTE_SIZE_ATTRIBUTE_ID: &str = "semantic:filestore:file:byte_size";
@@ -99,6 +99,7 @@ pub fn file_attributes() -> Vec<AttributeType> {
     vec![
         title_attribute(),
         description_attribute(),
+        parent_attribute(),
         attribute(
             FILE_FILESTORE_LOCATOR_ATTRIBUTE_ID,
             "filestore_locator",
@@ -179,6 +180,14 @@ fn description_attribute() -> AttributeType {
     )
 }
 
+fn parent_attribute() -> AttributeType {
+    attribute(
+        PARENT_ATTRIBUTE_ID,
+        "parent",
+        ref_type(crate::builtin::ID_ATTRIBUTE_ID),
+    )
+}
+
 fn attribute(id: &str, name: &str, ty: Type) -> AttributeType {
     attribute_with_title(id, name, ty, title_from_name(name))
 }
@@ -235,6 +244,13 @@ fn uint64_type() -> Type {
     Type::new(TypeKind::Number(NumberType::UInt(UIntWidth::U64)))
 }
 
+fn ref_type(name: &str) -> Type {
+    Type::new(TypeKind::Ref(TypeRef {
+        name: name.to_string(),
+        args: Vec::new(),
+    }))
+}
+
 fn meta_with_title(title: impl Into<String>) -> Meta {
     Meta {
         title: Some(title.into()),
@@ -282,7 +298,7 @@ mod tests {
     use crate::filestore::{
         FILE_CLASS_ID, FILE_CONTENT_HASH_SHA256_ATTRIBUTE_ID, FILE_FILESTORE_LOCATOR_ATTRIBUTE_ID,
         GENERIC_METADATA_MIGRATION_NAME, INIT_MIGRATION_NAME, MODULE_NAME, PACKAGE_NAME,
-        TITLE_ATTRIBUTE_ID, package,
+        PARENT_ATTRIBUTE_ID, TITLE_ATTRIBUTE_ID, package,
     };
 
     #[test]
@@ -297,6 +313,8 @@ mod tests {
         assert_eq!(package.migrations[1].name, GENERIC_METADATA_MIGRATION_NAME);
         assert!(package.root.classes.contains_key(FILE_CLASS_ID));
         assert!(package.root.attributes.contains_key(TITLE_ATTRIBUTE_ID));
+        assert!(package.root.attributes.contains_key(PARENT_ATTRIBUTE_ID));
+        assert_eq!(PARENT_ATTRIBUTE_ID, "semantic:parent");
         assert!(
             package
                 .root

@@ -1,6 +1,6 @@
 use semantic_data::schema::{
     AttributeRef, AttributeType, ClassAttribute, Constraint, ListType, Meta, StringType,
-    TemporalType, Type, TypeKind,
+    TemporalType, Type, TypeKind, TypeRef,
 };
 
 pub fn string_type() -> Type {
@@ -17,6 +17,13 @@ pub fn date_type() -> Type {
 pub fn list_type(items: Type) -> Type {
     Type::new(TypeKind::List(ListType {
         items: Box::new(items),
+    }))
+}
+
+pub fn ref_type(name: &str) -> Type {
+    Type::new(TypeKind::Ref(TypeRef {
+        name: name.to_string(),
+        args: Vec::new(),
     }))
 }
 

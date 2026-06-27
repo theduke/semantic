@@ -46,7 +46,7 @@ pub struct Catalog {
 pub const PRIMARY_ID_FIELD: &str = semantic_data::builtin::ID_ATTRIBUTE_ID;
 pub const OBJECT_TYPE_FIELD: &str = semantic_data::builtin::TYPE_ATTRIBUTE_ID;
 pub const PARENT_RELATION_FIELD: &str = "parent";
-pub const PARENT_RELATION_ATTRIBUTE_ID: &str = "parent";
+pub const PARENT_RELATION_ATTRIBUTE_ID: &str = "semantic:parent";
 pub const PARENT_RELATION_ATTRIBUTE: &str = PARENT_RELATION_ATTRIBUTE_ID;
 pub const PRIMARY_ID_INDEX_NAME: &str = "__builtin_pk_id";
 pub const OBJECT_TYPE_INDEX_NAME: &str = "__builtin_type";

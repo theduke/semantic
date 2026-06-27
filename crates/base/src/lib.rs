@@ -31,6 +31,13 @@ mod tests {
         );
 
         assert!(package.root.classes.contains_key(common::person::CLASS_ID));
+        assert!(
+            package
+                .root
+                .attributes
+                .contains_key(common::person::PARENT_ATTRIBUTE_ID)
+        );
+        assert_eq!(common::person::PARENT_ATTRIBUTE_ID, "semantic:parent");
 
         for attribute in common::person::attributes() {
             assert!(package.root.attributes.contains_key(&attribute.id));

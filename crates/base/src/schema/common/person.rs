@@ -17,7 +17,7 @@ pub const ALTERNATE_NAMES_ATTRIBUTE_ID: &str = "semantic:base:person:alternate_n
 pub const DESCRIPTION_ATTRIBUTE_ID: &str = "semantic:base:person:description";
 pub const BIRTH_DATE_ATTRIBUTE_ID: &str = "semantic:base:person:birth_date";
 pub const DEATH_DATE_ATTRIBUTE_ID: &str = "semantic:base:person:death_date";
-pub const PARENT_ATTRIBUTE_ID: &str = "parent";
+pub const PARENT_ATTRIBUTE_ID: &str = "semantic:parent";
 
 pub fn attributes() -> Vec<AttributeType> {
     vec![
@@ -64,6 +64,11 @@ pub fn attributes() -> Vec<AttributeType> {
         ),
         helpers::attribute(BIRTH_DATE_ATTRIBUTE_ID, "birth_date", helpers::date_type()),
         helpers::attribute(DEATH_DATE_ATTRIBUTE_ID, "death_date", helpers::date_type()),
+        helpers::attribute(
+            PARENT_ATTRIBUTE_ID,
+            "parent",
+            helpers::ref_type(semantic_data::builtin::ID_ATTRIBUTE_ID),
+        ),
     ]
 }
 
