@@ -63,7 +63,7 @@ impl<Root> Clone for FormNodeState<Root> {
 }
 
 impl<Root> FormNodeState<Root> {
-    pub fn new(kind: FormNodeKind, path: FieldPath) -> Self {
+    pub fn new(kind: FormNodeKind, path: FieldPath, owner: ScopeId) -> Self {
         let state = Self {
             kind,
             path: path.clone(),
@@ -77,9 +77,9 @@ impl<Root> FormNodeState<Root> {
             submit_errors: Vec::new(),
             validation_epoch: 0,
             validators: Vec::new(),
-            field_meta_signal: Signal::new(FieldMeta::new(path.clone())),
-            scope_meta_signal: Signal::new(ScopeMeta::new(path.clone())),
-            list_meta_signal: Signal::new(ListMeta::new(path)),
+            field_meta_signal: Signal::new_in_scope(FieldMeta::new(path.clone()), owner),
+            scope_meta_signal: Signal::new_in_scope(ScopeMeta::new(path.clone()), owner),
+            list_meta_signal: Signal::new_in_scope(ListMeta::new(path), owner),
             value_refresher: None,
             initial_value_refresher: None,
         };
@@ -167,39 +167,46 @@ impl<Root> Clone for FormRegistry<Root> {
 }
 
 impl<Root> FormRegistry<Root> {
-    pub fn ensure_node(&mut self, kind: FormNodeKind, path: FieldPath) {
+    pub fn ensure_node(&mut self, kind: FormNodeKind, path: FieldPath, owner: ScopeId) {
         self.nodes
             .entry(path.clone())
-            .or_insert_with(|| FormNodeState::new(kind, path));
+            .or_insert_with(|| FormNodeState::new(kind, path, owner));
     }
 
-    pub fn ensure_value_signal<Value>(&mut self, path: &FieldPath, value: Value) -> Signal<Value>
+    pub fn ensure_value_signal<Value>(
+        &mut self,
+        path: &FieldPath,
+        value: Value,
+        owner: ScopeId,
+    ) -> Signal<Value>
     where
         Value: Clone + PartialEq + 'static,
     {
-        ensure_typed_signal(&mut self.value_signals, path, value)
+        ensure_typed_signal(&mut self.value_signals, path, value, owner)
     }
 
     pub fn ensure_initial_value_signal<Value>(
         &mut self,
         path: &FieldPath,
         value: Value,
+        owner: ScopeId,
     ) -> Signal<Value>
     where
         Value: Clone + PartialEq + 'static,
     {
-        ensure_typed_signal(&mut self.initial_value_signals, path, value)
+        ensure_typed_signal(&mut self.initial_value_signals, path, value, owner)
     }
 
     pub fn ensure_list_key_signal(
         &mut self,
         path: &FieldPath,
         keys: Vec<ListItemKey>,
+        owner: ScopeId,
     ) -> Signal<Vec<ListItemKey>> {
         *self
             .list_key_signals
             .entry(path.clone())
-            .or_insert_with(|| Signal::new(keys))
+            .or_insert_with(|| Signal::new_in_scope(keys, owner))
     }
 
     pub fn remove_descendants(&mut self, path: &FieldPath) {
@@ -259,6 +266,7 @@ fn ensure_typed_signal<Value>(
     signals: &mut BTreeMap<FieldPath, Rc<dyn Any>>,
     path: &FieldPath,
     value: Value,
+    owner: ScopeId,
 ) -> Signal<Value>
 where
     Value: Clone + PartialEq + 'static,
@@ -269,7 +277,7 @@ where
         }
     }
 
-    let signal = Signal::new(value);
+    let signal = Signal::new_in_scope(value, owner);
     signals.insert(path.clone(), Rc::new(signal));
     signal
 }

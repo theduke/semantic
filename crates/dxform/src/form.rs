@@ -1,5 +1,6 @@
 use std::rc::Rc;
 
+use dioxus::prelude::dioxus_core::current_scope_id;
 use dioxus::prelude::*;
 use futures::FutureExt;
 
@@ -48,6 +49,7 @@ impl<T> FormOptions<T> {
 }
 
 pub(crate) struct FormState<Root: Clone + PartialEq + 'static> {
+    pub owner: ScopeId,
     pub values: Signal<Root>,
     pub initial_values: Signal<Root>,
     pub meta: Signal<FormMeta>,
@@ -87,19 +89,21 @@ impl<T: Clone + PartialEq + 'static> FormRoot<T> {
     }
 
     pub fn with_options(options: FormOptions<T>) -> Self {
+        let owner = current_scope_id();
         let initial_values = options.initial_values.clone();
         let mut registry = FormRegistry::default();
-        let mut root = FormNodeState::new(FormNodeKind::Scope, FieldPath::root());
+        let mut root = FormNodeState::new(FormNodeKind::Scope, FieldPath::root(), owner);
         root.empty = false;
         registry.nodes.insert(FieldPath::root(), root);
         let root = Self {
             state: Rc::new(FormState {
-                values: Signal::new(initial_values.clone()),
-                initial_values: Signal::new(initial_values),
-                meta: Signal::new(FormMeta::default()),
-                registry: Signal::new(registry),
+                owner,
+                values: Signal::new_in_scope(initial_values.clone(), owner),
+                initial_values: Signal::new_in_scope(initial_values, owner),
+                meta: Signal::new_in_scope(FormMeta::default(), owner),
+                registry: Signal::new_in_scope(registry, owner),
                 options: Rc::new(options),
-                next_key: Signal::new(1),
+                next_key: Signal::new_in_scope(1, owner),
             }),
         };
         root.register_form_validators();

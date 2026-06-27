@@ -154,16 +154,16 @@ where
             .collect::<Vec<_>>();
         let current = get(&scope.root.values());
         let initial = get(&scope.root.state.initial_values.read());
+        let owner = scope.root.state.owner;
         let (value_signal, initial_value_signal, meta_signal) =
             scope.root.with_registry(|registry| {
-                let value_signal = registry.ensure_value_signal(&path, current.clone());
+                let value_signal = registry.ensure_value_signal(&path, current.clone(), owner);
                 let initial_value_signal =
-                    registry.ensure_initial_value_signal(&path, initial.clone());
-                let node = registry
-                    .nodes
-                    .entry(path.clone())
-                    .or_insert_with(|| FormNodeState::new(FormNodeKind::Field, path.clone()));
-                node.validators.extend(validators);
+                    registry.ensure_initial_value_signal(&path, initial.clone(), owner);
+                let node = registry.nodes.entry(path.clone()).or_insert_with(|| {
+                    FormNodeState::new(FormNodeKind::Field, path.clone(), owner)
+                });
+                node.validators = validators;
                 node.value_refresher = Some({
                     let get = get.clone();
                     Rc::new(move |root: &Root| {
@@ -289,10 +289,13 @@ where
         let initial = self.initial_value_signal.read().clone();
         let empty = (self.is_empty)(&current);
         self.root.with_registry(|registry| {
-            let node = registry
-                .nodes
-                .entry(self.path.clone())
-                .or_insert_with(|| FormNodeState::new(FormNodeKind::Field, self.path.clone()));
+            let node = registry.nodes.entry(self.path.clone()).or_insert_with(|| {
+                FormNodeState::new(
+                    FormNodeKind::Field,
+                    self.path.clone(),
+                    self.root.state.owner,
+                )
+            });
             node.dirty = current != initial;
             node.empty = empty;
         });

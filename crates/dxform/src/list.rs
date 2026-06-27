@@ -172,17 +172,18 @@ where
         } else {
             new_keys.clone()
         };
+        let owner = scope.root.state.owner;
         let (value_signal, initial_value_signal, key_signal, meta_signal) =
             scope.root.with_registry(|registry| {
-                let value_signal = registry.ensure_value_signal(&path, current.clone());
+                let value_signal = registry.ensure_value_signal(&path, current.clone(), owner);
                 let initial_value_signal =
-                    registry.ensure_initial_value_signal(&path, initial.clone());
-                let key_signal = registry.ensure_list_key_signal(&path, initial_keys);
+                    registry.ensure_initial_value_signal(&path, initial.clone(), owner);
+                let key_signal = registry.ensure_list_key_signal(&path, initial_keys, owner);
                 let node = registry
                     .nodes
                     .entry(path.clone())
-                    .or_insert_with(|| FormNodeState::new(FormNodeKind::List, path.clone()));
-                node.validators.extend(validators);
+                    .or_insert_with(|| FormNodeState::new(FormNodeKind::List, path.clone(), owner));
+                node.validators = validators;
                 registry.list_keys.entry(path.clone()).or_insert(new_keys);
                 node.value_refresher = Some({
                     let get = get.clone();
@@ -445,7 +446,7 @@ where
         self.root.with_registry(|registry| {
             for (index, _) in keys.iter().enumerate() {
                 let path = self.path.index(index);
-                registry.ensure_node(FormNodeKind::ListItem, path);
+                registry.ensure_node(FormNodeKind::ListItem, path, self.root.state.owner);
             }
         });
     }
@@ -454,10 +455,9 @@ where
         let current = self.values();
         let initial = self.initial_value_signal.read().clone();
         self.root.with_registry(|registry| {
-            let node = registry
-                .nodes
-                .entry(self.path.clone())
-                .or_insert_with(|| FormNodeState::new(FormNodeKind::List, self.path.clone()));
+            let node = registry.nodes.entry(self.path.clone()).or_insert_with(|| {
+                FormNodeState::new(FormNodeKind::List, self.path.clone(), self.root.state.owner)
+            });
             node.dirty = current != initial;
             node.empty = current.is_empty() || current.iter().all(|item| (self.item_empty)(item));
         });
