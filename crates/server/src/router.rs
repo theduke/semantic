@@ -2,7 +2,7 @@ use std::collections::BTreeMap;
 use std::sync::Arc;
 
 use axum::extract::{Query, State};
-use axum::routing::post;
+use axum::routing::{get, post};
 use axum::{Json, Router};
 use http::HeaderMap;
 use semantic_app::{AppRequestContext, DbScopeId, SemanticApp};
@@ -50,8 +50,14 @@ impl SemanticServer {
             config: self.config.clone(),
             resolver: Arc::clone(&self.resolver),
         };
+        let file_get_path = format!("{}/{{id}}", self.config.file_api_prefix);
         Router::new()
             .route(&self.config.rpc_path, post(rpc_http_handler))
+            .route(
+                &self.config.file_api_prefix,
+                post(crate::file::upload_handler),
+            )
+            .route(&file_get_path, get(crate::file::download_handler))
             .route(
                 &self.config.ws_path,
                 axum::routing::get(crate::ws::rpc_ws_handler),

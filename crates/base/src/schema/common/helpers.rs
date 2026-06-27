@@ -1,6 +1,6 @@
 use semantic_data::schema::{
-    AttributeRef, AttributeType, ClassAttribute, Constraint, ListType, Meta, NumberType,
-    StringType, TemporalType, Type, TypeKind, UIntWidth,
+    AttributeRef, AttributeType, ClassAttribute, Constraint, ListType, Meta, StringType,
+    TemporalType, Type, TypeKind,
 };
 
 pub fn string_type() -> Type {
@@ -8,10 +8,6 @@ pub fn string_type() -> Type {
         format: None,
         normalization: None,
     }))
-}
-
-pub fn uint64_type() -> Type {
-    Type::new(TypeKind::Number(NumberType::UInt(UIntWidth::U64)))
 }
 
 pub fn date_type() -> Type {
@@ -107,7 +103,7 @@ mod tests {
     #[test]
     fn builds_titles_from_attribute_ids() {
         assert_eq!(
-            title_from_attribute_id("semantic.base.file.content_hash"),
+            title_from_attribute_id("semantic.filestore.file.content_hash"),
             "Content Hash"
         );
     }

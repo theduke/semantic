@@ -9,14 +9,10 @@ pub const MODULE_NAME: &str = "base";
 
 pub fn root_module() -> Module {
     let mut attributes = BTreeMap::new();
-    for attribute in common::file::attributes()
-        .into_iter()
-        .chain(common::person::attributes())
-    {
+    for attribute in common::person::attributes() {
         attributes.insert(attribute.id.clone(), attribute);
     }
 
-    let file_class = common::file::class();
     let person_class = common::person::class();
 
     Module {
@@ -24,10 +20,7 @@ pub fn root_module() -> Module {
         constants: BTreeMap::new(),
         types: BTreeMap::new(),
         attributes,
-        classes: BTreeMap::from([
-            (file_class.id.clone(), file_class),
-            (person_class.id.clone(), person_class),
-        ]),
+        classes: BTreeMap::from([(person_class.id.clone(), person_class)]),
         interfaces: BTreeMap::new(),
         contracts: BTreeMap::new(),
         meta: Meta::default(),

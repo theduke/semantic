@@ -8161,7 +8161,10 @@ name = "semantic_app"
 version = "0.0.1"
 dependencies = [
  "async-trait",
+ "bytes",
  "facet-json",
+ "futures-util",
+ "hex",
  "objstore",
  "objstore_fs",
  "semantic_base",
@@ -8169,6 +8172,7 @@ dependencies = [
  "semantic_db_core",
  "semantic_rpc",
  "serde",
+ "sha2 0.10.9",
  "thiserror 2.0.18",
  "tokio",
  "url",
@@ -8320,6 +8324,7 @@ version = "0.0.1"
 dependencies = [
  "async-trait",
  "axum",
+ "bytes",
  "futures-util",
  "http",
  "semantic_app",

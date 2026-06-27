@@ -2,7 +2,8 @@ use std::sync::Arc;
 
 use objstore::DynObjStore;
 
-use crate::{AppError, AppSession, DbScopeId, ObjectStoreId, Principal, SemanticApp, SemanticDb};
+use crate::object_store::ObjectStoreId;
+use crate::{AppError, AppSession, DbScopeId, Principal, SemanticApp, SemanticDb};
 
 #[derive(Clone)]
 pub struct AppRequestContext {
@@ -53,7 +54,7 @@ impl AppRequestContext {
             .await
     }
 
-    pub async fn resolve_object_store(
+    pub(crate) async fn resolve_object_store(
         &self,
         scope_id: Option<DbScopeId>,
         store_id: Option<ObjectStoreId>,
@@ -65,11 +66,19 @@ impl AppRequestContext {
         }
     }
 
-    pub async fn default_object_store(&self) -> std::result::Result<DynObjStore, AppError> {
-        self.resolve_object_store(None, None).await
+    pub(crate) async fn default_file_store(
+        &self,
+        scope_id: Option<DbScopeId>,
+    ) -> std::result::Result<DynObjStore, AppError> {
+        self.resolve_object_store(scope_id, None)
+            .await
+            .map_err(|err| match err {
+                AppError::ObjectStoreRequired(scope_id) => AppError::FileStoreRequired(scope_id),
+                other => other,
+            })
     }
 
-    async fn object_store_scope_id(
+    pub(crate) async fn resolve_scope_id(
         &self,
         scope_id: Option<DbScopeId>,
     ) -> std::result::Result<DbScopeId, AppError> {
@@ -88,5 +97,12 @@ impl AppRequestContext {
             .scopes()
             .default_scope()
             .ok_or(AppError::ScopeRequired)
+    }
+
+    async fn object_store_scope_id(
+        &self,
+        scope_id: Option<DbScopeId>,
+    ) -> std::result::Result<DbScopeId, AppError> {
+        self.resolve_scope_id(scope_id).await
     }
 }

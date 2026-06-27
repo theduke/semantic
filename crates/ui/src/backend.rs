@@ -116,11 +116,7 @@ pub fn build_embedded_client_with_blob_store(
                 mode: DbOpenMode::AutoCreate,
             },
         )
-        .with_default_object_store_request(
-            scope_id.clone(),
-            semantic_app::ObjectStoreId::new("default"),
-            semantic_app::ObjectStoreOpenRequest { uri: blob_uri },
-        )
+        .with_default_file_store_uri(scope_id.clone(), blob_uri)
         .register_builtin_commands()
         .map_err(|err| err.to_string())?
         .build()
@@ -159,6 +155,6 @@ mod tests {
         .unwrap();
 
         assert!(catalog.class_by_id("semantic.base.person").is_some());
-        assert!(catalog.class_by_id("semantic.base.file").is_some());
+        assert!(catalog.class_by_id("semantic.filestore.file").is_some());
     }
 }

@@ -6,6 +6,16 @@ pub enum AppError {
     ScopeRequired,
     #[error("object store required for scope '{0}'")]
     ObjectStoreRequired(String),
+    #[error("file store required for scope '{0}'")]
+    FileStoreRequired(String),
+    #[error("file '{0}' not found")]
+    FileNotFound(String),
+    #[error("invalid file entity: {0}")]
+    InvalidFileEntity(String),
+    #[error("invalid file metadata: {0}")]
+    InvalidFileMetadata(String),
+    #[error("invalid range: {0}")]
+    InvalidRange(String),
     #[error("unknown database scope '{0}'")]
     UnknownScope(String),
     #[error("unknown object store scope '{0}'")]
@@ -35,6 +45,21 @@ impl From<AppError> for semantic_rpc::RpcError {
             }
             AppError::ObjectStoreRequired(_) => {
                 semantic_rpc::RpcError::new("object_store_required", value.to_string())
+            }
+            AppError::FileStoreRequired(_) => {
+                semantic_rpc::RpcError::new("file_store_required", value.to_string())
+            }
+            AppError::FileNotFound(_) => {
+                semantic_rpc::RpcError::new("file_not_found", value.to_string())
+            }
+            AppError::InvalidFileEntity(_) => {
+                semantic_rpc::RpcError::new("invalid_file_entity", value.to_string())
+            }
+            AppError::InvalidFileMetadata(_) => {
+                semantic_rpc::RpcError::new("invalid_file_metadata", value.to_string())
+            }
+            AppError::InvalidRange(_) => {
+                semantic_rpc::RpcError::new("invalid_range", value.to_string())
             }
             AppError::UnknownScope(_) => {
                 semantic_rpc::RpcError::new("unknown_scope", value.to_string())

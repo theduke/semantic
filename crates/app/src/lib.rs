@@ -4,6 +4,7 @@ mod config;
 mod context;
 mod db;
 mod error;
+mod file;
 mod object_store;
 mod scope;
 mod session;
@@ -14,14 +15,16 @@ pub use config::AppConfig;
 pub use context::AppRequestContext;
 pub use db::{DbOpenRequest, DbProvider, SemanticDb};
 pub use error::AppError;
-pub use object_store::{
-    ObjectStoreId, ObjectStoreInfo, ObjectStoreManager, ObjectStoreOpenRequest,
+pub use file::{
+    FileByteStream, FileContent, FileCreateRequest, FileReadResult, FileRecord, FileService,
+    FileSizedStream,
 };
 pub use scope::{DbScopeId, ScopeInfo, ScopeManager, ScopeOpenOptions, ScopeVisibility};
 pub use session::{AppSession, AppSessionId};
 
 #[cfg(test)]
 mod tests {
+    use std::collections::BTreeMap;
     use std::sync::atomic::{AtomicUsize, Ordering};
     use std::sync::{Arc, Mutex};
     use std::time::{Duration, Instant};
@@ -42,6 +45,7 @@ mod tests {
         name: String,
         query_count: AtomicUsize,
         batch_count: AtomicUsize,
+        records: Mutex<BTreeMap<(String, String), Object>>,
         #[cfg(feature = "base")]
         package_count: Arc<AtomicUsize>,
     }
@@ -52,6 +56,7 @@ mod tests {
                 name: name.into(),
                 query_count: AtomicUsize::new(0),
                 batch_count: AtomicUsize::new(0),
+                records: Mutex::new(BTreeMap::new()),
                 #[cfg(feature = "base")]
                 package_count: Arc::new(AtomicUsize::new(0)),
             }
@@ -63,6 +68,7 @@ mod tests {
                 name: name.into(),
                 query_count: AtomicUsize::new(0),
                 batch_count: AtomicUsize::new(0),
+                records: Mutex::new(BTreeMap::new()),
                 package_count,
             }
         }
@@ -86,6 +92,19 @@ mod tests {
             collection: String,
             id: String,
         ) -> std::result::Result<Option<EntityRecord>, DbError> {
+            if let Some(object) = self
+                .records
+                .lock()
+                .unwrap()
+                .get(&(collection.clone(), id.clone()))
+                .cloned()
+            {
+                return Ok(Some(EntityRecord {
+                    collection,
+                    id,
+                    object,
+                }));
+            }
             let mut object = Object::new();
             object.insert("db", Value::String(self.name.clone()));
             Ok(Some(EntityRecord {
@@ -101,6 +120,10 @@ mod tests {
             _id: String,
             _object: Object,
         ) -> std::result::Result<(), DbError> {
+            self.records
+                .lock()
+                .unwrap()
+                .insert((_collection, _id), _object);
             Ok(())
         }
 
@@ -139,7 +162,10 @@ mod tests {
             &self,
             package: semantic_data::schema::Package,
         ) -> std::result::Result<PackageRegistrationOutcome, DbError> {
-            assert_eq!(package.name, semantic_base::PACKAGE_NAME);
+            assert!(
+                package.name == semantic_base::PACKAGE_NAME
+                    || package.name == semantic_data::filestore::PACKAGE_NAME
+            );
             self.package_count.fetch_add(1, Ordering::Relaxed);
             Ok(PackageRegistrationOutcome {
                 executed_migrations: vec![],
@@ -269,7 +295,7 @@ mod tests {
 
         assert_eq!(select_db_name(response), "default");
         #[cfg(feature = "base")]
-        assert_eq!(package_count.load(Ordering::Relaxed), 1);
+        assert_eq!(package_count.load(Ordering::Relaxed), 2);
     }
 
     #[cfg(feature = "base")]
@@ -350,11 +376,11 @@ mod tests {
             .await;
 
         assert_eq!(select_db_name(response), "mock://default");
-        assert_eq!(package_count.load(Ordering::Relaxed), 1);
+        assert_eq!(package_count.load(Ordering::Relaxed), 2);
     }
 
     #[tokio::test]
-    async fn default_object_store_resolves_for_default_scope() {
+    async fn default_file_store_resolves_for_default_scope() {
         let suffix = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .unwrap()
@@ -365,23 +391,78 @@ mod tests {
         let default_db: Arc<dyn SemanticDb> = Arc::new(MockDb::new("default"));
         let app = SemanticApp::builder()
             .with_default_scope(scope_id.clone(), default_db)
-            .with_default_object_store_request(
-                scope_id.clone(),
-                ObjectStoreId::new("default"),
-                ObjectStoreOpenRequest {
-                    uri: config.default_blob_uri().unwrap(),
-                },
-            )
+            .with_default_file_store_uri(scope_id.clone(), config.default_blob_uri().unwrap())
             .build()
             .unwrap();
 
         let store = ctx(&app, Principal::system())
-            .default_object_store()
+            .default_file_store(None)
             .await
             .unwrap();
 
         assert_eq!(store.kind(), "objstore.fs");
         assert!(config.default_blob_path().is_dir());
+    }
+
+    #[tokio::test]
+    async fn file_service_creates_and_reads_file() {
+        use bytes::Bytes;
+        use futures_util::TryStreamExt as _;
+
+        let suffix = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let data_dir = std::env::temp_dir().join(format!("semantic-app-file-{suffix}"));
+        let config = AppConfig::new().with_data_dir(&data_dir);
+        let scope_id = DbScopeId::new("default");
+        let default_db: Arc<dyn SemanticDb> = Arc::new(MockDb::new("default"));
+        let app = SemanticApp::builder()
+            .with_default_scope(scope_id.clone(), default_db)
+            .with_default_file_store_uri(scope_id, config.default_blob_uri().unwrap())
+            .build()
+            .unwrap();
+        let ctx = ctx(&app, Principal::system());
+
+        let mut entity = Object::new();
+        entity.insert("title", Value::String("Hello".to_string()));
+        entity.insert("type", Value::String("wrong".to_string()));
+        entity.insert("path", Value::String("wrong".to_string()));
+
+        let record = app
+            .files()
+            .create(
+                &ctx,
+                FileCreateRequest {
+                    scope_id: None,
+                    id: None,
+                    path: Some("uploads/hello.txt".to_string()),
+                    filename: Some("hello.txt".to_string()),
+                    mime_type: Some("text/plain".to_string()),
+                    entity,
+                    content: FileContent::Bytes(Bytes::from_static(b"hello")),
+                },
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(
+            record.id,
+            "file-sha256-2cf24dba5fb0a30e26e83b2ac5b9e29e1b161e5c1fa7425e73043362938b9824"
+        );
+        assert_eq!(
+            record.object.get("type").and_then(Value::as_str),
+            Some(semantic_data::filestore::FILE_CLASS_ID)
+        );
+        assert_eq!(
+            record.object.get("path").and_then(Value::as_str),
+            Some("uploads/hello.txt")
+        );
+        assert_eq!(record.object.get("byte_size"), Some(&Value::U64(5)));
+
+        let read = app.files().read(&ctx, None, record.id).await.unwrap();
+        let bytes = read.stream.try_collect::<bytes::BytesMut>().await.unwrap();
+        assert_eq!(&bytes[..], b"hello");
     }
 
     #[tokio::test]

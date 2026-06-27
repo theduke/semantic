@@ -1,6 +1,7 @@
 mod auth;
 mod config;
 mod error;
+mod file;
 mod redb;
 mod router;
 mod ws;
@@ -35,11 +36,7 @@ impl SemanticServer {
         let app = semantic_app::SemanticApp::builder()
             .with_provider(RedbDbProvider)
             .with_default_scope(scope_id.clone(), db)
-            .with_default_object_store_request(
-                scope_id,
-                semantic_app::ObjectStoreId::new("default"),
-                semantic_app::ObjectStoreOpenRequest { uri: blob_uri },
-            )
+            .with_default_file_store_uri(scope_id, blob_uri)
             .register_builtin_commands()?
             .build()?;
         Ok(Self::new(app))
@@ -48,7 +45,9 @@ impl SemanticServer {
 
 #[cfg(test)]
 mod tests {
+    use std::collections::BTreeMap;
     use std::sync::Arc;
+    use std::sync::Mutex;
 
     use async_trait::async_trait;
     use axum::body::{Body, to_bytes};
@@ -67,6 +66,7 @@ mod tests {
 
     struct MockDb {
         name: String,
+        records: Mutex<BTreeMap<(String, String), Object>>,
     }
 
     #[async_trait]
@@ -88,6 +88,19 @@ mod tests {
             collection: String,
             id: String,
         ) -> std::result::Result<Option<EntityRecord>, DbError> {
+            if let Some(object) = self
+                .records
+                .lock()
+                .unwrap()
+                .get(&(collection.clone(), id.clone()))
+                .cloned()
+            {
+                return Ok(Some(EntityRecord {
+                    collection,
+                    id,
+                    object,
+                }));
+            }
             Ok(Some(EntityRecord {
                 collection,
                 id,
@@ -101,6 +114,10 @@ mod tests {
             _id: String,
             _object: Object,
         ) -> std::result::Result<(), DbError> {
+            self.records
+                .lock()
+                .unwrap()
+                .insert((_collection, _id), _object);
             Ok(())
         }
 
@@ -120,25 +137,35 @@ mod tests {
             &self,
             package: semantic_data::schema::Package,
         ) -> std::result::Result<PackageRegistrationOutcome, DbError> {
-            assert_eq!(package.name, "semantic.base");
+            assert!(
+                package.name == "semantic.base"
+                    || package.name == semantic_data::filestore::PACKAGE_NAME
+            );
             Ok(PackageRegistrationOutcome {
                 executed_migrations: vec![],
             })
         }
     }
 
+    fn mock_db(name: &str) -> Arc<dyn SemanticDb> {
+        Arc::new(MockDb {
+            name: name.to_string(),
+            records: Mutex::new(BTreeMap::new()),
+        })
+    }
+
     fn test_app() -> semantic_app::SemanticApp {
-        let default_db: Arc<dyn SemanticDb> = Arc::new(MockDb {
-            name: "default".to_string(),
-        });
-        let header_db: Arc<dyn SemanticDb> = Arc::new(MockDb {
-            name: "header".to_string(),
-        });
-        let query_db: Arc<dyn SemanticDb> = Arc::new(MockDb {
-            name: "query".to_string(),
-        });
+        let default_db = mock_db("default");
+        let header_db = mock_db("header");
+        let query_db = mock_db("query");
+        let data_dir = std::env::temp_dir().join("semantic-server-test-blob");
+        let blob_uri = semantic_app::AppConfig::new()
+            .with_data_dir(&data_dir)
+            .default_blob_uri()
+            .unwrap();
         let app = semantic_app::SemanticApp::builder()
             .with_default_scope(DbScopeId::new("default"), default_db)
+            .with_default_file_store_uri(DbScopeId::new("default"), blob_uri)
             .register_builtin_commands()
             .unwrap()
             .build()
@@ -252,5 +279,164 @@ mod tests {
             panic!("expected rpc error");
         };
         assert_eq!(err.code, "invalid_request");
+    }
+
+    #[tokio::test]
+    async fn file_upload_and_download_round_trip() {
+        let server = SemanticServer::new(test_app());
+        let response = server
+            .router()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/api/v1/file")
+                    .header("x-semantic-scope", "default")
+                    .header("content-type", "text/plain")
+                    .header("x-semantic-file-path", "uploads/hello.txt")
+                    .header(
+                        "x-semantic-file-entity",
+                        r#"{"title":"Hello","path":"wrong"}"#,
+                    )
+                    .body(Body::from("hello"))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        if response.status() != http::StatusCode::CREATED {
+            let status = response.status();
+            let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+            panic!(
+                "expected 201, got {status}: {}",
+                String::from_utf8_lossy(&body)
+            );
+        }
+        let bytes = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+        let Value::Object(upload) = serde_json::from_slice::<Value>(&bytes).unwrap() else {
+            panic!("expected upload object");
+        };
+        let Some(Value::String(id)) = upload.get("id") else {
+            panic!("expected file id");
+        };
+        let Some(Value::Object(object)) = upload.get("object") else {
+            panic!("expected file object");
+        };
+        assert_eq!(
+            object.get("path").and_then(Value::as_str),
+            Some("uploads/hello.txt")
+        );
+        assert_eq!(object.get("title").and_then(Value::as_str), Some("Hello"));
+        assert_eq!(
+            object.get("mime_type").and_then(Value::as_str),
+            Some("text/plain")
+        );
+
+        let response = server
+            .router()
+            .oneshot(
+                Request::builder()
+                    .method("GET")
+                    .uri(format!("/api/v1/file/{id}"))
+                    .header("x-semantic-scope", "default")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), http::StatusCode::OK);
+        assert_eq!(
+            response.headers().get(http::header::CONTENT_TYPE).unwrap(),
+            "text/plain"
+        );
+        assert_eq!(
+            response.headers().get(http::header::ACCEPT_RANGES).unwrap(),
+            "bytes"
+        );
+        let bytes = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+        assert_eq!(&bytes[..], b"hello");
+    }
+
+    #[tokio::test]
+    async fn file_download_supports_byte_ranges() {
+        let server = SemanticServer::new(test_app());
+        let response = server
+            .router()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/api/v1/file")
+                    .header("x-semantic-scope", "default")
+                    .body(Body::from("abcdef"))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        if response.status() != http::StatusCode::CREATED {
+            let status = response.status();
+            let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+            panic!(
+                "expected 201, got {status}: {}",
+                String::from_utf8_lossy(&body)
+            );
+        }
+        let bytes = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+        let Value::Object(upload) = serde_json::from_slice::<Value>(&bytes).unwrap() else {
+            panic!("expected upload object");
+        };
+        let Some(Value::String(id)) = upload.get("id") else {
+            panic!("expected file id");
+        };
+
+        let response = server
+            .router()
+            .oneshot(
+                Request::builder()
+                    .method("GET")
+                    .uri(format!("/api/v1/file/{id}"))
+                    .header("x-semantic-scope", "default")
+                    .header("range", "bytes=1-3")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), http::StatusCode::PARTIAL_CONTENT);
+        assert_eq!(
+            response.headers().get(http::header::CONTENT_RANGE).unwrap(),
+            "bytes 1-3/6"
+        );
+        let bytes = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+        assert_eq!(&bytes[..], b"bcd");
+
+        let response = server
+            .router()
+            .oneshot(
+                Request::builder()
+                    .method("GET")
+                    .uri(format!("/api/v1/file/{id}"))
+                    .header("x-semantic-scope", "default")
+                    .header("range", "bytes=-2")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), http::StatusCode::PARTIAL_CONTENT);
+        let bytes = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+        assert_eq!(&bytes[..], b"ef");
+
+        let response = server
+            .router()
+            .oneshot(
+                Request::builder()
+                    .method("GET")
+                    .uri(format!("/api/v1/file/{id}"))
+                    .header("x-semantic-scope", "default")
+                    .header("range", "bytes=99-100")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), http::StatusCode::RANGE_NOT_SATISFIABLE);
     }
 }

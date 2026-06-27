@@ -387,6 +387,9 @@ async fn initialize_default_db(db: &Arc<dyn SemanticDb>) -> std::result::Result<
     #[cfg(feature = "base")]
     db.upsert_package(semantic_base::package()).await?;
 
+    db.upsert_package(semantic_data::filestore::package())
+        .await?;
+
     #[cfg(not(feature = "base"))]
     let _ = db;
 

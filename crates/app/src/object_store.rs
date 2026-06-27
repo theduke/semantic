@@ -12,10 +12,6 @@ impl ObjectStoreId {
     pub fn new(value: impl Into<String>) -> Self {
         Self(value.into())
     }
-
-    pub fn as_str(&self) -> &str {
-        &self.0
-    }
 }
 
 impl std::fmt::Display for ObjectStoreId {
@@ -39,15 +35,6 @@ impl From<String> for ObjectStoreId {
 #[derive(Clone, Debug)]
 pub struct ObjectStoreOpenRequest {
     pub uri: String,
-}
-
-#[derive(Clone, Debug)]
-pub struct ObjectStoreInfo {
-    pub scope_id: DbScopeId,
-    pub store_id: ObjectStoreId,
-    pub uri: String,
-    pub default: bool,
-    pub loaded: bool,
 }
 
 #[derive(Default)]
@@ -106,29 +93,6 @@ impl ObjectStoreManager {
         Ok(())
     }
 
-    pub fn attach_store(
-        &self,
-        scope_id: DbScopeId,
-        store_id: ObjectStoreId,
-        uri: String,
-        store: DynObjStore,
-        set_default: bool,
-    ) -> std::result::Result<(), AppError> {
-        let mut state = self.write_state()?;
-        let scope = state.scopes.entry(scope_id).or_default();
-        if set_default {
-            scope.default_store = Some(store_id.clone());
-        }
-        scope.entries.insert(
-            store_id,
-            ObjectStoreEntry {
-                request: ObjectStoreOpenRequest { uri },
-                store: Some(store),
-            },
-        );
-        Ok(())
-    }
-
     pub fn default_store_id(
         &self,
         scope_id: &DbScopeId,
@@ -138,27 +102,6 @@ impl ObjectStoreManager {
             .scopes
             .get(scope_id)
             .and_then(|scope| scope.default_store.clone()))
-    }
-
-    pub fn list_stores(
-        &self,
-        scope_id: &DbScopeId,
-    ) -> std::result::Result<Vec<ObjectStoreInfo>, AppError> {
-        let state = self.read_state()?;
-        let Some(scope) = state.scopes.get(scope_id) else {
-            return Ok(Vec::new());
-        };
-        Ok(scope
-            .entries
-            .iter()
-            .map(|(store_id, entry)| ObjectStoreInfo {
-                scope_id: scope_id.clone(),
-                store_id: store_id.clone(),
-                uri: entry.request.uri.clone(),
-                default: scope.default_store.as_ref() == Some(store_id),
-                loaded: entry.store.is_some(),
-            })
-            .collect())
     }
 
     pub fn resolve_store(

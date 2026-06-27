@@ -7,23 +7,12 @@ pub const INIT_MIGRATION_NAME: &str = "001_init";
 pub fn init() -> Migration {
     let mut operations = Vec::new();
 
-    for attribute in common::file::attributes() {
-        operations.push(MigrationOperation::Ddl(
-            MigrationDdlOperation::UpsertAttribute { attribute },
-        ));
-    }
-
     for attribute in common::person::attributes() {
         operations.push(MigrationOperation::Ddl(
             MigrationDdlOperation::UpsertAttribute { attribute },
         ));
     }
 
-    operations.push(MigrationOperation::Ddl(
-        MigrationDdlOperation::UpsertClass {
-            class: common::file::class(),
-        },
-    ));
     operations.push(MigrationOperation::Ddl(
         MigrationDdlOperation::UpsertClass {
             class: common::person::class(),

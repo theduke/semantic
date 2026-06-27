@@ -9,7 +9,11 @@ pub struct ServerConfig {
     pub port: u16,
     pub rpc_path: String,
     pub ws_path: String,
+    pub file_api_prefix: String,
     pub scope_header: HeaderName,
+    pub file_entity_header: HeaderName,
+    pub file_path_header: HeaderName,
+    pub file_id_header: HeaderName,
 }
 
 impl ServerConfig {
@@ -39,7 +43,11 @@ impl Default for ServerConfig {
             port: DEFAULT_PORT,
             rpc_path: "/rpc".to_string(),
             ws_path: "/rpc/ws".to_string(),
+            file_api_prefix: "/api/v1/file".to_string(),
             scope_header: HeaderName::from_static("x-semantic-scope"),
+            file_entity_header: HeaderName::from_static("x-semantic-file-entity"),
+            file_path_header: HeaderName::from_static("x-semantic-file-path"),
+            file_id_header: HeaderName::from_static("x-semantic-file-id"),
         }
     }
 }

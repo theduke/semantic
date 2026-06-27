@@ -1,6 +1,8 @@
 pub mod value;
 pub use value::*;
 
+pub mod filestore;
+
 pub mod attr;
 
 pub mod expr;

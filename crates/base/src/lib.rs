@@ -30,13 +30,9 @@ mod tests {
                 ))
         );
 
-        assert!(package.root.classes.contains_key(common::file::CLASS_ID));
         assert!(package.root.classes.contains_key(common::person::CLASS_ID));
 
-        for attribute in common::file::attributes()
-            .into_iter()
-            .chain(common::person::attributes())
-        {
+        for attribute in common::person::attributes() {
             assert!(package.root.attributes.contains_key(&attribute.id));
         }
     }
