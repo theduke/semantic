@@ -203,6 +203,14 @@ impl Value {
     pub fn is_nullish(&self) -> bool {
         matches!(self, Self::Null | Self::Void)
     }
+
+    pub fn write_canonical<W: std::io::Write>(&self, writer: &mut W) -> std::io::Result<()> {
+        super::canonical::write_canonical_value(writer, self)
+    }
+
+    pub fn canonical_bytes(&self) -> Vec<u8> {
+        super::canonical::canonical_value_bytes(self)
+    }
 }
 
 // INT methods.

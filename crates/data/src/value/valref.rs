@@ -41,6 +41,14 @@ pub enum ValueRef<'a> {
 }
 
 impl<'a> ValueRef<'a> {
+    pub fn write_canonical<W: std::io::Write>(self, writer: &mut W) -> std::io::Result<()> {
+        super::canonical::write_canonical_value_ref(writer, self)
+    }
+
+    pub fn canonical_bytes(self) -> Vec<u8> {
+        super::canonical::canonical_value_ref_bytes(self)
+    }
+
     pub fn into_owned(self) -> Value {
         match self {
             Self::Owned(value) => value,

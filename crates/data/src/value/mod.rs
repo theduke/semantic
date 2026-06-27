@@ -28,6 +28,12 @@ pub use val::{OrderedF32, OrderedF64, Value};
 mod valref;
 pub use valref::ValueRef;
 
+pub mod canonical;
+pub use canonical::{
+    canonical_value_bytes, canonical_value_ref_bytes, write_canonical_value,
+    write_canonical_value_ref,
+};
+
 mod path;
 pub use path::{FieldPath, PathSegment};
 
