@@ -25,6 +25,6 @@ pub use form::{
     rpc_insert_submit_handler, rpc_insert_submit_handler_with_primary_id,
 };
 pub use ui_catalog::{
-    CatalogLoadStatus, RenderMode, UiCatalog, UiCatalogContext, UiCatalogProvider, UiCatalogReload,
-    use_ui_catalog, use_ui_catalog_context, use_ui_catalog_reload,
+    CatalogLoadStatus, RenderMode, RenderSettings, UiCatalog, UiCatalogContext, UiCatalogProvider,
+    UiCatalogReload, use_ui_catalog, use_ui_catalog_context, use_ui_catalog_reload,
 };

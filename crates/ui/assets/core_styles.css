@@ -8,6 +8,7 @@
   --semantic-text: #17202a;
   --semantic-text-muted: #617084;
   --semantic-accent: #176b87;
+  --semantic-danger: #b42318;
   --semantic-radius: 6px;
   --semantic-space-1: 4px;
   --semantic-space-2: 8px;
@@ -358,6 +359,102 @@ pre {
   color: var(--semantic-text-muted);
 }
 
+.semantic-upload {
+  display: grid;
+  gap: var(--semantic-space-4);
+}
+
+.semantic-upload__header {
+  display: flex;
+  justify-content: space-between;
+  gap: var(--semantic-space-3);
+  align-items: center;
+}
+
+.semantic-upload__actions,
+.semantic-upload__item-actions,
+.semantic-upload__result-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--semantic-space-2);
+  align-items: center;
+}
+
+.semantic-upload__selector {
+  display: block;
+  padding: var(--semantic-space-4);
+  border: 1px dashed var(--semantic-border);
+  border-radius: var(--semantic-radius);
+  background: var(--semantic-surface);
+}
+
+.semantic-upload__queue,
+.semantic-upload__results {
+  display: grid;
+  gap: var(--semantic-space-3);
+}
+
+.semantic-upload__item,
+.semantic-upload__result {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) max-content;
+  gap: var(--semantic-space-4);
+  padding: var(--semantic-space-4);
+  border: 1px solid var(--semantic-border-soft);
+  border-radius: var(--semantic-radius);
+  background: var(--semantic-surface);
+}
+
+.semantic-upload__item-main {
+  display: grid;
+  gap: var(--semantic-space-3);
+  min-width: 0;
+}
+
+.semantic-upload__item-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--semantic-space-2);
+  color: var(--semantic-text-muted);
+  font-size: 13px;
+}
+
+.semantic-upload__metadata {
+  display: grid;
+  grid-template-columns: minmax(160px, 1fr) minmax(220px, 2fr);
+  gap: var(--semantic-space-3);
+}
+
+.semantic-upload__progress {
+  position: relative;
+  height: 22px;
+  border: 1px solid var(--semantic-border-soft);
+  border-radius: var(--semantic-radius);
+  background: var(--semantic-bg);
+  overflow: hidden;
+}
+
+.semantic-upload__progress-bar {
+  height: 100%;
+  min-width: 0;
+  background: var(--semantic-accent);
+  transition: width 160ms ease;
+}
+
+.semantic-upload__progress span {
+  position: absolute;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  color: var(--semantic-text);
+  font-size: 12px;
+}
+
+.semantic-upload__error {
+  color: var(--semantic-danger);
+  overflow-wrap: anywhere;
+}
+
 @media (max-width: 720px) {
   .semantic-ui__header {
     align-items: flex-start;
@@ -379,5 +476,17 @@ pre {
   .semantic-map__entry {
     grid-template-columns: 1fr;
     gap: var(--semantic-space-1);
+  }
+
+  .semantic-upload__header,
+  .semantic-upload__item,
+  .semantic-upload__result,
+  .semantic-upload__metadata {
+    grid-template-columns: 1fr;
+  }
+
+  .semantic-upload__header {
+    align-items: flex-start;
+    flex-direction: column;
   }
 }

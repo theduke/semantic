@@ -1,11 +1,21 @@
 use futures::future::LocalBoxFuture;
 #[cfg(feature = "desktop")]
 use semantic_app::{AppError, DbOpenRequest, DbProvider};
-use semantic_app::{AppRequestContext, AppSession, DbScopeId, Principal, SemanticApp};
+use semantic_app::{
+    AppRequestContext, AppSession, DbScopeId, FileContent, FileCreateRequest, Principal,
+    SemanticApp,
+};
 #[cfg(feature = "desktop")]
 use semantic_data::schema::DbOpenMode;
 use semantic_data::value::Value;
-use semantic_rpc::{RpcClientDyn, RpcClientError, RpcRequest, client::resolve_response};
+use semantic_rpc::{
+    RpcClientDyn, RpcClientError, RpcRequest,
+    client::resolve_response,
+    file::{
+        FileUploadPhase, FileUploadProgressSender, FileUploadRequest, FileUploadResponse,
+        emit_progress,
+    },
+};
 use std::sync::Arc;
 
 #[cfg(feature = "desktop")]
@@ -42,6 +52,16 @@ pub struct EmbeddedRpcClient {
     session: Arc<AppSession>,
     principal: Principal,
     scope_id: DbScopeId,
+}
+
+#[cfg(feature = "desktop")]
+#[derive(Clone)]
+pub struct EmbeddedAppHandle {
+    pub client: semantic_rpc::RpcClient,
+    pub app: SemanticApp,
+    pub session: Arc<AppSession>,
+    pub principal: Principal,
+    pub scope_id: DbScopeId,
 }
 
 impl EmbeddedRpcClient {
@@ -90,6 +110,56 @@ impl RpcClientDyn for EmbeddedRpcClient {
             resolve_response(response)
         })
     }
+
+    fn upload_file(
+        &self,
+        request: FileUploadRequest,
+        progress: Option<FileUploadProgressSender>,
+    ) -> LocalBoxFuture<'static, std::result::Result<FileUploadResponse, RpcClientError>> {
+        let app = self.app.clone();
+        let session = Arc::clone(&self.session);
+        let principal = self.principal.clone();
+        let scope_id = self.scope_id.clone();
+        Box::pin(async move {
+            let total = request.bytes.len() as u64;
+            emit_progress(&progress, FileUploadPhase::Preparing, 0, Some(total));
+            let ctx = AppRequestContext {
+                app: app.clone(),
+                principal,
+                session: Some(session),
+                request_scope: Some(scope_id),
+            };
+            emit_progress(&progress, FileUploadPhase::Uploading, total, Some(total));
+            emit_progress(&progress, FileUploadPhase::Finalizing, total, Some(total));
+            let record = app
+                .files()
+                .create(
+                    &ctx,
+                    FileCreateRequest {
+                        scope_id: request.scope_id.map(DbScopeId::new),
+                        id: request.id,
+                        filestore_locator: None,
+                        filename: request.filename,
+                        mime_type: request.mime_type,
+                        entity: request.entity,
+                        content: FileContent::Bytes(request.bytes),
+                    },
+                )
+                .await
+                .map_err(|err| RpcClientError::Remote("app_error".to_string(), err.to_string()))?;
+            let response = FileUploadResponse {
+                id: record.id,
+                collection: record.collection,
+                object: record.object,
+            };
+            emit_progress(&progress, FileUploadPhase::Done, total, Some(total));
+            Ok(response)
+        })
+    }
+
+    fn file_url(&self, id: &str) -> Option<String> {
+        Some(format!("semantic-file:///{id}"))
+    }
 }
 
 #[cfg(feature = "desktop")]
@@ -105,6 +175,15 @@ pub fn build_embedded_client_with_blob_store(
     db_path: impl AsRef<std::path::Path>,
     blob_uri: String,
 ) -> std::result::Result<(semantic_rpc::RpcClient, String), String> {
+    let handle = build_embedded_handle_with_blob_store(db_path, blob_uri)?;
+    Ok((handle.client, handle.scope_id.to_string()))
+}
+
+#[cfg(feature = "desktop")]
+pub fn build_embedded_handle_with_blob_store(
+    db_path: impl AsRef<std::path::Path>,
+    blob_uri: String,
+) -> std::result::Result<EmbeddedAppHandle, String> {
     let scope_id = DbScopeId::new("local");
     let db_uri = format!("redb://{}", db_path.as_ref().to_string_lossy());
     let app = SemanticApp::builder()
@@ -122,15 +201,20 @@ pub fn build_embedded_client_with_blob_store(
         .build()
         .map_err(|err| err.to_string())?;
     let session = app.new_session("semantic-ui");
-    Ok((
-        semantic_rpc::RpcClient::new(EmbeddedRpcClient::new(
-            app,
-            session,
-            Principal::system(),
-            scope_id.clone(),
-        )),
-        scope_id.to_string(),
-    ))
+    let principal = Principal::system();
+    let client = semantic_rpc::RpcClient::new(EmbeddedRpcClient::new(
+        app.clone(),
+        Arc::clone(&session),
+        principal.clone(),
+        scope_id.clone(),
+    ));
+    Ok(EmbeddedAppHandle {
+        client,
+        app,
+        session,
+        principal,
+        scope_id,
+    })
 }
 
 #[cfg(all(test, feature = "desktop"))]
@@ -151,6 +235,7 @@ mod tests {
         let catalog = futures::executor::block_on(semantic_ui_core::ui_catalog::load_catalog(
             client,
             Some(scope_id),
+            None,
         ))
         .unwrap();
 

@@ -8303,10 +8303,12 @@ name = "semantic_rpc"
 version = "0.0.1"
 dependencies = [
  "axum",
+ "bytes",
  "futures",
  "futures-util",
  "gloo-net",
  "http",
+ "js-sys",
  "reqwest",
  "semantic_data",
  "serde",
@@ -8315,7 +8317,9 @@ dependencies = [
  "tokio",
  "tokio-tungstenite 0.28.0",
  "tower",
+ "wasm-bindgen",
  "wasm-bindgen-futures",
+ "web-sys",
 ]
 
 [[package]]

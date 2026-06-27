@@ -20,7 +20,7 @@ pub struct ValueRenderContext {
     pub mode: RenderMode,
 }
 
-#[derive(Clone)]
+#[derive(Clone, PartialEq)]
 pub struct RenderSettings {
     pub show_media: bool,
     pub file_api_prefix: String,

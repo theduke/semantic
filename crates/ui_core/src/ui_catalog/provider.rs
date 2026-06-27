@@ -4,7 +4,7 @@ use semantic_db_core::catalog::CatalogStorageSnapshot;
 use semantic_rpc::RpcClient;
 
 use crate::context::{use_active_scope_id, use_rpc_client};
-use crate::ui_catalog::{UiCatalog, UiCatalogError};
+use crate::ui_catalog::{RenderSettings, UiCatalog, UiCatalogError};
 
 #[derive(Clone, Copy)]
 pub struct UiCatalogContext {
@@ -37,6 +37,7 @@ pub enum CatalogLoadStatus {
 pub async fn load_catalog(
     client: RpcClient,
     scope_id: Option<String>,
+    render_settings: Option<RenderSettings>,
 ) -> std::result::Result<UiCatalog, UiCatalogError> {
     let mut payload = Object::new();
     if let Some(scope_id) = scope_id {
@@ -70,7 +71,11 @@ pub async fn load_catalog(
     };
     let snapshot = facet_json::from_str::<CatalogStorageSnapshot>(catalog)
         .map_err(|err| UiCatalogError::Decode(err.to_string()))?;
-    Ok(UiCatalog::from_snapshot(snapshot))
+    let mut catalog = UiCatalog::from_snapshot(snapshot);
+    if let Some(render_settings) = render_settings {
+        *catalog.render_settings_mut() = render_settings;
+    }
+    Ok(catalog)
 }
 
 pub fn use_ui_catalog_context() -> UiCatalogContext {
@@ -90,7 +95,7 @@ pub fn use_ui_catalog_reload() -> UiCatalogReload {
 }
 
 #[component]
-pub fn UiCatalogProvider(children: Element) -> Element {
+pub fn UiCatalogProvider(render_settings: Option<RenderSettings>, children: Element) -> Element {
     let mut catalog_signal = use_signal(|| None::<UiCatalog>);
     let mut status = use_signal(|| CatalogLoadStatus::Loading);
     let client = use_rpc_client();
@@ -98,7 +103,8 @@ pub fn UiCatalogProvider(children: Element) -> Element {
     let mut resource = use_resource(move || {
         let client = client.clone();
         let scope_id = scope_id.clone();
-        async move { load_catalog(client, scope_id).await }
+        let render_settings = render_settings.clone();
+        async move { load_catalog(client, scope_id, render_settings).await }
     });
     use_context_provider(|| UiCatalogContext::new(catalog_signal));
     use_context_provider(|| UiCatalogReload {

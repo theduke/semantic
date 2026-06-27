@@ -10,6 +10,8 @@ use semantic_data::value::Value;
 use crate::command::RpcCommandSpec;
 use crate::convert::{RpcDecode, RpcEncode};
 use crate::error::RpcClientError;
+#[cfg(feature = "client")]
+use crate::file::{FileUploadProgressSender, FileUploadRequest, FileUploadResponse};
 use crate::protocol::{RpcRequest, RpcResponse, RpcResult};
 
 static NEXT_REQUEST_ID: AtomicU64 = AtomicU64::new(1);
@@ -27,6 +29,22 @@ pub trait RpcClientDyn: 'static {
         command: String,
         payload: Value,
     ) -> LocalBoxFuture<'static, std::result::Result<Value, RpcClientError>>;
+
+    fn upload_file(
+        &self,
+        _request: FileUploadRequest,
+        _progress: Option<FileUploadProgressSender>,
+    ) -> LocalBoxFuture<'static, std::result::Result<FileUploadResponse, RpcClientError>> {
+        Box::pin(async move {
+            Err(RpcClientError::Transport(
+                "file upload is not supported by this RPC client".to_string(),
+            ))
+        })
+    }
+
+    fn file_url(&self, _id: &str) -> Option<String> {
+        None
+    }
 }
 
 #[cfg(feature = "client")]
@@ -60,6 +78,18 @@ impl RpcClient {
             self.invoke_value(command, payload)
         })
         .await
+    }
+
+    pub async fn upload_file(
+        &self,
+        request: FileUploadRequest,
+        progress: Option<FileUploadProgressSender>,
+    ) -> std::result::Result<FileUploadResponse, RpcClientError> {
+        self.inner.upload_file(request, progress).await
+    }
+
+    pub fn file_url(&self, id: &str) -> Option<String> {
+        self.inner.file_url(id)
     }
 }
 

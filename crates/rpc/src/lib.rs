@@ -2,6 +2,8 @@ pub mod client;
 pub mod command;
 pub mod convert;
 pub mod error;
+#[cfg(feature = "client")]
+pub mod file;
 pub mod protocol;
 pub mod registry;
 

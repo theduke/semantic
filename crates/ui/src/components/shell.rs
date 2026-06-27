@@ -46,6 +46,13 @@ pub fn AppShell() -> Element {
                         "data-size": "default",
                         "Query"
                     }
+                    Link {
+                        to: Route::UploadPage,
+                        class: "dx-button",
+                        "data-style": "ghost",
+                        "data-size": "default",
+                        "Upload"
+                    }
                 }
             }
             main { class: "semantic-ui__main",
