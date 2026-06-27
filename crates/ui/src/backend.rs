@@ -1,15 +1,47 @@
 use futures::future::LocalBoxFuture;
+#[cfg(feature = "desktop")]
+use semantic_app::{AppError, DbOpenRequest, DbProvider};
 use semantic_app::{AppRequestContext, AppSession, DbScopeId, Principal, SemanticApp};
+#[cfg(feature = "desktop")]
+use semantic_data::schema::DbOpenMode;
 use semantic_data::value::Value;
 use semantic_rpc::{RpcClientDyn, RpcClientError, RpcRequest, client::resolve_response};
 use std::sync::Arc;
+
+#[cfg(feature = "desktop")]
+struct RedbDbProvider;
+
+#[cfg(feature = "desktop")]
+#[async_trait::async_trait]
+impl DbProvider for RedbDbProvider {
+    fn scheme(&self) -> &str {
+        "redb"
+    }
+
+    async fn open(
+        &self,
+        request: DbOpenRequest,
+        _principal: &Principal,
+    ) -> std::result::Result<Arc<dyn semantic_app::SemanticDb>, AppError> {
+        let path = request.uri.strip_prefix("redb://").ok_or_else(|| {
+            AppError::InvalidRequest(format!("invalid redb uri '{}'", request.uri))
+        })?;
+        if path.is_empty() {
+            return Err(AppError::InvalidRequest(
+                "invalid redb uri: missing database path".to_string(),
+            ));
+        }
+        let backend = semantic_db_redb::open_backend(path, request.mode)?;
+        Ok(Arc::new(semantic_db_core::Db::new(backend)))
+    }
+}
 
 #[derive(Clone)]
 pub struct EmbeddedRpcClient {
     app: SemanticApp,
     session: Arc<AppSession>,
     principal: Principal,
-    request_scope: Option<DbScopeId>,
+    scope_id: DbScopeId,
 }
 
 impl EmbeddedRpcClient {
@@ -17,13 +49,13 @@ impl EmbeddedRpcClient {
         app: SemanticApp,
         session: Arc<AppSession>,
         principal: Principal,
-        request_scope: Option<DbScopeId>,
+        scope_id: DbScopeId,
     ) -> Self {
         Self {
             app,
             session,
             principal,
-            request_scope,
+            scope_id,
         }
     }
 }
@@ -37,13 +69,13 @@ impl RpcClientDyn for EmbeddedRpcClient {
         let app = self.app.clone();
         let session = Arc::clone(&self.session);
         let principal = self.principal.clone();
-        let request_scope = self.request_scope.clone();
+        let scope_id = self.scope_id.clone();
         Box::pin(async move {
             let ctx = AppRequestContext {
                 app: app.clone(),
                 principal,
                 session: Some(session),
-                request_scope,
+                request_scope: Some(scope_id),
             };
             let response = app
                 .invoke(
@@ -64,13 +96,17 @@ impl RpcClientDyn for EmbeddedRpcClient {
 pub fn build_embedded_client(
     db_path: impl AsRef<std::path::Path>,
 ) -> std::result::Result<(semantic_rpc::RpcClient, String), String> {
-    let backend =
-        semantic_db_redb::open_backend(db_path, semantic_data::schema::DbOpenMode::AutoCreate)
-            .map_err(|err| err.to_string())?;
-    let db = Arc::new(semantic_db_core::Db::new(backend));
     let scope_id = DbScopeId::new("local");
+    let db_uri = format!("redb://{}", db_path.as_ref().to_string_lossy());
     let app = SemanticApp::builder()
-        .with_default_scope(scope_id.clone(), db)
+        .with_provider(RedbDbProvider)
+        .with_default_scope_request(
+            scope_id.clone(),
+            DbOpenRequest {
+                uri: db_uri,
+                mode: DbOpenMode::AutoCreate,
+            },
+        )
         .register_builtin_commands()
         .map_err(|err| err.to_string())?
         .build()
@@ -81,8 +117,34 @@ pub fn build_embedded_client(
             app,
             session,
             Principal::system(),
-            Some(scope_id.clone()),
+            scope_id.clone(),
         )),
         scope_id.to_string(),
     ))
+}
+
+#[cfg(all(test, feature = "desktop"))]
+mod tests {
+    use std::time::{SystemTime, UNIX_EPOCH};
+
+    use super::*;
+
+    #[test]
+    fn embedded_client_loads_base_catalog() {
+        let suffix = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let db_path = std::env::temp_dir().join(format!("semantic-ui-standalone-{suffix}.redb"));
+        let (client, scope_id) = build_embedded_client(&db_path).unwrap();
+
+        let catalog = futures::executor::block_on(semantic_ui_core::ui_catalog::load_catalog(
+            client,
+            Some(scope_id),
+        ))
+        .unwrap();
+
+        assert!(catalog.class_by_id("semantic.base.person").is_some());
+        assert!(catalog.class_by_id("semantic.base.file").is_some());
+    }
 }

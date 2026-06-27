@@ -27,10 +27,15 @@ pub struct SemanticAppInner {
     scopes: ScopeManager,
 }
 
+enum DefaultScope {
+    Opened(DbScopeId, Arc<dyn SemanticDb>),
+    Request(DbScopeId, DbOpenRequest),
+}
+
 pub struct SemanticAppBuilder {
     providers: BTreeMap<String, Arc<dyn DbProvider>>,
     registry: RpcRegistry<AppRequestContext>,
-    default_scope: Option<(DbScopeId, Arc<dyn SemanticDb>)>,
+    default_scope: Option<DefaultScope>,
     idle_ttl: Duration,
 }
 
@@ -65,7 +70,16 @@ impl SemanticAppBuilder {
     }
 
     pub fn with_default_scope(mut self, scope_id: DbScopeId, db: Arc<dyn SemanticDb>) -> Self {
-        self.default_scope = Some((scope_id, db));
+        self.default_scope = Some(DefaultScope::Opened(scope_id, db));
+        self
+    }
+
+    pub fn with_default_scope_request(
+        mut self,
+        scope_id: DbScopeId,
+        request: DbOpenRequest,
+    ) -> Self {
+        self.default_scope = Some(DefaultScope::Request(scope_id, request));
         self
     }
 
@@ -98,8 +112,13 @@ impl SemanticAppBuilder {
 
     pub fn build(self) -> std::result::Result<SemanticApp, AppError> {
         let scopes = ScopeManager::new(self.providers, self.idle_ttl);
-        if let Some((scope_id, db)) = self.default_scope {
-            scopes.add_default_scope(scope_id, db)?;
+        if let Some(default_scope) = self.default_scope {
+            match default_scope {
+                DefaultScope::Opened(scope_id, db) => scopes.add_default_scope(scope_id, db)?,
+                DefaultScope::Request(scope_id, request) => {
+                    scopes.add_default_scope_request(scope_id, request)?;
+                }
+            }
         }
         Ok(SemanticApp {
             inner: Arc::new(SemanticAppInner {

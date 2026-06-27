@@ -291,6 +291,42 @@ mod tests {
         assert_eq!(package_count.load(Ordering::Relaxed), 0);
     }
 
+    #[cfg(feature = "base")]
+    #[tokio::test]
+    async fn default_scope_request_registers_base_package() {
+        let opened = Arc::new(Mutex::new(Vec::new()));
+        let package_count = Arc::new(AtomicUsize::new(0));
+        let app = SemanticApp::builder()
+            .with_provider(mock_provider_with_package_count(
+                opened,
+                Arc::clone(&package_count),
+            ))
+            .with_default_scope_request(
+                DbScopeId::new("default"),
+                DbOpenRequest {
+                    uri: "mock://default".to_string(),
+                    mode: semantic_data::schema::DbOpenMode::AutoCreate,
+                },
+            )
+            .register_builtin_commands()
+            .unwrap()
+            .build()
+            .unwrap();
+
+        let response = app
+            .invoke(
+                ctx(&app, Principal::system()),
+                request(
+                    "semantic.db.query",
+                    value_object([("query", Value::String("select * from _".to_string()))]),
+                ),
+            )
+            .await;
+
+        assert_eq!(select_db_name(response), "mock://default");
+        assert_eq!(package_count.load(Ordering::Relaxed), 1);
+    }
+
     #[tokio::test]
     async fn principal_scopes_are_isolated() {
         let opened = Arc::new(Mutex::new(Vec::new()));

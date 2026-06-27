@@ -17,12 +17,14 @@ web = ["dioxus/web", "semantic_rpc/client-http-web"]
 desktop = ["dioxus/desktop", "semantic_rpc/client-http-native"]
 standalone = [
   "desktop",
+  "dep:async-trait",
   "dep:semantic_app",
   "dep:semantic_db_core",
   "dep:semantic_db_redb",
 ]
 
 [dependencies]
+async-trait = { version = "0.1.89", optional = true }
 dioxus = { workspace = true }
 futures = "0.3.31"
 semantic_app = { path = "../app", optional = true }

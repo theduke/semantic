@@ -122,6 +122,31 @@ impl ScopeManager {
         Ok(())
     }
 
+    pub fn add_default_scope_request(
+        &self,
+        scope_id: DbScopeId,
+        request: DbOpenRequest,
+    ) -> std::result::Result<(), AppError> {
+        let key = ScopeKey {
+            owner: Principal::system().id,
+            scope_id: scope_id.clone(),
+        };
+        let mut state = self.write_state()?;
+        state.default_scope = Some(scope_id);
+        state.entries.insert(
+            key,
+            ScopeEntry {
+                request,
+                visibility: ScopeVisibility::System,
+                db: None,
+                schema_initialized: false,
+                retireable: false,
+                last_used: Instant::now(),
+            },
+        );
+        Ok(())
+    }
+
     pub fn default_scope(&self) -> Option<DbScopeId> {
         self.state
             .read()
@@ -201,7 +226,7 @@ impl ScopeManager {
             .lookup_key(principal, &scope_id)?
             .ok_or_else(|| AppError::UnknownScope(scope_id.to_string()))?;
 
-        let (existing, request) = {
+        let (existing, request, schema_initialized) = {
             let mut state = self.write_state()?;
             let entry = state
                 .entries
@@ -211,6 +236,7 @@ impl ScopeManager {
             (
                 entry.db.clone().map(|db| (db, entry.schema_initialized)),
                 entry.request.clone(),
+                entry.schema_initialized,
             )
         };
 
@@ -230,6 +256,9 @@ impl ScopeManager {
 
         let provider = self.provider_for_uri(&request.uri)?;
         let db = provider.open(request, principal).await?;
+        if !schema_initialized {
+            initialize_default_db(&db).await?;
+        }
         let mut state = self.write_state()?;
         let entry = state
             .entries
