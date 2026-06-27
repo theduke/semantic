@@ -1,5 +1,5 @@
 use std::cmp::Ordering;
-use std::collections::{BTreeSet, HashMap};
+use std::collections::{BTreeSet, HashMap, VecDeque};
 use std::hash::Hash;
 use std::sync::Arc;
 
@@ -511,6 +511,31 @@ fn execute_join_stream(
                 resolve_expr_subqueries_async(predicate, source.clone(), &context, options).await?,
             );
         }
+        let out = match join.algorithm {
+            PhysicalJoinAlgorithm::Hash
+                if matches!(join.condition, PhysicalJoinCondition::Eq { .. }) =>
+            {
+                execute_hash_join_stream(join, source.clone(), context.clone(), options)
+            }
+            PhysicalJoinAlgorithm::Hash
+            | PhysicalJoinAlgorithm::NestedLoop
+            | PhysicalJoinAlgorithm::Merge => {
+                execute_nested_loop_join_stream(join, source.clone(), context.clone(), options)
+            }
+        };
+        Ok(out)
+    })
+    .try_flatten()
+    .boxed()
+}
+
+fn execute_hash_join_stream(
+    join: PhysicalJoinPlan,
+    source: Arc<dyn AsyncPhysicalDataSource + '_>,
+    context: QueryContext,
+    options: ExecutionOptions,
+) -> RecordBatchStream<'_> {
+    stream::once(async move {
         let left_stream = execute_physical_dyn_stream(
             *join.left.clone(),
             source.clone(),
@@ -533,16 +558,230 @@ fn execute_join_stream(
             let right_rows = collect_dyn_stream(right_stream).await?;
             (left_rows, right_rows)
         };
-        match join.algorithm {
-            PhysicalJoinAlgorithm::Hash => execute_hash_join(&join, left_rows, right_rows),
-            PhysicalJoinAlgorithm::NestedLoop | PhysicalJoinAlgorithm::Merge => {
-                execute_nested_loop_join(&join, left_rows, right_rows)
-            }
-        }
+        execute_hash_join(&join, left_rows, right_rows)
     })
     .map_ok(move |rows| rows_to_batches(rows, options.batch_size))
     .try_flatten()
     .boxed()
+}
+
+fn execute_nested_loop_join_stream(
+    join: PhysicalJoinPlan,
+    source: Arc<dyn AsyncPhysicalDataSource + '_>,
+    context: QueryContext,
+    options: ExecutionOptions,
+) -> RecordBatchStream<'_> {
+    stream::once(async move {
+        let right_rows = collect_dyn_stream(execute_physical_dyn_stream(
+            *join.right.clone(),
+            source.clone(),
+            context.clone(),
+            options,
+        ))
+        .await?;
+        let left_stream = execute_physical_dyn_stream(*join.left.clone(), source, context, options);
+        Ok(nested_loop_join_left_stream(
+            join,
+            left_stream,
+            right_rows,
+            options.batch_size,
+        ))
+    })
+    .try_flatten()
+    .boxed()
+}
+
+fn nested_loop_join_left_stream(
+    join: PhysicalJoinPlan,
+    left_stream: RecordBatchStream<'_>,
+    right_rows: Vec<DynObject>,
+    batch_size: usize,
+) -> RecordBatchStream<'_> {
+    let batch_size = batch_size.max(1);
+    stream::unfold(
+        (
+            join,
+            left_stream,
+            right_rows,
+            Vec::<bool>::new(),
+            VecDeque::<DynObject>::new(),
+            false,
+            false,
+        ),
+        move |(
+            join,
+            mut left_stream,
+            right_rows,
+            mut right_matched,
+            mut pending,
+            mut left_done,
+            mut unmatched_right_emitted,
+        )| async move {
+            if right_matched.is_empty() {
+                right_matched = vec![false; right_rows.len()];
+            }
+
+            loop {
+                if pending.len() >= batch_size {
+                    let batch = take_pending_batch(&mut pending, batch_size);
+                    return Some((
+                        Ok(batch),
+                        (
+                            join,
+                            left_stream,
+                            right_rows,
+                            right_matched,
+                            pending,
+                            left_done,
+                            unmatched_right_emitted,
+                        ),
+                    ));
+                }
+
+                if left_done {
+                    if !unmatched_right_emitted {
+                        append_unmatched_right_rows(
+                            &join,
+                            &right_rows,
+                            &right_matched,
+                            &mut pending,
+                        );
+                        unmatched_right_emitted = true;
+                    }
+                    if pending.is_empty() {
+                        return None;
+                    }
+                    let batch = take_pending_batch(&mut pending, batch_size);
+                    return Some((
+                        Ok(batch),
+                        (
+                            join,
+                            left_stream,
+                            right_rows,
+                            right_matched,
+                            pending,
+                            true,
+                            unmatched_right_emitted,
+                        ),
+                    ));
+                }
+
+                let Some(item) = left_stream.next().await else {
+                    left_done = true;
+                    continue;
+                };
+
+                let left_batch = match item {
+                    Ok(batch) => batch,
+                    Err(err) => {
+                        return Some((
+                            Err(err),
+                            (
+                                join,
+                                left_stream,
+                                right_rows,
+                                right_matched,
+                                pending,
+                                true,
+                                unmatched_right_emitted,
+                            ),
+                        ));
+                    }
+                };
+
+                for left_row in left_batch {
+                    append_nested_loop_left_row(
+                        &join,
+                        left_row.as_ref(),
+                        &right_rows,
+                        &mut right_matched,
+                        &mut pending,
+                    );
+                    if pending.len() >= batch_size {
+                        let batch = take_pending_batch(&mut pending, batch_size);
+                        return Some((
+                            Ok(batch),
+                            (
+                                join,
+                                left_stream,
+                                right_rows,
+                                right_matched,
+                                pending,
+                                false,
+                                unmatched_right_emitted,
+                            ),
+                        ));
+                    }
+                }
+            }
+        },
+    )
+    .boxed()
+}
+
+fn take_pending_batch(pending: &mut VecDeque<DynObject>, batch_size: usize) -> Vec<DynObject> {
+    let mut batch = Vec::with_capacity(batch_size);
+    for _ in 0..batch_size {
+        let Some(row) = pending.pop_front() else {
+            break;
+        };
+        batch.push(row);
+    }
+    batch
+}
+
+fn append_nested_loop_left_row(
+    join: &PhysicalJoinPlan,
+    left_row: &dyn QueryObjectAccess,
+    right_rows: &[DynObject],
+    right_matched: &mut [bool],
+    pending: &mut VecDeque<DynObject>,
+) {
+    let mut matched_any = false;
+    for (right_idx, right_row) in right_rows.iter().enumerate() {
+        if join_pair_matches(join, left_row, right_row.as_ref()) {
+            matched_any = true;
+            right_matched[right_idx] = true;
+            pending.push_back(Box::new(bind_join_result(
+                Some(left_row),
+                Some(right_row.as_ref()),
+                &join.left_binding,
+                &join.right_binding,
+            )) as DynObject);
+        }
+    }
+
+    if !matched_any && matches!(join.join_type, JoinType::Left | JoinType::Full) {
+        pending.push_back(Box::new(bind_join_result(
+            Some(left_row),
+            None,
+            &join.left_binding,
+            &join.right_binding,
+        )) as DynObject);
+    }
+}
+
+fn append_unmatched_right_rows(
+    join: &PhysicalJoinPlan,
+    right_rows: &[DynObject],
+    right_matched: &[bool],
+    pending: &mut VecDeque<DynObject>,
+) {
+    if !matches!(join.join_type, JoinType::Right | JoinType::Full) {
+        return;
+    }
+
+    for (idx, right_row) in right_rows.iter().enumerate() {
+        if right_matched[idx] {
+            continue;
+        }
+        pending.push_back(Box::new(bind_join_result(
+            None,
+            Some(right_row.as_ref()),
+            &join.left_binding,
+            &join.right_binding,
+        )) as DynObject);
+    }
 }
 
 fn field_path_for_ref(field: &FieldRef) -> Option<FieldPath> {
@@ -1026,6 +1265,24 @@ fn execute_hash_join(
     left_rows: Vec<DynObject>,
     right_rows: Vec<DynObject>,
 ) -> CoreResult<Vec<DynObject>> {
+    let PhysicalJoinCondition::Eq { .. } = &join.condition else {
+        return execute_nested_loop_join(join, left_rows, right_rows);
+    };
+
+    // Building the smaller side is semantics-preserving for inner joins. Outer joins keep the
+    // existing right-build path so unmatched-row handling and ordering stay unchanged.
+    if matches!(join.join_type, JoinType::Inner) && left_rows.len() < right_rows.len() {
+        return execute_hash_join_build_left(join, left_rows, right_rows);
+    }
+
+    execute_hash_join_build_right(join, left_rows, right_rows)
+}
+
+fn execute_hash_join_build_right(
+    join: &PhysicalJoinPlan,
+    left_rows: Vec<DynObject>,
+    right_rows: Vec<DynObject>,
+) -> CoreResult<Vec<DynObject>> {
     let PhysicalJoinCondition::Eq { left, right } = &join.condition else {
         return execute_nested_loop_join(join, left_rows, right_rows);
     };
@@ -1095,6 +1352,53 @@ fn execute_hash_join(
     }
 
     Ok(out)
+}
+
+fn execute_hash_join_build_left(
+    join: &PhysicalJoinPlan,
+    left_rows: Vec<DynObject>,
+    right_rows: Vec<DynObject>,
+) -> CoreResult<Vec<DynObject>> {
+    let PhysicalJoinCondition::Eq { left, right } = &join.condition else {
+        return execute_nested_loop_join(join, left_rows, right_rows);
+    };
+
+    let mut left_index: HashMap<ValueKey, Vec<(usize, Object)>> = HashMap::new();
+    for (idx, left_row) in left_rows.iter().enumerate() {
+        let Some(key) = value_ref_for_join_key(left_row.as_ref(), left).map(ValueKey::from_ref)
+        else {
+            continue;
+        };
+        left_index
+            .entry(key)
+            .or_default()
+            .push((idx, left_row.to_object()));
+    }
+
+    let mut out_by_left = (0..left_rows.len())
+        .map(|_| Vec::<DynObject>::new())
+        .collect::<Vec<_>>();
+    for right_row in &right_rows {
+        let Some(right_key) =
+            value_ref_for_join_key(right_row.as_ref(), right).map(ValueKey::from_ref)
+        else {
+            continue;
+        };
+
+        if let Some(matches) = left_index.get(&right_key) {
+            let right_obj = right_row.to_object();
+            for (left_idx, left_obj) in matches {
+                out_by_left[*left_idx].push(Box::new(bind_join_result_obj(
+                    Some(left_obj),
+                    Some(&right_obj),
+                    &join.left_binding,
+                    &join.right_binding,
+                )) as DynObject);
+            }
+        }
+    }
+
+    Ok(out_by_left.into_iter().flatten().collect())
 }
 
 fn execute_nested_loop_join(
