@@ -60,7 +60,7 @@ impl RpcClientDyn for EmbeddedRpcClient {
     }
 }
 
-#[cfg(any(feature = "desktop", feature = "server"))]
+#[cfg(feature = "desktop")]
 pub fn build_embedded_client(
     db_path: impl AsRef<std::path::Path>,
 ) -> std::result::Result<(semantic_rpc::RpcClient, String), String> {

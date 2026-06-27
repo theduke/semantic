@@ -1,5 +1,6 @@
 mod auth;
 mod command;
+mod config;
 mod context;
 mod db;
 mod error;
@@ -8,6 +9,7 @@ mod session;
 
 pub use auth::{Principal, PrincipalId, PrincipalKind};
 pub use command::{SemanticApp, SemanticAppBuilder, SemanticAppInner};
+pub use config::AppConfig;
 pub use context::AppRequestContext;
 pub use db::{DbOpenRequest, DbProvider, SemanticDb};
 pub use error::AppError;

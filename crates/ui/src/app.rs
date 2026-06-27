@@ -41,6 +41,12 @@ pub fn launch_with_client(client: RpcClient, initial_scope_id: Option<String>) {
     dioxus::launch(boot_app);
 }
 
+#[cfg(target_arch = "wasm32")]
+pub fn launch_web() {
+    let client = semantic_rpc::transport::http_client::HttpRpcClient::new("/rpc").into();
+    launch_with_client(client, Some("default".to_string()));
+}
+
 fn boot_app() -> Element {
     let props = BOOT
         .with(|boot| boot.borrow_mut().take())

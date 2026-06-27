@@ -1,20 +1,38 @@
 #[cfg(feature = "desktop")]
 fn main() {
     let args: Vec<String> = std::env::args().collect();
-    if args.get(1).is_some_and(|arg| arg == "serve") {
-        #[cfg(feature = "server")]
+    let rpc_url = arg_value(&args, "--rpc-url")
+        .or_else(|| std::env::var("SEMANTIC_RPC_URL").ok())
+        .unwrap_or_else(|| "http://127.0.0.1:8888/rpc".to_string());
+
+    if arg_flag(&args, "--standalone") {
+        #[cfg(feature = "standalone")]
         {
-            run_server(&args);
+            launch_standalone(&args);
             return;
         }
-        #[cfg(not(feature = "server"))]
+        #[cfg(not(feature = "standalone"))]
         {
-            eprintln!("server mode requires the 'server' feature");
+            eprintln!("standalone mode requires the 'standalone' feature");
             std::process::exit(2);
         }
     }
 
-    let db_path = arg_value(&args, "--db").unwrap_or_else(|| "semantic.redb".to_string());
+    let client = semantic_rpc::transport::http_client::HttpRpcClient::new(rpc_url).into();
+    semantic_ui::launch_with_client(client, Some("default".to_string()));
+}
+
+#[cfg(all(feature = "desktop", feature = "standalone"))]
+fn launch_standalone(args: &[String]) {
+    let app_config = app_config(args);
+    let db_path = arg_value(args, "--db")
+        .map(Into::into)
+        .unwrap_or_else(|| app_config.default_db_path());
+    if let Some(parent) = db_path.parent()
+        && !parent.as_os_str().is_empty()
+    {
+        std::fs::create_dir_all(parent).expect("create semantic UI database directory");
+    }
     let (client, scope_id) = match semantic_ui::build_embedded_client(db_path) {
         Ok(value) => value,
         Err(err) => {
@@ -25,25 +43,28 @@ fn main() {
     semantic_ui::launch_with_client(client, Some(scope_id));
 }
 
-#[cfg(all(feature = "server", feature = "desktop"))]
-fn run_server(args: &[String]) {
-    let db_path = arg_value(args, "--db").unwrap_or_else(|| "semantic.redb".to_string());
-    let bind = arg_value(args, "--bind").unwrap_or_else(|| "127.0.0.1:3000".to_string());
-    let runtime = tokio::runtime::Runtime::new().expect("tokio runtime");
-    runtime.block_on(async move {
-        let server = semantic_server::SemanticServer::local_redb(db_path)
-            .expect("local redb semantic server");
-        let listener = tokio::net::TcpListener::bind(&bind)
-            .await
-            .expect("bind semantic UI server");
-        eprintln!("semantic UI server listening on http://{bind}");
-        server.serve(listener).await.expect("serve semantic UI");
-    });
+#[cfg(all(feature = "desktop", feature = "standalone"))]
+fn app_config(args: &[String]) -> semantic_app::AppConfig {
+    let mut config = semantic_app::AppConfig::from_env();
+    if let Some(data_dir) = arg_value(args, "--data-dir") {
+        config.data_dir = Some(data_dir.into());
+    }
+    config
 }
 
-#[cfg(not(feature = "desktop"))]
+#[cfg(all(not(feature = "desktop"), target_arch = "wasm32"))]
 fn main() {
-    eprintln!("semantic_ui binary currently requires the 'desktop' feature");
+    semantic_ui::app::launch_web();
+}
+
+#[cfg(all(not(feature = "desktop"), not(target_arch = "wasm32")))]
+fn main() {
+    eprintln!("semantic_ui binary currently requires the 'desktop' or 'web' Dioxus target");
+}
+
+#[cfg(feature = "desktop")]
+fn arg_flag(args: &[String], name: &str) -> bool {
+    args.iter().any(|arg| arg == name)
 }
 
 #[cfg(feature = "desktop")]

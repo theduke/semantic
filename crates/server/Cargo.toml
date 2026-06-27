@@ -27,7 +27,7 @@ semantic_db_redb = { path = "../db_redb", optional = true }
 semantic_rpc = { path = "../rpc", features = ["server-axum-ws"] }
 serde_json = { workspace = true }
 thiserror = "2.0.17"
-tokio = { workspace = true, features = ["net", "rt", "sync"] }
+tokio = { workspace = true, features = ["net", "rt-multi-thread", "sync"] }
 tracing = { workspace = true }
 
 [dev-dependencies]

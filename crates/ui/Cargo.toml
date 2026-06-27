@@ -13,22 +13,21 @@ version.workspace = true
 
 [features]
 default = []
-web = ["dioxus/web", "semantic_rpc/client-ws-web"]
-desktop = ["dioxus/desktop", "dep:semantic_db_redb", "dep:semantic_server"]
-server = [
+web = ["dioxus/web", "semantic_rpc/client-http-web"]
+desktop = ["dioxus/desktop", "semantic_rpc/client-http-native"]
+standalone = [
+  "desktop",
+  "dep:semantic_app",
+  "dep:semantic_db_core",
   "dep:semantic_db_redb",
-  "dep:semantic_server",
-  "semantic_rpc/client-ws-native",
 ]
 
 [dependencies]
 dioxus = { workspace = true }
 futures = "0.3.31"
-semantic_app = { path = "../app" }
+semantic_app = { path = "../app", optional = true }
 semantic_data = { workspace = true }
-semantic_db_core = { path = "../db_core" }
+semantic_db_core = { path = "../db_core", optional = true }
 semantic_db_redb = { path = "../db_redb", optional = true }
 semantic_rpc = { path = "../rpc", features = ["client"] }
-semantic_server = { path = "../server", optional = true }
 semantic_ui_core = { path = "../ui_core" }
-tokio = { workspace = true, features = ["rt-multi-thread", "net"] }

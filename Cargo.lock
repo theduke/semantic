@@ -5928,9 +5928,7 @@ dependencies = [
  "semantic_db_core",
  "semantic_db_redb",
  "semantic_rpc",
- "semantic_server",
  "semantic_ui_core",
- "tokio",
 ]
 
 [[package]]
