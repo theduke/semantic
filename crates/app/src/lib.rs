@@ -427,7 +427,7 @@ mod tests {
         let mut entity = Object::new();
         entity.insert("title", Value::String("Hello".to_string()));
         entity.insert("type", Value::String("wrong".to_string()));
-        entity.insert("path", Value::String("wrong".to_string()));
+        entity.insert("filestore_locator", Value::String("wrong".to_string()));
 
         let record = app
             .files()
@@ -436,7 +436,7 @@ mod tests {
                 FileCreateRequest {
                     scope_id: None,
                     id: None,
-                    path: Some("uploads/hello.txt".to_string()),
+                    filestore_locator: Some("uploads/hello.txt".to_string()),
                     filename: Some("hello.txt".to_string()),
                     mime_type: Some("text/plain".to_string()),
                     entity,
@@ -455,7 +455,10 @@ mod tests {
             Some(semantic_data::filestore::FILE_CLASS_ID)
         );
         assert_eq!(
-            record.object.get("path").and_then(Value::as_str),
+            record
+                .object
+                .get("filestore_locator")
+                .and_then(Value::as_str),
             Some("uploads/hello.txt")
         );
         assert_eq!(record.object.get("byte_size"), Some(&Value::U64(5)));

@@ -4,7 +4,7 @@ use futures_util::{StreamExt as _, TryStreamExt as _};
 use objstore::{DataSource, ObjStore as _, Put};
 use semantic_data::filestore::{
     FILE_BYTE_SIZE_ATTRIBUTE_ID, FILE_CLASS_ID, FILE_CONTENT_HASH_SHA256_ATTRIBUTE_ID,
-    FILE_FILENAME_ATTRIBUTE_ID, FILE_MIME_TYPE_ATTRIBUTE_ID, FILE_PATH_ATTRIBUTE_ID,
+    FILE_FILENAME_ATTRIBUTE_ID, FILE_FILESTORE_LOCATOR_ATTRIBUTE_ID, FILE_MIME_TYPE_ATTRIBUTE_ID,
 };
 use semantic_data::value::{Object, Value};
 use semantic_db_core::{DEFAULT_COLLECTION, EntityRecord};
@@ -19,7 +19,7 @@ pub struct FileService;
 pub struct FileCreateRequest {
     pub scope_id: Option<DbScopeId>,
     pub id: Option<String>,
-    pub path: Option<String>,
+    pub filestore_locator: Option<String>,
     pub filename: Option<String>,
     pub mime_type: Option<String>,
     pub entity: Object,
@@ -44,7 +44,7 @@ pub struct FileRecord {
 
 pub struct FileReadResult {
     pub record: EntityRecord,
-    pub path: String,
+    pub filestore_locator: String,
     pub byte_size: Option<u64>,
     pub mime_type: Option<String>,
     pub content_hash_sha256: Option<String>,
@@ -71,9 +71,9 @@ impl FileService {
             .id
             .or_else(|| object_string(&request.entity, "id"))
             .unwrap_or_else(|| format!("file-sha256-{computed_sha256}"));
-        let path = request.path.unwrap_or_else(|| id.clone());
+        let filestore_locator = request.filestore_locator.unwrap_or_else(|| id.clone());
 
-        let mut put = Put::new(path.clone(), DataSource::Data(bytes.clone()));
+        let mut put = Put::new(filestore_locator.clone(), DataSource::Data(bytes.clone()));
         put.mime_type = request.mime_type.clone();
         let meta = store.send_put(put).await?;
 
@@ -83,7 +83,7 @@ impl FileService {
 
         let mut object = request.entity;
         object.insert("type", Value::String(FILE_CLASS_ID.to_string()));
-        object.insert("path", Value::String(path));
+        object.insert("filestore_locator", Value::String(filestore_locator));
         if let Some(filename) = request.filename {
             object.insert("filename", Value::String(filename));
         }
@@ -117,20 +117,20 @@ impl FileService {
             return Err(AppError::FileNotFound(id));
         };
         validate_file_record(&record)?;
-        let path = required_file_string(&record, "path")?;
+        let filestore_locator = required_file_string(&record, "filestore_locator")?;
         let byte_size = optional_file_u64(&record, "byte_size")?;
         let mime_type = optional_file_string(&record, "mime_type")?;
         let content_hash_sha256 = optional_file_string(&record, "content_hash_sha256")?;
 
         let store = ctx.default_file_store(Some(scope_id)).await?;
-        let Some((meta, stream)) = store.get_stream_with_meta(&path).await? else {
+        let Some((meta, stream)) = store.get_stream_with_meta(&filestore_locator).await? else {
             return Err(AppError::FileNotFound(id));
         };
         let stream = stream.map_err(AppError::ObjectStore).boxed();
 
         Ok(FileReadResult {
             record,
-            path,
+            filestore_locator,
             byte_size: byte_size.or(meta.size),
             mime_type: mime_type.or(meta.mime_type),
             content_hash_sha256: content_hash_sha256.or(meta.hash_sha256.map(hex::encode)),
@@ -239,7 +239,7 @@ fn file_value<'a>(record: &'a EntityRecord, field: &str) -> Option<&'a Value> {
 
 fn file_field_id(field: &str) -> Option<&'static str> {
     match field {
-        "path" => Some(FILE_PATH_ATTRIBUTE_ID),
+        "filestore_locator" => Some(FILE_FILESTORE_LOCATOR_ATTRIBUTE_ID),
         "filename" => Some(FILE_FILENAME_ATTRIBUTE_ID),
         "byte_size" => Some(FILE_BYTE_SIZE_ATTRIBUTE_ID),
         "mime_type" => Some(FILE_MIME_TYPE_ATTRIBUTE_ID),

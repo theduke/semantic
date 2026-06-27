@@ -34,8 +34,9 @@ pub async fn upload_handler(
     let request = FileCreateRequest {
         scope_id: None,
         id: header_string(&headers, &state.config.file_id_header),
-        path: header_string(&headers, &state.config.file_path_header),
-        filename: content_disposition_filename(&headers),
+        filestore_locator: None,
+        filename: header_string(&headers, &state.config.file_filename_header)
+            .or_else(|| content_disposition_filename(&headers)),
         mime_type: content_type(&headers),
         entity,
         content: FileContent::Bytes(body),

@@ -292,10 +292,10 @@ mod tests {
                     .uri("/api/v1/file")
                     .header("x-semantic-scope", "default")
                     .header("content-type", "text/plain")
-                    .header("x-semantic-file-path", "uploads/hello.txt")
+                    .header("x-semantic-filename", "hello.txt")
                     .header(
                         "x-semantic-file-entity",
-                        r#"{"title":"Hello","path":"wrong"}"#,
+                        r#"{"title":"Hello","filename":"wrong.txt","filestore_locator":"wrong"}"#,
                     )
                     .body(Body::from("hello"))
                     .unwrap(),
@@ -321,10 +321,14 @@ mod tests {
             panic!("expected file object");
         };
         assert_eq!(
-            object.get("path").and_then(Value::as_str),
-            Some("uploads/hello.txt")
+            object.get("filestore_locator").and_then(Value::as_str),
+            Some(id.as_str())
         );
         assert_eq!(object.get("title").and_then(Value::as_str), Some("Hello"));
+        assert_eq!(
+            object.get("filename").and_then(Value::as_str),
+            Some("hello.txt")
+        );
         assert_eq!(
             object.get("mime_type").and_then(Value::as_str),
             Some("text/plain")

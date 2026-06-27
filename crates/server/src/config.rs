@@ -12,7 +12,7 @@ pub struct ServerConfig {
     pub file_api_prefix: String,
     pub scope_header: HeaderName,
     pub file_entity_header: HeaderName,
-    pub file_path_header: HeaderName,
+    pub file_filename_header: HeaderName,
     pub file_id_header: HeaderName,
 }
 
@@ -46,7 +46,7 @@ impl Default for ServerConfig {
             file_api_prefix: "/api/v1/file".to_string(),
             scope_header: HeaderName::from_static("x-semantic-scope"),
             file_entity_header: HeaderName::from_static("x-semantic-file-entity"),
-            file_path_header: HeaderName::from_static("x-semantic-file-path"),
+            file_filename_header: HeaderName::from_static("x-semantic-filename"),
             file_id_header: HeaderName::from_static("x-semantic-file-id"),
         }
     }

@@ -12,7 +12,7 @@ pub const INIT_MIGRATION_NAME: &str = "001_init";
 
 pub const FILE_CLASS_ID: &str = "semantic.filestore.file";
 
-pub const FILE_PATH_ATTRIBUTE_ID: &str = "semantic.filestore.file.path";
+pub const FILE_FILESTORE_LOCATOR_ATTRIBUTE_ID: &str = "semantic.filestore.file.filestore_locator";
 pub const FILE_FILENAME_ATTRIBUTE_ID: &str = "semantic.filestore.file.filename";
 pub const FILE_BYTE_SIZE_ATTRIBUTE_ID: &str = "semantic.filestore.file.byte_size";
 pub const FILE_MIME_TYPE_ATTRIBUTE_ID: &str = "semantic.filestore.file.mime_type";
@@ -73,7 +73,11 @@ pub fn init_migration() -> Migration {
 
 pub fn file_attributes() -> Vec<AttributeType> {
     vec![
-        attribute(FILE_PATH_ATTRIBUTE_ID, "path", string_type()),
+        attribute(
+            FILE_FILESTORE_LOCATOR_ATTRIBUTE_ID,
+            "filestore_locator",
+            string_type(),
+        ),
         attribute(FILE_FILENAME_ATTRIBUTE_ID, "filename", string_type()),
         attribute(FILE_BYTE_SIZE_ATTRIBUTE_ID, "byte_size", uint64_type()),
         attribute(FILE_MIME_TYPE_ATTRIBUTE_ID, "mime_type", string_type()),
@@ -96,8 +100,8 @@ pub fn file_class() -> ClassType {
         extends: Vec::new(),
         attributes: BTreeMap::from([
             (
-                "path".to_string(),
-                class_attribute(FILE_PATH_ATTRIBUTE_ID, 10),
+                "filestore_locator".to_string(),
+                class_attribute(FILE_FILESTORE_LOCATOR_ATTRIBUTE_ID, 10),
             ),
             (
                 "filename".to_string(),
@@ -199,7 +203,7 @@ fn title_word(word: &str) -> String {
 #[cfg(test)]
 mod tests {
     use crate::filestore::{
-        FILE_CLASS_ID, FILE_CONTENT_HASH_SHA256_ATTRIBUTE_ID, FILE_PATH_ATTRIBUTE_ID,
+        FILE_CLASS_ID, FILE_CONTENT_HASH_SHA256_ATTRIBUTE_ID, FILE_FILESTORE_LOCATOR_ATTRIBUTE_ID,
         INIT_MIGRATION_NAME, MODULE_NAME, PACKAGE_NAME, package,
     };
 
@@ -213,7 +217,12 @@ mod tests {
         assert_eq!(package.migrations.len(), 1);
         assert_eq!(package.migrations[0].name, INIT_MIGRATION_NAME);
         assert!(package.root.classes.contains_key(FILE_CLASS_ID));
-        assert!(package.root.attributes.contains_key(FILE_PATH_ATTRIBUTE_ID));
+        assert!(
+            package
+                .root
+                .attributes
+                .contains_key(FILE_FILESTORE_LOCATOR_ATTRIBUTE_ID)
+        );
         assert!(
             package
                 .root
