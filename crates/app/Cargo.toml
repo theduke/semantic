@@ -12,3 +12,13 @@ categories.workspace = true
 version.workspace = true
 
 [dependencies]
+async-trait = "0.1.89"
+semantic_data = { workspace = true }
+semantic_db_core = { path = "../db_core" }
+semantic_rpc = { path = "../rpc" }
+serde = { workspace = true, features = ["derive"] }
+thiserror = "2.0.17"
+tokio = { workspace = true, features = ["sync", "time"] }
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["macros", "rt"] }

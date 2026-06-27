@@ -2407,6 +2407,15 @@ checksum = "94143f37725109f92c262ed2cf5e59bce7498c01bcc1502d7b9afe439a4e9f49"
 [[package]]
 name = "semantic_app"
 version = "0.0.1"
+dependencies = [
+ "async-trait",
+ "semantic_data",
+ "semantic_db_core",
+ "semantic_rpc",
+ "serde",
+ "thiserror 2.0.18",
+ "tokio",
+]
 
 [[package]]
 name = "semantic_data"
@@ -2542,6 +2551,22 @@ dependencies = [
 [[package]]
 name = "semantic_server"
 version = "0.0.1"
+dependencies = [
+ "async-trait",
+ "axum",
+ "futures-util",
+ "http",
+ "semantic_app",
+ "semantic_data",
+ "semantic_db_core",
+ "semantic_db_redb",
+ "semantic_rpc",
+ "serde_json",
+ "thiserror 2.0.18",
+ "tokio",
+ "tower",
+ "tracing",
+]
 
 [[package]]
 name = "semver"
