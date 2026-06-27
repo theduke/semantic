@@ -1,0 +1,18 @@
+[package]
+name = "semantic_base"
+authors.workspace = true
+keywords.workspace = true
+repository.workspace = true
+homepage.workspace = true
+license.workspace = true
+readme.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+categories.workspace = true
+version.workspace = true
+
+[dependencies]
+semantic_data = { workspace = true }
+
+[dev-dependencies]
+semantic_db_core = { path = "../db_core" }

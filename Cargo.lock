@@ -5776,6 +5776,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "semantic_base"
+version = "0.0.1"
+dependencies = [
+ "semantic_data",
+ "semantic_db_core",
+]
+
+[[package]]
 name = "semantic_data"
 version = "0.0.1"
 dependencies = [
