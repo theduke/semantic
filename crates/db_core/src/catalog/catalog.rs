@@ -24,7 +24,7 @@ use crate::catalog::{
     LocalRelationId, LocalTypeDefId, NameSet, RecordTypeSchema, RelationshipSchema,
     StoredAppliedMigration, StoredAttribute, StoredClass, StoredCollection, StoredFieldId,
     StoredIndex, StoredPackage, StoredRecordType, StoredRelationship, StoredTypeDef, TypeDefSchema,
-    nameset_for_identifier, nameset_for_qualified,
+    is_special_builtin_field, nameset_for_identifier, nameset_for_qualified,
 };
 
 #[derive(Debug, Clone)]
@@ -1332,12 +1332,16 @@ impl Catalog {
                     .entry(attr.attribute.id.clone())
                     .or_insert_with(|| attr.attribute.ty.clone());
                 field_attrs.insert(attr.attribute.id.clone(), attr.lid);
-                field_aliases
-                    .entry(attr.names.plain_name.clone())
-                    .or_insert_with(|| attr.attribute.id.clone());
-                field_aliases
-                    .entry(attr.names.underscore_name.clone())
-                    .or_insert_with(|| attr.attribute.id.clone());
+                insert_field_alias_if_not_builtin_shadow(
+                    &mut field_aliases,
+                    &attr.names.plain_name,
+                    &attr.attribute.id,
+                );
+                insert_field_alias_if_not_builtin_shadow(
+                    &mut field_aliases,
+                    &attr.names.underscore_name,
+                    &attr.attribute.id,
+                );
             }
         }
 
@@ -1710,10 +1714,15 @@ impl Catalog {
                     });
                 };
                 field_aliases.insert(alias.clone(), attr.attribute.id.clone());
-                field_aliases.insert(attr.names.plain_name.clone(), attr.attribute.id.clone());
-                field_aliases.insert(
-                    attr.names.underscore_name.clone(),
-                    attr.attribute.id.clone(),
+                insert_field_alias_if_not_builtin_shadow(
+                    field_aliases,
+                    &attr.names.plain_name,
+                    &attr.attribute.id,
+                );
+                insert_field_alias_if_not_builtin_shadow(
+                    field_aliases,
+                    &attr.names.underscore_name,
+                    &attr.attribute.id,
                 );
                 field_types.insert(attr.attribute.id.clone(), attr.attribute.ty.clone());
                 field_attrs.insert(attr.attribute.id.clone(), attr.lid);
@@ -2941,6 +2950,19 @@ fn literal_matches_type(value: &semantic_data::schema::LiteralValue, ty: &Type) 
 
 fn invalid_schema<T>(message: String) -> Result<T, CatalogError> {
     Err(CatalogError::InvalidSchema(message))
+}
+
+fn insert_field_alias_if_not_builtin_shadow(
+    field_aliases: &mut FnvHashMap<String, String>,
+    alias: &str,
+    canonical: &str,
+) {
+    if is_special_builtin_field(alias) && alias != canonical {
+        return;
+    }
+    field_aliases
+        .entry(alias.to_string())
+        .or_insert_with(|| canonical.to_string());
 }
 
 fn package_nameset(name: &str) -> NameSet {

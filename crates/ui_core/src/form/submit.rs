@@ -279,10 +279,10 @@ mod tests {
     fn inject_primary_id_adds_canonical_primary_key_field() {
         let mut object = Object::new();
 
-        inject_primary_id(&mut object, "semantic:id", "entity-1").unwrap();
+        inject_primary_id(&mut object, "id", "entity-1").unwrap();
 
         assert_eq!(
-            object.get("semantic:id"),
+            object.get("id"),
             Some(&Value::String("entity-1".to_string()))
         );
     }
@@ -290,9 +290,9 @@ mod tests {
     #[test]
     fn inject_primary_id_rejects_conflicting_primary_key_field() {
         let mut object = Object::new();
-        object.insert("semantic:id", Value::String("other-entity".to_string()));
+        object.insert("id", Value::String("other-entity".to_string()));
 
-        let err = inject_primary_id(&mut object, "semantic:id", "entity-1").unwrap_err();
+        let err = inject_primary_id(&mut object, "id", "entity-1").unwrap_err();
 
         assert!(
             err.message

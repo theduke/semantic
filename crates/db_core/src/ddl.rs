@@ -197,7 +197,7 @@ pub const CORE_CATALOG_COLLECTIONS_COLLECTION: &str = CORE_CATALOG_SCHEMA_COLLEC
 pub const CORE_CATALOG_INDEXES_COLLECTION: &str = CORE_CATALOG_SCHEMA_COLLECTION;
 pub const CORE_CATALOG_META_COLLECTION: &str = CORE_CATALOG_SCHEMA_COLLECTION;
 
-const CORE_CATALOG_ATTR_ID: &str = "semantic:id";
+const CORE_CATALOG_ATTR_ID: &str = "id";
 const CORE_CATALOG_ATTR_LID: &str = "semantic:lid";
 const CORE_CATALOG_ATTR_ATTRIBUTE: &str = "semantic:attribute";
 const CORE_CATALOG_ATTR_TYPE_DEF: &str = "semantic:type_def";

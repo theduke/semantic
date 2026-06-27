@@ -82,6 +82,7 @@ impl FileService {
         let mime_type = request.mime_type.or(meta.mime_type);
 
         let mut object = request.entity;
+        object.insert("id", Value::String(id.clone()));
         object.insert("type", Value::String(FILE_CLASS_ID.to_string()));
         object.insert("filestore_locator", Value::String(filestore_locator));
         if let Some(filename) = request.filename {

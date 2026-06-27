@@ -9,9 +9,12 @@ use crate::schema::{
 pub const PACKAGE_NAME: &str = "semantic.filestore";
 pub const MODULE_NAME: &str = "filestore";
 pub const INIT_MIGRATION_NAME: &str = "001_init";
+pub const GENERIC_METADATA_MIGRATION_NAME: &str = "002_generic_metadata";
 
 pub const FILE_CLASS_ID: &str = "semantic.filestore.file";
 
+pub const TITLE_ATTRIBUTE_ID: &str = "semantic:title";
+pub const DESCRIPTION_ATTRIBUTE_ID: &str = "semantic:description";
 pub const FILE_FILESTORE_LOCATOR_ATTRIBUTE_ID: &str = "semantic.filestore.file.filestore_locator";
 pub const FILE_FILENAME_ATTRIBUTE_ID: &str = "semantic.filestore.file.filename";
 pub const FILE_BYTE_SIZE_ATTRIBUTE_ID: &str = "semantic.filestore.file.byte_size";
@@ -24,7 +27,7 @@ pub fn package() -> Package {
         name: PACKAGE_NAME.to_string(),
         root: root_module(),
         modules: BTreeMap::new(),
-        migrations: vec![init_migration()],
+        migrations: vec![init_migration(), generic_metadata_migration()],
         version: None,
         meta: Meta::default(),
     }
@@ -71,8 +74,30 @@ pub fn init_migration() -> Migration {
     }
 }
 
+pub fn generic_metadata_migration() -> Migration {
+    Migration {
+        module: MODULE_NAME.to_string(),
+        name: GENERIC_METADATA_MIGRATION_NAME.to_string(),
+        description: Some("Attach generic title and description metadata to files.".to_string()),
+        operations: vec![
+            MigrationOperation::Ddl(MigrationDdlOperation::UpsertAttribute {
+                attribute: title_attribute(),
+            }),
+            MigrationOperation::Ddl(MigrationDdlOperation::UpsertAttribute {
+                attribute: description_attribute(),
+            }),
+            MigrationOperation::Ddl(MigrationDdlOperation::UpsertClass {
+                class: file_class(),
+            }),
+        ],
+        meta: Meta::default(),
+    }
+}
+
 pub fn file_attributes() -> Vec<AttributeType> {
     vec![
+        title_attribute(),
+        description_attribute(),
         attribute(
             FILE_FILESTORE_LOCATOR_ATTRIBUTE_ID,
             "filestore_locator",
@@ -99,30 +124,43 @@ pub fn file_class() -> ClassType {
         inherits: None,
         extends: Vec::new(),
         attributes: BTreeMap::from([
+            ("title".to_string(), class_attribute(TITLE_ATTRIBUTE_ID, 10)),
+            (
+                "description".to_string(),
+                class_attribute(DESCRIPTION_ATTRIBUTE_ID, 20),
+            ),
             (
                 "filestore_locator".to_string(),
-                class_attribute(FILE_FILESTORE_LOCATOR_ATTRIBUTE_ID, 10),
+                class_attribute(FILE_FILESTORE_LOCATOR_ATTRIBUTE_ID, 30),
             ),
             (
                 "filename".to_string(),
-                class_attribute(FILE_FILENAME_ATTRIBUTE_ID, 20),
+                class_attribute(FILE_FILENAME_ATTRIBUTE_ID, 40),
             ),
             (
                 "byte_size".to_string(),
-                class_attribute(FILE_BYTE_SIZE_ATTRIBUTE_ID, 30),
+                class_attribute(FILE_BYTE_SIZE_ATTRIBUTE_ID, 50),
             ),
             (
                 "mime_type".to_string(),
-                class_attribute(FILE_MIME_TYPE_ATTRIBUTE_ID, 40),
+                class_attribute(FILE_MIME_TYPE_ATTRIBUTE_ID, 60),
             ),
             (
                 "content_hash_sha256".to_string(),
-                class_attribute(FILE_CONTENT_HASH_SHA256_ATTRIBUTE_ID, 50),
+                class_attribute(FILE_CONTENT_HASH_SHA256_ATTRIBUTE_ID, 70),
             ),
         ]),
         constraints: Vec::new(),
         meta: meta_with_title("File"),
     }
+}
+
+fn title_attribute() -> AttributeType {
+    attribute(TITLE_ATTRIBUTE_ID, "title", string_type())
+}
+
+fn description_attribute() -> AttributeType {
+    attribute(DESCRIPTION_ATTRIBUTE_ID, "description", string_type())
 }
 
 fn attribute(id: &str, name: &str, ty: Type) -> AttributeType {
@@ -204,7 +242,8 @@ fn title_word(word: &str) -> String {
 mod tests {
     use crate::filestore::{
         FILE_CLASS_ID, FILE_CONTENT_HASH_SHA256_ATTRIBUTE_ID, FILE_FILESTORE_LOCATOR_ATTRIBUTE_ID,
-        INIT_MIGRATION_NAME, MODULE_NAME, PACKAGE_NAME, package,
+        GENERIC_METADATA_MIGRATION_NAME, INIT_MIGRATION_NAME, MODULE_NAME, PACKAGE_NAME,
+        TITLE_ATTRIBUTE_ID, package,
     };
 
     #[test]
@@ -214,9 +253,11 @@ mod tests {
         assert_eq!(package.name, PACKAGE_NAME);
         assert_eq!(package.root.name, MODULE_NAME);
         assert!(package.modules.is_empty());
-        assert_eq!(package.migrations.len(), 1);
+        assert_eq!(package.migrations.len(), 2);
         assert_eq!(package.migrations[0].name, INIT_MIGRATION_NAME);
+        assert_eq!(package.migrations[1].name, GENERIC_METADATA_MIGRATION_NAME);
         assert!(package.root.classes.contains_key(FILE_CLASS_ID));
+        assert!(package.root.attributes.contains_key(TITLE_ATTRIBUTE_ID));
         assert!(
             package
                 .root

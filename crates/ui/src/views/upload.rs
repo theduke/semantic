@@ -545,11 +545,14 @@ fn metadata_entity(title: &str, description: &str) -> Object {
     let mut entity = Object::new();
     let title = title.trim();
     if !title.is_empty() {
-        entity.insert("title", Value::String(title.to_string()));
+        entity.insert("semantic:title", Value::String(title.to_string()));
     }
     let description = description.trim();
     if !description.is_empty() {
-        entity.insert("description", Value::String(description.to_string()));
+        entity.insert(
+            "semantic:description",
+            Value::String(description.to_string()),
+        );
     }
     entity
 }
@@ -599,16 +602,18 @@ mod tests {
     }
 
     #[test]
-    fn metadata_entity_only_sets_user_fields() {
+    fn metadata_entity_sets_namespaced_user_fields() {
         let entity = metadata_entity(" Title ", " Body ");
         assert_eq!(
-            entity.get("title"),
+            entity.get("semantic:title"),
             Some(&Value::String("Title".to_string()))
         );
         assert_eq!(
-            entity.get("description"),
+            entity.get("semantic:description"),
             Some(&Value::String("Body".to_string()))
         );
+        assert!(!entity.contains_key("title"));
+        assert!(!entity.contains_key("description"));
         assert!(!entity.contains_key("filestore_locator"));
         assert!(!entity.contains_key("filename"));
     }

@@ -295,18 +295,12 @@ fn primary_id_field_for_collection(catalog: &crate::UiCatalog, collection: &str)
             collection
                 .field_ids
                 .iter()
-                .find(|field| field.canonical_field == "semantic:id")
+                .find(|field| field.canonical_field == "id")
                 .or_else(|| {
                     collection
                         .field_ids
                         .iter()
                         .find(|field| field.canonical_field == "semantic:catalog:id")
-                })
-                .or_else(|| {
-                    collection
-                        .field_ids
-                        .iter()
-                        .find(|field| field.canonical_field == "id")
                 })
         })
         .map(|field| field.canonical_field.clone())

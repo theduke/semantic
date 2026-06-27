@@ -425,7 +425,7 @@ mod tests {
         let ctx = ctx(&app, Principal::system());
 
         let mut entity = Object::new();
-        entity.insert("title", Value::String("Hello".to_string()));
+        entity.insert("semantic:title", Value::String("Hello".to_string()));
         entity.insert("type", Value::String("wrong".to_string()));
         entity.insert("filestore_locator", Value::String("wrong".to_string()));
 
@@ -462,6 +462,10 @@ mod tests {
             Some("uploads/hello.txt")
         );
         assert_eq!(record.object.get("byte_size"), Some(&Value::U64(5)));
+        assert_eq!(
+            record.object.get("semantic:title").and_then(Value::as_str),
+            Some("Hello")
+        );
 
         let read = app.files().read(&ctx, None, record.id).await.unwrap();
         let bytes = read.stream.try_collect::<bytes::BytesMut>().await.unwrap();
