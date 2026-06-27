@@ -4,8 +4,9 @@ use dioxus::prelude::*;
 use dxform::{FieldHandle, FormError, FormErrorSource, FormScope, ValidationStrategy};
 use semantic_data::{
     schema::{NumberType, StringFormat, TemporalType, Type, TypeKind},
-    value::{Date, Value},
+    value::{Date, DateTime, Time, Value},
 };
+use time::format_description::well_known::Rfc3339;
 
 use crate::{
     ValueView,
@@ -126,13 +127,18 @@ fn render_number(ctx: ValueFormRenderContext) -> Element {
 
 fn render_temporal(ctx: ValueFormRenderContext) -> Element {
     let Some(Type {
-        kind: TypeKind::Temporal(TemporalType::Date),
+        kind: TypeKind::Temporal(temporal),
         ..
     }) = ctx.value_type.clone()
     else {
         return fallback_edit(ctx);
     };
-    rsx! { DateValueInput { scope: ctx.scope } }
+    match temporal {
+        TemporalType::Date => rsx! { DateValueInput { scope: ctx.scope } },
+        TemporalType::DateTime => rsx! { DateTimeValueInput { scope: ctx.scope } },
+        TemporalType::Time => rsx! { TimeValueInput { scope: ctx.scope } },
+        _ => fallback_edit(ctx),
+    }
 }
 
 #[component]
@@ -151,7 +157,56 @@ fn DateValueInput(scope: FormScope<Value, Value>) -> Element {
     rsx! {
         input {
             class: "semantic-form__input",
-            r#type: "date",
+            r#type: "text",
+            placeholder: "yyyy-mm-dd",
+            value,
+            oninput: move |event| field.set_draft(event.value()),
+        }
+    }
+}
+
+#[component]
+fn DateTimeValueInput(scope: FormScope<Value, Value>) -> Element {
+    let field = dxform::use_field(scope, || dxform::FieldSpec {
+        name: "value".to_string(),
+        get: Rc::new(|value: &Value| value.clone()),
+        set: Rc::new(|parent: &mut Value, value: Value| *parent = value),
+        format: Rc::new(datetime_to_string),
+        parse: Rc::new(|value: &String| parse_datetime_value(value)),
+        is_empty: Rc::new(|value: &String| value.trim().is_empty()),
+        validators: Vec::new(),
+        validation: ValidationStrategy::submit(),
+    });
+    let value = field.draft();
+    rsx! {
+        input {
+            class: "semantic-form__input",
+            r#type: "text",
+            placeholder: "yyyy-mm-ddThh:mm:ssZ",
+            value,
+            oninput: move |event| field.set_draft(event.value()),
+        }
+    }
+}
+
+#[component]
+fn TimeValueInput(scope: FormScope<Value, Value>) -> Element {
+    let field = dxform::use_field(scope, || dxform::FieldSpec {
+        name: "value".to_string(),
+        get: Rc::new(|value: &Value| value.clone()),
+        set: Rc::new(|parent: &mut Value, value: Value| *parent = value),
+        format: Rc::new(time_to_string),
+        parse: Rc::new(|value: &String| parse_time_value(value)),
+        is_empty: Rc::new(|value: &String| value.trim().is_empty()),
+        validators: Vec::new(),
+        validation: ValidationStrategy::submit(),
+    });
+    let value = field.draft();
+    rsx! {
+        input {
+            class: "semantic-form__input",
+            r#type: "text",
+            placeholder: "hh:mm:ss",
             value,
             oninput: move |event| field.set_draft(event.value()),
         }
@@ -396,4 +451,141 @@ fn parse_date_value(value: &str) -> std::result::Result<Value, FormError> {
 
 fn invalid_date(err: impl std::fmt::Display) -> FormError {
     FormError::new(format!("invalid date: {err}")).with_source(FormErrorSource::Parse)
+}
+
+fn datetime_to_string(value: &Value) -> String {
+    let Value::DateTime(value) = value else {
+        return String::new();
+    };
+    let value = time::OffsetDateTime::from(*value);
+    value.format(&Rfc3339).unwrap_or_default()
+}
+
+fn parse_datetime_value(value: &str) -> std::result::Result<Value, FormError> {
+    let value = value.trim();
+    if value.is_empty() {
+        return Ok(Value::Null);
+    }
+    time::OffsetDateTime::parse(value, &Rfc3339)
+        .map(|datetime| Value::DateTime(DateTime::from(datetime)))
+        .map_err(invalid_datetime)
+}
+
+fn invalid_datetime(err: impl std::fmt::Display) -> FormError {
+    FormError::new(format!("invalid datetime: {err}")).with_source(FormErrorSource::Parse)
+}
+
+fn time_to_string(value: &Value) -> String {
+    let Value::Time(value) = value else {
+        return String::new();
+    };
+    let value = time::Time::from(*value);
+    if value.nanosecond() == 0 {
+        format!(
+            "{:02}:{:02}:{:02}",
+            value.hour(),
+            value.minute(),
+            value.second()
+        )
+    } else {
+        format!(
+            "{:02}:{:02}:{:02}.{:09}",
+            value.hour(),
+            value.minute(),
+            value.second(),
+            value.nanosecond()
+        )
+        .trim_end_matches('0')
+        .to_string()
+    }
+}
+
+fn parse_time_value(value: &str) -> std::result::Result<Value, FormError> {
+    let value = value.trim();
+    if value.is_empty() {
+        return Ok(Value::Null);
+    }
+    let mut parts = value.split(':');
+    let hour = parts
+        .next()
+        .ok_or_else(|| invalid_time("expected hh:mm[:ss[.fraction]]"))?
+        .parse::<u8>()
+        .map_err(invalid_time)?;
+    let minute = parts
+        .next()
+        .ok_or_else(|| invalid_time("expected hh:mm[:ss[.fraction]]"))?
+        .parse::<u8>()
+        .map_err(invalid_time)?;
+    let second_part = parts.next();
+    if parts.next().is_some() {
+        return Err(invalid_time("expected hh:mm[:ss[.fraction]]"));
+    }
+    let (second, nanosecond) = match second_part {
+        Some(second_part) => parse_second_with_fraction(second_part)?,
+        None => (0, 0),
+    };
+    time::Time::from_hms_nano(hour, minute, second, nanosecond)
+        .map(|time| Value::Time(Time::from(time)))
+        .map_err(invalid_time)
+}
+
+fn parse_second_with_fraction(value: &str) -> std::result::Result<(u8, u32), FormError> {
+    let mut parts = value.split('.');
+    let second = parts
+        .next()
+        .ok_or_else(|| invalid_time("expected seconds"))?
+        .parse::<u8>()
+        .map_err(invalid_time)?;
+    let Some(fraction) = parts.next() else {
+        return Ok((second, 0));
+    };
+    if parts.next().is_some() || fraction.is_empty() || fraction.len() > 9 {
+        return Err(invalid_time("expected up to 9 fractional second digits"));
+    }
+    let nanosecond = fraction.chars().try_fold(0u32, |acc, ch| {
+        ch.to_digit(10)
+            .map(|digit| acc * 10 + digit)
+            .ok_or_else(|| invalid_time("expected fractional second digits"))
+    })? * 10u32.pow(9 - fraction.len() as u32);
+    Ok((second, nanosecond))
+}
+
+fn invalid_time(err: impl std::fmt::Display) -> FormError {
+    FormError::new(format!("invalid time: {err}")).with_source(FormErrorSource::Parse)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn date_parser_round_trips_text_format() {
+        let value = parse_date_value("2025-01-01").expect("date");
+
+        assert_eq!(date_to_string(&value), "2025-01-01");
+        assert!(parse_date_value("2025-99-01").is_err());
+        assert_eq!(parse_date_value("").expect("empty"), Value::Null);
+    }
+
+    #[test]
+    fn datetime_parser_round_trips_rfc3339_text_format() {
+        let value = parse_datetime_value("2025-01-01T12:34:56Z").expect("datetime");
+
+        assert_eq!(datetime_to_string(&value), "2025-01-01T12:34:56Z");
+        assert!(parse_datetime_value("2025-01-01 12:34:56").is_err());
+        assert_eq!(parse_datetime_value("").expect("empty"), Value::Null);
+    }
+
+    #[test]
+    fn time_parser_accepts_minute_second_and_fraction_precision() {
+        let minute = parse_time_value("12:34").expect("minute");
+        let second = parse_time_value("12:34:56").expect("second");
+        let fraction = parse_time_value("12:34:56.123").expect("fraction");
+
+        assert_eq!(time_to_string(&minute), "12:34:00");
+        assert_eq!(time_to_string(&second), "12:34:56");
+        assert_eq!(time_to_string(&fraction), "12:34:56.123");
+        assert!(parse_time_value("12:99:00").is_err());
+        assert_eq!(parse_time_value("").expect("empty"), Value::Null);
+    }
 }
