@@ -2,17 +2,19 @@ use std::collections::BTreeMap;
 use std::sync::{Arc, RwLock};
 
 use async_trait::async_trait;
+use futures::{StreamExt, TryStreamExt, stream};
 use semantic_data::schema::{Package, RelationType};
 use semantic_data::value::{FieldPath, Object, Value};
 
 use crate::catalog::{Catalog, CollectionKind, IntegrityMode, LocalCollectionId, SharedCatalog};
 use crate::{
-    AccessPath, Backend, Batch, BatchOperation, BatchOutcome, BatchStats, DbError, DdlBatch,
-    DdlOutcome, DeleteQuery, DeleteResult, EntityRecord, Expr, FieldRef, InsertQuery, InsertResult,
-    InsertSource, JoinSource, LogicalJoinPlan, LogicalPlan, Operand, OrderBy,
-    PackageRegistrationOutcome, PhysicalDataSource, Query, QueryExplain, QueryField, QueryPlan,
-    QueryResult, SelectQuery, SourceRef, TextQueryInput, UpdateQuery, UpdateResult,
-    evaluate_filter_expr, execute_physical_plan_with_source,
+    AccessPath, AsyncPhysicalDataSource, Backend, Batch, BatchOperation, BatchOutcome, BatchStats,
+    CoreResult, DEFAULT_EXECUTION_BATCH_SIZE, DbError, DdlBatch, DdlOutcome, DeleteQuery,
+    DeleteResult, DynObject, EntityRecord, ExecutionOptions, Expr, FieldRef, InsertQuery,
+    InsertResult, InsertSource, JoinSource, LogicalJoinPlan, LogicalPlan, Operand, OrderBy,
+    PackageRegistrationOutcome, Query, QueryExplain, QueryField, QueryPlan, QueryResult,
+    SelectQuery, SendableRecordBatchStream, SourceRef, TextQueryInput, UpdateQuery, UpdateResult,
+    evaluate_filter_expr, execute_physical_plan_collect,
 };
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -332,9 +334,10 @@ impl FederatedBackend {
     async fn query_select(&self, query: SelectQuery) -> std::result::Result<Vec<Object>, DbError> {
         let registry = self.registry_snapshot()?;
         let pair = self.plan_select(&registry, &query)?;
-        let source = FederatedPhysicalDataSource { registry };
+        let source = Arc::new(FederatedAsyncPhysicalDataSource { registry });
         let context = crate::QueryContext::new(self.catalog.catalog_arc());
-        execute_physical_plan_with_source(&pair.physical, &source, &context)
+        execute_physical_plan_collect(pair.physical, source, context, ExecutionOptions::default())
+            .await
             .map_err(|err| DbError::InvalidQuery(err.to_string()))
     }
 
@@ -610,12 +613,12 @@ struct ResolvedCollection {
     federated_collection: Option<String>,
 }
 
-struct FederatedPhysicalDataSource {
+struct FederatedAsyncPhysicalDataSource {
     registry: SourceRegistry,
 }
 
-impl FederatedPhysicalDataSource {
-    fn request_for_source(&self, source: &SourceRef) -> crate::CoreResult<SourceScanRequest> {
+impl FederatedAsyncPhysicalDataSource {
+    fn request_for_source(&self, source: &SourceRef) -> CoreResult<SourceScanRequest> {
         let source_name = source.backend_tag.clone().ok_or_else(|| {
             crate::CoreError::new("federated physical source is missing backend tag")
         })?;
@@ -624,92 +627,129 @@ impl FederatedPhysicalDataSource {
         })?;
         Ok(SourceScanRequest::full_scan(source_name, collection))
     }
+
+    fn stream_request(&self, request: SourceScanRequest) -> SendableRecordBatchStream {
+        let registered = match self.registry.source(&request.source) {
+            Ok(source) => source.clone(),
+            Err(err) => {
+                return stream::once(async move { Err(crate::CoreError::new(err.to_string())) })
+                    .boxed();
+            }
+        };
+        stream::once(async move {
+            let rows = registered
+                .backend
+                .scan(request)
+                .await
+                .map_err(|err| crate::CoreError::new(err.to_string()))?;
+            Ok(rows
+                .into_iter()
+                .map(|row| Box::new(row) as DynObject)
+                .collect::<Vec<_>>())
+        })
+        .map_ok(chunk_dyn_rows)
+        .try_flatten()
+        .boxed()
+    }
 }
 
-impl PhysicalDataSource for FederatedPhysicalDataSource {
-    fn scan(&self, source: &SourceRef) -> crate::CoreResult<Vec<crate::DynObject>> {
-        let request = self.request_for_source(source)?;
-        let registered = self
-            .registry
-            .source(&request.source)
-            .map_err(|err| crate::CoreError::new(err.to_string()))?
-            .clone();
-        let rows = run_source_scan(registered.backend, request)
-            .map_err(|err| crate::CoreError::new(err.to_string()))?;
-        Ok(rows
-            .into_iter()
-            .map(|row| Box::new(row) as crate::DynObject)
-            .collect())
+impl AsyncPhysicalDataSource for FederatedAsyncPhysicalDataSource {
+    fn scan_stream(&self, source: SourceRef) -> SendableRecordBatchStream {
+        match self.request_for_source(&source) {
+            Ok(request) => self.stream_request(request),
+            Err(err) => stream::once(async move { Err(err) }).boxed(),
+        }
     }
 
-    fn scan_filtered(
+    fn scan_filtered_stream(
         &self,
-        source: &SourceRef,
-        predicate: &Expr,
-    ) -> crate::CoreResult<Vec<crate::DynObject>> {
-        let mut request = self.request_for_source(source)?;
-        let registered = self
-            .registry
-            .source(&request.source)
-            .map_err(|err| crate::CoreError::new(err.to_string()))?
-            .clone();
+        source: SourceRef,
+        predicate: Expr,
+    ) -> SendableRecordBatchStream {
+        let mut request = match self.request_for_source(&source) {
+            Ok(request) => request,
+            Err(err) => return stream::once(async move { Err(err) }).boxed(),
+        };
+        let registered = match self.registry.source(&request.source) {
+            Ok(source) => source.clone(),
+            Err(err) => {
+                return stream::once(async move { Err(crate::CoreError::new(err.to_string())) })
+                    .boxed();
+            }
+        };
         if registered.capabilities.supports_filter_pushdown {
-            request.predicate = Some(predicate.clone());
-            let rows = run_source_scan(registered.backend, request)
-                .map_err(|err| crate::CoreError::new(err.to_string()))?;
-            return Ok(rows
-                .into_iter()
-                .map(|row| Box::new(row) as crate::DynObject)
-                .collect());
+            request.predicate = Some(predicate);
+            return self.stream_request(request);
         }
 
-        let rows = self.scan(source)?;
-        Ok(rows
-            .into_iter()
-            .filter(|row| evaluate_filter_expr(row.as_ref(), predicate))
-            .collect())
+        self.scan_stream(source)
+            .map_ok(move |batch| {
+                batch
+                    .into_iter()
+                    .filter(|row| evaluate_filter_expr(row.as_ref(), &predicate))
+                    .collect::<Vec<_>>()
+            })
+            .boxed()
     }
 
-    fn index_lookup(
+    fn index_lookup_stream(
         &self,
-        source: &SourceRef,
-        field: &FieldRef,
-        value: &Value,
-    ) -> crate::CoreResult<Vec<crate::DynObject>> {
-        let mut request = self.request_for_source(source)?;
-        let registered = self
-            .registry
-            .source(&request.source)
-            .map_err(|err| crate::CoreError::new(err.to_string()))?
-            .clone();
+        source: SourceRef,
+        field: FieldRef,
+        value: Value,
+    ) -> SendableRecordBatchStream {
+        let mut request = match self.request_for_source(&source) {
+            Ok(request) => request,
+            Err(err) => return stream::once(async move { Err(err) }).boxed(),
+        };
+        let registered = match self.registry.source(&request.source) {
+            Ok(source) => source.clone(),
+            Err(err) => {
+                return stream::once(async move { Err(crate::CoreError::new(err.to_string())) })
+                    .boxed();
+            }
+        };
         if registered.capabilities.supports_index_lookup {
-            if let Some(path) = field_path_for_ref(field) {
+            if let Some(path) = field_path_for_ref(&field) {
                 request.predicate = Some(Expr::Binary {
                     op: semantic_data::query::BinaryOp::Eq,
                     left: Box::new(Expr::Operand(Operand::Field(path))),
-                    right: Box::new(Expr::Operand(Operand::Literal(value.clone()))),
+                    right: Box::new(Expr::Operand(Operand::Literal(value))),
                 });
-                let rows = run_source_scan(registered.backend, request)
-                    .map_err(|err| crate::CoreError::new(err.to_string()))?;
-                return Ok(rows
-                    .into_iter()
-                    .map(|row| Box::new(row) as crate::DynObject)
-                    .collect());
+                return self.stream_request(request);
             }
         }
 
-        PhysicalDataSource::scan_filtered(
-            self,
+        self.scan_filtered_stream(
             source,
-            &Expr::Binary {
+            Expr::Binary {
                 op: semantic_data::query::BinaryOp::Eq,
                 left: Box::new(Expr::Operand(Operand::Field(
-                    field_path_for_ref(field).unwrap_or_else(|| FieldPath::from_fields(["id"])),
+                    field_path_for_ref(&field).unwrap_or_else(|| FieldPath::from_fields(["id"])),
                 ))),
-                right: Box::new(Expr::Operand(Operand::Literal(value.clone()))),
+                right: Box::new(Expr::Operand(Operand::Literal(value))),
             },
         )
     }
+}
+
+fn chunk_dyn_rows(rows: Vec<DynObject>) -> SendableRecordBatchStream {
+    let batch_size = DEFAULT_EXECUTION_BATCH_SIZE;
+    stream::unfold(rows.into_iter(), move |mut iter| async move {
+        let mut batch = Vec::with_capacity(batch_size);
+        for _ in 0..batch_size {
+            let Some(row) = iter.next() else {
+                break;
+            };
+            batch.push(row);
+        }
+        if batch.is_empty() {
+            None
+        } else {
+            Some((Ok(batch), iter))
+        }
+    })
+    .boxed()
 }
 
 fn validate_source_name(name: &str) -> std::result::Result<(), DbError> {
@@ -948,15 +988,6 @@ fn field_path_for_ref(field: &FieldRef) -> Option<FieldPath> {
     }
 }
 
-fn run_source_scan(
-    backend: Arc<dyn FederatedSource>,
-    request: SourceScanRequest,
-) -> std::result::Result<Vec<Object>, DbError> {
-    std::thread::spawn(move || futures::executor::block_on(backend.scan(request)))
-        .join()
-        .map_err(|_| DbError::Storage("federated source scan thread panicked".to_string()))?
-}
-
 fn reject_cross_source_insert(
     registry: &SourceRegistry,
     default_source: Option<&str>,
@@ -1132,7 +1163,7 @@ impl BackendFederatedSource {
 
 #[cfg(test)]
 mod tests {
-    use futures::executor::block_on;
+    use futures::executor;
     use std::sync::Mutex;
 
     use super::*;
@@ -1271,7 +1302,7 @@ mod tests {
         source: Arc<MockSource>,
         capabilities: SourceCapabilities,
     ) {
-        block_on(db.register_source(SourceRegistration {
+        executor::block_on(db.register_source(SourceRegistration {
             name: name.to_string(),
             backend: source,
             namespace: SourceNamespace::PrefixCollections,
@@ -1292,7 +1323,8 @@ mod tests {
         let db = FederatedBackend::new(Some("local".to_string()));
         register(&db, "local", source.clone(), SourceCapabilities::default());
 
-        let out = block_on(db.query(TextQueryInput::sql("SELECT id FROM users"))).unwrap();
+        let out =
+            executor::block_on(db.query(TextQueryInput::sql("SELECT id FROM users"))).unwrap();
         let QueryResult::Select(rows) = out else {
             panic!("expected select result");
         };
@@ -1306,7 +1338,8 @@ mod tests {
         let db = FederatedBackend::new(None);
         register(&db, "local", source, SourceCapabilities::default());
 
-        let err = block_on(db.query(TextQueryInput::sql("SELECT id FROM users"))).unwrap_err();
+        let err =
+            executor::block_on(db.query(TextQueryInput::sql("SELECT id FROM users"))).unwrap_err();
         assert!(matches!(err, DbError::InvalidQuery(_)));
     }
 
@@ -1322,7 +1355,9 @@ mod tests {
         let db = FederatedBackend::new(None);
         register(&db, "github", source.clone(), SourceCapabilities::default());
 
-        let out = block_on(db.query(TextQueryInput::sql("SELECT login FROM github.User"))).unwrap();
+        let out =
+            executor::block_on(db.query(TextQueryInput::sql("SELECT login FROM github.User")))
+                .unwrap();
         let QueryResult::Select(rows) = out else {
             panic!("expected select result");
         };
@@ -1362,7 +1397,7 @@ mod tests {
         let sql = "SELECT u.login AS login, i.title AS title \
                    FROM github.User AS u \
                    JOIN local.issues AS i ON u.id = i.author_id";
-        let out = block_on(db.query(TextQueryInput::sql(sql))).unwrap();
+        let out = executor::block_on(db.query(TextQueryInput::sql(sql))).unwrap();
         let QueryResult::Select(rows) = out else {
             panic!("expected select result");
         };
@@ -1393,7 +1428,7 @@ mod tests {
         let sql = "SELECT u.login AS login \
                    FROM github.User AS u \
                    LEFT JOIN local.issues AS i ON u.id = i.author_id";
-        let out = block_on(db.query(TextQueryInput::sql(sql))).unwrap();
+        let out = executor::block_on(db.query(TextQueryInput::sql(sql))).unwrap();
         let QueryResult::Select(rows) = out else {
             panic!("expected select result");
         };
@@ -1430,7 +1465,7 @@ mod tests {
         let sql = "SELECT COUNT(*) AS issue_count \
                    FROM github.User AS u \
                    JOIN local.issues AS i ON u.id = i.author_id";
-        let out = block_on(db.query(TextQueryInput::sql(sql))).unwrap();
+        let out = executor::block_on(db.query(TextQueryInput::sql(sql))).unwrap();
         let QueryResult::Select(rows) = out else {
             panic!("expected select result");
         };
@@ -1460,7 +1495,7 @@ mod tests {
             },
         );
 
-        let out = block_on(db.query(TextQueryInput::sql(
+        let out = executor::block_on(db.query(TextQueryInput::sql(
             "SELECT login FROM users WHERE login = 'theduke'",
         )))
         .unwrap();
@@ -1486,7 +1521,7 @@ mod tests {
         let db = FederatedBackend::new(Some("local".to_string()));
         register(&db, "local", source.clone(), SourceCapabilities::default());
 
-        let out = block_on(db.query(TextQueryInput::sql(
+        let out = executor::block_on(db.query(TextQueryInput::sql(
             "SELECT login FROM users WHERE login = 'theduke'",
         )))
         .unwrap();
@@ -1504,7 +1539,7 @@ mod tests {
         let second = Arc::new(MockSource::new(&["users"], BTreeMap::new()));
         register(&db, "local", first, SourceCapabilities::default());
 
-        let err = block_on(db.register_source(SourceRegistration {
+        let err = executor::block_on(db.register_source(SourceRegistration {
             name: "local".to_string(),
             backend: second,
             namespace: SourceNamespace::PrefixCollections,
@@ -1534,7 +1569,7 @@ mod tests {
                 "id",
                 Value::String("u1".to_string()),
             )])]));
-        let out = block_on(db.query(TextQueryInput::Ast(Query::Insert(query)))).unwrap();
+        let out = executor::block_on(db.query(TextQueryInput::Ast(Query::Insert(query)))).unwrap();
         assert!(matches!(out, QueryResult::Insert(_)));
         assert_eq!(source.write_count(), 1);
     }
@@ -1572,7 +1607,7 @@ mod tests {
                 id: "2".to_string(),
                 object: Object::new(),
             });
-        let err = block_on(db.execute_batch(batch)).unwrap_err();
+        let err = executor::block_on(db.execute_batch(batch)).unwrap_err();
         assert!(matches!(err, DbError::InvalidQuery(_)));
     }
 
@@ -1585,7 +1620,8 @@ mod tests {
         let query = InsertQuery::new()
             .with_collection("github.users")
             .with_source(InsertSource::Objects(vec![Object::new()]));
-        let err = block_on(db.query(TextQueryInput::Ast(Query::Insert(query)))).unwrap_err();
+        let err =
+            executor::block_on(db.query(TextQueryInput::Ast(Query::Insert(query)))).unwrap_err();
         assert!(matches!(err, DbError::InvalidQuery(_)));
     }
 
@@ -1595,7 +1631,8 @@ mod tests {
         let db = FederatedBackend::new(Some("local".to_string()));
         register(&db, "local", source, SourceCapabilities::default());
 
-        let explain = block_on(db.explain(TextQueryInput::sql("SELECT * FROM users"))).unwrap();
+        let explain =
+            executor::block_on(db.explain(TextQueryInput::sql("SELECT * FROM users"))).unwrap();
         let crate::PhysicalPlan::Source(crate::PhysicalSource::Scan { source }) = explain.physical
         else {
             panic!("expected scan source");
@@ -1624,7 +1661,7 @@ mod tests {
         let db = FederatedBackend::new(Some("local".to_string()));
         register(&db, "local", source.clone(), SourceCapabilities::default());
 
-        let out = block_on(db.query(TextQueryInput::sql(
+        let out = executor::block_on(db.query(TextQueryInput::sql(
             "SELECT login FROM users ORDER BY login ASC LIMIT 1",
         )))
         .unwrap();
