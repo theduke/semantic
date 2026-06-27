@@ -60,8 +60,7 @@ pub fn register_defaults(catalog: &mut UiCatalog) {
     }
 
     let file_renderer = Rc::new(|ctx: RenderCtx, value: &Value, object: Option<&Object>| {
-        let Some(file_id) = object.and_then(|object| object_string(object, &[ID_ATTRIBUTE_ID]))
-        else {
+        let Some(file_id) = file_link_id(value, object) else {
             let text = value_to_text(value);
             return rsx! { span { class: "semantic-value semantic-value--scalar", "{text}" } };
         };
@@ -110,6 +109,12 @@ fn object_string<'a>(object: &'a Object, keys: &[&str]) -> Option<&'a str> {
         .find_map(|key| object.get(*key).and_then(Value::as_str))
 }
 
+fn file_link_id<'a>(value: &'a Value, object: Option<&'a Object>) -> Option<&'a str> {
+    object
+        .and_then(|object| object_string(object, &[ID_ATTRIBUTE_ID]))
+        .or_else(|| value.as_str())
+}
+
 pub fn value_to_text(value: &Value) -> String {
     match value {
         Value::Void => String::new(),
@@ -139,5 +144,29 @@ pub fn value_to_text(value: &Value) -> String {
         Value::Map(value) => format!("{value:?}"),
         Value::Object(value) => format!("{} fields", value.len()),
         Value::Variant(value) => format!("{value:?}"),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn file_link_id_prefers_object_id() {
+        let mut object = Object::new();
+        object.insert(ID_ATTRIBUTE_ID, Value::String("entity-id".to_string()));
+
+        assert_eq!(
+            file_link_id(&Value::String("locator".to_string()), Some(&object)),
+            Some("entity-id")
+        );
+    }
+
+    #[test]
+    fn file_link_id_falls_back_to_locator_value() {
+        assert_eq!(
+            file_link_id(&Value::String("file-locator".to_string()), None),
+            Some("file-locator")
+        );
     }
 }

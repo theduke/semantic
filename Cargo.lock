@@ -8351,6 +8351,7 @@ dependencies = [
  "dioxus",
  "dxcomp",
  "futures",
+ "infer",
  "semantic_app",
  "semantic_data",
  "semantic_db_core",

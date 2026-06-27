@@ -460,7 +460,7 @@ async fn upload_item(
         scope_id,
         id: None,
         filename: Some(item.name.clone()),
-        mime_type: item.mime_type.clone(),
+        mime_type: detect_mime_type(&item.name, item.mime_type.as_deref(), &bytes),
         entity: metadata_entity(&item.title, &item.description),
         bytes,
     };
@@ -513,13 +513,22 @@ fn same_file(item: &UploadQueueItem, file: &FileData) -> bool {
 }
 
 fn normalize_mime_type(file: &FileData) -> Option<String> {
-    let from_name = mime_from_name(&file.name());
-    let from_file = file
-        .content_type()
-        .filter(|mime| !mime.trim().is_empty())
-        .filter(|mime| !is_unhelpful_file_mime(mime));
+    detect_mime_type(&file.name(), file.content_type().as_deref(), &[])
+}
 
-    from_name.map(str::to_string).or(from_file)
+fn detect_mime_type(name: &str, declared_mime_type: Option<&str>, bytes: &[u8]) -> Option<String> {
+    infer::get(bytes)
+        .map(|kind| kind.mime_type().to_string())
+        .or_else(|| mime_from_name(name).map(str::to_string))
+        .or_else(|| normalize_declared_mime_type(declared_mime_type))
+}
+
+fn normalize_declared_mime_type(mime_type: Option<&str>) -> Option<String> {
+    mime_type
+        .map(str::trim)
+        .filter(|mime| !mime.is_empty())
+        .filter(|mime| !is_unhelpful_file_mime(mime))
+        .map(ToOwned::to_owned)
 }
 
 fn is_unhelpful_file_mime(mime: &str) -> bool {
@@ -609,6 +618,31 @@ mod tests {
         assert_eq!(mime_from_name("photo.png"), Some("image/png"));
         assert_eq!(mime_from_name("photo.WEBP"), Some("image/webp"));
         assert_eq!(mime_from_name("notes.txt"), None);
+    }
+
+    #[test]
+    fn detect_mime_type_prefers_binary_signature() {
+        let bytes = b"\x89PNG\r\n\x1a\n\0\0\0\rIHDR";
+        assert_eq!(
+            detect_mime_type("download.bin", Some("text/html; charset=utf-8"), bytes),
+            Some("image/png".to_string())
+        );
+    }
+
+    #[test]
+    fn detect_mime_type_falls_back_to_extension_before_declared_type() {
+        assert_eq!(
+            detect_mime_type("photo.png", Some("application/octet-stream"), &[]),
+            Some("image/png".to_string())
+        );
+    }
+
+    #[test]
+    fn detect_mime_type_uses_helpful_declared_type_last() {
+        assert_eq!(
+            detect_mime_type("archive.custom", Some("application/zip"), &[]),
+            Some("application/zip".to_string())
+        );
     }
 
     #[test]
