@@ -1,6 +1,7 @@
 use dioxus::html::FileData;
 use dioxus::prelude::*;
 use futures::StreamExt as _;
+use semantic_data::filestore::{DESCRIPTION_ATTRIBUTE_ID, TITLE_ATTRIBUTE_ID};
 use semantic_data::value::{Object, Value};
 use semantic_rpc::file::{
     FileUploadPhase, FileUploadProgress, FileUploadRequest, FileUploadResponse,
@@ -512,9 +513,18 @@ fn same_file(item: &UploadQueueItem, file: &FileData) -> bool {
 }
 
 fn normalize_mime_type(file: &FileData) -> Option<String> {
-    file.content_type()
+    let from_name = mime_from_name(&file.name());
+    let from_file = file
+        .content_type()
         .filter(|mime| !mime.trim().is_empty())
-        .or_else(|| mime_from_name(&file.name()).map(str::to_string))
+        .filter(|mime| !is_unhelpful_file_mime(mime));
+
+    from_name.map(str::to_string).or(from_file)
+}
+
+fn is_unhelpful_file_mime(mime: &str) -> bool {
+    let mime = mime.trim().to_ascii_lowercase();
+    mime == "application/octet-stream" || mime.starts_with("text/html")
 }
 
 fn mime_from_name(name: &str) -> Option<&'static str> {
@@ -545,12 +555,12 @@ fn metadata_entity(title: &str, description: &str) -> Object {
     let mut entity = Object::new();
     let title = title.trim();
     if !title.is_empty() {
-        entity.insert("semantic:title", Value::String(title.to_string()));
+        entity.insert(TITLE_ATTRIBUTE_ID, Value::String(title.to_string()));
     }
     let description = description.trim();
     if !description.is_empty() {
         entity.insert(
-            "semantic:description",
+            DESCRIPTION_ATTRIBUTE_ID,
             Value::String(description.to_string()),
         );
     }
@@ -605,17 +615,25 @@ mod tests {
     fn metadata_entity_sets_namespaced_user_fields() {
         let entity = metadata_entity(" Title ", " Body ");
         assert_eq!(
-            entity.get("semantic:title"),
+            entity.get(TITLE_ATTRIBUTE_ID),
             Some(&Value::String("Title".to_string()))
         );
         assert_eq!(
-            entity.get("semantic:description"),
+            entity.get(DESCRIPTION_ATTRIBUTE_ID),
             Some(&Value::String("Body".to_string()))
         );
         assert!(!entity.contains_key("title"));
         assert!(!entity.contains_key("description"));
         assert!(!entity.contains_key("filestore_locator"));
         assert!(!entity.contains_key("filename"));
+    }
+
+    #[test]
+    fn unhelpful_file_mime_is_detected() {
+        assert!(is_unhelpful_file_mime("application/octet-stream"));
+        assert!(is_unhelpful_file_mime("text/html; charset=utf-8"));
+        assert!(!is_unhelpful_file_mime("image/png"));
+        assert!(!is_unhelpful_file_mime("text/plain"));
     }
 
     #[test]

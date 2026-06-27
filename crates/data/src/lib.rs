@@ -3,6 +3,8 @@ pub use value::*;
 
 pub mod filestore;
 
+pub mod builtin;
+
 pub mod attr;
 
 pub mod expr;

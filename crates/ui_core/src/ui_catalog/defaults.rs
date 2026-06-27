@@ -1,10 +1,13 @@
 use std::rc::Rc;
 
 use dioxus::prelude::*;
-use semantic_data::filestore::FILE_FILESTORE_LOCATOR_ATTRIBUTE_ID;
-use semantic_data::value::Value;
+use semantic_data::builtin::ID_ATTRIBUTE_ID;
+use semantic_data::filestore::{
+    FILE_FILENAME_ATTRIBUTE_ID, FILE_FILESTORE_LOCATOR_ATTRIBUTE_ID, FILE_MIME_TYPE_ATTRIBUTE_ID,
+};
+use semantic_data::value::{Object, Value};
 
-use crate::ui_catalog::{RenderMode, UiCatalog, ValueRenderContext};
+use crate::ui_catalog::{RenderCtx, RenderMode, UiCatalog, ValueRenderContext};
 
 pub fn register_defaults(catalog: &mut UiCatalog) {
     let fallback = Rc::new(|ctx: ValueRenderContext| {
@@ -56,52 +59,55 @@ pub fn register_defaults(catalog: &mut UiCatalog) {
             .register_type_renderer(key, fallback.clone());
     }
 
-    catalog.render_registry_mut().register_attribute_renderer(
-        FILE_FILESTORE_LOCATOR_ATTRIBUTE_ID,
-        Rc::new(|ctx, value, object| {
-            let Some(file_id) = object
-                .and_then(|object| object.get("id"))
-                .and_then(Value::as_str)
-            else {
-                let text = value_to_text(value);
-                return rsx! { span { class: "semantic-value semantic-value--scalar", "{text}" } };
-            };
-            let href = format!("{}/{}", ctx.settings.file_api_prefix, file_id);
-            let mime_type = object
-                .and_then(|object| object.get("mime_type"))
-                .and_then(Value::as_str)
-                .unwrap_or_default();
-            let filename = object
-                .and_then(|object| object.get("filename"))
-                .and_then(Value::as_str)
-                .unwrap_or(file_id);
-            if ctx.settings.show_media && mime_type.starts_with("image/") {
-                rsx! {
-                    a {
-                        class: "semantic-file semantic-file--image",
-                        href: "{href}",
-                        target: "_blank",
-                        rel: "noopener noreferrer",
-                        img {
-                            class: "semantic-file__image",
-                            src: "{href}",
-                            alt: "{filename}"
-                        }
-                    }
-                }
-            } else {
-                rsx! {
-                    a {
-                        class: "semantic-file semantic-file--link",
-                        href: "{href}",
-                        target: "_blank",
-                        rel: "noopener noreferrer",
-                        "{filename}"
+    let file_renderer = Rc::new(|ctx: RenderCtx, value: &Value, object: Option<&Object>| {
+        let Some(file_id) = object.and_then(|object| object_string(object, &[ID_ATTRIBUTE_ID]))
+        else {
+            let text = value_to_text(value);
+            return rsx! { span { class: "semantic-value semantic-value--scalar", "{text}" } };
+        };
+        let href = format!("{}/{}", ctx.settings.file_api_prefix, file_id);
+        let mime_type = object
+            .and_then(|object| object_string(object, &["mime_type", FILE_MIME_TYPE_ATTRIBUTE_ID]))
+            .unwrap_or_default();
+        let filename = object
+            .and_then(|object| object_string(object, &["filename", FILE_FILENAME_ATTRIBUTE_ID]))
+            .unwrap_or(file_id);
+        if ctx.settings.show_media && mime_type.starts_with("image/") {
+            rsx! {
+                a {
+                    class: "semantic-file semantic-file--image",
+                    href: "{href}",
+                    target: "_blank",
+                    rel: "noopener noreferrer",
+                    img {
+                        class: "semantic-file__image",
+                        src: "{href}",
+                        alt: "{filename}"
                     }
                 }
             }
-        }),
-    );
+        } else {
+            rsx! {
+                a {
+                    class: "semantic-file semantic-file--link",
+                    href: "{href}",
+                    target: "_blank",
+                    rel: "noopener noreferrer",
+                    "{filename}"
+                }
+            }
+        }
+    });
+    for attribute_id in ["filestore_locator", FILE_FILESTORE_LOCATOR_ATTRIBUTE_ID] {
+        catalog
+            .render_registry_mut()
+            .register_attribute_renderer(attribute_id, file_renderer.clone());
+    }
+}
+
+fn object_string<'a>(object: &'a Object, keys: &[&str]) -> Option<&'a str> {
+    keys.iter()
+        .find_map(|key| object.get(*key).and_then(Value::as_str))
 }
 
 pub fn value_to_text(value: &Value) -> String {

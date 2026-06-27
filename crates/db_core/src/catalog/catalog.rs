@@ -43,8 +43,8 @@ pub struct Catalog {
     auto_index_enabled: bool,
 }
 
-pub const PRIMARY_ID_FIELD: &str = "id";
-pub const OBJECT_TYPE_FIELD: &str = "type";
+pub const PRIMARY_ID_FIELD: &str = semantic_data::builtin::ID_ATTRIBUTE_ID;
+pub const OBJECT_TYPE_FIELD: &str = semantic_data::builtin::TYPE_ATTRIBUTE_ID;
 pub const PARENT_RELATION_FIELD: &str = "parent";
 pub const PARENT_RELATION_ATTRIBUTE: &str = "parent";
 pub const PRIMARY_ID_INDEX_NAME: &str = "__builtin_pk_id";

@@ -2,6 +2,7 @@ use bytes::{Bytes, BytesMut};
 use futures_util::stream::BoxStream;
 use futures_util::{StreamExt as _, TryStreamExt as _};
 use objstore::{DataSource, ObjStore as _, Put};
+use semantic_data::builtin::{ID_ATTRIBUTE_ID, TYPE_ATTRIBUTE_ID};
 use semantic_data::filestore::{
     FILE_BYTE_SIZE_ATTRIBUTE_ID, FILE_CLASS_ID, FILE_CONTENT_HASH_SHA256_ATTRIBUTE_ID,
     FILE_FILENAME_ATTRIBUTE_ID, FILE_FILESTORE_LOCATOR_ATTRIBUTE_ID, FILE_MIME_TYPE_ATTRIBUTE_ID,
@@ -69,7 +70,7 @@ impl FileService {
         let computed_sha256 = sha256_hex(&bytes);
         let id = request
             .id
-            .or_else(|| object_string(&request.entity, "id"))
+            .or_else(|| object_string(&request.entity, ID_ATTRIBUTE_ID))
             .unwrap_or_else(|| format!("file-sha256-{computed_sha256}"));
         let filestore_locator = request.filestore_locator.unwrap_or_else(|| id.clone());
 
@@ -82,8 +83,8 @@ impl FileService {
         let mime_type = request.mime_type.or(meta.mime_type);
 
         let mut object = request.entity;
-        object.insert("id", Value::String(id.clone()));
-        object.insert("type", Value::String(FILE_CLASS_ID.to_string()));
+        object.insert(ID_ATTRIBUTE_ID, Value::String(id.clone()));
+        object.insert(TYPE_ATTRIBUTE_ID, Value::String(FILE_CLASS_ID.to_string()));
         object.insert("filestore_locator", Value::String(filestore_locator));
         if let Some(filename) = request.filename {
             object.insert("filename", Value::String(filename));
@@ -178,7 +179,7 @@ fn object_string(object: &Object, field: &str) -> Option<String> {
 }
 
 fn validate_file_record(record: &EntityRecord) -> std::result::Result<(), AppError> {
-    match record.object.get("type").and_then(Value::as_str) {
+    match record.object.get(TYPE_ATTRIBUTE_ID).and_then(Value::as_str) {
         Some(FILE_CLASS_ID) => Ok(()),
         Some(other) => Err(AppError::InvalidFileEntity(format!(
             "entity '{}' is type '{other}', not '{}'",

@@ -197,7 +197,7 @@ pub const CORE_CATALOG_COLLECTIONS_COLLECTION: &str = CORE_CATALOG_SCHEMA_COLLEC
 pub const CORE_CATALOG_INDEXES_COLLECTION: &str = CORE_CATALOG_SCHEMA_COLLECTION;
 pub const CORE_CATALOG_META_COLLECTION: &str = CORE_CATALOG_SCHEMA_COLLECTION;
 
-const CORE_CATALOG_ATTR_ID: &str = "id";
+const CORE_CATALOG_ATTR_ID: &str = semantic_data::builtin::ID_ATTRIBUTE_ID;
 const CORE_CATALOG_ATTR_LID: &str = "semantic:lid";
 const CORE_CATALOG_ATTR_ATTRIBUTE: &str = "semantic:attribute";
 const CORE_CATALOG_ATTR_TYPE_DEF: &str = "semantic:type_def";
@@ -223,7 +223,7 @@ const CORE_SCHEMA_MODULE: &str = "core";
 pub fn core_catalog_schema_batch() -> DdlBatch {
     let mut attrs = std::collections::BTreeMap::new();
     attrs.insert(
-        "id".to_string(),
+        CORE_CATALOG_ATTR_ID.to_string(),
         ClassAttribute {
             attribute: AttributeRef {
                 id: CORE_CATALOG_ATTR_ID.to_string(),
@@ -529,7 +529,7 @@ pub fn core_catalog_schema_batch() -> DdlBatch {
         .with_op(DdlOperation::UpsertAttribute {
             attribute: AttributeType {
                 id: CORE_CATALOG_ATTR_ID.to_string(),
-                name: "id".to_string(),
+                name: CORE_CATALOG_ATTR_ID.to_string(),
                 ty: Type {
                     kind: TypeKind::String(StringType {
                         format: None,
@@ -768,7 +768,7 @@ pub fn core_catalog_schema_batch() -> DdlBatch {
                 name: "parent".to_string(),
                 ty: Type {
                     kind: TypeKind::Ref(TypeRef {
-                        name: "id".to_string(),
+                        name: CORE_CATALOG_ATTR_ID.to_string(),
                         args: vec![],
                     }),
                     constraints: vec![],
@@ -800,7 +800,7 @@ pub fn core_catalog_schema_batch() -> DdlBatch {
                 name: "from".to_string(),
                 ty: Type {
                     kind: TypeKind::Ref(TypeRef {
-                        name: "id".to_string(),
+                        name: CORE_CATALOG_ATTR_ID.to_string(),
                         args: vec![],
                     }),
                     constraints: vec![],
@@ -816,7 +816,7 @@ pub fn core_catalog_schema_batch() -> DdlBatch {
                 name: "to".to_string(),
                 ty: Type {
                     kind: TypeKind::Ref(TypeRef {
-                        name: "id".to_string(),
+                        name: CORE_CATALOG_ATTR_ID.to_string(),
                         args: vec![],
                     }),
                     constraints: vec![],

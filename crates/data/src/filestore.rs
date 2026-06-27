@@ -117,6 +117,9 @@ pub fn file_attributes() -> Vec<AttributeType> {
 pub fn file_class() -> ClassType {
     let class_attribute =
         |attribute_id, ui_order| class_attribute_with_ui_order(attribute_id, false, Some(ui_order));
+    let titled_class_attribute = |attribute_id, ui_order, title| {
+        class_attribute_with_ui_order_and_title(attribute_id, false, Some(ui_order), title)
+    };
 
     ClassType {
         id: FILE_CLASS_ID.to_string(),
@@ -124,10 +127,13 @@ pub fn file_class() -> ClassType {
         inherits: None,
         extends: Vec::new(),
         attributes: BTreeMap::from([
-            ("title".to_string(), class_attribute(TITLE_ATTRIBUTE_ID, 10)),
+            (
+                "title".to_string(),
+                titled_class_attribute(TITLE_ATTRIBUTE_ID, 10, "Title"),
+            ),
             (
                 "description".to_string(),
-                class_attribute(DESCRIPTION_ATTRIBUTE_ID, 20),
+                titled_class_attribute(DESCRIPTION_ATTRIBUTE_ID, 20, "Description"),
             ),
             (
                 "filestore_locator".to_string(),
@@ -156,20 +162,29 @@ pub fn file_class() -> ClassType {
 }
 
 fn title_attribute() -> AttributeType {
-    attribute(TITLE_ATTRIBUTE_ID, "title", string_type())
+    attribute_with_title(TITLE_ATTRIBUTE_ID, "title", string_type(), "Title")
 }
 
 fn description_attribute() -> AttributeType {
-    attribute(DESCRIPTION_ATTRIBUTE_ID, "description", string_type())
+    attribute_with_title(
+        DESCRIPTION_ATTRIBUTE_ID,
+        "description",
+        string_type(),
+        "Description",
+    )
 }
 
 fn attribute(id: &str, name: &str, ty: Type) -> AttributeType {
+    attribute_with_title(id, name, ty, title_from_name(name))
+}
+
+fn attribute_with_title(id: &str, name: &str, ty: Type, title: impl Into<String>) -> AttributeType {
     AttributeType {
         id: id.to_string(),
         name: name.to_string(),
         ty,
         constraints: Vec::<Constraint>::new(),
-        meta: meta_with_title(title_from_name(name)),
+        meta: meta_with_title(title),
     }
 }
 
@@ -177,6 +192,20 @@ fn class_attribute_with_ui_order(
     attribute_id: &str,
     required: bool,
     ui_order: Option<u32>,
+) -> ClassAttribute {
+    class_attribute_with_ui_order_and_title(
+        attribute_id,
+        required,
+        ui_order,
+        title_from_attribute_id(attribute_id),
+    )
+}
+
+fn class_attribute_with_ui_order_and_title(
+    attribute_id: &str,
+    required: bool,
+    ui_order: Option<u32>,
+    title: impl Into<String>,
 ) -> ClassAttribute {
     ClassAttribute {
         attribute: AttributeRef {
@@ -186,7 +215,7 @@ fn class_attribute_with_ui_order(
         ui_order,
         computed: None,
         constraints: Vec::new(),
-        meta: meta_with_title(title_from_attribute_id(attribute_id)),
+        meta: meta_with_title(title),
     }
 }
 
@@ -280,6 +309,42 @@ mod tests {
                 .attributes
                 .values()
                 .all(|attribute| !attribute.required)
+        );
+    }
+
+    #[test]
+    fn generic_metadata_fields_have_explicit_titles() {
+        let attributes = super::file_attributes()
+            .into_iter()
+            .map(|attribute| (attribute.id.clone(), attribute))
+            .collect::<std::collections::BTreeMap<_, _>>();
+        assert_eq!(
+            attributes
+                .get(super::TITLE_ATTRIBUTE_ID)
+                .and_then(|attribute| attribute.meta.title.as_deref()),
+            Some("Title")
+        );
+        assert_eq!(
+            attributes
+                .get(super::DESCRIPTION_ATTRIBUTE_ID)
+                .and_then(|attribute| attribute.meta.title.as_deref()),
+            Some("Description")
+        );
+
+        let class = super::file_class();
+        assert_eq!(
+            class
+                .attributes
+                .get("title")
+                .and_then(|attribute| attribute.meta.title.as_deref()),
+            Some("Title")
+        );
+        assert_eq!(
+            class
+                .attributes
+                .get("description")
+                .and_then(|attribute| attribute.meta.title.as_deref()),
+            Some("Description")
         );
     }
 }
