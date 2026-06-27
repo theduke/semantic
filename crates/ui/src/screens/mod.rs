@@ -1,12 +1,14 @@
 mod catalog;
 mod collection;
 mod entity;
+mod form;
 mod home;
 mod query;
 
 pub use catalog::CatalogScreen;
 pub use collection::CollectionScreen;
 pub use entity::EntityScreen;
+pub use form::{CreateEntityScreen, EditEntityScreen};
 pub use home::HomeScreen;
 pub use query::QueryScreen;
 

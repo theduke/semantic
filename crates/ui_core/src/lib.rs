@@ -18,7 +18,7 @@ pub use form::{
     DynamicClassForm, DynamicFormActions, DynamicValueForm, SemanticFormErrors, SemanticFormMode,
     SemanticFormOptions, SemanticFormSubmit, SemanticSubmitContext, UiFormRegistry,
     ValueFormRenderContext, ValueFormRenderer, build_class_form_options, build_value_form_options,
-    default_value_for_type, literal_to_value,
+    default_value_for_class, default_value_for_type, literal_to_value, rpc_insert_submit_handler,
 };
 pub use ui_catalog::{
     CatalogLoadStatus, RenderMode, UiCatalog, UiCatalogContext, UiCatalogProvider, UiCatalogReload,

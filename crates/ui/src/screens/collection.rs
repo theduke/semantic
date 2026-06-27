@@ -8,6 +8,8 @@ use crate::screens::value_string;
 pub fn CollectionScreen(
     collection: String,
     on_open_entity: EventHandler<(String, String)>,
+    on_edit_entity: EventHandler<(String, String)>,
+    on_create_entity: EventHandler<()>,
 ) -> Element {
     let client = use_rpc_client();
     let scope_id = use_active_scope_id();
@@ -22,6 +24,12 @@ pub fn CollectionScreen(
     rsx! {
         section { class: "semantic-collection",
             h2 { "{collection}" }
+            div { class: "semantic-collection__actions",
+                button {
+                    onclick: move |_| on_create_entity.call(()),
+                    "Create"
+                }
+            }
             match &*resource.read_unchecked() {
                 Some(Ok(rows)) => rsx! {
                     table {
@@ -30,6 +38,7 @@ pub fn CollectionScreen(
                                 th { "id" }
                                 th { "type" }
                                 th { "fields" }
+                                th { "actions" }
                             }
                         }
                         tbody {
@@ -49,6 +58,18 @@ pub fn CollectionScreen(
                                     }
                                     td { "{row.get(\"type\").map(value_string).unwrap_or_default()}" }
                                     td { "{row.len()}" }
+                                    td {
+                                        if let Some(id) = row.get("id").and_then(Value::as_str).map(str::to_string) {
+                                            button {
+                                                onclick: {
+                                                    let collection = collection.clone();
+                                                    let id = id.clone();
+                                                    move |_| on_edit_entity.call((collection.clone(), id.clone()))
+                                                },
+                                                "Edit"
+                                            }
+                                        }
+                                    }
                                 }
                             }
                         }

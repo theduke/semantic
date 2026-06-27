@@ -95,6 +95,7 @@ pub struct SemanticFormOptions {
     pub class: Option<ClassType>,
     pub collection: Option<String>,
     pub id: Option<String>,
+    pub scope_id: Option<String>,
     pub submit: Option<SemanticFormSubmit>,
     pub validation: ValidationStrategy,
     pub show_actions: bool,
@@ -109,6 +110,7 @@ impl SemanticFormOptions {
             class: None,
             collection: None,
             id: None,
+            scope_id: None,
             submit: None,
             validation: ValidationStrategy::submit(),
             show_actions: true,
@@ -124,7 +126,7 @@ pub fn build_value_form_options(options: &SemanticFormOptions) -> FormOptions<Va
             options.class.clone(),
             options.collection.clone(),
             options.id.clone(),
-            None,
+            options.scope_id.clone(),
         ));
     }
     out
@@ -136,6 +138,7 @@ pub fn build_class_form_options(
     mode: SemanticFormMode,
     collection: Option<String>,
     id: Option<String>,
+    scope_id: Option<String>,
     submit: Option<SemanticFormSubmit>,
 ) -> SemanticFormOptions {
     let mut value = Value::Object(object);
@@ -152,6 +155,7 @@ pub fn build_class_form_options(
         class: Some(class),
         collection,
         id,
+        scope_id,
         submit,
         validation: ValidationStrategy::submit(),
         show_actions: true,

@@ -31,9 +31,10 @@ pub fn DynamicClassForm(
     mode: SemanticFormMode,
     collection: Option<String>,
     id: Option<String>,
+    scope_id: Option<String>,
     submit: Option<SemanticFormSubmit>,
 ) -> Element {
-    let options = build_class_form_options(class, object, mode, collection, id, submit);
+    let options = build_class_form_options(class, object, mode, collection, id, scope_id, submit);
     rsx! { crate::form::DynamicValueForm { options } }
 }
 

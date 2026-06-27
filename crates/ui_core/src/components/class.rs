@@ -22,6 +22,7 @@ pub fn ClassView(
                 collection,
                 id,
                 mode: form_mode,
+                scope_id: None,
                 submit: None
             }
         };

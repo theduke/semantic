@@ -5,7 +5,11 @@ use semantic_ui_core::{
 };
 
 #[component]
-pub fn EntityScreen(collection: String, id: String) -> Element {
+pub fn EntityScreen(
+    collection: String,
+    id: String,
+    on_edit_entity: EventHandler<(String, String)>,
+) -> Element {
     let client = use_rpc_client();
     let scope_id = use_active_scope_id();
     let catalog = use_ui_catalog();
@@ -22,6 +26,16 @@ pub fn EntityScreen(collection: String, id: String) -> Element {
     rsx! {
         section { class: "semantic-entity",
             h2 { "{collection}/{id}" }
+            div { class: "semantic-entity__actions",
+                button {
+                    onclick: {
+                        let collection = collection.clone();
+                        let id = id.clone();
+                        move |_| on_edit_entity.call((collection.clone(), id.clone()))
+                    },
+                    "Edit"
+                }
+            }
             match &*resource.read_unchecked() {
                 Some(Ok(Some(object))) => {
                     let class = catalog.object_class(object).cloned();

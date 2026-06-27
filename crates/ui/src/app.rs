@@ -4,7 +4,10 @@ use dioxus::prelude::*;
 use semantic_rpc::RpcClient;
 use semantic_ui_core::{UiCatalogProvider, provide_rpc_client, provide_ui_scope_context};
 
-use crate::screens::{CatalogScreen, CollectionScreen, EntityScreen, HomeScreen, QueryScreen};
+use crate::screens::{
+    CatalogScreen, CollectionScreen, CreateEntityScreen, EditEntityScreen, EntityScreen,
+    HomeScreen, QueryScreen,
+};
 
 thread_local! {
     static BOOT: RefCell<Option<AppRootProps>> = const { RefCell::new(None) };
@@ -26,8 +29,10 @@ impl PartialEq for AppRootProps {
 enum Page {
     Home,
     Catalog,
+    CreateEntity,
     Collection(String),
     Entity { collection: String, id: String },
+    EditEntity { collection: String, id: String },
     Query,
 }
 
@@ -82,6 +87,7 @@ fn AppShell() -> Element {
                     button { onclick: move |_| page.set(Page::Home), "Home" }
                     button { onclick: move |_| page.set(Page::Catalog), "Catalog" }
                     button { onclick: move |_| page.set(Page::Collection("entities".to_string())), "Entities" }
+                    button { onclick: move |_| page.set(Page::CreateEntity), "Create" }
                     button { onclick: move |_| page.set(Page::Query), "Query" }
                 }
             }
@@ -93,14 +99,36 @@ fn AppShell() -> Element {
                         }
                     },
                     Page::Catalog => rsx! { CatalogScreen {} },
+                    Page::CreateEntity => rsx! {
+                        CreateEntityScreen {
+                            on_open_entity: move |(collection, id): (String, String)| {
+                                page.set(Page::Entity { collection, id })
+                            }
+                        }
+                    },
                     Page::Collection(collection) => rsx! {
                         CollectionScreen {
                             collection: collection.clone(),
-                            on_open_entity: move |(collection, id): (String, String)| page.set(Page::Entity { collection, id })
+                            on_open_entity: move |(collection, id): (String, String)| {
+                                page.set(Page::Entity { collection, id })
+                            },
+                            on_edit_entity: move |(collection, id): (String, String)| {
+                                page.set(Page::EditEntity { collection, id })
+                            },
+                            on_create_entity: move |()| page.set(Page::CreateEntity)
                         }
                     },
                     Page::Entity { collection, id } => rsx! {
                         EntityScreen {
+                            collection,
+                            id,
+                            on_edit_entity: move |(collection, id): (String, String)| {
+                                page.set(Page::EditEntity { collection, id })
+                            }
+                        }
+                    },
+                    Page::EditEntity { collection, id } => rsx! {
+                        EditEntityScreen {
                             collection,
                             id
                         }
