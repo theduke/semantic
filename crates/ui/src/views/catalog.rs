@@ -2,7 +2,7 @@ use dioxus::prelude::*;
 use semantic_ui_core::use_ui_catalog;
 
 #[component]
-pub fn CatalogScreen() -> Element {
+pub fn CatalogPage() -> Element {
     let catalog = use_ui_catalog();
     let collections: Vec<String> = catalog
         .collections()

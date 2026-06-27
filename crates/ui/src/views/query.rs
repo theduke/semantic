@@ -2,10 +2,10 @@ use dioxus::prelude::*;
 use semantic_data::value::{Object, Value};
 use semantic_ui_core::{use_active_scope_id, use_rpc_client};
 
-use crate::screens::value_string;
+use crate::components::value_string;
 
 #[component]
-pub fn QueryScreen() -> Element {
+pub fn QueryPage() -> Element {
     let client = use_rpc_client();
     let scope_id = use_active_scope_id();
     let mut query = use_signal(|| "select * from entities limit 50".to_string());

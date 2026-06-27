@@ -9,8 +9,10 @@ use semantic_ui_core::{
     use_ui_catalog,
 };
 
+use crate::views::Route;
+
 #[component]
-pub fn CreateEntityScreen(on_open_entity: EventHandler<(String, String)>) -> Element {
+pub fn CreateEntityPage() -> Element {
     let client = use_rpc_client();
     let scope_id = use_active_scope_id();
     let catalog = use_ui_catalog();
@@ -120,7 +122,12 @@ pub fn CreateEntityScreen(on_open_entity: EventHandler<(String, String)>) -> Ele
                     dxcomp::Button {
                         variant: dxcomp::ButtonVariant::Outline,
                         r#type: "button",
-                        onclick: move |_| on_open_entity.call((collection.clone(), entity_id.clone())),
+                        onclick: move |_| {
+                            navigator().push(Route::EntityPage {
+                                collection: collection.clone(),
+                                id: entity_id.clone(),
+                            });
+                        },
                         "Open Entity"
                     }
                 }
@@ -130,7 +137,7 @@ pub fn CreateEntityScreen(on_open_entity: EventHandler<(String, String)>) -> Ele
 }
 
 #[component]
-pub fn EditEntityScreen(collection: String, id: String) -> Element {
+pub fn EditEntityPage(collection: String, id: String) -> Element {
     let client = use_rpc_client();
     let scope_id = use_active_scope_id();
     let catalog = use_ui_catalog();

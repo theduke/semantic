@@ -1,7 +1,8 @@
 pub mod app;
 #[cfg(feature = "standalone")]
 pub mod backend;
-pub mod screens;
+pub mod components;
+pub mod views;
 
 pub use app::{AppRoot, AppRootProps, launch_with_client};
 #[cfg(feature = "standalone")]

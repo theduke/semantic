@@ -2,15 +2,10 @@ use dioxus::prelude::*;
 use semantic_data::value::{Object, Value};
 use semantic_ui_core::{use_active_scope_id, use_rpc_client};
 
-use crate::screens::value_string;
+use crate::{components::value_string, views::Route};
 
 #[component]
-pub fn CollectionScreen(
-    collection: String,
-    on_open_entity: EventHandler<(String, String)>,
-    on_edit_entity: EventHandler<(String, String)>,
-    on_create_entity: EventHandler<()>,
-) -> Element {
+pub fn CollectionPage(collection: String) -> Element {
     let client = use_rpc_client();
     let scope_id = use_active_scope_id();
     let collection_for_query = collection.clone();
@@ -26,7 +21,9 @@ pub fn CollectionScreen(
             h2 { "{collection}" }
             div { class: "semantic-collection__actions",
                 dxcomp::Button {
-                    onclick: move |_| on_create_entity.call(()),
+                    onclick: move |_| {
+                        navigator().push(Route::CreateEntityPage);
+                    },
                     "Create"
                 }
             }
@@ -46,13 +43,14 @@ pub fn CollectionScreen(
                                 tr {
                                     td {
                                         if let Some(id) = row.get("id").and_then(Value::as_str).map(str::to_string) {
-                                            dxcomp::Button {
-                                                variant: dxcomp::ButtonVariant::Link,
-                                                onclick: {
-                                                    let collection = collection.clone();
-                                                    let id = id.clone();
-                                                    move |_| on_open_entity.call((collection.clone(), id.clone()))
+                                            Link {
+                                                to: Route::EntityPage {
+                                                    collection: collection.clone(),
+                                                    id: id.clone()
                                                 },
+                                                class: "dx-button",
+                                                "data-style": "link",
+                                                "data-size": "default",
                                                 "{id}"
                                             }
                                         }
@@ -67,7 +65,12 @@ pub fn CollectionScreen(
                                                 onclick: {
                                                     let collection = collection.clone();
                                                     let id = id.clone();
-                                                    move |_| on_edit_entity.call((collection.clone(), id.clone()))
+                                                    move |_| {
+                                                        navigator().push(Route::EditEntityPage {
+                                                            collection: collection.clone(),
+                                                            id: id.clone(),
+                                                        });
+                                                    }
                                                 },
                                                 "Edit"
                                             }

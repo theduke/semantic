@@ -1,8 +1,10 @@
 use dioxus::prelude::*;
 use semantic_ui_core::use_ui_catalog;
 
+use crate::views::Route;
+
 #[component]
-pub fn HomeScreen(on_open_collection: EventHandler<String>) -> Element {
+pub fn HomePage() -> Element {
     let catalog = use_ui_catalog();
     let collections: Vec<String> = catalog
         .collections()
@@ -25,9 +27,13 @@ pub fn HomeScreen(on_open_collection: EventHandler<String>) -> Element {
                         {
                             let collection_for_open = collection.clone();
                             rsx! {
-                        dxcomp::Button {
-                            variant: dxcomp::ButtonVariant::Link,
-                            onclick: move |_| on_open_collection.call(collection_for_open.clone()),
+                        Link {
+                            to: Route::CollectionPage {
+                                collection: collection_for_open
+                            },
+                            class: "dx-button",
+                            "data-style": "link",
+                            "data-size": "default",
                             "{collection}"
                         }
                             }

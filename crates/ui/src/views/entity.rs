@@ -4,12 +4,10 @@ use semantic_ui_core::{
     ClassView, ObjectView, RenderMode, use_active_scope_id, use_rpc_client, use_ui_catalog,
 };
 
+use crate::views::Route;
+
 #[component]
-pub fn EntityScreen(
-    collection: String,
-    id: String,
-    on_edit_entity: EventHandler<(String, String)>,
-) -> Element {
+pub fn EntityPage(collection: String, id: String) -> Element {
     let client = use_rpc_client();
     let scope_id = use_active_scope_id();
     let catalog = use_ui_catalog();
@@ -32,7 +30,12 @@ pub fn EntityScreen(
                     onclick: {
                         let collection = collection.clone();
                         let id = id.clone();
-                        move |_| on_edit_entity.call((collection.clone(), id.clone()))
+                        move |_| {
+                            navigator().push(Route::EditEntityPage {
+                                collection: collection.clone(),
+                                id: id.clone(),
+                            });
+                        }
                     },
                     "Edit"
                 }
