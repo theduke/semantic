@@ -7,8 +7,8 @@ use std::time::Duration;
 use semantic_data::schema::{DbOpenMode, FunctionType};
 use semantic_data::value::{Object, Value};
 use semantic_db_core::{
-    DEFAULT_COLLECTION, DeleteResult, InsertResult, MutationStats, QueryResult, TextQueryFormat,
-    TextQueryInput, UpdateResult,
+    Batch, BatchOperation, BatchOutcome, BatchStats, DEFAULT_COLLECTION, DeleteResult,
+    InsertResult, MutationStats, QueryResult, TextQueryFormat, TextQueryInput, UpdateResult,
 };
 use semantic_rpc::{RpcCommand, RpcCommandSpec, RpcRegistry, RpcRequest, RpcResponse};
 
@@ -107,6 +107,7 @@ impl SemanticAppBuilder {
         self.registry.register(DbGetCommand)?;
         self.registry.register(DbInsertCommand)?;
         self.registry.register(DbDeleteCommand)?;
+        self.registry.register(DbBatchCommand)?;
         Ok(self)
     }
 
@@ -138,6 +139,7 @@ struct DbQueryCommand;
 struct DbGetCommand;
 struct DbInsertCommand;
 struct DbDeleteCommand;
+struct DbBatchCommand;
 
 macro_rules! command_spec {
     ($ty:ty, $name:literal) => {
@@ -169,6 +171,7 @@ command_spec!(DbQueryCommand, "semantic.db.query");
 command_spec!(DbGetCommand, "semantic.db.get");
 command_spec!(DbInsertCommand, "semantic.db.insert");
 command_spec!(DbDeleteCommand, "semantic.db.delete");
+command_spec!(DbBatchCommand, "semantic.db.batch");
 
 impl RpcCommand<AppRequestContext> for ScopeOpenCommand {
     fn call<'a>(
@@ -429,6 +432,23 @@ impl RpcCommand<AppRequestContext> for DbDeleteCommand {
     }
 }
 
+impl RpcCommand<AppRequestContext> for DbBatchCommand {
+    fn call<'a>(
+        &'a self,
+        ctx: &'a AppRequestContext,
+        payload: Value,
+    ) -> Pin<Box<dyn Future<Output = std::result::Result<Value, AppError>> + Send + 'a>> {
+        Box::pin(async move {
+            let object = expect_object(payload)?;
+            let scope_id = optional_string(&object, "scope_id")?.map(DbScopeId::new);
+            let batch = batch_from_payload(&object)?;
+            let db = ctx.resolve_db(scope_id).await?;
+            let outcome = db.execute_batch(batch).await?;
+            Ok(batch_outcome_to_value(outcome))
+        })
+    }
+}
+
 fn expect_object(value: Value) -> std::result::Result<Object, AppError> {
     match value {
         Value::Object(object) => Ok(object),
@@ -436,6 +456,94 @@ fn expect_object(value: Value) -> std::result::Result<Object, AppError> {
             "expected object payload".to_string(),
         )),
     }
+}
+
+fn batch_from_payload(object: &Object) -> std::result::Result<Batch, AppError> {
+    let operations = match object.get("operations") {
+        Some(Value::List(operations)) => operations,
+        Some(_) => {
+            return Err(AppError::InvalidRequest(
+                "field 'operations' must be a list".to_string(),
+            ));
+        }
+        None => return Err(missing_field("operations")),
+    };
+    let mut batch = Batch::new();
+    for operation in operations {
+        batch = batch.with_op(batch_operation_from_value(operation)?);
+    }
+    Ok(batch)
+}
+
+fn batch_operation_from_value(value: &Value) -> std::result::Result<BatchOperation, AppError> {
+    let Value::Object(object) = value else {
+        return Err(AppError::InvalidRequest(
+            "batch operation must be an object".to_string(),
+        ));
+    };
+    let kind = required_string(object, "kind")?;
+    match kind.as_str() {
+        "upsert" => {
+            let collection =
+                optional_string(object, "collection")?.unwrap_or_else(|| DEFAULT_COLLECTION.into());
+            let id = required_string(object, "id")?;
+            let object = required_object(object, "object")?;
+            Ok(BatchOperation::Upsert {
+                collection,
+                id,
+                object,
+            })
+        }
+        "delete_by_id" => {
+            let collection =
+                optional_string(object, "collection")?.unwrap_or_else(|| DEFAULT_COLLECTION.into());
+            let id = required_string(object, "id")?;
+            Ok(BatchOperation::DeleteById { collection, id })
+        }
+        "delete_by_ids" => {
+            let collection =
+                optional_string(object, "collection")?.unwrap_or_else(|| DEFAULT_COLLECTION.into());
+            let ids = required_string_list(object, "ids")?;
+            Ok(BatchOperation::DeleteByIds { collection, ids })
+        }
+        other => Err(AppError::InvalidRequest(format!(
+            "unsupported batch operation kind '{other}'"
+        ))),
+    }
+}
+
+fn required_object(object: &Object, field: &str) -> std::result::Result<Object, AppError> {
+    match object.get(field) {
+        Some(Value::Object(value)) => Ok(value.clone()),
+        Some(_) => Err(AppError::InvalidRequest(format!(
+            "field '{field}' must be an object"
+        ))),
+        None => Err(missing_field(field)),
+    }
+}
+
+fn required_string_list(
+    object: &Object,
+    field: &str,
+) -> std::result::Result<Vec<String>, AppError> {
+    let values = match object.get(field) {
+        Some(Value::List(values)) => values,
+        Some(_) => {
+            return Err(AppError::InvalidRequest(format!(
+                "field '{field}' must be a list"
+            )));
+        }
+        None => return Err(missing_field(field)),
+    };
+    values
+        .iter()
+        .map(|value| match value {
+            Value::String(value) => Ok(value.clone()),
+            _ => Err(AppError::InvalidRequest(format!(
+                "field '{field}' must contain only strings"
+            ))),
+        })
+        .collect()
 }
 
 fn required_string(object: &Object, field: &str) -> std::result::Result<String, AppError> {
@@ -509,6 +617,39 @@ fn query_result_to_value(result: QueryResult) -> Value {
         }
     }
     Value::Object(object)
+}
+
+fn batch_outcome_to_value(outcome: BatchOutcome) -> Value {
+    let mut object = Object::new();
+    insert_batch_stats(&mut object, outcome.stats);
+    object.insert(
+        "dataset",
+        Value::Object(
+            outcome
+                .dataset
+                .into_iter()
+                .map(|(collection, rows)| {
+                    (
+                        collection,
+                        Value::Object(
+                            rows.into_iter()
+                                .map(|(id, object)| (id, Value::Object(object)))
+                                .collect(),
+                        ),
+                    )
+                })
+                .collect(),
+        ),
+    );
+    Value::Object(object)
+}
+
+fn insert_batch_stats(object: &mut Object, stats: BatchStats) {
+    let mut stats_object = Object::new();
+    stats_object.insert("upserted", Value::U64(stats.upserted as u64));
+    stats_object.insert("deleted", Value::U64(stats.deleted as u64));
+    stats_object.insert("updated", Value::U64(stats.updated as u64));
+    object.insert("stats", Value::Object(stats_object));
 }
 
 fn insert_insert_result(object: &mut Object, result: InsertResult) {

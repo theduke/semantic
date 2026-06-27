@@ -28,7 +28,9 @@ pub use renderer::{
 };
 pub use submit::{
     SemanticFormMode, SemanticFormOptions, SemanticFormSubmit, SemanticSubmitContext,
-    build_class_form_options, build_value_form_options, rpc_insert_submit_handler,
+    build_class_form_options, build_value_form_options, rpc_batch_upsert_submit_handler,
+    rpc_batch_upsert_submit_handler_with_primary_id, rpc_insert_submit_handler,
+    rpc_insert_submit_handler_with_primary_id,
 };
 pub(crate) use util::mode_from_render_mode;
 pub use util::{DynamicFormActions, DynamicValueForm, SemanticFormErrors, render_value_form_scope};

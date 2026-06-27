@@ -26,8 +26,8 @@ mod tests {
     use semantic_data::value::{Object, Value};
     use semantic_db_core::catalog::{Catalog, CatalogStorageSnapshot};
     use semantic_db_core::{
-        Batch, BatchOutcome, DbError, EntityRecord, PackageRegistrationOutcome, QueryResult,
-        TextQueryInput,
+        Batch, BatchOperation, BatchOutcome, BatchStats, DbError, EntityRecord,
+        PackageRegistrationOutcome, QueryResult, TextQueryInput,
     };
     use semantic_rpc::{RpcRequest, RpcResponse, RpcResult};
 
@@ -36,6 +36,7 @@ mod tests {
     struct MockDb {
         name: String,
         query_count: AtomicUsize,
+        batch_count: AtomicUsize,
         #[cfg(feature = "base")]
         package_count: Arc<AtomicUsize>,
     }
@@ -45,6 +46,7 @@ mod tests {
             Self {
                 name: name.into(),
                 query_count: AtomicUsize::new(0),
+                batch_count: AtomicUsize::new(0),
                 #[cfg(feature = "base")]
                 package_count: Arc::new(AtomicUsize::new(0)),
             }
@@ -55,6 +57,7 @@ mod tests {
             Self {
                 name: name.into(),
                 query_count: AtomicUsize::new(0),
+                batch_count: AtomicUsize::new(0),
                 package_count,
             }
         }
@@ -104,8 +107,26 @@ mod tests {
             Ok(())
         }
 
-        async fn execute_batch(&self, _batch: Batch) -> std::result::Result<BatchOutcome, DbError> {
-            Err(DbError::InvalidQuery("batch not used in tests".to_string()))
+        async fn execute_batch(&self, batch: Batch) -> std::result::Result<BatchOutcome, DbError> {
+            self.batch_count.fetch_add(1, Ordering::Relaxed);
+            let mut stats = BatchStats {
+                upserted: 0,
+                deleted: 0,
+                updated: 0,
+            };
+            for operation in batch.operations {
+                match operation {
+                    BatchOperation::Upsert { .. } => stats.upserted += 1,
+                    BatchOperation::DeleteById { .. } => stats.deleted += 1,
+                    BatchOperation::DeleteByIds { ids, .. } => stats.deleted += ids.len(),
+                    BatchOperation::Update { .. } => stats.updated += 1,
+                    BatchOperation::Delete { .. } => stats.deleted += 1,
+                }
+            }
+            Ok(BatchOutcome {
+                dataset: Default::default(),
+                stats,
+            })
         }
 
         #[cfg(feature = "base")]
@@ -550,6 +571,46 @@ mod tests {
         let snapshot = facet_json::from_str::<CatalogStorageSnapshot>(catalog)
             .expect("catalog snapshot should decode");
         assert!(snapshot.attributes.is_empty());
+    }
+
+    #[tokio::test]
+    async fn batch_command_executes_upsert_batch() {
+        let default_db: Arc<dyn SemanticDb> = Arc::new(MockDb::new("default"));
+        let app = SemanticApp::builder()
+            .with_default_scope(DbScopeId::new("default"), default_db)
+            .register_builtin_commands()
+            .unwrap()
+            .build()
+            .unwrap();
+
+        let response = app
+            .invoke(
+                ctx(&app, Principal::system()),
+                request(
+                    "semantic.db.batch",
+                    value_object([(
+                        "operations",
+                        Value::List(vec![value_object([
+                            ("kind", Value::String("upsert".to_string())),
+                            ("collection", Value::String("entities".to_string())),
+                            ("id", Value::String("entity-1".to_string())),
+                            (
+                                "object",
+                                value_object([("name", Value::String("Ada".to_string()))]),
+                            ),
+                        ])]),
+                    )]),
+                ),
+            )
+            .await;
+
+        let RpcResult::Ok(Value::Object(object)) = response.result else {
+            panic!("expected ok object");
+        };
+        let Some(Value::Object(stats)) = object.get("stats") else {
+            panic!("expected stats");
+        };
+        assert_eq!(stats.get("upserted"), Some(&Value::U64(1)));
     }
 
     #[test]

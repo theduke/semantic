@@ -168,28 +168,137 @@ pub fn rpc_insert_submit_handler(
     collection: String,
     id: String,
 ) -> SemanticFormSubmit {
+    rpc_insert_submit_handler_with_primary_id(client, scope_id, collection, id, "id".to_string())
+}
+
+pub fn rpc_insert_submit_handler_with_primary_id(
+    client: semantic_rpc::RpcClient,
+    scope_id: Option<String>,
+    collection: String,
+    id: String,
+    primary_id_field: String,
+) -> SemanticFormSubmit {
+    rpc_batch_upsert_submit_handler_with_primary_id(
+        client,
+        scope_id,
+        collection,
+        id,
+        primary_id_field,
+    )
+}
+
+pub fn rpc_batch_upsert_submit_handler(
+    client: semantic_rpc::RpcClient,
+    scope_id: Option<String>,
+    collection: String,
+    id: String,
+) -> SemanticFormSubmit {
+    rpc_batch_upsert_submit_handler_with_primary_id(
+        client,
+        scope_id,
+        collection,
+        id,
+        "id".to_string(),
+    )
+}
+
+pub fn rpc_batch_upsert_submit_handler_with_primary_id(
+    client: semantic_rpc::RpcClient,
+    scope_id: Option<String>,
+    collection: String,
+    id: String,
+    primary_id_field: String,
+) -> SemanticFormSubmit {
     SemanticFormSubmit::async_(move |ctx| {
         let client = client.clone();
         let scope_id = scope_id.clone();
         let collection = collection.clone();
         let id = id.clone();
+        let primary_id_field = primary_id_field.clone();
         async move {
-            let Value::Object(object) = ctx.value else {
+            let Value::Object(mut object) = ctx.value else {
                 return Err(SubmitError::message("submitted value must be an object"));
             };
+            inject_primary_id(&mut object, &primary_id_field, &id)?;
             let mut payload = Object::new();
             if let Some(scope_id) = scope_id {
                 payload.insert("scope_id", Value::String(scope_id));
             }
-            payload.insert("collection", Value::String(collection));
-            payload.insert("id", Value::String(id));
-            payload.insert("object", Value::Object(object));
+            payload.insert(
+                "operations",
+                Value::List(vec![Value::Object(batch_upsert_operation(
+                    collection, id, object,
+                ))]),
+            );
             client
-                .invoke_value("semantic.db.insert", Value::Object(payload))
+                .invoke_value("semantic.db.batch", Value::Object(payload))
                 .await
                 .map(|_| ())
                 .map_err(|err| SubmitError::message(err.to_string()))
         }
         .boxed_local()
     })
+}
+
+fn batch_upsert_operation(collection: String, id: String, object: Object) -> Object {
+    let mut operation = Object::new();
+    operation.insert("kind", Value::String("upsert".to_string()));
+    operation.insert("collection", Value::String(collection));
+    operation.insert("id", Value::String(id));
+    operation.insert("object", Value::Object(object));
+    operation
+}
+
+fn inject_primary_id(
+    object: &mut Object,
+    primary_id_field: &str,
+    id: &str,
+) -> std::result::Result<(), SubmitError> {
+    match object.get(primary_id_field) {
+        Some(Value::String(existing)) if existing == id => Ok(()),
+        Some(Value::String(existing)) => Err(SubmitError::message(format!(
+            "primary key field '{primary_id_field}' value '{existing}' does not match entity id '{id}'"
+        ))),
+        Some(_) => Err(SubmitError::message(format!(
+            "primary key field '{primary_id_field}' must be a string"
+        ))),
+        None => {
+            object.insert(primary_id_field.to_string(), Value::String(id.to_string()));
+            Ok(())
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use semantic_data::value::{Object, Value};
+
+    use super::inject_primary_id;
+
+    #[test]
+    fn inject_primary_id_adds_canonical_primary_key_field() {
+        let mut object = Object::new();
+
+        inject_primary_id(&mut object, "semantic:id", "entity-1").unwrap();
+
+        assert_eq!(
+            object.get("semantic:id"),
+            Some(&Value::String("entity-1".to_string()))
+        );
+    }
+
+    #[test]
+    fn inject_primary_id_rejects_conflicting_primary_key_field() {
+        let mut object = Object::new();
+        object.insert("semantic:id", Value::String("other-entity".to_string()));
+
+        let err = inject_primary_id(&mut object, "semantic:id", "entity-1").unwrap_err();
+
+        assert!(
+            err.message
+                .as_deref()
+                .unwrap_or_default()
+                .contains("does not match entity id 'entity-1'")
+        );
+    }
 }

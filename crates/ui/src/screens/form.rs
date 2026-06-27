@@ -4,8 +4,9 @@ use semantic_data::{
     value::{Object, Value},
 };
 use semantic_ui_core::{
-    DynamicClassForm, SemanticFormMode, default_value_for_class, rpc_insert_submit_handler,
-    use_active_scope_id, use_rpc_client, use_ui_catalog,
+    DynamicClassForm, SemanticFormMode, default_value_for_class,
+    rpc_batch_upsert_submit_handler_with_primary_id, use_active_scope_id, use_rpc_client,
+    use_ui_catalog,
 };
 
 #[component]
@@ -38,6 +39,7 @@ pub fn CreateEntityScreen(on_open_entity: EventHandler<(String, String)>) -> Ele
         .find(|class| class.id == class_id)
         .cloned()
         .or_else(|| classes.first().cloned());
+    let primary_id_field = primary_id_field_for_collection(&catalog, &collection);
 
     rsx! {
         section { class: "semantic-form-screen semantic-create-entity",
@@ -91,11 +93,13 @@ pub fn CreateEntityScreen(on_open_entity: EventHandler<(String, String)>) -> Ele
                         _ => Object::new(),
                     };
                     object.insert("type", Value::String(class.id.clone()));
-                    let submit = rpc_insert_submit_handler(
+                    object.insert(primary_id_field.clone(), Value::String(entity_id.clone()));
+                    let submit = rpc_batch_upsert_submit_handler_with_primary_id(
                         client.clone(),
                         scope_id.clone(),
                         collection.clone(),
                         entity_id.clone(),
+                        primary_id_field.clone(),
                     );
                     rsx! {
                         div { key: "{class.id}:{collection}:{entity_id}",
@@ -146,6 +150,7 @@ pub fn EditEntityScreen(collection: String, id: String) -> Element {
             match &*resource.read_unchecked() {
                 Some(Ok(Some(object))) => {
                     let class = catalog.object_class(object).cloned();
+                    let primary_id_field = primary_id_field_for_collection(&catalog, &collection);
                     rsx! {
                         if let Some(class) = class {
                             DynamicClassForm {
@@ -155,11 +160,12 @@ pub fn EditEntityScreen(collection: String, id: String) -> Element {
                                 collection: Some(collection.clone()),
                                 id: Some(id.clone()),
                                 scope_id: scope_id.clone(),
-                                submit: Some(rpc_insert_submit_handler(
+                                submit: Some(rpc_batch_upsert_submit_handler_with_primary_id(
                                     client.clone(),
                                     scope_id.clone(),
                                     collection.clone(),
                                     id.clone(),
+                                    primary_id_field,
                                 ))
                             }
                         } else {
@@ -221,4 +227,32 @@ fn new_entity_id() -> String {
         .map(|duration| duration.as_millis())
         .unwrap_or_default();
     format!("entity-{millis}")
+}
+
+fn primary_id_field_for_collection(
+    catalog: &semantic_ui_core::UiCatalog,
+    collection: &str,
+) -> String {
+    catalog
+        .collection_by_name(collection)
+        .and_then(|collection| {
+            collection
+                .field_ids
+                .iter()
+                .find(|field| field.canonical_field == "semantic:id")
+                .or_else(|| {
+                    collection
+                        .field_ids
+                        .iter()
+                        .find(|field| field.canonical_field == "semantic:catalog:id")
+                })
+                .or_else(|| {
+                    collection
+                        .field_ids
+                        .iter()
+                        .find(|field| field.canonical_field == "id")
+                })
+        })
+        .map(|field| field.canonical_field.clone())
+        .unwrap_or_else(|| "id".to_string())
 }

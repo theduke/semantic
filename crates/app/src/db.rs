@@ -1,6 +1,7 @@
 use std::sync::Arc;
 
 use async_trait::async_trait;
+use semantic_data::query as public_query;
 use semantic_data::schema::DbOpenMode;
 #[cfg(feature = "base")]
 use semantic_data::schema::Package;
@@ -9,7 +10,7 @@ use semantic_data::value::Object;
 use semantic_db_core::PackageRegistrationOutcome;
 use semantic_db_core::catalog::Catalog;
 use semantic_db_core::{
-    Batch, BatchOutcome, Db, DbError, EntityRecord, QueryResult, TextQueryInput,
+    Batch, BatchOperation, BatchOutcome, Db, DbError, EntityRecord, QueryResult, TextQueryInput,
 };
 
 use crate::{AppError, Principal};
@@ -97,10 +98,7 @@ impl SemanticDb for Db {
     }
 
     async fn execute_batch(&self, batch: Batch) -> std::result::Result<BatchOutcome, DbError> {
-        let _ = batch;
-        Err(DbError::InvalidQuery(
-            "core batch execution is not exposed by the app Db adapter yet".to_string(),
-        ))
+        self.execute_batch(public_batch_from_core(batch)?).await
     }
 
     #[cfg(feature = "base")]
@@ -110,6 +108,37 @@ impl SemanticDb for Db {
     ) -> std::result::Result<PackageRegistrationOutcome, DbError> {
         self.upsert_package(package).await
     }
+}
+
+fn public_batch_from_core(batch: Batch) -> std::result::Result<public_query::Batch, DbError> {
+    let mut operations = Vec::with_capacity(batch.operations.len());
+    for operation in batch.operations {
+        let operation = match operation {
+            BatchOperation::Upsert {
+                collection,
+                id,
+                object,
+            } => public_query::BatchOperation::Upsert {
+                collection,
+                id,
+                object,
+            },
+            BatchOperation::DeleteById { collection, id } => {
+                public_query::BatchOperation::DeleteById { collection, id }
+            }
+            BatchOperation::DeleteByIds { collection, ids } => {
+                public_query::BatchOperation::DeleteByIds { collection, ids }
+            }
+            BatchOperation::Update { .. } | BatchOperation::Delete { .. } => {
+                return Err(DbError::InvalidQuery(
+                    "query-based batch operations are not exposed by the app Db adapter yet"
+                        .to_string(),
+                ));
+            }
+        };
+        operations.push(operation);
+    }
+    Ok(public_query::Batch { operations })
 }
 
 #[derive(Clone, Debug)]
