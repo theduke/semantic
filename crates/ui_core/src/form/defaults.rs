@@ -18,12 +18,9 @@ use crate::{
 pub fn register_default_form_renderers(catalog: &mut crate::UiCatalog) {
     let fallback = Rc::new(|ctx: ValueFormRenderContext| {
         rsx! {
-            div { class: "semantic-form__readonly",
-                ValueView {
-                    value: ctx.scope.value(),
-                    type_hint: ctx.value_type.clone(),
-                    mode: RenderMode::Detail
-                }
+            FallbackValueDisplay {
+                scope: ctx.scope.clone(),
+                value_type: ctx.value_type.clone(),
             }
         }
     });
@@ -68,12 +65,22 @@ pub fn register_default_form_renderers(catalog: &mut crate::UiCatalog) {
 
 fn render_string(ctx: ValueFormRenderContext) -> Element {
     let field = value_leaf_field(ctx.scope.clone());
+    rsx! {
+        StringValueInput {
+            field,
+            value_type: ctx.value_type.clone(),
+        }
+    }
+}
+
+#[component]
+fn StringValueInput(field: FieldHandle<Value, Value>, value_type: Option<Type>) -> Element {
     let value = match field.value() {
         Value::String(value) => value,
         Value::Null | Value::Void => String::new(),
         value => crate::ui_catalog::defaults::value_to_text(&value),
     };
-    let input_type = string_input_type(ctx.value_type.as_ref());
+    let input_type = string_input_type(value_type.as_ref());
     let input_field = field.clone();
     let blur_field = field.clone();
     let focus_field = field.clone();
@@ -91,6 +98,11 @@ fn render_string(ctx: ValueFormRenderContext) -> Element {
 
 fn render_bool(ctx: ValueFormRenderContext) -> Element {
     let field = value_leaf_field(ctx.scope);
+    rsx! { BoolValueInput { field } }
+}
+
+#[component]
+fn BoolValueInput(field: FieldHandle<Value, Value>) -> Element {
     let checked = matches!(field.value(), Value::Bool(true));
     rsx! {
         input {
@@ -104,7 +116,17 @@ fn render_bool(ctx: ValueFormRenderContext) -> Element {
 
 fn render_number(ctx: ValueFormRenderContext) -> Element {
     let field = value_leaf_field(ctx.scope);
-    let ty = ctx.value_type.clone();
+    rsx! {
+        NumberValueInput {
+            field,
+            value_type: ctx.value_type.clone(),
+        }
+    }
+}
+
+#[component]
+fn NumberValueInput(field: FieldHandle<Value, Value>, value_type: Option<Type>) -> Element {
+    let ty = value_type.clone();
     let value = number_to_string(&field.value());
     rsx! {
         input {
@@ -199,10 +221,23 @@ fn render_nested_class(ctx: ValueFormRenderContext) -> Element {
 
 fn fallback_edit(ctx: ValueFormRenderContext) -> Element {
     rsx! {
+        FallbackValueDisplay {
+            scope: ctx.scope.clone(),
+            value_type: ctx.value_type.clone(),
+        }
+    }
+}
+
+#[component]
+fn FallbackValueDisplay(
+    scope: dxform::FormScope<Value, Value>,
+    value_type: Option<Type>,
+) -> Element {
+    rsx! {
         div { class: "semantic-form__unsupported",
             ValueView {
-                value: ctx.scope.value(),
-                type_hint: ctx.value_type,
+                value: scope.value(),
+                type_hint: value_type,
                 mode: RenderMode::Detail
             }
         }

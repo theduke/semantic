@@ -25,6 +25,21 @@ pub fn render_list_value_form(
     item_type: Type,
     mode: crate::form::SemanticFormMode,
 ) -> Element {
+    rsx! {
+        ListValueForm {
+            list,
+            item_type,
+            mode,
+        }
+    }
+}
+
+#[component]
+fn ListValueForm(
+    list: ListHandle<Value, Value>,
+    item_type: Type,
+    mode: crate::form::SemanticFormMode,
+) -> Element {
     let new_item_type = item_type.clone();
     rsx! {
         div { class: "semantic-form__list",
@@ -42,27 +57,38 @@ pub fn render_list_value_form(
                 }
             }
             for item in list.items() {
-                {
-                    let scope = item.scope();
-                    let path = scope.path();
-                    rsx! {
-                        div {
-                            class: "semantic-form__list-item",
-                            key: "{item.key()}",
-                            {crate::form::render_value_form_scope(crate::form::ValueFormRenderContext {
-                                scope,
-                                value_type: Some(item_type.clone()),
-                                mode,
-                                path,
-                            })}
-                            button {
-                                r#type: "button",
-                                onclick: item.remove_handler(),
-                                "Remove"
-                            }
-                        }
-                    }
+                ListValueItem {
+                    key: "{item.key()}",
+                    item,
+                    item_type: item_type.clone(),
+                    mode,
                 }
+            }
+        }
+    }
+}
+
+#[component]
+fn ListValueItem(
+    item: dxform::ListItemHandle<Value, Value>,
+    item_type: Type,
+    mode: crate::form::SemanticFormMode,
+) -> Element {
+    let scope = item.scope();
+    let path = scope.path();
+    rsx! {
+        div {
+            class: "semantic-form__list-item",
+            {crate::form::render_value_form_scope(crate::form::ValueFormRenderContext {
+                scope,
+                value_type: Some(item_type),
+                mode,
+                path,
+            })}
+            button {
+                r#type: "button",
+                onclick: item.remove_handler(),
+                "Remove"
             }
         }
     }

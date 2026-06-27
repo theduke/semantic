@@ -16,7 +16,7 @@ use crate::{
     ui_catalog::{RenderMode, use_ui_catalog},
 };
 
-#[derive(Clone)]
+#[derive(Clone, PartialEq)]
 pub struct ClassFormField {
     pub field_name: String,
     pub attribute: AttributeType,
@@ -62,7 +62,14 @@ pub fn render_class_form_body(ctx: ClassFormRenderContext) -> Element {
             for field in fields {
                 if field.field_name != OBJECT_TYPE_FIELD {
                     {
-                        render_class_field(ctx.scope.clone(), ctx.class.clone(), field, ctx.mode)
+                        rsx! {
+                            ClassFormFieldRow {
+                                scope: ctx.scope.clone(),
+                                class: ctx.class.clone(),
+                                field,
+                                mode: ctx.mode,
+                            }
+                        }
                     }
                 }
             }
@@ -111,7 +118,8 @@ fn collect_class_fields(
     }
 }
 
-fn render_class_field(
+#[component]
+fn ClassFormFieldRow(
     scope: FormScope<Value, Value>,
     class: ClassType,
     field: ClassFormField,
