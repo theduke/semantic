@@ -1,0 +1,233 @@
+use std::{cell::RefCell, rc::Rc};
+
+use dioxus::prelude::*;
+use dxform::prelude::*;
+
+#[derive(Clone, PartialEq, Debug, Default)]
+struct Hobby {
+    name: String,
+}
+
+#[derive(Clone, PartialEq, Debug, Default)]
+struct Person {
+    name: String,
+    hobbies: Vec<Hobby>,
+}
+
+#[derive(Clone, PartialEq, Debug, Default)]
+struct Profile {
+    person: Person,
+    active: bool,
+}
+
+fn person_name_field<Root>(scope: &FormScope<Person, Root>) -> FieldHandle<String, Root>
+where
+    Root: Clone + PartialEq + 'static,
+{
+    scope.field(FieldSpec::new(
+        "name",
+        |person: &Person| person.name.clone(),
+        |person, value| person.name = value,
+    ))
+}
+
+fn hobby_name_field<Root>(scope: &FormScope<Hobby, Root>) -> FieldHandle<String, Root>
+where
+    Root: Clone + PartialEq + 'static,
+{
+    scope.field(FieldSpec::new(
+        "name",
+        |hobby: &Hobby| hobby.name.clone(),
+        |hobby, value| hobby.name = value,
+    ))
+}
+
+fn run_in_runtime(f: impl FnOnce() + 'static) {
+    #[derive(Clone)]
+    struct TestProps {
+        f: Rc<RefCell<Option<Box<dyn FnOnce()>>>>,
+    }
+
+    fn app(props: TestProps) -> Element {
+        if let Some(f) = props.f.borrow_mut().take() {
+            f();
+        }
+        rsx! {}
+    }
+
+    let f = Rc::new(RefCell::new(Some(Box::new(f) as Box<dyn FnOnce()>)));
+    let mut dom = VirtualDom::new_with_props(app, TestProps { f });
+    dom.rebuild_to_vec();
+}
+
+#[test]
+fn field_change_marks_root_dirty_and_reset_clears_it() {
+    run_in_runtime(|| {
+        let form = FormRoot::new(Person::default());
+        let scope = form.scope();
+        let name = person_name_field(&scope);
+
+        name.set_value("Ada".to_string());
+
+        assert_eq!(form.values().name, "Ada");
+        assert!(name.meta().dirty);
+        assert!(form.meta().dirty);
+
+        name.reset();
+
+        assert_eq!(form.values().name, "");
+        assert!(!name.meta().dirty);
+        assert!(!form.meta().dirty);
+    });
+}
+
+#[test]
+fn subform_reset_updates_root_but_preserves_sibling_dirty_state() {
+    run_in_runtime(|| {
+        let form = FormRoot::new(Profile::default());
+        let root = form.scope();
+        let active = root.field(FieldSpec::new(
+            "active",
+            |profile: &Profile| profile.active,
+            |profile, value| profile.active = value,
+        ));
+        let person = root.subform(SubformSpec::new(
+            "person",
+            |profile: &Profile| profile.person.clone(),
+            |profile, value| profile.person = value,
+        ));
+        let name = person_name_field(&person);
+
+        active.set_value(true);
+        name.set_value("Ada".to_string());
+        assert!(form.meta().dirty);
+
+        person.reset();
+
+        assert_eq!(form.values().person.name, "");
+        assert!(form.values().active);
+        assert!(form.meta().dirty);
+        assert!(!person.meta().dirty);
+    });
+}
+
+#[test]
+fn list_add_remove_clear_updates_root_values_and_meta() {
+    run_in_runtime(|| {
+        let form = FormRoot::new(Person::default());
+        let list = form.scope().list(ListSpec::new(
+            "hobbies",
+            |person: &Person| person.hobbies.clone(),
+            |person, value| person.hobbies = value,
+        ));
+
+        list.push(Hobby {
+            name: "music".to_string(),
+        });
+        list.push(Hobby {
+            name: "climbing".to_string(),
+        });
+
+        assert_eq!(form.values().hobbies.len(), 2);
+        assert!(list.meta().dirty);
+        assert!(form.meta().dirty);
+
+        let keys = list
+            .items()
+            .into_iter()
+            .map(|item| item.key())
+            .collect::<Vec<_>>();
+        assert_eq!(keys.len(), 2);
+        assert_ne!(keys[0], keys[1]);
+
+        let removed = list.remove(0).expect("item should exist");
+        assert_eq!(removed.name, "music");
+        assert_eq!(form.values().hobbies[0].name, "climbing");
+
+        list.clear();
+        assert!(form.values().hobbies.is_empty());
+    });
+}
+
+#[test]
+fn reusable_nested_hobby_fields_work_inside_person_hobbies_list() {
+    run_in_runtime(|| {
+        let form = FormRoot::new(Person::default());
+        let hobbies = form.scope().list(ListSpec::new(
+            "hobbies",
+            |person: &Person| person.hobbies.clone(),
+            |person, value| person.hobbies = value,
+        ));
+
+        hobbies.push(Hobby::default());
+        let item = hobbies.items().remove(0);
+        let hobby_scope = item.scope();
+        let name = hobby_name_field(&hobby_scope);
+
+        name.set_value("gardening".to_string());
+
+        assert_eq!(form.values().hobbies[0].name, "gardening");
+        assert!(hobby_scope.meta().dirty);
+        assert!(form.meta().dirty);
+    });
+}
+
+#[test]
+fn field_validation_updates_root_validity() {
+    run_in_runtime(|| {
+        let form = FormRoot::new(Person::default());
+        let name = form.scope().field(
+            FieldSpec::new(
+                "name",
+                |person: &Person| person.name.clone(),
+                |person, value| person.name = value,
+            )
+            .validator(FieldValidator::sync(
+                |ctx: dxform::FieldValidationContext<Person, String>| {
+                    if ctx.value.trim().is_empty() {
+                        vec![FormError::field(ctx.path, "name is required")]
+                    } else {
+                        Vec::new()
+                    }
+                },
+            )),
+        );
+
+        let result = futures::executor::block_on(name.validate());
+
+        assert!(result.is_err());
+        assert_eq!(name.meta().errors.len(), 1);
+        assert_eq!(form.meta().validity, Validity::Invalid);
+    });
+}
+
+#[test]
+fn submit_error_maps_to_nested_list_path() {
+    run_in_runtime(|| {
+        let form = FormRoot::with_options(
+            FormOptions::new(Person {
+                hobbies: vec![Hobby::default()],
+                ..Person::default()
+            })
+            .on_submit(SubmitHandler::sync(|_ctx| {
+                Err(SubmitError::errors(vec![FormError::field(
+                    "hobbies[0].name",
+                    "invalid hobby",
+                )]))
+            })),
+        );
+        let hobbies = form.scope().list(ListSpec::new(
+            "hobbies",
+            |person: &Person| person.hobbies.clone(),
+            |person, value| person.hobbies = value,
+        ));
+        let hobby_scope = hobbies.items().remove(0).scope();
+        let name = hobby_name_field(&hobby_scope);
+
+        let result = futures::executor::block_on(form.submit());
+
+        assert!(result.is_err());
+        assert_eq!(name.meta().submit_errors.len(), 1);
+        assert!(form.meta().submit_failed);
+    });
+}
