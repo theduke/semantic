@@ -1166,11 +1166,15 @@ impl BackendFederatedSource {
 
 #[cfg(test)]
 mod tests {
-    use futures::executor;
     use std::sync::Mutex;
 
     use super::*;
     use crate::{evaluate_usize_expr, project_object};
+
+    fn run_async<T>(future: impl std::future::Future<Output = T>) -> T {
+        let mut pool = futures::executor::LocalPool::new();
+        pool.run_until(future)
+    }
 
     struct MockSource {
         catalog: Arc<Catalog>,
@@ -1305,7 +1309,7 @@ mod tests {
         source: Arc<MockSource>,
         capabilities: SourceCapabilities,
     ) {
-        executor::block_on(db.register_source(SourceRegistration {
+        run_async(db.register_source(SourceRegistration {
             name: name.to_string(),
             backend: source,
             namespace: SourceNamespace::PrefixCollections,
@@ -1326,8 +1330,7 @@ mod tests {
         let db = FederatedBackend::new(Some("local".to_string()));
         register(&db, "local", source.clone(), SourceCapabilities::default());
 
-        let out =
-            executor::block_on(db.query(TextQueryInput::sql("SELECT id FROM users"))).unwrap();
+        let out = run_async(db.query(TextQueryInput::sql("SELECT id FROM users"))).unwrap();
         let QueryResult::Select(rows) = out else {
             panic!("expected select result");
         };
@@ -1341,8 +1344,7 @@ mod tests {
         let db = FederatedBackend::new(None);
         register(&db, "local", source, SourceCapabilities::default());
 
-        let err =
-            executor::block_on(db.query(TextQueryInput::sql("SELECT id FROM users"))).unwrap_err();
+        let err = run_async(db.query(TextQueryInput::sql("SELECT id FROM users"))).unwrap_err();
         assert!(matches!(err, DbError::InvalidQuery(_)));
     }
 
@@ -1359,8 +1361,7 @@ mod tests {
         register(&db, "github", source.clone(), SourceCapabilities::default());
 
         let out =
-            executor::block_on(db.query(TextQueryInput::sql("SELECT login FROM github.User")))
-                .unwrap();
+            run_async(db.query(TextQueryInput::sql("SELECT login FROM github.User"))).unwrap();
         let QueryResult::Select(rows) = out else {
             panic!("expected select result");
         };
@@ -1400,7 +1401,7 @@ mod tests {
         let sql = "SELECT u.login AS login, i.title AS title \
                    FROM github.User AS u \
                    JOIN local.issues AS i ON u.id = i.author_id";
-        let out = executor::block_on(db.query(TextQueryInput::sql(sql))).unwrap();
+        let out = run_async(db.query(TextQueryInput::sql(sql))).unwrap();
         let QueryResult::Select(rows) = out else {
             panic!("expected select result");
         };
@@ -1431,7 +1432,7 @@ mod tests {
         let sql = "SELECT u.login AS login \
                    FROM github.User AS u \
                    LEFT JOIN local.issues AS i ON u.id = i.author_id";
-        let out = executor::block_on(db.query(TextQueryInput::sql(sql))).unwrap();
+        let out = run_async(db.query(TextQueryInput::sql(sql))).unwrap();
         let QueryResult::Select(rows) = out else {
             panic!("expected select result");
         };
@@ -1468,7 +1469,7 @@ mod tests {
         let sql = "SELECT COUNT(*) AS issue_count \
                    FROM github.User AS u \
                    JOIN local.issues AS i ON u.id = i.author_id";
-        let out = executor::block_on(db.query(TextQueryInput::sql(sql))).unwrap();
+        let out = run_async(db.query(TextQueryInput::sql(sql))).unwrap();
         let QueryResult::Select(rows) = out else {
             panic!("expected select result");
         };
@@ -1498,7 +1499,7 @@ mod tests {
             },
         );
 
-        let out = executor::block_on(db.query(TextQueryInput::sql(
+        let out = run_async(db.query(TextQueryInput::sql(
             "SELECT login FROM users WHERE login = 'theduke'",
         )))
         .unwrap();
@@ -1524,7 +1525,7 @@ mod tests {
         let db = FederatedBackend::new(Some("local".to_string()));
         register(&db, "local", source.clone(), SourceCapabilities::default());
 
-        let out = executor::block_on(db.query(TextQueryInput::sql(
+        let out = run_async(db.query(TextQueryInput::sql(
             "SELECT login FROM users WHERE login = 'theduke'",
         )))
         .unwrap();
@@ -1542,7 +1543,7 @@ mod tests {
         let second = Arc::new(MockSource::new(&["users"], BTreeMap::new()));
         register(&db, "local", first, SourceCapabilities::default());
 
-        let err = executor::block_on(db.register_source(SourceRegistration {
+        let err = run_async(db.register_source(SourceRegistration {
             name: "local".to_string(),
             backend: second,
             namespace: SourceNamespace::PrefixCollections,
@@ -1572,7 +1573,7 @@ mod tests {
                 "id",
                 Value::String("u1".to_string()),
             )])]));
-        let out = executor::block_on(db.query(TextQueryInput::Ast(Query::Insert(query)))).unwrap();
+        let out = run_async(db.query(TextQueryInput::Ast(Query::Insert(query)))).unwrap();
         assert!(matches!(out, QueryResult::Insert(_)));
         assert_eq!(source.write_count(), 1);
     }
@@ -1610,7 +1611,7 @@ mod tests {
                 id: "2".to_string(),
                 object: Object::new(),
             });
-        let err = executor::block_on(db.execute_batch(batch)).unwrap_err();
+        let err = run_async(db.execute_batch(batch)).unwrap_err();
         assert!(matches!(err, DbError::InvalidQuery(_)));
     }
 
@@ -1623,8 +1624,7 @@ mod tests {
         let query = InsertQuery::new()
             .with_collection("github.users")
             .with_source(InsertSource::Objects(vec![Object::new()]));
-        let err =
-            executor::block_on(db.query(TextQueryInput::Ast(Query::Insert(query)))).unwrap_err();
+        let err = run_async(db.query(TextQueryInput::Ast(Query::Insert(query)))).unwrap_err();
         assert!(matches!(err, DbError::InvalidQuery(_)));
     }
 
@@ -1634,8 +1634,7 @@ mod tests {
         let db = FederatedBackend::new(Some("local".to_string()));
         register(&db, "local", source, SourceCapabilities::default());
 
-        let explain =
-            executor::block_on(db.explain(TextQueryInput::sql("SELECT * FROM users"))).unwrap();
+        let explain = run_async(db.explain(TextQueryInput::sql("SELECT * FROM users"))).unwrap();
         let crate::PhysicalPlan::Source(crate::PhysicalSource::Scan { source }) = explain.physical
         else {
             panic!("expected scan source");
@@ -1664,7 +1663,7 @@ mod tests {
         let db = FederatedBackend::new(Some("local".to_string()));
         register(&db, "local", source.clone(), SourceCapabilities::default());
 
-        let out = executor::block_on(db.query(TextQueryInput::sql(
+        let out = run_async(db.query(TextQueryInput::sql(
             "SELECT login FROM users ORDER BY login ASC LIMIT 1",
         )))
         .unwrap();

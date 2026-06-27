@@ -833,12 +833,17 @@ pub fn execute_physical_plan_with_source(
     source: &dyn AsyncPhysicalDataSource,
     context: &QueryContext,
 ) -> CoreResult<Vec<Object>> {
-    futures::executor::block_on(execute_physical_plan_with_source_async(
+    run_future_to_completion(execute_physical_plan_with_source_async(
         plan,
         source,
         ExecutionOptions::default(),
         context,
     ))
+}
+
+fn run_future_to_completion<T>(future: impl std::future::Future<Output = T>) -> T {
+    let mut pool = futures::executor::LocalPool::new();
+    pool.run_until(future)
 }
 
 pub fn execute_physical_plan(
@@ -2189,8 +2194,11 @@ pub fn inject_computed_attributes(
 mod tests {
     use super::*;
     use crate::query::{Expr, Operand, QueryField, SelectQuery};
-    use futures::executor;
     use std::sync::atomic::{AtomicUsize, Ordering as AtomicOrdering};
+
+    fn run_async<T>(future: impl std::future::Future<Output = T>) -> T {
+        super::run_future_to_completion(future)
+    }
 
     struct InlineSource {
         left: Vec<Object>,
@@ -2297,7 +2305,7 @@ mod tests {
     #[test]
     fn async_values_emit_configured_batch_sizes() {
         let values = (0..5).map(|idx| obj_i64("id", idx)).collect::<Vec<_>>();
-        let batches = executor::block_on(
+        let batches = run_async(
             execute_physical_plan_stream(
                 PhysicalPlan::Values { values },
                 Arc::new(AsyncInlineSource::new(Vec::new())),
@@ -2319,7 +2327,7 @@ mod tests {
 
     #[test]
     fn async_stream_boundary_drops_empty_batches() {
-        let batches = executor::block_on(
+        let batches = run_async(
             execute_physical_plan_stream(
                 PhysicalPlan::Source(PhysicalSource::Scan {
                     source: SourceRef {
@@ -2373,7 +2381,7 @@ mod tests {
             limit: Some(Expr::from(2usize)),
         };
 
-        let out = executor::block_on(execute_physical_plan_collect(
+        let out = run_async(execute_physical_plan_collect(
             plan,
             Arc::new(AsyncInlineSource::new(rows)),
             QueryContext::default(),
@@ -2399,7 +2407,7 @@ mod tests {
             backend_tag: None,
         };
 
-        let filtered = executor::block_on(execute_physical_plan_collect(
+        let filtered = run_async(execute_physical_plan_collect(
             PhysicalPlan::Source(PhysicalSource::FilteredScan {
                 source: scan_ref.clone(),
                 predicate: Expr::Binary {
@@ -2415,7 +2423,7 @@ mod tests {
             ExecutionOptions::default(),
         ))
         .unwrap();
-        let indexed = executor::block_on(execute_physical_plan_collect(
+        let indexed = run_async(execute_physical_plan_collect(
             PhysicalPlan::Source(PhysicalSource::IndexLookup {
                 source: scan_ref,
                 field: FieldRef::Path(FieldPath::from_fields(["id"])),
