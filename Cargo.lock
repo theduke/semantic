@@ -2468,6 +2468,7 @@ dependencies = [
  "base64",
  "facet",
  "facet-json",
+ "futures",
  "rmp-serde",
  "semantic_data",
  "semantic_db_core",

@@ -1,6 +1,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
 
+use futures::{StreamExt, stream};
 use semantic_data::query::FieldFormat;
 use semantic_data::schema::IndexKind;
 use semantic_data::schema::{
@@ -1956,6 +1957,18 @@ fn equality_expr(path: FieldPath, value: Value) -> semantic_db_core::Expr {
     }
 }
 
+fn dyn_rows_to_stream(
+    mut rows: Vec<semantic_db_core::DynObject>,
+) -> semantic_db_core::SendableRecordBatchStream {
+    let batch_size = semantic_db_core::DEFAULT_EXECUTION_BATCH_SIZE;
+    let mut batches = Vec::new();
+    while !rows.is_empty() {
+        let take = rows.len().min(batch_size);
+        batches.push(rows.drain(..take).collect::<Vec<_>>());
+    }
+    stream::iter(batches.into_iter().map(Ok)).boxed()
+}
+
 struct KvPhysicalDataSource<'a, E: KvEngine> {
     db: &'a KvDb<E>,
     catalog: std::sync::Arc<Catalog>,
@@ -2145,6 +2158,44 @@ impl<E: KvEngine> KvPhysicalDataSource<'_, E> {
         Ok(out)
     }
 
+    fn scan_rows(
+        &self,
+        source: &semantic_db_core::SourceRef,
+    ) -> semantic_db_core::CoreResult<Vec<semantic_db_core::DynObject>> {
+        if self.is_all_alias_source(source) {
+            return self.scan_all_collections();
+        }
+        let collection = self
+            .resolve_collection(source)
+            .map_err(|err| semantic_db_core::CoreError::new(err.to_string()))?;
+        let rows = self
+            .db
+            .store
+            .scan_collection(collection.lid)
+            .map_err(|err| semantic_db_core::CoreError::new(err.to_string()))?;
+        let local_ref_lookup = build_local_ref_lookup(self.catalog.as_ref(), collection, &rows);
+        let mut field_names = BTreeMap::new();
+        let mut attr_names = BTreeMap::new();
+        for (field_id, name) in collection.fields() {
+            field_names.insert(field_id, name.to_string());
+            if let Some(attr_id) = collection.attr_for_field_id(field_id) {
+                attr_names.insert(attr_id, name.to_string());
+            }
+        }
+        Ok(rows
+            .into_iter()
+            .map(|row| {
+                Box::new(KvObjectView {
+                    object: row.object,
+                    collection_id: collection.lid,
+                    field_names: field_names.clone(),
+                    attr_names: attr_names.clone(),
+                    local_ref_lookup: Some(local_ref_lookup.clone()),
+                }) as semantic_db_core::DynObject
+            })
+            .collect())
+    }
+
     fn is_all_alias_source(&self, source: &semantic_db_core::SourceRef) -> bool {
         self.source_name(source)
             .is_some_and(is_all_collection_alias)
@@ -2234,7 +2285,7 @@ impl<E: KvEngine> KvPhysicalDataSource<'_, E> {
         {
             return self.materialize_ids(collection, ids);
         }
-        let all = semantic_db_core::PhysicalDataSource::scan(self, source)?;
+        let all = self.scan_rows(source)?;
         let mut out = Vec::new();
         for row in all {
             if self.evaluate_predicate_with_relationships(row.as_ref(), predicate)? {
@@ -2450,54 +2501,43 @@ fn value_from_object_with_alias_fallback(object: &Object, field: &str) -> Option
     Some(value.clone())
 }
 
-impl<E: KvEngine> semantic_db_core::PhysicalDataSource for KvPhysicalDataSource<'_, E> {
-    fn scan(
+impl<E: KvEngine> semantic_db_core::AsyncPhysicalDataSource for KvPhysicalDataSource<'_, E> {
+    fn scan_stream(
         &self,
-        source: &semantic_db_core::SourceRef,
-    ) -> semantic_db_core::CoreResult<Vec<semantic_db_core::DynObject>> {
-        if self.is_all_alias_source(source) {
-            return self.scan_all_collections();
+        source: semantic_db_core::SourceRef,
+    ) -> semantic_db_core::SendableRecordBatchStream {
+        match self.scan_rows(&source) {
+            Ok(rows) => dyn_rows_to_stream(rows),
+            Err(err) => stream::once(async move { Err(err) }).boxed(),
         }
-        let collection = self
-            .resolve_collection(source)
-            .map_err(|err| semantic_db_core::CoreError::new(err.to_string()))?;
-        let rows = self
-            .db
-            .store
-            .scan_collection(collection.lid)
-            .map_err(|err| semantic_db_core::CoreError::new(err.to_string()))?;
-        let local_ref_lookup = build_local_ref_lookup(self.catalog.as_ref(), collection, &rows);
-        let mut field_names = BTreeMap::new();
-        let mut attr_names = BTreeMap::new();
-        for (field_id, name) in collection.fields() {
-            field_names.insert(field_id, name.to_string());
-            if let Some(attr_id) = collection.attr_for_field_id(field_id) {
-                attr_names.insert(attr_id, name.to_string());
-            }
-        }
-        Ok(rows
-            .into_iter()
-            .map(|row| {
-                Box::new(KvObjectView {
-                    object: row.object,
-                    collection_id: collection.lid,
-                    field_names: field_names.clone(),
-                    attr_names: attr_names.clone(),
-                    local_ref_lookup: Some(local_ref_lookup.clone()),
-                }) as semantic_db_core::DynObject
-            })
-            .collect())
     }
 
-    fn scan_filtered(
+    fn scan_filtered_stream(
         &self,
-        source: &semantic_db_core::SourceRef,
-        predicate: &semantic_db_core::Expr,
-    ) -> semantic_db_core::CoreResult<Vec<semantic_db_core::DynObject>> {
-        self.scan_filtered_with_relationships(source, predicate)
+        source: semantic_db_core::SourceRef,
+        predicate: semantic_db_core::Expr,
+    ) -> semantic_db_core::SendableRecordBatchStream {
+        match self.scan_filtered_with_relationships(&source, &predicate) {
+            Ok(rows) => dyn_rows_to_stream(rows),
+            Err(err) => stream::once(async move { Err(err) }).boxed(),
+        }
     }
 
-    fn index_lookup(
+    fn index_lookup_stream(
+        &self,
+        source: semantic_db_core::SourceRef,
+        field: semantic_db_core::FieldRef,
+        value: Value,
+    ) -> semantic_db_core::SendableRecordBatchStream {
+        match self.index_lookup_rows(&source, &field, &value) {
+            Ok(rows) => dyn_rows_to_stream(rows),
+            Err(err) => stream::once(async move { Err(err) }).boxed(),
+        }
+    }
+}
+
+impl<E: KvEngine> KvPhysicalDataSource<'_, E> {
+    fn index_lookup_rows(
         &self,
         source: &semantic_db_core::SourceRef,
         field: &semantic_db_core::FieldRef,
@@ -2527,7 +2567,7 @@ impl<E: KvEngine> semantic_db_core::PhysicalDataSource for KvPhysicalDataSource<
             semantic_db_core::FieldRef::Path(path) => Some(path.clone()),
         };
         let Some(field_path) = field_path else {
-            return semantic_db_core::PhysicalDataSource::scan(self, source);
+            return self.scan_rows(source);
         };
 
         let top_level = field_path
@@ -2550,8 +2590,7 @@ impl<E: KvEngine> semantic_db_core::PhysicalDataSource for KvPhysicalDataSource<
                         .scan_index_value(index.lid, Some(&field_path), value)
                         .map_err(|err| semantic_db_core::CoreError::new(err.to_string()))?
                 } else {
-                    return semantic_db_core::PhysicalDataSource::scan_filtered(
-                        self,
+                    return self.scan_filtered_with_relationships(
                         source,
                         &equality_expr(field_path, value.clone()),
                     );
@@ -2567,21 +2606,19 @@ impl<E: KvEngine> semantic_db_core::PhysicalDataSource for KvPhysicalDataSource<
                         .scan_index_value(index.lid, Some(&field_path), value)
                         .map_err(|err| semantic_db_core::CoreError::new(err.to_string()))?
                 } else {
-                    return semantic_db_core::PhysicalDataSource::scan_filtered(
-                        self,
+                    return self.scan_filtered_with_relationships(
                         source,
                         &equality_expr(field_path, value.clone()),
                     );
                 }
             } else {
-                return semantic_db_core::PhysicalDataSource::scan_filtered(
-                    self,
+                return self.scan_filtered_with_relationships(
                     source,
                     &equality_expr(field_path, value.clone()),
                 );
             }
         } else {
-            return semantic_db_core::PhysicalDataSource::scan(self, source);
+            return self.scan_rows(source);
         };
 
         self.materialize_ids(collection, ids)

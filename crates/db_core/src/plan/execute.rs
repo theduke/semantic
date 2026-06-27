@@ -25,6 +25,7 @@ use crate::query::{
 pub type DynObject = Box<dyn QueryObjectAccess>;
 pub type RowBatch = Vec<DynObject>;
 pub type SendableRecordBatchStream = BoxStream<'static, CoreResult<RowBatch>>;
+type RecordBatchStream<'a> = BoxStream<'a, CoreResult<RowBatch>>;
 
 pub const DEFAULT_EXECUTION_BATCH_SIZE: usize = 1024;
 
@@ -42,35 +43,6 @@ impl Default for ExecutionOptions {
             parallel_union_branches: true,
             parallel_join_inputs: true,
         }
-    }
-}
-
-pub trait PhysicalDataSource: Send + Sync {
-    fn scan(&self, source: &SourceRef) -> CoreResult<Vec<DynObject>>;
-
-    fn scan_filtered(&self, source: &SourceRef, predicate: &Expr) -> CoreResult<Vec<DynObject>> {
-        let items = self.scan(source)?;
-        Ok(items
-            .into_iter()
-            .filter(|item| evaluate_filter_expr(item.as_ref(), predicate))
-            .collect())
-    }
-
-    fn index_lookup(
-        &self,
-        source: &SourceRef,
-        field: &FieldRef,
-        value: &Value,
-    ) -> CoreResult<Vec<DynObject>> {
-        let items = self.scan(source)?;
-        Ok(items
-            .into_iter()
-            .filter(|item| {
-                value_ref_for_field(item.as_ref(), field, None)
-                    .map(|v| v.into_owned() == *value)
-                    .unwrap_or(false)
-            })
-            .collect())
     }
 }
 
@@ -141,10 +113,10 @@ fn normalize_options(mut options: ExecutionOptions) -> ExecutionOptions {
 
 fn execute_physical_dyn_stream(
     plan: PhysicalPlan,
-    source: Arc<dyn AsyncPhysicalDataSource>,
+    source: Arc<dyn AsyncPhysicalDataSource + '_>,
     context: QueryContext,
     options: ExecutionOptions,
-) -> SendableRecordBatchStream {
+) -> RecordBatchStream<'_> {
     match plan {
         PhysicalPlan::Source(PhysicalSource::Scan { source: source_ref }) => {
             source.scan_stream(source_ref)
@@ -399,7 +371,7 @@ fn rows_to_batches(rows: Vec<DynObject>, batch_size: usize) -> SendableRecordBat
     .boxed()
 }
 
-async fn collect_dyn_stream(stream: SendableRecordBatchStream) -> CoreResult<Vec<DynObject>> {
+async fn collect_dyn_stream(stream: RecordBatchStream<'_>) -> CoreResult<Vec<DynObject>> {
     let batches = stream.try_collect::<Vec<_>>().await?;
     Ok(batches.into_iter().flatten().collect())
 }
@@ -410,29 +382,23 @@ fn filter_dyn_rows(rows: Vec<DynObject>, predicate: &Expr) -> Vec<DynObject> {
         .collect()
 }
 
-fn filter_batch_stream(
-    input: SendableRecordBatchStream,
-    predicate: Expr,
-) -> SendableRecordBatchStream {
+fn filter_batch_stream(input: RecordBatchStream<'_>, predicate: Expr) -> RecordBatchStream<'_> {
     input
         .map_ok(move |batch| filter_dyn_rows(batch, &predicate))
         .filter(|item| futures::future::ready(!matches!(item, Ok(batch) if batch.is_empty())))
         .boxed()
 }
 
-fn filter_bool_batch_stream(
-    input: SendableRecordBatchStream,
-    keep: bool,
-) -> SendableRecordBatchStream {
+fn filter_bool_batch_stream(input: RecordBatchStream<'_>, keep: bool) -> RecordBatchStream<'_> {
     if keep { input } else { stream::empty().boxed() }
 }
 
 fn filter_in_subquery_batch_stream(
-    input: SendableRecordBatchStream,
+    input: RecordBatchStream<'_>,
     left: Expr,
     sub_values: BTreeSet<Value>,
     negated: bool,
-) -> SendableRecordBatchStream {
+) -> RecordBatchStream<'_> {
     input
         .map_ok(move |batch| {
             batch
@@ -450,9 +416,9 @@ fn filter_in_subquery_batch_stream(
 }
 
 fn project_batch_stream(
-    input: SendableRecordBatchStream,
+    input: RecordBatchStream<'_>,
     projection: Vec<PhysicalProjectionField>,
-) -> SendableRecordBatchStream {
+) -> RecordBatchStream<'_> {
     input
         .map_ok(move |batch| {
             batch
@@ -464,10 +430,10 @@ fn project_batch_stream(
 }
 
 fn limit_batch_stream(
-    input: SendableRecordBatchStream,
+    input: RecordBatchStream<'_>,
     offset: usize,
     limit: Option<usize>,
-) -> SendableRecordBatchStream {
+) -> RecordBatchStream<'_> {
     stream::unfold(
         (input, offset, limit, false),
         |(mut input, mut offset, mut remaining, done)| async move {
@@ -509,7 +475,7 @@ fn limit_batch_stream(
     .boxed()
 }
 
-fn distinct_batch_stream(input: SendableRecordBatchStream) -> SendableRecordBatchStream {
+fn distinct_batch_stream(input: RecordBatchStream<'_>) -> RecordBatchStream<'_> {
     stream::unfold(
         (input, BTreeSet::<Object>::new()),
         |(mut input, mut dedup)| async move {
@@ -535,10 +501,10 @@ fn distinct_batch_stream(input: SendableRecordBatchStream) -> SendableRecordBatc
 
 fn execute_join_stream(
     mut join: PhysicalJoinPlan,
-    source: Arc<dyn AsyncPhysicalDataSource>,
+    source: Arc<dyn AsyncPhysicalDataSource + '_>,
     context: QueryContext,
     options: ExecutionOptions,
-) -> SendableRecordBatchStream {
+) -> RecordBatchStream<'_> {
     stream::once(async move {
         if let PhysicalJoinCondition::Predicate(predicate) = &join.condition {
             join.condition = PhysicalJoinCondition::Predicate(
@@ -587,23 +553,36 @@ fn field_path_for_ref(field: &FieldRef) -> Option<FieldPath> {
     }
 }
 
-pub fn execute_physical_plan_with_source(
-    plan: &PhysicalPlan,
-    source: &dyn PhysicalDataSource,
-    context: &QueryContext,
-) -> CoreResult<Vec<Object>> {
-    execute_physical_dyn(plan, source, context)
-        .map(|items| items.into_iter().map(|item| item.to_object()).collect())
-}
-
 pub async fn execute_physical_plan_with_source_async(
     plan: &PhysicalPlan,
     source: &dyn AsyncPhysicalDataSource,
     options: ExecutionOptions,
-    _context: &QueryContext,
+    context: &QueryContext,
 ) -> CoreResult<Vec<Object>> {
-    let out = execute_physical_dyn_async(plan, source, options).await?;
-    Ok(out.into_iter().map(|item| item.to_object()).collect())
+    let source = Arc::new(BorrowedAsyncPhysicalDataSource { inner: source });
+    Ok(collect_dyn_stream(execute_physical_dyn_stream(
+        plan.clone(),
+        source,
+        context.clone(),
+        normalize_options(options),
+    ))
+    .await?
+    .into_iter()
+    .map(|row| row.to_object())
+    .collect())
+}
+
+pub fn execute_physical_plan_with_source(
+    plan: &PhysicalPlan,
+    source: &dyn AsyncPhysicalDataSource,
+    context: &QueryContext,
+) -> CoreResult<Vec<Object>> {
+    futures::executor::block_on(execute_physical_plan_with_source_async(
+        plan,
+        source,
+        ExecutionOptions::default(),
+        context,
+    ))
 }
 
 pub fn execute_physical_plan(
@@ -615,388 +594,54 @@ pub fn execute_physical_plan(
         rows: Vec<Object>,
     }
 
-    impl PhysicalDataSource for InlineDataSource {
-        fn scan(&self, source: &SourceRef) -> CoreResult<Vec<DynObject>> {
+    impl AsyncPhysicalDataSource for InlineDataSource {
+        fn scan_stream(&self, source: SourceRef) -> SendableRecordBatchStream {
             if source.source_name.is_some() || source.collection_id.is_some() {
-                return Err(CoreError::new(
-                    "inline physical executor does not support named sources",
-                ));
+                return stream::once(async {
+                    Err(CoreError::new(
+                        "inline physical executor does not support named sources",
+                    ))
+                })
+                .boxed();
             }
-            Ok(self
-                .rows
-                .iter()
-                .cloned()
-                .map(|row| Box::new(row) as DynObject)
-                .collect())
+            rows_to_batches(
+                self.rows
+                    .iter()
+                    .cloned()
+                    .map(|row| Box::new(row) as DynObject)
+                    .collect(),
+                DEFAULT_EXECUTION_BATCH_SIZE,
+            )
         }
     }
 
     execute_physical_plan_with_source(plan, &InlineDataSource { rows }, context).unwrap_or_default()
 }
 
-fn execute_physical_dyn(
-    plan: &PhysicalPlan,
-    source: &dyn PhysicalDataSource,
-    context: &QueryContext,
-) -> CoreResult<Vec<DynObject>> {
-    match plan {
-        PhysicalPlan::Source(PhysicalSource::Scan { source: source_ref }) => {
-            source.scan(source_ref)
-        }
-        PhysicalPlan::Source(PhysicalSource::FilteredScan {
-            source: source_ref,
-            predicate,
-        }) => {
-            if !expr_contains_subquery(predicate) {
-                return source.scan_filtered(source_ref, predicate);
-            }
-            let predicate = resolve_expr_subqueries(predicate, source, context)?;
-            source.scan(source_ref).map(|items| {
-                items
-                    .into_iter()
-                    .filter(|item| evaluate_filter_expr(item.as_ref(), &predicate))
-                    .collect()
-            })
-        }
-        PhysicalPlan::Source(PhysicalSource::IndexLookup {
-            source: source_ref,
-            field,
-            value,
-            residual_predicate,
-        }) => {
-            let items = source.index_lookup(source_ref, field, value)?;
-            if let Some(residual) = residual_predicate {
-                let residual = resolve_expr_subqueries(residual, source, context)?;
-                Ok(items
-                    .into_iter()
-                    .filter(|item| evaluate_filter_expr(item.as_ref(), &residual))
-                    .collect())
-            } else {
-                Ok(items)
-            }
-        }
-        PhysicalPlan::Values { values } => Ok(values
-            .iter()
-            .cloned()
-            .map(|item| Box::new(item) as DynObject)
-            .collect()),
-        PhysicalPlan::Filter { input, predicate } => {
-            let predicate = resolve_expr_subqueries(predicate, source, context)?;
-            Ok(execute_physical_dyn(input, source, context)?
-                .into_iter()
-                .filter(|row| evaluate_filter_expr(row.as_ref(), &predicate))
-                .collect())
-        }
-        PhysicalPlan::Sort { input, order_by } => {
-            let mut out = execute_physical_dyn(input, source, context)?;
-            let order_by = resolve_order_by_subqueries(order_by, source, context)?;
-            out.sort_by(|a, b| compare_dyn_objects(a.as_ref(), b.as_ref(), &order_by));
-            Ok(out)
-        }
-        PhysicalPlan::Project { input, projection } => {
-            let projection = resolve_projection_subqueries(projection, source, context)?;
-            Ok(execute_physical_dyn(input, source, context)?
-                .into_iter()
-                .map(|row| Box::new(project_dyn_object(row.as_ref(), &projection)) as DynObject)
-                .collect())
-        }
-        PhysicalPlan::Aggregate {
-            input,
-            group_by,
-            projection,
-            having,
-        } => {
-            let group_by = resolve_expr_list_subqueries(group_by, source, context)?;
-            let projection = resolve_projection_subqueries(projection, source, context)?;
-            let having = match having {
-                Some(expr) => Some(resolve_expr_subqueries(expr, source, context)?),
-                None => None,
-            };
-            execute_aggregate(
-                execute_physical_dyn(input, source, context)?,
-                &group_by,
-                &projection,
-                &having,
-            )
-        }
-        PhysicalPlan::Limit {
-            input,
-            offset,
-            limit,
-        } => {
-            let offset = resolve_expr_subqueries(offset, source, context)?;
-            let limit = match limit {
-                Some(expr) => Some(resolve_expr_subqueries(expr, source, context)?),
-                None => None,
-            };
-            let offset = evaluate_usize_expr(&offset)
-                .ok_or_else(|| CoreError::new("failed to evaluate OFFSET expression"))?;
-            let limit = limit
-                .as_ref()
-                .map(|expr| {
-                    evaluate_usize_expr(expr)
-                        .ok_or_else(|| CoreError::new("failed to evaluate LIMIT expression"))
-                })
-                .transpose()?;
-            let iter = execute_physical_dyn(input, source, context)?
-                .into_iter()
-                .skip(offset);
-            if let Some(limit) = limit {
-                Ok(iter.take(limit).collect())
-            } else {
-                Ok(iter.collect())
-            }
-        }
-        PhysicalPlan::Distinct { input } => {
-            let mut dedup = BTreeSet::<Object>::new();
-            Ok(execute_physical_dyn(input, source, context)?
-                .into_iter()
-                .filter(|item| dedup.insert(item.to_object()))
-                .collect())
-        }
-        PhysicalPlan::Union { inputs, all } => {
-            let mut merged = Vec::<DynObject>::new();
-            for input in inputs {
-                merged.extend(execute_physical_dyn(input, source, context)?);
-            }
-            if *all {
-                return Ok(merged);
-            }
-            let mut dedup = BTreeSet::<Object>::new();
-            Ok(merged
-                .into_iter()
-                .filter(|item| dedup.insert(item.to_object()))
-                .collect())
-        }
-        PhysicalPlan::Join(join) => execute_join(join, source, context),
-        PhysicalPlan::ApplyExists {
-            input,
-            subquery,
-            negated,
-        } => {
-            let subquery_any = !execute_physical_dyn(subquery, source, context)?.is_empty();
-            Ok(execute_physical_dyn(input, source, context)?
-                .into_iter()
-                .filter(|_| {
-                    if *negated {
-                        !subquery_any
-                    } else {
-                        subquery_any
-                    }
-                })
-                .collect())
-        }
-        PhysicalPlan::ApplyInSubquery {
-            input,
-            left,
-            subquery,
-            negated,
-        } => {
-            let sub_values: BTreeSet<Value> = execute_physical_dyn(subquery, source, context)?
-                .into_iter()
-                .filter_map(|row| row.to_object().into_btree().into_values().next())
-                .collect();
-            let left = resolve_expr_subqueries(left, source, context)?;
-            Ok(execute_physical_dyn(input, source, context)?
-                .into_iter()
-                .filter(|row| {
-                    let contains = evaluate_expr(row.as_ref(), &left)
-                        .map(|v| sub_values.contains(&v))
-                        .unwrap_or(false);
-                    if *negated { !contains } else { contains }
-                })
-                .collect())
-        }
-        PhysicalPlan::Exchange { input, .. }
-        | PhysicalPlan::RepartitionHash { input, .. }
-        | PhysicalPlan::Materialize { input } => execute_physical_dyn(input, source, context),
+struct BorrowedAsyncPhysicalDataSource<'a> {
+    inner: &'a dyn AsyncPhysicalDataSource,
+}
+
+impl AsyncPhysicalDataSource for BorrowedAsyncPhysicalDataSource<'_> {
+    fn scan_stream(&self, source: SourceRef) -> SendableRecordBatchStream {
+        self.inner.scan_stream(source)
     }
-}
 
-fn resolve_projection_subqueries(
-    projection: &[PhysicalProjectionField],
-    source: &dyn PhysicalDataSource,
-    context: &QueryContext,
-) -> CoreResult<Vec<PhysicalProjectionField>> {
-    projection
-        .iter()
-        .map(|field| {
-            Ok(PhysicalProjectionField {
-                expr: resolve_expr_subqueries(&field.expr, source, context)?,
-                field: field.field.clone(),
-                source_path: field.source_path.clone(),
-                alias: field.alias.clone(),
-            })
-        })
-        .collect()
-}
+    fn scan_filtered_stream(
+        &self,
+        source: SourceRef,
+        predicate: Expr,
+    ) -> SendableRecordBatchStream {
+        self.inner.scan_filtered_stream(source, predicate)
+    }
 
-fn resolve_order_by_subqueries(
-    order_by: &[PhysicalOrderField],
-    source: &dyn PhysicalDataSource,
-    context: &QueryContext,
-) -> CoreResult<Vec<PhysicalOrderField>> {
-    order_by
-        .iter()
-        .map(|item| {
-            Ok(PhysicalOrderField {
-                expr: resolve_expr_subqueries(&item.expr, source, context)?,
-                direction: item.direction,
-            })
-        })
-        .collect()
-}
-
-fn resolve_expr_list_subqueries(
-    exprs: &[Expr],
-    source: &dyn PhysicalDataSource,
-    context: &QueryContext,
-) -> CoreResult<Vec<Expr>> {
-    exprs
-        .iter()
-        .map(|expr| resolve_expr_subqueries(expr, source, context))
-        .collect()
-}
-
-fn resolve_expr_subqueries(
-    expr: &Expr,
-    source: &dyn PhysicalDataSource,
-    context: &QueryContext,
-) -> CoreResult<Expr> {
-    match expr {
-        Expr::Operand(_) => Ok(expr.clone()),
-        Expr::Unary { op, expr } => Ok(Expr::Unary {
-            op: *op,
-            expr: Box::new(resolve_expr_subqueries(expr, source, context)?),
-        }),
-        Expr::Binary { op, left, right } => {
-            if *op == semantic_data::query::BinaryOp::In
-                && let Expr::Subquery(query) = right.as_ref()
-            {
-                return Ok(Expr::InList {
-                    expr: Box::new(resolve_expr_subqueries(left, source, context)?),
-                    list: execute_list_subquery(query, source, context)?
-                        .into_iter()
-                        .map(|value| Expr::Operand(Operand::Literal(value)))
-                        .collect(),
-                    negated: false,
-                });
-            }
-            Ok(Expr::Binary {
-                op: *op,
-                left: Box::new(resolve_expr_subqueries(left, source, context)?),
-                right: Box::new(resolve_expr_subqueries(right, source, context)?),
-            })
-        }
-        Expr::IfElse {
-            cond,
-            then_expr,
-            else_expr,
-        } => Ok(Expr::IfElse {
-            cond: Box::new(resolve_expr_subqueries(cond, source, context)?),
-            then_expr: Box::new(resolve_expr_subqueries(then_expr, source, context)?),
-            else_expr: Box::new(resolve_expr_subqueries(else_expr, source, context)?),
-        }),
-        Expr::Coalesce(items) => Ok(Expr::Coalesce(resolve_expr_list_subqueries(
-            items, source, context,
-        )?)),
-        Expr::Function { name, args } => Ok(Expr::Function {
-            name: name.clone(),
-            args: args
-                .iter()
-                .map(|arg| match arg {
-                    FunctionArg::Expr(expr) => {
-                        resolve_expr_subqueries(expr, source, context).map(FunctionArg::Expr)
-                    }
-                    FunctionArg::Wildcard => Ok(FunctionArg::Wildcard),
-                })
-                .collect::<CoreResult<Vec<_>>>()?,
-        }),
-        Expr::Aggregate { op, distinct, arg } => Ok(Expr::Aggregate {
-            op: *op,
-            distinct: *distinct,
-            arg: Box::new(match arg.as_ref() {
-                FunctionArg::Expr(expr) => {
-                    FunctionArg::Expr(resolve_expr_subqueries(expr, source, context)?)
-                }
-                FunctionArg::Wildcard => FunctionArg::Wildcard,
-            }),
-        }),
-        Expr::InList {
-            expr,
-            list,
-            negated,
-        } => Ok(Expr::InList {
-            expr: Box::new(resolve_expr_subqueries(expr, source, context)?),
-            list: resolve_expr_list_subqueries(list, source, context)?,
-            negated: *negated,
-        }),
-        Expr::Subquery(query) => Ok(Expr::Operand(Operand::Literal(execute_scalar_subquery(
-            query, source, context,
-        )?))),
-        Expr::Between {
-            expr,
-            low,
-            high,
-            negated,
-        } => Ok(Expr::Between {
-            expr: Box::new(resolve_expr_subqueries(expr, source, context)?),
-            low: Box::new(resolve_expr_subqueries(low, source, context)?),
-            high: Box::new(resolve_expr_subqueries(high, source, context)?),
-            negated: *negated,
-        }),
-        Expr::PatternMatch {
-            kind,
-            expr,
-            pattern,
-            case_insensitive,
-            negated,
-        } => Ok(Expr::PatternMatch {
-            kind: *kind,
-            expr: Box::new(resolve_expr_subqueries(expr, source, context)?),
-            pattern: Box::new(resolve_expr_subqueries(pattern, source, context)?),
-            case_insensitive: *case_insensitive,
-            negated: *negated,
-        }),
-        Expr::RegexMatch {
-            expr,
-            pattern,
-            case_insensitive,
-            negated,
-        } => Ok(Expr::RegexMatch {
-            expr: Box::new(resolve_expr_subqueries(expr, source, context)?),
-            pattern: Box::new(resolve_expr_subqueries(pattern, source, context)?),
-            case_insensitive: *case_insensitive,
-            negated: *negated,
-        }),
-        Expr::IsNull { expr, negated } => Ok(Expr::IsNull {
-            expr: Box::new(resolve_expr_subqueries(expr, source, context)?),
-            negated: *negated,
-        }),
-        Expr::Exists { query, negated } => {
-            let exists = !execute_select_subquery(query, source, context)?.is_empty();
-            Ok(Expr::Operand(Operand::Literal(Value::Bool(if *negated {
-                !exists
-            } else {
-                exists
-            }))))
-        }
-        Expr::RelationExists {
-            relation,
-            source: relation_source,
-            target,
-            transitive,
-            max_depth,
-        } => Ok(Expr::RelationExists {
-            relation: Box::new(resolve_expr_subqueries(relation, source, context)?),
-            source: Box::new(resolve_expr_subqueries(relation_source, source, context)?),
-            target: Box::new(resolve_expr_subqueries(target, source, context)?),
-            transitive: *transitive,
-            max_depth: match max_depth {
-                Some(expr) => Some(Box::new(resolve_expr_subqueries(expr, source, context)?)),
-                None => None,
-            },
-        }),
+    fn index_lookup_stream(
+        &self,
+        source: SourceRef,
+        field: FieldRef,
+        value: Value,
+    ) -> SendableRecordBatchStream {
+        self.inner.index_lookup_stream(source, field, value)
     }
 }
 
@@ -1057,53 +702,9 @@ fn expr_contains_subquery(expr: &Expr) -> bool {
     }
 }
 
-fn execute_select_subquery(
-    query: &crate::query::SelectQuery,
-    source: &dyn PhysicalDataSource,
-    context: &QueryContext,
-) -> CoreResult<Vec<Object>> {
-    let collection_id = query
-        .collection
-        .as_ref()
-        .filter(|name| !crate::is_all_collection_alias(name))
-        .and_then(|name| context.catalog().collection_by_name(name))
-        .map(|collection| collection.lid);
-    let source_ref = source_ref_for_collection(
-        query.collection.clone(),
-        query.source_alias.clone(),
-        collection_id,
-    );
-    let plan = Optimizer::core().optimize_query_with_source(query, source_ref, None, context);
-    execute_physical_dyn(&plan.physical, source, context)
-        .map(|rows| rows.into_iter().map(|row| row.to_object()).collect())
-}
-
-fn execute_scalar_subquery(
-    query: &crate::query::SelectQuery,
-    source: &dyn PhysicalDataSource,
-    context: &QueryContext,
-) -> CoreResult<Value> {
-    let rows = execute_select_subquery(query, source, context)?;
-    let Some(row) = rows.into_iter().next() else {
-        return Ok(Value::Null);
-    };
-    Ok(row.into_btree().into_values().next().unwrap_or(Value::Null))
-}
-
-fn execute_list_subquery(
-    query: &crate::query::SelectQuery,
-    source: &dyn PhysicalDataSource,
-    context: &QueryContext,
-) -> CoreResult<Vec<Value>> {
-    Ok(execute_select_subquery(query, source, context)?
-        .into_iter()
-        .filter_map(|row| row.into_btree().into_values().next())
-        .collect())
-}
-
 fn resolve_projection_subqueries_async<'a>(
     projection: &'a [PhysicalProjectionField],
-    source: Arc<dyn AsyncPhysicalDataSource>,
+    source: Arc<dyn AsyncPhysicalDataSource + 'a>,
     context: &'a QueryContext,
     options: ExecutionOptions,
 ) -> BoxFuture<'a, CoreResult<Vec<PhysicalProjectionField>>> {
@@ -1125,7 +726,7 @@ fn resolve_projection_subqueries_async<'a>(
 
 fn resolve_order_by_subqueries_async<'a>(
     order_by: &'a [PhysicalOrderField],
-    source: Arc<dyn AsyncPhysicalDataSource>,
+    source: Arc<dyn AsyncPhysicalDataSource + 'a>,
     context: &'a QueryContext,
     options: ExecutionOptions,
 ) -> BoxFuture<'a, CoreResult<Vec<PhysicalOrderField>>> {
@@ -1145,7 +746,7 @@ fn resolve_order_by_subqueries_async<'a>(
 
 fn resolve_expr_list_subqueries_async<'a>(
     exprs: &'a [Expr],
-    source: Arc<dyn AsyncPhysicalDataSource>,
+    source: Arc<dyn AsyncPhysicalDataSource + 'a>,
     context: &'a QueryContext,
     options: ExecutionOptions,
 ) -> BoxFuture<'a, CoreResult<Vec<Expr>>> {
@@ -1161,7 +762,7 @@ fn resolve_expr_list_subqueries_async<'a>(
 
 fn resolve_expr_subqueries_async<'a>(
     expr: &'a Expr,
-    source: Arc<dyn AsyncPhysicalDataSource>,
+    source: Arc<dyn AsyncPhysicalDataSource + 'a>,
     context: &'a QueryContext,
     options: ExecutionOptions,
 ) -> BoxFuture<'a, CoreResult<Expr>> {
@@ -1364,7 +965,7 @@ fn resolve_expr_subqueries_async<'a>(
 
 async fn execute_select_subquery_async(
     query: &crate::query::SelectQuery,
-    source: Arc<dyn AsyncPhysicalDataSource>,
+    source: Arc<dyn AsyncPhysicalDataSource + '_>,
     context: &QueryContext,
     options: ExecutionOptions,
 ) -> CoreResult<Vec<Object>> {
@@ -1380,12 +981,21 @@ async fn execute_select_subquery_async(
         collection_id,
     );
     let plan = Optimizer::core().optimize_query_with_source(query, source_ref, None, context);
-    execute_physical_plan_collect(plan.physical, source, context.clone(), options).await
+    Ok(collect_dyn_stream(execute_physical_dyn_stream(
+        plan.physical,
+        source,
+        context.clone(),
+        options,
+    ))
+    .await?
+    .into_iter()
+    .map(|row| row.to_object())
+    .collect())
 }
 
 async fn execute_scalar_subquery_async(
     query: &crate::query::SelectQuery,
-    source: Arc<dyn AsyncPhysicalDataSource>,
+    source: Arc<dyn AsyncPhysicalDataSource + '_>,
     context: &QueryContext,
     options: ExecutionOptions,
 ) -> CoreResult<Value> {
@@ -1398,7 +1008,7 @@ async fn execute_scalar_subquery_async(
 
 async fn execute_list_subquery_async(
     query: &crate::query::SelectQuery,
-    source: Arc<dyn AsyncPhysicalDataSource>,
+    source: Arc<dyn AsyncPhysicalDataSource + '_>,
     context: &QueryContext,
     options: ExecutionOptions,
 ) -> CoreResult<Vec<Value>> {
@@ -1409,153 +1019,6 @@ async fn execute_list_subquery_async(
             .filter_map(|row| row.into_btree().into_values().next())
             .collect(),
     )
-}
-
-fn execute_physical_dyn_async<'a>(
-    plan: &'a PhysicalPlan,
-    source: &'a dyn AsyncPhysicalDataSource,
-    options: ExecutionOptions,
-) -> BoxFuture<'a, CoreResult<Vec<DynObject>>> {
-    async move {
-        match plan {
-            PhysicalPlan::Source(PhysicalSource::Scan { source: source_ref }) => {
-                source.scan(source_ref.clone()).await
-            }
-            PhysicalPlan::Source(PhysicalSource::FilteredScan {
-                source: source_ref,
-                predicate,
-            }) => source.scan(source_ref.clone()).await.map(|items| {
-                items
-                    .into_iter()
-                    .filter(|item| evaluate_filter_expr(item.as_ref(), predicate))
-                    .collect()
-            }),
-            PhysicalPlan::Source(PhysicalSource::IndexLookup {
-                source: source_ref, ..
-            }) => source.scan(source_ref.clone()).await,
-            PhysicalPlan::Values { values } => Ok(values
-                .iter()
-                .cloned()
-                .map(|item| Box::new(item) as DynObject)
-                .collect()),
-            PhysicalPlan::Filter { input, predicate } => {
-                Ok(execute_physical_dyn_async(input, source, options)
-                    .await?
-                    .into_iter()
-                    .filter(|row| evaluate_filter_expr(row.as_ref(), predicate))
-                    .collect())
-            }
-            PhysicalPlan::Sort { input, order_by } => {
-                let mut out = execute_physical_dyn_async(input, source, options).await?;
-                out.sort_by(|a, b| compare_dyn_objects(a.as_ref(), b.as_ref(), order_by));
-                Ok(out)
-            }
-            PhysicalPlan::Project { input, projection } => {
-                Ok(execute_physical_dyn_async(input, source, options)
-                    .await?
-                    .into_iter()
-                    .map(|row| Box::new(project_dyn_object(row.as_ref(), projection)) as DynObject)
-                    .collect())
-            }
-            PhysicalPlan::Aggregate {
-                input,
-                group_by,
-                projection,
-                having,
-            } => execute_aggregate(
-                execute_physical_dyn_async(input, source, options).await?,
-                group_by,
-                projection,
-                having,
-            ),
-            PhysicalPlan::Limit {
-                input,
-                offset,
-                limit,
-            } => {
-                let offset = evaluate_usize_expr(offset)
-                    .ok_or_else(|| CoreError::new("failed to evaluate OFFSET expression"))?;
-                let limit = limit
-                    .as_ref()
-                    .map(|expr| {
-                        evaluate_usize_expr(expr)
-                            .ok_or_else(|| CoreError::new("failed to evaluate LIMIT expression"))
-                    })
-                    .transpose()?;
-                let iter = execute_physical_dyn_async(input, source, options)
-                    .await?
-                    .into_iter()
-                    .skip(offset);
-                if let Some(limit) = limit {
-                    Ok(iter.take(limit).collect())
-                } else {
-                    Ok(iter.collect())
-                }
-            }
-            PhysicalPlan::Distinct { input } => {
-                let mut dedup = BTreeSet::<Object>::new();
-                Ok(execute_physical_dyn_async(input, source, options)
-                    .await?
-                    .into_iter()
-                    .filter(|item| dedup.insert(item.to_object()))
-                    .collect())
-            }
-            PhysicalPlan::Union { inputs, all } => {
-                let mut merged = Vec::<DynObject>::new();
-                if options.parallel_union_branches {
-                    let futures = inputs
-                        .iter()
-                        .map(|input| execute_physical_dyn_async(input, source, options));
-                    for out in futures::future::try_join_all(futures).await? {
-                        merged.extend(out);
-                    }
-                } else {
-                    for input in inputs {
-                        merged.extend(execute_physical_dyn_async(input, source, options).await?);
-                    }
-                }
-                if *all {
-                    return Ok(merged);
-                }
-                let mut dedup = BTreeSet::<Object>::new();
-                Ok(merged
-                    .into_iter()
-                    .filter(|item| dedup.insert(item.to_object()))
-                    .collect())
-            }
-            PhysicalPlan::Join(_)
-            | PhysicalPlan::ApplyExists { .. }
-            | PhysicalPlan::ApplyInSubquery { .. } => Err(CoreError::new(
-                "async execution currently supports source/pipe operators only",
-            )),
-            PhysicalPlan::Exchange { input, .. }
-            | PhysicalPlan::RepartitionHash { input, .. }
-            | PhysicalPlan::Materialize { input } => {
-                execute_physical_dyn_async(input, source, options).await
-            }
-        }
-    }
-    .boxed()
-}
-
-fn execute_join(
-    join: &PhysicalJoinPlan,
-    source: &dyn PhysicalDataSource,
-    context: &QueryContext,
-) -> CoreResult<Vec<DynObject>> {
-    let mut join = join.clone();
-    if let PhysicalJoinCondition::Predicate(predicate) = &join.condition {
-        join.condition =
-            PhysicalJoinCondition::Predicate(resolve_expr_subqueries(predicate, source, context)?);
-    }
-    let left_rows = execute_physical_dyn(&join.left, source, context)?;
-    let right_rows = execute_physical_dyn(&join.right, source, context)?;
-    match join.algorithm {
-        PhysicalJoinAlgorithm::Hash => execute_hash_join(&join, left_rows, right_rows),
-        PhysicalJoinAlgorithm::NestedLoop | PhysicalJoinAlgorithm::Merge => {
-            execute_nested_loop_join(&join, left_rows, right_rows)
-        }
-    }
 }
 
 fn execute_hash_join(
@@ -2413,18 +1876,21 @@ mod tests {
         right: Vec<Object>,
     }
 
-    impl PhysicalDataSource for InlineSource {
-        fn scan(&self, source: &SourceRef) -> CoreResult<Vec<DynObject>> {
+    impl AsyncPhysicalDataSource for InlineSource {
+        fn scan_stream(&self, source: SourceRef) -> SendableRecordBatchStream {
             let values = match source.source_name.as_deref() {
                 Some("left") => &self.left,
                 Some("right") => &self.right,
                 _ => &self.left,
             };
-            Ok(values
-                .iter()
-                .cloned()
-                .map(|item| Box::new(item) as DynObject)
-                .collect())
+            rows_to_batches(
+                values
+                    .iter()
+                    .cloned()
+                    .map(|item| Box::new(item) as DynObject)
+                    .collect(),
+                2,
+            )
         }
     }
 
