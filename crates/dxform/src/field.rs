@@ -6,6 +6,7 @@ use futures::FutureExt;
 use crate::{
     DynValidator, FieldMeta, FieldPath, FieldValidationContext, FieldValidator, FormError,
     FormNodeKind, FormNodeState, FormRoot, FormScope, ValidationPhase, ValidationStrategy,
+    set_signal_if_changed,
 };
 
 pub struct FieldSpec<Parent, Value> {
@@ -64,6 +65,9 @@ where
     get: Rc<dyn Fn(&Root) -> Value>,
     set: Rc<dyn Fn(&mut Root, Value)>,
     is_empty: Rc<dyn Fn(&Value) -> bool>,
+    value_signal: Signal<Value>,
+    initial_value_signal: Signal<Value>,
+    meta_signal: Signal<FieldMeta>,
 }
 
 impl<Value, Root> Clone for FieldHandle<Value, Root>
@@ -78,6 +82,9 @@ where
             get: self.get.clone(),
             set: self.set.clone(),
             is_empty: self.is_empty.clone(),
+            value_signal: self.value_signal,
+            initial_value_signal: self.initial_value_signal,
+            meta_signal: self.meta_signal,
         }
     }
 }
@@ -145,19 +152,41 @@ where
                 }) as DynValidator<Root>
             })
             .collect::<Vec<_>>();
-        scope.root.with_registry(|registry| {
-            let node = registry
-                .nodes
-                .entry(path.clone())
-                .or_insert_with(|| FormNodeState::new(FormNodeKind::Field, path.clone()));
-            node.validators.extend(validators);
-        });
+        let current = get(&scope.root.values());
+        let initial = get(&scope.root.state.initial_values.read());
+        let (value_signal, initial_value_signal, meta_signal) =
+            scope.root.with_registry(|registry| {
+                let value_signal = registry.ensure_value_signal(&path, current.clone());
+                let initial_value_signal =
+                    registry.ensure_initial_value_signal(&path, initial.clone());
+                let node = registry
+                    .nodes
+                    .entry(path.clone())
+                    .or_insert_with(|| FormNodeState::new(FormNodeKind::Field, path.clone()));
+                node.validators.extend(validators);
+                node.value_refresher = Some({
+                    let get = get.clone();
+                    Rc::new(move |root: &Root| {
+                        set_signal_if_changed(value_signal, get(root));
+                    })
+                });
+                node.initial_value_refresher = Some({
+                    let get = get.clone();
+                    Rc::new(move |root: &Root| {
+                        set_signal_if_changed(initial_value_signal, get(root));
+                    })
+                });
+                (value_signal, initial_value_signal, node.field_meta_signal)
+            });
         let handle = Self {
             root: scope.root.clone(),
             path,
             get,
             set,
             is_empty: spec.is_empty,
+            value_signal,
+            initial_value_signal,
+            meta_signal,
         };
         handle.refresh_node_state();
         handle
@@ -168,31 +197,26 @@ where
     }
 
     pub fn value(&self) -> Value {
-        (self.get)(&self.root.values())
+        self.value_signal.read().clone()
     }
 
     pub fn value_signal(&self) -> ReadSignal<Value> {
-        Signal::new(self.value()).into()
+        self.value_signal.into()
     }
 
     pub fn meta(&self) -> FieldMeta {
-        self.root
-            .state
-            .registry
-            .read()
-            .nodes
-            .get(&self.path)
-            .map(FormNodeState::field_meta)
-            .unwrap_or_else(|| FieldMeta::new(self.path.clone()))
+        self.meta_signal.read().clone()
     }
 
     pub fn meta_signal(&self) -> ReadSignal<FieldMeta> {
-        Signal::new(self.meta()).into()
+        self.meta_signal.into()
     }
 
     pub fn set_value(&self, value: Value) {
         let set = self.set.clone();
-        self.root.mutate_values(move |root| set(root, value));
+        set_signal_if_changed(self.value_signal, value.clone());
+        self.root
+            .mutate_values_at(self.path.clone(), move |root| set(root, value));
         self.root.with_registry(|registry| {
             if let Some(node) = registry.nodes.get_mut(&self.path) {
                 node.touched = true;
@@ -262,7 +286,7 @@ where
 
     pub(crate) fn refresh_node_state(&self) {
         let current = self.value();
-        let initial = (self.get)(&self.root.state.initial_values.read());
+        let initial = self.initial_value_signal.read().clone();
         let empty = (self.is_empty)(&current);
         self.root.with_registry(|registry| {
             let node = registry

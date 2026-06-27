@@ -6,7 +6,7 @@ use futures::FutureExt;
 use crate::{
     DynValidator, FieldHandle, FieldPath, FieldSpec, FormNodeKind, FormNodeState, FormRoot,
     ListHandle, ListSpec, ScopeMeta, ScopeValidationContext, ScopeValidator, ValidationPhase,
-    ValidationStrategy,
+    ValidationStrategy, set_signal_if_changed,
 };
 
 type Getter<Root, T> = Rc<dyn Fn(&Root) -> T>;
@@ -69,6 +69,9 @@ where
     pub(crate) get: Getter<Root, T>,
     pub(crate) set: Setter<Root, T>,
     pub(crate) is_empty: Empty<T>,
+    value_signal: Signal<T>,
+    initial_value_signal: Signal<T>,
+    meta_signal: Signal<ScopeMeta>,
 }
 
 impl<T, Root> Clone for FormScope<T, Root>
@@ -83,6 +86,9 @@ where
             get: self.get.clone(),
             set: self.set.clone(),
             is_empty: self.is_empty.clone(),
+            value_signal: self.value_signal,
+            initial_value_signal: self.initial_value_signal,
+            meta_signal: self.meta_signal,
         }
     }
 }
@@ -109,8 +115,28 @@ where
         set: Setter<Root, T>,
         is_empty: Empty<T>,
     ) -> Self {
-        root.with_registry(|registry| {
-            registry.ensure_node(FormNodeKind::Scope, path.clone());
+        let current = get(&root.values());
+        let initial = get(&root.state.initial_values.read());
+        let (value_signal, initial_value_signal, meta_signal) = root.with_registry(|registry| {
+            let value_signal = registry.ensure_value_signal(&path, current.clone());
+            let initial_value_signal = registry.ensure_initial_value_signal(&path, initial.clone());
+            let node = registry
+                .nodes
+                .entry(path.clone())
+                .or_insert_with(|| FormNodeState::new(FormNodeKind::Scope, path.clone()));
+            node.value_refresher = Some({
+                let get = get.clone();
+                Rc::new(move |root: &Root| {
+                    set_signal_if_changed(value_signal, get(root));
+                })
+            });
+            node.initial_value_refresher = Some({
+                let get = get.clone();
+                Rc::new(move |root: &Root| {
+                    set_signal_if_changed(initial_value_signal, get(root));
+                })
+            });
+            (value_signal, initial_value_signal, node.scope_meta_signal)
         });
         let scope = Self {
             root,
@@ -118,6 +144,9 @@ where
             get,
             set,
             is_empty,
+            value_signal,
+            initial_value_signal,
+            meta_signal,
         };
         scope.refresh_node_state();
         scope
@@ -128,16 +157,19 @@ where
     }
 
     pub fn value(&self) -> T {
-        (self.get)(&self.root.values())
+        self.value_signal.read().clone()
+    }
+
+    pub fn value_signal(&self) -> ReadSignal<T> {
+        self.value_signal.into()
     }
 
     pub fn meta(&self) -> ScopeMeta {
-        self.root.scope_meta(&self.path)
+        self.meta_signal.read().clone()
     }
 
     pub fn meta_signal(&self) -> ReadSignal<ScopeMeta> {
-        let scope = self.clone();
-        Signal::new(scope.meta()).into()
+        self.meta_signal.into()
     }
 
     pub fn reset(&self) {
@@ -247,13 +279,15 @@ where
 
     pub(crate) fn set_value(&self, value: T) {
         let set = self.set.clone();
-        self.root.mutate_values(move |root| set(root, value));
+        set_signal_if_changed(self.value_signal, value.clone());
+        self.root
+            .mutate_values_at(self.path.clone(), move |root| set(root, value));
         self.refresh_node_state();
     }
 
     pub(crate) fn refresh_node_state(&self) {
         let current = self.value();
-        let initial = (self.get)(&self.root.state.initial_values.read());
+        let initial = self.initial_value_signal.read().clone();
         let empty = (self.is_empty)(&current);
         self.root.with_registry(|registry| {
             let node = registry

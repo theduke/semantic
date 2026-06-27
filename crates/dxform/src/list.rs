@@ -6,6 +6,7 @@ use futures::FutureExt;
 use crate::{
     DynValidator, FieldPath, FormNodeKind, FormNodeState, FormRoot, FormScope, ListItemKey,
     ListMeta, ListValidationContext, ListValidator, ValidationPhase, ValidationStrategy,
+    set_signal_if_changed,
 };
 
 pub struct ListSpec<Parent, Item> {
@@ -64,6 +65,10 @@ where
     get: Rc<dyn Fn(&Root) -> Vec<Item>>,
     set: Rc<dyn Fn(&mut Root, Vec<Item>)>,
     item_empty: Rc<dyn Fn(&Item) -> bool>,
+    value_signal: Signal<Vec<Item>>,
+    initial_value_signal: Signal<Vec<Item>>,
+    key_signal: Signal<Vec<ListItemKey>>,
+    meta_signal: Signal<ListMeta>,
 }
 
 impl<Item, Root> Clone for ListHandle<Item, Root>
@@ -78,6 +83,10 @@ where
             get: self.get.clone(),
             set: self.set.clone(),
             item_empty: self.item_empty.clone(),
+            value_signal: self.value_signal,
+            initial_value_signal: self.initial_value_signal,
+            key_signal: self.key_signal,
+            meta_signal: self.meta_signal,
         }
     }
 }
@@ -135,6 +144,8 @@ where
                 }) as DynValidator<Root>
             })
             .collect::<Vec<_>>();
+        let current = get(&scope.root.values());
+        let initial = get(&scope.root.state.initial_values.read());
         let has_keys = scope
             .root
             .state
@@ -148,20 +159,60 @@ where
             let len = get(&scope.root.values()).len();
             scope.root.allocate_keys(len)
         };
-        scope.root.with_registry(|registry| {
-            let node = registry
-                .nodes
-                .entry(path.clone())
-                .or_insert_with(|| FormNodeState::new(FormNodeKind::List, path.clone()));
-            node.validators.extend(validators);
-            registry.list_keys.entry(path.clone()).or_insert(new_keys);
-        });
+        let initial_keys = if has_keys {
+            scope
+                .root
+                .state
+                .registry
+                .read()
+                .list_keys
+                .get(&path)
+                .cloned()
+                .unwrap_or_default()
+        } else {
+            new_keys.clone()
+        };
+        let (value_signal, initial_value_signal, key_signal, meta_signal) =
+            scope.root.with_registry(|registry| {
+                let value_signal = registry.ensure_value_signal(&path, current.clone());
+                let initial_value_signal =
+                    registry.ensure_initial_value_signal(&path, initial.clone());
+                let key_signal = registry.ensure_list_key_signal(&path, initial_keys);
+                let node = registry
+                    .nodes
+                    .entry(path.clone())
+                    .or_insert_with(|| FormNodeState::new(FormNodeKind::List, path.clone()));
+                node.validators.extend(validators);
+                registry.list_keys.entry(path.clone()).or_insert(new_keys);
+                node.value_refresher = Some({
+                    let get = get.clone();
+                    Rc::new(move |root: &Root| {
+                        set_signal_if_changed(value_signal, get(root));
+                    })
+                });
+                node.initial_value_refresher = Some({
+                    let get = get.clone();
+                    Rc::new(move |root: &Root| {
+                        set_signal_if_changed(initial_value_signal, get(root));
+                    })
+                });
+                (
+                    value_signal,
+                    initial_value_signal,
+                    key_signal,
+                    node.list_meta_signal,
+                )
+            });
         let handle = Self {
             root: scope.root.clone(),
             path,
             get,
             set,
             item_empty: spec.item_empty,
+            value_signal,
+            initial_value_signal,
+            key_signal,
+            meta_signal,
         };
         handle.refresh_node_state();
         handle
@@ -172,35 +223,28 @@ where
     }
 
     pub fn meta(&self) -> ListMeta {
-        self.root
-            .state
-            .registry
-            .read()
-            .nodes
-            .get(&self.path)
-            .map(FormNodeState::list_meta)
-            .unwrap_or_else(|| ListMeta::new(self.path.clone()))
+        self.meta_signal.read().clone()
     }
 
     pub fn meta_signal(&self) -> ReadSignal<ListMeta> {
-        Signal::new(self.meta()).into()
+        self.meta_signal.into()
     }
 
     pub fn values(&self) -> Vec<Item> {
-        (self.get)(&self.root.values())
+        self.value_signal.read().clone()
+    }
+
+    pub fn values_signal(&self) -> ReadSignal<Vec<Item>> {
+        self.value_signal.into()
+    }
+
+    pub fn keys_signal(&self) -> ReadSignal<Vec<ListItemKey>> {
+        self.key_signal.into()
     }
 
     pub fn items(&self) -> Vec<ListItemHandle<Item, Root>> {
         self.ensure_key_count();
-        let keys = self
-            .root
-            .state
-            .registry
-            .read()
-            .list_keys
-            .get(&self.path)
-            .cloned()
-            .unwrap_or_default();
+        let keys = self.key_signal.read().clone();
         keys.into_iter()
             .enumerate()
             .map(|(index, key)| ListItemHandle {
@@ -228,7 +272,9 @@ where
         let index = index.min(values.len());
         values.insert(index, value);
         let set = self.set.clone();
-        self.root.mutate_values(move |root| set(root, values));
+        set_signal_if_changed(self.value_signal, values.clone());
+        self.root
+            .mutate_values_at(self.path.clone(), move |root| set(root, values));
         let key = self.root.allocate_key();
         self.root.with_registry(|registry| {
             registry
@@ -237,6 +283,9 @@ where
                 .or_default()
                 .insert(index, key);
         });
+        let mut keys = self.key_signal.read().clone();
+        keys.insert(index, key);
+        set_signal_if_changed(self.key_signal, keys);
         self.refresh_node_state();
     }
 
@@ -247,8 +296,11 @@ where
         }
         let removed = values.remove(index);
         let set = self.set.clone();
-        self.root.mutate_values(move |root| set(root, values));
+        set_signal_if_changed(self.value_signal, values.clone());
+        self.root
+            .mutate_values_at(self.path.clone(), move |root| set(root, values));
         let item_path = self.path.index(index);
+        let mut keys = self.key_signal.read().clone();
         self.root.with_registry(|registry| {
             if let Some(keys) = registry.list_keys.get_mut(&self.path) {
                 if index < keys.len() {
@@ -257,6 +309,10 @@ where
             }
             registry.remove_descendants(&item_path);
         });
+        if index < keys.len() {
+            keys.remove(index);
+        }
+        set_signal_if_changed(self.key_signal, keys);
         self.rebuild_item_nodes();
         self.refresh_node_state();
         Some(removed)
@@ -264,7 +320,9 @@ where
 
     pub fn clear(&self) {
         let set = self.set.clone();
-        self.root.mutate_values(move |root| set(root, Vec::new()));
+        set_signal_if_changed(self.value_signal, Vec::new());
+        self.root
+            .mutate_values_at(self.path.clone(), move |root| set(root, Vec::new()));
         self.root.with_registry(|registry| {
             registry.list_keys.insert(self.path.clone(), Vec::new());
             let path = self.path.clone();
@@ -272,6 +330,7 @@ where
                 .nodes
                 .retain(|node_path, _| !node_path.starts_with(&path) || node_path == &path);
         });
+        set_signal_if_changed(self.key_signal, Vec::new());
         self.refresh_node_state();
     }
 
@@ -282,7 +341,10 @@ where
         }
         values.swap(a, b);
         let set = self.set.clone();
-        self.root.mutate_values(move |root| set(root, values));
+        set_signal_if_changed(self.value_signal, values.clone());
+        self.root
+            .mutate_values_at(self.path.clone(), move |root| set(root, values));
+        let mut keys = self.key_signal.read().clone();
         self.root.with_registry(|registry| {
             if let Some(keys) = registry.list_keys.get_mut(&self.path) {
                 if a < keys.len() && b < keys.len() {
@@ -290,6 +352,10 @@ where
                 }
             }
         });
+        if a < keys.len() && b < keys.len() {
+            keys.swap(a, b);
+            set_signal_if_changed(self.key_signal, keys);
+        }
         self.rebuild_item_nodes();
         self.refresh_node_state();
     }
@@ -302,7 +368,10 @@ where
         let value = values.remove(from);
         values.insert(to, value);
         let set = self.set.clone();
-        self.root.mutate_values(move |root| set(root, values));
+        set_signal_if_changed(self.value_signal, values.clone());
+        self.root
+            .mutate_values_at(self.path.clone(), move |root| set(root, values));
+        let mut keys = self.key_signal.read().clone();
         self.root.with_registry(|registry| {
             if let Some(keys) = registry.list_keys.get_mut(&self.path) {
                 if from < keys.len() && to < keys.len() {
@@ -311,6 +380,11 @@ where
                 }
             }
         });
+        if from < keys.len() && to < keys.len() {
+            let key = keys.remove(from);
+            keys.insert(to, key);
+            set_signal_if_changed(self.key_signal, keys);
+        }
         self.rebuild_item_nodes();
         self.refresh_node_state();
     }
@@ -318,10 +392,13 @@ where
     pub fn reset(&self) {
         let initial = (self.get)(&self.root.state.initial_values.read());
         let set = self.set.clone();
-        self.root.mutate_values(move |root| set(root, initial));
+        set_signal_if_changed(self.value_signal, initial.clone());
+        self.root
+            .mutate_values_at(self.path.clone(), move |root| set(root, initial));
         self.root.with_registry(|registry| {
             registry.list_keys.remove(&self.path);
         });
+        set_signal_if_changed(self.key_signal, Vec::new());
         self.ensure_key_count();
         self.refresh_node_state();
     }
@@ -358,20 +435,13 @@ where
             let keys = registry.list_keys.entry(self.path.clone()).or_default();
             keys.truncate(len);
             keys.extend(new_keys);
+            set_signal_if_changed(self.key_signal, keys.clone());
         });
         self.rebuild_item_nodes();
     }
 
     fn rebuild_item_nodes(&self) {
-        let keys = self
-            .root
-            .state
-            .registry
-            .read()
-            .list_keys
-            .get(&self.path)
-            .cloned()
-            .unwrap_or_default();
+        let keys = self.key_signal.read().clone();
         self.root.with_registry(|registry| {
             for (index, _) in keys.iter().enumerate() {
                 let path = self.path.index(index);
@@ -382,7 +452,7 @@ where
 
     fn refresh_node_state(&self) {
         let current = self.values();
-        let initial = (self.get)(&self.root.state.initial_values.read());
+        let initial = self.initial_value_signal.read().clone();
         self.root.with_registry(|registry| {
             let node = registry
                 .nodes

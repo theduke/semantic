@@ -5,8 +5,8 @@ use futures::FutureExt;
 
 use crate::{
     FieldPath, FormError, FormErrorSource, FormMeta, FormNodeKind, FormNodeState, FormRegistry,
-    FormScope, FormValidationContext, FormValidator, ScopeMeta, SubmitContext, SubmitError,
-    SubmitHandler, ValidationPhase, ValidationStrategy, Validity,
+    FormScope, FormValidationContext, FormValidator, SubmitContext, SubmitError, SubmitHandler,
+    ValidationPhase, ValidationStrategy, Validity, set_signal_if_changed,
 };
 
 #[derive(Clone)]
@@ -147,12 +147,15 @@ impl<T: Clone + PartialEq + 'static> FormRoot<T> {
                 node.submit_errors.clear();
             }
         });
+        self.refresh_value_signals_for_change(&FieldPath::root());
+        self.refresh_initial_value_signals();
         self.recompute_all_meta();
     }
 
     pub fn reset_to(&self, values: T) {
         self.set_initial_values_signal(values.clone());
         self.set_values_signal(values);
+        self.refresh_initial_value_signals();
         self.reset();
     }
 
@@ -163,6 +166,7 @@ impl<T: Clone + PartialEq + 'static> FormRoot<T> {
                 node.dirty = false;
             }
         });
+        self.refresh_initial_value_signals();
         self.recompute_all_meta();
     }
 
@@ -271,7 +275,7 @@ impl<T: Clone + PartialEq + 'static> FormRoot<T> {
         (start..start + count as u64).collect()
     }
 
-    pub(crate) fn mutate_values(&self, f: impl FnOnce(&mut T)) {
+    pub(crate) fn mutate_values_at(&self, path: FieldPath, f: impl FnOnce(&mut T)) {
         let mut values = self.values();
         f(&mut values);
         self.set_values_signal(values);
@@ -282,7 +286,39 @@ impl<T: Clone + PartialEq + 'static> FormRoot<T> {
         if self.state.options.clear_submit_errors_on_change {
             self.clear_submit_errors();
         }
+        self.refresh_value_signals_for_change(&path);
         self.recompute_all_meta();
+    }
+
+    pub(crate) fn refresh_value_signals_for_change(&self, path: &FieldPath) {
+        let root = self.values();
+        let refreshers = {
+            let registry = self.state.registry.read();
+            registry
+                .nodes
+                .iter()
+                .filter(|(node_path, _)| node_path.starts_with(path) || path.starts_with(node_path))
+                .filter_map(|(_, node)| node.value_refresher.clone())
+                .collect::<Vec<_>>()
+        };
+        for refresh in refreshers {
+            refresh(&root);
+        }
+    }
+
+    pub(crate) fn refresh_initial_value_signals(&self) {
+        let root = self.state.initial_values.read().clone();
+        let refreshers = self
+            .state
+            .registry
+            .read()
+            .nodes
+            .values()
+            .filter_map(|node| node.initial_value_refresher.clone())
+            .collect::<Vec<_>>();
+        for refresh in refreshers {
+            refresh(&root);
+        }
     }
 
     pub(crate) fn recompute_all_meta(&self) {
@@ -348,6 +384,7 @@ impl<T: Clone + PartialEq + 'static> FormRoot<T> {
                             dirty_since_last_submit: previous_meta.dirty_since_last_submit,
                         });
                     }
+                    node.sync_meta_signals();
                 }
             }
             next_meta
@@ -355,16 +392,6 @@ impl<T: Clone + PartialEq + 'static> FormRoot<T> {
         if let Some(next_meta) = next_meta {
             self.set_meta(next_meta);
         }
-    }
-
-    pub(crate) fn scope_meta(&self, path: &FieldPath) -> ScopeMeta {
-        self.state
-            .registry
-            .read()
-            .nodes
-            .get(path)
-            .map(FormNodeState::scope_meta)
-            .unwrap_or_else(|| ScopeMeta::new(path.clone()))
     }
 
     pub(crate) async fn validate_path(
@@ -491,8 +518,7 @@ impl<T: Clone + PartialEq + 'static> FormRoot<T> {
     }
 
     fn set_meta(&self, value: FormMeta) {
-        let mut meta = self.state.meta;
-        meta.set(value);
+        set_signal_if_changed(self.state.meta, value);
     }
 
     fn set_values_signal(&self, value: T) {

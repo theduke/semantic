@@ -82,6 +82,47 @@ fn field_change_marks_root_dirty_and_reset_clears_it() {
 }
 
 #[test]
+fn field_value_and_meta_signals_are_live_and_field_local() {
+    run_in_runtime(|| {
+        let form = FormRoot::new(Person::default());
+        let scope = form.scope();
+        let name = person_name_field(&scope);
+        let hobbies = scope.list(ListSpec::new(
+            "hobbies",
+            |person: &Person| person.hobbies.clone(),
+            |person, value| person.hobbies = value,
+        ));
+        let name_value = name.value_signal();
+        let name_meta = name.meta_signal();
+        let hobbies_meta = hobbies.meta_signal();
+
+        name.set_value("Ada".to_string());
+
+        assert_eq!(name_value.read().as_str(), "Ada");
+        assert!(name_meta.read().dirty);
+        assert!(!hobbies_meta.read().dirty);
+    });
+}
+
+#[test]
+fn scope_value_signal_updates_for_descendant_changes() {
+    run_in_runtime(|| {
+        let form = FormRoot::new(Profile::default());
+        let person = form.scope().subform(SubformSpec::new(
+            "person",
+            |profile: &Profile| profile.person.clone(),
+            |profile, value| profile.person = value,
+        ));
+        let person_value = person.value_signal();
+        let name = person_name_field(&person);
+
+        name.set_value("Ada".to_string());
+
+        assert_eq!(person_value.read().name, "Ada");
+    });
+}
+
+#[test]
 fn subform_reset_updates_root_but_preserves_sibling_dirty_state() {
     run_in_runtime(|| {
         let form = FormRoot::new(Profile::default());
@@ -146,6 +187,35 @@ fn list_add_remove_clear_updates_root_values_and_meta() {
 
         list.clear();
         assert!(form.values().hobbies.is_empty());
+    });
+}
+
+#[test]
+fn list_key_signal_tracks_list_structure() {
+    run_in_runtime(|| {
+        let form = FormRoot::new(Person::default());
+        let list = form.scope().list(ListSpec::new(
+            "hobbies",
+            |person: &Person| person.hobbies.clone(),
+            |person, value| person.hobbies = value,
+        ));
+        let keys = list.keys_signal();
+
+        list.push(Hobby {
+            name: "music".to_string(),
+        });
+        list.push(Hobby {
+            name: "climbing".to_string(),
+        });
+        let before = keys.read().clone();
+        list.swap(0, 1);
+        let after_swap = keys.read().clone();
+        list.remove(0);
+        let after_remove = keys.read().clone();
+
+        assert_eq!(before.len(), 2);
+        assert_eq!(after_swap, vec![before[1], before[0]]);
+        assert_eq!(after_remove, vec![before[0]]);
     });
 }
 
