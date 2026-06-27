@@ -3,13 +3,17 @@ use std::collections::BTreeMap;
 use semantic_data::schema::{AttributeType, ClassType};
 use semantic_db_core::catalog::{CatalogStorageSnapshot, StoredCollection};
 
-use crate::ui_catalog::{
-    MediaRendererRegistration, MenuSection, RenderRegistry, defaults::register_defaults,
+use crate::{
+    form::{UiFormRegistry, register_default_form_renderers},
+    ui_catalog::{
+        MediaRendererRegistration, MenuSection, RenderRegistry, defaults::register_defaults,
+    },
 };
 
 #[derive(Clone, Default)]
 pub struct UiCatalogConfig {
     pub register_default_renderers: bool,
+    pub register_default_form_renderers: bool,
 }
 
 #[derive(Clone)]
@@ -21,6 +25,7 @@ pub struct UiCatalog {
     classes_by_name: BTreeMap<String, ClassType>,
     collections_by_name: BTreeMap<String, StoredCollection>,
     render_registry: RenderRegistry,
+    form_registry: UiFormRegistry,
     media_renderers: Vec<MediaRendererRegistration>,
     menu_sections: Vec<MenuSection>,
 }
@@ -44,6 +49,14 @@ impl UiCatalog {
 
     pub fn render_registry_mut(&mut self) -> &mut RenderRegistry {
         &mut self.render_registry
+    }
+
+    pub fn form_registry(&self) -> &UiFormRegistry {
+        &self.form_registry
+    }
+
+    pub fn form_registry_mut(&mut self) -> &mut UiFormRegistry {
+        &mut self.form_registry
     }
 
     pub fn media_renderers(&self) -> &[MediaRendererRegistration] {
@@ -124,11 +137,13 @@ impl UiCatalogBuilder {
                 classes_by_name,
                 collections_by_name,
                 render_registry: RenderRegistry::default(),
+                form_registry: UiFormRegistry::default(),
                 media_renderers: Vec::new(),
                 menu_sections: Vec::new(),
             },
             config: UiCatalogConfig {
                 register_default_renderers: true,
+                register_default_form_renderers: true,
             },
         }
     }
@@ -141,6 +156,9 @@ impl UiCatalogBuilder {
     pub fn build(mut self) -> UiCatalog {
         if self.config.register_default_renderers {
             register_defaults(&mut self.catalog);
+        }
+        if self.config.register_default_form_renderers {
+            register_default_form_renderers(&mut self.catalog);
         }
         self.catalog
     }

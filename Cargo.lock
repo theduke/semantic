@@ -5953,9 +5953,12 @@ dependencies = [
 name = "semantic_ui_core"
 version = "0.0.1"
 dependencies = [
+ "bytes",
  "dioxus",
+ "dxform",
  "facet-json",
  "futures",
+ "regex",
  "semantic_data",
  "semantic_db_core",
  "semantic_rpc",

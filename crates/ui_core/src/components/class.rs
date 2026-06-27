@@ -3,6 +3,7 @@ use semantic_data::schema::ClassType;
 use semantic_data::value::Object;
 
 use crate::components::ValueView;
+use crate::form::{DynamicClassForm, mode_from_render_mode};
 use crate::ui_catalog::{ClassRenderContext, RenderMode, use_ui_catalog};
 
 #[component]
@@ -13,6 +14,19 @@ pub fn ClassView(
     id: Option<String>,
     mode: RenderMode,
 ) -> Element {
+    if let Some(form_mode) = mode_from_render_mode(mode) {
+        return rsx! {
+            DynamicClassForm {
+                class,
+                object,
+                collection,
+                id,
+                mode: form_mode,
+                submit: None
+            }
+        };
+    }
+
     let catalog = use_ui_catalog();
     if let Some(renderer) = catalog
         .render_registry()

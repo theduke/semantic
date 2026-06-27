@@ -12,9 +12,12 @@ categories.workspace = true
 version.workspace = true
 
 [dependencies]
+bytes = { workspace = true }
 dioxus = { workspace = true }
+dxform = { path = "../dxform" }
 facet-json = "0.43.2"
 futures = "0.3.31"
+regex = "1.12.2"
 semantic_data = { workspace = true }
 semantic_db_core = { path = "../db_core" }
 semantic_rpc = { path = "../rpc", features = ["client"] }

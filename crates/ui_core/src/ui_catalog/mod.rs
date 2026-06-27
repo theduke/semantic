@@ -18,7 +18,7 @@ pub use provider::{
     CatalogLoadStatus, UiCatalogContext, UiCatalogProvider, UiCatalogReload, load_catalog,
     use_ui_catalog, use_ui_catalog_context, use_ui_catalog_reload,
 };
-pub use render_registry::RenderRegistry;
+pub use render_registry::{RenderRegistry, type_kind_key};
 pub use renderer::{
     AttributeRenderContext, AttributeRenderer, ClassRenderContext, ClassRenderer, RenderMode,
     ValueRenderContext, ValueRenderer,

@@ -2,7 +2,10 @@ use semantic_data::schema::{AttributeType, ClassType};
 use semantic_data::value::{Object, Value};
 use semantic_db_core::catalog::StoredCollection;
 
-use crate::ui_catalog::UiCatalog;
+use crate::{
+    form::{ClassFormField, class_form_fields},
+    ui_catalog::UiCatalog,
+};
 
 impl UiCatalog {
     pub fn attribute_by_id(&self, id: &str) -> Option<&AttributeType> {
@@ -63,5 +66,9 @@ impl UiCatalog {
         };
         self.class_by_id(class_id)
             .or_else(|| self.class_by_name(class_id))
+    }
+
+    pub fn class_form_fields(&self, class: &ClassType) -> Vec<ClassFormField> {
+        class_form_fields(self, class)
     }
 }
