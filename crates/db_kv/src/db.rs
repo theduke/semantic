@@ -3,7 +3,7 @@ use std::sync::Arc;
 
 use futures::{StreamExt, stream};
 use semantic_data::query::FieldFormat;
-use semantic_data::schema::IndexKind;
+use semantic_data::schema::{IndexKind, core::type_kind::TypeKind, core::type_node::Type};
 use semantic_data::schema::{
     Migration, MigrationOperation, Package, RelationIndexingMode, RelationMode, RelationType,
 };
@@ -15,8 +15,8 @@ use semantic_db_core::{
     QueryResult, SelectQuery, UpdateQuery, apply_core_schema_migrations, apply_migration_ddl_batch,
     canonicalize_delete_query, canonicalize_insert_query, canonicalize_query,
     canonicalize_select_query, canonicalize_update_query, execute_batch, is_all_collection_alias,
-    normalize_object_for_collection, normalize_package_definition, touched_collections,
-    validate_package_migrations,
+    normalize_object_for_collection, normalize_package_definition, ref_target_class_ids,
+    resolved_field_types_for_object, touched_collections, validate_package_migrations,
 };
 use semantic_db_core::{DbConfig, DbError, MigrationMismatchPolicy};
 
@@ -29,7 +29,7 @@ use crate::{
 };
 use semantic_db_core::catalog::{
     Catalog, CollectionKind, CollectionSchema, IntegrityMode, LocalAttrId, LocalCollectionId,
-    LocalFieldId, OBJECT_TYPE_FIELD, RELATION_TO_ATTRIBUTE, SharedCatalog,
+    LocalFieldId, OBJECT_TYPE_FIELD, RELATION_FROM_ATTRIBUTE, RELATION_TO_ATTRIBUTE, SharedCatalog,
 };
 use semantic_db_core::{
     DdlBatch, DdlCollectionKind, DdlOperation, DdlOutcome, QueryContext, TransactionConcurrency,
@@ -1468,9 +1468,33 @@ impl<E: KvEngine> KvDb<E> {
             }
             self.validate_unique_indexes(catalog, &collection_schema, &normalized_rows)?;
             normalized_after.insert(collection_name.clone(), normalized_rows.clone());
+        }
+
+        for (collection_name, normalized_rows) in &normalized_after {
+            let collection_schema =
+                catalog.collection_by_name(collection_name).ok_or_else(|| {
+                    DbError::UnknownCollectionByName {
+                        name: collection_name.clone(),
+                    }
+                })?;
+            self.validate_ref_fields(
+                catalog,
+                collection_schema,
+                normalized_rows,
+                &normalized_after,
+            )?;
+        }
+
+        for (collection_name, normalized_rows) in &normalized_after {
+            let collection_schema = catalog
+                .collection_by_name(collection_name)
+                .ok_or_else(|| DbError::UnknownCollectionByName {
+                    name: collection_name.clone(),
+                })?
+                .clone();
 
             let old_rows = before.get(collection_name);
-            if old_rows == Some(&normalized_rows) {
+            if old_rows == Some(normalized_rows) {
                 continue;
             }
 
@@ -1495,7 +1519,7 @@ impl<E: KvEngine> KvDb<E> {
                 });
             }
 
-            for (id, object) in &normalized_rows {
+            for (id, object) in normalized_rows {
                 let entity = StoredEntity {
                     id: id.clone(),
                     collection: collection_schema.lid.0,
@@ -1588,6 +1612,36 @@ impl<E: KvEngine> KvDb<E> {
                         index.canonical_field
                     )));
                 }
+            }
+        }
+
+        Ok(())
+    }
+
+    fn validate_ref_fields(
+        &self,
+        catalog: &Catalog,
+        collection: &CollectionSchema,
+        rows: &BTreeMap<String, Object>,
+        all_after: &BTreeMap<String, BTreeMap<String, Object>>,
+    ) -> std::result::Result<(), DbError> {
+        let target_rows =
+            all_after
+                .get(&collection.name)
+                .ok_or_else(|| DbError::UnknownCollectionByName {
+                    name: collection.name.clone(),
+                })?;
+
+        for object in rows.values() {
+            let field_types = resolved_field_types_for_object(catalog, collection, object);
+            for (field, ty) in field_types {
+                if field == RELATION_FROM_ATTRIBUTE || field == RELATION_TO_ATTRIBUTE {
+                    continue;
+                }
+                let Some(value) = object.get(&field) else {
+                    continue;
+                };
+                validate_ref_value(catalog, collection, target_rows, &field, &ty, value)?;
             }
         }
 
@@ -2775,6 +2829,145 @@ fn ensure_collection_mutable(collection: &CollectionSchema) -> std::result::Resu
     Ok(())
 }
 
+fn validate_ref_value(
+    catalog: &Catalog,
+    collection: &CollectionSchema,
+    target_rows: &BTreeMap<String, Object>,
+    field: &str,
+    ty: &Type,
+    value: &Value,
+) -> std::result::Result<(), DbError> {
+    match &ty.kind {
+        TypeKind::Ref(_) => validate_one_ref(catalog, collection, target_rows, field, ty, value),
+        TypeKind::Optional(optional) => {
+            if value.is_nullish() {
+                Ok(())
+            } else {
+                validate_ref_value(
+                    catalog,
+                    collection,
+                    target_rows,
+                    field,
+                    &optional.inner,
+                    value,
+                )
+            }
+        }
+        TypeKind::Union(union) => {
+            if value.is_nullish() && union.variants.iter().any(type_allows_nullish) {
+                return Ok(());
+            }
+            for variant in &union.variants {
+                if contains_ref_type(variant) {
+                    return validate_ref_value(
+                        catalog,
+                        collection,
+                        target_rows,
+                        field,
+                        variant,
+                        value,
+                    );
+                }
+            }
+            Ok(())
+        }
+        TypeKind::List(list) if contains_ref_type(&list.items) => {
+            let Value::List(items) = value else {
+                return Err(DbError::InvalidQuery(format!(
+                    "ref field '{}' in collection '{}' must be a list of string ids",
+                    field, collection.name
+                )));
+            };
+            for item in items {
+                validate_ref_value(catalog, collection, target_rows, field, &list.items, item)?;
+            }
+            Ok(())
+        }
+        _ => Ok(()),
+    }
+}
+
+fn validate_one_ref(
+    catalog: &Catalog,
+    collection: &CollectionSchema,
+    target_rows: &BTreeMap<String, Object>,
+    field: &str,
+    ty: &Type,
+    value: &Value,
+) -> std::result::Result<(), DbError> {
+    if value.is_nullish() {
+        return Ok(());
+    }
+
+    let Value::String(target_id) = value else {
+        return Err(DbError::InvalidQuery(format!(
+            "ref field '{}' in collection '{}' must be a string id",
+            field, collection.name
+        )));
+    };
+    if target_id.is_empty() {
+        return Err(DbError::InvalidQuery(format!(
+            "ref field '{}' in collection '{}' must be a non-empty string id",
+            field, collection.name
+        )));
+    }
+    let Some(target) = target_rows.get(target_id) else {
+        return Err(DbError::InvalidQuery(format!(
+            "ref field '{}' in collection '{}' points to missing target id '{}'",
+            field, collection.name, target_id
+        )));
+    };
+
+    let allowed_class_ids = ref_target_class_ids(catalog, ty);
+    if allowed_class_ids.is_empty() {
+        return Ok(());
+    }
+
+    let target_type = target
+        .get(OBJECT_TYPE_FIELD)
+        .and_then(Value::as_str)
+        .unwrap_or("");
+    let resolved_target_type = catalog
+        .class_ids(target_type)
+        .first()
+        .and_then(|lid| catalog.class_by_lid(*lid))
+        .map(|class| class.class.id.as_str())
+        .unwrap_or(target_type);
+    if allowed_class_ids
+        .iter()
+        .any(|class_id| class_id == resolved_target_type)
+    {
+        return Ok(());
+    }
+
+    Err(DbError::InvalidQuery(format!(
+        "ref field '{}' in collection '{}' points to target id '{}' with type '{}', expected one of: {}",
+        field,
+        collection.name,
+        target_id,
+        target_type,
+        allowed_class_ids.join(", ")
+    )))
+}
+
+fn contains_ref_type(ty: &Type) -> bool {
+    match &ty.kind {
+        TypeKind::Ref(_) => true,
+        TypeKind::Optional(optional) => contains_ref_type(&optional.inner),
+        TypeKind::Union(union) => union.variants.iter().any(contains_ref_type),
+        TypeKind::List(list) => contains_ref_type(&list.items),
+        _ => false,
+    }
+}
+
+fn type_allows_nullish(ty: &Type) -> bool {
+    match &ty.kind {
+        TypeKind::Optional(_) | TypeKind::Null(_) => true,
+        TypeKind::Union(union) => union.variants.iter().any(type_allows_nullish),
+        _ => false,
+    }
+}
+
 impl<E: KvEngine> semantic_db_core::AsyncPhysicalDataSource for KvPhysicalDataSource<'_, E> {
     fn scan_stream(
         &self,
@@ -3081,8 +3274,10 @@ mod tests {
             attribute::attribute_ref::AttributeRef,
             attribute::attribute_type::AttributeType,
             class::class_attribute::ClassAttribute,
+            class::class_ref::ClassRef,
             class::class_type::ClassType,
-            core::{meta::Meta, type_kind::TypeKind, type_node::Type},
+            collections::optional_type::OptionalType,
+            core::{meta::Meta, type_kind::TypeKind, type_node::Type, type_ref::TypeRef},
             primitives::{
                 bool_type::BoolType, number_type::NumberType, string_type::StringType,
                 uint_width::UIntWidth,
@@ -3096,10 +3291,10 @@ mod tests {
     use semantic_data::query::{BinaryOp, FieldFormat, SortDirection};
     use semantic_db_core::catalog::{CollectionKind, IntegrityMode};
     use semantic_db_core::{
-        ALL_COLLECTION_ALIAS, CORE_CATALOG_SCHEMA_COLLECTION, DEFAULT_COLLECTION, DdlBatch,
-        DdlCollectionKind, DdlOperation, Expr, Operand, OrderBy, Query, QueryField, QueryResult,
-        SelectQuery, TransactionConcurrency, TransactionOptions, UpdateQuery,
-        canonicalize_select_query,
+        ALL_COLLECTION_ALIAS, Batch, BatchOperation, CORE_CATALOG_SCHEMA_COLLECTION,
+        DEFAULT_COLLECTION, DdlBatch, DdlCollectionKind, DdlOperation, Expr, Operand, OrderBy,
+        Query, QueryField, QueryResult, SelectQuery, TransactionConcurrency, TransactionOptions,
+        UpdateQuery, canonicalize_select_query,
     };
     use semantic_db_core::{DbConfig, MigrationMismatchPolicy};
 
@@ -3304,6 +3499,159 @@ mod tests {
             stored_parent.object,
             stored_child.object
         );
+    }
+
+    #[test]
+    fn ref_field_rejects_missing_target() {
+        let mut db = KvDb::in_memory();
+        register_ref_schema(&mut db, ref_ty("person"));
+
+        let err = db
+            .insert(
+                DEFAULT_COLLECTION,
+                "article-1",
+                entity(
+                    "article-1",
+                    "article",
+                    [("author", Value::String("person-99".to_string()))],
+                ),
+            )
+            .expect_err("missing ref target should be rejected");
+
+        assert!(matches!(err, semantic_db_core::DbError::InvalidQuery(_)));
+        assert!(
+            err.to_string().contains("missing target id 'person-99'"),
+            "{err}"
+        );
+    }
+
+    #[test]
+    fn ref_field_accepts_existing_target() {
+        let mut db = KvDb::in_memory();
+        register_ref_schema(&mut db, ref_ty("person"));
+
+        db.insert(
+            DEFAULT_COLLECTION,
+            "person-1",
+            entity("person-1", "person", []),
+        )
+        .unwrap();
+        db.insert(
+            DEFAULT_COLLECTION,
+            "article-1",
+            entity(
+                "article-1",
+                "article",
+                [("author", Value::String("person-1".to_string()))],
+            ),
+        )
+        .unwrap();
+    }
+
+    #[test]
+    fn ref_field_accepts_same_batch_target() {
+        let mut db = KvDb::in_memory();
+        register_ref_schema(&mut db, ref_ty("person"));
+
+        db.execute_batch(
+            Batch::new()
+                .with_op(BatchOperation::Upsert {
+                    collection: DEFAULT_COLLECTION.to_string(),
+                    id: "person-1".to_string(),
+                    object: entity("person-1", "person", []),
+                })
+                .with_op(BatchOperation::Upsert {
+                    collection: DEFAULT_COLLECTION.to_string(),
+                    id: "article-1".to_string(),
+                    object: entity(
+                        "article-1",
+                        "article",
+                        [("author", Value::String("person-1".to_string()))],
+                    ),
+                }),
+        )
+        .unwrap();
+    }
+
+    #[test]
+    fn ref_field_rejects_wrong_target_class() {
+        let mut db = KvDb::in_memory();
+        register_ref_schema(&mut db, ref_ty("person"));
+
+        db.insert(
+            DEFAULT_COLLECTION,
+            "org-1",
+            entity("org-1", "organization", []),
+        )
+        .unwrap();
+        let err = db
+            .insert(
+                DEFAULT_COLLECTION,
+                "article-1",
+                entity(
+                    "article-1",
+                    "article",
+                    [("author", Value::String("org-1".to_string()))],
+                ),
+            )
+            .expect_err("wrong ref target class should be rejected");
+
+        assert!(matches!(err, semantic_db_core::DbError::InvalidQuery(_)));
+        assert!(err.to_string().contains("local:person"), "{err}");
+    }
+
+    #[test]
+    fn ref_field_accepts_subclass_target() {
+        let mut db = KvDb::in_memory();
+        register_ref_schema(&mut db, ref_ty("person"));
+
+        db.insert(DEFAULT_COLLECTION, "emp-1", entity("emp-1", "employee", []))
+            .unwrap();
+        db.insert(
+            DEFAULT_COLLECTION,
+            "article-1",
+            entity(
+                "article-1",
+                "article",
+                [("author", Value::String("emp-1".to_string()))],
+            ),
+        )
+        .unwrap();
+    }
+
+    #[test]
+    fn optional_ref_allows_null() {
+        let mut db = KvDb::in_memory();
+        register_ref_schema(
+            &mut db,
+            ty(TypeKind::Optional(OptionalType {
+                inner: Box::new(ref_ty("person")),
+            })),
+        );
+
+        db.insert(
+            DEFAULT_COLLECTION,
+            "article-1",
+            entity("article-1", "article", [("author", Value::Null)]),
+        )
+        .unwrap();
+    }
+
+    #[test]
+    fn ref_requires_string_value() {
+        let mut db = KvDb::in_memory();
+        register_ref_schema(&mut db, ref_ty("person"));
+
+        let err = db
+            .insert(
+                DEFAULT_COLLECTION,
+                "article-1",
+                entity("article-1", "article", [("author", Value::I64(42))]),
+            )
+            .expect_err("non-string ref should be rejected");
+
+        assert!(matches!(err, semantic_db_core::DbError::InvalidQuery(_)));
+        assert!(err.to_string().contains("must be a string id"), "{err}");
     }
 
     #[test]
@@ -3993,6 +4341,82 @@ mod tests {
             version: None,
             meta: Meta::default(),
         }
+    }
+
+    fn register_ref_schema(db: &mut KvDb<crate::storage::MemoryKvEngine>, author_ty: Type) {
+        db.transact_ddl(
+            DdlBatch::new()
+                .with_op(DdlOperation::UpsertAttribute {
+                    attribute: AttributeType {
+                        id: "author".to_string(),
+                        name: "author".to_string(),
+                        ty: author_ty,
+                        constraints: vec![],
+                        meta: Meta::default(),
+                    },
+                })
+                .with_op(DdlOperation::UpsertClass {
+                    class: test_class("person", "Person", None, BTreeMap::new()),
+                })
+                .with_op(DdlOperation::UpsertClass {
+                    class: test_class("organization", "Organization", None, BTreeMap::new()),
+                })
+                .with_op(DdlOperation::UpsertClass {
+                    class: test_class("employee", "Employee", Some("person"), BTreeMap::new()),
+                })
+                .with_op(DdlOperation::UpsertClass {
+                    class: test_class(
+                        "article",
+                        "Article",
+                        None,
+                        BTreeMap::from([(
+                            "author".to_string(),
+                            ClassAttribute {
+                                attribute: AttributeRef {
+                                    id: "author".to_string(),
+                                },
+                                required: true,
+                                ui_order: None,
+                                computed: None,
+                                constraints: vec![],
+                                meta: Meta::default(),
+                            },
+                        )]),
+                    ),
+                }),
+        )
+        .unwrap();
+    }
+
+    fn test_class(
+        id: &str,
+        name: &str,
+        inherits: Option<&str>,
+        attributes: BTreeMap<String, ClassAttribute>,
+    ) -> ClassType {
+        ClassType {
+            id: id.to_string(),
+            name: name.to_string(),
+            inherits: inherits.map(|id| ClassRef { id: id.to_string() }),
+            extends: vec![],
+            attributes,
+            constraints: vec![],
+            meta: Meta::default(),
+        }
+    }
+
+    fn entity<const N: usize>(id: &str, class_id: &str, fields: [(&str, Value); N]) -> Object {
+        let mut object = Object::new();
+        object.insert("id", Value::String(id.to_string()));
+        object.insert("type", Value::String(class_id.to_string()));
+        for (field, value) in fields {
+            object.insert(field, value);
+        }
+        object
+    }
+
+    fn ref_ty(class_id: &str) -> Type {
+        ty(TypeKind::Ref(TypeRef::new(class_id)))
     }
 
     fn ty(kind: TypeKind) -> Type {

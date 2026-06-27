@@ -1,4 +1,4 @@
-use std::collections::BTreeSet;
+use std::collections::{BTreeSet, HashSet};
 
 use fnv::FnvHashMap;
 use semantic_data::{
@@ -170,6 +170,127 @@ pub fn normalize_object_for_collection(
         &registered_field_types,
         reject_unknown_fields,
     )
+}
+
+pub fn resolved_field_types_for_object(
+    catalog: &Catalog,
+    collection: &CollectionSchema,
+    object: &Object,
+) -> FnvHashMap<String, Type> {
+    let mut field_types = FnvHashMap::default();
+
+    for (_, field_name) in collection.fields() {
+        if let Some(ty) = collection.field_type(field_name) {
+            field_types.insert(field_name.to_string(), ty.clone());
+        }
+    }
+
+    if collection.kind == CollectionKind::Untyped {
+        return field_types;
+    }
+
+    let Some(object_type) = object.get(OBJECT_TYPE_FIELD).and_then(Value::as_str) else {
+        return field_types;
+    };
+
+    let class_ids = catalog.class_ids(object_type);
+    let record_ids = catalog.record_type_ids(object_type);
+    if class_ids.len() + record_ids.len() != 1 {
+        return field_types;
+    }
+
+    if let Some(class_lid) = class_ids.first().copied() {
+        let mut class_aliases = FnvHashMap::default();
+        let mut field_required = FnvHashMap::default();
+        collect_class_fields(
+            catalog,
+            class_lid,
+            &mut class_aliases,
+            &mut field_types,
+            &mut field_required,
+        );
+    } else if let Some(record_lid) = record_ids.first().copied()
+        && let Some(record_type) = catalog.record_type_by_lid(record_lid)
+    {
+        for (field_name, field) in &record_type.record.fields {
+            field_types.insert(field_name.clone(), field.ty.clone());
+        }
+    }
+
+    field_types
+}
+
+pub fn ref_target_class_ids(catalog: &Catalog, ty: &Type) -> Vec<String> {
+    let mut out = BTreeSet::new();
+    collect_ref_target_class_ids(catalog, ty, &mut out);
+    out.into_iter().collect()
+}
+
+fn collect_ref_target_class_ids(catalog: &Catalog, ty: &Type, out: &mut BTreeSet<String>) {
+    match &ty.kind {
+        TypeKind::Ref(type_ref) => {
+            let class_ids = catalog.class_ids(&type_ref.name);
+            if class_ids.len() != 1 {
+                return;
+            }
+            let target_lid = class_ids[0];
+            let Some(target_class) = catalog.class_by_lid(target_lid) else {
+                return;
+            };
+            let target_id = target_class.class.id.clone();
+            out.insert(target_id.clone());
+            for (class_lid, class) in catalog.classes() {
+                if class_lid != target_lid && class_reaches(catalog, class_lid, &target_id) {
+                    out.insert(class.class.id.clone());
+                }
+            }
+        }
+        TypeKind::Union(union) => {
+            for variant in &union.variants {
+                collect_ref_target_class_ids(catalog, variant, out);
+            }
+        }
+        TypeKind::Optional(optional) => {
+            collect_ref_target_class_ids(catalog, &optional.inner, out);
+        }
+        _ => {}
+    }
+}
+
+fn class_reaches(catalog: &Catalog, class_lid: LocalClassId, target_class_id: &str) -> bool {
+    fn visit(
+        catalog: &Catalog,
+        class_lid: LocalClassId,
+        target_class_id: &str,
+        seen: &mut HashSet<LocalClassId>,
+    ) -> bool {
+        if !seen.insert(class_lid) {
+            return false;
+        }
+        let Some(class) = catalog.class_by_lid(class_lid) else {
+            return false;
+        };
+        if class.class.id == target_class_id {
+            return true;
+        }
+        if let Some(inherits) = &class.class.inherits
+            && let Some(base_lid) = catalog.class_id(&inherits.id)
+            && visit(catalog, base_lid, target_class_id, seen)
+        {
+            return true;
+        }
+        for ext in &class.class.extends {
+            if let Some(ext_lid) = catalog.class_id(&ext.id)
+                && visit(catalog, ext_lid, target_class_id, seen)
+            {
+                return true;
+            }
+        }
+        false
+    }
+
+    let mut seen = HashSet::new();
+    visit(catalog, class_lid, target_class_id, &mut seen)
 }
 
 fn best_effort_normalize_registered_attributes(

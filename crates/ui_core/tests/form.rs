@@ -5,7 +5,8 @@ use dxform::{FieldSpec, FormOptions, FormRoot, SubformSpec, SubmitHandler};
 use semantic_data::{
     schema::{
         AttributeRef, AttributeType, BoolType, ClassAttribute, ClassRef, ClassType, Constraint,
-        LengthSpec, LiteralValue, Meta, NumberType, StringType, Type, TypeKind, UIntWidth,
+        LengthSpec, LiteralValue, Meta, NumberType, OptionalType, StringType, Type, TypeKind,
+        TypeRef, UIntWidth, UnionType,
     },
     value::{Object, Value},
 };
@@ -103,6 +104,20 @@ fn class(id: &str, name: &str, attributes: BTreeMap<String, ClassAttribute>) -> 
     }
 }
 
+fn subclass(id: &str, name: &str, parent: &str) -> ClassType {
+    ClassType {
+        id: id.to_string(),
+        name: name.to_string(),
+        inherits: Some(ClassRef {
+            id: parent.to_string(),
+        }),
+        extends: Vec::new(),
+        attributes: BTreeMap::new(),
+        constraints: Vec::new(),
+        meta: Meta::default(),
+    }
+}
+
 fn catalog_with(attributes: Vec<AttributeType>, classes: Vec<ClassType>) -> UiCatalog {
     let mut snapshot = empty_snapshot();
     snapshot.attributes = attributes
@@ -145,6 +160,67 @@ fn form_registry_lookup_precedence_is_explicit() {
         registry
             .class_field_form_renderer("person", "name")
             .is_some()
+    );
+}
+
+#[test]
+fn ref_autocomplete_query_searches_entities_fields_and_limits() {
+    let sql = semantic_ui_core::form::ref_autocomplete_query(
+        "Ada",
+        &["person".to_string(), "employee".to_string()],
+    );
+
+    assert!(sql.starts_with("SELECT * FROM entities WHERE"));
+    assert!(sql.contains("\"id\" ILIKE '%Ada%'"));
+    assert!(sql.contains("\"semantic:title\" ILIKE '%Ada%'"));
+    assert!(sql.contains("\"semantic:base:person:display_name\" ILIKE '%Ada%'"));
+    assert!(sql.contains("\"type\" IN ('person', 'employee')"));
+    assert!(sql.ends_with(" LIMIT 25"));
+}
+
+#[test]
+fn ref_autocomplete_query_escapes_search_and_class_literals() {
+    let sql =
+        semantic_ui_core::form::ref_autocomplete_query("O'Hara", &["local:person's".to_string()]);
+
+    assert!(sql.contains("%O''Hara%"));
+    assert!(sql.contains("'local:person''s'"));
+}
+
+#[test]
+fn ref_autocomplete_class_filter_includes_subclasses_from_ref_type() {
+    let person = class("person", "Person", BTreeMap::new());
+    let employee = subclass("employee", "Employee", "person");
+    let catalog = catalog_with(Vec::new(), vec![person, employee]);
+    let ty = Type::from(TypeKind::Ref(TypeRef::new("Person")));
+
+    let class_ids = semantic_ui_core::form::ref_autocomplete_class_ids(&catalog, &ty);
+
+    assert_eq!(
+        class_ids,
+        vec!["employee".to_string(), "person".to_string()]
+    );
+}
+
+#[test]
+fn ref_autocomplete_class_filter_collects_optional_union_refs() {
+    let person = class("person", "Person", BTreeMap::new());
+    let org = class("organization", "Organization", BTreeMap::new());
+    let catalog = catalog_with(Vec::new(), vec![person, org]);
+    let ty = Type::from(TypeKind::Optional(OptionalType {
+        inner: Box::new(Type::from(TypeKind::Union(UnionType {
+            variants: vec![
+                Type::from(TypeKind::Ref(TypeRef::new("person"))),
+                Type::from(TypeKind::Ref(TypeRef::new("Organization"))),
+            ],
+        }))),
+    }));
+
+    let class_ids = semantic_ui_core::form::ref_autocomplete_class_ids(&catalog, &ty);
+
+    assert_eq!(
+        class_ids,
+        vec!["organization".to_string(), "person".to_string()]
     );
 }
 
