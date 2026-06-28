@@ -146,10 +146,7 @@ async fn load_breadcrumbs(
             run_select_query(client.clone(), scope_id.clone(), parent_query(&current)).await?;
         let Some(parent) = rows
             .first()
-            .and_then(|row| {
-                row.get("from")
-                    .or_else(|| row.get("semantic:base:directory_node:from"))
-            })
+            .and_then(|row| row.get("directory_from"))
             .and_then(Value::as_str)
             .map(str::to_string)
         else {

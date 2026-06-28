@@ -33,15 +33,17 @@ pub fn canonicalize_select_query(
     collection: &CollectionSchema,
 ) -> CanonicalResult<SelectQuery> {
     let base_binding = select_base_binding(query, collection);
+    let join_bindings = select_join_bindings(query);
     let predicate = query
         .predicate
         .as_ref()
         .map(|predicate| {
-            canonicalize_expr(
+            canonicalize_expr_with_join_bindings(
                 predicate,
                 catalog,
                 collection,
                 Some(base_binding),
+                &join_bindings,
                 "select predicate",
             )
         })
@@ -59,28 +61,31 @@ pub fn canonicalize_select_query(
         .map(|join| {
             let condition = match &join.condition {
                 crate::JoinCondition::OnExpr(expr) => {
-                    crate::JoinCondition::OnExpr(canonicalize_expr(
+                    crate::JoinCondition::OnExpr(canonicalize_expr_with_join_bindings(
                         expr,
                         catalog,
                         collection,
                         Some(base_binding),
+                        &join_bindings,
                         "select join on",
                     )?)
                 }
                 crate::JoinCondition::UsingFields { left, right } => {
                     crate::JoinCondition::UsingFields {
-                        left: canonicalize_path(
+                        left: canonicalize_path_with_join_bindings(
                             left,
                             catalog,
                             collection,
                             Some(base_binding),
+                            &join_bindings,
                             "select join using left",
                         )?,
-                        right: canonicalize_path(
+                        right: canonicalize_path_with_join_bindings(
                             right,
                             catalog,
                             collection,
                             Some(base_binding),
+                            &join_bindings,
                             "select join using right",
                         )?,
                     }
@@ -95,11 +100,12 @@ pub fn canonicalize_select_query(
                     .predicate
                     .as_ref()
                     .map(|expr| {
-                        canonicalize_expr(
+                        canonicalize_expr_with_join_bindings(
                             expr,
                             catalog,
                             collection,
                             Some(base_binding),
+                            &join_bindings,
                             "select join predicate",
                         )
                     })
@@ -113,11 +119,12 @@ pub fn canonicalize_select_query(
         .iter()
         .map(|order| {
             Ok(OrderBy {
-                expr: canonicalize_expr(
+                expr: canonicalize_expr_with_join_bindings(
                     &order.expr,
                     catalog,
                     collection,
                     Some(base_binding),
+                    &join_bindings,
                     "select order_by",
                 )?,
                 direction: order.direction,
@@ -136,11 +143,12 @@ pub fn canonicalize_select_query(
             .group_by
             .iter()
             .map(|expr| {
-                canonicalize_expr(
+                canonicalize_expr_with_join_bindings(
                     expr,
                     catalog,
                     collection,
                     Some(base_binding),
+                    &join_bindings,
                     "select group_by",
                 )
             })
@@ -149,11 +157,12 @@ pub fn canonicalize_select_query(
             .having
             .as_ref()
             .map(|predicate| {
-                canonicalize_expr(
+                canonicalize_expr_with_join_bindings(
                     predicate,
                     catalog,
                     collection,
                     Some(base_binding),
+                    &join_bindings,
                     "select having",
                 )
             })
@@ -355,6 +364,7 @@ fn canonicalize_projection_field(
     catalog: &Catalog,
     collection: &CollectionSchema,
 ) -> CanonicalResult<QueryField> {
+    let join_bindings = select_join_bindings(query);
     if let Some(path) = &field.wildcard {
         if wildcard_matches_binding(path, query, collection) {
             let wildcard = if query.joins.is_empty()
@@ -373,11 +383,12 @@ fn canonicalize_projection_field(
     }
 
     Ok(QueryField {
-        expr: Box::new(canonicalize_expr(
+        expr: Box::new(canonicalize_expr_with_join_bindings(
             &field.expr,
             catalog,
             collection,
             Some(select_base_binding(query, collection)),
+            &join_bindings,
             "select projection",
         )?),
         alias: field.alias.clone(),
@@ -385,11 +396,12 @@ fn canonicalize_projection_field(
             .wildcard
             .as_ref()
             .map(|path| {
-                canonicalize_path(
+                canonicalize_path_with_join_bindings(
                     path,
                     catalog,
                     collection,
                     Some(select_base_binding(query, collection)),
+                    &join_bindings,
                     "select projection",
                 )
             })
@@ -428,6 +440,18 @@ fn select_base_binding<'a>(query: &'a SelectQuery, collection: &'a CollectionSch
         .unwrap_or(collection.name.as_str())
 }
 
+fn select_join_bindings(query: &SelectQuery) -> Vec<String> {
+    query
+        .joins
+        .iter()
+        .map(|join| {
+            join.alias
+                .clone()
+                .unwrap_or_else(|| join.source.default_binding())
+        })
+        .collect()
+}
+
 fn path_is_single_field(path: &FieldPath, value: &str) -> bool {
     matches!(path.segments(), [PathSegment::Field(field)] if field == value)
 }
@@ -439,35 +463,54 @@ fn canonicalize_expr(
     base_binding: Option<&str>,
     context: &'static str,
 ) -> CanonicalResult<Expr> {
+    canonicalize_expr_with_join_bindings(expr, catalog, collection, base_binding, &[], context)
+}
+
+fn canonicalize_expr_with_join_bindings(
+    expr: &Expr,
+    catalog: &Catalog,
+    collection: &CollectionSchema,
+    base_binding: Option<&str>,
+    join_bindings: &[String],
+    context: &'static str,
+) -> CanonicalResult<Expr> {
     match expr {
-        Expr::Operand(operand) => {
-            canonicalize_operand(operand, catalog, collection, base_binding, context)
-                .map(Expr::Operand)
-        }
+        Expr::Operand(operand) => canonicalize_operand_with_join_bindings(
+            operand,
+            catalog,
+            collection,
+            base_binding,
+            join_bindings,
+            context,
+        )
+        .map(Expr::Operand),
         Expr::Unary { op, expr } => Ok(Expr::Unary {
             op: *op,
-            expr: Box::new(canonicalize_expr(
+            expr: Box::new(canonicalize_expr_with_join_bindings(
                 expr,
                 catalog,
                 collection,
                 base_binding,
+                join_bindings,
                 context,
             )?),
         }),
         Expr::Binary { op, left, right } => Ok(Expr::Binary {
             op: *op,
-            left: Box::new(canonicalize_expr(
+            left: Box::new(canonicalize_expr_with_join_bindings(
                 left,
                 catalog,
                 collection,
                 base_binding,
+                join_bindings,
                 context,
             )?),
-            right: Box::new(canonicalize_expr(
+            right: Box::new(canonicalize_expr_with_join_bindings(
                 right,
                 catalog,
                 collection,
                 base_binding,
+                join_bindings,
                 context,
             )?),
         }),
@@ -476,31 +519,43 @@ fn canonicalize_expr(
             then_expr,
             else_expr,
         } => Ok(Expr::IfElse {
-            cond: Box::new(canonicalize_expr(
+            cond: Box::new(canonicalize_expr_with_join_bindings(
                 cond,
                 catalog,
                 collection,
                 base_binding,
+                join_bindings,
                 context,
             )?),
-            then_expr: Box::new(canonicalize_expr(
+            then_expr: Box::new(canonicalize_expr_with_join_bindings(
                 then_expr,
                 catalog,
                 collection,
                 base_binding,
+                join_bindings,
                 context,
             )?),
-            else_expr: Box::new(canonicalize_expr(
+            else_expr: Box::new(canonicalize_expr_with_join_bindings(
                 else_expr,
                 catalog,
                 collection,
                 base_binding,
+                join_bindings,
                 context,
             )?),
         }),
         Expr::Coalesce(items) => items
             .iter()
-            .map(|item| canonicalize_expr(item, catalog, collection, base_binding, context))
+            .map(|item| {
+                canonicalize_expr_with_join_bindings(
+                    item,
+                    catalog,
+                    collection,
+                    base_binding,
+                    join_bindings,
+                    context,
+                )
+            })
             .collect::<CanonicalResult<Vec<_>>>()
             .map(Expr::Coalesce),
         Expr::Function { name, args } => Ok(Expr::Function {
@@ -508,10 +563,15 @@ fn canonicalize_expr(
             args: args
                 .iter()
                 .map(|arg| match arg {
-                    crate::FunctionArg::Expr(expr) => {
-                        canonicalize_expr(expr, catalog, collection, base_binding, context)
-                            .map(crate::FunctionArg::Expr)
-                    }
+                    crate::FunctionArg::Expr(expr) => canonicalize_expr_with_join_bindings(
+                        expr,
+                        catalog,
+                        collection,
+                        base_binding,
+                        join_bindings,
+                        context,
+                    )
+                    .map(crate::FunctionArg::Expr),
                     crate::FunctionArg::Wildcard => Ok(crate::FunctionArg::Wildcard),
                 })
                 .collect::<CanonicalResult<Vec<_>>>()?,
@@ -520,13 +580,16 @@ fn canonicalize_expr(
             op: *op,
             distinct: *distinct,
             arg: Box::new(match arg.as_ref() {
-                crate::FunctionArg::Expr(expr) => crate::FunctionArg::Expr(canonicalize_expr(
-                    expr,
-                    catalog,
-                    collection,
-                    base_binding,
-                    context,
-                )?),
+                crate::FunctionArg::Expr(expr) => {
+                    crate::FunctionArg::Expr(canonicalize_expr_with_join_bindings(
+                        expr,
+                        catalog,
+                        collection,
+                        base_binding,
+                        join_bindings,
+                        context,
+                    )?)
+                }
                 crate::FunctionArg::Wildcard => crate::FunctionArg::Wildcard,
             }),
         }),
@@ -535,16 +598,26 @@ fn canonicalize_expr(
             list,
             negated,
         } => Ok(Expr::InList {
-            expr: Box::new(canonicalize_expr(
+            expr: Box::new(canonicalize_expr_with_join_bindings(
                 expr,
                 catalog,
                 collection,
                 base_binding,
+                join_bindings,
                 context,
             )?),
             list: list
                 .iter()
-                .map(|item| canonicalize_expr(item, catalog, collection, base_binding, context))
+                .map(|item| {
+                    canonicalize_expr_with_join_bindings(
+                        item,
+                        catalog,
+                        collection,
+                        base_binding,
+                        join_bindings,
+                        context,
+                    )
+                })
                 .collect::<CanonicalResult<Vec<_>>>()?,
             negated: *negated,
         }),
@@ -557,25 +630,28 @@ fn canonicalize_expr(
             high,
             negated,
         } => Ok(Expr::Between {
-            expr: Box::new(canonicalize_expr(
+            expr: Box::new(canonicalize_expr_with_join_bindings(
                 expr,
                 catalog,
                 collection,
                 base_binding,
+                join_bindings,
                 context,
             )?),
-            low: Box::new(canonicalize_expr(
+            low: Box::new(canonicalize_expr_with_join_bindings(
                 low,
                 catalog,
                 collection,
                 base_binding,
+                join_bindings,
                 context,
             )?),
-            high: Box::new(canonicalize_expr(
+            high: Box::new(canonicalize_expr_with_join_bindings(
                 high,
                 catalog,
                 collection,
                 base_binding,
+                join_bindings,
                 context,
             )?),
             negated: *negated,
@@ -588,18 +664,20 @@ fn canonicalize_expr(
             negated,
         } => Ok(Expr::PatternMatch {
             kind: *kind,
-            expr: Box::new(canonicalize_expr(
+            expr: Box::new(canonicalize_expr_with_join_bindings(
                 expr,
                 catalog,
                 collection,
                 base_binding,
+                join_bindings,
                 context,
             )?),
-            pattern: Box::new(canonicalize_expr(
+            pattern: Box::new(canonicalize_expr_with_join_bindings(
                 pattern,
                 catalog,
                 collection,
                 base_binding,
+                join_bindings,
                 context,
             )?),
             case_insensitive: *case_insensitive,
@@ -611,29 +689,32 @@ fn canonicalize_expr(
             case_insensitive,
             negated,
         } => Ok(Expr::RegexMatch {
-            expr: Box::new(canonicalize_expr(
+            expr: Box::new(canonicalize_expr_with_join_bindings(
                 expr,
                 catalog,
                 collection,
                 base_binding,
+                join_bindings,
                 context,
             )?),
-            pattern: Box::new(canonicalize_expr(
+            pattern: Box::new(canonicalize_expr_with_join_bindings(
                 pattern,
                 catalog,
                 collection,
                 base_binding,
+                join_bindings,
                 context,
             )?),
             case_insensitive: *case_insensitive,
             negated: *negated,
         }),
         Expr::IsNull { expr, negated } => Ok(Expr::IsNull {
-            expr: Box::new(canonicalize_expr(
+            expr: Box::new(canonicalize_expr_with_join_bindings(
                 expr,
                 catalog,
                 collection,
                 base_binding,
+                join_bindings,
                 context,
             )?),
             negated: *negated,
@@ -649,33 +730,43 @@ fn canonicalize_expr(
             transitive,
             max_depth,
         } => Ok(Expr::RelationExists {
-            relation: Box::new(canonicalize_expr(
+            relation: Box::new(canonicalize_expr_with_join_bindings(
                 relation,
                 catalog,
                 collection,
                 base_binding,
+                join_bindings,
                 context,
             )?),
-            source: Box::new(canonicalize_expr(
+            source: Box::new(canonicalize_expr_with_join_bindings(
                 source,
                 catalog,
                 collection,
                 base_binding,
+                join_bindings,
                 context,
             )?),
-            target: Box::new(canonicalize_expr(
+            target: Box::new(canonicalize_expr_with_join_bindings(
                 target,
                 catalog,
                 collection,
                 base_binding,
+                join_bindings,
                 context,
             )?),
             transitive: *transitive,
             max_depth: max_depth
                 .as_ref()
                 .map(|value| {
-                    canonicalize_expr(value, catalog, collection, base_binding, context)
-                        .map(Box::new)
+                    canonicalize_expr_with_join_bindings(
+                        value,
+                        catalog,
+                        collection,
+                        base_binding,
+                        join_bindings,
+                        context,
+                    )
+                    .map(Box::new)
                 })
                 .transpose()?,
         }),
@@ -769,17 +860,24 @@ fn should_canonicalize_type_literal(value: &str) -> bool {
     value.contains(':') || value.contains('.') || value.contains('_')
 }
 
-fn canonicalize_operand(
+fn canonicalize_operand_with_join_bindings(
     operand: &Operand,
     catalog: &Catalog,
     collection: &CollectionSchema,
     base_binding: Option<&str>,
+    join_bindings: &[String],
     context: &'static str,
 ) -> CanonicalResult<Operand> {
     match operand {
-        Operand::Field(path) => {
-            canonicalize_path(path, catalog, collection, base_binding, context).map(Operand::Field)
-        }
+        Operand::Field(path) => canonicalize_path_with_join_bindings(
+            path,
+            catalog,
+            collection,
+            base_binding,
+            join_bindings,
+            context,
+        )
+        .map(Operand::Field),
         Operand::Literal(value) => Ok(Operand::Literal(value.clone())),
     }
 }
@@ -791,12 +889,27 @@ fn canonicalize_path(
     base_binding: Option<&str>,
     context: &'static str,
 ) -> CanonicalResult<FieldPath> {
+    canonicalize_path_with_join_bindings(path, catalog, collection, base_binding, &[], context)
+}
+
+fn canonicalize_path_with_join_bindings(
+    path: &FieldPath,
+    catalog: &Catalog,
+    collection: &CollectionSchema,
+    base_binding: Option<&str>,
+    join_bindings: &[String],
+    context: &'static str,
+) -> CanonicalResult<FieldPath> {
     let Some(PathSegment::Field(first)) = path.segments().first() else {
         return Err(QueryCanonicalizationError::InvalidPath {
             context,
             path: format_path(path),
         });
     };
+
+    if path.0.len() >= 2 && join_bindings.iter().any(|binding| binding == first) {
+        return Ok(path.clone());
+    }
 
     let mut out = if base_binding.is_some_and(|binding| binding == first) && path.0.len() >= 2 {
         FieldPath(path.0.iter().skip(1).cloned().collect())
@@ -1302,7 +1415,7 @@ mod tests {
             .upsert_collection(
                 "entities",
                 CollectionKind::Schema,
-                IntegrityMode::Permissive,
+                IntegrityMode::StrictRegisteredSchema,
             )
             .unwrap();
         let _ = catalog

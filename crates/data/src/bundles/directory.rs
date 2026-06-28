@@ -9,6 +9,7 @@ use crate::schema::{
 
 pub const MODULE_NAME: &str = "base";
 pub const DIRECTORIES_MIGRATION_NAME: &str = "002_directories";
+pub const ENTITIES_COLLECTION: &str = "entities";
 
 pub const DIRECTORY_CLASS_ID: &str = "semantic:base:directory";
 pub const DIRECTORY_NODE_CLASS_ID: &str = "semantic:base:directory_node";
@@ -65,9 +66,9 @@ pub fn migration() -> Migration {
 
     operations.push(MigrationOperation::Ddl(
         MigrationDdlOperation::UpsertCollection {
-            name: DIRECTORY_NODE_CLASS_ID.to_string(),
+            name: ENTITIES_COLLECTION.to_string(),
             kind: MigrationCollectionKind::Polymorphic,
-            integrity_mode: MigrationIntegrityMode::Permissive,
+            integrity_mode: MigrationIntegrityMode::StrictRegisteredSchema,
         },
     ));
 
@@ -178,7 +179,7 @@ pub fn directory_node_relationship() -> RelationType {
     RelationType {
         id: DIRECTORY_NODE_RELATION_ID.to_string(),
         name: "directory_node".to_string(),
-        source_collection: DIRECTORY_NODE_CLASS_ID.to_string(),
+        source_collection: ENTITIES_COLLECTION.to_string(),
         mode: RelationMode::External,
         indexing_mode: RelationIndexingMode::Enabled,
         meta: meta_with_title("Directory Node"),
@@ -292,7 +293,7 @@ fn migration_directory_node_relationship() -> RelationType {
     RelationType {
         id: DIRECTORY_NODE_RELATION_ID.to_string(),
         name: "directory_node".to_string(),
-        source_collection: DIRECTORY_NODE_CLASS_ID.to_string(),
+        source_collection: ENTITIES_COLLECTION.to_string(),
         mode: RelationMode::External,
         indexing_mode: RelationIndexingMode::Enabled,
         meta: meta_with_title("Directory Node"),
@@ -479,7 +480,7 @@ mod tests {
 
         assert_eq!(
             migration_upsert_collection_names(&migration),
-            vec![DIRECTORY_NODE_CLASS_ID]
+            vec![ENTITIES_COLLECTION]
         );
         assert_eq!(
             migration_upsert_relationship_ids(&migration),

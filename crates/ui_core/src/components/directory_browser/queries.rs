@@ -1,5 +1,6 @@
 use semantic_data::bundles::directory::{
-    DIRECTORY_CLASS_ID, DIRECTORY_NODE_CLASS_ID, DIRECTORY_NODE_RELATION_ID,
+    ATTR_DIRECTORY_NODE_FROM, ATTR_DIRECTORY_NODE_ORDER, DIRECTORY_CLASS_ID,
+    DIRECTORY_NODE_RELATION_ID,
 };
 
 use super::types::DirectorySort;
@@ -8,10 +9,9 @@ pub(super) const ENTITIES_COLLECTION: &str = "entities";
 
 pub(super) fn root_query(limit: usize, offset: usize) -> String {
     format!(
-        "SELECT d.* FROM {entities} AS d WHERE d.type = {directory_class} AND d.id NOT IN (SELECT n.to FROM {node_collection} AS n WHERE n.relation = {node_relation}) ORDER BY d.title ASC, d.id ASC LIMIT {limit} OFFSET {offset}",
+        "SELECT d.* FROM {entities} AS d WHERE d.type = {directory_class} AND d.id NOT IN (SELECT n.to FROM {entities} AS n WHERE n.relation = {node_relation}) ORDER BY d.title ASC, d.id ASC LIMIT {limit} OFFSET {offset}",
         entities = sql_ident(ENTITIES_COLLECTION),
         directory_class = sql_string(DIRECTORY_CLASS_ID),
-        node_collection = sql_ident(DIRECTORY_NODE_CLASS_ID),
         node_relation = sql_string(DIRECTORY_NODE_RELATION_ID),
     )
 }
@@ -23,9 +23,10 @@ pub(super) fn child_query(
     offset: usize,
 ) -> String {
     format!(
-        "SELECT child.*, n.order AS directory_order FROM {node_collection} AS n INNER JOIN {entities}._ AS child ON n.to = child.id WHERE n.relation = {node_relation} AND n.from = {parent_id} ORDER BY {order_by} LIMIT {limit} OFFSET {offset}",
-        node_collection = sql_ident(DIRECTORY_NODE_CLASS_ID),
+        "SELECT child.*, n.{node_order} AS directory_order FROM {entities} AS n INNER JOIN {entities}._ AS child ON n.to = child.id WHERE n.relation = {node_relation} AND n.{node_from} = {parent_id} ORDER BY {order_by} LIMIT {limit} OFFSET {offset}",
         entities = sql_ident(ENTITIES_COLLECTION),
+        node_from = sql_ident(ATTR_DIRECTORY_NODE_FROM),
+        node_order = sql_ident(ATTR_DIRECTORY_NODE_ORDER),
         node_relation = sql_string(DIRECTORY_NODE_RELATION_ID),
         parent_id = sql_string(parent_id),
         order_by = sort_order_by(sort),
@@ -34,9 +35,10 @@ pub(super) fn child_query(
 
 pub(super) fn child_directories_query(parent_id: &str, limit: usize, offset: usize) -> String {
     format!(
-        "SELECT child.*, n.order AS directory_order FROM {node_collection} AS n INNER JOIN {entities}._ AS child ON n.to = child.id WHERE n.relation = {node_relation} AND n.from = {parent_id} AND child.type = {directory_class} ORDER BY n.order ASC, child.title ASC, child.id ASC LIMIT {limit} OFFSET {offset}",
-        node_collection = sql_ident(DIRECTORY_NODE_CLASS_ID),
+        "SELECT child.*, n.{node_order} AS directory_order FROM {entities} AS n INNER JOIN {entities}._ AS child ON n.to = child.id WHERE n.relation = {node_relation} AND n.{node_from} = {parent_id} AND child.type = {directory_class} ORDER BY n.{node_order} ASC, child.title ASC, child.id ASC LIMIT {limit} OFFSET {offset}",
         entities = sql_ident(ENTITIES_COLLECTION),
+        node_from = sql_ident(ATTR_DIRECTORY_NODE_FROM),
+        node_order = sql_ident(ATTR_DIRECTORY_NODE_ORDER),
         node_relation = sql_string(DIRECTORY_NODE_RELATION_ID),
         parent_id = sql_string(parent_id),
         directory_class = sql_string(DIRECTORY_CLASS_ID),
@@ -45,8 +47,10 @@ pub(super) fn child_directories_query(parent_id: &str, limit: usize, offset: usi
 
 pub(super) fn parent_query(child_id: &str) -> String {
     format!(
-        "SELECT n.from FROM {node_collection} AS n WHERE n.relation = {node_relation} AND n.to = {child_id} ORDER BY n.order ASC, n.id ASC LIMIT 1",
-        node_collection = sql_ident(DIRECTORY_NODE_CLASS_ID),
+        "SELECT n.id AS id, n.{node_from} AS directory_from, n.{node_order} AS directory_order FROM {entities} AS n WHERE n.relation = {node_relation} AND n.to = {child_id} ORDER BY n.{node_order} ASC, n.id ASC LIMIT 1",
+        entities = sql_ident(ENTITIES_COLLECTION),
+        node_from = sql_ident(ATTR_DIRECTORY_NODE_FROM),
+        node_order = sql_ident(ATTR_DIRECTORY_NODE_ORDER),
         node_relation = sql_string(DIRECTORY_NODE_RELATION_ID),
         child_id = sql_string(child_id),
     )
@@ -54,7 +58,9 @@ pub(super) fn parent_query(child_id: &str) -> String {
 
 pub(super) fn sort_order_by(sort: DirectorySort) -> &'static str {
     match sort {
-        DirectorySort::Order => "n.order ASC, child.title ASC, child.id ASC",
+        DirectorySort::Order => {
+            "n.\"semantic:base:directory_node:order\" ASC, child.title ASC, child.id ASC"
+        }
         DirectorySort::TitleAsc => "child.title ASC, child.id ASC",
         DirectorySort::TitleDesc => "child.title DESC, child.id ASC",
         DirectorySort::TypeAsc => "child.type ASC, child.title ASC, child.id ASC",
@@ -81,7 +87,8 @@ pub(super) fn sql_ident(value: &str) -> String {
 #[cfg(test)]
 mod tests {
     use semantic_data::bundles::directory::{
-        DIRECTORY_CLASS_ID, DIRECTORY_NODE_CLASS_ID, DIRECTORY_NODE_RELATION_ID,
+        ATTR_DIRECTORY_NODE_FROM, ATTR_DIRECTORY_NODE_ORDER, DIRECTORY_CLASS_ID,
+        DIRECTORY_NODE_CLASS_ID, DIRECTORY_NODE_RELATION_ID,
     };
     use semantic_data::query::QueryInput;
     use semantic_data::value::{Object, Value};
@@ -108,7 +115,7 @@ mod tests {
     fn root_query_uses_directory_and_directory_node() {
         let query = root_query(101, 20);
         assert!(query.contains(DIRECTORY_CLASS_ID));
-        assert!(query.contains(DIRECTORY_NODE_CLASS_ID));
+        assert!(query.contains(ENTITIES_COLLECTION));
         assert!(query.contains("NOT IN"));
         assert!(query.contains("LIMIT 101 OFFSET 20"));
     }
@@ -147,8 +154,6 @@ mod tests {
         insert_directory(&db, "parent", "Parent").await;
         insert_directory(&db, "child-dir", "Child Dir").await;
         insert_entity(&db, "child-item", "semantic:base:person", "Child Item").await;
-        insert_node_collection_ref_target(&db, "child-item", "semantic:base:person", "Child Item")
-            .await;
         insert_directory_node(&db, "node-1", "parent", "child-item", 20).await;
         insert_directory_node(&db, "node-2", "parent", "child-dir", 10).await;
 
@@ -180,8 +185,6 @@ mod tests {
         insert_directory(&db, "parent", "Parent").await;
         insert_directory(&db, "child-dir", "Child Dir").await;
         insert_entity(&db, "child-item", "semantic:base:person", "Child Item").await;
-        insert_node_collection_ref_target(&db, "child-item", "semantic:base:person", "Child Item")
-            .await;
         insert_directory_node(&db, "node-1", "parent", "child-item", 20).await;
         insert_directory_node(&db, "node-2", "parent", "child-dir", 10).await;
 
@@ -217,7 +220,7 @@ mod tests {
 
         assert_eq!(rows.len(), 1);
         assert_eq!(
-            rows[0].get("from"),
+            rows[0].get("directory_from"),
             Some(&Value::String("parent".to_string()))
         );
     }
@@ -225,8 +228,8 @@ mod tests {
     #[test]
     fn child_query_filters_from_parent() {
         let query = child_query("parent'1", DirectorySort::Order, 101, 0);
-        assert!(query.contains("n.from = 'parent''1'"));
-        assert!(query.contains("n.order ASC"));
+        assert!(query.contains("n.\"semantic:base:directory_node:from\" = 'parent''1'"));
+        assert!(query.contains("n.\"semantic:base:directory_node:order\" ASC"));
     }
 
     #[test]
@@ -240,7 +243,6 @@ mod tests {
 
     async fn insert_directory(db: &Db, id: &str, title: &str) {
         insert_entity(db, id, DIRECTORY_CLASS_ID, title).await;
-        insert_node_collection_ref_target(db, id, DIRECTORY_CLASS_ID, title).await;
     }
 
     async fn insert_entity(db: &Db, id: &str, ty: &str, title: &str) {
@@ -253,16 +255,6 @@ mod tests {
             .expect("entity should insert");
     }
 
-    async fn insert_node_collection_ref_target(db: &Db, id: &str, ty: &str, title: &str) {
-        let mut entity = Object::new();
-        entity.insert("id", Value::String(id.to_string()));
-        entity.insert("type", Value::String(ty.to_string()));
-        entity.insert("title", Value::String(title.to_string()));
-        db.insert(DIRECTORY_NODE_CLASS_ID, id, entity)
-            .await
-            .expect("directory node ref target should insert");
-    }
-
     async fn insert_directory_node(db: &Db, id: &str, parent: &str, child: &str, order: u64) {
         let mut node = Object::new();
         node.insert("id", Value::String(id.to_string()));
@@ -271,10 +263,10 @@ mod tests {
             "relation",
             Value::String(DIRECTORY_NODE_RELATION_ID.to_string()),
         );
-        node.insert("from", Value::String(parent.to_string()));
+        node.insert(ATTR_DIRECTORY_NODE_FROM, Value::String(parent.to_string()));
         node.insert("to", Value::String(child.to_string()));
-        node.insert("order", Value::U64(order));
-        db.insert(DIRECTORY_NODE_CLASS_ID, id, node)
+        node.insert(ATTR_DIRECTORY_NODE_ORDER, Value::U64(order));
+        db.insert(ENTITIES_COLLECTION, id, node)
             .await
             .expect("directory node should insert");
     }
