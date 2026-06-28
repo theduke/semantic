@@ -6,6 +6,7 @@ use super::helpers;
 
 pub const CLASS_ID: &str = "semantic:base:person";
 
+pub const ATTR_TITLE: &str = semantic_data::bundles::directory::ATTR_TITLE;
 pub const ATTR_DISPLAY_NAME: &str = "semantic:base:person:display_name";
 pub const ATTR_GIVEN_NAME: &str = "semantic:base:person:given_name";
 pub const ATTR_FAMILY_NAME: &str = "semantic:base:person:family_name";
@@ -21,6 +22,7 @@ pub const ATTR_PARENT: &str = "semantic:parent";
 
 pub fn attributes() -> Vec<AttributeType> {
     vec![
+        helpers::attribute(ATTR_TITLE, "title", helpers::string_type()),
         helpers::attribute(ATTR_DISPLAY_NAME, "display_name", helpers::string_type()),
         helpers::attribute(ATTR_GIVEN_NAME, "given_name", helpers::string_type()),
         helpers::attribute(ATTR_FAMILY_NAME, "family_name", helpers::string_type()),
@@ -63,6 +65,7 @@ pub fn class() -> ClassType {
         inherits: None,
         extends: Vec::new(),
         attributes: BTreeMap::from([
+            ("title".to_string(), class_attribute(ATTR_TITLE, 5)),
             (
                 "display_name".to_string(),
                 class_attribute(ATTR_DISPLAY_NAME, 10),
