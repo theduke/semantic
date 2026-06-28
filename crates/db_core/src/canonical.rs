@@ -32,10 +32,19 @@ pub fn canonicalize_select_query(
     catalog: &Catalog,
     collection: &CollectionSchema,
 ) -> CanonicalResult<SelectQuery> {
+    let base_binding = select_base_binding(query, collection);
     let predicate = query
         .predicate
         .as_ref()
-        .map(|predicate| canonicalize_expr(predicate, catalog, collection, "select predicate"))
+        .map(|predicate| {
+            canonicalize_expr(
+                predicate,
+                catalog,
+                collection,
+                Some(base_binding),
+                "select predicate",
+            )
+        })
         .transpose()?;
 
     let projection = query
@@ -49,21 +58,29 @@ pub fn canonicalize_select_query(
         .iter()
         .map(|join| {
             let condition = match &join.condition {
-                crate::JoinCondition::OnExpr(expr) => crate::JoinCondition::OnExpr(
-                    canonicalize_expr(expr, catalog, collection, "select join on")?,
-                ),
+                crate::JoinCondition::OnExpr(expr) => {
+                    crate::JoinCondition::OnExpr(canonicalize_expr(
+                        expr,
+                        catalog,
+                        collection,
+                        Some(base_binding),
+                        "select join on",
+                    )?)
+                }
                 crate::JoinCondition::UsingFields { left, right } => {
                     crate::JoinCondition::UsingFields {
                         left: canonicalize_path(
                             left,
                             catalog,
                             collection,
+                            Some(base_binding),
                             "select join using left",
                         )?,
                         right: canonicalize_path(
                             right,
                             catalog,
                             collection,
+                            Some(base_binding),
                             "select join using right",
                         )?,
                     }
@@ -78,7 +95,13 @@ pub fn canonicalize_select_query(
                     .predicate
                     .as_ref()
                     .map(|expr| {
-                        canonicalize_expr(expr, catalog, collection, "select join predicate")
+                        canonicalize_expr(
+                            expr,
+                            catalog,
+                            collection,
+                            Some(base_binding),
+                            "select join predicate",
+                        )
                     })
                     .transpose()?,
             })
@@ -90,7 +113,13 @@ pub fn canonicalize_select_query(
         .iter()
         .map(|order| {
             Ok(OrderBy {
-                expr: canonicalize_expr(&order.expr, catalog, collection, "select order_by")?,
+                expr: canonicalize_expr(
+                    &order.expr,
+                    catalog,
+                    collection,
+                    Some(base_binding),
+                    "select order_by",
+                )?,
                 direction: order.direction,
             })
         })
@@ -106,19 +135,49 @@ pub fn canonicalize_select_query(
         group_by: query
             .group_by
             .iter()
-            .map(|expr| canonicalize_expr(expr, catalog, collection, "select group_by"))
+            .map(|expr| {
+                canonicalize_expr(
+                    expr,
+                    catalog,
+                    collection,
+                    Some(base_binding),
+                    "select group_by",
+                )
+            })
             .collect::<CanonicalResult<Vec<_>>>()?,
         having: query
             .having
             .as_ref()
-            .map(|predicate| canonicalize_expr(predicate, catalog, collection, "select having"))
+            .map(|predicate| {
+                canonicalize_expr(
+                    predicate,
+                    catalog,
+                    collection,
+                    Some(base_binding),
+                    "select having",
+                )
+            })
             .transpose()?,
         order_by,
-        offset: canonicalize_expr(&query.offset, catalog, collection, "select offset")?,
+        offset: canonicalize_expr(
+            &query.offset,
+            catalog,
+            collection,
+            Some(base_binding),
+            "select offset",
+        )?,
         limit: query
             .limit
             .as_ref()
-            .map(|expr| canonicalize_expr(expr, catalog, collection, "select limit"))
+            .map(|expr| {
+                canonicalize_expr(
+                    expr,
+                    catalog,
+                    collection,
+                    Some(base_binding),
+                    "select limit",
+                )
+            })
             .transpose()?,
         field_format: query.field_format,
     })
@@ -160,6 +219,7 @@ pub fn canonicalize_insert_query(
                     &field.expr,
                     catalog,
                     collection,
+                    None,
                     "insert returning",
                 )?),
                 alias: field.alias.clone(),
@@ -185,7 +245,9 @@ pub fn canonicalize_update_query(
     let predicate = query
         .predicate
         .as_ref()
-        .map(|predicate| canonicalize_expr(predicate, catalog, collection, "update predicate"))
+        .map(|predicate| {
+            canonicalize_expr(predicate, catalog, collection, None, "update predicate")
+        })
         .transpose()?;
 
     let assignments = query
@@ -197,12 +259,14 @@ pub fn canonicalize_update_query(
                     &assignment.path,
                     catalog,
                     collection,
+                    None,
                     "update assignment path",
                 )?,
                 value: canonicalize_expr(
                     &assignment.value,
                     catalog,
                     collection,
+                    None,
                     "update assignment value",
                 )?,
             })
@@ -218,6 +282,7 @@ pub fn canonicalize_update_query(
                     &field.expr,
                     catalog,
                     collection,
+                    None,
                     "update returning",
                 )?),
                 alias: field.alias.clone(),
@@ -233,7 +298,7 @@ pub fn canonicalize_update_query(
         limit: query
             .limit
             .as_ref()
-            .map(|expr| canonicalize_expr(expr, catalog, collection, "update limit"))
+            .map(|expr| canonicalize_expr(expr, catalog, collection, None, "update limit"))
             .transpose()?,
         returning,
         field_format: query.field_format,
@@ -248,7 +313,9 @@ pub fn canonicalize_delete_query(
     let predicate = query
         .predicate
         .as_ref()
-        .map(|predicate| canonicalize_expr(predicate, catalog, collection, "delete predicate"))
+        .map(|predicate| {
+            canonicalize_expr(predicate, catalog, collection, None, "delete predicate")
+        })
         .transpose()?;
 
     let returning = query
@@ -260,6 +327,7 @@ pub fn canonicalize_delete_query(
                     &field.expr,
                     catalog,
                     collection,
+                    None,
                     "delete returning",
                 )?),
                 alias: field.alias.clone(),
@@ -274,7 +342,7 @@ pub fn canonicalize_delete_query(
         limit: query
             .limit
             .as_ref()
-            .map(|expr| canonicalize_expr(expr, catalog, collection, "delete limit"))
+            .map(|expr| canonicalize_expr(expr, catalog, collection, None, "delete limit"))
             .transpose()?,
         returning,
         field_format: query.field_format,
@@ -309,13 +377,22 @@ fn canonicalize_projection_field(
             &field.expr,
             catalog,
             collection,
+            Some(select_base_binding(query, collection)),
             "select projection",
         )?),
         alias: field.alias.clone(),
         wildcard: field
             .wildcard
             .as_ref()
-            .map(|path| canonicalize_path(path, catalog, collection, "select projection"))
+            .map(|path| {
+                canonicalize_path(
+                    path,
+                    catalog,
+                    collection,
+                    Some(select_base_binding(query, collection)),
+                    "select projection",
+                )
+            })
             .transpose()?,
     })
 }
@@ -340,12 +417,15 @@ fn wildcard_matches_base_binding(
     query: &SelectQuery,
     collection: &CollectionSchema,
 ) -> bool {
-    let binding = query
+    path_is_single_field(path, select_base_binding(query, collection))
+}
+
+fn select_base_binding<'a>(query: &'a SelectQuery, collection: &'a CollectionSchema) -> &'a str {
+    query
         .source_alias
         .as_deref()
         .or(query.collection.as_deref())
-        .unwrap_or(collection.name.as_str());
-    path_is_single_field(path, binding)
+        .unwrap_or(collection.name.as_str())
 }
 
 fn path_is_single_field(path: &FieldPath, value: &str) -> bool {
@@ -356,33 +436,71 @@ fn canonicalize_expr(
     expr: &Expr,
     catalog: &Catalog,
     collection: &CollectionSchema,
+    base_binding: Option<&str>,
     context: &'static str,
 ) -> CanonicalResult<Expr> {
     match expr {
         Expr::Operand(operand) => {
-            canonicalize_operand(operand, catalog, collection, context).map(Expr::Operand)
+            canonicalize_operand(operand, catalog, collection, base_binding, context)
+                .map(Expr::Operand)
         }
         Expr::Unary { op, expr } => Ok(Expr::Unary {
             op: *op,
-            expr: Box::new(canonicalize_expr(expr, catalog, collection, context)?),
+            expr: Box::new(canonicalize_expr(
+                expr,
+                catalog,
+                collection,
+                base_binding,
+                context,
+            )?),
         }),
         Expr::Binary { op, left, right } => Ok(Expr::Binary {
             op: *op,
-            left: Box::new(canonicalize_expr(left, catalog, collection, context)?),
-            right: Box::new(canonicalize_expr(right, catalog, collection, context)?),
+            left: Box::new(canonicalize_expr(
+                left,
+                catalog,
+                collection,
+                base_binding,
+                context,
+            )?),
+            right: Box::new(canonicalize_expr(
+                right,
+                catalog,
+                collection,
+                base_binding,
+                context,
+            )?),
         }),
         Expr::IfElse {
             cond,
             then_expr,
             else_expr,
         } => Ok(Expr::IfElse {
-            cond: Box::new(canonicalize_expr(cond, catalog, collection, context)?),
-            then_expr: Box::new(canonicalize_expr(then_expr, catalog, collection, context)?),
-            else_expr: Box::new(canonicalize_expr(else_expr, catalog, collection, context)?),
+            cond: Box::new(canonicalize_expr(
+                cond,
+                catalog,
+                collection,
+                base_binding,
+                context,
+            )?),
+            then_expr: Box::new(canonicalize_expr(
+                then_expr,
+                catalog,
+                collection,
+                base_binding,
+                context,
+            )?),
+            else_expr: Box::new(canonicalize_expr(
+                else_expr,
+                catalog,
+                collection,
+                base_binding,
+                context,
+            )?),
         }),
         Expr::Coalesce(items) => items
             .iter()
-            .map(|item| canonicalize_expr(item, catalog, collection, context))
+            .map(|item| canonicalize_expr(item, catalog, collection, base_binding, context))
             .collect::<CanonicalResult<Vec<_>>>()
             .map(Expr::Coalesce),
         Expr::Function { name, args } => Ok(Expr::Function {
@@ -391,7 +509,7 @@ fn canonicalize_expr(
                 .iter()
                 .map(|arg| match arg {
                     crate::FunctionArg::Expr(expr) => {
-                        canonicalize_expr(expr, catalog, collection, context)
+                        canonicalize_expr(expr, catalog, collection, base_binding, context)
                             .map(crate::FunctionArg::Expr)
                     }
                     crate::FunctionArg::Wildcard => Ok(crate::FunctionArg::Wildcard),
@@ -402,9 +520,13 @@ fn canonicalize_expr(
             op: *op,
             distinct: *distinct,
             arg: Box::new(match arg.as_ref() {
-                crate::FunctionArg::Expr(expr) => {
-                    crate::FunctionArg::Expr(canonicalize_expr(expr, catalog, collection, context)?)
-                }
+                crate::FunctionArg::Expr(expr) => crate::FunctionArg::Expr(canonicalize_expr(
+                    expr,
+                    catalog,
+                    collection,
+                    base_binding,
+                    context,
+                )?),
                 crate::FunctionArg::Wildcard => crate::FunctionArg::Wildcard,
             }),
         }),
@@ -413,23 +535,49 @@ fn canonicalize_expr(
             list,
             negated,
         } => Ok(Expr::InList {
-            expr: Box::new(canonicalize_expr(expr, catalog, collection, context)?),
+            expr: Box::new(canonicalize_expr(
+                expr,
+                catalog,
+                collection,
+                base_binding,
+                context,
+            )?),
             list: list
                 .iter()
-                .map(|item| canonicalize_expr(item, catalog, collection, context))
+                .map(|item| canonicalize_expr(item, catalog, collection, base_binding, context))
                 .collect::<CanonicalResult<Vec<_>>>()?,
             negated: *negated,
         }),
-        Expr::Subquery(query) => Ok(Expr::Subquery(query.clone())),
+        Expr::Subquery(query) => Ok(Expr::Subquery(Box::new(canonicalize_subquery(
+            query, catalog, collection,
+        )?))),
         Expr::Between {
             expr,
             low,
             high,
             negated,
         } => Ok(Expr::Between {
-            expr: Box::new(canonicalize_expr(expr, catalog, collection, context)?),
-            low: Box::new(canonicalize_expr(low, catalog, collection, context)?),
-            high: Box::new(canonicalize_expr(high, catalog, collection, context)?),
+            expr: Box::new(canonicalize_expr(
+                expr,
+                catalog,
+                collection,
+                base_binding,
+                context,
+            )?),
+            low: Box::new(canonicalize_expr(
+                low,
+                catalog,
+                collection,
+                base_binding,
+                context,
+            )?),
+            high: Box::new(canonicalize_expr(
+                high,
+                catalog,
+                collection,
+                base_binding,
+                context,
+            )?),
             negated: *negated,
         }),
         Expr::PatternMatch {
@@ -440,8 +588,20 @@ fn canonicalize_expr(
             negated,
         } => Ok(Expr::PatternMatch {
             kind: *kind,
-            expr: Box::new(canonicalize_expr(expr, catalog, collection, context)?),
-            pattern: Box::new(canonicalize_expr(pattern, catalog, collection, context)?),
+            expr: Box::new(canonicalize_expr(
+                expr,
+                catalog,
+                collection,
+                base_binding,
+                context,
+            )?),
+            pattern: Box::new(canonicalize_expr(
+                pattern,
+                catalog,
+                collection,
+                base_binding,
+                context,
+            )?),
             case_insensitive: *case_insensitive,
             negated: *negated,
         }),
@@ -451,17 +611,35 @@ fn canonicalize_expr(
             case_insensitive,
             negated,
         } => Ok(Expr::RegexMatch {
-            expr: Box::new(canonicalize_expr(expr, catalog, collection, context)?),
-            pattern: Box::new(canonicalize_expr(pattern, catalog, collection, context)?),
+            expr: Box::new(canonicalize_expr(
+                expr,
+                catalog,
+                collection,
+                base_binding,
+                context,
+            )?),
+            pattern: Box::new(canonicalize_expr(
+                pattern,
+                catalog,
+                collection,
+                base_binding,
+                context,
+            )?),
             case_insensitive: *case_insensitive,
             negated: *negated,
         }),
         Expr::IsNull { expr, negated } => Ok(Expr::IsNull {
-            expr: Box::new(canonicalize_expr(expr, catalog, collection, context)?),
+            expr: Box::new(canonicalize_expr(
+                expr,
+                catalog,
+                collection,
+                base_binding,
+                context,
+            )?),
             negated: *negated,
         }),
         Expr::Exists { query, negated } => Ok(Expr::Exists {
-            query: query.clone(),
+            query: Box::new(canonicalize_subquery(query, catalog, collection)?),
             negated: *negated,
         }),
         Expr::RelationExists {
@@ -471,17 +649,51 @@ fn canonicalize_expr(
             transitive,
             max_depth,
         } => Ok(Expr::RelationExists {
-            relation: Box::new(canonicalize_expr(relation, catalog, collection, context)?),
-            source: Box::new(canonicalize_expr(source, catalog, collection, context)?),
-            target: Box::new(canonicalize_expr(target, catalog, collection, context)?),
+            relation: Box::new(canonicalize_expr(
+                relation,
+                catalog,
+                collection,
+                base_binding,
+                context,
+            )?),
+            source: Box::new(canonicalize_expr(
+                source,
+                catalog,
+                collection,
+                base_binding,
+                context,
+            )?),
+            target: Box::new(canonicalize_expr(
+                target,
+                catalog,
+                collection,
+                base_binding,
+                context,
+            )?),
             transitive: *transitive,
             max_depth: max_depth
                 .as_ref()
-                .map(|value| canonicalize_expr(value, catalog, collection, context).map(Box::new))
+                .map(|value| {
+                    canonicalize_expr(value, catalog, collection, base_binding, context)
+                        .map(Box::new)
+                })
                 .transpose()?,
         }),
     }
     .map(|expr| normalize_type_predicate_literals(expr, catalog, collection))
+}
+
+fn canonicalize_subquery(
+    query: &SelectQuery,
+    catalog: &Catalog,
+    parent_collection: &CollectionSchema,
+) -> CanonicalResult<SelectQuery> {
+    let collection = query
+        .collection
+        .as_deref()
+        .and_then(|name| catalog.collection_by_name(name))
+        .unwrap_or(parent_collection);
+    canonicalize_select_query(query, catalog, collection)
 }
 
 fn normalize_type_predicate_literals(
@@ -561,11 +773,12 @@ fn canonicalize_operand(
     operand: &Operand,
     catalog: &Catalog,
     collection: &CollectionSchema,
+    base_binding: Option<&str>,
     context: &'static str,
 ) -> CanonicalResult<Operand> {
     match operand {
         Operand::Field(path) => {
-            canonicalize_path(path, catalog, collection, context).map(Operand::Field)
+            canonicalize_path(path, catalog, collection, base_binding, context).map(Operand::Field)
         }
         Operand::Literal(value) => Ok(Operand::Literal(value.clone())),
     }
@@ -575,6 +788,7 @@ fn canonicalize_path(
     path: &FieldPath,
     catalog: &Catalog,
     collection: &CollectionSchema,
+    base_binding: Option<&str>,
     context: &'static str,
 ) -> CanonicalResult<FieldPath> {
     let Some(PathSegment::Field(first)) = path.segments().first() else {
@@ -584,23 +798,18 @@ fn canonicalize_path(
         });
     };
 
-    let mut out = path.clone();
-    let canonical_first = collection.canonical_field_name(first).to_string();
-    let alias_prefixed = out.0.len() >= 2
-        && first.len() <= 2
-        && matches!(out.0.get(1), Some(PathSegment::Field(_)))
-        && !collection.knows_field(&canonical_first);
-    let top_level_index = if alias_prefixed { 1 } else { 0 };
-
-    let Some(PathSegment::Field(top_level_field)) = out.0.get(top_level_index).cloned() else {
+    let mut out = if base_binding.is_some_and(|binding| binding == first) && path.0.len() >= 2 {
+        FieldPath(path.0.iter().skip(1).cloned().collect())
+    } else {
+        path.clone()
+    };
+    let Some(PathSegment::Field(first)) = out.segments().first() else {
         return Err(QueryCanonicalizationError::InvalidPath {
             context,
             path: format_path(path),
         });
     };
-
-    let canonical_top_level =
-        canonicalize_field_name(&top_level_field, catalog, collection, context)?;
+    let canonical_top_level = canonicalize_field_name(first, catalog, collection, context)?;
     if collection.is_closed_field_set() && !collection.knows_field(&canonical_top_level) {
         return Err(QueryCanonicalizationError::UnknownField {
             collection: collection.name.clone(),
@@ -608,7 +817,7 @@ fn canonicalize_path(
             context,
         });
     }
-    out.0[top_level_index] = PathSegment::Field(canonical_top_level);
+    out.0[0] = PathSegment::Field(canonical_top_level);
 
     Ok(out)
 }
@@ -663,7 +872,7 @@ mod tests {
     use std::collections::BTreeMap;
 
     use semantic_data::{
-        query::{BinaryOp, JoinType},
+        query::{BinaryOp, JoinType, SortDirection},
         schema::{
             ClassType,
             attribute::attribute_type::AttributeType,
@@ -932,5 +1141,181 @@ mod tests {
             err,
             QueryCanonicalizationError::UnknownField { field, .. } if field == "missing"
         ));
+    }
+
+    #[test]
+    fn canonicalizes_base_binding_qualified_select_paths() {
+        let mut catalog = Catalog::new();
+        let _ = catalog.upsert_attribute(AttributeType {
+            id: "semantic:title".to_string(),
+            name: "title".to_string(),
+            ty: Type {
+                kind: TypeKind::String(StringType {
+                    format: None,
+                    normalization: None,
+                }),
+                constraints: vec![],
+                annotations: vec![],
+            },
+            constraints: vec![],
+            meta: Meta::default(),
+        });
+        let _ = catalog
+            .upsert_collection("items", CollectionKind::Schema, IntegrityMode::Permissive)
+            .unwrap();
+        let collection = catalog.collection_by_name("items").unwrap();
+
+        let query = SelectQuery::new()
+            .with_collection("items")
+            .with_source_alias("item")
+            .with_predicate(eq_field("item", OBJECT_TYPE_FIELD, "semantic:article"))
+            .with_projection(vec![QueryField {
+                expr: Box::new(field_expr(["item", "title"])),
+                alias: None,
+                wildcard: None,
+            }])
+            .with_group_by(vec![field_expr(["item", OBJECT_TYPE_FIELD])])
+            .with_order_by(vec![crate::OrderBy {
+                expr: field_expr(["item", "title"]),
+                direction: SortDirection::Asc,
+            }])
+            .with_having(eq_field("item", OBJECT_TYPE_FIELD, "semantic:article"));
+
+        let canonical = canonicalize_select_query(&query, &catalog, collection).unwrap();
+        assert_binary_lhs_path(canonical.predicate.as_ref().unwrap(), &[OBJECT_TYPE_FIELD]);
+        assert_expr_path(canonical.projection[0].expr.as_ref(), &["semantic:title"]);
+        assert_expr_path(&canonical.group_by[0], &[OBJECT_TYPE_FIELD]);
+        assert_expr_path(&canonical.order_by[0].expr, &["semantic:title"]);
+        assert_binary_lhs_path(canonical.having.as_ref().unwrap(), &[OBJECT_TYPE_FIELD]);
+    }
+
+    #[test]
+    fn canonicalizes_base_binding_qualified_subquery_paths() {
+        let mut catalog = Catalog::new();
+        let _ = catalog
+            .upsert_collection(
+                "entities",
+                CollectionKind::Schema,
+                IntegrityMode::Permissive,
+            )
+            .unwrap();
+        let _ = catalog
+            .upsert_collection("nodes", CollectionKind::Schema, IntegrityMode::Permissive)
+            .unwrap();
+        let entities = catalog.collection_by_name("entities").unwrap();
+
+        let subquery = SelectQuery::new()
+            .with_collection("nodes")
+            .with_source_alias("n")
+            .with_projection(vec![QueryField {
+                expr: Box::new(field_expr(["n", "to"])),
+                alias: None,
+                wildcard: None,
+            }])
+            .with_predicate(eq_field("n", "relation", "semantic:base:directory_node"));
+        let query = SelectQuery::new()
+            .with_collection("entities")
+            .with_source_alias("d")
+            .with_predicate(Expr::Binary {
+                op: BinaryOp::In,
+                left: Box::new(field_expr(["d", "id"])),
+                right: Box::new(Expr::Subquery(Box::new(subquery))),
+            });
+
+        let canonical = canonicalize_select_query(&query, &catalog, entities).unwrap();
+        let Expr::Binary { left, right, .. } = canonical.predicate.as_ref().unwrap() else {
+            panic!("predicate must be binary");
+        };
+        assert_expr_path(left.as_ref(), &["id"]);
+        let Expr::Subquery(subquery) = right.as_ref() else {
+            panic!("rhs must be a subquery");
+        };
+        assert_expr_path(subquery.projection[0].expr.as_ref(), &["to"]);
+        assert_binary_lhs_path(subquery.predicate.as_ref().unwrap(), &["relation"]);
+    }
+
+    #[test]
+    fn preserves_join_binding_qualified_paths() {
+        let mut catalog = Catalog::new();
+        let _ = catalog
+            .upsert_collection(
+                "entities",
+                CollectionKind::Schema,
+                IntegrityMode::Permissive,
+            )
+            .unwrap();
+        let collection = catalog.collection_by_name("entities").unwrap();
+
+        let query = SelectQuery::new()
+            .with_collection("entities")
+            .with_source_alias("base")
+            .with_joins(vec![JoinQuery {
+                source: JoinSource {
+                    collection: Some("entities".to_string()),
+                    class: None,
+                },
+                alias: Some("c".to_string()),
+                join_type: JoinType::Inner,
+                condition: JoinCondition::OnExpr(Expr::Binary {
+                    op: BinaryOp::Eq,
+                    left: Box::new(field_expr(["base", "id"])),
+                    right: Box::new(field_expr(["c", "parent_id"])),
+                }),
+                predicate: Some(eq_field("c", OBJECT_TYPE_FIELD, "semantic:child")),
+            }])
+            .with_projection(vec![QueryField {
+                expr: Box::new(field_expr(["c", "title"])),
+                alias: None,
+                wildcard: None,
+            }]);
+
+        let canonical = canonicalize_select_query(&query, &catalog, collection).unwrap();
+        let JoinCondition::OnExpr(Expr::Binary { left, right, .. }) = &canonical.joins[0].condition
+        else {
+            panic!("join condition must be binary");
+        };
+        assert_expr_path(left.as_ref(), &["id"]);
+        assert_expr_path(right.as_ref(), &["c", "parent_id"]);
+        assert_binary_lhs_path(
+            canonical.joins[0].predicate.as_ref().unwrap(),
+            &["c", OBJECT_TYPE_FIELD],
+        );
+        assert_expr_path(canonical.projection[0].expr.as_ref(), &["c", "title"]);
+    }
+
+    fn field_expr<const N: usize>(segments: [&str; N]) -> Expr {
+        Expr::Operand(Operand::Field(FieldPath::from_fields(segments)))
+    }
+
+    fn eq_field(field_binding: &str, field_name: &str, value: &str) -> Expr {
+        Expr::Binary {
+            op: BinaryOp::Eq,
+            left: Box::new(field_expr([field_binding, field_name])),
+            right: Box::new(Expr::Operand(Operand::Literal(Value::String(
+                value.to_string(),
+            )))),
+        }
+    }
+
+    fn assert_binary_lhs_path(expr: &Expr, expected: &[&str]) {
+        let Expr::Binary { left, .. } = expr else {
+            panic!("expression must be binary");
+        };
+        assert_expr_path(left.as_ref(), expected);
+    }
+
+    fn assert_expr_path(expr: &Expr, expected: &[&str]) {
+        let Expr::Operand(Operand::Field(path)) = expr else {
+            panic!("expression must be field");
+        };
+        let actual = path
+            .segments()
+            .iter()
+            .map(|segment| match segment {
+                PathSegment::Field(field) => field.as_str(),
+                PathSegment::Index(_) => panic!("expected only field path segments"),
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(actual, expected);
     }
 }

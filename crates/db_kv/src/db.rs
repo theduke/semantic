@@ -4168,6 +4168,84 @@ mod tests {
     }
 
     #[test]
+    fn builtin_type_field_can_be_projected_and_filtered() {
+        let mut db = KvDb::in_memory();
+        db.create_collection("entities", CollectionKind::Polymorphic)
+            .unwrap();
+
+        let mut directory = Object::new();
+        directory.insert("id", Value::String("dir1".to_string()));
+        directory.insert("type", Value::String("semantic:base:directory".to_string()));
+        directory.insert("title", Value::String("Dir1".to_string()));
+        db.insert("entities", "dir1", directory).unwrap();
+
+        let projected = db
+            .select(
+                SelectQuery::new()
+                    .with_collection("entities")
+                    .with_projection(vec![semantic_db_core::QueryField {
+                        expr: Box::new(Expr::Operand(Operand::Field(FieldPath::from_fields([
+                            "type",
+                        ])))),
+                        alias: None,
+                        wildcard: None,
+                    }]),
+            )
+            .unwrap();
+        assert_eq!(
+            projected[0].get("type"),
+            Some(&Value::String("semantic:base:directory".to_string()))
+        );
+
+        let filtered = db
+            .select(
+                SelectQuery::new()
+                    .with_collection("entities")
+                    .with_predicate(eq_predicate(
+                        FieldPath::from_fields(["type"]),
+                        Value::String("semantic:base:directory".to_string()),
+                    )),
+            )
+            .unwrap();
+        assert_eq!(filtered.len(), 1);
+        assert_eq!(
+            filtered[0].get("id"),
+            Some(&Value::String("dir1".to_string()))
+        );
+
+        let sql_project = semantic_db_core::sql::parse_sql_query(
+            "SELECT type FROM entities LIMIT 10",
+            semantic_db_core::SqlDialectKind::Generic,
+        )
+        .unwrap()
+        .query;
+        let Query::Select(sql_project) = sql_project else {
+            panic!("expected SQL select query");
+        };
+        let sql_projected = db.select(sql_project).unwrap();
+        assert_eq!(
+            sql_projected[0].get("type"),
+            Some(&Value::String("semantic:base:directory".to_string()))
+        );
+
+        let sql_filter = semantic_db_core::sql::parse_sql_query(
+            "SELECT * FROM entities WHERE type = 'semantic:base:directory' LIMIT 10",
+            semantic_db_core::SqlDialectKind::Generic,
+        )
+        .unwrap()
+        .query;
+        let Query::Select(sql_filter) = sql_filter else {
+            panic!("expected SQL select query");
+        };
+        let sql_filtered = db.select(sql_filter).unwrap();
+        assert_eq!(sql_filtered.len(), 1);
+        assert_eq!(
+            sql_filtered[0].get("id"),
+            Some(&Value::String("dir1".to_string()))
+        );
+    }
+
+    #[test]
     fn auto_index_nested_paths_work_with_planner_and_mutations() {
         let mut db = KvDb::in_memory();
         db.create_collection("events", CollectionKind::Polymorphic)

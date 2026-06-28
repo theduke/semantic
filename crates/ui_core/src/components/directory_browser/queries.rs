@@ -81,6 +81,10 @@ pub(super) fn sql_ident(value: &str) -> String {
 #[cfg(test)]
 mod tests {
     use semantic_data::bundles::directory::{DIRECTORY_CLASS_ID, DIRECTORY_NODE_CLASS_ID};
+    use semantic_data::query::QueryInput;
+    use semantic_data::value::{Object, Value};
+    use semantic_db_core::{Db, QueryResult};
+    use semantic_db_kv::{KvBackend, KvDb};
 
     use super::*;
 
@@ -105,6 +109,37 @@ mod tests {
         assert!(query.contains(DIRECTORY_NODE_CLASS_ID));
         assert!(query.contains("NOT IN"));
         assert!(query.contains("LIMIT 101 OFFSET 20"));
+    }
+
+    #[tokio::test]
+    async fn root_query_finds_parentless_directory_entity() {
+        let db = Db::new(KvBackend::new(KvDb::in_memory()));
+        db.upsert_package(semantic_base::package())
+            .await
+            .expect("base package should register");
+
+        let mut directory = Object::new();
+        directory.insert("id", Value::String("dir1".to_string()));
+        directory.insert("type", Value::String(DIRECTORY_CLASS_ID.to_string()));
+        directory.insert("title", Value::String("Dir1".to_string()));
+        db.insert(ENTITIES_COLLECTION, "dir1", directory)
+            .await
+            .expect("directory should insert");
+
+        let result = db
+            .query(QueryInput::sql(root_query(200, 0)))
+            .await
+            .expect("root query should run");
+        let QueryResult::Select(rows) = result else {
+            panic!("root query should return select rows");
+        };
+
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].get("id"), Some(&Value::String("dir1".to_string())));
+        assert_eq!(
+            rows[0].get("type"),
+            Some(&Value::String(DIRECTORY_CLASS_ID.to_string()))
+        );
     }
 
     #[test]

@@ -27,3 +27,8 @@ semantic_rpc = { path = "../rpc", features = ["client"] }
 thiserror = "2.0.17"
 time = { workspace = true, features = ["formatting", "parsing"] }
 tracing = { workspace = true }
+
+[dev-dependencies]
+semantic_base = { path = "../base" }
+semantic_db_kv = { path = "../db_kv" }
+tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }

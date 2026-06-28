@@ -8403,11 +8403,14 @@ dependencies = [
  "facet-json",
  "futures",
  "regex",
+ "semantic_base",
  "semantic_data",
  "semantic_db_core",
+ "semantic_db_kv",
  "semantic_rpc",
  "thiserror 2.0.18",
  "time",
+ "tokio",
  "tracing",
 ]
 
