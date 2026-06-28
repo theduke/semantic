@@ -1,14 +1,15 @@
 use std::collections::BTreeMap;
 
 use crate::schema::{
-    AttributeRef, AttributeType, ClassAttribute, ClassType, Constraint, Meta, StringFormat,
-    StringType, Type, TypeKind,
+    AttributeRef, AttributeType, ClassAttribute, ClassType, Constraint, Meta,
+    MigrationCollectionKind, MigrationIntegrityMode, StringFormat, StringType, Type, TypeKind,
 };
 use crate::schema::{Migration, MigrationDdlOperation, MigrationOperation};
 
 pub const MODULE_NAME: &str = "auth";
 pub const INIT_MIGRATION_NAME: &str = "001_init";
 pub const USER_CLASS_ID: &str = "semantic:auth:user";
+pub const AUTH_COLLECTION: &str = "_semantic.auth";
 
 pub const ATTR_USERNAME: &str = "semantic:auth:user:username";
 pub const ATTR_PRIMARY_EMAIL: &str = "semantic:auth:user:primary_email";
@@ -43,6 +44,11 @@ pub fn init_migration() -> Migration {
             }),
             MigrationOperation::Ddl(MigrationDdlOperation::UpsertClass {
                 class: init_migration_user_class(),
+            }),
+            MigrationOperation::Ddl(MigrationDdlOperation::UpsertCollection {
+                name: AUTH_COLLECTION.to_string(),
+                kind: MigrationCollectionKind::Schema,
+                integrity_mode: MigrationIntegrityMode::StrictRegisteredSchema,
             }),
         ],
         meta: Meta::default(),
@@ -303,6 +309,11 @@ mod tests {
         assert!(!class.attributes["description"].required);
         assert!(!class.attributes["created_at"].required);
         assert!(!class.attributes["updated_at"].required);
+
+        assert_eq!(
+            migration_upsert_collection_names(&migration),
+            vec![AUTH_COLLECTION]
+        );
     }
 
     #[test]
@@ -357,5 +368,18 @@ mod tests {
                 _ => None,
             })
             .expect("migration should upsert user class")
+    }
+
+    fn migration_upsert_collection_names(migration: &Migration) -> Vec<&str> {
+        migration
+            .operations
+            .iter()
+            .filter_map(|operation| match operation {
+                MigrationOperation::Ddl(MigrationDdlOperation::UpsertCollection {
+                    name, ..
+                }) => Some(name.as_str()),
+                _ => None,
+            })
+            .collect()
     }
 }
