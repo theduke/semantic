@@ -1,11 +1,13 @@
 use std::{cell::RefCell, rc::Rc};
 
 use dioxus::prelude::*;
+use dioxus_icons::lucide::Pencil;
 use semantic_data::value::Value;
 use semantic_rpc::RpcClient;
 use semantic_ui_core::{
-    EntityTarget, RenderSettings, UiCatalog, UiCatalogProvider, ValueRenderContext,
-    provide_rpc_client, provide_ui_scope_context,
+    EntityActionContext, EntityActionPlacement, EntityActionRegistration, EntityTarget,
+    RenderSettings, UiCatalog, UiCatalogProvider, ValueRenderContext, provide_rpc_client,
+    provide_ui_scope_context,
 };
 
 const CORE_STYLES: Asset = asset!("/assets/core_styles.css");
@@ -115,6 +117,7 @@ fn configure_ui_catalog(mut catalog: UiCatalog) -> UiCatalog {
     catalog.set_entity_href_builder(Rc::new(entity_href));
     catalog.set_entity_link_renderer(Rc::new(entity_link));
     catalog.set_entity_open_handler(Rc::new(entity_open));
+    register_entity_actions(&mut catalog);
     catalog
 }
 
@@ -164,6 +167,53 @@ fn entity_open(target: EntityTarget) {
             collection: target.collection_or_default().to_string(),
             id: target.id,
         });
+    }
+}
+
+fn register_entity_actions(catalog: &mut UiCatalog) {
+    catalog.register_entity_action(EntityActionRegistration {
+        id: "edit".to_string(),
+        label: "Edit".to_string(),
+        icon: None,
+        class_id: None,
+        placements: vec![
+            EntityActionPlacement::Card,
+            EntityActionPlacement::Detail,
+            EntityActionPlacement::BrowseRow,
+        ],
+        enabled: Rc::new(|ctx: &EntityActionContext| !ctx.target.id.is_empty()),
+        render: Rc::new(|ctx: EntityActionContext| entity_edit_link(ctx.target)),
+    });
+}
+
+fn entity_edit_link(target: EntityTarget) -> Element {
+    if target.is_default_collection() {
+        rsx! {
+            Link {
+                to: Route::DefaultEditEntityPage { id: target.id },
+                class: "dx-button semantic-entity-action",
+                "data-style": "outline",
+                "data-size": "icon-sm",
+                title: "Edit",
+                aria_label: "Edit entity",
+                Pencil { size: "1rem" }
+            }
+        }
+    } else {
+        rsx! {
+            Link {
+                to: Route::CollectionEditEntityPage {
+                    collection: target.collection_or_default().to_string(),
+                    id: target.id
+                },
+                class: "dx-button semantic-entity-action",
+                "data-style": "outline",
+                "data-size": "icon-sm",
+                title: "Edit",
+                aria_label: "Edit entity",
+                Pencil { size: "1rem" }
+            }
+        }
     }
 }
 

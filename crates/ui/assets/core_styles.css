@@ -234,13 +234,13 @@ pre {
 }
 
 .semantic-field-table th {
-  width: 210px;
+  width: 1%;
   max-width: 260px;
-  background: var(--semantic-surface-muted);
   color: var(--semantic-text-muted);
   font-weight: 600;
   text-align: left;
   overflow-wrap: anywhere;
+  white-space: nowrap;
 }
 
 .semantic-field-table td {
@@ -357,6 +357,411 @@ pre {
 .semantic-empty,
 .semantic-loading {
   color: var(--semantic-text-muted);
+}
+
+.semantic-browse {
+  display: grid;
+  gap: var(--semantic-space-6);
+}
+
+.semantic-browse__header {
+  display: flex;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: var(--semantic-space-4);
+  padding-bottom: var(--semantic-space-4);
+  border-bottom: 1px solid var(--semantic-border-soft);
+}
+
+.semantic-browse__header h2 {
+  margin: 0;
+  font-size: 24px;
+  font-weight: 700;
+  letter-spacing: 0;
+}
+
+.semantic-browse__header p {
+  max-width: 620px;
+  margin: var(--semantic-space-2) 0 0;
+  color: var(--semantic-text-muted);
+}
+
+.semantic-browse__header-meta {
+  display: grid;
+  justify-items: end;
+  gap: var(--semantic-space-1);
+  min-width: 0;
+  color: var(--semantic-text-muted);
+  font-size: 12px;
+  text-transform: uppercase;
+}
+
+.semantic-browse__header-meta code {
+  max-width: 320px;
+  overflow: hidden;
+  color: var(--semantic-text);
+  font-size: 13px;
+  text-overflow: ellipsis;
+  text-transform: none;
+  white-space: nowrap;
+}
+
+.semantic-browse__query-card .dx-card {
+  border: 1px solid var(--semantic-border-soft);
+  border-radius: var(--semantic-radius);
+  background: var(--semantic-surface);
+  box-shadow: 0 10px 30px rgb(23 32 42 / 8%);
+  color: var(--semantic-text);
+}
+
+.semantic-browse__result-section {
+  display: grid;
+  gap: var(--semantic-space-4);
+  min-width: 0;
+  overflow-x: auto;
+}
+
+.semantic-browse__result-bar {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  min-height: 40px;
+  padding: 0 var(--semantic-space-1);
+  border-bottom: 1px solid var(--semantic-border-soft);
+  color: var(--semantic-text-muted);
+  font-size: 13px;
+}
+
+.semantic-browse__query-editor .dx-textarea {
+  width: 100%;
+  min-height: 240px;
+  resize: vertical;
+  border-color: var(--semantic-border);
+  background: #fbfcfd;
+  color: var(--semantic-text);
+  font-family: var(--semantic-font-mono);
+  font-size: 12px;
+  line-height: 1.6;
+}
+
+.semantic-browse__actions,
+.semantic-browse__toolbar,
+.semantic-browse__toggle-group,
+.semantic-browse__pagination {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--semantic-space-2);
+}
+
+.semantic-browse__actions,
+.semantic-browse__toolbar {
+  width: 100%;
+}
+
+.semantic-browse__actions {
+  justify-content: flex-end;
+}
+
+.semantic-browse__results {
+  display: grid;
+  gap: var(--semantic-space-4);
+  min-width: 0;
+}
+
+.semantic-browse__toolbar {
+  justify-content: space-between;
+  padding: var(--semantic-space-3);
+  border: 1px solid var(--semantic-border-soft);
+  border-radius: var(--semantic-radius);
+  background: color-mix(in srgb, var(--semantic-surface) 78%, var(--semantic-surface-muted));
+}
+
+.semantic-browse__toggle-group {
+  padding: 3px;
+  border: 1px solid var(--semantic-border-soft);
+  border-radius: var(--semantic-radius);
+  background: var(--semantic-surface);
+}
+
+.semantic-browse__page-size {
+  display: flex;
+  align-items: center;
+  gap: var(--semantic-space-2);
+  color: var(--semantic-text-muted);
+  font-size: 13px;
+}
+
+.semantic-browse__page-size select {
+  min-width: 72px;
+  padding: 6px 28px 6px 10px;
+  border: 1px solid var(--semantic-border);
+  border-radius: var(--semantic-radius);
+  background: var(--semantic-surface);
+  color: var(--semantic-text);
+}
+
+.semantic-browse__pagination span {
+  color: var(--semantic-text-muted);
+  font-size: 13px;
+  white-space: nowrap;
+}
+
+.semantic-browse__pagination--bottom {
+  justify-content: center;
+  justify-self: center;
+  width: fit-content;
+  max-width: 100%;
+  padding: var(--semantic-space-2) var(--semantic-space-3);
+  border: 1px solid var(--semantic-border-soft);
+  border-radius: var(--semantic-radius);
+  background: var(--semantic-surface);
+  box-shadow: 0 4px 14px rgb(23 32 42 / 7%);
+}
+
+.semantic-browse__state {
+  padding: var(--semantic-space-6);
+  border: 1px solid var(--semantic-border-soft);
+  border-radius: var(--semantic-radius);
+  background: var(--semantic-surface);
+}
+
+.semantic-entity-list--cards {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: var(--semantic-space-4);
+}
+
+.semantic-browse__result-section--grid-2 .semantic-entity-list--cards {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.semantic-browse__result-section--grid-3 .semantic-entity-list--cards {
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+
+.semantic-entity-card {
+  min-width: 0;
+}
+
+.semantic-entity-card .dx-card {
+  height: 100%;
+  border: 1px solid var(--semantic-border-soft);
+  border-radius: var(--semantic-radius);
+  background: #ffffff;
+  box-shadow: 0 4px 14px rgb(23 32 42 / 7%);
+  color: var(--semantic-text);
+  gap: var(--semantic-space-3);
+}
+
+.semantic-entity-card .dx-card-title {
+  min-width: 0;
+  overflow-wrap: anywhere;
+  font-size: 15px;
+  font-weight: 650;
+  line-height: 1.25;
+}
+
+.semantic-entity-card .dx-card-title a {
+  color: var(--semantic-accent);
+  text-decoration: none;
+}
+
+.semantic-entity-card .dx-card-title a:hover {
+  text-decoration: underline;
+}
+
+.semantic-entity-card__header-row {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: var(--semantic-space-3);
+  min-width: 0;
+}
+
+.semantic-entity-card__title-block {
+  display: grid;
+  gap: var(--semantic-space-1);
+  min-width: 0;
+}
+
+.semantic-entity-card__meta {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--semantic-space-2);
+  color: var(--semantic-text-muted);
+  font-size: 12px;
+  line-height: 1.3;
+}
+
+.semantic-entity-card__type {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.semantic-entity-card__id {
+  color: var(--semantic-text-muted);
+  font-size: 12px;
+  overflow-wrap: anywhere;
+}
+
+.semantic-entity-card__body {
+  min-width: 0;
+}
+
+.semantic-entity-card__field-table-wrap {
+  max-height: 420px;
+  overflow: auto;
+}
+
+.semantic-entity-card__field-table th,
+.semantic-entity-card__field-table td {
+  padding: 7px 9px;
+}
+
+.semantic-entity-card__field-table th {
+  width: 1%;
+  max-width: 180px;
+  white-space: nowrap;
+}
+
+.semantic-entity-card__field-table td {
+  width: 99%;
+  overflow-wrap: anywhere;
+}
+
+.semantic-entity-card__empty {
+  color: var(--semantic-text-muted);
+  font-size: 12px;
+}
+
+.semantic-entity-actions {
+  flex: 0 0 auto;
+  padding: 2px;
+  border-radius: var(--semantic-radius);
+  box-shadow: inset 0 0 0 1px var(--semantic-border-soft);
+  gap: 0;
+}
+
+.semantic-entity-actions .dx-toolbar-group {
+  gap: 0;
+}
+
+.semantic-entity-actions .dx-button,
+.semantic-entity-actions .semantic-entity-action {
+  border: 0;
+  border-radius: 4px;
+}
+
+.semantic-entity-actions .semantic-entity-action {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 2rem;
+  height: 2rem;
+  padding: 0;
+}
+
+.semantic-entity-list--table {
+  width: 100%;
+  border-collapse: separate;
+  border-spacing: 0;
+  overflow: hidden;
+  border: 1px solid var(--semantic-border-soft);
+  border-radius: var(--semantic-radius);
+  background: var(--semantic-surface);
+}
+
+.semantic-entity-list--table th,
+.semantic-entity-list--table td {
+  padding: 9px 12px;
+  border-bottom: 1px solid var(--semantic-border-soft);
+  text-align: left;
+  vertical-align: middle;
+}
+
+.semantic-entity-list--table th {
+  background: var(--semantic-surface-muted);
+  color: var(--semantic-text-muted);
+  font-size: 12px;
+  font-weight: 650;
+  text-transform: uppercase;
+}
+
+.semantic-entity-list--table tbody tr:hover {
+  background: #fbfcfd;
+}
+
+.semantic-entity-list--table tr:last-child td {
+  border-bottom: 0;
+}
+
+.semantic-entity-list__id-cell {
+  width: 1%;
+  max-width: 240px;
+  color: var(--semantic-text-muted);
+  font-family: var(--semantic-font-mono);
+  font-size: 12px;
+  white-space: nowrap;
+}
+
+.semantic-entity-list__title-cell {
+  min-width: 220px;
+  font-weight: 600;
+}
+
+.semantic-entity-list__type-cell {
+  width: 1%;
+  max-width: 220px;
+  color: var(--semantic-text-muted);
+  white-space: nowrap;
+}
+
+.semantic-entity-list__actions-cell {
+  width: 1%;
+  text-align: right;
+  white-space: nowrap;
+}
+
+.semantic-entity-list--table a {
+  color: var(--semantic-accent);
+  text-decoration: none;
+}
+
+.semantic-entity-list--table a:hover {
+  text-decoration: underline;
+}
+
+.semantic-entity-list__actions-cell .semantic-entity-actions {
+  justify-self: end;
+}
+
+@media (max-width: 640px) {
+  .semantic-browse__header {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+
+  .semantic-browse__header-meta {
+    justify-items: start;
+    width: 100%;
+  }
+
+  .semantic-browse__toolbar {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .semantic-browse__toggle-group,
+  .semantic-browse__pagination {
+    width: 100%;
+  }
+
+  .semantic-browse__result-section--grid-2 .semantic-entity-list--cards,
+  .semantic-browse__result-section--grid-3 .semantic-entity-list--cards {
+    grid-template-columns: minmax(0, 1fr);
+  }
 }
 
 .semantic-upload {

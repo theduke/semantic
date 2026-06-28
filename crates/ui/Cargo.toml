@@ -26,6 +26,7 @@ standalone = [
 [dependencies]
 async-trait = { version = "0.1.89", optional = true }
 dioxus = { workspace = true, features = ["router"] }
+dioxus-icons = "0.1.0"
 dxcomp = { path = "../dxcomp" }
 futures = "0.3.31"
 infer = { version = "0.19.0", default-features = false }

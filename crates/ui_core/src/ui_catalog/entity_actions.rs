@@ -1,6 +1,6 @@
 use std::rc::Rc;
 
-use dioxus::prelude::Element;
+use dioxus::prelude::{Element, EventHandler};
 use semantic_data::schema::ClassType;
 use semantic_data::value::Object;
 
@@ -23,14 +23,20 @@ mod tests {
     use semantic_db_core::catalog::{CatalogStorageSnapshot, LocalClassId, StoredClass};
 
     use super::*;
+    use crate::ui_catalog::UiCatalogConfig;
 
     #[test]
     fn entity_action_filtering_handles_global_exact_inherited_unrelated_and_disabled() {
-        let mut catalog = UiCatalog::from_snapshot(snapshot_with_classes(vec![
+        let mut catalog = UiCatalog::builder(snapshot_with_classes(vec![
             class("base", None),
             class("child", Some("base")),
             class("other", None),
-        ]));
+        ]))
+        .with_config(UiCatalogConfig {
+            register_default_renderers: false,
+            register_default_form_renderers: false,
+        })
+        .build();
         catalog.register_entity_action(action("global", None, true));
         catalog.register_entity_action(action("exact", Some("child"), true));
         catalog.register_entity_action(action("inherited", Some("base"), true));
@@ -44,6 +50,7 @@ mod tests {
             object,
             class: catalog.class_by_id("child").cloned(),
             placement: EntityActionPlacement::Card,
+            on_delete: None,
         };
         let ids = catalog
             .entity_actions_for(&ctx)
@@ -108,6 +115,7 @@ pub struct EntityActionContext {
     pub object: Object,
     pub class: Option<ClassType>,
     pub placement: EntityActionPlacement,
+    pub on_delete: Option<EventHandler<EntityTarget>>,
 }
 
 #[derive(Clone)]

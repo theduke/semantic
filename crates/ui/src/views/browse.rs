@@ -11,7 +11,6 @@ use semantic_ui_core::{
 use crate::views::Route;
 
 const DEFAULT_VIEW: &str = "cards";
-const DEFAULT_RENDERER: &str = "custom";
 const DEFAULT_PAGE_SIZE: usize = 50;
 
 #[component]
@@ -60,141 +59,286 @@ pub fn BrowsePage(
         }
     });
     let custom_sql = sql.is_some();
+    let mut show_filters = use_signal(|| false);
+    let mut grid_columns = use_signal(|| 1_usize);
+    let filters_open = *show_filters.read();
+    let grid_columns_value = *grid_columns.read();
+    let next_disabled = match resource.read_unchecked().as_ref() {
+        Some(Ok(rows)) => custom_sql || rows.len() < page_size,
+        _ => true,
+    };
 
     rsx! {
         section { class: "semantic-browse",
-            h2 { "Browse" }
-            div { class: "semantic-browse__controls",
-                dxcomp::Textarea {
-                    value: "{sql_input}",
-                    oninput: move |event: FormEvent| sql_input.set(event.value())
+            header { class: "semantic-browse__header",
+                div {
+                    h2 { "Browse entities" }
+                    p { "Inspect records and tune the SQL behind the result set." }
                 }
-                div { class: "semantic-browse__actions",
-                    dxcomp::Button {
-                        onclick: {
-                            let collection = collection.clone();
-                            let view = view_string(display_mode);
-                            let renderer = renderer_string(renderer_mode);
-                            move |_| {
-                                let raw_sql = sql_input.read().trim().to_string();
-                                if raw_sql.is_empty() {
+                div { class: "semantic-browse__header-meta",
+                    span { "Collection" }
+                    code { "{collection_name}" }
+                }
+            }
+            div { class: "semantic-browse__results",
+                div { class: "semantic-browse__toolbar",
+                    div { class: "semantic-browse__toggle-group", "aria-label": "Filters",
+                        dxcomp::Button {
+                            size: dxcomp::ButtonSize::Sm,
+                            variant: if filters_open { dxcomp::ButtonVariant::Primary } else { dxcomp::ButtonVariant::Outline },
+                            onclick: move |_| {
+                                let next = !*show_filters.read();
+                                show_filters.set(next);
+                            },
+                            if filters_open {
+                                "Hide filters"
+                            } else if custom_sql {
+                                "Edit filter"
+                            } else {
+                                "Filter"
+                            }
+                        }
+                    }
+                    div { class: "semantic-browse__toggle-group", "aria-label": "Result view",
+                        dxcomp::Button {
+                            size: dxcomp::ButtonSize::Sm,
+                            variant: if display_mode == EntityDisplayMode::Card { dxcomp::ButtonVariant::Primary } else { dxcomp::ButtonVariant::Outline },
+                            onclick: push_browse(collection.clone(), EntityDisplayMode::Card, renderer_mode, page, page_size, sql.clone()),
+                            "Cards"
+                        }
+                        dxcomp::Button {
+                            size: dxcomp::ButtonSize::Sm,
+                            variant: if display_mode == EntityDisplayMode::Table { dxcomp::ButtonVariant::Primary } else { dxcomp::ButtonVariant::Outline },
+                            onclick: push_browse(collection.clone(), EntityDisplayMode::Table, renderer_mode, page, page_size, sql.clone()),
+                            "Table"
+                        }
+                    }
+                    label { class: "semantic-browse__page-size",
+                        span { "Grid" }
+                        select {
+                            disabled: display_mode != EntityDisplayMode::Card,
+                            value: "{grid_columns_value}",
+                            onchange: move |event: FormEvent| {
+                                let columns = event.value().parse::<usize>().unwrap_or(1).clamp(1, 3);
+                                grid_columns.set(columns);
+                            },
+                            option { value: "1", "1 column" }
+                            option { value: "2", "2 columns" }
+                            option { value: "3", "3 columns" }
+                        }
+                    }
+                    label { class: "semantic-browse__page-size",
+                        span { "Rows" }
+                        select {
+                            value: "{page_size}",
+                            onchange: {
+                                let collection = collection.clone();
+                                let view = view_string(display_mode);
+                                let renderer = renderer_string(renderer_mode);
+                                let sql = sql.clone();
+                                move |event: FormEvent| {
+                                    let next_page_size = event.value().parse::<usize>().unwrap_or(DEFAULT_PAGE_SIZE);
                                     navigator().push(browse_route(
                                         collection.clone(),
                                         Some(view.clone()),
                                         Some(renderer.clone()),
-                                        Some(page),
-                                        Some(page_size),
-                                        None,
+                                        Some(0),
+                                        Some(next_page_size),
+                                        sql.clone(),
                                     ));
-                                    return;
                                 }
-                                let hash = stable_hash_hex(&raw_sql);
-                                store_sql(&hash, &raw_sql);
-                                navigator().push(browse_route(
-                                    collection.clone(),
-                                    Some(view.clone()),
-                                    Some(renderer.clone()),
-                                    Some(page),
-                                    Some(page_size),
-                                    Some(hash),
-                                ));
-                            }
-                        },
-                        "Apply"
+                            },
+                            option { value: "25", "25" }
+                            option { value: "50", "50" }
+                            option { value: "100", "100" }
+                        }
                     }
-                    dxcomp::Button {
-                        variant: dxcomp::ButtonVariant::Outline,
-                        onclick: {
-                            let collection = collection.clone();
-                            let view = view_string(display_mode);
-                            let renderer = renderer_string(renderer_mode);
-                            move |_| {
-                                navigator().push(browse_route(
-                                    collection.clone(),
-                                    Some(view.clone()),
-                                    Some(renderer.clone()),
-                                    Some(0),
-                                    Some(page_size),
-                                    None,
-                                ));
-                            }
-                        },
-                        "Clear"
+                    div { class: "semantic-browse__pagination",
+                        dxcomp::Button {
+                            disabled: custom_sql || page == 0,
+                            size: dxcomp::ButtonSize::Sm,
+                            variant: dxcomp::ButtonVariant::Outline,
+                            onclick: push_browse(collection.clone(), display_mode, renderer_mode, page.saturating_sub(1), page_size, sql.clone()),
+                            "Previous"
+                        }
+                        span { "Page {page + 1}" }
+                        dxcomp::Button {
+                            disabled: next_disabled,
+                            size: dxcomp::ButtonSize::Sm,
+                            variant: dxcomp::ButtonVariant::Outline,
+                            onclick: push_browse(collection.clone(), display_mode, renderer_mode, page + 1, page_size, sql.clone()),
+                            "Next"
+                        }
                     }
                 }
-                div { class: "semantic-browse__toggles",
-                    dxcomp::Button {
-                        variant: if display_mode == EntityDisplayMode::Card { dxcomp::ButtonVariant::Primary } else { dxcomp::ButtonVariant::Outline },
-                        onclick: push_browse(collection.clone(), EntityDisplayMode::Card, renderer_mode, page, page_size, sql.clone()),
-                        "Cards"
-                    }
-                    dxcomp::Button {
-                        variant: if display_mode == EntityDisplayMode::Table { dxcomp::ButtonVariant::Primary } else { dxcomp::ButtonVariant::Outline },
-                        onclick: push_browse(collection.clone(), EntityDisplayMode::Table, renderer_mode, page, page_size, sql.clone()),
-                        "Table"
-                    }
-                    dxcomp::Button {
-                        variant: if renderer_mode == EntityDisplayRenderer::Custom { dxcomp::ButtonVariant::Primary } else { dxcomp::ButtonVariant::Outline },
-                        onclick: push_browse(collection.clone(), display_mode, EntityDisplayRenderer::Custom, page, page_size, sql.clone()),
-                        "Custom"
-                    }
-                    dxcomp::Button {
-                        variant: if renderer_mode == EntityDisplayRenderer::Table { dxcomp::ButtonVariant::Primary } else { dxcomp::ButtonVariant::Outline },
-                        onclick: push_browse(collection.clone(), display_mode, EntityDisplayRenderer::Table, page, page_size, sql.clone()),
-                        "Table Renderer"
-                    }
-                    select {
-                        value: "{page_size}",
-                        onchange: {
-                            let collection = collection.clone();
-                            let view = view_string(display_mode);
-                            let renderer = renderer_string(renderer_mode);
-                            let sql = sql.clone();
-                            move |event: FormEvent| {
-                                let next_page_size = event.value().parse::<usize>().unwrap_or(DEFAULT_PAGE_SIZE);
-                                navigator().push(browse_route(
-                                    collection.clone(),
-                                    Some(view.clone()),
-                                    Some(renderer.clone()),
-                                    Some(0),
-                                    Some(next_page_size),
-                                    sql.clone(),
-                                ));
+                if filters_open {
+                    div { class: "semantic-browse__query-card",
+                        dxcomp::Card {
+                            dxcomp::CardHeader {
+                                dxcomp::CardTitle { "Query" }
+                                dxcomp::CardDescription {
+                                    if custom_sql {
+                                        "Custom SQL is active."
+                                    } else {
+                                        "Default paged collection query."
+                                    }
+                                }
                             }
-                        },
-                        option { value: "25", "25" }
-                        option { value: "50", "50" }
-                        option { value: "100", "100" }
-                    }
-                    dxcomp::Button {
-                        disabled: custom_sql || page == 0,
-                        variant: dxcomp::ButtonVariant::Outline,
-                        onclick: push_browse(collection.clone(), display_mode, renderer_mode, page.saturating_sub(1), page_size, sql.clone()),
-                        "Previous"
-                    }
-                    dxcomp::Button {
-                        disabled: custom_sql,
-                        variant: dxcomp::ButtonVariant::Outline,
-                        onclick: push_browse(collection.clone(), display_mode, renderer_mode, page + 1, page_size, sql.clone()),
-                        "Next"
+                            dxcomp::CardContent {
+                                div { class: "semantic-browse__query-editor",
+                                    dxcomp::Textarea {
+                                        value: "{sql_input}",
+                                        oninput: move |event: FormEvent| sql_input.set(event.value())
+                                    }
+                                }
+                            }
+                            dxcomp::CardFooter {
+                                div { class: "semantic-browse__actions",
+                                    dxcomp::Button {
+                                        onclick: {
+                                            let collection = collection.clone();
+                                            let view = view_string(display_mode);
+                                            let renderer = renderer_string(renderer_mode);
+                                            move |_| {
+                                                let raw_sql = sql_input.read().trim().to_string();
+                                                if raw_sql.is_empty() {
+                                                    navigator().push(browse_route(
+                                                        collection.clone(),
+                                                        Some(view.clone()),
+                                                        Some(renderer.clone()),
+                                                        Some(page),
+                                                        Some(page_size),
+                                                        None,
+                                                    ));
+                                                    return;
+                                                }
+                                                let hash = stable_hash_hex(&raw_sql);
+                                                store_sql(&hash, &raw_sql);
+                                                navigator().push(browse_route(
+                                                    collection.clone(),
+                                                    Some(view.clone()),
+                                                    Some(renderer.clone()),
+                                                    Some(page),
+                                                    Some(page_size),
+                                                    Some(hash),
+                                                ));
+                                            }
+                                        },
+                                        "Apply"
+                                    }
+                                    dxcomp::Button {
+                                        variant: dxcomp::ButtonVariant::Secondary,
+                                        onclick: {
+                                            let collection = collection.clone();
+                                            let view = view_string(display_mode);
+                                            let renderer = renderer_string(renderer_mode);
+                                            move |_| {
+                                                let raw_sql = sql_input.read().trim().to_string();
+                                                show_filters.set(false);
+                                                if raw_sql.is_empty() {
+                                                    navigator().push(browse_route(
+                                                        collection.clone(),
+                                                        Some(view.clone()),
+                                                        Some(renderer.clone()),
+                                                        Some(page),
+                                                        Some(page_size),
+                                                        None,
+                                                    ));
+                                                    return;
+                                                }
+                                                let hash = stable_hash_hex(&raw_sql);
+                                                store_sql(&hash, &raw_sql);
+                                                navigator().push(browse_route(
+                                                    collection.clone(),
+                                                    Some(view.clone()),
+                                                    Some(renderer.clone()),
+                                                    Some(page),
+                                                    Some(page_size),
+                                                    Some(hash),
+                                                ));
+                                            }
+                                        },
+                                        "Apply and hide"
+                                    }
+                                    dxcomp::Button {
+                                        variant: dxcomp::ButtonVariant::Outline,
+                                        onclick: {
+                                            let collection = collection.clone();
+                                            let view = view_string(display_mode);
+                                            let renderer = renderer_string(renderer_mode);
+                                            move |_| {
+                                                navigator().push(browse_route(
+                                                    collection.clone(),
+                                                    Some(view.clone()),
+                                                    Some(renderer.clone()),
+                                                    Some(0),
+                                                    Some(page_size),
+                                                    None,
+                                                ));
+                                            }
+                                        },
+                                        "Clear"
+                                    }
+                                }
+                            }
+                        }
                     }
                 }
-            }
-            match &*resource.read_unchecked() {
-                Some(Ok(rows)) => rsx! {
-                    EntityList {
-                        objects: rows.clone(),
-                        display_mode,
-                        renderer: renderer_mode,
-                        collection: collection.clone()
-                    }
-                },
-                Some(Err(err)) => rsx! {
-                    div { class: "semantic-error", "{err}" }
-                },
-                None => rsx! {
-                    div { class: "semantic-loading", "Loading entities..." }
-                },
+                match &*resource.read_unchecked() {
+                    Some(Ok(rows)) => {
+                        let row_count = rows.len();
+                        rsx! {
+                            div { class: "semantic-browse__result-section semantic-browse__result-section--grid-{grid_columns_value}",
+                                div { class: "semantic-browse__result-bar",
+                                    span { "{row_count} rows returned" }
+                                }
+                                EntityList {
+                                    objects: rows.clone(),
+                                    display_mode,
+                                    renderer: renderer_mode,
+                                    collection: collection.clone()
+                                }
+                                div { class: "semantic-browse__pagination semantic-browse__pagination--bottom",
+                                    dxcomp::Button {
+                                        disabled: custom_sql || page == 0,
+                                        size: dxcomp::ButtonSize::Sm,
+                                        variant: dxcomp::ButtonVariant::Outline,
+                                        onclick: push_browse(
+                                            collection.clone(),
+                                            display_mode,
+                                            renderer_mode,
+                                            page.saturating_sub(1),
+                                            page_size,
+                                            sql.clone(),
+                                        ),
+                                        "Previous"
+                                    }
+                                    span { "Page {page + 1}" }
+                                    dxcomp::Button {
+                                        disabled: next_disabled,
+                                        size: dxcomp::ButtonSize::Sm,
+                                        variant: dxcomp::ButtonVariant::Outline,
+                                        onclick: push_browse(
+                                            collection.clone(),
+                                            display_mode,
+                                            renderer_mode,
+                                            page + 1,
+                                            page_size,
+                                            sql.clone(),
+                                        ),
+                                        "Next"
+                                    }
+                                }
+                            }
+                        }
+                    },
+                    Some(Err(err)) => rsx! {
+                        div { class: "semantic-browse__state semantic-error", "{err}" }
+                    },
+                    None => rsx! {
+                        div { class: "semantic-browse__state semantic-loading", "Loading entities..." }
+                    },
+                }
             }
         }
     }
@@ -304,7 +448,7 @@ fn view_string(display_mode: EntityDisplayMode) -> String {
 
 fn renderer_string(renderer: EntityDisplayRenderer) -> String {
     match renderer {
-        EntityDisplayRenderer::Custom => DEFAULT_RENDERER.to_string(),
+        EntityDisplayRenderer::Custom => "custom".to_string(),
         EntityDisplayRenderer::Table => "table".to_string(),
     }
 }

@@ -12,31 +12,31 @@ pub(super) const ATTR_RELATION_RELATION: &str = "semantic:relation:relation";
 pub(super) const ATTR_RELATION_TO: &str = "semantic:relation:to";
 
 pub(super) fn root_query() -> String {
-    format!(
+    qualified_query(format!(
         "SELECT d.* FROM {entities} AS d WHERE d.type = {directory_class} ORDER BY d.title ASC, d.id ASC",
         entities = sql_ident(ENTITIES_COLLECTION),
         directory_class = sql_string(DIRECTORY_CLASS_ID),
-    )
+    ))
 }
 
 pub(super) fn directory_nodes_query() -> String {
-    format!(
+    qualified_query(format!(
         "SELECT n.id AS id, n.{relation_to} AS directory_to FROM {entities} AS n WHERE n.type = {node_class}",
         entities = sql_ident(ENTITIES_COLLECTION),
         relation_to = sql_ident(ATTR_RELATION_TO),
         node_class = sql_string(DIRECTORY_NODE_CLASS_ID),
-    )
+    ))
 }
 
 pub(super) fn child_links_query(parent_id: &str, child_ids: &[String]) -> String {
     if child_ids.is_empty() {
-        return format!(
+        return qualified_query(format!(
             "SELECT n.id AS id, n.{relation_to} AS directory_to FROM {entities} AS n WHERE 1 = 0",
             entities = sql_ident(ENTITIES_COLLECTION),
             relation_to = sql_ident(ATTR_RELATION_TO),
-        );
+        ));
     }
-    format!(
+    qualified_query(format!(
         "SELECT n.id AS id, n.{relation_to} AS directory_to, n.{node_order} AS directory_order FROM {entities} AS n WHERE n.{relation_relation} = {node_relation} AND n.{node_from} = {parent_id} AND n.{relation_to} IN ({child_ids}) ORDER BY n.{node_order} ASC, n.id ASC",
         entities = sql_ident(ENTITIES_COLLECTION),
         node_from = sql_ident(ATTR_DIRECTORY_NODE_FROM),
@@ -46,12 +46,12 @@ pub(super) fn child_links_query(parent_id: &str, child_ids: &[String]) -> String
         node_relation = sql_string(DIRECTORY_NODE_RELATION_ID),
         parent_id = sql_string(parent_id),
         child_ids = sql_string_list(child_ids),
-    )
+    ))
 }
 
 #[allow(dead_code)]
 pub(super) fn child_ids_query(parent_id: &str) -> String {
-    format!(
+    qualified_query(format!(
         "SELECT n.{relation_to} AS directory_to FROM {entities} AS n WHERE n.{relation_relation} = {node_relation} AND n.{node_from} = {parent_id} ORDER BY n.{node_order} ASC, n.id ASC",
         entities = sql_ident(ENTITIES_COLLECTION),
         node_from = sql_ident(ATTR_DIRECTORY_NODE_FROM),
@@ -60,11 +60,11 @@ pub(super) fn child_ids_query(parent_id: &str) -> String {
         relation_to = sql_ident(ATTR_RELATION_TO),
         node_relation = sql_string(DIRECTORY_NODE_RELATION_ID),
         parent_id = sql_string(parent_id),
-    )
+    ))
 }
 
 pub(super) fn parent_links_query(child_id: &str) -> String {
-    format!(
+    qualified_query(format!(
         "SELECT n.id AS id, n.{node_from} AS directory_from, n.{node_order} AS directory_order FROM {entities} AS n WHERE n.{relation_relation} = {node_relation} AND n.{relation_to} = {child_id} ORDER BY n.{node_order} ASC, n.id ASC",
         entities = sql_ident(ENTITIES_COLLECTION),
         node_from = sql_ident(ATTR_DIRECTORY_NODE_FROM),
@@ -73,22 +73,22 @@ pub(super) fn parent_links_query(child_id: &str) -> String {
         relation_to = sql_ident(ATTR_RELATION_TO),
         node_relation = sql_string(DIRECTORY_NODE_RELATION_ID),
         child_id = sql_string(child_id),
-    )
+    ))
 }
 
 pub(super) fn parent_count_query(child_id: &str) -> String {
-    format!(
+    qualified_query(format!(
         "SELECT COUNT(*) AS parent_count FROM {entities} AS n WHERE n.{relation_relation} = {node_relation} AND n.{relation_to} = {child_id}",
         entities = sql_ident(ENTITIES_COLLECTION),
         relation_relation = sql_ident(ATTR_RELATION_RELATION),
         relation_to = sql_ident(ATTR_RELATION_TO),
         node_relation = sql_string(DIRECTORY_NODE_RELATION_ID),
         child_id = sql_string(child_id),
-    )
+    ))
 }
 
 pub(super) fn directory_outgoing_links_query(directory_id: &str) -> String {
-    format!(
+    qualified_query(format!(
         "SELECT n.id AS id, n.{relation_to} AS directory_to, n.{node_order} AS directory_order FROM {entities} AS n WHERE n.{relation_relation} = {node_relation} AND n.{node_from} = {directory_id} ORDER BY n.{node_order} ASC, n.id ASC",
         entities = sql_ident(ENTITIES_COLLECTION),
         node_from = sql_ident(ATTR_DIRECTORY_NODE_FROM),
@@ -97,11 +97,11 @@ pub(super) fn directory_outgoing_links_query(directory_id: &str) -> String {
         relation_to = sql_ident(ATTR_RELATION_TO),
         node_relation = sql_string(DIRECTORY_NODE_RELATION_ID),
         directory_id = sql_string(directory_id),
-    )
+    ))
 }
 
 pub(super) fn max_child_order_query(parent_id: &str) -> String {
-    format!(
+    qualified_query(format!(
         "SELECT MAX(n.{node_order}) AS max_order FROM {entities} AS n WHERE n.{relation_relation} = {node_relation} AND n.{node_from} = {parent_id}",
         entities = sql_ident(ENTITIES_COLLECTION),
         node_from = sql_ident(ATTR_DIRECTORY_NODE_FROM),
@@ -109,7 +109,7 @@ pub(super) fn max_child_order_query(parent_id: &str) -> String {
         relation_relation = sql_ident(ATTR_RELATION_RELATION),
         node_relation = sql_string(DIRECTORY_NODE_RELATION_ID),
         parent_id = sql_string(parent_id),
-    )
+    ))
 }
 
 pub(super) fn addable_entities_query(parent_id: &str, search: &str, limit: usize) -> String {
@@ -123,7 +123,7 @@ pub(super) fn addable_entities_query(parent_id: &str, search: &str, limit: usize
         parent_id = sql_string(parent_id),
     );
     let predicates = search_predicate(search);
-    format!(
+    qualified_query(format!(
         "SELECT e.* FROM {entities} AS e WHERE e.type != {node_class} AND e.id != {parent_id} AND e.id NOT IN ({excluded}) AND ({predicates}) ORDER BY e.title ASC, e.id ASC LIMIT {limit}",
         entities = sql_ident(ENTITIES_COLLECTION),
         node_class = sql_string(DIRECTORY_NODE_CLASS_ID),
@@ -131,7 +131,7 @@ pub(super) fn addable_entities_query(parent_id: &str, search: &str, limit: usize
         excluded = excluded,
         predicates = predicates,
         limit = limit,
-    )
+    ))
 }
 
 #[allow(dead_code)]
@@ -142,13 +142,13 @@ pub(super) fn entity_autocomplete_query(search: &str, excluded_ids: &BTreeSet<St
     } else {
         format!(" AND e.id NOT IN ({})", sql_string_set(excluded_ids))
     };
-    format!(
+    qualified_query(format!(
         "SELECT e.* FROM {entities} AS e WHERE e.type != {node_class}{exclusion} AND ({predicates}) ORDER BY e.title ASC, e.id ASC LIMIT 50",
         entities = sql_ident(ENTITIES_COLLECTION),
         node_class = sql_string(DIRECTORY_NODE_CLASS_ID),
         exclusion = exclusion,
         predicates = predicates,
-    )
+    ))
 }
 
 pub(super) fn child_query(
@@ -157,7 +157,7 @@ pub(super) fn child_query(
     limit: usize,
     offset: usize,
 ) -> String {
-    format!(
+    qualified_query(format!(
         "SELECT child.*, n.{node_order} AS directory_order FROM {entities} AS n INNER JOIN {entities}._ AS child ON n.{relation_to} = child.id WHERE n.{relation_relation} = {node_relation} AND n.{node_from} = {parent_id} ORDER BY {order_by} LIMIT {limit} OFFSET {offset}",
         entities = sql_ident(ENTITIES_COLLECTION),
         node_from = sql_ident(ATTR_DIRECTORY_NODE_FROM),
@@ -167,11 +167,11 @@ pub(super) fn child_query(
         node_relation = sql_string(DIRECTORY_NODE_RELATION_ID),
         parent_id = sql_string(parent_id),
         order_by = sort_order_by(sort),
-    )
+    ))
 }
 
 pub(super) fn child_directories_query(parent_id: &str, limit: usize, offset: usize) -> String {
-    format!(
+    qualified_query(format!(
         "SELECT child.*, n.{node_order} AS directory_order FROM {entities} AS n INNER JOIN {entities}._ AS child ON n.{relation_to} = child.id WHERE n.{relation_relation} = {node_relation} AND n.{node_from} = {parent_id} AND child.type = {directory_class} ORDER BY n.{node_order} ASC, child.title ASC, child.id ASC LIMIT {limit} OFFSET {offset}",
         entities = sql_ident(ENTITIES_COLLECTION),
         node_from = sql_ident(ATTR_DIRECTORY_NODE_FROM),
@@ -181,11 +181,11 @@ pub(super) fn child_directories_query(parent_id: &str, limit: usize, offset: usi
         node_relation = sql_string(DIRECTORY_NODE_RELATION_ID),
         parent_id = sql_string(parent_id),
         directory_class = sql_string(DIRECTORY_CLASS_ID),
-    )
+    ))
 }
 
 pub(super) fn parent_query(child_id: &str) -> String {
-    format!(
+    qualified_query(format!(
         "SELECT n.id AS id, n.{node_from} AS directory_from, n.{node_order} AS directory_order FROM {entities} AS n WHERE n.{relation_relation} = {node_relation} AND n.{relation_to} = {child_id} ORDER BY n.{node_order} ASC, n.id ASC LIMIT 1",
         entities = sql_ident(ENTITIES_COLLECTION),
         node_from = sql_ident(ATTR_DIRECTORY_NODE_FROM),
@@ -194,7 +194,11 @@ pub(super) fn parent_query(child_id: &str) -> String {
         relation_to = sql_ident(ATTR_RELATION_TO),
         node_relation = sql_string(DIRECTORY_NODE_RELATION_ID),
         child_id = sql_string(child_id),
-    )
+    ))
+}
+
+fn qualified_query(query: String) -> String {
+    format!("{query} FORMAT qualified")
 }
 
 pub(super) fn sort_order_by(sort: DirectorySort) -> &'static str {
@@ -253,7 +257,7 @@ fn sql_string_set(values: &BTreeSet<String>) -> String {
 #[cfg(test)]
 mod tests {
     use semantic_data::bundles::directory::{
-        ATTR_DIRECTORY_NODE_FROM, ATTR_DIRECTORY_NODE_ORDER, DIRECTORY_CLASS_ID,
+        ATTR_DIRECTORY_NODE_FROM, ATTR_DIRECTORY_NODE_ORDER, ATTR_TITLE, DIRECTORY_CLASS_ID,
         DIRECTORY_NODE_CLASS_ID, DIRECTORY_NODE_RELATION_ID,
     };
     use semantic_data::query::QueryInput;
@@ -309,6 +313,11 @@ mod tests {
             rows[0].get("type"),
             Some(&Value::String(DIRECTORY_CLASS_ID.to_string()))
         );
+        assert_eq!(
+            rows[0].get(ATTR_TITLE),
+            Some(&Value::String("Dir1".to_string()))
+        );
+        assert!(!rows[0].contains_key("title"));
     }
 
     #[tokio::test]

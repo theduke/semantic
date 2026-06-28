@@ -1,10 +1,9 @@
 use dioxus::prelude::*;
 use semantic_data::value::{Object, Value};
 use semantic_ui_core::{
-    ClassView, ObjectView, RenderMode, use_active_scope_id, use_rpc_client, use_ui_catalog,
+    EntityCard, EntityDisplayRenderer, EntityRenderOptions, EntityTarget, use_active_scope_id,
+    use_rpc_client,
 };
-
-use crate::views::Route;
 
 #[component]
 pub fn DefaultEntityPage(id: String) -> Element {
@@ -30,7 +29,6 @@ pub fn CollectionEntityPage(collection: String, id: String) -> Element {
 fn EntityPageView(collection: Option<String>, id: String) -> Element {
     let client = use_rpc_client();
     let scope_id = use_active_scope_id();
-    let catalog = use_ui_catalog();
     let collection_for_load = collection.clone();
     let id_for_load = id.clone();
     let resource = use_resource(move || {
@@ -48,44 +46,18 @@ fn EntityPageView(collection: Option<String>, id: String) -> Element {
     rsx! {
         section { class: "semantic-entity",
             h2 { "{label}" }
-            div { class: "semantic-entity__actions",
-                dxcomp::Button {
-                    variant: dxcomp::ButtonVariant::Outline,
-                    onclick: {
-                        let collection = collection.clone();
-                        let id = id.clone();
-                        move |_| {
-                            if let Some(collection) = collection.clone() {
-                                navigator().push(Route::CollectionEditEntityPage {
-                                    collection,
-                                    id: id.clone(),
-                                });
-                            } else {
-                                navigator().push(Route::DefaultEditEntityPage { id: id.clone() });
-                            }
-                        }
-                    },
-                    "Edit"
-                }
-            }
             match &*resource.read_unchecked() {
-                Some(Ok(Some(object))) => {
-                    let class = catalog.object_class(object).cloned();
-                    rsx! {
-                        if let Some(class) = class {
-                            ClassView {
-                                class,
-                                object: object.clone(),
-                                collection: collection.clone(),
-                                id: Some(id.clone()),
-                                mode: RenderMode::Detail
-                            }
-                        } else {
-                            ObjectView {
-                                object: object.clone(),
-                                mode: RenderMode::Detail
-                            }
-                        }
+                Some(Ok(Some(object))) => rsx! {
+                    EntityCard {
+                        object: object.clone(),
+                        options: EntityRenderOptions {
+                            collection: collection.clone(),
+                            id: Some(id.clone()),
+                            renderer: EntityDisplayRenderer::Custom,
+                            preview: false,
+                            actions: true,
+                        },
+                        on_delete: move |_target: EntityTarget| navigator().go_back()
                     }
                 },
                 Some(Ok(None)) => rsx! {

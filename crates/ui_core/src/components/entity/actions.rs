@@ -1,4 +1,5 @@
 use dioxus::prelude::*;
+use dioxus_icons::lucide::{Eye, Trash2};
 use semantic_data::builtin::DEFAULT_COLLECTION;
 use semantic_data::value::{Object, Value};
 
@@ -14,39 +15,69 @@ pub fn EntityOpenButton(target: EntityTarget) -> Element {
         if let Some(open) = open {
             dxcomp::Button {
                 variant: dxcomp::ButtonVariant::Outline,
-                size: dxcomp::ButtonSize::Sm,
+                size: dxcomp::ButtonSize::IconSm,
+                title: "Open",
+                aria_label: "Open entity",
                 onclick: move |_| open(target.clone()),
-                "Open"
+                Eye { size: "1rem" }
             }
         }
     }
 }
 
 #[component]
-pub fn EntityDeleteButton(target: EntityTarget) -> Element {
+pub fn EntityDeleteButton(
+    target: EntityTarget,
+    #[props(default)] on_deleted: Option<EventHandler<EntityTarget>>,
+) -> Element {
     let client = use_rpc_client();
     let scope_id = use_active_scope_id();
+    let mut open = use_signal(|| false);
     let mut error = use_signal(|| None::<String>);
 
     rsx! {
         dxcomp::Button {
             variant: dxcomp::ButtonVariant::Outline,
-            size: dxcomp::ButtonSize::Sm,
-            onclick: move |_| {
-                if !confirm_delete() {
-                    return;
+            size: dxcomp::ButtonSize::IconSm,
+            title: "Delete",
+            aria_label: "Delete entity",
+            onclick: move |_| open.set(true),
+            Trash2 { size: "1rem" }
+        }
+        dxcomp::AlertDialog {
+            open: open(),
+            on_open_change: move |next_open: bool| open.set(next_open),
+            dxcomp::AlertDialogTitle { "Delete Entity" }
+            dxcomp::AlertDialogDescription {
+                "This permanently deletes the entity from the current scope."
+            }
+            dxcomp::AlertDialogActions {
+                dxcomp::AlertDialogCancel {
+                    on_click: move |_| open.set(false),
+                    "Cancel"
                 }
-                let client = client.clone();
-                let scope_id = scope_id.clone();
-                let target = target.clone();
-                spawn(async move {
-                    match delete_entity(client, scope_id, target).await {
-                        Ok(()) => reload_window(),
-                        Err(err) => error.set(Some(err)),
-                    }
-                });
-            },
-            "Delete"
+                dxcomp::AlertDialogAction {
+                    on_click: move |_| {
+                        let client = client.clone();
+                        let scope_id = scope_id.clone();
+                        let target = target.clone();
+                        let on_deleted = on_deleted.clone();
+                        spawn(async move {
+                            match delete_entity(client, scope_id, target.clone()).await {
+                                Ok(()) => {
+                                    if let Some(on_deleted) = on_deleted {
+                                        on_deleted.call(target);
+                                    } else {
+                                        reload_window();
+                                    }
+                                }
+                                Err(err) => error.set(Some(err)),
+                            }
+                        });
+                    },
+                    "Delete"
+                }
+            }
         }
         if let Some(error) = error.read().as_ref() {
             span { class: "semantic-error", "{error}" }
@@ -74,18 +105,6 @@ async fn delete_entity(
         .await
         .map(|_| ())
         .map_err(|err| err.to_string())
-}
-
-#[cfg(target_arch = "wasm32")]
-fn confirm_delete() -> bool {
-    web_sys::window()
-        .and_then(|window| window.confirm_with_message("Delete this entity?").ok())
-        .unwrap_or(false)
-}
-
-#[cfg(not(target_arch = "wasm32"))]
-fn confirm_delete() -> bool {
-    true
 }
 
 #[cfg(target_arch = "wasm32")]

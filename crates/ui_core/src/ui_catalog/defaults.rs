@@ -1,6 +1,7 @@
 use std::rc::Rc;
 
 use dioxus::prelude::*;
+use dioxus_icons::lucide::ExternalLink;
 use semantic_data::builtin::ATTR_ID;
 use semantic_data::filestore::{
     ATTR_FILE_FILENAME, ATTR_FILE_FILESTORE_LOCATOR, ATTR_FILE_MIME_TYPE,
@@ -156,6 +157,7 @@ fn register_default_entity_actions(catalog: &mut UiCatalog) {
         icon: None,
         class_id: None,
         placements: vec![
+            EntityActionPlacement::Card,
             EntityActionPlacement::Detail,
             EntityActionPlacement::BrowseRow,
         ],
@@ -163,7 +165,8 @@ fn register_default_entity_actions(catalog: &mut UiCatalog) {
         render: Rc::new(|ctx: EntityActionContext| {
             rsx! {
                 EntityDeleteButton {
-                    target: ctx.target
+                    target: ctx.target,
+                    on_deleted: ctx.on_delete
                 }
             }
         }),
@@ -183,13 +186,15 @@ fn register_default_entity_actions(catalog: &mut UiCatalog) {
             let href = external_url(&ctx.object).unwrap_or_default();
             rsx! {
                 a {
-                    class: "dx-button",
+                    class: "dx-button semantic-entity-action",
                     "data-style": "outline",
-                    "data-size": "sm",
+                    "data-size": "icon-sm",
                     href,
                     target: "_blank",
                     rel: "noopener noreferrer",
-                    "Open External"
+                    title: "Open External",
+                    aria_label: "Open external link",
+                    ExternalLink { size: "1rem" }
                 }
             }
         }),
