@@ -555,6 +555,18 @@ pre {
   text-align: left;
 }
 
+.semantic-directory-browser__tree-link[draggable="true"],
+.semantic-directory-browser__row[draggable="true"],
+.semantic-directory-browser__tile[draggable="true"] {
+  user-select: none;
+}
+
+.semantic-directory-browser__tree-link[draggable="true"]:active,
+.semantic-directory-browser__row[draggable="true"]:active,
+.semantic-directory-browser__tile[draggable="true"]:active {
+  cursor: grabbing;
+}
+
 .semantic-directory-browser__tree-link span {
   overflow: hidden;
   text-overflow: ellipsis;

@@ -261,9 +261,10 @@ pub fn open_backend_with_config(
 
 #[cfg(test)]
 mod tests {
-    use semantic_data::value::{Object, Value};
+    use semantic_data::query::BinaryOp;
+    use semantic_data::value::{FieldPath, Object, Value};
     use semantic_db_core::catalog::CollectionKind;
-    use semantic_db_core::{Db, SelectQuery};
+    use semantic_db_core::{Db, Expr, Operand, SelectQuery};
 
     use super::{DbOpenMode, RedbDatabase, RedbKvEngine, open_backend};
 
@@ -294,6 +295,68 @@ mod tests {
                 .unwrap();
             assert_eq!(out.len(), 1);
             assert_eq!(out[0].get("name"), Some(&Value::String("n".into())));
+        }
+    }
+
+    #[test]
+    fn redb_reopen_preserves_builtin_id_and_type_indexes() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("db");
+
+        {
+            let engine = RedbKvEngine::open(&path, DbOpenMode::AutoCreate).unwrap();
+            let mut db = RedbDatabase::new(engine);
+            db.create_collection("items", CollectionKind::Polymorphic)
+                .unwrap();
+
+            let mut first = Object::new();
+            first.insert("id", Value::String("item1".into()));
+            first.insert("type", Value::String("semantic:test:item".into()));
+            first.insert("name", Value::String("first".into()));
+            db.insert("items", "item1", first).unwrap();
+
+            let mut second = Object::new();
+            second.insert("id", Value::String("item2".into()));
+            second.insert("type", Value::String("semantic:test:other".into()));
+            second.insert("name", Value::String("second".into()));
+            db.insert("items", "item2", second).unwrap();
+        }
+
+        {
+            let engine = RedbKvEngine::open(&path, DbOpenMode::OpenExisting).unwrap();
+            let db = RedbDatabase::new(engine);
+
+            let by_id = db
+                .select(
+                    SelectQuery::new()
+                        .with_collection("items")
+                        .with_predicate(eq_predicate("id", "item1")),
+                )
+                .unwrap();
+            assert_eq!(by_id.len(), 1);
+            assert_eq!(by_id[0].get("name"), Some(&Value::String("first".into())));
+
+            let by_type = db
+                .select(
+                    SelectQuery::new()
+                        .with_collection("items")
+                        .with_predicate(eq_predicate("type", "semantic:test:item")),
+                )
+                .unwrap();
+            assert_eq!(by_type.len(), 1);
+            assert_eq!(by_type[0].get("id"), Some(&Value::String("item1".into())));
+        }
+    }
+
+    fn eq_predicate(field: &str, value: &str) -> Expr {
+        Expr::Binary {
+            op: BinaryOp::Eq,
+            left: Box::new(Expr::Operand(Operand::Field(FieldPath::from_fields([
+                field,
+            ])))),
+            right: Box::new(Expr::Operand(Operand::Literal(Value::String(
+                value.to_string(),
+            )))),
         }
     }
 

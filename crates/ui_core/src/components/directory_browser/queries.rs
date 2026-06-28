@@ -1,18 +1,28 @@
 use semantic_data::bundles::directory::{
     ATTR_DIRECTORY_NODE_FROM, ATTR_DIRECTORY_NODE_ORDER, DIRECTORY_CLASS_ID,
-    DIRECTORY_NODE_RELATION_ID,
+    DIRECTORY_NODE_CLASS_ID, DIRECTORY_NODE_RELATION_ID,
 };
 
 use super::types::DirectorySort;
 
 pub(super) const ENTITIES_COLLECTION: &str = "entities";
+pub(super) const ATTR_RELATION_RELATION: &str = "semantic:relation:relation";
+pub(super) const ATTR_RELATION_TO: &str = "semantic:relation:to";
 
-pub(super) fn root_query(limit: usize, offset: usize) -> String {
+pub(super) fn root_query() -> String {
     format!(
-        "SELECT d.* FROM {entities} AS d WHERE d.type = {directory_class} AND d.id NOT IN (SELECT n.to FROM {entities} AS n WHERE n.relation = {node_relation}) ORDER BY d.title ASC, d.id ASC LIMIT {limit} OFFSET {offset}",
+        "SELECT d.* FROM {entities} AS d WHERE d.type = {directory_class} ORDER BY d.title ASC, d.id ASC",
         entities = sql_ident(ENTITIES_COLLECTION),
         directory_class = sql_string(DIRECTORY_CLASS_ID),
-        node_relation = sql_string(DIRECTORY_NODE_RELATION_ID),
+    )
+}
+
+pub(super) fn directory_nodes_query() -> String {
+    format!(
+        "SELECT n.id AS id, n.{relation_to} AS directory_to FROM {entities} AS n WHERE n.type = {node_class}",
+        entities = sql_ident(ENTITIES_COLLECTION),
+        relation_to = sql_ident(ATTR_RELATION_TO),
+        node_class = sql_string(DIRECTORY_NODE_CLASS_ID),
     )
 }
 
@@ -23,10 +33,12 @@ pub(super) fn child_query(
     offset: usize,
 ) -> String {
     format!(
-        "SELECT child.*, n.{node_order} AS directory_order FROM {entities} AS n INNER JOIN {entities}._ AS child ON n.to = child.id WHERE n.relation = {node_relation} AND n.{node_from} = {parent_id} ORDER BY {order_by} LIMIT {limit} OFFSET {offset}",
+        "SELECT child.*, n.{node_order} AS directory_order FROM {entities} AS n INNER JOIN {entities}._ AS child ON n.{relation_to} = child.id WHERE n.{relation_relation} = {node_relation} AND n.{node_from} = {parent_id} ORDER BY {order_by} LIMIT {limit} OFFSET {offset}",
         entities = sql_ident(ENTITIES_COLLECTION),
         node_from = sql_ident(ATTR_DIRECTORY_NODE_FROM),
         node_order = sql_ident(ATTR_DIRECTORY_NODE_ORDER),
+        relation_relation = sql_ident(ATTR_RELATION_RELATION),
+        relation_to = sql_ident(ATTR_RELATION_TO),
         node_relation = sql_string(DIRECTORY_NODE_RELATION_ID),
         parent_id = sql_string(parent_id),
         order_by = sort_order_by(sort),
@@ -35,10 +47,12 @@ pub(super) fn child_query(
 
 pub(super) fn child_directories_query(parent_id: &str, limit: usize, offset: usize) -> String {
     format!(
-        "SELECT child.*, n.{node_order} AS directory_order FROM {entities} AS n INNER JOIN {entities}._ AS child ON n.to = child.id WHERE n.relation = {node_relation} AND n.{node_from} = {parent_id} AND child.type = {directory_class} ORDER BY n.{node_order} ASC, child.title ASC, child.id ASC LIMIT {limit} OFFSET {offset}",
+        "SELECT child.*, n.{node_order} AS directory_order FROM {entities} AS n INNER JOIN {entities}._ AS child ON n.{relation_to} = child.id WHERE n.{relation_relation} = {node_relation} AND n.{node_from} = {parent_id} AND child.type = {directory_class} ORDER BY n.{node_order} ASC, child.title ASC, child.id ASC LIMIT {limit} OFFSET {offset}",
         entities = sql_ident(ENTITIES_COLLECTION),
         node_from = sql_ident(ATTR_DIRECTORY_NODE_FROM),
         node_order = sql_ident(ATTR_DIRECTORY_NODE_ORDER),
+        relation_relation = sql_ident(ATTR_RELATION_RELATION),
+        relation_to = sql_ident(ATTR_RELATION_TO),
         node_relation = sql_string(DIRECTORY_NODE_RELATION_ID),
         parent_id = sql_string(parent_id),
         directory_class = sql_string(DIRECTORY_CLASS_ID),
@@ -47,10 +61,12 @@ pub(super) fn child_directories_query(parent_id: &str, limit: usize, offset: usi
 
 pub(super) fn parent_query(child_id: &str) -> String {
     format!(
-        "SELECT n.id AS id, n.{node_from} AS directory_from, n.{node_order} AS directory_order FROM {entities} AS n WHERE n.relation = {node_relation} AND n.to = {child_id} ORDER BY n.{node_order} ASC, n.id ASC LIMIT 1",
+        "SELECT n.id AS id, n.{node_from} AS directory_from, n.{node_order} AS directory_order FROM {entities} AS n WHERE n.{relation_relation} = {node_relation} AND n.{relation_to} = {child_id} ORDER BY n.{node_order} ASC, n.id ASC LIMIT 1",
         entities = sql_ident(ENTITIES_COLLECTION),
         node_from = sql_ident(ATTR_DIRECTORY_NODE_FROM),
         node_order = sql_ident(ATTR_DIRECTORY_NODE_ORDER),
+        relation_relation = sql_ident(ATTR_RELATION_RELATION),
+        relation_to = sql_ident(ATTR_RELATION_TO),
         node_relation = sql_string(DIRECTORY_NODE_RELATION_ID),
         child_id = sql_string(child_id),
     )
@@ -112,16 +128,16 @@ mod tests {
     }
 
     #[test]
-    fn root_query_uses_directory_and_directory_node() {
-        let query = root_query(101, 20);
+    fn root_query_uses_directory_class() {
+        let query = root_query();
         assert!(query.contains(DIRECTORY_CLASS_ID));
         assert!(query.contains(ENTITIES_COLLECTION));
-        assert!(query.contains("NOT IN"));
-        assert!(query.contains("LIMIT 101 OFFSET 20"));
+        assert!(query.contains("d.type"));
+        assert!(!query.contains("NOT IN"));
     }
 
     #[tokio::test]
-    async fn root_query_finds_parentless_directory_entity() {
+    async fn root_query_finds_directory_entities() {
         let db = Db::new(KvBackend::new(KvDb::in_memory()));
         db.upsert_package(semantic_base::package())
             .await
@@ -130,7 +146,7 @@ mod tests {
         insert_directory(&db, "dir1", "Dir1").await;
 
         let result = db
-            .query(QueryInput::sql(root_query(200, 0)))
+            .query(QueryInput::sql(root_query()))
             .await
             .expect("root query should run");
         let QueryResult::Select(rows) = result else {
@@ -143,6 +159,75 @@ mod tests {
             rows[0].get("type"),
             Some(&Value::String(DIRECTORY_CLASS_ID.to_string()))
         );
+    }
+
+    #[tokio::test]
+    async fn directory_nodes_query_returns_child_ids() {
+        let db = Db::new(KvBackend::new(KvDb::in_memory()));
+        db.upsert_package(semantic_base::package())
+            .await
+            .expect("base package should register");
+
+        insert_directory(&db, "dir1", "Dir1").await;
+        insert_directory(&db, "parent", "Parent").await;
+        insert_directory_node(&db, "node-1", "parent", "dir1", 10).await;
+
+        let result = db
+            .query(QueryInput::sql(directory_nodes_query()))
+            .await
+            .expect("directory nodes query should run");
+        let QueryResult::Select(rows) = result else {
+            panic!("directory nodes query should return select rows");
+        };
+
+        assert_eq!(rows.len(), 1);
+        assert_eq!(
+            rows[0].get("directory_to"),
+            Some(&Value::String("dir1".to_string()))
+        );
+    }
+
+    #[tokio::test]
+    async fn root_query_includes_directory_with_parent_node_for_rust_filtering() {
+        let db = Db::new(KvBackend::new(KvDb::in_memory()));
+        db.upsert_package(semantic_base::package())
+            .await
+            .expect("base package should register");
+
+        insert_directory(&db, "parent", "Parent").await;
+        insert_directory(&db, "child-dir", "Child Dir").await;
+        insert_directory_node(&db, "node-1", "parent", "child-dir", 10).await;
+
+        let result = db
+            .query(QueryInput::sql(root_query()))
+            .await
+            .expect("root query should run");
+        let QueryResult::Select(rows) = result else {
+            panic!("root query should return select rows");
+        };
+
+        assert_eq!(row_ids(&rows), vec!["child-dir", "parent"]);
+    }
+
+    #[tokio::test]
+    async fn root_query_ignores_non_directory_entities() {
+        let db = Db::new(KvBackend::new(KvDb::in_memory()));
+        db.upsert_package(semantic_base::package())
+            .await
+            .expect("base package should register");
+
+        insert_directory(&db, "dir1", "Dir1").await;
+        insert_entity(&db, "person1", "semantic:base:person", "Person 1").await;
+
+        let result = db
+            .query(QueryInput::sql(root_query()))
+            .await
+            .expect("root query should run");
+        let QueryResult::Select(rows) = result else {
+            panic!("root query should return select rows");
+        };
+
+        assert_eq!(row_ids(&rows), vec!["dir1"]);
     }
 
     #[tokio::test]
@@ -225,6 +310,34 @@ mod tests {
         );
     }
 
+    #[tokio::test]
+    async fn parent_query_returns_lowest_order_parent_node() {
+        let db = Db::new(KvBackend::new(KvDb::in_memory()));
+        db.upsert_package(semantic_base::package())
+            .await
+            .expect("base package should register");
+        insert_directory(&db, "parent-a", "Parent A").await;
+        insert_directory(&db, "parent-b", "Parent B").await;
+        insert_directory(&db, "child-dir", "Child Dir").await;
+        insert_directory_node(&db, "node-high", "parent-a", "child-dir", 20).await;
+        insert_directory_node(&db, "node-low", "parent-b", "child-dir", 10).await;
+
+        let result = db
+            .query(QueryInput::sql(parent_query("child-dir")))
+            .await
+            .expect("parent query should run");
+        let QueryResult::Select(rows) = result else {
+            panic!("parent query should return select rows");
+        };
+
+        assert_eq!(rows.len(), 1);
+        assert_eq!(
+            rows[0].get("directory_from"),
+            Some(&Value::String("parent-b".to_string()))
+        );
+        assert_eq!(rows[0].get("directory_order"), Some(&Value::U64(10)));
+    }
+
     #[test]
     fn child_query_filters_from_parent() {
         let query = child_query("parent'1", DirectorySort::Order, 101, 0);
@@ -260,11 +373,11 @@ mod tests {
         node.insert("id", Value::String(id.to_string()));
         node.insert("type", Value::String(DIRECTORY_NODE_CLASS_ID.to_string()));
         node.insert(
-            "relation",
+            ATTR_RELATION_RELATION,
             Value::String(DIRECTORY_NODE_RELATION_ID.to_string()),
         );
         node.insert(ATTR_DIRECTORY_NODE_FROM, Value::String(parent.to_string()));
-        node.insert("to", Value::String(child.to_string()));
+        node.insert(ATTR_RELATION_TO, Value::String(child.to_string()));
         node.insert(ATTR_DIRECTORY_NODE_ORDER, Value::U64(order));
         db.insert(ENTITIES_COLLECTION, id, node)
             .await

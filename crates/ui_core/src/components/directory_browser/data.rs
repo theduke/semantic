@@ -1,13 +1,16 @@
 use std::collections::BTreeSet;
 
+use dioxus::logger::tracing::info;
 use semantic_data::bundles::directory::{
-    ATTR_CREATED_AT, ATTR_TITLE, ATTR_UPDATED_AT, DIRECTORY_CLASS_ID,
+    ATTR_CREATED_AT, ATTR_DIRECTORY_NODE_FROM, ATTR_DIRECTORY_NODE_ORDER, ATTR_TITLE,
+    ATTR_UPDATED_AT, DIRECTORY_CLASS_ID, DIRECTORY_NODE_CLASS_ID, DIRECTORY_NODE_RELATION_ID,
 };
 use semantic_data::value::{Object, Value};
 
 use super::{
     queries::{
-        ENTITIES_COLLECTION, child_directories_query, child_query, parent_query, root_query,
+        ATTR_RELATION_RELATION, ATTR_RELATION_TO, ENTITIES_COLLECTION, child_directories_query,
+        child_query, directory_nodes_query, parent_query, root_query,
     },
     types::{
         DirectoryBreadcrumb, DirectoryBrowseItem, DirectoryPage, DirectorySort, DirectoryTreeRow,
@@ -42,12 +45,21 @@ pub(super) async fn load_directory_page(
             cycle: false,
         }
     };
-    let query = if let Some(root) = root.as_deref() {
-        child_query(root, sort, page_size + 1, offset)
+    let rows = if let Some(root) = root.as_deref() {
+        run_select_query(
+            client,
+            scope_id,
+            child_query(root, sort, page_size + 1, offset),
+        )
+        .await?
     } else {
-        root_query(page_size + 1, offset)
+        let roots = load_root_directory_rows(client, scope_id).await?;
+        roots
+            .into_iter()
+            .skip(offset)
+            .take(page_size + 1)
+            .collect::<Vec<_>>()
     };
-    let rows = run_select_query(client, scope_id, query).await?;
     let (items, has_next) = page_items_from_rows(rows, page_size);
     Ok(DirectoryPage {
         items,
@@ -63,15 +75,10 @@ pub(super) async fn load_tree_rows(
     expanded: BTreeSet<String>,
 ) -> std::result::Result<Vec<DirectoryTreeRow>, String> {
     let mut rows = Vec::new();
-    let roots = run_select_query(
-        client.clone(),
-        scope_id.clone(),
-        root_query(DEFAULT_TREE_LIMIT, 0),
-    )
-    .await?;
+    let roots = load_root_directory_rows(client.clone(), scope_id.clone()).await?;
     let roots = roots.into_iter().map(row_to_item).collect::<Vec<_>>();
     let mut path = BTreeSet::new();
-    for item in roots {
+    for item in roots.into_iter().take(DEFAULT_TREE_LIMIT) {
         push_tree_row(
             &mut rows,
             client.clone(),
@@ -84,6 +91,128 @@ pub(super) async fn load_tree_rows(
         .await?;
     }
     Ok(rows)
+}
+
+async fn load_root_directory_rows(
+    client: semantic_rpc::RpcClient,
+    scope_id: Option<String>,
+) -> std::result::Result<Vec<Object>, String> {
+    let child_ids = load_directory_child_ids(client.clone(), scope_id.clone()).await?;
+    let rows = run_select_query(client, scope_id, root_query()).await?;
+    let raw_count = rows.len();
+    let roots = rows
+        .into_iter()
+        .filter(|row| {
+            row.get("id")
+                .and_then(Value::as_str)
+                .is_some_and(|id| !child_ids.contains(id))
+        })
+        .collect::<Vec<_>>();
+    info!(
+        raw_directory_count = raw_count,
+        child_id_count = child_ids.len(),
+        root_directory_count = roots.len(),
+        "directory browser root directories filtered"
+    );
+    Ok(roots)
+}
+
+async fn load_directory_child_ids(
+    client: semantic_rpc::RpcClient,
+    scope_id: Option<String>,
+) -> std::result::Result<BTreeSet<String>, String> {
+    let rows = run_select_query(client, scope_id, directory_nodes_query()).await?;
+    Ok(rows
+        .iter()
+        .filter_map(|row| {
+            row.get("directory_to")
+                .or_else(|| row.get(ATTR_RELATION_TO))
+                .or_else(|| row.get("to"))
+                .and_then(Value::as_str)
+                .map(str::to_string)
+        })
+        .collect())
+}
+
+pub(super) async fn move_directory_item(
+    client: semantic_rpc::RpcClient,
+    scope_id: Option<String>,
+    item_id: String,
+    target_directory_id: String,
+) -> std::result::Result<(), String> {
+    if item_id == target_directory_id {
+        return Err("Cannot move an item into itself".to_string());
+    }
+
+    let Some(item) = load_entity(
+        client.clone(),
+        scope_id.clone(),
+        ENTITIES_COLLECTION,
+        &item_id,
+    )
+    .await?
+    else {
+        return Err("Item not found".to_string());
+    };
+    let Some(target) = load_entity(
+        client.clone(),
+        scope_id.clone(),
+        ENTITIES_COLLECTION,
+        &target_directory_id,
+    )
+    .await?
+    else {
+        return Err("Target directory not found".to_string());
+    };
+    if !is_directory_object(&target) {
+        return Err("Target must be a directory".to_string());
+    }
+    if is_directory_object(&item)
+        && target_has_ancestor(
+            client.clone(),
+            scope_id.clone(),
+            &target_directory_id,
+            &item_id,
+        )
+        .await?
+    {
+        return Err("Cannot move a directory into one of its descendants".to_string());
+    }
+
+    let existing_parent = load_parent_link(client.clone(), scope_id.clone(), &item_id).await?;
+    if existing_parent.as_ref().map(|link| link.parent_id.as_str())
+        == Some(target_directory_id.as_str())
+    {
+        return Ok(());
+    }
+
+    let mut operations = Vec::new();
+    if let Some(link) = existing_parent.as_ref() {
+        operations.push(Value::Object(batch_delete_operation(
+            ENTITIES_COLLECTION.to_string(),
+            link.node_id.clone(),
+        )));
+    }
+    operations.push(Value::Object(batch_upsert_operation(
+        ENTITIES_COLLECTION.to_string(),
+        directory_node_id(&target_directory_id, &item_id),
+        directory_node_object(
+            &target_directory_id,
+            &item_id,
+            existing_parent.and_then(|link| link.order).unwrap_or(0),
+        ),
+    )));
+
+    let mut payload = Object::new();
+    if let Some(scope_id) = scope_id {
+        payload.insert("scope_id", Value::String(scope_id));
+    }
+    payload.insert("operations", Value::List(operations));
+    client
+        .invoke_value("semantic.db.batch", Value::Object(payload))
+        .await
+        .map(|_| ())
+        .map_err(|err| err.to_string())
 }
 
 async fn push_tree_row(
@@ -125,6 +254,106 @@ async fn push_tree_row(
     }
     path.remove(&item.id);
     Ok(())
+}
+
+struct ParentLink {
+    node_id: String,
+    parent_id: String,
+    order: Option<u64>,
+}
+
+async fn load_parent_link(
+    client: semantic_rpc::RpcClient,
+    scope_id: Option<String>,
+    child_id: &str,
+) -> std::result::Result<Option<ParentLink>, String> {
+    let rows = run_select_query(client, scope_id, parent_query(child_id)).await?;
+    Ok(rows.first().and_then(parent_link_from_row))
+}
+
+fn parent_link_from_row(row: &Object) -> Option<ParentLink> {
+    Some(ParentLink {
+        node_id: row.get("id").and_then(Value::as_str)?.to_string(),
+        parent_id: row
+            .get("directory_from")
+            .and_then(Value::as_str)?
+            .to_string(),
+        order: value_as_u64(
+            row.get("directory_order")
+                .or_else(|| row.get("order"))
+                .or_else(|| row.get(ATTR_DIRECTORY_NODE_ORDER)),
+        ),
+    })
+}
+
+async fn target_has_ancestor(
+    client: semantic_rpc::RpcClient,
+    scope_id: Option<String>,
+    target_id: &str,
+    ancestor_id: &str,
+) -> std::result::Result<bool, String> {
+    let mut current = target_id.to_string();
+    for _ in 0..64 {
+        let Some(parent) = load_parent_link(client.clone(), scope_id.clone(), &current).await?
+        else {
+            return Ok(false);
+        };
+        if parent.parent_id == ancestor_id {
+            return Ok(true);
+        }
+        current = parent.parent_id;
+    }
+    Err("Directory ancestry is too deep or cyclic".to_string())
+}
+
+fn directory_node_object(parent_id: &str, child_id: &str, order: u64) -> Object {
+    let mut object = Object::new();
+    object.insert("id", Value::String(directory_node_id(parent_id, child_id)));
+    object.insert("type", Value::String(DIRECTORY_NODE_CLASS_ID.to_string()));
+    object.insert(
+        ATTR_RELATION_RELATION,
+        Value::String(DIRECTORY_NODE_RELATION_ID.to_string()),
+    );
+    object.insert(
+        ATTR_DIRECTORY_NODE_FROM,
+        Value::String(parent_id.to_string()),
+    );
+    object.insert(ATTR_RELATION_TO, Value::String(child_id.to_string()));
+    object.insert(ATTR_DIRECTORY_NODE_ORDER, Value::U64(order));
+    object
+}
+
+fn directory_node_id(parent_id: &str, child_id: &str) -> String {
+    format!(
+        "semantic:directory_node:{}:{}",
+        hex_id_part(parent_id),
+        hex_id_part(child_id)
+    )
+}
+
+fn hex_id_part(value: &str) -> String {
+    value
+        .as_bytes()
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect()
+}
+
+fn batch_delete_operation(collection: String, id: String) -> Object {
+    let mut operation = Object::new();
+    operation.insert("kind", Value::String("delete_by_id".to_string()));
+    operation.insert("collection", Value::String(collection));
+    operation.insert("id", Value::String(id));
+    operation
+}
+
+fn batch_upsert_operation(collection: String, id: String, object: Object) -> Object {
+    let mut operation = Object::new();
+    operation.insert("kind", Value::String("upsert".to_string()));
+    operation.insert("collection", Value::String(collection));
+    operation.insert("id", Value::String(id));
+    operation.insert("object", Value::Object(object));
+    operation
 }
 
 struct BreadcrumbLoad {
@@ -267,7 +496,7 @@ fn row_to_item(row: Object) -> DirectoryBrowseItem {
         order: value_as_u64(
             row.get("directory_order")
                 .or_else(|| row.get("order"))
-                .or_else(|| row.get("semantic:base:directory_node:order")),
+                .or_else(|| row.get(ATTR_DIRECTORY_NODE_ORDER)),
         ),
         created_at: object_string(&row, &["created_at", ATTR_CREATED_AT]).map(str::to_string),
         updated_at: object_string(&row, &["updated_at", ATTR_UPDATED_AT]).map(str::to_string),

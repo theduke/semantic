@@ -161,6 +161,11 @@ impl<E: KvEngine> KvDb<E> {
                 )?;
             }
         }
+        let mut index_ops = Vec::new();
+        db.backfill_missing_index_storage(&mut index_ops)?;
+        if !index_ops.is_empty() {
+            db.store.write_batch(&index_ops)?;
+        }
         Ok(db)
     }
 
@@ -172,6 +177,104 @@ impl<E: KvEngine> KvDb<E> {
         let ops = catalog_write_ops(&self.store, &catalog)?;
         self.store.write_batch(&ops)?;
         self.catalog.replace(catalog);
+        Ok(())
+    }
+
+    fn backfill_missing_index_storage(
+        &self,
+        ops: &mut Vec<KvWriteOp>,
+    ) -> std::result::Result<(), DbError> {
+        let catalog = self.catalog();
+        let mut indexes = Vec::new();
+        for (index_id, index) in catalog.indexes() {
+            if self
+                .store
+                .get_raw(&crate::storage::index_format_key(index_id))?
+                .is_none()
+            {
+                indexes.push(index.clone());
+            }
+        }
+        self.backfill_indexes(catalog.as_ref(), &indexes, None, ops)
+    }
+
+    fn backfill_new_indexes(
+        &self,
+        before: &Catalog,
+        after: &Catalog,
+        read_revision: Option<u64>,
+        ops: &mut Vec<KvWriteOp>,
+    ) -> std::result::Result<(), DbError> {
+        let indexes = after
+            .indexes()
+            .filter_map(|(index_id, index)| {
+                let changed = before.index_by_lid(index_id).is_none_or(|before_index| {
+                    before_index.collection != index.collection
+                        || before_index.canonical_field != index.canonical_field
+                        || before_index.schema.kind != index.schema.kind
+                        || before_index.schema.unique != index.schema.unique
+                });
+                changed.then(|| index.clone())
+            })
+            .collect::<Vec<_>>();
+        self.backfill_indexes(after, &indexes, read_revision, ops)
+    }
+
+    fn backfill_indexes(
+        &self,
+        catalog: &Catalog,
+        indexes: &[semantic_db_core::catalog::IndexSchema],
+        read_revision: Option<u64>,
+        ops: &mut Vec<KvWriteOp>,
+    ) -> std::result::Result<(), DbError> {
+        if indexes.is_empty() {
+            return Ok(());
+        }
+
+        let mut collection_ids = BTreeSet::new();
+        for index in indexes {
+            collection_ids.insert(index.collection);
+        }
+
+        for collection_id in collection_ids {
+            let Some(collection) = catalog.collection_by_lid(collection_id) else {
+                continue;
+            };
+            let collection_indexes = indexes
+                .iter()
+                .filter(|index| index.collection == collection_id)
+                .cloned()
+                .collect::<Vec<_>>();
+            if collection_indexes.is_empty() {
+                continue;
+            }
+
+            for index in &collection_indexes {
+                for key in self.store.index_keys(index.lid)? {
+                    ops.push(KvWriteOp::Delete { key });
+                }
+                ops.push(KvWriteOp::Put {
+                    key: crate::storage::index_format_key(index.lid),
+                    value: crate::storage::index_format_value(),
+                });
+            }
+
+            let rows = if self.store.tx_capabilities().snapshot_reads {
+                if let Some(revision) = read_revision {
+                    self.store
+                        .scan_collection_at_revision(collection.lid, revision)?
+                } else {
+                    self.store.scan_collection(collection.lid)?
+                }
+            } else {
+                self.store.scan_collection(collection.lid)?
+            };
+            for row in rows {
+                for index in &collection_indexes {
+                    self.push_index_ops(ops, index, &row.id, &row.object)?;
+                }
+            }
+        }
         Ok(())
     }
 
@@ -269,6 +372,12 @@ impl<E: KvEngine> KvDb<E> {
             )?;
             let mut extra_ops =
                 self.ddl_cleanup_ops(catalog_snapshot.catalog.as_ref(), &next_catalog)?;
+            self.backfill_new_indexes(
+                catalog_snapshot.catalog.as_ref(),
+                &next_catalog,
+                read_revision,
+                &mut extra_ops,
+            )?;
             extra_ops.extend(catalog_write_ops(&self.store, &next_catalog)?);
 
             match self.persist_dataset_delta(
@@ -977,6 +1086,12 @@ impl<E: KvEngine> KvDb<E> {
                     .map_err(|err| DbError::InvalidQuery(err.to_string()))?;
             let mut extra_ops =
                 self.ddl_cleanup_ops(catalog_snapshot.catalog.as_ref(), &next_catalog)?;
+            self.backfill_new_indexes(
+                catalog_snapshot.catalog.as_ref(),
+                &next_catalog,
+                read_revision,
+                &mut extra_ops,
+            )?;
             extra_ops.extend(catalog_write_ops(&self.store, &next_catalog)?);
             self.rebuild_relationship_edges(&next_catalog, &BTreeMap::new(), &mut extra_ops)?;
 
@@ -3346,7 +3461,7 @@ mod tests {
     };
     use semantic_db_core::{DbConfig, MigrationMismatchPolicy};
 
-    use super::{KvDb, QueryPlan, RELATION_EDGES_COLLECTION};
+    use super::{KvDb, KvWriteOp, QueryPlan, RELATION_EDGES_COLLECTION};
 
     #[test]
     fn initialization_creates_default_entities_collection() {
@@ -3990,6 +4105,82 @@ mod tests {
         assert_eq!(
             db.select(q_video.with_collection("events")).unwrap().len(),
             0
+        );
+    }
+
+    #[test]
+    fn open_rebuilds_missing_index_storage() {
+        let mut db = KvDb::in_memory();
+        let events = db
+            .create_collection("events", CollectionKind::Polymorphic)
+            .unwrap();
+        db.create_index("events_kind_idx", events, "kind", false)
+            .unwrap();
+
+        let mut event = Object::new();
+        event.insert("id", Value::String("event1".to_string()));
+        event.insert("kind", Value::String("music".to_string()));
+        db.insert("events", "event1", event).unwrap();
+
+        let kind_index = db
+            .catalog()
+            .find_equality_index(events, "kind")
+            .unwrap()
+            .lid;
+        let delete_index_ops = db
+            .store
+            .index_keys(kind_index)
+            .unwrap()
+            .into_iter()
+            .map(|key| KvWriteOp::Delete { key })
+            .collect::<Vec<_>>();
+        db.store.write_batch(&delete_index_ops).unwrap();
+
+        let query = SelectQuery::new()
+            .with_collection("events")
+            .with_predicate(eq_predicate(
+                FieldPath::from_fields(["kind"]),
+                Value::String("music".to_string()),
+            ));
+        assert_eq!(db.select(query.clone()).unwrap().len(), 0);
+
+        let (_catalog, engine) = db.into_parts();
+        let reopened = KvDb::open(engine).unwrap();
+
+        let rows = reopened.select(query).unwrap();
+        assert_eq!(rows.len(), 1);
+        assert_eq!(
+            rows[0].get("id"),
+            Some(&Value::String("event1".to_string()))
+        );
+    }
+
+    #[test]
+    fn creating_index_backfills_existing_rows() {
+        let mut db = KvDb::in_memory();
+        let events = db
+            .create_collection("events", CollectionKind::Polymorphic)
+            .unwrap();
+
+        let mut event = Object::new();
+        event.insert("id", Value::String("event1".to_string()));
+        event.insert("kind", Value::String("music".to_string()));
+        db.insert("events", "event1", event).unwrap();
+
+        db.create_index("events_kind_idx", events, "kind", false)
+            .unwrap();
+
+        let query = SelectQuery::new()
+            .with_collection("events")
+            .with_predicate(eq_predicate(
+                FieldPath::from_fields(["kind"]),
+                Value::String("music".to_string()),
+            ));
+        let rows = db.select(query).unwrap();
+        assert_eq!(rows.len(), 1);
+        assert_eq!(
+            rows[0].get("id"),
+            Some(&Value::String("event1".to_string()))
         );
     }
 
