@@ -3486,6 +3486,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "ffprobe"
+version = "0.4.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "8ffef835e1f9ac151db5bb2adbb95c9dfe1f315f987f011dd89cd655b4e9a52c"
+dependencies = [
+ "serde",
+ "serde_json",
+]
+
+[[package]]
 name = "field-offset"
 version = "0.3.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -8299,6 +8309,21 @@ dependencies = [
 ]
 
 [[package]]
+name = "semantic_media"
+version = "0.0.1"
+dependencies = [
+ "async-trait",
+ "bytes",
+ "ffprobe",
+ "futures-util",
+ "image",
+ "infer",
+ "serde",
+ "thiserror 2.0.18",
+ "tokio",
+]
+
+[[package]]
 name = "semantic_rpc"
 version = "0.0.1"
 dependencies = [
@@ -8335,6 +8360,7 @@ dependencies = [
  "semantic_data",
  "semantic_db_core",
  "semantic_db_redb",
+ "semantic_media",
  "semantic_rpc",
  "serde_json",
  "thiserror 2.0.18",

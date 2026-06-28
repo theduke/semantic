@@ -25,6 +25,7 @@ semantic_app = { path = "../app" }
 semantic_data = { workspace = true }
 semantic_db_core = { path = "../db_core" }
 semantic_db_redb = { path = "../db_redb", optional = true }
+semantic_media = { path = "../media", default-features = false }
 semantic_rpc = { path = "../rpc", features = ["server-axum-ws"] }
 serde_json = { workspace = true }
 thiserror = "2.0.17"

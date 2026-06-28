@@ -13,6 +13,7 @@ use http::header::{
 use http::{HeaderMap, StatusCode};
 use semantic_app::{AppRequestContext, FileContent, FileCreateRequest};
 use semantic_data::value::{Object, Value};
+use semantic_media::mime;
 
 use crate::ServerError;
 use crate::router::{ServerState, scope_from_parts};
@@ -31,13 +32,14 @@ pub async fn upload_handler(
         Ok(entity) => entity,
         Err(err) => return server_error_response(err),
     };
+    let mime_type = upload_mime_type(&headers, &body);
     let request = FileCreateRequest {
         scope_id: None,
         id: header_string(&headers, &state.config.file_id_header),
         filestore_locator: None,
         filename: header_string(&headers, &state.config.file_filename_header)
             .or_else(|| content_disposition_filename(&headers)),
-        mime_type: content_type(&headers),
+        mime_type,
         entity,
         content: FileContent::Bytes(body),
     };
@@ -166,11 +168,12 @@ fn header_string(headers: &HeaderMap, header: &HeaderName) -> Option<String> {
         .map(ToOwned::to_owned)
 }
 
-fn content_type(headers: &HeaderMap) -> Option<String> {
-    headers
+fn upload_mime_type(headers: &HeaderMap, body: &Bytes) -> Option<String> {
+    let declared = headers
         .get(CONTENT_TYPE)
-        .and_then(|value| value.to_str().ok())
-        .filter(|value| !value.is_empty())
+        .and_then(|value| value.to_str().ok());
+    mime::analyze_bytes(body.as_ref(), declared)
+        .best_effort()
         .map(ToOwned::to_owned)
 }
 
