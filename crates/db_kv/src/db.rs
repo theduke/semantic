@@ -29,7 +29,7 @@ use crate::{
 };
 use semantic_db_core::catalog::{
     ATTR_RELATION_FROM, ATTR_RELATION_TO, Catalog, CollectionKind, CollectionSchema, IntegrityMode,
-    LocalAttrId, LocalClassId, LocalCollectionId, LocalFieldId, OBJECT_TYPE_FIELD, SharedCatalog,
+    LocalAttrId, LocalCollectionId, LocalFieldId, OBJECT_TYPE_FIELD, SharedCatalog,
 };
 use semantic_db_core::{
     DdlBatch, DdlCollectionKind, DdlOperation, DdlOutcome, QueryContext, TransactionConcurrency,
@@ -1928,7 +1928,7 @@ impl<E: KvEngine> KvDb<E> {
         if let Some(object_type) = object.get(OBJECT_TYPE_FIELD).and_then(Value::as_str) {
             let class_ids = catalog.class_ids(object_type);
             if class_ids.len() == 1
-                && let Some(field) = Self::class_field_for_alias(catalog, class_ids[0], alias)
+                && let Some(field) = catalog.class_field_for_alias(class_ids[0], alias)
             {
                 return field;
             }
@@ -1957,57 +1957,6 @@ impl<E: KvEngine> KvDb<E> {
             .get(&field)
             .and_then(Value::as_str)
             .map(ToString::to_string)
-    }
-
-    fn class_field_for_alias(
-        catalog: &Catalog,
-        class_lid: LocalClassId,
-        alias: &str,
-    ) -> Option<String> {
-        fn visit(
-            catalog: &Catalog,
-            class_lid: LocalClassId,
-            alias: &str,
-            visited: &mut BTreeSet<LocalClassId>,
-        ) -> Option<String> {
-            if !visited.insert(class_lid) {
-                return None;
-            }
-
-            let class = catalog.class_by_lid(class_lid)?;
-            let mut out = None;
-
-            if let Some(inherits) = &class.class.inherits
-                && let Some(base_lid) = catalog.class_id(&inherits.id)
-            {
-                out = visit(catalog, base_lid, alias, visited);
-            }
-
-            for ext in &class.class.extends {
-                if let Some(ext_lid) = catalog.class_id(&ext.id)
-                    && let Some(field) = visit(catalog, ext_lid, alias, visited)
-                {
-                    out = Some(field);
-                }
-            }
-
-            for (field_alias, class_attr) in &class.class.attributes {
-                let Some(attr) = catalog.attribute_by_id(&class_attr.attribute.id) else {
-                    continue;
-                };
-                if field_alias == alias
-                    || attr.attribute.id == alias
-                    || attr.names.plain_name == alias
-                    || attr.names.underscore_name == alias
-                {
-                    out = Some(attr.attribute.id.clone());
-                }
-            }
-
-            out
-        }
-
-        visit(catalog, class_lid, alias, &mut BTreeSet::new())
     }
 
     fn stats_for_collection(

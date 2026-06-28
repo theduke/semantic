@@ -23,7 +23,7 @@ pub(super) fn child_query(
     offset: usize,
 ) -> String {
     format!(
-        "SELECT child.*, n.order AS directory_order FROM {node_collection} AS n INNER JOIN {entities} AS child ON n.to = child.id WHERE n.relation = {node_relation} AND n.from = {parent_id} ORDER BY {order_by} LIMIT {limit} OFFSET {offset}",
+        "SELECT child.*, n.order AS directory_order FROM {node_collection} AS n INNER JOIN {entities}._ AS child ON n.to = child.id WHERE n.relation = {node_relation} AND n.from = {parent_id} ORDER BY {order_by} LIMIT {limit} OFFSET {offset}",
         node_collection = sql_ident(DIRECTORY_NODE_CLASS_ID),
         entities = sql_ident(ENTITIES_COLLECTION),
         node_relation = sql_string(DIRECTORY_NODE_RELATION_ID),
@@ -34,7 +34,7 @@ pub(super) fn child_query(
 
 pub(super) fn child_directories_query(parent_id: &str, limit: usize, offset: usize) -> String {
     format!(
-        "SELECT child.*, n.order AS directory_order FROM {node_collection} AS n INNER JOIN {entities} AS child ON n.to = child.id WHERE n.relation = {node_relation} AND n.from = {parent_id} AND child.type = {directory_class} ORDER BY n.order ASC, child.title ASC, child.id ASC LIMIT {limit} OFFSET {offset}",
+        "SELECT child.*, n.order AS directory_order FROM {node_collection} AS n INNER JOIN {entities}._ AS child ON n.to = child.id WHERE n.relation = {node_relation} AND n.from = {parent_id} AND child.type = {directory_class} ORDER BY n.order ASC, child.title ASC, child.id ASC LIMIT {limit} OFFSET {offset}",
         node_collection = sql_ident(DIRECTORY_NODE_CLASS_ID),
         entities = sql_ident(ENTITIES_COLLECTION),
         node_relation = sql_string(DIRECTORY_NODE_RELATION_ID),
@@ -80,7 +80,9 @@ pub(super) fn sql_ident(value: &str) -> String {
 
 #[cfg(test)]
 mod tests {
-    use semantic_data::bundles::directory::{DIRECTORY_CLASS_ID, DIRECTORY_NODE_CLASS_ID};
+    use semantic_data::bundles::directory::{
+        DIRECTORY_CLASS_ID, DIRECTORY_NODE_CLASS_ID, DIRECTORY_NODE_RELATION_ID,
+    };
     use semantic_data::query::QueryInput;
     use semantic_data::value::{Object, Value};
     use semantic_db_core::{Db, QueryResult};
@@ -118,13 +120,7 @@ mod tests {
             .await
             .expect("base package should register");
 
-        let mut directory = Object::new();
-        directory.insert("id", Value::String("dir1".to_string()));
-        directory.insert("type", Value::String(DIRECTORY_CLASS_ID.to_string()));
-        directory.insert("title", Value::String("Dir1".to_string()));
-        db.insert(ENTITIES_COLLECTION, "dir1", directory)
-            .await
-            .expect("directory should insert");
+        insert_directory(&db, "dir1", "Dir1").await;
 
         let result = db
             .query(QueryInput::sql(root_query(200, 0)))
@@ -142,6 +138,90 @@ mod tests {
         );
     }
 
+    #[tokio::test]
+    async fn child_query_finds_items_for_parent_directory() {
+        let db = Db::new(KvBackend::new(KvDb::in_memory()));
+        db.upsert_package(semantic_base::package())
+            .await
+            .expect("base package should register");
+        insert_directory(&db, "parent", "Parent").await;
+        insert_directory(&db, "child-dir", "Child Dir").await;
+        insert_entity(&db, "child-item", "semantic:base:person", "Child Item").await;
+        insert_node_collection_ref_target(&db, "child-item", "semantic:base:person", "Child Item")
+            .await;
+        insert_directory_node(&db, "node-1", "parent", "child-item", 20).await;
+        insert_directory_node(&db, "node-2", "parent", "child-dir", 10).await;
+
+        let result = db
+            .query(QueryInput::sql(child_query(
+                "parent",
+                DirectorySort::Order,
+                200,
+                0,
+            )))
+            .await
+            .expect("child query should run");
+        let QueryResult::Select(rows) = result else {
+            panic!("child query should return select rows");
+        };
+
+        let ids = row_ids(&rows);
+        assert_eq!(ids, vec!["child-dir", "child-item"]);
+        assert_eq!(rows[0].get("directory_order"), Some(&Value::U64(10)));
+        assert_eq!(rows[1].get("directory_order"), Some(&Value::U64(20)));
+    }
+
+    #[tokio::test]
+    async fn child_directories_query_filters_to_directory_children() {
+        let db = Db::new(KvBackend::new(KvDb::in_memory()));
+        db.upsert_package(semantic_base::package())
+            .await
+            .expect("base package should register");
+        insert_directory(&db, "parent", "Parent").await;
+        insert_directory(&db, "child-dir", "Child Dir").await;
+        insert_entity(&db, "child-item", "semantic:base:person", "Child Item").await;
+        insert_node_collection_ref_target(&db, "child-item", "semantic:base:person", "Child Item")
+            .await;
+        insert_directory_node(&db, "node-1", "parent", "child-item", 20).await;
+        insert_directory_node(&db, "node-2", "parent", "child-dir", 10).await;
+
+        let result = db
+            .query(QueryInput::sql(child_directories_query("parent", 200, 0)))
+            .await
+            .expect("child directories query should run");
+        let QueryResult::Select(rows) = result else {
+            panic!("child directories query should return select rows");
+        };
+
+        assert_eq!(row_ids(&rows), vec!["child-dir"]);
+        assert_eq!(rows[0].get("directory_order"), Some(&Value::U64(10)));
+    }
+
+    #[tokio::test]
+    async fn parent_query_finds_parent_directory_id() {
+        let db = Db::new(KvBackend::new(KvDb::in_memory()));
+        db.upsert_package(semantic_base::package())
+            .await
+            .expect("base package should register");
+        insert_directory(&db, "parent", "Parent").await;
+        insert_directory(&db, "child-dir", "Child Dir").await;
+        insert_directory_node(&db, "node-1", "parent", "child-dir", 10).await;
+
+        let result = db
+            .query(QueryInput::sql(parent_query("child-dir")))
+            .await
+            .expect("parent query should run");
+        let QueryResult::Select(rows) = result else {
+            panic!("parent query should return select rows");
+        };
+
+        assert_eq!(rows.len(), 1);
+        assert_eq!(
+            rows[0].get("from"),
+            Some(&Value::String("parent".to_string()))
+        );
+    }
+
     #[test]
     fn child_query_filters_from_parent() {
         let query = child_query("parent'1", DirectorySort::Order, 101, 0);
@@ -156,5 +236,52 @@ mod tests {
             "child.title DESC, child.id ASC"
         );
         assert_eq!(sort_order_by(DirectorySort::IdAsc), "child.id ASC");
+    }
+
+    async fn insert_directory(db: &Db, id: &str, title: &str) {
+        insert_entity(db, id, DIRECTORY_CLASS_ID, title).await;
+        insert_node_collection_ref_target(db, id, DIRECTORY_CLASS_ID, title).await;
+    }
+
+    async fn insert_entity(db: &Db, id: &str, ty: &str, title: &str) {
+        let mut entity = Object::new();
+        entity.insert("id", Value::String(id.to_string()));
+        entity.insert("type", Value::String(ty.to_string()));
+        entity.insert("title", Value::String(title.to_string()));
+        db.insert(ENTITIES_COLLECTION, id, entity)
+            .await
+            .expect("entity should insert");
+    }
+
+    async fn insert_node_collection_ref_target(db: &Db, id: &str, ty: &str, title: &str) {
+        let mut entity = Object::new();
+        entity.insert("id", Value::String(id.to_string()));
+        entity.insert("type", Value::String(ty.to_string()));
+        entity.insert("title", Value::String(title.to_string()));
+        db.insert(DIRECTORY_NODE_CLASS_ID, id, entity)
+            .await
+            .expect("directory node ref target should insert");
+    }
+
+    async fn insert_directory_node(db: &Db, id: &str, parent: &str, child: &str, order: u64) {
+        let mut node = Object::new();
+        node.insert("id", Value::String(id.to_string()));
+        node.insert("type", Value::String(DIRECTORY_NODE_CLASS_ID.to_string()));
+        node.insert(
+            "relation",
+            Value::String(DIRECTORY_NODE_RELATION_ID.to_string()),
+        );
+        node.insert("from", Value::String(parent.to_string()));
+        node.insert("to", Value::String(child.to_string()));
+        node.insert("order", Value::U64(order));
+        db.insert(DIRECTORY_NODE_CLASS_ID, id, node)
+            .await
+            .expect("directory node should insert");
+    }
+
+    fn row_ids(rows: &[Object]) -> Vec<&str> {
+        rows.iter()
+            .map(|row| row.get("id").and_then(Value::as_str).expect("row id"))
+            .collect()
     }
 }

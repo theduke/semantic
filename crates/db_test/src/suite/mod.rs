@@ -61,6 +61,8 @@ pub async fn test_db(db: &Db) {
     test_text_query_formats(db).await;
     test_relationships_generic_embedded(db).await;
     test_relationships_generic_external(db).await;
+    test_builtin_type_filter_query(db).await;
+    test_class_collection_alias_query(db).await;
     test_strict_registered_schema_typeless_insert(db).await;
 }
 
@@ -259,6 +261,160 @@ async fn test_select_query(db: &Db) {
     assert_eq!(rows.len(), 1);
     assert_eq!(rows[0].get("id"), Some(&Value::String("evt-a".to_string())));
     assert_eq!(rows[0].get("score"), Some(&Value::I64(10)));
+}
+
+async fn test_builtin_type_filter_query(db: &Db) {
+    db.create_collection("shared_suite_type_filter", CollectionKind::Polymorphic)
+        .await
+        .expect("type filter collection creation should succeed");
+
+    let mut directory = Object::new();
+    directory.insert("id", Value::String("type-dir".to_string()));
+    directory.insert("type", Value::String("shared.suite.directory".to_string()));
+    directory.insert("title", Value::String("Directory".to_string()));
+    db.insert("shared_suite_type_filter", "type-dir", directory)
+        .await
+        .expect("typed row insert should succeed");
+
+    let ast_rows = db
+        .select(
+            SelectQuery::new()
+                .with_collection("shared_suite_type_filter")
+                .with_predicate(eq_predicate(
+                    FieldPath::from_fields(["type"]),
+                    Value::String("shared.suite.directory".to_string()),
+                )),
+        )
+        .await
+        .expect("AST type filter query should succeed");
+    assert_eq!(row_ids(&ast_rows), vec!["type-dir"]);
+
+    if db
+        .supported_text_query_formats()
+        .contains(&TextQueryFormat::Sql)
+    {
+        let result = db
+            .query_text(
+                TextQueryFormat::Sql,
+                "SELECT id, type FROM shared_suite_type_filter WHERE type = 'shared.suite.directory'",
+            )
+            .await
+            .expect("SQL type filter query should succeed");
+        let QueryResult::Select(sql_rows) = result else {
+            panic!("SQL type filter query should return SELECT rows");
+        };
+        assert_eq!(row_ids(&sql_rows), vec!["type-dir"]);
+        assert_eq!(
+            sql_rows[0].get("type"),
+            Some(&Value::String("shared.suite.directory".to_string())),
+        );
+    }
+}
+
+async fn test_class_collection_alias_query(db: &Db) {
+    db.execute_ddl(
+        DdlBatch::new()
+            .with_op(DdlOperation::UpsertAttribute {
+                attribute: blog_string_attribute("shared.alias.relation.from", "from"),
+            })
+            .with_op(DdlOperation::UpsertAttribute {
+                attribute: blog_string_attribute("shared.alias.node.from", "from"),
+            })
+            .with_op(DdlOperation::UpsertClass {
+                class: ClassType {
+                    id: "shared.alias.relation".to_string(),
+                    name: "AliasRelation".to_string(),
+                    inherits: None,
+                    extends: vec![],
+                    attributes: BTreeMap::from([(
+                        "from".to_string(),
+                        ClassAttribute {
+                            attribute: AttributeRef {
+                                id: "shared.alias.relation.from".to_string(),
+                            },
+                            required: true,
+                            ui_order: None,
+                            computed: None,
+                            constraints: vec![],
+                            meta: Meta::default(),
+                        },
+                    )]),
+                    constraints: vec![],
+                    meta: Meta::default(),
+                },
+            })
+            .with_op(DdlOperation::UpsertClass {
+                class: ClassType {
+                    id: "shared.alias.node".to_string(),
+                    name: "AliasNode".to_string(),
+                    inherits: Some(semantic_data::schema::ClassRef {
+                        id: "shared.alias.relation".to_string(),
+                    }),
+                    extends: vec![],
+                    attributes: BTreeMap::from([(
+                        "from".to_string(),
+                        ClassAttribute {
+                            attribute: AttributeRef {
+                                id: "shared.alias.node.from".to_string(),
+                            },
+                            required: true,
+                            ui_order: None,
+                            computed: None,
+                            constraints: vec![],
+                            meta: Meta::default(),
+                        },
+                    )]),
+                    constraints: vec![],
+                    meta: Meta::default(),
+                },
+            })
+            .with_op(DdlOperation::UpsertCollection {
+                name: "shared.alias.node".to_string(),
+                kind: DdlCollectionKind::Polymorphic,
+                integrity_mode: IntegrityMode::Permissive,
+            }),
+    )
+    .await
+    .expect("alias query schema setup should succeed");
+
+    let mut row = Object::new();
+    row.insert("id", Value::String("alias-node-1".to_string()));
+    row.insert("type", Value::String("shared.alias.node".to_string()));
+    row.insert("from", Value::String("parent-1".to_string()));
+    db.insert("shared.alias.node", "alias-node-1", row)
+        .await
+        .expect("alias node insert should succeed");
+
+    let ast_rows = db
+        .select(
+            SelectQuery::new()
+                .with_collection("shared.alias.node")
+                .with_source_alias("n")
+                .with_predicate(eq_predicate(
+                    FieldPath::from_fields(["n", "from"]),
+                    Value::String("parent-1".to_string()),
+                )),
+        )
+        .await
+        .expect("AST class collection alias query should succeed");
+    assert_eq!(row_ids(&ast_rows), vec!["alias-node-1"]);
+
+    if db
+        .supported_text_query_formats()
+        .contains(&TextQueryFormat::Sql)
+    {
+        let result = db
+            .query_text(
+                TextQueryFormat::Sql,
+                r#"SELECT n.from FROM "shared.alias.node" AS n WHERE n.from = 'parent-1'"#,
+            )
+            .await
+            .expect("SQL class collection alias query should succeed");
+        let QueryResult::Select(sql_rows) = result else {
+            panic!("SQL class collection alias query should return SELECT rows");
+        };
+        assert_eq!(sql_rows.len(), 1);
+    }
 }
 
 async fn test_update_query(db: &Db) {

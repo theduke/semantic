@@ -828,6 +828,10 @@ fn canonicalize_field_name(
     collection: &CollectionSchema,
     context: &'static str,
 ) -> CanonicalResult<String> {
+    if let Some(field) = catalog.class_named_collection_field_for_alias(collection, field) {
+        return Ok(field);
+    }
+
     let attr_ids = catalog.attribute_ids(field);
     if attr_ids.len() > 1 && !is_special_builtin_field(field) {
         return Err(QueryCanonicalizationError::AmbiguousField {
@@ -1044,6 +1048,108 @@ mod tests {
             err,
             QueryCanonicalizationError::AmbiguousField { field, .. } if field == "title"
         ));
+    }
+
+    #[test]
+    fn class_named_collection_disambiguates_shadowed_attribute_alias() {
+        let mut catalog = Catalog::new();
+        let _ = catalog.upsert_attribute(AttributeType {
+            id: "semantic:relation:from".to_string(),
+            name: "from".to_string(),
+            ty: Type {
+                kind: TypeKind::String(StringType {
+                    format: None,
+                    normalization: None,
+                }),
+                constraints: vec![],
+                annotations: vec![],
+            },
+            constraints: vec![],
+            meta: Meta::default(),
+        });
+        let _ = catalog.upsert_attribute(AttributeType {
+            id: "semantic:base:directory_node:from".to_string(),
+            name: "from".to_string(),
+            ty: Type {
+                kind: TypeKind::String(StringType {
+                    format: None,
+                    normalization: None,
+                }),
+                constraints: vec![],
+                annotations: vec![],
+            },
+            constraints: vec![],
+            meta: Meta::default(),
+        });
+        let _ = catalog
+            .upsert_class(ClassType {
+                id: "semantic:relation".to_string(),
+                name: "Relation".to_string(),
+                inherits: None,
+                extends: vec![],
+                attributes: BTreeMap::from([(
+                    "from".to_string(),
+                    semantic_data::schema::ClassAttribute {
+                        attribute: semantic_data::schema::AttributeRef {
+                            id: "semantic:relation:from".to_string(),
+                        },
+                        required: true,
+                        ui_order: None,
+                        computed: None,
+                        constraints: vec![],
+                        meta: Meta::default(),
+                    },
+                )]),
+                constraints: vec![],
+                meta: Meta::default(),
+            })
+            .unwrap();
+        let _ = catalog
+            .upsert_class(ClassType {
+                id: "semantic:base:directory_node".to_string(),
+                name: "DirectoryNode".to_string(),
+                inherits: Some(semantic_data::schema::ClassRef {
+                    id: "semantic:relation".to_string(),
+                }),
+                extends: vec![],
+                attributes: BTreeMap::from([(
+                    "from".to_string(),
+                    semantic_data::schema::ClassAttribute {
+                        attribute: semantic_data::schema::AttributeRef {
+                            id: "semantic:base:directory_node:from".to_string(),
+                        },
+                        required: true,
+                        ui_order: None,
+                        computed: None,
+                        constraints: vec![],
+                        meta: Meta::default(),
+                    },
+                )]),
+                constraints: vec![],
+                meta: Meta::default(),
+            })
+            .unwrap();
+        let _ = catalog
+            .upsert_collection(
+                "semantic:base:directory_node",
+                CollectionKind::Schema,
+                IntegrityMode::Permissive,
+            )
+            .unwrap();
+        let collection = catalog
+            .collection_by_name("semantic:base:directory_node")
+            .unwrap();
+
+        let query = SelectQuery::new()
+            .with_collection("semantic:base:directory_node")
+            .with_source_alias("n")
+            .with_predicate(eq_field("n", "from", "parent-dir"));
+
+        let canonical = canonicalize_select_query(&query, &catalog, collection).unwrap();
+        assert_binary_lhs_path(
+            canonical.predicate.as_ref().unwrap(),
+            &["semantic:base:directory_node:from"],
+        );
     }
 
     #[test]

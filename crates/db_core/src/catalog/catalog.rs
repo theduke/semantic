@@ -501,6 +501,65 @@ impl Catalog {
         self.classes.get(lid)
     }
 
+    pub fn class_field_for_alias(&self, class_lid: LocalClassId, alias: &str) -> Option<String> {
+        fn visit(
+            catalog: &Catalog,
+            class_lid: LocalClassId,
+            alias: &str,
+            visited: &mut BTreeSet<LocalClassId>,
+        ) -> Option<String> {
+            if !visited.insert(class_lid) {
+                return None;
+            }
+
+            let class = catalog.class_by_lid(class_lid)?;
+            let mut out = None;
+
+            if let Some(inherits) = &class.class.inherits
+                && let Some(base_lid) = catalog.class_id(&inherits.id)
+            {
+                out = visit(catalog, base_lid, alias, visited);
+            }
+
+            for ext in &class.class.extends {
+                if let Some(ext_lid) = catalog.class_id(&ext.id)
+                    && let Some(field) = visit(catalog, ext_lid, alias, visited)
+                {
+                    out = Some(field);
+                }
+            }
+
+            for (field_alias, class_attr) in &class.class.attributes {
+                let Some(attr) = catalog.attribute_by_id(&class_attr.attribute.id) else {
+                    continue;
+                };
+                if field_alias == alias
+                    || attr.attribute.id == alias
+                    || attr.names.plain_name == alias
+                    || attr.names.underscore_name == alias
+                {
+                    out = Some(attr.attribute.id.clone());
+                }
+            }
+
+            out
+        }
+
+        visit(self, class_lid, alias, &mut BTreeSet::new())
+    }
+
+    pub fn class_named_collection_field_for_alias(
+        &self,
+        collection: &CollectionSchema,
+        alias: &str,
+    ) -> Option<String> {
+        let class_ids = self.class_ids(&collection.name);
+        if class_ids.len() != 1 {
+            return None;
+        }
+        self.class_field_for_alias(class_ids[0], alias)
+    }
+
     pub fn register_collection(
         &mut self,
         name: impl Into<String>,
@@ -1652,130 +1711,6 @@ impl Catalog {
                 .insert_fixed(lid, verbatim_nameset(&name), schema);
         }
         Ok(())
-    }
-
-    fn collect_class_fields(
-        &self,
-        class_lid: LocalClassId,
-        field_aliases: &mut FnvHashMap<String, String>,
-        field_types: &mut FnvHashMap<String, Type>,
-        field_attrs: &mut FnvHashMap<String, LocalAttrId>,
-    ) -> Result<(), CatalogError> {
-        fn visit(
-            catalog: &Catalog,
-            class_lid: LocalClassId,
-            visited: &mut BTreeSet<LocalClassId>,
-            field_aliases: &mut FnvHashMap<String, String>,
-            field_types: &mut FnvHashMap<String, Type>,
-            field_attrs: &mut FnvHashMap<String, LocalAttrId>,
-        ) -> Result<(), CatalogError> {
-            if !visited.insert(class_lid) {
-                return Ok(());
-            }
-            let class = catalog
-                .classes
-                .get(class_lid)
-                .ok_or(CatalogError::UnknownClass(class_lid))?;
-            if let Some(inherits) = &class.class.inherits {
-                let Some(base_lid) = catalog.class_id(&inherits.id) else {
-                    return Err(CatalogError::InvalidSchema(format!(
-                        "class '{}' inherits unknown class '{}'",
-                        class.class.id, inherits.id
-                    )));
-                };
-                visit(
-                    catalog,
-                    base_lid,
-                    visited,
-                    field_aliases,
-                    field_types,
-                    field_attrs,
-                )?;
-            }
-            for ext in &class.class.extends {
-                let Some(ext_lid) = catalog.class_id(&ext.id) else {
-                    return Err(CatalogError::InvalidSchema(format!(
-                        "class '{}' extends unknown class '{}'",
-                        class.class.id, ext.id
-                    )));
-                };
-                visit(
-                    catalog,
-                    ext_lid,
-                    visited,
-                    field_aliases,
-                    field_types,
-                    field_attrs,
-                )?;
-            }
-            for (alias, class_attr) in &class.class.attributes {
-                let Some(attr) = catalog.attribute_by_id(&class_attr.attribute.id) else {
-                    return Err(CatalogError::UnknownAttribute {
-                        id: class_attr.attribute.id.clone(),
-                    });
-                };
-                field_aliases.insert(alias.clone(), attr.attribute.id.clone());
-                insert_field_alias_if_not_builtin_shadow(
-                    field_aliases,
-                    &attr.names.plain_name,
-                    &attr.attribute.id,
-                );
-                insert_field_alias_if_not_builtin_shadow(
-                    field_aliases,
-                    &attr.names.underscore_name,
-                    &attr.attribute.id,
-                );
-                field_types.insert(attr.attribute.id.clone(), attr.attribute.ty.clone());
-                field_attrs.insert(attr.attribute.id.clone(), attr.lid);
-            }
-            Ok(())
-        }
-
-        let mut visited = BTreeSet::new();
-        visit(
-            self,
-            class_lid,
-            &mut visited,
-            field_aliases,
-            field_types,
-            field_attrs,
-        )
-    }
-
-    fn class_inherits(&self, class_lid: LocalClassId, target_class_id: &str) -> bool {
-        fn visit(
-            catalog: &Catalog,
-            class_lid: LocalClassId,
-            target_class_id: &str,
-            seen: &mut BTreeSet<LocalClassId>,
-        ) -> bool {
-            if !seen.insert(class_lid) {
-                return false;
-            }
-            let Some(class) = catalog.class_by_lid(class_lid) else {
-                return false;
-            };
-            if class.class.id == target_class_id {
-                return true;
-            }
-            if let Some(inherits) = &class.class.inherits
-                && let Some(base_lid) = catalog.class_id(&inherits.id)
-                && visit(catalog, base_lid, target_class_id, seen)
-            {
-                return true;
-            }
-            for ext in &class.class.extends {
-                if let Some(ext_lid) = catalog.class_id(&ext.id)
-                    && visit(catalog, ext_lid, target_class_id, seen)
-                {
-                    return true;
-                }
-            }
-            false
-        }
-
-        let mut seen = BTreeSet::new();
-        visit(self, class_lid, target_class_id, &mut seen)
     }
 }
 

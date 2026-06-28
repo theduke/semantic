@@ -1956,18 +1956,45 @@ fn map_value_at_path_ref<'a>(
     path: &FieldPath,
 ) -> Option<ValueRef<'a>> {
     let mut current = path.segments().first().and_then(|first| match first {
-        PathSegment::Field(field) => object.get(field),
+        PathSegment::Field(field) => object_field_with_alias_fallback(object, field),
         PathSegment::Index(_) => None,
     })?;
 
     for segment in path.segments().iter().skip(1) {
         current = match segment {
-            PathSegment::Field(field) => current.get_field(field)?,
+            PathSegment::Field(field) => value_field_with_alias_fallback(current, field)?,
             PathSegment::Index(index) => current.get_index(*index)?,
         };
     }
 
     Some(ValueRef::Ref(current))
+}
+
+fn value_field_with_alias_fallback<'a>(value: &'a Value, field: &str) -> Option<&'a Value> {
+    match value {
+        Value::Object(object) => object_field_with_alias_fallback(object, field),
+        _ => None,
+    }
+}
+
+fn object_field_with_alias_fallback<'a>(
+    object: &'a BTreeMap<String, Value>,
+    field: &str,
+) -> Option<&'a Value> {
+    if let Some(value) = object.get(field) {
+        return Some(value);
+    }
+    let wanted_plain = field.rsplit(':').next().unwrap_or(field);
+    let mut matching = object.iter().filter(|(key, _)| {
+        key.rsplit(':')
+            .next()
+            .is_some_and(|plain| plain == wanted_plain)
+    });
+    let (_, value) = matching.next()?;
+    if matching.next().is_some() {
+        return None;
+    }
+    Some(value)
 }
 
 pub fn first_indexable_equality_predicate(predicate: &Expr) -> Option<(String, Value)> {
