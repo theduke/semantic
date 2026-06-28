@@ -50,6 +50,7 @@ pub fn canonicalize_select_query(
                     "select projection",
                 )?),
                 alias: field.alias.clone(),
+                wildcard: field.wildcard.clone(),
             })
         })
         .collect::<CanonicalResult<Vec<_>>>()?;
@@ -173,6 +174,7 @@ pub fn canonicalize_insert_query(
                     "insert returning",
                 )?),
                 alias: field.alias.clone(),
+                wildcard: field.wildcard.clone(),
             })
         })
         .collect::<CanonicalResult<Vec<_>>>()?;
@@ -230,6 +232,7 @@ pub fn canonicalize_update_query(
                     "update returning",
                 )?),
                 alias: field.alias.clone(),
+                wildcard: field.wildcard.clone(),
             })
         })
         .collect::<CanonicalResult<Vec<_>>>()?;
@@ -271,6 +274,7 @@ pub fn canonicalize_delete_query(
                     "delete returning",
                 )?),
                 alias: field.alias.clone(),
+                wildcard: field.wildcard.clone(),
             })
         })
         .collect::<CanonicalResult<Vec<_>>>()?;
@@ -654,6 +658,7 @@ mod tests {
                     "semantic_title",
                 ])))),
                 alias: None,
+                wildcard: None,
             }]);
 
         let canonical = canonicalize_select_query(&query, &catalog, collection).unwrap();
@@ -762,6 +767,7 @@ mod tests {
                     "title",
                 ])))),
                 alias: None,
+                wildcard: None,
             }]);
 
         let err = canonicalize_select_query(&query, &catalog, collection).unwrap_err();

@@ -292,6 +292,7 @@ impl From<usize> for Expr {
 pub struct QueryField {
     pub expr: Box<Expr>,
     pub alias: Option<String>,
+    pub wildcard: Option<FieldPath>,
 }
 
 #[derive(facet::Facet, Debug, Clone, PartialEq)]
@@ -537,6 +538,7 @@ impl From<public_query::QueryField> for QueryField {
         Self {
             expr: Box::new((*value.expr).into()),
             alias: value.alias,
+            wildcard: None,
         }
     }
 }
@@ -1542,6 +1544,14 @@ pub fn evaluate_expr<T: ObjectAccess + ?Sized>(value: &T, expr: &Expr) -> Option
 pub fn project_object<T: ObjectAccess + ?Sized>(value: &T, projection: &[QueryField]) -> Object {
     let mut out = Object::new();
     for project in projection {
+        if let Some(path) = &project.wildcard {
+            let Some(Value::Object(object)) = value.value_at_path_ref(path).map(|v| v.into_owned())
+            else {
+                continue;
+            };
+            out.extend(object);
+            continue;
+        }
         let Some(v) = evaluate_expr(value, &project.expr) else {
             continue;
         };
@@ -2029,11 +2039,48 @@ mod tests {
                     "score",
                 ])))),
                 alias: Some("s".into()),
+                wildcard: None,
             }]);
 
         let out = execute_query(&query, vec![a, b]);
         assert_eq!(out.len(), 1);
         assert_eq!(out[0].get("s"), Some(&Value::I64(9)));
+    }
+
+    #[test]
+    fn project_object_flattens_qualified_wildcard() {
+        let mut child = Object::new();
+        child.insert("id", Value::String("child-1".to_string()));
+        child.insert("title", Value::String("Child".to_string()));
+
+        let mut row = Object::new();
+        row.insert("child", Value::Object(child));
+        row.insert("order", Value::U64(7));
+
+        let out = project_object(
+            &row,
+            &[
+                QueryField {
+                    expr: Box::new(Expr::Operand(Operand::Field(FieldPath::from_fields([
+                        "child",
+                    ])))),
+                    alias: None,
+                    wildcard: Some(FieldPath::from_fields(["child"])),
+                },
+                QueryField {
+                    expr: Box::new(Expr::Operand(Operand::Field(FieldPath::from_fields([
+                        "order",
+                    ])))),
+                    alias: Some("directory_order".to_string()),
+                    wildcard: None,
+                },
+            ],
+        );
+
+        assert_eq!(out.get("id"), Some(&Value::String("child-1".to_string())));
+        assert_eq!(out.get("title"), Some(&Value::String("Child".to_string())));
+        assert_eq!(out.get("directory_order"), Some(&Value::U64(7)));
+        assert!(!out.contains_key("child"));
     }
 
     #[test]

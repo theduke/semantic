@@ -929,6 +929,7 @@ fn to_projection_field(field: &QueryField, context: &QueryContext) -> PhysicalPr
         field: field_ref,
         source_path,
         alias: field.alias.clone(),
+        wildcard: field.wildcard.clone(),
     }
 }
 
@@ -1443,6 +1444,7 @@ mod tests {
                     "parent", "parent", "id",
                 ])))),
                 alias: Some("gp".to_string()),
+                wildcard: None,
             }]);
         let plan =
             Optimizer::core().optimize_query(&query, Some("events".to_string()), None, &context);

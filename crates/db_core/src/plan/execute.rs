@@ -978,6 +978,7 @@ fn resolve_projection_subqueries_async<'a>(
                 field: field.field.clone(),
                 source_path: field.source_path.clone(),
                 alias: field.alias.clone(),
+                wildcard: field.wildcard.clone(),
             });
         }
         Ok(out)
@@ -1575,6 +1576,14 @@ fn project_dyn_object(
 ) -> Object {
     let mut out = Object::new();
     for project in projection {
+        if let Some(path) = &project.wildcard {
+            let Some(Value::Object(object)) = value.value_at_path_ref(path).map(|v| v.into_owned())
+            else {
+                continue;
+            };
+            out.extend(object);
+            continue;
+        }
         let projected = if let Some(field) = &project.field {
             value_ref_for_field(value, field, project.source_path.as_ref()).map(|v| v.into_owned())
         } else {
@@ -2375,6 +2384,7 @@ mod tests {
                     field: Some(FieldRef::Path(FieldPath::from_fields(["id"]))),
                     source_path: Some(FieldPath::from_fields(["id"])),
                     alias: Some("out".to_string()),
+                    wildcard: None,
                 }],
             }),
             offset: Expr::from(1usize),
@@ -2566,11 +2576,13 @@ mod tests {
                                 ["x"],
                             )))),
                             alias: None,
+                            wildcard: None,
                         }]),
                 )),
                 field: None,
                 source_path: None,
                 alias: Some("sv".to_string()),
+                wildcard: None,
             }],
         };
 
@@ -2618,6 +2630,7 @@ mod tests {
                                 ["x"],
                             )))),
                             alias: None,
+                            wildcard: None,
                         }]),
                 ))),
             },

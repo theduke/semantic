@@ -70,8 +70,9 @@ use semantic_data::value::{FieldPath, PathSegment, Value};
 use sqlparser::ast::{
     Assignment, AssignmentTarget, BinaryOperator, Expr as SqlExpr, FromTable, FunctionArguments,
     Insert as SqlInsert, Join, JoinConstraint, JoinOperator, LimitClause, ObjectName, Offset,
-    OrderByExpr, OrderByKind, Query as SqlQuery, Select, SelectItem, SetExpr, Statement,
-    TableAlias, TableFactor, TableObject, TableWithJoins, UnaryOperator, ValueWithSpan, Values,
+    OrderByExpr, OrderByKind, Query as SqlQuery, Select, SelectItem,
+    SelectItemQualifiedWildcardKind, SetExpr, Statement, TableAlias, TableFactor, TableObject,
+    TableWithJoins, UnaryOperator, ValueWithSpan, Values,
 };
 use sqlparser::dialect::{Dialect, GenericDialect, MySqlDialect, PostgreSqlDialect, SQLiteDialect};
 use sqlparser::parser::Parser;
@@ -781,14 +782,26 @@ fn parse_projection(items: Vec<SelectItem>) -> Result<Vec<QueryField>, SqlQueryE
             SelectItem::UnnamedExpr(expr) => Ok(QueryField {
                 expr: Box::new(parse_expr(expr)?),
                 alias: None,
+                wildcard: None,
             }),
             SelectItem::ExprWithAlias { expr, alias } => Ok(QueryField {
                 expr: Box::new(parse_expr(expr)?),
                 alias: Some(alias.value),
+                wildcard: None,
             }),
-            SelectItem::QualifiedWildcard(_, _) => Err(SqlQueryError::Unsupported(
-                "qualified wildcards are not supported".to_string(),
-            )),
+            SelectItem::QualifiedWildcard(SelectItemQualifiedWildcardKind::ObjectName(name), _) => {
+                let path = object_name_to_path(&name)?;
+                Ok(QueryField {
+                    expr: Box::new(Expr::Operand(Operand::Field(path.clone()))),
+                    alias: None,
+                    wildcard: Some(path),
+                })
+            }
+            SelectItem::QualifiedWildcard(SelectItemQualifiedWildcardKind::Expr(_), _) => {
+                Err(SqlQueryError::Unsupported(
+                    "expression-qualified wildcards are not supported".to_string(),
+                ))
+            }
             SelectItem::Wildcard(_) => unreachable!("handled above"),
         })
         .collect()
@@ -1447,7 +1460,12 @@ fn select_to_sql(query: &SelectQuery, collection: &str) -> Result<String, SqlQue
                 sql.push_str(", ");
             }
             first = false;
-            sql.push_str(&expr_to_sql(&item.expr)?);
+            if let Some(path) = &item.wildcard {
+                sql.push_str(&path_to_sql(path)?);
+                sql.push_str(".*");
+            } else {
+                sql.push_str(&expr_to_sql(&item.expr)?);
+            }
             if let Some(alias) = &item.alias {
                 sql.push_str(" AS ");
                 sql.push_str(alias);
@@ -1650,7 +1668,12 @@ fn projection_to_sql(projection: &[QueryField]) -> Result<String, SqlQueryError>
             out.push_str(", ");
         }
         first = false;
-        out.push_str(&expr_to_sql(&field.expr)?);
+        if let Some(path) = &field.wildcard {
+            out.push_str(&path_to_sql(path)?);
+            out.push_str(".*");
+        } else {
+            out.push_str(&expr_to_sql(&field.expr)?);
+        }
         if let Some(alias) = &field.alias {
             out.push_str(" AS ");
             out.push_str(alias);
@@ -1954,6 +1977,30 @@ mod tests {
             select.offset,
             Expr::Operand(Operand::Literal(Value::I64(2)))
         ));
+    }
+
+    #[test]
+    fn parse_and_print_qualified_wildcard_projection() {
+        let parsed = parse_sql_query(
+            "SELECT child.*, n.order AS directory_order FROM nodes AS n INNER JOIN entities AS child ON n.to = child.id",
+            SqlDialectKind::Generic,
+        )
+        .unwrap();
+        let Query::Select(select) = parsed.query else {
+            panic!("expected select");
+        };
+        assert_eq!(select.projection.len(), 2);
+        assert_eq!(
+            select.projection[0].wildcard,
+            Some(FieldPath::from_fields(["child"]))
+        );
+        assert_eq!(
+            select.projection[1].alias.as_deref(),
+            Some("directory_order")
+        );
+
+        let sql = query_to_sql(&Query::Select(select)).unwrap();
+        assert!(sql.starts_with("SELECT child.*, n.order AS directory_order FROM nodes AS n"));
     }
 
     #[test]

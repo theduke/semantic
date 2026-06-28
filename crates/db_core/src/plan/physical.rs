@@ -39,6 +39,7 @@ pub struct PhysicalProjectionField {
     pub field: Option<FieldRef>,
     pub source_path: Option<FieldPath>,
     pub alias: Option<String>,
+    pub wildcard: Option<FieldPath>,
 }
 
 #[derive(Debug, Clone, PartialEq)]

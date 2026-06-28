@@ -3561,6 +3561,7 @@ mod tests {
                     "id",
                 ])))),
                 alias: Some("id".to_string()),
+                wildcard: None,
             }]);
         let catalog = db.catalog();
         let collection = catalog.collection_by_name("ref_paths").unwrap();
@@ -4259,6 +4260,7 @@ mod tests {
                     "score",
                 ])))),
                 alias: Some("new_score".to_string()),
+                wildcard: None,
             }]);
 
         let out = db
@@ -4294,6 +4296,7 @@ mod tests {
                     "id",
                 ])))),
                 alias: None,
+                wildcard: None,
             }]);
 
         let out = db
