@@ -1,9 +1,10 @@
-use std::collections::BTreeSet;
+use std::{collections::BTreeSet, time::Duration};
 
 use dioxus::logger::tracing::{error, info, warn};
 use dioxus::prelude::*;
 use dioxus_icons::lucide::{
-    ChevronDown, ChevronRight, FileText, Folder, Grid2x2, List, PanelLeft, RefreshCw,
+    ChevronDown, ChevronRight, ClipboardPaste, Copy, FileText, Folder, FolderPlus, Grid2x2, Link,
+    List, PanelLeft, Pencil, Plus, RefreshCw, Scissors, Trash2, X,
 };
 use futures::StreamExt;
 
@@ -14,7 +15,12 @@ use crate::{
 };
 
 use super::{
-    data::{load_directory_page, load_tree_rows, move_directory_item},
+    data::{
+        add_items_to_directory, copy_items_to_directory, create_directory, cut_items_to_directory,
+        hard_delete_items, load_addable_entity_options, load_directory_page, load_tree_rows,
+        move_directory_item, rename_directory_item, unlink_items_from_directory,
+        unlink_items_from_directory_confirmed,
+    },
     types::{
         BrowseViewMode, DirectoryBrowseItem, DirectoryBrowserProps, DirectoryPage, DirectorySort,
         DirectoryTreeRow,
@@ -26,6 +32,41 @@ enum LoadState<T> {
     Loading,
     Ready(T),
     Error(String),
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+enum DirectoryClipboardMode {
+    Cut,
+    Copy,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct DirectoryClipboard {
+    mode: DirectoryClipboardMode,
+    item_ids: BTreeSet<String>,
+    source_directory_id: Option<String>,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+enum DirectoryDialog {
+    NewDirectory {
+        parent: Option<String>,
+    },
+    AddExisting {
+        parent: String,
+    },
+    Rename {
+        item_id: String,
+        title: String,
+    },
+    ConfirmRemove {
+        parent: String,
+        item_ids: Vec<String>,
+        orphaned_directory_ids: Vec<String>,
+    },
+    ConfirmDelete {
+        item_ids: Vec<String>,
+    },
 }
 
 enum DirectoryBrowserCommand {
@@ -54,6 +95,32 @@ enum DirectoryBrowserCommand {
     },
     OpenItem(DirectoryBrowseItem),
     OpenTreeRoot(String),
+    ToggleSelection(DirectoryBrowseItem),
+    SelectVisible(Vec<String>),
+    ClearSelection,
+    CutSelected,
+    CopySelected,
+    PasteInto(String),
+    RemoveSelected,
+    ConfirmRemove {
+        parent: String,
+        item_ids: Vec<String>,
+    },
+    ConfirmDelete(Vec<String>),
+    OpenDialog(DirectoryDialog),
+    CloseDialog,
+    CreateDirectory {
+        parent: Option<String>,
+        title: String,
+    },
+    AddExisting {
+        parent: String,
+        item_id: String,
+    },
+    RenameItem {
+        item_id: String,
+        title: String,
+    },
     CloseDetail,
 }
 
@@ -67,6 +134,10 @@ struct DirectoryBrowserSignals {
     tree_open: Signal<bool>,
     expanded_tree: Signal<BTreeSet<String>>,
     selected_item: Signal<Option<DirectoryBrowseItem>>,
+    selected_items: Signal<BTreeSet<String>>,
+    focused_item: Signal<Option<String>>,
+    clipboard: Signal<Option<DirectoryClipboard>>,
+    pending_dialog: Signal<Option<DirectoryDialog>>,
     dragged_item: Signal<Option<String>>,
     suppress_click: Signal<bool>,
     move_error: Signal<Option<String>>,
@@ -112,6 +183,10 @@ fn use_directory_browser_coroutine(
                             state.page_size.set(default_page_size.max(1));
                             state.tree_open.set(default_tree_open);
                             state.selected_item.set(None);
+                            state.selected_items.set(BTreeSet::new());
+                            state.focused_item.set(None);
+                            state.clipboard.set(None);
+                            state.pending_dialog.set(None);
                             state.move_error.set(None);
                             reload_current_content(
                                 active_client.clone(),
@@ -142,6 +217,8 @@ fn use_directory_browser_coroutine(
                             state.current_root.set(root);
                             state.page.set(0);
                             state.selected_item.set(None);
+                            state.selected_items.set(BTreeSet::new());
+                            state.focused_item.set(None);
                         }
                         if root_changed || scope_changed {
                             state.move_error.set(None);
@@ -378,6 +455,274 @@ fn use_directory_browser_coroutine(
                         );
                         navigate_to_tree_root(Some(item_id));
                     }
+                    DirectoryBrowserCommand::ToggleSelection(item) => {
+                        let mut next = (state.selected_items)();
+                        if !next.insert(item.id.clone()) {
+                            next.remove(&item.id);
+                        }
+                        state.focused_item.set(Some(item.id));
+                        state.selected_items.set(next);
+                    }
+                    DirectoryBrowserCommand::SelectVisible(item_ids) => {
+                        state.selected_items.set(item_ids.into_iter().collect());
+                    }
+                    DirectoryBrowserCommand::ClearSelection => {
+                        state.selected_items.set(BTreeSet::new());
+                        state.focused_item.set(None);
+                    }
+                    DirectoryBrowserCommand::CutSelected => {
+                        let item_ids = (state.selected_items)();
+                        if !item_ids.is_empty() {
+                            state.clipboard.set(Some(DirectoryClipboard {
+                                mode: DirectoryClipboardMode::Cut,
+                                item_ids,
+                                source_directory_id: (state.current_root)(),
+                            }));
+                        }
+                    }
+                    DirectoryBrowserCommand::CopySelected => {
+                        let item_ids = (state.selected_items)();
+                        if !item_ids.is_empty() {
+                            state.clipboard.set(Some(DirectoryClipboard {
+                                mode: DirectoryClipboardMode::Copy,
+                                item_ids,
+                                source_directory_id: (state.current_root)(),
+                            }));
+                        }
+                    }
+                    DirectoryBrowserCommand::PasteInto(target_directory_id) => {
+                        let Some(clipboard) = (state.clipboard)() else {
+                            continue;
+                        };
+                        let Some(client) = active_client.clone() else {
+                            state
+                                .move_error
+                                .set(Some("No active RPC client".to_string()));
+                            continue;
+                        };
+                        let item_ids = clipboard.item_ids.iter().cloned().collect::<Vec<_>>();
+                        let result = match clipboard.mode {
+                            DirectoryClipboardMode::Cut => {
+                                cut_items_to_directory(
+                                    client,
+                                    active_scope_id.clone(),
+                                    clipboard.source_directory_id.clone(),
+                                    target_directory_id,
+                                    item_ids,
+                                )
+                                .await
+                            }
+                            DirectoryClipboardMode::Copy => {
+                                copy_items_to_directory(
+                                    client,
+                                    active_scope_id.clone(),
+                                    target_directory_id,
+                                    item_ids,
+                                )
+                                .await
+                            }
+                        };
+                        match result {
+                            Ok(()) => {
+                                state.move_error.set(None);
+                                state.selected_items.set(BTreeSet::new());
+                                if clipboard.mode == DirectoryClipboardMode::Cut {
+                                    state.clipboard.set(None);
+                                }
+                                reload_after_mutation(
+                                    active_client.clone(),
+                                    active_scope_id.clone(),
+                                    state,
+                                )
+                                .await;
+                            }
+                            Err(err) => state.move_error.set(Some(err)),
+                        }
+                    }
+                    DirectoryBrowserCommand::RemoveSelected => {
+                        let Some(parent) = (state.current_root)() else {
+                            state.move_error.set(Some(
+                                "Remove is only available inside a directory".to_string(),
+                            ));
+                            continue;
+                        };
+                        let item_ids = (state.selected_items)().into_iter().collect::<Vec<_>>();
+                        if item_ids.is_empty() {
+                            continue;
+                        }
+                        let Some(client) = active_client.clone() else {
+                            state
+                                .move_error
+                                .set(Some("No active RPC client".to_string()));
+                            continue;
+                        };
+                        match unlink_items_from_directory(
+                            client,
+                            active_scope_id.clone(),
+                            parent.clone(),
+                            item_ids.clone(),
+                        )
+                        .await
+                        {
+                            Ok(outcome) if outcome.requires_confirmation => {
+                                state
+                                    .pending_dialog
+                                    .set(Some(DirectoryDialog::ConfirmRemove {
+                                        parent,
+                                        item_ids,
+                                        orphaned_directory_ids: outcome.orphaned_directory_ids,
+                                    }));
+                            }
+                            Ok(_) => {
+                                state.move_error.set(None);
+                                state.selected_items.set(BTreeSet::new());
+                                reload_after_mutation(
+                                    active_client.clone(),
+                                    active_scope_id.clone(),
+                                    state,
+                                )
+                                .await;
+                            }
+                            Err(err) => state.move_error.set(Some(err)),
+                        }
+                    }
+                    DirectoryBrowserCommand::ConfirmRemove { parent, item_ids } => {
+                        let Some(client) = active_client.clone() else {
+                            state
+                                .move_error
+                                .set(Some("No active RPC client".to_string()));
+                            continue;
+                        };
+                        match unlink_items_from_directory_confirmed(
+                            client,
+                            active_scope_id.clone(),
+                            parent,
+                            item_ids,
+                        )
+                        .await
+                        {
+                            Ok(_) => {
+                                state.move_error.set(None);
+                                state.selected_items.set(BTreeSet::new());
+                                state.pending_dialog.set(None);
+                                reload_after_mutation(
+                                    active_client.clone(),
+                                    active_scope_id.clone(),
+                                    state,
+                                )
+                                .await;
+                            }
+                            Err(err) => state.move_error.set(Some(err)),
+                        }
+                    }
+                    DirectoryBrowserCommand::ConfirmDelete(item_ids) => {
+                        let Some(client) = active_client.clone() else {
+                            state
+                                .move_error
+                                .set(Some("No active RPC client".to_string()));
+                            continue;
+                        };
+                        match hard_delete_items(client, active_scope_id.clone(), item_ids.clone())
+                            .await
+                        {
+                            Ok(()) => {
+                                if let Some(root) = (state.current_root)()
+                                    && item_ids.iter().any(|item_id| item_id == &root)
+                                {
+                                    navigate_to_tree_root(None);
+                                }
+                                state.move_error.set(None);
+                                state.selected_items.set(BTreeSet::new());
+                                state.pending_dialog.set(None);
+                                reload_after_mutation(
+                                    active_client.clone(),
+                                    active_scope_id.clone(),
+                                    state,
+                                )
+                                .await;
+                            }
+                            Err(err) => state.move_error.set(Some(err)),
+                        }
+                    }
+                    DirectoryBrowserCommand::OpenDialog(dialog) => {
+                        state.pending_dialog.set(Some(dialog));
+                    }
+                    DirectoryBrowserCommand::CloseDialog => {
+                        state.pending_dialog.set(None);
+                    }
+                    DirectoryBrowserCommand::CreateDirectory { parent, title } => {
+                        let Some(client) = active_client.clone() else {
+                            state
+                                .move_error
+                                .set(Some("No active RPC client".to_string()));
+                            continue;
+                        };
+                        match create_directory(client, active_scope_id.clone(), parent, title).await
+                        {
+                            Ok(_) => {
+                                state.move_error.set(None);
+                                state.pending_dialog.set(None);
+                                reload_after_mutation(
+                                    active_client.clone(),
+                                    active_scope_id.clone(),
+                                    state,
+                                )
+                                .await;
+                            }
+                            Err(err) => state.move_error.set(Some(err)),
+                        }
+                    }
+                    DirectoryBrowserCommand::AddExisting { parent, item_id } => {
+                        let Some(client) = active_client.clone() else {
+                            state
+                                .move_error
+                                .set(Some("No active RPC client".to_string()));
+                            continue;
+                        };
+                        match add_items_to_directory(
+                            client,
+                            active_scope_id.clone(),
+                            parent,
+                            vec![item_id],
+                        )
+                        .await
+                        {
+                            Ok(()) => {
+                                state.move_error.set(None);
+                                state.pending_dialog.set(None);
+                                reload_after_mutation(
+                                    active_client.clone(),
+                                    active_scope_id.clone(),
+                                    state,
+                                )
+                                .await;
+                            }
+                            Err(err) => state.move_error.set(Some(err)),
+                        }
+                    }
+                    DirectoryBrowserCommand::RenameItem { item_id, title } => {
+                        let Some(client) = active_client.clone() else {
+                            state
+                                .move_error
+                                .set(Some("No active RPC client".to_string()));
+                            continue;
+                        };
+                        match rename_directory_item(client, active_scope_id.clone(), item_id, title)
+                            .await
+                        {
+                            Ok(()) => {
+                                state.move_error.set(None);
+                                state.pending_dialog.set(None);
+                                reload_after_mutation(
+                                    active_client.clone(),
+                                    active_scope_id.clone(),
+                                    state,
+                                )
+                                .await;
+                            }
+                            Err(err) => state.move_error.set(Some(err)),
+                        }
+                    }
                     DirectoryBrowserCommand::CloseDetail => {
                         info!("directory browser close detail");
                         state.selected_item.set(None);
@@ -413,6 +758,10 @@ pub fn DirectoryBrowser(props: DirectoryBrowserProps) -> Element {
     };
     let expanded_tree = use_signal(BTreeSet::<String>::new);
     let selected_item = use_signal(|| None::<DirectoryBrowseItem>);
+    let selected_items = use_signal(BTreeSet::<String>::new);
+    let focused_item = use_signal(|| None::<String>);
+    let clipboard = use_signal(|| None::<DirectoryClipboard>);
+    let pending_dialog = use_signal(|| None::<DirectoryDialog>);
     let dragged_item = use_signal(|| None::<String>);
     let suppress_click = use_signal(|| false);
     let move_error = use_signal(|| None::<String>);
@@ -428,6 +777,10 @@ pub fn DirectoryBrowser(props: DirectoryBrowserProps) -> Element {
         tree_open,
         expanded_tree,
         selected_item,
+        selected_items,
+        focused_item,
+        clipboard,
+        pending_dialog,
         dragged_item,
         suppress_click,
         move_error,
@@ -436,6 +789,23 @@ pub fn DirectoryBrowser(props: DirectoryBrowserProps) -> Element {
     };
 
     let commands = use_directory_browser_coroutine(state);
+    let selected_count = selected_items().len();
+    let current_items = match &*content_state.read() {
+        LoadState::Ready(page_data) => page_data.items.clone(),
+        LoadState::Loading | LoadState::Error(_) => Vec::new(),
+    };
+    let visible_ids = current_items
+        .iter()
+        .map(|item| item.id.clone())
+        .collect::<Vec<_>>();
+    let current_root_title = match &*content_state.read() {
+        LoadState::Ready(page_data) => page_data
+            .breadcrumbs
+            .last()
+            .map(|crumb| crumb.title.clone())
+            .unwrap_or_else(|| "Tree".to_string()),
+        LoadState::Loading | LoadState::Error(_) => "Tree".to_string(),
+    };
 
     use_effect(use_reactive(
         (
@@ -494,6 +864,56 @@ pub fn DirectoryBrowser(props: DirectoryBrowserProps) -> Element {
                     dxcomp::Button {
                         variant: dxcomp::ButtonVariant::Outline,
                         size: dxcomp::ButtonSize::IconSm,
+                        title: "New Directory",
+                        onclick: {
+                            let current_root = current_root();
+                            move |_| {
+                                commands.send(DirectoryBrowserCommand::OpenDialog(DirectoryDialog::NewDirectory {
+                                    parent: current_root.clone(),
+                                }));
+                            }
+                        },
+                        FolderPlus { size: "1rem" }
+                    }
+                    dxcomp::Button {
+                        variant: dxcomp::ButtonVariant::Outline,
+                        size: dxcomp::ButtonSize::IconSm,
+                        title: "Add Existing Item",
+                        disabled: current_root().is_none(),
+                        onclick: {
+                            let current_root = current_root();
+                            move |_| {
+                                if let Some(parent) = current_root.clone() {
+                                    commands.send(DirectoryBrowserCommand::OpenDialog(DirectoryDialog::AddExisting {
+                                        parent,
+                                    }));
+                                }
+                            }
+                        },
+                        Link { size: "1rem" }
+                    }
+                    dxcomp::Button {
+                        variant: dxcomp::ButtonVariant::Outline,
+                        size: dxcomp::ButtonSize::IconSm,
+                        title: "Rename current directory",
+                        disabled: current_root().is_none(),
+                        onclick: {
+                            let current_root = current_root();
+                            let current_root_title = current_root_title.clone();
+                            move |_| {
+                                if let Some(item_id) = current_root.clone() {
+                                    commands.send(DirectoryBrowserCommand::OpenDialog(DirectoryDialog::Rename {
+                                        item_id,
+                                        title: current_root_title.clone(),
+                                    }));
+                                }
+                            }
+                        },
+                        Pencil { size: "1rem" }
+                    }
+                    dxcomp::Button {
+                        variant: dxcomp::ButtonVariant::Outline,
+                        size: dxcomp::ButtonSize::IconSm,
                         title: "Toggle tree",
                         onclick: move |_| commands.send(DirectoryBrowserCommand::ToggleTree),
                         PanelLeft { size: "1rem" }
@@ -549,12 +969,126 @@ pub fn DirectoryBrowser(props: DirectoryBrowserProps) -> Element {
                     }
                 }
             }
-            if let Some(err) = move_error() {
-                div { class: "semantic-error", "{err}" }
+            div {
+                class: "semantic-directory-browser__selection-toolbar",
+                "data-active": selected_count > 0 || move_error().is_some(),
+                span { class: "semantic-directory-browser__selection-count", "{selected_count} selected" }
+                dxcomp::Button {
+                    variant: dxcomp::ButtonVariant::Outline,
+                    size: dxcomp::ButtonSize::Sm,
+                    disabled: selected_count == 0 || current_root().is_none(),
+                    onclick: move |_| commands.send(DirectoryBrowserCommand::RemoveSelected),
+                    X { size: "1rem" }
+                    "Remove"
+                }
+                dxcomp::Button {
+                    variant: dxcomp::ButtonVariant::Outline,
+                    size: dxcomp::ButtonSize::Sm,
+                    disabled: selected_count == 0,
+                    onclick: move |_| commands.send(DirectoryBrowserCommand::CutSelected),
+                    Scissors { size: "1rem" }
+                    "Cut"
+                }
+                dxcomp::Button {
+                    variant: dxcomp::ButtonVariant::Outline,
+                    size: dxcomp::ButtonSize::Sm,
+                    disabled: selected_count == 0,
+                    onclick: move |_| commands.send(DirectoryBrowserCommand::CopySelected),
+                    Copy { size: "1rem" }
+                    "Copy"
+                }
+                dxcomp::Button {
+                    variant: dxcomp::ButtonVariant::Outline,
+                    size: dxcomp::ButtonSize::Sm,
+                    disabled: clipboard().is_none() || current_root().is_none(),
+                    onclick: {
+                        let current_root = current_root();
+                        move |_| {
+                            if let Some(parent) = current_root.clone() {
+                                commands.send(DirectoryBrowserCommand::PasteInto(parent));
+                            }
+                        }
+                    },
+                    ClipboardPaste { size: "1rem" }
+                    "Paste"
+                }
+                dxcomp::Button {
+                    variant: dxcomp::ButtonVariant::Destructive,
+                    size: dxcomp::ButtonSize::Sm,
+                    disabled: selected_count == 0,
+                    onclick: {
+                        let selected_items = selected_items();
+                        move |_| {
+                            commands.send(DirectoryBrowserCommand::OpenDialog(DirectoryDialog::ConfirmDelete {
+                                item_ids: selected_items.iter().cloned().collect(),
+                            }));
+                        }
+                    },
+                    Trash2 { size: "1rem" }
+                    "Delete"
+                }
+                dxcomp::Button {
+                    variant: dxcomp::ButtonVariant::Ghost,
+                    size: dxcomp::ButtonSize::Sm,
+                    disabled: selected_count == 0,
+                    onclick: move |_| commands.send(DirectoryBrowserCommand::ClearSelection),
+                    "Clear"
+                }
+                if let Some(err) = move_error() {
+                    div { class: "semantic-error", "{err}" }
+                }
             }
             div {
                 class: "semantic-directory-browser__body",
+                "data-tree-open": tree_open(),
+                tabindex: "0",
                 onmouseup: move |_| end_drag(commands),
+                onkeydown: {
+                    let visible_ids = visible_ids.clone();
+                    move |event: KeyboardEvent| {
+                        let key = event.key().to_string();
+                        let modifiers = event.modifiers();
+                        let command = match key.as_str() {
+                            "Escape" => Some(DirectoryBrowserCommand::ClearSelection),
+                            "a" | "A" if modifiers.ctrl() || modifiers.meta() => {
+                                event.prevent_default();
+                                Some(DirectoryBrowserCommand::SelectVisible(visible_ids.clone()))
+                            }
+                            "Delete" if modifiers.shift() => {
+                                event.prevent_default();
+                                Some(DirectoryBrowserCommand::OpenDialog(DirectoryDialog::ConfirmDelete {
+                                    item_ids: selected_items().iter().cloned().collect(),
+                                }))
+                            }
+                            "Delete" => {
+                                event.prevent_default();
+                                Some(DirectoryBrowserCommand::RemoveSelected)
+                            }
+                            "x" | "X" if modifiers.ctrl() || modifiers.meta() => {
+                                event.prevent_default();
+                                Some(DirectoryBrowserCommand::CutSelected)
+                            }
+                            "c" | "C" if modifiers.ctrl() || modifiers.meta() => {
+                                event.prevent_default();
+                                Some(DirectoryBrowserCommand::CopySelected)
+                            }
+                            "v" | "V" if modifiers.ctrl() || modifiers.meta() => {
+                                event.prevent_default();
+                                current_root().map(DirectoryBrowserCommand::PasteInto)
+                            }
+                            "F2" => current_root().map(|item_id| {
+                                DirectoryBrowserCommand::OpenDialog(DirectoryDialog::Rename {
+                                    item_id,
+                                    title: current_root_title.clone(),
+                                })
+                            }),
+                            _ => None,
+                        };
+                        if let Some(command) = command {
+                            commands.send(command);
+                        }
+                    }
+                },
                 if tree_open() {
                     aside { class: "semantic-directory-browser__tree",
                         match &*tree_state.read() {
@@ -563,11 +1097,22 @@ pub fn DirectoryBrowser(props: DirectoryBrowserProps) -> Element {
                                     div { class: "semantic-empty", "No directories" }
                                 } else {
                                     for row in rows.iter().cloned() {
+                                        {
+                                            let row_id = row.item.id.clone();
+                                            let row_selected = selected_items().contains(&row_id);
+                                            let row_cut = clipboard()
+                                                .as_ref()
+                                                .is_some_and(|clipboard| clipboard.mode == DirectoryClipboardMode::Cut && clipboard.item_ids.contains(&row_id));
+                                            rsx! {
                                         DirectoryTreeRowView {
                                             row,
                                             active_root: current_root(),
+                                            selected: row_selected,
+                                            cut: row_cut,
                                             expanded: expanded_tree,
                                             commands,
+                                        }
+                                            }
                                         }
                                     }
                                 }
@@ -577,31 +1122,58 @@ pub fn DirectoryBrowser(props: DirectoryBrowserProps) -> Element {
                         }
                     }
                 }
-                div { class: "semantic-directory-browser__content",
-                    match &*content_state.read() {
-                        LoadState::Ready(page_data) => rsx! {
-                            if page_data.items.is_empty() {
-                                div { class: "semantic-empty", "No items" }
-                            } else if view_mode() == BrowseViewMode::List {
-                                DirectoryList {
-                                    items: page_data.items.clone(),
-                                    commands,
-                                }
-                            } else {
-                                DirectoryGrid {
-                                    items: page_data.items.clone(),
-                                    commands,
-                                }
+                dxcomp::ContextMenu {
+                    dxcomp::ContextMenuTrigger {
+                        div { class: "semantic-directory-browser__content",
+                            match &*content_state.read() {
+                                LoadState::Ready(page_data) => rsx! {
+                                    div { class: "semantic-directory-browser__items",
+                                        if page_data.items.is_empty() {
+                                            DirectoryEmptyState {
+                                                root: current_root(),
+                                                clipboard_available: clipboard().is_some(),
+                                                commands,
+                                            }
+                                        } else if view_mode() == BrowseViewMode::List {
+                                            DirectoryList {
+                                                items: page_data.items.clone(),
+                                                selected_items: selected_items(),
+                                                cut_items: cut_item_ids(clipboard()),
+                                                commands,
+                                            }
+                                        } else {
+                                            DirectoryGrid {
+                                                items: page_data.items.clone(),
+                                                selected_items: selected_items(),
+                                                cut_items: cut_item_ids(clipboard()),
+                                                commands,
+                                            }
+                                        }
+                                    },
+                                    DirectoryPagination {
+                                        page: page(),
+                                        has_next: page_data.has_next,
+                                        on_previous: move |_| commands.send(DirectoryBrowserCommand::PreviousPage),
+                                        on_next: move |_| commands.send(DirectoryBrowserCommand::NextPage),
+                                    }
+                                },
+                                LoadState::Error(err) => rsx! {
+                                    div { class: "semantic-directory-browser__items",
+                                        div { class: "semantic-error", "{err}" }
+                                    }
+                                },
+                                LoadState::Loading => rsx! {
+                                    div { class: "semantic-directory-browser__items",
+                                        div { class: "semantic-loading", "Loading directory..." }
+                                    }
+                                },
                             }
-                            DirectoryPagination {
-                                page: page(),
-                                has_next: page_data.has_next,
-                                on_previous: move |_| commands.send(DirectoryBrowserCommand::PreviousPage),
-                                on_next: move |_| commands.send(DirectoryBrowserCommand::NextPage),
-                            }
-                        },
-                        LoadState::Error(err) => rsx! { div { class: "semantic-error", "{err}" } },
-                        LoadState::Loading => rsx! { div { class: "semantic-loading", "Loading directory..." } },
+                        }
+                    }
+                    DirectoryBackgroundContextMenuContent {
+                        root: current_root(),
+                        clipboard_available: clipboard().is_some(),
+                        commands,
                     }
                 }
             }
@@ -614,6 +1186,11 @@ pub fn DirectoryBrowser(props: DirectoryBrowserProps) -> Element {
                     }
                 },
             }
+            DirectoryOperationDialog {
+                dialog: pending_dialog(),
+                scope_id: scope_id.clone(),
+                commands,
+            }
         }
     }
 }
@@ -621,6 +1198,8 @@ pub fn DirectoryBrowser(props: DirectoryBrowserProps) -> Element {
 #[component]
 fn DirectoryList(
     items: Vec<DirectoryBrowseItem>,
+    selected_items: BTreeSet<String>,
+    cut_items: BTreeSet<String>,
     commands: Coroutine<DirectoryBrowserCommand>,
 ) -> Element {
     let count = items.len();
@@ -636,6 +1215,8 @@ fn DirectoryList(
                 rsx! {
                     DirectoryListRow {
                         key: "{item.id}",
+                        selected: selected_items.contains(&item.id),
+                        cut: cut_items.contains(&item.id),
                         item,
                         commands,
                     }
@@ -648,6 +1229,8 @@ fn DirectoryList(
 #[component]
 fn DirectoryGrid(
     items: Vec<DirectoryBrowseItem>,
+    selected_items: BTreeSet<String>,
+    cut_items: BTreeSet<String>,
     commands: Coroutine<DirectoryBrowserCommand>,
 ) -> Element {
     let columns = 4usize;
@@ -665,6 +1248,8 @@ fn DirectoryGrid(
                         for item in items[start..end].iter().cloned() {
                             DirectoryTile {
                                 key: "{item.id}",
+                                selected: selected_items.contains(&item.id),
+                                cut: cut_items.contains(&item.id),
                                 item,
                                 commands,
                             }
@@ -679,6 +1264,8 @@ fn DirectoryGrid(
 #[component]
 fn DirectoryListRow(
     item: DirectoryBrowseItem,
+    selected: bool,
+    cut: bool,
     commands: Coroutine<DirectoryBrowserCommand>,
 ) -> Element {
     let type_label = item.type_id.clone().unwrap_or_else(|| "entity".to_string());
@@ -691,9 +1278,14 @@ fn DirectoryListRow(
         .clone()
         .or(item.created_at.clone())
         .unwrap_or_default();
+    let click_item = item.clone();
     rsx! {
+        dxcomp::ContextMenu {
+            dxcomp::ContextMenuTrigger {
         button {
             class: "semantic-directory-browser__row",
+            "data-selected": selected,
+            "data-cut": cut,
             "data-drop-target": item.is_directory,
             "data-draggable": true,
             onmousedown: {
@@ -708,7 +1300,15 @@ fn DirectoryListRow(
                     move_dragged_item_to_directory(None, target_id.clone(), is_directory, true, commands);
                 }
             },
-            onclick: move |_| commands.send(DirectoryBrowserCommand::OpenItem(item.clone())),
+            onclick: move |event: MouseEvent| {
+                event.stop_propagation();
+                if event.modifiers().shift() {
+                    event.prevent_default();
+                    commands.send(DirectoryBrowserCommand::ToggleSelection(click_item.clone()));
+                } else {
+                    commands.send(DirectoryBrowserCommand::OpenItem(click_item.clone()));
+                }
+            },
             if item.is_directory {
                 Folder { size: "1.2rem" }
             } else {
@@ -720,18 +1320,28 @@ fn DirectoryListRow(
             span { class: "semantic-directory-browser__item-order", "{order}" }
             span { class: "semantic-directory-browser__item-date", "{updated}" }
         }
+            }
+            DirectoryItemContextMenuContent { item, commands }
+        }
     }
 }
 
 #[component]
 fn DirectoryTile(
     item: DirectoryBrowseItem,
+    selected: bool,
+    cut: bool,
     commands: Coroutine<DirectoryBrowserCommand>,
 ) -> Element {
     let type_label = item.type_id.clone().unwrap_or_else(|| "entity".to_string());
+    let click_item = item.clone();
     rsx! {
+        dxcomp::ContextMenu {
+            dxcomp::ContextMenuTrigger {
         button {
             class: "semantic-directory-browser__tile",
+            "data-selected": selected,
+            "data-cut": cut,
             "data-drop-target": item.is_directory,
             "data-draggable": true,
             onmousedown: {
@@ -746,7 +1356,15 @@ fn DirectoryTile(
                     move_dragged_item_to_directory(None, target_id.clone(), is_directory, true, commands);
                 }
             },
-            onclick: move |_| commands.send(DirectoryBrowserCommand::OpenItem(item.clone())),
+            onclick: move |event: MouseEvent| {
+                event.stop_propagation();
+                if event.modifiers().shift() {
+                    event.prevent_default();
+                    commands.send(DirectoryBrowserCommand::ToggleSelection(click_item.clone()));
+                } else {
+                    commands.send(DirectoryBrowserCommand::OpenItem(click_item.clone()));
+                }
+            },
             if item.is_directory {
                 Folder { size: "2rem" }
             } else {
@@ -756,6 +1374,9 @@ fn DirectoryTile(
             span { class: "semantic-directory-browser__item-type", "{type_label}" }
             code { class: "semantic-directory-browser__item-id", "{item.id}" }
         }
+            }
+            DirectoryItemContextMenuContent { item, commands }
+        }
     }
 }
 
@@ -763,10 +1384,14 @@ fn DirectoryTile(
 fn DirectoryTreeRowView(
     row: DirectoryTreeRow,
     active_root: Option<String>,
+    selected: bool,
+    cut: bool,
     expanded: Signal<BTreeSet<String>>,
     commands: Coroutine<DirectoryBrowserCommand>,
 ) -> Element {
     let item = row.item.clone();
+    let click_item = item.clone();
+    let expander_item_id = item.id.clone();
     let is_active = active_root.as_deref() == Some(item.id.as_str());
     let is_expanded = expanded.read().contains(&item.id);
     let padding = row.depth * 16;
@@ -779,7 +1404,7 @@ fn DirectoryTreeRowView(
                 class: "semantic-directory-browser__tree-expander",
                 disabled: row.cycle,
                 onclick: {
-                    let item_id = item.id.clone();
+                    let item_id = expander_item_id.clone();
                     move |_| {
                         commands.send(DirectoryBrowserCommand::ToggleTreeExpansion(item_id.clone()));
                     }
@@ -790,24 +1415,267 @@ fn DirectoryTreeRowView(
                     ChevronRight { size: "1rem" }
                 }
             }
-            button {
-                class: "semantic-directory-browser__tree-link",
-                "data-drop-target": true,
-                "data-draggable": true,
-                onmousedown: {
-                    let item_id = item.id.clone();
-                    move |_| begin_drag(item_id.clone(), commands)
+            dxcomp::ContextMenu {
+                dxcomp::ContextMenuTrigger {
+                    button {
+                        class: "semantic-directory-browser__tree-link",
+                        "data-selected": selected,
+                        "data-cut": cut,
+                        "data-drop-target": true,
+                        "data-draggable": true,
+                        onmousedown: {
+                            let item_id = item.id.clone();
+                            move |_| begin_drag(item_id.clone(), commands)
+                        },
+                        onmouseup: {
+                            let target_id = item.id.clone();
+                            move |event: MouseEvent| {
+                                event.stop_propagation();
+                                move_dragged_item_to_directory(None, target_id.clone(), true, true, commands);
+                            }
+                        },
+                        onclick: move |event: MouseEvent| {
+                            event.stop_propagation();
+                            if event.modifiers().shift() {
+                                event.prevent_default();
+                                commands.send(DirectoryBrowserCommand::ToggleSelection(click_item.clone()));
+                            } else {
+                                commands.send(DirectoryBrowserCommand::OpenTreeRoot(click_item.id.clone()));
+                            }
+                        },
+                        Folder { size: "1rem" }
+                        span { "{item.title}" }
+                    }
+                }
+                DirectoryItemContextMenuContent { item, commands }
+            }
+        }
+    }
+}
+
+#[component]
+fn DirectoryItemContextMenuContent(
+    item: DirectoryBrowseItem,
+    commands: Coroutine<DirectoryBrowserCommand>,
+) -> Element {
+    let item_id = item.id.clone();
+    let item_title = item.title.clone();
+    let open_item = item.clone();
+    let is_directory = item.is_directory;
+    rsx! {
+        dxcomp::ContextMenuContent {
+            dxcomp::ContextMenuItem {
+                value: "open".to_string(),
+                index: 0usize,
+                on_select: move |_| commands.send(DirectoryBrowserCommand::OpenItem(open_item.clone())),
+                "Open"
+            }
+            dxcomp::ContextMenuItem {
+                value: "rename".to_string(),
+                index: 1usize,
+                on_select: {
+                    let item_id = item_id.clone();
+                    let item_title = item_title.clone();
+                    move |_| commands.send(DirectoryBrowserCommand::OpenDialog(DirectoryDialog::Rename {
+                        item_id: item_id.clone(),
+                        title: item_title.clone(),
+                    }))
                 },
-                onmouseup: {
-                    let target_id = item.id.clone();
-                    move |event: MouseEvent| {
-                        event.stop_propagation();
-                        move_dragged_item_to_directory(None, target_id.clone(), true, true, commands);
+                "Rename"
+            }
+            dxcomp::ContextMenuItem {
+                value: "cut".to_string(),
+                index: 2usize,
+                on_select: {
+                    let item_id = item_id.clone();
+                    move |_| {
+                        commands.send(DirectoryBrowserCommand::SelectVisible(vec![item_id.clone()]));
+                        commands.send(DirectoryBrowserCommand::CutSelected);
                     }
                 },
-                onclick: move |_| commands.send(DirectoryBrowserCommand::OpenTreeRoot(item.id.clone())),
-                Folder { size: "1rem" }
-                span { "{item.title}" }
+                "Cut"
+            }
+            dxcomp::ContextMenuItem {
+                value: "copy".to_string(),
+                index: 3usize,
+                on_select: {
+                    let item_id = item_id.clone();
+                    move |_| {
+                        commands.send(DirectoryBrowserCommand::SelectVisible(vec![item_id.clone()]));
+                        commands.send(DirectoryBrowserCommand::CopySelected);
+                    }
+                },
+                "Copy"
+            }
+            if is_directory {
+                dxcomp::ContextMenuItem {
+                    value: "new-child".to_string(),
+                    index: 4usize,
+                    on_select: {
+                        let item_id = item_id.clone();
+                        move |_| commands.send(DirectoryBrowserCommand::OpenDialog(DirectoryDialog::NewDirectory {
+                            parent: Some(item_id.clone()),
+                        }))
+                    },
+                    "New Child Directory"
+                }
+                dxcomp::ContextMenuItem {
+                    value: "paste-into".to_string(),
+                    index: 5usize,
+                    on_select: {
+                        let item_id = item_id.clone();
+                        move |_| commands.send(DirectoryBrowserCommand::PasteInto(item_id.clone()))
+                    },
+                    "Paste Into Directory"
+                }
+                dxcomp::ContextMenuItem {
+                    value: "add-existing".to_string(),
+                    index: 6usize,
+                    on_select: {
+                        let item_id = item_id.clone();
+                        move |_| commands.send(DirectoryBrowserCommand::OpenDialog(DirectoryDialog::AddExisting {
+                            parent: item_id.clone(),
+                        }))
+                    },
+                    "Add Existing Item"
+                }
+            }
+            dxcomp::ContextMenuItem {
+                value: "remove".to_string(),
+                index: 7usize,
+                on_select: {
+                    let item_id = item_id.clone();
+                    move |_| {
+                        commands.send(DirectoryBrowserCommand::SelectVisible(vec![item_id.clone()]));
+                        commands.send(DirectoryBrowserCommand::RemoveSelected);
+                    }
+                },
+                "Remove"
+            }
+            dxcomp::ContextMenuItem {
+                value: "delete".to_string(),
+                index: 8usize,
+                on_select: {
+                    let item_id = item_id.clone();
+                    move |_| commands.send(DirectoryBrowserCommand::OpenDialog(DirectoryDialog::ConfirmDelete {
+                        item_ids: vec![item_id.clone()],
+                    }))
+                },
+                "Delete"
+            }
+            dxcomp::ContextMenuItem {
+                value: "refresh".to_string(),
+                index: 9usize,
+                on_select: move |_| commands.send(DirectoryBrowserCommand::Refresh),
+                "Refresh"
+            }
+        }
+    }
+}
+
+#[component]
+fn DirectoryBackgroundContextMenuContent(
+    root: Option<String>,
+    clipboard_available: bool,
+    commands: Coroutine<DirectoryBrowserCommand>,
+) -> Element {
+    rsx! {
+        dxcomp::ContextMenuContent {
+            dxcomp::ContextMenuItem {
+                value: "new-directory".to_string(),
+                index: 0usize,
+                on_select: {
+                    let root = root.clone();
+                    move |_| commands.send(DirectoryBrowserCommand::OpenDialog(DirectoryDialog::NewDirectory {
+                        parent: root.clone(),
+                    }))
+                },
+                "New Directory"
+            }
+            if let Some(parent) = root.clone() {
+                dxcomp::ContextMenuItem {
+                    value: "paste".to_string(),
+                    index: 1usize,
+                    disabled: !clipboard_available,
+                    on_select: {
+                        let parent = parent.clone();
+                        move |_| commands.send(DirectoryBrowserCommand::PasteInto(parent.clone()))
+                    },
+                    "Paste"
+                }
+                dxcomp::ContextMenuItem {
+                    value: "add-existing".to_string(),
+                    index: 2usize,
+                    on_select: {
+                        let parent = parent.clone();
+                        move |_| commands.send(DirectoryBrowserCommand::OpenDialog(DirectoryDialog::AddExisting {
+                            parent: parent.clone(),
+                        }))
+                    },
+                    "Add Existing Item"
+                }
+            }
+            dxcomp::ContextMenuItem {
+                value: "refresh".to_string(),
+                index: 3usize,
+                on_select: move |_| commands.send(DirectoryBrowserCommand::Refresh),
+                "Refresh"
+            }
+        }
+    }
+}
+
+#[component]
+fn DirectoryEmptyState(
+    root: Option<String>,
+    clipboard_available: bool,
+    commands: Coroutine<DirectoryBrowserCommand>,
+) -> Element {
+    let title = if root.is_some() {
+        "No items"
+    } else {
+        "No directories"
+    };
+    rsx! {
+        div { class: "semantic-empty semantic-directory-browser__empty-actions",
+            span { "{title}" }
+            dxcomp::Button {
+                variant: dxcomp::ButtonVariant::Outline,
+                size: dxcomp::ButtonSize::Sm,
+                onclick: {
+                    let root = root.clone();
+                    move |_| commands.send(DirectoryBrowserCommand::OpenDialog(DirectoryDialog::NewDirectory {
+                        parent: root.clone(),
+                    }))
+                },
+                Plus { size: "1rem" }
+                "New Directory"
+            }
+            if let Some(parent) = root.clone() {
+                dxcomp::Button {
+                    variant: dxcomp::ButtonVariant::Outline,
+                    size: dxcomp::ButtonSize::Sm,
+                    onclick: {
+                        let parent = parent.clone();
+                        move |_| commands.send(DirectoryBrowserCommand::OpenDialog(DirectoryDialog::AddExisting {
+                            parent: parent.clone(),
+                        }))
+                    },
+                    Link { size: "1rem" }
+                    "Add Existing"
+                }
+                if clipboard_available {
+                    dxcomp::Button {
+                        variant: dxcomp::ButtonVariant::Outline,
+                        size: dxcomp::ButtonSize::Sm,
+                        onclick: {
+                            let parent = parent.clone();
+                            move |_| commands.send(DirectoryBrowserCommand::PasteInto(parent.clone()))
+                        },
+                        ClipboardPaste { size: "1rem" }
+                        "Paste"
+                    }
+                }
             }
         }
     }
@@ -893,6 +1761,193 @@ fn EntityDetailDialog(
     }
 }
 
+#[component]
+fn DirectoryOperationDialog(
+    dialog: Option<DirectoryDialog>,
+    scope_id: Option<String>,
+    commands: Coroutine<DirectoryBrowserCommand>,
+) -> Element {
+    let client = use_rpc_client();
+    let mut title = use_signal(String::new);
+    let mut add_query = use_signal(String::new);
+    let mut add_selected = use_signal(|| None::<String>);
+    let add_parent = match dialog.as_ref() {
+        Some(DirectoryDialog::AddExisting { parent }) => Some(parent.clone()),
+        _ => None,
+    };
+    let options = use_resource(move || {
+        let client = client.clone();
+        let scope_id = scope_id.clone();
+        let parent = add_parent.clone();
+        let search = add_query();
+        async move {
+            dioxus_sdk_time::sleep(Duration::from_millis(250)).await;
+            let Some(parent) = parent else {
+                return Vec::new();
+            };
+            load_addable_entity_options(client, scope_id, parent, search, 50)
+                .await
+                .unwrap_or_default()
+        }
+    });
+    let options = options.read().clone().unwrap_or_default();
+    let open = dialog.is_some();
+    rsx! {
+        dxcomp::Dialog {
+            open,
+            on_open_change: move |open: bool| {
+                if !open {
+                    commands.send(DirectoryBrowserCommand::CloseDialog);
+                }
+            },
+            match dialog {
+                Some(DirectoryDialog::NewDirectory { parent }) => rsx! {
+                    dxcomp::DialogTitle { "New Directory" }
+                    label { class: "semantic-directory-browser__dialog-field",
+                        span { "Title" }
+                        input {
+                            value: "{title()}",
+                            oninput: move |event| title.set(event.value()),
+                        }
+                    }
+                    div { class: "semantic-directory-browser__dialog-actions",
+                        dxcomp::Button {
+                            variant: dxcomp::ButtonVariant::Outline,
+                            onclick: move |_| commands.send(DirectoryBrowserCommand::CloseDialog),
+                            "Cancel"
+                        }
+                        dxcomp::Button {
+                            disabled: title().trim().is_empty(),
+                            onclick: move |_| commands.send(DirectoryBrowserCommand::CreateDirectory {
+                                parent: parent.clone(),
+                                title: title(),
+                            }),
+                            "Create"
+                        }
+                    }
+                },
+                Some(DirectoryDialog::AddExisting { parent }) => rsx! {
+                    dxcomp::DialogTitle { "Add Existing Item" }
+                    dxcomp::Combobox::<String> {
+                        default_value: add_selected(),
+                        on_value_change: move |value| add_selected.set(value),
+                        on_query_change: move |value| add_query.set(value),
+                        placeholder: "Search entities",
+                        aria_label: "Existing entity",
+                        list_aria_label: "Existing entities",
+                        dxcomp::ComboboxEmpty { "No entity found." }
+                        for (index, option) in options.iter().enumerate() {
+                            dxcomp::ComboboxOption::<String> {
+                                index,
+                                value: option.id.clone(),
+                                text_value: format!("{} {}", option.title, option.id),
+                                span { "{option.title}" }
+                                code { " {option.id}" }
+                            }
+                        }
+                    }
+                    div { class: "semantic-directory-browser__dialog-actions",
+                        dxcomp::Button {
+                            variant: dxcomp::ButtonVariant::Outline,
+                            onclick: move |_| commands.send(DirectoryBrowserCommand::CloseDialog),
+                            "Cancel"
+                        }
+                        dxcomp::Button {
+                            disabled: add_selected().is_none(),
+                            onclick: move |_| {
+                                if let Some(item_id) = add_selected() {
+                                    commands.send(DirectoryBrowserCommand::AddExisting {
+                                        parent: parent.clone(),
+                                        item_id,
+                                    });
+                                }
+                            },
+                            "Add"
+                        }
+                    }
+                },
+                Some(DirectoryDialog::Rename { item_id, title: initial_title }) => {
+                    if title().is_empty() {
+                        title.set(initial_title.clone());
+                    }
+                    rsx! {
+                        dxcomp::DialogTitle { "Rename" }
+                        label { class: "semantic-directory-browser__dialog-field",
+                            span { "Title" }
+                            input {
+                                value: "{title()}",
+                                oninput: move |event| title.set(event.value()),
+                            }
+                        }
+                        div { class: "semantic-directory-browser__dialog-actions",
+                            dxcomp::Button {
+                                variant: dxcomp::ButtonVariant::Outline,
+                                onclick: move |_| commands.send(DirectoryBrowserCommand::CloseDialog),
+                                "Cancel"
+                            }
+                            dxcomp::Button {
+                                disabled: title().trim().is_empty(),
+                                onclick: move |_| commands.send(DirectoryBrowserCommand::RenameItem {
+                                    item_id: item_id.clone(),
+                                    title: title(),
+                                }),
+                                "Rename"
+                            }
+                        }
+                    }
+                },
+                Some(DirectoryDialog::ConfirmRemove { parent, item_ids, orphaned_directory_ids }) => rsx! {
+                    dxcomp::DialogTitle { "Remove Items" }
+                    dxcomp::DialogDescription {
+                        "Removing this selection will unlink it from the current directory. {orphaned_directory_ids.len()} directory item(s) have no other parent and will be deleted, but descendant entities are not recursively deleted."
+                    }
+                    div { class: "semantic-directory-browser__dialog-actions",
+                        dxcomp::Button {
+                            variant: dxcomp::ButtonVariant::Outline,
+                            onclick: move |_| commands.send(DirectoryBrowserCommand::CloseDialog),
+                            "Cancel"
+                        }
+                        dxcomp::Button {
+                            variant: dxcomp::ButtonVariant::Destructive,
+                            onclick: move |_| commands.send(DirectoryBrowserCommand::ConfirmRemove {
+                                parent: parent.clone(),
+                                item_ids: item_ids.clone(),
+                            }),
+                            "Remove"
+                        }
+                    }
+                },
+                Some(DirectoryDialog::ConfirmDelete { item_ids }) => rsx! {
+                    dxcomp::DialogTitle { "Delete Items" }
+                    dxcomp::DialogDescription {
+                        "This deletes the selected entities. Directory child entities are not recursively deleted, but directory links owned by deleted directories are removed."
+                    }
+                    div { class: "semantic-directory-browser__dialog-actions",
+                        dxcomp::Button {
+                            variant: dxcomp::ButtonVariant::Outline,
+                            onclick: move |_| commands.send(DirectoryBrowserCommand::CloseDialog),
+                            "Cancel"
+                        }
+                        dxcomp::Button {
+                            variant: dxcomp::ButtonVariant::Destructive,
+                            onclick: move |_| commands.send(DirectoryBrowserCommand::ConfirmDelete(item_ids.clone())),
+                            "Delete"
+                        }
+                    }
+                },
+                None => rsx! {},
+            }
+        }
+    }
+}
+
+fn cut_item_ids(clipboard: Option<DirectoryClipboard>) -> BTreeSet<String> {
+    clipboard
+        .filter(|clipboard| clipboard.mode == DirectoryClipboardMode::Cut)
+        .map(|clipboard| clipboard.item_ids)
+        .unwrap_or_default()
+}
+
 async fn reload_current_content(
     client: Option<semantic_rpc::RpcClient>,
     scope_id: Option<String>,
@@ -939,6 +1994,17 @@ async fn reload_current_tree(
         "directory browser tree reload requested"
     );
     reload_tree(client, scope_id, (state.expanded_tree)(), state.tree_state).await;
+}
+
+async fn reload_after_mutation(
+    client: Option<semantic_rpc::RpcClient>,
+    scope_id: Option<String>,
+    state: DirectoryBrowserSignals,
+) {
+    reload_current_content(client.clone(), scope_id.clone(), state).await;
+    if (state.tree_open)() {
+        reload_current_tree(client, scope_id, state).await;
+    }
 }
 
 async fn reload_content(

@@ -5,12 +5,14 @@ use semantic_data::bundles::directory::{
     ATTR_CREATED_AT, ATTR_DIRECTORY_NODE_FROM, ATTR_DIRECTORY_NODE_ORDER, ATTR_TITLE,
     ATTR_UPDATED_AT, DIRECTORY_CLASS_ID, DIRECTORY_NODE_CLASS_ID, DIRECTORY_NODE_RELATION_ID,
 };
-use semantic_data::value::{Object, Value};
+use semantic_data::value::{DateTime, Object, Value};
 
 use super::{
     queries::{
-        ATTR_RELATION_RELATION, ATTR_RELATION_TO, ENTITIES_COLLECTION, child_directories_query,
-        child_query, directory_nodes_query, parent_query, root_query,
+        ATTR_RELATION_RELATION, ATTR_RELATION_TO, ENTITIES_COLLECTION, addable_entities_query,
+        child_directories_query, child_ids_query, child_links_query, child_query,
+        directory_nodes_query, directory_outgoing_links_query, max_child_order_query,
+        parent_count_query, parent_links_query, parent_query, root_query,
     },
     types::{
         DirectoryBreadcrumb, DirectoryBrowseItem, DirectoryPage, DirectorySort, DirectoryTreeRow,
@@ -18,6 +20,13 @@ use super::{
 };
 
 const DEFAULT_TREE_LIMIT: usize = 200;
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(super) struct UnlinkOutcome {
+    pub removed_item_ids: Vec<String>,
+    pub orphaned_directory_ids: Vec<String>,
+    pub requires_confirmation: bool,
+}
 
 pub(super) async fn load_directory_page(
     client: semantic_rpc::RpcClient,
@@ -215,6 +224,336 @@ pub(super) async fn move_directory_item(
         .map_err(|err| err.to_string())
 }
 
+pub(super) async fn create_directory(
+    client: semantic_rpc::RpcClient,
+    scope_id: Option<String>,
+    parent: Option<String>,
+    title: String,
+) -> std::result::Result<String, String> {
+    let title = title.trim();
+    if title.is_empty() {
+        return Err("Directory title is required".to_string());
+    }
+    if let Some(parent_id) = parent.as_deref() {
+        validate_directory(client.clone(), scope_id.clone(), parent_id).await?;
+    }
+
+    let id = format!("directory-{}", unix_time_millis());
+    let now = Value::DateTime(DateTime::now_utc());
+    let mut directory = Object::new();
+    directory.insert("id", Value::String(id.clone()));
+    directory.insert("type", Value::String(DIRECTORY_CLASS_ID.to_string()));
+    directory.insert("title", Value::String(title.to_string()));
+    directory.insert(ATTR_TITLE, Value::String(title.to_string()));
+    directory.insert("created_at", now.clone());
+    directory.insert(ATTR_CREATED_AT, now.clone());
+    directory.insert("updated_at", now.clone());
+    directory.insert(ATTR_UPDATED_AT, now);
+
+    let mut operations = vec![Value::Object(batch_upsert_operation(
+        ENTITIES_COLLECTION.to_string(),
+        id.clone(),
+        directory,
+    ))];
+    if let Some(parent_id) = parent {
+        let order = next_directory_order(client.clone(), scope_id.clone(), &parent_id).await?;
+        operations.push(Value::Object(batch_upsert_operation(
+            ENTITIES_COLLECTION.to_string(),
+            directory_node_id(&parent_id, &id),
+            directory_node_object(&parent_id, &id, order),
+        )));
+    }
+    run_batch_operations(client, scope_id, operations).await?;
+    Ok(id)
+}
+
+pub(super) async fn add_items_to_directory(
+    client: semantic_rpc::RpcClient,
+    scope_id: Option<String>,
+    target_directory_id: String,
+    item_ids: Vec<String>,
+) -> std::result::Result<(), String> {
+    add_items_to_directory_inner(client, scope_id, target_directory_id, item_ids).await
+}
+
+pub(super) async fn copy_items_to_directory(
+    client: semantic_rpc::RpcClient,
+    scope_id: Option<String>,
+    target_directory_id: String,
+    item_ids: Vec<String>,
+) -> std::result::Result<(), String> {
+    add_items_to_directory_inner(client, scope_id, target_directory_id, item_ids).await
+}
+
+pub(super) async fn cut_items_to_directory(
+    client: semantic_rpc::RpcClient,
+    scope_id: Option<String>,
+    source_directory_id: Option<String>,
+    target_directory_id: String,
+    item_ids: Vec<String>,
+) -> std::result::Result<(), String> {
+    if source_directory_id.as_deref() == Some(target_directory_id.as_str()) {
+        return Ok(());
+    }
+    validate_directory(client.clone(), scope_id.clone(), &target_directory_id).await?;
+    let item_ids = dedupe_ids(item_ids);
+    if item_ids.is_empty() {
+        return Ok(());
+    }
+    validate_addable_items(
+        client.clone(),
+        scope_id.clone(),
+        &target_directory_id,
+        &item_ids,
+    )
+    .await?;
+
+    let existing_target_links = load_child_links(
+        client.clone(),
+        scope_id.clone(),
+        &target_directory_id,
+        &item_ids,
+    )
+    .await?;
+    let linked_target_ids = existing_target_links
+        .into_iter()
+        .filter_map(|link| link.child_id)
+        .collect::<BTreeSet<_>>();
+
+    let mut order =
+        next_directory_order(client.clone(), scope_id.clone(), &target_directory_id).await?;
+    let mut operations = Vec::new();
+    if let Some(source_id) = source_directory_id.as_deref() {
+        let source_links =
+            load_child_links(client.clone(), scope_id.clone(), source_id, &item_ids).await?;
+        operations.extend(source_links.into_iter().map(|link| {
+            Value::Object(batch_delete_operation(
+                ENTITIES_COLLECTION.to_string(),
+                link.node_id,
+            ))
+        }));
+    }
+    for item_id in item_ids {
+        if linked_target_ids.contains(&item_id) {
+            continue;
+        }
+        operations.push(Value::Object(batch_upsert_operation(
+            ENTITIES_COLLECTION.to_string(),
+            directory_node_id(&target_directory_id, &item_id),
+            directory_node_object(&target_directory_id, &item_id, order),
+        )));
+        order = order.saturating_add(1);
+    }
+    run_batch_operations(client, scope_id, operations).await
+}
+
+pub(super) async fn unlink_items_from_directory(
+    client: semantic_rpc::RpcClient,
+    scope_id: Option<String>,
+    parent_id: String,
+    item_ids: Vec<String>,
+) -> std::result::Result<UnlinkOutcome, String> {
+    unlink_items_from_directory_inner(client, scope_id, parent_id, item_ids, false).await
+}
+
+pub(super) async fn unlink_items_from_directory_confirmed(
+    client: semantic_rpc::RpcClient,
+    scope_id: Option<String>,
+    parent_id: String,
+    item_ids: Vec<String>,
+) -> std::result::Result<UnlinkOutcome, String> {
+    unlink_items_from_directory_inner(client, scope_id, parent_id, item_ids, true).await
+}
+
+pub(super) async fn hard_delete_items(
+    client: semantic_rpc::RpcClient,
+    scope_id: Option<String>,
+    item_ids: Vec<String>,
+) -> std::result::Result<(), String> {
+    let item_ids = dedupe_ids(item_ids);
+    if item_ids.is_empty() {
+        return Ok(());
+    }
+
+    let mut operations = Vec::new();
+    for item_id in &item_ids {
+        let incoming = load_parent_links(client.clone(), scope_id.clone(), item_id).await?;
+        operations.extend(incoming.into_iter().map(|link| {
+            Value::Object(batch_delete_operation(
+                ENTITIES_COLLECTION.to_string(),
+                link.node_id,
+            ))
+        }));
+        if let Some(entity) = load_entity(
+            client.clone(),
+            scope_id.clone(),
+            ENTITIES_COLLECTION,
+            item_id,
+        )
+        .await?
+            && is_directory_object(&entity)
+        {
+            let outgoing =
+                load_directory_outgoing_links(client.clone(), scope_id.clone(), item_id).await?;
+            operations.extend(outgoing.into_iter().map(|link| {
+                Value::Object(batch_delete_operation(
+                    ENTITIES_COLLECTION.to_string(),
+                    link.node_id,
+                ))
+            }));
+        }
+        operations.push(Value::Object(batch_delete_operation(
+            ENTITIES_COLLECTION.to_string(),
+            item_id.clone(),
+        )));
+    }
+    run_batch_operations(client, scope_id, operations).await
+}
+
+#[allow(dead_code)]
+pub(super) async fn delete_entities(
+    client: semantic_rpc::RpcClient,
+    scope_id: Option<String>,
+    item_ids: Vec<String>,
+) -> std::result::Result<(), String> {
+    hard_delete_items(client, scope_id, item_ids).await
+}
+
+pub(super) async fn rename_directory_item(
+    client: semantic_rpc::RpcClient,
+    scope_id: Option<String>,
+    item_id: String,
+    title: String,
+) -> std::result::Result<(), String> {
+    let title = title.trim();
+    if title.is_empty() {
+        return Err("Title is required".to_string());
+    }
+    let Some(mut entity) = load_entity(
+        client.clone(),
+        scope_id.clone(),
+        ENTITIES_COLLECTION,
+        &item_id,
+    )
+    .await?
+    else {
+        return Err("Item not found".to_string());
+    };
+    let now = Value::DateTime(DateTime::now_utc());
+    entity.insert("title", Value::String(title.to_string()));
+    entity.insert(ATTR_TITLE, Value::String(title.to_string()));
+    entity.insert("updated_at", now.clone());
+    entity.insert(ATTR_UPDATED_AT, now);
+    run_batch_operations(
+        client,
+        scope_id,
+        vec![Value::Object(batch_upsert_operation(
+            ENTITIES_COLLECTION.to_string(),
+            item_id,
+            entity,
+        ))],
+    )
+    .await
+}
+
+pub(super) async fn load_addable_entity_options(
+    client: semantic_rpc::RpcClient,
+    scope_id: Option<String>,
+    parent_id: String,
+    search: String,
+    limit: usize,
+) -> std::result::Result<Vec<DirectoryBrowseItem>, String> {
+    validate_directory(client.clone(), scope_id.clone(), &parent_id).await?;
+    let rows = run_select_query(
+        client,
+        scope_id,
+        addable_entities_query(&parent_id, &search, limit),
+    )
+    .await?;
+    Ok(rows.into_iter().map(row_to_item).collect())
+}
+
+pub(super) async fn directory_parent_count(
+    client: semantic_rpc::RpcClient,
+    scope_id: Option<String>,
+    child_id: &str,
+) -> std::result::Result<usize, String> {
+    let rows = run_select_query(client, scope_id, parent_count_query(child_id)).await?;
+    Ok(rows
+        .first()
+        .and_then(|row| row.get("parent_count"))
+        .and_then(value_as_usize)
+        .unwrap_or(0))
+}
+
+#[allow(dead_code)]
+pub(super) async fn load_child_ids_for_directory(
+    client: semantic_rpc::RpcClient,
+    scope_id: Option<String>,
+    parent_id: &str,
+) -> std::result::Result<BTreeSet<String>, String> {
+    let rows = run_select_query(client, scope_id, child_ids_query(parent_id)).await?;
+    Ok(rows
+        .iter()
+        .filter_map(|row| {
+            row.get("directory_to")
+                .or_else(|| row.get(ATTR_RELATION_TO))
+                .and_then(Value::as_str)
+                .map(str::to_string)
+        })
+        .collect())
+}
+
+#[allow(dead_code)]
+pub(super) async fn load_directory_links_for_parent(
+    client: semantic_rpc::RpcClient,
+    scope_id: Option<String>,
+    parent_id: &str,
+    child_ids: &[String],
+) -> std::result::Result<Vec<DirectoryLink>, String> {
+    load_child_links(client, scope_id, parent_id, child_ids).await
+}
+
+#[allow(dead_code)]
+pub(super) async fn load_all_directory_links_for_items(
+    client: semantic_rpc::RpcClient,
+    scope_id: Option<String>,
+    item_ids: &[String],
+) -> std::result::Result<Vec<DirectoryLink>, String> {
+    let mut links = Vec::new();
+    for item_id in item_ids {
+        links.extend(load_parent_links(client.clone(), scope_id.clone(), item_id).await?);
+        if let Some(entity) = load_entity(
+            client.clone(),
+            scope_id.clone(),
+            ENTITIES_COLLECTION,
+            item_id,
+        )
+        .await?
+            && is_directory_object(&entity)
+        {
+            links.extend(
+                load_directory_outgoing_links(client.clone(), scope_id.clone(), item_id).await?,
+            );
+        }
+    }
+    Ok(links)
+}
+
+pub(super) async fn next_directory_order(
+    client: semantic_rpc::RpcClient,
+    scope_id: Option<String>,
+    parent_id: &str,
+) -> std::result::Result<u64, String> {
+    let rows = run_select_query(client, scope_id, max_child_order_query(parent_id)).await?;
+    Ok(rows
+        .first()
+        .and_then(|row| row.get("max_order"))
+        .and_then(|value| value_as_u64(Some(value)))
+        .map(|order| order.saturating_add(1))
+        .unwrap_or(0))
+}
+
 async fn push_tree_row(
     rows: &mut Vec<DirectoryTreeRow>,
     client: semantic_rpc::RpcClient,
@@ -256,6 +595,15 @@ async fn push_tree_row(
     Ok(())
 }
 
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(super) struct DirectoryLink {
+    pub node_id: String,
+    pub parent_id: Option<String>,
+    pub child_id: Option<String>,
+    pub order: Option<u64>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
 struct ParentLink {
     node_id: String,
     parent_id: String,
@@ -286,24 +634,268 @@ fn parent_link_from_row(row: &Object) -> Option<ParentLink> {
     })
 }
 
+fn directory_link_from_row(row: &Object) -> Option<DirectoryLink> {
+    Some(DirectoryLink {
+        node_id: row.get("id").and_then(Value::as_str)?.to_string(),
+        parent_id: row
+            .get("directory_from")
+            .or_else(|| row.get(ATTR_DIRECTORY_NODE_FROM))
+            .and_then(Value::as_str)
+            .map(str::to_string),
+        child_id: row
+            .get("directory_to")
+            .or_else(|| row.get(ATTR_RELATION_TO))
+            .or_else(|| row.get("to"))
+            .and_then(Value::as_str)
+            .map(str::to_string),
+        order: value_as_u64(
+            row.get("directory_order")
+                .or_else(|| row.get("order"))
+                .or_else(|| row.get(ATTR_DIRECTORY_NODE_ORDER)),
+        ),
+    })
+}
+
+async fn load_child_links(
+    client: semantic_rpc::RpcClient,
+    scope_id: Option<String>,
+    parent_id: &str,
+    child_ids: &[String],
+) -> std::result::Result<Vec<DirectoryLink>, String> {
+    let rows = run_select_query(client, scope_id, child_links_query(parent_id, child_ids)).await?;
+    Ok(rows.iter().filter_map(directory_link_from_row).collect())
+}
+
+async fn load_parent_links(
+    client: semantic_rpc::RpcClient,
+    scope_id: Option<String>,
+    child_id: &str,
+) -> std::result::Result<Vec<DirectoryLink>, String> {
+    let rows = run_select_query(client, scope_id, parent_links_query(child_id)).await?;
+    Ok(rows.iter().filter_map(directory_link_from_row).collect())
+}
+
+async fn load_directory_outgoing_links(
+    client: semantic_rpc::RpcClient,
+    scope_id: Option<String>,
+    directory_id: &str,
+) -> std::result::Result<Vec<DirectoryLink>, String> {
+    let rows = run_select_query(
+        client,
+        scope_id,
+        directory_outgoing_links_query(directory_id),
+    )
+    .await?;
+    Ok(rows.iter().filter_map(directory_link_from_row).collect())
+}
+
+async fn add_items_to_directory_inner(
+    client: semantic_rpc::RpcClient,
+    scope_id: Option<String>,
+    target_directory_id: String,
+    item_ids: Vec<String>,
+) -> std::result::Result<(), String> {
+    validate_directory(client.clone(), scope_id.clone(), &target_directory_id).await?;
+    let item_ids = dedupe_ids(item_ids);
+    if item_ids.is_empty() {
+        return Ok(());
+    }
+    validate_addable_items(
+        client.clone(),
+        scope_id.clone(),
+        &target_directory_id,
+        &item_ids,
+    )
+    .await?;
+
+    let existing_links = load_child_links(
+        client.clone(),
+        scope_id.clone(),
+        &target_directory_id,
+        &item_ids,
+    )
+    .await?;
+    let existing_ids = existing_links
+        .into_iter()
+        .filter_map(|link| link.child_id)
+        .collect::<BTreeSet<_>>();
+    let mut order =
+        next_directory_order(client.clone(), scope_id.clone(), &target_directory_id).await?;
+    let mut operations = Vec::new();
+    for item_id in item_ids {
+        if existing_ids.contains(&item_id) {
+            continue;
+        }
+        operations.push(Value::Object(batch_upsert_operation(
+            ENTITIES_COLLECTION.to_string(),
+            directory_node_id(&target_directory_id, &item_id),
+            directory_node_object(&target_directory_id, &item_id, order),
+        )));
+        order = order.saturating_add(1);
+    }
+    run_batch_operations(client, scope_id, operations).await
+}
+
+async fn unlink_items_from_directory_inner(
+    client: semantic_rpc::RpcClient,
+    scope_id: Option<String>,
+    parent_id: String,
+    item_ids: Vec<String>,
+    delete_orphaned_directories: bool,
+) -> std::result::Result<UnlinkOutcome, String> {
+    validate_directory(client.clone(), scope_id.clone(), &parent_id).await?;
+    let item_ids = dedupe_ids(item_ids);
+    if item_ids.is_empty() {
+        return Ok(UnlinkOutcome {
+            removed_item_ids: Vec::new(),
+            orphaned_directory_ids: Vec::new(),
+            requires_confirmation: false,
+        });
+    }
+
+    let links = load_child_links(client.clone(), scope_id.clone(), &parent_id, &item_ids).await?;
+    let linked_ids = links
+        .iter()
+        .filter_map(|link| link.child_id.clone())
+        .collect::<BTreeSet<_>>();
+    let mut orphaned_directory_ids = Vec::new();
+    for item_id in &linked_ids {
+        let Some(entity) = load_entity(
+            client.clone(),
+            scope_id.clone(),
+            ENTITIES_COLLECTION,
+            item_id,
+        )
+        .await?
+        else {
+            continue;
+        };
+        if is_directory_object(&entity)
+            && directory_parent_count(client.clone(), scope_id.clone(), item_id).await? <= 1
+        {
+            orphaned_directory_ids.push(item_id.clone());
+        }
+    }
+    if !orphaned_directory_ids.is_empty() && !delete_orphaned_directories {
+        return Ok(UnlinkOutcome {
+            removed_item_ids: linked_ids.into_iter().collect(),
+            orphaned_directory_ids,
+            requires_confirmation: true,
+        });
+    }
+
+    let orphaned_set = orphaned_directory_ids
+        .iter()
+        .cloned()
+        .collect::<BTreeSet<_>>();
+    let mut operations = links
+        .into_iter()
+        .map(|link| {
+            Value::Object(batch_delete_operation(
+                ENTITIES_COLLECTION.to_string(),
+                link.node_id,
+            ))
+        })
+        .collect::<Vec<_>>();
+    for directory_id in &orphaned_directory_ids {
+        let outgoing =
+            load_directory_outgoing_links(client.clone(), scope_id.clone(), directory_id).await?;
+        operations.extend(outgoing.into_iter().map(|link| {
+            Value::Object(batch_delete_operation(
+                ENTITIES_COLLECTION.to_string(),
+                link.node_id,
+            ))
+        }));
+        operations.push(Value::Object(batch_delete_operation(
+            ENTITIES_COLLECTION.to_string(),
+            directory_id.clone(),
+        )));
+    }
+
+    run_batch_operations(client, scope_id, operations).await?;
+    Ok(UnlinkOutcome {
+        removed_item_ids: linked_ids.into_iter().collect(),
+        orphaned_directory_ids: orphaned_set.into_iter().collect(),
+        requires_confirmation: false,
+    })
+}
+
 async fn target_has_ancestor(
     client: semantic_rpc::RpcClient,
     scope_id: Option<String>,
     target_id: &str,
     ancestor_id: &str,
 ) -> std::result::Result<bool, String> {
-    let mut current = target_id.to_string();
+    let mut seen = BTreeSet::new();
+    let mut pending = vec![target_id.to_string()];
     for _ in 0..64 {
-        let Some(parent) = load_parent_link(client.clone(), scope_id.clone(), &current).await?
-        else {
+        let Some(current_id) = pending.pop() else {
             return Ok(false);
         };
-        if parent.parent_id == ancestor_id {
-            return Ok(true);
+        if !seen.insert(current_id.clone()) {
+            continue;
         }
-        current = parent.parent_id;
+        for parent in load_parent_links(client.clone(), scope_id.clone(), &current_id).await? {
+            let Some(parent_id) = parent.parent_id else {
+                continue;
+            };
+            if parent_id == ancestor_id {
+                return Ok(true);
+            }
+            pending.push(parent_id);
+        }
     }
     Err("Directory ancestry is too deep or cyclic".to_string())
+}
+
+async fn validate_directory(
+    client: semantic_rpc::RpcClient,
+    scope_id: Option<String>,
+    directory_id: &str,
+) -> std::result::Result<Object, String> {
+    let Some(directory) = load_entity(client, scope_id, ENTITIES_COLLECTION, directory_id).await?
+    else {
+        return Err("Target directory not found".to_string());
+    };
+    if !is_directory_object(&directory) {
+        return Err("Target must be a directory".to_string());
+    }
+    Ok(directory)
+}
+
+async fn validate_addable_items(
+    client: semantic_rpc::RpcClient,
+    scope_id: Option<String>,
+    target_directory_id: &str,
+    item_ids: &[String],
+) -> std::result::Result<(), String> {
+    for item_id in item_ids {
+        if item_id == target_directory_id {
+            return Err("Cannot add a directory to itself".to_string());
+        }
+        let Some(item) = load_entity(
+            client.clone(),
+            scope_id.clone(),
+            ENTITIES_COLLECTION,
+            item_id,
+        )
+        .await?
+        else {
+            return Err(format!("Item not found: {item_id}"));
+        };
+        if is_directory_object(&item)
+            && target_has_ancestor(
+                client.clone(),
+                scope_id.clone(),
+                target_directory_id,
+                item_id,
+            )
+            .await?
+        {
+            return Err("Cannot add a directory to one of its descendants".to_string());
+        }
+    }
+    Ok(())
 }
 
 fn directory_node_object(parent_id: &str, child_id: &str, order: u64) -> Object {
@@ -354,6 +946,41 @@ fn batch_upsert_operation(collection: String, id: String, object: Object) -> Obj
     operation.insert("id", Value::String(id));
     operation.insert("object", Value::Object(object));
     operation
+}
+
+async fn run_batch_operations(
+    client: semantic_rpc::RpcClient,
+    scope_id: Option<String>,
+    operations: Vec<Value>,
+) -> std::result::Result<(), String> {
+    if operations.is_empty() {
+        return Ok(());
+    }
+    let mut payload = Object::new();
+    if let Some(scope_id) = scope_id {
+        payload.insert("scope_id", Value::String(scope_id));
+    }
+    payload.insert("operations", Value::List(operations));
+    client
+        .invoke_value("semantic.db.batch", Value::Object(payload))
+        .await
+        .map(|_| ())
+        .map_err(|err| err.to_string())
+}
+
+fn dedupe_ids(item_ids: Vec<String>) -> Vec<String> {
+    let mut seen = BTreeSet::new();
+    item_ids
+        .into_iter()
+        .filter(|item_id| seen.insert(item_id.clone()))
+        .collect()
+}
+
+fn unix_time_millis() -> u128 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|duration| duration.as_millis())
+        .unwrap_or_default()
 }
 
 struct BreadcrumbLoad {
@@ -535,6 +1162,20 @@ fn value_as_u64(value: Option<&Value>) -> Option<u64> {
         Some(Value::I32(value)) => (*value).try_into().ok(),
         Some(Value::I16(value)) => (*value).try_into().ok(),
         Some(Value::I8(value)) => (*value).try_into().ok(),
+        _ => None,
+    }
+}
+
+fn value_as_usize(value: &Value) -> Option<usize> {
+    match value {
+        Value::U64(value) => (*value).try_into().ok(),
+        Value::U32(value) => (*value).try_into().ok(),
+        Value::U16(value) => Some(usize::from(*value)),
+        Value::U8(value) => Some(usize::from(*value)),
+        Value::I64(value) => (*value).try_into().ok(),
+        Value::I32(value) => (*value).try_into().ok(),
+        Value::I16(value) => (*value).try_into().ok(),
+        Value::I8(value) => (*value).try_into().ok(),
         _ => None,
     }
 }

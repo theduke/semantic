@@ -457,8 +457,11 @@ pre {
 
 .semantic-directory-browser {
   display: grid;
-  gap: var(--semantic-space-4);
+  grid-template-rows: auto auto minmax(0, 1fr);
+  gap: var(--semantic-space-3);
   min-height: 70vh;
+  min-width: 0;
+  overflow: hidden;
 }
 
 .semantic-directory-browser__toolbar {
@@ -466,6 +469,21 @@ pre {
   grid-template-columns: minmax(0, 1fr) auto;
   gap: var(--semantic-space-3);
   align-items: center;
+}
+
+.semantic-directory-browser__selection-toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--semantic-space-2);
+  align-items: center;
+  min-height: 36px;
+  visibility: hidden;
+  pointer-events: none;
+}
+
+.semantic-directory-browser__selection-toolbar[data-active="true"] {
+  visibility: visible;
+  pointer-events: auto;
 }
 
 .semantic-directory-browser__breadcrumbs,
@@ -500,16 +518,48 @@ pre {
   font-size: 13px;
 }
 
+.semantic-directory-browser__selection-count {
+  color: var(--semantic-text-muted);
+  font-size: 13px;
+}
+
+.semantic-directory-browser__dialog-field {
+  display: grid;
+  gap: var(--semantic-space-2);
+  margin-block: var(--semantic-space-3);
+}
+
+.semantic-directory-browser__dialog-field input {
+  min-width: min(28rem, 70vw);
+}
+
+.semantic-directory-browser__empty-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--semantic-space-2);
+  align-items: center;
+  justify-content: center;
+}
+
 .semantic-directory-browser__body {
   display: grid;
-  grid-template-columns: minmax(220px, 280px) minmax(0, 1fr);
   gap: var(--semantic-space-4);
   min-height: 0;
+  min-width: 0;
+}
+
+.semantic-directory-browser__body[data-tree-open="true"] {
+  grid-template-columns: minmax(220px, 280px) minmax(0, 1fr);
+}
+
+.semantic-directory-browser__body[data-tree-open="false"] {
+  grid-template-columns: minmax(0, 1fr);
 }
 
 .semantic-directory-browser__tree,
 .semantic-directory-browser__content {
   min-width: 0;
+  min-height: 0;
   border: 1px solid var(--semantic-border-soft);
   border-radius: var(--semantic-radius);
   background: var(--semantic-surface);
@@ -518,12 +568,22 @@ pre {
 .semantic-directory-browser__tree {
   padding: var(--semantic-space-2);
   overflow: auto;
+  scrollbar-gutter: stable both-edges;
 }
 
 .semantic-directory-browser__content {
   display: grid;
+  grid-template-rows: minmax(0, 1fr) auto;
   gap: var(--semantic-space-3);
+  overflow: hidden;
   padding: var(--semantic-space-3);
+}
+
+.semantic-directory-browser__items {
+  min-height: 0;
+  min-width: 0;
+  overflow: auto;
+  scrollbar-gutter: stable both-edges;
 }
 
 .semantic-directory-browser__tree-row {
@@ -536,6 +596,30 @@ pre {
 
 .semantic-directory-browser__tree-row[data-active="true"] {
   background: var(--semantic-bg);
+}
+
+.semantic-directory-browser__tree-link[data-selected="true"],
+.semantic-directory-browser__row[data-selected="true"],
+.semantic-directory-browser__tile[data-selected="true"] {
+  outline: 2px solid #62a8bb;
+  outline-offset: -2px;
+  background: #edf7fa;
+  box-shadow: inset 3px 0 0 var(--semantic-accent);
+}
+
+.semantic-directory-browser__tree-link[data-cut="true"],
+.semantic-directory-browser__row[data-cut="true"],
+.semantic-directory-browser__tile[data-cut="true"] {
+  opacity: 0.62;
+  box-shadow: inset 0 0 0 1px var(--semantic-border);
+}
+
+.semantic-directory-browser__tree-link[data-selected="true"][data-cut="true"],
+.semantic-directory-browser__row[data-selected="true"][data-cut="true"],
+.semantic-directory-browser__tile[data-selected="true"][data-cut="true"] {
+  box-shadow:
+    inset 3px 0 0 var(--semantic-accent),
+    inset 0 0 0 1px var(--semantic-border);
 }
 
 .semantic-directory-browser__tree-expander,
@@ -633,7 +717,9 @@ pre {
 }
 
 .semantic-directory-browser__pagination {
-  justify-self: end;
+  justify-self: center;
+  align-self: end;
+  padding-block-start: var(--semantic-space-2);
 }
 
 .semantic-directory-browser__page-label {
@@ -680,9 +766,13 @@ pre {
   }
 
   .semantic-directory-browser__toolbar,
-  .semantic-directory-browser__body,
   .semantic-directory-browser__grid-row {
     grid-template-columns: 1fr;
+  }
+
+  .semantic-directory-browser__body[data-tree-open="true"],
+  .semantic-directory-browser__body[data-tree-open="false"] {
+    grid-template-columns: minmax(0, 1fr);
   }
 
   .semantic-directory-browser__row {
