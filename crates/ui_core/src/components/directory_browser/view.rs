@@ -21,8 +21,6 @@ use super::{
     },
 };
 
-const DIRECTORY_DRAG_MIME: &str = "application/x-semantic-directory-item-id";
-
 #[derive(Clone, Debug, PartialEq)]
 enum LoadState<T> {
     Loading,
@@ -288,7 +286,7 @@ fn use_directory_browser_coroutine(
                             continue;
                         };
                         if item_id == target_directory_id {
-                            warn!(
+                            info!(
                                 item_id = item_id.as_str(),
                                 "directory browser drop ignored because source equals target"
                             );
@@ -554,7 +552,9 @@ pub fn DirectoryBrowser(props: DirectoryBrowserProps) -> Element {
             if let Some(err) = move_error() {
                 div { class: "semantic-error", "{err}" }
             }
-            div { class: "semantic-directory-browser__body",
+            div {
+                class: "semantic-directory-browser__body",
+                onmouseup: move |_| end_drag(commands),
                 if tree_open() {
                     aside { class: "semantic-directory-browser__tree",
                         match &*tree_state.read() {
@@ -695,7 +695,7 @@ fn DirectoryListRow(
         button {
             class: "semantic-directory-browser__row",
             "data-drop-target": item.is_directory,
-            draggable: "true",
+            "data-draggable": true,
             onmousedown: {
                 let item_id = item.id.clone();
                 move |_| begin_drag(item_id.clone(), commands)
@@ -703,25 +703,10 @@ fn DirectoryListRow(
             onmouseup: {
                 let target_id = item.id.clone();
                 let is_directory = item.is_directory;
-                move |_| move_dragged_item_to_directory(None, target_id.clone(), is_directory, true, commands)
-            },
-            ondragstart: {
-                let item_id = item.id.clone();
-                move |event: DragEvent| start_item_drag(event, item_id.clone(), commands)
-            },
-            ondragend: move |_| end_drag(commands),
-            ondragenter: {
-                let is_directory = item.is_directory;
-                move |event: DragEvent| allow_drop_on_directory(event, is_directory)
-            },
-            ondragover: {
-                let is_directory = item.is_directory;
-                move |event: DragEvent| allow_drop_on_directory(event, is_directory)
-            },
-            ondrop: {
-                let target_id = item.id.clone();
-                let is_directory = item.is_directory;
-                move |event: DragEvent| drop_on_directory(event, target_id.clone(), is_directory, commands)
+                move |event: MouseEvent| {
+                    event.stop_propagation();
+                    move_dragged_item_to_directory(None, target_id.clone(), is_directory, true, commands);
+                }
             },
             onclick: move |_| commands.send(DirectoryBrowserCommand::OpenItem(item.clone())),
             if item.is_directory {
@@ -748,7 +733,7 @@ fn DirectoryTile(
         button {
             class: "semantic-directory-browser__tile",
             "data-drop-target": item.is_directory,
-            draggable: "true",
+            "data-draggable": true,
             onmousedown: {
                 let item_id = item.id.clone();
                 move |_| begin_drag(item_id.clone(), commands)
@@ -756,25 +741,10 @@ fn DirectoryTile(
             onmouseup: {
                 let target_id = item.id.clone();
                 let is_directory = item.is_directory;
-                move |_| move_dragged_item_to_directory(None, target_id.clone(), is_directory, true, commands)
-            },
-            ondragstart: {
-                let item_id = item.id.clone();
-                move |event: DragEvent| start_item_drag(event, item_id.clone(), commands)
-            },
-            ondragend: move |_| end_drag(commands),
-            ondragenter: {
-                let is_directory = item.is_directory;
-                move |event: DragEvent| allow_drop_on_directory(event, is_directory)
-            },
-            ondragover: {
-                let is_directory = item.is_directory;
-                move |event: DragEvent| allow_drop_on_directory(event, is_directory)
-            },
-            ondrop: {
-                let target_id = item.id.clone();
-                let is_directory = item.is_directory;
-                move |event: DragEvent| drop_on_directory(event, target_id.clone(), is_directory, commands)
+                move |event: MouseEvent| {
+                    event.stop_propagation();
+                    move_dragged_item_to_directory(None, target_id.clone(), is_directory, true, commands);
+                }
             },
             onclick: move |_| commands.send(DirectoryBrowserCommand::OpenItem(item.clone())),
             if item.is_directory {
@@ -823,29 +793,17 @@ fn DirectoryTreeRowView(
             button {
                 class: "semantic-directory-browser__tree-link",
                 "data-drop-target": true,
-                draggable: "true",
+                "data-draggable": true,
                 onmousedown: {
                     let item_id = item.id.clone();
                     move |_| begin_drag(item_id.clone(), commands)
                 },
                 onmouseup: {
                     let target_id = item.id.clone();
-                    move |_| move_dragged_item_to_directory(None, target_id.clone(), true, true, commands)
-                },
-                ondragstart: {
-                    let item_id = item.id.clone();
-                    move |event: DragEvent| start_item_drag(event, item_id.clone(), commands)
-                },
-                ondragend: move |_| end_drag(commands),
-                ondragenter: {
-                    move |event: DragEvent| allow_drop_on_directory(event, true)
-                },
-                ondragover: {
-                    move |event: DragEvent| allow_drop_on_directory(event, true)
-                },
-                ondrop: {
-                    let target_id = item.id.clone();
-                    move |event: DragEvent| drop_on_directory(event, target_id.clone(), true, commands)
+                    move |event: MouseEvent| {
+                        event.stop_propagation();
+                        move_dragged_item_to_directory(None, target_id.clone(), true, true, commands);
+                    }
                 },
                 onclick: move |_| commands.send(DirectoryBrowserCommand::OpenTreeRoot(item.id.clone())),
                 Folder { size: "1rem" }
@@ -1053,47 +1011,6 @@ fn begin_drag(item_id: String, commands: Coroutine<DirectoryBrowserCommand>) {
 
 fn end_drag(commands: Coroutine<DirectoryBrowserCommand>) {
     commands.send(DirectoryBrowserCommand::EndDrag);
-}
-
-fn start_item_drag(
-    event: DragEvent,
-    item_id: String,
-    commands: Coroutine<DirectoryBrowserCommand>,
-) {
-    let transfer = event.data_transfer();
-    transfer.set_effect_allowed("move");
-    let _ = transfer.set_data(DIRECTORY_DRAG_MIME, &item_id);
-    let _ = transfer.set_data("text/plain", &item_id);
-    begin_drag(item_id, commands);
-}
-
-fn allow_drop_on_directory(event: DragEvent, is_directory: bool) {
-    if !is_directory {
-        return;
-    }
-    event.prevent_default();
-    event.data_transfer().set_drop_effect("move");
-}
-
-fn drop_on_directory(
-    event: DragEvent,
-    target_directory_id: String,
-    is_directory: bool,
-    commands: Coroutine<DirectoryBrowserCommand>,
-) {
-    event.prevent_default();
-    event.stop_propagation();
-    let dropped_item = event
-        .data_transfer()
-        .get_data(DIRECTORY_DRAG_MIME)
-        .or_else(|| event.data_transfer().get_data("text/plain"));
-    move_dragged_item_to_directory(
-        dropped_item,
-        target_directory_id,
-        is_directory,
-        false,
-        commands,
-    );
 }
 
 fn move_dragged_item_to_directory(

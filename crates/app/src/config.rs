@@ -1,10 +1,20 @@
 use std::path::{Path, PathBuf};
 
-#[derive(Clone, Debug, Default, Eq, PartialEq)]
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub struct AppConfig {
     pub data_dir: Option<PathBuf>,
     pub temp_dir: Option<PathBuf>,
     pub auto_analyze_media: bool,
+}
+
+impl Default for AppConfig {
+    fn default() -> Self {
+        Self {
+            data_dir: None,
+            temp_dir: None,
+            auto_analyze_media: true,
+        }
+    }
 }
 
 impl AppConfig {
@@ -32,7 +42,8 @@ impl AppConfig {
         let temp_dir = std::env::var_os("SEMANTIC_TEMP_DIR").map(PathBuf::from);
         let auto_analyze_media = std::env::var("SEMANTIC_AUTO_ANALYZE_MEDIA")
             .ok()
-            .is_some_and(|value| parse_bool(&value).unwrap_or(false));
+            .and_then(|value| parse_bool(&value))
+            .unwrap_or_else(|| Self::default().auto_analyze_media);
         Self {
             data_dir,
             temp_dir,
@@ -93,4 +104,24 @@ fn fs_uri_for_path(path: PathBuf) -> std::result::Result<String, String> {
     url::Url::parse(&fs_uri)
         .map_err(|err| format!("failed to parse fs uri for '{}': {err}", path.display()))?;
     Ok(fs_uri)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::AppConfig;
+
+    #[test]
+    fn auto_analyze_media_defaults_to_enabled() {
+        assert!(AppConfig::default().auto_analyze_media);
+        assert!(AppConfig::new().auto_analyze_media);
+    }
+
+    #[test]
+    fn auto_analyze_media_can_be_disabled_explicitly() {
+        assert!(
+            !AppConfig::new()
+                .with_auto_analyze_media(false)
+                .auto_analyze_media
+        );
+    }
 }

@@ -555,15 +555,15 @@ pre {
   text-align: left;
 }
 
-.semantic-directory-browser__tree-link[draggable="true"],
-.semantic-directory-browser__row[draggable="true"],
-.semantic-directory-browser__tile[draggable="true"] {
+.semantic-directory-browser__tree-link[data-draggable="true"],
+.semantic-directory-browser__row[data-draggable="true"],
+.semantic-directory-browser__tile[data-draggable="true"] {
   user-select: none;
 }
 
-.semantic-directory-browser__tree-link[draggable="true"]:active,
-.semantic-directory-browser__row[draggable="true"]:active,
-.semantic-directory-browser__tile[draggable="true"]:active {
+.semantic-directory-browser__tree-link[data-draggable="true"]:active,
+.semantic-directory-browser__row[data-draggable="true"]:active,
+.semantic-directory-browser__tile[data-draggable="true"]:active {
   cursor: grabbing;
 }
 
