@@ -5,7 +5,8 @@ pub mod ui_catalog;
 pub mod components;
 
 pub use components::{
-    AttributeValueView, ClassView, ErrorView, LoadingView, MediaView, ObjectView, ValueView,
+    AttributeValueView, ClassView, DirectoryBrowser, DirectoryBrowserConfig, DirectoryBrowserProps,
+    ErrorView, LoadingView, MediaView, ObjectView, ValueView,
 };
 pub use context::{
     UiScopeContext, provide_rpc_client, provide_ui_scope_context, use_active_scope_id,

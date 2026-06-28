@@ -1,5 +1,6 @@
 use std::collections::BTreeMap;
 
+use semantic_data::bundles::directory;
 use semantic_data::schema::{Meta, Module, Package};
 
 use crate::{migrations, schema::common};
@@ -12,15 +13,23 @@ pub fn root_module() -> Module {
     for attribute in common::person::attributes() {
         attributes.insert(attribute.id.clone(), attribute);
     }
+    for attribute in directory::attributes() {
+        attributes.insert(attribute.id.clone(), attribute);
+    }
 
     let person_class = common::person::class();
+    let directory_classes = directory::classes();
+    let mut classes = BTreeMap::from([(person_class.id.clone(), person_class)]);
+    for class in directory_classes {
+        classes.insert(class.id.clone(), class);
+    }
 
     Module {
         name: MODULE_NAME.to_string(),
         constants: BTreeMap::new(),
         types: BTreeMap::new(),
         attributes,
-        classes: BTreeMap::from([(person_class.id.clone(), person_class)]),
+        classes,
         interfaces: BTreeMap::new(),
         contracts: BTreeMap::new(),
         meta: Meta::default(),

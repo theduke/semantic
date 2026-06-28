@@ -47,6 +47,13 @@ pub fn AppShell() -> Element {
                         "Query"
                     }
                     Link {
+                        to: Route::TreePage { root: None },
+                        class: "dx-button",
+                        "data-style": "ghost",
+                        "data-size": "default",
+                        "Tree"
+                    }
+                    Link {
                         to: Route::UploadPage,
                         class: "dx-button",
                         "data-style": "ghost",

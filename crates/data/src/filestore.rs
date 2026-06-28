@@ -24,6 +24,14 @@ pub const ATTR_FILE_MIME_TYPE: &str = "semantic:filestore:file:mime_type";
 pub const ATTR_FILE_FILEKIND: &str = "semantic:filestore:file:filekind";
 pub const ATTR_FILE_CONTENT_HASH_SHA256: &str = "semantic:filestore:file:content_hash_sha256";
 
+pub const TITLE_ATTRIBUTE_ID: &str = ATTR_TITLE;
+pub const DESCRIPTION_ATTRIBUTE_ID: &str = ATTR_DESCRIPTION;
+pub const FILE_FILESTORE_LOCATOR_ATTRIBUTE_ID: &str = ATTR_FILE_FILESTORE_LOCATOR;
+pub const FILE_FILENAME_ATTRIBUTE_ID: &str = ATTR_FILE_FILENAME;
+pub const FILE_BYTE_SIZE_ATTRIBUTE_ID: &str = ATTR_FILE_BYTE_SIZE;
+pub const FILE_MIME_TYPE_ATTRIBUTE_ID: &str = ATTR_FILE_MIME_TYPE;
+pub const FILE_CONTENT_HASH_SHA256_ATTRIBUTE_ID: &str = ATTR_FILE_CONTENT_HASH_SHA256;
+
 pub fn package() -> Package {
     Package {
         name: PACKAGE_NAME.to_string(),

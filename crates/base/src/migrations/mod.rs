@@ -1,3 +1,4 @@
+use semantic_data::bundles::directory;
 use semantic_data::schema::{Meta, Migration, MigrationDdlOperation, MigrationOperation};
 
 use crate::{bundle::MODULE_NAME, schema::common};
@@ -29,5 +30,7 @@ pub fn init() -> Migration {
 }
 
 pub fn all() -> Vec<Migration> {
-    vec![init()]
+    let mut migrations = vec![init()];
+    migrations.extend(directory::migrations());
+    migrations
 }

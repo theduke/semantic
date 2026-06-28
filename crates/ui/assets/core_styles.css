@@ -455,6 +455,183 @@ pre {
   overflow-wrap: anywhere;
 }
 
+.semantic-directory-browser {
+  display: grid;
+  gap: var(--semantic-space-4);
+  min-height: 70vh;
+}
+
+.semantic-directory-browser__toolbar {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: var(--semantic-space-3);
+  align-items: center;
+}
+
+.semantic-directory-browser__breadcrumbs,
+.semantic-directory-browser__toolbar-controls,
+.semantic-directory-browser__view-toggle,
+.semantic-directory-browser__dialog-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--semantic-space-2);
+  align-items: center;
+}
+
+.semantic-directory-browser__breadcrumb {
+  border: 0;
+  padding: 0;
+  background: transparent;
+  color: var(--semantic-accent);
+  cursor: pointer;
+  font: inherit;
+}
+
+.semantic-directory-browser__breadcrumb-separator,
+.semantic-directory-browser__warning {
+  color: var(--semantic-text-muted);
+}
+
+.semantic-directory-browser__control {
+  display: flex;
+  gap: var(--semantic-space-2);
+  align-items: center;
+  color: var(--semantic-text-muted);
+  font-size: 13px;
+}
+
+.semantic-directory-browser__body {
+  display: grid;
+  grid-template-columns: minmax(220px, 280px) minmax(0, 1fr);
+  gap: var(--semantic-space-4);
+  min-height: 0;
+}
+
+.semantic-directory-browser__tree,
+.semantic-directory-browser__content {
+  min-width: 0;
+  border: 1px solid var(--semantic-border-soft);
+  border-radius: var(--semantic-radius);
+  background: var(--semantic-surface);
+}
+
+.semantic-directory-browser__tree {
+  padding: var(--semantic-space-2);
+  overflow: auto;
+}
+
+.semantic-directory-browser__content {
+  display: grid;
+  gap: var(--semantic-space-3);
+  padding: var(--semantic-space-3);
+}
+
+.semantic-directory-browser__tree-row {
+  display: grid;
+  grid-template-columns: 28px minmax(0, 1fr);
+  gap: var(--semantic-space-1);
+  align-items: center;
+  padding-left: var(--semantic-directory-depth, 0);
+}
+
+.semantic-directory-browser__tree-row[data-active="true"] {
+  background: var(--semantic-bg);
+}
+
+.semantic-directory-browser__tree-expander,
+.semantic-directory-browser__tree-link {
+  border: 0;
+  background: transparent;
+  color: var(--semantic-text);
+  cursor: pointer;
+}
+
+.semantic-directory-browser__tree-link {
+  display: flex;
+  gap: var(--semantic-space-2);
+  align-items: center;
+  min-width: 0;
+  padding: var(--semantic-space-2);
+  text-align: left;
+}
+
+.semantic-directory-browser__tree-link span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.semantic-directory-browser__row {
+  display: grid;
+  grid-template-columns: 28px minmax(140px, 1.4fr) minmax(100px, 0.8fr) minmax(120px, 1fr) 56px minmax(100px, 0.8fr);
+  gap: var(--semantic-space-3);
+  align-items: center;
+  width: 100%;
+  min-height: 48px;
+  border: 0;
+  border-bottom: 1px solid var(--semantic-border-soft);
+  background: transparent;
+  color: var(--semantic-text);
+  cursor: pointer;
+  text-align: left;
+}
+
+.semantic-directory-browser__row:hover,
+.semantic-directory-browser__tile:hover {
+  background: var(--semantic-bg);
+}
+
+.semantic-directory-browser__item-title,
+.semantic-directory-browser__item-type,
+.semantic-directory-browser__item-id,
+.semantic-directory-browser__item-date {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.semantic-directory-browser__item-type,
+.semantic-directory-browser__item-date,
+.semantic-directory-browser__item-order {
+  color: var(--semantic-text-muted);
+  font-size: 13px;
+}
+
+.semantic-directory-browser__grid-row {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: var(--semantic-space-3);
+  min-height: 120px;
+}
+
+.semantic-directory-browser__tile {
+  display: grid;
+  grid-template-rows: 36px auto auto auto;
+  gap: var(--semantic-space-2);
+  align-content: start;
+  min-width: 0;
+  min-height: 112px;
+  padding: var(--semantic-space-3);
+  border: 1px solid var(--semantic-border-soft);
+  border-radius: var(--semantic-radius);
+  background: transparent;
+  color: var(--semantic-text);
+  cursor: pointer;
+  text-align: left;
+}
+
+.semantic-directory-browser__pagination {
+  justify-self: end;
+}
+
+.semantic-directory-browser__page-label {
+  display: inline-flex;
+  align-items: center;
+  min-height: 36px;
+  color: var(--semantic-text-muted);
+  font-size: 13px;
+}
+
 @media (max-width: 720px) {
   .semantic-ui__header {
     align-items: flex-start;
@@ -488,5 +665,22 @@ pre {
   .semantic-upload__header {
     align-items: flex-start;
     flex-direction: column;
+  }
+
+  .semantic-directory-browser__toolbar,
+  .semantic-directory-browser__body,
+  .semantic-directory-browser__grid-row {
+    grid-template-columns: 1fr;
+  }
+
+  .semantic-directory-browser__row {
+    grid-template-columns: 28px minmax(0, 1fr);
+  }
+
+  .semantic-directory-browser__item-type,
+  .semantic-directory-browser__item-id,
+  .semantic-directory-browser__item-order,
+  .semantic-directory-browser__item-date {
+    display: none;
   }
 }

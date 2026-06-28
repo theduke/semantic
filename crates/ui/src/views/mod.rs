@@ -4,6 +4,7 @@ mod entity;
 mod form;
 mod home;
 mod query;
+mod tree;
 mod upload;
 
 pub use catalog::CatalogPage;
@@ -12,6 +13,7 @@ pub use entity::EntityPage;
 pub use form::{CreateEntityPage, EditEntityPage};
 pub use home::HomePage;
 pub use query::QueryPage;
+pub use tree::TreePage;
 pub use upload::UploadPage;
 
 use dioxus::prelude::*;
@@ -35,6 +37,8 @@ pub enum Route {
     EditEntityPage { collection: String, id: String },
     #[route("/query")]
     QueryPage,
+    #[route("/tree?:root")]
+    TreePage { root: Option<String> },
     #[route("/upload")]
     UploadPage,
 }

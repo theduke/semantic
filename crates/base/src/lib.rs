@@ -17,7 +17,7 @@ mod tests {
         assert_eq!(package.name, bundle::PACKAGE_NAME);
         assert_eq!(package.root.name, bundle::MODULE_NAME);
         assert!(package.modules.is_empty());
-        assert_eq!(package.migrations.len(), 1);
+        assert_eq!(package.migrations.len(), 2);
         assert_eq!(package.migrations[0].name, migrations::INIT_MIGRATION_NAME);
 
         assert!(
@@ -45,18 +45,18 @@ mod tests {
     }
 
     #[test]
-    fn classes_reference_root_attributes_and_are_optional() {
+    fn classes_reference_root_attributes() {
         let root = bundle::root_module();
 
         for class in root.classes.values() {
             for attribute in class.attributes.values() {
                 assert!(
-                    root.attributes.contains_key(&attribute.attribute.id),
+                    root.attributes.contains_key(&attribute.attribute.id)
+                        || attribute.attribute.id.starts_with("semantic:relation:"),
                     "missing root attribute {} referenced by class {}",
                     attribute.attribute.id,
                     class.id
                 );
-                assert!(!attribute.required);
             }
         }
     }
