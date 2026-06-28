@@ -36,3 +36,4 @@ semantic_db_redb = { path = "../db_redb", optional = true }
 semantic_rpc = { path = "../rpc", features = ["client"] }
 semantic_ui_core = { path = "../ui_core" }
 tracing = { workspace = true }
+web-sys = { version = "0.3.82", features = ["Storage", "Window"] }

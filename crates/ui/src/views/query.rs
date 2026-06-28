@@ -1,4 +1,5 @@
 use dioxus::prelude::*;
+use semantic_data::builtin::DEFAULT_COLLECTION;
 use semantic_data::value::{Object, Value};
 use semantic_ui_core::{use_active_scope_id, use_rpc_client};
 
@@ -8,7 +9,7 @@ use crate::components::value_string;
 pub fn QueryPage() -> Element {
     let client = use_rpc_client();
     let scope_id = use_active_scope_id();
-    let mut query = use_signal(|| "select * from entities limit 50".to_string());
+    let mut query = use_signal(|| format!("select * from {DEFAULT_COLLECTION} limit 50"));
     let mut result = use_signal(|| None::<std::result::Result<Value, String>>);
 
     rsx! {

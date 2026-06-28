@@ -8,7 +8,11 @@ use semantic_data::filestore::{
 use semantic_data::value::{Object, Value};
 use tracing::{info, warn};
 
-use crate::ui_catalog::{RenderCtx, RenderMode, UiCatalog, ValueRenderContext};
+use crate::components::{EntityDeleteButton, EntityOpenButton};
+use crate::ui_catalog::{
+    EntityActionContext, EntityActionPlacement, EntityActionRegistration, RenderCtx, RenderMode,
+    UiCatalog, ValueRenderContext,
+};
 
 pub fn register_defaults(catalog: &mut UiCatalog) {
     let fallback = Rc::new(|ctx: ValueRenderContext| {
@@ -24,6 +28,7 @@ pub fn register_defaults(catalog: &mut UiCatalog) {
     catalog
         .render_registry_mut()
         .set_fallback_renderer(fallback.clone());
+    register_default_entity_actions(catalog);
     for key in [
         "any",
         "unknown",
@@ -122,6 +127,81 @@ pub fn register_defaults(catalog: &mut UiCatalog) {
             .render_registry_mut()
             .register_attribute_renderer(attribute_id, file_renderer.clone());
     }
+}
+
+fn register_default_entity_actions(catalog: &mut UiCatalog) {
+    catalog.register_entity_action(EntityActionRegistration {
+        id: "open".to_string(),
+        label: "Open".to_string(),
+        icon: None,
+        class_id: None,
+        placements: vec![
+            EntityActionPlacement::Card,
+            EntityActionPlacement::Detail,
+            EntityActionPlacement::BrowseRow,
+        ],
+        enabled: Rc::new(|ctx: &EntityActionContext| !ctx.target.id.is_empty()),
+        render: Rc::new(|ctx: EntityActionContext| {
+            rsx! {
+                EntityOpenButton {
+                    target: ctx.target
+                }
+            }
+        }),
+    });
+
+    catalog.register_entity_action(EntityActionRegistration {
+        id: "delete".to_string(),
+        label: "Delete".to_string(),
+        icon: None,
+        class_id: None,
+        placements: vec![
+            EntityActionPlacement::Detail,
+            EntityActionPlacement::BrowseRow,
+        ],
+        enabled: Rc::new(|ctx: &EntityActionContext| !ctx.target.id.is_empty()),
+        render: Rc::new(|ctx: EntityActionContext| {
+            rsx! {
+                EntityDeleteButton {
+                    target: ctx.target
+                }
+            }
+        }),
+    });
+
+    catalog.register_entity_action(EntityActionRegistration {
+        id: "open_external".to_string(),
+        label: "Open External".to_string(),
+        icon: None,
+        class_id: None,
+        placements: vec![
+            EntityActionPlacement::Card,
+            EntityActionPlacement::BrowseRow,
+        ],
+        enabled: Rc::new(|ctx: &EntityActionContext| external_url(&ctx.object).is_some()),
+        render: Rc::new(|ctx: EntityActionContext| {
+            let href = external_url(&ctx.object).unwrap_or_default();
+            rsx! {
+                a {
+                    class: "dx-button",
+                    "data-style": "outline",
+                    "data-size": "sm",
+                    href,
+                    target: "_blank",
+                    rel: "noopener noreferrer",
+                    "Open External"
+                }
+            }
+        }),
+    });
+}
+
+fn external_url(object: &Object) -> Option<String> {
+    ["url", "href", "link"]
+        .iter()
+        .find_map(|field| object.get(*field).and_then(Value::as_str))
+        .filter(|url| url.starts_with("http://") || url.starts_with("https://"))
+        .map(str::to_string)
 }
 
 fn object_string<'a>(object: &'a Object, keys: &[&str]) -> Option<&'a str> {

@@ -6,7 +6,8 @@ use semantic_db_core::catalog::{CatalogStorageSnapshot, StoredCollection};
 use crate::{
     form::{UiFormRegistry, register_default_form_renderers},
     ui_catalog::{
-        MediaRendererRegistration, MenuSection, RenderRegistry, RenderSettings,
+        EntityActionRegistration, EntityHrefBuilder, EntityLinkRenderer, EntityNavigation,
+        EntityOpenHandler, MediaRendererRegistration, MenuSection, RenderRegistry, RenderSettings,
         defaults::register_defaults,
     },
 };
@@ -30,6 +31,8 @@ pub struct UiCatalog {
     form_registry: UiFormRegistry,
     media_renderers: Vec<MediaRendererRegistration>,
     menu_sections: Vec<MenuSection>,
+    entity_navigation: EntityNavigation,
+    entity_actions: Vec<EntityActionRegistration>,
 }
 
 impl UiCatalog {
@@ -75,6 +78,34 @@ impl UiCatalog {
 
     pub fn menu_sections(&self) -> &[MenuSection] {
         &self.menu_sections
+    }
+
+    pub fn entity_navigation(&self) -> &EntityNavigation {
+        &self.entity_navigation
+    }
+
+    pub fn entity_navigation_mut(&mut self) -> &mut EntityNavigation {
+        &mut self.entity_navigation
+    }
+
+    pub fn entity_actions(&self) -> &[EntityActionRegistration] {
+        &self.entity_actions
+    }
+
+    pub(crate) fn entity_actions_mut(&mut self) -> &mut Vec<EntityActionRegistration> {
+        &mut self.entity_actions
+    }
+
+    pub fn set_entity_href_builder(&mut self, builder: EntityHrefBuilder) {
+        self.entity_navigation.href = Some(builder);
+    }
+
+    pub fn set_entity_open_handler(&mut self, handler: EntityOpenHandler) {
+        self.entity_navigation.open = Some(handler);
+    }
+
+    pub fn set_entity_link_renderer(&mut self, renderer: EntityLinkRenderer) {
+        self.entity_navigation.link_renderer = Some(renderer);
     }
 
     pub fn register_media_renderer(&mut self, renderer: MediaRendererRegistration) {
@@ -151,6 +182,8 @@ impl UiCatalogBuilder {
                 form_registry: UiFormRegistry::default(),
                 media_renderers: Vec::new(),
                 menu_sections: Vec::new(),
+                entity_navigation: EntityNavigation::default(),
+                entity_actions: Vec::new(),
             },
             config: UiCatalogConfig {
                 register_default_renderers: true,

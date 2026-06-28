@@ -7,7 +7,7 @@ use semantic_data::bundles::directory::{
 
 use super::types::DirectorySort;
 
-pub(super) const ENTITIES_COLLECTION: &str = "entities";
+pub(super) const ENTITIES_COLLECTION: &str = semantic_data::builtin::DEFAULT_COLLECTION;
 pub(super) const ATTR_RELATION_RELATION: &str = "semantic:relation:relation";
 pub(super) const ATTR_RELATION_TO: &str = "semantic:relation:to";
 
@@ -507,6 +507,8 @@ mod tests {
         let excluded_ids = BTreeSet::from(["existing'1".to_string(), "existing2".to_string()]);
         let query = entity_autocomplete_query("Ada's", &excluded_ids);
         assert!(query.contains("ILIKE '%Ada''s%'"));
+        assert!(query.contains("e.id ILIKE '%Ada''s%'"));
+        assert!(query.contains("e.\"semantic:title\" ILIKE '%Ada''s%'"));
         assert!(query.contains("e.id NOT IN ('existing''1', 'existing2')"));
         assert!(query.contains(DIRECTORY_NODE_CLASS_ID));
         assert!(query.contains("LIMIT 50"));
@@ -589,6 +591,55 @@ mod tests {
         };
 
         assert_eq!(row_ids(&rows), vec!["candidate"]);
+    }
+
+    #[tokio::test]
+    async fn addable_entities_query_searches_id_and_attr_title() {
+        let db = Db::new(KvBackend::new(KvDb::in_memory()));
+        db.upsert_package(semantic_base::package())
+            .await
+            .expect("base package should register");
+        insert_directory(&db, "parent", "Parent").await;
+        insert_entity(&db, "find-by-id", "semantic:base:person", "Plain").await;
+
+        let mut attr_title_entity = Object::new();
+        attr_title_entity.insert("id", Value::String("attr-title-candidate".to_string()));
+        attr_title_entity.insert("type", Value::String("semantic:base:person".to_string()));
+        attr_title_entity.insert(ATTR_TITLE, Value::String("Find By Attribute".to_string()));
+        db.insert(
+            ENTITIES_COLLECTION,
+            "attr-title-candidate",
+            attr_title_entity,
+        )
+        .await
+        .expect("entity should insert");
+
+        let by_id = db
+            .query(QueryInput::sql(addable_entities_query(
+                "parent",
+                "find-by-id",
+                50,
+            )))
+            .await
+            .expect("addable entities query should run");
+        let QueryResult::Select(by_id_rows) = by_id else {
+            panic!("addable entities query should return select rows");
+        };
+
+        let by_attr_title = db
+            .query(QueryInput::sql(addable_entities_query(
+                "parent",
+                "Attribute",
+                50,
+            )))
+            .await
+            .expect("addable entities query should run");
+        let QueryResult::Select(by_attr_title_rows) = by_attr_title else {
+            panic!("addable entities query should return select rows");
+        };
+
+        assert_eq!(row_ids(&by_id_rows), vec!["find-by-id"]);
+        assert_eq!(row_ids(&by_attr_title_rows), vec!["attr-title-candidate"]);
     }
 
     #[test]

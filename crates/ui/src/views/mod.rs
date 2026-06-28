@@ -1,3 +1,4 @@
+mod browse;
 mod catalog;
 mod collection;
 mod entity;
@@ -7,10 +8,11 @@ mod query;
 mod tree;
 mod upload;
 
+pub use browse::BrowsePage;
 pub use catalog::CatalogPage;
 pub use collection::CollectionPage;
-pub use entity::EntityPage;
-pub use form::{CreateEntityPage, EditEntityPage};
+pub use entity::{CollectionEntityPage, DefaultEntityPage};
+pub use form::{CollectionEditEntityPage, CreateEntityPage, DefaultEditEntityPage};
 pub use home::HomePage;
 pub use query::QueryPage;
 pub use tree::TreePage;
@@ -31,10 +33,23 @@ pub enum Route {
     CollectionPage { collection: String },
     #[route("/entities/create")]
     CreateEntityPage,
+    #[route("/entities/:id")]
+    DefaultEntityPage { id: String },
     #[route("/collections/:collection/:id")]
-    EntityPage { collection: String, id: String },
+    CollectionEntityPage { collection: String, id: String },
+    #[route("/entities/:id/edit")]
+    DefaultEditEntityPage { id: String },
     #[route("/collections/:collection/:id/edit")]
-    EditEntityPage { collection: String, id: String },
+    CollectionEditEntityPage { collection: String, id: String },
+    #[route("/browse?:collection&:view&:renderer&:page&:page_size&:sql")]
+    BrowsePage {
+        collection: Option<String>,
+        view: Option<String>,
+        renderer: Option<String>,
+        page: Option<usize>,
+        page_size: Option<usize>,
+        sql: Option<String>,
+    },
     #[route("/query")]
     QueryPage,
     #[route("/tree?:root")]

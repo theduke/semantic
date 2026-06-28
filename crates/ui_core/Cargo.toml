@@ -27,6 +27,7 @@ semantic_rpc = { path = "../rpc", features = ["client"] }
 thiserror = "2.0.17"
 time = { workspace = true, features = ["formatting", "parsing"] }
 tracing = { workspace = true }
+web-sys = { version = "0.3.82", features = ["Window", "Location"] }
 
 [dev-dependencies]
 semantic_base = { path = "../base" }

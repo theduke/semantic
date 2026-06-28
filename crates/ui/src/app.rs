@@ -4,8 +4,8 @@ use dioxus::prelude::*;
 use semantic_data::value::Value;
 use semantic_rpc::RpcClient;
 use semantic_ui_core::{
-    RenderSettings, UiCatalog, UiCatalogProvider, ValueRenderContext, provide_rpc_client,
-    provide_ui_scope_context,
+    EntityTarget, RenderSettings, UiCatalog, UiCatalogProvider, ValueRenderContext,
+    provide_rpc_client, provide_ui_scope_context,
 };
 
 const CORE_STYLES: Asset = asset!("/assets/core_styles.css");
@@ -112,7 +112,59 @@ fn configure_ui_catalog(mut catalog: UiCatalog) -> UiCatalog {
     catalog
         .render_registry_mut()
         .register_type_renderer("ref", Rc::new(render_ref_link));
+    catalog.set_entity_href_builder(Rc::new(entity_href));
+    catalog.set_entity_link_renderer(Rc::new(entity_link));
+    catalog.set_entity_open_handler(Rc::new(entity_open));
     catalog
+}
+
+fn entity_href(target: &EntityTarget) -> Option<String> {
+    if target.id.is_empty() {
+        return None;
+    }
+    if target.is_default_collection() {
+        Some(format!("/entities/{}", target.id))
+    } else {
+        Some(format!(
+            "/collections/{}/{}",
+            target.collection_or_default(),
+            target.id
+        ))
+    }
+}
+
+fn entity_link(target: EntityTarget, content: Element) -> Element {
+    if target.is_default_collection() {
+        rsx! {
+            Link {
+                to: Route::DefaultEntityPage { id: target.id },
+                class: "semantic-ref semantic-ref--link",
+                {content}
+            }
+        }
+    } else {
+        rsx! {
+            Link {
+                to: Route::CollectionEntityPage {
+                    collection: target.collection_or_default().to_string(),
+                    id: target.id
+                },
+                class: "semantic-ref semantic-ref--link",
+                {content}
+            }
+        }
+    }
+}
+
+fn entity_open(target: EntityTarget) {
+    if target.is_default_collection() {
+        navigator().push(Route::DefaultEntityPage { id: target.id });
+    } else {
+        navigator().push(Route::CollectionEntityPage {
+            collection: target.collection_or_default().to_string(),
+            id: target.id,
+        });
+    }
 }
 
 fn render_ref_link(ctx: ValueRenderContext) -> Element {
@@ -125,10 +177,7 @@ fn render_ref_link(ctx: ValueRenderContext) -> Element {
     }
     rsx! {
         Link {
-            to: Route::EntityPage {
-                collection: "entities".to_string(),
-                id: id.clone(),
-            },
+            to: Route::DefaultEntityPage { id: id.clone() },
             class: "semantic-ref semantic-ref--link",
             "{id}"
         }
@@ -140,4 +189,31 @@ fn file_api_prefix_from_probe(client: &RpcClient) -> Option<String> {
     let url = client.file_url(probe)?;
     url.strip_suffix(probe)
         .map(|prefix| prefix.trim_end_matches('/').to_string())
+}
+
+#[cfg(test)]
+mod tests {
+    use semantic_data::builtin::DEFAULT_COLLECTION;
+
+    use super::*;
+
+    #[test]
+    fn entity_href_builder_uses_default_and_collection_routes() {
+        assert_eq!(
+            entity_href(&EntityTarget::default_collection("id-1")).as_deref(),
+            Some("/entities/id-1")
+        );
+        assert_eq!(
+            entity_href(&EntityTarget::new(
+                Some(DEFAULT_COLLECTION.to_string()),
+                "id-1"
+            ))
+            .as_deref(),
+            Some("/entities/id-1")
+        );
+        assert_eq!(
+            entity_href(&EntityTarget::new(Some("custom".to_string()), "id-1")).as_deref(),
+            Some("/collections/custom/id-1")
+        );
+    }
 }

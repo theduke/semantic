@@ -1,4 +1,5 @@
 use dioxus::prelude::*;
+use semantic_data::builtin::DEFAULT_COLLECTION;
 
 use crate::views::Route;
 
@@ -25,7 +26,7 @@ pub fn AppShell() -> Element {
                     }
                     Link {
                         to: Route::CollectionPage {
-                            collection: "entities".to_string()
+                            collection: DEFAULT_COLLECTION.to_string()
                         },
                         class: "dx-button",
                         "data-style": "ghost",
@@ -38,6 +39,20 @@ pub fn AppShell() -> Element {
                         "data-style": "ghost",
                         "data-size": "default",
                         "Create"
+                    }
+                    Link {
+                        to: Route::BrowsePage {
+                            collection: None,
+                            view: None,
+                            renderer: None,
+                            page: None,
+                            page_size: None,
+                            sql: None,
+                        },
+                        class: "dx-button",
+                        "data-style": "ghost",
+                        "data-size": "default",
+                        "Browse"
                     }
                     Link {
                         to: Route::QueryPage,

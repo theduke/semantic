@@ -1,7 +1,7 @@
 use dioxus::prelude::*;
 use futures::FutureExt;
 use semantic_data::{
-    builtin::ATTR_ID,
+    builtin::{ATTR_ID, DEFAULT_COLLECTION},
     schema::ClassType,
     value::{Object, Value},
 };
@@ -23,7 +23,7 @@ pub fn CreateEntityPage() -> Element {
     let default_collection = collections
         .first()
         .cloned()
-        .unwrap_or_else(|| "entities".to_string());
+        .unwrap_or_else(|| DEFAULT_COLLECTION.to_string());
     let initial_class_id = classes
         .first()
         .map(|class| class.id.clone())
@@ -43,7 +43,7 @@ pub fn CreateEntityPage() -> Element {
         .or_else(|| classes.first().cloned());
     let primary_id_field = primary_id_field_for_collection(&catalog, &collection);
     let collection_options = if collections.is_empty() {
-        vec!["entities".to_string()]
+        vec![DEFAULT_COLLECTION.to_string()]
     } else {
         collections.clone()
     };
@@ -144,7 +144,27 @@ pub fn CreateEntityPage() -> Element {
 }
 
 #[component]
-pub fn EditEntityPage(collection: String, id: String) -> Element {
+pub fn DefaultEditEntityPage(id: String) -> Element {
+    rsx! {
+        EditEntityPageView {
+            collection: None,
+            id
+        }
+    }
+}
+
+#[component]
+pub fn CollectionEditEntityPage(collection: String, id: String) -> Element {
+    rsx! {
+        EditEntityPageView {
+            collection: Some(collection),
+            id
+        }
+    }
+}
+
+#[component]
+fn EditEntityPageView(collection: Option<String>, id: String) -> Element {
     let client = use_rpc_client();
     let scope_id = use_active_scope_id();
     let catalog = use_ui_catalog();
@@ -159,14 +179,17 @@ pub fn EditEntityPage(collection: String, id: String) -> Element {
         let id = id_for_load.clone();
         async move { load_entity(client, scope_id, collection, id).await }
     });
+    let collection_label = collection
+        .clone()
+        .unwrap_or_else(|| DEFAULT_COLLECTION.to_string());
 
     rsx! {
         section { class: "semantic-form-screen semantic-edit-entity",
-            h2 { "Edit {collection}/{id}" }
+            h2 { "Edit {collection_label}/{id}" }
             match &*resource.read_unchecked() {
                 Some(Ok(Some(object))) => {
                     let class = catalog.object_class(object).cloned();
-                    let primary_id_field = primary_id_field_for_collection(&catalog, &collection);
+                    let primary_id_field = primary_id_field_for_collection(&catalog, &collection_label);
                     rsx! {
                         if let Some(class) = class {
                             div { class: "semantic-table-wrap semantic-form-screen__meta",
@@ -174,7 +197,7 @@ pub fn EditEntityPage(collection: String, id: String) -> Element {
                                     tbody {
                                         tr {
                                             th { scope: "row", "Collection" }
-                                            td { code { "{collection}" } }
+                                            td { code { "{collection_label}" } }
                                         }
                                         tr {
                                             th { scope: "row", "ID" }
@@ -191,13 +214,13 @@ pub fn EditEntityPage(collection: String, id: String) -> Element {
                                 class,
                                 object: object.clone(),
                                 mode: SemanticFormMode::Edit,
-                                collection: Some(collection.clone()),
+                                collection: collection.clone(),
                                 id: Some(id.clone()),
                                 scope_id: scope_id.clone(),
                                 submit: Some(rpc_batch_upsert_submit_handler_with_primary_id(
                                     client.clone(),
                                     scope_id.clone(),
-                                    collection.clone(),
+                                    collection_label.clone(),
                                     id.clone(),
                                     primary_id_field,
                                 ))
@@ -224,14 +247,16 @@ pub fn EditEntityPage(collection: String, id: String) -> Element {
 pub async fn load_entity(
     client: semantic_rpc::RpcClient,
     scope_id: Option<String>,
-    collection: String,
+    collection: Option<String>,
     id: String,
 ) -> std::result::Result<Option<Object>, String> {
     let mut payload = Object::new();
     if let Some(scope_id) = scope_id {
         payload.insert("scope_id", Value::String(scope_id));
     }
-    payload.insert("collection", Value::String(collection));
+    if let Some(collection) = collection {
+        payload.insert("collection", Value::String(collection));
+    }
     payload.insert(ATTR_ID, Value::String(id));
     let response = client
         .invoke_value("semantic.db.get", Value::Object(payload))

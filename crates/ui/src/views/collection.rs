@@ -1,4 +1,5 @@
 use dioxus::prelude::*;
+use semantic_data::builtin::DEFAULT_COLLECTION;
 use semantic_data::value::{Object, Value};
 use semantic_ui_core::{use_active_scope_id, use_rpc_client};
 
@@ -44,10 +45,7 @@ pub fn CollectionPage(collection: String) -> Element {
                                     td {
                                         if let Some(id) = row.get("id").and_then(Value::as_str).map(str::to_string) {
                                             Link {
-                                                to: Route::EntityPage {
-                                                    collection: collection.clone(),
-                                                    id: id.clone()
-                                                },
+                                                to: entity_route(collection.clone(), id.clone()),
                                                 class: "dx-button",
                                                 "data-style": "link",
                                                 "data-size": "default",
@@ -66,10 +64,10 @@ pub fn CollectionPage(collection: String) -> Element {
                                                     let collection = collection.clone();
                                                     let id = id.clone();
                                                     move |_| {
-                                                        navigator().push(Route::EditEntityPage {
-                                                            collection: collection.clone(),
-                                                            id: id.clone(),
-                                                        });
+                                                        navigator().push(edit_entity_route(
+                                                            collection.clone(),
+                                                            id.clone(),
+                                                        ));
                                                     }
                                                 },
                                                 "Edit"
@@ -89,6 +87,22 @@ pub fn CollectionPage(collection: String) -> Element {
                 },
             }
         }
+    }
+}
+
+fn entity_route(collection: String, id: String) -> Route {
+    if collection == DEFAULT_COLLECTION {
+        Route::DefaultEntityPage { id }
+    } else {
+        Route::CollectionEntityPage { collection, id }
+    }
+}
+
+fn edit_entity_route(collection: String, id: String) -> Route {
+    if collection == DEFAULT_COLLECTION {
+        Route::DefaultEditEntityPage { id }
+    } else {
+        Route::CollectionEditEntityPage { collection, id }
     }
 }
 

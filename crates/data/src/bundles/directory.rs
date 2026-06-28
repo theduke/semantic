@@ -1,5 +1,6 @@
 use std::collections::BTreeMap;
 
+use crate::builtin::DEFAULT_COLLECTION;
 use crate::schema::{
     AttributeRef, AttributeType, ClassAttribute, ClassRef, ClassType, Constraint, Meta, Migration,
     MigrationCollectionKind, MigrationDdlOperation, MigrationIntegrityMode, MigrationOperation,
@@ -9,7 +10,7 @@ use crate::schema::{
 
 pub const MODULE_NAME: &str = "base";
 pub const DIRECTORIES_MIGRATION_NAME: &str = "002_directories";
-pub const ENTITIES_COLLECTION: &str = "entities";
+pub const ENTITIES_COLLECTION: &str = DEFAULT_COLLECTION;
 
 pub const DIRECTORY_CLASS_ID: &str = "semantic:base:directory";
 pub const DIRECTORY_NODE_CLASS_ID: &str = "semantic:base:directory_node";

@@ -6,7 +6,9 @@ pub mod components;
 
 pub use components::{
     AttributeValueView, ClassView, DirectoryBrowser, DirectoryBrowserConfig, DirectoryBrowserProps,
-    ErrorView, LoadingView, MediaView, ObjectView, ValueView,
+    EntityCard, EntityDeleteButton, EntityDisplayMode, EntityDisplayRenderer, EntityList,
+    EntityOpenButton, EntityRenderOptions, EntityTableRow, ErrorView, LoadingView, MediaView,
+    ObjectView, ValueView,
 };
 pub use context::{
     UiScopeContext, provide_rpc_client, provide_ui_scope_context, use_active_scope_id,
@@ -26,7 +28,8 @@ pub use form::{
     rpc_insert_submit_handler, rpc_insert_submit_handler_with_primary_id,
 };
 pub use ui_catalog::{
-    CatalogLoadStatus, RenderMode, RenderSettings, UiCatalog, UiCatalogContext, UiCatalogProvider,
-    UiCatalogReload, ValueRenderContext, use_ui_catalog, use_ui_catalog_context,
-    use_ui_catalog_reload,
+    CatalogLoadStatus, EntityActionContext, EntityActionPlacement, EntityActionRegistration,
+    EntityHrefBuilder, EntityLinkRenderer, EntityNavigation, EntityOpenHandler, EntityTarget,
+    RenderMode, RenderSettings, UiCatalog, UiCatalogContext, UiCatalogProvider, UiCatalogReload,
+    ValueRenderContext, use_ui_catalog, use_ui_catalog_context, use_ui_catalog_reload,
 };

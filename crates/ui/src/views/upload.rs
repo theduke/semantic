@@ -1,6 +1,7 @@
 use dioxus::html::FileData;
 use dioxus::prelude::*;
 use futures::StreamExt as _;
+use semantic_data::builtin::DEFAULT_COLLECTION;
 use semantic_data::filestore::{ATTR_DESCRIPTION, ATTR_TITLE};
 use semantic_data::value::{Object, Value};
 use semantic_rpc::file::{
@@ -13,6 +14,14 @@ use semantic_ui_core::{
 use crate::views::Route;
 
 type QueueItemId = u64;
+
+fn upload_entity_route(collection: String, id: String) -> Route {
+    if collection == DEFAULT_COLLECTION {
+        Route::DefaultEntityPage { id }
+    } else {
+        Route::CollectionEntityPage { collection, id }
+    }
+}
 
 #[derive(Clone, Debug, PartialEq)]
 struct UploadQueueItem {
@@ -251,10 +260,10 @@ pub fn UploadPage() -> Element {
                         div { class: "semantic-upload__result",
                             div { class: "semantic-upload__result-actions",
                                 Link {
-                                    to: Route::EntityPage {
-                                        collection: result.collection.clone(),
-                                        id: result.id.clone()
-                                    },
+                                    to: upload_entity_route(
+                                        result.collection.clone(),
+                                        result.id.clone(),
+                                    ),
                                     "Entity"
                                 }
                                 if let Some(url) = result_client.file_url(&result.id) {

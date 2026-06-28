@@ -6,14 +6,8 @@ use crate::ui_catalog::{MediaRenderOptions, use_ui_catalog};
 #[component]
 pub fn MediaView(object: Object, options: MediaRenderOptions) -> Element {
     let catalog = use_ui_catalog();
-    if let Some(Value::String(class_id)) = object.get("type") {
-        if let Some(renderer) = catalog
-            .media_renderers()
-            .iter()
-            .find(|renderer| renderer.class_id.as_deref() == Some(class_id.as_str()))
-        {
-            return (renderer.renderer)(object, options);
-        }
+    if let Some(renderer) = catalog.media_renderer_for_object(&object) {
+        return (renderer.renderer)(object, options);
     }
 
     let src = object

@@ -7,7 +7,27 @@ use semantic_ui_core::{
 use crate::views::Route;
 
 #[component]
-pub fn EntityPage(collection: String, id: String) -> Element {
+pub fn DefaultEntityPage(id: String) -> Element {
+    rsx! {
+        EntityPageView {
+            collection: None,
+            id
+        }
+    }
+}
+
+#[component]
+pub fn CollectionEntityPage(collection: String, id: String) -> Element {
+    rsx! {
+        EntityPageView {
+            collection: Some(collection),
+            id
+        }
+    }
+}
+
+#[component]
+fn EntityPageView(collection: Option<String>, id: String) -> Element {
     let client = use_rpc_client();
     let scope_id = use_active_scope_id();
     let catalog = use_ui_catalog();
@@ -20,10 +40,14 @@ pub fn EntityPage(collection: String, id: String) -> Element {
         let id = id_for_load.clone();
         async move { load_entity(client, scope_id, collection, id).await }
     });
+    let label = collection
+        .as_deref()
+        .map(|collection| format!("{collection}/{id}"))
+        .unwrap_or_else(|| id.clone());
 
     rsx! {
         section { class: "semantic-entity",
-            h2 { "{collection}/{id}" }
+            h2 { "{label}" }
             div { class: "semantic-entity__actions",
                 dxcomp::Button {
                     variant: dxcomp::ButtonVariant::Outline,
@@ -31,10 +55,14 @@ pub fn EntityPage(collection: String, id: String) -> Element {
                         let collection = collection.clone();
                         let id = id.clone();
                         move |_| {
-                            navigator().push(Route::EditEntityPage {
-                                collection: collection.clone(),
-                                id: id.clone(),
-                            });
+                            if let Some(collection) = collection.clone() {
+                                navigator().push(Route::CollectionEditEntityPage {
+                                    collection,
+                                    id: id.clone(),
+                                });
+                            } else {
+                                navigator().push(Route::DefaultEditEntityPage { id: id.clone() });
+                            }
                         }
                     },
                     "Edit"
@@ -48,7 +76,7 @@ pub fn EntityPage(collection: String, id: String) -> Element {
                             ClassView {
                                 class,
                                 object: object.clone(),
-                                collection: Some(collection.clone()),
+                                collection: collection.clone(),
                                 id: Some(id.clone()),
                                 mode: RenderMode::Detail
                             }
@@ -77,14 +105,16 @@ pub fn EntityPage(collection: String, id: String) -> Element {
 async fn load_entity(
     client: semantic_rpc::RpcClient,
     scope_id: Option<String>,
-    collection: String,
+    collection: Option<String>,
     id: String,
 ) -> std::result::Result<Option<Object>, String> {
     let mut payload = Object::new();
     if let Some(scope_id) = scope_id {
         payload.insert("scope_id", Value::String(scope_id));
     }
-    payload.insert("collection", Value::String(collection));
+    if let Some(collection) = collection {
+        payload.insert("collection", Value::String(collection));
+    }
     payload.insert("id", Value::String(id));
     let response = client
         .invoke_value("semantic.db.get", Value::Object(payload))

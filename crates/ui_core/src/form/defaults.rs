@@ -208,7 +208,10 @@ pub fn ref_autocomplete_query(
         ));
     }
 
-    let mut sql = "SELECT * FROM entities".to_string();
+    let mut sql = format!(
+        "SELECT * FROM {}",
+        semantic_data::builtin::DEFAULT_COLLECTION
+    );
     if !predicates.is_empty() {
         sql.push_str(" WHERE ");
         sql.push_str(&predicates.join(" AND "));

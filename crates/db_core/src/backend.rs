@@ -16,7 +16,7 @@ use crate::{
     TextQueryInput, UpdateQuery, prql, sql,
 };
 
-pub const DEFAULT_COLLECTION: &str = "entities";
+pub use semantic_data::builtin::DEFAULT_COLLECTION;
 pub const ALL_COLLECTION_ALIAS: &str = "all";
 
 pub fn is_all_collection_alias(name: &str) -> bool {
@@ -65,6 +65,23 @@ impl From<Option<&str>> for CollectionInput {
             Some(value) => Self::Named(value.to_string()),
             None => Self::Default,
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn default_collection_input_uses_data_default_collection() {
+        assert_eq!(
+            CollectionInput::Default.into_collection(),
+            semantic_data::builtin::DEFAULT_COLLECTION
+        );
+        assert_eq!(
+            CollectionInput::from(None::<String>).into_collection(),
+            semantic_data::builtin::DEFAULT_COLLECTION
+        );
     }
 }
 
