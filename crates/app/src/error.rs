@@ -16,6 +16,8 @@ pub enum AppError {
     InvalidFileMetadata(String),
     #[error("invalid range: {0}")]
     InvalidRange(String),
+    #[error("media analysis failed: {0}")]
+    MediaAnalysis(#[from] semantic_media::MediaAnalysisError),
     #[error("unknown database scope '{0}'")]
     UnknownScope(String),
     #[error("unknown object store scope '{0}'")]
@@ -60,6 +62,9 @@ impl From<AppError> for semantic_rpc::RpcError {
             }
             AppError::InvalidRange(_) => {
                 semantic_rpc::RpcError::new("invalid_range", value.to_string())
+            }
+            AppError::MediaAnalysis(_) => {
+                semantic_rpc::RpcError::new("media_analysis_failed", value.to_string())
             }
             AppError::UnknownScope(_) => {
                 semantic_rpc::RpcError::new("unknown_scope", value.to_string())

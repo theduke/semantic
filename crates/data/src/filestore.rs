@@ -1,9 +1,9 @@
 use std::collections::BTreeMap;
 
 use crate::schema::{
-    AttributeRef, AttributeType, ClassAttribute, ClassType, Constraint, EnumRepr, EnumType,
-    EnumVariant, Meta, Migration, MigrationDdlOperation, MigrationOperation, Module, NumberType,
-    Package, StringType, Type, TypeKind, TypeRef, UIntWidth,
+    AttributeRef, AttributeType, BoolType, ClassAttribute, ClassType, Constraint, EnumRepr,
+    EnumType, EnumVariant, FloatWidth, Meta, Migration, MigrationDdlOperation, MigrationOperation,
+    Module, NumberType, Package, StringType, TemporalType, Type, TypeKind, TypeRef, UIntWidth,
 };
 
 pub const PACKAGE_NAME: &str = "semantic.filestore";
@@ -11,6 +11,7 @@ pub const MODULE_NAME: &str = "filestore";
 pub const INIT_MIGRATION_NAME: &str = "001_init";
 pub const GENERIC_METADATA_MIGRATION_NAME: &str = "002_generic_metadata";
 pub const FILEKIND_MIGRATION_NAME: &str = "003_filekind";
+pub const MEDIA_METADATA_MIGRATION_NAME: &str = "004_media_metadata";
 
 pub const FILE_CLASS_ID: &str = "semantic:filestore:file";
 
@@ -23,6 +24,23 @@ pub const ATTR_FILE_BYTE_SIZE: &str = "semantic:filestore:file:byte_size";
 pub const ATTR_FILE_MIME_TYPE: &str = "semantic:filestore:file:mime_type";
 pub const ATTR_FILE_FILEKIND: &str = "semantic:filestore:file:filekind";
 pub const ATTR_FILE_CONTENT_HASH_SHA256: &str = "semantic:filestore:file:content_hash_sha256";
+pub const ATTR_FILE_MEDIA_PIXEL_WIDTH: &str = "semantic:filestore:file:media_pixel_width";
+pub const ATTR_FILE_MEDIA_PIXEL_HEIGHT: &str = "semantic:filestore:file:media_pixel_height";
+pub const ATTR_FILE_MEDIA_DURATION: &str = "semantic:filestore:file:media_duration";
+pub const ATTR_FILE_MEDIA_VIDEO_FRAMES_PER_SECOND: &str =
+    "semantic:filestore:file:media_video_frames_per_second";
+pub const ATTR_FILE_MEDIA_VIDEO_FRAME_COUNT: &str =
+    "semantic:filestore:file:media_video_frame_count";
+pub const ATTR_FILE_MEDIA_BITRATE: &str = "semantic:filestore:file:media_bitrate";
+pub const ATTR_FILE_MEDIA_VIDEO_BITRATE: &str = "semantic:filestore:file:media_video_bitrate";
+pub const ATTR_FILE_MEDIA_AUDIO_BITRATE: &str = "semantic:filestore:file:media_audio_bitrate";
+pub const ATTR_FILE_MEDIA_HAS_AUDIO: &str = "semantic:filestore:file:media_has_audio";
+pub const ATTR_FILE_MEDIA_VIDEO_CODEC: &str = "semantic:filestore:file:media_video_codec";
+pub const ATTR_FILE_MEDIA_AUDIO_CODEC: &str = "semantic:filestore:file:media_audio_codec";
+pub const ATTR_FILE_MEDIA_AUDIO_CHANNELS: &str = "semantic:filestore:file:media_audio_channels";
+pub const ATTR_FILE_MEDIA_AUDIO_SAMPLE_RATE: &str =
+    "semantic:filestore:file:media_audio_sample_rate";
+pub const ATTR_FILE_MEDIA_CONTAINER_FORMAT: &str = "semantic:filestore:file:media_container_format";
 
 pub const TITLE_ATTRIBUTE_ID: &str = ATTR_TITLE;
 pub const DESCRIPTION_ATTRIBUTE_ID: &str = ATTR_DESCRIPTION;
@@ -31,6 +49,21 @@ pub const FILE_FILENAME_ATTRIBUTE_ID: &str = ATTR_FILE_FILENAME;
 pub const FILE_BYTE_SIZE_ATTRIBUTE_ID: &str = ATTR_FILE_BYTE_SIZE;
 pub const FILE_MIME_TYPE_ATTRIBUTE_ID: &str = ATTR_FILE_MIME_TYPE;
 pub const FILE_CONTENT_HASH_SHA256_ATTRIBUTE_ID: &str = ATTR_FILE_CONTENT_HASH_SHA256;
+pub const FILE_MEDIA_PIXEL_WIDTH_ATTRIBUTE_ID: &str = ATTR_FILE_MEDIA_PIXEL_WIDTH;
+pub const FILE_MEDIA_PIXEL_HEIGHT_ATTRIBUTE_ID: &str = ATTR_FILE_MEDIA_PIXEL_HEIGHT;
+pub const FILE_MEDIA_DURATION_ATTRIBUTE_ID: &str = ATTR_FILE_MEDIA_DURATION;
+pub const FILE_MEDIA_VIDEO_FRAMES_PER_SECOND_ATTRIBUTE_ID: &str =
+    ATTR_FILE_MEDIA_VIDEO_FRAMES_PER_SECOND;
+pub const FILE_MEDIA_VIDEO_FRAME_COUNT_ATTRIBUTE_ID: &str = ATTR_FILE_MEDIA_VIDEO_FRAME_COUNT;
+pub const FILE_MEDIA_BITRATE_ATTRIBUTE_ID: &str = ATTR_FILE_MEDIA_BITRATE;
+pub const FILE_MEDIA_VIDEO_BITRATE_ATTRIBUTE_ID: &str = ATTR_FILE_MEDIA_VIDEO_BITRATE;
+pub const FILE_MEDIA_AUDIO_BITRATE_ATTRIBUTE_ID: &str = ATTR_FILE_MEDIA_AUDIO_BITRATE;
+pub const FILE_MEDIA_HAS_AUDIO_ATTRIBUTE_ID: &str = ATTR_FILE_MEDIA_HAS_AUDIO;
+pub const FILE_MEDIA_VIDEO_CODEC_ATTRIBUTE_ID: &str = ATTR_FILE_MEDIA_VIDEO_CODEC;
+pub const FILE_MEDIA_AUDIO_CODEC_ATTRIBUTE_ID: &str = ATTR_FILE_MEDIA_AUDIO_CODEC;
+pub const FILE_MEDIA_AUDIO_CHANNELS_ATTRIBUTE_ID: &str = ATTR_FILE_MEDIA_AUDIO_CHANNELS;
+pub const FILE_MEDIA_AUDIO_SAMPLE_RATE_ATTRIBUTE_ID: &str = ATTR_FILE_MEDIA_AUDIO_SAMPLE_RATE;
+pub const FILE_MEDIA_CONTAINER_FORMAT_ATTRIBUTE_ID: &str = ATTR_FILE_MEDIA_CONTAINER_FORMAT;
 
 pub fn package() -> Package {
     Package {
@@ -41,6 +74,7 @@ pub fn package() -> Package {
             init_migration(),
             generic_metadata_migration(),
             filekind_migration(),
+            media_metadata_migration(),
         ],
         version: None,
         meta: Meta::default(),
@@ -127,6 +161,28 @@ pub fn filekind_migration() -> Migration {
     }
 }
 
+pub fn media_metadata_migration() -> Migration {
+    let mut operations = Vec::new();
+    for attribute in media_metadata_migration_attributes() {
+        operations.push(MigrationOperation::Ddl(
+            MigrationDdlOperation::UpsertAttribute { attribute },
+        ));
+    }
+    operations.push(MigrationOperation::Ddl(
+        MigrationDdlOperation::UpsertClass {
+            class: file_class(),
+        },
+    ));
+
+    Migration {
+        module: MODULE_NAME.to_string(),
+        name: MEDIA_METADATA_MIGRATION_NAME.to_string(),
+        description: Some("Add media analysis metadata to files.".to_string()),
+        operations,
+        meta: Meta::default(),
+    }
+}
+
 pub fn file_attributes() -> Vec<AttributeType> {
     vec![
         title_attribute(),
@@ -146,6 +202,64 @@ pub fn file_attributes() -> Vec<AttributeType> {
             "content_hash_sha256",
             string_type(),
         ),
+        attribute(
+            ATTR_FILE_MEDIA_PIXEL_WIDTH,
+            "media_pixel_width",
+            uint64_type(),
+        ),
+        attribute(
+            ATTR_FILE_MEDIA_PIXEL_HEIGHT,
+            "media_pixel_height",
+            uint64_type(),
+        ),
+        attribute(ATTR_FILE_MEDIA_DURATION, "media_duration", duration_type()),
+        attribute(
+            ATTR_FILE_MEDIA_VIDEO_FRAMES_PER_SECOND,
+            "media_video_frames_per_second",
+            float64_type(),
+        ),
+        attribute(
+            ATTR_FILE_MEDIA_VIDEO_FRAME_COUNT,
+            "media_video_frame_count",
+            uint64_type(),
+        ),
+        attribute(ATTR_FILE_MEDIA_BITRATE, "media_bitrate", uint64_type()),
+        attribute(
+            ATTR_FILE_MEDIA_VIDEO_BITRATE,
+            "media_video_bitrate",
+            uint64_type(),
+        ),
+        attribute(
+            ATTR_FILE_MEDIA_AUDIO_BITRATE,
+            "media_audio_bitrate",
+            uint64_type(),
+        ),
+        attribute(ATTR_FILE_MEDIA_HAS_AUDIO, "media_has_audio", bool_type()),
+        attribute(
+            ATTR_FILE_MEDIA_VIDEO_CODEC,
+            "media_video_codec",
+            string_type(),
+        ),
+        attribute(
+            ATTR_FILE_MEDIA_AUDIO_CODEC,
+            "media_audio_codec",
+            string_type(),
+        ),
+        attribute(
+            ATTR_FILE_MEDIA_AUDIO_CHANNELS,
+            "media_audio_channels",
+            uint64_type(),
+        ),
+        attribute(
+            ATTR_FILE_MEDIA_AUDIO_SAMPLE_RATE,
+            "media_audio_sample_rate",
+            uint64_type(),
+        ),
+        attribute(
+            ATTR_FILE_MEDIA_CONTAINER_FORMAT,
+            "media_container_format",
+            string_type(),
+        ),
     ]
 }
 
@@ -163,6 +277,60 @@ pub fn file_class() -> ClassType {
             "content_hash_sha256",
             ATTR_FILE_CONTENT_HASH_SHA256,
             90,
+            None,
+        ),
+        ("media_pixel_width", ATTR_FILE_MEDIA_PIXEL_WIDTH, 100, None),
+        (
+            "media_pixel_height",
+            ATTR_FILE_MEDIA_PIXEL_HEIGHT,
+            110,
+            None,
+        ),
+        ("media_duration", ATTR_FILE_MEDIA_DURATION, 120, None),
+        (
+            "media_video_frames_per_second",
+            ATTR_FILE_MEDIA_VIDEO_FRAMES_PER_SECOND,
+            130,
+            None,
+        ),
+        (
+            "media_video_frame_count",
+            ATTR_FILE_MEDIA_VIDEO_FRAME_COUNT,
+            140,
+            None,
+        ),
+        ("media_bitrate", ATTR_FILE_MEDIA_BITRATE, 150, None),
+        (
+            "media_video_bitrate",
+            ATTR_FILE_MEDIA_VIDEO_BITRATE,
+            160,
+            None,
+        ),
+        (
+            "media_audio_bitrate",
+            ATTR_FILE_MEDIA_AUDIO_BITRATE,
+            170,
+            None,
+        ),
+        ("media_has_audio", ATTR_FILE_MEDIA_HAS_AUDIO, 180, None),
+        ("media_video_codec", ATTR_FILE_MEDIA_VIDEO_CODEC, 190, None),
+        ("media_audio_codec", ATTR_FILE_MEDIA_AUDIO_CODEC, 200, None),
+        (
+            "media_audio_channels",
+            ATTR_FILE_MEDIA_AUDIO_CHANNELS,
+            210,
+            None,
+        ),
+        (
+            "media_audio_sample_rate",
+            ATTR_FILE_MEDIA_AUDIO_SAMPLE_RATE,
+            220,
+            None,
+        ),
+        (
+            "media_container_format",
+            ATTR_FILE_MEDIA_CONTAINER_FORMAT,
+            230,
             None,
         ),
     ])
@@ -228,6 +396,95 @@ fn filekind_migration_attribute() -> AttributeType {
         migration_filekind_type(),
         "File Kind",
     )
+}
+
+fn media_metadata_migration_attributes() -> Vec<AttributeType> {
+    vec![
+        migration_attribute(
+            ATTR_FILE_MEDIA_PIXEL_WIDTH,
+            "media_pixel_width",
+            migration_uint64_type(),
+            "Media Pixel Width",
+        ),
+        migration_attribute(
+            ATTR_FILE_MEDIA_PIXEL_HEIGHT,
+            "media_pixel_height",
+            migration_uint64_type(),
+            "Media Pixel Height",
+        ),
+        migration_attribute(
+            ATTR_FILE_MEDIA_DURATION,
+            "media_duration",
+            migration_duration_type(),
+            "Media Duration",
+        ),
+        migration_attribute(
+            ATTR_FILE_MEDIA_VIDEO_FRAMES_PER_SECOND,
+            "media_video_frames_per_second",
+            migration_float64_type(),
+            "Media Video Frames Per Second",
+        ),
+        migration_attribute(
+            ATTR_FILE_MEDIA_VIDEO_FRAME_COUNT,
+            "media_video_frame_count",
+            migration_uint64_type(),
+            "Media Video Frame Count",
+        ),
+        migration_attribute(
+            ATTR_FILE_MEDIA_BITRATE,
+            "media_bitrate",
+            migration_uint64_type(),
+            "Media Bitrate",
+        ),
+        migration_attribute(
+            ATTR_FILE_MEDIA_VIDEO_BITRATE,
+            "media_video_bitrate",
+            migration_uint64_type(),
+            "Media Video Bitrate",
+        ),
+        migration_attribute(
+            ATTR_FILE_MEDIA_AUDIO_BITRATE,
+            "media_audio_bitrate",
+            migration_uint64_type(),
+            "Media Audio Bitrate",
+        ),
+        migration_attribute(
+            ATTR_FILE_MEDIA_HAS_AUDIO,
+            "media_has_audio",
+            migration_bool_type(),
+            "Media Has Audio",
+        ),
+        migration_attribute(
+            ATTR_FILE_MEDIA_VIDEO_CODEC,
+            "media_video_codec",
+            migration_string_type(),
+            "Media Video Codec",
+        ),
+        migration_attribute(
+            ATTR_FILE_MEDIA_AUDIO_CODEC,
+            "media_audio_codec",
+            migration_string_type(),
+            "Media Audio Codec",
+        ),
+        migration_attribute(
+            ATTR_FILE_MEDIA_AUDIO_CHANNELS,
+            "media_audio_channels",
+            migration_uint64_type(),
+            "Media Audio Channels",
+        ),
+        migration_attribute(
+            ATTR_FILE_MEDIA_AUDIO_SAMPLE_RATE,
+            "media_audio_sample_rate",
+            migration_uint64_type(),
+            "Media Audio Sample Rate",
+        ),
+        migration_attribute(
+            ATTR_FILE_MEDIA_CONTAINER_FORMAT,
+            "media_container_format",
+            migration_string_type(),
+            "Media Container Format",
+        ),
+    ]
 }
 
 fn init_migration_file_class() -> ClassType {
@@ -330,6 +587,18 @@ fn migration_string_type() -> Type {
 
 fn migration_uint64_type() -> Type {
     Type::new(TypeKind::Number(NumberType::UInt(UIntWidth::U64)))
+}
+
+fn migration_bool_type() -> Type {
+    Type::new(TypeKind::Bool(BoolType))
+}
+
+fn migration_float64_type() -> Type {
+    Type::new(TypeKind::Number(NumberType::Float(FloatWidth::F64)))
+}
+
+fn migration_duration_type() -> Type {
+    Type::new(TypeKind::Temporal(TemporalType::Duration))
 }
 
 fn migration_ref_type(name: &str) -> Type {
@@ -437,6 +706,18 @@ fn uint64_type() -> Type {
     Type::new(TypeKind::Number(NumberType::UInt(UIntWidth::U64)))
 }
 
+fn bool_type() -> Type {
+    Type::new(TypeKind::Bool(BoolType))
+}
+
+fn float64_type() -> Type {
+    Type::new(TypeKind::Number(NumberType::Float(FloatWidth::F64)))
+}
+
+fn duration_type() -> Type {
+    Type::new(TypeKind::Temporal(TemporalType::Duration))
+}
+
 fn filekind_type() -> Type {
     Type::new(TypeKind::Enum(EnumType {
         repr: EnumRepr::String,
@@ -511,10 +792,14 @@ fn title_word(word: &str) -> String {
 mod tests {
     use crate::filestore::{
         ATTR_FILE_CONTENT_HASH_SHA256, ATTR_FILE_FILEKIND, ATTR_FILE_FILESTORE_LOCATOR,
-        ATTR_PARENT, ATTR_TITLE, FILE_CLASS_ID, FILEKIND_MIGRATION_NAME,
-        GENERIC_METADATA_MIGRATION_NAME, INIT_MIGRATION_NAME, MODULE_NAME, PACKAGE_NAME, package,
+        ATTR_FILE_MEDIA_DURATION, ATTR_FILE_MEDIA_PIXEL_WIDTH, ATTR_PARENT, ATTR_TITLE,
+        FILE_CLASS_ID, FILEKIND_MIGRATION_NAME, GENERIC_METADATA_MIGRATION_NAME,
+        INIT_MIGRATION_NAME, MEDIA_METADATA_MIGRATION_NAME, MODULE_NAME, PACKAGE_NAME, package,
     };
-    use crate::schema::{EnumRepr, Migration, MigrationDdlOperation, MigrationOperation, TypeKind};
+    use crate::schema::{
+        EnumRepr, FloatWidth, Migration, MigrationDdlOperation, MigrationOperation, NumberType,
+        TemporalType, TypeKind,
+    };
 
     #[test]
     fn package_has_expected_structure() {
@@ -523,10 +808,11 @@ mod tests {
         assert_eq!(package.name, PACKAGE_NAME);
         assert_eq!(package.root.name, MODULE_NAME);
         assert!(package.modules.is_empty());
-        assert_eq!(package.migrations.len(), 3);
+        assert_eq!(package.migrations.len(), 4);
         assert_eq!(package.migrations[0].name, INIT_MIGRATION_NAME);
         assert_eq!(package.migrations[1].name, GENERIC_METADATA_MIGRATION_NAME);
         assert_eq!(package.migrations[2].name, FILEKIND_MIGRATION_NAME);
+        assert_eq!(package.migrations[3].name, MEDIA_METADATA_MIGRATION_NAME);
         assert!(package.root.classes.contains_key(FILE_CLASS_ID));
         assert!(package.root.attributes.contains_key(ATTR_TITLE));
         assert!(package.root.attributes.contains_key(ATTR_PARENT));
@@ -544,6 +830,18 @@ mod tests {
                 .contains_key(ATTR_FILE_CONTENT_HASH_SHA256)
         );
         assert!(package.root.attributes.contains_key(ATTR_FILE_FILEKIND));
+        assert!(
+            package
+                .root
+                .attributes
+                .contains_key(ATTR_FILE_MEDIA_PIXEL_WIDTH)
+        );
+        assert!(
+            package
+                .root
+                .attributes
+                .contains_key(ATTR_FILE_MEDIA_DURATION)
+        );
     }
 
     #[test]
@@ -609,6 +907,25 @@ mod tests {
 
         let class = migration_upsert_class(&migration);
         assert!(class.attributes.contains_key("filekind"));
+        assert!(!class.attributes.contains_key("media_duration"));
+    }
+
+    #[test]
+    fn media_metadata_migration_only_adds_media_attributes() {
+        let migration = super::media_metadata_migration();
+        let ids = migration_upsert_attribute_ids(&migration);
+
+        assert_eq!(ids.len(), 14);
+        assert!(ids.iter().all(|id| id.contains(":media_")));
+
+        let class = migration_upsert_class(&migration);
+        assert!(class.attributes.contains_key("media_duration"));
+        assert!(
+            class
+                .attributes
+                .values()
+                .all(|attribute| !attribute.required)
+        );
     }
 
     #[test]
@@ -690,6 +1007,41 @@ mod tests {
             .expect("filekind class attribute should exist");
         assert!(!class_attribute.required);
         assert_eq!(class_attribute.attribute.id, super::ATTR_FILE_FILEKIND);
+    }
+
+    #[test]
+    fn media_metadata_fields_have_expected_types() {
+        let attributes = super::file_attributes()
+            .into_iter()
+            .map(|attribute| (attribute.id.clone(), attribute))
+            .collect::<std::collections::BTreeMap<_, _>>();
+
+        assert!(matches!(
+            attributes
+                .get(super::ATTR_FILE_MEDIA_PIXEL_WIDTH)
+                .map(|attribute| &attribute.ty.kind),
+            Some(TypeKind::Number(NumberType::UInt(
+                crate::schema::UIntWidth::U64
+            )))
+        ));
+        assert!(matches!(
+            attributes
+                .get(super::ATTR_FILE_MEDIA_DURATION)
+                .map(|attribute| &attribute.ty.kind),
+            Some(TypeKind::Temporal(TemporalType::Duration))
+        ));
+        assert!(matches!(
+            attributes
+                .get(super::ATTR_FILE_MEDIA_HAS_AUDIO)
+                .map(|attribute| &attribute.ty.kind),
+            Some(TypeKind::Bool(_))
+        ));
+        assert!(matches!(
+            attributes
+                .get(super::ATTR_FILE_MEDIA_VIDEO_FRAMES_PER_SECOND)
+                .map(|attribute| &attribute.ty.kind),
+            Some(TypeKind::Number(NumberType::Float(FloatWidth::F64)))
+        ));
     }
 
     fn migration_upsert_attribute_ids(migration: &Migration) -> Vec<&str> {

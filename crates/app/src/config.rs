@@ -3,6 +3,8 @@ use std::path::{Path, PathBuf};
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
 pub struct AppConfig {
     pub data_dir: Option<PathBuf>,
+    pub temp_dir: Option<PathBuf>,
+    pub auto_analyze_media: bool,
 }
 
 impl AppConfig {
@@ -15,9 +17,27 @@ impl AppConfig {
         self
     }
 
+    pub fn with_temp_dir(mut self, temp_dir: impl Into<PathBuf>) -> Self {
+        self.temp_dir = Some(temp_dir.into());
+        self
+    }
+
+    pub fn with_auto_analyze_media(mut self, enabled: bool) -> Self {
+        self.auto_analyze_media = enabled;
+        self
+    }
+
     pub fn from_env() -> Self {
         let data_dir = std::env::var_os("SEMANTIC_DATA_DIR").map(PathBuf::from);
-        Self { data_dir }
+        let temp_dir = std::env::var_os("SEMANTIC_TEMP_DIR").map(PathBuf::from);
+        let auto_analyze_media = std::env::var("SEMANTIC_AUTO_ANALYZE_MEDIA")
+            .ok()
+            .is_some_and(|value| parse_bool(&value).unwrap_or(false));
+        Self {
+            data_dir,
+            temp_dir,
+            auto_analyze_media,
+        }
     }
 
     pub fn default_db_path(&self) -> PathBuf {
@@ -48,6 +68,14 @@ impl AppConfig {
             std::fs::create_dir_all(parent)?;
         }
         Ok(())
+    }
+}
+
+fn parse_bool(value: &str) -> Option<bool> {
+    match value.trim().to_ascii_lowercase().as_str() {
+        "1" | "true" | "yes" | "on" => Some(true),
+        "0" | "false" | "no" | "off" => Some(false),
+        _ => None,
     }
 }
 

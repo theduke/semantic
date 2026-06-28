@@ -471,6 +471,26 @@ mod tests {
         );
     }
 
+    #[test]
+    fn duration_canonical_bytes_preserve_subsecond_precision() {
+        let one_second = Value::Duration(crate::value::Duration::from(time::Duration::seconds(1)));
+        let one_second_one_ms = Value::Duration(crate::value::Duration::from(
+            time::Duration::milliseconds(1001),
+        ));
+        let one_second_two_ms = Value::Duration(crate::value::Duration::from(
+            time::Duration::milliseconds(1002),
+        ));
+
+        assert_ne!(
+            one_second.canonical_bytes(),
+            one_second_one_ms.canonical_bytes()
+        );
+        assert_ne!(
+            one_second_one_ms.canonical_bytes(),
+            one_second_two_ms.canonical_bytes()
+        );
+    }
+
     fn find_subslice(haystack: &[u8], needle: &[u8]) -> Option<usize> {
         haystack
             .windows(needle.len())

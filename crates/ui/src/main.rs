@@ -36,7 +36,9 @@ fn launch_standalone(args: &[String]) {
     let blob_uri = app_config
         .default_blob_uri()
         .expect("build default semantic UI blob store uri");
-    let handle = match semantic_ui::build_embedded_handle_with_blob_store(db_path, blob_uri) {
+    let handle = match semantic_ui::build_embedded_handle_with_app_config_and_blob_store(
+        db_path, app_config, blob_uri,
+    ) {
         Ok(value) => value,
         Err(err) => {
             eprintln!("failed to open semantic database: {err}");
@@ -221,6 +223,12 @@ fn app_config(args: &[String]) -> semantic_app::AppConfig {
     let mut config = semantic_app::AppConfig::from_env();
     if let Some(data_dir) = arg_value(args, "--data-dir") {
         config.data_dir = Some(data_dir.into());
+    }
+    if let Some(temp_dir) = arg_value(args, "--temp-dir") {
+        config.temp_dir = Some(temp_dir.into());
+    }
+    if arg_flag(args, "--auto-analyze-media") {
+        config.auto_analyze_media = true;
     }
     config
 }

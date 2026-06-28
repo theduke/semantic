@@ -24,7 +24,7 @@ impl From<Duration> for time::Duration {
 #[repr(C)]
 #[facet(rename_all = "snake_case")]
 enum FacetProxy {
-    Seconds(i64),
+    Milliseconds(i64),
 }
 
 impl TryFrom<FacetProxy> for time::Duration {
@@ -32,13 +32,34 @@ impl TryFrom<FacetProxy> for time::Duration {
 
     fn try_from(proxy: FacetProxy) -> Result<Self, Self::Error> {
         match proxy {
-            FacetProxy::Seconds(seconds) => Ok(time::Duration::new(seconds, 0)),
+            FacetProxy::Milliseconds(milliseconds) => {
+                Ok(time::Duration::milliseconds(milliseconds))
+            }
         }
     }
 }
 
 impl From<&time::Duration> for FacetProxy {
     fn from(key: &time::Duration) -> Self {
-        Self::Seconds(key.whole_seconds())
+        Self::Milliseconds(key.whole_milliseconds() as i64)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::Duration;
+
+    #[test]
+    fn facet_json_serializes_milliseconds() {
+        let duration = Duration::from(time::Duration::milliseconds(1500));
+        let encoded = facet_json::to_string(&duration).expect("serialize duration");
+        assert_eq!(encoded, "1500");
+    }
+
+    #[test]
+    fn facet_proxy_truncates_sub_millisecond_precision() {
+        let duration = Duration::from(time::Duration::microseconds(1500));
+        let encoded = facet_json::to_string(&duration).expect("serialize duration");
+        assert_eq!(encoded, "1");
     }
 }

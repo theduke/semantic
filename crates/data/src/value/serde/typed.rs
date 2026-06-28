@@ -68,7 +68,12 @@ where
         }
         Value::Duration(v) => {
             let raw: time::Duration = (*v).into();
-            serializer.serialize_newtype_variant("Value", 17, "duration", &raw.whole_seconds())
+            serializer.serialize_newtype_variant(
+                "Value",
+                17,
+                "duration",
+                &(raw.whole_milliseconds() as i64),
+            )
         }
         Value::Time(v) => {
             let raw: time::Time = (*v).into();
@@ -228,8 +233,10 @@ impl<'de> Visitor<'de> for TypedValueVisitor {
                 Ok(Value::IpAddr(parsed))
             }
             VariantTag::Duration => {
-                let seconds = variant.newtype_variant::<i64>()?;
-                Ok(Value::Duration(time::Duration::seconds(seconds).into()))
+                let milliseconds = variant.newtype_variant::<i64>()?;
+                Ok(Value::Duration(
+                    time::Duration::milliseconds(milliseconds).into(),
+                ))
             }
             VariantTag::Time => {
                 let nanos = variant.newtype_variant::<i64>()?;
@@ -482,6 +489,17 @@ mod tests {
         let value = Value::I8(12);
         let encoded = ::serde_json::to_string(&TypedValue(value.clone())).expect("serialize typed");
         let decoded: TypedValue = ::serde_json::from_str(&encoded).expect("deserialize typed");
+        assert_eq!(decoded.0, value);
+    }
+
+    #[test]
+    fn typed_duration_roundtrip_preserves_milliseconds() {
+        let value = Value::Duration(time::Duration::milliseconds(1500).into());
+        let encoded =
+            ::serde_json::to_string(&TypedValue(value.clone())).expect("serialize duration");
+        assert_eq!(encoded, r#"{"duration":1500}"#);
+
+        let decoded: TypedValue = ::serde_json::from_str(&encoded).expect("deserialize duration");
         assert_eq!(decoded.0, value);
     }
 

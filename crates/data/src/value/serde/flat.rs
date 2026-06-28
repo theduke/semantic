@@ -49,7 +49,7 @@ where
         Value::IpAddr(v) => serializer.serialize_str(&v.to_string()),
         Value::Duration(v) => {
             let raw: time::Duration = (*v).into();
-            serializer.serialize_i64(raw.whole_seconds())
+            serializer.serialize_i64(raw.whole_milliseconds() as i64)
         }
         Value::Time(v) => {
             let raw: time::Time = (*v).into();
@@ -347,6 +347,13 @@ mod tests {
 
         let decoded: Value = ::serde_json::from_str(&encoded).expect("deserialize null");
         assert_eq!(decoded, Value::Null);
+    }
+
+    #[test]
+    fn flat_duration_serializes_as_milliseconds() {
+        let value = Value::Duration(time::Duration::milliseconds(1500).into());
+        let encoded = ::serde_json::to_string(&value).expect("serialize duration");
+        assert_eq!(encoded, "1500");
     }
 
     #[test]

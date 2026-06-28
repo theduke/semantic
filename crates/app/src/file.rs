@@ -11,11 +11,17 @@ use semantic_data::value::{Object, Value};
 use semantic_db_core::{DEFAULT_COLLECTION, EntityRecord};
 use sha2::{Digest as _, Sha256};
 
-use crate::{AppError, AppRequestContext, DbScopeId};
+use crate::{
+    AppError, AppRequestContext, DbScopeId, MediaAnalysisConfig, MediaAnalysisService,
+    media::merge_analysis_attributes,
+};
 
 pub type FileByteStream = BoxStream<'static, std::result::Result<Bytes, AppError>>;
 
-pub struct FileService;
+#[derive(Clone, Debug)]
+pub struct FileService {
+    media_analysis: MediaAnalysisService,
+}
 
 pub struct FileCreateRequest {
     pub scope_id: Option<DbScopeId>,
@@ -53,8 +59,14 @@ pub struct FileReadResult {
 }
 
 impl FileService {
-    pub fn new() -> Self {
-        Self
+    pub fn new(media_analysis_config: MediaAnalysisConfig) -> Self {
+        Self {
+            media_analysis: MediaAnalysisService::new(media_analysis_config),
+        }
+    }
+
+    pub fn media_analysis(&self) -> &MediaAnalysisService {
+        &self.media_analysis
     }
 
     pub async fn create(
@@ -73,6 +85,7 @@ impl FileService {
             .or_else(|| object_string(&request.entity, ATTR_ID))
             .unwrap_or_else(|| format!("file-sha256-{computed_sha256}"));
         let filestore_locator = request.filestore_locator.unwrap_or_else(|| id.clone());
+        let filename = request.filename.clone();
 
         let mut put = Put::new(filestore_locator.clone(), DataSource::Data(bytes.clone()));
         put.mime_type = request.mime_type.clone();
@@ -86,7 +99,7 @@ impl FileService {
         object.insert(ATTR_ID, Value::String(id.clone()));
         object.insert(ATTR_TYPE, Value::String(FILE_CLASS_ID.to_string()));
         object.insert("filestore_locator", Value::String(filestore_locator));
-        if let Some(filename) = request.filename {
+        if let Some(filename) = filename.clone() {
             object.insert("filename", Value::String(filename));
         }
         if let Some(byte_size) = byte_size {
@@ -96,6 +109,18 @@ impl FileService {
             object.insert("mime_type", Value::String(mime_type));
         }
         object.insert("content_hash_sha256", Value::String(content_hash_sha256));
+        if self.media_analysis.config().auto_analyze_media
+            && let Ok(Some(analysis)) = self
+                .media_analysis
+                .analyze_created_bytes(
+                    bytes,
+                    filename.as_deref(),
+                    object_string(&object, "mime_type").as_deref(),
+                )
+                .await
+        {
+            merge_analysis_attributes(&mut object, &analysis);
+        }
 
         db.insert(DEFAULT_COLLECTION.to_string(), id.clone(), object.clone())
             .await?;
@@ -143,7 +168,7 @@ impl FileService {
 
 impl Default for FileService {
     fn default() -> Self {
-        Self::new()
+        Self::new(MediaAnalysisConfig::default())
     }
 }
 

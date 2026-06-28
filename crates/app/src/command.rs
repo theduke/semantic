@@ -14,8 +14,9 @@ use semantic_rpc::{RpcCommand, RpcCommandSpec, RpcRegistry, RpcRequest, RpcRespo
 
 use crate::object_store::{ObjectStoreId, ObjectStoreManager, ObjectStoreOpenRequest};
 use crate::{
-    AppError, AppRequestContext, AppSession, DbOpenRequest, DbProvider, DbScopeId, FileService,
-    ScopeInfo, ScopeManager, ScopeOpenOptions, ScopeVisibility, SemanticDb,
+    AppConfig, AppError, AppRequestContext, AppSession, DbOpenRequest, DbProvider, DbScopeId,
+    FileService, MediaAnalysisConfig, ScopeInfo, ScopeManager, ScopeOpenOptions, ScopeVisibility,
+    SemanticDb,
 };
 
 const DEFAULT_FILE_STORE_ID: &str = "default";
@@ -47,6 +48,7 @@ pub struct SemanticAppBuilder {
     default_scope: Option<DefaultScope>,
     default_object_store: Option<DefaultObjectStore>,
     idle_ttl: Duration,
+    media_analysis_config: MediaAnalysisConfig,
 }
 
 impl SemanticApp {
@@ -57,6 +59,7 @@ impl SemanticApp {
             default_scope: None,
             default_object_store: None,
             idle_ttl: Duration::from_secs(15 * 60),
+            media_analysis_config: MediaAnalysisConfig::default(),
         }
     }
 
@@ -116,6 +119,21 @@ impl SemanticAppBuilder {
         self
     }
 
+    pub fn with_config(mut self, config: AppConfig) -> Self {
+        self.media_analysis_config = MediaAnalysisConfig::from(&config);
+        self
+    }
+
+    pub fn with_media_temp_dir(mut self, temp_dir: impl Into<std::path::PathBuf>) -> Self {
+        self.media_analysis_config.temp_dir = Some(temp_dir.into());
+        self
+    }
+
+    pub fn with_auto_analyze_media(mut self, enabled: bool) -> Self {
+        self.media_analysis_config.auto_analyze_media = enabled;
+        self
+    }
+
     pub fn register_command<C>(mut self, command: C) -> std::result::Result<Self, AppError>
     where
         C: RpcCommand<AppRequestContext>,
@@ -136,6 +154,7 @@ impl SemanticAppBuilder {
         self.registry.register(DbInsertCommand)?;
         self.registry.register(DbDeleteCommand)?;
         self.registry.register(DbBatchCommand)?;
+        self.registry.register(FileAnalyzeCommand)?;
         Ok(self)
     }
 
@@ -162,7 +181,7 @@ impl SemanticAppBuilder {
                 registry: Arc::new(self.registry),
                 scopes,
                 object_stores,
-                file_service: FileService::new(),
+                file_service: FileService::new(self.media_analysis_config),
             }),
         })
     }
@@ -178,6 +197,7 @@ struct DbGetCommand;
 struct DbInsertCommand;
 struct DbDeleteCommand;
 struct DbBatchCommand;
+struct FileAnalyzeCommand;
 
 macro_rules! command_spec {
     ($ty:ty, $name:literal) => {
@@ -210,6 +230,7 @@ command_spec!(DbGetCommand, "semantic.db.get");
 command_spec!(DbInsertCommand, "semantic.db.insert");
 command_spec!(DbDeleteCommand, "semantic.db.delete");
 command_spec!(DbBatchCommand, "semantic.db.batch");
+command_spec!(FileAnalyzeCommand, "semantic.file.analyze");
 
 impl RpcCommand<AppRequestContext> for ScopeOpenCommand {
     fn call<'a>(
@@ -483,6 +504,37 @@ impl RpcCommand<AppRequestContext> for DbBatchCommand {
             let db = ctx.resolve_db(scope_id).await?;
             let outcome = db.execute_batch(batch).await?;
             Ok(batch_outcome_to_value(outcome))
+        })
+    }
+}
+
+impl RpcCommand<AppRequestContext> for FileAnalyzeCommand {
+    fn call<'a>(
+        &'a self,
+        ctx: &'a AppRequestContext,
+        payload: Value,
+    ) -> Pin<Box<dyn Future<Output = std::result::Result<Value, AppError>> + Send + 'a>> {
+        Box::pin(async move {
+            let object = expect_object(payload)?;
+            let scope_id = optional_string(&object, "scope_id")?.map(DbScopeId::new);
+            let id = required_string(&object, "id")?;
+            let outcome = ctx
+                .app
+                .files()
+                .media_analysis()
+                .analyze_persisted_file(ctx, scope_id, id)
+                .await?;
+            let mut out = Object::new();
+            out.insert("id", Value::String(outcome.id));
+            out.insert("collection", Value::String(outcome.collection));
+            out.insert("analyzed", Value::Bool(outcome.analyzed));
+            match outcome.analysis_kind {
+                Some(kind) => out.insert("analysis_kind", Value::String(kind.to_string())),
+                None => out.insert("analysis_kind", Value::Null),
+            };
+            out.insert("attributes", Value::Object(outcome.attributes));
+            out.insert("object", Value::Object(outcome.object));
+            Ok(Value::Object(out))
         })
     }
 }

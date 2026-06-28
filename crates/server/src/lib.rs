@@ -20,11 +20,23 @@ impl SemanticServer {
         let blob_uri = app_config
             .default_blob_uri()
             .map_err(|err| ServerError::App(semantic_app::AppError::InvalidRequest(err)))?;
-        Self::local_redb_with_blob_store(path, blob_uri)
+        Self::local_redb_with_app_config_and_blob_store(path, app_config, blob_uri)
     }
 
     pub fn local_redb_with_blob_store(
         path: impl AsRef<std::path::Path>,
+        blob_uri: String,
+    ) -> std::result::Result<Self, ServerError> {
+        Self::local_redb_with_app_config_and_blob_store(
+            path,
+            semantic_app::AppConfig::from_env(),
+            blob_uri,
+        )
+    }
+
+    pub fn local_redb_with_app_config_and_blob_store(
+        path: impl AsRef<std::path::Path>,
+        app_config: semantic_app::AppConfig,
         blob_uri: String,
     ) -> std::result::Result<Self, ServerError> {
         let path = path.as_ref();
@@ -34,6 +46,7 @@ impl SemanticServer {
             std::sync::Arc::new(semantic_db_core::Db::new(backend));
         let scope_id = semantic_app::DbScopeId::new("default");
         let app = semantic_app::SemanticApp::builder()
+            .with_config(app_config)
             .with_provider(RedbDbProvider)
             .with_default_scope(scope_id.clone(), db)
             .with_default_file_store_uri(scope_id, blob_uri)

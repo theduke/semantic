@@ -217,9 +217,23 @@ pub fn build_embedded_handle_with_blob_store(
     db_path: impl AsRef<std::path::Path>,
     blob_uri: String,
 ) -> std::result::Result<EmbeddedAppHandle, String> {
+    build_embedded_handle_with_app_config_and_blob_store(
+        db_path,
+        semantic_app::AppConfig::from_env(),
+        blob_uri,
+    )
+}
+
+#[cfg(feature = "desktop")]
+pub fn build_embedded_handle_with_app_config_and_blob_store(
+    db_path: impl AsRef<std::path::Path>,
+    app_config: semantic_app::AppConfig,
+    blob_uri: String,
+) -> std::result::Result<EmbeddedAppHandle, String> {
     let scope_id = DbScopeId::new("local");
     let db_uri = format!("redb://{}", db_path.as_ref().to_string_lossy());
     let app = SemanticApp::builder()
+        .with_config(app_config)
         .with_provider(RedbDbProvider)
         .with_default_scope_request(
             scope_id.clone(),

@@ -54,7 +54,7 @@ where
         ValueRef::IpAddr(v) => serializer.serialize_str(&v.to_string()),
         ValueRef::Duration(v) => {
             let raw: time::Duration = (*v).into();
-            serializer.serialize_i64(raw.whole_seconds())
+            serializer.serialize_i64(raw.whole_milliseconds() as i64)
         }
         ValueRef::Time(v) => {
             let raw: time::Time = (*v).into();
@@ -332,6 +332,14 @@ mod tests {
         let encoded =
             ::serde_json::to_string(&FlatValueRef(ValueRef::Ref(&value))).expect("serialize ref");
         assert_eq!(encoded, "42");
+    }
+
+    #[test]
+    fn flat_value_ref_duration_serializes_as_milliseconds() {
+        let duration = crate::value::Duration::from(time::Duration::milliseconds(1500));
+        let encoded = ::serde_json::to_string(&FlatValueRef(ValueRef::Duration(duration)))
+            .expect("serialize duration");
+        assert_eq!(encoded, "1500");
     }
 
     #[test]

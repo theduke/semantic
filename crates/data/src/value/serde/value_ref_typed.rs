@@ -64,7 +64,12 @@ where
         }
         ValueRef::Duration(v) => {
             let raw: time::Duration = (*v).into();
-            serializer.serialize_newtype_variant("Value", 17, "duration", &raw.whole_seconds())
+            serializer.serialize_newtype_variant(
+                "Value",
+                17,
+                "duration",
+                &(raw.whole_milliseconds() as i64),
+            )
         }
         ValueRef::Time(v) => {
             let raw: time::Time = (*v).into();
@@ -224,8 +229,10 @@ impl<'de> Visitor<'de> for TypedValueRefVisitor {
                 Ok(ValueRef::IpAddr(parsed))
             }
             VariantTag::Duration => {
-                let seconds = variant.newtype_variant::<i64>()?;
-                Ok(ValueRef::Duration(time::Duration::seconds(seconds).into()))
+                let milliseconds = variant.newtype_variant::<i64>()?;
+                Ok(ValueRef::Duration(
+                    time::Duration::milliseconds(milliseconds).into(),
+                ))
             }
             VariantTag::Time => {
                 let nanos = variant.newtype_variant::<i64>()?;
@@ -486,6 +493,18 @@ mod tests {
         let decoded: TypedValueRef<'_> =
             ::serde_json::from_str(&encoded).expect("deserialize typed");
         assert_eq!(decoded.0.into_owned(), Value::I8(12));
+    }
+
+    #[test]
+    fn typed_value_ref_duration_roundtrip_preserves_milliseconds() {
+        let duration = crate::value::Duration::from(time::Duration::milliseconds(1500));
+        let value = TypedValueRef(ValueRef::Duration(duration));
+        let encoded = ::serde_json::to_string(&value).expect("serialize duration");
+        assert_eq!(encoded, r#"{"duration":1500}"#);
+
+        let decoded: TypedValueRef<'_> =
+            ::serde_json::from_str(&encoded).expect("deserialize duration");
+        assert_eq!(decoded.0.into_owned(), Value::Duration(duration));
     }
 
     #[test]

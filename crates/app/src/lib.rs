@@ -5,6 +5,7 @@ mod context;
 mod db;
 mod error;
 mod file;
+mod media;
 mod object_store;
 mod scope;
 mod session;
@@ -19,6 +20,7 @@ pub use file::{
     FileByteStream, FileContent, FileCreateRequest, FileReadResult, FileRecord, FileService,
     FileSizedStream,
 };
+pub use media::{MediaAnalysisConfig, MediaAnalysisOutcome, MediaAnalysisService};
 pub use scope::{DbScopeId, ScopeInfo, ScopeManager, ScopeOpenOptions, ScopeVisibility};
 pub use session::{AppSession, AppSessionId};
 
@@ -142,10 +144,21 @@ mod tests {
                 deleted: 0,
                 updated: 0,
             };
+            let mut records = self.records.lock().unwrap();
             for operation in batch.operations {
                 match operation {
-                    BatchOperation::Upsert { .. } => stats.upserted += 1,
-                    BatchOperation::DeleteById { .. } => stats.deleted += 1,
+                    BatchOperation::Upsert {
+                        collection,
+                        id,
+                        object,
+                    } => {
+                        records.insert((collection, id), object);
+                        stats.upserted += 1;
+                    }
+                    BatchOperation::DeleteById { collection, id } => {
+                        records.remove(&(collection, id));
+                        stats.deleted += 1;
+                    }
                     BatchOperation::DeleteByIds { ids, .. } => stats.deleted += ids.len(),
                     BatchOperation::Update { .. } => stats.updated += 1,
                     BatchOperation::Delete { .. } => stats.deleted += 1,
@@ -248,6 +261,14 @@ mod tests {
             request_scope: None,
         }
     }
+
+    const PNG_1X1: &[u8] = &[
+        0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0x00, 0x00, 0x00, 0x0d, 0x49, 0x48, 0x44,
+        0x52, 0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x01, 0x08, 0x04, 0x00, 0x00, 0x00, 0xb5,
+        0x1c, 0x0c, 0x02, 0x00, 0x00, 0x00, 0x0b, 0x49, 0x44, 0x41, 0x54, 0x78, 0x9c, 0x63, 0xfa,
+        0xcf, 0x00, 0x00, 0x02, 0x07, 0x01, 0x02, 0x9a, 0x1c, 0x31, 0x71, 0x00, 0x00, 0x00, 0x00,
+        0x49, 0x45, 0x4e, 0x44, 0xae, 0x42, 0x60, 0x82,
+    ];
 
     fn select_db_name(response: RpcResponse) -> String {
         let RpcResult::Ok(Value::Object(object)) = response.result else {
@@ -470,6 +491,294 @@ mod tests {
         let read = app.files().read(&ctx, None, record.id).await.unwrap();
         let bytes = read.stream.try_collect::<bytes::BytesMut>().await.unwrap();
         assert_eq!(&bytes[..], b"hello");
+    }
+
+    #[tokio::test]
+    async fn file_service_auto_analyzes_image_when_enabled() {
+        use bytes::Bytes;
+
+        let suffix = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let data_dir = std::env::temp_dir().join(format!("semantic-app-image-auto-{suffix}"));
+        let config = AppConfig::new()
+            .with_data_dir(&data_dir)
+            .with_auto_analyze_media(true);
+        let scope_id = DbScopeId::new("default");
+        let default_db: Arc<dyn SemanticDb> = Arc::new(MockDb::new("default"));
+        let app = SemanticApp::builder()
+            .with_config(config.clone())
+            .with_default_scope(scope_id.clone(), default_db)
+            .with_default_file_store_uri(scope_id, config.default_blob_uri().unwrap())
+            .build()
+            .unwrap();
+        let ctx = ctx(&app, Principal::system());
+
+        let record = app
+            .files()
+            .create(
+                &ctx,
+                FileCreateRequest {
+                    scope_id: None,
+                    id: Some("image-1".to_string()),
+                    filestore_locator: None,
+                    filename: Some("image.png".to_string()),
+                    mime_type: Some("image/png".to_string()),
+                    entity: Object::new(),
+                    content: FileContent::Bytes(Bytes::from_static(PNG_1X1)),
+                },
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(
+            record
+                .object
+                .get(semantic_data::filestore::ATTR_FILE_MEDIA_PIXEL_WIDTH),
+            Some(&Value::U64(1))
+        );
+        assert_eq!(
+            record
+                .object
+                .get(semantic_data::filestore::ATTR_FILE_MEDIA_PIXEL_HEIGHT),
+            Some(&Value::U64(1))
+        );
+    }
+
+    #[tokio::test]
+    async fn file_service_auto_analysis_failure_keeps_file() {
+        use bytes::Bytes;
+
+        let suffix = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let data_dir = std::env::temp_dir().join(format!("semantic-app-video-auto-{suffix}"));
+        let config = AppConfig::new()
+            .with_data_dir(&data_dir)
+            .with_auto_analyze_media(true);
+        let scope_id = DbScopeId::new("default");
+        let default_db: Arc<dyn SemanticDb> = Arc::new(MockDb::new("default"));
+        let app = SemanticApp::builder()
+            .with_config(config.clone())
+            .with_default_scope(scope_id.clone(), default_db)
+            .with_default_file_store_uri(scope_id, config.default_blob_uri().unwrap())
+            .build()
+            .unwrap();
+        let ctx = ctx(&app, Principal::system());
+
+        let record = app
+            .files()
+            .create(
+                &ctx,
+                FileCreateRequest {
+                    scope_id: None,
+                    id: Some("video-1".to_string()),
+                    filestore_locator: None,
+                    filename: Some("video.mp4".to_string()),
+                    mime_type: Some("video/mp4".to_string()),
+                    entity: Object::new(),
+                    content: FileContent::Bytes(Bytes::from_static(b"not video")),
+                },
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(record.id, "video-1");
+        assert!(
+            !record
+                .object
+                .contains_key(semantic_data::filestore::ATTR_FILE_MEDIA_DURATION)
+        );
+    }
+
+    #[tokio::test]
+    async fn file_analyze_command_updates_existing_image() {
+        use bytes::Bytes;
+
+        let suffix = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let data_dir = std::env::temp_dir().join(format!("semantic-app-image-command-{suffix}"));
+        let config = AppConfig::new().with_data_dir(&data_dir);
+        let scope_id = DbScopeId::new("default");
+        let default_db: Arc<dyn SemanticDb> = Arc::new(MockDb::new("default"));
+        let app = SemanticApp::builder()
+            .with_config(config.clone())
+            .with_default_scope(scope_id.clone(), default_db)
+            .with_default_file_store_uri(scope_id, config.default_blob_uri().unwrap())
+            .register_builtin_commands()
+            .unwrap()
+            .build()
+            .unwrap();
+        let ctx = ctx(&app, Principal::system());
+
+        app.files()
+            .create(
+                &ctx,
+                FileCreateRequest {
+                    scope_id: None,
+                    id: Some("image-1".to_string()),
+                    filestore_locator: None,
+                    filename: Some("image.png".to_string()),
+                    mime_type: Some("image/png".to_string()),
+                    entity: Object::new(),
+                    content: FileContent::Bytes(Bytes::from_static(PNG_1X1)),
+                },
+            )
+            .await
+            .unwrap();
+
+        let response = app
+            .invoke(
+                ctx.clone(),
+                request(
+                    "semantic.file.analyze",
+                    value_object([("id", Value::String("image-1".to_string()))]),
+                ),
+            )
+            .await;
+
+        let RpcResult::Ok(Value::Object(out)) = response.result else {
+            panic!("expected ok object");
+        };
+        assert_eq!(out.get("analyzed"), Some(&Value::Bool(true)));
+        assert_eq!(
+            out.get("analysis_kind").and_then(Value::as_str),
+            Some("image")
+        );
+        let Some(Value::Object(attributes)) = out.get("attributes") else {
+            panic!("expected attributes object");
+        };
+        assert_eq!(
+            attributes.get(semantic_data::filestore::ATTR_FILE_MEDIA_PIXEL_WIDTH),
+            Some(&Value::U64(1))
+        );
+
+        let read = app
+            .files()
+            .read(&ctx, None, "image-1".to_string())
+            .await
+            .unwrap();
+        assert_eq!(
+            read.record
+                .object
+                .get(semantic_data::filestore::ATTR_FILE_MEDIA_PIXEL_WIDTH),
+            Some(&Value::U64(1))
+        );
+    }
+
+    #[tokio::test]
+    async fn file_analyze_command_returns_false_for_non_media() {
+        use bytes::Bytes;
+
+        let suffix = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let data_dir = std::env::temp_dir().join(format!("semantic-app-text-command-{suffix}"));
+        let config = AppConfig::new().with_data_dir(&data_dir);
+        let scope_id = DbScopeId::new("default");
+        let default_db: Arc<dyn SemanticDb> = Arc::new(MockDb::new("default"));
+        let app = SemanticApp::builder()
+            .with_config(config.clone())
+            .with_default_scope(scope_id.clone(), default_db)
+            .with_default_file_store_uri(scope_id, config.default_blob_uri().unwrap())
+            .register_builtin_commands()
+            .unwrap()
+            .build()
+            .unwrap();
+        let ctx = ctx(&app, Principal::system());
+
+        app.files()
+            .create(
+                &ctx,
+                FileCreateRequest {
+                    scope_id: None,
+                    id: Some("text-1".to_string()),
+                    filestore_locator: None,
+                    filename: Some("hello.txt".to_string()),
+                    mime_type: Some("text/plain".to_string()),
+                    entity: Object::new(),
+                    content: FileContent::Bytes(Bytes::from_static(b"hello")),
+                },
+            )
+            .await
+            .unwrap();
+
+        let response = app
+            .invoke(
+                ctx,
+                request(
+                    "semantic.file.analyze",
+                    value_object([("id", Value::String("text-1".to_string()))]),
+                ),
+            )
+            .await;
+
+        let RpcResult::Ok(Value::Object(out)) = response.result else {
+            panic!("expected ok object");
+        };
+        assert_eq!(out.get("analyzed"), Some(&Value::Bool(false)));
+        assert!(
+            matches!(out.get("attributes"), Some(Value::Object(attributes)) if attributes.is_empty())
+        );
+    }
+
+    #[tokio::test]
+    async fn file_analyze_command_surfaces_missing_ffprobe_temp_dir() {
+        use bytes::Bytes;
+
+        let suffix = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let data_dir = std::env::temp_dir().join(format!("semantic-app-video-command-{suffix}"));
+        let config = AppConfig::new().with_data_dir(&data_dir);
+        let scope_id = DbScopeId::new("default");
+        let default_db: Arc<dyn SemanticDb> = Arc::new(MockDb::new("default"));
+        let app = SemanticApp::builder()
+            .with_config(config.clone())
+            .with_default_scope(scope_id.clone(), default_db)
+            .with_default_file_store_uri(scope_id, config.default_blob_uri().unwrap())
+            .register_builtin_commands()
+            .unwrap()
+            .build()
+            .unwrap();
+        let ctx = ctx(&app, Principal::system());
+
+        app.files()
+            .create(
+                &ctx,
+                FileCreateRequest {
+                    scope_id: None,
+                    id: Some("video-1".to_string()),
+                    filestore_locator: None,
+                    filename: Some("video.mp4".to_string()),
+                    mime_type: Some("video/mp4".to_string()),
+                    entity: Object::new(),
+                    content: FileContent::Bytes(Bytes::from_static(b"not video")),
+                },
+            )
+            .await
+            .unwrap();
+
+        let response = app
+            .invoke(
+                ctx,
+                request(
+                    "semantic.file.analyze",
+                    value_object([("id", Value::String("video-1".to_string()))]),
+                ),
+            )
+            .await;
+
+        let RpcResult::Err(error) = response.result else {
+            panic!("expected media analysis error");
+        };
+        assert_eq!(error.code, "media_analysis_failed");
     }
 
     #[tokio::test]

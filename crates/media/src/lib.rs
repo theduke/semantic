@@ -145,19 +145,35 @@ pub struct ImageAnalysis {
     pub dimensions: Dimensions,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct VideoAnalysis {
     pub duration: Duration,
     pub has_audio: bool,
     pub dimensions: Option<Dimensions>,
+    pub frames_per_second: Option<f64>,
+    pub frame_count: Option<u64>,
+    pub bitrate: Option<u64>,
+    pub video_bitrate: Option<u64>,
+    pub audio_bitrate: Option<u64>,
+    pub video_codec: Option<String>,
+    pub audio_codec: Option<String>,
+    pub audio_channels: Option<u64>,
+    pub audio_sample_rate: Option<u64>,
+    pub container_format: Option<String>,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct AudioAnalysis {
     pub duration: Duration,
+    pub bitrate: Option<u64>,
+    pub audio_bitrate: Option<u64>,
+    pub audio_codec: Option<String>,
+    pub audio_channels: Option<u64>,
+    pub audio_sample_rate: Option<u64>,
+    pub container_format: Option<String>,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum FileAnalysis {
     Image(ImageAnalysis),
@@ -355,6 +371,16 @@ fn video_analysis(
         duration,
         has_audio: audio_stream.is_some(),
         dimensions: dimensions(video_stream),
+        frames_per_second: frames_per_second(video_stream),
+        frame_count: parse_u64(video_stream.nb_frames.as_deref()),
+        bitrate: parse_u64(probe.format.bit_rate.as_deref()),
+        video_bitrate: parse_u64(video_stream.bit_rate.as_deref()),
+        audio_bitrate: audio_stream.and_then(|stream| parse_u64(stream.bit_rate.as_deref())),
+        video_codec: video_stream.codec_name.clone(),
+        audio_codec: audio_stream.and_then(|stream| stream.codec_name.clone()),
+        audio_channels: audio_stream.and_then(|stream| stream.channels?.try_into().ok()),
+        audio_sample_rate: audio_stream.and_then(|stream| parse_u64(stream.sample_rate.as_deref())),
+        container_format: Some(probe.format.format_name).filter(|value| !value.is_empty()),
     })
 }
 
@@ -376,7 +402,17 @@ fn audio_analysis(
         .map(duration_from_secs_f64)
         .ok_or(MediaAnalysisError::MissingDuration { kind: "audio" })?;
 
-    Ok(AudioAnalysis { duration })
+    Ok(AudioAnalysis {
+        duration,
+        bitrate: parse_u64(probe.format.bit_rate.as_deref()),
+        audio_bitrate: parse_u64(audio_stream.bit_rate.as_deref()),
+        audio_codec: audio_stream.codec_name.clone(),
+        audio_channels: audio_stream
+            .channels
+            .and_then(|channels| channels.try_into().ok()),
+        audio_sample_rate: parse_u64(audio_stream.sample_rate.as_deref()),
+        container_format: Some(probe.format.format_name).filter(|value| !value.is_empty()),
+    })
 }
 
 fn dimensions(stream: &ffprobe::Stream) -> Option<Dimensions> {
@@ -394,6 +430,31 @@ fn duration_from_secs_f64(secs: f64) -> Duration {
     } else {
         Duration::ZERO
     }
+}
+
+fn frames_per_second(stream: &ffprobe::Stream) -> Option<f64> {
+    parse_rational(&stream.avg_frame_rate).or_else(|| parse_rational(&stream.r_frame_rate))
+}
+
+fn parse_rational(value: &str) -> Option<f64> {
+    let value = value.trim();
+    if let Some((numerator, denominator)) = value.split_once('/') {
+        let numerator = numerator.trim().parse::<f64>().ok()?;
+        let denominator = denominator.trim().parse::<f64>().ok()?;
+        if denominator == 0.0 {
+            return None;
+        }
+        let out = numerator / denominator;
+        return (out.is_finite() && out > 0.0).then_some(out);
+    }
+    value
+        .parse::<f64>()
+        .ok()
+        .filter(|value| value.is_finite() && *value > 0.0)
+}
+
+fn parse_u64(value: Option<&str>) -> Option<u64> {
+    value?.trim().parse::<u64>().ok()
 }
 
 #[cfg(test)]
@@ -458,5 +519,70 @@ mod tests {
             .unwrap_err();
 
         assert!(matches!(error, MediaAnalysisError::TempDirRequired));
+    }
+
+    #[test]
+    fn parses_ffprobe_rational_frame_rates() {
+        assert_eq!(parse_rational("25/1"), Some(25.0));
+        assert_eq!(parse_rational("30000/1001"), Some(30000.0 / 1001.0));
+        assert_eq!(parse_rational("0/0"), None);
+        assert_eq!(parse_rational("not-a-rate"), None);
+    }
+
+    #[test]
+    fn video_analysis_maps_ffprobe_metadata() {
+        let mut video_stream = ffprobe::Stream {
+            codec_type: Some("video".to_string()),
+            codec_name: Some("h264".to_string()),
+            width: Some(1920),
+            height: Some(1080),
+            avg_frame_rate: "30000/1001".to_string(),
+            r_frame_rate: "30/1".to_string(),
+            nb_frames: Some("42".to_string()),
+            bit_rate: Some("4000000".to_string()),
+            ..ffprobe::Stream::default()
+        };
+        video_stream.duration = Some("12.5".to_string());
+        let audio_stream = ffprobe::Stream {
+            codec_type: Some("audio".to_string()),
+            codec_name: Some("aac".to_string()),
+            bit_rate: Some("128000".to_string()),
+            channels: Some(2),
+            sample_rate: Some("48000".to_string()),
+            ..ffprobe::Stream::default()
+        };
+        let probe = ffprobe::FfProbe {
+            streams: vec![video_stream, audio_stream],
+            format: ffprobe::Format {
+                duration: Some("12.5".to_string()),
+                bit_rate: Some("4128000".to_string()),
+                format_name: "mov,mp4,m4a,3gp,3g2,mj2".to_string(),
+                ..ffprobe::Format::default()
+            },
+        };
+
+        let analysis = video_analysis(probe).expect("video analysis");
+
+        assert_eq!(analysis.duration, Duration::from_millis(12_500));
+        assert_eq!(
+            analysis.dimensions,
+            Some(Dimensions {
+                width: 1920,
+                height: 1080
+            })
+        );
+        assert_eq!(analysis.frames_per_second, Some(30000.0 / 1001.0));
+        assert_eq!(analysis.frame_count, Some(42));
+        assert_eq!(analysis.bitrate, Some(4_128_000));
+        assert_eq!(analysis.video_bitrate, Some(4_000_000));
+        assert_eq!(analysis.audio_bitrate, Some(128_000));
+        assert_eq!(analysis.video_codec.as_deref(), Some("h264"));
+        assert_eq!(analysis.audio_codec.as_deref(), Some("aac"));
+        assert_eq!(analysis.audio_channels, Some(2));
+        assert_eq!(analysis.audio_sample_rate, Some(48_000));
+        assert_eq!(
+            analysis.container_format.as_deref(),
+            Some("mov,mp4,m4a,3gp,3g2,mj2")
+        );
     }
 }
