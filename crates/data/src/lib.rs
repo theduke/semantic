@@ -5,6 +5,8 @@ pub mod filestore;
 
 pub mod builtin;
 
+pub mod bundles;
+
 pub mod attr;
 
 pub mod expr;
