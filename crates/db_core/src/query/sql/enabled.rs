@@ -1461,7 +1461,7 @@ fn select_to_sql(query: &SelectQuery, collection: &str) -> Result<String, SqlQue
             }
             first = false;
             if let Some(path) = &item.wildcard {
-                sql.push_str(&path_to_sql(path)?);
+                sql.push_str(&wildcard_to_sql(path, &item.expr)?);
                 sql.push_str(".*");
             } else {
                 sql.push_str(&expr_to_sql(&item.expr)?);
@@ -1669,7 +1669,7 @@ fn projection_to_sql(projection: &[QueryField]) -> Result<String, SqlQueryError>
         }
         first = false;
         if let Some(path) = &field.wildcard {
-            out.push_str(&path_to_sql(path)?);
+            out.push_str(&wildcard_to_sql(path, &field.expr)?);
             out.push_str(".*");
         } else {
             out.push_str(&expr_to_sql(&field.expr)?);
@@ -1680,6 +1680,15 @@ fn projection_to_sql(projection: &[QueryField]) -> Result<String, SqlQueryError>
         }
     }
     Ok(out)
+}
+
+fn wildcard_to_sql(path: &FieldPath, expr: &Expr) -> Result<String, SqlQueryError> {
+    if path.segments().is_empty()
+        && let Expr::Operand(Operand::Field(source_path)) = expr
+    {
+        return path_to_sql(source_path);
+    }
+    path_to_sql(path)
 }
 
 fn expr_to_sql(expr: &Expr) -> Result<String, SqlQueryError> {
@@ -2001,6 +2010,23 @@ mod tests {
 
         let sql = query_to_sql(&Query::Select(select)).unwrap();
         assert!(sql.starts_with("SELECT child.*, n.order AS directory_order FROM nodes AS n"));
+    }
+
+    #[test]
+    fn prints_canonical_base_binding_wildcard() {
+        let query = Query::Select(
+            SelectQuery::new()
+                .with_collection("entities")
+                .with_source_alias("d")
+                .with_projection(vec![QueryField {
+                    expr: Box::new(Expr::Operand(Operand::Field(FieldPath::from_fields(["d"])))),
+                    alias: None,
+                    wildcard: Some(FieldPath::new()),
+                }]),
+        );
+
+        let sql = query_to_sql(&query).unwrap();
+        assert_eq!(sql, "SELECT d.* FROM entities AS d");
     }
 
     #[test]

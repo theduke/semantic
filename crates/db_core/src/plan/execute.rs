@@ -1577,6 +1577,10 @@ fn project_dyn_object(
     let mut out = Object::new();
     for project in projection {
         if let Some(path) = &project.wildcard {
+            if path.segments().is_empty() {
+                out.extend(value.to_object());
+                continue;
+            }
             let Some(Value::Object(object)) = value.value_at_path_ref(path).map(|v| v.into_owned())
             else {
                 continue;
@@ -2402,6 +2406,40 @@ mod tests {
         assert_eq!(out.len(), 2);
         assert_eq!(out[0].get("out"), Some(&Value::I64(3)));
         assert_eq!(out[1].get("out"), Some(&Value::I64(4)));
+    }
+
+    #[test]
+    fn physical_projection_flattens_current_row_wildcard() {
+        let rows = vec![obj_i64("id", 1)];
+        let plan = PhysicalPlan::Project {
+            input: Box::new(PhysicalPlan::Source(PhysicalSource::Scan {
+                source: SourceRef {
+                    source_name: Some("items".to_string()),
+                    collection_id: None,
+                    binding: Some("i".to_string()),
+                    backend_tag: None,
+                },
+            })),
+            projection: vec![PhysicalProjectionField {
+                expr: Expr::Operand(Operand::Field(FieldPath::from_fields(["i"]))),
+                field: None,
+                source_path: Some(FieldPath::from_fields(["i"])),
+                alias: None,
+                wildcard: Some(FieldPath::new()),
+            }],
+        };
+
+        let out = run_async(execute_physical_plan_collect(
+            plan,
+            Arc::new(AsyncInlineSource::new(rows)),
+            QueryContext::default(),
+            ExecutionOptions::default(),
+        ))
+        .unwrap();
+
+        assert_eq!(out.len(), 1);
+        assert_eq!(out[0].get("id"), Some(&Value::I64(1)));
+        assert!(!out[0].contains_key("i"));
     }
 
     #[test]

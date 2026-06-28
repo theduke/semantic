@@ -1545,6 +1545,10 @@ pub fn project_object<T: ObjectAccess + ?Sized>(value: &T, projection: &[QueryFi
     let mut out = Object::new();
     for project in projection {
         if let Some(path) = &project.wildcard {
+            if path.segments().is_empty() {
+                out.extend(value.to_object());
+                continue;
+            }
             let Some(Value::Object(object)) = value.value_at_path_ref(path).map(|v| v.into_owned())
             else {
                 continue;
@@ -2081,6 +2085,24 @@ mod tests {
         assert_eq!(out.get("title"), Some(&Value::String("Child".to_string())));
         assert_eq!(out.get("directory_order"), Some(&Value::U64(7)));
         assert!(!out.contains_key("child"));
+    }
+
+    #[test]
+    fn project_object_flattens_current_row_wildcard() {
+        let mut row = Object::new();
+        row.insert("id", Value::String("entity-1".to_string()));
+        row.insert("title", Value::String("Entity".to_string()));
+
+        let out = project_object(
+            &row,
+            &[QueryField {
+                expr: Box::new(Expr::Operand(Operand::Field(FieldPath::from_fields(["d"])))),
+                alias: None,
+                wildcard: Some(FieldPath::new()),
+            }],
+        );
+
+        assert_eq!(out, row);
     }
 
     #[test]

@@ -41,18 +41,7 @@ pub fn canonicalize_select_query(
     let projection = query
         .projection
         .iter()
-        .map(|field| {
-            Ok(QueryField {
-                expr: Box::new(canonicalize_expr(
-                    &field.expr,
-                    catalog,
-                    collection,
-                    "select projection",
-                )?),
-                alias: field.alias.clone(),
-                wildcard: field.wildcard.clone(),
-            })
-        })
+        .map(|field| canonicalize_projection_field(query, field, catalog, collection))
         .collect::<CanonicalResult<Vec<_>>>()?;
 
     let joins = query
@@ -290,6 +279,77 @@ pub fn canonicalize_delete_query(
         returning,
         field_format: query.field_format,
     })
+}
+
+fn canonicalize_projection_field(
+    query: &SelectQuery,
+    field: &QueryField,
+    catalog: &Catalog,
+    collection: &CollectionSchema,
+) -> CanonicalResult<QueryField> {
+    if let Some(path) = &field.wildcard {
+        if wildcard_matches_binding(path, query, collection) {
+            let wildcard = if query.joins.is_empty()
+                && wildcard_matches_base_binding(path, query, collection)
+            {
+                FieldPath::new()
+            } else {
+                path.clone()
+            };
+            return Ok(QueryField {
+                expr: field.expr.clone(),
+                alias: field.alias.clone(),
+                wildcard: Some(wildcard),
+            });
+        }
+    }
+
+    Ok(QueryField {
+        expr: Box::new(canonicalize_expr(
+            &field.expr,
+            catalog,
+            collection,
+            "select projection",
+        )?),
+        alias: field.alias.clone(),
+        wildcard: field
+            .wildcard
+            .as_ref()
+            .map(|path| canonicalize_path(path, catalog, collection, "select projection"))
+            .transpose()?,
+    })
+}
+
+fn wildcard_matches_binding(
+    path: &FieldPath,
+    query: &SelectQuery,
+    collection: &CollectionSchema,
+) -> bool {
+    wildcard_matches_base_binding(path, query, collection)
+        || query.joins.iter().any(|join| {
+            let binding = join
+                .alias
+                .clone()
+                .unwrap_or_else(|| join.source.default_binding());
+            path_is_single_field(path, &binding)
+        })
+}
+
+fn wildcard_matches_base_binding(
+    path: &FieldPath,
+    query: &SelectQuery,
+    collection: &CollectionSchema,
+) -> bool {
+    let binding = query
+        .source_alias
+        .as_deref()
+        .or(query.collection.as_deref())
+        .unwrap_or(collection.name.as_str());
+    path_is_single_field(path, binding)
+}
+
+fn path_is_single_field(path: &FieldPath, value: &str) -> bool {
+    matches!(path.segments(), [PathSegment::Field(field)] if field == value)
 }
 
 fn canonicalize_expr(
@@ -603,7 +663,7 @@ mod tests {
     use std::collections::BTreeMap;
 
     use semantic_data::{
-        query::BinaryOp,
+        query::{BinaryOp, JoinType},
         schema::{
             ClassType,
             attribute::attribute_type::AttributeType,
@@ -614,7 +674,7 @@ mod tests {
     };
 
     use crate::{
-        Expr, Operand, QueryField, SelectQuery,
+        Expr, JoinCondition, JoinQuery, JoinSource, Operand, QueryField, SelectQuery,
         catalog::{Catalog, CollectionKind, IntegrityMode, OBJECT_TYPE_FIELD},
     };
 
@@ -774,6 +834,103 @@ mod tests {
         assert!(matches!(
             err,
             QueryCanonicalizationError::AmbiguousField { field, .. } if field == "title"
+        ));
+    }
+
+    #[test]
+    fn canonicalizes_binding_qualified_wildcards_without_schema_lookup() {
+        let mut catalog = Catalog::new();
+        let _ = catalog
+            .upsert_collection(
+                "entities",
+                CollectionKind::Schema,
+                IntegrityMode::StrictRegisteredSchema,
+            )
+            .unwrap();
+        let collection = catalog.collection_by_name("entities").unwrap();
+
+        let query = SelectQuery::new()
+            .with_collection("entities")
+            .with_source_alias("d")
+            .with_projection(vec![QueryField {
+                expr: Box::new(Expr::Operand(Operand::Field(FieldPath::from_fields(["d"])))),
+                alias: None,
+                wildcard: Some(FieldPath::from_fields(["d"])),
+            }]);
+
+        let canonical = canonicalize_select_query(&query, &catalog, collection).unwrap();
+        assert_eq!(canonical.projection[0].wildcard, Some(FieldPath::new()));
+    }
+
+    #[test]
+    fn canonicalizes_join_binding_qualified_wildcards() {
+        let mut catalog = Catalog::new();
+        let _ = catalog
+            .upsert_collection(
+                "entities",
+                CollectionKind::Schema,
+                IntegrityMode::StrictRegisteredSchema,
+            )
+            .unwrap();
+        let collection = catalog.collection_by_name("entities").unwrap();
+
+        let query = SelectQuery::new()
+            .with_collection("entities")
+            .with_source_alias("n")
+            .with_joins(vec![JoinQuery {
+                source: JoinSource {
+                    collection: Some("entities".to_string()),
+                    class: None,
+                },
+                alias: Some("child".to_string()),
+                join_type: JoinType::Inner,
+                condition: JoinCondition::OnExpr(Expr::Operand(Operand::Literal(Value::Bool(
+                    true,
+                )))),
+                predicate: None,
+            }])
+            .with_projection(vec![QueryField {
+                expr: Box::new(Expr::Operand(Operand::Field(FieldPath::from_fields([
+                    "child",
+                ])))),
+                alias: None,
+                wildcard: Some(FieldPath::from_fields(["child"])),
+            }]);
+
+        let canonical = canonicalize_select_query(&query, &catalog, collection).unwrap();
+        assert_eq!(
+            canonical.projection[0].wildcard,
+            Some(FieldPath::from_fields(["child"]))
+        );
+    }
+
+    #[test]
+    fn rejects_unknown_qualified_wildcards_in_closed_collections() {
+        let mut catalog = Catalog::new();
+        let _ = catalog
+            .upsert_collection(
+                "entities",
+                CollectionKind::Schema,
+                IntegrityMode::StrictRegisteredSchema,
+            )
+            .unwrap();
+        let collection = catalog.collection_by_name("entities").unwrap();
+
+        let query = SelectQuery::new()
+            .with_collection("entities")
+            .with_source_alias("d")
+            .with_projection(vec![QueryField {
+                expr: Box::new(Expr::Operand(Operand::Field(FieldPath::from_fields([
+                    "missing",
+                ])))),
+                alias: None,
+                wildcard: Some(FieldPath::from_fields(["missing"])),
+            }]);
+
+        let err = canonicalize_select_query(&query, &catalog, collection).unwrap_err();
+        assert!(matches!(
+            err,
+            QueryCanonicalizationError::UnknownField { field, .. } if field == "missing"
         ));
     }
 }
