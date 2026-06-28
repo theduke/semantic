@@ -243,12 +243,14 @@ pub(super) async fn create_directory(
     let mut directory = Object::new();
     directory.insert("id", Value::String(id.clone()));
     directory.insert("type", Value::String(DIRECTORY_CLASS_ID.to_string()));
-    directory.insert("title", Value::String(title.to_string()));
-    directory.insert(ATTR_TITLE, Value::String(title.to_string()));
-    directory.insert("created_at", now.clone());
-    directory.insert(ATTR_CREATED_AT, now.clone());
-    directory.insert("updated_at", now.clone());
-    directory.insert(ATTR_UPDATED_AT, now);
+    insert_canonical_field(
+        &mut directory,
+        "title",
+        ATTR_TITLE,
+        Value::String(title.to_string()),
+    );
+    insert_canonical_field(&mut directory, "created_at", ATTR_CREATED_AT, now.clone());
+    insert_canonical_field(&mut directory, "updated_at", ATTR_UPDATED_AT, now);
 
     let mut operations = vec![Value::Object(batch_upsert_operation(
         ENTITIES_COLLECTION.to_string(),
@@ -440,10 +442,13 @@ pub(super) async fn rename_directory_item(
         return Err("Item not found".to_string());
     };
     let now = Value::DateTime(DateTime::now_utc());
-    entity.insert("title", Value::String(title.to_string()));
-    entity.insert(ATTR_TITLE, Value::String(title.to_string()));
-    entity.insert("updated_at", now.clone());
-    entity.insert(ATTR_UPDATED_AT, now);
+    insert_canonical_field(
+        &mut entity,
+        "title",
+        ATTR_TITLE,
+        Value::String(title.to_string()),
+    );
+    insert_canonical_field(&mut entity, "updated_at", ATTR_UPDATED_AT, now);
     run_batch_operations(
         client,
         scope_id,
@@ -1125,8 +1130,8 @@ fn row_to_item(row: Object) -> DirectoryBrowseItem {
                 .or_else(|| row.get("order"))
                 .or_else(|| row.get(ATTR_DIRECTORY_NODE_ORDER)),
         ),
-        created_at: object_string(&row, &["created_at", ATTR_CREATED_AT]).map(str::to_string),
-        updated_at: object_string(&row, &["updated_at", ATTR_UPDATED_AT]).map(str::to_string),
+        created_at: object_string(&row, ATTR_CREATED_AT).map(str::to_string),
+        updated_at: object_string(&row, ATTR_UPDATED_AT).map(str::to_string),
         collection: ENTITIES_COLLECTION.to_string(),
         object: row,
         id,
@@ -1142,14 +1147,18 @@ pub(super) fn is_directory_object(object: &Object) -> bool {
 }
 
 fn object_title(object: &Object, fallback: &str) -> String {
-    object_string(object, &["title", ATTR_TITLE])
+    object_string(object, ATTR_TITLE)
         .unwrap_or(fallback)
         .to_string()
 }
 
-fn object_string<'a>(object: &'a Object, keys: &[&str]) -> Option<&'a str> {
-    keys.iter()
-        .find_map(|key| object.get(*key).and_then(Value::as_str))
+fn object_string<'a>(object: &'a Object, key: &str) -> Option<&'a str> {
+    object.get(key).and_then(Value::as_str)
+}
+
+fn insert_canonical_field(object: &mut Object, alias: &str, canonical: &str, value: Value) {
+    object.remove(alias);
+    object.insert(canonical, value);
 }
 
 fn value_as_u64(value: Option<&Value>) -> Option<u64> {
@@ -1199,5 +1208,33 @@ mod tests {
         let mut object = Object::new();
         object.insert("type", Value::String(DIRECTORY_CLASS_ID.to_string()));
         assert!(is_directory_object(&object));
+    }
+
+    #[test]
+    fn row_to_item_reads_canonical_directory_fields_only() {
+        let mut object = Object::new();
+        object.insert("id", Value::String("item-1".to_string()));
+        object.insert("title", Value::String("Plain Title".to_string()));
+        object.insert(ATTR_TITLE, Value::String("Canonical Title".to_string()));
+        object.insert("created_at", Value::String("plain-created".to_string()));
+        object.insert(
+            ATTR_CREATED_AT,
+            Value::String("canonical-created".to_string()),
+        );
+
+        let item = row_to_item(object);
+
+        assert_eq!(item.title, "Canonical Title");
+        assert_eq!(item.created_at.as_deref(), Some("canonical-created"));
+
+        let mut plain_only = Object::new();
+        plain_only.insert("id", Value::String("item-2".to_string()));
+        plain_only.insert("title", Value::String("Plain Title".to_string()));
+        plain_only.insert("created_at", Value::String("plain-created".to_string()));
+
+        let item = row_to_item(plain_only);
+
+        assert_eq!(item.title, "item-2");
+        assert_eq!(item.created_at, None);
     }
 }
