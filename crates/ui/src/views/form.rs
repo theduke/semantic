@@ -1,7 +1,7 @@
 use dioxus::prelude::*;
 use futures::FutureExt;
 use semantic_data::{
-    builtin::ID_ATTRIBUTE_ID,
+    builtin::ATTR_ID,
     schema::ClassType,
     value::{Object, Value},
 };
@@ -232,7 +232,7 @@ pub async fn load_entity(
         payload.insert("scope_id", Value::String(scope_id));
     }
     payload.insert("collection", Value::String(collection));
-    payload.insert(ID_ATTRIBUTE_ID, Value::String(id));
+    payload.insert(ATTR_ID, Value::String(id));
     let response = client
         .invoke_value("semantic.db.get", Value::Object(payload))
         .await
@@ -273,7 +273,7 @@ fn primary_id_field_for_collection(
             collection
                 .field_ids
                 .iter()
-                .find(|field| field.canonical_field == ID_ATTRIBUTE_ID)
+                .find(|field| field.canonical_field == ATTR_ID)
                 .or_else(|| {
                     collection
                         .field_ids
@@ -282,7 +282,7 @@ fn primary_id_field_for_collection(
                 })
         })
         .map(|field| field.canonical_field.clone())
-        .unwrap_or_else(|| ID_ATTRIBUTE_ID.to_string())
+        .unwrap_or_else(|| ATTR_ID.to_string())
 }
 
 fn rpc_batch_upsert_submit_handler_from_primary_id_field(
@@ -336,7 +336,7 @@ fn batch_upsert_operation(collection: String, id: String, object: Object) -> Obj
     let mut operation = Object::new();
     operation.insert("kind", Value::String("upsert".to_string()));
     operation.insert("collection", Value::String(collection));
-    operation.insert(ID_ATTRIBUTE_ID, Value::String(id));
+    operation.insert(ATTR_ID, Value::String(id));
     operation.insert("object", Value::Object(object));
     operation
 }

@@ -3,7 +3,7 @@ use std::collections::BTreeSet;
 use dioxus::prelude::*;
 use dxform::{FormScope, use_field};
 use semantic_data::{
-    builtin::ID_ATTRIBUTE_ID,
+    builtin::ATTR_ID,
     schema::{
         AttributeRef, AttributeType, ClassAttribute, ClassType, Meta, StringType, Type, TypeKind,
     },
@@ -296,7 +296,7 @@ fn primary_id_field_for_collection(catalog: &crate::UiCatalog, collection: &str)
             collection
                 .field_ids
                 .iter()
-                .find(|field| field.canonical_field == ID_ATTRIBUTE_ID)
+                .find(|field| field.canonical_field == ATTR_ID)
                 .or_else(|| {
                     collection
                         .field_ids
@@ -305,7 +305,7 @@ fn primary_id_field_for_collection(catalog: &crate::UiCatalog, collection: &str)
                 })
         })
         .map(|field| field.canonical_field.clone())
-        .unwrap_or_else(|| ID_ATTRIBUTE_ID.to_string())
+        .unwrap_or_else(|| ATTR_ID.to_string())
 }
 
 fn is_primary_id_form_field(field: &ClassFormField, primary_id_field: &str) -> bool {
@@ -322,7 +322,7 @@ fn synthetic_id_form_field(primary_id_field: String) -> ClassFormField {
         storage_field_name: primary_id_field.clone(),
         attribute: AttributeType {
             id: primary_id_field.clone(),
-            name: ID_ATTRIBUTE_ID.to_string(),
+            name: ATTR_ID.to_string(),
             ty: Type {
                 kind: TypeKind::String(StringType {
                     format: None,

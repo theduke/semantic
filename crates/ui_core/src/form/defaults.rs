@@ -120,7 +120,7 @@ fn RefValueAutocomplete(scope: FormScope<Value, Value>, value_type: Option<Type>
     };
     let current_id = match scope.root_value() {
         Value::Object(object) => object
-            .get(semantic_data::builtin::ID_ATTRIBUTE_ID)
+            .get(semantic_data::builtin::ATTR_ID)
             .and_then(Value::as_str)
             .map(ToString::to_string),
         _ => None,

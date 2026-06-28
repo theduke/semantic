@@ -64,8 +64,7 @@ pub fn nameset_for_qualified(qualified_name: &str) -> NameSet {
 }
 
 pub fn is_special_builtin_field(name: &str) -> bool {
-    name == semantic_data::builtin::ID_ATTRIBUTE_ID
-        || name == semantic_data::builtin::TYPE_ATTRIBUTE_ID
+    name == semantic_data::builtin::ATTR_ID || name == semantic_data::builtin::ATTR_TYPE
 }
 
 fn split_identifier<'a>(

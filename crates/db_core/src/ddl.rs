@@ -19,9 +19,8 @@ use semantic_data::schema::{
 use crate::{
     AppliedMigration, CoreError, apply_migration_ddl_batch,
     catalog::{
-        Catalog, CatalogBatchOperation, CollectionKind, IntegrityMode,
-        PARENT_RELATION_ATTRIBUTE_ID, RELATION_CLASS_ID, RELATION_FROM_ATTRIBUTE_ID,
-        RELATION_RELATION_ATTRIBUTE_ID, RELATION_TO_ATTRIBUTE_ID,
+        ATTR_PARENT_RELATION, ATTR_RELATION_FROM, ATTR_RELATION_RELATION, ATTR_RELATION_TO,
+        Catalog, CatalogBatchOperation, CollectionKind, IntegrityMode, RELATION_CLASS_ID,
     },
 };
 
@@ -201,33 +200,33 @@ pub const CORE_CATALOG_COLLECTIONS_COLLECTION: &str = CORE_CATALOG_SCHEMA_COLLEC
 pub const CORE_CATALOG_INDEXES_COLLECTION: &str = CORE_CATALOG_SCHEMA_COLLECTION;
 pub const CORE_CATALOG_META_COLLECTION: &str = CORE_CATALOG_SCHEMA_COLLECTION;
 
-pub const CORE_CATALOG_ID_ATTRIBUTE_ID: &str = semantic_data::builtin::ID_ATTRIBUTE_ID;
-pub const CORE_CATALOG_LID_ATTRIBUTE_ID: &str = "semantic:lid";
-pub const CORE_CATALOG_ATTRIBUTE_ATTRIBUTE_ID: &str = "semantic:attribute";
-pub const CORE_CATALOG_TYPE_DEF_ATTRIBUTE_ID: &str = "semantic:type_def";
-pub const CORE_CATALOG_RECORD_ATTRIBUTE_ID: &str = "semantic:record";
-pub const CORE_CATALOG_CLASS_ATTRIBUTE_ID: &str = "semantic:class";
-pub const CORE_CATALOG_NAME_ATTRIBUTE_ID: &str = "semantic:name";
-pub const CORE_CATALOG_INTEGRITY_MODE_ATTRIBUTE_ID: &str = "semantic:db:integrity_mode";
-pub const CORE_CATALOG_FIELD_IDS_ATTRIBUTE_ID: &str = "semantic:db:field_ids";
-pub const CORE_CATALOG_COLLECTION_ATTRIBUTE_ID: &str = "semantic:db:collection";
-pub const CORE_CATALOG_FIELD_ATTRIBUTE_ID: &str = "semantic:db:field";
-pub const CORE_CATALOG_INDEX_KIND_ATTRIBUTE_ID: &str = "semantic:db:index_kind";
-pub const CORE_CATALOG_UNIQUE_ATTRIBUTE_ID: &str = "semantic:db:unique";
-pub const CORE_CATALOG_NEXT_FIELD_ID_ATTRIBUTE_ID: &str = "semantic:db:next_field_id";
-pub const CORE_CATALOG_AUTO_INDEX_ENABLED_ATTRIBUTE_ID: &str = "semantic:db:auto_index_enabled";
-pub const CORE_CATALOG_PACKAGES_ATTRIBUTE_ID: &str = "semantic:db:packages";
-pub const CORE_CATALOG_APPLIED_MIGRATIONS_ATTRIBUTE_ID: &str = "semantic:db:applied_migrations";
+pub const ATTR_CORE_CATALOG_ID: &str = semantic_data::builtin::ATTR_ID;
+pub const ATTR_CORE_CATALOG_LID: &str = "semantic:lid";
+pub const ATTR_CORE_CATALOG_ATTRIBUTE: &str = "semantic:attribute";
+pub const ATTR_CORE_CATALOG_TYPE_DEF: &str = "semantic:type_def";
+pub const ATTR_CORE_CATALOG_RECORD: &str = "semantic:record";
+pub const ATTR_CORE_CATALOG_CLASS: &str = "semantic:class";
+pub const ATTR_CORE_CATALOG_NAME: &str = "semantic:name";
+pub const ATTR_CORE_CATALOG_INTEGRITY_MODE: &str = "semantic:db:integrity_mode";
+pub const ATTR_CORE_CATALOG_FIELD_IDS: &str = "semantic:db:field_ids";
+pub const ATTR_CORE_CATALOG_COLLECTION: &str = "semantic:db:collection";
+pub const ATTR_CORE_CATALOG_FIELD: &str = "semantic:db:field";
+pub const ATTR_CORE_CATALOG_INDEX_KIND: &str = "semantic:db:index_kind";
+pub const ATTR_CORE_CATALOG_UNIQUE: &str = "semantic:db:unique";
+pub const ATTR_CORE_CATALOG_NEXT_FIELD_ID: &str = "semantic:db:next_field_id";
+pub const ATTR_CORE_CATALOG_AUTO_INDEX_ENABLED: &str = "semantic:db:auto_index_enabled";
+pub const ATTR_CORE_CATALOG_PACKAGES: &str = "semantic:db:packages";
+pub const ATTR_CORE_CATALOG_APPLIED_MIGRATIONS: &str = "semantic:db:applied_migrations";
 const CORE_SCHEMA_PACKAGE: &str = "semantic";
 const CORE_SCHEMA_MODULE: &str = "core";
 
 pub fn core_catalog_schema_batch() -> DdlBatch {
     let mut attrs = std::collections::BTreeMap::new();
     attrs.insert(
-        CORE_CATALOG_ID_ATTRIBUTE_ID.to_string(),
+        ATTR_CORE_CATALOG_ID.to_string(),
         ClassAttribute {
             attribute: AttributeRef {
-                id: CORE_CATALOG_ID_ATTRIBUTE_ID.to_string(),
+                id: ATTR_CORE_CATALOG_ID.to_string(),
             },
             required: true,
             ui_order: None,
@@ -240,7 +239,7 @@ pub fn core_catalog_schema_batch() -> DdlBatch {
         "lid".to_string(),
         ClassAttribute {
             attribute: AttributeRef {
-                id: CORE_CATALOG_LID_ATTRIBUTE_ID.to_string(),
+                id: ATTR_CORE_CATALOG_LID.to_string(),
             },
             required: true,
             ui_order: None,
@@ -253,7 +252,7 @@ pub fn core_catalog_schema_batch() -> DdlBatch {
         "attribute".to_string(),
         ClassAttribute {
             attribute: AttributeRef {
-                id: CORE_CATALOG_ATTRIBUTE_ATTRIBUTE_ID.to_string(),
+                id: ATTR_CORE_CATALOG_ATTRIBUTE.to_string(),
             },
             required: false,
             ui_order: None,
@@ -266,7 +265,7 @@ pub fn core_catalog_schema_batch() -> DdlBatch {
         "type_def".to_string(),
         ClassAttribute {
             attribute: AttributeRef {
-                id: CORE_CATALOG_TYPE_DEF_ATTRIBUTE_ID.to_string(),
+                id: ATTR_CORE_CATALOG_TYPE_DEF.to_string(),
             },
             required: false,
             ui_order: None,
@@ -279,7 +278,7 @@ pub fn core_catalog_schema_batch() -> DdlBatch {
         "record".to_string(),
         ClassAttribute {
             attribute: AttributeRef {
-                id: CORE_CATALOG_RECORD_ATTRIBUTE_ID.to_string(),
+                id: ATTR_CORE_CATALOG_RECORD.to_string(),
             },
             required: false,
             ui_order: None,
@@ -292,7 +291,7 @@ pub fn core_catalog_schema_batch() -> DdlBatch {
         "class".to_string(),
         ClassAttribute {
             attribute: AttributeRef {
-                id: CORE_CATALOG_CLASS_ATTRIBUTE_ID.to_string(),
+                id: ATTR_CORE_CATALOG_CLASS.to_string(),
             },
             required: false,
             ui_order: None,
@@ -305,7 +304,7 @@ pub fn core_catalog_schema_batch() -> DdlBatch {
         "name".to_string(),
         ClassAttribute {
             attribute: AttributeRef {
-                id: CORE_CATALOG_NAME_ATTRIBUTE_ID.to_string(),
+                id: ATTR_CORE_CATALOG_NAME.to_string(),
             },
             required: false,
             ui_order: None,
@@ -318,7 +317,7 @@ pub fn core_catalog_schema_batch() -> DdlBatch {
         "integrity_mode".to_string(),
         ClassAttribute {
             attribute: AttributeRef {
-                id: CORE_CATALOG_INTEGRITY_MODE_ATTRIBUTE_ID.to_string(),
+                id: ATTR_CORE_CATALOG_INTEGRITY_MODE.to_string(),
             },
             required: false,
             ui_order: None,
@@ -331,7 +330,7 @@ pub fn core_catalog_schema_batch() -> DdlBatch {
         "field_ids".to_string(),
         ClassAttribute {
             attribute: AttributeRef {
-                id: CORE_CATALOG_FIELD_IDS_ATTRIBUTE_ID.to_string(),
+                id: ATTR_CORE_CATALOG_FIELD_IDS.to_string(),
             },
             required: false,
             ui_order: None,
@@ -344,7 +343,7 @@ pub fn core_catalog_schema_batch() -> DdlBatch {
         "collection".to_string(),
         ClassAttribute {
             attribute: AttributeRef {
-                id: CORE_CATALOG_COLLECTION_ATTRIBUTE_ID.to_string(),
+                id: ATTR_CORE_CATALOG_COLLECTION.to_string(),
             },
             required: false,
             ui_order: None,
@@ -357,7 +356,7 @@ pub fn core_catalog_schema_batch() -> DdlBatch {
         "field".to_string(),
         ClassAttribute {
             attribute: AttributeRef {
-                id: CORE_CATALOG_FIELD_ATTRIBUTE_ID.to_string(),
+                id: ATTR_CORE_CATALOG_FIELD.to_string(),
             },
             required: false,
             ui_order: None,
@@ -370,7 +369,7 @@ pub fn core_catalog_schema_batch() -> DdlBatch {
         "index_kind".to_string(),
         ClassAttribute {
             attribute: AttributeRef {
-                id: CORE_CATALOG_INDEX_KIND_ATTRIBUTE_ID.to_string(),
+                id: ATTR_CORE_CATALOG_INDEX_KIND.to_string(),
             },
             required: false,
             ui_order: None,
@@ -383,7 +382,7 @@ pub fn core_catalog_schema_batch() -> DdlBatch {
         "unique".to_string(),
         ClassAttribute {
             attribute: AttributeRef {
-                id: CORE_CATALOG_UNIQUE_ATTRIBUTE_ID.to_string(),
+                id: ATTR_CORE_CATALOG_UNIQUE.to_string(),
             },
             required: false,
             ui_order: None,
@@ -396,7 +395,7 @@ pub fn core_catalog_schema_batch() -> DdlBatch {
         "next_field_id".to_string(),
         ClassAttribute {
             attribute: AttributeRef {
-                id: CORE_CATALOG_NEXT_FIELD_ID_ATTRIBUTE_ID.to_string(),
+                id: ATTR_CORE_CATALOG_NEXT_FIELD_ID.to_string(),
             },
             required: false,
             ui_order: None,
@@ -409,7 +408,7 @@ pub fn core_catalog_schema_batch() -> DdlBatch {
         "auto_index_enabled".to_string(),
         ClassAttribute {
             attribute: AttributeRef {
-                id: CORE_CATALOG_AUTO_INDEX_ENABLED_ATTRIBUTE_ID.to_string(),
+                id: ATTR_CORE_CATALOG_AUTO_INDEX_ENABLED.to_string(),
             },
             required: false,
             ui_order: None,
@@ -422,7 +421,7 @@ pub fn core_catalog_schema_batch() -> DdlBatch {
         "packages".to_string(),
         ClassAttribute {
             attribute: AttributeRef {
-                id: CORE_CATALOG_PACKAGES_ATTRIBUTE_ID.to_string(),
+                id: ATTR_CORE_CATALOG_PACKAGES.to_string(),
             },
             required: false,
             ui_order: None,
@@ -435,7 +434,7 @@ pub fn core_catalog_schema_batch() -> DdlBatch {
         "applied_migrations".to_string(),
         ClassAttribute {
             attribute: AttributeRef {
-                id: CORE_CATALOG_APPLIED_MIGRATIONS_ATTRIBUTE_ID.to_string(),
+                id: ATTR_CORE_CATALOG_APPLIED_MIGRATIONS.to_string(),
             },
             required: false,
             ui_order: None,
@@ -481,7 +480,7 @@ pub fn core_catalog_schema_batch() -> DdlBatch {
         "relation".to_string(),
         ClassAttribute {
             attribute: AttributeRef {
-                id: RELATION_RELATION_ATTRIBUTE_ID.to_string(),
+                id: ATTR_RELATION_RELATION.to_string(),
             },
             required: true,
             ui_order: None,
@@ -494,7 +493,7 @@ pub fn core_catalog_schema_batch() -> DdlBatch {
         "from".to_string(),
         ClassAttribute {
             attribute: AttributeRef {
-                id: RELATION_FROM_ATTRIBUTE_ID.to_string(),
+                id: ATTR_RELATION_FROM.to_string(),
             },
             required: true,
             ui_order: None,
@@ -507,7 +506,7 @@ pub fn core_catalog_schema_batch() -> DdlBatch {
         "to".to_string(),
         ClassAttribute {
             attribute: AttributeRef {
-                id: RELATION_TO_ATTRIBUTE_ID.to_string(),
+                id: ATTR_RELATION_TO.to_string(),
             },
             required: true,
             ui_order: None,
@@ -529,8 +528,8 @@ pub fn core_catalog_schema_batch() -> DdlBatch {
     DdlBatch::new()
         .with_op(DdlOperation::UpsertAttribute {
             attribute: AttributeType {
-                id: CORE_CATALOG_ID_ATTRIBUTE_ID.to_string(),
-                name: CORE_CATALOG_ID_ATTRIBUTE_ID.to_string(),
+                id: ATTR_CORE_CATALOG_ID.to_string(),
+                name: ATTR_CORE_CATALOG_ID.to_string(),
                 ty: Type {
                     kind: TypeKind::String(StringType {
                         format: None,
@@ -548,7 +547,7 @@ pub fn core_catalog_schema_batch() -> DdlBatch {
         })
         .with_op(DdlOperation::UpsertAttribute {
             attribute: AttributeType {
-                id: CORE_CATALOG_LID_ATTRIBUTE_ID.to_string(),
+                id: ATTR_CORE_CATALOG_LID.to_string(),
                 name: "lid".to_string(),
                 ty: Type {
                     kind: TypeKind::Number(NumberType::UInt(UIntWidth::U64)),
@@ -561,7 +560,7 @@ pub fn core_catalog_schema_batch() -> DdlBatch {
         })
         .with_op(DdlOperation::UpsertAttribute {
             attribute: AttributeType {
-                id: CORE_CATALOG_ATTRIBUTE_ATTRIBUTE_ID.to_string(),
+                id: ATTR_CORE_CATALOG_ATTRIBUTE.to_string(),
                 name: "attribute".to_string(),
                 ty: Type {
                     kind: TypeKind::Any(AnyType),
@@ -574,7 +573,7 @@ pub fn core_catalog_schema_batch() -> DdlBatch {
         })
         .with_op(DdlOperation::UpsertAttribute {
             attribute: AttributeType {
-                id: CORE_CATALOG_TYPE_DEF_ATTRIBUTE_ID.to_string(),
+                id: ATTR_CORE_CATALOG_TYPE_DEF.to_string(),
                 name: "type_def".to_string(),
                 ty: Type {
                     kind: TypeKind::Any(AnyType),
@@ -587,7 +586,7 @@ pub fn core_catalog_schema_batch() -> DdlBatch {
         })
         .with_op(DdlOperation::UpsertAttribute {
             attribute: AttributeType {
-                id: CORE_CATALOG_RECORD_ATTRIBUTE_ID.to_string(),
+                id: ATTR_CORE_CATALOG_RECORD.to_string(),
                 name: "record".to_string(),
                 ty: Type {
                     kind: TypeKind::Any(AnyType),
@@ -600,7 +599,7 @@ pub fn core_catalog_schema_batch() -> DdlBatch {
         })
         .with_op(DdlOperation::UpsertAttribute {
             attribute: AttributeType {
-                id: CORE_CATALOG_CLASS_ATTRIBUTE_ID.to_string(),
+                id: ATTR_CORE_CATALOG_CLASS.to_string(),
                 name: "class".to_string(),
                 ty: Type {
                     kind: TypeKind::Any(AnyType),
@@ -613,7 +612,7 @@ pub fn core_catalog_schema_batch() -> DdlBatch {
         })
         .with_op(DdlOperation::UpsertAttribute {
             attribute: AttributeType {
-                id: CORE_CATALOG_NAME_ATTRIBUTE_ID.to_string(),
+                id: ATTR_CORE_CATALOG_NAME.to_string(),
                 name: "name".to_string(),
                 ty: Type {
                     kind: TypeKind::String(StringType {
@@ -629,7 +628,7 @@ pub fn core_catalog_schema_batch() -> DdlBatch {
         })
         .with_op(DdlOperation::UpsertAttribute {
             attribute: AttributeType {
-                id: CORE_CATALOG_INTEGRITY_MODE_ATTRIBUTE_ID.to_string(),
+                id: ATTR_CORE_CATALOG_INTEGRITY_MODE.to_string(),
                 name: "integrity_mode".to_string(),
                 ty: Type {
                     kind: TypeKind::Any(AnyType),
@@ -642,7 +641,7 @@ pub fn core_catalog_schema_batch() -> DdlBatch {
         })
         .with_op(DdlOperation::UpsertAttribute {
             attribute: AttributeType {
-                id: CORE_CATALOG_FIELD_IDS_ATTRIBUTE_ID.to_string(),
+                id: ATTR_CORE_CATALOG_FIELD_IDS.to_string(),
                 name: "field_ids".to_string(),
                 ty: Type {
                     kind: TypeKind::Any(AnyType),
@@ -655,7 +654,7 @@ pub fn core_catalog_schema_batch() -> DdlBatch {
         })
         .with_op(DdlOperation::UpsertAttribute {
             attribute: AttributeType {
-                id: CORE_CATALOG_COLLECTION_ATTRIBUTE_ID.to_string(),
+                id: ATTR_CORE_CATALOG_COLLECTION.to_string(),
                 name: "collection".to_string(),
                 ty: Type {
                     kind: TypeKind::Number(NumberType::UInt(UIntWidth::U64)),
@@ -668,7 +667,7 @@ pub fn core_catalog_schema_batch() -> DdlBatch {
         })
         .with_op(DdlOperation::UpsertAttribute {
             attribute: AttributeType {
-                id: CORE_CATALOG_FIELD_ATTRIBUTE_ID.to_string(),
+                id: ATTR_CORE_CATALOG_FIELD.to_string(),
                 name: "field".to_string(),
                 ty: Type {
                     kind: TypeKind::String(StringType {
@@ -684,7 +683,7 @@ pub fn core_catalog_schema_batch() -> DdlBatch {
         })
         .with_op(DdlOperation::UpsertAttribute {
             attribute: AttributeType {
-                id: CORE_CATALOG_INDEX_KIND_ATTRIBUTE_ID.to_string(),
+                id: ATTR_CORE_CATALOG_INDEX_KIND.to_string(),
                 name: "index_kind".to_string(),
                 ty: Type {
                     kind: TypeKind::String(StringType {
@@ -700,7 +699,7 @@ pub fn core_catalog_schema_batch() -> DdlBatch {
         })
         .with_op(DdlOperation::UpsertAttribute {
             attribute: AttributeType {
-                id: CORE_CATALOG_UNIQUE_ATTRIBUTE_ID.to_string(),
+                id: ATTR_CORE_CATALOG_UNIQUE.to_string(),
                 name: "unique".to_string(),
                 ty: Type {
                     kind: TypeKind::Bool(BoolType),
@@ -713,7 +712,7 @@ pub fn core_catalog_schema_batch() -> DdlBatch {
         })
         .with_op(DdlOperation::UpsertAttribute {
             attribute: AttributeType {
-                id: CORE_CATALOG_NEXT_FIELD_ID_ATTRIBUTE_ID.to_string(),
+                id: ATTR_CORE_CATALOG_NEXT_FIELD_ID.to_string(),
                 name: "next_field_id".to_string(),
                 ty: Type {
                     kind: TypeKind::Number(NumberType::UInt(UIntWidth::U64)),
@@ -726,7 +725,7 @@ pub fn core_catalog_schema_batch() -> DdlBatch {
         })
         .with_op(DdlOperation::UpsertAttribute {
             attribute: AttributeType {
-                id: CORE_CATALOG_AUTO_INDEX_ENABLED_ATTRIBUTE_ID.to_string(),
+                id: ATTR_CORE_CATALOG_AUTO_INDEX_ENABLED.to_string(),
                 name: "auto_index_enabled".to_string(),
                 ty: Type {
                     kind: TypeKind::Bool(BoolType),
@@ -739,7 +738,7 @@ pub fn core_catalog_schema_batch() -> DdlBatch {
         })
         .with_op(DdlOperation::UpsertAttribute {
             attribute: AttributeType {
-                id: CORE_CATALOG_PACKAGES_ATTRIBUTE_ID.to_string(),
+                id: ATTR_CORE_CATALOG_PACKAGES.to_string(),
                 name: "packages".to_string(),
                 ty: Type {
                     kind: TypeKind::Any(AnyType),
@@ -752,7 +751,7 @@ pub fn core_catalog_schema_batch() -> DdlBatch {
         })
         .with_op(DdlOperation::UpsertAttribute {
             attribute: AttributeType {
-                id: CORE_CATALOG_APPLIED_MIGRATIONS_ATTRIBUTE_ID.to_string(),
+                id: ATTR_CORE_CATALOG_APPLIED_MIGRATIONS.to_string(),
                 name: "applied_migrations".to_string(),
                 ty: Type {
                     kind: TypeKind::Any(AnyType),
@@ -765,11 +764,11 @@ pub fn core_catalog_schema_batch() -> DdlBatch {
         })
         .with_op(DdlOperation::UpsertAttribute {
             attribute: AttributeType {
-                id: PARENT_RELATION_ATTRIBUTE_ID.to_string(),
+                id: ATTR_PARENT_RELATION.to_string(),
                 name: "parent".to_string(),
                 ty: Type {
                     kind: TypeKind::Ref(TypeRef {
-                        name: CORE_CATALOG_ID_ATTRIBUTE_ID.to_string(),
+                        name: ATTR_CORE_CATALOG_ID.to_string(),
                         args: vec![],
                     }),
                     constraints: vec![],
@@ -781,7 +780,7 @@ pub fn core_catalog_schema_batch() -> DdlBatch {
         })
         .with_op(DdlOperation::UpsertAttribute {
             attribute: AttributeType {
-                id: RELATION_RELATION_ATTRIBUTE_ID.to_string(),
+                id: ATTR_RELATION_RELATION.to_string(),
                 name: "relation".to_string(),
                 ty: Type {
                     kind: TypeKind::String(StringType {
@@ -797,11 +796,11 @@ pub fn core_catalog_schema_batch() -> DdlBatch {
         })
         .with_op(DdlOperation::UpsertAttribute {
             attribute: AttributeType {
-                id: RELATION_FROM_ATTRIBUTE_ID.to_string(),
+                id: ATTR_RELATION_FROM.to_string(),
                 name: "from".to_string(),
                 ty: Type {
                     kind: TypeKind::Ref(TypeRef {
-                        name: CORE_CATALOG_ID_ATTRIBUTE_ID.to_string(),
+                        name: ATTR_CORE_CATALOG_ID.to_string(),
                         args: vec![],
                     }),
                     constraints: vec![],
@@ -813,11 +812,11 @@ pub fn core_catalog_schema_batch() -> DdlBatch {
         })
         .with_op(DdlOperation::UpsertAttribute {
             attribute: AttributeType {
-                id: RELATION_TO_ATTRIBUTE_ID.to_string(),
+                id: ATTR_RELATION_TO.to_string(),
                 name: "to".to_string(),
                 ty: Type {
                     kind: TypeKind::Ref(TypeRef {
-                        name: CORE_CATALOG_ID_ATTRIBUTE_ID.to_string(),
+                        name: ATTR_CORE_CATALOG_ID.to_string(),
                         args: vec![],
                     }),
                     constraints: vec![],

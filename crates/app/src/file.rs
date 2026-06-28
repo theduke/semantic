@@ -2,10 +2,10 @@ use bytes::{Bytes, BytesMut};
 use futures_util::stream::BoxStream;
 use futures_util::{StreamExt as _, TryStreamExt as _};
 use objstore::{DataSource, ObjStore as _, Put};
-use semantic_data::builtin::{ID_ATTRIBUTE_ID, TYPE_ATTRIBUTE_ID};
+use semantic_data::builtin::{ATTR_ID, ATTR_TYPE};
 use semantic_data::filestore::{
-    FILE_BYTE_SIZE_ATTRIBUTE_ID, FILE_CLASS_ID, FILE_CONTENT_HASH_SHA256_ATTRIBUTE_ID,
-    FILE_FILENAME_ATTRIBUTE_ID, FILE_FILESTORE_LOCATOR_ATTRIBUTE_ID, FILE_MIME_TYPE_ATTRIBUTE_ID,
+    ATTR_FILE_BYTE_SIZE, ATTR_FILE_CONTENT_HASH_SHA256, ATTR_FILE_FILENAME,
+    ATTR_FILE_FILESTORE_LOCATOR, ATTR_FILE_MIME_TYPE, FILE_CLASS_ID,
 };
 use semantic_data::value::{Object, Value};
 use semantic_db_core::{DEFAULT_COLLECTION, EntityRecord};
@@ -70,7 +70,7 @@ impl FileService {
         let computed_sha256 = sha256_hex(&bytes);
         let id = request
             .id
-            .or_else(|| object_string(&request.entity, ID_ATTRIBUTE_ID))
+            .or_else(|| object_string(&request.entity, ATTR_ID))
             .unwrap_or_else(|| format!("file-sha256-{computed_sha256}"));
         let filestore_locator = request.filestore_locator.unwrap_or_else(|| id.clone());
 
@@ -83,8 +83,8 @@ impl FileService {
         let mime_type = request.mime_type.or(meta.mime_type);
 
         let mut object = request.entity;
-        object.insert(ID_ATTRIBUTE_ID, Value::String(id.clone()));
-        object.insert(TYPE_ATTRIBUTE_ID, Value::String(FILE_CLASS_ID.to_string()));
+        object.insert(ATTR_ID, Value::String(id.clone()));
+        object.insert(ATTR_TYPE, Value::String(FILE_CLASS_ID.to_string()));
         object.insert("filestore_locator", Value::String(filestore_locator));
         if let Some(filename) = request.filename {
             object.insert("filename", Value::String(filename));
@@ -179,7 +179,7 @@ fn object_string(object: &Object, field: &str) -> Option<String> {
 }
 
 fn validate_file_record(record: &EntityRecord) -> std::result::Result<(), AppError> {
-    match record.object.get(TYPE_ATTRIBUTE_ID).and_then(Value::as_str) {
+    match record.object.get(ATTR_TYPE).and_then(Value::as_str) {
         Some(FILE_CLASS_ID) => Ok(()),
         Some(other) => Err(AppError::InvalidFileEntity(format!(
             "entity '{}' is type '{other}', not '{}'",
@@ -241,11 +241,11 @@ fn file_value<'a>(record: &'a EntityRecord, field: &str) -> Option<&'a Value> {
 
 fn file_field_id(field: &str) -> Option<&'static str> {
     match field {
-        "filestore_locator" => Some(FILE_FILESTORE_LOCATOR_ATTRIBUTE_ID),
-        "filename" => Some(FILE_FILENAME_ATTRIBUTE_ID),
-        "byte_size" => Some(FILE_BYTE_SIZE_ATTRIBUTE_ID),
-        "mime_type" => Some(FILE_MIME_TYPE_ATTRIBUTE_ID),
-        "content_hash_sha256" => Some(FILE_CONTENT_HASH_SHA256_ATTRIBUTE_ID),
+        "filestore_locator" => Some(ATTR_FILE_FILESTORE_LOCATOR),
+        "filename" => Some(ATTR_FILE_FILENAME),
+        "byte_size" => Some(ATTR_FILE_BYTE_SIZE),
+        "mime_type" => Some(ATTR_FILE_MIME_TYPE),
+        "content_hash_sha256" => Some(ATTR_FILE_CONTENT_HASH_SHA256),
         _ => None,
     }
 }

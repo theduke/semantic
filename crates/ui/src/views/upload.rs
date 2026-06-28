@@ -1,7 +1,7 @@
 use dioxus::html::FileData;
 use dioxus::prelude::*;
 use futures::StreamExt as _;
-use semantic_data::filestore::{DESCRIPTION_ATTRIBUTE_ID, TITLE_ATTRIBUTE_ID};
+use semantic_data::filestore::{ATTR_DESCRIPTION, ATTR_TITLE};
 use semantic_data::value::{Object, Value};
 use semantic_rpc::file::{
     FileUploadPhase, FileUploadProgress, FileUploadRequest, FileUploadResponse,
@@ -564,14 +564,11 @@ fn metadata_entity(title: &str, description: &str) -> Object {
     let mut entity = Object::new();
     let title = title.trim();
     if !title.is_empty() {
-        entity.insert(TITLE_ATTRIBUTE_ID, Value::String(title.to_string()));
+        entity.insert(ATTR_TITLE, Value::String(title.to_string()));
     }
     let description = description.trim();
     if !description.is_empty() {
-        entity.insert(
-            DESCRIPTION_ATTRIBUTE_ID,
-            Value::String(description.to_string()),
-        );
+        entity.insert(ATTR_DESCRIPTION, Value::String(description.to_string()));
     }
     entity
 }
@@ -649,11 +646,11 @@ mod tests {
     fn metadata_entity_sets_namespaced_user_fields() {
         let entity = metadata_entity(" Title ", " Body ");
         assert_eq!(
-            entity.get(TITLE_ATTRIBUTE_ID),
+            entity.get(ATTR_TITLE),
             Some(&Value::String("Title".to_string()))
         );
         assert_eq!(
-            entity.get(DESCRIPTION_ATTRIBUTE_ID),
+            entity.get(ATTR_DESCRIPTION),
             Some(&Value::String("Body".to_string()))
         );
         assert!(!entity.contains_key("title"));

@@ -1,9 +1,9 @@
 use std::rc::Rc;
 
 use dioxus::prelude::*;
-use semantic_data::builtin::ID_ATTRIBUTE_ID;
+use semantic_data::builtin::ATTR_ID;
 use semantic_data::filestore::{
-    FILE_FILENAME_ATTRIBUTE_ID, FILE_FILESTORE_LOCATOR_ATTRIBUTE_ID, FILE_MIME_TYPE_ATTRIBUTE_ID,
+    ATTR_FILE_FILENAME, ATTR_FILE_FILESTORE_LOCATOR, ATTR_FILE_MIME_TYPE,
 };
 use semantic_data::value::{Object, Value};
 use tracing::{info, warn};
@@ -67,10 +67,10 @@ pub fn register_defaults(catalog: &mut UiCatalog) {
         };
         let href = format!("{}/{}", ctx.settings.file_api_prefix, file_id);
         let mime_type = object
-            .and_then(|object| object_string(object, &["mime_type", FILE_MIME_TYPE_ATTRIBUTE_ID]))
+            .and_then(|object| object_string(object, &["mime_type", ATTR_FILE_MIME_TYPE]))
             .unwrap_or_default();
         let filename = object
-            .and_then(|object| object_string(object, &["filename", FILE_FILENAME_ATTRIBUTE_ID]))
+            .and_then(|object| object_string(object, &["filename", ATTR_FILE_FILENAME]))
             .unwrap_or(file_id);
         if ctx.settings.show_media && mime_type.starts_with("image/") {
             info!(
@@ -117,7 +117,7 @@ pub fn register_defaults(catalog: &mut UiCatalog) {
             }
         }
     });
-    for attribute_id in ["filestore_locator", FILE_FILESTORE_LOCATOR_ATTRIBUTE_ID] {
+    for attribute_id in ["filestore_locator", ATTR_FILE_FILESTORE_LOCATOR] {
         catalog
             .render_registry_mut()
             .register_attribute_renderer(attribute_id, file_renderer.clone());
@@ -131,7 +131,7 @@ fn object_string<'a>(object: &'a Object, keys: &[&str]) -> Option<&'a str> {
 
 fn file_link_id<'a>(value: &'a Value, object: Option<&'a Object>) -> Option<&'a str> {
     object
-        .and_then(|object| object_string(object, &[ID_ATTRIBUTE_ID]))
+        .and_then(|object| object_string(object, &[ATTR_ID]))
         .or_else(|| value.as_str())
 }
 
@@ -174,7 +174,7 @@ mod tests {
     #[test]
     fn file_link_id_prefers_object_id() {
         let mut object = Object::new();
-        object.insert(ID_ATTRIBUTE_ID, Value::String("entity-id".to_string()));
+        object.insert(ATTR_ID, Value::String("entity-id".to_string()));
 
         assert_eq!(
             file_link_id(&Value::String("locator".to_string()), Some(&object)),

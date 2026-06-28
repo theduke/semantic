@@ -28,8 +28,8 @@ use crate::{
     },
 };
 use semantic_db_core::catalog::{
-    Catalog, CollectionKind, CollectionSchema, IntegrityMode, LocalAttrId, LocalCollectionId,
-    LocalFieldId, OBJECT_TYPE_FIELD, RELATION_FROM_ATTRIBUTE, RELATION_TO_ATTRIBUTE, SharedCatalog,
+    ATTR_RELATION_FROM, ATTR_RELATION_TO, Catalog, CollectionKind, CollectionSchema, IntegrityMode,
+    LocalAttrId, LocalClassId, LocalCollectionId, LocalFieldId, OBJECT_TYPE_FIELD, SharedCatalog,
 };
 use semantic_db_core::{
     DdlBatch, DdlCollectionKind, DdlOperation, DdlOutcome, QueryContext, TransactionConcurrency,
@@ -1635,7 +1635,7 @@ impl<E: KvEngine> KvDb<E> {
         for object in rows.values() {
             let field_types = resolved_field_types_for_object(catalog, collection, object);
             for (field, ty) in field_types {
-                if field == RELATION_FROM_ATTRIBUTE || field == RELATION_TO_ATTRIBUTE {
+                if field == ATTR_RELATION_FROM || field == ATTR_RELATION_TO {
                     continue;
                 }
                 let Some(value) = object.get(&field) else {
@@ -1810,26 +1810,33 @@ impl<E: KvEngine> KvDb<E> {
                     }
                 }
                 RelationMode::External => {
-                    let target_field = catalog
-                        .attribute_by_id(RELATION_TO_ATTRIBUTE)
-                        .map(|attr| attr.attribute.id.clone())
-                        .unwrap_or_else(|| {
-                            source_collection
-                                .canonical_field_name(RELATION_TO_ATTRIBUTE)
-                                .to_string()
-                        });
-                    for (doc_id, object) in &source_rows {
+                    for (_, object) in &source_rows {
+                        let Some(source_id) = Self::external_relation_field_value(
+                            catalog,
+                            source_collection,
+                            object,
+                            "from",
+                            ATTR_RELATION_FROM,
+                        ) else {
+                            continue;
+                        };
                         let Some(target_id) = object
-                            .get(&target_field)
+                            .get(&Self::external_relation_field_name(
+                                catalog,
+                                source_collection,
+                                object,
+                                "to",
+                                ATTR_RELATION_TO,
+                            ))
                             .and_then(Value::as_str)
                             .map(ToString::to_string)
                         else {
                             continue;
                         };
-                        if doc_id.is_empty() || target_id.is_empty() {
+                        if source_id.is_empty() || target_id.is_empty() {
                             continue;
                         }
-                        direct.push((doc_id.clone(), target_id));
+                        direct.push((source_id, target_id));
                     }
                 }
             }
@@ -1909,6 +1916,98 @@ impl<E: KvEngine> KvDb<E> {
             }
         }
         Ok(out)
+    }
+
+    fn external_relation_field_name(
+        catalog: &Catalog,
+        source_collection: &CollectionSchema,
+        object: &Object,
+        alias: &str,
+        fallback_attr: &str,
+    ) -> String {
+        if let Some(object_type) = object.get(OBJECT_TYPE_FIELD).and_then(Value::as_str) {
+            let class_ids = catalog.class_ids(object_type);
+            if class_ids.len() == 1
+                && let Some(field) = Self::class_field_for_alias(catalog, class_ids[0], alias)
+            {
+                return field;
+            }
+        }
+
+        source_collection
+            .canonical_field_name(fallback_attr)
+            .to_string()
+    }
+
+    fn external_relation_field_value(
+        catalog: &Catalog,
+        source_collection: &CollectionSchema,
+        object: &Object,
+        alias: &str,
+        fallback_attr: &str,
+    ) -> Option<String> {
+        let field = Self::external_relation_field_name(
+            catalog,
+            source_collection,
+            object,
+            alias,
+            fallback_attr,
+        );
+        object
+            .get(&field)
+            .and_then(Value::as_str)
+            .map(ToString::to_string)
+    }
+
+    fn class_field_for_alias(
+        catalog: &Catalog,
+        class_lid: LocalClassId,
+        alias: &str,
+    ) -> Option<String> {
+        fn visit(
+            catalog: &Catalog,
+            class_lid: LocalClassId,
+            alias: &str,
+            visited: &mut BTreeSet<LocalClassId>,
+        ) -> Option<String> {
+            if !visited.insert(class_lid) {
+                return None;
+            }
+
+            let class = catalog.class_by_lid(class_lid)?;
+            let mut out = None;
+
+            if let Some(inherits) = &class.class.inherits
+                && let Some(base_lid) = catalog.class_id(&inherits.id)
+            {
+                out = visit(catalog, base_lid, alias, visited);
+            }
+
+            for ext in &class.class.extends {
+                if let Some(ext_lid) = catalog.class_id(&ext.id)
+                    && let Some(field) = visit(catalog, ext_lid, alias, visited)
+                {
+                    out = Some(field);
+                }
+            }
+
+            for (field_alias, class_attr) in &class.class.attributes {
+                let Some(attr) = catalog.attribute_by_id(&class_attr.attribute.id) else {
+                    continue;
+                };
+                if field_alias == alias
+                    || attr.attribute.id == alias
+                    || attr.names.plain_name == alias
+                    || attr.names.underscore_name == alias
+                {
+                    out = Some(attr.attribute.id.clone());
+                }
+            }
+
+            out
+        }
+
+        visit(catalog, class_lid, alias, &mut BTreeSet::new())
     }
 
     fn stats_for_collection(

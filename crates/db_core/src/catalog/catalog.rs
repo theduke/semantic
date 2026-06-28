@@ -43,20 +43,17 @@ pub struct Catalog {
     auto_index_enabled: bool,
 }
 
-pub const PRIMARY_ID_FIELD: &str = semantic_data::builtin::ID_ATTRIBUTE_ID;
-pub const OBJECT_TYPE_FIELD: &str = semantic_data::builtin::TYPE_ATTRIBUTE_ID;
+pub const PRIMARY_ID_FIELD: &str = semantic_data::builtin::ATTR_ID;
+pub const OBJECT_TYPE_FIELD: &str = semantic_data::builtin::ATTR_TYPE;
 pub const PARENT_RELATION_FIELD: &str = "parent";
-pub const PARENT_RELATION_ATTRIBUTE_ID: &str = "semantic:parent";
-pub const PARENT_RELATION_ATTRIBUTE: &str = PARENT_RELATION_ATTRIBUTE_ID;
+pub const ATTR_PARENT_RELATION: &str = "semantic:parent";
 pub const PRIMARY_ID_INDEX_NAME: &str = "__builtin_pk_id";
 pub const OBJECT_TYPE_INDEX_NAME: &str = "__builtin_type";
 pub const BUILTIN_PARENT_RELATION_ID: &str = "__builtin.parent";
 pub const RELATION_CLASS_ID: &str = "semantic:relation";
-pub const RELATION_RELATION_ATTRIBUTE_ID: &str = "semantic:relation:relation";
-pub const RELATION_FROM_ATTRIBUTE_ID: &str = "semantic:relation:from";
-pub const RELATION_TO_ATTRIBUTE_ID: &str = "semantic:relation:to";
-pub const RELATION_FROM_ATTRIBUTE: &str = RELATION_FROM_ATTRIBUTE_ID;
-pub const RELATION_TO_ATTRIBUTE: &str = RELATION_TO_ATTRIBUTE_ID;
+pub const ATTR_RELATION_RELATION: &str = "semantic:relation:relation";
+pub const ATTR_RELATION_FROM: &str = "semantic:relation:from";
+pub const ATTR_RELATION_TO: &str = "semantic:relation:to";
 pub const AUTO_PATH_INDEX_NAME: &str = "__auto_index_all_paths";
 pub const AUTO_PATH_INDEX_FIELD: &str = "__path__";
 
@@ -630,7 +627,7 @@ impl Catalog {
                 }
             }
             RelationMode::External => {
-                for field in [RELATION_FROM_ATTRIBUTE, RELATION_TO_ATTRIBUTE] {
+                for field in [ATTR_RELATION_FROM, ATTR_RELATION_TO] {
                     let canonical = source_collection.canonical_field_name(field);
                     if source_collection.is_closed_field_set()
                         && !source_collection.knows_field(canonical)
@@ -1250,7 +1247,7 @@ impl Catalog {
         &mut self,
         collection: LocalCollectionId,
     ) -> Result<(), CatalogError> {
-        if self.attribute_by_id(PARENT_RELATION_ATTRIBUTE).is_none() {
+        if self.attribute_by_id(ATTR_PARENT_RELATION).is_none() {
             return Ok(());
         }
         let collection_name = self
@@ -1263,7 +1260,7 @@ impl Catalog {
             name: "parent".to_string(),
             source_collection: collection_name,
             mode: RelationMode::Embedded {
-                attribute: PARENT_RELATION_ATTRIBUTE.to_string(),
+                attribute: ATTR_PARENT_RELATION.to_string(),
             },
             indexing_mode: semantic_data::schema::RelationIndexingMode::Enabled,
             meta: Meta::default(),

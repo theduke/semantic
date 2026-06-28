@@ -58,9 +58,36 @@ pub fn normalize_object_for_collection(
     collection: &CollectionSchema,
     object: &mut Object,
 ) -> ObjectNormalizationResult<()> {
+    let concrete_class_lid = object
+        .get(OBJECT_TYPE_FIELD)
+        .and_then(Value::as_str)
+        .and_then(|object_type| {
+            let class_ids = catalog.class_ids(object_type);
+            if class_ids.len() == 1 {
+                Some(class_ids[0])
+            } else {
+                None
+            }
+        });
+    let mut concrete_class_aliases = FnvHashMap::default();
+    if let Some(class_lid) = concrete_class_lid {
+        let mut field_types = FnvHashMap::default();
+        let mut field_required = FnvHashMap::default();
+        collect_class_fields(
+            catalog,
+            class_lid,
+            &mut concrete_class_aliases,
+            &mut field_types,
+            &mut field_required,
+        );
+    }
+
     for key in object.keys() {
         let attr_ids = catalog.attribute_ids(key);
-        if attr_ids.len() > 1 && !is_special_builtin_field(key) {
+        if attr_ids.len() > 1
+            && !is_special_builtin_field(key)
+            && !concrete_class_aliases.contains_key(key)
+        {
             return Err(ObjectNormalizationError::AmbiguousFieldAlias {
                 collection: collection.name.clone(),
                 alias: key.clone(),
@@ -68,15 +95,14 @@ pub fn normalize_object_for_collection(
         }
     }
 
-    normalize_aliases(collection, object, |key| {
-        Some(collection.canonical_field_name(key).to_string())
-    })?;
-
     let mut registered_field_types = FnvHashMap::default();
     let mut registered_field_required = FnvHashMap::default();
     let mut reject_unknown_fields = collection.is_closed_field_set();
 
     if collection.kind == CollectionKind::Untyped {
+        normalize_aliases(collection, object, |key| {
+            Some(collection.canonical_field_name(key).to_string())
+        })?;
         return validate_object_fields(
             collection,
             object,
@@ -85,10 +111,14 @@ pub fn normalize_object_for_collection(
         );
     }
 
-    match object.get(OBJECT_TYPE_FIELD).and_then(Value::as_str) {
+    match object
+        .get(OBJECT_TYPE_FIELD)
+        .and_then(Value::as_str)
+        .map(ToString::to_string)
+    {
         Some(object_type) => {
-            let class_ids = catalog.class_ids(object_type);
-            let record_ids = catalog.record_type_ids(object_type);
+            let class_ids = catalog.class_ids(&object_type);
+            let record_ids = catalog.record_type_ids(&object_type);
             if class_ids.len() + record_ids.len() > 1 {
                 return Err(ObjectNormalizationError::AmbiguousObjectType {
                     collection: collection.name.clone(),
@@ -97,7 +127,7 @@ pub fn normalize_object_for_collection(
             }
             if let Some(class_lid) = class_ids.first().copied() {
                 if let Some(class) = catalog.class_by_lid(class_lid) {
-                    if should_canonicalize_object_type(object_type) {
+                    if should_canonicalize_object_type(&object_type) {
                         object.insert(
                             OBJECT_TYPE_FIELD.to_string(),
                             Value::String(class.class.id.clone()),
@@ -112,14 +142,22 @@ pub fn normalize_object_for_collection(
                     &mut registered_field_types,
                     &mut registered_field_required,
                 );
-                normalize_aliases(collection, object, |key| class_aliases.get(key).cloned())?;
+                normalize_aliases(collection, object, |key| {
+                    class_aliases
+                        .get(key)
+                        .cloned()
+                        .or_else(|| Some(collection.canonical_field_name(key).to_string()))
+                })?;
                 reject_unknown_fields |=
                     collection.integrity_mode == IntegrityMode::StrictRegisteredSchema;
             } else if let Some(record_lid) = record_ids.first().copied() {
+                normalize_aliases(collection, object, |key| {
+                    Some(collection.canonical_field_name(key).to_string())
+                })?;
                 let record_type = catalog
                     .record_type_by_lid(record_lid)
                     .expect("record type id must resolve");
-                if should_canonicalize_object_type(object_type) {
+                if should_canonicalize_object_type(&object_type) {
                     object.insert(
                         OBJECT_TYPE_FIELD.to_string(),
                         Value::String(record_type.id.clone()),
@@ -136,9 +174,16 @@ pub fn normalize_object_for_collection(
                     collection: collection.name.clone(),
                     object_type: object_type.to_string(),
                 });
+            } else {
+                normalize_aliases(collection, object, |key| {
+                    Some(collection.canonical_field_name(key).to_string())
+                })?;
             }
         }
         None => {
+            normalize_aliases(collection, object, |key| {
+                Some(collection.canonical_field_name(key).to_string())
+            })?;
             best_effort_normalize_registered_attributes(catalog, collection, object)?;
             reject_unknown_fields |=
                 collection.integrity_mode == IntegrityMode::StrictRegisteredSchema;

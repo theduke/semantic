@@ -10,7 +10,8 @@ use semantic_data::query::{
 use semantic_data::schema::{
     ClassAttribute, ClassType, Meta, Migration, MigrationCollectionKind, MigrationDdlOperation,
     MigrationIntegrityMode, MigrationOperation, Module, Package, RelationIndexingMode,
-    RelationMode, RelationType, StringType, Type, TypeDef, TypeKind, Visibility,
+    RelationMode, RelationType, StringType, Type, TypeDef, TypeKind, TypeRef, UIntWidth,
+    Visibility,
     attribute::{attribute_ref::AttributeRef, attribute_type::AttributeType},
     primitives::{int_width::IntWidth, number_type::NumberType},
 };
@@ -1986,7 +1987,7 @@ async fn test_relationships_generic_external(db: &Db) {
                     ),
                     eq_predicate(
                         FieldPath::from_fields(["source"]),
-                        Value::String("r1".to_string()),
+                        Value::String("x".to_string()),
                     ),
                     eq_predicate(
                         FieldPath::from_fields(["target"]),
@@ -1997,6 +1998,169 @@ async fn test_relationships_generic_external(db: &Db) {
         .await
         .expect("document relationship edge materialization query should succeed");
     assert_eq!(edge_rows.len(), 1);
+
+    let doc_id_edge_rows = db
+        .select(
+            SelectQuery::new()
+                .with_collection("__semantic.relationship_edges")
+                .with_predicate(and_all(vec![
+                    eq_predicate(
+                        FieldPath::from_fields(["relation"]),
+                        Value::String("shared.rel.weighted".to_string()),
+                    ),
+                    eq_predicate(
+                        FieldPath::from_fields(["source"]),
+                        Value::String("r1".to_string()),
+                    ),
+                    eq_predicate(
+                        FieldPath::from_fields(["target"]),
+                        Value::String("y".to_string()),
+                    ),
+                ])),
+        )
+        .await
+        .expect("document id relationship edge query should succeed");
+    assert!(doc_id_edge_rows.is_empty());
+
+    db.execute_ddl(
+        DdlBatch::new()
+            .with_op(DdlOperation::UpsertAttribute {
+                attribute: AttributeType {
+                    id: "shared.directory_node.from".to_string(),
+                    name: "from".to_string(),
+                    ty: Type::new(TypeKind::Ref(TypeRef::new("shared.directory"))),
+                    constraints: vec![],
+                    meta: Meta::default(),
+                },
+            })
+            .with_op(DdlOperation::UpsertAttribute {
+                attribute: AttributeType {
+                    id: "shared.directory_node.order".to_string(),
+                    name: "order".to_string(),
+                    ty: Type::new(TypeKind::Number(NumberType::UInt(UIntWidth::U64))),
+                    constraints: vec![],
+                    meta: Meta::default(),
+                },
+            })
+            .with_op(DdlOperation::UpsertClass {
+                class: ClassType {
+                    id: "shared.directory".to_string(),
+                    name: "Directory".to_string(),
+                    inherits: None,
+                    extends: vec![],
+                    attributes: BTreeMap::new(),
+                    constraints: vec![],
+                    meta: Meta::default(),
+                },
+            })
+            .with_op(DdlOperation::UpsertClass {
+                class: ClassType {
+                    id: "shared.directory_node".to_string(),
+                    name: "DirectoryNode".to_string(),
+                    inherits: Some(semantic_data::schema::ClassRef {
+                        id: RELATION_CLASS_ID.to_string(),
+                    }),
+                    extends: vec![],
+                    attributes: BTreeMap::from([
+                        (
+                            "from".to_string(),
+                            ClassAttribute {
+                                attribute: AttributeRef {
+                                    id: "shared.directory_node.from".to_string(),
+                                },
+                                required: true,
+                                ui_order: None,
+                                computed: None,
+                                constraints: vec![],
+                                meta: Meta::default(),
+                            },
+                        ),
+                        (
+                            "order".to_string(),
+                            ClassAttribute {
+                                attribute: AttributeRef {
+                                    id: "shared.directory_node.order".to_string(),
+                                },
+                                required: false,
+                                ui_order: None,
+                                computed: None,
+                                constraints: vec![],
+                                meta: Meta::default(),
+                            },
+                        ),
+                    ]),
+                    constraints: vec![],
+                    meta: Meta::default(),
+                },
+            })
+            .with_op(DdlOperation::UpsertCollection {
+                name: "shared_suite_directory_nodes".to_string(),
+                kind: DdlCollectionKind::Polymorphic,
+                integrity_mode: IntegrityMode::Permissive,
+            })
+            .with_op(DdlOperation::UpsertRelationship {
+                relationship: RelationType {
+                    id: "shared.directory_node".to_string(),
+                    name: "directory_node".to_string(),
+                    source_collection: "shared_suite_directory_nodes".to_string(),
+                    mode: RelationMode::External,
+                    indexing_mode: RelationIndexingMode::Enabled,
+                    meta: Meta::default(),
+                },
+            }),
+    )
+    .await
+    .expect("shadowed directory node relationship ddl should succeed");
+
+    let mut parent_directory = Object::new();
+    parent_directory.insert("id", Value::String("parent-dir".to_string()));
+    parent_directory.insert("type", Value::String("shared.directory".to_string()));
+    db.insert(
+        "shared_suite_directory_nodes",
+        "parent-dir",
+        parent_directory,
+    )
+    .await
+    .expect("parent directory row insert should succeed");
+
+    let mut child_item = Object::new();
+    child_item.insert("id", Value::String("child-item".to_string()));
+    db.insert("shared_suite_directory_nodes", "child-item", child_item)
+        .await
+        .expect("child item row insert should succeed");
+
+    let mut directory_node = Object::new();
+    directory_node.insert("id", Value::String("dir-rel-1".to_string()));
+    directory_node.insert("type", Value::String("shared.directory_node".to_string()));
+    directory_node.insert("from", Value::String("parent-dir".to_string()));
+    directory_node.insert("to", Value::String("child-item".to_string()));
+    directory_node.insert("order", Value::U64(10));
+    db.insert("shared_suite_directory_nodes", "dir-rel-1", directory_node)
+        .await
+        .expect("directory node relation row insert should succeed");
+
+    let directory_edge_rows = db
+        .select(
+            SelectQuery::new()
+                .with_collection("__semantic.relationship_edges")
+                .with_predicate(and_all(vec![
+                    eq_predicate(
+                        FieldPath::from_fields(["relation"]),
+                        Value::String("shared.directory_node".to_string()),
+                    ),
+                    eq_predicate(
+                        FieldPath::from_fields(["source"]),
+                        Value::String("parent-dir".to_string()),
+                    ),
+                    eq_predicate(
+                        FieldPath::from_fields(["target"]),
+                        Value::String("child-item".to_string()),
+                    ),
+                ])),
+        )
+        .await
+        .expect("directory node relationship edge query should succeed");
+    assert_eq!(directory_edge_rows.len(), 1);
 }
 
 fn blog_package_v1() -> Package {

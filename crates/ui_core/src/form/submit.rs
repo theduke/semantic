@@ -3,7 +3,7 @@ use std::rc::Rc;
 use dxform::{FormOptions, SubmitContext, SubmitError, SubmitHandler, ValidationStrategy};
 use futures::future::{FutureExt, LocalBoxFuture};
 use semantic_data::{
-    builtin::ID_ATTRIBUTE_ID,
+    builtin::ATTR_ID,
     schema::{ClassType, Type},
     value::{Object, Value},
 };
@@ -169,13 +169,7 @@ pub fn rpc_insert_submit_handler(
     collection: String,
     id: String,
 ) -> SemanticFormSubmit {
-    rpc_insert_submit_handler_with_primary_id(
-        client,
-        scope_id,
-        collection,
-        id,
-        ID_ATTRIBUTE_ID.to_string(),
-    )
+    rpc_insert_submit_handler_with_primary_id(client, scope_id, collection, id, ATTR_ID.to_string())
 }
 
 pub fn rpc_insert_submit_handler_with_primary_id(
@@ -205,7 +199,7 @@ pub fn rpc_batch_upsert_submit_handler(
         scope_id,
         collection,
         id,
-        ID_ATTRIBUTE_ID.to_string(),
+        ATTR_ID.to_string(),
     )
 }
 
@@ -251,7 +245,7 @@ fn batch_upsert_operation(collection: String, id: String, object: Object) -> Obj
     let mut operation = Object::new();
     operation.insert("kind", Value::String("upsert".to_string()));
     operation.insert("collection", Value::String(collection));
-    operation.insert(ID_ATTRIBUTE_ID, Value::String(id));
+    operation.insert(ATTR_ID, Value::String(id));
     operation.insert("object", Value::Object(object));
     operation
 }
@@ -278,7 +272,7 @@ fn inject_primary_id(
 
 #[cfg(test)]
 mod tests {
-    use semantic_data::builtin::ID_ATTRIBUTE_ID;
+    use semantic_data::builtin::ATTR_ID;
     use semantic_data::value::{Object, Value};
 
     use super::inject_primary_id;
@@ -287,10 +281,10 @@ mod tests {
     fn inject_primary_id_adds_canonical_primary_key_field() {
         let mut object = Object::new();
 
-        inject_primary_id(&mut object, ID_ATTRIBUTE_ID, "entity-1").unwrap();
+        inject_primary_id(&mut object, ATTR_ID, "entity-1").unwrap();
 
         assert_eq!(
-            object.get(ID_ATTRIBUTE_ID),
+            object.get(ATTR_ID),
             Some(&Value::String("entity-1".to_string()))
         );
     }
@@ -298,9 +292,9 @@ mod tests {
     #[test]
     fn inject_primary_id_rejects_conflicting_primary_key_field() {
         let mut object = Object::new();
-        object.insert(ID_ATTRIBUTE_ID, Value::String("other-entity".to_string()));
+        object.insert(ATTR_ID, Value::String("other-entity".to_string()));
 
-        let err = inject_primary_id(&mut object, ID_ATTRIBUTE_ID, "entity-1").unwrap_err();
+        let err = inject_primary_id(&mut object, ATTR_ID, "entity-1").unwrap_err();
 
         assert!(
             err.message
