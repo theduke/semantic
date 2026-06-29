@@ -776,6 +776,7 @@ fn title_word(word: &str) -> String {
         "url" => "URL".to_string(),
         "urls" => "URLs".to_string(),
         "ui" => "UI".to_string(),
+        "filestore" => "File Store".to_string(),
         "mime" => "MIME".to_string(),
         "sha256" => "SHA256".to_string(),
         _ => {
@@ -937,6 +938,66 @@ mod tests {
                 .values()
                 .all(|attribute| !attribute.required)
         );
+    }
+
+    #[test]
+    fn all_declared_attributes_have_titles() {
+        for attribute in super::file_attributes() {
+            assert!(
+                attribute
+                    .meta
+                    .title
+                    .as_deref()
+                    .is_some_and(|title| !title.is_empty()),
+                "{} should have a title",
+                attribute.id
+            );
+        }
+
+        for migration in [
+            super::init_migration(),
+            super::generic_metadata_migration(),
+            super::filekind_migration(),
+            super::media_metadata_migration(),
+        ] {
+            for operation in migration.operations {
+                if let MigrationOperation::Ddl(MigrationDdlOperation::UpsertAttribute {
+                    attribute,
+                }) = operation
+                {
+                    assert!(
+                        attribute
+                            .meta
+                            .title
+                            .as_deref()
+                            .is_some_and(|title| !title.is_empty()),
+                        "{} should have a title",
+                        attribute.id
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn all_declared_class_attributes_have_titles() {
+        for class in [
+            super::file_class(),
+            super::init_migration_file_class(),
+            super::generic_metadata_migration_file_class(),
+            super::filekind_migration_file_class(),
+        ] {
+            for (name, attribute) in class.attributes {
+                assert!(
+                    attribute
+                        .meta
+                        .title
+                        .as_deref()
+                        .is_some_and(|title| !title.is_empty()),
+                    "{name} should have a title"
+                );
+            }
+        }
     }
 
     #[test]

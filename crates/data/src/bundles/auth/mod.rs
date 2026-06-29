@@ -344,6 +344,53 @@ mod tests {
         assert_eq!(string_type.format, Some(StringFormat::Email));
     }
 
+    #[test]
+    fn all_declared_attributes_have_titles() {
+        for attribute in attributes() {
+            assert!(
+                attribute
+                    .meta
+                    .title
+                    .as_deref()
+                    .is_some_and(|title| !title.is_empty()),
+                "{} should have a title",
+                attribute.id
+            );
+        }
+
+        for operation in init_migration().operations {
+            if let MigrationOperation::Ddl(MigrationDdlOperation::UpsertAttribute { attribute }) =
+                operation
+            {
+                assert!(
+                    attribute
+                        .meta
+                        .title
+                        .as_deref()
+                        .is_some_and(|title| !title.is_empty()),
+                    "{} should have a title",
+                    attribute.id
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn all_declared_class_attributes_have_titles() {
+        for class in [user_class(), init_migration_user_class()] {
+            for (name, attribute) in class.attributes {
+                assert!(
+                    attribute
+                        .meta
+                        .title
+                        .as_deref()
+                        .is_some_and(|title| !title.is_empty()),
+                    "{name} should have a title"
+                );
+            }
+        }
+    }
+
     fn migration_upsert_attribute_ids(migration: &Migration) -> Vec<&str> {
         migration
             .operations

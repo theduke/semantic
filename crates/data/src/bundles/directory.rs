@@ -499,6 +499,58 @@ mod tests {
         assert_eq!(type_ref.name, DIRECTORY_CLASS_ID);
     }
 
+    #[test]
+    fn all_declared_attributes_have_titles() {
+        for attribute in attributes() {
+            assert!(
+                attribute
+                    .meta
+                    .title
+                    .as_deref()
+                    .is_some_and(|title| !title.is_empty()),
+                "{} should have a title",
+                attribute.id
+            );
+        }
+
+        for operation in migration().operations {
+            if let MigrationOperation::Ddl(MigrationDdlOperation::UpsertAttribute { attribute }) =
+                operation
+            {
+                assert!(
+                    attribute
+                        .meta
+                        .title
+                        .as_deref()
+                        .is_some_and(|title| !title.is_empty()),
+                    "{} should have a title",
+                    attribute.id
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn all_declared_class_attributes_have_titles() {
+        for class in [
+            directory_class(),
+            directory_node_class(),
+            migration_directory_class(),
+            migration_directory_node_class(),
+        ] {
+            for (name, attribute) in class.attributes {
+                assert!(
+                    attribute
+                        .meta
+                        .title
+                        .as_deref()
+                        .is_some_and(|title| !title.is_empty()),
+                    "{name} should have a title"
+                );
+            }
+        }
+    }
+
     fn migration_upsert_attribute_ids(migration: &Migration) -> Vec<&str> {
         migration
             .operations

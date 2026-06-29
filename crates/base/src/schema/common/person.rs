@@ -113,3 +113,37 @@ pub fn class() -> ClassType {
         meta: helpers::meta_with_title("Person"),
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn all_declared_attributes_have_titles() {
+        for attribute in attributes() {
+            assert!(
+                attribute
+                    .meta
+                    .title
+                    .as_deref()
+                    .is_some_and(|title| !title.is_empty()),
+                "{} should have a title",
+                attribute.id
+            );
+        }
+    }
+
+    #[test]
+    fn all_declared_class_attributes_have_titles() {
+        for (name, attribute) in class().attributes {
+            assert!(
+                attribute
+                    .meta
+                    .title
+                    .as_deref()
+                    .is_some_and(|title| !title.is_empty()),
+                "{name} should have a title"
+            );
+        }
+    }
+}
