@@ -12,6 +12,7 @@ use crate::views::Route;
 
 const DEFAULT_VIEW: &str = "cards";
 const DEFAULT_PAGE_SIZE: usize = 50;
+const RELATION_CLASS_ID: &str = "semantic:relation";
 
 #[component]
 pub fn BrowsePage(
@@ -413,9 +414,16 @@ async fn run_query(
 }
 
 fn default_query(collection: &str, page_size: usize, page: usize) -> String {
+    let relation_filter = if collection == DEFAULT_COLLECTION {
+        format!(" WHERE type != '{RELATION_CLASS_ID}'")
+    } else {
+        String::new()
+    };
+
     format!(
-        "SELECT * FROM {} LIMIT {} OFFSET {}",
+        "SELECT * FROM {}{} LIMIT {} OFFSET {}",
         sql_ident(collection),
+        relation_filter,
         page_size,
         page.saturating_mul(page_size)
     )
@@ -498,4 +506,25 @@ fn load_sql(hash: &str) -> Option<String> {
 
 thread_local! {
     static FALLBACK_SQL_STORAGE: RefCell<BTreeMap<String, String>> = const { RefCell::new(BTreeMap::new()) };
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn default_entities_query_excludes_relation_entities() {
+        assert_eq!(
+            default_query(DEFAULT_COLLECTION, 50, 2),
+            "SELECT * FROM \"entities\" WHERE type != 'semantic:relation' LIMIT 50 OFFSET 100"
+        );
+    }
+
+    #[test]
+    fn default_non_entities_query_does_not_add_entity_type_filter() {
+        assert_eq!(
+            default_query("events", 25, 1),
+            "SELECT * FROM \"events\" LIMIT 25 OFFSET 25"
+        );
+    }
 }
