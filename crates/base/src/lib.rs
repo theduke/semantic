@@ -8,7 +8,10 @@ pub use bundle::{MODULE_NAME, PACKAGE_NAME, package, root_module};
 mod tests {
     use semantic_data::schema::{MigrationDdlOperation, MigrationOperation};
 
-    use crate::{bundle, migrations, schema::common};
+    use crate::{
+        bundle, migrations,
+        schema::{common, notes},
+    };
 
     #[test]
     fn package_has_expected_structure() {
@@ -17,8 +20,9 @@ mod tests {
         assert_eq!(package.name, bundle::PACKAGE_NAME);
         assert_eq!(package.root.name, bundle::MODULE_NAME);
         assert!(package.modules.is_empty());
-        assert_eq!(package.migrations.len(), 2);
+        assert_eq!(package.migrations.len(), 3);
         assert_eq!(package.migrations[0].name, migrations::INIT_MIGRATION_NAME);
+        assert_eq!(package.migrations[2].name, migrations::NOTES_MIGRATION_NAME);
 
         assert!(
             package.migrations[0]
@@ -31,6 +35,7 @@ mod tests {
         );
 
         assert!(package.root.classes.contains_key(common::person::CLASS_ID));
+        assert!(package.root.classes.contains_key(notes::CLASS_ID));
         assert!(
             package
                 .root
@@ -40,6 +45,9 @@ mod tests {
         assert_eq!(common::person::ATTR_PARENT, "semantic:parent");
 
         for attribute in common::person::attributes() {
+            assert!(package.root.attributes.contains_key(&attribute.id));
+        }
+        for attribute in notes::attributes() {
             assert!(package.root.attributes.contains_key(&attribute.id));
         }
     }

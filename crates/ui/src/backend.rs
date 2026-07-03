@@ -293,6 +293,11 @@ mod tests {
         );
         assert!(
             catalog
+                .class_by_id(semantic_base::schema::notes::CLASS_ID)
+                .is_some()
+        );
+        assert!(
+            catalog
                 .class_by_id(semantic_data::filestore::FILE_CLASS_ID)
                 .is_some()
         );
