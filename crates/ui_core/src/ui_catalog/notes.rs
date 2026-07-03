@@ -59,6 +59,9 @@ pub(crate) fn register_note_renderers(catalog: &mut UiCatalog) {
             FIELD_NOTE_CONTENT,
             Rc::new(render_note_content_form),
         );
+    catalog
+        .form_registry_mut()
+        .register_attribute_form_renderer(ATTR_NOTE_CONTENT, Rc::new(render_note_content_form));
 }
 
 fn render_note_class(ctx: ClassRenderContext) -> Element {
