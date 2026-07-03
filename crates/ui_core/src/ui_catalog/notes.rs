@@ -108,6 +108,11 @@ fn render_note_format_form(ctx: AttributeFormRenderContext) -> Element {
 }
 
 fn render_note_content_form(ctx: AttributeFormRenderContext) -> Element {
+    #[cfg(feature = "markdown")]
+    if note_content_format(&ctx) == FORMAT_MARKDOWN {
+        return render_markdown_note_content_form(ctx);
+    }
+
     let field = ctx.field.clone();
     let value = value_string(&field.value());
     let input_field = field.clone();
@@ -122,6 +127,27 @@ fn render_note_content_form(ctx: AttributeFormRenderContext) -> Element {
             onblur: move |_event: FocusEvent| blur_field.set_focused(false),
             onfocus: move |_event: FocusEvent| focus_field.set_focused(true),
         }
+    }
+}
+
+#[cfg(feature = "markdown")]
+fn render_markdown_note_content_form(ctx: AttributeFormRenderContext) -> Element {
+    let field = ctx.field.clone();
+    let value = value_string(&field.value());
+
+    rsx! {
+        dxeditor::MarkdownEditor {
+            value,
+            on_change: move |value: String| field.set_value(Value::String(value)),
+        }
+    }
+}
+
+#[cfg(feature = "markdown")]
+fn note_content_format(ctx: &AttributeFormRenderContext) -> String {
+    match ctx.scope.root_value() {
+        Value::Object(object) => note_format(&object).unwrap_or(FORMAT_TEXT).to_string(),
+        _ => FORMAT_TEXT.to_string(),
     }
 }
 

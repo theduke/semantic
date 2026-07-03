@@ -13,7 +13,7 @@ version.workspace = true
 
 [features]
 default = ["markdown"]
-markdown = ["dep:pulldown-cmark"]
+markdown = ["dep:dxeditor", "dep:pulldown-cmark", "dxeditor/markdown"]
 
 [dependencies]
 bytes = { workspace = true }
@@ -21,6 +21,7 @@ dioxus = { workspace = true, features = ["router"] }
 dioxus-icons = "0.1.0"
 dioxus-sdk-time = "0.7.0"
 dxcomp = { path = "../dxcomp" }
+dxeditor = { path = "../dxeditor", default-features = false, optional = true }
 dxform = { path = "../dxform" }
 facet-json = "0.43.2"
 futures = "0.3.31"
