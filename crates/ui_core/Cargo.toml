@@ -13,7 +13,7 @@ version.workspace = true
 
 [features]
 default = ["markdown"]
-markdown = ["dep:dxeditor", "dep:pulldown-cmark", "dxeditor/markdown"]
+markdown = ["dep:dxeditor", "dep:pulldown-cmark", "dxeditor/markdown", "dxeditor/web"]
 
 [dependencies]
 bytes = { workspace = true }
