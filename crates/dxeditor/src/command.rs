@@ -116,6 +116,41 @@ pub fn register_standard_commands(registry: &mut CommandRegistry) {
     );
 
     registry.register(
+        "editor.set_block_type",
+        Rc::new(|ctx, args| {
+            let document = ctx.state.document();
+            let component = args
+                .get("component")
+                .and_then(Value::as_str)
+                .ok_or_else(|| EditorError::Message("missing component".to_string()))?
+                .to_string();
+            let attrs = args
+                .get("attrs")
+                .and_then(Value::as_object)
+                .cloned()
+                .unwrap_or_default();
+            let id = args
+                .get("id")
+                .and_then(Value::as_str)
+                .map(NodeId::from)
+                .or_else(|| document.blocks.first().map(|block| block.id.clone()))
+                .ok_or_else(|| EditorError::Message("missing block id".to_string()))?;
+            let mut block = document
+                .blocks
+                .iter()
+                .find(|block| block.id == id)
+                .cloned()
+                .ok_or_else(|| EditorError::Message(format!("block '{}' does not exist", id.0)))?;
+            block.component = component;
+            block.attrs = attrs;
+            Ok(Transaction::new(vec![Operation::ReplaceBlock {
+                id,
+                block,
+            }]))
+        }),
+    );
+
+    registry.register(
         "editor.set_plain_text",
         Rc::new(|ctx, args| {
             let text = args
@@ -129,6 +164,26 @@ pub fn register_standard_commands(registry: &mut CommandRegistry) {
                 .first()
                 .map(|block| block.id.clone())
                 .unwrap_or_else(|| NodeId::from("block-1"));
+            Ok(Transaction::new(vec![Operation::SetInlineText {
+                block_id: id,
+                text,
+            }]))
+        }),
+    );
+
+    registry.register(
+        "editor.set_block_text",
+        Rc::new(|_ctx, args| {
+            let id = args
+                .get("id")
+                .and_then(Value::as_str)
+                .map(NodeId::from)
+                .ok_or_else(|| EditorError::Message("missing block id".to_string()))?;
+            let text = args
+                .get("text")
+                .and_then(Value::as_str)
+                .ok_or_else(|| EditorError::Message("missing text".to_string()))?
+                .to_string();
             Ok(Transaction::new(vec![Operation::SetInlineText {
                 block_id: id,
                 text,
