@@ -15,6 +15,9 @@ dioxus-primitives = { path = "/home/theduke/dev/github.com/DioxusLabs/dioxus-com
 palette = "0.7.6"
 time = { workspace = true, features = ["macros"] }
 
+[dev-dependencies]
+dioxus-ssr = "0.7.9"
+
 [features]
 default = []
 web = ["dioxus/web", "dioxus-primitives/web"]

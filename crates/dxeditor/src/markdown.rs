@@ -176,57 +176,125 @@ fn parse_inline(text: &str, block_index: usize) -> Vec<InlineNode> {
     let mut remaining = text;
     let mut inline_index = 1usize;
 
-    while let Some(start) = remaining.find("[@") {
+    while !remaining.is_empty() {
+        let Some(start) = next_inline_start(remaining) else {
+            push_text_node(&mut nodes, block_index, &mut inline_index, remaining, None);
+            break;
+        };
         let before = &remaining[..start];
         if !before.is_empty() {
-            nodes.push(InlineNode::text(
-                format!("text-{block_index}-{inline_index}"),
-                before,
-            ));
-            inline_index += 1;
+            push_text_node(&mut nodes, block_index, &mut inline_index, before, None);
         }
 
-        let mention_start = &remaining[start..];
-        let Some(label_end) = mention_start.find("](") else {
-            nodes.push(InlineNode::text(
-                format!("text-{block_index}-{inline_index}"),
-                mention_start,
-            ));
-            return nodes;
-        };
-        let label = &mention_start[2..label_end];
-        let after_label = &mention_start[(label_end + 2)..];
-        let Some(url_end) = after_label.find(')') else {
-            nodes.push(InlineNode::text(
-                format!("text-{block_index}-{inline_index}"),
-                mention_start,
-            ));
-            return nodes;
-        };
-        let href = &after_label[..url_end];
-        if let Some(entity_id) = href.strip_prefix("semantic:entity:") {
-            nodes.push(InlineNode::mention(
-                format!("mention-{block_index}-{inline_index}"),
-                entity_id,
-                label,
-            ));
+        let token = &remaining[start..];
+        if let Some((node, consumed)) = parse_inline_token(token, block_index, inline_index) {
+            nodes.push(node);
+            inline_index += 1;
+            remaining = &token[consumed..];
         } else {
-            nodes.push(
-                InlineNode::text(format!("text-{block_index}-{inline_index}"), label)
-                    .with_mark(Mark::link(href)),
+            let marker_len = if token.starts_with("**") { 2 } else { 1 };
+            push_text_node(
+                &mut nodes,
+                block_index,
+                &mut inline_index,
+                &token[..marker_len],
+                None,
             );
-        }
-        inline_index += 1;
-        remaining = &after_label[(url_end + 1)..];
+            remaining = &token[marker_len..];
+        };
     }
 
-    if !remaining.is_empty() {
-        nodes.push(InlineNode::text(
-            format!("text-{block_index}-{inline_index}"),
-            remaining,
+    nodes
+}
+
+#[cfg(feature = "markdown")]
+fn next_inline_start(text: &str) -> Option<usize> {
+    ["**", "*", "`", "["]
+        .iter()
+        .filter_map(|marker| text.find(marker))
+        .min()
+}
+
+#[cfg(feature = "markdown")]
+fn parse_inline_token(
+    token: &str,
+    block_index: usize,
+    inline_index: usize,
+) -> Option<(InlineNode, usize)> {
+    if let Some(rest) = token.strip_prefix("**") {
+        let end = rest.find("**")?;
+        let text = &rest[..end];
+        return Some((
+            InlineNode::text(format!("text-{block_index}-{inline_index}"), text)
+                .with_mark(Mark::new("bold")),
+            2 + end + 2,
         ));
     }
-    nodes
+
+    if let Some(rest) = token.strip_prefix('*') {
+        let end = rest.find('*')?;
+        let text = &rest[..end];
+        return Some((
+            InlineNode::text(format!("text-{block_index}-{inline_index}"), text)
+                .with_mark(Mark::new("italic")),
+            1 + end + 1,
+        ));
+    }
+
+    if let Some(rest) = token.strip_prefix('`') {
+        let end = rest.find('`')?;
+        let text = &rest[..end];
+        return Some((
+            InlineNode::text(format!("text-{block_index}-{inline_index}"), text)
+                .with_mark(Mark::new("code")),
+            1 + end + 1,
+        ));
+    }
+
+    if token.starts_with('[') {
+        let label_end = token.find("](")?;
+        let label = &token[1..label_end];
+        let after_label = &token[(label_end + 2)..];
+        let url_end = after_label.find(')')?;
+        let href = &after_label[..url_end];
+        let consumed = label_end + 2 + url_end + 1;
+        if let Some(entity_id) = label
+            .strip_prefix('@')
+            .and_then(|_| href.strip_prefix("semantic:entity:"))
+        {
+            return Some((
+                InlineNode::mention(
+                    format!("mention-{block_index}-{inline_index}"),
+                    entity_id,
+                    label.trim_start_matches('@'),
+                ),
+                consumed,
+            ));
+        }
+        return Some((
+            InlineNode::text(format!("text-{block_index}-{inline_index}"), label)
+                .with_mark(Mark::link(href)),
+            consumed,
+        ));
+    }
+
+    None
+}
+
+#[cfg(feature = "markdown")]
+fn push_text_node(
+    nodes: &mut Vec<InlineNode>,
+    block_index: usize,
+    inline_index: &mut usize,
+    text: &str,
+    mark: Option<Mark>,
+) {
+    let mut node = InlineNode::text(format!("text-{block_index}-{inline_index}"), text);
+    if let Some(mark) = mark {
+        node.marks.push(mark);
+    }
+    nodes.push(node);
+    *inline_index += 1;
 }
 
 #[cfg(feature = "markdown")]

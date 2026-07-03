@@ -3105,6 +3105,7 @@ dependencies = [
  "dioxus",
  "dioxus-icons",
  "dioxus-primitives",
+ "dioxus-ssr",
  "palette",
  "time",
 ]
@@ -3114,6 +3115,7 @@ name = "dxeditor"
 version = "0.0.1"
 dependencies = [
  "dioxus",
+ "dioxus-ssr",
  "futures",
  "markdown",
  "serde",

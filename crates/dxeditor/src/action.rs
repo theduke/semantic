@@ -202,10 +202,10 @@ pub fn register_standard_actions(registry: &mut ActionRegistry) {
         Value::Null,
     );
 
-    for (id, label, key) in [
-        ("editor.bold", "Bold", "b"),
-        ("editor.italic", "Italic", "i"),
-        ("editor.code", "Code", "e"),
+    for (id, label, key, mark) in [
+        ("editor.bold", "Bold", "b", "bold"),
+        ("editor.italic", "Italic", "i", "italic"),
+        ("editor.code", "Code", "e", "code"),
     ] {
         registry.register(EditorAction {
             id: id.to_string(),
@@ -221,7 +221,9 @@ pub fn register_standard_actions(registry: &mut ActionRegistry) {
             priority: 50,
             is_enabled: always_enabled.clone(),
             is_active: never_active.clone(),
-            run: Rc::new(|mut ctx| ctx.dispatch_command("editor.noop", Value::Null)),
+            run: Rc::new(move |mut ctx| {
+                ctx.dispatch_command("editor.toggle_mark", json!({ "mark": mark }))
+            }),
         });
     }
 
@@ -233,7 +235,7 @@ pub fn register_standard_actions(registry: &mut ActionRegistry) {
         vec![ActionSurface::SlashMenu, ActionSurface::CommandPalette],
         None,
         80,
-        "editor.set_block_component",
+        "editor.set_block_type",
         json!({ "component": "paragraph" }),
     );
 
@@ -246,8 +248,8 @@ pub fn register_standard_actions(registry: &mut ActionRegistry) {
             vec![ActionSurface::SlashMenu, ActionSurface::CommandPalette],
             None,
             79 - level,
-            "editor.set_block_component",
-            json!({ "component": "heading" }),
+            "editor.set_block_type",
+            json!({ "component": "heading", "attrs": { "level": level } }),
         );
     }
 

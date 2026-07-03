@@ -4,7 +4,8 @@ use serde_json::Value;
 
 use crate::{
     EditorError,
-    document::{BlockNode, COMPONENT_PARAGRAPH, NodeId},
+    document::{BlockNode, COMPONENT_PARAGRAPH, MARK_BOLD, MARK_CODE, MARK_ITALIC, Mark, NodeId},
+    selection::{EditorSelection, TextPosition},
     state::EditorState,
     transaction::{Operation, Transaction},
 };
@@ -135,17 +136,10 @@ pub fn register_standard_commands(registry: &mut CommandRegistry) {
                 .map(NodeId::from)
                 .or_else(|| document.blocks.first().map(|block| block.id.clone()))
                 .ok_or_else(|| EditorError::Message("missing block id".to_string()))?;
-            let mut block = document
-                .blocks
-                .iter()
-                .find(|block| block.id == id)
-                .cloned()
-                .ok_or_else(|| EditorError::Message(format!("block '{}' does not exist", id.0)))?;
-            block.component = component;
-            block.attrs = attrs;
-            Ok(Transaction::new(vec![Operation::ReplaceBlock {
+            Ok(Transaction::new(vec![Operation::SetBlockType {
                 id,
-                block,
+                component,
+                attrs,
             }]))
         }),
     );
@@ -192,7 +186,117 @@ pub fn register_standard_commands(registry: &mut CommandRegistry) {
     );
 
     registry.register(
+        "editor.toggle_mark",
+        Rc::new(|ctx, args| {
+            let mark_name = args
+                .get("mark")
+                .and_then(Value::as_str)
+                .ok_or_else(|| EditorError::Message("missing mark".to_string()))?;
+            let mark = match mark_name {
+                MARK_BOLD | MARK_ITALIC | MARK_CODE => Mark::new(mark_name),
+                other => return Err(EditorError::Message(format!("unknown mark '{other}'"))),
+            };
+            let selection = args
+                .get("selection")
+                .cloned()
+                .map(serde_json::from_value)
+                .transpose()
+                .map_err(|err| EditorError::InvalidPayload {
+                    format: "dxeditor.selection.v1".to_string(),
+                    message: err.to_string(),
+                })?
+                .or_else(|| ctx.state.selection())
+                .or_else(|| first_block_selection(&ctx.state));
+            let Some(selection) = selection else {
+                return Ok(Transaction::empty());
+            };
+            Ok(Transaction::new(vec![Operation::ToggleMark {
+                selection,
+                mark,
+            }]))
+        }),
+    );
+
+    registry.register(
+        "editor.split_block",
+        Rc::new(|ctx, args| {
+            let document = ctx.state.document();
+            let id = args
+                .get("id")
+                .and_then(Value::as_str)
+                .map(NodeId::from)
+                .or_else(|| document.blocks.first().map(|block| block.id.clone()))
+                .ok_or_else(|| EditorError::Message("missing block id".to_string()))?;
+            let offset = args
+                .get("offset")
+                .and_then(Value::as_u64)
+                .map(|value| value as usize)
+                .unwrap_or_else(|| {
+                    ctx.state
+                        .selection()
+                        .filter(|selection| selection.is_collapsed())
+                        .map(|selection| selection.anchor.offset)
+                        .unwrap_or_else(|| {
+                            document
+                                .blocks
+                                .iter()
+                                .find(|block| block.id == id)
+                                .map(BlockNode::text_content)
+                                .map(|text| text.chars().count())
+                                .unwrap_or_default()
+                        })
+                });
+            Ok(Transaction::new(vec![Operation::SplitBlock { id, offset }]))
+        }),
+    );
+
+    registry.register(
+        "editor.merge_blocks",
+        Rc::new(|ctx, args| {
+            let document = ctx.state.document();
+            let first_id = args
+                .get("first_id")
+                .and_then(Value::as_str)
+                .map(NodeId::from);
+            let second_id = args
+                .get("second_id")
+                .and_then(Value::as_str)
+                .map(NodeId::from);
+            let (first_id, second_id) = first_id
+                .zip(second_id)
+                .or_else(|| {
+                    let index = args.get("index").and_then(Value::as_u64)? as usize;
+                    Some((
+                        document.blocks.get(index)?.id.clone(),
+                        document.blocks.get(index + 1)?.id.clone(),
+                    ))
+                })
+                .or_else(|| {
+                    Some((
+                        document.blocks.first()?.id.clone(),
+                        document.blocks.get(1)?.id.clone(),
+                    ))
+                })
+                .ok_or_else(|| EditorError::Message("missing adjacent block ids".to_string()))?;
+            Ok(Transaction::new(vec![Operation::MergeBlocks {
+                first_id,
+                second_id,
+            }]))
+        }),
+    );
+
+    registry.register(
         "editor.noop",
         Rc::new(|_ctx, _args| Ok(Transaction::empty())),
     );
+}
+
+fn first_block_selection(state: &EditorState) -> Option<EditorSelection> {
+    let document = state.document();
+    let block = document.blocks.first()?;
+    let len = block.text_content().chars().count();
+    Some(EditorSelection {
+        anchor: TextPosition::new(block.id.clone(), None, 0),
+        focus: TextPosition::new(block.id.clone(), None, len),
+    })
 }

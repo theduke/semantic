@@ -8,9 +8,11 @@ use crate::{
     catalog::EditorCatalog,
     codec::EditorPayload,
     document::{
-        BlockNode, COMPONENT_CODE, COMPONENT_DIVIDER, COMPONENT_HEADING, COMPONENT_PARAGRAPH,
-        COMPONENT_QUOTE, DOCUMENT_SCHEMA_V1, EditorDocument, NodeId,
+        BlockNode, COMPONENT_CODE, COMPONENT_DIVIDER, COMPONENT_HEADING, COMPONENT_LINK,
+        COMPONENT_MENTION, COMPONENT_PARAGRAPH, COMPONENT_QUOTE, DOCUMENT_SCHEMA_V1,
+        EditorDocument, InlineNode, Mark, NodeId,
     },
+    selection::{EditorSelection, TextPosition},
     state::EditorState,
 };
 
@@ -78,18 +80,18 @@ const DXEDITOR_STYLE: &str = r#"
 
 .dxeditor__document {
   display: grid;
-  gap: 8px;
+  gap: 2px;
   min-height: 260px;
-  padding: 16px 18px;
+  padding: 22px 28px;
   background: #ffffff;
 }
 
 .dxeditor__block {
   min-width: 0;
   margin: 0;
-  border: 1px solid transparent;
-  border-radius: 6px;
-  padding: 4px 6px;
+  border: 0;
+  border-radius: 4px;
+  padding: 2px 0;
   outline: none;
   overflow-wrap: anywhere;
   line-height: 1.6;
@@ -97,12 +99,12 @@ const DXEDITOR_STYLE: &str = r#"
 }
 
 .dxeditor__block:hover {
-  border-color: #e7ebf0;
+  background: transparent;
 }
 
 .dxeditor__block:focus {
-  border-color: #176b87;
-  box-shadow: 0 0 0 2px rgb(23 107 135 / 12%);
+  box-shadow: inset 3px 0 0 #176b87;
+  padding-left: 8px;
 }
 
 .dxeditor__block[data-component="heading"] {
@@ -120,16 +122,32 @@ const DXEDITOR_STYLE: &str = r#"
 
 .dxeditor__block[data-component="quote"] {
   border-left: 3px solid #9bb5c1;
-  border-radius: 0 6px 6px 0;
+  border-radius: 0 4px 4px 0;
   color: #435367;
   padding-left: 12px;
 }
 
 .dxeditor__block[data-component="code"] {
-  border-color: #dfe5ec;
   background: #f6f8fa;
+  border-radius: 4px;
+  padding: 8px 10px;
   font-family: ui-monospace, SFMono-Regular, Consolas, "Liberation Mono", Menlo, monospace;
   font-size: 13px;
+}
+
+.dxeditor__inline-code {
+  border-radius: 4px;
+  background: #eef2f6;
+  padding: 0 4px;
+  font-family: ui-monospace, SFMono-Regular, Consolas, "Liberation Mono", Menlo, monospace;
+  font-size: 0.92em;
+}
+
+.dxeditor__mention {
+  border-radius: 4px;
+  background: #e9f2f5;
+  color: #176b87;
+  padding: 0 4px;
 }
 
 .dxeditor__divider {
@@ -396,95 +414,316 @@ fn EditableBlock(
 ) -> Element {
     let text = block.text_content();
     let block_id = block.id.clone();
+    let inline = block_inline_content(&block);
     let level = block
         .attrs
         .get("level")
         .and_then(Value::as_u64)
         .unwrap_or(1)
         .clamp(1, 6);
-    let contenteditable = if readonly { "false" } else { "plaintext-only" };
+    let contenteditable = if readonly { "false" } else { "true" };
 
     match block.component.as_str() {
-        COMPONENT_HEADING => rsx! {
-            div {
-                class: "dxeditor__block",
-                "data-component": COMPONENT_HEADING,
-                "data-level": "{level}",
-                contenteditable,
-                oninput: move |event: FormEvent| {
-                    apply_block_text_edit(
-                        &catalog,
-                        &editor_state,
-                        block_id.clone(),
-                        event.value(),
-                        &output_format,
+        COMPONENT_HEADING => {
+            let input_catalog = catalog.clone();
+            let input_state = editor_state.clone();
+            let input_block_id = block_id.clone();
+            let input_format = output_format.clone();
+            let mut input_render_version = render_version;
+            rsx! {
+                div {
+                    class: "dxeditor__block",
+                    "data-component": COMPONENT_HEADING,
+                    "data-level": "{level}",
+                    contenteditable,
+                    oninput: move |event: FormEvent| {
+                        apply_block_text_edit(
+                            &input_catalog,
+                            &input_state,
+                            input_block_id.clone(),
+                            event.value(),
+                            &input_format,
+                            on_change,
+                            &mut input_render_version,
+                        );
+                    },
+                    onkeydown: block_keydown_handler(
+                        catalog,
+                        editor_state,
+                        block_id,
+                        text.chars().count(),
+                        output_format,
                         on_change,
-                        &mut render_version,
-                    );
-                },
-                "{text}"
+                        render_version,
+                        readonly,
+                    ),
+                    for node in inline {
+                        InlineNodeView { node }
+                    }
+                }
             }
-        },
-        COMPONENT_QUOTE => rsx! {
-            div {
-                class: "dxeditor__block",
-                "data-component": COMPONENT_QUOTE,
-                contenteditable,
-                oninput: move |event: FormEvent| {
-                    apply_block_text_edit(
-                        &catalog,
-                        &editor_state,
-                        block_id.clone(),
-                        event.value(),
-                        &output_format,
+        }
+        COMPONENT_QUOTE => {
+            let input_catalog = catalog.clone();
+            let input_state = editor_state.clone();
+            let input_block_id = block_id.clone();
+            let input_format = output_format.clone();
+            let mut input_render_version = render_version;
+            rsx! {
+                div {
+                    class: "dxeditor__block",
+                    "data-component": COMPONENT_QUOTE,
+                    contenteditable,
+                    oninput: move |event: FormEvent| {
+                        apply_block_text_edit(
+                            &input_catalog,
+                            &input_state,
+                            input_block_id.clone(),
+                            event.value(),
+                            &input_format,
+                            on_change,
+                            &mut input_render_version,
+                        );
+                    },
+                    onkeydown: block_keydown_handler(
+                        catalog,
+                        editor_state,
+                        block_id,
+                        text.chars().count(),
+                        output_format,
                         on_change,
-                        &mut render_version,
-                    );
-                },
-                "{text}"
+                        render_version,
+                        readonly,
+                    ),
+                    for node in inline {
+                        InlineNodeView { node }
+                    }
+                }
             }
-        },
-        COMPONENT_CODE => rsx! {
-            pre {
-                class: "dxeditor__block",
-                "data-component": COMPONENT_CODE,
-                contenteditable,
-                oninput: move |event: FormEvent| {
-                    apply_block_text_edit(
-                        &catalog,
-                        &editor_state,
-                        block_id.clone(),
-                        event.value(),
-                        &output_format,
+        }
+        COMPONENT_CODE => {
+            let input_catalog = catalog.clone();
+            let input_state = editor_state.clone();
+            let input_block_id = block_id.clone();
+            let input_format = output_format.clone();
+            let mut input_render_version = render_version;
+            rsx! {
+                pre {
+                    class: "dxeditor__block",
+                    "data-component": COMPONENT_CODE,
+                    contenteditable,
+                    oninput: move |event: FormEvent| {
+                        apply_block_text_edit(
+                            &input_catalog,
+                            &input_state,
+                            input_block_id.clone(),
+                            event.value(),
+                            &input_format,
+                            on_change,
+                            &mut input_render_version,
+                        );
+                    },
+                    onkeydown: block_keydown_handler(
+                        catalog,
+                        editor_state,
+                        block_id,
+                        text.chars().count(),
+                        output_format,
                         on_change,
-                        &mut render_version,
-                    );
-                },
-                "{text}"
+                        render_version,
+                        readonly,
+                    ),
+                    for node in inline {
+                        InlineNodeView { node }
+                    }
+                }
             }
-        },
+        }
         COMPONENT_DIVIDER => rsx! {
             hr { class: "dxeditor__divider" }
         },
-        _ => rsx! {
-            div {
-                class: "dxeditor__block",
-                "data-component": COMPONENT_PARAGRAPH,
-                contenteditable,
-                oninput: move |event: FormEvent| {
-                    apply_block_text_edit(
-                        &catalog,
-                        &editor_state,
-                        block_id.clone(),
-                        event.value(),
-                        &output_format,
+        _ => {
+            let input_catalog = catalog.clone();
+            let input_state = editor_state.clone();
+            let input_block_id = block_id.clone();
+            let input_format = output_format.clone();
+            let mut input_render_version = render_version;
+            rsx! {
+                div {
+                    class: "dxeditor__block",
+                    "data-component": COMPONENT_PARAGRAPH,
+                    contenteditable,
+                    oninput: move |event: FormEvent| {
+                        apply_block_text_edit(
+                            &input_catalog,
+                            &input_state,
+                            input_block_id.clone(),
+                            event.value(),
+                            &input_format,
+                            on_change,
+                            &mut input_render_version,
+                        );
+                    },
+                    onkeydown: block_keydown_handler(
+                        catalog,
+                        editor_state,
+                        block_id,
+                        text.chars().count(),
+                        output_format,
                         on_change,
-                        &mut render_version,
-                    );
-                },
-                "{text}"
+                        render_version,
+                        readonly,
+                    ),
+                    for node in inline {
+                        InlineNodeView { node }
+                    }
+                }
+            }
+        }
+    }
+}
+
+#[component]
+fn InlineNodeView(node: InlineNode) -> Element {
+    if node.component == COMPONENT_MENTION {
+        let entity_id = node
+            .attrs
+            .get("id")
+            .and_then(Value::as_str)
+            .unwrap_or_default()
+            .to_string();
+        return rsx! {
+            span {
+                class: "dxeditor__mention",
+                "data-entity-id": "{entity_id}",
+                "@{node.text}"
+            }
+        };
+    }
+
+    rsx! {
+        MarkedText {
+            text: node.text,
+            marks: node.marks,
+            index: 0,
+        }
+    }
+}
+
+#[component]
+fn MarkedText(text: String, marks: Vec<Mark>, index: usize) -> Element {
+    let Some(mark) = marks.get(index).cloned() else {
+        return rsx! { span { "{text}" } };
+    };
+    let next = index + 1;
+    match mark.component.as_str() {
+        "bold" => rsx! {
+            strong {
+                MarkedText { text, marks, index: next }
             }
         },
+        "italic" => rsx! {
+            em {
+                MarkedText { text, marks, index: next }
+            }
+        },
+        "code" => rsx! {
+            code {
+                class: "dxeditor__inline-code",
+                MarkedText { text, marks, index: next }
+            }
+        },
+        COMPONENT_LINK => {
+            let href = mark
+                .attrs
+                .get("href")
+                .and_then(Value::as_str)
+                .unwrap_or_default()
+                .to_string();
+            rsx! {
+                a {
+                    href,
+                    MarkedText { text, marks, index: next }
+                }
+            }
+        }
+        _ => rsx! {
+            MarkedText { text, marks, index: next }
+        },
+    }
+}
+
+fn block_inline_content(block: &BlockNode) -> Vec<InlineNode> {
+    match &block.content {
+        crate::document::NodeContent::Inline(inline) => inline.clone(),
+        _ => Vec::new(),
+    }
+}
+
+fn block_keydown_handler(
+    catalog: EditorCatalog,
+    editor_state: EditorState,
+    block_id: NodeId,
+    text_len: usize,
+    output_format: String,
+    on_change: EventHandler<EditorPayload>,
+    mut render_version: Signal<u64>,
+    readonly: bool,
+) -> impl FnMut(KeyboardEvent) {
+    move |event: KeyboardEvent| {
+        if readonly {
+            return;
+        }
+        let key = event.key().to_string();
+        let modifiers = event.modifiers();
+        let command = match key.as_str() {
+            "Enter" => {
+                event.prevent_default();
+                Some((
+                    "editor.split_block",
+                    json!({ "id": block_id.0, "offset": text_len }),
+                ))
+            }
+            "b" | "B" if modifiers.ctrl() || modifiers.meta() => {
+                event.prevent_default();
+                Some((
+                    "editor.toggle_mark",
+                    json!({
+                        "mark": "bold",
+                        "selection": full_block_selection(&block_id, text_len),
+                    }),
+                ))
+            }
+            "i" | "I" if modifiers.ctrl() || modifiers.meta() => {
+                event.prevent_default();
+                Some((
+                    "editor.toggle_mark",
+                    json!({
+                        "mark": "italic",
+                        "selection": full_block_selection(&block_id, text_len),
+                    }),
+                ))
+            }
+            _ => None,
+        };
+        if let Some((command, args)) = command {
+            apply_editor_command(
+                &catalog,
+                &editor_state,
+                command,
+                args,
+                &output_format,
+                on_change,
+                &mut render_version,
+            );
+        }
+    }
+}
+
+fn full_block_selection(block_id: &NodeId, text_len: usize) -> EditorSelection {
+    EditorSelection {
+        anchor: TextPosition::new(block_id.clone(), None, 0),
+        focus: TextPosition::new(block_id.clone(), None, text_len),
     }
 }
 
@@ -497,6 +736,16 @@ fn apply_block_text_edit(
     on_change: EventHandler<EditorPayload>,
     render_version: &mut Signal<u64>,
 ) {
+    if editor_state
+        .document()
+        .blocks
+        .iter()
+        .find(|block| block.id == block_id)
+        .is_some_and(|block| block.text_content() == text)
+    {
+        return;
+    }
+
     apply_editor_command(
         catalog,
         editor_state,

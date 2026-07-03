@@ -8,8 +8,8 @@ use dioxus::prelude::*;
 use dxeditor::{
     ActionSurface, BlockNode, ChromeRendererContext, CodecRegistry, ComponentRenderKind,
     ComponentRendererContext, DecodeContext, EditorCatalog, EditorCodec, EditorDocument,
-    EditorError, EditorPayload, EncodeContext, InlineNode, KeyBinding, NodeContent, Operation,
-    Transaction,
+    EditorError, EditorPayload, EditorSelection, EncodeContext, InlineNode, KeyBinding, Mark,
+    NodeContent, Operation, TextPosition, Transaction,
 };
 use futures::executor::block_on;
 use serde_json::{Value, json};
@@ -189,6 +189,51 @@ fn markdown_round_trip_preserves_basic_blocks() {
 }
 
 #[test]
+fn markdown_round_trip_preserves_inline_marks_and_links() {
+    let catalog = EditorCatalog::default();
+    let input =
+        "A *soft* **strong** `code` [site](https://example.com) [@Ada](semantic:entity:entity-1)";
+    let document = catalog
+        .codecs()
+        .decode(&EditorPayload::new("markdown", Value::String(input.into())))
+        .unwrap();
+
+    let inline = match &document.blocks[0].content {
+        NodeContent::Inline(inline) => inline,
+        _ => panic!("expected inline content"),
+    };
+
+    assert!(inline.iter().any(|node| {
+        node.text == "soft" && node.marks.iter().any(|mark| mark.component == "italic")
+    }));
+    assert!(inline.iter().any(|node| {
+        node.text == "strong" && node.marks.iter().any(|mark| mark.component == "bold")
+    }));
+    assert!(
+        inline
+            .iter()
+            .any(|node| node.text == "code"
+                && node.marks.iter().any(|mark| mark.component == "code"))
+    );
+    assert!(inline.iter().any(|node| {
+        node.text == "site"
+            && node.marks.iter().any(|mark| {
+                mark.component == "link"
+                    && mark.attrs.get("href").and_then(Value::as_str) == Some("https://example.com")
+            })
+    }));
+    assert!(
+        inline
+            .iter()
+            .any(|node| node.component == "mention" && node.text == "Ada")
+    );
+
+    let output = catalog.codecs().encode(&document, "markdown").unwrap();
+
+    assert_eq!(output.value.as_str().unwrap(), input);
+}
+
+#[test]
 fn semantic_mentions_serialize_to_markdown_links() {
     let document = EditorDocument::new(vec![BlockNode::paragraph(
         "block-1",
@@ -205,6 +250,110 @@ fn semantic_mentions_serialize_to_markdown_links() {
         output.value.as_str().unwrap(),
         "See [@Ada](semantic:entity:entity-1)"
     );
+}
+
+#[test]
+fn set_block_type_preserves_inline_content() {
+    let catalog = EditorCatalog::default();
+    let state = dxeditor::EditorState::new(EditorDocument::new(vec![BlockNode::paragraph(
+        "block-1",
+        vec![
+            InlineNode::text("text-1", "Hello "),
+            InlineNode::text("text-2", "world").with_mark(Mark::new("bold")),
+        ],
+    )]));
+
+    let transaction = catalog
+        .commands()
+        .dispatch(
+            "editor.set_block_type",
+            &state,
+            json!({ "id": "block-1", "component": "heading", "attrs": { "level": 2 } }),
+        )
+        .unwrap();
+    state.apply_transaction(transaction).unwrap();
+    let document = state.document();
+
+    assert_eq!(document.blocks[0].component, "heading");
+    assert_eq!(
+        document.blocks[0]
+            .attrs
+            .get("level")
+            .and_then(Value::as_u64),
+        Some(2)
+    );
+    assert_eq!(document.blocks[0].text_content(), "Hello world");
+    let NodeContent::Inline(inline) = &document.blocks[0].content else {
+        panic!("expected inline content");
+    };
+    assert!(inline[1].marks.iter().any(|mark| mark.component == "bold"));
+}
+
+#[test]
+fn toggle_mark_model_operation_updates_range() {
+    let state = dxeditor::EditorState::new(EditorDocument::new(vec![BlockNode::paragraph(
+        "block-1",
+        vec![InlineNode::text("text-1", "Hello world")],
+    )]));
+    let selection = EditorSelection {
+        anchor: TextPosition::new("block-1", None, 6),
+        focus: TextPosition::new("block-1", None, 11),
+    };
+
+    state
+        .apply_transaction(Transaction::new(vec![Operation::ToggleMark {
+            selection,
+            mark: Mark::new("bold"),
+        }]))
+        .unwrap();
+    let document = state.document();
+    let NodeContent::Inline(inline) = &document.blocks[0].content else {
+        panic!("expected inline content");
+    };
+
+    assert_eq!(inline.len(), 2);
+    assert_eq!(inline[0].text, "Hello ");
+    assert_eq!(inline[1].text, "world");
+    assert!(inline[1].marks.iter().any(|mark| mark.component == "bold"));
+}
+
+#[test]
+fn split_and_merge_block_helpers_preserve_inline_content() {
+    let state = dxeditor::EditorState::new(EditorDocument::new(vec![BlockNode::paragraph(
+        "block-1",
+        vec![
+            InlineNode::text("text-1", "Hello "),
+            InlineNode::text("text-2", "world").with_mark(Mark::new("italic")),
+        ],
+    )]));
+
+    state
+        .apply_transaction(Transaction::new(vec![Operation::SplitBlock {
+            id: "block-1".into(),
+            offset: 6,
+        }]))
+        .unwrap();
+    assert_eq!(state.document().blocks.len(), 2);
+    assert_eq!(state.document().blocks[0].text_content(), "Hello ");
+    assert_eq!(state.document().blocks[1].text_content(), "world");
+
+    let second_id = state.document().blocks[1].id.clone();
+    state
+        .apply_transaction(Transaction::new(vec![Operation::MergeBlocks {
+            first_id: "block-1".into(),
+            second_id,
+        }]))
+        .unwrap();
+    let document = state.document();
+
+    assert_eq!(document.blocks.len(), 1);
+    assert_eq!(document.blocks[0].text_content(), "Hello world");
+    let NodeContent::Inline(inline) = &document.blocks[0].content else {
+        panic!("expected inline content");
+    };
+    assert!(inline.iter().any(
+        |node| node.text == "world" && node.marks.iter().any(|mark| mark.component == "italic")
+    ));
 }
 
 #[test]
@@ -255,6 +404,30 @@ fn dioxus_smoke_renders_editor() {
     dom.rebuild_to_vec();
 
     assert!(*seen.borrow());
+}
+
+#[test]
+fn dioxus_smoke_renders_marked_spans() {
+    let document = EditorDocument::new(vec![BlockNode::paragraph(
+        "block-1",
+        vec![
+            InlineNode::text("text-1", "Bold").with_mark(Mark::new("bold")),
+            InlineNode::text("text-2", " and "),
+            InlineNode::text("text-3", "code").with_mark(Mark::new("code")),
+            InlineNode::text("text-4", " link").with_mark(Mark::link("https://example.com")),
+        ],
+    )]);
+
+    let html = dioxus_ssr::render_element(rsx! {
+        dxeditor::DocumentView {
+            document,
+            catalog: EditorCatalog::default(),
+        }
+    });
+
+    assert!(html.contains("<strong>"));
+    assert!(html.contains("<code"));
+    assert!(html.contains("<a href=\"https://example.com\""));
 }
 
 #[test]
