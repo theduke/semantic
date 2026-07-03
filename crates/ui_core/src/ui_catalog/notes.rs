@@ -54,6 +54,9 @@ pub(crate) fn register_note_renderers(catalog: &mut UiCatalog) {
         );
     catalog
         .form_registry_mut()
+        .register_attribute_form_renderer(ATTR_NOTE_FORMAT, Rc::new(render_note_format_form));
+    catalog
+        .form_registry_mut()
         .register_class_field_form_renderer(
             NOTE_CLASS_ID,
             FIELD_NOTE_CONTENT,
@@ -202,12 +205,25 @@ fn NoteContentView(content: String, format: String) -> Element {
 }
 
 fn note_format(object: &Object) -> Option<&str> {
-    object_string(object, &[FIELD_NOTE_FORMAT, ATTR_NOTE_FORMAT])
+    object_format(object, &[FIELD_NOTE_FORMAT, ATTR_NOTE_FORMAT])
 }
 
 fn object_string<'a>(object: &'a Object, keys: &[&str]) -> Option<&'a str> {
     keys.iter()
         .find_map(|key| object.get(*key).and_then(Value::as_str))
+}
+
+fn object_format<'a>(object: &'a Object, keys: &[&str]) -> Option<&'a str> {
+    keys.iter()
+        .find_map(|key| object.get(*key).and_then(value_format))
+}
+
+fn value_format(value: &Value) -> Option<&str> {
+    match value {
+        Value::String(value) => Some(value.as_str()),
+        Value::Variant(value) => Some(value.variant.as_str()),
+        _ => None,
+    }
 }
 
 fn value_string(value: &Value) -> String {
@@ -238,7 +254,7 @@ fn markdown_to_html(markdown: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::{FIELD_NOTE_FORMAT, FORMAT_MARKDOWN, note_format, value_string};
-    use semantic_data::value::{Object, Value};
+    use semantic_data::value::{Object, Value, VariantValue};
 
     #[test]
     fn note_format_prefers_field_name() {
@@ -246,6 +262,32 @@ mod tests {
         object.insert(
             FIELD_NOTE_FORMAT.to_string(),
             Value::String(FORMAT_MARKDOWN.to_string()),
+        );
+
+        assert_eq!(note_format(&object), Some(FORMAT_MARKDOWN));
+    }
+
+    #[test]
+    fn note_format_accepts_attribute_id() {
+        let mut object = Object::new();
+        object.insert(
+            super::ATTR_NOTE_FORMAT.to_string(),
+            Value::String(FORMAT_MARKDOWN.to_string()),
+        );
+
+        assert_eq!(note_format(&object), Some(FORMAT_MARKDOWN));
+    }
+
+    #[test]
+    fn note_format_accepts_variant_values() {
+        let mut object = Object::new();
+        object.insert(
+            FIELD_NOTE_FORMAT.to_string(),
+            Value::Variant(Box::new(VariantValue {
+                r#type: None,
+                variant: FORMAT_MARKDOWN.to_string(),
+                value: Value::Null,
+            })),
         );
 
         assert_eq!(note_format(&object), Some(FORMAT_MARKDOWN));

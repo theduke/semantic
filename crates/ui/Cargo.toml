@@ -14,9 +14,10 @@ version.workspace = true
 [features]
 default = ["markdown"]
 markdown = ["semantic_ui_core/markdown"]
-web = ["dioxus/web", "semantic_rpc/client-http-web"]
-desktop = ["dioxus/desktop", "semantic_rpc/client-http-native"]
+web = ["markdown", "dioxus/web", "semantic_rpc/client-http-web"]
+desktop = ["markdown", "dioxus/desktop", "semantic_rpc/client-http-native"]
 standalone = [
+  "markdown",
   "desktop",
   "dep:async-trait",
   "dep:semantic_app",
