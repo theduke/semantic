@@ -11,6 +11,10 @@ rust-version.workspace = true
 categories.workspace = true
 version.workspace = true
 
+[features]
+default = ["markdown"]
+markdown = ["dep:pulldown-cmark"]
+
 [dependencies]
 bytes = { workspace = true }
 dioxus = { workspace = true, features = ["router"] }
@@ -20,6 +24,7 @@ dxcomp = { path = "../dxcomp" }
 dxform = { path = "../dxform" }
 facet-json = "0.43.2"
 futures = "0.3.31"
+pulldown-cmark = { version = "0.13.0", optional = true }
 regex = "1.12.2"
 semantic_data = { workspace = true }
 semantic_db_core = { path = "../db_core" }

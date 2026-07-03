@@ -6,6 +6,7 @@ mod error;
 mod lookup;
 mod media;
 mod menu;
+mod notes;
 mod provider;
 mod render_registry;
 mod renderer;

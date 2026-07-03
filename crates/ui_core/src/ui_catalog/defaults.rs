@@ -66,6 +66,8 @@ pub fn register_defaults(catalog: &mut UiCatalog) {
             .register_type_renderer(key, fallback.clone());
     }
 
+    super::notes::register_note_renderers(catalog);
+
     let file_renderer = Rc::new(|ctx: RenderCtx, value: &Value, object: Option<&Object>| {
         let Some(file_id) = file_link_id(value, object) else {
             let text = value_to_text(value);

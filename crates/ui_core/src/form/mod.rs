@@ -6,6 +6,7 @@ mod list;
 mod registry;
 mod renderer;
 mod submit;
+mod textarea;
 mod util;
 mod validation;
 mod value;
@@ -34,6 +35,7 @@ pub use submit::{
     rpc_batch_upsert_submit_handler_with_primary_id, rpc_insert_submit_handler,
     rpc_insert_submit_handler_with_primary_id,
 };
+pub use textarea::AutoExpandingTextarea;
 pub(crate) use util::mode_from_render_mode;
 pub use util::{DynamicFormActions, DynamicValueForm, SemanticFormErrors, render_value_form_scope};
 pub use validation::{
