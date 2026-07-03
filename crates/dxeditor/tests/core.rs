@@ -318,6 +318,22 @@ fn toggle_mark_model_operation_updates_range() {
 }
 
 #[test]
+fn toggle_mark_without_selection_noops() {
+    let catalog = EditorCatalog::default();
+    let state = dxeditor::EditorState::new(EditorDocument::new(vec![BlockNode::paragraph(
+        "block-1",
+        vec![InlineNode::text("text-1", "Hello world")],
+    )]));
+
+    let transaction = catalog
+        .commands()
+        .dispatch("editor.toggle_mark", &state, json!({ "mark": "bold" }))
+        .unwrap();
+
+    assert!(transaction.operations.is_empty());
+}
+
+#[test]
 fn split_and_merge_block_helpers_preserve_inline_content() {
     let state = dxeditor::EditorState::new(EditorDocument::new(vec![BlockNode::paragraph(
         "block-1",

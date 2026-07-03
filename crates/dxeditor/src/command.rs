@@ -5,7 +5,6 @@ use serde_json::Value;
 use crate::{
     EditorError,
     document::{BlockNode, COMPONENT_PARAGRAPH, MARK_BOLD, MARK_CODE, MARK_ITALIC, Mark, NodeId},
-    selection::{EditorSelection, TextPosition},
     state::EditorState,
     transaction::{Operation, Transaction},
 };
@@ -205,8 +204,7 @@ pub fn register_standard_commands(registry: &mut CommandRegistry) {
                     format: "dxeditor.selection.v1".to_string(),
                     message: err.to_string(),
                 })?
-                .or_else(|| ctx.state.selection())
-                .or_else(|| first_block_selection(&ctx.state));
+                .or_else(|| ctx.state.selection());
             let Some(selection) = selection else {
                 return Ok(Transaction::empty());
             };
@@ -289,14 +287,4 @@ pub fn register_standard_commands(registry: &mut CommandRegistry) {
         "editor.noop",
         Rc::new(|_ctx, _args| Ok(Transaction::empty())),
     );
-}
-
-fn first_block_selection(state: &EditorState) -> Option<EditorSelection> {
-    let document = state.document();
-    let block = document.blocks.first()?;
-    let len = block.text_content().chars().count();
-    Some(EditorSelection {
-        anchor: TextPosition::new(block.id.clone(), None, 0),
-        focus: TextPosition::new(block.id.clone(), None, len),
-    })
 }

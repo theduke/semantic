@@ -11,6 +11,7 @@ pub mod markdown;
 pub mod markdown;
 pub mod render;
 pub mod selection;
+mod selection_bridge;
 pub mod state;
 pub mod suggestion;
 pub mod transaction;

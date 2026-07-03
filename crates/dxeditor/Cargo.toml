@@ -25,7 +25,7 @@ serde = { workspace = true, features = ["derive"] }
 serde_json = { workspace = true }
 thiserror = "2.0.17"
 wasm-bindgen = { version = "0.2.105", optional = true }
-web-sys = { version = "0.3.82", optional = true, features = ["KeyboardEvent"] }
+web-sys = { version = "0.3.82", optional = true, features = ["Document", "Element", "KeyboardEvent", "Node", "Range", "Selection", "Window"] }
 
 [dev-dependencies]
 dioxus-ssr = "0.7.9"

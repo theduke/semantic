@@ -12,7 +12,8 @@ use crate::{
         COMPONENT_MENTION, COMPONENT_PARAGRAPH, COMPONENT_QUOTE, DOCUMENT_SCHEMA_V1,
         EditorDocument, InlineNode, Mark, NodeId,
     },
-    selection::{EditorSelection, TextPosition},
+    selection::EditorSelection,
+    selection_bridge,
     state::EditorState,
 };
 
@@ -286,6 +287,18 @@ fn EditorToolbar(
     let code_state = editor_state.clone();
     let code_format = output_format.clone();
 
+    let bold_catalog = catalog.clone();
+    let bold_state = editor_state.clone();
+    let bold_format = output_format.clone();
+
+    let italic_catalog = catalog.clone();
+    let italic_state = editor_state.clone();
+    let italic_format = output_format.clone();
+
+    let inline_code_catalog = catalog.clone();
+    let inline_code_state = editor_state.clone();
+    let inline_code_format = output_format.clone();
+
     let insert_catalog = catalog.clone();
     let insert_state = editor_state.clone();
     let insert_format = output_format.clone();
@@ -297,15 +310,16 @@ fn EditorToolbar(
                     class: "dxeditor__button",
                     r#type: "button",
                     title: "Paragraph",
+                    onmousedown: move |event| event.prevent_default(),
                     onclick: move |_| {
-                        apply_editor_command(
-                            &paragraph_catalog,
-                            &paragraph_state,
-                            "editor.set_block_type",
-                            json!({ "component": COMPONENT_PARAGRAPH }),
-                            &paragraph_format,
+                        spawn_block_type_command(
+                            paragraph_catalog.clone(),
+                            paragraph_state.clone(),
+                            COMPONENT_PARAGRAPH,
+                            None,
+                            paragraph_format.clone(),
                             on_change,
-                            &mut render_version,
+                            render_version,
                         );
                     },
                     "P"
@@ -314,15 +328,16 @@ fn EditorToolbar(
                     class: "dxeditor__button",
                     r#type: "button",
                     title: "Heading 1",
+                    onmousedown: move |event| event.prevent_default(),
                     onclick: move |_| {
-                        apply_editor_command(
-                            &h1_catalog,
-                            &h1_state,
-                            "editor.set_block_type",
-                            json!({ "component": COMPONENT_HEADING, "attrs": { "level": 1 } }),
-                            &h1_format,
+                        spawn_block_type_command(
+                            h1_catalog.clone(),
+                            h1_state.clone(),
+                            COMPONENT_HEADING,
+                            Some(json!({ "level": 1 })),
+                            h1_format.clone(),
                             on_change,
-                            &mut render_version,
+                            render_version,
                         );
                     },
                     "H1"
@@ -331,15 +346,16 @@ fn EditorToolbar(
                     class: "dxeditor__button",
                     r#type: "button",
                     title: "Heading 2",
+                    onmousedown: move |event| event.prevent_default(),
                     onclick: move |_| {
-                        apply_editor_command(
-                            &h2_catalog,
-                            &h2_state,
-                            "editor.set_block_type",
-                            json!({ "component": COMPONENT_HEADING, "attrs": { "level": 2 } }),
-                            &h2_format,
+                        spawn_block_type_command(
+                            h2_catalog.clone(),
+                            h2_state.clone(),
+                            COMPONENT_HEADING,
+                            Some(json!({ "level": 2 })),
+                            h2_format.clone(),
                             on_change,
-                            &mut render_version,
+                            render_version,
                         );
                     },
                     "H2"
@@ -348,15 +364,16 @@ fn EditorToolbar(
                     class: "dxeditor__button",
                     r#type: "button",
                     title: "Quote",
+                    onmousedown: move |event| event.prevent_default(),
                     onclick: move |_| {
-                        apply_editor_command(
-                            &quote_catalog,
-                            &quote_state,
-                            "editor.set_block_type",
-                            json!({ "component": COMPONENT_QUOTE }),
-                            &quote_format,
+                        spawn_block_type_command(
+                            quote_catalog.clone(),
+                            quote_state.clone(),
+                            COMPONENT_QUOTE,
+                            None,
+                            quote_format.clone(),
                             on_change,
-                            &mut render_version,
+                            render_version,
                         );
                     },
                     "Quote"
@@ -365,18 +382,72 @@ fn EditorToolbar(
                     class: "dxeditor__button",
                     r#type: "button",
                     title: "Code block",
+                    onmousedown: move |event| event.prevent_default(),
                     onclick: move |_| {
-                        apply_editor_command(
-                            &code_catalog,
-                            &code_state,
-                            "editor.set_block_type",
-                            json!({ "component": COMPONENT_CODE }),
-                            &code_format,
+                        spawn_block_type_command(
+                            code_catalog.clone(),
+                            code_state.clone(),
+                            COMPONENT_CODE,
+                            None,
+                            code_format.clone(),
                             on_change,
-                            &mut render_version,
+                            render_version,
                         );
                     },
                     "Code"
+                }
+            }
+            div { class: "dxeditor__toolbar-group", role: "group", aria_label: "Inline formatting",
+                button {
+                    class: "dxeditor__button",
+                    r#type: "button",
+                    title: "Bold",
+                    onmousedown: move |event| event.prevent_default(),
+                    onclick: move |_| {
+                        spawn_toggle_mark_command(
+                            bold_catalog.clone(),
+                            bold_state.clone(),
+                            "bold",
+                            bold_format.clone(),
+                            on_change,
+                            render_version,
+                        );
+                    },
+                    "B"
+                }
+                button {
+                    class: "dxeditor__button",
+                    r#type: "button",
+                    title: "Italic",
+                    onmousedown: move |event| event.prevent_default(),
+                    onclick: move |_| {
+                        spawn_toggle_mark_command(
+                            italic_catalog.clone(),
+                            italic_state.clone(),
+                            "italic",
+                            italic_format.clone(),
+                            on_change,
+                            render_version,
+                        );
+                    },
+                    "I"
+                }
+                button {
+                    class: "dxeditor__button",
+                    r#type: "button",
+                    title: "Inline code",
+                    onmousedown: move |event| event.prevent_default(),
+                    onclick: move |_| {
+                        spawn_toggle_mark_command(
+                            inline_code_catalog.clone(),
+                            inline_code_state.clone(),
+                            "code",
+                            inline_code_format.clone(),
+                            on_change,
+                            render_version,
+                        );
+                    },
+                    "`"
                 }
             }
             div { class: "dxeditor__toolbar-group", role: "group", aria_label: "Insert",
@@ -384,6 +455,7 @@ fn EditorToolbar(
                     class: "dxeditor__button",
                     r#type: "button",
                     title: "Insert paragraph block",
+                    onmousedown: move |event| event.prevent_default(),
                     onclick: move |_| {
                         apply_editor_command(
                             &insert_catalog,
@@ -414,7 +486,9 @@ fn EditableBlock(
 ) -> Element {
     let text = block.text_content();
     let block_id = block.id.clone();
-    let inline = block_inline_content(&block);
+    let block_id_attr = block_id.0.clone();
+    let text_len = text.chars().count();
+    let inline = block_inline_segments(&block);
     let level = block
         .attrs
         .get("level")
@@ -433,8 +507,10 @@ fn EditableBlock(
             rsx! {
                 div {
                     class: "dxeditor__block",
+                    "data-block-id": "{block_id_attr}",
                     "data-component": COMPONENT_HEADING,
                     "data-level": "{level}",
+                    "data-text-len": "{text_len}",
                     contenteditable,
                     oninput: move |event: FormEvent| {
                         apply_block_text_edit(
@@ -451,14 +527,18 @@ fn EditableBlock(
                         catalog,
                         editor_state,
                         block_id,
-                        text.chars().count(),
+                        text_len,
                         output_format,
                         on_change,
                         render_version,
                         readonly,
                     ),
-                    for node in inline {
-                        InlineNodeView { node }
+                    for segment in inline {
+                        InlineNodeView {
+                            node: segment.node,
+                            start: segment.start,
+                            end: segment.end,
+                        }
                     }
                 }
             }
@@ -472,7 +552,9 @@ fn EditableBlock(
             rsx! {
                 div {
                     class: "dxeditor__block",
+                    "data-block-id": "{block_id_attr}",
                     "data-component": COMPONENT_QUOTE,
+                    "data-text-len": "{text_len}",
                     contenteditable,
                     oninput: move |event: FormEvent| {
                         apply_block_text_edit(
@@ -489,14 +571,18 @@ fn EditableBlock(
                         catalog,
                         editor_state,
                         block_id,
-                        text.chars().count(),
+                        text_len,
                         output_format,
                         on_change,
                         render_version,
                         readonly,
                     ),
-                    for node in inline {
-                        InlineNodeView { node }
+                    for segment in inline {
+                        InlineNodeView {
+                            node: segment.node,
+                            start: segment.start,
+                            end: segment.end,
+                        }
                     }
                 }
             }
@@ -510,7 +596,9 @@ fn EditableBlock(
             rsx! {
                 pre {
                     class: "dxeditor__block",
+                    "data-block-id": "{block_id_attr}",
                     "data-component": COMPONENT_CODE,
+                    "data-text-len": "{text_len}",
                     contenteditable,
                     oninput: move |event: FormEvent| {
                         apply_block_text_edit(
@@ -527,14 +615,18 @@ fn EditableBlock(
                         catalog,
                         editor_state,
                         block_id,
-                        text.chars().count(),
+                        text_len,
                         output_format,
                         on_change,
                         render_version,
                         readonly,
                     ),
-                    for node in inline {
-                        InlineNodeView { node }
+                    for segment in inline {
+                        InlineNodeView {
+                            node: segment.node,
+                            start: segment.start,
+                            end: segment.end,
+                        }
                     }
                 }
             }
@@ -551,7 +643,9 @@ fn EditableBlock(
             rsx! {
                 div {
                     class: "dxeditor__block",
+                    "data-block-id": "{block_id_attr}",
                     "data-component": COMPONENT_PARAGRAPH,
+                    "data-text-len": "{text_len}",
                     contenteditable,
                     oninput: move |event: FormEvent| {
                         apply_block_text_edit(
@@ -568,14 +662,18 @@ fn EditableBlock(
                         catalog,
                         editor_state,
                         block_id,
-                        text.chars().count(),
+                        text_len,
                         output_format,
                         on_change,
                         render_version,
                         readonly,
                     ),
-                    for node in inline {
-                        InlineNodeView { node }
+                    for segment in inline {
+                        InlineNodeView {
+                            node: segment.node,
+                            start: segment.start,
+                            end: segment.end,
+                        }
                     }
                 }
             }
@@ -583,8 +681,18 @@ fn EditableBlock(
     }
 }
 
+#[derive(Clone, PartialEq)]
+struct InlineSegment {
+    node: InlineNode,
+    start: usize,
+    end: usize,
+}
+
 #[component]
-fn InlineNodeView(node: InlineNode) -> Element {
+fn InlineNodeView(node: InlineNode, start: usize, end: usize) -> Element {
+    let inline_id = node.id.0.clone();
+    let text_len = node.text.chars().count();
+
     if node.component == COMPONENT_MENTION {
         let entity_id = node
             .attrs
@@ -595,6 +703,11 @@ fn InlineNodeView(node: InlineNode) -> Element {
         return rsx! {
             span {
                 class: "dxeditor__mention",
+                "data-inline-id": "{inline_id}",
+                "data-inline-start": "{start}",
+                "data-inline-end": "{end}",
+                "data-inline-text-len": "{text_len}",
+                "data-inline-prefix-len": "1",
                 "data-entity-id": "{entity_id}",
                 "@{node.text}"
             }
@@ -602,10 +715,17 @@ fn InlineNodeView(node: InlineNode) -> Element {
     }
 
     rsx! {
-        MarkedText {
-            text: node.text,
-            marks: node.marks,
-            index: 0,
+        span {
+            "data-inline-id": "{inline_id}",
+            "data-inline-start": "{start}",
+            "data-inline-end": "{end}",
+            "data-inline-text-len": "{text_len}",
+            "data-inline-prefix-len": "0",
+            MarkedText {
+                text: node.text,
+                marks: node.marks,
+                index: 0,
+            }
         }
     }
 }
@@ -653,9 +773,24 @@ fn MarkedText(text: String, marks: Vec<Mark>, index: usize) -> Element {
     }
 }
 
-fn block_inline_content(block: &BlockNode) -> Vec<InlineNode> {
+fn block_inline_segments(block: &BlockNode) -> Vec<InlineSegment> {
     match &block.content {
-        crate::document::NodeContent::Inline(inline) => inline.clone(),
+        crate::document::NodeContent::Inline(inline) => {
+            let mut cursor = 0usize;
+            inline
+                .iter()
+                .cloned()
+                .map(|node| {
+                    let start = cursor;
+                    cursor += node.text.chars().count();
+                    InlineSegment {
+                        node,
+                        start,
+                        end: cursor,
+                    }
+                })
+                .collect()
+        }
         _ => Vec::new(),
     }
 }
@@ -676,55 +811,205 @@ fn block_keydown_handler(
         }
         let key = event.key().to_string();
         let modifiers = event.modifiers();
-        let command = match key.as_str() {
+        match key.as_str() {
             "Enter" => {
                 event.prevent_default();
-                Some((
-                    "editor.split_block",
-                    json!({ "id": block_id.0, "offset": text_len }),
-                ))
+                spawn_split_block_command(
+                    catalog.clone(),
+                    editor_state.clone(),
+                    block_id.clone(),
+                    text_len,
+                    output_format.clone(),
+                    on_change,
+                    render_version,
+                );
+            }
+            "Backspace" => {
+                let Some((command, args)) = editor_state
+                    .selection()
+                    .filter(EditorSelection::is_collapsed)
+                    .filter(|selection| selection.focus.offset == 0)
+                    .and_then(|selection| {
+                        let document = editor_state.document();
+                        previous_block_id(&document, &selection.focus.block_id).map(|previous_id| {
+                            event.prevent_default();
+                            (
+                                "editor.merge_blocks",
+                                json!({
+                                "first_id": previous_id.0,
+                                "second_id": selection.focus.block_id.0,
+                                }),
+                            )
+                        })
+                    })
+                else {
+                    return;
+                };
+                apply_editor_command(
+                    &catalog,
+                    &editor_state,
+                    command,
+                    args,
+                    &output_format,
+                    on_change,
+                    &mut render_version,
+                );
             }
             "b" | "B" if modifiers.ctrl() || modifiers.meta() => {
                 event.prevent_default();
-                Some((
-                    "editor.toggle_mark",
-                    json!({
-                        "mark": "bold",
-                        "selection": full_block_selection(&block_id, text_len),
-                    }),
-                ))
+                spawn_toggle_mark_command(
+                    catalog.clone(),
+                    editor_state.clone(),
+                    "bold",
+                    output_format.clone(),
+                    on_change,
+                    render_version,
+                );
             }
             "i" | "I" if modifiers.ctrl() || modifiers.meta() => {
                 event.prevent_default();
-                Some((
-                    "editor.toggle_mark",
-                    json!({
-                        "mark": "italic",
-                        "selection": full_block_selection(&block_id, text_len),
-                    }),
-                ))
+                spawn_toggle_mark_command(
+                    catalog.clone(),
+                    editor_state.clone(),
+                    "italic",
+                    output_format.clone(),
+                    on_change,
+                    render_version,
+                );
             }
-            _ => None,
-        };
-        if let Some((command, args)) = command {
-            apply_editor_command(
-                &catalog,
-                &editor_state,
-                command,
-                args,
-                &output_format,
-                on_change,
-                &mut render_version,
-            );
+            "e" | "E" if modifiers.ctrl() || modifiers.meta() => {
+                event.prevent_default();
+                spawn_toggle_mark_command(
+                    catalog.clone(),
+                    editor_state.clone(),
+                    "code",
+                    output_format.clone(),
+                    on_change,
+                    render_version,
+                );
+            }
+            _ => {}
         }
     }
 }
 
-fn full_block_selection(block_id: &NodeId, text_len: usize) -> EditorSelection {
-    EditorSelection {
-        anchor: TextPosition::new(block_id.clone(), None, 0),
-        focus: TextPosition::new(block_id.clone(), None, text_len),
+fn spawn_block_type_command(
+    catalog: EditorCatalog,
+    editor_state: EditorState,
+    component: &'static str,
+    attrs: Option<Value>,
+    output_format: String,
+    on_change: EventHandler<EditorPayload>,
+    mut render_version: Signal<u64>,
+) {
+    spawn(async move {
+        let Some(selection) = current_editor_selection(&editor_state).await else {
+            return;
+        };
+        apply_editor_command(
+            &catalog,
+            &editor_state,
+            "editor.set_block_type",
+            block_type_args(&selection, component, attrs),
+            &output_format,
+            on_change,
+            &mut render_version,
+        );
+    });
+}
+
+fn spawn_toggle_mark_command(
+    catalog: EditorCatalog,
+    editor_state: EditorState,
+    mark: &'static str,
+    output_format: String,
+    on_change: EventHandler<EditorPayload>,
+    mut render_version: Signal<u64>,
+) {
+    spawn(async move {
+        let Some(selection) = current_editor_selection(&editor_state).await else {
+            return;
+        };
+        if selection.is_collapsed() {
+            return;
+        }
+        apply_editor_command(
+            &catalog,
+            &editor_state,
+            "editor.toggle_mark",
+            mark_args(&selection, mark),
+            &output_format,
+            on_change,
+            &mut render_version,
+        );
+    });
+}
+
+fn spawn_split_block_command(
+    catalog: EditorCatalog,
+    editor_state: EditorState,
+    block_id: NodeId,
+    text_len: usize,
+    output_format: String,
+    on_change: EventHandler<EditorPayload>,
+    mut render_version: Signal<u64>,
+) {
+    spawn(async move {
+        let selection = current_editor_selection(&editor_state).await;
+        let (id, offset) = selection
+            .filter(EditorSelection::is_collapsed)
+            .map(|selection| (selection.focus.block_id, selection.focus.offset))
+            .unwrap_or((block_id, text_len));
+        apply_editor_command(
+            &catalog,
+            &editor_state,
+            "editor.split_block",
+            json!({ "id": id.0, "offset": offset }),
+            &output_format,
+            on_change,
+            &mut render_version,
+        );
+    });
+}
+
+async fn current_editor_selection(editor_state: &EditorState) -> Option<EditorSelection> {
+    selection_bridge::browser_selection()
+        .await
+        .or_else(|| editor_state.selection())
+}
+
+fn block_type_args(selection: &EditorSelection, component: &str, attrs: Option<Value>) -> Value {
+    let mut args = serde_json::Map::new();
+    args.insert(
+        "component".to_string(),
+        Value::String(component.to_string()),
+    );
+    if let Some(attrs) = attrs {
+        args.insert("attrs".to_string(), attrs);
     }
+    args.insert(
+        "id".to_string(),
+        Value::String(selection.focus.block_id.0.clone()),
+    );
+    Value::Object(args)
+}
+
+fn mark_args(selection: &EditorSelection, mark: &str) -> Value {
+    let mut args = serde_json::Map::new();
+    args.insert("mark".to_string(), Value::String(mark.to_string()));
+    args.insert("selection".to_string(), json!(selection));
+    Value::Object(args)
+}
+
+fn previous_block_id(document: &EditorDocument, block_id: &NodeId) -> Option<NodeId> {
+    let index = document
+        .blocks
+        .iter()
+        .position(|block| block.id == *block_id)?;
+    index
+        .checked_sub(1)
+        .and_then(|previous| document.blocks.get(previous))
+        .map(|block| block.id.clone())
 }
 
 fn apply_block_text_edit(
