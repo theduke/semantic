@@ -814,14 +814,20 @@ fn block_keydown_handler(
         match key.as_str() {
             "Enter" => {
                 event.prevent_default();
-                spawn_split_block_command(
-                    catalog.clone(),
-                    editor_state.clone(),
-                    block_id.clone(),
-                    text_len,
-                    output_format.clone(),
+                let offset = editor_state
+                    .selection()
+                    .filter(EditorSelection::is_collapsed)
+                    .filter(|selection| selection.focus.block_id == block_id)
+                    .map(|selection| selection.focus.offset)
+                    .unwrap_or(text_len);
+                apply_editor_command(
+                    &catalog,
+                    &editor_state,
+                    "editor.split_block",
+                    json!({ "id": block_id.0, "offset": offset }),
+                    &output_format,
                     on_change,
-                    render_version,
+                    &mut render_version,
                 );
             }
             "Backspace" => {
@@ -945,33 +951,6 @@ fn spawn_toggle_mark_command(
     });
 }
 
-fn spawn_split_block_command(
-    catalog: EditorCatalog,
-    editor_state: EditorState,
-    block_id: NodeId,
-    text_len: usize,
-    output_format: String,
-    on_change: EventHandler<EditorPayload>,
-    mut render_version: Signal<u64>,
-) {
-    spawn(async move {
-        let selection = current_editor_selection(&editor_state).await;
-        let (id, offset) = selection
-            .filter(EditorSelection::is_collapsed)
-            .map(|selection| (selection.focus.block_id, selection.focus.offset))
-            .unwrap_or((block_id, text_len));
-        apply_editor_command(
-            &catalog,
-            &editor_state,
-            "editor.split_block",
-            json!({ "id": id.0, "offset": offset }),
-            &output_format,
-            on_change,
-            &mut render_version,
-        );
-    });
-}
-
 async fn current_editor_selection(editor_state: &EditorState) -> Option<EditorSelection> {
     selection_bridge::browser_selection()
         .await
@@ -1031,15 +1010,143 @@ fn apply_block_text_edit(
         return;
     }
 
+    let block_id_value = block_id.0.clone();
     apply_editor_command(
         catalog,
         editor_state,
-        "editor.set_block_text",
-        json!({ "id": block_id.0, "text": text }),
+        "editor.set_block_inline_content",
+        json!({
+            "id": block_id_value,
+            "inline": parse_inline_input_rules(&block_id, &text),
+        }),
         output_format,
         on_change,
         render_version,
     );
+}
+
+fn parse_inline_input_rules(block_id: &NodeId, text: &str) -> Vec<InlineNode> {
+    let mut nodes = Vec::new();
+    let mut remaining = text;
+    let mut inline_index = 1usize;
+
+    while !remaining.is_empty() {
+        let Some(start) = next_inline_marker(remaining) else {
+            push_input_text_node(&mut nodes, block_id, &mut inline_index, remaining, None);
+            break;
+        };
+
+        let before = &remaining[..start];
+        if !before.is_empty() {
+            push_input_text_node(&mut nodes, block_id, &mut inline_index, before, None);
+        }
+
+        let token = &remaining[start..];
+        if let Some((node, consumed)) = parse_inline_input_token(token, block_id, inline_index) {
+            nodes.push(node);
+            inline_index += 1;
+            remaining = &token[consumed..];
+        } else {
+            let marker_len = if token.starts_with("**") { 2 } else { 1 };
+            push_input_text_node(
+                &mut nodes,
+                block_id,
+                &mut inline_index,
+                &token[..marker_len],
+                None,
+            );
+            remaining = &token[marker_len..];
+        }
+    }
+
+    nodes
+}
+
+fn next_inline_marker(text: &str) -> Option<usize> {
+    ["**", "*", "`", "["]
+        .iter()
+        .filter_map(|marker| text.find(marker))
+        .min()
+}
+
+fn parse_inline_input_token(
+    token: &str,
+    block_id: &NodeId,
+    inline_index: usize,
+) -> Option<(InlineNode, usize)> {
+    if let Some(rest) = token.strip_prefix("**") {
+        let end = rest.find("**")?;
+        let text = &rest[..end];
+        return Some((
+            input_text_node(block_id, inline_index, text).with_mark(Mark::new("bold")),
+            2 + end + 2,
+        ));
+    }
+
+    if let Some(rest) = token.strip_prefix('*') {
+        let end = rest.find('*')?;
+        let text = &rest[..end];
+        return Some((
+            input_text_node(block_id, inline_index, text).with_mark(Mark::new("italic")),
+            1 + end + 1,
+        ));
+    }
+
+    if let Some(rest) = token.strip_prefix('`') {
+        let end = rest.find('`')?;
+        let text = &rest[..end];
+        return Some((
+            input_text_node(block_id, inline_index, text).with_mark(Mark::new("code")),
+            1 + end + 1,
+        ));
+    }
+
+    if token.starts_with('[') {
+        let label_end = token.find("](")?;
+        let label = &token[1..label_end];
+        let after_label = &token[(label_end + 2)..];
+        let url_end = after_label.find(')')?;
+        let href = &after_label[..url_end];
+        let consumed = label_end + 2 + url_end + 1;
+        if let Some(entity_id) = label
+            .strip_prefix('@')
+            .and_then(|_| href.strip_prefix("semantic:entity:"))
+        {
+            return Some((
+                InlineNode::mention(
+                    format!("{}:mention-{inline_index}", block_id.0),
+                    entity_id,
+                    label.trim_start_matches('@'),
+                ),
+                consumed,
+            ));
+        }
+        return Some((
+            input_text_node(block_id, inline_index, label).with_mark(Mark::link(href)),
+            consumed,
+        ));
+    }
+
+    None
+}
+
+fn push_input_text_node(
+    nodes: &mut Vec<InlineNode>,
+    block_id: &NodeId,
+    inline_index: &mut usize,
+    text: &str,
+    mark: Option<Mark>,
+) {
+    let mut node = input_text_node(block_id, *inline_index, text);
+    if let Some(mark) = mark {
+        node.marks.push(mark);
+    }
+    nodes.push(node);
+    *inline_index += 1;
+}
+
+fn input_text_node(block_id: &NodeId, inline_index: usize, text: &str) -> InlineNode {
+    InlineNode::text(format!("{}:text-{inline_index}", block_id.0), text)
 }
 
 fn apply_editor_command(
@@ -1166,5 +1273,39 @@ pub fn DocumentView(document: EditorDocument, #[props(default)] catalog: EditorC
             readonly: true,
             on_change: move |_document: EditorDocument| {},
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::parse_inline_input_rules;
+    use crate::document::NodeId;
+
+    #[test]
+    fn inline_input_rules_parse_markdown_marks() {
+        let inline = parse_inline_input_rules(&NodeId::from("block-1"), "*hello* **world** `code`");
+
+        assert_eq!(inline.len(), 5);
+        assert_eq!(inline[0].text, "hello");
+        assert!(
+            inline[0]
+                .marks
+                .iter()
+                .any(|mark| mark.component == "italic")
+        );
+        assert_eq!(inline[2].text, "world");
+        assert!(inline[2].marks.iter().any(|mark| mark.component == "bold"));
+        assert_eq!(inline[4].text, "code");
+        assert!(inline[4].marks.iter().any(|mark| mark.component == "code"));
+    }
+
+    #[test]
+    fn inline_input_rules_leave_unclosed_markers_as_text() {
+        let inline = parse_inline_input_rules(&NodeId::from("block-1"), "*hello");
+
+        assert_eq!(inline.len(), 2);
+        assert_eq!(inline[0].text, "*");
+        assert_eq!(inline[1].text, "hello");
+        assert!(inline.iter().all(|node| node.marks.is_empty()));
     }
 }

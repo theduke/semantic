@@ -65,6 +65,10 @@ pub enum Operation {
         block_id: NodeId,
         text: String,
     },
+    SetInlineContent {
+        block_id: NodeId,
+        inline: Vec<InlineNode>,
+    },
     ToggleMark {
         selection: EditorSelection,
         mark: Mark,
@@ -141,6 +145,16 @@ impl Operation {
                     format!("{}:text", block_id.0),
                     text.clone(),
                 )]);
+            }
+            Operation::SetInlineContent { block_id, inline } => {
+                let Some(existing) = document.blocks.iter_mut().find(|node| node.id == *block_id)
+                else {
+                    return Err(EditorError::Transaction(format!(
+                        "block '{}' does not exist",
+                        block_id.0
+                    )));
+                };
+                existing.content = NodeContent::Inline(inline.clone());
             }
             Operation::ToggleMark { selection, mark } => {
                 toggle_mark(document, selection, mark)?;

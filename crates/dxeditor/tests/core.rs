@@ -334,6 +334,33 @@ fn toggle_mark_without_selection_noops() {
 }
 
 #[test]
+fn set_block_inline_content_command_replaces_inline_nodes() {
+    let catalog = EditorCatalog::default();
+    let state = dxeditor::EditorState::new(EditorDocument::new(vec![BlockNode::paragraph(
+        "block-1",
+        vec![InlineNode::text("text-1", "old")],
+    )]));
+    let inline = vec![InlineNode::text("text-2", "hello").with_mark(Mark::new("bold"))];
+
+    let transaction = catalog
+        .commands()
+        .dispatch(
+            "editor.set_block_inline_content",
+            &state,
+            json!({ "id": "block-1", "inline": inline }),
+        )
+        .unwrap();
+    state.apply_transaction(transaction).unwrap();
+
+    let document = state.document();
+    let NodeContent::Inline(inline) = &document.blocks[0].content else {
+        panic!("expected inline content");
+    };
+    assert_eq!(inline[0].text, "hello");
+    assert!(inline[0].marks.iter().any(|mark| mark.component == "bold"));
+}
+
+#[test]
 fn split_and_merge_block_helpers_preserve_inline_content() {
     let state = dxeditor::EditorState::new(EditorDocument::new(vec![BlockNode::paragraph(
         "block-1",

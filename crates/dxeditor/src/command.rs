@@ -4,7 +4,9 @@ use serde_json::Value;
 
 use crate::{
     EditorError,
-    document::{BlockNode, COMPONENT_PARAGRAPH, MARK_BOLD, MARK_CODE, MARK_ITALIC, Mark, NodeId},
+    document::{
+        BlockNode, COMPONENT_PARAGRAPH, InlineNode, MARK_BOLD, MARK_CODE, MARK_ITALIC, Mark, NodeId,
+    },
     state::EditorState,
     transaction::{Operation, Transaction},
 };
@@ -180,6 +182,31 @@ pub fn register_standard_commands(registry: &mut CommandRegistry) {
             Ok(Transaction::new(vec![Operation::SetInlineText {
                 block_id: id,
                 text,
+            }]))
+        }),
+    );
+
+    registry.register(
+        "editor.set_block_inline_content",
+        Rc::new(|_ctx, args| {
+            let id = args
+                .get("id")
+                .and_then(Value::as_str)
+                .map(NodeId::from)
+                .ok_or_else(|| EditorError::Message("missing block id".to_string()))?;
+            let inline = args
+                .get("inline")
+                .cloned()
+                .map(serde_json::from_value::<Vec<InlineNode>>)
+                .transpose()
+                .map_err(|err| EditorError::InvalidPayload {
+                    format: "dxeditor.inline.v1".to_string(),
+                    message: err.to_string(),
+                })?
+                .ok_or_else(|| EditorError::Message("missing inline content".to_string()))?;
+            Ok(Transaction::new(vec![Operation::SetInlineContent {
+                block_id: id,
+                inline,
             }]))
         }),
     );
