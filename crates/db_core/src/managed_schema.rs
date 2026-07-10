@@ -587,6 +587,11 @@ mod tests {
     }
 
     #[test]
+    fn validate_package_migrations_accepts_filestore_package() {
+        validate_package_migrations(&semantic_data::filestore::package()).unwrap();
+    }
+
+    #[test]
     fn normalize_package_definition_qualifies_nested_record_and_union_refs() {
         let package = Package {
             name: "inventory".to_string(),

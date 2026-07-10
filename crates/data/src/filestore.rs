@@ -348,7 +348,7 @@ fn init_migration_attributes() -> Vec<AttributeType> {
             ATTR_FILE_FILESTORE_LOCATOR,
             "filestore_locator",
             migration_string_type(),
-            "Filestore Locator",
+            "File Store Locator",
         ),
         migration_attribute(
             ATTR_FILE_FILENAME,
