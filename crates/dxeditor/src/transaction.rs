@@ -36,6 +36,27 @@ impl Transaction {
         normalize_document(document);
         Ok(())
     }
+
+    pub fn apply_with_inverse(
+        &self,
+        document: &mut EditorDocument,
+        selection: &mut Option<EditorSelection>,
+    ) -> Result<Transaction, EditorError> {
+        let mut inverses = Vec::with_capacity(self.operations.len());
+        for operation in &self.operations {
+            inverses.push(operation.apply_with_inverse(document, selection)?);
+        }
+        let before_normalize = document.clone();
+        normalize_document(document);
+        if *document != before_normalize {
+            inverses.push(Operation::ReplaceDocument(before_normalize));
+        }
+        inverses.reverse();
+        Ok(Transaction {
+            operations: inverses,
+            add_to_history: false,
+        })
+    }
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -65,6 +86,15 @@ pub enum Operation {
         block_id: NodeId,
         text: String,
     },
+    InsertText {
+        block_id: NodeId,
+        offset: usize,
+        text: String,
+    },
+    DeleteText {
+        block_id: NodeId,
+        range: std::ops::Range<usize>,
+    },
     SetInlineContent {
         block_id: NodeId,
         inline: Vec<InlineNode>,
@@ -85,6 +115,66 @@ pub enum Operation {
 }
 
 impl Operation {
+    fn apply_with_inverse(
+        &self,
+        document: &mut EditorDocument,
+        selection: &mut Option<EditorSelection>,
+    ) -> Result<Operation, EditorError> {
+        let inverse = match self {
+            Operation::ReplaceDocument(_) => Operation::ReplaceDocument(document.clone()),
+            Operation::InsertBlock { block, .. } => Operation::RemoveBlock {
+                id: block.id.clone(),
+            },
+            Operation::RemoveBlock { id } => {
+                let index = document
+                    .blocks
+                    .iter()
+                    .position(|block| block.id == *id)
+                    .ok_or_else(|| {
+                        EditorError::Transaction(format!("block '{}' does not exist", id.0))
+                    })?;
+                Operation::InsertBlock {
+                    index,
+                    block: document.blocks[index].clone(),
+                }
+            }
+            Operation::ReplaceBlock { id, .. }
+            | Operation::SetBlockComponent { id, .. }
+            | Operation::SetBlockType { id, .. } => Operation::ReplaceBlock {
+                id: id.clone(),
+                block: document
+                    .blocks
+                    .iter()
+                    .find(|block| block.id == *id)
+                    .cloned()
+                    .ok_or_else(|| {
+                        EditorError::Transaction(format!("block '{}' does not exist", id.0))
+                    })?,
+            },
+            Operation::SetInlineText { block_id, .. }
+            | Operation::SetInlineContent { block_id, .. }
+            | Operation::ToggleMark {
+                selection:
+                    EditorSelection {
+                        anchor: TextPosition { block_id, .. },
+                        ..
+                    },
+                ..
+            }
+            | Operation::InsertText { block_id, .. }
+            | Operation::DeleteText { block_id, .. } => Operation::SetInlineContent {
+                block_id: block_id.clone(),
+                inline: inline_content(document, block_id)?.clone(),
+            },
+            Operation::SplitBlock { .. } | Operation::MergeBlocks { .. } => {
+                Operation::ReplaceDocument(document.clone())
+            }
+            Operation::SetSelection(_) => Operation::SetSelection(selection.clone()),
+        };
+        self.apply(document, selection)?;
+        Ok(inverse)
+    }
+
     fn apply(
         &self,
         document: &mut EditorDocument,
@@ -156,6 +246,16 @@ impl Operation {
                 };
                 existing.content = NodeContent::Inline(inline.clone());
             }
+            Operation::InsertText {
+                block_id,
+                offset,
+                text,
+            } => {
+                insert_text(document, block_id, *offset, text)?;
+            }
+            Operation::DeleteText { block_id, range } => {
+                delete_text(document, block_id, range.clone())?;
+            }
             Operation::ToggleMark { selection, mark } => {
                 toggle_mark(document, selection, mark)?;
             }
@@ -174,6 +274,78 @@ impl Operation {
         }
         Ok(())
     }
+}
+
+fn insert_text(
+    document: &mut EditorDocument,
+    block_id: &NodeId,
+    offset: usize,
+    text: &str,
+) -> Result<(), EditorError> {
+    if text.is_empty() {
+        return Ok(());
+    }
+    let inline = inline_content_mut(document, block_id)?;
+    let total: usize = inline.iter().map(|node| node.text.chars().count()).sum();
+    if offset > total {
+        return Err(EditorError::Transaction(format!(
+            "text offset {offset} exceeds block length {total}"
+        )));
+    }
+    if inline.is_empty() {
+        inline.push(InlineNode::text(format!("{}:text", block_id.0), text));
+        return Ok(());
+    }
+    let mut cursor = 0;
+    for node in inline {
+        let len = node.text.chars().count();
+        if offset <= cursor + len {
+            let local = offset - cursor;
+            let mut chars: Vec<char> = node.text.chars().collect();
+            chars.splice(local..local, text.chars());
+            node.text = chars.into_iter().collect();
+            return Ok(());
+        }
+        cursor += len;
+    }
+    unreachable!("validated text offset")
+}
+
+fn delete_text(
+    document: &mut EditorDocument,
+    block_id: &NodeId,
+    range: std::ops::Range<usize>,
+) -> Result<(), EditorError> {
+    let inline = inline_content_mut(document, block_id)?;
+    let total: usize = inline.iter().map(|node| node.text.chars().count()).sum();
+    if range.start > range.end || range.end > total {
+        return Err(EditorError::Transaction(format!(
+            "invalid text range {}..{} for block length {total}",
+            range.start, range.end
+        )));
+    }
+    if range.is_empty() {
+        return Ok(());
+    }
+    let mut cursor = 0;
+    for node in inline.iter_mut() {
+        let len = node.text.chars().count();
+        let node_start = cursor;
+        let node_end = cursor + len;
+        cursor = node_end;
+        let start = range.start.saturating_sub(node_start).min(len);
+        let end = range.end.saturating_sub(node_start).min(len);
+        if start < end {
+            node.text = node
+                .text
+                .chars()
+                .take(start)
+                .chain(node.text.chars().skip(end))
+                .collect();
+        }
+    }
+    inline.retain(|node| !node.text.is_empty());
+    Ok(())
 }
 
 pub fn normalize_document(document: &mut EditorDocument) {

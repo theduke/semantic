@@ -13,14 +13,14 @@ version.workspace = true
 
 [features]
 default = ["markdown", "web"]
-markdown = ["dep:markdown"]
+markdown = ["dep:pulldown-cmark"]
 web = ["dep:web-sys", "dep:wasm-bindgen"]
 tables = []
 
 [dependencies]
 dioxus = { workspace = true }
 futures = "0.3.31"
-markdown = { version = "1.0.0", optional = true }
+pulldown-cmark = { version = "0.13.0", optional = true }
 serde = { workspace = true, features = ["derive"] }
 serde_json = { workspace = true }
 thiserror = "2.0.17"

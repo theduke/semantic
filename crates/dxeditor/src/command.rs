@@ -52,6 +52,21 @@ impl CommandRegistry {
 
 pub fn register_standard_commands(registry: &mut CommandRegistry) {
     registry.register(
+        "editor.undo",
+        Rc::new(|ctx, _args| {
+            ctx.state.undo();
+            Ok(Transaction::empty())
+        }),
+    );
+    registry.register(
+        "editor.redo",
+        Rc::new(|ctx, _args| {
+            ctx.state.redo();
+            Ok(Transaction::empty())
+        }),
+    );
+
+    registry.register(
         "editor.replace_document",
         Rc::new(|_ctx, args| {
             let document =

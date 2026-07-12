@@ -41,7 +41,7 @@ impl KeyBinding {
             ctrl: true,
             alt: false,
             shift: false,
-            meta: true,
+            meta: false,
         }
     }
 
@@ -49,8 +49,11 @@ impl KeyBinding {
         self.key.eq_ignore_ascii_case(&event.key)
             && self.alt == event.alt
             && self.shift == event.shift
-            && (!self.ctrl || event.ctrl)
-            && (!self.meta || event.meta || event.ctrl)
+            && if self.ctrl && !self.meta {
+                event.ctrl || event.meta
+            } else {
+                self.ctrl == event.ctrl && self.meta == event.meta
+            }
     }
 }
 
@@ -181,7 +184,7 @@ pub fn register_standard_actions(registry: &mut ActionRegistry) {
         vec![ActionSurface::MainToolbar, ActionSurface::CommandPalette],
         Some(KeyBinding::primary("z")),
         100,
-        "editor.noop",
+        "editor.undo",
         Value::Null,
     );
     register_command_action(
@@ -195,10 +198,10 @@ pub fn register_standard_actions(registry: &mut ActionRegistry) {
             ctrl: true,
             alt: false,
             shift: true,
-            meta: true,
+            meta: false,
         }),
         99,
-        "editor.noop",
+        "editor.redo",
         Value::Null,
     );
 

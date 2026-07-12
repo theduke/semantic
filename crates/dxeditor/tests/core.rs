@@ -164,6 +164,84 @@ fn command_to_transaction_flow_updates_state_and_history() {
 }
 
 #[test]
+fn text_operations_preserve_inline_identity_marks_and_are_invertible() {
+    let bold = Mark::new("bold");
+    let document = EditorDocument::new(vec![BlockNode::paragraph(
+        "block",
+        vec![InlineNode::text("stable", "héllo").with_mark(bold.clone())],
+    )]);
+    let original = document.clone();
+    let mut document = document;
+    let mut selection = None;
+    let transaction = Transaction::new(vec![
+        Operation::InsertText {
+            block_id: "block".into(),
+            offset: 2,
+            text: "🙂".to_string(),
+        },
+        Operation::DeleteText {
+            block_id: "block".into(),
+            range: 3..4,
+        },
+    ]);
+    let inverse = transaction
+        .apply_with_inverse(&mut document, &mut selection)
+        .unwrap();
+
+    let NodeContent::Inline(inline) = &document.blocks[0].content else {
+        panic!("expected inline content");
+    };
+    assert_eq!(inline[0].id.0, "stable");
+    assert_eq!(inline[0].marks, vec![bold]);
+    inverse.apply(&mut document, &mut selection).unwrap();
+    assert_eq!(document, original);
+}
+
+#[test]
+fn history_coalesces_adjacent_inserts_and_restores_selections() {
+    let state = dxeditor::EditorState::new(EditorDocument::plain_text("a"));
+    let before = EditorSelection::collapsed(TextPosition::new("block-1", None, 1));
+    state
+        .apply_transaction(Transaction::new(vec![Operation::SetSelection(Some(
+            before.clone(),
+        ))]))
+        .unwrap();
+    state
+        .apply_transaction(Transaction::new(vec![Operation::InsertText {
+            block_id: "block-1".into(),
+            offset: 1,
+            text: "b".to_string(),
+        }]))
+        .unwrap();
+    state
+        .apply_transaction(Transaction::new(vec![Operation::InsertText {
+            block_id: "block-1".into(),
+            offset: 2,
+            text: "c".to_string(),
+        }]))
+        .unwrap();
+
+    assert_eq!(state.document().text_content(), "abc");
+    assert_eq!(state.history().undo_len(), 2);
+    assert!(state.undo());
+    assert_eq!(state.document().text_content(), "a");
+    assert_eq!(state.selection(), Some(before));
+    assert!(state.redo());
+    assert_eq!(state.document().text_content(), "abc");
+}
+
+#[test]
+fn primary_shortcut_matches_control_or_meta() {
+    let primary = KeyBinding::primary("z");
+    let mut control = KeyBinding::new("z");
+    control.ctrl = true;
+    let mut meta = KeyBinding::new("z");
+    meta.meta = true;
+    assert!(primary.matches(&control));
+    assert!(primary.matches(&meta));
+}
+
+#[test]
 fn transaction_normalizes_empty_documents() {
     let state = dxeditor::EditorState::new(EditorDocument::plain_text("before"));
     state

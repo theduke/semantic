@@ -13,7 +13,7 @@ version.workspace = true
 
 [features]
 default = ["markdown"]
-markdown = ["dep:dxeditor", "dep:pulldown-cmark", "dxeditor/markdown", "dxeditor/web"]
+markdown = ["dep:dxeditor", "dep:pulldown-cmark"]
 
 [dependencies]
 bytes = { workspace = true }
@@ -21,7 +21,6 @@ dioxus = { workspace = true, features = ["router"] }
 dioxus-icons = "0.1.0"
 dioxus-sdk-time = "0.7.0"
 dxcomp = { path = "../dxcomp" }
-dxeditor = { path = "../dxeditor", default-features = false, optional = true }
 dxform = { path = "../dxform" }
 facet-json = "0.43.2"
 futures = "0.3.31"
@@ -34,6 +33,12 @@ thiserror = "2.0.17"
 time = { workspace = true, features = ["formatting", "parsing"] }
 tracing = { workspace = true }
 web-sys = { version = "0.3.82", features = ["Window", "Location"] }
+
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+dxeditor = { path = "../dxeditor", default-features = false, features = ["markdown"], optional = true }
+
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+dxeditor = { path = "../dxeditor", default-features = false, features = ["markdown", "web"], optional = true }
 
 [dev-dependencies]
 semantic_base = { path = "../base" }

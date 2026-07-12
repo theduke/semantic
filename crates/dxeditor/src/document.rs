@@ -149,7 +149,7 @@ impl BlockNode {
                 .collect::<Vec<_>>()
                 .join("\n"),
             NodeContent::Void => String::new(),
-            NodeContent::Custom(value) => value.to_string(),
+            NodeContent::Custom(_) => String::new(),
         }
     }
 }

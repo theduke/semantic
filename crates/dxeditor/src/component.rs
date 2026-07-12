@@ -1,10 +1,14 @@
-use std::collections::BTreeMap;
+use std::{
+    collections::BTreeMap,
+    sync::atomic::{AtomicU64, Ordering},
+};
 
 use dioxus::prelude::*;
 use serde_json::{Value, json};
 
 use crate::{
     EditorError,
+    bridge::{EditorBridge, set_dom_selection},
     catalog::EditorCatalog,
     codec::EditorPayload,
     document::{
@@ -13,9 +17,11 @@ use crate::{
         EditorDocument, InlineNode, Mark, NodeId,
     },
     selection::EditorSelection,
-    selection_bridge,
     state::EditorState,
+    transaction_for_event,
 };
+
+static NEXT_EDITOR_ID: AtomicU64 = AtomicU64::new(1);
 
 const DXEDITOR_STYLE: &str = r#"
 .dxeditor {
@@ -206,6 +212,8 @@ pub fn Editor(
     output_format: String,
     catalog: EditorCatalog,
     on_change: EventHandler<EditorPayload>,
+    #[props(default)] onfocus: Option<EventHandler<FocusEvent>>,
+    #[props(default)] onblur: Option<EventHandler<FocusEvent>>,
     #[props(default)] readonly: bool,
 ) -> Element {
     let initial_document = catalog
@@ -219,16 +227,40 @@ pub fn Editor(
             EditorState::new(initial_document)
         }
     });
-    let render_version = use_signal(|| 0_u64);
+    let mut render_version = use_signal(|| 0_u64);
+    // EditorState is not signal-backed yet, so bridge-driven model changes must
+    // explicitly invalidate this component until the reactive store migration lands.
     let _render_version = render_version();
+    let editor_id = use_signal(|| {
+        format!(
+            "dxeditor-{}",
+            NEXT_EDITOR_ID.fetch_add(1, Ordering::Relaxed)
+        )
+    })();
     let editor_state = state.read().clone();
     let document = editor_state.document();
     let block_count = document.blocks.len();
     let word_count = document_word_count(&document);
+    let bridge_state = editor_state.clone();
+    let bridge_catalog = catalog.clone();
+    let bridge_format = output_format.clone();
+    let selection_editor_id = editor_id.clone();
+    let selection_state = editor_state.clone();
+    let selection_render_version = render_version;
+    use_effect(move || {
+        let _ = selection_render_version();
+        if let Some(selection) = selection_state.selection() {
+            set_dom_selection(&selection_editor_id, &selection);
+        }
+    });
 
     rsx! {
         style { {DXEDITOR_STYLE} }
-        div { class: "dxeditor", "data-readonly": "{readonly}",
+        div {
+            class: "dxeditor",
+            "data-readonly": "{readonly}",
+            onfocus: move |event| if let Some(handler) = onfocus { handler.call(event) },
+            onblur: move |event| if let Some(handler) = onblur { handler.call(event) },
             if !readonly {
                 EditorToolbar {
                     catalog: catalog.clone(),
@@ -238,7 +270,30 @@ pub fn Editor(
                     render_version,
                 }
             }
-            div { class: "dxeditor__document", role: "textbox", aria_multiline: "true",
+            div {
+                class: "dxeditor__document",
+                role: "textbox",
+                aria_multiline: "true",
+                contenteditable: if readonly { "false" } else { "true" },
+                "data-dxeditor-id": "{editor_id}",
+                EditorBridge {
+                    editor_id: editor_id.clone(),
+                    on_event: move |event| {
+                        let transaction = transaction_for_event(event, &bridge_state.document());
+                        if transaction.operations.is_empty() { return; }
+                        if bridge_state.apply_transaction(transaction).is_ok() {
+                            let _ = dispatch_editor_command(
+                                &bridge_catalog,
+                                &bridge_state,
+                                "editor.noop",
+                                Value::Null,
+                                &bridge_format,
+                                on_change,
+                            );
+                            render_version += 1;
+                        }
+                    },
+                }
                 for block in document.blocks {
                     EditableBlock {
                         block,
@@ -499,11 +554,6 @@ fn EditableBlock(
 
     match block.component.as_str() {
         COMPONENT_HEADING => {
-            let input_catalog = catalog.clone();
-            let input_state = editor_state.clone();
-            let input_block_id = block_id.clone();
-            let input_format = output_format.clone();
-            let mut input_render_version = render_version;
             rsx! {
                 div {
                     class: "dxeditor__block",
@@ -512,17 +562,6 @@ fn EditableBlock(
                     "data-level": "{level}",
                     "data-text-len": "{text_len}",
                     contenteditable,
-                    oninput: move |event: FormEvent| {
-                        apply_block_text_edit(
-                            &input_catalog,
-                            &input_state,
-                            input_block_id.clone(),
-                            event.value(),
-                            &input_format,
-                            on_change,
-                            &mut input_render_version,
-                        );
-                    },
                     onkeydown: block_keydown_handler(
                         catalog,
                         editor_state,
@@ -544,11 +583,6 @@ fn EditableBlock(
             }
         }
         COMPONENT_QUOTE => {
-            let input_catalog = catalog.clone();
-            let input_state = editor_state.clone();
-            let input_block_id = block_id.clone();
-            let input_format = output_format.clone();
-            let mut input_render_version = render_version;
             rsx! {
                 div {
                     class: "dxeditor__block",
@@ -556,17 +590,6 @@ fn EditableBlock(
                     "data-component": COMPONENT_QUOTE,
                     "data-text-len": "{text_len}",
                     contenteditable,
-                    oninput: move |event: FormEvent| {
-                        apply_block_text_edit(
-                            &input_catalog,
-                            &input_state,
-                            input_block_id.clone(),
-                            event.value(),
-                            &input_format,
-                            on_change,
-                            &mut input_render_version,
-                        );
-                    },
                     onkeydown: block_keydown_handler(
                         catalog,
                         editor_state,
@@ -588,11 +611,6 @@ fn EditableBlock(
             }
         }
         COMPONENT_CODE => {
-            let input_catalog = catalog.clone();
-            let input_state = editor_state.clone();
-            let input_block_id = block_id.clone();
-            let input_format = output_format.clone();
-            let mut input_render_version = render_version;
             rsx! {
                 pre {
                     class: "dxeditor__block",
@@ -600,17 +618,6 @@ fn EditableBlock(
                     "data-component": COMPONENT_CODE,
                     "data-text-len": "{text_len}",
                     contenteditable,
-                    oninput: move |event: FormEvent| {
-                        apply_block_text_edit(
-                            &input_catalog,
-                            &input_state,
-                            input_block_id.clone(),
-                            event.value(),
-                            &input_format,
-                            on_change,
-                            &mut input_render_version,
-                        );
-                    },
                     onkeydown: block_keydown_handler(
                         catalog,
                         editor_state,
@@ -635,11 +642,6 @@ fn EditableBlock(
             hr { class: "dxeditor__divider" }
         },
         _ => {
-            let input_catalog = catalog.clone();
-            let input_state = editor_state.clone();
-            let input_block_id = block_id.clone();
-            let input_format = output_format.clone();
-            let mut input_render_version = render_version;
             rsx! {
                 div {
                     class: "dxeditor__block",
@@ -647,17 +649,6 @@ fn EditableBlock(
                     "data-component": COMPONENT_PARAGRAPH,
                     "data-text-len": "{text_len}",
                     contenteditable,
-                    oninput: move |event: FormEvent| {
-                        apply_block_text_edit(
-                            &input_catalog,
-                            &input_state,
-                            input_block_id.clone(),
-                            event.value(),
-                            &input_format,
-                            on_change,
-                            &mut input_render_version,
-                        );
-                    },
                     onkeydown: block_keydown_handler(
                         catalog,
                         editor_state,
@@ -952,9 +943,7 @@ fn spawn_toggle_mark_command(
 }
 
 async fn current_editor_selection(editor_state: &EditorState) -> Option<EditorSelection> {
-    selection_bridge::browser_selection()
-        .await
-        .or_else(|| editor_state.selection())
+    editor_state.selection()
 }
 
 fn block_type_args(selection: &EditorSelection, component: &str, attrs: Option<Value>) -> Value {
@@ -989,164 +978,6 @@ fn previous_block_id(document: &EditorDocument, block_id: &NodeId) -> Option<Nod
         .checked_sub(1)
         .and_then(|previous| document.blocks.get(previous))
         .map(|block| block.id.clone())
-}
-
-fn apply_block_text_edit(
-    catalog: &EditorCatalog,
-    editor_state: &EditorState,
-    block_id: NodeId,
-    text: String,
-    output_format: &str,
-    on_change: EventHandler<EditorPayload>,
-    render_version: &mut Signal<u64>,
-) {
-    if editor_state
-        .document()
-        .blocks
-        .iter()
-        .find(|block| block.id == block_id)
-        .is_some_and(|block| block.text_content() == text)
-    {
-        return;
-    }
-
-    let block_id_value = block_id.0.clone();
-    apply_editor_command(
-        catalog,
-        editor_state,
-        "editor.set_block_inline_content",
-        json!({
-            "id": block_id_value,
-            "inline": parse_inline_input_rules(&block_id, &text),
-        }),
-        output_format,
-        on_change,
-        render_version,
-    );
-}
-
-fn parse_inline_input_rules(block_id: &NodeId, text: &str) -> Vec<InlineNode> {
-    let mut nodes = Vec::new();
-    let mut remaining = text;
-    let mut inline_index = 1usize;
-
-    while !remaining.is_empty() {
-        let Some(start) = next_inline_marker(remaining) else {
-            push_input_text_node(&mut nodes, block_id, &mut inline_index, remaining, None);
-            break;
-        };
-
-        let before = &remaining[..start];
-        if !before.is_empty() {
-            push_input_text_node(&mut nodes, block_id, &mut inline_index, before, None);
-        }
-
-        let token = &remaining[start..];
-        if let Some((node, consumed)) = parse_inline_input_token(token, block_id, inline_index) {
-            nodes.push(node);
-            inline_index += 1;
-            remaining = &token[consumed..];
-        } else {
-            let marker_len = if token.starts_with("**") { 2 } else { 1 };
-            push_input_text_node(
-                &mut nodes,
-                block_id,
-                &mut inline_index,
-                &token[..marker_len],
-                None,
-            );
-            remaining = &token[marker_len..];
-        }
-    }
-
-    nodes
-}
-
-fn next_inline_marker(text: &str) -> Option<usize> {
-    ["**", "*", "`", "["]
-        .iter()
-        .filter_map(|marker| text.find(marker))
-        .min()
-}
-
-fn parse_inline_input_token(
-    token: &str,
-    block_id: &NodeId,
-    inline_index: usize,
-) -> Option<(InlineNode, usize)> {
-    if let Some(rest) = token.strip_prefix("**") {
-        let end = rest.find("**")?;
-        let text = &rest[..end];
-        return Some((
-            input_text_node(block_id, inline_index, text).with_mark(Mark::new("bold")),
-            2 + end + 2,
-        ));
-    }
-
-    if let Some(rest) = token.strip_prefix('*') {
-        let end = rest.find('*')?;
-        let text = &rest[..end];
-        return Some((
-            input_text_node(block_id, inline_index, text).with_mark(Mark::new("italic")),
-            1 + end + 1,
-        ));
-    }
-
-    if let Some(rest) = token.strip_prefix('`') {
-        let end = rest.find('`')?;
-        let text = &rest[..end];
-        return Some((
-            input_text_node(block_id, inline_index, text).with_mark(Mark::new("code")),
-            1 + end + 1,
-        ));
-    }
-
-    if token.starts_with('[') {
-        let label_end = token.find("](")?;
-        let label = &token[1..label_end];
-        let after_label = &token[(label_end + 2)..];
-        let url_end = after_label.find(')')?;
-        let href = &after_label[..url_end];
-        let consumed = label_end + 2 + url_end + 1;
-        if let Some(entity_id) = label
-            .strip_prefix('@')
-            .and_then(|_| href.strip_prefix("semantic:entity:"))
-        {
-            return Some((
-                InlineNode::mention(
-                    format!("{}:mention-{inline_index}", block_id.0),
-                    entity_id,
-                    label.trim_start_matches('@'),
-                ),
-                consumed,
-            ));
-        }
-        return Some((
-            input_text_node(block_id, inline_index, label).with_mark(Mark::link(href)),
-            consumed,
-        ));
-    }
-
-    None
-}
-
-fn push_input_text_node(
-    nodes: &mut Vec<InlineNode>,
-    block_id: &NodeId,
-    inline_index: &mut usize,
-    text: &str,
-    mark: Option<Mark>,
-) {
-    let mut node = input_text_node(block_id, *inline_index, text);
-    if let Some(mark) = mark {
-        node.marks.push(mark);
-    }
-    nodes.push(node);
-    *inline_index += 1;
-}
-
-fn input_text_node(block_id: &NodeId, inline_index: usize, text: &str) -> InlineNode {
-    InlineNode::text(format!("{}:text-{inline_index}", block_id.0), text)
 }
 
 fn apply_editor_command(
@@ -1201,6 +1032,8 @@ fn document_word_count(document: &EditorDocument) -> usize {
 pub fn MarkdownEditor(
     value: String,
     on_change: EventHandler<String>,
+    #[props(default)] onfocus: Option<EventHandler<FocusEvent>>,
+    #[props(default)] onblur: Option<EventHandler<FocusEvent>>,
     #[props(default)] catalog: EditorCatalog,
     #[props(default)] readonly: bool,
 ) -> Element {
@@ -1210,6 +1043,8 @@ pub fn MarkdownEditor(
             output_format: "markdown".to_string(),
             catalog,
             readonly,
+            onfocus,
+            onblur,
             on_change: move |payload: EditorPayload| {
                 if let Some(value) = payload.value.as_str() {
                     on_change.call(value.to_string());
@@ -1273,39 +1108,5 @@ pub fn DocumentView(document: EditorDocument, #[props(default)] catalog: EditorC
             readonly: true,
             on_change: move |_document: EditorDocument| {},
         }
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::parse_inline_input_rules;
-    use crate::document::NodeId;
-
-    #[test]
-    fn inline_input_rules_parse_markdown_marks() {
-        let inline = parse_inline_input_rules(&NodeId::from("block-1"), "*hello* **world** `code`");
-
-        assert_eq!(inline.len(), 5);
-        assert_eq!(inline[0].text, "hello");
-        assert!(
-            inline[0]
-                .marks
-                .iter()
-                .any(|mark| mark.component == "italic")
-        );
-        assert_eq!(inline[2].text, "world");
-        assert!(inline[2].marks.iter().any(|mark| mark.component == "bold"));
-        assert_eq!(inline[4].text, "code");
-        assert!(inline[4].marks.iter().any(|mark| mark.component == "code"));
-    }
-
-    #[test]
-    fn inline_input_rules_leave_unclosed_markers_as_text() {
-        let inline = parse_inline_input_rules(&NodeId::from("block-1"), "*hello");
-
-        assert_eq!(inline.len(), 2);
-        assert_eq!(inline[0].text, "*");
-        assert_eq!(inline[1].text, "hello");
-        assert!(inline.iter().all(|node| node.marks.is_empty()));
     }
 }

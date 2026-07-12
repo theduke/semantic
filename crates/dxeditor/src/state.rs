@@ -1,4 +1,8 @@
-use std::{cell::RefCell, rc::Rc};
+use std::{
+    cell::RefCell,
+    rc::Rc,
+    time::{Duration, Instant},
+};
 
 use crate::{
     EditorError, document::EditorDocument, selection::EditorSelection, transaction::Transaction,
@@ -6,8 +10,19 @@ use crate::{
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct EditorHistory {
-    undo: Vec<EditorDocument>,
-    redo: Vec<EditorDocument>,
+    undo: Vec<HistoryEntry>,
+    redo: Vec<HistoryEntry>,
+}
+
+const HISTORY_LIMIT: usize = 200;
+const COALESCE_WINDOW: Duration = Duration::from_secs(1);
+
+#[derive(Clone, Debug, PartialEq)]
+struct HistoryEntry {
+    inverse: Transaction,
+    selection_before: Option<EditorSelection>,
+    inserted: Option<(crate::document::NodeId, usize, usize)>,
+    timestamp: Instant,
 }
 
 impl EditorHistory {
@@ -90,15 +105,44 @@ impl EditorState {
         }
 
         let mut data = self.inner.borrow_mut();
-        let previous = data.document.clone();
         let mut next_document = data.document.clone();
         let mut next_selection = data.selection.clone();
-        transaction.apply(&mut next_document, &mut next_selection)?;
+        let selection_before = next_selection.clone();
+        let inverse = transaction.apply_with_inverse(&mut next_document, &mut next_selection)?;
         data.document = next_document;
         data.selection = next_selection;
 
         if transaction.add_to_history {
-            data.history.undo.push(previous);
+            let now = Instant::now();
+            let inserted = inserted_range(&transaction);
+            let should_coalesce = data.history.undo.last().is_some_and(|previous| {
+                matches!((&previous.inserted, &inserted),
+                    (Some((old_block, _, old_end)), Some((new_block, new_start, _)))
+                        if old_block == new_block && old_end == new_start)
+                    && now.duration_since(previous.timestamp) <= COALESCE_WINDOW
+            });
+            if should_coalesce {
+                let previous = data.history.undo.last_mut().expect("checked above");
+                let mut operations = inverse.operations;
+                operations.extend(std::mem::take(&mut previous.inverse.operations));
+                previous.inverse.operations = operations;
+                if let (Some((_, _, old_end)), Some((_, _, new_end))) =
+                    (&mut previous.inserted, inserted)
+                {
+                    *old_end = new_end;
+                }
+                previous.timestamp = now;
+            } else {
+                data.history.undo.push(HistoryEntry {
+                    inverse,
+                    selection_before,
+                    inserted,
+                    timestamp: now,
+                });
+                if data.history.undo.len() > HISTORY_LIMIT {
+                    data.history.undo.remove(0);
+                }
+            }
             data.history.redo.clear();
         }
         Ok(())
@@ -109,8 +153,24 @@ impl EditorState {
         let Some(previous) = data.history.undo.pop() else {
             return false;
         };
-        let current = std::mem::replace(&mut data.document, previous);
-        data.history.redo.push(current);
+        let selection_before = data.selection.clone();
+        let mut document = data.document.clone();
+        let mut selection = data.selection.clone();
+        let Ok(inverse) = previous
+            .inverse
+            .apply_with_inverse(&mut document, &mut selection)
+        else {
+            data.history.undo.push(previous);
+            return false;
+        };
+        data.document = document;
+        data.selection = previous.selection_before;
+        data.history.redo.push(HistoryEntry {
+            inverse,
+            selection_before,
+            inserted: None,
+            timestamp: Instant::now(),
+        });
         true
     }
 
@@ -119,16 +179,46 @@ impl EditorState {
         let Some(next) = data.history.redo.pop() else {
             return false;
         };
-        let current = std::mem::replace(&mut data.document, next);
-        data.history.undo.push(current);
+        let selection_before = data.selection.clone();
+        let mut document = data.document.clone();
+        let mut selection = data.selection.clone();
+        let Ok(inverse) = next
+            .inverse
+            .apply_with_inverse(&mut document, &mut selection)
+        else {
+            data.history.redo.push(next);
+            return false;
+        };
+        data.document = document;
+        data.selection = next.selection_before;
+        data.history.undo.push(HistoryEntry {
+            inverse,
+            selection_before,
+            inserted: None,
+            timestamp: Instant::now(),
+        });
         true
     }
 }
 
 impl PartialEq for EditorState {
     fn eq(&self, other: &Self) -> bool {
-        Rc::ptr_eq(&self.inner, &other.inner) || *self.inner.borrow() == *other.inner.borrow()
+        Rc::ptr_eq(&self.inner, &other.inner)
     }
+}
+
+fn inserted_range(transaction: &Transaction) -> Option<(crate::document::NodeId, usize, usize)> {
+    let [
+        crate::transaction::Operation::InsertText {
+            block_id,
+            offset,
+            text,
+        },
+    ] = transaction.operations.as_slice()
+    else {
+        return None;
+    };
+    Some((block_id.clone(), *offset, offset + text.chars().count()))
 }
 
 #[derive(Clone)]

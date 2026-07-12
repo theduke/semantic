@@ -1,17 +1,16 @@
 pub mod action;
+mod bridge;
 pub mod catalog;
 pub mod codec;
 pub mod command;
 pub mod component;
 pub mod document;
 pub mod extension;
+pub mod input;
 #[cfg(feature = "markdown")]
-pub mod markdown;
-#[cfg(not(feature = "markdown"))]
 pub mod markdown;
 pub mod render;
 pub mod selection;
-mod selection_bridge;
 pub mod state;
 pub mod suggestion;
 pub mod transaction;
@@ -35,6 +34,7 @@ pub use document::{
     TableRow,
 };
 pub use extension::EditorExtension;
+pub use input::{InputEvent, reconcile_block_text, transaction_for_event};
 pub use render::{
     ChromeRenderer, ChromeRendererContext, ComponentRenderKind, ComponentRenderer,
     ComponentRendererContext, EditorRenderRegistry,
