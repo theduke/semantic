@@ -1,8 +1,5 @@
 use semantic_data::{
-    schema::{
-        ClassType, Constraint, Field, LiteralValue, NumberType, RecordType, Type, TypeKind,
-        UIntWidth,
-    },
+    schema::{ClassType, Constraint, Field, NumberType, RecordType, Type, TypeKind, UIntWidth},
     value::{Map, Object, Value},
 };
 use semantic_db_core::catalog::OBJECT_TYPE_FIELD;
@@ -65,26 +62,6 @@ pub fn default_value_for_class(class: &ClassType, catalog: &UiCatalog) -> Value 
         }
     }
     Value::Object(object)
-}
-
-pub fn literal_to_value(value: &LiteralValue) -> Value {
-    match value {
-        LiteralValue::Null => Value::Null,
-        LiteralValue::Bool(value) => Value::Bool(*value),
-        LiteralValue::Int(value) => i64::try_from(*value).map(Value::I64).unwrap_or(Value::Null),
-        LiteralValue::UInt(value) => u64::try_from(*value).map(Value::U64).unwrap_or(Value::Null),
-        LiteralValue::Float(value) => value.parse::<f64>().map(Value::from).unwrap_or(Value::Null),
-        LiteralValue::String(value) => Value::String(value.clone()),
-        LiteralValue::Bytes(value) => Value::Bytes(bytes::Bytes::from(value.clone())),
-        LiteralValue::List(values) => Value::List(values.iter().map(literal_to_value).collect()),
-        LiteralValue::Map(values) => {
-            let mut object = Object::new();
-            for (key, value) in values {
-                object.insert(key.clone(), literal_to_value(value));
-            }
-            Value::Object(object)
-        }
-    }
 }
 
 pub fn object_field_value(parent: &Value, field_name: &str, fallback: Value) -> Value {
@@ -155,7 +132,7 @@ fn default_value_for_record(record: &RecordType) -> Value {
         if field.required {
             object.insert(name.as_str().to_string(), default_value_for_field(field));
         } else if let Some(default) = field.default.as_ref() {
-            object.insert(name.as_str().to_string(), literal_to_value(default));
+            object.insert(name.as_str().to_string(), default.clone());
         }
     }
     Value::Object(object)
@@ -165,7 +142,7 @@ fn default_value_for_field(field: &Field) -> Value {
     field
         .default
         .as_ref()
-        .map(literal_to_value)
+        .cloned()
         .unwrap_or_else(|| default_value_for_type(&field.ty))
 }
 
@@ -197,7 +174,7 @@ fn default_number_value(number: &NumberType) -> Value {
 
 fn default_constraint_value(constraint: &Constraint) -> Option<Value> {
     match constraint {
-        Constraint::DefaultValue { value } => Some(literal_to_value(value)),
+        Constraint::DefaultValue { value } => Some(value.clone()),
         _ => None,
     }
 }

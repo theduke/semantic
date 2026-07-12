@@ -2,6 +2,6 @@
 pub struct ContractConstant {
     pub name: String,
     pub ty: crate::schema::core::type_node::Type,
-    pub value: crate::schema::core::literal_value::LiteralValue,
+    pub value: crate::value::Value,
     pub meta: crate::schema::core::meta::Meta,
 }

@@ -9,7 +9,7 @@ pub struct Meta {
     pub deprecated: Option<Deprecation>,
 
     pub aliases: Vec<String>,
-    pub examples: Vec<crate::schema::core::literal_value::LiteralValue>,
+    pub examples: Vec<crate::value::Value>,
 
     pub tags: Vec<String>,
     pub docs_url: Option<String>,

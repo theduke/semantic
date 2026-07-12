@@ -5,8 +5,8 @@ use dxform::{FieldSpec, FormOptions, FormRoot, SubformSpec, SubmitHandler};
 use semantic_data::{
     schema::{
         AttributeRef, AttributeType, BoolType, ClassAttribute, ClassRef, ClassType, Constraint,
-        LengthSpec, LiteralValue, Meta, NumberType, OptionalType, StringType, Type, TypeKind,
-        TypeRef, UIntWidth, UnionType,
+        LengthSpec, Meta, NumberType, OptionalType, StringType, Type, TypeKind, TypeRef, UIntWidth,
+        UnionType,
     },
     value::{Object, Value},
 };
@@ -253,11 +253,7 @@ fn default_class_value_sets_type_and_required_fields() {
 }
 
 #[test]
-fn literal_and_type_defaults_are_semantic_values() {
-    assert_eq!(
-        semantic_ui_core::literal_to_value(&LiteralValue::String("hello".to_string())),
-        Value::String("hello".to_string())
-    );
+fn type_defaults_are_semantic_values() {
     assert_eq!(
         default_value_for_type(&string_type()),
         Value::String(String::new())

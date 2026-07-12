@@ -57,7 +57,6 @@ pub use contract::contract_interface::ContractInterface;
 pub use core::annotation::Annotation;
 pub use core::annotation_value::AnnotationValue;
 pub use core::extension_type::ExtensionType;
-pub use core::literal_value::LiteralValue;
 pub use core::meta::Meta;
 pub use core::schema_doc::SchemaDoc;
 pub use core::schema_import::SchemaImport;

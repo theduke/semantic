@@ -1,7 +1,6 @@
 pub mod annotation;
 pub mod annotation_value;
 pub mod extension_type;
-pub mod literal_value;
 pub mod meta;
 pub mod schema_doc;
 pub mod schema_import;

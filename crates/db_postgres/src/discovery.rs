@@ -4,7 +4,6 @@ use semantic_data::expr::{
     BinaryExpr, BinaryOperator, CallArg, CallExpr, Callee, Expr, FieldAccessExpr, LiteralExpr,
     RefExpr,
 };
-use semantic_data::schema::core::literal_value::LiteralValue;
 use semantic_data::schema::core::meta::Meta;
 use semantic_data::schema::core::type_kind::TypeKind;
 use semantic_data::schema::core::type_node::Type;
@@ -13,6 +12,7 @@ use semantic_data::schema::primitives::string_type::StringType;
 use semantic_data::schema::{
     AttributeRef, AttributeType, ClassAttribute, ClassConstraint, ClassType,
 };
+use semantic_data::value::Value;
 use semantic_db_core::DbError;
 use semantic_db_core::catalog::{Catalog, CollectionKind, IntegrityMode, PRIMARY_ID_FIELD};
 use tokio_postgres::Client;
@@ -349,7 +349,7 @@ fn register_table(catalog: &mut Catalog, table: &DiscoveredTable) -> Result<(), 
 /// Composite:  `stringify(table_name + "-" + pk_a + "::" + pk_b + ...)`
 fn build_synthetic_id_attr(table_name: &str, pk_columns: &[String]) -> ClassAttribute {
     let prefix = Expr::Literal(LiteralExpr {
-        value: LiteralValue::String(format!("{}-", table_name)),
+        value: Value::String(format!("{}-", table_name)),
     });
 
     let concat = pk_columns
@@ -372,7 +372,7 @@ fn build_synthetic_id_attr(table_name: &str, pk_columns: &[String]) -> ClassAttr
                     op: BinaryOperator::Concat,
                     left: acc,
                     right: Expr::Literal(LiteralExpr {
-                        value: LiteralValue::String("::".into()),
+                        value: Value::String("::".into()),
                     }),
                 }));
                 Expr::Binary(Box::new(BinaryExpr {
@@ -405,9 +405,9 @@ fn build_synthetic_id_attr(table_name: &str, pk_columns: &[String]) -> ClassAttr
 // Utilities
 // ---------------------------------------------------------------------------
 
-/// Create a `LiteralValue::String` from a JSON string.
-fn literal_value_from_json(json: &str) -> LiteralValue {
-    LiteralValue::String(json.to_string())
+/// Create a string value from a JSON string.
+fn literal_value_from_json(json: &str) -> Value {
+    Value::String(json.to_string())
 }
 
 #[cfg(test)]

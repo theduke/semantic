@@ -2,10 +2,7 @@ use std::sync::Arc;
 
 use semantic_data::{
     expr::{Expr, LiteralExpr},
-    schema::{
-        class::{class_constraint::ClassConstraint, class_type::ClassType},
-        core::literal_value::LiteralValue,
-    },
+    schema::class::{class_constraint::ClassConstraint, class_type::ClassType},
     value::{Object, Value},
 };
 use semantic_db_core::{DbError, EntityRecord, Query, SelectQuery, catalog::Catalog};
@@ -245,7 +242,7 @@ pub fn extract_pk_columns(class: &ClassType) -> Result<Vec<String>, DbError> {
     let json_str = match constraint {
         ClassConstraint::MultiFieldExpr { expr, .. } => match expr {
             Expr::Literal(LiteralExpr {
-                value: LiteralValue::String(s),
+                value: Value::String(s),
             }) => s.clone(),
             _ => {
                 return Err(DbError::InvalidQuery(

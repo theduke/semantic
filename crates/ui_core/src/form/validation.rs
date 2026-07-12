@@ -211,10 +211,9 @@ fn validate_contains(
     errors: &mut Vec<FormError>,
     path: &FieldPath,
     value: &Value,
-    expected: &semantic_data::schema::LiteralValue,
+    expected: &Value,
 ) {
-    let expected = crate::form::literal_to_value(expected);
-    let contains = match (value, &expected) {
+    let contains = match (value, expected) {
         (Value::String(value), Value::String(expected)) => value.contains(expected),
         (Value::List(items), expected) => items.contains(expected),
         _ => true,

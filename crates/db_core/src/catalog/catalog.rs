@@ -2832,47 +2832,49 @@ fn validate_length_spec(
     Ok(())
 }
 
-fn literal_matches_type(value: &semantic_data::schema::LiteralValue, ty: &Type) -> bool {
-    use semantic_data::schema::LiteralValue;
+fn literal_matches_type(value: &semantic_data::value::Value, ty: &Type) -> bool {
+    use semantic_data::value::Value;
 
     match (&ty.kind, value) {
-        (_, LiteralValue::Null) => matches!(
+        (_, Value::Null) => matches!(
             ty.kind,
             TypeKind::Null(_) | TypeKind::Optional(_) | TypeKind::Any(_) | TypeKind::Unknown(_)
         ),
         (TypeKind::Any(_) | TypeKind::Unknown(_) | TypeKind::Json, _) => true,
-        (TypeKind::Bool(_), LiteralValue::Bool(_)) => true,
-        (TypeKind::Char(_), LiteralValue::String(value)) => value.chars().count() == 1,
-        (TypeKind::String(_), LiteralValue::String(_)) => true,
-        (TypeKind::Bytes(_), LiteralValue::Bytes(_)) => true,
-        (TypeKind::Number(number), LiteralValue::Int(_)) => !matches!(
+        (TypeKind::Bool(_), Value::Bool(_)) => true,
+        (TypeKind::Char(_), Value::String(value)) => value.chars().count() == 1,
+        (TypeKind::String(_), Value::String(_)) => true,
+        (TypeKind::Bytes(_), Value::Bytes(_)) => true,
+        (
+            TypeKind::Number(number),
+            Value::I8(_) | Value::I16(_) | Value::I32(_) | Value::I64(_) | Value::I128(_),
+        ) => !matches!(
             number,
             semantic_data::schema::NumberType::UInt(_)
                 | semantic_data::schema::NumberType::BigUInt(_)
         ),
-        (TypeKind::Number(_), LiteralValue::UInt(_)) => true,
-        (TypeKind::Number(_), LiteralValue::Float(_)) => true,
+        (
+            TypeKind::Number(_),
+            Value::U8(_) | Value::U16(_) | Value::U32(_) | Value::U64(_) | Value::U128(_),
+        ) => true,
+        (TypeKind::Number(_), Value::F32(_) | Value::F64(_)) => true,
         (TypeKind::Optional(optional), value) => literal_matches_type(value, &optional.inner),
-        (TypeKind::Array(array), LiteralValue::List(_)) => {
+        (TypeKind::Array(array), Value::List(_)) => {
             matches!(
                 array.length,
                 None | Some(semantic_data::schema::LengthSpec::Range { .. })
             )
         }
-        (TypeKind::List(_), LiteralValue::List(_)) | (TypeKind::Set(_), LiteralValue::List(_)) => {
-            true
-        }
-        (TypeKind::Tuple(tuple), LiteralValue::List(values)) => {
+        (TypeKind::List(_), Value::List(_)) | (TypeKind::Set(_), Value::List(_)) => true,
+        (TypeKind::Tuple(tuple), Value::List(values)) => {
             values.len() == tuple.items.len() || tuple.rest.is_some()
         }
-        (TypeKind::Map(_), LiteralValue::Map(_)) | (TypeKind::Record(_), LiteralValue::Map(_)) => {
-            true
-        }
-        (TypeKind::Enum(enum_type), LiteralValue::String(value)) => enum_type
+        (TypeKind::Map(_), Value::Object(_)) | (TypeKind::Record(_), Value::Object(_)) => true,
+        (TypeKind::Enum(enum_type), Value::String(value)) => enum_type
             .variants
             .iter()
             .any(|variant| variant.symbol.as_ref() == Some(value) || variant.name == *value),
-        (TypeKind::Enum(enum_type), LiteralValue::Int(value)) => {
+        (TypeKind::Enum(enum_type), Value::I128(value)) => {
             i64::try_from(*value).ok().is_some_and(|value| {
                 enum_type
                     .variants
@@ -2925,9 +2927,9 @@ fn verbatim_nameset(name: &str) -> NameSet {
 mod tests {
     use semantic_data::schema::{
         AttributeType, ClassAttribute, ClassConstraint, ClassType, Constraint, EnumType,
-        EnumVariant, IntWidth, ListType, LiteralValue, NumberBound, NumberType, VariantCase,
-        VariantPayload, VariantTag, VariantType, attribute::attribute_ref::AttributeRef,
-        record::field::Field, union::union_type::UnionType,
+        EnumVariant, IntWidth, ListType, NumberBound, NumberType, VariantCase, VariantPayload,
+        VariantTag, VariantType, attribute::attribute_ref::AttributeRef, record::field::Field,
+        union::union_type::UnionType,
     };
 
     use super::*;
@@ -3224,7 +3226,7 @@ mod tests {
                     constraints: vec![ClassConstraint::MultiFieldExpr {
                         expr: semantic_data::expr::Expr::Literal(
                             semantic_data::expr::LiteralExpr {
-                                value: LiteralValue::Bool(true),
+                                value: semantic_data::value::Value::Bool(true),
                             },
                         ),
                         description: Some("dynamic rule owned by an extension".to_string()),

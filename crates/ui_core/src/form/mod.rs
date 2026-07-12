@@ -43,7 +43,7 @@ pub use validation::{
     validators_for_attribute,
 };
 pub use value::{
-    default_value_for_class, default_value_for_type, default_value_for_type_kind, literal_to_value,
+    default_value_for_class, default_value_for_type, default_value_for_type_kind,
     object_field_value, set_object_field_value, set_optional_object_field_value, set_value_list,
     value_as_list,
 };

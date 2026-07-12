@@ -10,7 +10,7 @@ pub enum Constraint {
     Pattern(String),
     Prefix(String),
     Suffix(String),
-    Contains(crate::schema::core::literal_value::LiteralValue),
+    Contains(crate::value::Value),
 
     Precision {
         precision: u32,
@@ -40,7 +40,7 @@ pub enum Constraint {
     },
 
     DefaultValue {
-        value: crate::schema::core::literal_value::LiteralValue,
+        value: crate::value::Value,
     },
     DefaultExpr {
         expr: crate::expr::Expr,

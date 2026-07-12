@@ -1054,7 +1054,7 @@ fn infer_expr_type(
 
     match expr {
         expr::Expr::Literal(lit) => match &lit.value {
-            semantic_data::schema::core::literal_value::LiteralValue::String(_) => {
+            semantic_data::value::Value::String(_) => {
                 return Some(Type {
                     kind: TK::String(StringType {
                         format: None,

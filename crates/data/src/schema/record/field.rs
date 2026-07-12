@@ -4,6 +4,6 @@ pub struct Field {
     pub required: bool,
     pub readonly: bool,
     pub writeonly: bool,
-    pub default: Option<crate::schema::core::literal_value::LiteralValue>,
+    pub default: Option<crate::value::Value>,
     pub meta: crate::schema::core::meta::Meta,
 }

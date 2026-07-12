@@ -66,6 +66,12 @@ impl From<&std::net::IpAddr> for FacetProxyIpAddr {
 #[repr(C)]
 #[facet(rename_all = "snake_case")]
 pub enum Value {
+    /// Bottom/never value: no value exists or is produced. Unlike [`Self::Null`], which is an
+    /// explicit data null, this is the value-level counterpart of `TypeKind::Never`.
+    ///
+    /// Both `Void` and `Null` are nullish. Even under bottom semantics, `Void == Void` holds at
+    /// the representation level: `Value` implements `Eq`, `Ord`, and `Hash`, and `Void` is used
+    /// as a concrete marker value (for example, in RPC command payloads).
     Void,
     Null,
 
@@ -102,6 +108,38 @@ pub enum Value {
 
 // Generic methods.
 impl Value {
+    fn variant_rank(&self) -> u8 {
+        match self {
+            Self::Void => 0,
+            Self::Null => 1,
+            Self::Bool(_) => 2,
+            Self::I8(_) => 3,
+            Self::I16(_) => 4,
+            Self::I32(_) => 5,
+            Self::I64(_) => 6,
+            Self::I128(_) => 7,
+            Self::U8(_) => 8,
+            Self::U16(_) => 9,
+            Self::U32(_) => 10,
+            Self::U64(_) => 11,
+            Self::U128(_) => 12,
+            Self::F32(_) => 13,
+            Self::F64(_) => 14,
+            Self::Uuid(_) => 15,
+            Self::IpAddr(_) => 16,
+            Self::Duration(_) => 17,
+            Self::Time(_) => 18,
+            Self::Date(_) => 19,
+            Self::DateTime(_) => 20,
+            Self::Bytes(_) => 21,
+            Self::String(_) => 22,
+            Self::List(_) => 23,
+            Self::Map(_) => 24,
+            Self::Object(_) => 25,
+            Self::Variant(_) => 26,
+        }
+    }
+
     pub fn as_value_ref<'a>(&'a self) -> ValueRef<'a> {
         match self {
             Self::Void => ValueRef::Void,
@@ -226,126 +264,40 @@ impl Ord for Value {
     fn cmp(&self, other: &Self) -> Ordering {
         match (self, other) {
             (Self::Void, Self::Void) => Ordering::Equal,
-            (Self::Void, _) => Ordering::Less,
-
             (Self::Null, Self::Null) => Ordering::Equal,
-            (Self::Null, _) => Ordering::Less,
-
             (Self::Bool(a), Self::Bool(b)) => a.cmp(b),
-            (Self::Bool(_), _) => Ordering::Less,
-
             (Self::I8(a), Self::I8(b)) => a.cmp(b),
-            (Self::I8(_), _) => Ordering::Less,
-
             (Self::I16(a), Self::I16(b)) => a.cmp(b),
-            (Self::I16(_), _) => Ordering::Less,
-
             (Self::I32(a), Self::I32(b)) => a.cmp(b),
-            (Self::I32(_), _) => Ordering::Less,
-
             (Self::I64(a), Self::I64(b)) => a.cmp(b),
-            (Self::I64(_), _) => Ordering::Less,
-
             (Self::I128(a), Self::I128(b)) => a.cmp(b),
-            (Self::I128(_), _) => Ordering::Less,
-
             (Self::U8(a), Self::U8(b)) => a.cmp(b),
-            (Self::U8(_), _) => Ordering::Less,
-
             (Self::U16(a), Self::U16(b)) => a.cmp(b),
-            (Self::U16(_), _) => Ordering::Less,
-
             (Self::U32(a), Self::U32(b)) => a.cmp(b),
-            (Self::U32(_), _) => Ordering::Less,
-
             (Self::U64(a), Self::U64(b)) => a.cmp(b),
-            (Self::U64(_), _) => Ordering::Less,
-
             (Self::U128(a), Self::U128(b)) => a.cmp(b),
-            (Self::U128(_), _) => Ordering::Less,
-
             (Self::F32(a), Self::F32(b)) => a.cmp(b),
-            (Self::F32(_), _) => Ordering::Less,
-
             (Self::F64(a), Self::F64(b)) => a.cmp(b),
-            (Self::F64(_), _) => Ordering::Less,
-
             (Self::Uuid(a), Self::Uuid(b)) => a.cmp(b),
-            (Self::Uuid(_), _) => Ordering::Less,
-
             (Self::IpAddr(a), Self::IpAddr(b)) => a.cmp(b),
-            (Self::IpAddr(_), _) => Ordering::Less,
             (Self::Duration(a), Self::Duration(b)) => a.cmp(b),
-            (Self::Duration(_), _) => Ordering::Less,
-
             (Self::Time(a), Self::Time(b)) => a.cmp(b),
-            (Self::Time(_), _) => Ordering::Less,
-
             (Self::Date(a), Self::Date(b)) => a.cmp(b),
-            (Self::Date(_), _) => Ordering::Less,
-
             (Self::DateTime(a), Self::DateTime(b)) => a.cmp(b),
-            (Self::DateTime(_), _) => Ordering::Less,
-
             (Self::Bytes(a), Self::Bytes(b)) => a.cmp(b),
-            (Self::Bytes(_), _) => Ordering::Less,
-
             (Self::String(a), Self::String(b)) => a.cmp(b),
-            (Self::String(_), _) => Ordering::Less,
-
             (Self::List(a), Self::List(b)) => a.cmp(b),
-            (Self::List(_), _) => Ordering::Less,
-
             (Self::Map(a), Self::Map(b)) => a.cmp(b),
-            (Self::Map(_), _) => Ordering::Less,
-
             (Self::Object(a), Self::Object(b)) => a.cmp(b),
-            (Self::Object(_), _) => Ordering::Less,
-
             (Self::Variant(a), Self::Variant(b)) => a.cmp(b),
-            (Self::Variant(_), _) => Ordering::Less,
+            _ => self.variant_rank().cmp(&other.variant_rank()),
         }
     }
 }
 
 impl PartialEq for Value {
     fn eq(&self, other: &Self) -> bool {
-        match (self, other) {
-            (Self::Null, Self::Null) => true,
-
-            (Self::Bool(a), Self::Bool(b)) => a == b,
-            (Self::I8(a), Self::I8(b)) => a == b,
-            (Self::I16(a), Self::I16(b)) => a == b,
-            (Self::I32(a), Self::I32(b)) => a == b,
-            (Self::I64(a), Self::I64(b)) => a == b,
-            (Self::I128(a), Self::I128(b)) => a == b,
-            (Self::U8(a), Self::U8(b)) => a == b,
-            (Self::U16(a), Self::U16(b)) => a == b,
-            (Self::U32(a), Self::U32(b)) => a == b,
-            (Self::U64(a), Self::U64(b)) => a == b,
-            (Self::U128(a), Self::U128(b)) => a == b,
-            (Self::F32(a), Self::F32(b)) => a == b,
-            (Self::F64(a), Self::F64(b)) => a == b,
-
-            (Self::Uuid(a), Self::Uuid(b)) => a == b,
-            // (Self::IpAddr(a), Self::IpAddr(b)) => a == b,
-            (Self::Duration(a), Self::Duration(b)) => a == b,
-            (Self::Time(a), Self::Time(b)) => a == b,
-            (Self::Date(a), Self::Date(b)) => a == b,
-            (Self::DateTime(a), Self::DateTime(b)) => a == b,
-
-            (Self::Bytes(a), Self::Bytes(b)) => a == b,
-            (Self::String(a), Self::String(b)) => a == b,
-
-            (Self::List(a), Self::List(b)) => a == b,
-
-            (Self::Map(a), Self::Map(b)) => a == b,
-
-            (Self::Object(a), Self::Object(b)) => a == b,
-            (Self::Variant(a), Self::Variant(b)) => a == b,
-
-            _ => false,
-        }
+        self.cmp(other) == Ordering::Equal
     }
 }
 

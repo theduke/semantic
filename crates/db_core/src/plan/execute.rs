@@ -2006,7 +2006,7 @@ pub fn evaluate_computed_expr(
     use semantic_data::value::Value;
 
     match expr {
-        expr::Expr::Literal(lit) => Ok(literal_to_value(&lit.value)),
+        expr::Expr::Literal(lit) => Ok(lit.value.clone()),
         expr::Expr::Ref(expr::RefExpr::Identifier(name)) if name == "self" => Err(CoreError::new(
             "bare self reference not allowed in computed expression",
         )),
@@ -2085,28 +2085,6 @@ pub fn evaluate_computed_expr(
             "unsupported expression in computed attribute: {:?}",
             std::mem::discriminant(expr)
         ))),
-    }
-}
-
-fn literal_to_value(lit: &semantic_data::schema::core::literal_value::LiteralValue) -> Value {
-    use semantic_data::schema::core::literal_value::LiteralValue as LV;
-    use semantic_data::value::Map;
-    match lit {
-        LV::Null => Value::Null,
-        LV::Bool(b) => Value::Bool(*b),
-        LV::Int(v) => Value::I128(*v),
-        LV::UInt(v) => Value::U128(*v),
-        LV::Float(s) => Value::String(s.clone()),
-        LV::String(s) => Value::String(s.clone()),
-        LV::Bytes(b) => Value::Bytes(b.clone().into()),
-        LV::List(items) => Value::List(items.iter().map(literal_to_value).collect()),
-        LV::Map(entries) => {
-            let mut map = Map::new();
-            for (k, v) in entries {
-                map.insert(Value::String(k.clone()), literal_to_value(v));
-            }
-            Value::Map(map)
-        }
     }
 }
 
