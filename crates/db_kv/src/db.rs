@@ -14,9 +14,10 @@ use semantic_db_core::{
     InsertSource, MutationStats, PackageRegistrationOutcome, Query, QueryExplain, QueryPlan,
     QueryResult, SelectQuery, UpdateQuery, apply_core_schema_migrations, apply_migration_ddl_batch,
     canonicalize_delete_query, canonicalize_insert_query, canonicalize_query,
-    canonicalize_select_query, canonicalize_update_query, execute_batch, is_all_collection_alias,
-    normalize_object_for_collection, normalize_package_definition, ref_target_class_ids,
-    resolved_field_types_for_object, touched_collections, validate_package_migrations,
+    canonicalize_select_query, canonicalize_update_query, evaluate_mutation_limit, execute_batch,
+    is_all_collection_alias, normalize_object_for_collection, normalize_package_definition,
+    ref_target_class_ids, resolved_field_types_for_object, touched_collections,
+    validate_package_migrations,
 };
 use semantic_db_core::{DbConfig, DbError, MigrationMismatchPolicy};
 
@@ -821,6 +822,8 @@ impl<E: KvEngine> KvDb<E> {
         &mut self,
         query: UpdateQuery,
     ) -> std::result::Result<semantic_db_core::UpdateResult, DbError> {
+        evaluate_mutation_limit(query.limit.as_ref())
+            .map_err(|err| DbError::InvalidQuery(err.to_string()))?;
         let collection = query.collection_or_default().to_string();
         let catalog = self.catalog();
         let collection_schema = catalog
@@ -910,6 +913,8 @@ impl<E: KvEngine> KvDb<E> {
         &mut self,
         query: DeleteQuery,
     ) -> std::result::Result<semantic_db_core::DeleteResult, DbError> {
+        evaluate_mutation_limit(query.limit.as_ref())
+            .map_err(|err| DbError::InvalidQuery(err.to_string()))?;
         let collection = query.collection_or_default().to_string();
         let catalog = self.catalog();
         let collection_schema = catalog
@@ -949,25 +954,9 @@ impl<E: KvEngine> KvDb<E> {
                         object: object.clone(),
                     })
                     .collect::<Vec<_>>();
-                result = semantic_db_core::apply_delete_with_returning(&query, entities);
-
-                let stripped = DeleteQuery {
-                    collection: query.collection.clone(),
-                    predicate: query.predicate.clone(),
-                    limit: query.limit.clone(),
-                    returning: Vec::new(),
-                    field_format: query.field_format,
-                };
-                let (remaining, _) = semantic_db_core::apply_delete(
-                    &stripped,
-                    coll.iter()
-                        .map(|(id, object)| semantic_db_core::Entity {
-                            id: id.clone(),
-                            collection: collection_name.clone(),
-                            object: object.clone(),
-                        })
-                        .collect(),
-                );
+                let (remaining, delete_result) =
+                    semantic_db_core::apply_delete_with_remaining(&query, entities);
+                result = delete_result;
                 coll.clear();
                 for entity in remaining {
                     coll.insert(entity.id, entity.object);
@@ -1013,6 +1002,7 @@ impl<E: KvEngine> KvDb<E> {
         batch: Batch,
         options: TransactionOptions,
     ) -> std::result::Result<BatchOutcome, DbError> {
+        validate_batch_mutation_limits(&batch)?;
         let caps = self.store.tx_capabilities();
         if options.concurrency == TransactionConcurrency::Mvcc && !caps.mvcc {
             return Err(DbError::InvalidQuery(
@@ -2992,6 +2982,18 @@ fn ensure_collection_mutable(collection: &CollectionSchema) -> std::result::Resu
     Ok(())
 }
 
+fn validate_batch_mutation_limits(batch: &Batch) -> std::result::Result<(), DbError> {
+    for operation in &batch.operations {
+        let limit = match operation {
+            BatchOperation::Update { query, .. } => query.limit.as_ref(),
+            BatchOperation::Delete { query, .. } => query.limit.as_ref(),
+            _ => continue,
+        };
+        evaluate_mutation_limit(limit).map_err(|err| DbError::InvalidQuery(err.to_string()))?;
+    }
+    Ok(())
+}
+
 fn validate_ref_value(
     catalog: &Catalog,
     collection: &CollectionSchema,
@@ -3459,7 +3461,7 @@ mod tests {
         Query, QueryField, QueryResult, SelectQuery, TransactionConcurrency, TransactionOptions,
         UpdateQuery, canonicalize_select_query,
     };
-    use semantic_db_core::{DbConfig, MigrationMismatchPolicy};
+    use semantic_db_core::{DbConfig, DbError, MigrationMismatchPolicy};
 
     use super::{KvDb, KvWriteOp, QueryPlan, RELATION_EDGES_COLLECTION};
 
@@ -4529,6 +4531,79 @@ mod tests {
             out.returning[0].get("id"),
             Some(&Value::String("i1".to_string())),
         );
+    }
+
+    #[test]
+    fn delete_returning_rebuilds_from_single_limited_traversal() {
+        let mut db = KvDb::in_memory();
+        db.create_collection("items", CollectionKind::Polymorphic)
+            .unwrap();
+        for id in ["i1", "i2", "i3"] {
+            let mut row = Object::new();
+            row.insert("id", Value::String(id.to_string()));
+            db.insert("items", id, row).unwrap();
+        }
+
+        let query = semantic_db_core::DeleteQuery::new()
+            .with_collection("items")
+            .with_limit(2)
+            .with_returning(vec![QueryField {
+                expr: Box::new(Expr::Operand(Operand::Field(FieldPath::from_fields([
+                    "id",
+                ])))),
+                alias: None,
+                wildcard: None,
+            }]);
+        let result = db.delete_where_returning(query).unwrap();
+
+        assert_eq!(result.deleted, 2);
+        assert_eq!(
+            result
+                .returning
+                .iter()
+                .filter_map(|row| row.get("id").and_then(Value::as_str))
+                .collect::<Vec<_>>(),
+            vec!["i1", "i2"],
+        );
+        assert!(db.get("items", "i1").unwrap().is_none());
+        assert!(db.get("items", "i2").unwrap().is_none());
+        assert!(db.get("items", "i3").unwrap().is_some());
+    }
+
+    #[test]
+    fn programmatic_mutations_reject_invalid_limits_without_writes() {
+        let mut db = KvDb::in_memory();
+        db.create_collection("items", CollectionKind::Polymorphic)
+            .unwrap();
+
+        let mut row = Object::new();
+        row.insert("id", Value::String("i1".to_string()));
+        row.insert("value", Value::I64(1));
+        db.insert("items", "i1", row).unwrap();
+
+        let invalid_limit = Expr::Operand(Operand::Literal(Value::I64(-1)));
+        let update = UpdateQuery::new()
+            .with_collection("items")
+            .set(
+                FieldPath::from_fields(["value"]),
+                Expr::Operand(Operand::Literal(Value::I64(2))),
+            )
+            .with_limit(invalid_limit.clone());
+        let error = db.update_where(update).unwrap_err();
+        assert!(matches!(error, DbError::InvalidQuery(_)));
+        assert_eq!(
+            db.get("items", "i1")
+                .unwrap()
+                .and_then(|row| row.object.get("value").cloned()),
+            Some(Value::I64(1))
+        );
+
+        let delete = semantic_db_core::DeleteQuery::new()
+            .with_collection("items")
+            .with_limit(invalid_limit);
+        let error = db.delete_where(delete).unwrap_err();
+        assert!(matches!(error, DbError::InvalidQuery(_)));
+        assert!(db.get("items", "i1").unwrap().is_some());
     }
 
     #[test]

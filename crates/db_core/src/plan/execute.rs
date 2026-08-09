@@ -328,6 +328,7 @@ fn execute_physical_dyn_stream(
             subquery,
             negated,
         } => stream::once(async move {
+            let shape = physical_subquery_single_column_shape(&subquery)?;
             let sub_values: BTreeSet<Value> = collect_dyn_stream(execute_physical_dyn_stream(
                 *subquery,
                 source.clone(),
@@ -336,8 +337,8 @@ fn execute_physical_dyn_stream(
             ))
             .await?
             .into_iter()
-            .filter_map(|row| row.to_object().into_btree().into_values().next())
-            .collect();
+            .map(|row| single_column_subquery_value(row.to_object(), shape))
+            .collect::<CoreResult<_>>()?;
             let left =
                 resolve_expr_subqueries_async(&left, source.clone(), &context, options).await?;
             Ok(filter_in_subquery_batch_stream(
@@ -415,16 +416,28 @@ fn filter_in_subquery_batch_stream(
     sub_values: BTreeSet<Value>,
     negated: bool,
 ) -> RecordBatchStream<'_> {
+    if sub_values.is_empty() {
+        return filter_bool_batch_stream(input, negated);
+    }
+    let contains_null = sub_values.iter().any(Value::is_nullish);
     normalize_record_batch_stream(
         input
             .map_ok(move |batch| {
                 batch
                     .into_iter()
                     .filter(|row| {
-                        let contains = evaluate_expr(row.as_ref(), &left)
-                            .map(|value| sub_values.contains(&value))
-                            .unwrap_or(false);
-                        if negated { !contains } else { contains }
+                        let Some(value) = evaluate_expr(row.as_ref(), &left) else {
+                            return false;
+                        };
+                        if value.is_nullish() {
+                            return false;
+                        }
+                        let contains = sub_values.contains(&value);
+                        if negated {
+                            !contains && !contains_null
+                        } else {
+                            contains
+                        }
                     })
                     .collect::<Vec<_>>()
             })
@@ -1031,6 +1044,25 @@ fn resolve_expr_subqueries_async<'a>(
     async move {
         match expr {
             Expr::Operand(_) => Ok(expr.clone()),
+            Expr::Unary { op, expr }
+                if *op == semantic_data::query::UnaryOp::Not
+                    && matches!(
+                        expr.as_ref(),
+                        Expr::Binary {
+                            op: semantic_data::query::BinaryOp::In,
+                            right,
+                            ..
+                        } if matches!(right.as_ref(), Expr::Subquery(_))
+                    ) =>
+            {
+                let Expr::Binary { left, right, .. } = expr.as_ref() else {
+                    unreachable!("guard requires binary IN expression");
+                };
+                let Expr::Subquery(query) = right.as_ref() else {
+                    unreachable!("guard requires IN subquery");
+                };
+                resolve_in_subquery_expr_async(left, query, true, source, context, options).await
+            }
             Expr::Unary { op, expr } => Ok(Expr::Unary {
                 op: *op,
                 expr: Box::new(
@@ -1041,18 +1073,10 @@ fn resolve_expr_subqueries_async<'a>(
                 if *op == semantic_data::query::BinaryOp::In
                     && let Expr::Subquery(query) = right.as_ref()
                 {
-                    return Ok(Expr::InList {
-                        expr: Box::new(
-                            resolve_expr_subqueries_async(left, source.clone(), context, options)
-                                .await?,
-                        ),
-                        list: execute_list_subquery_async(query, source, context, options)
-                            .await?
-                            .into_iter()
-                            .map(|value| Expr::Operand(Operand::Literal(value)))
-                            .collect(),
-                        negated: false,
-                    });
+                    return resolve_in_subquery_expr_async(
+                        left, query, false, source, context, options,
+                    )
+                    .await;
                 }
                 Ok(Expr::Binary {
                     op: *op,
@@ -1180,9 +1204,10 @@ fn resolve_expr_subqueries_async<'a>(
                 negated: *negated,
             }),
             Expr::Exists { query, negated } => {
-                let exists = !execute_select_subquery_async(query, source, context, options)
-                    .await?
-                    .is_empty();
+                let exists =
+                    !execute_select_subquery_async(query, source, context, options, Some(1))
+                        .await?
+                        .is_empty();
                 Ok(Expr::Operand(Operand::Literal(Value::Bool(if *negated {
                     !exists
                 } else {
@@ -1225,11 +1250,59 @@ fn resolve_expr_subqueries_async<'a>(
     .boxed()
 }
 
+fn resolve_in_subquery_expr_async<'a>(
+    left: &'a Expr,
+    query: &'a crate::query::SelectQuery,
+    negated: bool,
+    source: Arc<dyn AsyncPhysicalDataSource + 'a>,
+    context: &'a QueryContext,
+    options: ExecutionOptions,
+) -> BoxFuture<'a, CoreResult<Expr>> {
+    async move {
+        let values = execute_list_subquery_async(query, source.clone(), context, options).await?;
+        if values.is_empty() {
+            return Ok(Expr::Operand(Operand::Literal(Value::Bool(negated))));
+        }
+        let left = resolve_expr_subqueries_async(left, source, context, options).await?;
+        let contains_null = values.iter().any(Value::is_nullish);
+        let list = values
+            .into_iter()
+            .filter(|value| !value.is_nullish())
+            .map(|value| Expr::Operand(Operand::Literal(value)))
+            .collect();
+        let membership = Expr::InList {
+            expr: Box::new(left.clone()),
+            list,
+            negated: negated && !contains_null,
+        };
+        let null = Expr::Operand(Operand::Literal(Value::Null));
+
+        if contains_null {
+            Ok(Expr::IfElse {
+                cond: Box::new(membership),
+                then_expr: Box::new(Expr::Operand(Operand::Literal(Value::Bool(!negated)))),
+                else_expr: Box::new(null),
+            })
+        } else {
+            Ok(Expr::IfElse {
+                cond: Box::new(Expr::IsNull {
+                    expr: Box::new(left),
+                    negated: false,
+                }),
+                then_expr: Box::new(null),
+                else_expr: Box::new(membership),
+            })
+        }
+    }
+    .boxed()
+}
+
 async fn execute_select_subquery_async(
     query: &crate::query::SelectQuery,
     source: Arc<dyn AsyncPhysicalDataSource + '_>,
     context: &QueryContext,
     options: ExecutionOptions,
+    row_limit: Option<usize>,
 ) -> CoreResult<Vec<Object>> {
     let collection_id = query
         .collection
@@ -1243,8 +1316,16 @@ async fn execute_select_subquery_async(
         collection_id,
     );
     let plan = Optimizer::core().optimize_query_with_source(query, source_ref, None, context);
+    let physical = match row_limit {
+        Some(limit) => PhysicalPlan::Limit {
+            input: Box::new(plan.physical),
+            offset: Expr::from(0usize),
+            limit: Some(Expr::from(limit)),
+        },
+        None => plan.physical,
+    };
     Ok(collect_dyn_stream(execute_physical_dyn_stream(
-        plan.physical,
+        physical,
         source,
         context.clone(),
         options,
@@ -1261,11 +1342,18 @@ async fn execute_scalar_subquery_async(
     context: &QueryContext,
     options: ExecutionOptions,
 ) -> CoreResult<Value> {
-    let rows = execute_select_subquery_async(query, source, context, options).await?;
-    let Some(row) = rows.into_iter().next() else {
+    let shape = select_subquery_single_column_shape(query)?;
+    let mut rows = execute_select_subquery_async(query, source, context, options, Some(2)).await?;
+    if rows.len() > 1 {
+        return Err(CoreError::new(format!(
+            "scalar subquery returned {} rows; expected at most one",
+            rows.len()
+        )));
+    }
+    let Some(row) = rows.pop() else {
         return Ok(Value::Null);
     };
-    Ok(row.into_btree().into_values().next().unwrap_or(Value::Null))
+    single_column_subquery_value(row, shape)
 }
 
 async fn execute_list_subquery_async(
@@ -1274,13 +1362,121 @@ async fn execute_list_subquery_async(
     context: &QueryContext,
     options: ExecutionOptions,
 ) -> CoreResult<Vec<Value>> {
-    Ok(
-        execute_select_subquery_async(query, source, context, options)
-            .await?
-            .into_iter()
-            .filter_map(|row| row.into_btree().into_values().next())
-            .collect(),
-    )
+    let shape = select_subquery_single_column_shape(query)?;
+    execute_select_subquery_async(query, source, context, options, None)
+        .await?
+        .into_iter()
+        .map(|row| single_column_subquery_value(row, shape))
+        .collect()
+}
+
+#[derive(Clone, Copy)]
+enum SingleColumnShape {
+    Exact,
+    Dynamic,
+}
+
+fn select_subquery_single_column_shape(
+    query: &crate::query::SelectQuery,
+) -> CoreResult<SingleColumnShape> {
+    if query.projection.is_empty() {
+        return Ok(SingleColumnShape::Dynamic);
+    }
+    reject_duplicate_projection_aliases(
+        query
+            .projection
+            .iter()
+            .filter_map(|field| field.alias.as_deref()),
+    )?;
+    if query.projection.len() != 1 {
+        return Err(CoreError::new(format!(
+            "subquery projects {} columns; expected exactly one",
+            query.projection.len()
+        )));
+    }
+    if query.projection[0].wildcard.is_some() {
+        return Err(CoreError::new(
+            "wildcard subquery projection cannot be proven to contain exactly one column",
+        ));
+    }
+    Ok(SingleColumnShape::Exact)
+}
+
+fn physical_subquery_single_column_shape(plan: &PhysicalPlan) -> CoreResult<SingleColumnShape> {
+    match plan {
+        PhysicalPlan::Project { projection, .. } | PhysicalPlan::Aggregate { projection, .. } => {
+            reject_duplicate_projection_aliases(
+                projection.iter().filter_map(|field| field.alias.as_deref()),
+            )?;
+            if projection.len() != 1 {
+                return Err(CoreError::new(format!(
+                    "subquery projects {} columns; expected exactly one",
+                    projection.len()
+                )));
+            }
+            if projection[0].wildcard.is_some() {
+                return Err(CoreError::new(
+                    "wildcard subquery projection cannot be proven to contain exactly one column",
+                ));
+            }
+            Ok(SingleColumnShape::Exact)
+        }
+        PhysicalPlan::Sort { input, .. }
+        | PhysicalPlan::Filter { input, .. }
+        | PhysicalPlan::Limit { input, .. }
+        | PhysicalPlan::Distinct { input }
+        | PhysicalPlan::ApplyExists { input, .. }
+        | PhysicalPlan::ApplyInSubquery { input, .. }
+        | PhysicalPlan::Exchange { input, .. }
+        | PhysicalPlan::RepartitionHash { input, .. }
+        | PhysicalPlan::Materialize { input } => physical_subquery_single_column_shape(input),
+        PhysicalPlan::Union { inputs, .. } => {
+            let mut shape = SingleColumnShape::Exact;
+            for input in inputs {
+                if matches!(
+                    physical_subquery_single_column_shape(input)?,
+                    SingleColumnShape::Dynamic
+                ) {
+                    shape = SingleColumnShape::Dynamic;
+                }
+            }
+            Ok(shape)
+        }
+        PhysicalPlan::Source(_) | PhysicalPlan::Values { .. } | PhysicalPlan::Join(_) => {
+            Ok(SingleColumnShape::Dynamic)
+        }
+    }
+}
+
+fn reject_duplicate_projection_aliases<'a>(
+    aliases: impl IntoIterator<Item = &'a str>,
+) -> CoreResult<()> {
+    let mut seen = BTreeSet::new();
+    for alias in aliases {
+        if !seen.insert(alias) {
+            return Err(CoreError::new(format!(
+                "subquery projection contains duplicate alias '{alias}'"
+            )));
+        }
+    }
+    Ok(())
+}
+
+fn single_column_subquery_value(row: Object, shape: SingleColumnShape) -> CoreResult<Value> {
+    let fields = row.into_btree();
+    if fields.is_empty() && matches!(shape, SingleColumnShape::Exact) {
+        return Ok(Value::Null);
+    }
+    if fields.len() != 1 {
+        return Err(CoreError::new(format!(
+            "subquery returned {} columns; expected exactly one",
+            fields.len()
+        )));
+    }
+    Ok(fields
+        .into_values()
+        .next()
+        .expect("single-column row must contain one value"))
 }
 
 fn execute_hash_join(
@@ -1488,7 +1684,7 @@ fn join_pair_matches(
                 &join.left_binding,
                 &join.right_binding,
             );
-            evaluate_filter_expr(&merged, predicate)
+            matches!(evaluate_join_predicate(&merged, predicate), SqlTruth::True)
         }
         PhysicalJoinCondition::Eq { left: l, right: r } => {
             let lv = value_ref_for_join_key(left, l);
@@ -1496,6 +1692,79 @@ fn join_pair_matches(
             match (lv, rv) {
                 (Some(lv), Some(rv)) => lv.into_owned() == rv.into_owned(),
                 _ => false,
+            }
+        }
+    }
+}
+
+#[derive(Clone, Copy)]
+enum SqlTruth {
+    True,
+    False,
+    Unknown,
+}
+
+fn evaluate_join_predicate(row: &dyn QueryObjectAccess, expr: &Expr) -> SqlTruth {
+    match expr {
+        Expr::Binary { op, left, right } if *op == semantic_data::query::BinaryOp::And => {
+            match (
+                evaluate_join_predicate(row, left),
+                evaluate_join_predicate(row, right),
+            ) {
+                (SqlTruth::False, _) | (_, SqlTruth::False) => SqlTruth::False,
+                (SqlTruth::True, SqlTruth::True) => SqlTruth::True,
+                _ => SqlTruth::Unknown,
+            }
+        }
+        Expr::Binary { op, left, right } if *op == semantic_data::query::BinaryOp::Or => {
+            match (
+                evaluate_join_predicate(row, left),
+                evaluate_join_predicate(row, right),
+            ) {
+                (SqlTruth::True, _) | (_, SqlTruth::True) => SqlTruth::True,
+                (SqlTruth::False, SqlTruth::False) => SqlTruth::False,
+                _ => SqlTruth::Unknown,
+            }
+        }
+        Expr::Binary { op, left, right }
+            if matches!(
+                op,
+                semantic_data::query::BinaryOp::Eq
+                    | semantic_data::query::BinaryOp::NotEq
+                    | semantic_data::query::BinaryOp::Lt
+                    | semantic_data::query::BinaryOp::Lte
+                    | semantic_data::query::BinaryOp::Gt
+                    | semantic_data::query::BinaryOp::Gte
+            ) =>
+        {
+            let Some(left) = evaluate_expr(row, left) else {
+                return SqlTruth::Unknown;
+            };
+            let Some(right) = evaluate_expr(row, right) else {
+                return SqlTruth::Unknown;
+            };
+            if left.is_nullish() || right.is_nullish() {
+                return SqlTruth::Unknown;
+            }
+            match evaluate_expr(row, expr) {
+                Some(Value::Bool(true)) => SqlTruth::True,
+                Some(Value::Bool(false)) => SqlTruth::False,
+                _ => SqlTruth::Unknown,
+            }
+        }
+        Expr::Unary {
+            op: semantic_data::query::UnaryOp::Not,
+            expr,
+        } => match evaluate_join_predicate(row, expr) {
+            SqlTruth::True => SqlTruth::False,
+            SqlTruth::False => SqlTruth::True,
+            SqlTruth::Unknown => SqlTruth::Unknown,
+        },
+        _ => {
+            if evaluate_filter_expr(row, expr) {
+                SqlTruth::True
+            } else {
+                SqlTruth::False
             }
         }
     }
@@ -1621,7 +1890,14 @@ fn value_ref_for_join_key<'a>(
     row: &'a dyn QueryObjectAccess,
     key: &PhysicalJoinKey,
 ) -> Option<ValueRef<'a>> {
-    value_ref_for_field(row, &key.field, Some(&key.source_path))
+    let value = value_ref_for_field(row, &key.field, Some(&key.source_path))?;
+    let is_nullish = match &value {
+        ValueRef::Owned(value) => value.is_nullish(),
+        ValueRef::Ref(value) => value.is_nullish(),
+        ValueRef::Void | ValueRef::Null => true,
+        _ => false,
+    };
+    (!is_nullish).then_some(value)
 }
 
 fn execute_aggregate(
@@ -1688,23 +1964,48 @@ fn evaluate_group_expr(rows: &[Object], expr: &Expr) -> Option<Value> {
     match expr {
         Expr::Aggregate { op, distinct, arg } => evaluate_aggregate_expr(rows, *op, *distinct, arg),
         Expr::Unary { op, expr } => {
-            let one = rows.first()?;
+            let value = evaluate_group_expr(rows, expr)?;
+            if value.is_nullish() {
+                return Some(Value::Null);
+            }
+            let empty = Object::new();
+            let one = rows.first().unwrap_or(&empty);
             evaluate_expr(
                 one,
                 &Expr::Unary {
                     op: *op,
-                    expr: Box::new(rewrite_group_expr(rows, expr)?),
+                    expr: Box::new(Expr::Operand(Operand::Literal(value))),
                 },
             )
         }
         Expr::Binary { op, left, right } => {
-            let one = rows.first()?;
+            let left = evaluate_group_expr(rows, left)?;
+            let right = evaluate_group_expr(rows, right)?;
+            if left.is_nullish() || right.is_nullish() {
+                return match op {
+                    semantic_data::query::BinaryOp::And
+                        if matches!(left, Value::Bool(false))
+                            || matches!(right, Value::Bool(false)) =>
+                    {
+                        Some(Value::Bool(false))
+                    }
+                    semantic_data::query::BinaryOp::Or
+                        if matches!(left, Value::Bool(true))
+                            || matches!(right, Value::Bool(true)) =>
+                    {
+                        Some(Value::Bool(true))
+                    }
+                    _ => Some(Value::Null),
+                };
+            }
+            let empty = Object::new();
+            let one = rows.first().unwrap_or(&empty);
             evaluate_expr(
                 one,
                 &Expr::Binary {
                     op: *op,
-                    left: Box::new(rewrite_group_expr(rows, left)?),
-                    right: Box::new(rewrite_group_expr(rows, right)?),
+                    left: Box::new(Expr::Operand(Operand::Literal(left))),
+                    right: Box::new(Expr::Operand(Operand::Literal(right))),
                 },
             )
         }
@@ -1713,102 +2014,155 @@ fn evaluate_group_expr(rows: &[Object], expr: &Expr) -> Option<Value> {
             then_expr,
             else_expr,
         } => {
-            let one = rows.first()?;
-            evaluate_expr(
-                one,
-                &Expr::IfElse {
-                    cond: Box::new(rewrite_group_expr(rows, cond)?),
-                    then_expr: Box::new(rewrite_group_expr(rows, then_expr)?),
-                    else_expr: Box::new(rewrite_group_expr(rows, else_expr)?),
-                },
-            )
+            let condition = evaluate_group_expr(rows, cond)?;
+            if matches!(condition, Value::Bool(true)) {
+                evaluate_group_expr(rows, then_expr)
+            } else {
+                evaluate_group_expr(rows, else_expr)
+            }
         }
         Expr::Coalesce(items) => {
-            let mut rewritten = Vec::with_capacity(items.len());
             for item in items {
-                rewritten.push(rewrite_group_expr(rows, item)?);
+                let Some(value) = evaluate_group_expr(rows, item) else {
+                    continue;
+                };
+                if !value.is_nullish() {
+                    return Some(value);
+                }
             }
-            evaluate_expr(rows.first()?, &Expr::Coalesce(rewritten))
+            Some(Value::Null)
         }
         Expr::Function { name, args } => {
             let mut rewritten = Vec::with_capacity(args.len());
+            let mut contains_null = false;
             for arg in args {
                 rewritten.push(match arg {
-                    FunctionArg::Expr(expr) => FunctionArg::Expr(rewrite_group_expr(rows, expr)?),
+                    FunctionArg::Expr(expr) => {
+                        let value = evaluate_group_expr(rows, expr)?;
+                        contains_null |= value.is_nullish();
+                        FunctionArg::Expr(Expr::Operand(Operand::Literal(value)))
+                    }
                     FunctionArg::Wildcard => FunctionArg::Wildcard,
                 });
             }
+            let empty = Object::new();
+            let one = rows.first().unwrap_or(&empty);
             evaluate_expr(
-                rows.first()?,
+                one,
                 &Expr::Function {
                     name: name.clone(),
                     args: rewritten,
                 },
             )
+            .or_else(|| contains_null.then_some(Value::Null))
         }
-        _ => rows.first().and_then(|row| evaluate_expr(row, expr)),
-    }
-}
-
-fn rewrite_group_expr(rows: &[Object], expr: &Expr) -> Option<Expr> {
-    if expr_contains_aggregate(expr) {
-        evaluate_group_expr(rows, expr).map(|value| Expr::Operand(Operand::Literal(value)))
-    } else {
-        Some(expr.clone())
-    }
-}
-
-fn expr_contains_aggregate(expr: &Expr) -> bool {
-    match expr {
-        Expr::Aggregate { .. } => true,
-        Expr::Unary { expr, .. } => expr_contains_aggregate(expr),
-        Expr::Binary { left, right, .. } => {
-            expr_contains_aggregate(left) || expr_contains_aggregate(right)
-        }
-        Expr::IfElse {
-            cond,
-            then_expr,
-            else_expr,
+        Expr::InList {
+            expr,
+            list,
+            negated,
         } => {
-            expr_contains_aggregate(cond)
-                || expr_contains_aggregate(then_expr)
-                || expr_contains_aggregate(else_expr)
-        }
-        Expr::Coalesce(items) => items.iter().any(expr_contains_aggregate),
-        Expr::Function { args, .. } => args.iter().any(|arg| match arg {
-            FunctionArg::Expr(expr) => expr_contains_aggregate(expr),
-            FunctionArg::Wildcard => false,
-        }),
-        Expr::InList { expr, list, .. } => {
-            expr_contains_aggregate(expr) || list.iter().any(expr_contains_aggregate)
+            let target = evaluate_group_expr(rows, expr)?;
+            if list.is_empty() {
+                return Some(Value::Bool(*negated));
+            }
+            if target.is_nullish() {
+                return Some(Value::Null);
+            }
+            let mut contains_null = false;
+            for item in list {
+                let Some(candidate) = evaluate_group_expr(rows, item) else {
+                    contains_null = true;
+                    continue;
+                };
+                if candidate.is_nullish() {
+                    contains_null = true;
+                } else if candidate == target {
+                    return Some(Value::Bool(!*negated));
+                }
+            }
+            if contains_null {
+                Some(Value::Null)
+            } else {
+                Some(Value::Bool(*negated))
+            }
         }
         Expr::Between {
-            expr, low, high, ..
+            expr,
+            low,
+            high,
+            negated,
         } => {
-            expr_contains_aggregate(expr)
-                || expr_contains_aggregate(low)
-                || expr_contains_aggregate(high)
+            let value = evaluate_group_expr(rows, expr)?;
+            let low = evaluate_group_expr(rows, low)?;
+            let high = evaluate_group_expr(rows, high)?;
+            if value.is_nullish() || low.is_nullish() || high.is_nullish() {
+                return Some(Value::Null);
+            }
+            Some(Value::Bool(if *negated {
+                value < low || value > high
+            } else {
+                value >= low && value <= high
+            }))
         }
-        Expr::PatternMatch { expr, pattern, .. } | Expr::RegexMatch { expr, pattern, .. } => {
-            expr_contains_aggregate(expr) || expr_contains_aggregate(pattern)
-        }
-        Expr::IsNull { expr, .. } => expr_contains_aggregate(expr),
-        Expr::RelationExists {
-            relation,
-            source,
-            target,
-            max_depth,
-            ..
+        Expr::PatternMatch {
+            kind,
+            expr,
+            pattern,
+            case_insensitive,
+            negated,
         } => {
-            expr_contains_aggregate(relation)
-                || expr_contains_aggregate(source)
-                || expr_contains_aggregate(target)
-                || max_depth
-                    .as_ref()
-                    .is_some_and(|depth| expr_contains_aggregate(depth))
+            let value = evaluate_group_expr(rows, expr)?;
+            let pattern = evaluate_group_expr(rows, pattern)?;
+            if value.is_nullish() || pattern.is_nullish() {
+                return Some(Value::Null);
+            }
+            evaluate_group_scalar_expr(
+                rows,
+                Expr::PatternMatch {
+                    kind: *kind,
+                    expr: Box::new(Expr::Operand(Operand::Literal(value))),
+                    pattern: Box::new(Expr::Operand(Operand::Literal(pattern))),
+                    case_insensitive: *case_insensitive,
+                    negated: *negated,
+                },
+            )
         }
-        Expr::Subquery(_) | Expr::Exists { .. } | Expr::Operand(_) => false,
+        Expr::RegexMatch {
+            expr,
+            pattern,
+            case_insensitive,
+            negated,
+        } => {
+            let value = evaluate_group_expr(rows, expr)?;
+            let pattern = evaluate_group_expr(rows, pattern)?;
+            if value.is_nullish() || pattern.is_nullish() {
+                return Some(Value::Null);
+            }
+            evaluate_group_scalar_expr(
+                rows,
+                Expr::RegexMatch {
+                    expr: Box::new(Expr::Operand(Operand::Literal(value))),
+                    pattern: Box::new(Expr::Operand(Operand::Literal(pattern))),
+                    case_insensitive: *case_insensitive,
+                    negated: *negated,
+                },
+            )
+        }
+        Expr::IsNull { expr, negated } => {
+            let is_null = evaluate_group_expr(rows, expr).is_none_or(|value| value.is_nullish());
+            Some(Value::Bool(if *negated { !is_null } else { is_null }))
+        }
+        Expr::Operand(Operand::Literal(value)) => Some(value.clone()),
+        Expr::Operand(Operand::Field(_))
+        | Expr::Subquery(_)
+        | Expr::Exists { .. }
+        | Expr::RelationExists { .. } => rows.first().and_then(|row| evaluate_expr(row, expr)),
     }
+}
+
+fn evaluate_group_scalar_expr(rows: &[Object], expr: Expr) -> Option<Value> {
+    let empty = Object::new();
+    evaluate_expr(rows.first().unwrap_or(&empty), &expr)
 }
 
 fn evaluate_aggregate_expr(
@@ -2421,6 +2775,272 @@ mod tests {
     }
 
     #[test]
+    fn mixed_bare_wildcard_projection_preserves_ordered_map_overwrite_semantics() {
+        let mut row = obj_i64("id", 1);
+        row.insert("title", Value::String("original".to_string()));
+        let plan = PhysicalPlan::Project {
+            input: Box::new(PhysicalPlan::Values { values: vec![row] }),
+            projection: vec![
+                PhysicalProjectionField {
+                    expr: Expr::Operand(Operand::Literal(Value::Null)),
+                    field: None,
+                    source_path: None,
+                    alias: None,
+                    wildcard: Some(FieldPath::new()),
+                },
+                PhysicalProjectionField {
+                    expr: Expr::Operand(Operand::Literal(Value::String("override".to_string()))),
+                    field: None,
+                    source_path: None,
+                    alias: Some("title".to_string()),
+                    wildcard: None,
+                },
+            ],
+        };
+
+        let out = run_async(execute_physical_plan_collect(
+            plan,
+            Arc::new(AsyncInlineSource::new(Vec::new())),
+            QueryContext::default(),
+            ExecutionOptions::default(),
+        ))
+        .unwrap();
+
+        assert_eq!(out.len(), 1);
+        assert_eq!(out[0].get("id"), Some(&Value::I64(1)));
+        assert_eq!(
+            out[0].get("title"),
+            Some(&Value::String("override".to_string()))
+        );
+    }
+
+    #[test]
+    fn global_aggregate_expressions_evaluate_over_empty_input() {
+        let count = || Expr::Aggregate {
+            op: AggregateOp::Count,
+            distinct: false,
+            arg: Box::new(FunctionArg::Wildcard),
+        };
+        let sum = || Expr::Aggregate {
+            op: AggregateOp::Sum,
+            distinct: false,
+            arg: Box::new(FunctionArg::Expr(Expr::Operand(Operand::Field(
+                FieldPath::from_fields(["score"]),
+            )))),
+        };
+        let projection = vec![
+            PhysicalProjectionField {
+                expr: Expr::Binary {
+                    op: semantic_data::query::BinaryOp::Add,
+                    left: Box::new(count()),
+                    right: Box::new(Expr::Operand(Operand::Literal(Value::I64(1)))),
+                },
+                field: None,
+                source_path: None,
+                alias: Some("adjusted".to_string()),
+                wildcard: None,
+            },
+            PhysicalProjectionField {
+                expr: Expr::Operand(Operand::Literal(Value::String("empty".to_string()))),
+                field: None,
+                source_path: None,
+                alias: Some("label".to_string()),
+                wildcard: None,
+            },
+            PhysicalProjectionField {
+                expr: Expr::Coalesce(vec![sum(), Expr::Operand(Operand::Literal(Value::I64(0)))]),
+                field: None,
+                source_path: None,
+                alias: Some("sum_or_zero".to_string()),
+                wildcard: None,
+            },
+            PhysicalProjectionField {
+                expr: Expr::Binary {
+                    op: semantic_data::query::BinaryOp::Add,
+                    left: Box::new(sum()),
+                    right: Box::new(Expr::Operand(Operand::Literal(Value::I64(1)))),
+                },
+                field: None,
+                source_path: None,
+                alias: Some("nullable_sum".to_string()),
+                wildcard: None,
+            },
+            PhysicalProjectionField {
+                expr: Expr::IsNull {
+                    expr: Box::new(sum()),
+                    negated: false,
+                },
+                field: None,
+                source_path: None,
+                alias: Some("sum_is_null".to_string()),
+                wildcard: None,
+            },
+        ];
+        let having = Some(Expr::Binary {
+            op: semantic_data::query::BinaryOp::Eq,
+            left: Box::new(count()),
+            right: Box::new(Expr::Operand(Operand::Literal(Value::I64(0)))),
+        });
+
+        let rows = execute_aggregate(Vec::new(), &[], &projection, &having).unwrap();
+        assert_eq!(rows.len(), 1);
+        let row = rows[0].to_object();
+        assert_eq!(row.get("adjusted"), Some(&Value::F64(1.0.into())));
+        assert_eq!(row.get("label"), Some(&Value::String("empty".to_string())));
+        assert_eq!(row.get("sum_or_zero"), Some(&Value::I64(0)));
+        assert_eq!(row.get("nullable_sum"), Some(&Value::Null));
+        assert_eq!(row.get("sum_is_null"), Some(&Value::Bool(true)));
+    }
+
+    #[test]
+    fn grouped_aggregate_does_not_invent_a_group_for_empty_input() {
+        let projection = vec![PhysicalProjectionField {
+            expr: Expr::Aggregate {
+                op: AggregateOp::Count,
+                distinct: false,
+                arg: Box::new(FunctionArg::Wildcard),
+            },
+            field: None,
+            source_path: None,
+            alias: Some("count".to_string()),
+            wildcard: None,
+        }];
+
+        let rows = execute_aggregate(
+            Vec::new(),
+            &[Expr::Operand(Operand::Field(FieldPath::from_fields([
+                "kind",
+            ])))],
+            &projection,
+            &None,
+        )
+        .unwrap();
+        assert!(rows.is_empty());
+    }
+
+    #[test]
+    fn aggregate_group_expressions_cover_range_membership_and_patterns() {
+        let sum = || Expr::Aggregate {
+            op: AggregateOp::Sum,
+            distinct: false,
+            arg: Box::new(FunctionArg::Expr(Expr::Operand(Operand::Field(
+                FieldPath::from_fields(["score"]),
+            )))),
+        };
+        let count = || Expr::Aggregate {
+            op: AggregateOp::Count,
+            distinct: false,
+            arg: Box::new(FunctionArg::Wildcard),
+        };
+        let max_name = || Expr::Aggregate {
+            op: AggregateOp::Max,
+            distinct: false,
+            arg: Box::new(FunctionArg::Expr(Expr::Operand(Operand::Field(
+                FieldPath::from_fields(["name"]),
+            )))),
+        };
+        let between = |negated| Expr::Between {
+            expr: Box::new(sum()),
+            low: Box::new(Expr::Operand(Operand::Literal(Value::F64(4.0.into())))),
+            high: Box::new(Expr::Operand(Operand::Literal(Value::F64(6.0.into())))),
+            negated,
+        };
+        let in_with_null = |negated| Expr::InList {
+            expr: Box::new(count()),
+            list: vec![
+                Expr::Operand(Operand::Literal(Value::I64(2))),
+                Expr::Operand(Operand::Literal(Value::Null)),
+            ],
+            negated,
+        };
+        let in_empty = |negated| Expr::InList {
+            expr: Box::new(count()),
+            list: Vec::new(),
+            negated,
+        };
+        let like = |negated| Expr::PatternMatch {
+            kind: semantic_data::query::PatternMatchKind::Like,
+            expr: Box::new(max_name()),
+            pattern: Box::new(Expr::Operand(Operand::Literal(Value::String(
+                "b%".to_string(),
+            )))),
+            case_insensitive: false,
+            negated,
+        };
+        let regex = |negated| Expr::RegexMatch {
+            expr: Box::new(max_name()),
+            pattern: Box::new(Expr::Operand(Operand::Literal(Value::String(
+                "^b".to_string(),
+            )))),
+            case_insensitive: false,
+            negated,
+        };
+        let field = |alias: &str, expr| PhysicalProjectionField {
+            expr,
+            field: None,
+            source_path: None,
+            alias: Some(alias.to_string()),
+            wildcard: None,
+        };
+        let projection = vec![
+            field("between", between(false)),
+            field("not_between", between(true)),
+            field("in", in_with_null(false)),
+            field("not_in", in_with_null(true)),
+            field("in_empty", in_empty(false)),
+            field("not_in_empty", in_empty(true)),
+            field("like", like(false)),
+            field("not_like", like(true)),
+            field("regex", regex(false)),
+            field("not_regex", regex(true)),
+        ];
+        let mut first = Object::new();
+        first.insert("score", Value::I64(2));
+        first.insert("name", Value::String("alpha".to_string()));
+        let mut second = Object::new();
+        second.insert("score", Value::I64(3));
+        second.insert("name", Value::String("beta".to_string()));
+
+        let nonempty = execute_aggregate(
+            vec![Box::new(first), Box::new(second)],
+            &[],
+            &projection,
+            &Some(between(false)),
+        )
+        .unwrap();
+        assert_eq!(nonempty.len(), 1);
+        let row = nonempty[0].to_object();
+        for key in ["between", "in", "like", "regex", "not_in_empty"] {
+            assert_eq!(row.get(key), Some(&Value::Bool(true)), "{key}");
+        }
+        for key in ["not_between", "not_in", "in_empty", "not_like", "not_regex"] {
+            assert_eq!(row.get(key), Some(&Value::Bool(false)), "{key}");
+        }
+
+        let empty = execute_aggregate(Vec::new(), &[], &projection, &None).unwrap();
+        assert_eq!(empty.len(), 1);
+        let row = empty[0].to_object();
+        for key in [
+            "between",
+            "not_between",
+            "in",
+            "not_in",
+            "like",
+            "not_like",
+            "regex",
+            "not_regex",
+        ] {
+            assert_eq!(row.get(key), Some(&Value::Null), "{key}");
+        }
+        assert_eq!(row.get("in_empty"), Some(&Value::Bool(false)));
+        assert_eq!(row.get("not_in_empty"), Some(&Value::Bool(true)));
+
+        let filtered_empty =
+            execute_aggregate(Vec::new(), &[], &projection, &Some(between(false))).unwrap();
+        assert!(filtered_empty.is_empty());
+    }
+
+    #[test]
     fn async_filtered_scan_and_index_lookup_use_source_hooks() {
         let source = Arc::new(AsyncInlineSource::new(vec![
             obj_i64("id", 1),
@@ -2474,8 +3094,14 @@ mod tests {
         l1.insert("id", Value::I64(1));
         let mut l2 = Object::new();
         l2.insert("id", Value::I64(2));
+        let mut lnull = Object::new();
+        lnull.insert("id", Value::Null);
+        let lmissing = Object::new();
         let mut r1 = Object::new();
         r1.insert("rid", Value::I64(2));
+        let mut rnull = Object::new();
+        rnull.insert("rid", Value::Null);
+        let rmissing = Object::new();
 
         let plan = PhysicalPlan::Join(PhysicalJoinPlan {
             left: Box::new(PhysicalPlan::Source(PhysicalSource::Scan {
@@ -2513,8 +3139,8 @@ mod tests {
         let out = execute_physical_plan_with_source(
             &plan,
             &InlineSource {
-                left: vec![l1, l2],
-                right: vec![r1],
+                left: vec![l1, l2, lnull, lmissing],
+                right: vec![r1, rnull, rmissing],
             },
             &QueryContext::default(),
         )
@@ -2522,6 +3148,93 @@ mod tests {
         assert_eq!(out.len(), 1);
         assert!(out[0].contains_key("l"));
         assert!(out[0].contains_key("r"));
+    }
+
+    #[test]
+    fn residual_equality_join_matches_hash_null_semantics_for_all_join_types() {
+        let source_ref = |name: &str| {
+            PhysicalPlan::Source(PhysicalSource::Scan {
+                source: SourceRef {
+                    source_name: Some(name.to_string()),
+                    collection_id: None,
+                    binding: None,
+                    backend_tag: None,
+                },
+            })
+        };
+        let plan = |join_type, residual| {
+            let equality = Expr::Binary {
+                op: semantic_data::query::BinaryOp::Eq,
+                left: Box::new(Expr::Operand(Operand::Field(FieldPath::from_fields([
+                    "l", "id",
+                ])))),
+                right: Box::new(Expr::Operand(Operand::Field(FieldPath::from_fields([
+                    "r", "id",
+                ])))),
+            };
+            PhysicalPlan::Join(PhysicalJoinPlan {
+                left: Box::new(source_ref("left")),
+                right: Box::new(source_ref("right")),
+                join_type,
+                algorithm: if residual {
+                    PhysicalJoinAlgorithm::NestedLoop
+                } else {
+                    PhysicalJoinAlgorithm::Hash
+                },
+                condition: if residual {
+                    PhysicalJoinCondition::Predicate(Expr::Binary {
+                        op: semantic_data::query::BinaryOp::And,
+                        left: Box::new(equality),
+                        right: Box::new(Expr::Operand(Operand::Literal(Value::Bool(true)))),
+                    })
+                } else {
+                    PhysicalJoinCondition::Eq {
+                        left: PhysicalJoinKey {
+                            field: FieldRef::Path(FieldPath::from_fields(["id"])),
+                            source_path: FieldPath::from_fields(["id"]),
+                        },
+                        right: PhysicalJoinKey {
+                            field: FieldRef::Path(FieldPath::from_fields(["id"])),
+                            source_path: FieldPath::from_fields(["id"]),
+                        },
+                    }
+                },
+                left_binding: "l".to_string(),
+                right_binding: "r".to_string(),
+            })
+        };
+        let rows = || {
+            let mut null = Object::new();
+            null.insert("id", Value::Null);
+            vec![obj_i64("id", 1), null, Object::new()]
+        };
+
+        for join_type in [
+            JoinType::Inner,
+            JoinType::Left,
+            JoinType::Right,
+            JoinType::Full,
+        ] {
+            let hash = execute_physical_plan_with_source(
+                &plan(join_type, false),
+                &InlineSource {
+                    left: rows(),
+                    right: rows(),
+                },
+                &QueryContext::default(),
+            )
+            .unwrap();
+            let residual = execute_physical_plan_with_source(
+                &plan(join_type, true),
+                &InlineSource {
+                    left: rows(),
+                    right: rows(),
+                },
+                &QueryContext::default(),
+            )
+            .unwrap();
+            assert_eq!(residual, hash, "join type {join_type:?}");
+        }
     }
 
     #[test]
@@ -2663,5 +3376,406 @@ mod tests {
         .unwrap();
         assert_eq!(out.len(), 1);
         assert_eq!(out[0].get("v"), Some(&Value::I64(1)));
+    }
+
+    #[test]
+    fn scalar_subquery_enforces_row_cardinality_and_empty_is_null() {
+        let scalar_plan = || PhysicalPlan::Project {
+            input: Box::new(PhysicalPlan::Values {
+                values: vec![obj_i64("id", 1)],
+            }),
+            projection: vec![PhysicalProjectionField {
+                expr: Expr::Subquery(Box::new(
+                    SelectQuery::new()
+                        .with_collection("right")
+                        .with_projection(vec![QueryField {
+                            expr: Box::new(Expr::Operand(Operand::Field(FieldPath::from_fields(
+                                ["x"],
+                            )))),
+                            alias: None,
+                            wildcard: None,
+                        }]),
+                )),
+                field: None,
+                source_path: None,
+                alias: Some("scalar".to_string()),
+                wildcard: None,
+            }],
+        };
+
+        let empty = execute_physical_plan_with_source(
+            &scalar_plan(),
+            &InlineSource {
+                left: Vec::new(),
+                right: Vec::new(),
+            },
+            &QueryContext::default(),
+        )
+        .unwrap();
+        assert_eq!(empty[0].get("scalar"), Some(&Value::Null));
+
+        let err = execute_physical_plan_with_source(
+            &scalar_plan(),
+            &InlineSource {
+                left: Vec::new(),
+                right: vec![obj_i64("x", 1), obj_i64("x", 2)],
+            },
+            &QueryContext::default(),
+        )
+        .unwrap_err();
+        assert!(err.to_string().contains("expected at most one"));
+    }
+
+    #[test]
+    fn scalar_and_in_subqueries_require_exactly_one_column() {
+        let mut right = Object::new();
+        right.insert("x", Value::I64(1));
+        right.insert("y", Value::I64(2));
+        let two_columns = || {
+            SelectQuery::new()
+                .with_collection("right")
+                .with_projection(vec![
+                    QueryField {
+                        expr: Box::new(Expr::Operand(Operand::Field(FieldPath::from_fields([
+                            "x",
+                        ])))),
+                        alias: None,
+                        wildcard: None,
+                    },
+                    QueryField {
+                        expr: Box::new(Expr::Operand(Operand::Field(FieldPath::from_fields([
+                            "y",
+                        ])))),
+                        alias: None,
+                        wildcard: None,
+                    },
+                ])
+        };
+        let source = InlineSource {
+            left: Vec::new(),
+            right: vec![right],
+        };
+
+        let scalar = PhysicalPlan::Project {
+            input: Box::new(PhysicalPlan::Values {
+                values: vec![obj_i64("id", 1)],
+            }),
+            projection: vec![PhysicalProjectionField {
+                expr: Expr::Subquery(Box::new(two_columns())),
+                field: None,
+                source_path: None,
+                alias: Some("scalar".to_string()),
+                wildcard: None,
+            }],
+        };
+        let scalar_err =
+            execute_physical_plan_with_source(&scalar, &source, &QueryContext::default())
+                .unwrap_err();
+        assert!(scalar_err.to_string().contains("expected exactly one"));
+
+        let in_filter = PhysicalPlan::Filter {
+            input: Box::new(PhysicalPlan::Values {
+                values: vec![obj_i64("v", 1)],
+            }),
+            predicate: Expr::Binary {
+                op: semantic_data::query::BinaryOp::In,
+                left: Box::new(Expr::Operand(Operand::Field(FieldPath::from_fields(["v"])))),
+                right: Box::new(Expr::Subquery(Box::new(two_columns()))),
+            },
+        };
+        let in_err =
+            execute_physical_plan_with_source(&in_filter, &source, &QueryContext::default())
+                .unwrap_err();
+        assert!(in_err.to_string().contains("expected exactly one"));
+    }
+
+    #[test]
+    fn missing_single_projected_field_is_null_and_duplicate_aliases_fail() {
+        let missing_field_query = || {
+            SelectQuery::new()
+                .with_collection("right")
+                .with_projection(vec![QueryField {
+                    expr: Box::new(Expr::Operand(Operand::Field(FieldPath::from_fields([
+                        "missing",
+                    ])))),
+                    alias: Some("value".to_string()),
+                    wildcard: None,
+                }])
+        };
+        let scalar = PhysicalPlan::Project {
+            input: Box::new(PhysicalPlan::Values {
+                values: vec![obj_i64("id", 1)],
+            }),
+            projection: vec![PhysicalProjectionField {
+                expr: Expr::Subquery(Box::new(missing_field_query())),
+                field: None,
+                source_path: None,
+                alias: Some("scalar".to_string()),
+                wildcard: None,
+            }],
+        };
+        let rows = execute_physical_plan_with_source(
+            &scalar,
+            &InlineSource {
+                left: Vec::new(),
+                right: vec![obj_i64("present", 1)],
+            },
+            &QueryContext::default(),
+        )
+        .unwrap();
+        assert_eq!(rows[0].get("scalar"), Some(&Value::Null));
+
+        let duplicate_alias_query =
+            SelectQuery::new()
+                .with_collection("right")
+                .with_projection(vec![
+                    QueryField {
+                        expr: Box::new(Expr::Operand(Operand::Field(FieldPath::from_fields([
+                            "x",
+                        ])))),
+                        alias: Some("duplicate".to_string()),
+                        wildcard: None,
+                    },
+                    QueryField {
+                        expr: Box::new(Expr::Operand(Operand::Field(FieldPath::from_fields([
+                            "y",
+                        ])))),
+                        alias: Some("duplicate".to_string()),
+                        wildcard: None,
+                    },
+                ]);
+        let duplicate_alias = PhysicalPlan::Project {
+            input: Box::new(PhysicalPlan::Values {
+                values: vec![obj_i64("id", 1)],
+            }),
+            projection: vec![PhysicalProjectionField {
+                expr: Expr::Subquery(Box::new(duplicate_alias_query)),
+                field: None,
+                source_path: None,
+                alias: Some("scalar".to_string()),
+                wildcard: None,
+            }],
+        };
+        let err = execute_physical_plan_with_source(
+            &duplicate_alias,
+            &InlineSource {
+                left: Vec::new(),
+                right: vec![obj_i64("x", 1)],
+            },
+            &QueryContext::default(),
+        )
+        .unwrap_err();
+        assert!(err.to_string().contains("duplicate alias 'duplicate'"));
+    }
+
+    #[test]
+    fn in_subquery_preserves_null_semantics_in_expressions() {
+        let query = || {
+            SelectQuery::new()
+                .with_collection("right")
+                .with_projection(vec![QueryField {
+                    expr: Box::new(Expr::Operand(Operand::Field(FieldPath::from_fields(["x"])))),
+                    alias: None,
+                    wildcard: None,
+                }])
+        };
+        let in_expr = |negated| {
+            let expr = Expr::Binary {
+                op: semantic_data::query::BinaryOp::In,
+                left: Box::new(Expr::Operand(Operand::Field(FieldPath::from_fields(["v"])))),
+                right: Box::new(Expr::Subquery(Box::new(query()))),
+            };
+            if negated {
+                Expr::Unary {
+                    op: semantic_data::query::UnaryOp::Not,
+                    expr: Box::new(expr),
+                }
+            } else {
+                expr
+            }
+        };
+        let project = |expr| PhysicalPlan::Project {
+            input: Box::new(PhysicalPlan::Values {
+                values: vec![obj_i64("v", 2)],
+            }),
+            projection: vec![PhysicalProjectionField {
+                expr,
+                field: None,
+                source_path: None,
+                alias: Some("result".to_string()),
+                wildcard: None,
+            }],
+        };
+        let mut null_row = Object::new();
+        null_row.insert("x", Value::Null);
+        let source = InlineSource {
+            left: Vec::new(),
+            right: vec![obj_i64("x", 1), null_row],
+        };
+
+        let in_rows = execute_physical_plan_with_source(
+            &project(in_expr(false)),
+            &source,
+            &QueryContext::default(),
+        )
+        .unwrap();
+        assert_eq!(in_rows[0].get("result"), Some(&Value::Null));
+
+        let not_in_rows = execute_physical_plan_with_source(
+            &project(in_expr(true)),
+            &source,
+            &QueryContext::default(),
+        )
+        .unwrap();
+        assert_eq!(not_in_rows[0].get("result"), Some(&Value::Null));
+    }
+
+    #[test]
+    fn empty_in_subquery_ignores_null_or_missing_left_operand() {
+        let query = || {
+            SelectQuery::new()
+                .with_collection("right")
+                .with_projection(vec![QueryField {
+                    expr: Box::new(Expr::Operand(Operand::Field(FieldPath::from_fields(["x"])))),
+                    alias: None,
+                    wildcard: None,
+                }])
+        };
+        let in_expr = |negated| {
+            let expr = Expr::Binary {
+                op: semantic_data::query::BinaryOp::In,
+                left: Box::new(Expr::Operand(Operand::Field(FieldPath::from_fields(["v"])))),
+                right: Box::new(Expr::Subquery(Box::new(query()))),
+            };
+            if negated {
+                Expr::Unary {
+                    op: semantic_data::query::UnaryOp::Not,
+                    expr: Box::new(expr),
+                }
+            } else {
+                expr
+            }
+        };
+        let mut null_left = Object::new();
+        null_left.insert("v", Value::Null);
+        let missing_left = Object::new();
+        let source = InlineSource {
+            left: Vec::new(),
+            right: Vec::new(),
+        };
+
+        let projection = PhysicalPlan::Project {
+            input: Box::new(PhysicalPlan::Values {
+                values: vec![null_left.clone()],
+            }),
+            projection: vec![
+                PhysicalProjectionField {
+                    expr: in_expr(false),
+                    field: None,
+                    source_path: None,
+                    alias: Some("in_result".to_string()),
+                    wildcard: None,
+                },
+                PhysicalProjectionField {
+                    expr: in_expr(true),
+                    field: None,
+                    source_path: None,
+                    alias: Some("not_in_result".to_string()),
+                    wildcard: None,
+                },
+            ],
+        };
+        let projected =
+            execute_physical_plan_with_source(&projection, &source, &QueryContext::default())
+                .unwrap();
+        assert_eq!(projected[0].get("in_result"), Some(&Value::Bool(false)));
+        assert_eq!(projected[0].get("not_in_result"), Some(&Value::Bool(true)));
+
+        for (negated, expected_len) in [(false, 0), (true, 2)] {
+            let filter = PhysicalPlan::Filter {
+                input: Box::new(PhysicalPlan::Values {
+                    values: vec![null_left.clone(), missing_left.clone()],
+                }),
+                predicate: in_expr(negated),
+            };
+            let filtered =
+                execute_physical_plan_with_source(&filter, &source, &QueryContext::default())
+                    .unwrap();
+            assert_eq!(filtered.len(), expected_len);
+
+            let apply = PhysicalPlan::ApplyInSubquery {
+                input: Box::new(PhysicalPlan::Values {
+                    values: vec![null_left.clone(), missing_left.clone()],
+                }),
+                left: Expr::Operand(Operand::Field(FieldPath::from_fields(["v"]))),
+                subquery: Box::new(PhysicalPlan::Values { values: Vec::new() }),
+                negated,
+            };
+            let applied =
+                execute_physical_plan_with_source(&apply, &source, &QueryContext::default())
+                    .unwrap();
+            assert_eq!(applied.len(), expected_len);
+        }
+    }
+
+    #[test]
+    fn apply_in_subquery_filters_unknown_null_results() {
+        let mut left_null = Object::new();
+        left_null.insert("v", Value::Null);
+        let mut subquery_null = Object::new();
+        subquery_null.insert("x", Value::Null);
+        let plan = |negated| PhysicalPlan::ApplyInSubquery {
+            input: Box::new(PhysicalPlan::Values {
+                values: vec![obj_i64("v", 1), obj_i64("v", 2), left_null.clone()],
+            }),
+            left: Expr::Operand(Operand::Field(FieldPath::from_fields(["v"]))),
+            subquery: Box::new(PhysicalPlan::Values {
+                values: vec![obj_i64("x", 1), subquery_null.clone()],
+            }),
+            negated,
+        };
+
+        let source = InlineSource {
+            left: Vec::new(),
+            right: Vec::new(),
+        };
+        let in_rows =
+            execute_physical_plan_with_source(&plan(false), &source, &QueryContext::default())
+                .unwrap();
+        assert_eq!(in_rows.len(), 1);
+        assert_eq!(in_rows[0].get("v"), Some(&Value::I64(1)));
+
+        let not_in_rows =
+            execute_physical_plan_with_source(&plan(true), &source, &QueryContext::default())
+                .unwrap();
+        assert!(not_in_rows.is_empty());
+    }
+
+    #[test]
+    fn apply_in_subquery_requires_exactly_one_column() {
+        let mut subquery_row = Object::new();
+        subquery_row.insert("x", Value::I64(1));
+        subquery_row.insert("y", Value::I64(2));
+        let plan = PhysicalPlan::ApplyInSubquery {
+            input: Box::new(PhysicalPlan::Values {
+                values: vec![obj_i64("v", 1)],
+            }),
+            left: Expr::Operand(Operand::Field(FieldPath::from_fields(["v"]))),
+            subquery: Box::new(PhysicalPlan::Values {
+                values: vec![subquery_row],
+            }),
+            negated: false,
+        };
+
+        let err = execute_physical_plan_with_source(
+            &plan,
+            &InlineSource {
+                left: Vec::new(),
+                right: Vec::new(),
+            },
+            &QueryContext::default(),
+        )
+        .unwrap_err();
+        assert!(err.to_string().contains("expected exactly one"));
     }
 }

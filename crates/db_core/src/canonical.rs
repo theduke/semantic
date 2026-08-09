@@ -366,6 +366,9 @@ fn canonicalize_projection_field(
 ) -> CanonicalResult<QueryField> {
     let join_bindings = select_join_bindings(query);
     if let Some(path) = &field.wildcard {
+        if path.segments().is_empty() {
+            return Ok(field.clone());
+        }
         if wildcard_matches_binding(path, query, collection) {
             let wildcard = if query.joins.is_empty()
                 && wildcard_matches_base_binding(path, query, collection)
@@ -1288,6 +1291,61 @@ mod tests {
 
         let canonical = canonicalize_select_query(&query, &catalog, collection).unwrap();
         assert_eq!(canonical.projection[0].wildcard, Some(FieldPath::new()));
+    }
+
+    #[test]
+    fn canonicalizes_mixed_bare_wildcard_without_losing_projection_order() {
+        let mut catalog = Catalog::new();
+        let _ = catalog.upsert_attribute(AttributeType {
+            id: "semantic:title".to_string(),
+            name: "title".to_string(),
+            ty: Type {
+                kind: TypeKind::String(StringType {
+                    format: None,
+                    normalization: None,
+                }),
+                constraints: vec![],
+                annotations: vec![],
+            },
+            constraints: vec![],
+            meta: Meta::default(),
+        });
+        let _ = catalog
+            .upsert_collection("items", CollectionKind::Schema, IntegrityMode::Permissive)
+            .unwrap();
+        let collection = catalog.collection_by_name("items").unwrap();
+        let query = SelectQuery::new()
+            .with_collection("items")
+            .with_projection(vec![
+                QueryField {
+                    expr: Box::new(Expr::Operand(Operand::Literal(Value::Null))),
+                    alias: None,
+                    wildcard: Some(FieldPath::new()),
+                },
+                QueryField {
+                    expr: Box::new(Expr::Operand(Operand::Field(FieldPath::from_fields([
+                        "title",
+                    ])))),
+                    alias: Some("selected_title".to_string()),
+                    wildcard: None,
+                },
+            ]);
+
+        let canonical = canonicalize_select_query(&query, &catalog, collection).unwrap();
+        assert_eq!(canonical.projection.len(), 2);
+        assert_eq!(canonical.projection[0].wildcard, Some(FieldPath::new()));
+        assert!(matches!(
+            canonical.projection[0].expr.as_ref(),
+            Expr::Operand(Operand::Literal(Value::Null))
+        ));
+        let Expr::Operand(Operand::Field(path)) = canonical.projection[1].expr.as_ref() else {
+            panic!("second projection must remain the explicit field");
+        };
+        assert_eq!(path, &FieldPath::from_fields(["semantic:title"]));
+        assert_eq!(
+            canonical.projection[1].alias.as_deref(),
+            Some("selected_title")
+        );
     }
 
     #[test]

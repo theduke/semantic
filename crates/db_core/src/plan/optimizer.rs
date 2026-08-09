@@ -947,7 +947,8 @@ fn lower_join_condition(join: &LogicalJoinPlan, context: &QueryContext) -> Physi
     match &join.condition {
         LogicalJoinCondition::True => PhysicalJoinCondition::True,
         LogicalJoinCondition::Predicate(predicate) => {
-            PhysicalJoinCondition::Predicate(predicate.clone())
+            try_lower_equi_join_predicate(join, predicate, context)
+                .unwrap_or_else(|| PhysicalJoinCondition::Predicate(predicate.clone()))
         }
         LogicalJoinCondition::UsingFields { left, right } => PhysicalJoinCondition::Eq {
             left: PhysicalJoinKey {
@@ -959,6 +960,101 @@ fn lower_join_condition(join: &LogicalJoinPlan, context: &QueryContext) -> Physi
                 source_path: right.clone(),
             },
         },
+    }
+}
+
+fn try_lower_equi_join_predicate(
+    join: &LogicalJoinPlan,
+    predicate: &Expr,
+    context: &QueryContext,
+) -> Option<PhysicalJoinCondition> {
+    let Expr::Binary {
+        op: BinaryOp::Eq,
+        left,
+        right,
+    } = predicate
+    else {
+        return None;
+    };
+    let Expr::Operand(Operand::Field(left)) = left.as_ref() else {
+        return None;
+    };
+    let Expr::Operand(Operand::Field(right)) = right.as_ref() else {
+        return None;
+    };
+
+    let direct = orient_equi_join_paths(join, left, right)
+        .or_else(|| orient_equi_join_paths(join, right, left))?;
+    let (left, right) = direct;
+    Some(PhysicalJoinCondition::Eq {
+        left: PhysicalJoinKey {
+            field: resolve_field_ref_for_path(context, &left),
+            source_path: left,
+        },
+        right: PhysicalJoinKey {
+            field: resolve_field_ref_for_path(context, &right),
+            source_path: right,
+        },
+    })
+}
+
+fn orient_equi_join_paths(
+    join: &LogicalJoinPlan,
+    left: &FieldPath,
+    right: &FieldPath,
+) -> Option<(FieldPath, FieldPath)> {
+    let (left_binding, left_tail) = split_qualified_path(left)?;
+    let (right_binding, right_tail) = split_qualified_path(right)?;
+    if right_binding != join.right_binding
+        || !logical_plan_has_binding(&join.left, left_binding)
+        || logical_plan_has_binding(&join.left, right_binding)
+    {
+        return None;
+    }
+
+    let left_path = if left_binding == join.left_binding {
+        left_tail
+    } else {
+        left.clone()
+    };
+    Some((left_path, right_tail))
+}
+
+fn split_qualified_path(path: &FieldPath) -> Option<(&str, FieldPath)> {
+    let [PathSegment::Field(binding), tail @ ..] = path.segments() else {
+        return None;
+    };
+    if tail.is_empty() {
+        return None;
+    }
+    Some((binding, tail.to_vec().into()))
+}
+
+fn logical_plan_has_binding(plan: &LogicalPlan, binding: &str) -> bool {
+    match plan {
+        LogicalPlan::Source { source, .. } => {
+            source.binding.as_deref().or(source.source_name.as_deref()) == Some(binding)
+        }
+        LogicalPlan::Join(join) => {
+            join.left_binding == binding
+                || join.right_binding == binding
+                || logical_plan_has_binding(&join.left, binding)
+                || logical_plan_has_binding(&join.right, binding)
+        }
+        LogicalPlan::Filter { input, .. }
+        | LogicalPlan::Sort { input, .. }
+        | LogicalPlan::Project { input, .. }
+        | LogicalPlan::Aggregate { input, .. }
+        | LogicalPlan::Limit { input, .. }
+        | LogicalPlan::Distinct { input }
+        | LogicalPlan::ApplyExists { input, .. }
+        | LogicalPlan::ApplyInSubquery { input, .. }
+        | LogicalPlan::Exchange { input, .. }
+        | LogicalPlan::RepartitionHash { input, .. } => logical_plan_has_binding(input, binding),
+        LogicalPlan::Union { inputs, .. } => inputs
+            .iter()
+            .any(|input| logical_plan_has_binding(input, binding)),
+        LogicalPlan::Values { .. } => false,
     }
 }
 
@@ -1394,6 +1490,105 @@ mod tests {
             LogicalPlan::Union { inputs, .. } => inputs.iter().map(count_ref_joins).sum(),
             LogicalPlan::Source { .. } | LogicalPlan::Values { .. } => 0,
         }
+    }
+
+    fn bound_source(name: &str, binding: &str) -> LogicalPlan {
+        LogicalPlan::Source {
+            source: SourceRef {
+                source_name: Some(name.to_string()),
+                collection_id: None,
+                binding: Some(binding.to_string()),
+                backend_tag: None,
+            },
+            pushed_predicate: None,
+        }
+    }
+
+    fn field(path: impl IntoIterator<Item = &'static str>) -> Expr {
+        Expr::Operand(Operand::Field(FieldPath::from_fields(path)))
+    }
+
+    fn lower_test_join(predicate: Expr) -> PhysicalJoinPlan {
+        let logical = LogicalPlan::Join(LogicalJoinPlan {
+            left: Box::new(bound_source("items", "s")),
+            right: Box::new(bound_source("artists", "a")),
+            join_type: JoinType::Inner,
+            condition: LogicalJoinCondition::Predicate(predicate),
+            left_binding: "s".to_string(),
+            right_binding: "a".to_string(),
+        });
+        let optimizer = Optimizer::new().add_lowering_pass(CoreLoweringPass);
+        let PhysicalPlan::Join(join) =
+            optimizer.lower_to_physical(&logical, None, &QueryContext::default())
+        else {
+            panic!("expected physical join");
+        };
+        join
+    }
+
+    #[test]
+    fn exact_qualified_equi_join_uses_hash_algorithm() {
+        let join = lower_test_join(Expr::Binary {
+            op: BinaryOp::Eq,
+            left: Box::new(field(["s", "artist_id"])),
+            right: Box::new(field(["a", "id"])),
+        });
+
+        assert_eq!(join.algorithm, PhysicalJoinAlgorithm::Hash);
+        let PhysicalJoinCondition::Eq { left, right } = join.condition else {
+            panic!("expected equality join condition");
+        };
+        assert_eq!(left.source_path, FieldPath::from_fields(["artist_id"]));
+        assert_eq!(right.source_path, FieldPath::from_fields(["id"]));
+    }
+
+    #[test]
+    fn reversed_qualified_equi_join_uses_hash_algorithm() {
+        let join = lower_test_join(Expr::Binary {
+            op: BinaryOp::Eq,
+            left: Box::new(field(["a", "id"])),
+            right: Box::new(field(["s", "artist_id"])),
+        });
+
+        assert_eq!(join.algorithm, PhysicalJoinAlgorithm::Hash);
+        let PhysicalJoinCondition::Eq { left, right } = join.condition else {
+            panic!("expected equality join condition");
+        };
+        assert_eq!(left.source_path, FieldPath::from_fields(["artist_id"]));
+        assert_eq!(right.source_path, FieldPath::from_fields(["id"]));
+    }
+
+    #[test]
+    fn ambiguous_or_residual_join_predicates_remain_nested_loops() {
+        let ambiguous = lower_test_join(Expr::Binary {
+            op: BinaryOp::Eq,
+            left: Box::new(field(["artist_id"])),
+            right: Box::new(field(["id"])),
+        });
+        assert_eq!(ambiguous.algorithm, PhysicalJoinAlgorithm::NestedLoop);
+        assert!(matches!(
+            ambiguous.condition,
+            PhysicalJoinCondition::Predicate(_)
+        ));
+
+        let residual = lower_test_join(Expr::Binary {
+            op: BinaryOp::And,
+            left: Box::new(Expr::Binary {
+                op: BinaryOp::Eq,
+                left: Box::new(field(["s", "artist_id"])),
+                right: Box::new(field(["a", "id"])),
+            }),
+            right: Box::new(Expr::Binary {
+                op: BinaryOp::Eq,
+                left: Box::new(field(["a", "active"])),
+                right: Box::new(Expr::Operand(Operand::Literal(Value::Bool(true)))),
+            }),
+        });
+        assert_eq!(residual.algorithm, PhysicalJoinAlgorithm::NestedLoop);
+        assert!(matches!(
+            residual.condition,
+            PhysicalJoinCondition::Predicate(_)
+        ));
     }
 
     #[test]

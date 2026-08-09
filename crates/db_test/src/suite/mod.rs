@@ -45,6 +45,7 @@ pub async fn test_db(db: &Db) {
     test_package_migrations(db).await;
     test_select_query(db).await;
     test_sql_insert_query(db).await;
+    test_sql_end_to_end_regressions(db).await;
     test_update_query(db).await;
     test_delete_query(db).await;
     test_ast_predicate_constructs(db).await;
@@ -508,6 +509,179 @@ async fn test_sql_insert_query(db: &Db) {
     assert_eq!(rows[1].get("score"), Some(&Value::I64(9)));
 }
 
+async fn test_sql_end_to_end_regressions(db: &Db) {
+    if !db
+        .supported_text_query_formats()
+        .contains(&TextQueryFormat::Sql)
+    {
+        return;
+    }
+
+    const ITEMS: &str = "shared_suite_sql_e2e_items";
+    const TAGS: &str = "shared_suite_sql_e2e_tags";
+
+    db.create_collection(ITEMS, CollectionKind::Polymorphic)
+        .await
+        .expect("SQL end-to-end item collection creation should succeed");
+    db.create_collection(TAGS, CollectionKind::Polymorphic)
+        .await
+        .expect("SQL end-to-end tag collection creation should succeed");
+
+    db.insert(ITEMS, "sql-e2e-a", row("sql-e2e-a", "music", 4))
+        .await
+        .expect("first SQL end-to-end item insert should succeed");
+    db.insert(ITEMS, "sql-e2e-b", row("sql-e2e-b", "video", 12))
+        .await
+        .expect("second SQL end-to-end item insert should succeed");
+    db.insert(TAGS, "sql-tag-a", row("sql-tag-a", "tag", 0))
+        .await
+        .expect("first SQL end-to-end tag insert should succeed");
+    db.insert(TAGS, "sql-tag-b", row("sql-tag-b", "tag", 0))
+        .await
+        .expect("second SQL end-to-end tag insert should succeed");
+
+    let case_result = db
+        .query_text(
+            TextQueryFormat::Sql,
+            format!(
+                "SELECT id, CASE WHEN score > 10 THEN 'high' WHEN score > 0 THEN 'positive' ELSE 'none' END AS band, CASE kind WHEN 'music' THEN 'audio' WHEN 'video' THEN 'visual' ELSE 'other' END AS category FROM {ITEMS} ORDER BY id"
+            ),
+        )
+        .await
+        .expect("searched and simple multi-branch CASE SQL should execute");
+    let QueryResult::Select(case_rows) = case_result else {
+        panic!("CASE SQL query should return SELECT rows");
+    };
+    assert_eq!(row_ids(&case_rows), vec!["sql-e2e-a", "sql-e2e-b"]);
+    assert_eq!(
+        row_strings(&case_rows, "band"),
+        vec!["positive".to_string(), "high".to_string()]
+    );
+    assert_eq!(
+        row_strings(&case_rows, "category"),
+        vec!["audio".to_string(), "visual".to_string()]
+    );
+
+    let cross_result = db
+        .query_text(
+            TextQueryFormat::Sql,
+            format!(
+                "SELECT i.id AS item_id, t.id AS tag_id FROM {ITEMS} AS i CROSS JOIN {TAGS}._ AS t ORDER BY i.id, t.id"
+            ),
+        )
+        .await
+        .expect("cross-collection CROSS JOIN SQL should execute");
+    let QueryResult::Select(cross_rows) = cross_result else {
+        panic!("CROSS JOIN SQL query should return SELECT rows");
+    };
+    let pairs = cross_rows
+        .iter()
+        .map(|row| {
+            (
+                row.get("item_id")
+                    .and_then(Value::as_str)
+                    .expect("CROSS JOIN row should contain item_id"),
+                row.get("tag_id")
+                    .and_then(Value::as_str)
+                    .expect("CROSS JOIN row should contain tag_id"),
+            )
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(
+        pairs,
+        vec![
+            ("sql-e2e-a", "sql-tag-a"),
+            ("sql-e2e-a", "sql-tag-b"),
+            ("sql-e2e-b", "sql-tag-a"),
+            ("sql-e2e-b", "sql-tag-b"),
+        ]
+    );
+
+    let update_result = db
+        .query_text(
+            TextQueryFormat::Sql,
+            format!("UPDATE {ITEMS} SET score = score + 6 WHERE id = 'sql-e2e-a' RETURNING *"),
+        )
+        .await
+        .expect("SQL UPDATE RETURNING wildcard should execute");
+    let QueryResult::Update(update) = update_result else {
+        panic!("SQL UPDATE RETURNING wildcard should return an UPDATE result");
+    };
+    assert_eq!(update.stats.matched, 1);
+    assert_eq!(update.stats.affected, 1);
+    assert_eq!(update.returning.len(), 1);
+    let mut expected_updated_row = row("sql-e2e-a", "music", 4);
+    expected_updated_row.insert("score", Value::F64(10.0.into()));
+    assert_eq!(update.returning[0], expected_updated_row);
+
+    for invalid_sql in [
+        format!("UPDATE {ITEMS} SET score = 999 LIMIT -1"),
+        format!("DELETE FROM {ITEMS} LIMIT -1"),
+    ] {
+        db.query_text(TextQueryFormat::Sql, invalid_sql)
+            .await
+            .expect_err("invalid SQL DML LIMIT should be rejected");
+    }
+    let unchanged = db
+        .get(ITEMS, "sql-e2e-a")
+        .await
+        .expect("row lookup after invalid SQL DML LIMIT should succeed")
+        .expect("invalid SQL DML LIMIT must not remove the row");
+    assert_eq!(
+        unchanged.object.get("score"),
+        Some(&Value::F64(10.0.into()))
+    );
+    assert!(
+        db.get(ITEMS, "sql-e2e-b")
+            .await
+            .expect("control row lookup after invalid DELETE LIMIT should succeed")
+            .is_some()
+    );
+
+    let delete_result = db
+        .query_text(
+            TextQueryFormat::Sql,
+            format!("DELETE FROM {ITEMS} WHERE id = 'sql-e2e-b' RETURNING *"),
+        )
+        .await
+        .expect("SQL DELETE RETURNING wildcard should execute");
+    let QueryResult::Delete(delete) = delete_result else {
+        panic!("SQL DELETE RETURNING wildcard should return a DELETE result");
+    };
+    assert_eq!(delete.deleted, 1);
+    assert_eq!(delete.returning.len(), 1);
+    assert_eq!(delete.returning[0], row("sql-e2e-b", "video", 12));
+    assert!(
+        db.get(ITEMS, "sql-e2e-b")
+            .await
+            .expect("deleted SQL end-to-end row lookup should succeed")
+            .is_none()
+    );
+
+    let mixed_projection = db
+        .query_text(
+            TextQueryFormat::Sql,
+            format!("SELECT *, score + 1 AS boosted FROM {ITEMS} WHERE id = 'sql-e2e-a'"),
+        )
+        .await
+        .expect("mixed wildcard SQL projection should execute");
+    let QueryResult::Select(mixed_rows) = mixed_projection else {
+        panic!("mixed wildcard SQL projection should return SELECT rows");
+    };
+    assert_eq!(mixed_rows.len(), 1);
+    assert_eq!(mixed_rows[0].len(), 4);
+    assert_eq!(
+        mixed_rows[0].get("id"),
+        Some(&Value::String("sql-e2e-a".to_string()))
+    );
+    assert_eq!(
+        mixed_rows[0].get("kind"),
+        Some(&Value::String("music".to_string()))
+    );
+    assert_eq!(mixed_rows[0].get("score"), Some(&Value::F64(10.0.into())));
+    assert_eq!(mixed_rows[0].get("boosted"), Some(&Value::F64(11.0.into())));
+}
+
 async fn test_delete_query(db: &Db) {
     db.create_collection("shared_suite_delete", CollectionKind::Polymorphic)
         .await
@@ -924,17 +1098,14 @@ async fn test_sql_predicate_constructs(db: &Db) {
     };
     assert_eq!(ilike_rows.len(), 1);
 
-    let similar_result = db
+    let similar_error = db
         .query_text(
             TextQueryFormat::Sql,
             "SELECT id FROM shared_suite_sql_predicates WHERE note SIMILAR TO 'hello%'",
         )
         .await
-        .expect("sql SIMILAR TO query should succeed");
-    let QueryResult::Select(similar_rows) = similar_result else {
-        panic!("sql SIMILAR TO query should return SELECT rows");
-    };
-    assert_eq!(similar_rows.len(), 1);
+        .expect_err("SQL SIMILAR TO should be rejected until its semantics are implemented");
+    assert!(similar_error.to_string().contains("SIMILAR TO"));
 
     let regex_result = db
         .query_text(
@@ -999,7 +1170,7 @@ async fn test_sql_predicate_constructs(db: &Db) {
     let exists_result = db
         .query_text(
             TextQueryFormat::Sql,
-            "SELECT id FROM shared_suite_sql_predicates WHERE EXISTS (SELECT id FROM shared_suite_sql_predicates WHERE id = 'sql-a')",
+            "SELECT id FROM shared_suite_sql_predicates WHERE EXISTS (SELECT nested.id FROM shared_suite_sql_predicates AS nested WHERE nested.id = 'sql-a')",
         )
         .await
         .expect("sql EXISTS query should succeed");
@@ -1196,7 +1367,7 @@ async fn test_subquery_patterns(db: &Db) {
         let in_sql = db
             .query_text(
                 TextQueryFormat::Sql,
-                "SELECT id FROM shared_suite_subquery_outer WHERE score IN (SELECT value FROM shared_suite_subquery_inner WHERE tag = 'in') ORDER BY id",
+                "SELECT id FROM shared_suite_subquery_outer WHERE score IN (SELECT inner_rows.value FROM shared_suite_subquery_inner AS inner_rows WHERE inner_rows.tag = 'in') ORDER BY id",
             )
             .await
             .expect("sql IN subquery query should succeed");
@@ -1208,7 +1379,7 @@ async fn test_subquery_patterns(db: &Db) {
         let not_in_sql = db
             .query_text(
                 TextQueryFormat::Sql,
-                "SELECT id FROM shared_suite_subquery_outer WHERE score NOT IN (SELECT value FROM shared_suite_subquery_inner WHERE tag = 'in') ORDER BY id",
+                "SELECT id FROM shared_suite_subquery_outer WHERE score NOT IN (SELECT inner_rows.value FROM shared_suite_subquery_inner AS inner_rows WHERE inner_rows.tag = 'in') ORDER BY id",
             )
             .await
             .expect("sql NOT IN subquery query should succeed");
@@ -1220,7 +1391,7 @@ async fn test_subquery_patterns(db: &Db) {
         let scalar_predicate_sql = db
             .query_text(
                 TextQueryFormat::Sql,
-                "SELECT id FROM shared_suite_subquery_outer WHERE score = (SELECT value FROM shared_suite_subquery_inner WHERE tag = 'only')",
+                "SELECT id FROM shared_suite_subquery_outer WHERE score = (SELECT inner_rows.value FROM shared_suite_subquery_inner AS inner_rows WHERE inner_rows.tag = 'only')",
             )
             .await
             .expect("sql scalar subquery predicate should succeed");
@@ -1232,7 +1403,7 @@ async fn test_subquery_patterns(db: &Db) {
         let scalar_projection_sql = db
             .query_text(
                 TextQueryFormat::Sql,
-                "SELECT id, (SELECT value FROM shared_suite_subquery_inner WHERE tag = 'only') AS cutoff FROM shared_suite_subquery_outer ORDER BY id",
+                "SELECT id, (SELECT inner_rows.value FROM shared_suite_subquery_inner AS inner_rows WHERE inner_rows.tag = 'only') AS cutoff FROM shared_suite_subquery_outer ORDER BY id",
             )
             .await
             .expect("sql scalar subquery projection should succeed");
@@ -1621,6 +1792,9 @@ async fn test_sql_aggregation_distinct_grouping(db: &Db) {
     db.create_collection("shared_suite_sql_agg", CollectionKind::Polymorphic)
         .await
         .expect("sql aggregation test collection creation should succeed");
+    db.create_collection("shared_suite_sql_agg_empty", CollectionKind::Polymorphic)
+        .await
+        .expect("empty sql aggregation test collection creation should succeed");
     for (id, kind, score) in [
         ("sql-agg-a", "music", 10),
         ("sql-agg-b", "music", 20),
@@ -1683,6 +1857,192 @@ async fn test_sql_aggregation_distinct_grouping(db: &Db) {
     assert_eq!(
         global_rows[0].get("uniq_total"),
         Some(&Value::F64(35.0.into()))
+    );
+
+    let empty_global = db
+        .query_text(
+            TextQueryFormat::Sql,
+            "SELECT COUNT(*) + 1 AS adjusted, 'empty' AS label, COALESCE(SUM(score), 0) AS total, SUM(score) + 1 AS nullable, SUM(score) IS NULL AS sum_is_null FROM shared_suite_sql_agg_empty HAVING COUNT(*) = 0",
+        )
+        .await
+        .expect("empty sql global aggregate query should succeed");
+    let QueryResult::Select(empty_global_rows) = empty_global else {
+        panic!("empty sql global aggregate query should return SELECT rows");
+    };
+    assert_eq!(empty_global_rows.len(), 1);
+    assert_eq!(
+        empty_global_rows[0].get("adjusted"),
+        Some(&Value::F64(1.0.into()))
+    );
+    assert_eq!(
+        empty_global_rows[0].get("label"),
+        Some(&Value::String("empty".to_string()))
+    );
+    assert_eq!(empty_global_rows[0].get("total"), Some(&Value::I64(0)));
+    assert_eq!(empty_global_rows[0].get("nullable"), Some(&Value::Null));
+    assert_eq!(
+        empty_global_rows[0].get("sum_is_null"),
+        Some(&Value::Bool(true))
+    );
+
+    let aggregate_predicates = db
+        .query_text(
+            TextQueryFormat::Sql,
+            "SELECT SUM(score) BETWEEN 30.0 AND 50.0 AS in_range, SUM(score) NOT BETWEEN 30.0 AND 50.0 AS out_of_range, COUNT(*) IN (4, NULL) AS count_match, COUNT(*) NOT IN (4, NULL) AS count_not_match, MAX(kind) LIKE 'v%' AS max_like, MAX(kind) ~ '^v' AS max_regex FROM shared_suite_sql_agg",
+        )
+        .await
+        .expect("aggregate predicate expressions should succeed");
+    let QueryResult::Select(aggregate_predicate_rows) = aggregate_predicates else {
+        panic!("aggregate predicate expressions should return SELECT rows");
+    };
+    assert_eq!(aggregate_predicate_rows.len(), 1);
+    for key in ["in_range", "count_match", "max_like", "max_regex"] {
+        assert_eq!(
+            aggregate_predicate_rows[0].get(key),
+            Some(&Value::Bool(true)),
+            "{key}"
+        );
+    }
+    for key in ["out_of_range", "count_not_match"] {
+        assert_eq!(
+            aggregate_predicate_rows[0].get(key),
+            Some(&Value::Bool(false)),
+            "{key}"
+        );
+    }
+
+    let empty_aggregate_predicates = db
+        .query_text(
+            TextQueryFormat::Sql,
+            "SELECT SUM(score) BETWEEN 1.0 AND 2.0 AS in_range, SUM(score) NOT BETWEEN 1.0 AND 2.0 AS out_of_range, COUNT(*) IN (1, NULL) AS count_match, COUNT(*) NOT IN (1, NULL) AS count_not_match, MAX(kind) LIKE 'v%' AS max_like, MAX(kind) !~ '^v' AS max_not_regex FROM shared_suite_sql_agg_empty",
+        )
+        .await
+        .expect("empty aggregate predicate expressions should succeed");
+    let QueryResult::Select(empty_aggregate_predicate_rows) = empty_aggregate_predicates else {
+        panic!("empty aggregate predicate expressions should return SELECT rows");
+    };
+    assert_eq!(empty_aggregate_predicate_rows.len(), 1);
+    for key in [
+        "in_range",
+        "out_of_range",
+        "count_match",
+        "count_not_match",
+        "max_like",
+        "max_not_regex",
+    ] {
+        assert_eq!(
+            empty_aggregate_predicate_rows[0].get(key),
+            Some(&Value::Null),
+            "{key}"
+        );
+    }
+
+    let by_alias = db
+        .query_text(
+            TextQueryFormat::Sql,
+            "SELECT kind, SUM(score) AS total FROM shared_suite_sql_agg GROUP BY kind ORDER BY total DESC",
+        )
+        .await
+        .expect("sql aggregate alias ordering query should succeed");
+    let QueryResult::Select(by_alias_rows) = by_alias else {
+        panic!("sql aggregate alias ordering query should return SELECT rows");
+    };
+    assert_eq!(
+        row_strings(&by_alias_rows, "kind"),
+        vec!["music".to_string(), "video".to_string()]
+    );
+
+    let by_ordinal = db
+        .query_text(
+            TextQueryFormat::Sql,
+            "SELECT kind, SUM(score) AS total FROM shared_suite_sql_agg GROUP BY kind ORDER BY 2 ASC",
+        )
+        .await
+        .expect("sql aggregate ordinal ordering query should succeed");
+    let QueryResult::Select(by_ordinal_rows) = by_ordinal else {
+        panic!("sql aggregate ordinal ordering query should return SELECT rows");
+    };
+    assert_eq!(
+        row_strings(&by_ordinal_rows, "kind"),
+        vec!["video".to_string(), "music".to_string()]
+    );
+    assert_eq!(
+        by_ordinal_rows
+            .iter()
+            .map(|row| row.get("total").cloned())
+            .collect::<Vec<_>>(),
+        vec![Some(Value::F64(10.0.into())), Some(Value::F64(30.0.into()))]
+    );
+
+    let grouped_derived = db
+        .query_text(
+            TextQueryFormat::Sql,
+            "SELECT score + 1 AS bucket, COUNT(*) AS n FROM shared_suite_sql_agg GROUP BY score + 1 ORDER BY bucket ASC",
+        )
+        .await
+        .expect("sql grouped derived expression query should succeed");
+    let QueryResult::Select(grouped_derived_rows) = grouped_derived else {
+        panic!("sql grouped derived expression query should return SELECT rows");
+    };
+    assert_eq!(grouped_derived_rows.len(), 3);
+    assert_eq!(
+        grouped_derived_rows
+            .iter()
+            .map(|row| (row.get("bucket").cloned(), row.get("n").cloned()))
+            .collect::<Vec<_>>(),
+        vec![
+            (Some(Value::F64(6.0.into())), Some(Value::I64(2))),
+            (Some(Value::F64(11.0.into())), Some(Value::I64(1))),
+            (Some(Value::F64(21.0.into())), Some(Value::I64(1))),
+        ]
+    );
+
+    let grouped_ordinal = db
+        .query_text(
+            TextQueryFormat::Sql,
+            "SELECT score + 1 AS bucket, COUNT(*) AS n FROM shared_suite_sql_agg GROUP BY 1 ORDER BY bucket ASC",
+        )
+        .await
+        .expect("sql derived projection GROUP BY ordinal query should succeed");
+    let QueryResult::Select(grouped_ordinal_rows) = grouped_ordinal else {
+        panic!("sql derived projection GROUP BY ordinal query should return SELECT rows");
+    };
+    assert_eq!(grouped_ordinal_rows, grouped_derived_rows);
+
+    let ambiguous_group_alias = db
+        .query_text(
+            TextQueryFormat::Sql,
+            "SELECT score + 1 AS bucket, COUNT(*) AS n FROM shared_suite_sql_agg GROUP BY bucket",
+        )
+        .await
+        .expect_err("ambiguous SQL GROUP BY output alias should be rejected");
+    let ambiguous_group_alias = ambiguous_group_alias.to_string();
+    assert!(ambiguous_group_alias.contains("ambiguous with a projection alias"));
+    assert!(ambiguous_group_alias.contains("ordinal or repeat"));
+
+    for invalid_sql in [
+        "SELECT kind, score, COUNT(*) AS n FROM shared_suite_sql_agg GROUP BY kind",
+        "SELECT kind, COUNT(*) AS n FROM shared_suite_sql_agg GROUP BY kind HAVING score > 0",
+        "SELECT kind, COUNT(*) AS n FROM shared_suite_sql_agg GROUP BY kind ORDER BY score",
+        "SELECT id FROM shared_suite_sql_agg WHERE SUM(score) > 0",
+        "SELECT kind FROM shared_suite_sql_agg GROUP BY SUM(score)",
+        "SELECT COUNT(SUM(score)) AS n FROM shared_suite_sql_agg",
+        "SELECT id, score AS id FROM shared_suite_sql_agg",
+        "SELECT *, COUNT(*) AS n FROM shared_suite_sql_agg",
+        "SELECT id FROM shared_suite_sql_agg ORDER BY 0",
+        "SELECT id FROM shared_suite_sql_agg ORDER BY 2",
+    ] {
+        db.query_text(TextQueryFormat::Sql, invalid_sql)
+            .await
+            .expect_err("invalid SQL select semantics should be rejected");
+    }
+
+    assert!(
+        db.get("shared_suite_sql_agg", "sql-agg-a")
+            .await
+            .expect("seed lookup after invalid SQL queries should succeed")
+            .is_some(),
+        "invalid SQL queries must not affect stored rows"
     );
 }
 
@@ -1800,6 +2160,48 @@ async fn test_sql_ordering_variants(db: &Db) {
         row_ids(&by_expr_rows),
         vec!["sql-ord-d", "sql-ord-a", "sql-ord-c", "sql-ord-b"]
     );
+
+    let by_alias = db
+        .query_text(
+            TextQueryFormat::Sql,
+            "SELECT id, score + 1 AS rank FROM shared_suite_ordering_sql ORDER BY rank DESC, id ASC",
+        )
+        .await
+        .expect("sql projection alias ordering query should succeed");
+    let QueryResult::Select(by_alias_rows) = by_alias else {
+        panic!("sql projection alias ordering query should return SELECT rows");
+    };
+    assert_eq!(
+        row_ids(&by_alias_rows),
+        vec!["sql-ord-d", "sql-ord-a", "sql-ord-c", "sql-ord-b"]
+    );
+    assert_eq!(
+        by_alias_rows
+            .iter()
+            .map(|row| row.get("rank").cloned())
+            .collect::<Vec<_>>(),
+        vec![
+            Some(Value::F64(10.0.into())),
+            Some(Value::F64(6.0.into())),
+            Some(Value::F64(6.0.into())),
+            Some(Value::F64(2.0.into())),
+        ]
+    );
+
+    let by_ordinal = db
+        .query_text(
+            TextQueryFormat::Sql,
+            "SELECT id, score FROM shared_suite_ordering_sql ORDER BY 2 DESC, 1 DESC",
+        )
+        .await
+        .expect("sql projection ordinal ordering query should succeed");
+    let QueryResult::Select(by_ordinal_rows) = by_ordinal else {
+        panic!("sql projection ordinal ordering query should return SELECT rows");
+    };
+    assert_eq!(
+        row_ids(&by_ordinal_rows),
+        vec!["sql-ord-d", "sql-ord-c", "sql-ord-a", "sql-ord-b"]
+    );
 }
 
 async fn test_ast_limit_offset_variants(db: &Db) {
@@ -1876,6 +2278,25 @@ async fn test_sql_limit_offset_variants(db: &Db) {
         panic!("sql limit/offset expression query should return SELECT rows");
     };
     assert_eq!(row_ids(&rows), vec!["sql-lim-c", "sql-lim-d"]);
+
+    let alias_page = db
+        .query_text(
+            TextQueryFormat::Sql,
+            "SELECT id, score + 1 AS rank FROM shared_suite_limit_sql ORDER BY rank ASC, id ASC LIMIT 2 OFFSET 1",
+        )
+        .await
+        .expect("sql alias ordered limit/offset query should succeed");
+    let QueryResult::Select(alias_page_rows) = alias_page else {
+        panic!("sql alias ordered limit/offset query should return SELECT rows");
+    };
+    assert_eq!(row_ids(&alias_page_rows), vec!["sql-lim-b", "sql-lim-c"]);
+    assert_eq!(
+        alias_page_rows
+            .iter()
+            .map(|row| row.get("rank").cloned())
+            .collect::<Vec<_>>(),
+        vec![Some(Value::F64(3.0.into())), Some(Value::F64(4.0.into()))]
+    );
 }
 
 async fn test_relationships_generic_embedded(db: &Db) {

@@ -23,8 +23,8 @@
 /// - Joins:
 ///   - `NATURAL JOIN`.
 ///   - `JOIN` without explicit constraint.
-///   - Join operators outside basic `INNER/LEFT/RIGHT/FULL`.
-///   - `USING` with anything other than exactly two field paths.
+///   - Join operators outside `INNER/LEFT/RIGHT/FULL/CROSS`.
+///   - `JOIN ... USING` (coalesced output semantics are not represented).
 ///
 /// - `UPDATE`:
 ///   - `UPDATE ... FROM`.
@@ -41,14 +41,25 @@
 ///   - Note: `FROM <table>` is optional only in collection-scoped parsing APIs.
 ///
 /// - Expressions and functions:
-///   - Most SQL functions except `COALESCE`.
-///   - CASE variants other than a single `WHEN ... THEN ... ELSE ... END`.
+///   - Functions other than the executable aggregate, casing, coalescing, and
+///     relationship functions recognized below.
+///   - `SIMILAR TO` (SQL regex semantics are not implemented).
+///   - `LIKE ANY` / `ILIKE ANY`.
+///   - Source-less and correlated subqueries. Fields inside subqueries must be
+///     explicitly qualified by an inner source binding because schema-free SQL
+///     parsing cannot distinguish an unqualified inner field from an outer ref.
+///   - Subqueries in DML expressions.
 ///   - Unsupported unary/binary operators.
-///   - Non-literal limit/offset expressions.
+///   - Non-constant DML limit expressions.
 ///
 /// - Ordering / pagination:
 ///   - `ORDER BY ... NULLS FIRST/LAST`.
 ///   - `ORDER BY ... WITH FILL`.
+///   - Aggregate `ORDER BY` expressions that are not projected (hidden
+///     aggregate sort outputs are not represented by the current query AST).
+///   - Positional ordering/grouping against wildcard projections.
+///   - Bare `GROUP BY` identifiers that match a differently-named output alias;
+///     use the projection ordinal or repeat the source expression instead.
 ///   - `LIMIT BY`.
 ///
 /// - Names / paths:
@@ -112,6 +123,19 @@ pub fn parse_sql_query(
     sql: &str,
     dialect: SqlDialectKind,
 ) -> Result<ParsedSqlQuery, SqlQueryError> {
+    let parsed = parse_sql_query_raw(sql, dialect)?;
+    if matches!(&parsed.query, Query::Select(select) if select.collection.is_none()) {
+        return Err(SqlQueryError::Invalid(
+            "SELECT requires a FROM source outside collection-scoped parsing".to_string(),
+        ));
+    }
+    Ok(parsed)
+}
+
+fn parse_sql_query_raw(
+    sql: &str,
+    dialect: SqlDialectKind,
+) -> Result<ParsedSqlQuery, SqlQueryError> {
     if let Some(parsed) = parse_create_attribute_sql(sql)? {
         return Ok(parsed);
     }
@@ -134,13 +158,13 @@ pub fn parse_sql_query_for_collection(
     expected_collection: &str,
     dialect: SqlDialectKind,
 ) -> Result<Query, SqlQueryError> {
-    let parsed = match parse_sql_query(sql, dialect) {
+    let parsed = match parse_sql_query_raw(sql, dialect) {
         Ok(parsed) => parsed,
         Err(SqlQueryError::Parse(_)) => {
             let Some(rewritten) = rewrite_implicit_collection_sql(sql, expected_collection) else {
-                return parse_sql_query(sql, dialect).map(|parsed| parsed.query);
+                return parse_sql_query_raw(sql, dialect).map(|parsed| parsed.query);
             };
-            parse_sql_query(&rewritten, dialect)?
+            parse_sql_query_raw(&rewritten, dialect)?
         }
         Err(err) => return Err(err),
     };
@@ -190,6 +214,13 @@ fn parse_statement(stmt: Statement) -> Result<ParsedSqlQuery, SqlQueryError> {
 }
 
 fn parse_create_attribute_sql(sql: &str) -> Result<Option<ParsedSqlQuery>, SqlQueryError> {
+    let Some(after_create) = strip_keyword(sql, "create") else {
+        return Ok(None);
+    };
+    if strip_keyword(after_create, "attribute").is_none() {
+        return Ok(None);
+    }
+
     let tokens = tokenize_sql_ddl(sql)?;
     if tokens.is_empty() {
         return Ok(None);
@@ -375,10 +406,187 @@ fn parse_select_stmt(query: SqlQuery) -> Result<ParsedSqlQuery, SqlQueryError> {
 fn parse_select_subquery(query: SqlQuery) -> Result<SelectQuery, SqlQueryError> {
     let parsed = parse_select_stmt(query)?;
     match parsed.query {
-        Query::Select(select) => Ok(select),
+        Query::Select(select) => {
+            validate_subquery_scope(&select)?;
+            Ok(select)
+        }
         _ => Err(SqlQueryError::Invalid(
             "expected SELECT subquery expression".to_string(),
         )),
+    }
+}
+
+fn validate_subquery_scope(select: &SelectQuery) -> Result<(), SqlQueryError> {
+    let collection = select.collection.as_ref().ok_or_else(|| {
+        SqlQueryError::Unsupported("source-less subqueries are not supported".to_string())
+    })?;
+    let mut bindings = Vec::new();
+    if let Some(alias) = &select.source_alias {
+        // SQL aliases hide the original relation name within the query block.
+        bindings.push(alias.clone());
+    } else {
+        bindings.push(collection.clone());
+        if let Some(last) = collection.rsplit('.').next()
+            && last != collection
+        {
+            bindings.push(last.to_string());
+        }
+    }
+    for join in &select.joins {
+        bindings.push(
+            join.alias
+                .clone()
+                .unwrap_or_else(|| join.source.default_binding()),
+        );
+    }
+
+    if select_has_scope_path(
+        select,
+        &|path| path_has_external_binding(path, &bindings),
+        &|path| wildcard_has_external_binding(path, &bindings),
+    ) {
+        return Err(SqlQueryError::Unsupported(
+            "correlated subqueries are not supported".to_string(),
+        ));
+    }
+    if select_has_scope_path(select, &path_is_unqualified_field, &|_| false) {
+        return Err(SqlQueryError::Unsupported(
+            "unqualified field references in subqueries are not supported; qualify fields with the inner source binding"
+                .to_string(),
+        ));
+    }
+    Ok(())
+}
+
+fn path_has_external_binding(path: &FieldPath, bindings: &[String]) -> bool {
+    path.segments().len() >= 2
+        && !bindings
+            .iter()
+            .any(|binding| path_starts_with_binding(path, binding))
+}
+
+fn wildcard_has_external_binding(path: &FieldPath, bindings: &[String]) -> bool {
+    !path.segments().is_empty()
+        && !bindings
+            .iter()
+            .any(|binding| path_starts_with_binding(path, binding))
+}
+
+fn path_starts_with_binding(path: &FieldPath, binding: &str) -> bool {
+    let mut segments = path.segments().iter();
+    binding
+        .split('.')
+        .all(|part| matches!(segments.next(), Some(PathSegment::Field(field)) if field == part))
+}
+
+fn path_is_unqualified_field(path: &FieldPath) -> bool {
+    matches!(path.segments(), [PathSegment::Field(_)])
+}
+
+fn select_has_scope_path(
+    select: &SelectQuery,
+    expr_path_matches: &impl Fn(&FieldPath) -> bool,
+    wildcard_path_matches: &impl Fn(&FieldPath) -> bool,
+) -> bool {
+    select.projection.iter().any(|field| {
+        expr_has_scope_path(&field.expr, expr_path_matches)
+            || field.wildcard.as_ref().is_some_and(wildcard_path_matches)
+    }) || select
+        .predicate
+        .as_ref()
+        .is_some_and(|expr| expr_has_scope_path(expr, expr_path_matches))
+        || select
+            .group_by
+            .iter()
+            .any(|expr| expr_has_scope_path(expr, expr_path_matches))
+        || select
+            .having
+            .as_ref()
+            .is_some_and(|expr| expr_has_scope_path(expr, expr_path_matches))
+        || select
+            .order_by
+            .iter()
+            .any(|order| expr_has_scope_path(&order.expr, expr_path_matches))
+        || select.joins.iter().any(|join| {
+            let condition_matches = match &join.condition {
+                JoinCondition::OnExpr(expr) => expr_has_scope_path(expr, expr_path_matches),
+                JoinCondition::UsingFields { left, right } => {
+                    expr_path_matches(left) || expr_path_matches(right)
+                }
+            };
+            condition_matches
+                || join
+                    .predicate
+                    .as_ref()
+                    .is_some_and(|expr| expr_has_scope_path(expr, expr_path_matches))
+        })
+}
+
+fn expr_has_scope_path(expr: &Expr, path_matches: &impl Fn(&FieldPath) -> bool) -> bool {
+    match expr {
+        Expr::Operand(Operand::Field(path)) => path_matches(path),
+        Expr::Operand(Operand::Literal(_)) | Expr::Subquery(_) | Expr::Exists { .. } => false,
+        Expr::Unary { expr, .. } | Expr::IsNull { expr, .. } => {
+            expr_has_scope_path(expr, path_matches)
+        }
+        Expr::Binary { left, right, .. }
+        | Expr::PatternMatch {
+            expr: left,
+            pattern: right,
+            ..
+        }
+        | Expr::RegexMatch {
+            expr: left,
+            pattern: right,
+            ..
+        } => expr_has_scope_path(left, path_matches) || expr_has_scope_path(right, path_matches),
+        Expr::IfElse {
+            cond,
+            then_expr,
+            else_expr,
+        } => {
+            expr_has_scope_path(cond, path_matches)
+                || expr_has_scope_path(then_expr, path_matches)
+                || expr_has_scope_path(else_expr, path_matches)
+        }
+        Expr::Coalesce(items) => items
+            .iter()
+            .any(|expr| expr_has_scope_path(expr, path_matches)),
+        Expr::Function { args, .. } => args.iter().any(|arg| match arg {
+            FunctionArg::Expr(expr) => expr_has_scope_path(expr, path_matches),
+            FunctionArg::Wildcard => false,
+        }),
+        Expr::Aggregate { arg, .. } => match arg.as_ref() {
+            FunctionArg::Expr(expr) => expr_has_scope_path(expr, path_matches),
+            FunctionArg::Wildcard => false,
+        },
+        Expr::InList { expr, list, .. } => {
+            expr_has_scope_path(expr, path_matches)
+                || list
+                    .iter()
+                    .any(|expr| expr_has_scope_path(expr, path_matches))
+        }
+        Expr::Between {
+            expr, low, high, ..
+        } => {
+            expr_has_scope_path(expr, path_matches)
+                || expr_has_scope_path(low, path_matches)
+                || expr_has_scope_path(high, path_matches)
+        }
+        Expr::RelationExists {
+            relation,
+            source,
+            target,
+            max_depth,
+            ..
+        } => {
+            expr_has_scope_path(relation, path_matches)
+                || expr_has_scope_path(source, path_matches)
+                || expr_has_scope_path(target, path_matches)
+                || max_depth
+                    .as_deref()
+                    .is_some_and(|expr| expr_has_scope_path(expr, path_matches))
+        }
     }
 }
 
@@ -389,7 +597,13 @@ fn parse_select(
     field_format: FieldFormat,
 ) -> Result<ParsedSqlQuery, SqlQueryError> {
     let distinct = parse_select_distinct(select.distinct.as_ref())?;
-    if select.into.is_some()
+    if select.optimizer_hint.is_some()
+        || select.select_modifiers.is_some()
+        || select.top.is_some()
+        || select.top_before_distinct
+        || select.flavor != sqlparser::ast::SelectFlavor::Standard
+        || select.window_before_qualify
+        || select.into.is_some()
         || !select.lateral_views.is_empty()
         || select.prewhere.is_some()
         || !select.connect_by.is_empty()
@@ -423,12 +637,27 @@ fn parse_select(
         let (collection, source_alias, joins) = parse_from_clause(base)?;
         (Some(collection), source_alias, joins)
     };
-    let projection = parse_projection(select.projection)?;
+    let projection = parse_projection(select.projection, true)?;
     let predicate = select.selection.map(parse_expr).transpose()?;
-    let group_by = parse_group_by(select.group_by)?;
+    let group_by = parse_group_by(select.group_by, &projection)?;
     let having = select.having.map(parse_expr).transpose()?;
-    let order_by = parse_order_by(order_by)?;
     let (limit, offset) = parse_limit_clause(limit_clause)?;
+    let group_bindings = base_group_bindings(
+        collection.as_deref(),
+        source_alias.as_deref(),
+        joins.is_empty(),
+    );
+    let order_by = validate_and_resolve_select_semantics(
+        &projection,
+        predicate.as_ref(),
+        &joins,
+        &group_by,
+        having.as_ref(),
+        limit.as_ref(),
+        &offset,
+        &group_bindings,
+        parse_order_by(order_by)?,
+    )?;
 
     Ok(ParsedSqlQuery {
         query: Query::Select(SelectQuery {
@@ -462,15 +691,64 @@ fn parse_select_distinct(
     }
 }
 
-fn parse_group_by(group_by: sqlparser::ast::GroupByExpr) -> Result<Vec<Expr>, SqlQueryError> {
+fn parse_group_by(
+    group_by: sqlparser::ast::GroupByExpr,
+    projection: &[QueryField],
+) -> Result<Vec<Expr>, SqlQueryError> {
     match group_by {
-        sqlparser::ast::GroupByExpr::Expressions(exprs, _) => {
-            exprs.into_iter().map(parse_expr).collect()
-        }
+        sqlparser::ast::GroupByExpr::Expressions(exprs, modifiers) if modifiers.is_empty() => exprs
+            .into_iter()
+            .map(parse_expr)
+            .map(|expr| expr.and_then(|expr| resolve_group_by_expr(expr, projection)))
+            .collect(),
         other => Err(SqlQueryError::Unsupported(format!(
             "GROUP BY form '{other:?}' is not supported"
         ))),
     }
+}
+
+fn resolve_group_by_expr(expr: Expr, projection: &[QueryField]) -> Result<Expr, SqlQueryError> {
+    let target = if let Some(index) = order_ordinal(&expr) {
+        let index = index.checked_sub(1).ok_or_else(|| {
+            SqlQueryError::Invalid("GROUP BY ordinal must be at least 1".to_string())
+        })?;
+        Some(projection.get(index).ok_or_else(|| {
+            SqlQueryError::Invalid(format!(
+                "GROUP BY ordinal {} exceeds projection length {}",
+                index + 1,
+                projection.len()
+            ))
+        })?)
+    } else if let Some(alias) = single_field_name(&expr) {
+        if let Some(field) = projection
+            .iter()
+            .find(|field| field.alias.as_deref() == Some(alias))
+        {
+            if field_expr_final_name(&field.expr) == Some(alias) {
+                return Ok(expr);
+            }
+            return Err(SqlQueryError::Invalid(format!(
+                "GROUP BY identifier {alias:?} is ambiguous with a projection alias; use its ordinal or repeat the source expression"
+            )));
+        }
+        None
+    } else {
+        None
+    };
+    let Some(target) = target else {
+        return Ok(expr);
+    };
+    if target.wildcard.is_some() {
+        return Err(SqlQueryError::Unsupported(
+            "GROUP BY cannot reference a wildcard projection".to_string(),
+        ));
+    }
+    if expr_contains_aggregate(&target.expr) {
+        return Err(SqlQueryError::Invalid(
+            "GROUP BY cannot reference an aggregate projection".to_string(),
+        ));
+    }
+    Ok((*target.expr).clone())
 }
 
 fn parse_insert_stmt(insert: SqlInsert) -> Result<ParsedSqlQuery, SqlQueryError> {
@@ -503,9 +781,10 @@ fn parse_insert_stmt(insert: SqlInsert) -> Result<ParsedSqlQuery, SqlQueryError>
         .collect::<Vec<_>>();
     let returning = insert
         .returning
-        .map(parse_projection)
+        .map(|items| parse_projection(items, false))
         .transpose()?
         .unwrap_or_default();
+    validate_dml_projection(&returning)?;
     let source_query = insert.source.ok_or_else(|| {
         SqlQueryError::Unsupported("INSERT DEFAULT VALUES is not supported".to_string())
     })?;
@@ -565,6 +844,11 @@ fn parse_insert_source(source: SqlQuery) -> Result<InsertSource, SqlQueryError> 
                     "failed to parse INSERT SELECT source".to_string(),
                 ));
             };
+            if select_query.collection.is_none() {
+                return Err(SqlQueryError::Invalid(
+                    "INSERT SELECT source requires a FROM source".to_string(),
+                ));
+            }
             Ok(InsertSource::Select(select_query))
         }
         other => Err(SqlQueryError::Unsupported(format!(
@@ -580,7 +864,7 @@ fn parse_insert_values(values: Values) -> Result<InsertSource, SqlQueryError> {
         .into_iter()
         .map(|row| {
             row.into_iter()
-                .map(parse_expr)
+                .map(parse_dml_expr)
                 .collect::<Result<Vec<_>, _>>()
         })
         .collect::<Result<Vec<_>, _>>()?;
@@ -588,6 +872,11 @@ fn parse_insert_values(values: Values) -> Result<InsertSource, SqlQueryError> {
 }
 
 fn parse_update_stmt(update: sqlparser::ast::Update) -> Result<ParsedSqlQuery, SqlQueryError> {
+    if update.optimizer_hint.is_some() {
+        return Err(SqlQueryError::Unsupported(
+            "UPDATE optimizer hints are not supported".to_string(),
+        ));
+    }
     if update.from.is_some() {
         return Err(SqlQueryError::Unsupported(
             "UPDATE .. FROM is not supported".to_string(),
@@ -603,19 +892,25 @@ fn parse_update_stmt(update: sqlparser::ast::Update) -> Result<ParsedSqlQuery, S
             "UPDATE with JOIN is not supported".to_string(),
         ));
     }
+    if table_alias(&update.table.relation).is_some() {
+        return Err(SqlQueryError::Unsupported(
+            "UPDATE target aliases are not supported".to_string(),
+        ));
+    }
     let collection = parse_base_table_name(&update.table.relation)?;
     let assignments = update
         .assignments
         .into_iter()
         .map(parse_assignment)
         .collect::<Result<Vec<_>, _>>()?;
-    let predicate = update.selection.map(parse_expr).transpose()?;
+    let predicate = update.selection.map(parse_dml_expr).transpose()?;
     let returning = update
         .returning
-        .map(parse_projection)
+        .map(|items| parse_projection(items, false))
         .transpose()?
         .unwrap_or_default();
-    let limit = update.limit.map(parse_expr).transpose()?;
+    validate_dml_projection(&returning)?;
+    let limit = parse_dml_limit(update.limit)?;
 
     Ok(ParsedSqlQuery {
         query: Query::Update(UpdateQuery {
@@ -630,6 +925,11 @@ fn parse_update_stmt(update: sqlparser::ast::Update) -> Result<ParsedSqlQuery, S
 }
 
 fn parse_delete_stmt(delete: sqlparser::ast::Delete) -> Result<ParsedSqlQuery, SqlQueryError> {
+    if delete.optimizer_hint.is_some() {
+        return Err(SqlQueryError::Unsupported(
+            "DELETE optimizer hints are not supported".to_string(),
+        ));
+    }
     if delete.using.is_some() {
         return Err(SqlQueryError::Unsupported(
             "DELETE .. USING is not supported".to_string(),
@@ -660,14 +960,20 @@ fn parse_delete_stmt(delete: sqlparser::ast::Delete) -> Result<ParsedSqlQuery, S
             "DELETE with JOIN is not supported".to_string(),
         ));
     }
+    if table_alias(&table.relation).is_some() {
+        return Err(SqlQueryError::Unsupported(
+            "DELETE target aliases are not supported".to_string(),
+        ));
+    }
     let collection = parse_base_table_name(&table.relation)?;
-    let predicate = delete.selection.map(parse_expr).transpose()?;
+    let predicate = delete.selection.map(parse_dml_expr).transpose()?;
     let returning = delete
         .returning
-        .map(parse_projection)
+        .map(|items| parse_projection(items, false))
         .transpose()?
         .unwrap_or_default();
-    let limit = delete.limit.map(parse_expr).transpose()?;
+    validate_dml_projection(&returning)?;
+    let limit = parse_dml_limit(delete.limit)?;
 
     Ok(ParsedSqlQuery {
         query: Query::Delete(DeleteQuery {
@@ -694,14 +1000,27 @@ fn parse_from_clause(
 }
 
 fn parse_join(join: Join) -> Result<JoinQuery, SqlQueryError> {
+    if join.global {
+        return Err(SqlQueryError::Unsupported(
+            "GLOBAL JOIN is not supported".to_string(),
+        ));
+    }
     let source = parse_join_source(&join.relation)?;
     let alias = table_alias(&join.relation);
 
-    let (join_type, constraint) = match join.join_operator {
-        JoinOperator::Inner(c) | JoinOperator::Join(c) => (JoinType::Inner, c),
-        JoinOperator::Left(c) | JoinOperator::LeftOuter(c) => (JoinType::Left, c),
-        JoinOperator::Right(c) | JoinOperator::RightOuter(c) => (JoinType::Right, c),
-        JoinOperator::FullOuter(c) => (JoinType::Full, c),
+    let (join_type, constraint, cross_join) = match join.join_operator {
+        JoinOperator::Inner(c) | JoinOperator::Join(c) => (JoinType::Inner, c, false),
+        JoinOperator::Left(c) | JoinOperator::LeftOuter(c) => (JoinType::Left, c, false),
+        JoinOperator::Right(c) | JoinOperator::RightOuter(c) => (JoinType::Right, c, false),
+        JoinOperator::FullOuter(c) => (JoinType::Full, c, false),
+        JoinOperator::CrossJoin(JoinConstraint::None) => {
+            (JoinType::Inner, JoinConstraint::None, true)
+        }
+        JoinOperator::CrossJoin(other) => {
+            return Err(SqlQueryError::Unsupported(format!(
+                "CROSS JOIN constraint '{other:?}' is not supported"
+            )));
+        }
         other => {
             return Err(SqlQueryError::Unsupported(format!(
                 "join operator '{other:?}' is not supported"
@@ -711,15 +1030,11 @@ fn parse_join(join: Join) -> Result<JoinQuery, SqlQueryError> {
 
     let condition = match constraint {
         JoinConstraint::On(expr) => JoinCondition::OnExpr(parse_expr(expr)?),
-        JoinConstraint::Using(fields) => {
-            if fields.len() != 2 {
-                return Err(SqlQueryError::Unsupported(
-                    "USING requires exactly two field paths for now".to_string(),
-                ));
-            }
-            let left = object_name_to_path(&fields[0])?;
-            let right = object_name_to_path(&fields[1])?;
-            JoinCondition::UsingFields { left, right }
+        JoinConstraint::Using(_) => {
+            return Err(SqlQueryError::Unsupported(
+                "JOIN USING is not supported because coalesced output semantics are not represented"
+                    .to_string(),
+            ));
         }
         JoinConstraint::Natural => {
             return Err(SqlQueryError::Unsupported(
@@ -727,9 +1042,13 @@ fn parse_join(join: Join) -> Result<JoinQuery, SqlQueryError> {
             ));
         }
         JoinConstraint::None => {
-            return Err(SqlQueryError::Unsupported(
-                "JOIN without a constraint is not supported".to_string(),
-            ));
+            if cross_join {
+                JoinCondition::OnExpr(Expr::Operand(Operand::Literal(Value::Bool(true))))
+            } else {
+                return Err(SqlQueryError::Unsupported(
+                    "JOIN without a constraint is not supported".to_string(),
+                ));
+            }
         }
     };
 
@@ -768,11 +1087,15 @@ fn parse_join_source(factor: &TableFactor) -> Result<JoinSource, SqlQueryError> 
     }
 }
 
-fn parse_projection(items: Vec<SelectItem>) -> Result<Vec<QueryField>, SqlQueryError> {
-    if items
-        .iter()
-        .any(|item| matches!(item, SelectItem::Wildcard(_)))
+fn parse_projection(
+    items: Vec<SelectItem>,
+    collapse_single_unqualified_wildcard: bool,
+) -> Result<Vec<QueryField>, SqlQueryError> {
+    if collapse_single_unqualified_wildcard
+        && items.len() == 1
+        && let SelectItem::Wildcard(options) = &items[0]
     {
+        validate_wildcard_options(options)?;
         return Ok(Vec::new());
     }
 
@@ -789,7 +1112,11 @@ fn parse_projection(items: Vec<SelectItem>) -> Result<Vec<QueryField>, SqlQueryE
                 alias: Some(alias.value),
                 wildcard: None,
             }),
-            SelectItem::QualifiedWildcard(SelectItemQualifiedWildcardKind::ObjectName(name), _) => {
+            SelectItem::QualifiedWildcard(
+                SelectItemQualifiedWildcardKind::ObjectName(name),
+                options,
+            ) => {
+                validate_wildcard_options(&options)?;
                 let path = object_name_to_path(&name)?;
                 Ok(QueryField {
                     expr: Box::new(Expr::Operand(Operand::Field(path.clone()))),
@@ -802,9 +1129,32 @@ fn parse_projection(items: Vec<SelectItem>) -> Result<Vec<QueryField>, SqlQueryE
                     "expression-qualified wildcards are not supported".to_string(),
                 ))
             }
-            SelectItem::Wildcard(_) => unreachable!("handled above"),
+            SelectItem::Wildcard(options) => {
+                validate_wildcard_options(&options)?;
+                Ok(QueryField {
+                    expr: Box::new(Expr::Operand(Operand::Literal(Value::Null))),
+                    alias: None,
+                    wildcard: Some(FieldPath::new()),
+                })
+            }
         })
         .collect()
+}
+
+fn validate_wildcard_options(
+    options: &sqlparser::ast::WildcardAdditionalOptions,
+) -> Result<(), SqlQueryError> {
+    if options.opt_ilike.is_some()
+        || options.opt_exclude.is_some()
+        || options.opt_except.is_some()
+        || options.opt_replace.is_some()
+        || options.opt_rename.is_some()
+    {
+        return Err(SqlQueryError::Unsupported(
+            "wildcard projection modifiers are not supported".to_string(),
+        ));
+    }
+    Ok(())
 }
 
 fn parse_order_by(
@@ -813,6 +1163,11 @@ fn parse_order_by(
     let Some(order_by) = order_by else {
         return Ok(Vec::new());
     };
+    if order_by.interpolate.is_some() {
+        return Err(SqlQueryError::Unsupported(
+            "ORDER BY INTERPOLATE is not supported".to_string(),
+        ));
+    }
     let OrderByKind::Expressions(items) = order_by.kind else {
         return Err(SqlQueryError::Unsupported(
             "non-expression ORDER BY forms are not supported".to_string(),
@@ -840,6 +1195,554 @@ fn parse_order_item(item: OrderByExpr) -> Result<DbOrderBy, SqlQueryError> {
         expr: parse_expr(item.expr)?,
         direction,
     })
+}
+
+fn validate_and_resolve_select_semantics(
+    projection: &[QueryField],
+    predicate: Option<&Expr>,
+    joins: &[JoinQuery],
+    group_by: &[Expr],
+    having: Option<&Expr>,
+    limit: Option<&Expr>,
+    offset: &Expr,
+    group_bindings: &[String],
+    order_by: Vec<DbOrderBy>,
+) -> Result<Vec<DbOrderBy>, SqlQueryError> {
+    validate_unique_projection_keys(projection)?;
+
+    if predicate.is_some_and(expr_contains_aggregate) {
+        return Err(SqlQueryError::Invalid(
+            "aggregate expressions are not allowed in WHERE".to_string(),
+        ));
+    }
+    for join in joins {
+        let condition_has_aggregate = match &join.condition {
+            JoinCondition::OnExpr(expr) => expr_contains_aggregate(expr),
+            JoinCondition::UsingFields { .. } => false,
+        };
+        if condition_has_aggregate || join.predicate.as_ref().is_some_and(expr_contains_aggregate) {
+            return Err(SqlQueryError::Invalid(
+                "aggregate expressions are not allowed in JOIN conditions".to_string(),
+            ));
+        }
+    }
+    if group_by.iter().any(expr_contains_aggregate) {
+        return Err(SqlQueryError::Invalid(
+            "aggregate expressions are not allowed in GROUP BY".to_string(),
+        ));
+    }
+    if limit.is_some_and(expr_contains_aggregate) || expr_contains_aggregate(offset) {
+        return Err(SqlQueryError::Invalid(
+            "aggregate expressions are not allowed in LIMIT or OFFSET".to_string(),
+        ));
+    }
+
+    for expr in projection
+        .iter()
+        .map(|field| field.expr.as_ref())
+        .chain(having)
+        .chain(order_by.iter().map(|order| &order.expr))
+    {
+        if expr_contains_nested_aggregate(expr) {
+            return Err(SqlQueryError::Invalid(
+                "nested aggregate expressions are not supported".to_string(),
+            ));
+        }
+    }
+
+    let aggregate_query = !group_by.is_empty()
+        || having.is_some()
+        || projection
+            .iter()
+            .any(|field| expr_contains_aggregate(&field.expr))
+        || order_by
+            .iter()
+            .any(|order| expr_contains_aggregate(&order.expr));
+
+    if !aggregate_query {
+        return order_by
+            .into_iter()
+            .map(|order| resolve_nonaggregate_order(order, projection))
+            .collect();
+    }
+
+    if projection.is_empty() || projection.iter().any(|field| field.wildcard.is_some()) {
+        return Err(SqlQueryError::Invalid(
+            "wildcard projections are not allowed in aggregate queries".to_string(),
+        ));
+    }
+    for field in projection {
+        validate_grouped_expr(&field.expr, group_by, group_bindings, "SELECT projection")?;
+    }
+    if let Some(having) = having {
+        validate_grouped_expr(having, group_by, group_bindings, "HAVING")?;
+    }
+
+    order_by
+        .into_iter()
+        .map(|order| resolve_aggregate_order(order, projection, group_by, group_bindings))
+        .collect()
+}
+
+fn validate_unique_projection_keys(projection: &[QueryField]) -> Result<(), SqlQueryError> {
+    let mut keys = std::collections::HashSet::new();
+    for field in projection {
+        let Some(key) = projection_output_key(field) else {
+            continue;
+        };
+        if !keys.insert(key.clone()) {
+            return Err(SqlQueryError::Invalid(format!(
+                "duplicate SQL projection output key '{key}'; use distinct aliases"
+            )));
+        }
+    }
+    Ok(())
+}
+
+fn base_group_bindings(
+    collection: Option<&str>,
+    source_alias: Option<&str>,
+    no_joins: bool,
+) -> Vec<String> {
+    if !no_joins {
+        return Vec::new();
+    }
+    if let Some(alias) = source_alias {
+        return vec![alias.to_string()];
+    }
+    let Some(collection) = collection else {
+        return Vec::new();
+    };
+    let mut bindings = vec![collection.to_string()];
+    if let Some(tail) = collection.rsplit('.').next()
+        && tail != collection
+    {
+        bindings.push(tail.to_string());
+    }
+    bindings
+}
+
+fn projection_output_key(field: &QueryField) -> Option<String> {
+    if field.wildcard.is_some() {
+        return None;
+    }
+    if let Some(alias) = &field.alias {
+        return Some(alias.clone());
+    }
+    if let Some(name) = field_expr_final_name(&field.expr) {
+        return Some(name.to_string());
+    }
+    Some("value".to_string())
+}
+
+fn field_expr_final_name(expr: &Expr) -> Option<&str> {
+    let Expr::Operand(Operand::Field(path)) = expr else {
+        return None;
+    };
+    path.segments()
+        .iter()
+        .rev()
+        .find_map(|segment| match segment {
+            PathSegment::Field(name) => Some(name.as_str()),
+            _ => None,
+        })
+}
+
+fn resolve_nonaggregate_order(
+    mut order: DbOrderBy,
+    projection: &[QueryField],
+) -> Result<DbOrderBy, SqlQueryError> {
+    if let Some(index) = order_ordinal(&order.expr) {
+        if projection.iter().any(|field| field.wildcard.is_some()) {
+            return Err(SqlQueryError::Unsupported(
+                "ORDER BY ordinals are not supported with wildcard projections".to_string(),
+            ));
+        }
+        let field = projection
+            .get(index.checked_sub(1).ok_or_else(|| {
+                SqlQueryError::Invalid("ORDER BY ordinal must be at least 1".to_string())
+            })?)
+            .ok_or_else(|| {
+                SqlQueryError::Invalid(format!(
+                    "ORDER BY ordinal {index} exceeds projection length {}",
+                    projection.len()
+                ))
+            })?;
+        order.expr = (*field.expr).clone();
+        return Ok(order);
+    }
+    if let Some(alias) = single_field_name(&order.expr)
+        && let Some(field) = projection
+            .iter()
+            .find(|field| field.alias.as_deref() == Some(alias))
+    {
+        order.expr = (*field.expr).clone();
+    }
+    Ok(order)
+}
+
+fn resolve_aggregate_order(
+    mut order: DbOrderBy,
+    projection: &[QueryField],
+    group_by: &[Expr],
+    group_bindings: &[String],
+) -> Result<DbOrderBy, SqlQueryError> {
+    let projection_index = if let Some(index) = order_ordinal(&order.expr) {
+        Some(index.checked_sub(1).ok_or_else(|| {
+            SqlQueryError::Invalid("ORDER BY ordinal must be at least 1".to_string())
+        })?)
+    } else if let Some(name) = single_field_name(&order.expr) {
+        projection
+            .iter()
+            .position(|field| field.alias.as_deref() == Some(name))
+            .or_else(|| {
+                projection
+                    .iter()
+                    .position(|field| field.expr.as_ref() == &order.expr)
+            })
+            .or_else(|| {
+                projection.iter().position(|field| {
+                    field.alias.is_none() && field_expr_final_name(&field.expr) == Some(name)
+                })
+            })
+    } else {
+        projection
+            .iter()
+            .position(|field| field.expr.as_ref() == &order.expr)
+    };
+    let Some(index) = projection_index else {
+        return Err(SqlQueryError::Invalid(
+            "aggregate ORDER BY expressions must reference a projected expression, alias, or ordinal"
+                .to_string(),
+        ));
+    };
+    let field = projection.get(index).ok_or_else(|| {
+        SqlQueryError::Invalid(format!(
+            "ORDER BY ordinal {} exceeds projection length {}",
+            index + 1,
+            projection.len()
+        ))
+    })?;
+    validate_grouped_expr(&field.expr, group_by, group_bindings, "ORDER BY")?;
+    let key = projection_output_key(field).ok_or_else(|| {
+        SqlQueryError::Unsupported(
+            "aggregate ORDER BY cannot reference a wildcard projection".to_string(),
+        )
+    })?;
+    order.expr = Expr::Operand(Operand::Field(FieldPath::from_fields([key])));
+    Ok(order)
+}
+
+fn order_ordinal(expr: &Expr) -> Option<usize> {
+    let Expr::Operand(Operand::Literal(value)) = expr else {
+        return None;
+    };
+    match value {
+        Value::I8(value) => usize::try_from(*value).ok(),
+        Value::I16(value) => usize::try_from(*value).ok(),
+        Value::I32(value) => usize::try_from(*value).ok(),
+        Value::I64(value) => usize::try_from(*value).ok(),
+        Value::I128(value) => usize::try_from(*value).ok(),
+        Value::U8(value) => Some(*value as usize),
+        Value::U16(value) => Some(*value as usize),
+        Value::U32(value) => usize::try_from(*value).ok(),
+        Value::U64(value) => usize::try_from(*value).ok(),
+        Value::U128(value) => usize::try_from(*value).ok(),
+        _ => None,
+    }
+}
+
+fn single_field_name(expr: &Expr) -> Option<&str> {
+    let Expr::Operand(Operand::Field(path)) = expr else {
+        return None;
+    };
+    let [PathSegment::Field(name)] = path.segments() else {
+        return None;
+    };
+    Some(name)
+}
+
+fn expr_contains_nested_aggregate(expr: &Expr) -> bool {
+    match expr {
+        Expr::Aggregate { arg, .. } => match arg.as_ref() {
+            FunctionArg::Expr(expr) => expr_contains_aggregate(expr),
+            FunctionArg::Wildcard => false,
+        },
+        Expr::Operand(_) | Expr::Subquery(_) | Expr::Exists { .. } => false,
+        Expr::Unary { expr, .. } | Expr::IsNull { expr, .. } => {
+            expr_contains_nested_aggregate(expr)
+        }
+        Expr::Binary { left, right, .. }
+        | Expr::PatternMatch {
+            expr: left,
+            pattern: right,
+            ..
+        }
+        | Expr::RegexMatch {
+            expr: left,
+            pattern: right,
+            ..
+        } => expr_contains_nested_aggregate(left) || expr_contains_nested_aggregate(right),
+        Expr::IfElse {
+            cond,
+            then_expr,
+            else_expr,
+        } => {
+            expr_contains_nested_aggregate(cond)
+                || expr_contains_nested_aggregate(then_expr)
+                || expr_contains_nested_aggregate(else_expr)
+        }
+        Expr::Coalesce(items) => items.iter().any(expr_contains_nested_aggregate),
+        Expr::Function { args, .. } => args.iter().any(|arg| match arg {
+            FunctionArg::Expr(expr) => expr_contains_nested_aggregate(expr),
+            FunctionArg::Wildcard => false,
+        }),
+        Expr::InList { expr, list, .. } => {
+            expr_contains_nested_aggregate(expr) || list.iter().any(expr_contains_nested_aggregate)
+        }
+        Expr::Between {
+            expr, low, high, ..
+        } => {
+            expr_contains_nested_aggregate(expr)
+                || expr_contains_nested_aggregate(low)
+                || expr_contains_nested_aggregate(high)
+        }
+        Expr::RelationExists {
+            relation,
+            source,
+            target,
+            max_depth,
+            ..
+        } => {
+            expr_contains_nested_aggregate(relation)
+                || expr_contains_nested_aggregate(source)
+                || expr_contains_nested_aggregate(target)
+                || max_depth
+                    .as_deref()
+                    .is_some_and(expr_contains_nested_aggregate)
+        }
+    }
+}
+
+fn group_expr_equivalent(left: &Expr, right: &Expr, bindings: &[String]) -> bool {
+    if left == right {
+        return true;
+    }
+    normalize_group_expr(left, bindings) == normalize_group_expr(right, bindings)
+}
+
+fn normalize_group_expr(expr: &Expr, bindings: &[String]) -> Expr {
+    let normalize = |expr: &Expr| normalize_group_expr(expr, bindings);
+    match expr {
+        Expr::Operand(Operand::Field(path)) => {
+            Expr::Operand(Operand::Field(normalize_group_path(path, bindings)))
+        }
+        Expr::Operand(Operand::Literal(value)) => Expr::Operand(Operand::Literal(value.clone())),
+        Expr::Unary { op, expr } => Expr::Unary {
+            op: *op,
+            expr: Box::new(normalize(expr)),
+        },
+        Expr::Binary { op, left, right } => Expr::Binary {
+            op: *op,
+            left: Box::new(normalize(left)),
+            right: Box::new(normalize(right)),
+        },
+        Expr::IfElse {
+            cond,
+            then_expr,
+            else_expr,
+        } => Expr::IfElse {
+            cond: Box::new(normalize(cond)),
+            then_expr: Box::new(normalize(then_expr)),
+            else_expr: Box::new(normalize(else_expr)),
+        },
+        Expr::Coalesce(items) => Expr::Coalesce(items.iter().map(normalize).collect()),
+        Expr::Function { name, args } => Expr::Function {
+            name: name.clone(),
+            args: args
+                .iter()
+                .map(|arg| match arg {
+                    FunctionArg::Expr(expr) => FunctionArg::Expr(normalize(expr)),
+                    FunctionArg::Wildcard => FunctionArg::Wildcard,
+                })
+                .collect(),
+        },
+        Expr::Aggregate { op, distinct, arg } => Expr::Aggregate {
+            op: *op,
+            distinct: *distinct,
+            arg: Box::new(match arg.as_ref() {
+                FunctionArg::Expr(expr) => FunctionArg::Expr(normalize(expr)),
+                FunctionArg::Wildcard => FunctionArg::Wildcard,
+            }),
+        },
+        Expr::InList {
+            expr,
+            list,
+            negated,
+        } => Expr::InList {
+            expr: Box::new(normalize(expr)),
+            list: list.iter().map(normalize).collect(),
+            negated: *negated,
+        },
+        Expr::Subquery(query) => Expr::Subquery(query.clone()),
+        Expr::Between {
+            expr,
+            low,
+            high,
+            negated,
+        } => Expr::Between {
+            expr: Box::new(normalize(expr)),
+            low: Box::new(normalize(low)),
+            high: Box::new(normalize(high)),
+            negated: *negated,
+        },
+        Expr::PatternMatch {
+            kind,
+            expr,
+            pattern,
+            case_insensitive,
+            negated,
+        } => Expr::PatternMatch {
+            kind: *kind,
+            expr: Box::new(normalize(expr)),
+            pattern: Box::new(normalize(pattern)),
+            case_insensitive: *case_insensitive,
+            negated: *negated,
+        },
+        Expr::RegexMatch {
+            expr,
+            pattern,
+            case_insensitive,
+            negated,
+        } => Expr::RegexMatch {
+            expr: Box::new(normalize(expr)),
+            pattern: Box::new(normalize(pattern)),
+            case_insensitive: *case_insensitive,
+            negated: *negated,
+        },
+        Expr::IsNull { expr, negated } => Expr::IsNull {
+            expr: Box::new(normalize(expr)),
+            negated: *negated,
+        },
+        Expr::Exists { query, negated } => Expr::Exists {
+            query: query.clone(),
+            negated: *negated,
+        },
+        Expr::RelationExists {
+            relation,
+            source,
+            target,
+            transitive,
+            max_depth,
+        } => Expr::RelationExists {
+            relation: Box::new(normalize(relation)),
+            source: Box::new(normalize(source)),
+            target: Box::new(normalize(target)),
+            transitive: *transitive,
+            max_depth: max_depth.as_deref().map(normalize).map(Box::new),
+        },
+    }
+}
+
+fn normalize_group_path(path: &FieldPath, bindings: &[String]) -> FieldPath {
+    for binding in bindings {
+        let parts = binding.split('.').collect::<Vec<_>>();
+        if path.segments().len() <= parts.len() {
+            continue;
+        }
+        let matches =
+            path.segments().iter().zip(parts.iter()).all(
+                |(segment, part)| matches!(segment, PathSegment::Field(field) if field == part),
+            );
+        if matches {
+            return FieldPath::from(path.segments()[parts.len()..].to_vec());
+        }
+    }
+    path.clone()
+}
+
+fn validate_grouped_expr(
+    expr: &Expr,
+    group_by: &[Expr],
+    group_bindings: &[String],
+    clause: &str,
+) -> Result<(), SqlQueryError> {
+    if group_by
+        .iter()
+        .any(|group| group_expr_equivalent(group, expr, group_bindings))
+    {
+        return Ok(());
+    }
+    match expr {
+        Expr::Operand(Operand::Literal(_)) | Expr::Subquery(_) | Expr::Exists { .. } => Ok(()),
+        Expr::Operand(Operand::Field(path)) => Err(SqlQueryError::Invalid(format!(
+            "field '{}' in {clause} must appear in GROUP BY or be inside an aggregate",
+            path_to_sql(path).unwrap_or_else(|_| format!("{path:?}"))
+        ))),
+        Expr::Aggregate { .. } => Ok(()),
+        Expr::Unary { expr, .. } | Expr::IsNull { expr, .. } => {
+            validate_grouped_expr(expr, group_by, group_bindings, clause)
+        }
+        Expr::Binary { left, right, .. }
+        | Expr::PatternMatch {
+            expr: left,
+            pattern: right,
+            ..
+        }
+        | Expr::RegexMatch {
+            expr: left,
+            pattern: right,
+            ..
+        } => {
+            validate_grouped_expr(left, group_by, group_bindings, clause)?;
+            validate_grouped_expr(right, group_by, group_bindings, clause)
+        }
+        Expr::IfElse {
+            cond,
+            then_expr,
+            else_expr,
+        } => {
+            validate_grouped_expr(cond, group_by, group_bindings, clause)?;
+            validate_grouped_expr(then_expr, group_by, group_bindings, clause)?;
+            validate_grouped_expr(else_expr, group_by, group_bindings, clause)
+        }
+        Expr::Coalesce(items) => items
+            .iter()
+            .try_for_each(|expr| validate_grouped_expr(expr, group_by, group_bindings, clause)),
+        Expr::Function { args, .. } => args.iter().try_for_each(|arg| match arg {
+            FunctionArg::Expr(expr) => {
+                validate_grouped_expr(expr, group_by, group_bindings, clause)
+            }
+            FunctionArg::Wildcard => Ok(()),
+        }),
+        Expr::InList { expr, list, .. } => {
+            validate_grouped_expr(expr, group_by, group_bindings, clause)?;
+            list.iter()
+                .try_for_each(|expr| validate_grouped_expr(expr, group_by, group_bindings, clause))
+        }
+        Expr::Between {
+            expr, low, high, ..
+        } => {
+            validate_grouped_expr(expr, group_by, group_bindings, clause)?;
+            validate_grouped_expr(low, group_by, group_bindings, clause)?;
+            validate_grouped_expr(high, group_by, group_bindings, clause)
+        }
+        Expr::RelationExists {
+            relation,
+            source,
+            target,
+            max_depth,
+            ..
+        } => {
+            validate_grouped_expr(relation, group_by, group_bindings, clause)?;
+            validate_grouped_expr(source, group_by, group_bindings, clause)?;
+            validate_grouped_expr(target, group_by, group_bindings, clause)?;
+            if let Some(max_depth) = max_depth {
+                validate_grouped_expr(max_depth, group_by, group_bindings, clause)?;
+            }
+            Ok(())
+        }
+    }
 }
 
 fn parse_limit_clause(
@@ -877,6 +1780,168 @@ fn parse_offset(offset: Offset) -> Result<Expr, SqlQueryError> {
     parse_expr(offset.value)
 }
 
+fn parse_dml_limit(limit: Option<SqlExpr>) -> Result<Option<Expr>, SqlQueryError> {
+    let limit = limit.map(parse_dml_expr).transpose()?;
+    if limit
+        .as_ref()
+        .is_some_and(|expr| evaluate_usize_expr(expr).is_none())
+    {
+        return Err(SqlQueryError::Invalid(
+            "DML LIMIT must be a non-negative constant integer".to_string(),
+        ));
+    }
+    Ok(limit)
+}
+
+fn parse_dml_expr(expr: SqlExpr) -> Result<Expr, SqlQueryError> {
+    let expr = parse_expr(expr)?;
+    if expr_contains_subquery(&expr) {
+        return Err(SqlQueryError::Unsupported(
+            "subqueries are not supported in DML expressions".to_string(),
+        ));
+    }
+    if expr_contains_aggregate(&expr) {
+        return Err(SqlQueryError::Unsupported(
+            "aggregate expressions are not supported in DML expressions".to_string(),
+        ));
+    }
+    Ok(expr)
+}
+
+fn validate_dml_projection(projection: &[QueryField]) -> Result<(), SqlQueryError> {
+    if projection
+        .iter()
+        .any(|field| expr_contains_subquery(&field.expr))
+    {
+        return Err(SqlQueryError::Unsupported(
+            "subqueries are not supported in DML RETURNING expressions".to_string(),
+        ));
+    }
+    if projection
+        .iter()
+        .any(|field| expr_contains_aggregate(&field.expr))
+    {
+        return Err(SqlQueryError::Unsupported(
+            "aggregate expressions are not supported in DML RETURNING expressions".to_string(),
+        ));
+    }
+    Ok(())
+}
+
+fn expr_contains_subquery(expr: &Expr) -> bool {
+    match expr {
+        Expr::Subquery(_) | Expr::Exists { .. } => true,
+        Expr::Operand(_) => false,
+        Expr::Unary { expr, .. } | Expr::IsNull { expr, .. } => expr_contains_subquery(expr),
+        Expr::Binary { left, right, .. }
+        | Expr::PatternMatch {
+            expr: left,
+            pattern: right,
+            ..
+        }
+        | Expr::RegexMatch {
+            expr: left,
+            pattern: right,
+            ..
+        } => expr_contains_subquery(left) || expr_contains_subquery(right),
+        Expr::IfElse {
+            cond,
+            then_expr,
+            else_expr,
+        } => {
+            expr_contains_subquery(cond)
+                || expr_contains_subquery(then_expr)
+                || expr_contains_subquery(else_expr)
+        }
+        Expr::Coalesce(items) => items.iter().any(expr_contains_subquery),
+        Expr::InList { expr, list, .. } => {
+            expr_contains_subquery(expr) || list.iter().any(expr_contains_subquery)
+        }
+        Expr::Function { args, .. } => args.iter().any(|arg| match arg {
+            FunctionArg::Expr(expr) => expr_contains_subquery(expr),
+            FunctionArg::Wildcard => false,
+        }),
+        Expr::Aggregate { arg, .. } => match arg.as_ref() {
+            FunctionArg::Expr(expr) => expr_contains_subquery(expr),
+            FunctionArg::Wildcard => false,
+        },
+        Expr::Between {
+            expr, low, high, ..
+        } => {
+            expr_contains_subquery(expr)
+                || expr_contains_subquery(low)
+                || expr_contains_subquery(high)
+        }
+        Expr::RelationExists {
+            relation,
+            source,
+            target,
+            max_depth,
+            ..
+        } => {
+            expr_contains_subquery(relation)
+                || expr_contains_subquery(source)
+                || expr_contains_subquery(target)
+                || max_depth.as_deref().is_some_and(expr_contains_subquery)
+        }
+    }
+}
+
+fn expr_contains_aggregate(expr: &Expr) -> bool {
+    match expr {
+        Expr::Aggregate { .. } => true,
+        Expr::Operand(_) | Expr::Subquery(_) | Expr::Exists { .. } => false,
+        Expr::Unary { expr, .. } | Expr::IsNull { expr, .. } => expr_contains_aggregate(expr),
+        Expr::Binary { left, right, .. }
+        | Expr::PatternMatch {
+            expr: left,
+            pattern: right,
+            ..
+        }
+        | Expr::RegexMatch {
+            expr: left,
+            pattern: right,
+            ..
+        } => expr_contains_aggregate(left) || expr_contains_aggregate(right),
+        Expr::IfElse {
+            cond,
+            then_expr,
+            else_expr,
+        } => {
+            expr_contains_aggregate(cond)
+                || expr_contains_aggregate(then_expr)
+                || expr_contains_aggregate(else_expr)
+        }
+        Expr::Coalesce(items) => items.iter().any(expr_contains_aggregate),
+        Expr::Function { args, .. } => args.iter().any(|arg| match arg {
+            FunctionArg::Expr(expr) => expr_contains_aggregate(expr),
+            FunctionArg::Wildcard => false,
+        }),
+        Expr::InList { expr, list, .. } => {
+            expr_contains_aggregate(expr) || list.iter().any(expr_contains_aggregate)
+        }
+        Expr::Between {
+            expr, low, high, ..
+        } => {
+            expr_contains_aggregate(expr)
+                || expr_contains_aggregate(low)
+                || expr_contains_aggregate(high)
+        }
+        Expr::RelationExists {
+            relation,
+            source,
+            target,
+            max_depth,
+            ..
+        } => {
+            expr_contains_aggregate(relation)
+                || expr_contains_aggregate(source)
+                || expr_contains_aggregate(target)
+                || max_depth.as_deref().is_some_and(expr_contains_aggregate)
+        }
+    }
+}
+
 fn parse_assignment(assign: Assignment) -> Result<crate::Assignment, SqlQueryError> {
     let path = match assign.target {
         AssignmentTarget::ColumnName(name) => object_name_to_path(&name)?,
@@ -888,7 +1953,7 @@ fn parse_assignment(assign: Assignment) -> Result<crate::Assignment, SqlQueryErr
     };
     Ok(crate::Assignment {
         path,
-        value: parse_expr(assign.value)?,
+        value: parse_dml_expr(assign.value)?,
     })
 }
 
@@ -996,11 +2061,16 @@ fn parse_expr(expr: SqlExpr) -> Result<Expr, SqlQueryError> {
         }),
         SqlExpr::Like {
             negated,
+            any,
             expr,
             pattern,
             escape_char,
-            ..
         } => {
+            if any {
+                return Err(SqlQueryError::Unsupported(
+                    "LIKE ANY is not supported".to_string(),
+                ));
+            }
             if escape_char.is_some() {
                 return Err(SqlQueryError::Unsupported(
                     "LIKE ESCAPE is not supported".to_string(),
@@ -1016,11 +2086,16 @@ fn parse_expr(expr: SqlExpr) -> Result<Expr, SqlQueryError> {
         }
         SqlExpr::ILike {
             negated,
+            any,
             expr,
             pattern,
             escape_char,
-            ..
         } => {
+            if any {
+                return Err(SqlQueryError::Unsupported(
+                    "ILIKE ANY is not supported".to_string(),
+                ));
+            }
             if escape_char.is_some() {
                 return Err(SqlQueryError::Unsupported(
                     "ILIKE ESCAPE is not supported".to_string(),
@@ -1034,25 +2109,9 @@ fn parse_expr(expr: SqlExpr) -> Result<Expr, SqlQueryError> {
                 negated,
             })
         }
-        SqlExpr::SimilarTo {
-            negated,
-            expr,
-            pattern,
-            escape_char,
-        } => {
-            if escape_char.is_some() {
-                return Err(SqlQueryError::Unsupported(
-                    "SIMILAR TO ESCAPE is not supported".to_string(),
-                ));
-            }
-            Ok(Expr::PatternMatch {
-                kind: PatternMatchKind::SimilarTo,
-                expr: Box::new(parse_expr(*expr)?),
-                pattern: Box::new(parse_expr(*pattern)?),
-                case_insensitive: false,
-                negated,
-            })
-        }
+        SqlExpr::SimilarTo { .. } => Err(SqlQueryError::Unsupported(
+            "SIMILAR TO is not supported because its SQL semantics are not implemented".to_string(),
+        )),
         SqlExpr::IsNull(expr) => Ok(Expr::IsNull {
             expr: Box::new(parse_expr(*expr)?),
             negated: false,
@@ -1072,20 +2131,34 @@ fn parse_expr(expr: SqlExpr) -> Result<Expr, SqlQueryError> {
             else_result,
             ..
         } => {
-            if operand.is_some() || conditions.len() != 1 {
+            if conditions.is_empty() {
                 return Err(SqlQueryError::Unsupported(
-                    "CASE forms other than a single WHEN are not supported".to_string(),
+                    "CASE requires at least one WHEN branch".to_string(),
                 ));
             }
-            let when = conditions.into_iter().next().expect("checked len");
-            let else_expr = else_result.ok_or_else(|| {
-                SqlQueryError::Unsupported("CASE requires ELSE expression".to_string())
-            })?;
-            Ok(Expr::IfElse {
-                cond: Box::new(parse_expr(when.condition)?),
-                then_expr: Box::new(parse_expr(when.result)?),
-                else_expr: Box::new(parse_expr(*else_expr)?),
-            })
+            let operand = operand.map(|operand| parse_expr(*operand)).transpose()?;
+            let mut lowered = else_result
+                .map(|expr| parse_expr(*expr))
+                .transpose()?
+                .unwrap_or_else(|| Expr::Operand(Operand::Literal(Value::Null)));
+            for when in conditions.into_iter().rev() {
+                let condition = parse_expr(when.condition)?;
+                let condition = if let Some(operand) = &operand {
+                    Expr::Binary {
+                        op: BinaryOp::Eq,
+                        left: Box::new(operand.clone()),
+                        right: Box::new(condition),
+                    }
+                } else {
+                    condition
+                };
+                lowered = Expr::IfElse {
+                    cond: Box::new(condition),
+                    then_expr: Box::new(parse_expr(when.result)?),
+                    else_expr: Box::new(lowered),
+                };
+            }
+            Ok(lowered)
         }
         other => Err(SqlQueryError::Unsupported(format!(
             "expression '{other}' is not supported"
@@ -1094,12 +2167,24 @@ fn parse_expr(expr: SqlExpr) -> Result<Expr, SqlQueryError> {
 }
 
 fn parse_function_expr(function: sqlparser::ast::Function) -> Result<Expr, SqlQueryError> {
-    if function.over.is_some() || !function.within_group.is_empty() || function.filter.is_some() {
+    if function.uses_odbc_syntax
+        || !matches!(function.parameters, FunctionArguments::None)
+        || function.null_treatment.is_some()
+        || function.over.is_some()
+        || !function.within_group.is_empty()
+        || function.filter.is_some()
+    {
         return Err(SqlQueryError::Unsupported(format!(
-            "window/filter modifiers are not supported for function '{}'",
+            "parameters, ODBC syntax, and execution modifiers are not supported for function '{}'",
             function.name
         )));
     }
+    if function.name.0.len() != 1 || function.name.0[0].as_ident().is_none() {
+        return Err(SqlQueryError::Unsupported(
+            "qualified or function-style function names are not supported".to_string(),
+        ));
+    }
+    let function_name = function.name.to_string();
     let mut args = Vec::new();
     let FunctionArguments::List(argument_list) = function.args else {
         return Err(SqlQueryError::Unsupported(format!(
@@ -1107,6 +2192,13 @@ fn parse_function_expr(function: sqlparser::ast::Function) -> Result<Expr, SqlQu
             function.name
         )));
     };
+    if !argument_list.clauses.is_empty() {
+        return Err(SqlQueryError::Unsupported(format!(
+            "function '{}' argument clauses are not supported",
+            function.name
+        )));
+    }
+    let duplicate_treatment = argument_list.duplicate_treatment;
     for arg in argument_list.args {
         match arg {
             sqlparser::ast::FunctionArg::Unnamed(sqlparser::ast::FunctionArgExpr::Expr(expr)) => {
@@ -1124,27 +2216,46 @@ fn parse_function_expr(function: sqlparser::ast::Function) -> Result<Expr, SqlQu
         }
     }
     let distinct = matches!(
-        argument_list.duplicate_treatment,
+        duplicate_treatment,
         Some(sqlparser::ast::DuplicateTreatment::Distinct)
     );
-    if let Some(op) = aggregate_op_from_name(&function.name.to_string()) {
-        let arg = if args.len() == 1 {
-            args.into_iter().next().expect("checked len")
-        } else if args.is_empty() && matches!(op, AggregateOp::Count) {
-            FunctionArg::Wildcard
-        } else {
+    if let Some(op) = aggregate_op_from_name(&function_name) {
+        if args.len() != 1 {
             return Err(SqlQueryError::Unsupported(format!(
                 "aggregate '{}' expects exactly one argument",
                 function.name
             )));
-        };
+        }
+        let arg = args.into_iter().next().expect("checked len");
+        if matches!(arg, FunctionArg::Wildcard) && !matches!(op, AggregateOp::Count) {
+            return Err(SqlQueryError::Unsupported(format!(
+                "aggregate '{}' does not support a wildcard argument",
+                function.name
+            )));
+        }
+        if distinct && matches!(arg, FunctionArg::Wildcard) {
+            return Err(SqlQueryError::Unsupported(
+                "COUNT(DISTINCT *) is not supported".to_string(),
+            ));
+        }
         return Ok(Expr::Aggregate {
             op,
             distinct,
             arg: Box::new(arg),
         });
     }
-    if function.name.to_string().eq_ignore_ascii_case("coalesce") {
+    if duplicate_treatment.is_some() {
+        return Err(SqlQueryError::Unsupported(format!(
+            "duplicate treatment is only supported for aggregate functions, not '{}'",
+            function.name
+        )));
+    }
+    if function_name.eq_ignore_ascii_case("coalesce") {
+        if args.is_empty() {
+            return Err(SqlQueryError::Unsupported(
+                "COALESCE expects at least one argument".to_string(),
+            ));
+        }
         let mut exprs = Vec::new();
         for arg in args {
             let FunctionArg::Expr(expr) = arg else {
@@ -1155,23 +2266,28 @@ fn parse_function_expr(function: sqlparser::ast::Function) -> Result<Expr, SqlQu
             exprs.push(expr);
         }
         Ok(Expr::Coalesce(exprs))
-    } else if function
-        .name
-        .to_string()
-        .eq_ignore_ascii_case("has_relation")
+    } else if function_name.eq_ignore_ascii_case("lower")
+        || function_name.eq_ignore_ascii_case("upper")
     {
-        parse_relation_function_expr(args, false)
-    } else if function
-        .name
-        .to_string()
-        .eq_ignore_ascii_case("has_relation_path")
-    {
-        parse_relation_function_expr(args, true)
-    } else {
+        if args.len() != 1 || !matches!(args.first(), Some(FunctionArg::Expr(_))) {
+            return Err(SqlQueryError::Unsupported(format!(
+                "function '{}' expects exactly one expression argument",
+                function.name
+            )));
+        }
         Ok(Expr::Function {
-            name: function.name.to_string(),
+            name: function_name,
             args,
         })
+    } else if function_name.eq_ignore_ascii_case("has_relation") {
+        parse_relation_function_expr(args, false)
+    } else if function_name.eq_ignore_ascii_case("has_relation_path") {
+        parse_relation_function_expr(args, true)
+    } else {
+        Err(SqlQueryError::Unsupported(format!(
+            "function '{}' is not executable",
+            function.name
+        )))
     }
 }
 
@@ -1301,7 +2417,37 @@ fn parse_literal(value: ValueWithSpan) -> Result<Value, SqlQueryError> {
 
 fn parse_base_table_name(factor: &TableFactor) -> Result<String, SqlQueryError> {
     match factor {
-        TableFactor::Table { name, .. } => object_name_to_string(name),
+        TableFactor::Table {
+            name,
+            alias,
+            args,
+            with_hints,
+            version,
+            with_ordinality,
+            partitions,
+            json_path,
+            sample,
+            index_hints,
+        } => {
+            if alias
+                .as_ref()
+                .is_some_and(|alias| !alias.columns.is_empty())
+                || args.is_some()
+                || !with_hints.is_empty()
+                || version.is_some()
+                || *with_ordinality
+                || !partitions.is_empty()
+                || json_path.is_some()
+                || sample.is_some()
+                || !index_hints.is_empty()
+            {
+                return Err(SqlQueryError::Unsupported(
+                    "table functions, alias columns, hints, versions, partitions, JSON paths, sampling, and index hints are not supported"
+                        .to_string(),
+                ));
+            }
+            object_name_to_string(name)
+        }
         other => Err(SqlQueryError::Unsupported(format!(
             "table factor '{other}' is not supported"
         ))),
@@ -1451,27 +2597,7 @@ fn select_to_sql(query: &SelectQuery, collection: &str) -> Result<String, SqlQue
     if query.distinct {
         sql.push_str("DISTINCT ");
     }
-    if query.projection.is_empty() {
-        sql.push('*');
-    } else {
-        let mut first = true;
-        for item in &query.projection {
-            if !first {
-                sql.push_str(", ");
-            }
-            first = false;
-            if let Some(path) = &item.wildcard {
-                sql.push_str(&wildcard_to_sql(path, &item.expr)?);
-                sql.push_str(".*");
-            } else {
-                sql.push_str(&expr_to_sql(&item.expr)?);
-            }
-            if let Some(alias) = &item.alias {
-                sql.push_str(" AS ");
-                sql.push_str(alias);
-            }
-        }
-    }
+    sql.push_str(&projection_to_sql(&query.projection)?);
 
     sql.push_str(" FROM ");
     sql.push_str(collection);
@@ -1537,7 +2663,7 @@ fn select_to_sql(query: &SelectQuery, collection: &str) -> Result<String, SqlQue
                 sql.push_str(", ");
             }
             first = false;
-            sql.push_str(&expr_to_sql(&item.expr)?);
+            sql.push_str(&select_order_expr_to_sql(query, &item.expr)?);
             sql.push_str(match item.direction {
                 SortDirection::Asc => " ASC",
                 SortDirection::Desc => " DESC",
@@ -1563,6 +2689,26 @@ fn select_to_sql(query: &SelectQuery, collection: &str) -> Result<String, SqlQue
         sql.push_str(format_name);
     }
     Ok(sql)
+}
+
+fn select_order_expr_to_sql(query: &SelectQuery, expr: &Expr) -> Result<String, SqlQueryError> {
+    let aggregate_query = !query.group_by.is_empty()
+        || query.having.is_some()
+        || query
+            .projection
+            .iter()
+            .any(|field| expr_contains_aggregate(&field.expr));
+    if aggregate_query && let Some(name) = single_field_name(expr) {
+        let mut matches = query.projection.iter().filter(|field| {
+            field.alias.is_none() && projection_output_key(field).as_deref() == Some(name)
+        });
+        if let Some(field) = matches.next()
+            && matches.next().is_none()
+        {
+            return expr_to_sql(&field.expr);
+        }
+    }
+    expr_to_sql(expr)
 }
 
 fn insert_to_sql(query: &InsertQuery, collection: &str) -> Result<String, SqlQueryError> {
@@ -1669,8 +2815,15 @@ fn projection_to_sql(projection: &[QueryField]) -> Result<String, SqlQueryError>
         }
         first = false;
         if let Some(path) = &field.wildcard {
-            out.push_str(&wildcard_to_sql(path, &field.expr)?);
-            out.push_str(".*");
+            if path.segments().is_empty()
+                && !matches!(field.expr.as_ref(), Expr::Operand(Operand::Field(source)) if !source.segments().is_empty())
+            {
+                out.push('*');
+            } else {
+                let wildcard_source = wildcard_to_sql(path, &field.expr)?;
+                out.push_str(&wildcard_source);
+                out.push_str(".*");
+            }
         } else {
             out.push_str(&expr_to_sql(&field.expr)?);
         }
@@ -1686,6 +2839,9 @@ fn wildcard_to_sql(path: &FieldPath, expr: &Expr) -> Result<String, SqlQueryErro
     if path.segments().is_empty()
         && let Expr::Operand(Operand::Field(source_path)) = expr
     {
+        if source_path.segments().is_empty() {
+            return Ok(String::new());
+        }
         return path_to_sql(source_path);
     }
     path_to_sql(path)
@@ -2053,6 +3209,228 @@ mod tests {
     }
 
     #[test]
+    fn resolves_nonaggregate_order_aliases_and_ordinals() {
+        let parsed = parse_sql_query(
+            "SELECT score + 1 AS rank, id FROM items ORDER BY rank DESC, 2 ASC, hidden DESC",
+            SqlDialectKind::Generic,
+        )
+        .unwrap();
+        let Query::Select(select) = parsed.query else {
+            panic!("expected select");
+        };
+        assert!(matches!(
+            select.order_by[0].expr,
+            Expr::Binary {
+                op: BinaryOp::Add,
+                ..
+            }
+        ));
+        assert!(matches!(
+            &select.order_by[1].expr,
+            Expr::Operand(Operand::Field(path)) if path == &FieldPath::from_fields(["id"])
+        ));
+        assert!(matches!(
+            &select.order_by[2].expr,
+            Expr::Operand(Operand::Field(path)) if path == &FieldPath::from_fields(["hidden"])
+        ));
+
+        for sql in [
+            "SELECT id FROM items ORDER BY 0",
+            "SELECT id FROM items ORDER BY 2",
+            "SELECT * FROM items ORDER BY 1",
+            "SELECT *, score FROM items ORDER BY 2",
+        ] {
+            assert!(parse_sql_query(sql, SqlDialectKind::Generic).is_err());
+        }
+    }
+
+    #[test]
+    fn resolves_aggregate_order_aliases_ordinals_and_expressions() {
+        for order in ["total", "2", "SUM(score)"] {
+            let sql = format!(
+                "SELECT kind, SUM(score) AS total FROM items GROUP BY kind HAVING SUM(score) > 0 ORDER BY {order} DESC"
+            );
+            let parsed = parse_sql_query(&sql, SqlDialectKind::Generic).unwrap();
+            let Query::Select(select) = parsed.query else {
+                panic!("expected select");
+            };
+            assert!(matches!(
+                &select.order_by[0].expr,
+                Expr::Operand(Operand::Field(path))
+                    if path == &FieldPath::from_fields(["total"])
+            ));
+        }
+
+        let parsed = parse_sql_query(
+            "SELECT kind AS category, COUNT(*) AS n FROM items GROUP BY kind ORDER BY kind",
+            SqlDialectKind::Generic,
+        )
+        .unwrap();
+        let Query::Select(select) = parsed.query else {
+            panic!("expected select");
+        };
+        assert!(matches!(
+            &select.order_by[0].expr,
+            Expr::Operand(Operand::Field(path))
+                if path == &FieldPath::from_fields(["category"])
+        ));
+
+        for sql in [
+            "SELECT value, COUNT(*) AS n FROM items GROUP BY value ORDER BY value",
+            "SELECT SUM(score) AS value FROM items ORDER BY value",
+        ] {
+            parse_sql_query(sql, SqlDialectKind::Generic).unwrap();
+        }
+    }
+
+    #[test]
+    fn aggregate_order_does_not_resolve_synthetic_output_names() {
+        for sql in [
+            "SELECT SUM(score) FROM items ORDER BY value",
+            "SELECT score + 1 FROM items GROUP BY score + 1 ORDER BY value",
+        ] {
+            assert!(matches!(
+                parse_sql_query(sql, SqlDialectKind::Generic),
+                Err(SqlQueryError::Invalid(message))
+                    if message.contains("must reference a projected expression, alias, or ordinal")
+            ));
+        }
+    }
+
+    #[test]
+    fn aggregate_order_round_trips_without_exposing_internal_output_keys() {
+        for sql in [
+            "SELECT SUM(score) FROM items ORDER BY SUM(score)",
+            "SELECT SUM(score) FROM items ORDER BY 1",
+            "SELECT kind + 1 FROM items GROUP BY kind + 1 ORDER BY kind + 1",
+            "SELECT kind + 1 FROM items GROUP BY kind + 1 ORDER BY 1",
+        ] {
+            let parsed = parse_sql_query(sql, SqlDialectKind::Generic).unwrap();
+            let printed = query_to_sql(&parsed.query).unwrap();
+            assert!(!printed.contains("ORDER BY value"));
+            parse_sql_query(&printed, SqlDialectKind::PostgreSql).unwrap();
+        }
+    }
+
+    #[test]
+    fn resolves_group_by_ordinals_and_rejects_ambiguous_output_aliases() {
+        let parsed = parse_sql_query(
+            "SELECT score AS kind, COUNT(*) AS n FROM items GROUP BY 1 ORDER BY 1",
+            SqlDialectKind::Generic,
+        )
+        .unwrap();
+        let Query::Select(select) = parsed.query else {
+            panic!("expected select");
+        };
+        assert_eq!(
+            select.group_by,
+            vec![Expr::Operand(Operand::Field(FieldPath::from_fields([
+                "score",
+            ])))]
+        );
+
+        parse_sql_query(
+            "SELECT kind, COUNT(*) AS n FROM items GROUP BY 1 ORDER BY 1",
+            SqlDialectKind::Generic,
+        )
+        .unwrap();
+        for sql in [
+            "SELECT kind AS kind, COUNT(*) AS n FROM items GROUP BY kind",
+            "SELECT items.kind AS kind, COUNT(*) AS n FROM items GROUP BY kind",
+            "SELECT score AS kind, COUNT(*) AS n FROM items GROUP BY score",
+        ] {
+            parse_sql_query(sql, SqlDialectKind::Generic).unwrap();
+        }
+        for sql in [
+            "SELECT score AS kind, COUNT(*) AS n FROM items GROUP BY kind",
+            "SELECT score + 1 AS bucket, COUNT(*) AS n FROM items GROUP BY bucket",
+        ] {
+            assert!(matches!(
+                parse_sql_query(sql, SqlDialectKind::Generic),
+                Err(SqlQueryError::Invalid(message))
+                    if message.contains("ambiguous with a projection alias")
+                        && message.contains("ordinal or repeat")
+            ));
+        }
+        for sql in [
+            "SELECT kind, COUNT(*) AS n FROM items GROUP BY 0",
+            "SELECT kind, COUNT(*) AS n FROM items GROUP BY 3",
+            "SELECT kind, COUNT(*) AS n FROM items GROUP BY 2",
+            "SELECT *, kind FROM items GROUP BY 1",
+            "SELECT COUNT(*) AS kind FROM items GROUP BY kind",
+        ] {
+            assert!(parse_sql_query(sql, SqlDialectKind::Generic).is_err());
+        }
+    }
+
+    #[test]
+    fn normalizes_base_qualified_grouped_fields() {
+        for sql in [
+            "SELECT items.kind, COUNT(*) AS n FROM items GROUP BY kind",
+            "SELECT kind, COUNT(*) AS n FROM items GROUP BY items.kind",
+            "SELECT i.kind, COUNT(*) AS n FROM items AS i GROUP BY kind",
+            "SELECT items.score + 1 AS bucket, COUNT(*) AS n FROM items GROUP BY score + 1",
+        ] {
+            parse_sql_query(sql, SqlDialectKind::Generic).unwrap();
+        }
+    }
+
+    #[test]
+    fn rejects_illegal_aggregate_placement_and_nesting() {
+        for sql in [
+            "SELECT id FROM items WHERE SUM(score) > 0",
+            "SELECT COUNT(*) AS n FROM items AS i JOIN other AS o ON SUM(i.score) = o.score",
+            "SELECT kind FROM items GROUP BY SUM(score)",
+            "SELECT COUNT(*) AS n FROM items LIMIT COUNT(*)",
+            "SELECT COUNT(SUM(score)) AS n FROM items",
+            "SELECT COALESCE(COUNT(SUM(score)), 0) AS n FROM items",
+        ] {
+            assert!(matches!(
+                parse_sql_query(sql, SqlDialectKind::Generic),
+                Err(SqlQueryError::Invalid(_))
+            ));
+        }
+    }
+
+    #[test]
+    fn validates_grouped_fields_in_projection_having_and_order() {
+        parse_sql_query(
+            "SELECT kind, score, COUNT(*) AS n FROM items GROUP BY kind, score HAVING score > 0 ORDER BY score",
+            SqlDialectKind::Generic,
+        )
+        .unwrap();
+        for sql in [
+            "SELECT kind, score, COUNT(*) AS n FROM items GROUP BY kind",
+            "SELECT kind, COUNT(*) AS n FROM items GROUP BY kind HAVING score > 0",
+            "SELECT kind, COUNT(*) AS n FROM items GROUP BY kind ORDER BY score",
+            "SELECT kind, COUNT(*) AS n FROM items",
+            "SELECT COUNT(*) AS n FROM items GROUP BY kind ORDER BY kind",
+        ] {
+            assert!(matches!(
+                parse_sql_query(sql, SqlDialectKind::Generic),
+                Err(SqlQueryError::Invalid(_))
+            ));
+        }
+    }
+
+    #[test]
+    fn rejects_aggregate_wildcards_and_duplicate_output_keys() {
+        for sql in [
+            "SELECT *, COUNT(*) AS n FROM items",
+            "SELECT * FROM items GROUP BY kind",
+            "SELECT id, id FROM items",
+            "SELECT id, score AS id FROM items",
+            "SELECT 1, 2 FROM items",
+            "SELECT COUNT(*), SUM(score) FROM items",
+        ] {
+            assert!(matches!(
+                parse_sql_query(sql, SqlDialectKind::Generic),
+                Err(SqlQueryError::Invalid(_))
+            ));
+        }
+    }
+
+    #[test]
     fn parse_update_and_print() {
         let parsed = parse_sql_query(
             "UPDATE items SET score = score + 1 WHERE id = 'a' RETURNING score",
@@ -2118,6 +3496,116 @@ mod tests {
     }
 
     #[test]
+    fn source_less_select_requires_collection_scope() {
+        assert!(matches!(
+            parse_sql_query("SELECT 1", SqlDialectKind::Generic),
+            Err(SqlQueryError::Invalid(message)) if message.contains("requires a FROM source")
+        ));
+
+        let query =
+            parse_sql_query_for_collection("SELECT 1", "items", SqlDialectKind::Generic).unwrap();
+        assert_eq!(query.collection(), Some("items"));
+    }
+
+    #[test]
+    fn mixed_wildcard_projection_is_not_discarded() {
+        let parsed =
+            parse_sql_query("SELECT *, score AS s FROM items", SqlDialectKind::Generic).unwrap();
+        let Query::Select(select) = parsed.query else {
+            panic!("expected select");
+        };
+        assert_eq!(select.projection.len(), 2);
+        assert_eq!(select.projection[0].wildcard, Some(FieldPath::new()));
+        assert_eq!(select.projection[1].alias.as_deref(), Some("s"));
+        assert_eq!(
+            query_to_sql(&Query::Select(select)).unwrap(),
+            "SELECT *, score AS s FROM items"
+        );
+    }
+
+    #[test]
+    fn dml_returning_wildcard_is_explicit() {
+        let parsed = parse_sql_query(
+            "UPDATE items SET score = 1 RETURNING *",
+            SqlDialectKind::Generic,
+        )
+        .unwrap();
+        let Query::Update(update) = &parsed.query else {
+            panic!("expected update");
+        };
+        assert_eq!(update.returning.len(), 1);
+        assert_eq!(update.returning[0].wildcard, Some(FieldPath::new()));
+        assert!(query_to_sql(&parsed.query).unwrap().contains("RETURNING *"));
+    }
+
+    #[test]
+    fn dml_limit_must_be_a_non_negative_constant_integer() {
+        assert!(matches!(
+            parse_sql_query(
+                "UPDATE items SET score = 1 LIMIT score",
+                SqlDialectKind::MySql,
+            ),
+            Err(SqlQueryError::Invalid(message)) if message.contains("DML LIMIT")
+        ));
+        assert!(matches!(
+            parse_sql_query(
+                "DELETE FROM items LIMIT -1",
+                SqlDialectKind::MySql,
+            ),
+            Err(SqlQueryError::Invalid(message)) if message.contains("DML LIMIT")
+        ));
+        parse_sql_query(
+            "UPDATE items SET score = 1 LIMIT 2 + 3",
+            SqlDialectKind::MySql,
+        )
+        .unwrap();
+    }
+
+    #[test]
+    fn dml_expressions_reject_subqueries() {
+        assert!(matches!(
+            parse_sql_query(
+                "UPDATE items SET score = (SELECT score FROM other_items)",
+                SqlDialectKind::Generic,
+            ),
+            Err(SqlQueryError::Unsupported(message)) if message.contains("subqueries")
+        ));
+        assert!(matches!(
+            parse_sql_query(
+                "DELETE FROM items WHERE EXISTS (SELECT id FROM other_items)",
+                SqlDialectKind::Generic,
+            ),
+            Err(SqlQueryError::Unsupported(message)) if message.contains("subqueries")
+        ));
+    }
+
+    #[test]
+    fn dml_expressions_reject_aggregates() {
+        for sql in [
+            "UPDATE items SET score = SUM(score)",
+            "DELETE FROM items WHERE COUNT(*) > 0",
+            "UPDATE items SET score = 1 RETURNING SUM(score)",
+        ] {
+            assert!(matches!(
+                parse_sql_query(sql, SqlDialectKind::Generic),
+                Err(SqlQueryError::Unsupported(message)) if message.contains("aggregate")
+            ));
+        }
+    }
+
+    #[test]
+    fn rejects_ignored_select_and_table_fields() {
+        assert!(matches!(
+            parse_sql_query("SELECT SQL_NO_CACHE id FROM items", SqlDialectKind::MySql,),
+            Err(SqlQueryError::Unsupported(_))
+        ));
+        assert!(matches!(
+            parse_sql_query("SELECT * FROM items AS i(id)", SqlDialectKind::Generic,),
+            Err(SqlQueryError::Unsupported(_))
+        ));
+    }
+
+    #[test]
     fn parse_select_from_all_collection_alias() {
         let query = parse_sql_query("SELECT id FROM all", SqlDialectKind::Generic).unwrap();
         let Query::Select(select) = query.query else {
@@ -2176,9 +3664,119 @@ mod tests {
     }
 
     #[test]
+    fn rejects_using_and_parses_cross_join() {
+        assert!(matches!(
+            parse_sql_query(
+                "SELECT i.id FROM items AS i JOIN users AS u USING (id)",
+                SqlDialectKind::Generic,
+            ),
+            Err(SqlQueryError::Unsupported(message)) if message.contains("JOIN USING")
+        ));
+
+        let parsed = parse_sql_query(
+            "SELECT i.id FROM items AS i CROSS JOIN tags AS t",
+            SqlDialectKind::Generic,
+        )
+        .unwrap();
+        let Query::Select(select) = parsed.query else {
+            panic!("expected select");
+        };
+        assert!(matches!(
+            &select.joins[0].condition,
+            JoinCondition::OnExpr(Expr::Operand(Operand::Literal(Value::Bool(true))))
+        ));
+    }
+
+    #[test]
+    fn parses_multi_branch_and_simple_case() {
+        let parsed = parse_sql_query(
+            "SELECT CASE WHEN score > 10 THEN 'high' WHEN score > 0 THEN 'low' ELSE 'none' END AS band, CASE kind WHEN 'music' THEN 1 WHEN 'video' THEN 2 ELSE 0 END AS rank FROM items",
+            SqlDialectKind::Generic,
+        )
+        .unwrap();
+        let Query::Select(select) = parsed.query else {
+            panic!("expected select");
+        };
+        assert!(matches!(
+            select.projection[0].expr.as_ref(),
+            Expr::IfElse { else_expr, .. }
+                if matches!(else_expr.as_ref(), Expr::IfElse { .. })
+        ));
+        assert!(matches!(
+            select.projection[1].expr.as_ref(),
+            Expr::IfElse { cond, else_expr, .. }
+                if matches!(cond.as_ref(), Expr::Binary { op: BinaryOp::Eq, .. })
+                    && matches!(else_expr.as_ref(), Expr::IfElse { .. })
+        ));
+    }
+
+    #[test]
+    fn only_executable_functions_and_valid_arities_are_accepted() {
+        parse_sql_query(
+            "SELECT LOWER(name) AS lowered, COALESCE(title, name) AS chosen FROM items",
+            SqlDialectKind::Generic,
+        )
+        .unwrap();
+        parse_sql_query(
+            "SELECT COUNT(*) AS count FROM items",
+            SqlDialectKind::Generic,
+        )
+        .unwrap();
+        for sql in [
+            "SELECT mystery(name) FROM items",
+            "SELECT LOWER(name, title) FROM items",
+            "SELECT COALESCE() FROM items",
+            "SELECT COUNT() FROM items",
+            "SELECT SUM(*) FROM items",
+        ] {
+            assert!(matches!(
+                parse_sql_query(sql, SqlDialectKind::Generic),
+                Err(SqlQueryError::Unsupported(_))
+            ));
+        }
+    }
+
+    #[test]
+    fn rejects_similar_to_until_semantics_are_implemented() {
+        assert!(matches!(
+            parse_sql_query(
+                "SELECT id FROM items WHERE name SIMILAR TO 'a%'",
+                SqlDialectKind::Generic,
+            ),
+            Err(SqlQueryError::Unsupported(message)) if message.contains("SIMILAR TO")
+        ));
+    }
+
+    #[test]
+    fn rejects_like_any_flags() {
+        for sql in [
+            "SELECT id FROM items WHERE name LIKE ANY ('a%', 'b%')",
+            "SELECT id FROM items WHERE name ILIKE ANY ('a%', 'b%')",
+        ] {
+            assert!(matches!(
+                parse_sql_query(sql, SqlDialectKind::Generic),
+                Err(SqlQueryError::Unsupported(message)) if message.contains("ANY")
+            ));
+        }
+    }
+
+    #[test]
+    fn postgresql_dialect_remains_fail_closed_without_backend_capability() {
+        for sql in [
+            "SELECT date_trunc('day', created_at) FROM items",
+            "SELECT id FROM items WHERE name SIMILAR TO 'a%'",
+        ] {
+            assert!(matches!(
+                parse_sql_query(sql, SqlDialectKind::PostgreSql),
+                Err(SqlQueryError::Unsupported(_))
+            ));
+        }
+    }
+
+    #[test]
     fn parse_in_subquery_as_binary_in() {
         let parsed = parse_sql_query(
-            "SELECT id FROM items WHERE id IN (SELECT id FROM other_items)",
+            "SELECT id FROM items WHERE id IN (SELECT o.id FROM other_items AS o)",
             SqlDialectKind::Generic,
         )
         .unwrap();
@@ -2194,6 +3792,73 @@ mod tests {
                 ..
             } if matches!(right.as_ref(), Expr::Subquery(_))
         ));
+    }
+
+    #[test]
+    fn rejects_source_less_and_correlated_subqueries() {
+        assert!(matches!(
+            parse_sql_query(
+                "SELECT id FROM items WHERE id = (SELECT 1)",
+                SqlDialectKind::Generic,
+            ),
+            Err(SqlQueryError::Unsupported(message)) if message.contains("source-less subqueries")
+        ));
+        assert!(matches!(
+            parse_sql_query(
+                "SELECT i.id FROM items AS i WHERE EXISTS (SELECT o.id FROM other_items AS o WHERE o.id = i.id)",
+                SqlDialectKind::Generic,
+            ),
+            Err(SqlQueryError::Unsupported(message)) if message.contains("correlated subqueries")
+        ));
+        assert!(matches!(
+            parse_sql_query(
+                "SELECT i.id FROM items AS i WHERE EXISTS (SELECT i.* FROM other_items AS o)",
+                SqlDialectKind::Generic,
+            ),
+            Err(SqlQueryError::Unsupported(message)) if message.contains("correlated subqueries")
+        ));
+        assert!(matches!(
+            parse_sql_query(
+                "SELECT i.id FROM items AS i WHERE EXISTS (SELECT o.id FROM other_items AS o WHERE outer_only = 1)",
+                SqlDialectKind::Generic,
+            ),
+            Err(SqlQueryError::Unsupported(message)) if message.contains("unqualified field references")
+        ));
+        for dialect in [SqlDialectKind::Generic, SqlDialectKind::PostgreSql] {
+            assert!(matches!(
+                parse_sql_query(
+                    "SELECT other_items.id FROM items AS other_items WHERE EXISTS (SELECT inner_items.id FROM public.other_items AS inner_items WHERE inner_items.id = other_items.id)",
+                    dialect,
+                ),
+                Err(SqlQueryError::Unsupported(message)) if message.contains("correlated subqueries")
+            ));
+        }
+    }
+
+    #[test]
+    fn accepts_multipart_self_qualified_subquery_fields() {
+        for dialect in [SqlDialectKind::Generic, SqlDialectKind::PostgreSql] {
+            parse_sql_query(
+                "SELECT id FROM items WHERE id IN (SELECT public.other_items.id FROM public.other_items WHERE public.other_items.active = TRUE)",
+                dialect,
+            )
+            .unwrap();
+            parse_sql_query(
+                "SELECT id FROM items WHERE id IN (SELECT inner_items.id FROM public.other_items AS inner_items WHERE inner_items.active = TRUE)",
+                dialect,
+            )
+            .unwrap();
+        }
+    }
+
+    #[test]
+    fn ordinary_sql_literals_with_semicolons_reach_sqlparser() {
+        let parsed =
+            parse_sql_query("SELECT ';' AS marker FROM items", SqlDialectKind::Generic).unwrap();
+        let Query::Select(select) = parsed.query else {
+            panic!("expected select");
+        };
+        assert_eq!(select.projection[0].alias.as_deref(), Some("marker"));
     }
 
     #[test]

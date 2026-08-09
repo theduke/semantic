@@ -130,7 +130,7 @@ pub use sql::*;
 
 use std::{
     cmp::Ordering,
-    collections::{BTreeMap, BTreeSet},
+    collections::{BTreeMap, BTreeSet, HashMap},
 };
 
 use regex::RegexBuilder;
@@ -1251,6 +1251,21 @@ impl std::error::Error for CoreError {}
 pub type CoreResult<T> = std::result::Result<T, CoreError>;
 
 pub fn execute_batch(input: &Dataset, batch: &Batch) -> CoreResult<BatchOutcome> {
+    // Validate every mutation limit before cloning or inspecting the dataset. In
+    // particular, an invalid programmatically-constructed DELETE must not be
+    // interpreted as an unbounded mutation.
+    for operation in &batch.operations {
+        match operation {
+            BatchOperation::Update { query, .. } => {
+                evaluate_mutation_limit(query.limit.as_ref())?;
+            }
+            BatchOperation::Delete { query, .. } => {
+                evaluate_mutation_limit(query.limit.as_ref())?;
+            }
+            _ => {}
+        }
+    }
+
     let mut dataset = input.clone();
     let mut stats = BatchStats {
         upserted: 0,
@@ -1339,12 +1354,13 @@ pub fn apply_update_with_returning(
     query: &UpdateQuery,
     entities: &mut [Entity],
 ) -> CoreResult<UpdateResult> {
+    let limit = evaluate_mutation_limit(query.limit.as_ref())?;
     let mut matched = 0usize;
     let mut affected = 0usize;
     let mut returning = Vec::new();
-    let limit = query.limit.as_ref().and_then(evaluate_usize_expr);
+    let mut staged = Vec::new();
 
-    for entity in entities.iter_mut() {
+    for (index, entity) in entities.iter().enumerate() {
         if !row_matches(&entity.object, &query.predicate) {
             continue;
         }
@@ -1356,21 +1372,30 @@ pub fn apply_update_with_returning(
         }
 
         matched += 1;
-        let before = entity.object.clone();
+        let mut updated = entity.object.clone();
 
         for assignment in &query.assignments {
+            // SQL assignments are simultaneous: every right-hand side observes
+            // the row as it was before this UPDATE, not earlier assignments.
             let value = evaluate_expr(&entity.object, &assignment.value)
                 .ok_or_else(|| CoreError::new("failed to evaluate assignment expression"))?;
-            set_value_at_path(&mut entity.object, &assignment.path, value)?;
+            set_value_at_path(&mut updated, &assignment.path, value)?;
         }
 
         if !query.returning.is_empty() {
-            returning.push(project_object(&entity.object, &query.returning));
+            returning.push(project_object(&updated, &query.returning));
         }
 
-        if entity.object != before {
+        if updated != entity.object {
             affected += 1;
         }
+        staged.push((index, updated));
+    }
+
+    // Commit only after every matching row has evaluated and validated. This
+    // preserves statement atomicity for callers of the public core API too.
+    for (index, updated) in staged {
+        entities[index].object = updated;
     }
 
     Ok(UpdateResult {
@@ -1380,8 +1405,8 @@ pub fn apply_update_with_returning(
 }
 
 pub fn apply_delete(query: &DeleteQuery, entities: Vec<Entity>) -> (Vec<Entity>, usize) {
-    let result = apply_delete_plan(query, entities);
-    (result.remaining, result.deleted)
+    let (remaining, result) = apply_delete_with_remaining(query, entities);
+    (remaining, result.deleted)
 }
 
 struct DeletePlanResult {
@@ -1391,17 +1416,30 @@ struct DeletePlanResult {
 }
 
 pub fn apply_delete_with_returning(query: &DeleteQuery, entities: Vec<Entity>) -> DeleteResult {
+    apply_delete_with_remaining(query, entities).1
+}
+
+/// Applies a delete in one traversal, returning both surviving entities and
+/// the mutation result (including any RETURNING projection).
+pub fn apply_delete_with_remaining(
+    query: &DeleteQuery,
+    entities: Vec<Entity>,
+) -> (Vec<Entity>, DeleteResult) {
     let DeletePlanResult {
-        deleted, returning, ..
+        remaining,
+        deleted,
+        returning,
     } = apply_delete_plan(query, entities);
-    DeleteResult { deleted, returning }
+    (remaining, DeleteResult { deleted, returning })
 }
 
 fn apply_delete_plan(query: &DeleteQuery, entities: Vec<Entity>) -> DeletePlanResult {
     let mut deleted = 0usize;
     let mut remaining = Vec::with_capacity(entities.len());
     let mut returning = Vec::new();
-    let limit = query.limit.as_ref().and_then(evaluate_usize_expr);
+    // The legacy standalone delete helpers cannot return an error. Treat an
+    // invalid limit as zero so they fail closed instead of deleting all rows.
+    let limit = evaluate_mutation_limit(query.limit.as_ref()).unwrap_or(Some(0));
 
     for entity in entities {
         if row_matches(&entity.object, &query.predicate)
@@ -1759,6 +1797,19 @@ pub fn evaluate_usize_expr(expr: &Expr) -> Option<usize> {
     }
 }
 
+/// Evaluates a mutation limit, rejecting expressions that are not constant,
+/// non-negative integers.
+pub fn evaluate_mutation_limit(
+    limit: Option<&Expr>,
+) -> std::result::Result<Option<usize>, CoreError> {
+    match limit {
+        None => Ok(None),
+        Some(expr) => evaluate_usize_expr(expr).map(Some).ok_or_else(|| {
+            CoreError::new("mutation LIMIT must evaluate to a non-negative integer")
+        }),
+    }
+}
+
 fn resolve_operand<'a, T: ObjectAccess + ?Sized>(
     value: &'a T,
     operand: &'a Operand,
@@ -1876,41 +1927,220 @@ fn evaluate_function<T: ObjectAccess + ?Sized>(
 }
 
 fn like_match(input: &str, pattern: &str, case_insensitive: bool) -> bool {
-    let (input, pattern) = if case_insensitive {
-        (input.to_ascii_lowercase(), pattern.to_ascii_lowercase())
-    } else {
-        (input.to_string(), pattern.to_string())
-    };
-    like_match_inner(input.as_bytes(), pattern.as_bytes())
+    like_match_inner(input, pattern, case_insensitive)
 }
 
-fn like_match_inner(input: &[u8], pattern: &[u8]) -> bool {
-    if pattern.is_empty() {
-        return input.is_empty();
+fn like_match_inner(input: &str, pattern: &str, case_insensitive: bool) -> bool {
+    // Literal segments are O(input + pattern): anchors are checked once and
+    // unanchored segments use KMP over disjoint ranges. Segments containing `_`
+    // use multiword Shift-And in O(input * ceil(pattern / 64)).
+    if !pattern.contains('%') {
+        return match_like_segment_at(input, 0, pattern, case_insensitive) == Some(input.len());
     }
-    match pattern[0] {
-        b'%' => {
-            for i in 0..=input.len() {
-                if like_match_inner(&input[i..], &pattern[1..]) {
-                    return true;
-                }
-            }
-            false
+
+    let segments = pattern.split('%').collect::<Vec<_>>();
+    let mut first_unanchored = 0;
+    let mut last_unanchored = segments.len();
+    let mut cursor = 0;
+
+    if !pattern.starts_with('%') {
+        let Some(end) = match_like_segment_at(input, 0, segments[0], case_insensitive) else {
+            return false;
+        };
+        cursor = end;
+        first_unanchored = 1;
+    }
+
+    let suffix_start = if !pattern.ends_with('%') {
+        last_unanchored -= 1;
+        let Some(start) =
+            match_like_segment_at_end(input, segments[last_unanchored], case_insensitive)
+        else {
+            return false;
+        };
+        start
+    } else {
+        input.len()
+    };
+
+    if cursor > suffix_start {
+        return false;
+    }
+
+    for segment in &segments[first_unanchored..last_unanchored] {
+        if segment.is_empty() {
+            continue;
         }
-        b'_' => {
-            if input.is_empty() {
-                false
-            } else {
-                like_match_inner(&input[1..], &pattern[1..])
-            }
+        let Some((_, relative_end)) =
+            find_like_segment(&input[cursor..suffix_start], segment, case_insensitive)
+        else {
+            return false;
+        };
+        cursor += relative_end;
+    }
+
+    cursor <= suffix_start
+}
+
+fn match_like_segment_at(
+    input: &str,
+    start: usize,
+    segment: &str,
+    case_insensitive: bool,
+) -> Option<usize> {
+    let mut input_chars = input[start..].char_indices();
+    let mut end = start;
+    for pattern_char in segment.chars() {
+        let (relative_index, input_char) = input_chars.next()?;
+        if pattern_char != '_' && !like_chars_equal(input_char, pattern_char, case_insensitive) {
+            return None;
         }
-        c => {
-            if input.first().copied() == Some(c) {
-                like_match_inner(&input[1..], &pattern[1..])
-            } else {
-                false
-            }
+        end = start + relative_index + input_char.len_utf8();
+    }
+    Some(end)
+}
+
+fn match_like_segment_at_end(input: &str, segment: &str, case_insensitive: bool) -> Option<usize> {
+    let mut input_chars = input.char_indices().rev();
+    let mut start = input.len();
+    for pattern_char in segment.chars().rev() {
+        let (input_index, input_char) = input_chars.next()?;
+        if pattern_char != '_' && !like_chars_equal(input_char, pattern_char, case_insensitive) {
+            return None;
         }
+        start = input_index;
+    }
+    Some(start)
+}
+
+fn find_like_segment(input: &str, segment: &str, case_insensitive: bool) -> Option<(usize, usize)> {
+    if segment.contains('_') {
+        return find_wildcard_like_segment(input, segment, case_insensitive);
+    }
+
+    find_literal_like_segment(input, segment, case_insensitive)
+}
+
+fn find_wildcard_like_segment(
+    input: &str,
+    segment: &str,
+    case_insensitive: bool,
+) -> Option<(usize, usize)> {
+    const WORD_BITS: usize = u64::BITS as usize;
+
+    let pattern_len = segment.chars().count();
+    if pattern_len == 0 {
+        return Some((0, 0));
+    }
+
+    // Shift-And NFA state is split into machine words. Literal masks are kept
+    // per word so storage is O(pattern), even when every scalar is distinct.
+    // Matching is O(input * ceil(pattern / 64)) with no length cap.
+    let word_count = pattern_len.div_ceil(WORD_BITS);
+    let mut literal_masks = (0..word_count)
+        .map(|_| HashMap::<char, u64>::new())
+        .collect::<Vec<_>>();
+    let mut wildcard_masks = vec![0u64; word_count];
+
+    for (index, pattern_char) in segment.chars().enumerate() {
+        let word = index / WORD_BITS;
+        let bit = 1u64 << (index % WORD_BITS);
+        if pattern_char == '_' {
+            wildcard_masks[word] |= bit;
+        } else {
+            let key = normalize_like_char(pattern_char, case_insensitive);
+            *literal_masks[word].entry(key).or_default() |= bit;
+        }
+    }
+
+    let match_word = (pattern_len - 1) / WORD_BITS;
+    let match_bit = 1u64 << ((pattern_len - 1) % WORD_BITS);
+    let mut state = vec![0u64; word_count];
+
+    for (input_index, input_char) in input.char_indices() {
+        let key = normalize_like_char(input_char, case_insensitive);
+        let mut carry = 1u64;
+        for word in 0..word_count {
+            let previous = state[word];
+            let shifted = (previous << 1) | carry;
+            carry = previous >> (WORD_BITS - 1);
+            let literal_mask = literal_masks[word].get(&key).copied().unwrap_or(0);
+            state[word] = shifted & (literal_mask | wildcard_masks[word]);
+        }
+
+        if state[match_word] & match_bit != 0 {
+            let end = input_index + input_char.len_utf8();
+            let start = input[..end]
+                .char_indices()
+                .rev()
+                .nth(pattern_len - 1)
+                .map(|(index, _)| index)
+                .expect("a complete match contains every pattern scalar");
+            return Some((start, end));
+        }
+    }
+
+    None
+}
+
+fn find_literal_like_segment(
+    input: &str,
+    segment: &str,
+    case_insensitive: bool,
+) -> Option<(usize, usize)> {
+    let pattern = segment.chars().collect::<Vec<_>>();
+    if pattern.is_empty() {
+        return Some((0, 0));
+    }
+
+    // KMP makes literal segments linear even for adversarial near matches such
+    // as `%aaaa...b` against a long run of `a` characters.
+    let mut failure = vec![0; pattern.len()];
+    let mut prefix_len = 0;
+    for index in 1..pattern.len() {
+        while prefix_len > 0
+            && !like_chars_equal(pattern[index], pattern[prefix_len], case_insensitive)
+        {
+            prefix_len = failure[prefix_len - 1];
+        }
+        if like_chars_equal(pattern[index], pattern[prefix_len], case_insensitive) {
+            prefix_len += 1;
+            failure[index] = prefix_len;
+        }
+    }
+
+    let mut matched = 0;
+    for (input_index, input_char) in input.char_indices() {
+        while matched > 0 && !like_chars_equal(input_char, pattern[matched], case_insensitive) {
+            matched = failure[matched - 1];
+        }
+        if like_chars_equal(input_char, pattern[matched], case_insensitive) {
+            matched += 1;
+        }
+        if matched == pattern.len() {
+            let end = input_index + input_char.len_utf8();
+            let start = input[..end]
+                .char_indices()
+                .rev()
+                .nth(pattern.len() - 1)
+                .map(|(index, _)| index)
+                .expect("a complete match contains every pattern scalar");
+            return Some((start, end));
+        }
+    }
+
+    None
+}
+
+fn like_chars_equal(left: char, right: char, case_insensitive: bool) -> bool {
+    normalize_like_char(left, case_insensitive) == normalize_like_char(right, case_insensitive)
+}
+
+fn normalize_like_char(value: char, case_insensitive: bool) -> char {
+    if case_insensitive {
+        value.to_ascii_lowercase()
+    } else {
+        value
     }
 }
 
@@ -2208,6 +2438,270 @@ mod tests {
         let stats = apply_update(&query, &mut rows).unwrap();
         assert_eq!(stats.affected, 1);
         assert_eq!(rows[0].object.get("score"), Some(&Value::F64(5.0.into())));
+    }
+
+    #[test]
+    fn update_assignments_read_the_original_row() {
+        let mut object = Object::new();
+        object.insert("a", Value::I64(1));
+        object.insert("b", Value::I64(2));
+        let mut rows = vec![Entity {
+            id: "1".into(),
+            collection: "items".into(),
+            object,
+        }];
+
+        let query = UpdateQuery::new()
+            .set(
+                FieldPath::from_fields(["a"]),
+                Expr::Operand(Operand::Field(FieldPath::from_fields(["b"]))),
+            )
+            .set(
+                FieldPath::from_fields(["b"]),
+                Expr::Operand(Operand::Field(FieldPath::from_fields(["a"]))),
+            );
+
+        let stats = apply_update(&query, &mut rows).unwrap();
+        assert_eq!(stats.affected, 1);
+        assert_eq!(rows[0].object.get("a"), Some(&Value::I64(2)));
+        assert_eq!(rows[0].object.get("b"), Some(&Value::I64(1)));
+    }
+
+    #[test]
+    fn failed_update_assignment_does_not_partially_modify_row() {
+        let mut object = Object::new();
+        object.insert("a", Value::I64(1));
+        let mut rows = vec![Entity {
+            id: "1".into(),
+            collection: "items".into(),
+            object,
+        }];
+
+        let query = UpdateQuery::new()
+            .set(
+                FieldPath::from_fields(["a"]),
+                Expr::Operand(Operand::Literal(Value::I64(9))),
+            )
+            .set(
+                FieldPath::from_fields(["b"]),
+                Expr::Operand(Operand::Field(FieldPath::from_fields(["missing"]))),
+            );
+
+        assert!(apply_update(&query, &mut rows).is_err());
+        assert_eq!(rows[0].object.get("a"), Some(&Value::I64(1)));
+        assert!(!rows[0].object.contains_key("b"));
+    }
+
+    #[test]
+    fn failed_update_rolls_back_rows_staged_before_the_error() {
+        let mut first = Object::new();
+        first.insert("value", Value::I64(1));
+        first.insert("source", Value::I64(10));
+        let mut second = Object::new();
+        second.insert("value", Value::I64(2));
+        let mut rows = vec![
+            Entity {
+                id: "1".into(),
+                collection: "items".into(),
+                object: first,
+            },
+            Entity {
+                id: "2".into(),
+                collection: "items".into(),
+                object: second,
+            },
+        ];
+        let before = rows.clone();
+        let query = UpdateQuery::new().set(
+            FieldPath::from_fields(["value"]),
+            Expr::Operand(Operand::Field(FieldPath::from_fields(["source"]))),
+        );
+
+        assert!(apply_update_with_returning(&query, &mut rows).is_err());
+        assert_eq!(rows, before);
+    }
+
+    #[test]
+    fn invalid_mutation_limits_fail_closed() {
+        let mut object = Object::new();
+        object.insert("a", Value::I64(1));
+        let entity = Entity {
+            id: "1".into(),
+            collection: "items".into(),
+            object,
+        };
+        let invalid_limit = Expr::Operand(Operand::Literal(Value::String("all".into())));
+
+        let mut update_rows = vec![entity.clone()];
+        let update = UpdateQuery::new()
+            .set(
+                FieldPath::from_fields(["a"]),
+                Expr::Operand(Operand::Literal(Value::I64(9))),
+            )
+            .with_limit(invalid_limit.clone());
+        assert!(apply_update(&update, &mut update_rows).is_err());
+        assert_eq!(update_rows, vec![entity.clone()]);
+
+        let delete = DeleteQuery::new().with_limit(invalid_limit);
+        let (remaining, deleted) = apply_delete(&delete, vec![entity.clone()]);
+        assert_eq!(deleted, 0);
+        assert_eq!(remaining, vec![entity]);
+    }
+
+    #[test]
+    fn delete_with_remaining_preserves_limit_order_and_compatibility() {
+        let entities = ["a", "b", "c"]
+            .into_iter()
+            .map(|id| {
+                let mut object = Object::new();
+                object.insert("id", Value::String(id.to_string()));
+                Entity {
+                    id: id.to_string(),
+                    collection: "items".into(),
+                    object,
+                }
+            })
+            .collect::<Vec<_>>();
+        let query = DeleteQuery::new()
+            .with_limit(2)
+            .with_returning(vec![QueryField {
+                expr: Box::new(Expr::Operand(Operand::Field(FieldPath::from_fields([
+                    "id",
+                ])))),
+                alias: None,
+                wildcard: None,
+            }]);
+
+        let (remaining, result) = apply_delete_with_remaining(&query, entities.clone());
+        assert_eq!(
+            remaining
+                .iter()
+                .map(|entity| entity.id.as_str())
+                .collect::<Vec<_>>(),
+            vec!["c"],
+        );
+        assert_eq!(result.deleted, 2);
+        assert_eq!(
+            result
+                .returning
+                .iter()
+                .filter_map(|row| row.get("id").and_then(Value::as_str))
+                .collect::<Vec<_>>(),
+            vec!["a", "b"],
+        );
+
+        let zero_query = query.clone().with_limit(0);
+        let (zero_remaining, zero_result) =
+            apply_delete_with_remaining(&zero_query, entities.clone());
+        assert_eq!(zero_remaining, entities);
+        assert_eq!(zero_result.deleted, 0);
+        assert!(zero_result.returning.is_empty());
+
+        let (legacy_remaining, legacy_deleted) = apply_delete(&query, entities.clone());
+        assert_eq!(legacy_remaining, remaining);
+        assert_eq!(legacy_deleted, result.deleted);
+        assert_eq!(apply_delete_with_returning(&query, entities), result);
+    }
+
+    #[test]
+    fn like_matches_unicode_scalars_and_ascii_case_insensitively() {
+        assert!(like_match("a🦀界", "a_界", false));
+        assert!(!like_match("a🦀界", "a__界", false));
+        assert!(like_match("prefix界", "%界", false));
+        assert!(like_match("ab🦀cd界ef", "a%_cd%ef", false));
+        assert!(like_match("RuSt", "r_st", true));
+        assert!(!like_match("RuSt", "r_st", false));
+    }
+
+    #[test]
+    fn like_handles_long_adversarial_patterns_without_recursion() {
+        let input = "🦀".repeat(20_000);
+        let scalar_pattern = "_".repeat(20_000);
+        assert!(like_match(&input, &scalar_pattern, false));
+
+        let wildcard_pattern = "%".repeat(50_000);
+        assert!(like_match("", &wildcard_pattern, false));
+
+        let multiword_input = format!("{}界{}", "🦀".repeat(64), "🦀".repeat(64));
+        let multiword_pattern = format!("%{}界{}%", "_".repeat(64), "_".repeat(64));
+        assert!(like_match(&multiword_input, &multiword_pattern, false,));
+    }
+
+    #[test]
+    fn like_literal_segment_near_match_is_non_quadratic() {
+        let input = "a".repeat(100_000);
+        let literal = format!("{}b", "a".repeat(10_000));
+        assert!(!like_match(&input, &format!("%{literal}"), false));
+        assert!(!like_match(&input, &format!("%{literal}%"), false));
+
+        let wildcard_literal = format!("_{}b", "a".repeat(10_000));
+        assert!(!like_match(&input, &format!("%{wildcard_literal}%"), false,));
+    }
+
+    #[test]
+    fn like_matches_exhaustive_reference_cases() {
+        fn enumerate(alphabet: &[char], max_len: usize) -> Vec<String> {
+            let mut all = vec![String::new()];
+            let mut frontier = vec![String::new()];
+            for _ in 0..max_len {
+                let mut next = Vec::new();
+                for prefix in &frontier {
+                    for value in alphabet {
+                        let mut item = prefix.clone();
+                        item.push(*value);
+                        next.push(item);
+                    }
+                }
+                all.extend(next.iter().cloned());
+                frontier = next;
+            }
+            all
+        }
+
+        fn reference(input: &str, pattern: &str, case_insensitive: bool) -> bool {
+            let input = input.chars().collect::<Vec<_>>();
+            let pattern = pattern.chars().collect::<Vec<_>>();
+            let mut matches = vec![vec![false; pattern.len() + 1]; input.len() + 1];
+            matches[input.len()][pattern.len()] = true;
+
+            for pattern_index in (0..pattern.len()).rev() {
+                if pattern[pattern_index] == '%' {
+                    matches[input.len()][pattern_index] = matches[input.len()][pattern_index + 1];
+                    for input_index in (0..input.len()).rev() {
+                        matches[input_index][pattern_index] = matches[input_index]
+                            [pattern_index + 1]
+                            || matches[input_index + 1][pattern_index];
+                    }
+                } else {
+                    for input_index in (0..input.len()).rev() {
+                        let scalar_matches = pattern[pattern_index] == '_'
+                            || like_chars_equal(
+                                input[input_index],
+                                pattern[pattern_index],
+                                case_insensitive,
+                            );
+                        matches[input_index][pattern_index] =
+                            scalar_matches && matches[input_index + 1][pattern_index + 1];
+                    }
+                }
+            }
+
+            matches[0][0]
+        }
+
+        let inputs = enumerate(&['a', 'B', '🦀'], 4);
+        let patterns = enumerate(&['a', 'B', '🦀', '_', '%'], 4);
+        for case_insensitive in [false, true] {
+            for input in &inputs {
+                for pattern in &patterns {
+                    assert_eq!(
+                        like_match(input, pattern, case_insensitive),
+                        reference(input, pattern, case_insensitive),
+                        "input={input:?}, pattern={pattern:?}, case_insensitive={case_insensitive}",
+                    );
+                }
+            }
+        }
     }
 
     #[test]
