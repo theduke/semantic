@@ -29,8 +29,8 @@
           inherit system overlays;
         };
 
-        # Rust toolchain with wasm32 target.
-        rustWasm = pkgs.rust-bin.stable.latest.default.override {
+        # Nightly pinned before io-lifetimes 0.7.5 became incompatible with newer nightly rustc releases.
+        rustWasm = pkgs.rust-bin.nightly."2025-05-01".default.override {
           extensions = [ "rust-src" ];
           targets = [ "wasm32-unknown-unknown" ];
         };
@@ -54,6 +54,7 @@
           sassc
           # provides wasm-opt for optimizations
           binaryen
+          yarn-berry
         ];
 
         ui = pkgs.rustPlatform.buildRustPackage {
@@ -185,6 +186,7 @@
           src = self;
 
           nativeBuildInputs = with pkgs; [
+            rustWasm
             pkg-config
             cargo-watch
             # dioxus-cli
