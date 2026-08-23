@@ -18,7 +18,10 @@ pub use entity_navigation::{
 };
 pub use error::UiCatalogError;
 pub use media::{
-    MediaHandle, MediaKind, MediaRenderEvent, MediaRenderOptions, MediaRendererRegistration,
+    MediaHandle, MediaHandleRegistration, MediaKind, MediaPlaybackEvent, MediaPlaybackEventKind,
+    MediaPlaybackRenderOptions, MediaPlaybackRendererRegistration, MediaRenderEvent,
+    MediaRenderOptions, MediaRendererRegistration, PlaybackMediaHandle, PlaybackSessionId,
+    RegisteredPlaybackHandle, media_kind_for_object,
 };
 pub use menu::{ActionPlacement, MenuSection, UiAction};
 pub use provider::{

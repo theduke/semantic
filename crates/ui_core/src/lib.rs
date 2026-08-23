@@ -7,8 +7,8 @@ pub mod components;
 pub use components::{
     AttributeValueView, ClassView, DirectoryBrowser, DirectoryBrowserConfig, DirectoryBrowserProps,
     EntityCard, EntityDeleteButton, EntityDisplayMode, EntityDisplayRenderer, EntityList,
-    EntityOpenButton, EntityRenderOptions, EntityTableRow, ErrorView, LoadingView, MediaView,
-    ObjectView, ValueView,
+    EntityOpenButton, EntityRenderOptions, EntityTableRow, ErrorView, LoadingView,
+    MediaPlaybackView, MediaView, ObjectView, ValueView, register_default_playback_renderers,
 };
 pub use context::{
     UiScopeContext, provide_rpc_client, provide_ui_scope_context, use_active_scope_id,
@@ -30,6 +30,9 @@ pub use form::{
 pub use ui_catalog::{
     CatalogLoadStatus, EntityActionContext, EntityActionPlacement, EntityActionRegistration,
     EntityHrefBuilder, EntityLinkRenderer, EntityNavigation, EntityOpenHandler, EntityTarget,
-    RenderMode, RenderSettings, UiCatalog, UiCatalogContext, UiCatalogProvider, UiCatalogReload,
-    ValueRenderContext, use_ui_catalog, use_ui_catalog_context, use_ui_catalog_reload,
+    MediaHandleRegistration, MediaKind, MediaPlaybackEvent, MediaPlaybackEventKind,
+    MediaPlaybackRenderOptions, MediaPlaybackRendererRegistration, PlaybackMediaHandle,
+    RegisteredPlaybackHandle, RenderMode, RenderSettings, UiCatalog, UiCatalogContext,
+    UiCatalogProvider, UiCatalogReload, ValueRenderContext, media_kind_for_object, use_ui_catalog,
+    use_ui_catalog_context, use_ui_catalog_reload,
 };

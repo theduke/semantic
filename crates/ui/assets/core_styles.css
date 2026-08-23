@@ -1201,6 +1201,184 @@ pre {
   font-size: 13px;
 }
 
+.semantic-player {
+  display: flex;
+  flex-direction: column;
+  height: calc(100vh - 132px);
+  min-height: 560px;
+  min-width: 0;
+  overflow: hidden;
+  border: 1px solid var(--semantic-border);
+  border-radius: var(--semantic-radius);
+  background: var(--semantic-surface);
+}
+
+.semantic-player:fullscreen {
+  width: 100vw;
+  height: 100vh;
+  padding: env(safe-area-inset-top) env(safe-area-inset-right)
+    env(safe-area-inset-bottom) env(safe-area-inset-left);
+  border: 0;
+  border-radius: 0;
+}
+
+.semantic-player__toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--semantic-space-2);
+  padding: var(--semantic-space-2);
+  border-bottom: 1px solid var(--semantic-border);
+  background: var(--semantic-surface);
+}
+
+.semantic-player__toolbar-group,
+.semantic-player__transport,
+.semantic-player__progress,
+.semantic-player__interval,
+.semantic-player__now-playing {
+  display: flex;
+  align-items: center;
+  gap: var(--semantic-space-2);
+  min-width: 0;
+}
+
+.semantic-player__now-playing { flex: 1 1 180px; }
+.semantic-player__position { white-space: nowrap; color: var(--semantic-text-muted); }
+.semantic-player__title {
+  min-width: 0;
+  max-width: 360px;
+  overflow: hidden;
+  border: 0;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-weight: 600;
+}
+.semantic-player__progress input { width: 120px; }
+.semantic-player__interval select { min-height: 32px; }
+
+.semantic-player__body {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(260px, 340px);
+  flex: 1 1 auto;
+  min-height: 0;
+  min-width: 0;
+  overflow: hidden;
+}
+
+.semantic-player__stage-wrap { position: relative; min-width: 0; min-height: 0; overflow: hidden; }
+.semantic-player__stage {
+  display: grid;
+  width: 100%;
+  height: 100%;
+  min-width: 0;
+  min-height: 0;
+  place-items: center;
+  overflow: hidden;
+  padding: var(--semantic-space-4);
+  background: #111418;
+  color: #f7f8fa;
+}
+.semantic-player__media { display: grid; width: 100%; height: 100%; min-height: 0; place-items: center; }
+.semantic-media-playback__image,
+.semantic-media-playback__video {
+  display: block;
+  max-width: 100%;
+  max-height: 100%;
+  object-fit: contain;
+}
+.semantic-media-playback__audio {
+  display: grid;
+  width: min(640px, 100%);
+  gap: var(--semantic-space-6);
+  place-items: center;
+  padding: var(--semantic-space-6);
+}
+.semantic-media-playback__audio-title { font-size: clamp(20px, 4vw, 40px); text-align: center; }
+.semantic-media-playback__audio-element { width: 100%; }
+.semantic-player__fallback { width: min(720px, 100%); max-height: 100%; overflow: auto; color: var(--semantic-text); }
+.semantic-player__empty,
+.semantic-player__stage-error,
+.semantic-player__stage-status { max-width: 520px; text-align: center; }
+
+.semantic-player__playlist {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  overflow: hidden;
+  border-left: 1px solid var(--semantic-border);
+  background: var(--semantic-surface);
+  color: var(--semantic-text);
+}
+.semantic-player__playlist-header {
+  display: flex;
+  align-items: center;
+  gap: var(--semantic-space-2);
+  min-height: 48px;
+  padding: var(--semantic-space-2);
+  border-bottom: 1px solid var(--semantic-border-soft);
+}
+.semantic-player__playlist-header span { color: var(--semantic-text-muted); }
+.semantic-player__playlist-scroll,
+.semantic-player__virtual-list { flex: 1 1 auto; height: 100%; min-height: 0; overflow: auto; }
+.semantic-player__playlist-row {
+  display: grid;
+  grid-template-columns: 38px minmax(0, 1fr) auto auto auto;
+  align-items: center;
+  gap: var(--semantic-space-2);
+  width: 100%;
+  height: 56px;
+  border: 0;
+  border-bottom: 1px solid var(--semantic-border-soft);
+  border-radius: 0;
+  text-align: left;
+}
+.semantic-player__playlist-row--active { background: color-mix(in srgb, var(--semantic-accent) 14%, var(--semantic-surface)); }
+.semantic-player__playlist-row--failed { color: var(--semantic-danger); }
+.semantic-player__playlist-failed { font-size: 11px; font-weight: 600; }
+.semantic-player__playlist-title { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.semantic-player__playlist-number,
+.semantic-player__playlist-kind { color: var(--semantic-text-muted); font-size: 12px; }
+
+.semantic-player__filter-panel {
+  display: grid;
+  gap: var(--semantic-space-3);
+  max-height: 56vh;
+  overflow: auto;
+  padding: var(--semantic-space-4);
+  border-bottom: 1px solid var(--semantic-border);
+  background: var(--semantic-surface-muted);
+}
+.semantic-player__filter-panel > header,
+.semantic-player__filter-actions { display: flex; align-items: flex-start; justify-content: space-between; gap: var(--semantic-space-3); }
+.semantic-player__filter-panel h2,
+.semantic-player__filter-panel p { margin: 0; }
+.semantic-player__filter-panel label { display: grid; gap: var(--semantic-space-1); }
+.semantic-player__filter-panel fieldset { display: flex; gap: var(--semantic-space-4); border: 1px solid var(--semantic-border); }
+.semantic-player__filter-panel fieldset label,
+.semantic-player__filter-check { display: flex; align-items: center; gap: var(--semantic-space-2); }
+.semantic-player__filter-sql textarea { width: 100%; font-family: var(--semantic-font-mono); }
+.semantic-player__filter-note { color: var(--semantic-text-muted); }
+.semantic-player__filter-error,
+.semantic-player__transient-error { color: var(--semantic-danger); }
+.semantic-player__warning { padding: var(--semantic-space-2) var(--semantic-space-4); background: #fff7d6; }
+.semantic-player__transient-error {
+  position: absolute;
+  right: var(--semantic-space-3);
+  bottom: var(--semantic-space-3);
+  left: var(--semantic-space-3);
+  display: flex;
+  align-items: center;
+  gap: var(--semantic-space-2);
+  padding: var(--semantic-space-2);
+  border: 1px solid currentColor;
+  border-radius: var(--semantic-radius);
+  background: var(--semantic-surface);
+}
+.semantic-player__transient-error span { flex: 1; }
+.semantic-player__entity-dialog-body { max-height: 65vh; overflow: auto; }
+.semantic-player__dialog-actions { display: flex; justify-content: flex-end; margin-top: var(--semantic-space-4); }
+
 @media (max-width: 720px) {
   .semantic-ui__header {
     align-items: flex-start;
@@ -1256,4 +1434,14 @@ pre {
   .semantic-directory-browser__item-date {
     display: none;
   }
+
+  .semantic-player { height: calc(100vh - 190px); min-height: 500px; }
+  .semantic-player__body { grid-template-columns: minmax(0, 1fr); grid-template-rows: minmax(220px, 1fr) minmax(180px, 38%); }
+  .semantic-player__playlist { border-top: 1px solid var(--semantic-border); border-left: 0; }
+  .semantic-player__progress { order: 10; flex: 1 1 100%; }
+  .semantic-player__progress input { flex: 1; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .semantic-player * { scroll-behavior: auto !important; }
 }

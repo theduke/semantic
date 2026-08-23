@@ -111,6 +111,7 @@ pub fn AppRoot(props: AppRootProps) -> Element {
 }
 
 fn configure_ui_catalog(mut catalog: UiCatalog) -> UiCatalog {
+    semantic_ui_core::register_default_playback_renderers(&mut catalog);
     catalog
         .render_registry_mut()
         .register_type_renderer("ref", Rc::new(render_ref_link));

@@ -15,6 +15,6 @@ pub use entity::{
 };
 pub use error::ErrorView;
 pub use loading::LoadingView;
-pub use media::MediaView;
+pub use media::{MediaPlaybackView, MediaView, register_default_playback_renderers};
 pub use object::ObjectView;
 pub use value::{AttributeValueView, ValueView};

@@ -62,6 +62,13 @@ pub fn AppShell() -> Element {
                         "Query"
                     }
                     Link {
+                        to: Route::PlayPage,
+                        class: "dx-button",
+                        "data-style": "ghost",
+                        "data-size": "default",
+                        "Play"
+                    }
+                    Link {
                         to: Route::TreePage { root: None },
                         class: "dx-button",
                         "data-style": "ghost",

@@ -8423,6 +8423,7 @@ dependencies = [
  "async-trait",
  "dioxus",
  "dioxus-icons",
+ "dioxus-sdk-time",
  "dxcomp",
  "futures",
  "infer",

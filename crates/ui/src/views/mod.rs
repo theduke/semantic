@@ -4,6 +4,7 @@ mod collection;
 mod entity;
 mod form;
 mod home;
+mod play;
 mod query;
 mod tree;
 mod upload;
@@ -14,6 +15,7 @@ pub use collection::CollectionPage;
 pub use entity::{CollectionEntityPage, DefaultEntityPage};
 pub use form::{CollectionEditEntityPage, CreateEntityPage, DefaultEditEntityPage};
 pub use home::HomePage;
+pub use play::PlayPage;
 pub use query::QueryPage;
 pub use tree::TreePage;
 pub use upload::UploadPage;
@@ -52,6 +54,8 @@ pub enum Route {
     },
     #[route("/query")]
     QueryPage,
+    #[route("/play")]
+    PlayPage,
     #[route("/tree?:root")]
     TreePage { root: Option<String> },
     #[route("/upload")]

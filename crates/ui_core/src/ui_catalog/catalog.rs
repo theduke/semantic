@@ -7,8 +7,8 @@ use crate::{
     form::{UiFormRegistry, register_default_form_renderers},
     ui_catalog::{
         EntityActionRegistration, EntityHrefBuilder, EntityLinkRenderer, EntityNavigation,
-        EntityOpenHandler, MediaRendererRegistration, MenuSection, RenderRegistry, RenderSettings,
-        defaults::register_defaults,
+        EntityOpenHandler, MediaPlaybackRendererRegistration, MediaRendererRegistration,
+        MenuSection, RenderRegistry, RenderSettings, defaults::register_defaults,
     },
 };
 
@@ -30,6 +30,7 @@ pub struct UiCatalog {
     render_settings: RenderSettings,
     form_registry: UiFormRegistry,
     media_renderers: Vec<MediaRendererRegistration>,
+    media_playback_renderers: Vec<MediaPlaybackRendererRegistration>,
     menu_sections: Vec<MenuSection>,
     entity_navigation: EntityNavigation,
     entity_actions: Vec<EntityActionRegistration>,
@@ -76,6 +77,10 @@ impl UiCatalog {
         &self.media_renderers
     }
 
+    pub fn media_playback_renderers(&self) -> &[MediaPlaybackRendererRegistration] {
+        &self.media_playback_renderers
+    }
+
     pub fn menu_sections(&self) -> &[MenuSection] {
         &self.menu_sections
     }
@@ -110,6 +115,13 @@ impl UiCatalog {
 
     pub fn register_media_renderer(&mut self, renderer: MediaRendererRegistration) {
         self.media_renderers.push(renderer);
+    }
+
+    pub fn register_media_playback_renderer(
+        &mut self,
+        renderer: MediaPlaybackRendererRegistration,
+    ) {
+        self.media_playback_renderers.push(renderer);
     }
 
     pub fn register_menu_section(&mut self, section: MenuSection) {
@@ -181,6 +193,7 @@ impl UiCatalogBuilder {
                 render_settings: RenderSettings::default(),
                 form_registry: UiFormRegistry::default(),
                 media_renderers: Vec::new(),
+                media_playback_renderers: Vec::new(),
                 menu_sections: Vec::new(),
                 entity_navigation: EntityNavigation::default(),
                 entity_actions: Vec::new(),
