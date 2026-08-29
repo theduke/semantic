@@ -14,12 +14,14 @@ use semantic_db_core::{
     InsertSource, MutationStats, PackageRegistrationOutcome, Query, QueryExplain, QueryPlan,
     QueryResult, SelectQuery, UpdateQuery, apply_core_schema_migrations, apply_migration_ddl_batch,
     canonicalize_delete_query, canonicalize_insert_query, canonicalize_query,
-    canonicalize_select_query, canonicalize_update_query, evaluate_mutation_limit, execute_batch,
-    is_all_collection_alias, normalize_object_for_collection, normalize_package_definition,
-    ref_target_class_ids, resolved_field_types_for_object, touched_collections,
-    validate_package_migrations,
+    canonicalize_select_query, canonicalize_update_query, evaluate_mutation_limit,
+    execute_batch_with_prepare, is_all_collection_alias, normalize_object_for_collection,
+    normalize_package_definition, prepare_object_for_write, ref_target_class_ids,
+    resolved_field_types_for_object, touched_collections, validate_package_migrations,
 };
-use semantic_db_core::{DbConfig, DbError, MigrationMismatchPolicy};
+use semantic_db_core::{
+    CoreError, DbConfig, DbError, DefaultExpressionContext, MigrationMismatchPolicy,
+};
 
 use crate::{
     schema_store::{catalog_write_ops, load_catalog},
@@ -658,12 +660,10 @@ impl<E: KvEngine> KvDb<E> {
         let inserted = rows.len();
 
         let mut batch = Batch::new();
-        let mut returning_rows = Vec::new();
+        let mut inserted_ids = Vec::with_capacity(inserted);
         for object in rows {
             let id = self.extract_insert_id(&collection, &object)?;
-            if !returning.is_empty() {
-                returning_rows.push(semantic_db_core::project_object(&object, &returning));
-            }
+            inserted_ids.push(id.clone());
             batch = batch.with_op(BatchOperation::Upsert {
                 collection: collection.name.clone(),
                 id,
@@ -671,7 +671,29 @@ impl<E: KvEngine> KvDb<E> {
             });
         }
 
-        self.execute_batch(batch)?;
+        let outcome = self.execute_batch(batch)?;
+        let returning_rows = if returning.is_empty() {
+            Vec::new()
+        } else {
+            let stored_rows = outcome.dataset.get(&collection.name).ok_or_else(|| {
+                DbError::Storage(format!(
+                    "inserted collection '{}' missing from batch outcome",
+                    collection.name
+                ))
+            })?;
+            inserted_ids
+                .iter()
+                .map(|id| {
+                    stored_rows
+                        .get(id)
+                        .map(|object| semantic_db_core::project_object(object, &returning))
+                        .ok_or_else(|| DbError::EntityNotFound {
+                            collection: collection.name.clone(),
+                            id: id.clone(),
+                        })
+                })
+                .collect::<std::result::Result<Vec<_>, _>>()?
+        };
         Ok(semantic_db_core::InsertResult {
             inserted,
             returning: self.format_output_rows(
@@ -866,8 +888,21 @@ impl<E: KvEngine> KvDb<E> {
                         object: object.clone(),
                     })
                     .collect::<Vec<_>>();
-                result = semantic_db_core::apply_update_with_returning(&query, &mut entities)
-                    .map_err(|err| DbError::InvalidQuery(err.to_string()))?;
+                let default_context = DefaultExpressionContext::now();
+                result = semantic_db_core::apply_update_with_returning_and_prepare(
+                    &query,
+                    &mut entities,
+                    |_, object| {
+                        prepare_object_for_write(
+                            catalog_snapshot.catalog.as_ref(),
+                            &collection_schema,
+                            object,
+                            &default_context,
+                        )
+                        .map_err(|err| CoreError::new(err.to_string()))
+                    },
+                )
+                .map_err(|err| DbError::InvalidQuery(err.to_string()))?;
                 coll.clear();
                 for entity in entities {
                     coll.insert(entity.id, entity.object);
@@ -1024,8 +1059,11 @@ impl<E: KvEngine> KvDb<E> {
                 &batch,
                 read_revision,
             )?;
-            let out = execute_batch(&dataset, &batch)
-                .map_err(|err| DbError::InvalidQuery(err.to_string()))?;
+            let out = Self::execute_batch_with_write_defaults(
+                catalog_snapshot.catalog.as_ref(),
+                &dataset,
+                &batch,
+            )?;
 
             if self.catalog.snapshot().version != catalog_snapshot.version {
                 return Err(DbError::TransactionConflict(
@@ -1318,12 +1356,27 @@ impl<E: KvEngine> KvDb<E> {
                 )
             })
             .collect::<BTreeMap<_, _>>();
-        let out = execute_batch(&dataset, &batch)
-            .map_err(|err| DbError::InvalidQuery(err.to_string()))?;
+        let out = Self::execute_batch_with_write_defaults(current_catalog, &dataset, &batch)?;
         for (collection_name, rows) in out.dataset {
             after.insert(collection_name, rows);
         }
         Ok(())
+    }
+
+    fn execute_batch_with_write_defaults(
+        catalog: &Catalog,
+        dataset: &BTreeMap<String, BTreeMap<String, Object>>,
+        batch: &Batch,
+    ) -> std::result::Result<BatchOutcome, DbError> {
+        let default_context = DefaultExpressionContext::now();
+        execute_batch_with_prepare(dataset, batch, |collection, _, object| {
+            let collection_schema = catalog
+                .collection_by_name(collection)
+                .ok_or_else(|| CoreError::new(format!("collection '{collection}' not found")))?;
+            prepare_object_for_write(catalog, collection_schema, object, &default_context)
+                .map_err(|err| CoreError::new(err.to_string()))
+        })
+        .map_err(|err| DbError::InvalidQuery(err.to_string()))
     }
 
     fn load_collection_dataset(
@@ -3434,8 +3487,9 @@ mod tests {
     use std::collections::BTreeMap;
 
     use semantic_data::{
+        expr::{CallExpr, Callee, Expr as SchemaExpr},
         schema::{
-            Migration, MigrationDdlOperation, MigrationOperation, Module, Package,
+            Constraint, Migration, MigrationDdlOperation, MigrationOperation, Module, Package,
             attribute::attribute_ref::AttributeRef,
             attribute::attribute_type::AttributeType,
             class::class_attribute::ClassAttribute,
@@ -3445,12 +3499,12 @@ mod tests {
             core::{meta::Meta, type_kind::TypeKind, type_node::Type, type_ref::TypeRef},
             primitives::{
                 bool_type::BoolType, number_type::NumberType, string_type::StringType,
-                uint_width::UIntWidth,
+                temporal_type::TemporalType, uint_width::UIntWidth,
             },
             record::field::Field,
             record::record_type::RecordType,
         },
-        value::{FieldPath, Object, PathSegment, Value},
+        value::{DateTime, FieldPath, Object, PathSegment, Value},
     };
 
     use semantic_data::query::{BinaryOp, FieldFormat, SortDirection};
@@ -3954,6 +4008,202 @@ mod tests {
             .unwrap()
             .unwrap();
         assert_eq!(stored.kind, crate::storage::StoredEntityKind::Class);
+    }
+
+    #[test]
+    fn default_expressions_apply_to_unset_fields_on_insert_and_update() {
+        let mut db = KvDb::in_memory();
+        db.transact_ddl(
+            DdlBatch::new()
+                .with_op(DdlOperation::UpsertAttribute {
+                    attribute: AttributeType {
+                        id: "test:timestamp".to_string(),
+                        name: "timestamp".to_string(),
+                        ty: ty(TypeKind::Optional(OptionalType {
+                            inner: Box::new(ty(TypeKind::Temporal(TemporalType::DateTime))),
+                        })),
+                        constraints: vec![],
+                        meta: Meta::default(),
+                    },
+                })
+                .with_op(DdlOperation::UpsertAttribute {
+                    attribute: AttributeType {
+                        id: "test:title".to_string(),
+                        name: "title".to_string(),
+                        ty: ty(TypeKind::String(StringType {
+                            format: None,
+                            normalization: None,
+                        })),
+                        constraints: vec![],
+                        meta: Meta::default(),
+                    },
+                })
+                .with_op(DdlOperation::UpsertClass {
+                    class: default_expression_test_class(false),
+                }),
+        )
+        .unwrap();
+
+        db.insert(
+            DEFAULT_COLLECTION,
+            "legacy",
+            entity(
+                "legacy",
+                "test:default_expression",
+                [("title", Value::String("before".to_string()))],
+            ),
+        )
+        .unwrap();
+        assert!(
+            !db.get(DEFAULT_COLLECTION, "legacy")
+                .unwrap()
+                .unwrap()
+                .object
+                .contains_key("test:timestamp")
+        );
+
+        db.transact_ddl(DdlBatch::new().with_op(DdlOperation::UpsertClass {
+            class: default_expression_test_class(true),
+        }))
+        .unwrap();
+
+        let update_title = |db: &mut KvDb<_>, id: &str, title: &str| {
+            db.update_where(
+                UpdateQuery::new()
+                    .with_collection(DEFAULT_COLLECTION)
+                    .with_predicate(eq_predicate(
+                        FieldPath::from_fields(["id"]),
+                        Value::String(id.to_string()),
+                    ))
+                    .set(
+                        FieldPath::from_fields(["title"]),
+                        Expr::Operand(Operand::Literal(Value::String(title.to_string()))),
+                    ),
+            )
+            .unwrap()
+        };
+
+        let stats = update_title(&mut db, "legacy", "before");
+        assert_eq!(stats.affected, 1);
+        assert!(matches!(
+            db.get(DEFAULT_COLLECTION, "legacy")
+                .unwrap()
+                .unwrap()
+                .object
+                .get("test:timestamp"),
+            Some(Value::DateTime(_))
+        ));
+
+        db.insert(
+            DEFAULT_COLLECTION,
+            "missing",
+            entity(
+                "missing",
+                "test:default_expression",
+                [("title", Value::String("missing".to_string()))],
+            ),
+        )
+        .unwrap();
+        assert!(matches!(
+            db.get(DEFAULT_COLLECTION, "missing")
+                .unwrap()
+                .unwrap()
+                .object
+                .get("test:timestamp"),
+            Some(Value::DateTime(_))
+        ));
+
+        let fixed = DateTime::now_utc();
+        db.insert(
+            DEFAULT_COLLECTION,
+            "set",
+            entity(
+                "set",
+                "test:default_expression",
+                [
+                    ("title", Value::String("set".to_string())),
+                    ("timestamp", Value::DateTime(fixed)),
+                ],
+            ),
+        )
+        .unwrap();
+        let _ = update_title(&mut db, "set", "changed");
+        assert_eq!(
+            db.get(DEFAULT_COLLECTION, "set")
+                .unwrap()
+                .unwrap()
+                .object
+                .get("test:timestamp"),
+            Some(&Value::DateTime(fixed))
+        );
+
+        db.update_where(
+            UpdateQuery::new()
+                .with_collection(DEFAULT_COLLECTION)
+                .with_predicate(eq_predicate(
+                    FieldPath::from_fields(["id"]),
+                    Value::String("set".to_string()),
+                ))
+                .set(
+                    FieldPath::from_fields(["timestamp"]),
+                    Expr::Operand(Operand::Literal(Value::Void)),
+                ),
+        )
+        .unwrap();
+        let regenerated = db
+            .get(DEFAULT_COLLECTION, "set")
+            .unwrap()
+            .unwrap()
+            .object
+            .get("test:timestamp")
+            .cloned();
+        assert!(matches!(regenerated, Some(Value::DateTime(_))));
+        assert_ne!(regenerated, Some(Value::DateTime(fixed)));
+
+        db.insert(
+            DEFAULT_COLLECTION,
+            "null",
+            entity(
+                "null",
+                "test:default_expression",
+                [
+                    ("title", Value::String("null".to_string())),
+                    ("timestamp", Value::Null),
+                ],
+            ),
+        )
+        .unwrap();
+        let _ = update_title(&mut db, "null", "still null");
+        assert_eq!(
+            db.get(DEFAULT_COLLECTION, "null")
+                .unwrap()
+                .unwrap()
+                .object
+                .get("test:timestamp"),
+            Some(&Value::Null)
+        );
+
+        db.insert(
+            DEFAULT_COLLECTION,
+            "void",
+            entity(
+                "void",
+                "test:default_expression",
+                [
+                    ("title", Value::String("void".to_string())),
+                    ("timestamp", Value::Void),
+                ],
+            ),
+        )
+        .unwrap();
+        assert!(matches!(
+            db.get(DEFAULT_COLLECTION, "void")
+                .unwrap()
+                .unwrap()
+                .object
+                .get("test:timestamp"),
+            Some(Value::DateTime(_))
+        ));
     }
 
     #[test]
@@ -4798,6 +5048,53 @@ mod tests {
             constraints: vec![],
             meta: Meta::default(),
         }
+    }
+
+    fn default_expression_test_class(with_default: bool) -> ClassType {
+        let constraints = if with_default {
+            vec![Constraint::DefaultExpr {
+                expr: SchemaExpr::Call(Box::new(CallExpr {
+                    callee: Callee::Name(vec!["time".to_string(), "now".to_string()]),
+                    args: Vec::new(),
+                    over: None,
+                })),
+            }]
+        } else {
+            Vec::new()
+        };
+        test_class(
+            "test:default_expression",
+            "DefaultExpression",
+            None,
+            BTreeMap::from([
+                (
+                    "timestamp".to_string(),
+                    ClassAttribute {
+                        attribute: AttributeRef {
+                            id: "test:timestamp".to_string(),
+                        },
+                        required: false,
+                        ui_order: None,
+                        computed: None,
+                        constraints,
+                        meta: Meta::default(),
+                    },
+                ),
+                (
+                    "title".to_string(),
+                    ClassAttribute {
+                        attribute: AttributeRef {
+                            id: "test:title".to_string(),
+                        },
+                        required: false,
+                        ui_order: None,
+                        computed: None,
+                        constraints: Vec::new(),
+                        meta: Meta::default(),
+                    },
+                ),
+            ]),
+        )
     }
 
     fn entity<const N: usize>(id: &str, class_id: &str, fields: [(&str, Value); N]) -> Object {

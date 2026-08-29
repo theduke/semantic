@@ -2,6 +2,7 @@ use std::collections::{BTreeSet, HashSet};
 
 use fnv::FnvHashMap;
 use semantic_data::{
+    expr::Expr,
     schema::{core::type_kind::TypeKind, core::type_node::Type},
     value::{Object, Value},
 };
@@ -49,6 +50,14 @@ pub enum ObjectNormalizationError {
     AmbiguousFieldAlias { collection: String, alias: String },
     #[error("field '{field}' is computed and cannot be written in collection '{collection}'")]
     ComputedFieldNotWritable { collection: String, field: String },
+    #[error(
+        "failed to evaluate default expression for field '{field}' in collection '{collection}': {message}"
+    )]
+    DefaultExpression {
+        collection: String,
+        field: String,
+        message: String,
+    },
 }
 
 pub type ObjectNormalizationResult<T> = std::result::Result<T, ObjectNormalizationError>;
@@ -57,6 +66,24 @@ pub fn normalize_object_for_collection(
     catalog: &Catalog,
     collection: &CollectionSchema,
     object: &mut Object,
+) -> ObjectNormalizationResult<()> {
+    normalize_object_for_collection_inner(catalog, collection, object, None)
+}
+
+pub fn prepare_object_for_write(
+    catalog: &Catalog,
+    collection: &CollectionSchema,
+    object: &mut Object,
+    default_context: &crate::DefaultExpressionContext,
+) -> ObjectNormalizationResult<()> {
+    normalize_object_for_collection_inner(catalog, collection, object, Some(default_context))
+}
+
+fn normalize_object_for_collection_inner(
+    catalog: &Catalog,
+    collection: &CollectionSchema,
+    object: &mut Object,
+    default_context: Option<&crate::DefaultExpressionContext>,
 ) -> ObjectNormalizationResult<()> {
     let concrete_class_lid = object
         .get(OBJECT_TYPE_FIELD)
@@ -73,12 +100,14 @@ pub fn normalize_object_for_collection(
     if let Some(class_lid) = concrete_class_lid {
         let mut field_types = FnvHashMap::default();
         let mut field_required = FnvHashMap::default();
+        let mut field_default_exprs = FnvHashMap::default();
         collect_class_fields(
             catalog,
             class_lid,
             &mut concrete_class_aliases,
             &mut field_types,
             &mut field_required,
+            &mut field_default_exprs,
         );
     }
 
@@ -97,6 +126,7 @@ pub fn normalize_object_for_collection(
 
     let mut registered_field_types = FnvHashMap::default();
     let mut registered_field_required = FnvHashMap::default();
+    let mut registered_field_default_exprs = FnvHashMap::default();
     let mut reject_unknown_fields = collection.is_closed_field_set();
 
     if collection.kind == CollectionKind::Untyped {
@@ -141,6 +171,7 @@ pub fn normalize_object_for_collection(
                     &mut class_aliases,
                     &mut registered_field_types,
                     &mut registered_field_required,
+                    &mut registered_field_default_exprs,
                 );
                 normalize_aliases(collection, object, |key| {
                     class_aliases
@@ -188,6 +219,15 @@ pub fn normalize_object_for_collection(
             reject_unknown_fields |=
                 collection.integrity_mode == IntegrityMode::StrictRegisteredSchema;
         }
+    }
+
+    if let Some(default_context) = default_context {
+        apply_default_expressions(
+            collection,
+            object,
+            &registered_field_default_exprs,
+            default_context,
+        )?;
     }
 
     // Reject writes to computed fields.
@@ -247,12 +287,14 @@ pub fn resolved_field_types_for_object(
     if let Some(class_lid) = class_ids.first().copied() {
         let mut class_aliases = FnvHashMap::default();
         let mut field_required = FnvHashMap::default();
+        let mut field_default_exprs = FnvHashMap::default();
         collect_class_fields(
             catalog,
             class_lid,
             &mut class_aliases,
             &mut field_types,
             &mut field_required,
+            &mut field_default_exprs,
         );
     } else if let Some(record_lid) = record_ids.first().copied()
         && let Some(record_type) = catalog.record_type_by_lid(record_lid)
@@ -431,6 +473,7 @@ fn collect_class_fields(
     field_aliases: &mut FnvHashMap<String, String>,
     field_types: &mut FnvHashMap<String, Type>,
     field_required: &mut FnvHashMap<String, bool>,
+    field_default_exprs: &mut FnvHashMap<String, Expr>,
 ) {
     fn visit(
         catalog: &Catalog,
@@ -439,6 +482,7 @@ fn collect_class_fields(
         field_aliases: &mut FnvHashMap<String, String>,
         field_types: &mut FnvHashMap<String, Type>,
         field_required: &mut FnvHashMap<String, bool>,
+        field_default_exprs: &mut FnvHashMap<String, Expr>,
     ) {
         if !visited.insert(class_lid) {
             return;
@@ -456,6 +500,7 @@ fn collect_class_fields(
                 field_aliases,
                 field_types,
                 field_required,
+                field_default_exprs,
             );
         }
         for ext in &class.class.extends {
@@ -467,6 +512,7 @@ fn collect_class_fields(
                     field_aliases,
                     field_types,
                     field_required,
+                    field_default_exprs,
                 );
             }
         }
@@ -482,6 +528,21 @@ fn collect_class_fields(
             );
             field_types.insert(attr.attribute.id.clone(), attr.attribute.ty.clone());
             field_required.insert(attr.attribute.id.clone(), class_attr.required);
+            if class_attr.computed.is_none()
+                && let Some(expr) = attr
+                    .attribute
+                    .constraints
+                    .iter()
+                    .chain(class_attr.constraints.iter())
+                    .find_map(|constraint| match constraint {
+                        semantic_data::schema::Constraint::DefaultExpr { expr } => {
+                            Some(expr.clone())
+                        }
+                        _ => None,
+                    })
+            {
+                field_default_exprs.insert(attr.attribute.id.clone(), expr);
+            }
         }
     }
 
@@ -493,7 +554,33 @@ fn collect_class_fields(
         field_aliases,
         field_types,
         field_required,
+        field_default_exprs,
     );
+}
+
+fn apply_default_expressions(
+    collection: &CollectionSchema,
+    object: &mut Object,
+    field_default_exprs: &FnvHashMap<String, Expr>,
+    context: &crate::DefaultExpressionContext,
+) -> ObjectNormalizationResult<()> {
+    for (field, expr) in field_default_exprs {
+        if object
+            .get(field)
+            .is_some_and(|value| !matches!(value, Value::Void))
+        {
+            continue;
+        }
+        let value = crate::evaluate_default_expression(expr, context).map_err(|err| {
+            ObjectNormalizationError::DefaultExpression {
+                collection: collection.name.clone(),
+                field: field.clone(),
+                message: err.to_string(),
+            }
+        })?;
+        object.insert(field.clone(), value);
+    }
+    Ok(())
 }
 
 fn prune_nullish_optional_registered_fields(

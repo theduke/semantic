@@ -1251,6 +1251,17 @@ impl std::error::Error for CoreError {}
 pub type CoreResult<T> = std::result::Result<T, CoreError>;
 
 pub fn execute_batch(input: &Dataset, batch: &Batch) -> CoreResult<BatchOutcome> {
+    execute_batch_with_prepare(input, batch, |_, _, _| Ok(()))
+}
+
+pub fn execute_batch_with_prepare<F>(
+    input: &Dataset,
+    batch: &Batch,
+    mut prepare: F,
+) -> CoreResult<BatchOutcome>
+where
+    F: FnMut(&str, &str, &mut Object) -> CoreResult<()>,
+{
     // Validate every mutation limit before cloning or inspecting the dataset. In
     // particular, an invalid programmatically-constructed DELETE must not be
     // interpreted as an unbounded mutation.
@@ -1281,7 +1292,9 @@ pub fn execute_batch(input: &Dataset, batch: &Batch) -> CoreResult<BatchOutcome>
                 object,
             } => {
                 let coll = dataset.entry(collection.clone()).or_default();
-                coll.insert(id.clone(), object.clone());
+                let mut object = object.clone();
+                prepare(collection, id, &mut object)?;
+                coll.insert(id.clone(), object);
                 stats.upserted += 1;
             }
             BatchOperation::DeleteById { collection, id } => {
@@ -1311,8 +1324,12 @@ pub fn execute_batch(input: &Dataset, batch: &Batch) -> CoreResult<BatchOutcome>
                         })
                         .collect::<Vec<_>>();
 
-                    let result = apply_update(query, &mut entities)?;
-                    stats.updated += result.affected;
+                    let result = apply_update_with_returning_and_prepare(
+                        query,
+                        &mut entities,
+                        |id, object| prepare(collection, id, object),
+                    )?;
+                    stats.updated += result.stats.affected;
 
                     coll.clear();
                     for entity in entities {
@@ -1354,6 +1371,17 @@ pub fn apply_update_with_returning(
     query: &UpdateQuery,
     entities: &mut [Entity],
 ) -> CoreResult<UpdateResult> {
+    apply_update_with_returning_and_prepare(query, entities, |_, _| Ok(()))
+}
+
+pub fn apply_update_with_returning_and_prepare<F>(
+    query: &UpdateQuery,
+    entities: &mut [Entity],
+    mut prepare: F,
+) -> CoreResult<UpdateResult>
+where
+    F: FnMut(&str, &mut Object) -> CoreResult<()>,
+{
     let limit = evaluate_mutation_limit(query.limit.as_ref())?;
     let mut matched = 0usize;
     let mut affected = 0usize;
@@ -1381,6 +1409,8 @@ pub fn apply_update_with_returning(
                 .ok_or_else(|| CoreError::new("failed to evaluate assignment expression"))?;
             set_value_at_path(&mut updated, &assignment.path, value)?;
         }
+
+        prepare(&entity.id, &mut updated)?;
 
         if !query.returning.is_empty() {
             returning.push(project_object(&updated, &query.returning));

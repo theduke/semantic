@@ -2568,6 +2568,17 @@ fn validate_constraints(
                     }
                 }
             }
+            Constraint::DefaultExpr { expr } => {
+                let expr_type = crate::validate_default_expression(expr)
+                    .map_err(|err| CatalogError::InvalidSchema(format!("{context} {err}")))?;
+                if let Some(ty) = target_value_type(target)
+                    && !default_expression_matches_type(expr_type, ty)
+                {
+                    return invalid_schema(format!(
+                        "{context} DefaultExpr does not match its target type"
+                    ));
+                }
+            }
             _ => {}
         }
     }
@@ -2882,6 +2893,21 @@ fn literal_matches_type(value: &semantic_data::value::Value, ty: &Type) -> bool 
                     .any(|variant| variant.value == Some(value))
             })
         }
+        _ => false,
+    }
+}
+
+fn default_expression_matches_type(expr_type: crate::DefaultExpressionType, ty: &Type) -> bool {
+    match &ty.kind {
+        TypeKind::Any(_) | TypeKind::Unknown(_) => true,
+        TypeKind::Optional(optional) => default_expression_matches_type(expr_type, &optional.inner),
+        TypeKind::Temporal(temporal) => matches!(
+            (expr_type, temporal),
+            (
+                crate::DefaultExpressionType::DateTime,
+                semantic_data::schema::TemporalType::DateTime
+            )
+        ),
         _ => false,
     }
 }

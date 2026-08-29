@@ -1,5 +1,6 @@
 use std::collections::BTreeMap;
 
+use semantic_data::expr::{CallExpr, Callee, Expr};
 use semantic_data::schema::{
     AttributeRef, AttributeType, ClassAttribute, ClassType, Constraint, EnumRepr, EnumType,
     EnumVariant, Type, TypeKind,
@@ -10,6 +11,8 @@ use super::common::helpers;
 pub const CLASS_ID: &str = "semantic:base:note";
 pub const ATTR_NOTE_FORMAT: &str = "semantic:base:note:note_format";
 pub const ATTR_NOTE_CONTENT: &str = "semantic:base:note:note_content";
+pub const ATTR_CREATED_AT: &str = semantic_data::bundles::directory::ATTR_CREATED_AT;
+pub const ATTR_UPDATED_AT: &str = semantic_data::bundles::directory::ATTR_UPDATED_AT;
 
 pub const FORMAT_TEXT: &str = "text";
 pub const FORMAT_MARKDOWN: &str = "markdown";
@@ -35,6 +38,14 @@ pub fn class() -> ClassType {
             (
                 "note_content".to_string(),
                 class_attribute(ATTR_NOTE_CONTENT, true, 20),
+            ),
+            (
+                "created_at".to_string(),
+                class_attribute(ATTR_CREATED_AT, false, 30),
+            ),
+            (
+                "updated_at".to_string(),
+                class_attribute(ATTR_UPDATED_AT, false, 40),
             ),
         ]),
         constraints: Vec::new(),
@@ -70,12 +81,27 @@ fn class_attribute(attribute_id: &str, required: bool, ui_order: u32) -> ClassAt
         required,
         ui_order: Some(ui_order),
         computed: None,
-        constraints: Vec::new(),
+        constraints: match attribute_id {
+            ATTR_CREATED_AT | ATTR_UPDATED_AT => vec![now_default_constraint()],
+            _ => Vec::new(),
+        },
         meta: helpers::meta_with_title(match attribute_id {
             ATTR_NOTE_FORMAT => "Note Format",
             ATTR_NOTE_CONTENT => "Note Content",
+            ATTR_CREATED_AT => "Created At",
+            ATTR_UPDATED_AT => "Updated At",
             _ => attribute_id,
         }),
+    }
+}
+
+fn now_default_constraint() -> Constraint {
+    Constraint::DefaultExpr {
+        expr: Expr::Call(Box::new(CallExpr {
+            callee: Callee::Name(vec!["time".to_string(), "now".to_string()]),
+            args: Vec::new(),
+            over: None,
+        })),
     }
 }
 
@@ -94,9 +120,13 @@ fn enum_variant(name: &str) -> EnumVariant {
 
 #[cfg(test)]
 mod tests {
+    use semantic_data::expr::{Callee, Expr};
     use semantic_data::schema::{EnumRepr, TypeKind};
 
-    use super::{ATTR_NOTE_CONTENT, ATTR_NOTE_FORMAT, FORMAT_MARKDOWN, FORMAT_TEXT};
+    use super::{
+        ATTR_CREATED_AT, ATTR_NOTE_CONTENT, ATTR_NOTE_FORMAT, ATTR_UPDATED_AT, FORMAT_MARKDOWN,
+        FORMAT_TEXT,
+    };
 
     #[test]
     fn note_format_is_string_enum() {
@@ -130,5 +160,26 @@ mod tests {
         );
         assert!(class.attributes["note_format"].required);
         assert!(class.attributes["note_content"].required);
+
+        assert_eq!(class.attributes["created_at"].attribute.id, ATTR_CREATED_AT);
+        assert_eq!(class.attributes["updated_at"].attribute.id, ATTR_UPDATED_AT);
+        assert!(!class.attributes["created_at"].required);
+        assert!(!class.attributes["updated_at"].required);
+
+        for attribute_name in ["created_at", "updated_at"] {
+            let [
+                semantic_data::schema::Constraint::DefaultExpr {
+                    expr: Expr::Call(call),
+                },
+            ] = class.attributes[attribute_name].constraints.as_slice()
+            else {
+                panic!("{attribute_name} should default to an expression");
+            };
+            assert_eq!(
+                call.callee,
+                Callee::Name(vec!["time".to_string(), "now".to_string()])
+            );
+            assert!(call.args.is_empty());
+        }
     }
 }
