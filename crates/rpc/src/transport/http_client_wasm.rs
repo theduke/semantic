@@ -9,8 +9,8 @@ use crate::client::{RpcClient, RpcClientDyn, request, resolve_response};
 use crate::command::RpcCommandSpec;
 use crate::error::RpcClientError;
 use crate::file::{
-    FileUploadPhase, FileUploadProgressSender, FileUploadRequest, FileUploadResponse,
-    derive_file_api_prefix, emit_progress,
+    FileUploadContent, FileUploadPhase, FileUploadProgressSender, FileUploadRequest,
+    FileUploadResponse, derive_file_api_prefix, emit_progress,
 };
 use crate::protocol::RpcResponse;
 
@@ -121,12 +121,8 @@ async fn upload_file_xhr(
     request: FileUploadRequest,
     progress: Option<FileUploadProgressSender>,
 ) -> std::result::Result<FileUploadResponse, RpcClientError> {
-    emit_progress(
-        &progress,
-        FileUploadPhase::Preparing,
-        0,
-        Some(request.bytes.len() as u64),
-    );
+    let total = request.content.size();
+    emit_progress(&progress, FileUploadPhase::Preparing, 0, total);
     let mut url = file_api_prefix;
     if let Some(scope_id) = &request.scope_id {
         let separator = if url.contains('?') { '&' } else { '?' };
@@ -157,9 +153,8 @@ async fn upload_file_xhr(
             .map_err(js_transport)?;
     }
 
-    let total = request.bytes.len() as u64;
     let upload_progress = progress.clone();
-    let onprogress = Closure::<dyn FnMut(ProgressEvent)>::new(move |event| {
+    let onprogress = Closure::<dyn FnMut(ProgressEvent)>::new(move |event: ProgressEvent| {
         let total_bytes = event.length_computable().then_some(event.total() as u64);
         emit_progress(
             &upload_progress,
@@ -169,6 +164,7 @@ async fn upload_file_xhr(
         );
     });
     xhr.upload()
+        .map_err(js_transport)?
         .set_onprogress(Some(onprogress.as_ref().unchecked_ref()));
     onprogress.forget();
 
@@ -198,10 +194,20 @@ async fn upload_file_xhr(
     onload.forget();
     onerror.forget();
 
-    let array = Uint8Array::from(request.bytes.as_ref());
-    let parts = js_sys::Array::new();
-    parts.push(&array.buffer());
-    let blob = Blob::new_with_u8_array_sequence(&parts).map_err(js_transport)?;
+    let blob = match request.content {
+        FileUploadContent::Bytes(bytes) => {
+            let array = Uint8Array::from(bytes.as_ref());
+            let parts = js_sys::Array::new();
+            parts.push(&array.buffer());
+            Blob::new_with_u8_array_sequence(&parts).map_err(js_transport)?
+        }
+        FileUploadContent::Blob(blob) => blob,
+        FileUploadContent::Stream { .. } => {
+            return Err(RpcClientError::Transport(
+                "stream-backed uploads are not supported in the web client; use a Blob".to_string(),
+            ));
+        }
+    };
     xhr.send_with_opt_blob(Some(&blob)).map_err(js_transport)?;
 
     let xhr = receiver.await.map_err(|_| {
@@ -218,11 +224,16 @@ async fn upload_file_xhr(
             short_body(&text)
         )));
     }
-    emit_progress(&progress, FileUploadPhase::Finalizing, total, Some(total));
+    emit_progress(
+        &progress,
+        FileUploadPhase::Finalizing,
+        total.unwrap_or(0),
+        total,
+    );
     let value = serde_json::from_str::<Value>(&text)
         .map_err(|err| RpcClientError::Protocol(err.to_string()))?;
     let response = FileUploadResponse::from_value(value)?;
-    emit_progress(&progress, FileUploadPhase::Done, total, Some(total));
+    emit_progress(&progress, FileUploadPhase::Done, total.unwrap_or(0), total);
     Ok(response)
 }
 

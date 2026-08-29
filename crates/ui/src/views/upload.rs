@@ -4,8 +4,9 @@ use futures::StreamExt as _;
 use semantic_data::builtin::DEFAULT_COLLECTION;
 use semantic_data::filestore::{ATTR_DESCRIPTION, ATTR_PARENT, ATTR_TITLE};
 use semantic_data::value::{Object, Value};
+use semantic_rpc::RpcClientError;
 use semantic_rpc::file::{
-    FileUploadPhase, FileUploadProgress, FileUploadRequest, FileUploadResponse,
+    FileUploadContent, FileUploadPhase, FileUploadProgress, FileUploadRequest, FileUploadResponse,
 };
 use semantic_ui_core::{
     ClassView, EntityAutocomplete, FileTreePicker, FileTreeSelection, ObjectView, RenderMode,
@@ -15,6 +16,7 @@ use semantic_ui_core::{
 use crate::views::Route;
 
 type QueueItemId = u64;
+const MAX_FILE_UPLOAD_SIZE: u64 = 100 * 1024 * 1024 * 1024;
 
 fn upload_entity_route(collection: String, id: String) -> Route {
     if collection == DEFAULT_COLLECTION {
@@ -521,8 +523,16 @@ async fn upload_item(
         });
         item.clone()
     };
-    let bytes = match item.file.read_bytes().await {
-        Ok(bytes) => bytes,
+    if item.byte_size > MAX_FILE_UPLOAD_SIZE {
+        set_failed(
+            queue,
+            id,
+            "File exceeds the 100 GiB upload limit".to_string(),
+        );
+        return;
+    }
+    let content = match file_upload_content(&item.file) {
+        Ok(content) => content,
         Err(err) => {
             set_failed(queue, id, err.to_string());
             return;
@@ -548,9 +558,9 @@ async fn upload_item(
         scope_id: scope_id.clone(),
         id: None,
         filename: Some(item.name.clone()),
-        mime_type: detect_mime_type(&item.name, item.mime_type.as_deref(), &bytes),
-        bytes,
+        mime_type: detect_mime_type(&item.name, item.mime_type.as_deref(), &[]),
         entity: metadata_entity(&item.title, &item.description, parent_entity.as_deref()),
+        content,
     };
     match client.upload_file(request, Some(progress_tx)).await {
         Ok(response) => {
@@ -612,6 +622,47 @@ fn same_file(item: &UploadQueueItem, file: &FileData) -> bool {
 
 fn normalize_mime_type(file: &FileData) -> Option<String> {
     detect_mime_type(&file.name(), file.content_type().as_deref(), &[])
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn file_upload_content(file: &FileData) -> std::result::Result<FileUploadContent, RpcClientError> {
+    let path = file.path();
+    let size = Some(file.size());
+    let stream = futures::stream::try_unfold(
+        None::<tokio_util::io::ReaderStream<tokio::fs::File>>,
+        move |reader| {
+            let path = path.clone();
+            async move {
+                let mut reader = match reader {
+                    Some(reader) => reader,
+                    None => tokio_util::io::ReaderStream::new(
+                        tokio::fs::File::open(&path)
+                            .await
+                            .map_err(|err| RpcClientError::Transport(err.to_string()))?,
+                    ),
+                };
+                match reader.next().await {
+                    Some(Ok(chunk)) => Ok(Some((chunk, Some(reader)))),
+                    Some(Err(err)) => Err(RpcClientError::Transport(err.to_string())),
+                    None => Ok(None),
+                }
+            }
+        },
+    )
+    .boxed();
+    Ok(FileUploadContent::Stream { stream, size })
+}
+
+#[cfg(target_arch = "wasm32")]
+fn file_upload_content(file: &FileData) -> std::result::Result<FileUploadContent, RpcClientError> {
+    use wasm_bindgen::JsCast as _;
+
+    let file = file
+        .inner()
+        .downcast_ref::<web_sys::File>()
+        .ok_or_else(|| RpcClientError::Transport("browser file handle is unavailable".to_string()))?
+        .clone();
+    Ok(FileUploadContent::Blob(file.unchecked_into()))
 }
 
 fn detect_mime_type(name: &str, declared_mime_type: Option<&str>, bytes: &[u8]) -> Option<String> {

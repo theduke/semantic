@@ -4,14 +4,14 @@ use axum::Json;
 use axum::body::Body;
 use axum::extract::{Path, Query, State};
 use axum::response::{IntoResponse, Response};
-use bytes::{Bytes, BytesMut};
-use futures_util::TryStreamExt as _;
+use bytes::BytesMut;
+use futures_util::{StreamExt as _, TryStreamExt as _};
 use http::header::{
     ACCEPT_RANGES, CONTENT_LENGTH, CONTENT_RANGE, CONTENT_TYPE, ETAG, HeaderName, HeaderValue,
     RANGE,
 };
 use http::{HeaderMap, StatusCode};
-use semantic_app::{AppRequestContext, FileContent, FileCreateRequest};
+use semantic_app::{AppRequestContext, FileContent, FileCreateRequest, FileSizedStream};
 use semantic_data::value::{Object, Value};
 use semantic_media::mime;
 
@@ -22,7 +22,7 @@ pub async fn upload_handler(
     State(state): State<ServerState>,
     headers: HeaderMap,
     Query(query): Query<BTreeMap<String, String>>,
-    body: Bytes,
+    body: Body,
 ) -> Response {
     let ctx = match request_context(&state, &headers, &query).await {
         Ok(ctx) => ctx,
@@ -32,7 +32,32 @@ pub async fn upload_handler(
         Ok(entity) => entity,
         Err(err) => return server_error_response(err),
     };
-    let mime_type = upload_mime_type(&headers, &body);
+    let content_length = match upload_content_length(&headers) {
+        Ok(content_length) => content_length,
+        Err(err) => return server_error_response(err),
+    };
+    if content_length.is_some_and(|size| size > state.config.max_file_upload_size) {
+        return app_error_response(semantic_app::AppError::FileUploadTooLarge {
+            limit: state.config.max_file_upload_size,
+        });
+    }
+    let mut stream = limited_upload_stream(body, state.config.max_file_upload_size);
+    let mut initial_chunks = Vec::new();
+    let mut mime_prefix = BytesMut::with_capacity(8 * 1024);
+    while mime_prefix.len() < mime_prefix.capacity() {
+        let chunk = match stream.next().await {
+            Some(Ok(chunk)) => chunk,
+            Some(Err(err)) => return app_error_response(err),
+            None => break,
+        };
+        let remaining = mime_prefix.capacity() - mime_prefix.len();
+        mime_prefix.extend_from_slice(&chunk[..chunk.len().min(remaining)]);
+        initial_chunks.push(chunk);
+    }
+    let mime_type = upload_mime_type(&headers, &mime_prefix);
+    let stream = futures_util::stream::iter(initial_chunks.into_iter().map(Ok))
+        .chain(stream)
+        .boxed();
     let request = FileCreateRequest {
         scope_id: None,
         id: header_string(&headers, &state.config.file_id_header),
@@ -41,7 +66,10 @@ pub async fn upload_handler(
             .or_else(|| content_disposition_filename(&headers)),
         mime_type,
         entity,
-        content: FileContent::Bytes(body),
+        content: FileContent::Stream(FileSizedStream {
+            stream,
+            size: content_length,
+        }),
     };
 
     match state.app.files().create(&ctx, request).await {
@@ -168,11 +196,42 @@ fn header_string(headers: &HeaderMap, header: &HeaderName) -> Option<String> {
         .map(ToOwned::to_owned)
 }
 
-fn upload_mime_type(headers: &HeaderMap, body: &Bytes) -> Option<String> {
+fn upload_content_length(headers: &HeaderMap) -> std::result::Result<Option<u64>, ServerError> {
+    headers
+        .get(CONTENT_LENGTH)
+        .map(|value| {
+            value
+                .to_str()
+                .map_err(|err| ServerError::InvalidHeader(err.to_string()))?
+                .parse()
+                .map_err(|err| ServerError::InvalidHeader(format!("invalid content-length: {err}")))
+        })
+        .transpose()
+}
+
+fn limited_upload_stream(body: Body, limit: u64) -> semantic_app::FileByteStream {
+    let stream = body
+        .into_data_stream()
+        .map_err(|err| semantic_app::AppError::InvalidRequest(err.to_string()))
+        .boxed();
+    futures_util::stream::try_unfold((stream, 0_u64), move |(mut stream, received)| async move {
+        let Some(chunk) = stream.try_next().await? else {
+            return Ok(None);
+        };
+        let received = received.saturating_add(chunk.len() as u64);
+        if received > limit {
+            return Err(semantic_app::AppError::FileUploadTooLarge { limit });
+        }
+        Ok(Some((chunk, (stream, received))))
+    })
+    .boxed()
+}
+
+fn upload_mime_type(headers: &HeaderMap, body: &[u8]) -> Option<String> {
     let declared = headers
         .get(CONTENT_TYPE)
         .and_then(|value| value.to_str().ok());
-    mime::analyze_bytes(body.as_ref(), declared)
+    mime::analyze_bytes(body, declared)
         .best_effort()
         .map(ToOwned::to_owned)
 }
@@ -268,6 +327,9 @@ fn app_error_response(err: semantic_app::AppError) -> Response {
         }
         semantic_app::AppError::InvalidRange(_) => {
             (StatusCode::RANGE_NOT_SATISFIABLE, err.to_string()).into_response()
+        }
+        semantic_app::AppError::FileUploadTooLarge { .. } => {
+            (StatusCode::PAYLOAD_TOO_LARGE, err.to_string()).into_response()
         }
         semantic_app::AppError::InvalidFileEntity(_)
         | semantic_app::AppError::InvalidFileMetadata(_)

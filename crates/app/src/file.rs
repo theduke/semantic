@@ -1,7 +1,9 @@
-use bytes::{Bytes, BytesMut};
+use std::sync::{Arc, Mutex};
+
+use bytes::Bytes;
 use futures_util::stream::BoxStream;
 use futures_util::{StreamExt as _, TryStreamExt as _};
-use objstore::{DataSource, ObjStore as _, Put};
+use objstore::{DataSource, ObjStore as _, ObjStoreError, Operation, Put, SizedValueStream};
 use semantic_data::builtin::{ATTR_ID, ATTR_TYPE};
 use semantic_data::filestore::{
     ATTR_FILE_BYTE_SIZE, ATTR_FILE_CONTENT_HASH_SHA256, ATTR_FILE_FILENAME,
@@ -78,27 +80,35 @@ impl FileService {
         let db = ctx.resolve_db(Some(scope_id.clone())).await?;
         let store = ctx.default_file_store(Some(scope_id)).await?;
 
-        let bytes = content_bytes(request.content).await?;
-        let computed_sha256 = sha256_hex(&bytes);
-        let id = request
+        let requested_id = request
             .id
-            .or_else(|| object_string(&request.entity, ATTR_ID))
-            .unwrap_or_else(|| format!("file-sha256-{computed_sha256}"));
-        let filestore_locator = request.filestore_locator.unwrap_or_else(|| id.clone());
+            .or_else(|| object_string(&request.entity, ATTR_ID));
         let filename = request.filename.clone();
-
-        let mut put = Put::new(filestore_locator.clone(), DataSource::Data(bytes.clone()));
-        put.mime_type = request.mime_type.clone();
-        let meta = store.send_put(put).await?;
-
-        let content_hash_sha256 = meta.hash_sha256.map(hex::encode).unwrap_or(computed_sha256);
-        let byte_size = meta.size.or(Some(bytes.len() as u64));
+        let PersistedContent {
+            meta,
+            filestore_locator,
+            content_hash_sha256,
+            byte_size: streamed_byte_size,
+            bytes,
+        } = persist_content(
+            store.as_ref(),
+            request.filestore_locator,
+            requested_id.as_deref(),
+            request.mime_type.clone(),
+            request.content,
+        )
+        .await?;
+        let id = requested_id.unwrap_or_else(|| format!("file-sha256-{content_hash_sha256}"));
+        let byte_size = meta.size.or(Some(streamed_byte_size));
         let mime_type = request.mime_type.or(meta.mime_type);
 
         let mut object = request.entity;
         object.insert(ATTR_ID, Value::String(id.clone()));
         object.insert(ATTR_TYPE, Value::String(FILE_CLASS_ID.to_string()));
-        object.insert("filestore_locator", Value::String(filestore_locator));
+        object.insert(
+            "filestore_locator",
+            Value::String(filestore_locator.clone()),
+        );
         if let Some(filename) = filename.clone() {
             object.insert("filename", Value::String(filename));
         }
@@ -115,17 +125,35 @@ impl FileService {
             object.insert("filekind", Value::String("other".to_string()));
         }
         object.insert("content_hash_sha256", Value::String(content_hash_sha256));
-        if self.media_analysis.config().auto_analyze_media
-            && let Ok(Some(analysis)) = self
-                .media_analysis
-                .analyze_created_bytes(
-                    bytes,
-                    filename.as_deref(),
-                    object_string(&object, "mime_type").as_deref(),
-                )
-                .await
-        {
-            merge_analysis_attributes(&mut object, &analysis);
+        if self.media_analysis.config().auto_analyze_media {
+            let declared_mime_type = object_string(&object, "mime_type");
+            let analysis = match bytes {
+                Some(bytes) => {
+                    self.media_analysis
+                        .analyze_created_bytes(
+                            bytes,
+                            filename.as_deref(),
+                            declared_mime_type.as_deref(),
+                        )
+                        .await
+                }
+                None => match store.get_stream(&filestore_locator).await {
+                    Ok(Some(stream)) => {
+                        self.media_analysis
+                            .analyze_stream(
+                                stream.map_err(AppError::ObjectStore).boxed(),
+                                filename.as_deref(),
+                                declared_mime_type.as_deref(),
+                            )
+                            .await
+                    }
+                    Ok(None) => Ok(None),
+                    Err(err) => Err(AppError::ObjectStore(err)),
+                },
+            };
+            if let Ok(Some(analysis)) = analysis {
+                merge_analysis_attributes(&mut object, &analysis);
+            }
         }
 
         db.insert(DEFAULT_COLLECTION.to_string(), id.clone(), object.clone())
@@ -178,20 +206,145 @@ impl Default for FileService {
     }
 }
 
-async fn content_bytes(content: FileContent) -> std::result::Result<Bytes, AppError> {
+struct PersistedContent {
+    meta: objstore::ObjectMeta,
+    filestore_locator: String,
+    content_hash_sha256: String,
+    byte_size: u64,
+    bytes: Option<Bytes>,
+}
+
+#[derive(Default)]
+struct StreamUploadState {
+    hasher: Sha256,
+    byte_size: u64,
+    input_error: Option<StreamInputError>,
+}
+
+enum StreamInputError {
+    UploadTooLarge(u64),
+    Other(String),
+}
+
+async fn persist_content(
+    store: &dyn objstore::ObjStore,
+    requested_filestore_locator: Option<String>,
+    requested_id: Option<&str>,
+    mime_type: Option<String>,
+    content: FileContent,
+) -> std::result::Result<PersistedContent, AppError> {
     match content {
-        FileContent::Bytes(bytes) => Ok(bytes),
+        FileContent::Bytes(bytes) => {
+            let content_hash_sha256 = sha256_hex(&bytes);
+            let byte_size = bytes.len() as u64;
+            let filestore_locator = requested_filestore_locator.unwrap_or_else(|| {
+                requested_id
+                    .map(ToOwned::to_owned)
+                    .unwrap_or_else(|| format!("file-sha256-{content_hash_sha256}"))
+            });
+            let mut put = Put::new(&filestore_locator, DataSource::Data(bytes.clone()));
+            put.mime_type = mime_type;
+            let meta = store.send_put(put).await?;
+            Ok(PersistedContent {
+                meta,
+                filestore_locator,
+                content_hash_sha256,
+                byte_size,
+                bytes: Some(bytes),
+            })
+        }
         FileContent::Stream(stream) => {
-            let data = stream.stream.try_collect::<BytesMut>().await?;
-            if let Some(size) = stream.size
-                && data.len() as u64 != size
+            let temporary_locator = format!("upload-tmp-{}", uuid::Uuid::new_v4());
+            let expected_size = stream.size;
+            let state = Arc::new(Mutex::new(StreamUploadState::default()));
+            let stream_state = Arc::clone(&state);
+            let stream = stream
+                .stream
+                .map(move |result| match result {
+                    Ok(chunk) => {
+                        let mut state = stream_state.lock().expect("file stream state poisoned");
+                        state.hasher.update(&chunk);
+                        state.byte_size = state.byte_size.saturating_add(chunk.len() as u64);
+                        Ok(chunk)
+                    }
+                    Err(err) => {
+                        let input_error = match &err {
+                            AppError::FileUploadTooLarge { limit } => {
+                                StreamInputError::UploadTooLarge(*limit)
+                            }
+                            _ => StreamInputError::Other(err.to_string()),
+                        };
+                        stream_state
+                            .lock()
+                            .expect("file stream state poisoned")
+                            .input_error = Some(input_error);
+                        Err(ObjStoreError::Io {
+                            operation: Operation::Put,
+                            source: Some(Box::new(err)),
+                        })
+                    }
+                })
+                .boxed();
+            let stream = match expected_size {
+                Some(size) => SizedValueStream::new(stream, size),
+                None => SizedValueStream::new_without_size(stream),
+            };
+            let mut put = Put::new(&temporary_locator, DataSource::Stream(stream));
+            put.mime_type = mime_type;
+            if let Err(err) = store.send_put(put).await {
+                let input_error = state
+                    .lock()
+                    .expect("file stream state poisoned")
+                    .input_error
+                    .take();
+                let _ = store.delete(&temporary_locator).await;
+                return match input_error {
+                    Some(StreamInputError::UploadTooLarge(limit)) => {
+                        Err(AppError::FileUploadTooLarge { limit })
+                    }
+                    Some(StreamInputError::Other(message)) => {
+                        Err(AppError::InvalidRequest(message))
+                    }
+                    None => Err(AppError::ObjectStore(err)),
+                };
+            }
+            let (content_hash_sha256, byte_size) = {
+                let state = state.lock().expect("file stream state poisoned");
+                (
+                    hex::encode(state.hasher.clone().finalize()),
+                    state.byte_size,
+                )
+            };
+            if let Some(expected_size) = expected_size
+                && byte_size != expected_size
             {
+                let _ = store.delete(&temporary_locator).await;
                 return Err(AppError::InvalidFileMetadata(format!(
-                    "stream size declared {size}, received {} bytes",
-                    data.len()
+                    "stream size declared {expected_size}, received {byte_size} bytes"
                 )));
             }
-            Ok(data.freeze())
+            let filestore_locator = requested_filestore_locator.unwrap_or_else(|| {
+                requested_id
+                    .map(ToOwned::to_owned)
+                    .unwrap_or_else(|| format!("file-sha256-{content_hash_sha256}"))
+            });
+            let meta = match store
+                .move_object(&temporary_locator, &filestore_locator)
+                .await
+            {
+                Ok(meta) => meta,
+                Err(err) => {
+                    let _ = store.delete(&temporary_locator).await;
+                    return Err(AppError::ObjectStore(err));
+                }
+            };
+            Ok(PersistedContent {
+                meta,
+                filestore_locator,
+                content_hash_sha256,
+                byte_size,
+                bytes: None,
+            })
         }
     }
 }

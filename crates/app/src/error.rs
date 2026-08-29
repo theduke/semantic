@@ -14,6 +14,8 @@ pub enum AppError {
     InvalidFileEntity(String),
     #[error("invalid file metadata: {0}")]
     InvalidFileMetadata(String),
+    #[error("file upload exceeds the {limit} byte limit")]
+    FileUploadTooLarge { limit: u64 },
     #[error("invalid range: {0}")]
     InvalidRange(String),
     #[error("media analysis failed: {0}")]
@@ -59,6 +61,9 @@ impl From<AppError> for semantic_rpc::RpcError {
             }
             AppError::InvalidFileMetadata(_) => {
                 semantic_rpc::RpcError::new("invalid_file_metadata", value.to_string())
+            }
+            AppError::FileUploadTooLarge { .. } => {
+                semantic_rpc::RpcError::new("file_upload_too_large", value.to_string())
             }
             AppError::InvalidRange(_) => {
                 semantic_rpc::RpcError::new("invalid_range", value.to_string())

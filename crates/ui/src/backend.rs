@@ -1,9 +1,10 @@
+use futures::StreamExt as _;
 use futures::future::LocalBoxFuture;
 #[cfg(feature = "desktop")]
 use semantic_app::{AppError, DbOpenRequest, DbProvider};
 use semantic_app::{
-    AppRequestContext, AppSession, DbScopeId, FileContent, FileCreateRequest, Principal,
-    SemanticApp,
+    AppRequestContext, AppSession, DbScopeId, FileContent, FileCreateRequest, FileSizedStream,
+    Principal, SemanticApp,
 };
 #[cfg(feature = "desktop")]
 use semantic_data::schema::DbOpenMode;
@@ -12,8 +13,8 @@ use semantic_rpc::{
     RpcClientDyn, RpcClientError, RpcRequest,
     client::resolve_response,
     file::{
-        FileUploadPhase, FileUploadProgressSender, FileUploadRequest, FileUploadResponse,
-        emit_progress,
+        FileUploadContent, FileUploadPhase, FileUploadProgressSender, FileUploadRequest,
+        FileUploadResponse, emit_progress,
     },
 };
 use std::sync::Arc;
@@ -122,16 +123,46 @@ impl RpcClientDyn for EmbeddedRpcClient {
         let principal = self.principal.clone();
         let scope_id = self.scope_id.clone();
         Box::pin(async move {
-            let total = request.bytes.len() as u64;
-            emit_progress(&progress, FileUploadPhase::Preparing, 0, Some(total));
+            let total = request.content.size();
+            emit_progress(&progress, FileUploadPhase::Preparing, 0, total);
             let ctx = AppRequestContext {
                 app: app.clone(),
                 principal,
                 session: Some(session),
                 request_scope: Some(scope_id),
             };
-            emit_progress(&progress, FileUploadPhase::Uploading, total, Some(total));
-            emit_progress(&progress, FileUploadPhase::Finalizing, total, Some(total));
+            let content = match request.content {
+                FileUploadContent::Bytes(bytes) => {
+                    emit_progress(
+                        &progress,
+                        FileUploadPhase::Uploading,
+                        bytes.len() as u64,
+                        total,
+                    );
+                    FileContent::Bytes(bytes)
+                }
+                FileUploadContent::Stream { stream, size } => {
+                    let upload_progress = progress.clone();
+                    let mut uploaded = 0_u64;
+                    let stream = stream
+                        .map(move |result| {
+                            result
+                                .map(|chunk| {
+                                    uploaded = uploaded.saturating_add(chunk.len() as u64);
+                                    emit_progress(
+                                        &upload_progress,
+                                        FileUploadPhase::Uploading,
+                                        uploaded,
+                                        size,
+                                    );
+                                    chunk
+                                })
+                                .map_err(|err| AppError::InvalidRequest(err.to_string()))
+                        })
+                        .boxed();
+                    FileContent::Stream(FileSizedStream { stream, size })
+                }
+            };
             let record = app
                 .files()
                 .create(
@@ -143,17 +174,23 @@ impl RpcClientDyn for EmbeddedRpcClient {
                         filename: request.filename,
                         mime_type: request.mime_type,
                         entity: request.entity,
-                        content: FileContent::Bytes(request.bytes),
+                        content,
                     },
                 )
                 .await
                 .map_err(|err| RpcClientError::Remote("app_error".to_string(), err.to_string()))?;
+            emit_progress(
+                &progress,
+                FileUploadPhase::Finalizing,
+                total.unwrap_or(0),
+                total,
+            );
             let response = FileUploadResponse {
                 id: record.id,
                 collection: record.collection,
                 object: record.object,
             };
-            emit_progress(&progress, FileUploadPhase::Done, total, Some(total));
+            emit_progress(&progress, FileUploadPhase::Done, total.unwrap_or(0), total);
             Ok(response)
         })
     }

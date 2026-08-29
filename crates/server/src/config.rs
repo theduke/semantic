@@ -2,6 +2,7 @@ use http::HeaderName;
 
 pub const DEFAULT_INTERFACE: &str = "127.0.0.1";
 pub const DEFAULT_PORT: u16 = 8888;
+pub const DEFAULT_MAX_FILE_UPLOAD_SIZE: u64 = 100 * 1024 * 1024 * 1024;
 
 #[derive(Clone, Debug)]
 pub struct ServerConfig {
@@ -14,6 +15,7 @@ pub struct ServerConfig {
     pub file_entity_header: HeaderName,
     pub file_filename_header: HeaderName,
     pub file_id_header: HeaderName,
+    pub max_file_upload_size: u64,
 }
 
 impl ServerConfig {
@@ -27,6 +29,12 @@ impl ServerConfig {
                 .to_string_lossy()
                 .parse()
                 .map_err(|err| format!("invalid SEMANTIC_PORT: {err}"))?;
+        }
+        if let Some(size) = std::env::var_os("SEMANTIC_MAX_FILE_UPLOAD_SIZE") {
+            config.max_file_upload_size = size
+                .to_string_lossy()
+                .parse()
+                .map_err(|err| format!("invalid SEMANTIC_MAX_FILE_UPLOAD_SIZE: {err}"))?;
         }
         Ok(config)
     }
@@ -48,6 +56,7 @@ impl Default for ServerConfig {
             file_entity_header: HeaderName::from_static("x-semantic-file-entity"),
             file_filename_header: HeaderName::from_static("x-semantic-filename"),
             file_id_header: HeaderName::from_static("x-semantic-file-id"),
+            max_file_upload_size: DEFAULT_MAX_FILE_UPLOAD_SIZE,
         }
     }
 }

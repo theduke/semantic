@@ -1,17 +1,52 @@
+use std::pin::Pin;
+
 use bytes::Bytes;
+use futures::Stream;
 use futures::channel::mpsc::UnboundedSender;
 use semantic_data::value::{Object, Value};
 
 use crate::RpcClientError;
 
-#[derive(Clone, Debug)]
+pub type FileUploadByteStream =
+    Pin<Box<dyn Stream<Item = std::result::Result<Bytes, RpcClientError>> + Send + 'static>>;
+
+pub enum FileUploadContent {
+    Bytes(Bytes),
+    Stream {
+        stream: FileUploadByteStream,
+        size: Option<u64>,
+    },
+    #[cfg(all(target_arch = "wasm32", feature = "client-http-web"))]
+    Blob(web_sys::Blob),
+}
+
+impl FileUploadContent {
+    pub fn size(&self) -> Option<u64> {
+        match self {
+            Self::Bytes(bytes) => Some(bytes.len() as u64),
+            Self::Stream { size, .. } => *size,
+            #[cfg(all(target_arch = "wasm32", feature = "client-http-web"))]
+            Self::Blob(blob) => Some(blob.size() as u64),
+        }
+    }
+}
+
+impl std::fmt::Debug for FileUploadContent {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("FileUploadContent")
+            .field("size", &self.size())
+            .finish_non_exhaustive()
+    }
+}
+
+#[derive(Debug)]
 pub struct FileUploadRequest {
     pub scope_id: Option<String>,
     pub id: Option<String>,
     pub filename: Option<String>,
     pub mime_type: Option<String>,
     pub entity: Object,
-    pub bytes: Bytes,
+    pub content: FileUploadContent,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -197,7 +232,7 @@ mod tests {
             filename: None,
             mime_type: None,
             entity: Object::new(),
-            bytes: Bytes::new(),
+            content: FileUploadContent::Bytes(Bytes::new()),
         };
         let err = futures::executor::block_on(UnsupportedClient.upload_file(request, None))
             .expect_err("default upload must fail");

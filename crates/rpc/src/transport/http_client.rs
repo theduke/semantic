@@ -1,4 +1,5 @@
 use bytes::Bytes;
+use futures::StreamExt as _;
 use futures::stream;
 use semantic_data::value::Value;
 
@@ -6,8 +7,8 @@ use crate::client::{RpcClient, RpcClientDyn, request, resolve_response};
 use crate::command::RpcCommandSpec;
 use crate::error::RpcClientError;
 use crate::file::{
-    FileUploadPhase, FileUploadProgressSender, FileUploadRequest, FileUploadResponse,
-    derive_file_api_prefix, emit_progress,
+    FileUploadByteStream, FileUploadContent, FileUploadPhase, FileUploadProgressSender,
+    FileUploadRequest, FileUploadResponse, derive_file_api_prefix, emit_progress,
 };
 use crate::protocol::RpcResponse;
 
@@ -85,12 +86,8 @@ impl HttpRpcClient {
         request: FileUploadRequest,
         progress: Option<FileUploadProgressSender>,
     ) -> Result<FileUploadResponse, RpcClientError> {
-        emit_progress(
-            &progress,
-            FileUploadPhase::Preparing,
-            0,
-            Some(request.bytes.len() as u64),
-        );
+        let total = request.content.size();
+        emit_progress(&progress, FileUploadPhase::Preparing, 0, total);
         let mut url = self.file_api_prefix.clone();
         if let Some(scope_id) = &request.scope_id {
             let separator = if url.contains('?') { '&' } else { '?' };
@@ -99,7 +96,6 @@ impl HttpRpcClient {
             url.push_str(&form_encode(scope_id));
         }
 
-        let total = request.bytes.len() as u64;
         let entity_header = serde_json::to_string(&Value::Object(request.entity.clone()))
             .map_err(|err| RpcClientError::Protocol(err.to_string()))?;
         let mut builder = self
@@ -115,8 +111,11 @@ impl HttpRpcClient {
         if let Some(id) = &request.id {
             builder = builder.header("x-semantic-file-id", id);
         }
+        if let Some(total) = total {
+            builder = builder.header(reqwest::header::CONTENT_LENGTH, total);
+        }
 
-        let body = progress_stream(request.bytes.clone(), progress.clone());
+        let body = upload_body_stream(request.content, progress.clone());
         let response = builder
             .body(reqwest::Body::wrap_stream(body))
             .send()
@@ -130,13 +129,18 @@ impl HttpRpcClient {
                 short_body(&body)
             )));
         }
-        emit_progress(&progress, FileUploadPhase::Finalizing, total, Some(total));
+        emit_progress(
+            &progress,
+            FileUploadPhase::Finalizing,
+            total.unwrap_or(0),
+            total,
+        );
         let value = response
             .json::<Value>()
             .await
             .map_err(|err| RpcClientError::Protocol(err.to_string()))?;
         let response = FileUploadResponse::from_value(value)?;
-        emit_progress(&progress, FileUploadPhase::Done, total, Some(total));
+        emit_progress(&progress, FileUploadPhase::Done, total.unwrap_or(0), total);
         Ok(response)
     }
 }
@@ -177,7 +181,7 @@ impl From<HttpRpcClient> for RpcClient {
 fn progress_stream(
     bytes: Bytes,
     progress: Option<FileUploadProgressSender>,
-) -> impl futures::Stream<Item = std::result::Result<Bytes, std::io::Error>> {
+) -> FileUploadByteStream {
     const CHUNK_SIZE: usize = 64 * 1024;
     let total = bytes.len() as u64;
     stream::unfold(0usize, move |offset| {
@@ -198,6 +202,28 @@ fn progress_stream(
             Some((Ok(chunk), end))
         }
     })
+    .boxed()
+}
+
+fn upload_body_stream(
+    content: FileUploadContent,
+    progress: Option<FileUploadProgressSender>,
+) -> FileUploadByteStream {
+    match content {
+        FileUploadContent::Bytes(bytes) => progress_stream(bytes, progress),
+        FileUploadContent::Stream { stream, size } => {
+            let mut uploaded = 0_u64;
+            stream
+                .map(move |result| {
+                    if let Ok(chunk) = &result {
+                        uploaded = uploaded.saturating_add(chunk.len() as u64);
+                        emit_progress(&progress, FileUploadPhase::Uploading, uploaded, size);
+                    }
+                    result
+                })
+                .boxed()
+        }
+    }
 }
 
 fn form_encode(value: &str) -> String {

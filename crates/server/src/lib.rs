@@ -391,6 +391,88 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn file_upload_streams_bodies_larger_than_axums_default_limit() {
+        const CHUNK_SIZE: usize = 64 * 1024;
+        const CHUNK_COUNT: usize = 48;
+        const TOTAL_SIZE: usize = CHUNK_SIZE * CHUNK_COUNT;
+
+        let chunks = (0..CHUNK_COUNT)
+            .map(|_| Ok::<_, std::convert::Infallible>(bytes::Bytes::from(vec![0x5a; CHUNK_SIZE])));
+        let server = SemanticServer::new(test_app());
+        let response = server
+            .router()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/api/v1/file")
+                    .header("x-semantic-scope", "default")
+                    .header("content-length", TOTAL_SIZE)
+                    .body(Body::from_stream(futures_util::stream::iter(chunks)))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        if response.status() != http::StatusCode::CREATED {
+            let status = response.status();
+            let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+            panic!(
+                "expected 201, got {status}: {}",
+                String::from_utf8_lossy(&body)
+            );
+        }
+        let bytes = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+        let Value::Object(upload) = serde_json::from_slice::<Value>(&bytes).unwrap() else {
+            panic!("expected upload object");
+        };
+        let Some(Value::Object(object)) = upload.get("object") else {
+            panic!("expected file object");
+        };
+        assert_eq!(
+            object.get("byte_size"),
+            Some(&Value::U64(TOTAL_SIZE as u64))
+        );
+    }
+
+    #[tokio::test]
+    async fn file_upload_enforces_configured_streaming_limit() {
+        let mut config = ServerConfig::default();
+        config.max_file_upload_size = 4;
+        let server = SemanticServer::new(test_app()).with_config(config);
+        let response = server
+            .router()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/api/v1/file")
+                    .header("x-semantic-scope", "default")
+                    .header("content-length", 5)
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), http::StatusCode::PAYLOAD_TOO_LARGE);
+
+        let chunks = [
+            Ok::<_, std::convert::Infallible>(bytes::Bytes::from_static(b"1234")),
+            Ok(bytes::Bytes::from_static(b"5")),
+        ];
+        let response = server
+            .router()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/api/v1/file")
+                    .header("x-semantic-scope", "default")
+                    .body(Body::from_stream(futures_util::stream::iter(chunks)))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), http::StatusCode::PAYLOAD_TOO_LARGE);
+    }
+
+    #[tokio::test]
     async fn file_download_supports_byte_ranges() {
         let server = SemanticServer::new(test_app());
         let response = server
