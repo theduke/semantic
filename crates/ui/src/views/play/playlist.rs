@@ -17,7 +17,9 @@ pub fn PlayerPlaylist(
 ) -> Element {
     let mut count = use_signal(|| entries.len());
     let entry_count = entries.len();
-    use_effect(move || count.set(entry_count));
+    use_effect(use_reactive((&entry_count,), move |(entry_count,)| {
+        count.set(entry_count);
+    }));
     let active_label =
         active_index.map_or_else(|| "None".to_string(), |index| (index + 1).to_string());
     rsx! {
