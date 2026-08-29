@@ -106,7 +106,13 @@ impl FileService {
             object.insert("byte_size", Value::U64(byte_size));
         }
         if let Some(mime_type) = mime_type {
+            object.insert(
+                "filekind",
+                Value::String(filekind_from_mime_type(&mime_type).to_string()),
+            );
             object.insert("mime_type", Value::String(mime_type));
+        } else {
+            object.insert("filekind", Value::String("other".to_string()));
         }
         object.insert("content_hash_sha256", Value::String(content_hash_sha256));
         if self.media_analysis.config().auto_analyze_media
@@ -196,6 +202,59 @@ fn sha256_hex(bytes: &[u8]) -> String {
     hex::encode(hasher.finalize())
 }
 
+fn filekind_from_mime_type(mime_type: &str) -> &'static str {
+    let mime_type = semantic_media::mime::normalize_declared(Some(mime_type)).unwrap_or_default();
+    let mime_type = mime_type.as_str();
+
+    if mime_type.starts_with("image/") {
+        "image"
+    } else if mime_type.starts_with("video/") {
+        "video"
+    } else if mime_type.starts_with("audio/") {
+        "audio"
+    } else if mime_type.starts_with("text/")
+        || matches!(
+            mime_type,
+            "application/json"
+                | "application/javascript"
+                | "application/sql"
+                | "application/toml"
+                | "application/xml"
+                | "application/yaml"
+                | "application/x-yaml"
+        )
+        || mime_type.ends_with("+json")
+        || mime_type.ends_with("+xml")
+    {
+        "text"
+    } else if matches!(
+        mime_type,
+        "application/pdf" | "application/rtf" | "application/msword" | "application/epub+zip"
+    ) || mime_type.starts_with("application/vnd.ms-")
+        || mime_type.starts_with("application/vnd.oasis.opendocument.")
+        || mime_type.starts_with("application/vnd.openxmlformats-officedocument.")
+    {
+        "document"
+    } else if matches!(
+        mime_type,
+        "application/gzip"
+            | "application/vnd.rar"
+            | "application/x-7z-compressed"
+            | "application/x-bzip2"
+            | "application/x-gzip"
+            | "application/x-rar-compressed"
+            | "application/x-tar"
+            | "application/x-xz"
+            | "application/x-zip-compressed"
+            | "application/zip"
+            | "application/zstd"
+    ) {
+        "archive"
+    } else {
+        "other"
+    }
+}
+
 fn object_string(object: &Object, field: &str) -> Option<String> {
     object
         .get(field)
@@ -272,5 +331,22 @@ fn file_field_id(field: &str) -> Option<&'static str> {
         "mime_type" => Some(ATTR_FILE_MIME_TYPE),
         "content_hash_sha256" => Some(ATTR_FILE_CONTENT_HASH_SHA256),
         _ => None,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::filekind_from_mime_type;
+
+    #[test]
+    fn filekind_is_derived_from_mime_type() {
+        assert_eq!(filekind_from_mime_type("image/png"), "image");
+        assert_eq!(filekind_from_mime_type("video/mp4"), "video");
+        assert_eq!(filekind_from_mime_type("audio/mpeg"), "audio");
+        assert_eq!(filekind_from_mime_type("text/plain; charset=utf-8"), "text");
+        assert_eq!(filekind_from_mime_type("application/json"), "text");
+        assert_eq!(filekind_from_mime_type("application/pdf"), "document");
+        assert_eq!(filekind_from_mime_type("application/zip"), "archive");
+        assert_eq!(filekind_from_mime_type("application/octet-stream"), "other");
     }
 }

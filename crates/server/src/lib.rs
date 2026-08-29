@@ -363,6 +363,7 @@ mod tests {
             object.get("mime_type").and_then(Value::as_str),
             Some("text/plain")
         );
+        assert_eq!(object.get("filekind").and_then(Value::as_str), Some("text"));
 
         let response = server
             .router()

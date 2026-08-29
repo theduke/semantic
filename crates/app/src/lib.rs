@@ -484,6 +484,10 @@ mod tests {
         );
         assert_eq!(record.object.get("byte_size"), Some(&Value::U64(5)));
         assert_eq!(
+            record.object.get("filekind").and_then(Value::as_str),
+            Some("text")
+        );
+        assert_eq!(
             record.object.get("semantic:title").and_then(Value::as_str),
             Some("Hello")
         );
