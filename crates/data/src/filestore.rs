@@ -268,16 +268,21 @@ pub fn file_class() -> ClassType {
         ("title", ATTR_TITLE, 10, Some("Title")),
         ("description", ATTR_DESCRIPTION, 20, Some("Description")),
         ("parent", ATTR_PARENT, 30, None),
-        ("filestore_locator", ATTR_FILE_FILESTORE_LOCATOR, 40, None),
-        ("filename", ATTR_FILE_FILENAME, 50, None),
-        ("byte_size", ATTR_FILE_BYTE_SIZE, 60, None),
-        ("mime_type", ATTR_FILE_MIME_TYPE, 70, None),
-        ("filekind", ATTR_FILE_FILEKIND, 80, None),
+        (
+            "filestore_locator",
+            ATTR_FILE_FILESTORE_LOCATOR,
+            40,
+            Some("File Store Locator"),
+        ),
+        ("filename", ATTR_FILE_FILENAME, 50, Some("Filename")),
+        ("byte_size", ATTR_FILE_BYTE_SIZE, 60, Some("Byte Size")),
+        ("mime_type", ATTR_FILE_MIME_TYPE, 70, Some("MIME Type")),
+        ("filekind", ATTR_FILE_FILEKIND, 80, Some("File Kind")),
         (
             "content_hash_sha256",
             ATTR_FILE_CONTENT_HASH_SHA256,
             90,
-            None,
+            Some("Content Hash SHA256"),
         ),
         ("media_pixel_width", ATTR_FILE_MEDIA_PIXEL_WIDTH, 100, None),
         (
@@ -997,6 +1002,51 @@ mod tests {
                     "{name} should have a title"
                 );
             }
+        }
+    }
+
+    #[test]
+    fn file_fields_have_explicit_titles() {
+        let expected = [
+            ("title", super::ATTR_TITLE, "Title"),
+            ("byte_size", super::ATTR_FILE_BYTE_SIZE, "Byte Size"),
+            (
+                "content_hash_sha256",
+                super::ATTR_FILE_CONTENT_HASH_SHA256,
+                "Content Hash SHA256",
+            ),
+            ("filekind", super::ATTR_FILE_FILEKIND, "File Kind"),
+            ("filename", super::ATTR_FILE_FILENAME, "Filename"),
+            (
+                "filestore_locator",
+                super::ATTR_FILE_FILESTORE_LOCATOR,
+                "File Store Locator",
+            ),
+            ("mime_type", super::ATTR_FILE_MIME_TYPE, "MIME Type"),
+        ];
+
+        let attributes = super::file_attributes()
+            .into_iter()
+            .map(|attribute| (attribute.id.clone(), attribute))
+            .collect::<std::collections::BTreeMap<_, _>>();
+
+        let class = super::file_class();
+
+        for (field_name, attribute_id, title) in expected {
+            assert_eq!(
+                attributes
+                    .get(attribute_id)
+                    .and_then(|attribute| attribute.meta.title.as_deref()),
+                Some(title),
+            );
+
+            assert_eq!(
+                class
+                    .attributes
+                    .get(field_name)
+                    .and_then(|attribute| attribute.meta.title.as_deref()),
+                Some(title),
+            );
         }
     }
 

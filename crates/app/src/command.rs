@@ -4,7 +4,7 @@ use std::pin::Pin;
 use std::sync::Arc;
 use std::time::Duration;
 
-use semantic_data::schema::{DbOpenMode, FunctionType};
+use semantic_data::schema::{DbOpenMode, FunctionType, Package};
 use semantic_data::value::{Object, Value};
 use semantic_db_core::{
     Batch, BatchOperation, BatchOutcome, BatchStats, DEFAULT_COLLECTION, DeleteResult,
@@ -149,6 +149,7 @@ impl SemanticAppBuilder {
         self.registry.register(ScopeCurrentCommand)?;
         self.registry.register(ScopeListCommand)?;
         self.registry.register(DbCatalogCommand)?;
+        self.registry.register(DbPackageUpsertCommand)?;
         self.registry.register(DbQueryCommand)?;
         self.registry.register(DbGetCommand)?;
         self.registry.register(DbInsertCommand)?;
@@ -192,6 +193,7 @@ struct ScopeUseCommand;
 struct ScopeCurrentCommand;
 struct ScopeListCommand;
 struct DbCatalogCommand;
+struct DbPackageUpsertCommand;
 struct DbQueryCommand;
 struct DbGetCommand;
 struct DbInsertCommand;
@@ -225,6 +227,7 @@ command_spec!(ScopeUseCommand, "semantic.scope.use");
 command_spec!(ScopeCurrentCommand, "semantic.scope.current");
 command_spec!(ScopeListCommand, "semantic.scope.list");
 command_spec!(DbCatalogCommand, "semantic.db.catalog");
+command_spec!(DbPackageUpsertCommand, "semantic.db.package.upsert");
 command_spec!(DbQueryCommand, "semantic.db.query");
 command_spec!(DbGetCommand, "semantic.db.get");
 command_spec!(DbInsertCommand, "semantic.db.insert");
@@ -386,6 +389,36 @@ impl RpcCommand<AppRequestContext> for DbCatalogCommand {
             let mut out = Object::new();
             out.insert("format", Value::String("facet-json".to_string()));
             out.insert("catalog", Value::String(catalog));
+            Ok(Value::Object(out))
+        })
+    }
+}
+
+impl RpcCommand<AppRequestContext> for DbPackageUpsertCommand {
+    fn call<'a>(
+        &'a self,
+        ctx: &'a AppRequestContext,
+        payload: Value,
+    ) -> Pin<Box<dyn Future<Output = std::result::Result<Value, AppError>> + Send + 'a>> {
+        Box::pin(async move {
+            let object = expect_object(payload)?;
+            let scope_id = optional_string(&object, "scope_id")?.map(DbScopeId::new);
+            let format = optional_string(&object, "format")?;
+            if !matches!(format.as_deref(), None | Some("facet-json")) {
+                return Err(AppError::InvalidRequest(format!(
+                    "unsupported package format '{}'",
+                    format.expect("checked above")
+                )));
+            }
+            let package = facet_json::from_str::<Package>(&required_string(&object, "package")?)
+                .map_err(|err| AppError::InvalidRequest(format!("invalid package: {err}")))?;
+            let db = ctx.resolve_db(scope_id).await?;
+            let outcome = db.upsert_package(package).await?;
+            let outcome = facet_json::to_string(&outcome)
+                .map_err(|err| AppError::InvalidRequest(err.to_string()))?;
+            let mut out = Object::new();
+            out.insert("format", Value::String("facet-json".to_string()));
+            out.insert("outcome", Value::String(outcome));
             Ok(Value::Object(out))
         })
     }

@@ -2,11 +2,8 @@ use std::sync::Arc;
 
 use async_trait::async_trait;
 use semantic_data::query as public_query;
-use semantic_data::schema::DbOpenMode;
-#[cfg(feature = "base")]
-use semantic_data::schema::Package;
+use semantic_data::schema::{DbOpenMode, Package};
 use semantic_data::value::Object;
-#[cfg(feature = "base")]
 use semantic_db_core::PackageRegistrationOutcome;
 use semantic_db_core::catalog::Catalog;
 use semantic_db_core::{
@@ -38,7 +35,6 @@ pub trait SemanticDb: Send + Sync + 'static {
 
     async fn execute_batch(&self, batch: Batch) -> std::result::Result<BatchOutcome, DbError>;
 
-    #[cfg(feature = "base")]
     async fn upsert_package(
         &self,
         package: Package,
@@ -101,7 +97,6 @@ impl SemanticDb for Db {
         self.execute_batch(public_batch_from_core(batch)?).await
     }
 
-    #[cfg(feature = "base")]
     async fn upsert_package(
         &self,
         package: Package,

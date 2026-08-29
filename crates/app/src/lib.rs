@@ -170,15 +170,11 @@ mod tests {
             })
         }
 
-        #[cfg(feature = "base")]
         async fn upsert_package(
             &self,
-            package: semantic_data::schema::Package,
+            _package: semantic_data::schema::Package,
         ) -> std::result::Result<PackageRegistrationOutcome, DbError> {
-            assert!(
-                package.name == semantic_base::PACKAGE_NAME
-                    || package.name == semantic_data::filestore::PACKAGE_NAME
-            );
+            #[cfg(feature = "base")]
             self.package_count.fetch_add(1, Ordering::Relaxed);
             Ok(PackageRegistrationOutcome {
                 executed_migrations: vec![],
@@ -1008,6 +1004,46 @@ mod tests {
         let snapshot = facet_json::from_str::<CatalogStorageSnapshot>(catalog)
             .expect("catalog snapshot should decode");
         assert!(snapshot.attributes.is_empty());
+    }
+
+    #[tokio::test]
+    async fn package_upsert_command_registers_facet_json_package() {
+        let default_db: Arc<dyn SemanticDb> = Arc::new(MockDb::new("default"));
+        let app = SemanticApp::builder()
+            .with_default_scope(DbScopeId::new("default"), default_db)
+            .register_builtin_commands()
+            .unwrap()
+            .build()
+            .unwrap();
+        let package = semantic_data::filestore::package();
+        let package = facet_json::to_string(&package).unwrap();
+
+        let response = app
+            .invoke(
+                ctx(&app, Principal::system()),
+                request(
+                    "semantic.db.package.upsert",
+                    value_object([
+                        ("format", Value::String("facet-json".to_string())),
+                        ("package", Value::String(package)),
+                    ]),
+                ),
+            )
+            .await;
+
+        let RpcResult::Ok(Value::Object(object)) = response.result else {
+            panic!("expected ok object");
+        };
+        assert_eq!(
+            object.get("format"),
+            Some(&Value::String("facet-json".to_string()))
+        );
+        let Some(Value::String(outcome)) = object.get("outcome") else {
+            panic!("expected outcome string");
+        };
+        let outcome = facet_json::from_str::<PackageRegistrationOutcome>(outcome)
+            .expect("registration outcome should decode");
+        assert!(outcome.executed_migrations.is_empty());
     }
 
     #[tokio::test]

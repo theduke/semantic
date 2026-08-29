@@ -14,7 +14,7 @@ ui-standalone:
 	SEMANTIC_DATA_DIR=$(DATA_DIR) dx serve --desktop --hot-patch --package semantic_ui --no-default-features --features standalone --args=--standalone
 
 ui-desktop:
-	SEMANTIC_RPC_URL=http://$(SEMANTIC_INTERFACE):$(SEMANTIC_PORT)/rpc dx serve --desktop --hot-patch --package semantic_ui --no-default-features --features desktop
+	dx serve --desktop --hot-patch --package semantic_ui --no-default-features --features desktop
 
 ui-web:
 	dx serve --web --package semantic_ui --no-default-features --features web
