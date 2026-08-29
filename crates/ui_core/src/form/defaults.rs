@@ -1,4 +1,4 @@
-use std::{rc::Rc, time::Duration};
+use std::rc::Rc;
 
 use dioxus::prelude::*;
 use dxform::{FieldHandle, FormError, FormErrorSource, FormScope, ValidationStrategy};
@@ -9,8 +9,7 @@ use semantic_data::{
 use time::format_description::well_known::Rfc3339;
 
 use crate::{
-    ValueView,
-    context::{use_active_scope_id, use_rpc_client},
+    EntityAutocomplete, ValueView,
     form::{ValueFormRenderContext, render_list_value_form, render_value_form_scope},
     ui_catalog::{RenderMode, UiCatalog, use_ui_catalog},
 };
@@ -97,19 +96,10 @@ fn render_ref(ctx: ValueFormRenderContext) -> Element {
     }
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
-struct RefOption {
-    id: String,
-    label: String,
-}
-
 #[component]
 fn RefValueAutocomplete(scope: FormScope<Value, Value>, value_type: Option<Type>) -> Element {
     let catalog = use_ui_catalog();
-    let client = use_rpc_client();
-    let scope_id = use_active_scope_id();
     let field = use_value_leaf_field(scope.clone());
-    let mut query = use_signal(String::new);
     let allowed_class_ids = value_type
         .as_ref()
         .map(|ty| ref_autocomplete_class_ids(&catalog, ty))
@@ -125,53 +115,18 @@ fn RefValueAutocomplete(scope: FormScope<Value, Value>, value_type: Option<Type>
             .map(ToString::to_string),
         _ => None,
     };
-    let options = use_resource(move || {
-        let client = client.clone();
-        let scope_id = scope_id.clone();
-        let search = query();
-        let allowed_class_ids = allowed_class_ids.clone();
-        let current_id = current_id.clone();
-        async move {
-            dioxus_sdk_time::sleep(Duration::from_millis(250)).await;
-            let sql = ref_autocomplete_query(&search, &allowed_class_ids, current_id.as_deref());
-            let mut payload = semantic_data::value::Object::new();
-            if let Some(scope_id) = scope_id {
-                payload.insert("scope_id", Value::String(scope_id));
-            }
-            payload.insert("format", Value::String("sql".to_string()));
-            payload.insert("query", Value::String(sql));
-            client
-                .invoke_value("semantic.db.query", Value::Object(payload))
-                .await
-                .map(ref_options_from_query_response)
-                .unwrap_or_default()
-        }
-    });
-    let options = options.read().clone().unwrap_or_default();
     rsx! {
-        dxcomp::Combobox::<String> {
-            default_value: selected,
+        EntityAutocomplete {
+            value: selected,
+            allowed_class_ids,
+            excluded_id: current_id,
             on_value_change: move |value| {
                 if let Some(id) = value {
                     field.set_value(Value::String(id));
                 }
             },
-            on_query_change: move |value| query.set(value),
             placeholder: "Search entities",
             aria_label: "Referenced entity",
-            list_aria_label: "Referenced entities",
-            dxcomp::ComboboxEmpty { "No entity found." }
-            for (index, option) in options.iter().enumerate() {
-                dxcomp::ComboboxOption::<String> {
-                    index,
-                    value: option.id.clone(),
-                    text_value: option.label.clone(),
-                    span { "{option.label}" }
-                    if option.label != option.id {
-                        code { " {option.id}" }
-                    }
-                }
-            }
         }
     }
 }
@@ -291,31 +246,6 @@ fn ui_class_reaches(catalog: &UiCatalog, class_id: &str, target_class_id: &str) 
         target_class_id,
         &mut std::collections::BTreeSet::new(),
     )
-}
-
-fn ref_options_from_query_response(value: Value) -> Vec<RefOption> {
-    let Value::Object(object) = value else {
-        return Vec::new();
-    };
-    let Some(Value::List(rows)) = object.get("rows") else {
-        return Vec::new();
-    };
-    rows.iter()
-        .filter_map(|row| {
-            let Value::Object(object) = row else {
-                return None;
-            };
-            let id = object.get("id").and_then(Value::as_str)?.to_string();
-            let label = REF_SEARCH_FIELDS
-                .iter()
-                .skip(1)
-                .find_map(|field| object.get(*field).and_then(Value::as_str))
-                .filter(|label| !label.is_empty())
-                .unwrap_or(&id)
-                .to_string();
-            Some(RefOption { id, label })
-        })
-        .collect()
 }
 
 fn quote_sql_ident(ident: &str) -> String {

@@ -6,9 +6,11 @@ pub mod components;
 
 pub use components::{
     AttributeValueView, ClassView, DirectoryBrowser, DirectoryBrowserConfig, DirectoryBrowserProps,
-    EntityCard, EntityDeleteButton, EntityDisplayMode, EntityDisplayRenderer, EntityList,
-    EntityOpenButton, EntityRenderOptions, EntityTableRow, ErrorView, LoadingView,
-    MediaPlaybackView, MediaView, ObjectView, ValueView, register_default_playback_renderers,
+    EntityAutocomplete, EntityAutocompleteProps, EntityCard, EntityDeleteButton, EntityDisplayMode,
+    EntityDisplayRenderer, EntityList, EntityOpenButton, EntityRenderOptions, EntityTableRow,
+    ErrorView, FileTreePicker, FileTreePickerProps, FileTreeSelection, LoadingView,
+    MediaPlaybackView, MediaView, ObjectView, ValueView, add_items_to_directory,
+    register_default_playback_renderers,
 };
 pub use context::{
     UiScopeContext, provide_rpc_client, provide_ui_scope_context, use_active_scope_id,

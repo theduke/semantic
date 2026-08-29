@@ -21,10 +21,24 @@ pub(super) fn root_query() -> String {
 
 pub(super) fn directory_nodes_query() -> String {
     qualified_query(format!(
-        "SELECT n.id AS id, n.{relation_to} AS directory_to FROM {entities} AS n WHERE n.type = {node_class}",
+        "SELECT n.id AS id, n.{node_from} AS directory_from, n.{relation_to} AS directory_to, n.{node_order} AS directory_order FROM {entities} AS n WHERE n.type = {node_class}",
         entities = sql_ident(ENTITIES_COLLECTION),
+        node_from = sql_ident(ATTR_DIRECTORY_NODE_FROM),
+        node_order = sql_ident(ATTR_DIRECTORY_NODE_ORDER),
         relation_to = sql_ident(ATTR_RELATION_TO),
         node_class = sql_string(DIRECTORY_NODE_CLASS_ID),
+    ))
+}
+
+pub(super) fn file_tree_items_query() -> String {
+    qualified_query(format!(
+        "SELECT child.*, n.{node_from} AS directory_from, n.{relation_to} AS directory_to, n.{node_order} AS directory_order FROM {entities} AS n INNER JOIN {entities}._ AS child ON n.{relation_to} = child.id WHERE n.{relation_relation} = {node_relation} ORDER BY n.{node_order} ASC, child.title ASC, child.id ASC",
+        entities = sql_ident(ENTITIES_COLLECTION),
+        node_from = sql_ident(ATTR_DIRECTORY_NODE_FROM),
+        node_order = sql_ident(ATTR_DIRECTORY_NODE_ORDER),
+        relation_relation = sql_ident(ATTR_RELATION_RELATION),
+        relation_to = sql_ident(ATTR_RELATION_TO),
+        node_relation = sql_string(DIRECTORY_NODE_RELATION_ID),
     ))
 }
 

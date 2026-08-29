@@ -1,4 +1,4 @@
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 
 use dioxus::logger::tracing::info;
 use semantic_data::bundles::directory::{
@@ -11,8 +11,8 @@ use super::{
     queries::{
         ATTR_RELATION_RELATION, ATTR_RELATION_TO, ENTITIES_COLLECTION, addable_entities_query,
         child_directories_query, child_ids_query, child_links_query, child_query,
-        directory_nodes_query, directory_outgoing_links_query, max_child_order_query,
-        parent_count_query, parent_links_query, parent_query, root_query,
+        directory_nodes_query, directory_outgoing_links_query, file_tree_items_query,
+        max_child_order_query, parent_count_query, parent_links_query, parent_query, root_query,
     },
     types::{
         DirectoryBreadcrumb, DirectoryBrowseItem, DirectoryPage, DirectorySort, DirectoryTreeRow,
@@ -100,6 +100,131 @@ pub(super) async fn load_tree_rows(
         .await?;
     }
     Ok(rows)
+}
+
+pub(super) async fn load_file_tree_rows(
+    client: semantic_rpc::RpcClient,
+    scope_id: Option<String>,
+    show_files: bool,
+) -> std::result::Result<Vec<DirectoryTreeRow>, String> {
+    let directory_rows = run_select_query(client.clone(), scope_id.clone(), root_query()).await?;
+    let mut items = directory_rows
+        .into_iter()
+        .map(row_to_item)
+        .map(|item| (item.id.clone(), item))
+        .collect::<BTreeMap<_, _>>();
+    if show_files {
+        let linked_items =
+            run_select_query(client.clone(), scope_id.clone(), file_tree_items_query()).await?;
+        for item in linked_items.into_iter().map(row_to_item) {
+            items.entry(item.id.clone()).or_insert(item);
+        }
+    }
+    let link_rows = run_select_query(client, scope_id, directory_nodes_query()).await?;
+    let mut children = BTreeMap::<String, Vec<(u64, String)>>::new();
+    let mut child_ids = BTreeSet::new();
+    for link in link_rows.iter().filter_map(directory_link_from_row) {
+        let (Some(parent_id), Some(child_id)) = (link.parent_id, link.child_id) else {
+            continue;
+        };
+        if items.contains_key(&parent_id) && items.contains_key(&child_id) {
+            child_ids.insert(child_id.clone());
+            children
+                .entry(parent_id)
+                .or_default()
+                .push((link.order.unwrap_or(u64::MAX), child_id));
+        }
+    }
+    for child_rows in children.values_mut() {
+        child_rows.sort_by(|left, right| {
+            left.0.cmp(&right.0).then_with(|| {
+                let left_item = items.get(&left.1);
+                let right_item = items.get(&right.1);
+                left_item
+                    .map(|item| (&item.title, &item.id))
+                    .cmp(&right_item.map(|item| (&item.title, &item.id)))
+            })
+        });
+    }
+
+    let mut root_ids = items
+        .keys()
+        .filter(|id| {
+            !child_ids.contains(*id) && items.get(*id).is_some_and(|item| item.is_directory)
+        })
+        .cloned()
+        .collect::<Vec<_>>();
+    root_ids.sort_by_key(|id| {
+        items
+            .get(id)
+            .map(|item| (item.title.clone(), item.id.clone()))
+    });
+
+    let mut rows = Vec::new();
+    let mut emitted = BTreeSet::new();
+    let mut path = BTreeSet::new();
+    for root_id in root_ids {
+        append_picker_tree_rows(
+            &mut rows,
+            &items,
+            &children,
+            &root_id,
+            0,
+            &mut path,
+            &mut emitted,
+        );
+    }
+    for id in items.keys() {
+        if !emitted.contains(id) {
+            append_picker_tree_rows(&mut rows, &items, &children, id, 0, &mut path, &mut emitted);
+        }
+    }
+    Ok(rows)
+}
+
+fn append_picker_tree_rows(
+    rows: &mut Vec<DirectoryTreeRow>,
+    directories: &BTreeMap<String, DirectoryBrowseItem>,
+    children: &BTreeMap<String, Vec<(u64, String)>>,
+    id: &str,
+    depth: usize,
+    path: &mut BTreeSet<String>,
+    emitted: &mut BTreeSet<String>,
+) {
+    let Some(item) = directories.get(id).cloned() else {
+        return;
+    };
+    if path.contains(id) {
+        rows.push(DirectoryTreeRow {
+            item,
+            depth,
+            cycle: true,
+        });
+        return;
+    }
+    if !emitted.insert(id.to_string()) {
+        return;
+    }
+    rows.push(DirectoryTreeRow {
+        item,
+        depth,
+        cycle: false,
+    });
+    path.insert(id.to_string());
+    if let Some(child_rows) = children.get(id) {
+        for (_, child_id) in child_rows {
+            append_picker_tree_rows(
+                rows,
+                directories,
+                children,
+                child_id,
+                depth + 1,
+                path,
+                emitted,
+            );
+        }
+    }
+    path.remove(id);
 }
 
 async fn load_root_directory_rows(
@@ -269,7 +394,7 @@ pub(super) async fn create_directory(
     Ok(id)
 }
 
-pub(super) async fn add_items_to_directory(
+pub async fn add_items_to_directory(
     client: semantic_rpc::RpcClient,
     scope_id: Option<String>,
     target_directory_id: String,

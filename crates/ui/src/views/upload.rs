@@ -2,13 +2,14 @@ use dioxus::html::FileData;
 use dioxus::prelude::*;
 use futures::StreamExt as _;
 use semantic_data::builtin::DEFAULT_COLLECTION;
-use semantic_data::filestore::{ATTR_DESCRIPTION, ATTR_TITLE};
+use semantic_data::filestore::{ATTR_DESCRIPTION, ATTR_PARENT, ATTR_TITLE};
 use semantic_data::value::{Object, Value};
 use semantic_rpc::file::{
     FileUploadPhase, FileUploadProgress, FileUploadRequest, FileUploadResponse,
 };
 use semantic_ui_core::{
-    ClassView, ObjectView, RenderMode, use_active_scope_id, use_rpc_client, use_ui_catalog,
+    ClassView, EntityAutocomplete, FileTreePicker, FileTreeSelection, ObjectView, RenderMode,
+    add_items_to_directory, use_active_scope_id, use_rpc_client, use_ui_catalog,
 };
 
 use crate::views::Route;
@@ -84,6 +85,8 @@ pub fn UploadPage() -> Element {
     let mut queue = use_signal(Vec::<UploadQueueItem>::new);
     let mut notice = use_signal(|| None::<String>);
     let mut next_id = use_signal(|| 1_u64);
+    let mut destination_directory = use_signal(|| None::<FileTreeSelection>);
+    let mut parent_entity = use_signal(|| None::<String>);
 
     let commands = use_coroutine(move |mut rx: UnboundedReceiver<UploadCommand>| {
         let client = client.clone();
@@ -154,7 +157,18 @@ pub fn UploadPage() -> Element {
                         }
                     }
                     UploadCommand::UploadOne(id) => {
-                        upload_item(id, queue, client.clone(), scope_id.clone()).await;
+                        upload_item(
+                            id,
+                            queue,
+                            client.clone(),
+                            scope_id.clone(),
+                            destination_directory
+                                .read()
+                                .as_ref()
+                                .map(|item| item.id.clone()),
+                            parent_entity.read().clone(),
+                        )
+                        .await;
                     }
                     UploadCommand::UploadAll => {
                         let ids = queue
@@ -169,7 +183,18 @@ pub fn UploadPage() -> Element {
                             .map(|item| item.id)
                             .collect::<Vec<_>>();
                         for id in ids {
-                            upload_item(id, queue, client.clone(), scope_id.clone()).await;
+                            upload_item(
+                                id,
+                                queue,
+                                client.clone(),
+                                scope_id.clone(),
+                                destination_directory
+                                    .read()
+                                    .as_ref()
+                                    .map(|item| item.id.clone()),
+                                parent_entity.read().clone(),
+                            )
+                            .await;
                         }
                     }
                     UploadCommand::Progress { id, progress } => {
@@ -235,6 +260,58 @@ pub fn UploadPage() -> Element {
                         disabled: busy,
                         onclick: move |_| commands.send(UploadCommand::ClearAll),
                         "Clear queue"
+                    }
+                }
+            }
+            section { class: "semantic-upload__defaults",
+                div { class: "semantic-upload__defaults-header",
+                    div {
+                        h3 { "Apply to all uploads" }
+                        p { "Choose shared organization and relationship settings for this queue." }
+                    }
+                    if destination_directory.read().is_some() || parent_entity.read().is_some() {
+                        dxcomp::Button {
+                            variant: dxcomp::ButtonVariant::Ghost,
+                            size: dxcomp::ButtonSize::Sm,
+                            disabled: busy,
+                            onclick: move |_| {
+                                destination_directory.set(None);
+                                parent_entity.set(None);
+                            },
+                            "Clear settings"
+                        }
+                    }
+                }
+                div { class: "semantic-upload__default-field",
+                    div { class: "semantic-upload__default-label",
+                        strong { "Destination directory" }
+                        if let Some(directory) = destination_directory.read().as_ref() {
+                            span { "Selected: {directory.title}" }
+                        } else {
+                            span { "No directory selected" }
+                        }
+                    }
+                    FileTreePicker {
+                        selected: destination_directory.read().as_ref().map(|item| item.id.clone()),
+                        show_files: false,
+                        select_directories: true,
+                        select_files: false,
+                        filter_placeholder: "Filter directories",
+                        disabled: busy,
+                        on_select: move |selection| destination_directory.set(Some(selection)),
+                    }
+                }
+                label { class: "semantic-upload__default-field",
+                    div { class: "semantic-upload__default-label",
+                        strong { "Parent entity" }
+                        span { "Optional relationship applied to every uploaded file" }
+                    }
+                    EntityAutocomplete {
+                        value: parent_entity.read().clone(),
+                        disabled: busy,
+                        placeholder: "Search for a parent entity",
+                        aria_label: "Parent entity",
+                        on_value_change: move |value| parent_entity.set(value),
                     }
                 }
             }
@@ -421,6 +498,8 @@ async fn upload_item(
     mut queue: Signal<Vec<UploadQueueItem>>,
     client: semantic_rpc::RpcClient,
     scope_id: Option<String>,
+    destination_directory: Option<String>,
+    parent_entity: Option<String>,
 ) {
     let item = {
         let mut queue = queue.write();
@@ -466,18 +545,28 @@ async fn upload_item(
         }
     });
     let request = FileUploadRequest {
-        scope_id,
+        scope_id: scope_id.clone(),
         id: None,
         filename: Some(item.name.clone()),
         mime_type: detect_mime_type(&item.name, item.mime_type.as_deref(), &bytes),
-        entity: metadata_entity(&item.title, &item.description),
         bytes,
+        entity: metadata_entity(&item.title, &item.description, parent_entity.as_deref()),
     };
     match client.upload_file(request, Some(progress_tx)).await {
         Ok(response) => {
+            let directory_error = if let Some(directory_id) = destination_directory {
+                add_items_to_directory(client, scope_id, directory_id, vec![response.id.clone()])
+                    .await
+                    .err()
+                    .map(|error| {
+                        format!("Upload completed, but adding it to the directory failed: {error}")
+                    })
+            } else {
+                None
+            };
             if let Some(item) = queue.write().iter_mut().find(|item| item.id == id) {
                 item.status = UploadItemStatus::Done;
-                item.error = None;
+                item.error = directory_error;
                 item.result = Some(response);
             }
         }
@@ -569,7 +658,7 @@ fn title_from_filename(name: &str) -> String {
         .to_string()
 }
 
-fn metadata_entity(title: &str, description: &str) -> Object {
+fn metadata_entity(title: &str, description: &str, parent_entity: Option<&str>) -> Object {
     let mut entity = Object::new();
     let title = title.trim();
     if !title.is_empty() {
@@ -578,6 +667,9 @@ fn metadata_entity(title: &str, description: &str) -> Object {
     let description = description.trim();
     if !description.is_empty() {
         entity.insert(ATTR_DESCRIPTION, Value::String(description.to_string()));
+    }
+    if let Some(parent_entity) = parent_entity.map(str::trim).filter(|id| !id.is_empty()) {
+        entity.insert(ATTR_PARENT, Value::String(parent_entity.to_string()));
     }
     entity
 }
@@ -653,7 +745,7 @@ mod tests {
 
     #[test]
     fn metadata_entity_sets_namespaced_user_fields() {
-        let entity = metadata_entity(" Title ", " Body ");
+        let entity = metadata_entity(" Title ", " Body ", Some("parent-id"));
         assert_eq!(
             entity.get(ATTR_TITLE),
             Some(&Value::String("Title".to_string()))
@@ -661,6 +753,10 @@ mod tests {
         assert_eq!(
             entity.get(ATTR_DESCRIPTION),
             Some(&Value::String("Body".to_string()))
+        );
+        assert_eq!(
+            entity.get(ATTR_PARENT),
+            Some(&Value::String("parent-id".to_string()))
         );
         assert!(!entity.contains_key("title"));
         assert!(!entity.contains_key("description"));

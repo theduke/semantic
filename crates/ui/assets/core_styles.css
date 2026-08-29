@@ -851,6 +851,108 @@ pre {
   align-items: center;
 }
 
+.semantic-upload__defaults {
+  display: grid;
+  gap: var(--semantic-space-4);
+  padding: var(--semantic-space-4);
+  border: 1px solid var(--semantic-border-soft);
+  border-radius: var(--semantic-radius);
+  background: var(--semantic-surface);
+}
+
+.semantic-upload__defaults-header {
+  display: flex;
+  justify-content: space-between;
+  gap: var(--semantic-space-3);
+  align-items: start;
+}
+
+.semantic-upload__defaults-header h3,
+.semantic-upload__defaults-header p {
+  margin: 0;
+}
+
+.semantic-upload__defaults-header p,
+.semantic-upload__default-label span {
+  color: var(--semantic-text-muted);
+  font-size: 13px;
+}
+
+.semantic-upload__default-field,
+.semantic-upload__default-label {
+  display: grid;
+  gap: var(--semantic-space-2);
+}
+
+.semantic-directory-picker {
+  display: grid;
+  gap: var(--semantic-space-2);
+  min-width: 0;
+}
+
+.semantic-directory-picker__filter input {
+  width: 100%;
+}
+
+.semantic-directory-picker__tree {
+  max-height: 20rem;
+  min-height: 5rem;
+  overflow: auto;
+  padding: var(--semantic-space-2);
+  border: 1px solid var(--semantic-border-soft);
+  border-radius: var(--semantic-radius);
+  background: var(--semantic-bg);
+  scrollbar-gutter: stable;
+}
+
+.semantic-directory-picker__row {
+  display: grid;
+  grid-template-columns: 28px minmax(0, 1fr) auto;
+  gap: var(--semantic-space-1);
+  align-items: center;
+  padding-left: var(--semantic-directory-depth, 0);
+}
+
+.semantic-directory-picker__row[data-selected="true"] {
+  background: #edf7fa;
+}
+
+.semantic-directory-picker__expander,
+.semantic-directory-picker__directory {
+  border: 0;
+  background: transparent;
+  color: var(--semantic-text);
+  cursor: pointer;
+}
+
+.semantic-directory-picker__expander {
+  display: grid;
+  place-items: center;
+  width: 28px;
+  height: 28px;
+  padding: 0;
+}
+
+.semantic-directory-picker__directory {
+  display: flex;
+  gap: var(--semantic-space-2);
+  align-items: center;
+  min-width: 0;
+  padding: var(--semantic-space-2);
+  text-align: left;
+}
+
+.semantic-directory-picker__directory span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.semantic-directory-picker__directory[data-selected="true"] {
+  color: var(--semantic-accent);
+  font-weight: 600;
+}
+
 .semantic-upload__selector {
   display: block;
   padding: var(--semantic-space-4);
