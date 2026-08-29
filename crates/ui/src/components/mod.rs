@@ -1,6 +1,6 @@
 mod shell;
 
-pub use shell::AppShell;
+pub use shell::{AppShell, PlayerShell};
 
 pub(crate) fn value_string(value: &semantic_data::value::Value) -> String {
     value

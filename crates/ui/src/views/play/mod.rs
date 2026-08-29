@@ -16,7 +16,7 @@ use data::{get_object, load_playlist};
 use dioxus::prelude::*;
 use entity_dialog::PlayerEntityDialog;
 use filters::PlayerFilters;
-use playlist::{PlayerPlaylist, scroll_to_index};
+use playlist::{PlayerPlaylist, PlaylistResizeHandle, scroll_to_index};
 use query::PlaylistFilter;
 use semantic_ui_core::{MediaHandleRegistration, MediaKind, use_active_scope_id, use_rpc_client};
 use stage::PlayerStage;
@@ -239,8 +239,10 @@ pub fn PlayPage() -> Element {
             if let Some(warning) = queue_warning() {
                 div { class: "semantic-player__warning", role: "status", "{warning}" }
             }
-            div { class: "semantic-player__body",
-                div { class: "semantic-player__stage-wrap",
+                    div {
+                        id: "semantic-player-body",
+                        class: if current.playlist_open { "semantic-player__body semantic-player__body--playlist" } else { "semantic-player__body" },
+                        div { class: "semantic-player__stage-wrap",
                     PlayerStage {
                         entry: active_entry.clone(), object: active_result.clone(),
                         session_id: current.playback_session, playing: current.playback_intent,
@@ -257,16 +259,21 @@ pub fn PlayPage() -> Element {
                                 onclick: move |_| controller.next(), "Skip" }
                         }
                     }
-                }
-                if current.playlist_open {
-                    PlayerPlaylist {
-                        entries: current.queue.clone(), active_index: current.active_index,
-                        failed_occurrences: current.failed_occurrences.clone(),
-                        follow_active: *follow_active.read(),
-                        on_select: move |index| controller.select(index),
-                        on_follow_change: move |follow| follow_active.set(follow),
-                    }
-                }
+                        }
+                        if current.playlist_open {
+                            PlaylistResizeHandle {}
+                            PlayerPlaylist {
+                                entries: current.queue.clone(), active_index: current.active_index,
+                                failed_occurrences: current.failed_occurrences.clone(),
+                                follow_active: *follow_active.read(),
+                                on_select: move |index| controller.select(index),
+                                on_follow_change: move |follow| follow_active.set(follow),
+                                on_close: move |_| {
+                                    state.write().playlist_open = false;
+                                    store_playlist_open(false);
+                                },
+                            }
+                        }
             }
             PlayerEntityDialog {
                 open: current.entity_dialog_open, title: current_title,

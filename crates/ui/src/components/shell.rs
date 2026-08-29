@@ -7,85 +7,104 @@ use crate::views::Route;
 pub fn AppShell() -> Element {
     rsx! {
         div { class: "semantic-ui",
-            header { class: "semantic-ui__header",
-                h1 { "Semantic" }
-                nav {
-                    Link {
-                        to: Route::HomePage,
-                        class: "dx-button",
-                        "data-style": "ghost",
-                        "data-size": "default",
-                        "Home"
-                    }
-                    Link {
-                        to: Route::CatalogPage,
-                        class: "dx-button",
-                        "data-style": "ghost",
-                        "data-size": "default",
-                        "Catalog"
-                    }
-                    Link {
-                        to: Route::CollectionPage {
-                            collection: DEFAULT_COLLECTION.to_string()
-                        },
-                        class: "dx-button",
-                        "data-style": "ghost",
-                        "data-size": "default",
-                        "Entities"
-                    }
-                    Link {
-                        to: Route::CreateEntityPage,
-                        class: "dx-button",
-                        "data-style": "ghost",
-                        "data-size": "default",
-                        "Create"
-                    }
-                    Link {
-                        to: Route::BrowsePage {
-                            collection: None,
-                            view: None,
-                            renderer: None,
-                            page: None,
-                            page_size: None,
-                            sql: None,
-                        },
-                        class: "dx-button",
-                        "data-style": "ghost",
-                        "data-size": "default",
-                        "Browse"
-                    }
-                    Link {
-                        to: Route::QueryPage,
-                        class: "dx-button",
-                        "data-style": "ghost",
-                        "data-size": "default",
-                        "Query"
-                    }
-                    Link {
-                        to: Route::PlayPage,
-                        class: "dx-button",
-                        "data-style": "ghost",
-                        "data-size": "default",
-                        "Play"
-                    }
-                    Link {
-                        to: Route::TreePage { root: None },
-                        class: "dx-button",
-                        "data-style": "ghost",
-                        "data-size": "default",
-                        "Tree"
-                    }
-                    Link {
-                        to: Route::UploadPage,
-                        class: "dx-button",
-                        "data-style": "ghost",
-                        "data-size": "default",
-                        "Upload"
-                    }
-                }
-            }
+            AppHeader {}
             main { class: "semantic-ui__main",
                 Outlet::<Route> {}
+            }
+        }
+    }
+}
+
+#[component]
+pub fn PlayerShell() -> Element {
+    rsx! {
+        div { class: "semantic-player-shell",
+            AppHeader {}
+            main { class: "semantic-player-shell__main",
+                Outlet::<Route> {}
+            }
+        }
+    }
+}
+
+#[component]
+fn AppHeader() -> Element {
+    rsx! {
+        header { class: "semantic-ui__header",
+            h1 { "Semantic" }
+            nav {
+                Link {
+                    to: Route::HomePage,
+                    class: "dx-button",
+                    "data-style": "ghost",
+                    "data-size": "default",
+                    "Home"
+                }
+                Link {
+                    to: Route::CatalogPage,
+                    class: "dx-button",
+                    "data-style": "ghost",
+                    "data-size": "default",
+                    "Catalog"
+                }
+                Link {
+                    to: Route::CollectionPage {
+                        collection: DEFAULT_COLLECTION.to_string()
+                    },
+                    class: "dx-button",
+                    "data-style": "ghost",
+                    "data-size": "default",
+                    "Entities"
+                }
+                Link {
+                    to: Route::CreateEntityPage,
+                    class: "dx-button",
+                    "data-style": "ghost",
+                    "data-size": "default",
+                    "Create"
+                }
+                Link {
+                    to: Route::BrowsePage {
+                        collection: None,
+                        view: None,
+                        renderer: None,
+                        page: None,
+                        page_size: None,
+                        sql: None,
+                    },
+                    class: "dx-button",
+                    "data-style": "ghost",
+                    "data-size": "default",
+                    "Browse"
+                }
+                Link {
+                    to: Route::QueryPage,
+                    class: "dx-button",
+                    "data-style": "ghost",
+                    "data-size": "default",
+                    "Query"
+                }
+                Link {
+                    to: Route::PlayPage,
+                    class: "dx-button",
+                    "data-style": "ghost",
+                    "data-size": "default",
+                    "Play"
+                }
+                Link {
+                    to: Route::TreePage { root: None },
+                    class: "dx-button",
+                    "data-style": "ghost",
+                    "data-size": "default",
+                    "Tree"
+                }
+                Link {
+                    to: Route::UploadPage,
+                    class: "dx-button",
+                    "data-style": "ghost",
+                    "data-size": "default",
+                    "Upload"
+                }
             }
         }
     }

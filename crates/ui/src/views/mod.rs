@@ -22,7 +22,7 @@ pub use upload::UploadPage;
 
 use dioxus::prelude::*;
 
-use crate::components::AppShell;
+use crate::components::{AppShell, PlayerShell};
 
 #[derive(Clone, Debug, PartialEq, Routable)]
 pub enum Route {
@@ -54,10 +54,12 @@ pub enum Route {
     },
     #[route("/query")]
     QueryPage,
-    #[route("/play")]
-    PlayPage,
     #[route("/tree?:root")]
     TreePage { root: Option<String> },
     #[route("/upload")]
     UploadPage,
+    #[end_layout]
+    #[layout(PlayerShell)]
+    #[route("/play")]
+    PlayPage,
 }

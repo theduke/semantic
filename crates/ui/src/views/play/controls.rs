@@ -45,8 +45,9 @@ pub fn PlayerControls(
             div { class: "semantic-player__toolbar-group",
                 dxcomp::Button { size: dxcomp::ButtonSize::Sm, variant: toggle_variant(filter_open), onclick: on_filter,
                     aria_pressed: filter_open, aria_expanded: filter_open, aria_controls: "semantic-player-filter", "Filter" }
-                dxcomp::Button { size: dxcomp::ButtonSize::Sm, variant: toggle_variant(playlist_open), onclick: on_playlist,
-                    aria_pressed: playlist_open, aria_expanded: playlist_open, aria_controls: "semantic-player-playlist", "Playlist" }
+                       dxcomp::Button { size: dxcomp::ButtonSize::Sm, variant: toggle_variant(playlist_open), onclick: on_playlist,
+                           aria_pressed: playlist_open, aria_expanded: playlist_open, aria_controls: "semantic-player-playlist",
+                           title: if playlist_open { "Hide playlist" } else { "Show playlist" }, "Playlist" }
                 dxcomp::Button { size: dxcomp::ButtonSize::Sm, variant: toggle_variant(muted), onclick: on_mute,
                     aria_pressed: muted, title: if muted { "Unmute (M)" } else { "Mute (M)" }, if muted { "Muted" } else { "Sound" } }
                 dxcomp::Button { size: dxcomp::ButtonSize::Sm, variant: toggle_variant(cycle), onclick: on_cycle,
