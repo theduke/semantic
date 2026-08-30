@@ -6525,7 +6525,9 @@ dependencies = [
 
 [[package]]
 name = "objstore"
-version = "0.1.0-alpha.2"
+version = "0.1.0-alpha.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "8a51ac1200ff9f3299705396fb31bbb1f64722445543e181f40dba1d9391c965"
 dependencies = [
  "async-trait",
  "bytes",
@@ -6540,7 +6542,9 @@ dependencies = [
 
 [[package]]
 name = "objstore_fs"
-version = "0.1.0-alpha.2"
+version = "0.1.0-alpha.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "cf37099077a0d5eadf9f0c75434637a69a7961c3fad2841bb086e638a54ae06d"
 dependencies = [
  "async-trait",
  "bytes",

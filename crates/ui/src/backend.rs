@@ -231,7 +231,7 @@ impl RpcClientDyn for EmbeddedRpcClient {
                     RpcClientError::Remote("app_error".to_string(), err.to_string())
                 })?;
             let file = reader
-                .read(Some(FileByteRange::from(offset)))
+                .read(Some(FileByteRange::from_offset(offset)))
                 .await
                 .map_err(|err| RpcClientError::Remote("app_error".to_string(), err.to_string()))?;
             let stream = file

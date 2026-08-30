@@ -4,7 +4,7 @@ use bytes::Bytes;
 use futures_util::stream::BoxStream;
 use futures_util::{StreamExt as _, TryStreamExt as _};
 use objstore::{
-    DataSource, DynObjStore, ObjStore as _, ObjStoreError, Operation, Put, SizedValueStream,
+    Copy, DataSource, DynObjStore, ObjStore as _, ObjStoreError, Operation, Put, SizedValueStream,
 };
 use semantic_data::builtin::{ATTR_ID, ATTR_TYPE};
 use semantic_data::filestore::{
@@ -377,10 +377,18 @@ async fn persist_content(
                     .map(ToOwned::to_owned)
                     .unwrap_or_else(|| format!("file-sha256-{content_hash_sha256}"))
             });
-            let meta = match store
-                .move_object(&temporary_locator, &filestore_locator)
-                .await
-            {
+            let persist_result = async {
+                let meta = store
+                    .send_copy(Copy::new(&temporary_locator, &filestore_locator))
+                    .await?;
+
+                store.delete(&temporary_locator).await?;
+
+                std::result::Result::<_, ObjStoreError>::Ok(meta)
+            }
+            .await;
+
+            let meta = match persist_result {
                 Ok(meta) => meta,
                 Err(err) => {
                     let _ = store.delete(&temporary_locator).await;

@@ -20,8 +20,8 @@ async-trait = "0.1.89"
 bytes = { workspace = true }
 futures-util = "0.3.31"
 hex = { workspace = true }
-objstore = { path = "../../../objstore/objstore" }
-objstore_fs = { path = "../../../objstore/objstore_fs" }
+objstore = "0.1.0-alpha.3"
+objstore_fs = "0.1.0-alpha.3"
 ordered-float = { workspace = true }
 semantic_data = { workspace = true }
 semantic_base = { path = "../base", optional = true }
