@@ -1,4 +1,6 @@
 pub mod context;
+#[cfg(feature = "markdown")]
+mod editor_entity_links;
 pub mod form;
 pub mod ui_catalog;
 

@@ -3,6 +3,7 @@ use serde_json::Value;
 
 use crate::document_v2::ComponentDocumentV2;
 use crate::engine_manifest::EditorEngineManifest;
+use crate::entity_link::{EntityLinkCandidate, EntityLinkPreview};
 
 pub const EDITOR_PROTOCOL_VERSION: u32 = 2;
 
@@ -93,6 +94,18 @@ pub enum EngineCommand {
         request_id: u64,
         suggestions: Vec<MentionSuggestion>,
     },
+    EntitySearchResults {
+        #[serde(flatten)]
+        session: ProtocolSession,
+        request_id: u64,
+        candidates: Vec<EntityLinkCandidate>,
+    },
+    EntityPreviewResult {
+        #[serde(flatten)]
+        session: ProtocolSession,
+        request_id: u64,
+        preview: Option<EntityLinkPreview>,
+    },
     Destroy {
         #[serde(flatten)]
         session: ProtocolSession,
@@ -123,6 +136,23 @@ pub enum EngineEvent {
         session: ProtocolSession,
         request_id: u64,
         query: String,
+    },
+    EntitySearchQuery {
+        #[serde(flatten)]
+        session: ProtocolSession,
+        request_id: u64,
+        query: String,
+    },
+    EntityPreviewQuery {
+        #[serde(flatten)]
+        session: ProtocolSession,
+        request_id: u64,
+        entity_id: String,
+    },
+    EntityOpen {
+        #[serde(flatten)]
+        session: ProtocolSession,
+        entity_id: String,
     },
     CommandState {
         #[serde(flatten)]
@@ -160,6 +190,9 @@ impl EngineEvent {
             | Self::DocumentChange { session, .. }
             | Self::Blur { session, .. }
             | Self::MentionQuery { session, .. }
+            | Self::EntitySearchQuery { session, .. }
+            | Self::EntityPreviewQuery { session, .. }
+            | Self::EntityOpen { session, .. }
             | Self::CommandState { session, .. }
             | Self::Error { session, .. } => session,
         }
@@ -169,7 +202,12 @@ impl EngineEvent {
         match self {
             Self::DocumentChange { revision, .. } | Self::Blur { revision, .. } => Some(*revision),
             Self::Error { revision, .. } => *revision,
-            Self::Ready { .. } | Self::MentionQuery { .. } | Self::CommandState { .. } => None,
+            Self::Ready { .. }
+            | Self::MentionQuery { .. }
+            | Self::EntitySearchQuery { .. }
+            | Self::EntityPreviewQuery { .. }
+            | Self::EntityOpen { .. }
+            | Self::CommandState { .. } => None,
         }
     }
 }
@@ -255,6 +293,9 @@ impl SessionRevisionGuard {
             }
             EngineEvent::Ready { .. }
             | EngineEvent::MentionQuery { .. }
+            | EngineEvent::EntitySearchQuery { .. }
+            | EngineEvent::EntityPreviewQuery { .. }
+            | EngineEvent::EntityOpen { .. }
             | EngineEvent::CommandState { .. }
             | EngineEvent::Error { .. } => {}
         }
@@ -392,5 +433,42 @@ mod tests {
         let command_value = serde_json::to_value(command).unwrap();
         assert_eq!(command_value["kind"], "mentionSuggestions");
         assert_eq!(command_value["suggestions"][0]["label"], "Alice");
+    }
+
+    #[test]
+    fn entity_search_and_preview_are_versioned_session_messages() {
+        let search = EngineEvent::EntitySearchQuery {
+            session: session(2),
+            request_id: 4,
+            query: "ada".to_string(),
+        };
+        let value = serde_json::to_value(&search).unwrap();
+        assert_eq!(value["kind"], "entitySearchQuery");
+        assert_eq!(value["request_id"], 4);
+        assert_eq!(value["protocol_version"], EDITOR_PROTOCOL_VERSION);
+
+        let response = EngineCommand::EntityPreviewResult {
+            session: session(2),
+            request_id: 5,
+            preview: Some(crate::entity_link::EntityLinkPreview {
+                id: "person-1".to_string(),
+                label: "Ada".to_string(),
+                detail: Some("Person".to_string()),
+                fields: vec![crate::entity_link::EntityPreviewField {
+                    label: "Email".to_string(),
+                    value: "ada@example.test".to_string(),
+                }],
+            }),
+        };
+        let value = serde_json::to_value(&response).unwrap();
+        assert_eq!(value["kind"], "entityPreviewResult");
+        assert_eq!(value["preview"]["fields"][0]["label"], "Email");
+
+        let open = serde_json::to_value(EngineEvent::EntityOpen {
+            session: session(2),
+            entity_id: "person-1".to_string(),
+        })
+        .unwrap();
+        assert_eq!(open["kind"], "entityOpen");
     }
 }

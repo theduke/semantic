@@ -57,6 +57,9 @@ export type ComponentDocumentV2 = {
 }
 
 export type MentionCandidate = { id: string; label: string; detail?: string }
+export type EntityLinkCandidate = { id: string; label: string; detail?: string }
+export type EntityPreviewField = { label: string; value: string }
+export type EntityLinkPreview = { id: string; label: string; detail?: string; fields?: EntityPreviewField[] }
 export type EngineManifest = {
   version: number
   document_catalog_fingerprint: string
@@ -79,6 +82,14 @@ export type MentionProvider = (
   query: string,
   context: { signal: AbortSignal; sessionId: string },
 ) => Promise<readonly MentionCandidate[]> | readonly MentionCandidate[]
+export type EntitySearchProvider = (
+  query: string,
+  context: { signal: AbortSignal; sessionId: string },
+) => Promise<readonly EntityLinkCandidate[]> | readonly EntityLinkCandidate[]
+export type EntityPreviewProvider = (
+  entityId: string,
+  context: { signal: AbortSignal; sessionId: string },
+) => Promise<EntityLinkPreview | null> | EntityLinkPreview | null
 
 export interface MountOptions {
   sessionId: string
@@ -90,6 +101,10 @@ export interface MountOptions {
   manifest?: EngineManifest
   emit: (event: unknown) => void
   mentionProvider?: MentionProvider
+  entitySearchProvider?: EntitySearchProvider
+  entityPreviewProvider?: EntityPreviewProvider
+  entityOpenHandler?: (entityId: string) => void
+  entityLinkColor?: string | null
 }
 
 export interface EditorSession {
@@ -108,6 +123,14 @@ export const safeUrl = (value: string): boolean => {
     return false
   }
 }
+
+export const entityIdFromHref = (href: string): string | null => {
+  if (!href.startsWith('semantic:entity:')) return null
+  const entityId = href.slice('semantic:entity:'.length)
+  return entityId && entityId.length <= 1024 ? entityId : null
+}
+
+export const entityHref = (entityId: string): string => `semantic:entity:${entityId}`
 
 export const safeImageUrl = (value: string): boolean => {
   if (!value || value !== value.trim() || /[\s\u0000-\u001f\u007f\\]/u.test(value) || !/^https?:\/\//iu.test(value)) return false
@@ -223,11 +246,12 @@ const Mention = Node.create({
       label: { default: '' },
     }
   },
-  parseHTML() { return [{ tag: 'span[data-semantic-mention]' }] },
+  parseHTML() { return [{ tag: '[data-semantic-mention]' }] },
   renderHTML({ node, HTMLAttributes }) {
-    return ['span', mergeAttributes(HTMLAttributes, {
+    return ['a', mergeAttributes(HTMLAttributes, {
       'data-semantic-mention': node.attrs.entityId,
-      class: 'dxeditor-engine__mention',
+      href: entityHref(String(node.attrs.entityId)),
+      class: 'dxeditor-engine__mention dxeditor-engine__entity-link',
       contenteditable: 'false',
     }), `@${node.attrs.label}`]
   },
@@ -308,6 +332,13 @@ const SafeLink = Link.extend({
         renderHTML: attrs => attrs.title ? { title: String(attrs.title) } : {},
       },
     }
+  },
+  renderHTML({ HTMLAttributes }) {
+    const entityId = entityIdFromHref(String(HTMLAttributes.href ?? ''))
+    return ['a', mergeAttributes(this.options.HTMLAttributes, HTMLAttributes, entityId ? {
+      'data-semantic-entity-link': entityId,
+      class: 'dxeditor-engine__entity-link',
+    } : {}) , 0]
   },
 })
 
@@ -459,7 +490,8 @@ const v2MarksToPm = (marks: ComponentMarkV2[] = []): JSONContent['marks'] => mar
   if (['bold', 'italic', 'strike', 'code'].includes(mark.kind)) return [{ type: mark.kind }]
   if (mark.kind === 'link') {
     const href = String(mark.attrs?.href ?? '')
-    return safeUrl(href) ? [{ type: 'link', attrs: { href, title: mark.attrs?.title ?? null } }] : []
+    return safeUrl(href) || entityIdFromHref(href)
+      ? [{ type: 'link', attrs: { href, title: mark.attrs?.title ?? null } }] : []
   }
   return []
 })
@@ -541,7 +573,7 @@ const cleanAttrs = (attrs: Attributes = {}): Attributes => Object.fromEntries(
 
 const pmMarksToV2 = (marks: JSONContent['marks'] = []): ComponentMarkV2[] => marks.flatMap(mark => {
   if (['bold', 'italic', 'strike', 'code'].includes(mark.type)) return [{ kind: mark.type }]
-  if (mark.type === 'link' && safeUrl(String(mark.attrs?.href ?? ''))) {
+  if (mark.type === 'link' && (safeUrl(String(mark.attrs?.href ?? '')) || entityIdFromHref(String(mark.attrs?.href ?? '')))) {
     return [{ kind: 'link', attrs: cleanAttrs({ href: mark.attrs?.href, title: mark.attrs?.title }) }]
   }
   return []
@@ -672,6 +704,9 @@ export const mount = (host: HTMLElement, options: MountOptions): EditorSession =
 	  const commandEnabled = (command: string): boolean => commandManifest.get(command)?.enabled ?? true
   const wrapper = host.closest<HTMLElement>('.dxeditor') ?? host.parentElement ?? host
   const overlays = wrapper.querySelector<HTMLElement>('[data-dxeditor-overlays]') ?? wrapper
+  const entityLinkColor = options.entityLinkColor && (typeof CSS === 'undefined' || CSS.supports('color', options.entityLinkColor))
+    ? options.entityLinkColor : '#176b87'
+  wrapper.style.setProperty('--dxeditor-entity-link-color', entityLinkColor)
   const clipboardSchemaFingerprint = options.manifest?.clipboard_schema_fingerprint
     ?? `${options.schemaFingerprint ?? 'standard'}:${INTERNAL_SCHEMA_FINGERPRINT}`
   const bubble = window.document.createElement('div')
@@ -754,7 +789,28 @@ export const mount = (host: HTMLElement, options: MountOptions): EditorSession =
   mentions.setAttribute('aria-label', 'Mention suggestions')
   mentions.id = `dxeditor-mentions-${options.sessionId}`
   mentions.hidden = true
-  overlays.append(bubble, blockControls, slash, blockMenu, linkPopover, tableControls, mediaPopover, mentions)
+  const entityPopover = window.document.createElement('div')
+  entityPopover.className = 'dxeditor-engine__surface dxeditor-engine__entity-popover'
+  entityPopover.setAttribute('role', 'dialog')
+  entityPopover.setAttribute('aria-label', 'Link to entity')
+  entityPopover.hidden = true
+  const entitySearch = window.document.createElement('input')
+  entitySearch.type = 'search'
+  entitySearch.placeholder = 'Search entities'
+  entitySearch.autocomplete = 'off'
+  entitySearch.setAttribute('aria-label', 'Search entities')
+  const entityResults = window.document.createElement('div')
+  entityResults.className = 'dxeditor-engine__entity-results'
+  entityResults.setAttribute('role', 'listbox')
+  entityResults.setAttribute('aria-label', 'Entity results')
+  entityResults.id = `dxeditor-entities-${options.sessionId}`
+  entityPopover.append(entitySearch, entityResults)
+  const entityPreview = window.document.createElement('div')
+  entityPreview.className = 'dxeditor-engine__surface dxeditor-engine__entity-preview'
+  entityPreview.setAttribute('role', 'dialog')
+  entityPreview.setAttribute('aria-label', 'Entity preview')
+  entityPreview.hidden = true
+  overlays.append(bubble, blockControls, slash, blockMenu, linkPopover, tableControls, mediaPopover, mentions, entityPopover, entityPreview)
 
 	  let revision = 0
 	  let lastEmittedSnapshot: string | null = null
@@ -770,6 +826,12 @@ export const mount = (host: HTMLElement, options: MountOptions): EditorSession =
   let mentionRequest: AbortController | null = null
   let mentionQuery: string | null = null
 	  let mentionTimer: number | undefined
+	  let entitySearchTimer: number | undefined
+	  let entitySearchRequest: AbortController | null = null
+	  let entitySearchSequence = 0
+	  let entityInsertAt: number | null = null
+	  let entityPreviewRequest: AbortController | null = null
+	  let previewEntityId: string | null = null
 	  let activeOptionIndex = 0
 	  let dismissedSlash: string | null = null
 	  let dismissedMention: string | null = null
@@ -785,8 +847,8 @@ export const mount = (host: HTMLElement, options: MountOptions): EditorSession =
     Document, Paragraph, Text, Heading.configure({ levels: [1, 2, 3, 4, 5, 6] }), Bold, Italic, Strike, Code,
     Blockquote, CodeBlock, BulletList, OrderedList, ListItem, TaskList, TaskItem.configure({ nested: true }),
     HardBreak, HorizontalRule, SafeImage.configure({ allowBase64: false, inline: true }),
-    SafeLink.configure({ openOnClick: false, autolink: true, defaultProtocol: 'https', protocols: ['http', 'https', 'mailto', 'tel'],
-      isAllowedUri: url => safeUrl(url) }),
+    SafeLink.configure({ openOnClick: false, autolink: true, defaultProtocol: 'https', protocols: ['http', 'https', 'mailto', 'tel', 'semantic'],
+      isAllowedUri: url => safeUrl(url) || entityIdFromHref(url) !== null }),
 	    // Column widths and spans are not Markdown-persistable. Keep resize disabled until a
 	    // typed format manifest explicitly enables it.
 	    Table.configure({ resizable: options.manifest?.features.persistent_table_widths ?? false }), TableRow, TableHeader, TableCell,
@@ -1162,6 +1224,89 @@ export const mount = (host: HTMLElement, options: MountOptions): EditorSession =
     if (event.key === 'Enter') { event.preventDefault(); applyMedia() }
     if (event.key === 'Escape') { pendingImageInsertAt = null; mediaPopover.hidden = true; editor.commands.focus() }
   }))
+  const closeEntityPopover = (): void => {
+    window.clearTimeout(entitySearchTimer)
+    entitySearchRequest?.abort()
+    entitySearchRequest = null
+    entityInsertAt = null
+    entityPopover.hidden = true
+    entityResults.replaceChildren()
+  }
+  const selectEntity = (candidate: EntityLinkCandidate): void => {
+    const position = entityInsertAt
+    if (position === null) return
+    editor.chain().focus().insertContentAt(position, [
+      { type: 'semanticMention', attrs: { semanticId: id('mention'), entityId: candidate.id, label: candidate.label } },
+      { type: 'text', text: ' ' },
+    ]).run()
+    closeEntityPopover()
+  }
+  const searchEntities = (): void => {
+    window.clearTimeout(entitySearchTimer)
+    entitySearchRequest?.abort()
+    entitySearchRequest = new AbortController()
+    const request = entitySearchRequest
+    const sequence = ++entitySearchSequence
+    const query = entitySearch.value.trim()
+    entityResults.replaceChildren()
+    const loading = window.document.createElement('span')
+    loading.textContent = 'Searching…'
+    loading.setAttribute('role', 'status')
+    entityResults.append(loading)
+    entitySearchTimer = window.setTimeout(async () => {
+      try {
+        const candidates = await options.entitySearchProvider?.(query, { signal: request.signal, sessionId: options.sessionId }) ?? []
+        if (request.signal.aborted || sequence !== entitySearchSequence || entityPopover.hidden) return
+        entityResults.replaceChildren()
+        candidates.slice(0, 25).forEach(candidate => {
+          if (!candidate || typeof candidate.id !== 'string' || !candidate.id || typeof candidate.label !== 'string') return
+          const item = button(candidate.detail ? `${candidate.label} — ${candidate.detail}` : candidate.label, `Link to ${candidate.label}`, () => selectEntity(candidate))
+          item.setAttribute('role', 'option')
+          entityResults.append(item)
+        })
+        if (!entityResults.childElementCount) {
+          const empty = window.document.createElement('span')
+          empty.textContent = 'No entities found'
+          empty.setAttribute('role', 'status')
+          entityResults.append(empty)
+        }
+      } catch {
+        if (request.signal.aborted || sequence !== entitySearchSequence) return
+        entityResults.replaceChildren()
+        const failure = window.document.createElement('span')
+        failure.textContent = 'Entity search unavailable'
+        failure.setAttribute('role', 'alert')
+        entityResults.append(failure)
+      }
+    }, 120)
+  }
+  const openEntityPopover = (): void => {
+    removeSlashTrigger()
+    entityInsertAt = editor.state.selection.from
+    entitySearch.value = ''
+    entityPopover.hidden = false
+    slash.hidden = true
+    const caret = editor.view.coordsAtPos(entityInsertAt)
+    positionSurface(entityPopover, new DOMRect(caret.left, caret.bottom, 1, 1), wrapper)
+    entitySearch.focus()
+    searchEntities()
+  }
+  entitySearch.addEventListener('input', searchEntities)
+  entitySearch.addEventListener('keydown', event => {
+    const items = Array.from(entityResults.querySelectorAll<HTMLButtonElement>('button[role="option"]'))
+    const active = window.document.activeElement
+    if (event.key === 'Escape') { event.preventDefault(); closeEntityPopover(); editor.commands.focus(); return }
+    if (event.key === 'ArrowDown' && items.length) { event.preventDefault(); items[0]?.focus(); return }
+    if (event.key === 'Enter' && items.length) { event.preventDefault(); items[0]?.click(); return }
+    if (active !== entitySearch && event.key === 'ArrowUp') { event.preventDefault(); entitySearch.focus() }
+  })
+  entityResults.addEventListener('keydown', event => {
+    const items = Array.from(entityResults.querySelectorAll<HTMLButtonElement>('button[role="option"]'))
+    const index = items.indexOf(window.document.activeElement as HTMLButtonElement)
+    if (event.key === 'Escape') { event.preventDefault(); closeEntityPopover(); editor.commands.focus() }
+    else if (event.key === 'ArrowDown') { event.preventDefault(); (items[index + 1] ?? items[0])?.focus() }
+    else if (event.key === 'ArrowUp') { event.preventDefault(); if (index <= 0) entitySearch.focus(); else items[index - 1]?.focus() }
+  })
   const addBlockButton = button('+', 'Add a block', () => {
     slashBlockTarget = activeBlockTarget
     slashInsertionMode = true
@@ -1221,6 +1366,12 @@ export const mount = (host: HTMLElement, options: MountOptions): EditorSession =
     item.setAttribute('role', 'option')
     slash.append(item)
   })
+  if (options.entitySearchProvider) {
+    const item = button('Entity', 'Link to an entity', openEntityPopover)
+    item.setAttribute('role', 'option')
+    item.dataset.extension = 'entity-link'
+    slash.append(item)
+  }
   ;[['+ Row', 'Add row after', 'addRowAfter'], ['− Row', 'Delete row', 'deleteRow'], ['+ Column', 'Add column after', 'addColumnAfter'],
     ['− Column', 'Delete column', 'deleteColumn'], ['Header', 'Toggle header row', 'toggleHeaderRow'],
     ['⇤', 'Align cell left', 'alignCell', 'left'], ['↔', 'Align cell center', 'alignCell', 'center'], ['⇥', 'Align cell right', 'alignCell', 'right'],
@@ -1320,6 +1471,87 @@ export const mount = (host: HTMLElement, options: MountOptions): EditorSession =
       }
     }, 120)
   }
+
+  const entityLinkTarget = (target: EventTarget | null): { element: HTMLElement; id: string } | null => {
+    if (!(target instanceof Element)) return null
+    const element = target.closest<HTMLElement>('[data-semantic-mention], [data-semantic-entity-link]')
+    if (!element || !editor.view.dom.contains(element)) return null
+    const entityId = element.dataset.semanticMention ?? element.dataset.semanticEntityLink ?? ''
+    return entityId ? { element, id: entityId } : null
+  }
+  const closeEntityPreview = (): void => {
+    entityPreviewRequest?.abort()
+    entityPreviewRequest = null
+    previewEntityId = null
+    entityPreview.hidden = true
+    entityPreview.replaceChildren()
+  }
+  const renderEntityPreview = (preview: EntityLinkPreview): void => {
+    entityPreview.replaceChildren()
+    const title = window.document.createElement('strong')
+    title.textContent = preview.label
+    entityPreview.append(title)
+    if (preview.detail) {
+      const detail = window.document.createElement('span')
+      detail.className = 'dxeditor-engine__entity-preview-detail'
+      detail.textContent = preview.detail
+      entityPreview.append(detail)
+    }
+    const fields = window.document.createElement('dl')
+    ;(preview.fields ?? []).slice(0, 8).forEach(field => {
+      if (!field || typeof field.label !== 'string' || typeof field.value !== 'string') return
+      const term = window.document.createElement('dt')
+      term.textContent = field.label
+      const value = window.document.createElement('dd')
+      value.textContent = field.value
+      fields.append(term, value)
+    })
+    if (fields.childElementCount) entityPreview.append(fields)
+  }
+  const openEntityPreview = async (target: { element: HTMLElement; id: string }): Promise<void> => {
+    if (!options.entityPreviewProvider || previewEntityId === target.id) return
+    entityPreviewRequest?.abort()
+    entityPreviewRequest = new AbortController()
+    const request = entityPreviewRequest
+    previewEntityId = target.id
+    entityPreview.replaceChildren()
+    const loading = window.document.createElement('span')
+    loading.textContent = 'Loading entity…'
+    loading.setAttribute('role', 'status')
+    entityPreview.append(loading)
+    entityPreview.hidden = false
+    positionSurface(entityPreview, target.element.getBoundingClientRect(), wrapper)
+    try {
+      const preview = await options.entityPreviewProvider(target.id, { signal: request.signal, sessionId: options.sessionId })
+      if (request.signal.aborted || previewEntityId !== target.id) return
+      if (!preview) { closeEntityPreview(); return }
+      renderEntityPreview(preview)
+      positionSurface(entityPreview, target.element.getBoundingClientRect(), wrapper)
+    } catch {
+      if (!request.signal.aborted && previewEntityId === target.id) closeEntityPreview()
+    }
+  }
+  const entityPointerOver = (event: PointerEvent): void => {
+    const target = entityLinkTarget(event.target)
+    if (target) void openEntityPreview(target)
+  }
+  const entityPointerOut = (event: PointerEvent): void => {
+    const current = entityLinkTarget(event.target)
+    if (!current) return
+    const related = event.relatedTarget
+    if (related instanceof globalThis.Node && (current.element.contains(related) || entityPreview.contains(related))) return
+    closeEntityPreview()
+  }
+  const entityClick = (event: MouseEvent): void => {
+    const target = entityLinkTarget(event.target)
+    if (!target || !options.entityOpenHandler) return
+    event.preventDefault()
+    options.entityOpenHandler(target.id)
+  }
+  editor.view.dom.addEventListener('pointerover', entityPointerOver)
+  editor.view.dom.addEventListener('pointerout', entityPointerOut)
+  editor.view.dom.addEventListener('click', entityClick)
+  entityPreview.addEventListener('pointerleave', closeEntityPreview)
 
   const positionBlockControls = (): void => {
     if (options.readonly) {
@@ -1430,13 +1662,15 @@ export const mount = (host: HTMLElement, options: MountOptions): EditorSession =
 
   const outside = (event: PointerEvent) => {
     const target = event.target as globalThis.Node
-    if (![bubble, slash, blockControls, blockMenu, linkPopover, tableControls, mediaPopover, mentions].some(surface => surface.contains(target))) {
+    if (![bubble, slash, blockControls, blockMenu, linkPopover, tableControls, mediaPopover, mentions, entityPopover, entityPreview].some(surface => surface.contains(target))) {
       slash.hidden = true
       slashInsertionMode = false
       slashBlockTarget = null
       blockMenu.hidden = true
       menuBlockTarget = null
       linkPopover.hidden = true
+      closeEntityPopover()
+      closeEntityPreview()
       if (!editor.isActive('image')) mediaPopover.hidden = true
       closeMentions()
     }
@@ -1447,7 +1681,7 @@ export const mount = (host: HTMLElement, options: MountOptions): EditorSession =
     if (geometryFrame !== null || destroyed) return
     geometryFrame = window.requestAnimationFrame(() => {
       geometryFrame = null
-      if ([bubble, slash, blockControls, blockMenu, linkPopover, tableControls, mediaPopover, mentions]
+      if ([bubble, slash, blockControls, blockMenu, linkPopover, tableControls, mediaPopover, mentions, entityPopover, entityPreview]
         .some(surface => !surface.hidden)) updateSurfaces(editor)
     })
   }
@@ -1485,7 +1719,7 @@ export const mount = (host: HTMLElement, options: MountOptions): EditorSession =
 	      const slashMatch = /(?:^|\s)\/([^\s/]*)$/.exec(before)
 	      if (!slash.hidden && slashMatch) dismissedSlash = `${$from.pos}:${slashMatch[1]}`
       slash.hidden = true; slashBlockTarget = null; blockMenu.hidden = true; menuBlockTarget = null; linkPopover.hidden = true; mediaPopover.hidden = true
-      bubble.hidden = true; tableControls.hidden = true; pendingImageInsertAt = null; closeMentions(); editor.commands.focus()
+      bubble.hidden = true; tableControls.hidden = true; pendingImageInsertAt = null; closeMentions(); closeEntityPopover(); closeEntityPreview(); editor.commands.focus()
 	      editor.view.dom.setAttribute('aria-expanded', 'false')
 	      editor.view.dom.removeAttribute('aria-activedescendant')
     }
@@ -1497,6 +1731,8 @@ export const mount = (host: HTMLElement, options: MountOptions): EditorSession =
     command: run,
 	    replaceDocument(document, historyPolicy = 'reset') {
 	      closeMentions()
+	      closeEntityPopover()
+	      closeEntityPreview()
 	      flush('replace')
 	      suppressUpdate = true
 	      documentMetadata = document.metadata ?? {}
@@ -1525,6 +1761,8 @@ export const mount = (host: HTMLElement, options: MountOptions): EditorSession =
 	      flush('destroy')
 	      destroyed = true
 	      closeMentions()
+	      closeEntityPopover()
+	      closeEntityPreview()
 	      window.document.removeEventListener('pointerdown', outside, true)
 	      if (geometryFrame !== null) window.cancelAnimationFrame(geometryFrame)
 	      window.removeEventListener('scroll', refreshGeometry, true)
@@ -1534,9 +1772,12 @@ export const mount = (host: HTMLElement, options: MountOptions): EditorSession =
 	      geometryObserver?.disconnect()
 	      editor.view.dom.removeEventListener('pointermove', blockPointerMove)
 	      editor.view.dom.removeEventListener('pointerleave', blockPointerLeave)
+	      editor.view.dom.removeEventListener('pointerover', entityPointerOver)
+	      editor.view.dom.removeEventListener('pointerout', entityPointerOut)
+	      editor.view.dom.removeEventListener('click', entityClick)
 	      editor.view.dom.removeEventListener('keydown', editorKeydown, true)
       editor.destroy()
-      bubble.remove(); blockControls.remove(); slash.remove(); blockMenu.remove(); linkPopover.remove(); tableControls.remove(); mediaPopover.remove(); mentions.remove()
+      bubble.remove(); blockControls.remove(); slash.remove(); blockMenu.remove(); linkPopover.remove(); tableControls.remove(); mediaPopover.remove(); mentions.remove(); entityPopover.remove(); entityPreview.remove()
     },
   }
 }

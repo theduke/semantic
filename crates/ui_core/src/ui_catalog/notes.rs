@@ -141,6 +141,7 @@ fn render_note_content_form(ctx: AttributeFormRenderContext) -> Element {
 
 #[cfg(feature = "markdown")]
 fn render_markdown_note_content_form(ctx: AttributeFormRenderContext) -> Element {
+    let entity_links = crate::editor_entity_links::use_semantic_entity_links();
     let field = ctx.field.clone();
     let value = value_string(&field.value());
     let initial_value = value.clone();
@@ -178,6 +179,7 @@ fn render_markdown_note_content_form(ctx: AttributeFormRenderContext) -> Element
     rsx! {
         dxeditor::MarkdownEditor {
             value,
+            entity_links: Some(entity_links),
             on_change: move |value: String| {
                 pending_value.set(Some(value));
                 debounce_revision += 1;
@@ -257,12 +259,15 @@ fn NoteContentView(content: String, format: String) -> Element {
 #[cfg(feature = "markdown")]
 #[component]
 fn FormattedMarkdownView(content: String) -> Element {
-    let document = use_memo(use_reactive!(|(content,)| {
-        dxeditor::markdown::parse_markdown(&content)
-    }));
+    let entity_links = crate::editor_entity_links::use_semantic_entity_links();
     rsx! {
         div { class: "semantic-note__formatted",
-            dxeditor::DocumentView { document: document() }
+            dxeditor::MarkdownEditor {
+                value: content,
+                readonly: true,
+                entity_links: Some(entity_links),
+                on_change: move |_| {},
+            }
         }
     }
 }

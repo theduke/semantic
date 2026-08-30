@@ -8,6 +8,7 @@ pub mod component_spec;
 pub mod document;
 pub mod document_v2;
 pub mod engine_manifest;
+pub mod entity_link;
 pub mod extension;
 pub mod format;
 pub mod input;
@@ -61,6 +62,10 @@ pub use document_v2::{
 pub use engine_manifest::{
     ENGINE_MANIFEST_VERSION, EditorEngineManifest, EngineCommandManifest, EngineComponentManifest,
     EngineFeatureManifest,
+};
+pub use entity_link::{
+    EntityLinkCandidate, EntityLinkExtension, EntityLinkPreview, EntityLinkProvider,
+    EntityPreviewField,
 };
 pub use extension::EditorExtension;
 pub use format::{

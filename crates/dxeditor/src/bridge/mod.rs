@@ -19,6 +19,7 @@ pub(crate) fn EditorBridge(
     aria_label: String,
     format_id: String,
     manifest: EditorEngineManifest,
+    entity_link_color: Option<String>,
     on_event: EventHandler<EngineEvent>,
 ) -> Element {
     let destroy = EngineCommand::Destroy {
@@ -54,6 +55,9 @@ pub(crate) fn EditorBridge(
         let Ok(manifest_json) = serde_json::to_string(&manifest) else {
             return;
         };
+        let Ok(entity_link_color_json) = serde_json::to_string(&entity_link_color) else {
+            return;
+        };
         let engine_bootstrap = if ENGINE_INSTALL_STARTED.swap(true, Ordering::AcqRel) {
             ""
         } else {
@@ -67,6 +71,7 @@ const protocol = {session_json};
 const sessionId = protocol.session_id;
 window.__semanticDxEditorProtocol ??= new Map();
 window.__semanticDxEditorMentionRequests ??= new Map();
+window.__semanticDxEditorEntityRequests ??= new Map();
 const protocolState = {{ ...protocol, lastLocalRevision: 0 }};
 window.__semanticDxEditorProtocol.set(sessionId, protocolState);
 const host = document.querySelector(`[data-dxeditor-host="${{CSS.escape(editorId)}}"]`);
@@ -81,6 +86,7 @@ if (!host || !window.__semanticDxEditor) {{
       ariaLabel: {aria_label_json},
       formatId: {format_id_json},
       manifest: {manifest_json},
+      entityLinkColor: {entity_link_color_json},
       document: {document_json},
       mentionProvider: (query, context) => new Promise((resolve, reject) => {{
         const requestId = (protocolState.nextMentionRequestId ?? 0) + 1;
@@ -94,6 +100,33 @@ if (!host || !window.__semanticDxEditor) {{
         }}, {{ once: true }});
         dioxus.send({{ kind: 'mentionQuery', ...protocolState, request_id: requestId, query }});
       }}),
+      entitySearchProvider: {entity_link_color_json} === null ? undefined : (query, context) => new Promise((resolve, reject) => {{
+        const requestId = (protocolState.nextEntityRequestId ?? 0) + 1;
+        protocolState.nextEntityRequestId = requestId;
+        const requests = window.__semanticDxEditorEntityRequests.get(sessionId) ?? new Map();
+        window.__semanticDxEditorEntityRequests.set(sessionId, requests);
+        requests.set(requestId, resolve);
+        context.signal.addEventListener('abort', () => {{
+          requests.delete(requestId);
+          reject(new DOMException('Aborted', 'AbortError'));
+        }}, {{ once: true }});
+        dioxus.send({{ kind: 'entitySearchQuery', ...protocolState, request_id: requestId, query }});
+      }}),
+      entityPreviewProvider: {entity_link_color_json} === null ? undefined : (entityId, context) => new Promise((resolve, reject) => {{
+        const requestId = (protocolState.nextEntityRequestId ?? 0) + 1;
+        protocolState.nextEntityRequestId = requestId;
+        const requests = window.__semanticDxEditorEntityRequests.get(sessionId) ?? new Map();
+        window.__semanticDxEditorEntityRequests.set(sessionId, requests);
+        requests.set(requestId, resolve);
+        context.signal.addEventListener('abort', () => {{
+          requests.delete(requestId);
+          reject(new DOMException('Aborted', 'AbortError'));
+        }}, {{ once: true }});
+        dioxus.send({{ kind: 'entityPreviewQuery', ...protocolState, request_id: requestId, entity_id: entityId }});
+      }}),
+      entityOpenHandler: {entity_link_color_json} === null ? undefined : entityId => {{
+        dioxus.send({{ kind: 'entityOpen', ...protocolState, entity_id: entityId }});
+      }},
       emit: event => {{
         const current = window.__semanticDxEditorProtocol.get(sessionId) ?? protocolState;
         if (Number.isSafeInteger(event.revision)) current.lastLocalRevision = event.revision;
@@ -227,17 +260,56 @@ resolve({suggestions});
                 session.protocol_version, session.external_revision.0
             )
         }
+        EngineCommand::EntitySearchResults {
+            session,
+            request_id,
+            candidates,
+        } => entity_response_script(session, *request_id, candidates),
+        EngineCommand::EntityPreviewResult {
+            session,
+            request_id,
+            preview,
+        } => entity_response_script(session, *request_id, preview),
         EngineCommand::Destroy { session } => {
             let Ok(session_id) = serde_json::to_string(&session.session_id) else {
                 return;
             };
             format!(
-                "window.__semanticDxEditor?.destroy({session_id}); window.__semanticDxEditorProtocol?.delete({session_id}); window.__semanticDxEditorMentionRequests?.delete({session_id});"
+                "window.__semanticDxEditor?.destroy({session_id}); window.__semanticDxEditorProtocol?.delete({session_id}); window.__semanticDxEditorMentionRequests?.delete({session_id}); window.__semanticDxEditorEntityRequests?.delete({session_id});"
             )
         }
         EngineCommand::Mount { .. } => return,
     };
     let _ = document::eval(&script);
+}
+
+fn entity_response_script(
+    session: &ProtocolSession,
+    request_id: u64,
+    value: &impl serde::Serialize,
+) -> String {
+    let Ok(session_id) = serde_json::to_string(&session.session_id) else {
+        return String::new();
+    };
+    let Ok(schema_fingerprint) = serde_json::to_string(&session.schema_fingerprint) else {
+        return String::new();
+    };
+    let Ok(value) = serde_json::to_string(value) else {
+        return String::new();
+    };
+    format!(
+        r#"(() => {{
+const state = window.__semanticDxEditorProtocol?.get({session_id});
+if (!state || state.protocol_version !== {} || state.schema_fingerprint !== {schema_fingerprint}
+    || state.external_revision !== {}) return;
+const requests = window.__semanticDxEditorEntityRequests?.get({session_id});
+const resolve = requests?.get({request_id});
+if (!resolve) return;
+requests.delete({request_id});
+resolve({value});
+}})();"#,
+        session.protocol_version, session.external_revision.0
+    )
 }
 
 #[cfg(test)]
@@ -284,5 +356,21 @@ mod tests {
             "external_revision": 3,
         });
         assert!(serde_json::from_value::<EngineEvent>(unknown).is_err());
+    }
+
+    #[test]
+    fn entity_responses_are_scoped_to_the_request_and_session() {
+        let script = entity_response_script(
+            &session(),
+            17,
+            &vec![crate::entity_link::EntityLinkCandidate {
+                id: "person-1".to_string(),
+                label: "Ada".to_string(),
+                detail: None,
+            }],
+        );
+        assert!(script.contains("schema-1"));
+        assert!(script.contains("requests?.get(17)"));
+        assert!(script.contains("person-1"));
     }
 }

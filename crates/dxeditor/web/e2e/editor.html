@@ -12,6 +12,7 @@
       .dxeditor-engine__surface[hidden] { display: none; }
       .dxeditor-engine__slash, .dxeditor-engine__block-menu, .dxeditor-engine__link-popover { flex-direction: column; }
       .dxeditor-engine__block-controls { border: 0; box-shadow: none; padding: 0; }
+      .dxeditor-engine__entity-link { color: var(--dxeditor-entity-link-color, #176b87); }
       table, td, th { border: 1px solid #888; border-collapse: collapse; padding: 4px; }
     </style>
   </head>
@@ -47,6 +48,18 @@
             { id: 'entity-alice', label: 'Alice', detail: 'Person' },
             { id: 'entity-alpine', label: 'Alpine', detail: 'Project' },
           ].filter(item => item.label.toLowerCase().includes(query.toLowerCase())),
+          entitySearchProvider: async query => [
+            { id: 'entity-ada', label: 'Ada Lovelace', detail: 'Person' },
+            { id: 'entity-atlas', label: 'Atlas', detail: 'Project' },
+          ].filter(item => item.label.toLowerCase().includes(query.toLowerCase())),
+          entityPreviewProvider: async entityId => entityId === 'entity-ada' ? {
+            id: entityId,
+            label: 'Ada Lovelace',
+            detail: 'Person',
+            fields: [{ label: 'Email', value: 'ada@example.test' }],
+          } : null,
+          entityOpenHandler: entityId => { window.openedEntity = entityId; },
+          entityLinkColor: '#7c3aed',
         },
       );
     </script>

@@ -1,8 +1,10 @@
-import { beforeEach, describe, expect, it } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { Fragment, Schema, Slice } from '@tiptap/pm/model'
 import urlPolicyCases from '../../assets/url_policy_cases.json'
 import {
   decodeInternalClipboard,
+  entityHref,
+  entityIdFromHref,
   encodeInternalClipboard,
   INTERNAL_CLIPBOARD_VERSION,
   mount,
@@ -25,6 +27,8 @@ beforeEach(() => {
   }) as DOMRectList
   Range.prototype.getBoundingClientRect = () => new DOMRect()
 })
+
+afterEach(() => vi.useRealTimers())
 
 const clipboardSchema = new Schema({
   nodes: {
@@ -252,6 +256,93 @@ describe('URL role policies', () => {
       expect(safeUrl(fixture.value), `hyperlink: ${fixture.value}`).toBe(fixture.hyperlink)
       expect(safeImageUrl(fixture.value), `media: ${fixture.value}`).toBe(fixture.media)
     }
+  })
+})
+
+describe('internal entity link extension', () => {
+  const entityDocument = (): ComponentDocumentV2 => ({
+    schema: 'semantic.component-document', version: 2,
+    root: { kind: 'document', content: [{
+      kind: 'paragraph', id: 'paragraph-entity', content: [
+        { kind: 'mention', id: 'mention-1', attrs: { entity_id: 'person:1', label: 'Ada' } },
+      ],
+    }] },
+  })
+
+  it('preserves the semantic entity URI contract and v2 round trip', () => {
+    expect(entityHref('person:1')).toBe('semantic:entity:person:1')
+    expect(entityIdFromHref('semantic:entity:person:1')).toBe('person:1')
+    expect(entityIdFromHref('https://example.com')).toBeNull()
+    expect(pmToV2(v2ToPm(entityDocument()))).toEqual(entityDocument())
+  })
+
+  it('registers /entity only when an application search provider exists', () => {
+    document.body.innerHTML = '<div class="dxeditor"><div id="host"></div><div data-dxeditor-overlays></div></div>'
+    const withoutProvider = mount(document.querySelector('#host')!, {
+      sessionId: 'entity-none', document: paragraphDocument('paragraph-none', ''), readonly: false, emit: () => {},
+    })
+    ;(document.querySelector('[title="Add a block"]') as HTMLButtonElement).click()
+    expect(document.querySelector('[data-extension="entity-link"]')).toBeNull()
+    withoutProvider.destroy()
+
+    document.body.innerHTML = '<div class="dxeditor"><div id="host"></div><div data-dxeditor-overlays></div></div>'
+    const withProvider = mount(document.querySelector('#host')!, {
+      sessionId: 'entity-enabled', document: paragraphDocument('paragraph-enabled', ''), readonly: false, emit: () => {},
+      entitySearchProvider: () => [],
+    })
+    ;(document.querySelector('[title="Add a block"]') as HTMLButtonElement).click()
+    expect(document.querySelector('[data-extension="entity-link"]')).not.toBeNull()
+    withProvider.destroy()
+  })
+
+  it('discards stale async search and inserts the selected entity link', async () => {
+    vi.useFakeTimers()
+    document.body.innerHTML = '<div class="dxeditor"><div id="host"></div><div data-dxeditor-overlays></div></div>'
+    const provider = vi.fn((query: string, context: { signal: AbortSignal }) => new Promise<readonly { id: string; label: string }[]>(resolve => {
+      const delay = query === 'old' ? 80 : 10
+      setTimeout(() => {
+        if (!context.signal.aborted) resolve([{ id: query || 'all', label: query || 'All' }])
+      }, delay)
+    }))
+    const session = mount(document.querySelector('#host')!, {
+      sessionId: 'entity-search', document: paragraphDocument('paragraph-search', ''), readonly: false, emit: () => {},
+      entitySearchProvider: provider,
+    })
+    ;(document.querySelector('[title="Add a block"]') as HTMLButtonElement).click()
+    ;(document.querySelector('[data-extension="entity-link"]') as HTMLButtonElement).click()
+    const search = document.querySelector('[aria-label="Search entities"]') as HTMLInputElement
+    search.value = 'old'; search.dispatchEvent(new Event('input'))
+    await vi.advanceTimersByTimeAsync(120)
+    search.value = 'new'; search.dispatchEvent(new Event('input'))
+    await vi.advanceTimersByTimeAsync(140)
+    expect(document.querySelector('[title="Link to new"]')).not.toBeNull()
+    expect(document.querySelector('[title="Link to old"]')).toBeNull()
+    ;(document.querySelector('[title="Link to new"]') as HTMLButtonElement).click()
+    expect(session.snapshot().root.content?.[0]?.content?.[0]).toMatchObject({
+      kind: 'mention', attrs: { entity_id: 'new', label: 'new' },
+    })
+    session.destroy()
+  })
+
+  it('renders provider-owned hover preview data without interpreting HTML', async () => {
+    document.body.innerHTML = '<div class="dxeditor"><div id="host"></div><div data-dxeditor-overlays></div></div>'
+    const preview = vi.fn(async () => ({
+      id: 'person:1', label: '<b>Ada</b>', detail: 'Person', fields: [{ label: 'Email', value: 'ada@example.test' }],
+    }))
+    const open = vi.fn()
+    const session = mount(document.querySelector('#host')!, {
+      sessionId: 'entity-preview', document: entityDocument(), readonly: false, emit: () => {},
+      entitySearchProvider: () => [], entityPreviewProvider: preview, entityOpenHandler: open, entityLinkColor: 'rebeccapurple',
+    })
+    const link = document.querySelector('[data-semantic-mention="person:1"]') as HTMLElement
+    expect(link.classList.contains('dxeditor-engine__entity-link')).toBe(true)
+    link.dispatchEvent(new Event('pointerover', { bubbles: true }))
+    await vi.waitFor(() => expect(document.querySelector('[aria-label="Entity preview"]')?.textContent).toContain('<b>Ada</b>'))
+    expect(document.querySelector('[aria-label="Entity preview"] b')).toBeNull()
+    expect(document.querySelector('[aria-label="Entity preview"]')?.textContent).toContain('ada@example.test')
+    link.click()
+    expect(open).toHaveBeenCalledWith('person:1')
+    session.destroy()
   })
 })
 

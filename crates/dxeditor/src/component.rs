@@ -314,12 +314,20 @@ const DXEDITOR_STYLE: &str = r#"
   overflow-x: auto;
 }
 
-.dxeditor-engine__mention {
+         .dxeditor-engine__mention {
   border-radius: 4px;
   background: #e9f2f5;
   color: #176b87;
   padding: 1px 4px;
-}
+         }
+
+         .dxeditor-engine__entity-link {
+           color: var(--dxeditor-entity-link-color, #176b87);
+           font-weight: 600;
+           text-decoration-color: color-mix(in srgb, var(--dxeditor-entity-link-color, #176b87) 55%, transparent);
+           text-underline-offset: 0.14em;
+           cursor: pointer;
+         }
 
 .dxeditor-engine__opaque {
   border: 1px dashed #a8b4c2;
@@ -410,11 +418,97 @@ const DXEDITOR_STYLE: &str = r#"
   font: inherit;
 }
 
-.dxeditor-engine__link-actions {
+         .dxeditor-engine__link-actions {
   display: flex;
   justify-content: flex-end;
   gap: 4px;
-}
+         }
+
+         .dxeditor-engine__entity-popover {
+           flex-direction: column;
+           width: min(360px, calc(100vw - 24px));
+           padding: 8px;
+         }
+
+         .dxeditor-engine__entity-popover > input {
+           min-height: 36px;
+           border: 1px solid #a8b4c2;
+           border-radius: 5px;
+           padding: 5px 8px;
+           font: inherit;
+         }
+
+         .dxeditor-engine__entity-results {
+           display: grid;
+           max-height: 280px;
+           overflow-y: auto;
+         }
+
+         .dxeditor-engine__entity-results .dxeditor-engine__button {
+           text-align: left;
+         }
+
+         .dxeditor-engine__entity-preview {
+           display: grid;
+           width: min(340px, calc(100vw - 24px));
+           gap: 5px;
+           padding: 10px 12px;
+         }
+
+         .dxeditor-engine__entity-preview-detail {
+           color: #617084;
+           font-size: 12px;
+         }
+
+         .dxeditor-engine__entity-preview dl {
+           display: grid;
+           grid-template-columns: minmax(70px, auto) 1fr;
+           gap: 3px 10px;
+           margin: 4px 0 0;
+           font-size: 12px;
+         }
+
+         .dxeditor-engine__entity-preview dt {
+           color: #617084;
+         }
+
+         .dxeditor-engine__entity-preview dd {
+           min-width: 0;
+           margin: 0;
+           overflow-wrap: anywhere;
+         }
+
+         .dxeditor__read-only-entity-link {
+           position: relative;
+         }
+
+         .dxeditor__read-only-entity-preview {
+           position: absolute;
+           z-index: 20;
+           top: calc(100% + 5px);
+           left: 0;
+           display: grid;
+           width: min(320px, calc(100vw - 24px));
+           gap: 4px;
+           border: 1px solid #d8dee7;
+           border-radius: 7px;
+           background: #fff;
+           box-shadow: 0 6px 24px rgb(23 32 42 / 16%);
+           padding: 10px 12px;
+           color: #17202a;
+         }
+
+         .dxeditor__read-only-entity-preview dl {
+           display: grid;
+           grid-template-columns: minmax(70px, auto) 1fr;
+           gap: 3px 10px;
+           margin: 4px 0 0;
+           font-size: 12px;
+         }
+
+         .dxeditor__read-only-entity-preview dd {
+           margin: 0;
+         }
 
 .dxeditor-engine__field-error {
   min-height: 1em;
@@ -520,6 +614,7 @@ pub fn Editor(
     #[props(default)] editor_actions: EditorActionsMode,
     #[props(default)] external_revision: Option<u64>,
     #[props(default = "Document editor".to_string())] aria_label: String,
+    #[props(default)] entity_links: Option<crate::entity_link::EntityLinkExtension>,
 ) -> Element {
     let decoded = decode_editor_payload(&catalog, &value);
     let decode_error = decoded.as_ref().err().map(ToString::to_string);
@@ -569,6 +664,16 @@ pub fn Editor(
     let mention_catalog = catalog.clone();
     let mention_session_id = session_id.clone();
     let mention_schema_fingerprint = schema_fingerprint.clone();
+    let entity_provider = entity_links.as_ref().map(|extension| extension.provider());
+    let entity_link_style = entity_links
+        .as_ref()
+        .map(|extension| format!("--dxeditor-entity-link-color: {}", extension.accent_color()));
+    let readonly_entity_links = entity_links.clone();
+    let entity_link_color = entity_links
+        .as_ref()
+        .map(|extension| extension.accent_color().to_string());
+    let entity_session_id = session_id.clone();
+    let entity_schema_fingerprint = schema_fingerprint.clone();
     let external_value = value.clone();
     let supplied_external_revision = external_revision;
     use_effect(use_reactive!(|(
@@ -656,6 +761,7 @@ pub fn Editor(
         style { {DXEDITOR_STYLE} }
         div {
             class: "dxeditor",
+            style: entity_link_style,
             "data-readonly": "{readonly}",
             "data-engine": "tiptap-prosemirror",
             onfocus: move |event| if let Some(handler) = onfocus { handler.call(event) },
@@ -712,7 +818,7 @@ pub fn Editor(
                     }
                 }
             } else if readonly {
-                crate::render_v2::ReadOnlyDocumentV2 { document: initial_document }
+                crate::render_v2::ReadOnlyDocumentV2 { document: initial_document, entity_links: readonly_entity_links }
             } else {
                 div {
                     class: "dxeditor__document",
@@ -732,6 +838,7 @@ pub fn Editor(
                     aria_label: aria_label.clone(),
                     format_id: output_format.clone(),
                     manifest: engine_manifest,
+                    entity_link_color,
                     on_event: move |event| {
                         match event {
                             EngineEvent::Ready { session }
@@ -831,6 +938,64 @@ pub fn Editor(
                                         suggestions,
                                     });
                                 });
+                            }
+                            EngineEvent::EntitySearchQuery { session, request_id, query }
+                                if session_matches(
+                                    &session,
+                                    &expected_session_id,
+                                    &expected_schema_fingerprint,
+                                    current_external_revision(),
+                                ) =>
+                            {
+                                let Some(provider) = entity_provider.clone() else { return };
+                                let response_session = ProtocolSession::new(
+                                    entity_session_id.clone(),
+                                    entity_schema_fingerprint.clone(),
+                                    current_external_revision(),
+                                );
+                                spawn(async move {
+                                    let candidates = provider.search(query).await;
+                                    run_engine_command(&EngineCommand::EntitySearchResults {
+                                        session: response_session,
+                                        request_id,
+                                        candidates,
+                                    });
+                                });
+                            }
+                            EngineEvent::EntityPreviewQuery { session, request_id, entity_id }
+                                if session_matches(
+                                    &session,
+                                    &expected_session_id,
+                                    &expected_schema_fingerprint,
+                                    current_external_revision(),
+                                ) =>
+                            {
+                                let Some(provider) = entity_provider.clone() else { return };
+                                let response_session = ProtocolSession::new(
+                                    entity_session_id.clone(),
+                                    entity_schema_fingerprint.clone(),
+                                    current_external_revision(),
+                                );
+                                spawn(async move {
+                                    let preview = provider.preview(entity_id).await;
+                                    run_engine_command(&EngineCommand::EntityPreviewResult {
+                                        session: response_session,
+                                        request_id,
+                                        preview,
+                                    });
+                                });
+                            }
+                            EngineEvent::EntityOpen { session, entity_id }
+                                if session_matches(
+                                    &session,
+                                    &expected_session_id,
+                                    &expected_schema_fingerprint,
+                                    current_external_revision(),
+                                ) =>
+                            {
+                                if let Some(provider) = entity_provider.clone() {
+                                    provider.open(entity_id);
+                                }
                             }
                             EngineEvent::CommandState { session, can_undo: next_can_undo, can_redo: next_can_redo }
                                 if session_matches(
@@ -1143,6 +1308,7 @@ pub fn MarkdownEditor(
     #[props(default)] readonly: bool,
     #[props(default)] editor_actions: EditorActionsMode,
     #[props(default)] external_revision: Option<u64>,
+    #[props(default)] entity_links: Option<crate::entity_link::EntityLinkExtension>,
 ) -> Element {
     rsx! {
         Editor {
@@ -1152,6 +1318,7 @@ pub fn MarkdownEditor(
             readonly,
             editor_actions,
             external_revision,
+            entity_links,
             onfocus,
             onblur,
             on_change: move |payload: EditorPayload| {
@@ -1171,6 +1338,7 @@ pub fn PlainTextEditor(
     #[props(default)] readonly: bool,
     #[props(default)] editor_actions: EditorActionsMode,
     #[props(default)] external_revision: Option<u64>,
+    #[props(default)] entity_links: Option<crate::entity_link::EntityLinkExtension>,
 ) -> Element {
     rsx! {
         Editor {
@@ -1180,6 +1348,7 @@ pub fn PlainTextEditor(
             readonly,
             editor_actions,
             external_revision,
+            entity_links,
             on_change: move |payload: EditorPayload| {
                 if let Some(value) = payload.value.as_str() {
                     on_change.call(value.to_string());
@@ -1197,6 +1366,7 @@ pub fn DocumentEditor(
     #[props(default)] readonly: bool,
     #[props(default)] editor_actions: EditorActionsMode,
     #[props(default)] external_revision: Option<u64>,
+    #[props(default)] entity_links: Option<crate::entity_link::EntityLinkExtension>,
 ) -> Element {
     let value = serde_json::to_value(document).unwrap_or(Value::Null);
     rsx! {
@@ -1207,6 +1377,7 @@ pub fn DocumentEditor(
             readonly,
             editor_actions,
             external_revision,
+            entity_links,
             on_change: move |payload: EditorPayload| {
                 if let Ok(document) = serde_json::from_value::<EditorDocument>(payload.value) {
                     on_change.call(document);

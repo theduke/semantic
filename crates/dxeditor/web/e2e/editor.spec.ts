@@ -158,6 +158,34 @@ test('rejects unsafe links without losing the mapped selection', async ({ page }
   await expect(editor.locator('a')).toHaveCount(0)
 })
 
+test('searches, inserts, persists, and previews an application-owned entity link', async ({ page }) => {
+  const editor = page.locator('.ProseMirror')
+  await editor.click()
+  await page.getByRole('button', { name: 'Add a block' }).click()
+  await page.getByRole('option', { name: 'Entity' }).click()
+  const dialog = page.getByRole('dialog', { name: 'Link to entity' })
+  await dialog.getByLabel('Search entities').fill('Ada')
+  await dialog.getByRole('option', { name: /Ada Lovelace/ }).click()
+
+  const link = editor.locator('[data-semantic-mention="entity-ada"]')
+  await expect(link).toHaveText('@Ada Lovelace')
+  await expect(link).toHaveCSS('color', 'rgb(124, 58, 237)')
+  const snapshot = await page.evaluate(() => {
+    const session = (window as unknown as { editorSession: { snapshot: () => unknown } }).editorSession
+    return session.snapshot()
+  }) as { root: { content: Array<{ content?: Array<{ kind: string; attrs?: Record<string, string> }> }> } }
+  expect(snapshot.root.content[0]?.content?.find(node => node.kind === 'mention')).toMatchObject({
+    kind: 'mention', attrs: { entity_id: 'entity-ada', label: 'Ada Lovelace' },
+  })
+
+  await link.hover()
+  const preview = page.getByRole('dialog', { name: 'Entity preview' })
+  await expect(preview).toContainText('Ada Lovelace')
+  await expect(preview).toContainText('ada@example.test')
+  await link.click()
+  await expect.poll(() => page.evaluate(() => (window as unknown as { openedEntity?: string }).openedEntity)).toBe('entity-ada')
+})
+
 test('has no automatically detectable accessibility violations in core states', async ({ page }) => {
   const editor = page.locator('.ProseMirror')
   await editor.click()
