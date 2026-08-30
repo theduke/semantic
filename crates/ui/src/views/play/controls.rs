@@ -48,7 +48,7 @@ pub fn PlayerControls(
             }
             div { class: "semantic-player__now-playing",
                 span { class: "semantic-player__position", "{position} / {queue_len}" }
-                button { class: "semantic-player__title", onclick: on_title, disabled: !has_active,
+                button { r#type: "button", class: "semantic-player__title", onclick: on_title, disabled: !has_active,
                     aria_label: "Open active entity: {title}", title: "{title}", "{title}" }
             }
             PlayerProgress { progress, on_seek }

@@ -231,7 +231,12 @@ pub fn PlayPage() -> Element {
                 on_previous: move |_| controller.previous(),
                 on_toggle_play: move |_| controller.toggle_play(),
                 on_next: move |_| controller.next(),
-                on_title: move |_| { if state.read().active_index.is_some() { controller.open_dialog(); } },
+                on_title: move |event: MouseEvent| {
+                    event.stop_propagation();
+                    if state.read().active_index.is_some() {
+                        controller.open_dialog();
+                    }
+                },
                 on_interval: move |interval| state.write().set_image_interval(interval),
                 on_seek: move |seconds| controller.seek(seconds),
             }
@@ -282,7 +287,6 @@ pub fn PlayPage() -> Element {
                                 follow_active: *follow_active.read(),
                                 on_select: move |index| controller.select(index),
                                 on_remove: move |index| controller.remove(index),
-                                on_move: move |(index, new_index)| controller.move_entry(index, new_index),
                                 on_clear: move |_| controller.clear(),
                                 on_follow_change: move |follow| follow_active.set(follow),
                                 on_close: move |_| {

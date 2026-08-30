@@ -92,15 +92,13 @@ fn class_form_field_dom_ids(path: &str) -> ClassFormFieldDomIds {
     }
 }
 
-fn class_form_field_state(field: &ClassFormField, readonly: bool) -> &'static str {
+fn class_form_field_state(field: &ClassFormField, readonly: bool) -> Option<&'static str> {
     if field.class_attribute.computed.is_some() {
-        "Computed"
+        Some("Computed")
     } else if readonly {
-        "Read only"
-    } else if field.class_attribute.required {
-        "Required"
+        Some("Read only")
     } else {
-        "Optional"
+        None
     }
 }
 
@@ -308,6 +306,7 @@ fn ClassFormFieldRow(
     let label = class_form_field_label(&field);
     let description = class_form_field_description(&field);
     let field_state = class_form_field_state(&field, readonly);
+    let required = field.class_attribute.required;
     let field_for_spec = field.clone();
     let catalog_for_spec = catalog.clone();
     let field_handle = use_field(scope.clone(), move || {
@@ -327,6 +326,7 @@ fn ClassFormFieldRow(
                 label,
                 description,
                 field_state,
+                required,
                 ids,
                 type_hint: field.attribute.ty.clone(),
             }
@@ -363,7 +363,7 @@ fn ClassFormFieldRow(
     let has_errors = !errors.is_empty();
     let aria_describedby = described_by(&ids, description.is_some(), has_errors);
     rsx! {
-        tr { class: "semantic-form__field",
+        tr { class: if required { "semantic-form__field semantic-form__field--required" } else { "semantic-form__field" },
             if let Some(title) = label.title.as_ref() {
                 th {
                     id: ids.label.clone(),
@@ -371,7 +371,9 @@ fn ClassFormFieldRow(
                     class: "semantic-form__label",
                     title: "{title}",
                     span { class: "semantic-form__label-text", "{label.text}" }
-                    span { class: "semantic-form__field-state", "{field_state}" }
+                    if let Some(field_state) = field_state {
+                        span { class: "semantic-form__field-state", "{field_state}" }
+                    }
                 }
             } else {
                 th {
@@ -379,7 +381,9 @@ fn ClassFormFieldRow(
                     scope: "row",
                     class: "semantic-form__label",
                     span { class: "semantic-form__label-text", "{label.text}" }
-                    span { class: "semantic-form__field-state", "{field_state}" }
+                    if let Some(field_state) = field_state {
+                        span { class: "semantic-form__field-state", "{field_state}" }
+                    }
                 }
             }
             td {
@@ -526,7 +530,8 @@ fn ReadonlyClassFormField(
     field: dxform::FieldHandle<Value, Value>,
     label: ClassFormFieldLabel,
     description: Option<String>,
-    field_state: &'static str,
+    field_state: Option<&'static str>,
+    required: bool,
     ids: ClassFormFieldDomIds,
     type_hint: semantic_data::schema::Type,
 ) -> Element {
@@ -534,7 +539,7 @@ fn ReadonlyClassFormField(
     let has_errors = !errors.is_empty();
     let aria_describedby = described_by(&ids, description.is_some(), has_errors);
     rsx! {
-        tr { class: "semantic-form__field semantic-form__field--readonly",
+        tr { class: if required { "semantic-form__field semantic-form__field--readonly semantic-form__field--required" } else { "semantic-form__field semantic-form__field--readonly" },
             if let Some(title) = label.title.as_ref() {
                 th {
                     id: ids.label.clone(),
@@ -542,7 +547,9 @@ fn ReadonlyClassFormField(
                     class: "semantic-form__label",
                     title: "{title}",
                     span { class: "semantic-form__label-text", "{label.text}" }
-                    span { class: "semantic-form__field-state", "{field_state}" }
+                    if let Some(field_state) = field_state {
+                        span { class: "semantic-form__field-state", "{field_state}" }
+                    }
                 }
             } else {
                 th {
@@ -550,7 +557,9 @@ fn ReadonlyClassFormField(
                     scope: "row",
                     class: "semantic-form__label",
                     span { class: "semantic-form__label-text", "{label.text}" }
-                    span { class: "semantic-form__field-state", "{field_state}" }
+                    if let Some(field_state) = field_state {
+                        span { class: "semantic-form__field-state", "{field_state}" }
+                    }
                 }
             }
             td {
@@ -596,13 +605,13 @@ mod tests {
     }
 
     #[test]
-    fn field_shell_state_distinguishes_required_optional_and_readonly() {
+    fn field_shell_state_only_labels_non_editable_fields() {
         let mut field = synthetic_id_form_field(ATTR_ID.to_string());
-        assert_eq!(class_form_field_state(&field, false), "Required");
+        assert_eq!(class_form_field_state(&field, false), None);
 
         field.class_attribute.required = false;
-        assert_eq!(class_form_field_state(&field, false), "Optional");
-        assert_eq!(class_form_field_state(&field, true), "Read only");
+        assert_eq!(class_form_field_state(&field, false), None);
+        assert_eq!(class_form_field_state(&field, true), Some("Read only"));
     }
 
     #[test]

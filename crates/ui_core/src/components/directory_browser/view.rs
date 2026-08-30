@@ -9,9 +9,8 @@ use dioxus_icons::lucide::{
 use futures::StreamExt;
 
 use crate::{
-    components::{ClassView, ObjectView},
+    components::{EntityCard, EntityDisplayRenderer, EntityRenderOptions},
     context::{use_active_scope_id, use_rpc_client},
-    ui_catalog::{RenderMode, use_ui_catalog},
 };
 
 use super::{
@@ -2135,7 +2134,6 @@ fn EntityDetailDialog(
     item: Option<DirectoryBrowseItem>,
     on_open_change: EventHandler<bool>,
 ) -> Element {
-    let catalog = use_ui_catalog();
     let title = item
         .as_ref()
         .map(|item| item.title.clone())
@@ -2146,18 +2144,16 @@ fn EntityDetailDialog(
             on_open_change,
             dxcomp::DialogTitle { "{title}" }
             if let Some(item) = item {
-                if let Some(class) = catalog.object_class(&item.object).cloned() {
-                    ClassView {
-                        class,
-                        object: item.object.clone(),
-                        collection: Some(item.collection.clone()),
-                        id: Some(item.id.clone()),
-                        mode: RenderMode::Detail,
-                    }
-                } else {
-                    ObjectView {
-                        object: item.object.clone(),
-                        mode: RenderMode::Detail,
+                div { class: "semantic-directory-browser__entity-dialog-body",
+                    EntityCard {
+                        object: item.object,
+                        options: EntityRenderOptions {
+                            collection: Some(item.collection),
+                            id: Some(item.id),
+                            renderer: EntityDisplayRenderer::Custom,
+                            preview: false,
+                            actions: true,
+                        },
                     }
                 }
             }

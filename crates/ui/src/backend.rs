@@ -2,8 +2,8 @@ use futures::{StreamExt as _, TryStreamExt as _};
 #[cfg(feature = "desktop")]
 use semantic_app::{AppError, DbOpenRequest, DbProvider};
 use semantic_app::{
-    AppRequestContext, AppSession, DbScopeId, FileContent, FileCreateRequest, FileSizedStream,
-    Principal, SemanticApp,
+    AppRequestContext, AppSession, DbScopeId, FileByteRange, FileContent, FileCreateRequest,
+    FileSizedStream, Principal, SemanticApp,
 };
 #[cfg(feature = "desktop")]
 use semantic_data::schema::DbOpenMode;
@@ -12,8 +12,8 @@ use semantic_rpc::{
     RpcClientDyn, RpcClientError, RpcRequest,
     client::resolve_response,
     file::{
-        FileUploadContent, FileUploadPhase, FileUploadProgressSender, FileUploadRequest,
-        FileUploadResponse, emit_progress,
+        FileDownloadByteStream, FileUploadContent, FileUploadPhase, FileUploadProgressSender,
+        FileUploadRequest, FileUploadResponse, emit_progress,
     },
 };
 use std::sync::Arc;
@@ -207,6 +207,41 @@ impl RpcClientDyn for EmbeddedRpcClient {
         Some(url)
     }
 
+    fn stream_file_from(
+        &self,
+        id: String,
+        _scope_id: Option<String>,
+        offset: u64,
+    ) -> semantic_rpc::client::RpcClientFuture<
+        std::result::Result<FileDownloadByteStream, RpcClientError>,
+    > {
+        let app = self.app.clone();
+        let session = Arc::clone(&self.session);
+        let principal = self.principal.clone();
+        let scope_id = self.scope_id.clone();
+        Box::pin(async move {
+            let ctx = AppRequestContext {
+                app: app.clone(),
+                principal,
+                session: Some(session),
+                request_scope: Some(scope_id),
+            };
+            let reader =
+                app.files().open(&ctx, None, id).await.map_err(|err| {
+                    RpcClientError::Remote("app_error".to_string(), err.to_string())
+                })?;
+            let file = reader
+                .read(Some(FileByteRange::from(offset)))
+                .await
+                .map_err(|err| RpcClientError::Remote("app_error".to_string(), err.to_string()))?;
+            let stream = file
+                .stream
+                .map_err(|err| RpcClientError::Remote("app_error".to_string(), err.to_string()))
+                .boxed();
+            Ok(stream)
+        })
+    }
+
     fn read_file_range(
         &self,
         id: String,
@@ -226,21 +261,24 @@ impl RpcClientDyn for EmbeddedRpcClient {
                 session: Some(session),
                 request_scope: Some(scope_id),
             };
-            let file =
-                app.files().read(&ctx, None, id).await.map_err(|err| {
+            let reader =
+                app.files().open(&ctx, None, id).await.map_err(|err| {
                     RpcClientError::Remote("app_error".to_string(), err.to_string())
                 })?;
+            let file = reader
+                .read(Some(FileByteRange::bounded(
+                    offset,
+                    offset.saturating_add(u64::from(size)),
+                )))
+                .await
+                .map_err(|err| RpcClientError::Remote("app_error".to_string(), err.to_string()))?;
             let bytes = file
                 .stream
                 .try_collect::<bytes::BytesMut>()
                 .await
                 .map_err(|err| RpcClientError::Remote("app_error".to_string(), err.to_string()))?
                 .freeze();
-            let start = usize::try_from(offset)
-                .unwrap_or(usize::MAX)
-                .min(bytes.len());
-            let end = start.saturating_add(size as usize).min(bytes.len());
-            Ok(bytes.slice(start..end))
+            Ok(bytes)
         })
     }
 }

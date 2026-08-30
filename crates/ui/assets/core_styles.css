@@ -91,6 +91,36 @@
   --semantic-transition-fast: var(--semantic-transition-duration-fast) var(--semantic-transition-easing);
 }
 
+/* Keep the shared component library on the same palette as the app. The
+   additional element selector wins over its later, generic :root defaults. */
+html:root {
+  --primary-color: var(--semantic-color-surface-1);
+  --primary-color-1: var(--semantic-color-canvas);
+  --primary-color-2: var(--semantic-color-surface-1);
+  --primary-color-3: var(--semantic-color-surface-2);
+  --primary-color-4: var(--semantic-color-surface-2);
+  --primary-color-5: var(--semantic-color-surface-3);
+  --primary-color-6: var(--semantic-color-border-soft);
+  --primary-color-7: var(--semantic-color-border);
+  --secondary-color: var(--semantic-color-text);
+  --secondary-color-1: var(--semantic-color-text);
+  --secondary-color-2: var(--semantic-color-text);
+  --secondary-color-3: var(--semantic-color-text);
+  --secondary-color-4: var(--semantic-color-text);
+  --secondary-color-5: var(--semantic-color-text-muted);
+  --secondary-color-6: var(--semantic-color-border);
+  --focused-border-color: var(--semantic-color-focus);
+  --primary-success-color: var(--semantic-color-success-surface);
+  --secondary-success-color: var(--semantic-color-success);
+  --primary-warning-color: var(--semantic-color-warning-surface);
+  --secondary-warning-color: var(--semantic-color-warning);
+  --primary-error-color: var(--semantic-color-danger);
+  --secondary-error-color: color-mix(in srgb, var(--semantic-color-danger) 84%, black);
+  --contrast-error-color: var(--semantic-color-surface-1);
+  --primary-info-color: var(--semantic-color-info-surface);
+  --secondary-info-color: var(--semantic-color-info);
+}
+
 :root[data-semantic-theme="light"] {
   color-scheme: light;
 }
@@ -1023,6 +1053,52 @@ pre {
 
 .semantic-form__field-table-wrap {
   overflow: visible;
+  border-color: var(--semantic-border-soft);
+  border-radius: var(--semantic-radius-lg);
+  box-shadow: var(--semantic-shadow-1);
+}
+
+.semantic-form__field {
+  background: var(--semantic-surface);
+  transition: background var(--semantic-transition-fast);
+}
+
+.semantic-form__field:nth-child(even) {
+  background: color-mix(in srgb, var(--semantic-surface-muted) 58%, var(--semantic-surface));
+}
+
+.semantic-form__field:focus-within {
+  background: color-mix(in srgb, var(--semantic-color-info-surface) 72%, var(--semantic-surface));
+}
+
+.semantic-form__label-text {
+  color: var(--semantic-text-muted);
+  font-weight: 560;
+}
+
+.semantic-form__field--required .semantic-form__label-text {
+  color: var(--semantic-text);
+  font-weight: 760;
+}
+
+.semantic-form__field-state {
+  display: block;
+  width: max-content;
+  margin-block-start: var(--semantic-space-1);
+  padding: 2px 6px;
+  border-radius: var(--semantic-radius-pill);
+  background: var(--semantic-surface-muted);
+  color: var(--semantic-text-muted);
+  font-size: 11px;
+  font-weight: 560;
+}
+
+.semantic-form__help {
+  max-width: 68ch;
+  margin: 0;
+  color: var(--semantic-text-muted);
+  font-size: var(--semantic-font-size-label);
+  line-height: var(--semantic-line-height-body);
 }
 
 .semantic-form-screen__meta-table th {
@@ -1053,6 +1129,12 @@ pre {
   background: var(--semantic-surface);
   color: var(--semantic-text);
   padding: 0 var(--semantic-space-3);
+}
+
+.semantic-form__control :is(input, select, textarea):focus-visible {
+  border-color: var(--semantic-color-focus);
+  box-shadow: var(--semantic-focus-ring);
+  outline: none;
 }
 
 .semantic-form__auto-textarea.dx-textarea {
@@ -2562,6 +2644,13 @@ pre {
   margin-block: var(--semantic-space-3);
 }
 
+.semantic-directory-browser__entity-dialog-body {
+  min-width: 0;
+  max-height: min(68vh, 48rem);
+  overflow: auto;
+  overscroll-behavior: contain;
+}
+
 .semantic-directory-browser__empty-actions {
   display: flex;
   flex-wrap: wrap;
@@ -2889,6 +2978,9 @@ pre {
   max-width: 360px;
   overflow: hidden;
   border: 0;
+  background: transparent;
+  color: var(--semantic-accent);
+  cursor: pointer;
   text-overflow: ellipsis;
   white-space: nowrap;
   font-weight: 600;
@@ -4047,6 +4139,78 @@ pre {
   .semantic-home__collection-open {
     grid-column: 2;
     grid-row: 1 / span 2;
+  }
+}
+
+/* Primary workspace and data destinations. */
+.semantic-data-page,
+.semantic-home {
+  gap: var(--semantic-space-8);
+}
+
+.semantic-route-panels {
+  display: grid;
+  min-width: 0;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: var(--semantic-space-4);
+}
+
+.semantic-route-panel {
+  display: grid;
+  min-width: 0;
+  min-height: 168px;
+  grid-template-rows: auto minmax(0, 1fr) auto;
+  gap: var(--semantic-space-3);
+  padding: clamp(var(--semantic-space-4), 3vw, var(--semantic-space-6));
+  color: var(--semantic-text);
+  text-decoration: none;
+  transition:
+    border-color var(--semantic-transition-fast),
+    box-shadow var(--semantic-transition-fast),
+    transform var(--semantic-transition-fast);
+}
+
+.semantic-route-panel:hover {
+  border-color: color-mix(in srgb, var(--semantic-accent) 46%, var(--semantic-border));
+  box-shadow: var(--semantic-shadow-2);
+  transform: translateY(-2px);
+}
+
+.semantic-route-panel:focus-visible {
+  border-color: var(--semantic-color-focus);
+  box-shadow: var(--semantic-focus-ring), var(--semantic-shadow-2);
+  outline: none;
+}
+
+.semantic-route-panel h2,
+.semantic-route-panel p {
+  margin: 0;
+}
+
+.semantic-route-panel h2 {
+  font-size: var(--semantic-font-size-section-title);
+  line-height: var(--semantic-line-height-tight);
+}
+
+.semantic-route-panel p {
+  max-width: 52ch;
+  color: var(--semantic-text-muted);
+  line-height: var(--semantic-line-height-reading);
+}
+
+.semantic-route-panel span {
+  color: var(--semantic-accent);
+  font-size: var(--semantic-font-size-label);
+  font-weight: 680;
+}
+
+@media (max-width: 640px) {
+  .semantic-route-panels {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .semantic-route-panel {
+    min-height: 144px;
   }
 }
 

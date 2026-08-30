@@ -1,5 +1,4 @@
 use dioxus::prelude::*;
-use semantic_data::builtin::DEFAULT_COLLECTION;
 
 use crate::views::Route;
 
@@ -66,14 +65,12 @@ fn AppFrameHeader() -> Element {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum NavItem {
     Home,
-    Entities,
     Browse,
     Tree,
-    Catalog,
     CreateEntity,
     Upload,
-    Query,
     Player,
+    Data,
 }
 
 /// The application's grouped primary navigation.
@@ -121,13 +118,7 @@ pub fn PrimaryNav() -> Element {
                     on_navigate: move |_| menu_open.set(false),
                 }
             }
-            NavGroup { label: "Data",
-                PrimaryNavLink {
-                    to: Route::CollectionPage { collection: DEFAULT_COLLECTION.to_string() },
-                    label: "Entities",
-                    active: nav_item_is_active(&route, NavItem::Entities),
-                    on_navigate: move |_| menu_open.set(false),
-                }
+            NavGroup { label: "Explore",
                 PrimaryNavLink {
                     to: Route::BrowsePage {
                         collection: None,
@@ -147,12 +138,6 @@ pub fn PrimaryNav() -> Element {
                     active: nav_item_is_active(&route, NavItem::Tree),
                     on_navigate: move |_| menu_open.set(false),
                 }
-                PrimaryNavLink {
-                    to: Route::CatalogPage,
-                    label: "Catalog",
-                    active: nav_item_is_active(&route, NavItem::Catalog),
-                    on_navigate: move |_| menu_open.set(false),
-                }
             }
             NavGroup { label: "Create",
                 PrimaryNavLink {
@@ -170,15 +155,17 @@ pub fn PrimaryNav() -> Element {
             }
             NavGroup { label: "Tools",
                 PrimaryNavLink {
-                    to: Route::QueryPage,
-                    label: "Query",
-                    active: nav_item_is_active(&route, NavItem::Query),
-                    on_navigate: move |_| menu_open.set(false),
-                }
-                PrimaryNavLink {
                     to: Route::PlayPage,
                     label: "Player",
                     active: nav_item_is_active(&route, NavItem::Player),
+                    on_navigate: move |_| menu_open.set(false),
+                }
+            }
+            NavGroup { label: "Data tools",
+                PrimaryNavLink {
+                    to: Route::DataPage,
+                    label: "Data",
+                    active: nav_item_is_active(&route, NavItem::Data),
                     on_navigate: move |_| menu_open.set(false),
                 }
             }
@@ -225,18 +212,19 @@ fn nav_item_is_active(route: &Route, item: NavItem) -> bool {
     matches!(
         (route, item),
         (Route::HomePage, NavItem::Home)
-            | (Route::CollectionPage { .. }, NavItem::Entities)
-            | (Route::DefaultEntityPage { .. }, NavItem::Entities)
-            | (Route::CollectionEntityPage { .. }, NavItem::Entities)
-            | (Route::DefaultEditEntityPage { .. }, NavItem::Entities)
-            | (Route::CollectionEditEntityPage { .. }, NavItem::Entities)
+            | (Route::CollectionPage { .. }, NavItem::Browse)
+            | (Route::DefaultEntityPage { .. }, NavItem::Browse)
+            | (Route::CollectionEntityPage { .. }, NavItem::Browse)
+            | (Route::DefaultEditEntityPage { .. }, NavItem::Browse)
+            | (Route::CollectionEditEntityPage { .. }, NavItem::Browse)
             | (Route::BrowsePage { .. }, NavItem::Browse)
             | (Route::TreePage { .. }, NavItem::Tree)
-            | (Route::CatalogPage, NavItem::Catalog)
             | (Route::CreateEntityPage, NavItem::CreateEntity)
             | (Route::UploadPage, NavItem::Upload)
-            | (Route::QueryPage, NavItem::Query)
             | (Route::PlayPage, NavItem::Player)
+            | (Route::DataPage, NavItem::Data)
+            | (Route::CatalogPage, NavItem::Data)
+            | (Route::QueryPage, NavItem::Data)
     )
 }
 
@@ -245,7 +233,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn entity_routes_share_the_entities_navigation_item() {
+    fn entity_routes_share_the_browse_navigation_item() {
         let routes = [
             Route::CollectionPage {
                 collection: "main".to_string(),
@@ -267,7 +255,7 @@ mod tests {
         ];
 
         for route in routes {
-            assert!(nav_item_is_active(&route, NavItem::Entities));
+            assert!(nav_item_is_active(&route, NavItem::Browse));
             assert!(!nav_item_is_active(&route, NavItem::Home));
         }
     }
@@ -288,5 +276,8 @@ mod tests {
 
         assert!(nav_item_is_active(&browse, NavItem::Browse));
         assert!(nav_item_is_active(&tree, NavItem::Tree));
+        assert!(nav_item_is_active(&Route::DataPage, NavItem::Data));
+        assert!(nav_item_is_active(&Route::CatalogPage, NavItem::Data));
+        assert!(nav_item_is_active(&Route::QueryPage, NavItem::Data));
     }
 }

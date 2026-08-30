@@ -15,7 +15,6 @@ pub fn PlayerPlaylist(
     follow_active: bool,
     on_select: EventHandler<usize>,
     on_remove: EventHandler<usize>,
-    on_move: EventHandler<(usize, usize)>,
     on_clear: EventHandler<()>,
     on_follow_change: EventHandler<bool>,
     on_close: EventHandler<MouseEvent>,
@@ -128,7 +127,6 @@ pub fn PlayerPlaylist(
                             &failed_occurrences,
                             on_select,
                             on_remove,
-                            on_move,
                         )}
                     }
                 }
@@ -146,7 +144,6 @@ pub fn PlayerPlaylist(
                         &virtual_failed_occurrences,
                         on_select,
                         on_remove,
-                        on_move,
                     )
                 }
             }
@@ -314,7 +311,6 @@ fn playlist_row(
     failed_occurrences: &BTreeSet<u64>,
     on_select: EventHandler<usize>,
     on_remove: EventHandler<usize>,
-    on_move: EventHandler<(usize, usize)>,
 ) -> Element {
     let Some(entry) = entries.get(index).cloned() else {
         return rsx! {};
@@ -338,23 +334,7 @@ fn playlist_row(
                 if let Some(duration) = duration { span { "{duration}" } }
                 if failed { span { class: "semantic-player__playlist-failed", title: "Playback failed", "Failed" } }
             }
-            div { class: "semantic-player__playlist-row-actions", role: "group", aria_label: "Reorder or remove {entry.title}",
-                crate::components::IconButton {
-                    label: format!("Move {} up", entry.title),
-                    tooltip: "Move up".to_string(),
-                    size: crate::components::IconButtonSize::Small,
-                    disabled: index == 0,
-                    on_click: move |_| on_move.call((index, index.saturating_sub(1))),
-                    span { aria_hidden: "true", "↑" }
-                }
-                crate::components::IconButton {
-                    label: format!("Move {} down", entry.title),
-                    tooltip: "Move down".to_string(),
-                    size: crate::components::IconButtonSize::Small,
-                    disabled: index + 1 >= entries.len(),
-                    on_click: move |_| on_move.call((index, index + 1)),
-                    span { aria_hidden: "true", "↓" }
-                }
+            div { class: "semantic-player__playlist-row-actions",
                 crate::components::IconButton {
                     label: format!("Remove {} from queue", entry.title),
                     tooltip: "Remove from queue".to_string(),

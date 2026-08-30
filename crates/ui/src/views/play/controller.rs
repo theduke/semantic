@@ -181,10 +181,6 @@ impl PlayerController {
         self.progress.set(PlaybackProgress::default());
     }
 
-    pub fn move_entry(mut self, index: usize, new_index: usize) {
-        self.state.write().move_entry(index, new_index);
-    }
-
     fn valid_handle(self) -> Option<MediaHandleRegistration> {
         let registration = self.handle.read().clone()?;
         let state = self.state.read();

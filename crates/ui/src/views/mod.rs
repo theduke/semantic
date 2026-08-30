@@ -1,6 +1,7 @@
 mod browse;
 mod catalog;
 mod collection;
+mod data;
 mod entity;
 mod form;
 mod home;
@@ -12,6 +13,7 @@ mod upload;
 pub use browse::BrowsePage;
 pub use catalog::CatalogPage;
 pub use collection::CollectionPage;
+pub use data::DataPage;
 pub use entity::{CollectionEntityPage, DefaultEntityPage};
 pub use form::{CollectionEditEntityPage, CreateEntityPage, DefaultEditEntityPage};
 pub use home::HomePage;
@@ -29,7 +31,9 @@ pub enum Route {
     #[layout(AppShell)]
     #[route("/")]
     HomePage,
-    #[route("/catalog")]
+    #[route("/data")]
+    DataPage,
+    #[route("/data/catalog")]
     CatalogPage,
     #[route("/collections/:collection")]
     CollectionPage { collection: String },
@@ -52,7 +56,7 @@ pub enum Route {
         page_size: Option<usize>,
         sql: Option<String>,
     },
-    #[route("/query")]
+    #[route("/data/query")]
     QueryPage,
     #[route("/tree?:root")]
     TreePage { root: Option<String> },

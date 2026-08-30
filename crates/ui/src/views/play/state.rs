@@ -160,22 +160,6 @@ impl PlayerState {
         self.switch_session();
     }
 
-    pub fn move_entry(&mut self, index: usize, new_index: usize) {
-        if index >= self.queue.len() || new_index >= self.queue.len() || index == new_index {
-            return;
-        }
-        let active_occurrence = self.active_entry().map(|entry| entry.occurrence_id);
-        let mut queue = self.queue.as_ref().clone();
-        let entry = queue.remove(index);
-        queue.insert(new_index, entry);
-        self.queue = Rc::new(queue);
-        self.active_index = active_occurrence.and_then(|occurrence| {
-            self.queue
-                .iter()
-                .position(|entry| entry.occurrence_id == occurrence)
-        });
-    }
-
     pub fn event_is_current(&self, event: &MediaPlaybackEvent) -> bool {
         event.session_id == self.playback_session
             && self
