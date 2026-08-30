@@ -728,7 +728,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn file_analyze_command_surfaces_missing_ffprobe_temp_dir() {
+    async fn file_analyze_command_skips_undetected_video() {
         use bytes::Bytes;
 
         let suffix = SystemTime::now()
@@ -775,10 +775,13 @@ mod tests {
             )
             .await;
 
-        let RpcResult::Err(error) = response.result else {
-            panic!("expected media analysis error");
+        let RpcResult::Ok(Value::Object(out)) = response.result else {
+            panic!("expected ok object");
         };
-        assert_eq!(error.code, "media_analysis_failed");
+        assert_eq!(out.get("analyzed"), Some(&Value::Bool(false)));
+        assert!(
+            matches!(out.get("attributes"), Some(Value::Object(attributes)) if attributes.is_empty())
+        );
     }
 
     #[tokio::test]

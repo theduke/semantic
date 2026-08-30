@@ -66,9 +66,8 @@ impl MediaAnalysisService {
         filename: Option<&str>,
         declared_mime_type: Option<&str>,
     ) -> std::result::Result<Option<FileAnalysis>, AppError> {
-        let media_mime_type = mime::analyze_bytes_owned(&bytes, declared_mime_type)
-            .best_effort()
-            .map(ToOwned::to_owned);
+        let mime_analysis = mime::analyze_bytes_owned(&bytes, declared_mime_type);
+        let media_mime_type = detected_media_mime_type(mime_analysis);
         let input = input_from_bytes(bytes, filename, media_mime_type.as_deref());
         self.analyze_input(input, media_mime_type.as_deref()).await
     }
@@ -80,7 +79,16 @@ impl MediaAnalysisService {
         declared_mime_type: Option<&str>,
     ) -> std::result::Result<Option<FileAnalysis>, AppError> {
         let input = input_from_stream(stream, filename, declared_mime_type);
-        self.analyze_input(input, declared_mime_type).await
+        let (detected_mime_type, input) = input.detect_mime_type().await?;
+        let media_mime_type = detected_media_mime_type(mime::MimeAnalysis {
+            declared: mime::normalize_declared(declared_mime_type),
+            detected: detected_mime_type,
+        });
+        let input = match media_mime_type.as_deref() {
+            Some(media_mime_type) => input.with_declared_mime_type(media_mime_type),
+            None => return Ok(None),
+        };
+        self.analyze_input(input, media_mime_type.as_deref()).await
     }
 
     pub async fn analyze_persisted_file(
@@ -139,7 +147,7 @@ impl MediaAnalysisService {
                 .await
                 .map_err(AppError::from);
         }
-        if mime::is_video(mime_type) || mime::is_audio(mime_type) || mime_type.is_none() {
+        if mime::is_video(mime_type) || mime::is_audio(mime_type) {
             return FfprobeAnalyzer::new(AnalyzerConfig {
                 temp_dir: self.config.temp_dir.clone(),
             })
@@ -149,6 +157,14 @@ impl MediaAnalysisService {
         }
         Ok(None)
     }
+}
+
+fn detected_media_mime_type(analysis: mime::MimeAnalysis) -> Option<String> {
+    analysis.detected.or_else(|| {
+        analysis
+            .declared
+            .filter(|mime_type| mime::is_image(Some(mime_type)))
+    })
 }
 
 pub fn merge_analysis_attributes(object: &mut Object, analysis: &FileAnalysis) {

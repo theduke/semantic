@@ -23,8 +23,9 @@ futures-util = "0.3.31"
 image = { version = "=0.25.6", optional = true }
 infer = "0.19.0"
 serde = { workspace = true, features = ["derive"] }
+serde_json = { workspace = true }
 thiserror = "2.0.17"
-tokio = { workspace = true, features = ["fs", "io-util", "rt", "sync"] }
+tokio = { workspace = true, features = ["fs", "io-util", "process", "rt", "sync"] }
 
 [dev-dependencies]
 tokio = { workspace = true, features = ["macros", "rt"] }

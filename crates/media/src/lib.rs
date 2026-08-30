@@ -2,13 +2,15 @@
 
 use std::path::{Path, PathBuf};
 use std::pin::Pin;
+use std::process::Stdio;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use async_trait::async_trait;
 use bytes::Bytes;
 use futures_util::{Stream, StreamExt as _};
 use serde::{Deserialize, Serialize};
-use tokio::io::AsyncWriteExt as _;
+use tokio::io::{AsyncWriteExt as _, BufWriter};
+use tokio::process::Command;
 
 pub mod mime;
 
@@ -51,6 +53,37 @@ impl FileAnalysisInput {
     pub fn with_declared_mime_type(mut self, mime_type: impl Into<String>) -> Self {
         self.declared_mime_type = Some(mime_type.into());
         self
+    }
+
+    pub async fn detect_mime_type(
+        mut self,
+    ) -> std::result::Result<(Option<String>, Self), MediaAnalysisError> {
+        const MAX_SNIFF_BYTES: usize = 8 * 1024;
+
+        let mut buffered_chunks = Vec::new();
+        let mut sniffed_bytes = Vec::with_capacity(MAX_SNIFF_BYTES);
+        let mut detected = None;
+        while sniffed_bytes.len() < MAX_SNIFF_BYTES {
+            let Some(chunk) = self.stream.next().await else {
+                break;
+            };
+            let chunk = chunk?;
+            let remaining = MAX_SNIFF_BYTES - sniffed_bytes.len();
+            sniffed_bytes.extend_from_slice(&chunk[..chunk.len().min(remaining)]);
+            buffered_chunks.push(chunk);
+            detected = mime::detect_bytes(&sniffed_bytes);
+            if detected.is_some() {
+                break;
+            }
+        }
+        self.stream = Box::pin(
+            futures_util::stream::iter(buffered_chunks.into_iter().map(Ok)).chain(self.stream),
+        );
+
+        Ok((
+            detected.or_else(|| mime::detect_bytes(&sniffed_bytes)),
+            self,
+        ))
     }
 
     pub async fn read_to_bytes(mut self) -> std::result::Result<Bytes, MediaAnalysisError> {
@@ -306,23 +339,23 @@ impl FileAnalyzer for FfprobeAnalyzer {
             return Ok(None);
         }
 
-        let temp_dir = self
-            .config
-            .temp_dir
-            .as_deref()
-            .ok_or(MediaAnalysisError::TempDirRequired)?;
-        let temp_file = input.write_to_temp_file(temp_dir).await?;
-        let path = temp_file.path().to_path_buf();
-        let ffprobe_bin = self.ffprobe_bin.clone();
+        let probe = match self.config.temp_dir.as_deref() {
+            Some(temp_dir) => {
+                let temp_file = input.write_to_temp_file(temp_dir).await?;
+                let path = temp_file.path().to_path_buf();
+                let ffprobe_bin = self.ffprobe_bin.clone();
 
-        let probe = tokio::task::spawn_blocking(move || {
-            let mut builder = ffprobe::Config::builder();
-            if let Some(ffprobe_bin) = ffprobe_bin {
-                builder = builder.ffprobe_bin(ffprobe_bin);
+                tokio::task::spawn_blocking(move || {
+                    let mut builder = ffprobe::Config::builder();
+                    if let Some(ffprobe_bin) = ffprobe_bin {
+                        builder = builder.ffprobe_bin(ffprobe_bin);
+                    }
+                    builder.run(path)
+                })
+                .await??
             }
-            builder.run(path)
-        })
-        .await??;
+            None => ffprobe_stream(input, self.ffprobe_bin.as_deref()).await?,
+        };
 
         if mime::is_video(declared_mime_type.as_deref()) {
             Ok(Some(FileAnalysis::Video(video_analysis(probe)?)))
@@ -335,6 +368,104 @@ impl FileAnalyzer for FfprobeAnalyzer {
         } else {
             Ok(None)
         }
+    }
+}
+
+async fn ffprobe_stream(
+    mut input: FileAnalysisInput,
+    ffprobe_bin: Option<&Path>,
+) -> std::result::Result<ffprobe::FfProbe, MediaAnalysisError> {
+    let input_format = ffprobe_input_format(
+        input.declared_mime_type.as_deref(),
+        input.filename.as_deref(),
+    );
+    let mut command = Command::new(ffprobe_bin.unwrap_or_else(|| Path::new("ffprobe")));
+    command
+        .args([
+            "-v",
+            "quiet",
+            "-show_format",
+            "-show_streams",
+            "-print_format",
+            "json",
+        ])
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .kill_on_drop(true);
+    if let Some(input_format) = input_format {
+        command.args(["-f", input_format]);
+    }
+    command.arg("pipe:0");
+
+    let mut child = command.spawn().map_err(ffprobe::FfProbeError::Io)?;
+    let stdin = child
+        .stdin
+        .take()
+        .ok_or_else(|| std::io::Error::other("could not open ffprobe stdin"))?;
+    let writer = tokio::spawn(async move {
+        let mut stdin = BufWriter::new(stdin);
+        while let Some(chunk) = input.stream.next().await {
+            stdin.write_all(&chunk?).await?;
+        }
+        stdin.shutdown().await?;
+        Ok::<(), MediaAnalysisError>(())
+    });
+
+    let output = child
+        .wait_with_output()
+        .await
+        .map_err(ffprobe::FfProbeError::Io)?;
+    let writer_result = writer.await?;
+    if !output.status.success() {
+        return Err(ffprobe::FfProbeError::Status(output).into());
+    }
+    writer_result?;
+
+    serde_json::from_slice(&output.stdout)
+        .map_err(ffprobe::FfProbeError::Deserialize)
+        .map_err(MediaAnalysisError::from)
+}
+
+fn ffprobe_input_format(mime_type: Option<&str>, filename: Option<&str>) -> Option<&'static str> {
+    let mime_type = mime::normalize_declared(mime_type);
+    match mime_type.as_deref() {
+        Some("video/mp4" | "audio/mp4" | "video/quicktime" | "video/3gpp" | "audio/3gpp") => {
+            Some("mov")
+        }
+        Some("video/webm" | "audio/webm") => Some("matroska,webm"),
+        Some("video/x-matroska" | "audio/x-matroska") => Some("matroska"),
+        Some("video/ogg" | "audio/ogg" | "application/ogg") => Some("ogg"),
+        Some("video/x-msvideo") => Some("avi"),
+        Some("video/x-flv") => Some("flv"),
+        Some("video/mp2t") => Some("mpegts"),
+        Some("audio/mpeg") => Some("mp3"),
+        Some("audio/wav" | "audio/x-wav") => Some("wav"),
+        Some("audio/flac") => Some("flac"),
+        Some("audio/aac") => Some("aac"),
+        Some(_) => None,
+        None => ffprobe_input_format_from_filename(filename),
+    }
+}
+
+fn ffprobe_input_format_from_filename(filename: Option<&str>) -> Option<&'static str> {
+    match filename
+        .and_then(filename_extension)
+        .map(str::to_ascii_lowercase)
+        .as_deref()
+    {
+        Some("mp4" | "m4a" | "m4v" | "mov" | "3gp" | "3g2") => Some("mov"),
+        Some("webm") => Some("matroska,webm"),
+        Some("mkv" | "mka") => Some("matroska"),
+        Some("ogg" | "ogv" | "oga") => Some("ogg"),
+        Some("avi") => Some("avi"),
+        Some("flv") => Some("flv"),
+        Some("ts" | "mts" | "m2ts") => Some("mpegts"),
+        Some("mp3") => Some("mp3"),
+        Some("wav") => Some("wav"),
+        Some("flac") => Some("flac"),
+        Some("aac") => Some("aac"),
+        _ => None,
     }
 }
 
@@ -490,6 +621,25 @@ mod tests {
         assert!(temp_file_name(None).ends_with(".tmp"));
     }
 
+    #[tokio::test]
+    async fn stream_detection_preserves_all_input_bytes() {
+        let chunks = vec![
+            Ok(Bytes::copy_from_slice(&PNG_1X1[..4])),
+            Ok(Bytes::copy_from_slice(&PNG_1X1[4..16])),
+            Ok(Bytes::copy_from_slice(&PNG_1X1[16..])),
+        ];
+        let input = FileAnalysisInput {
+            filename: None,
+            declared_mime_type: None,
+            stream: Box::pin(futures_util::stream::iter(chunks)),
+        };
+
+        let (detected, input) = input.detect_mime_type().await.unwrap();
+
+        assert_eq!(detected.as_deref(), Some("image/png"));
+        assert_eq!(input.read_to_bytes().await.unwrap().as_ref(), PNG_1X1);
+    }
+
     #[cfg(feature = "image")]
     #[tokio::test]
     async fn image_analyzer_reads_dimensions_from_stream() {
@@ -508,17 +658,106 @@ mod tests {
         );
     }
 
-    #[tokio::test]
-    async fn ffprobe_analyzer_requires_temp_dir_before_writing() {
-        let input = FileAnalysisInput::from_bytes(Bytes::from_static(b"not a video"))
-            .with_declared_mime_type("video/mp4");
+    #[test]
+    fn ffprobe_input_format_prefers_mime_type_then_filename() {
+        assert_eq!(
+            ffprobe_input_format(Some("video/mp4; codecs=avc1"), Some("clip.webm")),
+            Some("mov")
+        );
+        assert_eq!(
+            ffprobe_input_format(None, Some("clip.WEBM")),
+            Some("matroska,webm")
+        );
+        assert_eq!(ffprobe_input_format(Some("video/mpeg"), None), None);
+    }
 
-        let error = FfprobeAnalyzer::new(AnalyzerConfig::default())
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn ffprobe_analyzer_streams_to_stdin_without_temp_dir() {
+        let script = fake_ffprobe(
+            "case \" $* \" in *\" -f mov \"*) ;; *) exit 41 ;; esac\n\
+             [ \"$(cat)\" = \"video bytes\" ] || exit 42",
+        );
+
+        let input = FileAnalysisInput::from_bytes(Bytes::from_static(b"video bytes"))
+            .with_filename("clip.mp4")
+            .with_declared_mime_type("video/mp4");
+        let analysis = FfprobeAnalyzer::new(AnalyzerConfig::default())
+            .with_ffprobe_bin(script.path())
             .analyze(input)
             .await
-            .unwrap_err();
+            .unwrap();
 
-        assert!(matches!(error, MediaAnalysisError::TempDirRequired));
+        assert_eq!(
+            analysis,
+            Some(FileAnalysis::Video(
+                video_analysis(fake_video_probe()).unwrap()
+            ))
+        );
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn ffprobe_analyzer_uses_temp_file_when_configured() {
+        let script = fake_ffprobe(
+            "case \" $* \" in *\" pipe:0 \"*) exit 41 ;; esac\n\
+             for argument in \"$@\"; do input_path=$argument; done\n\
+             [ \"$(cat \"$input_path\")\" = \"video bytes\" ] || exit 42",
+        );
+        let input = FileAnalysisInput::from_bytes(Bytes::from_static(b"video bytes"))
+            .with_filename("clip.mp4")
+            .with_declared_mime_type("video/mp4");
+
+        let analysis = FfprobeAnalyzer::new(AnalyzerConfig::with_temp_dir(std::env::temp_dir()))
+            .with_ffprobe_bin(script.path())
+            .analyze(input)
+            .await
+            .unwrap();
+
+        assert_eq!(
+            analysis,
+            Some(FileAnalysis::Video(
+                video_analysis(fake_video_probe()).unwrap()
+            ))
+        );
+    }
+
+    #[cfg(unix)]
+    fn fake_ffprobe(assertions: &str) -> TempMediaFile {
+        use std::os::unix::fs::PermissionsExt as _;
+
+        let probe_json = serde_json::to_string(&fake_video_probe()).unwrap();
+        let script = TempMediaFile {
+            path: std::env::temp_dir().join(temp_file_name(Some("fake-ffprobe"))),
+        };
+        std::fs::write(
+            script.path(),
+            format!("#!/bin/sh\n{assertions}\nprintf '%s' '{probe_json}'\n"),
+        )
+        .unwrap();
+        std::fs::set_permissions(script.path(), std::fs::Permissions::from_mode(0o700)).unwrap();
+        script
+    }
+
+    #[cfg(unix)]
+    fn fake_video_probe() -> ffprobe::FfProbe {
+        ffprobe::FfProbe {
+            streams: vec![ffprobe::Stream {
+                codec_type: Some("video".to_string()),
+                codec_name: Some("h264".to_string()),
+                width: Some(320),
+                height: Some(240),
+                avg_frame_rate: "24/1".to_string(),
+                r_frame_rate: "24/1".to_string(),
+                duration: Some("2.5".to_string()),
+                ..ffprobe::Stream::default()
+            }],
+            format: ffprobe::Format {
+                duration: Some("2.5".to_string()),
+                format_name: "mov,mp4,m4a,3gp,3g2,mj2".to_string(),
+                ..ffprobe::Format::default()
+            },
+        }
     }
 
     #[test]
