@@ -1,5 +1,4 @@
-use futures::StreamExt as _;
-use futures::future::LocalBoxFuture;
+use futures::{StreamExt as _, TryStreamExt as _};
 #[cfg(feature = "desktop")]
 use semantic_app::{AppError, DbOpenRequest, DbProvider};
 use semantic_app::{
@@ -87,7 +86,7 @@ impl RpcClientDyn for EmbeddedRpcClient {
         &self,
         command: String,
         payload: Value,
-    ) -> LocalBoxFuture<'static, std::result::Result<Value, RpcClientError>> {
+    ) -> semantic_rpc::client::RpcClientFuture<std::result::Result<Value, RpcClientError>> {
         let app = self.app.clone();
         let session = Arc::clone(&self.session);
         let principal = self.principal.clone();
@@ -117,7 +116,9 @@ impl RpcClientDyn for EmbeddedRpcClient {
         &self,
         request: FileUploadRequest,
         progress: Option<FileUploadProgressSender>,
-    ) -> LocalBoxFuture<'static, std::result::Result<FileUploadResponse, RpcClientError>> {
+    ) -> semantic_rpc::client::RpcClientFuture<
+        std::result::Result<FileUploadResponse, RpcClientError>,
+    > {
         let app = self.app.clone();
         let session = Arc::clone(&self.session);
         let principal = self.principal.clone();
@@ -204,6 +205,43 @@ impl RpcClientDyn for EmbeddedRpcClient {
             "generated embedded file URL"
         );
         Some(url)
+    }
+
+    fn read_file_range(
+        &self,
+        id: String,
+        _scope_id: Option<String>,
+        offset: u64,
+        size: u32,
+    ) -> semantic_rpc::client::RpcClientFuture<std::result::Result<bytes::Bytes, RpcClientError>>
+    {
+        let app = self.app.clone();
+        let session = Arc::clone(&self.session);
+        let principal = self.principal.clone();
+        let scope_id = self.scope_id.clone();
+        Box::pin(async move {
+            let ctx = AppRequestContext {
+                app: app.clone(),
+                principal,
+                session: Some(session),
+                request_scope: Some(scope_id),
+            };
+            let file =
+                app.files().read(&ctx, None, id).await.map_err(|err| {
+                    RpcClientError::Remote("app_error".to_string(), err.to_string())
+                })?;
+            let bytes = file
+                .stream
+                .try_collect::<bytes::BytesMut>()
+                .await
+                .map_err(|err| RpcClientError::Remote("app_error".to_string(), err.to_string()))?
+                .freeze();
+            let start = usize::try_from(offset)
+                .unwrap_or(usize::MAX)
+                .min(bytes.len());
+            let end = start.saturating_add(size as usize).min(bytes.len());
+            Ok(bytes.slice(start..end))
+        })
     }
 }
 

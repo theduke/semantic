@@ -1,9 +1,13 @@
 use std::future::Future;
-#[cfg(feature = "client")]
+#[cfg(all(feature = "client", target_arch = "wasm32"))]
 use std::rc::Rc;
+#[cfg(all(feature = "client", not(target_arch = "wasm32")))]
+use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 
-#[cfg(feature = "client")]
+#[cfg(all(feature = "client", not(target_arch = "wasm32")))]
+use futures::future::BoxFuture;
+#[cfg(all(feature = "client", target_arch = "wasm32"))]
 use futures::future::LocalBoxFuture;
 use semantic_data::value::Value;
 
@@ -13,19 +17,41 @@ use crate::error::RpcClientError;
 #[cfg(feature = "client")]
 use crate::file::{FileUploadProgressSender, FileUploadRequest, FileUploadResponse};
 use crate::protocol::{RpcRequest, RpcResponse, RpcResult};
+#[cfg(feature = "client")]
+use bytes::Bytes;
 
 static NEXT_REQUEST_ID: AtomicU64 = AtomicU64::new(1);
 
 #[cfg(feature = "client")]
 #[derive(Clone)]
 pub struct RpcClient {
+    #[cfg(target_arch = "wasm32")]
     inner: Rc<dyn RpcClientDyn>,
+    #[cfg(not(target_arch = "wasm32"))]
+    inner: Arc<dyn RpcClientDyn>,
 }
+
+#[cfg(all(feature = "client", not(target_arch = "wasm32")))]
+pub type RpcClientFuture<T> = BoxFuture<'static, T>;
+#[cfg(all(feature = "client", target_arch = "wasm32"))]
+pub type RpcClientFuture<T> = LocalBoxFuture<'static, T>;
+
+#[cfg(all(feature = "client", not(target_arch = "wasm32")))]
+pub trait RpcClientThreadBounds: Send + Sync {}
+#[cfg(all(feature = "client", not(target_arch = "wasm32")))]
+impl<T: Send + Sync> RpcClientThreadBounds for T {}
+#[cfg(all(feature = "client", target_arch = "wasm32"))]
+pub trait RpcClientThreadBounds {}
+#[cfg(all(feature = "client", target_arch = "wasm32"))]
+impl<T> RpcClientThreadBounds for T {}
 
 #[cfg(feature = "client")]
 impl PartialEq for RpcClient {
     fn eq(&self, other: &Self) -> bool {
-        Rc::ptr_eq(&self.inner, &other.inner)
+        #[cfg(target_arch = "wasm32")]
+        return Rc::ptr_eq(&self.inner, &other.inner);
+        #[cfg(not(target_arch = "wasm32"))]
+        return Arc::ptr_eq(&self.inner, &other.inner);
     }
 }
 
@@ -33,18 +59,18 @@ impl PartialEq for RpcClient {
 impl Eq for RpcClient {}
 
 #[cfg(feature = "client")]
-pub trait RpcClientDyn: 'static {
+pub trait RpcClientDyn: RpcClientThreadBounds + 'static {
     fn invoke_value(
         &self,
         command: String,
         payload: Value,
-    ) -> LocalBoxFuture<'static, std::result::Result<Value, RpcClientError>>;
+    ) -> RpcClientFuture<std::result::Result<Value, RpcClientError>>;
 
     fn upload_file(
         &self,
         _request: FileUploadRequest,
         _progress: Option<FileUploadProgressSender>,
-    ) -> LocalBoxFuture<'static, std::result::Result<FileUploadResponse, RpcClientError>> {
+    ) -> RpcClientFuture<std::result::Result<FileUploadResponse, RpcClientError>> {
         Box::pin(async move {
             Err(RpcClientError::Transport(
                 "file upload is not supported by this RPC client".to_string(),
@@ -55,17 +81,41 @@ pub trait RpcClientDyn: 'static {
     fn file_url(&self, _id: &str) -> Option<String> {
         None
     }
+
+    #[cfg(feature = "client")]
+    fn read_file_range(
+        &self,
+        _id: String,
+        _scope_id: Option<String>,
+        _offset: u64,
+        _size: u32,
+    ) -> RpcClientFuture<std::result::Result<Bytes, RpcClientError>> {
+        Box::pin(async {
+            Err(RpcClientError::Transport(
+                "file downloads are not supported by this client".to_string(),
+            ))
+        })
+    }
 }
 
 #[cfg(feature = "client")]
 impl RpcClient {
     pub fn new(client: impl RpcClientDyn) -> Self {
         Self {
+            #[cfg(target_arch = "wasm32")]
             inner: Rc::new(client),
+            #[cfg(not(target_arch = "wasm32"))]
+            inner: Arc::new(client),
         }
     }
 
+    #[cfg(target_arch = "wasm32")]
     pub fn from_rc(client: Rc<dyn RpcClientDyn>) -> Self {
+        Self { inner: client }
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    pub fn from_arc(client: Arc<dyn RpcClientDyn>) -> Self {
         Self { inner: client }
     }
 
@@ -100,6 +150,19 @@ impl RpcClient {
 
     pub fn file_url(&self, id: &str) -> Option<String> {
         self.inner.file_url(id)
+    }
+
+    #[cfg(feature = "client")]
+    pub async fn read_file_range(
+        &self,
+        id: impl Into<String>,
+        scope_id: Option<String>,
+        offset: u64,
+        size: u32,
+    ) -> std::result::Result<Bytes, RpcClientError> {
+        self.inner
+            .read_file_range(id.into(), scope_id, offset, size)
+            .await
     }
 }
 

@@ -27,6 +27,7 @@ standalone = [
 
 [dependencies]
 async-trait = { version = "0.1.89", optional = true }
+bytes = { workspace = true }
 dioxus = { workspace = true, features = ["router"] }
 dioxus-icons = "0.1.0"
 dioxus-sdk-time = "0.7.0"

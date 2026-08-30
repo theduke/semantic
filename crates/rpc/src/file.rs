@@ -184,9 +184,8 @@ mod tests {
             &self,
             _command: String,
             _payload: Value,
-        ) -> futures::future::LocalBoxFuture<'static, std::result::Result<Value, RpcClientError>>
-        {
-            async { Ok(Value::Null) }.boxed_local()
+        ) -> crate::client::RpcClientFuture<std::result::Result<Value, RpcClientError>> {
+            async { Ok(Value::Null) }.boxed()
         }
     }
 
@@ -239,5 +238,13 @@ mod tests {
         assert!(
             matches!(err, RpcClientError::Transport(message) if message.contains("not supported"))
         );
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    #[test]
+    fn native_rpc_clients_are_send_and_sync() {
+        fn assert_send_sync<T: Send + Sync>() {}
+        assert_send_sync::<crate::RpcClient>();
+        assert_send_sync::<UnsupportedClient>();
     }
 }

@@ -85,7 +85,7 @@ impl RpcClientDyn for WsRpcClient {
         &self,
         command: String,
         payload: Value,
-    ) -> futures::future::LocalBoxFuture<'static, std::result::Result<Value, RpcClientError>> {
+    ) -> crate::client::RpcClientFuture<std::result::Result<Value, RpcClientError>> {
         let client = self.clone();
         Box::pin(async move { client.invoke_value(command, payload).await })
     }

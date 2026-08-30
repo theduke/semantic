@@ -1,0 +1,24 @@
+[package]
+name = "semantic_cli"
+default-run = "semantic"
+authors.workspace = true
+keywords.workspace = true
+repository.workspace = true
+homepage.workspace = true
+license.workspace = true
+readme = "README.md"
+edition.workspace = true
+rust-version.workspace = true
+categories.workspace = true
+version.workspace = true
+
+[[bin]]
+name = "semantic"
+path = "src/main.rs"
+
+[dependencies]
+clap = { version = "4.5.48", features = ["derive", "env"] }
+semantic_fuse = { path = "../fuse" }
+semantic_rpc = { path = "../rpc", features = ["client-http-native"] }
+thiserror = "2.0.17"
+tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }

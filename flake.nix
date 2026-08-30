@@ -52,19 +52,23 @@
 
           baseDeps = {
             # Base dependencies needed for normal workspace development.
-            packages = with pkgs; [
-              rustToolchain
-              pkg-config
-              openssl
-              openssl.dev
-              cargo-nextest
-            ];
+            packages =
+              (with pkgs; [
+                rustToolchain
+                pkg-config
+                openssl
+                openssl.dev
+                cargo-nextest
+              ])
+              ++ lib.optionals pkgs.stdenv.isLinux [ pkgs.fuse3 ];
 
             # Native libraries needed by non-UI crates that link common system deps.
-            buildInputs = with pkgs; [
-              openssl
-              openssl.dev
-            ];
+            buildInputs =
+              (with pkgs; [
+                openssl
+                openssl.dev
+              ])
+              ++ lib.optionals pkgs.stdenv.isLinux [ pkgs.fuse3 ];
 
             nativeBuildInputs = [ ];
           };

@@ -143,6 +143,44 @@ impl HttpRpcClient {
         emit_progress(&progress, FileUploadPhase::Done, total.unwrap_or(0), total);
         Ok(response)
     }
+
+    pub async fn read_file_range(
+        &self,
+        id: &str,
+        scope_id: Option<&str>,
+        offset: u64,
+        size: u32,
+    ) -> Result<Bytes, RpcClientError> {
+        if size == 0 {
+            return Ok(Bytes::new());
+        }
+        let mut url = format!("{}/{}", self.file_api_prefix, path_encode(id));
+        if let Some(scope_id) = scope_id {
+            url.push_str("?scope=");
+            url.push_str(&form_encode(scope_id));
+        }
+        let end = offset.saturating_add(u64::from(size)).saturating_sub(1);
+        let response = self
+            .client
+            .get(url)
+            .header(reqwest::header::RANGE, format!("bytes={offset}-{end}"))
+            .send()
+            .await
+            .map_err(|err| RpcClientError::Transport(err.to_string()))?;
+        let status = response.status();
+        if status == reqwest::StatusCode::RANGE_NOT_SATISFIABLE {
+            return Ok(Bytes::new());
+        }
+        if !status.is_success() {
+            return Err(RpcClientError::Transport(format!(
+                "file download failed with status {status}"
+            )));
+        }
+        response
+            .bytes()
+            .await
+            .map_err(|err| RpcClientError::Transport(err.to_string()))
+    }
 }
 
 impl RpcClientDyn for HttpRpcClient {
@@ -150,7 +188,7 @@ impl RpcClientDyn for HttpRpcClient {
         &self,
         command: String,
         payload: Value,
-    ) -> futures::future::LocalBoxFuture<'static, std::result::Result<Value, RpcClientError>> {
+    ) -> crate::client::RpcClientFuture<std::result::Result<Value, RpcClientError>> {
         let client = self.clone();
         Box::pin(async move { client.invoke_value(command, payload).await })
     }
@@ -159,16 +197,29 @@ impl RpcClientDyn for HttpRpcClient {
         &self,
         request: FileUploadRequest,
         progress: Option<FileUploadProgressSender>,
-    ) -> futures::future::LocalBoxFuture<
-        'static,
-        std::result::Result<FileUploadResponse, RpcClientError>,
-    > {
+    ) -> crate::client::RpcClientFuture<std::result::Result<FileUploadResponse, RpcClientError>>
+    {
         let client = self.clone();
         Box::pin(async move { client.upload_file(request, progress).await })
     }
 
     fn file_url(&self, id: &str) -> Option<String> {
         Some(format!("{}/{}", self.file_api_prefix, id))
+    }
+
+    fn read_file_range(
+        &self,
+        id: String,
+        scope_id: Option<String>,
+        offset: u64,
+        size: u32,
+    ) -> crate::client::RpcClientFuture<Result<Bytes, RpcClientError>> {
+        let client = self.clone();
+        Box::pin(async move {
+            client
+                .read_file_range(&id, scope_id.as_deref(), offset, size)
+                .await
+        })
     }
 }
 
@@ -234,6 +285,19 @@ fn form_encode(value: &str) -> String {
                 out.push(byte as char)
             }
             b' ' => out.push('+'),
+            _ => out.push_str(&format!("%{byte:02X}")),
+        }
+    }
+    out
+}
+
+fn path_encode(value: &str) -> String {
+    let mut out = String::new();
+    for byte in value.bytes() {
+        match byte {
+            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b'~' => {
+                out.push(byte as char)
+            }
             _ => out.push_str(&format!("%{byte:02X}")),
         }
     }

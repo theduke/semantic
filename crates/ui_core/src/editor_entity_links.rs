@@ -203,12 +203,12 @@ fn preview_value(value: &Value) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::{cell::RefCell, rc::Rc};
+    use std::sync::{Arc, Mutex};
 
     use semantic_rpc::{RpcClientDyn, RpcClientError};
 
     struct MockClient {
-        calls: Rc<RefCell<Vec<(String, Value)>>>,
+        calls: Arc<Mutex<Vec<(String, Value)>>>,
         response: Value,
     }
 
@@ -217,8 +217,9 @@ mod tests {
             &self,
             command: String,
             payload: Value,
-        ) -> LocalBoxFuture<'static, std::result::Result<Value, RpcClientError>> {
-            self.calls.borrow_mut().push((command, payload));
+        ) -> semantic_rpc::client::RpcClientFuture<std::result::Result<Value, RpcClientError>>
+        {
+            self.calls.lock().unwrap().push((command, payload));
             let response = self.response.clone();
             Box::pin(async move { Ok(response) })
         }
@@ -266,7 +267,7 @@ mod tests {
 
     #[test]
     fn provider_queries_semantic_rpc_with_scope_for_search_and_preview() {
-        let calls = Rc::new(RefCell::new(Vec::new()));
+        let calls = Arc::new(Mutex::new(Vec::new()));
         let client = RpcClient::new(MockClient {
             calls: calls.clone(),
             response: response(response_row()),
@@ -282,7 +283,7 @@ mod tests {
         assert_eq!(candidates[0].label, "Ada Lovelace");
         assert_eq!(preview.unwrap().fields[0].label, "email");
 
-        let calls = calls.borrow();
+        let calls = calls.lock().unwrap();
         assert_eq!(calls.len(), 2);
         assert!(calls.iter().all(|(command, payload)| {
             command == "semantic.db.query"
