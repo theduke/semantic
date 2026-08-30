@@ -8298,8 +8298,10 @@ name = "semantic_cli"
 version = "0.0.1"
 dependencies = [
  "clap",
+ "semantic_app",
  "semantic_fuse",
  "semantic_rpc",
+ "semantic_server",
  "thiserror 2.0.18",
  "tokio",
 ]
