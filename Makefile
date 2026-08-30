@@ -4,10 +4,15 @@ DATA_DIR ?= ./data
 SEMANTIC_INTERFACE ?= 127.0.0.1
 SEMANTIC_PORT ?= 8888
 
-.PHONY: server ui-standalone ui-desktop ui-web
+.PHONY: server server-release ui-standalone ui-desktop ui-web
+
 server:
 	mkdir -p $(DATA_DIR)
 	SEMANTIC_DATA_DIR=$(DATA_DIR) SEMANTIC_INTERFACE=$(SEMANTIC_INTERFACE) SEMANTIC_PORT=$(SEMANTIC_PORT) cargo run -p semantic_server
+
+server-release:
+	mkdir -p $(DATA_DIR)
+	SEMANTIC_DATA_DIR=$(DATA_DIR) SEMANTIC_INTERFACE=$(SEMANTIC_INTERFACE) SEMANTIC_PORT=$(SEMANTIC_PORT) cargo run --release -p semantic_server
 
 ui-standalone:
 	mkdir -p $(DATA_DIR)
