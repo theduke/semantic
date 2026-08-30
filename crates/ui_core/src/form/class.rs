@@ -38,6 +38,38 @@ pub struct ClassFormFieldLabel {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ClassFormRenderOptions {
+    show_header: bool,
+    excluded_fields: BTreeSet<String>,
+}
+
+impl ClassFormRenderOptions {
+    pub fn show_header(mut self, show_header: bool) -> Self {
+        self.show_header = show_header;
+        self
+    }
+
+    pub fn exclude_field(mut self, field_name: impl Into<String>) -> Self {
+        self.excluded_fields.insert(field_name.into());
+        self
+    }
+
+    fn excludes(&self, field: &ClassFormField) -> bool {
+        self.excluded_fields.contains(&field.field_name)
+            || self.excluded_fields.contains(&field.storage_field_name)
+    }
+}
+
+impl Default for ClassFormRenderOptions {
+    fn default() -> Self {
+        Self {
+            show_header: true,
+            excluded_fields: BTreeSet::new(),
+        }
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
 struct ClassFormFieldDomIds {
     control: String,
     label: String,
@@ -152,13 +184,20 @@ pub fn default_class_form_renderer(ctx: ClassFormRenderContext) -> Element {
 }
 
 pub fn render_class_form_body(ctx: ClassFormRenderContext) -> Element {
+    render_class_form_body_with_options(ctx, ClassFormRenderOptions::default())
+}
+
+pub fn render_class_form_body_with_options(
+    ctx: ClassFormRenderContext,
+    options: ClassFormRenderOptions,
+) -> Element {
     let catalog = use_ui_catalog();
     let mut fields = catalog.class_form_fields(&ctx.class);
     let primary_id_field = ctx
         .collection
         .as_deref()
         .map(|collection| primary_id_field_for_collection(&catalog, collection));
-    let primary_field = primary_id_field.as_ref().and_then(|primary_id_field| {
+    let mut primary_field = primary_id_field.as_ref().and_then(|primary_id_field| {
         fields
             .iter()
             .position(|field| is_primary_id_form_field(field, primary_id_field))
@@ -187,6 +226,8 @@ pub fn render_class_form_body(ctx: ClassFormRenderContext) -> Element {
             .collect::<Vec<_>>(),
         _ => Vec::new(),
     };
+    fields.retain(|field| !options.excludes(field));
+    primary_field = primary_field.filter(|field| !options.excludes(field));
     let title = ctx
         .class
         .meta
@@ -195,10 +236,12 @@ pub fn render_class_form_body(ctx: ClassFormRenderContext) -> Element {
         .unwrap_or_else(|| ctx.class.name.clone());
     rsx! {
         div { class: "semantic-form semantic-form--class",
-            header { class: "semantic-form__header",
-                h2 { "{title}" }
-                if let Some(id) = &ctx.id {
-                    code { "{id}" }
+            if options.show_header {
+                header { class: "semantic-form__header",
+                    h2 { "{title}" }
+                    if let Some(id) = &ctx.id {
+                        code { "{id}" }
+                    }
                 }
             }
             div { class: "semantic-table-wrap semantic-form__field-table-wrap",
@@ -242,6 +285,21 @@ pub fn render_class_form_body(ctx: ClassFormRenderContext) -> Element {
                     }
                 }
             }
+        }
+    }
+}
+
+pub(crate) fn render_class_form_field_row(
+    ctx: &ClassFormRenderContext,
+    field: ClassFormField,
+) -> Element {
+    rsx! {
+        ClassFormFieldRow {
+            scope: ctx.scope.clone(),
+            class: ctx.class.clone(),
+            field,
+            mode: ctx.mode,
+            readonly: false,
         }
     }
 }
@@ -627,6 +685,25 @@ mod tests {
         assert_eq!(
             class_form_field_description(&field).as_deref(),
             Some("Class help")
+        );
+    }
+
+    #[test]
+    fn class_form_options_exclude_by_field_or_storage_name() {
+        let mut field = synthetic_id_form_field(ATTR_ID.to_string());
+        field.field_name = "note_content".to_string();
+        field.storage_field_name = "semantic:base:note:note_content".to_string();
+
+        assert!(!ClassFormRenderOptions::default().excludes(&field));
+        assert!(
+            ClassFormRenderOptions::default()
+                .exclude_field("note_content")
+                .excludes(&field)
+        );
+        assert!(
+            ClassFormRenderOptions::default()
+                .exclude_field("semantic:base:note:note_content")
+                .excludes(&field)
         );
     }
 }

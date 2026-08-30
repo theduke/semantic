@@ -1164,8 +1164,33 @@ pre {
 }
 
 .semantic-form__status {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--semantic-space-2);
   color: var(--semantic-text-muted);
   font-size: 12px;
+}
+
+.semantic-form__actions[data-status="dirty"] .semantic-form__status {
+  padding: 6px 10px;
+  border-radius: var(--semantic-radius-pill);
+  background: var(--semantic-color-warning-surface);
+  color: var(--semantic-color-warning);
+  font-weight: 650;
+}
+
+.semantic-form__status-warning {
+  display: inline-grid;
+  width: 18px;
+  height: 18px;
+  flex: 0 0 auto;
+  place-items: center;
+  border-radius: var(--semantic-radius-pill);
+  background: var(--semantic-color-warning);
+  color: var(--semantic-color-warning-surface);
+  font-size: 12px;
+  font-weight: 800;
+  line-height: 1;
 }
 
 .semantic-form__errors {
@@ -3639,6 +3664,110 @@ pre {
   display: grid;
   min-width: 0;
   gap: var(--semantic-space-4);
+}
+
+/* Notes use a document-first canvas while their secondary fields stay compact. */
+.semantic-form-page__body:has(.semantic-note-form) {
+  width: min(100%, var(--semantic-content-width));
+}
+
+.semantic-note-form {
+  display: grid;
+  min-width: 0;
+  gap: var(--semantic-space-6);
+}
+
+.semantic-note-form__header,
+.semantic-note-form__section-header {
+  display: flex;
+  min-width: 0;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: var(--semantic-space-4);
+}
+
+.semantic-note-form__header h2,
+.semantic-note-form__section-header h3,
+.semantic-note-form__header p,
+.semantic-note-form__section-header p {
+  margin: 0;
+}
+
+.semantic-note-form__header h2 {
+  font-size: var(--semantic-font-size-section-title);
+}
+
+.semantic-note-form__header p,
+.semantic-note-form__section-header p {
+  margin-block-start: var(--semantic-space-1);
+  color: var(--semantic-text-muted);
+  font-size: var(--semantic-font-size-label);
+  line-height: var(--semantic-line-height-body);
+}
+
+.semantic-note-form__format {
+  flex: 0 0 auto;
+  padding: 4px 9px;
+  border: 1px solid var(--semantic-border-soft);
+  border-radius: var(--semantic-radius-pill);
+  background: var(--semantic-surface-muted);
+  color: var(--semantic-text-muted);
+  font-size: var(--semantic-font-size-caption);
+  font-weight: 650;
+}
+
+.semantic-note-form__document,
+.semantic-note-form__metadata {
+  display: grid;
+  min-width: 0;
+  gap: var(--semantic-space-3);
+}
+
+.semantic-note-form__content-table-wrap {
+  overflow: visible;
+  border-radius: var(--semantic-radius-lg);
+  box-shadow: var(--semantic-shadow-1);
+}
+
+.semantic-note-form__content-table,
+.semantic-note-form__content-table tbody,
+.semantic-note-form__content-table tr {
+  display: grid;
+  width: 100%;
+}
+
+.semantic-note-form__content-table th,
+.semantic-note-form__content-table td {
+  display: grid;
+  width: 100%;
+  max-width: none;
+  white-space: normal;
+}
+
+.semantic-note-form__content-table th {
+  padding: var(--semantic-space-3) var(--semantic-space-4) var(--semantic-space-2);
+  border-bottom: 0;
+}
+
+.semantic-note-form__content-table td {
+  padding: 0 var(--semantic-space-4) var(--semantic-space-4);
+}
+
+.semantic-note-form__document .dxeditor,
+.semantic-note-form__document .semantic-form__auto-textarea.dx-textarea {
+  width: 100%;
+  max-width: none;
+}
+
+.semantic-note-form[data-format="markdown"] .dxeditor__document {
+  min-height: clamp(360px, 52vh, 620px);
+}
+
+.semantic-note-form__metadata {
+  width: min(100%, var(--semantic-content-width-narrow));
+  margin-inline: auto;
+  padding-top: var(--semantic-space-2);
+  border-top: 1px solid var(--semantic-border-soft);
 }
 
 .semantic-form-actions {

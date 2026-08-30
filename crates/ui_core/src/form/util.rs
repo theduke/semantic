@@ -224,15 +224,16 @@ pub fn DynamicFormActions(
     #[props(default)] labels: SemanticFormActionLabels,
 ) -> Element {
     let meta = form.meta();
-    let status = if meta.submitting {
-        "Submitting"
-    } else if semantic_form_is_dirty(&meta) {
-        "Modified"
+    let dirty = semantic_form_is_dirty(&meta);
+    let (status_kind, status) = if meta.submitting {
+        ("pending", "Saving changes…")
+    } else if dirty {
+        ("dirty", "Unsaved changes — save to keep them")
     } else {
-        "Unchanged"
+        ("clean", "No unsaved changes")
     };
     rsx! {
-        div { class: "semantic-form__actions",
+        div { class: "semantic-form__actions", "data-status": status_kind,
             dxcomp::Button {
                 r#type: "submit",
                 disabled: meta.submitting,
@@ -246,7 +247,16 @@ pub fn DynamicFormActions(
                 onclick: move |_| form.reset(),
                 "{labels.reset}"
             }
-            span { class: "semantic-form__status", aria_live: "polite", "{status}" }
+            span {
+                class: "semantic-form__status",
+                role: "status",
+                aria_live: "polite",
+                aria_atomic: "true",
+                if dirty {
+                    span { class: "semantic-form__status-warning", aria_hidden: "true", "!" }
+                }
+                span { "{status}" }
+            }
             SemanticFormErrors { errors: meta.errors }
             SemanticFormErrors { errors: meta.submit_errors }
         }

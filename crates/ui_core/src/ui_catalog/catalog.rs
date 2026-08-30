@@ -252,6 +252,18 @@ mod tests {
         assert!(!configured.render_settings().show_media);
     }
 
+    #[test]
+    fn defaults_register_the_note_class_form_renderer() {
+        let catalog = UiCatalog::from_snapshot(empty_snapshot());
+
+        assert!(
+            catalog
+                .form_registry()
+                .class_form_renderer("semantic:base:note")
+                .is_some()
+        );
+    }
+
     fn empty_snapshot() -> CatalogStorageSnapshot {
         CatalogStorageSnapshot {
             attributes: Vec::new(),

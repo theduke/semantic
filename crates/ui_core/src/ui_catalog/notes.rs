@@ -6,8 +6,13 @@ use std::time::Duration;
 use dioxus::prelude::*;
 use semantic_data::value::{Object, Value};
 
-use crate::form::{AttributeFormRenderContext, AutoExpandingTextarea};
-use crate::ui_catalog::{ClassRenderContext, RenderCtx, UiCatalog, defaults::value_to_text};
+use crate::form::{
+    AttributeFormRenderContext, AutoExpandingTextarea, ClassFormRenderContext,
+    ClassFormRenderOptions, render_class_form_body_with_options, render_class_form_field_row,
+};
+use crate::ui_catalog::{
+    ClassRenderContext, RenderCtx, UiCatalog, defaults::value_to_text, use_ui_catalog,
+};
 
 const NOTE_CLASS_ID: &str = "semantic:base:note";
 const ATTR_NOTE_FORMAT: &str = "semantic:base:note:note_format";
@@ -47,6 +52,9 @@ pub(crate) fn register_note_renderers(catalog: &mut UiCatalog) {
     catalog
         .render_registry_mut()
         .register_class_renderer(NOTE_CLASS_ID, Rc::new(render_note_class));
+    catalog
+        .form_registry_mut()
+        .register_class_form_renderer(NOTE_CLASS_ID, Rc::new(render_note_class_form));
 
     catalog
         .form_registry_mut()
@@ -94,6 +102,68 @@ fn render_note_class(ctx: ClassRenderContext) -> Element {
             NoteContentView {
                 content,
                 format,
+            }
+        }
+    }
+}
+
+fn render_note_class_form(ctx: ClassFormRenderContext) -> Element {
+    let catalog = use_ui_catalog();
+    let form_value = ctx.scope.value();
+    let format = match &form_value {
+        Value::Object(object) => note_format(object).unwrap_or(FORMAT_TEXT),
+        _ => FORMAT_TEXT,
+    }
+    .to_string();
+    let format_label = if format == FORMAT_MARKDOWN {
+        "Markdown"
+    } else {
+        "Text"
+    };
+    let content_field = catalog
+        .class_form_fields(&ctx.class)
+        .into_iter()
+        .find(|field| {
+            field.field_name == FIELD_NOTE_CONTENT || field.storage_field_name == ATTR_NOTE_CONTENT
+        });
+    let metadata_options = ClassFormRenderOptions::default()
+        .show_header(false)
+        .exclude_field(FIELD_NOTE_CONTENT);
+
+    rsx! {
+        div {
+            class: "semantic-note-form",
+            "data-format": "{format}",
+            header { class: "semantic-note-form__header",
+                div {
+                    h2 { "Note" }
+                    p { "Write the note first, then adjust its details below." }
+                }
+                span { class: "semantic-note-form__format", "{format_label}" }
+            }
+            section {
+                class: "semantic-note-form__document",
+                aria_label: "Note content",
+                if let Some(content_field) = content_field {
+                    div { class: "semantic-table-wrap semantic-note-form__content-table-wrap",
+                        table { class: "semantic-field-table semantic-note-form__content-table",
+                            tbody {
+                                {render_class_form_field_row(&ctx, content_field)}
+                            }
+                        }
+                    }
+                } else {
+                    div { class: "semantic-form__unsupported", role: "alert",
+                        "The note content field is not registered in the active catalog."
+                    }
+                }
+            }
+            section { class: "semantic-note-form__metadata", aria_label: "Note details",
+                header { class: "semantic-note-form__section-header",
+                    h3 { "Note details" }
+                    p { "Format, timestamps, metadata, and other schema fields." }
+                }
+                {render_class_form_body_with_options(ctx.clone(), metadata_options)}
             }
         }
     }

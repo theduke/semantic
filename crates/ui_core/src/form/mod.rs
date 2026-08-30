@@ -11,9 +11,11 @@ mod util;
 mod validation;
 mod value;
 
+pub(crate) use class::render_class_form_field_row;
 pub use class::{
-    ClassFormField, ClassFormFieldLabel, DynamicClassForm, class_form_field_label,
-    class_form_fields, default_class_form_renderer, render_class_form_body,
+    ClassFormField, ClassFormFieldLabel, ClassFormRenderOptions, DynamicClassForm,
+    class_form_field_label, class_form_fields, default_class_form_renderer, render_class_form_body,
+    render_class_form_body_with_options,
 };
 pub use context::{
     provide_semantic_form_mode, provide_semantic_form_root, provide_semantic_form_scope,
