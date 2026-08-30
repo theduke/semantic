@@ -4,21 +4,25 @@ use std::{
 };
 
 use dioxus::prelude::*;
-use serde_json::{Value, json};
+use serde_json::Value;
 
 use crate::{
-    EditorError,
-    bridge::{EditorBridge, set_dom_selection},
+    bridge::{EditorBridge, run_engine_command},
     catalog::EditorCatalog,
     codec::EditorPayload,
+    component_spec::validate_component_document,
     document::{
-        BlockNode, COMPONENT_CODE, COMPONENT_DIVIDER, COMPONENT_HEADING, COMPONENT_LINK,
-        COMPONENT_MENTION, COMPONENT_PARAGRAPH, COMPONENT_QUOTE, DOCUMENT_SCHEMA_V1,
-        EditorDocument, InlineNode, Mark, NodeId,
+        BlockNode, COMPONENT_CODE, COMPONENT_DIVIDER, COMPONENT_HEADING, COMPONENT_LIST,
+        COMPONENT_LIST_ITEM, COMPONENT_MENTION, COMPONENT_PARAGRAPH, COMPONENT_QUOTE,
+        COMPONENT_TABLE, DOCUMENT_SCHEMA_V1, EditorDocument, InlineNode, Mark, NodeContent,
     },
-    selection::EditorSelection,
-    state::EditorState,
-    transaction_for_event,
+    document_v2::{ComponentDocumentV2, UnknownComponentPolicy, ValidationLimits},
+    format::{DecodeOptions, EncodeOptions},
+    migrate::{migrate_v1_to_v2, migrate_v2_to_v1},
+    protocol::{
+        EngineCommand, EngineEvent, HistoryPolicy, MentionSuggestion, ProtocolSession, Revision,
+    },
+    suggestion::SuggestionQueryContext,
 };
 
 static NEXT_EDITOR_ID: AtomicU64 = AtomicU64::new(1);
@@ -170,6 +174,239 @@ const DXEDITOR_STYLE: &str = r#"
   color: #617084;
   font-size: 12px;
 }
+
+.dxeditor[data-engine="tiptap-prosemirror"] {
+  position: relative;
+  overflow: visible;
+  border: 0;
+  border-radius: 0;
+  box-shadow: none;
+}
+
+.dxeditor__editor-actions {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  min-height: 38px;
+  padding: 4px 8px;
+  color: #617084;
+}
+
+.dxeditor__editor-actions-status {
+  margin-left: auto;
+  font-size: 12px;
+}
+
+.dxeditor__live-status {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
+}
+
+.dxeditor[data-engine="tiptap-prosemirror"] .dxeditor__document {
+  display: block;
+  min-height: 260px;
+  padding: 22px 48px;
+}
+
+.dxeditor-engine__content {
+  min-height: 216px;
+  outline: none;
+  line-height: 1.62;
+  overflow-wrap: anywhere;
+}
+
+.dxeditor-engine__content > * {
+  margin: 0.2rem 0;
+}
+
+.dxeditor-engine__content h1,
+.dxeditor-engine__content h2,
+.dxeditor-engine__content h3 {
+  line-height: 1.25;
+  margin-top: 1.1em;
+}
+
+.dxeditor-engine__content blockquote {
+  margin-left: 0;
+  border-left: 3px solid #9bb5c1;
+  padding-left: 12px;
+  color: #435367;
+}
+
+.dxeditor-engine__content pre {
+  overflow-x: auto;
+  border-radius: 6px;
+  background: #f6f8fa;
+  padding: 12px;
+}
+
+.dxeditor-engine__content table {
+  width: 100%;
+  table-layout: fixed;
+  border-collapse: collapse;
+  overflow: hidden;
+}
+
+.dxeditor-engine__content td,
+.dxeditor-engine__content th {
+  min-width: 96px;
+  border: 1px solid #cfd8e3;
+  padding: 6px 8px;
+  vertical-align: top;
+}
+
+.dxeditor-engine__content .selectedCell::after {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  background: rgb(23 107 135 / 14%);
+  content: "";
+}
+
+.dxeditor-engine__content .tableWrapper {
+  overflow-x: auto;
+}
+
+.dxeditor-engine__mention {
+  border-radius: 4px;
+  background: #e9f2f5;
+  color: #176b87;
+  padding: 1px 4px;
+}
+
+.dxeditor-engine__opaque {
+  border: 1px dashed #a8b4c2;
+  white-space: pre-wrap;
+}
+
+.dxeditor__overlays {
+  position: absolute;
+  inset: 0;
+  z-index: 20;
+  pointer-events: none;
+}
+
+.dxeditor-engine__surface {
+  position: absolute;
+  display: flex;
+  gap: 2px;
+  max-width: min(520px, calc(100vw - 24px));
+  border: 1px solid #d8dee7;
+  border-radius: 7px;
+  background: #fff;
+  box-shadow: 0 6px 24px rgb(23 32 42 / 16%);
+  padding: 4px;
+  pointer-events: auto;
+}
+
+.dxeditor-engine__surface[hidden] {
+  display: none;
+}
+
+.dxeditor-engine__button {
+  min-width: 30px;
+  min-height: 30px;
+  border: 0;
+  border-radius: 5px;
+  background: transparent;
+  color: inherit;
+  padding: 4px 8px;
+  font: inherit;
+  cursor: pointer;
+}
+
+.dxeditor-engine__button:hover,
+.dxeditor-engine__button:focus-visible {
+  background: #eef2f6;
+  outline: 2px solid transparent;
+}
+
+.dxeditor-engine__slash {
+  flex-direction: column;
+  width: 230px;
+  max-height: 300px;
+  overflow-y: auto;
+}
+
+.dxeditor-engine__block-menu {
+  flex-direction: column;
+  min-width: 160px;
+}
+
+.dxeditor-engine__block-menu .dxeditor-engine__button {
+  text-align: left;
+}
+
+.dxeditor-engine__link-popover {
+  flex-direction: column;
+  width: min(320px, calc(100vw - 24px));
+  padding: 8px;
+}
+
+.dxeditor-engine__link-popover label {
+  display: grid;
+  gap: 4px;
+  color: #435367;
+  font-size: 12px;
+}
+
+.dxeditor-engine__link-popover input {
+  min-height: 34px;
+  border: 1px solid #a8b4c2;
+  border-radius: 5px;
+  padding: 4px 8px;
+  font: inherit;
+}
+
+.dxeditor-engine__link-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 4px;
+}
+
+.dxeditor-engine__field-error {
+  min-height: 1em;
+  color: #b42318;
+  font-size: 12px;
+}
+
+.dxeditor-engine__slash .dxeditor-engine__button {
+  text-align: left;
+}
+
+.dxeditor-engine__block-controls {
+  transform: translateX(-100%);
+}
+
+.dxeditor__error {
+  border: 1px solid #b42318;
+  border-radius: 6px;
+  background: #fff5f4;
+  padding: 12px;
+  color: #7a271a;
+}
+
+@media (max-width: 640px) {
+  .dxeditor[data-engine="tiptap-prosemirror"] .dxeditor__document {
+    padding: 18px 20px;
+  }
+
+  .dxeditor-engine__table-controls {
+    position: fixed;
+    right: 8px;
+    bottom: max(8px, env(safe-area-inset-bottom));
+    left: 8px !important;
+    top: auto !important;
+    overflow-x: auto;
+  }
+}
 "#;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -206,6 +443,16 @@ impl ComponentRegistry {
     }
 }
 
+/// Controls the optional document-wide action strip. Formatting and insertion
+/// actions are intentionally never shown in this surface.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum EditorActionsMode {
+    #[default]
+    Hidden,
+    History,
+    HistoryAndStatus,
+}
+
 #[component]
 pub fn Editor(
     value: EditorPayload,
@@ -215,812 +462,571 @@ pub fn Editor(
     #[props(default)] onfocus: Option<EventHandler<FocusEvent>>,
     #[props(default)] onblur: Option<EventHandler<FocusEvent>>,
     #[props(default)] readonly: bool,
+    #[props(default)] editor_actions: EditorActionsMode,
+    #[props(default)] external_revision: Option<u64>,
+    #[props(default = "Document editor".to_string())] aria_label: String,
 ) -> Element {
-    let initial_document = catalog
-        .codecs()
-        .decode(&value)
-        .unwrap_or_else(|_| EditorDocument::plain_text(""));
-    let state = use_signal(move || {
-        if readonly {
-            EditorState::readonly(initial_document)
-        } else {
-            EditorState::new(initial_document)
-        }
-    });
-    let mut render_version = use_signal(|| 0_u64);
-    // EditorState is not signal-backed yet, so bridge-driven model changes must
-    // explicitly invalidate this component until the reactive store migration lands.
-    let _render_version = render_version();
+    let decoded = decode_editor_payload(&catalog, &value);
+    let decode_error = decoded.as_ref().err().map(ToString::to_string);
+    let initial_document = decoded.unwrap_or_default();
     let editor_id = use_signal(|| {
         format!(
             "dxeditor-{}",
             NEXT_EDITOR_ID.fetch_add(1, Ordering::Relaxed)
         )
     })();
-    let editor_state = state.read().clone();
-    let document = editor_state.document();
-    let block_count = document.blocks.len();
-    let word_count = document_word_count(&document);
-    let bridge_state = editor_state.clone();
-    let bridge_catalog = catalog.clone();
-    let bridge_format = output_format.clone();
-    let selection_editor_id = editor_id.clone();
-    let selection_state = editor_state.clone();
-    let selection_render_version = render_version;
-    use_effect(move || {
-        let _ = selection_render_version();
-        if let Some(selection) = selection_state.selection() {
-            set_dom_selection(&selection_editor_id, &selection);
+    let session_id = use_signal(|| {
+        format!(
+            "dxeditor-session-{}",
+            NEXT_EDITOR_ID.fetch_add(1, Ordering::Relaxed)
+        )
+    })();
+    let schema_fingerprint = catalog.schema_fingerprint();
+    let initial_external_revision = Revision(external_revision.unwrap_or_default());
+    let mut status = use_signal(|| "Ready".to_string());
+    let mut block_count = use_signal(|| initial_document.root.content.len());
+    let mut word_count = use_signal(|| document_word_count(&initial_document));
+    let mut current_document = use_signal(|| initial_document.clone());
+    let initial_external = (value.clone(), external_revision);
+    let mut observed_external = use_signal(move || initial_external);
+    let mut last_emitted = use_signal(|| None::<(EditorPayload, Revision)>);
+    let mut dirty = use_signal(|| false);
+    let mut current_external_revision = use_signal(|| initial_external_revision);
+    let mut last_local_revision = use_signal(|| Revision::ZERO);
+    let output_catalog = catalog.clone();
+    let output_format_for_event = output_format.clone();
+    let expected_session_id = session_id.clone();
+    let expected_schema_fingerprint = schema_fingerprint.clone();
+    let undo_session = session_id.clone();
+    let undo_schema_fingerprint = schema_fingerprint.clone();
+    let redo_session = session_id.clone();
+    let redo_schema_fingerprint = schema_fingerprint.clone();
+    let external_catalog = catalog.clone();
+    let external_session = session_id.clone();
+    let external_schema_fingerprint = schema_fingerprint.clone();
+    let mention_catalog = catalog.clone();
+    let mention_session_id = session_id.clone();
+    let mention_schema_fingerprint = schema_fingerprint.clone();
+    let external_value = value.clone();
+    let supplied_external_revision = external_revision;
+    use_effect(use_reactive!(|(
+        external_value,
+        supplied_external_revision,
+    )| {
+        let observed = (external_value.clone(), supplied_external_revision);
+        if *observed_external.peek() == observed {
+            return;
         }
-    });
+        observed_external.set(observed);
+
+        let current_revision = current_external_revision();
+        let supplied_revision = supplied_external_revision.map(Revision);
+        if supplied_revision.is_some_and(|revision| revision < current_revision) {
+            status.set(format!(
+                "Stale external revision {} ignored",
+                supplied_revision.unwrap_or_default()
+            ));
+            return;
+        }
+
+        if last_emitted
+            .peek()
+            .as_ref()
+            .is_some_and(|(payload, _)| payload == &external_value)
+        {
+            if let Some(revision) =
+                supplied_revision.filter(|revision| *revision > current_revision)
+            {
+                let session = ProtocolSession::new(
+                    external_session.clone(),
+                    external_schema_fingerprint.clone(),
+                    revision,
+                );
+                run_engine_command(&EngineCommand::Acknowledge {
+                    session,
+                    local_revision: last_local_revision(),
+                });
+                current_external_revision.set(revision);
+            }
+            last_emitted.set(None);
+            dirty.set(false);
+            status.set("Saved".to_string());
+            return;
+        }
+
+        let incoming_revision = match supplied_revision {
+            Some(revision) if revision <= current_revision => {
+                status.set(format!("External revision {revision} ignored"));
+                return;
+            }
+            Some(revision) => revision,
+            None => current_revision.next(),
+        };
+        if dirty() {
+            status.set(format!(
+                "Conflict: external revision {incoming_revision} was not applied"
+            ));
+            return;
+        }
+        match decode_editor_payload(&external_catalog, &external_value) {
+            Ok(document) => {
+                block_count.set(document.root.content.len());
+                word_count.set(document_word_count(&document));
+                current_document.set(document.clone());
+                let session = ProtocolSession::new(
+                    external_session.clone(),
+                    external_schema_fingerprint.clone(),
+                    incoming_revision,
+                );
+                run_engine_command(&EngineCommand::ReplaceDocument {
+                    session,
+                    document,
+                    history_policy: HistoryPolicy::Reset,
+                });
+                current_external_revision.set(incoming_revision);
+                status.set(format!("Updated to external revision {incoming_revision}"));
+            }
+            Err(error) => status.set(format!("External update rejected: {error}")),
+        }
+    }));
 
     rsx! {
         style { {DXEDITOR_STYLE} }
         div {
             class: "dxeditor",
             "data-readonly": "{readonly}",
+            "data-engine": "tiptap-prosemirror",
             onfocus: move |event| if let Some(handler) = onfocus { handler.call(event) },
             onblur: move |event| if let Some(handler) = onblur { handler.call(event) },
-            if !readonly {
-                EditorToolbar {
-                    catalog: catalog.clone(),
-                    editor_state: editor_state.clone(),
-                    output_format: output_format.clone(),
-                    on_change,
-                    render_version,
-                }
-            }
-            div {
-                class: "dxeditor__document",
-                role: "textbox",
-                aria_multiline: "true",
-                contenteditable: if readonly { "false" } else { "true" },
-                "data-dxeditor-id": "{editor_id}",
-                EditorBridge {
-                    editor_id: editor_id.clone(),
-                    on_event: move |event| {
-                        let transaction = transaction_for_event(event, &bridge_state.document());
-                        if transaction.operations.is_empty() { return; }
-                        if bridge_state.apply_transaction(transaction).is_ok() {
-                            let _ = dispatch_editor_command(
-                                &bridge_catalog,
-                                &bridge_state,
-                                "editor.noop",
-                                Value::Null,
-                                &bridge_format,
-                                on_change,
-                            );
-                            render_version += 1;
+            if !readonly && editor_actions != EditorActionsMode::Hidden {
+                div {
+                    class: "dxeditor__editor-actions",
+                    role: "toolbar",
+                    aria_label: "Editor history",
+                    button {
+                        class: "dxeditor__button",
+                        r#type: "button",
+                        aria_label: "Undo",
+                            onclick: move |_| run_history_command(
+                                &undo_session,
+                                &undo_schema_fingerprint,
+                                current_external_revision(),
+                                last_local_revision(),
+                                "undo",
+                            ),
+                        "↶"
+                    }
+                    button {
+                        class: "dxeditor__button",
+                        r#type: "button",
+                        aria_label: "Redo",
+                            onclick: move |_| run_history_command(
+                                &redo_session,
+                                &redo_schema_fingerprint,
+                                current_external_revision(),
+                                last_local_revision(),
+                                "redo",
+                            ),
+                        "↷"
+                    }
+                    if editor_actions == EditorActionsMode::HistoryAndStatus {
+                        span {
+                            class: "dxeditor__editor-actions-status",
+                            "{status} · {block_count} blocks · {word_count} words"
                         }
-                    },
-                }
-                for block in document.blocks {
-                    EditableBlock {
-                        block,
-                        catalog: catalog.clone(),
-                        editor_state: editor_state.clone(),
-                        output_format: output_format.clone(),
-                        on_change,
-                        readonly,
-                        render_version,
                     }
                 }
             }
-            div { class: "dxeditor__status",
-                span { "{block_count} blocks" }
-                span { "{word_count} words" }
+            if let Some(error) = decode_error {
+                div {
+                    class: "dxeditor__error",
+                    role: "alert",
+                    p { "This document could not be opened safely: {error}" }
+                    details {
+                        summary { "View original source" }
+                        pre { "{value.value}" }
+                    }
+                }
+            } else if readonly {
+                ReadOnlyDocument {
+                    document: migrate_v2_to_v1(&initial_document)
+                        .unwrap_or_else(|_| EditorDocument::plain_text(initial_document.text_content()))
+                }
+            } else {
+                div {
+                    class: "dxeditor__document",
+                    "data-dxeditor-host": "{editor_id}",
+                    aria_label: "{aria_label}",
+                }
+                div { class: "dxeditor__overlays", "data-dxeditor-overlays": "true" }
+                EditorBridge {
+                    editor_id: editor_id.clone(),
+                    session: ProtocolSession::new(
+                        session_id.clone(),
+                        schema_fingerprint.clone(),
+                        initial_external_revision,
+                    ),
+                    document_value: initial_document,
+                    readonly,
+                    on_event: move |event| {
+                        match event {
+                            EngineEvent::Ready { session }
+                                if session_matches(
+                                    &session,
+                                    &expected_session_id,
+                                    &expected_schema_fingerprint,
+                                    current_external_revision(),
+                                ) =>
+                            {
+                                status.set("Ready".to_string());
+                            }
+                            EngineEvent::DocumentChange { session, revision, document }
+                                if session_matches(
+                                    &session,
+                                    &expected_session_id,
+                                    &expected_schema_fingerprint,
+                                    current_external_revision(),
+                                ) && revision > last_local_revision() =>
+                            {
+                                last_local_revision.set(revision);
+                                block_count.set(document.root.content.len());
+                                word_count.set(document_word_count(&document));
+                                current_document.set(document.clone());
+                                match encode_editor_payload(&output_catalog, &document, &output_format_for_event) {
+                                    Ok(payload) => {
+                                        status.set(format!("Unsaved revision {revision}"));
+                                        dirty.set(true);
+                                        last_emitted.set(Some((payload.clone(), revision)));
+                                        on_change.call(payload);
+                                    }
+                                    Err(error) => status.set(format!("Encoding failed: {error}")),
+                                }
+                            }
+                            EngineEvent::Blur { session, revision, document }
+                                if session_matches(
+                                    &session,
+                                    &expected_session_id,
+                                    &expected_schema_fingerprint,
+                                    current_external_revision(),
+                                ) && revision >= last_local_revision() =>
+                            {
+                                last_local_revision.set(revision);
+                                current_document.set(document.clone());
+                                if let Ok(payload) = encode_editor_payload(&output_catalog, &document, &output_format_for_event) {
+                                    status.set(format!("Revision {revision} flushed"));
+                                    last_emitted.set(Some((payload.clone(), revision)));
+                                    on_change.call(payload);
+                                }
+                            }
+                            EngineEvent::MentionQuery { session, request_id, query }
+                                if session_matches(
+                                    &session,
+                                    &expected_session_id,
+                                    &expected_schema_fingerprint,
+                                    current_external_revision(),
+                                ) =>
+                            {
+                                let Some(provider) = mention_catalog.suggestions().provider('@') else {
+                                    return;
+                                };
+                                let catalog = mention_catalog.clone();
+                                let document = current_document();
+                                let response_session = ProtocolSession::new(
+                                    mention_session_id.clone(),
+                                    mention_schema_fingerprint.clone(),
+                                    current_external_revision(),
+                                );
+                                spawn(async move {
+                                    let legacy = migrate_v2_to_v1(&document)
+                                        .unwrap_or_else(|_| EditorDocument::plain_text(document.text_content()));
+                                    let items = provider
+                                        .query(SuggestionQueryContext {
+                                            query,
+                                            state: crate::state::EditorState::new(legacy),
+                                            catalog,
+                                        })
+                                        .await;
+                                    let suggestions = items
+                                        .into_iter()
+                                        .map(|item| MentionSuggestion {
+                                            id: item.id,
+                                            label: item.label,
+                                            detail: item.description,
+                                        })
+                                        .collect();
+                                    run_engine_command(&EngineCommand::MentionSuggestions {
+                                        session: response_session,
+                                        request_id,
+                                        suggestions,
+                                    });
+                                });
+                            }
+                            EngineEvent::Error { session, message }
+                                if session_matches(
+                                    &session,
+                                    &expected_session_id,
+                                    &expected_schema_fingerprint,
+                                    current_external_revision(),
+                                ) =>
+                            {
+                                status.set(format!("Editor error: {message}"));
+                            }
+                            _ => {}
+                        }
+                    },
+                }
             }
+            span { class: "dxeditor__live-status", role: "status", "{status}" }
         }
     }
 }
 
+fn decode_editor_payload(
+    catalog: &EditorCatalog,
+    payload: &EditorPayload,
+) -> Result<ComponentDocumentV2, String> {
+    if catalog.document_formats().format(&payload.format).is_some() {
+        return catalog
+            .document_formats()
+            .decode(payload, catalog.component_specs(), DecodeOptions::default())
+            .map(|decoded| decoded.document)
+            .map_err(|error| error.to_string());
+    }
+
+    let legacy = catalog
+        .codecs()
+        .decode(payload)
+        .map_err(|error| error.to_string())?;
+    let document = migrate_v1_to_v2(&legacy).map_err(|error| error.to_string())?;
+    validate_component_document(
+        &document,
+        catalog.component_specs(),
+        &ValidationLimits::default(),
+        UnknownComponentPolicy::PreserveOpaque,
+    )
+    .map_err(|error| error.to_string())?;
+    Ok(document)
+}
+
+fn encode_editor_payload(
+    catalog: &EditorCatalog,
+    document: &ComponentDocumentV2,
+    format: &str,
+) -> Result<EditorPayload, String> {
+    if catalog.document_formats().format(format).is_some() {
+        return catalog
+            .document_formats()
+            .encode(
+                document,
+                format,
+                catalog.component_specs(),
+                EncodeOptions::default(),
+            )
+            .map(|encoded| encoded.payload)
+            .map_err(|error| error.to_string());
+    }
+
+    let legacy = migrate_v2_to_v1(document).map_err(|error| error.to_string())?;
+    catalog
+        .codecs()
+        .encode(&legacy, format)
+        .map_err(|error| error.to_string())
+}
+
+fn session_matches(
+    session: &ProtocolSession,
+    session_id: &str,
+    schema_fingerprint: &str,
+    external_revision: Revision,
+) -> bool {
+    session.protocol_version == crate::protocol::EDITOR_PROTOCOL_VERSION
+        && session.session_id == session_id
+        && session.schema_fingerprint == schema_fingerprint
+        && session.external_revision == external_revision
+}
+
+fn run_history_command(
+    session_id: &str,
+    schema_fingerprint: &str,
+    external_revision: Revision,
+    expected_revision: Revision,
+    command: &str,
+) {
+    run_engine_command(&EngineCommand::RunCommand {
+        session: ProtocolSession::new(session_id, schema_fingerprint, external_revision),
+        request_id: NEXT_EDITOR_ID.fetch_add(1, Ordering::Relaxed),
+        expected_revision,
+        command: command.to_string(),
+        args: Value::Null,
+    });
+}
+
 #[component]
-fn EditorToolbar(
-    catalog: EditorCatalog,
-    editor_state: EditorState,
-    output_format: String,
-    on_change: EventHandler<EditorPayload>,
-    mut render_version: Signal<u64>,
-) -> Element {
-    let paragraph_catalog = catalog.clone();
-    let paragraph_state = editor_state.clone();
-    let paragraph_format = output_format.clone();
-
-    let h1_catalog = catalog.clone();
-    let h1_state = editor_state.clone();
-    let h1_format = output_format.clone();
-
-    let h2_catalog = catalog.clone();
-    let h2_state = editor_state.clone();
-    let h2_format = output_format.clone();
-
-    let quote_catalog = catalog.clone();
-    let quote_state = editor_state.clone();
-    let quote_format = output_format.clone();
-
-    let code_catalog = catalog.clone();
-    let code_state = editor_state.clone();
-    let code_format = output_format.clone();
-
-    let bold_catalog = catalog.clone();
-    let bold_state = editor_state.clone();
-    let bold_format = output_format.clone();
-
-    let italic_catalog = catalog.clone();
-    let italic_state = editor_state.clone();
-    let italic_format = output_format.clone();
-
-    let inline_code_catalog = catalog.clone();
-    let inline_code_state = editor_state.clone();
-    let inline_code_format = output_format.clone();
-
-    let insert_catalog = catalog.clone();
-    let insert_state = editor_state.clone();
-    let insert_format = output_format.clone();
-
+fn ReadOnlyDocument(document: EditorDocument) -> Element {
     rsx! {
-        div { class: "dxeditor__toolbar",
-            div { class: "dxeditor__toolbar-group", role: "group", aria_label: "Block type",
-                button {
-                    class: "dxeditor__button",
-                    r#type: "button",
-                    title: "Paragraph",
-                    onmousedown: move |event| event.prevent_default(),
-                    onclick: move |_| {
-                        spawn_block_type_command(
-                            paragraph_catalog.clone(),
-                            paragraph_state.clone(),
-                            COMPONENT_PARAGRAPH,
-                            None,
-                            paragraph_format.clone(),
-                            on_change,
-                            render_version,
-                        );
-                    },
-                    "P"
-                }
-                button {
-                    class: "dxeditor__button",
-                    r#type: "button",
-                    title: "Heading 1",
-                    onmousedown: move |event| event.prevent_default(),
-                    onclick: move |_| {
-                        spawn_block_type_command(
-                            h1_catalog.clone(),
-                            h1_state.clone(),
-                            COMPONENT_HEADING,
-                            Some(json!({ "level": 1 })),
-                            h1_format.clone(),
-                            on_change,
-                            render_version,
-                        );
-                    },
-                    "H1"
-                }
-                button {
-                    class: "dxeditor__button",
-                    r#type: "button",
-                    title: "Heading 2",
-                    onmousedown: move |event| event.prevent_default(),
-                    onclick: move |_| {
-                        spawn_block_type_command(
-                            h2_catalog.clone(),
-                            h2_state.clone(),
-                            COMPONENT_HEADING,
-                            Some(json!({ "level": 2 })),
-                            h2_format.clone(),
-                            on_change,
-                            render_version,
-                        );
-                    },
-                    "H2"
-                }
-                button {
-                    class: "dxeditor__button",
-                    r#type: "button",
-                    title: "Quote",
-                    onmousedown: move |event| event.prevent_default(),
-                    onclick: move |_| {
-                        spawn_block_type_command(
-                            quote_catalog.clone(),
-                            quote_state.clone(),
-                            COMPONENT_QUOTE,
-                            None,
-                            quote_format.clone(),
-                            on_change,
-                            render_version,
-                        );
-                    },
-                    "Quote"
-                }
-                button {
-                    class: "dxeditor__button",
-                    r#type: "button",
-                    title: "Code block",
-                    onmousedown: move |event| event.prevent_default(),
-                    onclick: move |_| {
-                        spawn_block_type_command(
-                            code_catalog.clone(),
-                            code_state.clone(),
-                            COMPONENT_CODE,
-                            None,
-                            code_format.clone(),
-                            on_change,
-                            render_version,
-                        );
-                    },
-                    "Code"
-                }
-            }
-            div { class: "dxeditor__toolbar-group", role: "group", aria_label: "Inline formatting",
-                button {
-                    class: "dxeditor__button",
-                    r#type: "button",
-                    title: "Bold",
-                    onmousedown: move |event| event.prevent_default(),
-                    onclick: move |_| {
-                        spawn_toggle_mark_command(
-                            bold_catalog.clone(),
-                            bold_state.clone(),
-                            "bold",
-                            bold_format.clone(),
-                            on_change,
-                            render_version,
-                        );
-                    },
-                    "B"
-                }
-                button {
-                    class: "dxeditor__button",
-                    r#type: "button",
-                    title: "Italic",
-                    onmousedown: move |event| event.prevent_default(),
-                    onclick: move |_| {
-                        spawn_toggle_mark_command(
-                            italic_catalog.clone(),
-                            italic_state.clone(),
-                            "italic",
-                            italic_format.clone(),
-                            on_change,
-                            render_version,
-                        );
-                    },
-                    "I"
-                }
-                button {
-                    class: "dxeditor__button",
-                    r#type: "button",
-                    title: "Inline code",
-                    onmousedown: move |event| event.prevent_default(),
-                    onclick: move |_| {
-                        spawn_toggle_mark_command(
-                            inline_code_catalog.clone(),
-                            inline_code_state.clone(),
-                            "code",
-                            inline_code_format.clone(),
-                            on_change,
-                            render_version,
-                        );
-                    },
-                    "`"
-                }
-            }
-            div { class: "dxeditor__toolbar-group", role: "group", aria_label: "Insert",
-                button {
-                    class: "dxeditor__button",
-                    r#type: "button",
-                    title: "Insert paragraph block",
-                    onmousedown: move |event| event.prevent_default(),
-                    onclick: move |_| {
-                        apply_editor_command(
-                            &insert_catalog,
-                            &insert_state,
-                            "editor.insert_block",
-                            json!({ "component": COMPONENT_PARAGRAPH }),
-                            &insert_format,
-                            on_change,
-                            &mut render_version,
-                        );
-                    },
-                    "+ Block"
-                }
+        article { class: "dxeditor__document dxeditor__read-only",
+            for block in document.blocks {
+                ReadOnlyBlock { block }
             }
         }
     }
 }
 
 #[component]
-fn EditableBlock(
-    block: BlockNode,
-    catalog: EditorCatalog,
-    editor_state: EditorState,
-    output_format: String,
-    on_change: EventHandler<EditorPayload>,
-    readonly: bool,
-    mut render_version: Signal<u64>,
-) -> Element {
-    let text = block.text_content();
-    let block_id = block.id.clone();
-    let block_id_attr = block_id.0.clone();
-    let text_len = text.chars().count();
-    let inline = block_inline_segments(&block);
+fn ReadOnlyBlock(block: BlockNode) -> Element {
+    let component = block.component.as_str();
     let level = block
         .attrs
         .get("level")
         .and_then(Value::as_u64)
         .unwrap_or(1)
         .clamp(1, 6);
-    let contenteditable = if readonly { "false" } else { "true" };
-
-    match block.component.as_str() {
-        COMPONENT_HEADING => {
-            rsx! {
-                div {
-                    class: "dxeditor__block",
-                    "data-block-id": "{block_id_attr}",
-                    "data-component": COMPONENT_HEADING,
-                    "data-level": "{level}",
-                    "data-text-len": "{text_len}",
-                    contenteditable,
-                    onkeydown: block_keydown_handler(
-                        catalog,
-                        editor_state,
-                        block_id,
-                        text_len,
-                        output_format,
-                        on_change,
-                        render_version,
-                        readonly,
-                    ),
-                    for segment in inline {
-                        InlineNodeView {
-                            node: segment.node,
-                            start: segment.start,
-                            end: segment.end,
-                        }
-                    }
-                }
-            }
-        }
-        COMPONENT_QUOTE => {
-            rsx! {
-                div {
-                    class: "dxeditor__block",
-                    "data-block-id": "{block_id_attr}",
-                    "data-component": COMPONENT_QUOTE,
-                    "data-text-len": "{text_len}",
-                    contenteditable,
-                    onkeydown: block_keydown_handler(
-                        catalog,
-                        editor_state,
-                        block_id,
-                        text_len,
-                        output_format,
-                        on_change,
-                        render_version,
-                        readonly,
-                    ),
-                    for segment in inline {
-                        InlineNodeView {
-                            node: segment.node,
-                            start: segment.start,
-                            end: segment.end,
-                        }
-                    }
-                }
-            }
-        }
-        COMPONENT_CODE => {
-            rsx! {
-                pre {
-                    class: "dxeditor__block",
-                    "data-block-id": "{block_id_attr}",
-                    "data-component": COMPONENT_CODE,
-                    "data-text-len": "{text_len}",
-                    contenteditable,
-                    onkeydown: block_keydown_handler(
-                        catalog,
-                        editor_state,
-                        block_id,
-                        text_len,
-                        output_format,
-                        on_change,
-                        render_version,
-                        readonly,
-                    ),
-                    for segment in inline {
-                        InlineNodeView {
-                            node: segment.node,
-                            start: segment.start,
-                            end: segment.end,
-                        }
-                    }
-                }
-            }
-        }
-        COMPONENT_DIVIDER => rsx! {
-            hr { class: "dxeditor__divider" }
+    match component {
+        COMPONENT_HEADING => match level {
+            1 => rsx! { h1 { ReadOnlyContent { content: block.content } } },
+            2 => rsx! { h2 { ReadOnlyContent { content: block.content } } },
+            3 => rsx! { h3 { ReadOnlyContent { content: block.content } } },
+            4 => rsx! { h4 { ReadOnlyContent { content: block.content } } },
+            5 => rsx! { h5 { ReadOnlyContent { content: block.content } } },
+            _ => rsx! { h6 { ReadOnlyContent { content: block.content } } },
         },
-        _ => {
+        COMPONENT_QUOTE => rsx! { blockquote { ReadOnlyContent { content: block.content } } },
+        COMPONENT_CODE => rsx! { pre { code { "{block.text_content()}" } } },
+        COMPONENT_DIVIDER => rsx! { hr {} },
+        COMPONENT_LIST => {
+            let ordered = block
+                .attrs
+                .get("ordered")
+                .and_then(Value::as_bool)
+                .unwrap_or(false);
+            let NodeContent::Blocks(items) = block.content else {
+                return rsx! {};
+            };
+            if ordered {
+                rsx! { ol { for item in items { ReadOnlyListItem { block: item } } } }
+            } else {
+                rsx! { ul { for item in items { ReadOnlyListItem { block: item } } } }
+            }
+        }
+        COMPONENT_TABLE => {
+            let NodeContent::Table(table) = block.content else {
+                return rsx! {};
+            };
             rsx! {
-                div {
-                    class: "dxeditor__block",
-                    "data-block-id": "{block_id_attr}",
-                    "data-component": COMPONENT_PARAGRAPH,
-                    "data-text-len": "{text_len}",
-                    contenteditable,
-                    onkeydown: block_keydown_handler(
-                        catalog,
-                        editor_state,
-                        block_id,
-                        text_len,
-                        output_format,
-                        on_change,
-                        render_version,
-                        readonly,
-                    ),
-                    for segment in inline {
-                        InlineNodeView {
-                            node: segment.node,
-                            start: segment.start,
-                            end: segment.end,
+                div { class: "tableWrapper",
+                    table {
+                        tbody {
+                            for row in table.rows {
+                                tr {
+                                    for cell in row.cells {
+                                        td {
+                                            for cell_block in cell.blocks {
+                                                ReadOnlyBlock { block: cell_block }
+                                            }
+                                        }
+                                    }
+                                }
+                            }
                         }
                     }
                 }
             }
         }
+        "opaque_markdown" | "opaque_markdown_block" => {
+            let source = block
+                .attrs
+                .get("source")
+                .and_then(Value::as_str)
+                .unwrap_or_default();
+            rsx! { pre { class: "dxeditor-engine__opaque", code { "{source}" } } }
+        }
+        COMPONENT_PARAGRAPH | COMPONENT_LIST_ITEM => {
+            rsx! { p { ReadOnlyContent { content: block.content } } }
+        }
+        _ => rsx! { div { class: "dxeditor__fallback", "{block.text_content()}" } },
     }
-}
-
-#[derive(Clone, PartialEq)]
-struct InlineSegment {
-    node: InlineNode,
-    start: usize,
-    end: usize,
 }
 
 #[component]
-fn InlineNodeView(node: InlineNode, start: usize, end: usize) -> Element {
-    let inline_id = node.id.0.clone();
-    let text_len = node.text.chars().count();
-
-    if node.component == COMPONENT_MENTION {
-        let entity_id = node
-            .attrs
-            .get("id")
-            .and_then(Value::as_str)
-            .unwrap_or_default()
-            .to_string();
-        return rsx! {
-            span {
-                class: "dxeditor__mention",
-                "data-inline-id": "{inline_id}",
-                "data-inline-start": "{start}",
-                "data-inline-end": "{end}",
-                "data-inline-text-len": "{text_len}",
-                "data-inline-prefix-len": "1",
-                "data-entity-id": "{entity_id}",
-                "@{node.text}"
-            }
-        };
-    }
-
+fn ReadOnlyListItem(block: BlockNode) -> Element {
+    let checked = block.attrs.get("checked").and_then(Value::as_bool);
     rsx! {
-        span {
-            "data-inline-id": "{inline_id}",
-            "data-inline-start": "{start}",
-            "data-inline-end": "{end}",
-            "data-inline-text-len": "{text_len}",
-            "data-inline-prefix-len": "0",
-            MarkedText {
-                text: node.text,
-                marks: node.marks,
-                index: 0,
+        li {
+            if let Some(checked) = checked {
+                input { r#type: "checkbox", checked, disabled: true, aria_label: "Task complete" }
             }
+            ReadOnlyContent { content: block.content }
         }
     }
 }
 
 #[component]
-fn MarkedText(text: String, marks: Vec<Mark>, index: usize) -> Element {
-    let Some(mark) = marks.get(index).cloned() else {
-        return rsx! { span { "{text}" } };
+fn ReadOnlyContent(content: NodeContent) -> Element {
+    match content {
+        NodeContent::Inline(inline) => rsx! {
+            for node in inline { ReadOnlyInline { node } }
+        },
+        NodeContent::Blocks(blocks) => rsx! {
+            for block in blocks { ReadOnlyBlock { block } }
+        },
+        NodeContent::Table(_) | NodeContent::Void | NodeContent::Custom(_) => rsx! {},
+    }
+}
+
+#[component]
+fn ReadOnlyInline(node: InlineNode) -> Element {
+    if node.component == COMPONENT_MENTION {
+        return rsx! { span { class: "dxeditor-engine__mention", "@{node.text}" } };
+    }
+    render_marked_text(node.text, &node.marks, 0)
+}
+
+fn render_marked_text(text: String, marks: &[Mark], index: usize) -> Element {
+    let Some(mark) = marks.get(index) else {
+        return rsx! { "{text}" };
     };
-    let next = index + 1;
+    let child = render_marked_text(text, marks, index + 1);
     match mark.component.as_str() {
-        "bold" => rsx! {
-            strong {
-                MarkedText { text, marks, index: next }
-            }
-        },
-        "italic" => rsx! {
-            em {
-                MarkedText { text, marks, index: next }
-            }
-        },
-        "code" => rsx! {
-            code {
-                class: "dxeditor__inline-code",
-                MarkedText { text, marks, index: next }
-            }
-        },
-        COMPONENT_LINK => {
+        "bold" => rsx! { strong { {child} } },
+        "italic" => rsx! { em { {child} } },
+        "strike" => rsx! { del { {child} } },
+        "code" => rsx! { code { {child} } },
+        "link" => {
             let href = mark
                 .attrs
                 .get("href")
                 .and_then(Value::as_str)
-                .unwrap_or_default()
-                .to_string();
-            rsx! {
-                a {
-                    href,
-                    MarkedText { text, marks, index: next }
-                }
+                .unwrap_or_default();
+            if safe_link_url(href) {
+                rsx! { a { href, rel: "noopener noreferrer", {child} } }
+            } else {
+                child
             }
         }
-        _ => rsx! {
-            MarkedText { text, marks, index: next }
-        },
+        _ => child,
     }
 }
 
-fn block_inline_segments(block: &BlockNode) -> Vec<InlineSegment> {
-    match &block.content {
-        crate::document::NodeContent::Inline(inline) => {
-            let mut cursor = 0usize;
-            inline
-                .iter()
-                .cloned()
-                .map(|node| {
-                    let start = cursor;
-                    cursor += node.text.chars().count();
-                    InlineSegment {
-                        node,
-                        start,
-                        end: cursor,
-                    }
-                })
-                .collect()
-        }
-        _ => Vec::new(),
+fn safe_link_url(url: &str) -> bool {
+    let value = url.trim();
+    if value.is_empty() || value.chars().any(char::is_control) {
+        return false;
     }
-}
-
-fn block_keydown_handler(
-    catalog: EditorCatalog,
-    editor_state: EditorState,
-    block_id: NodeId,
-    text_len: usize,
-    output_format: String,
-    on_change: EventHandler<EditorPayload>,
-    mut render_version: Signal<u64>,
-    readonly: bool,
-) -> impl FnMut(KeyboardEvent) {
-    move |event: KeyboardEvent| {
-        if readonly {
-            return;
-        }
-        let key = event.key().to_string();
-        let modifiers = event.modifiers();
-        match key.as_str() {
-            "Enter" => {
-                event.prevent_default();
-                let offset = editor_state
-                    .selection()
-                    .filter(EditorSelection::is_collapsed)
-                    .filter(|selection| selection.focus.block_id == block_id)
-                    .map(|selection| selection.focus.offset)
-                    .unwrap_or(text_len);
-                apply_editor_command(
-                    &catalog,
-                    &editor_state,
-                    "editor.split_block",
-                    json!({ "id": block_id.0, "offset": offset }),
-                    &output_format,
-                    on_change,
-                    &mut render_version,
-                );
-            }
-            "Backspace" => {
-                let Some((command, args)) = editor_state
-                    .selection()
-                    .filter(EditorSelection::is_collapsed)
-                    .filter(|selection| selection.focus.offset == 0)
-                    .and_then(|selection| {
-                        let document = editor_state.document();
-                        previous_block_id(&document, &selection.focus.block_id).map(|previous_id| {
-                            event.prevent_default();
-                            (
-                                "editor.merge_blocks",
-                                json!({
-                                "first_id": previous_id.0,
-                                "second_id": selection.focus.block_id.0,
-                                }),
-                            )
-                        })
-                    })
-                else {
-                    return;
-                };
-                apply_editor_command(
-                    &catalog,
-                    &editor_state,
-                    command,
-                    args,
-                    &output_format,
-                    on_change,
-                    &mut render_version,
-                );
-            }
-            "b" | "B" if modifiers.ctrl() || modifiers.meta() => {
-                event.prevent_default();
-                spawn_toggle_mark_command(
-                    catalog.clone(),
-                    editor_state.clone(),
-                    "bold",
-                    output_format.clone(),
-                    on_change,
-                    render_version,
-                );
-            }
-            "i" | "I" if modifiers.ctrl() || modifiers.meta() => {
-                event.prevent_default();
-                spawn_toggle_mark_command(
-                    catalog.clone(),
-                    editor_state.clone(),
-                    "italic",
-                    output_format.clone(),
-                    on_change,
-                    render_version,
-                );
-            }
-            "e" | "E" if modifiers.ctrl() || modifiers.meta() => {
-                event.prevent_default();
-                spawn_toggle_mark_command(
-                    catalog.clone(),
-                    editor_state.clone(),
-                    "code",
-                    output_format.clone(),
-                    on_change,
-                    render_version,
-                );
-            }
-            _ => {}
-        }
+    if value.starts_with('/') || value.starts_with('#') || value.starts_with("./") {
+        return true;
     }
+    value
+        .split_once(':')
+        .map(|(scheme, _)| {
+            matches!(
+                scheme.to_ascii_lowercase().as_str(),
+                "http" | "https" | "mailto" | "tel"
+            )
+        })
+        .unwrap_or(true)
 }
 
-fn spawn_block_type_command(
-    catalog: EditorCatalog,
-    editor_state: EditorState,
-    component: &'static str,
-    attrs: Option<Value>,
-    output_format: String,
-    on_change: EventHandler<EditorPayload>,
-    mut render_version: Signal<u64>,
-) {
-    spawn(async move {
-        let Some(selection) = current_editor_selection(&editor_state).await else {
-            return;
-        };
-        apply_editor_command(
-            &catalog,
-            &editor_state,
-            "editor.set_block_type",
-            block_type_args(&selection, component, attrs),
-            &output_format,
-            on_change,
-            &mut render_version,
-        );
-    });
-}
-
-fn spawn_toggle_mark_command(
-    catalog: EditorCatalog,
-    editor_state: EditorState,
-    mark: &'static str,
-    output_format: String,
-    on_change: EventHandler<EditorPayload>,
-    mut render_version: Signal<u64>,
-) {
-    spawn(async move {
-        let Some(selection) = current_editor_selection(&editor_state).await else {
-            return;
-        };
-        if selection.is_collapsed() {
-            return;
-        }
-        apply_editor_command(
-            &catalog,
-            &editor_state,
-            "editor.toggle_mark",
-            mark_args(&selection, mark),
-            &output_format,
-            on_change,
-            &mut render_version,
-        );
-    });
-}
-
-async fn current_editor_selection(editor_state: &EditorState) -> Option<EditorSelection> {
-    editor_state.selection()
-}
-
-fn block_type_args(selection: &EditorSelection, component: &str, attrs: Option<Value>) -> Value {
-    let mut args = serde_json::Map::new();
-    args.insert(
-        "component".to_string(),
-        Value::String(component.to_string()),
-    );
-    if let Some(attrs) = attrs {
-        args.insert("attrs".to_string(), attrs);
-    }
-    args.insert(
-        "id".to_string(),
-        Value::String(selection.focus.block_id.0.clone()),
-    );
-    Value::Object(args)
-}
-
-fn mark_args(selection: &EditorSelection, mark: &str) -> Value {
-    let mut args = serde_json::Map::new();
-    args.insert("mark".to_string(), Value::String(mark.to_string()));
-    args.insert("selection".to_string(), json!(selection));
-    Value::Object(args)
-}
-
-fn previous_block_id(document: &EditorDocument, block_id: &NodeId) -> Option<NodeId> {
-    let index = document
-        .blocks
-        .iter()
-        .position(|block| block.id == *block_id)?;
-    index
-        .checked_sub(1)
-        .and_then(|previous| document.blocks.get(previous))
-        .map(|block| block.id.clone())
-}
-
-fn apply_editor_command(
-    catalog: &EditorCatalog,
-    editor_state: &EditorState,
-    command: &str,
-    args: Value,
-    output_format: &str,
-    on_change: EventHandler<EditorPayload>,
-    render_version: &mut Signal<u64>,
-) {
-    if dispatch_editor_command(
-        catalog,
-        editor_state,
-        command,
-        args,
-        output_format,
-        on_change,
-    )
-    .is_ok()
-    {
-        render_version.set(render_version() + 1);
-    }
-}
-
-fn dispatch_editor_command(
-    catalog: &EditorCatalog,
-    editor_state: &EditorState,
-    command: &str,
-    args: Value,
-    output_format: &str,
-    on_change: EventHandler<EditorPayload>,
-) -> Result<(), EditorError> {
-    let transaction = catalog.commands().dispatch(command, editor_state, args)?;
-    editor_state.apply_transaction(transaction)?;
-    let payload = catalog
-        .codecs()
-        .encode(&editor_state.document(), output_format)?;
-    on_change.call(payload);
-    Ok(())
-}
-
-fn document_word_count(document: &EditorDocument) -> usize {
+fn document_word_count(document: &ComponentDocumentV2) -> usize {
     document
         .text_content()
         .split_whitespace()
@@ -1036,6 +1042,8 @@ pub fn MarkdownEditor(
     #[props(default)] onblur: Option<EventHandler<FocusEvent>>,
     #[props(default)] catalog: EditorCatalog,
     #[props(default)] readonly: bool,
+    #[props(default)] editor_actions: EditorActionsMode,
+    #[props(default)] external_revision: Option<u64>,
 ) -> Element {
     rsx! {
         Editor {
@@ -1043,6 +1051,8 @@ pub fn MarkdownEditor(
             output_format: "markdown".to_string(),
             catalog,
             readonly,
+            editor_actions,
+            external_revision,
             onfocus,
             onblur,
             on_change: move |payload: EditorPayload| {
@@ -1060,6 +1070,8 @@ pub fn PlainTextEditor(
     on_change: EventHandler<String>,
     #[props(default)] catalog: EditorCatalog,
     #[props(default)] readonly: bool,
+    #[props(default)] editor_actions: EditorActionsMode,
+    #[props(default)] external_revision: Option<u64>,
 ) -> Element {
     rsx! {
         Editor {
@@ -1067,6 +1079,8 @@ pub fn PlainTextEditor(
             output_format: "plain_text".to_string(),
             catalog,
             readonly,
+            editor_actions,
+            external_revision,
             on_change: move |payload: EditorPayload| {
                 if let Some(value) = payload.value.as_str() {
                     on_change.call(value.to_string());
@@ -1082,6 +1096,8 @@ pub fn DocumentEditor(
     on_change: EventHandler<EditorDocument>,
     #[props(default)] catalog: EditorCatalog,
     #[props(default)] readonly: bool,
+    #[props(default)] editor_actions: EditorActionsMode,
+    #[props(default)] external_revision: Option<u64>,
 ) -> Element {
     let value = serde_json::to_value(document).unwrap_or(Value::Null);
     rsx! {
@@ -1090,6 +1106,8 @@ pub fn DocumentEditor(
             output_format: DOCUMENT_SCHEMA_V1.to_string(),
             catalog,
             readonly,
+            editor_actions,
+            external_revision,
             on_change: move |payload: EditorPayload| {
                 if let Ok(document) = serde_json::from_value::<EditorDocument>(payload.value) {
                     on_change.call(document);
@@ -1101,12 +1119,40 @@ pub fn DocumentEditor(
 
 #[component]
 pub fn DocumentView(document: EditorDocument, #[props(default)] catalog: EditorCatalog) -> Element {
-    rsx! {
-        DocumentEditor {
-            document,
-            catalog,
-            readonly: true,
-            on_change: move |_document: EditorDocument| {},
-        }
+    let _ = catalog;
+    rsx! { ReadOnlyDocument { document } }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn legacy_v1_payloads_cross_the_component_boundary_as_v2() {
+        let catalog = EditorCatalog::default();
+        let payload = EditorPayload::new(
+            DOCUMENT_SCHEMA_V1,
+            serde_json::to_value(EditorDocument::plain_text("hello")).unwrap(),
+        );
+        let document = decode_editor_payload(&catalog, &payload).unwrap();
+        assert_eq!(document.version, 2);
+        assert_eq!(document.text_content(), "hello");
+
+        let encoded = encode_editor_payload(&catalog, &document, DOCUMENT_SCHEMA_V1).unwrap();
+        let legacy: EditorDocument = serde_json::from_value(encoded.value).unwrap();
+        assert_eq!(legacy.text_content(), "hello");
+    }
+
+    #[cfg(feature = "markdown")]
+    #[test]
+    fn markdown_compatibility_uses_the_v2_session_document() {
+        let catalog = EditorCatalog::default();
+        let payload = EditorPayload::new("markdown", Value::String("# Hello\n".to_string()));
+        let document = decode_editor_payload(&catalog, &payload).unwrap();
+        assert_eq!(document.version, 2);
+        assert_eq!(document.text_content(), "Hello");
+
+        let encoded = encode_editor_payload(&catalog, &document, "markdown").unwrap();
+        assert!(encoded.value.as_str().unwrap().contains("# Hello"));
     }
 }

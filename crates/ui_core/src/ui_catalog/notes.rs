@@ -1,4 +1,7 @@
-use std::{rc::Rc, time::Duration};
+use std::rc::Rc;
+
+#[cfg(feature = "markdown")]
+use std::time::Duration;
 
 use dioxus::prelude::*;
 use semantic_data::value::{Object, Value};
@@ -143,7 +146,6 @@ fn render_markdown_note_content_form(ctx: AttributeFormRenderContext) -> Element
     let initial_value = value.clone();
     let mut last_prop_value = use_signal(move || initial_value);
     let mut last_emitted_value = use_signal(|| None::<String>);
-    let mut editor_generation = use_signal(|| 0_u64);
     let mut pending_value = use_signal(|| None::<String>);
     let mut debounce_revision = use_signal(|| 0_u64);
 
@@ -161,7 +163,6 @@ fn render_markdown_note_content_form(ctx: AttributeFormRenderContext) -> Element
 
         debounce_revision += 1;
         pending_value.set(None);
-        editor_generation += 1;
     });
 
     let drop_field = field.clone();
@@ -174,11 +175,8 @@ fn render_markdown_note_content_form(ctx: AttributeFormRenderContext) -> Element
     let change_field = field.clone();
     let blur_field = field.clone();
     let focus_field = field;
-    let editor_key = format!("markdown-editor-{}", editor_generation());
-
     rsx! {
         dxeditor::MarkdownEditor {
-            key: "{editor_key}",
             value,
             on_change: move |value: String| {
                 pending_value.set(Some(value));
@@ -226,11 +224,6 @@ fn NoteContentView(content: String, format: String) -> Element {
     };
     let mut mode = use_signal(move || default_mode);
     let can_render_formatted = format == FORMAT_MARKDOWN && markdown_rendering_enabled();
-    let markdown_content = content.clone();
-    let rendered_markdown = use_memo(use_reactive!(|(markdown_content,)| markdown_to_html(
-        &markdown_content
-    )));
-
     let show_formatted = mode() == NoteContentMode::Formatted && can_render_formatted;
     rsx! {
         div { class: "semantic-note__content",
@@ -253,15 +246,31 @@ fn NoteContentView(content: String, format: String) -> Element {
                 }
             }
             if show_formatted {
-                div {
-                    class: "semantic-note__formatted",
-                    dangerous_inner_html: rendered_markdown(),
-                }
+                FormattedMarkdownView { content: content.clone() }
             } else {
                 pre { class: "semantic-note__raw semantic-value semantic-value--raw", "{content}" }
             }
         }
     }
+}
+
+#[cfg(feature = "markdown")]
+#[component]
+fn FormattedMarkdownView(content: String) -> Element {
+    let document = use_memo(use_reactive!(|(content,)| {
+        dxeditor::markdown::parse_markdown(&content)
+    }));
+    rsx! {
+        div { class: "semantic-note__formatted",
+            dxeditor::DocumentView { document: document() }
+        }
+    }
+}
+
+#[cfg(not(feature = "markdown"))]
+#[component]
+fn FormattedMarkdownView(content: String) -> Element {
+    rsx! { pre { class: "semantic-note__raw", "{content}" } }
 }
 
 fn note_format(object: &Object) -> Option<&str> {
@@ -298,17 +307,75 @@ fn markdown_rendering_enabled() -> bool {
     cfg!(feature = "markdown")
 }
 
-#[cfg(feature = "markdown")]
+#[cfg(all(feature = "markdown", test))]
 fn markdown_to_html(markdown: &str) -> String {
-    let parser = pulldown_cmark::Parser::new_ext(markdown, pulldown_cmark::Options::all());
+    let parser = pulldown_cmark::Parser::new_ext(markdown, pulldown_cmark::Options::all())
+        .map(sanitize_markdown_event);
     let mut html = String::new();
     pulldown_cmark::html::push_html(&mut html, parser);
     html
 }
 
-#[cfg(not(feature = "markdown"))]
-fn markdown_to_html(markdown: &str) -> String {
-    markdown.to_string()
+#[cfg(all(feature = "markdown", test))]
+fn sanitize_markdown_event(event: pulldown_cmark::Event<'_>) -> pulldown_cmark::Event<'_> {
+    use pulldown_cmark::{Event, Tag};
+
+    match event {
+        Event::Html(html) | Event::InlineHtml(html) => Event::Text(html),
+        Event::Start(Tag::Link {
+            link_type,
+            dest_url,
+            title,
+            id,
+        }) => Event::Start(Tag::Link {
+            link_type,
+            dest_url: if safe_markdown_url(&dest_url) {
+                dest_url
+            } else {
+                "#".into()
+            },
+            title,
+            id,
+        }),
+        Event::Start(Tag::Image {
+            link_type,
+            dest_url,
+            title,
+            id,
+        }) => Event::Start(Tag::Image {
+            link_type,
+            dest_url: if safe_markdown_url(&dest_url) {
+                dest_url
+            } else {
+                "about:blank".into()
+            },
+            title,
+            id,
+        }),
+        other => other,
+    }
+}
+
+#[cfg(all(feature = "markdown", test))]
+fn safe_markdown_url(url: &str) -> bool {
+    let normalized = url
+        .chars()
+        .filter(|character| !character.is_ascii_control() && !character.is_ascii_whitespace())
+        .flat_map(char::to_lowercase)
+        .collect::<String>();
+    let Some(colon) = normalized.find(':') else {
+        return true;
+    };
+    if normalized[..colon]
+        .chars()
+        .any(|character| matches!(character, '/' | '?' | '#'))
+    {
+        return true;
+    }
+    matches!(
+        &normalized[..colon],
+        "http" | "https" | "mailto" | "tel" | "semantic"
+    )
 }
 
 #[cfg(test)]
@@ -366,5 +433,30 @@ mod tests {
     #[test]
     fn markdown_to_html_renders_markdown() {
         assert!(super::markdown_to_html("# Title").contains("<h1>Title</h1>"));
+    }
+
+    #[cfg(feature = "markdown")]
+    #[test]
+    fn markdown_to_html_escapes_raw_html() {
+        let html = super::markdown_to_html(
+            "<script>alert('xss')</script>\n\ntext <img src=x onerror=alert(1)>",
+        );
+        assert!(!html.contains("<script>"));
+        assert!(!html.contains("<img"));
+        assert!(html.contains("&lt;script&gt;"));
+        assert!(html.contains("&lt;img src=x onerror=alert(1)&gt;"));
+    }
+
+    #[cfg(feature = "markdown")]
+    #[test]
+    fn markdown_to_html_blocks_active_url_schemes() {
+        let html = super::markdown_to_html(
+            "[bad](javascript:alert(1)) ![bad](data:text/html,boom) [ok](https://example.com)",
+        );
+        assert!(!html.to_ascii_lowercase().contains("javascript:"));
+        assert!(!html.to_ascii_lowercase().contains("data:text/html"));
+        assert!(html.contains("href=\"#\""));
+        assert!(html.contains("src=\"about:blank\""));
+        assert!(html.contains("href=\"https://example.com\""));
     }
 }

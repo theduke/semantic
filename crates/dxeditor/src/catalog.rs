@@ -7,11 +7,13 @@ use crate::{
     codec::{CodecRegistry, register_standard_codecs},
     command::{CommandRegistry, register_standard_commands},
     component::{ComponentRegistry, EditorComponentKind, EditorComponentRegistration},
+    component_spec::{ComponentCatalog, ComponentCatalogError, register_standard_component_specs},
     document::{
         COMPONENT_CODE, COMPONENT_DIVIDER, COMPONENT_HEADING, COMPONENT_LINK, COMPONENT_LIST,
         COMPONENT_LIST_ITEM, COMPONENT_MENTION, COMPONENT_PARAGRAPH, COMPONENT_QUOTE,
         COMPONENT_TABLE, COMPONENT_TABLE_CELL, COMPONENT_TABLE_ROW, COMPONENT_TEXT,
     },
+    format::{DocumentFormatRegistry, register_standard_document_formats},
     render::{ComponentRenderKind, EditorRenderRegistry},
     suggestion::{
         EntityMentionSuggestionProvider, InputRuleRegistry, SlashMenuSuggestionProvider,
@@ -35,7 +37,9 @@ impl Default for EditorCatalogConfig {
 #[derive(Clone)]
 pub struct EditorCatalog {
     codecs: CodecRegistry,
+    document_formats: DocumentFormatRegistry,
     components: ComponentRegistry,
+    component_specs: ComponentCatalog,
     renderers: EditorRenderRegistry,
     commands: CommandRegistry,
     actions: ActionRegistry,
@@ -56,12 +60,32 @@ impl EditorCatalog {
         &mut self.codecs
     }
 
+    pub fn document_formats(&self) -> &DocumentFormatRegistry {
+        &self.document_formats
+    }
+
+    pub fn document_formats_mut(&mut self) -> &mut DocumentFormatRegistry {
+        &mut self.document_formats
+    }
+
     pub fn components(&self) -> &ComponentRegistry {
         &self.components
     }
 
     pub fn components_mut(&mut self) -> &mut ComponentRegistry {
         &mut self.components
+    }
+
+    pub fn component_specs(&self) -> &ComponentCatalog {
+        &self.component_specs
+    }
+
+    pub fn component_specs_mut(&mut self) -> &mut ComponentCatalog {
+        &mut self.component_specs
+    }
+
+    pub fn schema_fingerprint(&self) -> String {
+        self.component_specs.schema_fingerprint()
     }
 
     pub fn renderers(&self) -> &EditorRenderRegistry {
@@ -127,7 +151,9 @@ impl EditorCatalogBuilder {
         Self {
             catalog: EditorCatalog {
                 codecs: CodecRegistry::default(),
+                document_formats: DocumentFormatRegistry::default(),
                 components: ComponentRegistry::default(),
+                component_specs: ComponentCatalog::default(),
                 renderers: EditorRenderRegistry::default(),
                 commands: CommandRegistry::default(),
                 actions: ActionRegistry::default(),
@@ -143,16 +169,24 @@ impl EditorCatalogBuilder {
         self
     }
 
-    pub fn build(mut self) -> EditorCatalog {
+    pub fn build(self) -> EditorCatalog {
+        self.try_build()
+            .expect("standard editor catalog specifications must be valid")
+    }
+
+    pub fn try_build(mut self) -> Result<EditorCatalog, ComponentCatalogError> {
         if self.config.register_defaults {
             register_standard_codecs(&mut self.catalog.codecs);
+            register_standard_document_formats(&mut self.catalog.document_formats);
             register_standard_components(&mut self.catalog.components);
+            register_standard_component_specs(&mut self.catalog.component_specs)?;
             register_standard_renderers(&mut self.catalog.renderers);
             register_standard_commands(&mut self.catalog.commands);
             register_standard_actions(&mut self.catalog.actions);
             register_standard_suggestions(&mut self.catalog.suggestions);
         }
-        self.catalog
+        self.catalog.component_specs.validate()?;
+        Ok(self.catalog)
     }
 }
 

@@ -1,0 +1,30 @@
+<!doctype html>
+<html lang="en">
+  <head><meta charset="utf-8"><title>dxeditor engine smoke</title></head>
+  <body>
+    <main class="dxeditor">
+      <div data-dxeditor-host="smoke"></div>
+      <div data-dxeditor-overlays></div>
+    </main>
+    <output id="result">FAIL</output>
+    <script src="../dist/editor.iife.js"></script>
+    <script>
+      const documentValue = {
+        schema: 'semantic.component-document', version: 2,
+        root: { kind: 'document', content: [{
+          id: 'block-1', kind: 'paragraph',
+          content: [{ kind: 'text', text: 'Browser smoke' }],
+        }] },
+      };
+      const host = document.querySelector('[data-dxeditor-host]');
+      const session = SemanticEditorEngine.mount(host, {
+        sessionId: 'smoke', document: documentValue, readonly: false, emit() {},
+      });
+      session.command('heading', { level: 2 });
+      const snapshot = session.snapshot();
+      if (host.querySelector('.ProseMirror') && snapshot.root.content[0].kind === 'heading') {
+        document.querySelector('#result').textContent = 'PASS';
+      }
+    </script>
+  </body>
+</html>

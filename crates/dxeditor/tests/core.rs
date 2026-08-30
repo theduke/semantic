@@ -552,6 +552,25 @@ fn dioxus_smoke_renders_marked_spans() {
 }
 
 #[test]
+fn document_view_does_not_render_unsafe_link_destinations() {
+    let document = EditorDocument::new(vec![BlockNode::paragraph(
+        "block-1",
+        vec![InlineNode::text("text-1", "unsafe").with_mark(Mark::link("javascript:alert(1)"))],
+    )]);
+
+    let html = dioxus_ssr::render_element(rsx! {
+        dxeditor::DocumentView {
+            document,
+            catalog: EditorCatalog::default(),
+        }
+    });
+
+    assert!(html.contains("unsafe"));
+    assert!(!html.contains("javascript:"));
+    assert!(!html.contains("<a href="));
+}
+
+#[test]
 fn action_dispatch_mutates_shared_state() {
     let catalog = EditorCatalog::default();
     let state = dxeditor::EditorState::new(EditorDocument::plain_text("body"));
