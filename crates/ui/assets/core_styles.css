@@ -1529,7 +1529,8 @@ pre {
 .semantic-player__filter-panel {
   display: grid;
   gap: var(--semantic-space-3);
-  max-height: 56vh;
+  flex: 0 0 auto;
+  max-height: min(72vh, calc(100% - 9rem));
   overflow: auto;
   padding: var(--semantic-space-4);
   border-bottom: 1px solid var(--semantic-border);

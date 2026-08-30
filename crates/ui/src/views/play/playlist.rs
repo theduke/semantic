@@ -18,6 +18,11 @@ pub fn PlayerPlaylist(
     on_close: EventHandler<MouseEvent>,
 ) -> Element {
     let entry_count = entries.len();
+    // VirtualList retains this signal, so appends must update it explicitly.
+    let mut virtual_count = use_signal(|| entry_count);
+    use_effect(use_reactive((&entry_count,), move |(entry_count,)| {
+        virtual_count.set(entry_count);
+    }));
     let active_label =
         active_index.map_or_else(|| "None".to_string(), |index| (index + 1).to_string());
     let virtual_entries = entries.clone();
@@ -69,7 +74,7 @@ pub fn PlayerPlaylist(
                 dxcomp::VirtualList {
                     id: "semantic-player-virtual-list",
                     class: "semantic-player__virtual-list",
-                    count: entry_count,
+                    count: virtual_count,
                     buffer: 8_usize,
                     estimate_size: move |_| ROW_HEIGHT,
                     render_item: move |index: usize| playlist_row(
