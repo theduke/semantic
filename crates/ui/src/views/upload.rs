@@ -235,6 +235,18 @@ pub fn UploadPage() -> Element {
             UploadItemStatus::Reading | UploadItemStatus::Uploading
         )
     });
+    let visible_queue_items = queue
+        .read()
+        .iter()
+        .filter(|item| {
+            !matches!(
+                item.status,
+                UploadItemStatus::Done | UploadItemStatus::Removed
+            )
+        })
+        .cloned()
+        .collect::<Vec<_>>();
+
     let results = queue
         .read()
         .iter()
@@ -328,8 +340,8 @@ pub fn UploadPage() -> Element {
                 div { class: "semantic-upload__error", "{message}" }
             }
             div { class: "semantic-upload__queue",
-                for item in queue.read().iter().filter(|item| item.status != UploadItemStatus::Removed) {
-                    UploadQueueRow { item: item.clone(), commands }
+                for item in visible_queue_items {
+                    UploadQueueRow { item, commands }
                 }
             }
             if !results.is_empty() {
