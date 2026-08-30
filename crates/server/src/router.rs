@@ -51,7 +51,7 @@ impl SemanticServer {
             resolver: Arc::clone(&self.resolver),
         };
         let file_get_path = format!("{}/{{id}}", self.config.file_api_prefix);
-        Router::new()
+        let router = Router::new()
             .route(&self.config.rpc_path, post(rpc_http_handler))
             .route(
                 &self.config.file_api_prefix,
@@ -62,7 +62,12 @@ impl SemanticServer {
                 &self.config.ws_path,
                 axum::routing::get(crate::ws::rpc_ws_handler),
             )
-            .with_state(state)
+            .with_state(state);
+
+        #[cfg(feature = "embed-ui")]
+        let router = router.fallback_service(get(crate::ui::handler));
+
+        router
     }
 
     pub async fn serve(self, listener: TcpListener) -> std::result::Result<(), ServerError> {

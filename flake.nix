@@ -11,6 +11,10 @@
       url = "github:oxalica/rust-overlay";
       inputs.nixpkgs.follows = "nixpkgs";
     };
+    dioxus-components = {
+      url = "github:DioxusLabs/dioxus-components/02801f27e4b3e30606e5c77e435c9d955c708eb3";
+      flake = false;
+    };
   };
 
   outputs =
@@ -49,6 +53,28 @@
             ];
             targets = [ "wasm32-unknown-unknown" ];
           };
+          rustPlatform = pkgs.makeRustPlatform {
+            cargo = rustToolchain;
+            rustc = rustToolchain;
+          };
+          version = (builtins.fromTOML (builtins.readFile ./Cargo.toml)).workspace.package.version;
+          source = lib.cleanSourceWith {
+            src = ./.;
+            filter =
+              path: type:
+              let
+                base = baseNameOf path;
+              in
+              !lib.elem base [
+                ".git"
+                "docs"
+                "node_modules"
+                "target"
+              ];
+          };
+          cargoDeps = rustPlatform.importCargoLock {
+            lockFile = ./Cargo.lock;
+          };
 
           baseDeps = {
             # Base dependencies needed for normal workspace development.
@@ -59,6 +85,7 @@
                 openssl
                 openssl.dev
                 cargo-nextest
+                just
               ])
               ++ lib.optionals pkgs.stdenv.isLinux [ pkgs.fuse3 ];
 
@@ -128,6 +155,47 @@
             nativeBuildInputs = baseDeps.nativeBuildInputs ++ uiDeps.nativeBuildInputs;
           };
 
+          semanticPackage = rustPlatform.buildRustPackage {
+            pname = "semantic";
+            inherit version cargoDeps;
+            src = source;
+
+            nativeBuildInputs = with pkgs; [
+              binaryen
+              dioxus-cli
+              pkg-config
+              wasm-bindgen-cli
+            ];
+            buildInputs = baseDeps.buildInputs;
+
+            postPatch = ''
+              substituteInPlace crates/dxcomp/Cargo.toml \
+                --replace-fail \
+                'path = "/home/theduke/dev/github.com/DioxusLabs/dioxus-components/primitives"' \
+                'path = "${inputs.dioxus-components}/primitives"'
+            '';
+
+            buildPhase = ''
+              runHook preBuild
+              export CARGO_TARGET_DIR="$PWD/target"
+              dx build --web --release --package semantic_ui \
+                --no-default-features --features web --debug-symbols=false --locked
+              cargo build --release --package semantic_cli --bin semantic \
+                --features embed-ui --locked
+              runHook postBuild
+            '';
+
+            installPhase = ''
+              runHook preInstall
+              install -Dm755 target/release/semantic $out/bin/semantic
+              runHook postInstall
+            '';
+
+            doCheck = false;
+            dontCargoInstall = true;
+            meta.mainProgram = "semantic";
+          };
+
           uiLibraryPath = lib.makeLibraryPath (
             baseDeps.buildInputs
             ++ uiDeps.buildInputs
@@ -193,6 +261,16 @@
           _module.args.pkgs = pkgs;
 
           formatter = pkgs.nixfmt-rfc-style;
+
+          packages = {
+            semantic = semanticPackage;
+            default = semanticPackage;
+          };
+
+          apps.default = {
+            type = "app";
+            program = "${semanticPackage}/bin/semantic";
+          };
 
           devShells.base = baseShell;
           devShells.default = commonShell;

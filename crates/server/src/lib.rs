@@ -4,6 +4,8 @@ mod error;
 mod file;
 mod redb;
 mod router;
+#[cfg(feature = "embed-ui")]
+mod ui;
 mod ws;
 
 pub use auth::{HeaderPrincipalResolver, NoAuthPrincipalResolver, PrincipalResolver};

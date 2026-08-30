@@ -16,6 +16,9 @@ version.workspace = true
 name = "semantic"
 path = "src/main.rs"
 
+[features]
+embed-ui = ["semantic_server/embed-ui"]
+
 [dependencies]
 clap = { version = "4.5.48", features = ["derive", "env"] }
 semantic_app = { path = "../app" }
