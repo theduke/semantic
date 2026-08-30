@@ -49,9 +49,18 @@ each scope.
 
 Fuser invokes synchronous filesystem callbacks. The filesystem retains the
 calling Tokio runtime handle and uses `block_on` to wait for asynchronous
-operations through the native, thread-safe `RpcClient` abstraction. File
-content is read through ranged RPC requests, so reads do not require loading
-the entire blob into memory.
+operations through the native, thread-safe `RpcClient` abstraction. Multiple
+Fuser workers may serve different open files concurrently; network waits use
+per-file-descriptor locks rather than holding the global filesystem-state lock.
+
+Raw files use the kernel page cache and read-ahead. Each open file descriptor
+also keeps an offset-to-EOF API stream for sequential reads. Small forward gaps
+are drained from that stream, while distant or backward seeks use one exact
+range request without discarding a useful sequential stream. A second
+contiguous read at the new location promotes it to the active stream. A stream
+that was closed by an idle server is resumed from its exact byte cursor with a
+bounded retry count. The server passes ranges to the backing object store and
+streams the response, so neither side loads a whole blob for every FUSE read.
 
 The `semantic` CLI passes Ctrl-C and SIGTERM to the mount as an explicit
 shutdown request. The FUSE session is unmounted and its worker is joined before

@@ -1,7 +1,7 @@
 use std::{
     collections::{BTreeMap, BTreeSet, HashMap},
     ffi::OsStr,
-    sync::Mutex,
+    sync::{Arc, Mutex},
     time::{Duration, SystemTime},
 };
 
@@ -15,6 +15,7 @@ use fuser::{
 use futures::SinkExt as _;
 use semantic_data::value::Value;
 use semantic_rpc::RpcClientError;
+use semantic_rpc::file::FileDownloadByteStream;
 
 use crate::{
     layout::{
@@ -37,6 +38,9 @@ const EIO: Errno = Errno::EIO;
 const ENOENT: Errno = Errno::ENOENT;
 const ENOTDIR: Errno = Errno::ENOTDIR;
 const EROFS: Errno = Errno::EROFS;
+const MAX_FORWARD_STREAM_GAP: u64 = 256 * 1024;
+const MAX_RECENT_READ_BYTES: usize = 256 * 1024;
+const MAX_STREAM_RESUME_ATTEMPTS: usize = 2;
 
 pub(crate) fn mount_options(config: &MountConfig) -> Config {
     let mut options = vec![MountOption::FSName("semantic".to_string())];
@@ -48,6 +52,8 @@ pub(crate) fn mount_options(config: &MountConfig) -> Config {
     }
     let mut fuse_config = Config::default();
     fuse_config.mount_options = options;
+    fuse_config.n_threads = Some(4);
+    fuse_config.clone_fd = cfg!(target_os = "linux");
     fuse_config.acl = if config.allow_other {
         SessionACL::All
     } else {
@@ -122,6 +128,177 @@ enum WriteHandle {
     },
 }
 
+struct ActiveReadStream {
+    stream: FileDownloadByteStream,
+    buffer_offset: u64,
+    buffer: Vec<u8>,
+    cursor: u64,
+}
+
+struct RawReadHandle {
+    bridge: RuntimeBridge,
+    entity_id: String,
+    scope_id: Option<String>,
+    file_size: u64,
+    active: Option<ActiveReadStream>,
+    last_exact_end: Option<u64>,
+}
+
+impl RawReadHandle {
+    fn new(
+        bridge: RuntimeBridge,
+        entity_id: String,
+        scope_id: Option<String>,
+        file_size: u64,
+    ) -> Self {
+        Self {
+            bridge,
+            entity_id,
+            scope_id,
+            file_size,
+            active: None,
+            last_exact_end: None,
+        }
+    }
+
+    fn read(&mut self, offset: u64, size: u32) -> std::result::Result<Bytes, String> {
+        if size == 0 || offset >= self.file_size {
+            return Ok(Bytes::new());
+        }
+        let end = offset.saturating_add(u64::from(size)).min(self.file_size);
+
+        if self.active.is_none() {
+            self.start_stream(offset)?;
+            return self.read_from_active(offset, end);
+        }
+
+        let can_reuse_active = self.active.as_ref().is_some_and(|active| {
+            offset >= active.buffer_offset
+                && offset <= active.cursor.saturating_add(MAX_FORWARD_STREAM_GAP)
+        });
+        if can_reuse_active {
+            self.last_exact_end = None;
+            return self.read_from_active(offset, end);
+        }
+
+        if self.last_exact_end == Some(offset) {
+            self.start_stream(offset)?;
+            self.last_exact_end = None;
+            return self.read_from_active(offset, end);
+        }
+
+        let bytes = self.bridge.read(
+            self.entity_id.clone(),
+            self.scope_id.clone(),
+            offset,
+            u32::try_from(end - offset).expect("FUSE read length fits u32"),
+        )?;
+        if bytes.len() as u64 != end - offset {
+            return Err(format!(
+                "short ranged read for '{}': requested {} bytes at {offset}, received {}",
+                self.entity_id,
+                end - offset,
+                bytes.len()
+            ));
+        }
+        self.last_exact_end = Some(end);
+        Ok(bytes)
+    }
+
+    fn start_stream(&mut self, offset: u64) -> std::result::Result<(), String> {
+        let mut attempts = 0;
+        let stream = loop {
+            match self.bridge.stream_file_from(
+                self.entity_id.clone(),
+                self.scope_id.clone(),
+                offset,
+            ) {
+                Ok(stream) => break stream,
+                Err(error) => {
+                    if attempts >= MAX_STREAM_RESUME_ATTEMPTS {
+                        return Err(error);
+                    }
+                    attempts += 1;
+                }
+            }
+        };
+        self.active = Some(ActiveReadStream {
+            stream,
+            buffer_offset: offset,
+            buffer: Vec::new(),
+            cursor: offset,
+        });
+        Ok(())
+    }
+
+    fn read_from_active(&mut self, offset: u64, end: u64) -> std::result::Result<Bytes, String> {
+        let mut resume_attempts = 0;
+        loop {
+            let active = self.active.as_mut().expect("active stream initialized");
+            if active.cursor >= end {
+                break;
+            }
+            match self.bridge.next_download_chunk(&mut active.stream) {
+                Ok(Some(chunk)) if !chunk.is_empty() => {
+                    let remaining = self.file_size.saturating_sub(active.cursor) as usize;
+                    let chunk = &chunk[..chunk.len().min(remaining)];
+                    active.buffer.extend_from_slice(chunk);
+                    active.cursor = active.cursor.saturating_add(chunk.len() as u64);
+                }
+                Ok(Some(_)) => continue,
+                Ok(None) | Err(_) if active.cursor < self.file_size => {
+                    if resume_attempts >= MAX_STREAM_RESUME_ATTEMPTS {
+                        return Err(format!(
+                            "download stream for '{}' ended at {} before file size {}",
+                            self.entity_id, active.cursor, self.file_size
+                        ));
+                    }
+                    resume_attempts += 1;
+                    let cursor = active.cursor;
+                    match self.bridge.stream_file_from(
+                        self.entity_id.clone(),
+                        self.scope_id.clone(),
+                        cursor,
+                    ) {
+                        Ok(stream) => active.stream = stream,
+                        Err(error) if resume_attempts >= MAX_STREAM_RESUME_ATTEMPTS => {
+                            return Err(error);
+                        }
+                        Err(_) => continue,
+                    }
+                }
+                Ok(None) | Err(_) => break,
+            }
+        }
+
+        let active = self.active.as_mut().expect("active stream initialized");
+        let available_end = end.min(active.cursor);
+        if available_end <= offset {
+            return Ok(Bytes::new());
+        }
+        let start_index = usize::try_from(offset - active.buffer_offset)
+            .map_err(|_| "read buffer offset does not fit usize".to_string())?;
+        let end_index = usize::try_from(available_end - active.buffer_offset)
+            .map_err(|_| "read buffer end does not fit usize".to_string())?;
+        let bytes = Bytes::copy_from_slice(&active.buffer[start_index..end_index]);
+
+        let retain_from = available_end.saturating_sub(MAX_RECENT_READ_BYTES as u64);
+        if retain_from > active.buffer_offset {
+            let drain = usize::try_from(retain_from - active.buffer_offset)
+                .unwrap_or(usize::MAX)
+                .min(active.buffer.len());
+            active.buffer.drain(..drain);
+            active.buffer_offset = active.buffer_offset.saturating_add(drain as u64);
+        }
+        Ok(bytes)
+    }
+}
+
+enum PreparedRead {
+    Data(Bytes),
+    Raw(Arc<Mutex<RawReadHandle>>),
+}
+
 pub struct SemanticFilesystem {
     state: Mutex<FilesystemState>,
 }
@@ -131,6 +308,7 @@ struct FilesystemState {
     config: MountConfig,
     nodes: HashMap<u64, Node>,
     handles: HashMap<u64, WriteHandle>,
+    read_handles: HashMap<u64, Arc<Mutex<RawReadHandle>>>,
     next_inode: u64,
     next_handle: u64,
 }
@@ -154,6 +332,7 @@ impl FilesystemState {
             config,
             nodes: HashMap::new(),
             handles: HashMap::new(),
+            read_handles: HashMap::new(),
             next_inode: ROOT_INODE + 1,
             next_handle: 1,
         };
@@ -479,6 +658,17 @@ impl FilesystemState {
         fh
     }
 
+    fn allocate_read_handle(&mut self, handle: RawReadHandle) -> u64 {
+        let fh = self.next_handle;
+        self.next_handle += 1;
+        self.read_handles.insert(fh, Arc::new(Mutex::new(handle)));
+        fh
+    }
+
+    fn release_read_handle(&mut self, fh: u64) -> bool {
+        self.read_handles.remove(&fh).is_some()
+    }
+
     fn commit(&mut self, fh: u64) -> std::result::Result<(), Errno> {
         let Some(mut handle) = self.handles.remove(&fh) else {
             return Err(EBADF);
@@ -689,7 +879,19 @@ impl FilesystemState {
         }
         let writing = flags & libc::O_ACCMODE != libc::O_RDONLY;
         if !writing {
-            reply.opened(FileHandle(0), FopenFlags::FOPEN_DIRECT_IO);
+            let fh = match &node.kind {
+                NodeKind::RawFile { entity_id } => {
+                    let handle = RawReadHandle::new(
+                        self.bridge.clone(),
+                        entity_id.clone(),
+                        self.config.scope_id.clone(),
+                        node.size,
+                    );
+                    self.allocate_read_handle(handle)
+                }
+                _ => 0,
+            };
+            reply.opened(FileHandle(fh), FopenFlags::empty());
             return;
         }
         if self.config.read_only {
@@ -720,49 +922,40 @@ impl FilesystemState {
         reply.opened(FileHandle(fh), FopenFlags::FOPEN_DIRECT_IO);
     }
 
-    fn read(
+    fn prepare_read(
         &mut self,
-        _req: &Request,
         ino: u64,
-        _fh: u64,
+        fh: u64,
         offset: i64,
         size: u32,
-        _flags: i32,
-        _lock_owner: Option<u64>,
-        reply: ReplyData,
-    ) {
+    ) -> std::result::Result<PreparedRead, Errno> {
         self.drain_events();
         if offset < 0 {
-            reply.error(EINVAL);
-            return;
+            return Err(EINVAL);
         }
         let Some(node) = self.nodes.get(&ino) else {
-            reply.error(ENOENT);
-            return;
+            return Err(ENOENT);
         };
         match &node.kind {
             NodeKind::Metadata { content, .. } => {
                 let start = (offset as usize).min(content.len());
                 let end = start.saturating_add(size as usize).min(content.len());
-                reply.data(&content[start..end]);
+                Ok(PreparedRead::Data(Bytes::copy_from_slice(
+                    &content[start..end],
+                )))
             }
-            NodeKind::RawFile { entity_id } => {
-                match self.bridge.read(
-                    entity_id.clone(),
-                    self.config.scope_id.clone(),
-                    offset as u64,
-                    size,
-                ) {
-                    Ok(bytes) => reply.data(&bytes),
-                    Err(_) => reply.error(EIO),
-                }
-            }
+            NodeKind::RawFile { .. } => self
+                .read_handles
+                .get(&fh)
+                .cloned()
+                .map(PreparedRead::Raw)
+                .ok_or(EBADF),
             NodeKind::Failed(error) => {
                 tracing::error!(inode = ino, error, "FUSE upload failed");
-                reply.error(EIO);
+                Err(EIO)
             }
-            NodeKind::Pending => reply.error(EBUSY),
-            NodeKind::Directory { .. } => reply.error(EINVAL),
+            NodeKind::Pending => Err(EBUSY),
+            NodeKind::Directory { .. } => Err(EINVAL),
         }
     }
 
@@ -940,6 +1133,10 @@ impl FilesystemState {
     }
 
     fn flush(&mut self, _req: &Request, _ino: u64, fh: u64, _lock_owner: u64, reply: ReplyEmpty) {
+        if self.read_handles.contains_key(&fh) {
+            reply.ok();
+            return;
+        }
         match self.commit(fh) {
             Ok(()) => reply.ok(),
             Err(error) => reply.error(error),
@@ -947,6 +1144,10 @@ impl FilesystemState {
     }
 
     fn fsync(&mut self, _req: &Request, _ino: u64, fh: u64, _datasync: bool, reply: ReplyEmpty) {
+        if self.read_handles.contains_key(&fh) {
+            reply.ok();
+            return;
+        }
         match self.commit(fh) {
             Ok(()) => reply.ok(),
             Err(error) => reply.error(error),
@@ -963,6 +1164,10 @@ impl FilesystemState {
         _flush: bool,
         reply: ReplyEmpty,
     ) {
+        if self.release_read_handle(fh) {
+            reply.ok();
+            return;
+        }
         let result = self.commit(fh);
         self.handles.remove(&fh);
         match result {
@@ -1129,16 +1334,29 @@ impl Filesystem for SemanticFilesystem {
         lock_owner: Option<LockOwner>,
         reply: ReplyData,
     ) {
-        self.state.lock().expect("FUSE state poisoned").read(
-            req,
-            ino.0,
-            fh.0,
-            offset.min(i64::MAX as u64) as i64,
-            size,
-            flags.0,
-            lock_owner.map(|owner| owner.0),
-            reply,
-        );
+        let _ = (req, flags, lock_owner);
+        let prepared = self
+            .state
+            .lock()
+            .expect("FUSE state poisoned")
+            .prepare_read(ino.0, fh.0, offset.min(i64::MAX as u64) as i64, size);
+        match prepared {
+            Ok(PreparedRead::Data(bytes)) => reply.data(&bytes),
+            Ok(PreparedRead::Raw(handle)) => {
+                let result = handle
+                    .lock()
+                    .expect("FUSE read handle poisoned")
+                    .read(offset, size);
+                match result {
+                    Ok(bytes) => reply.data(&bytes),
+                    Err(error) => {
+                        tracing::error!(inode = ino.0, offset, size, error, "FUSE read failed");
+                        reply.error(EIO);
+                    }
+                }
+            }
+            Err(error) => reply.error(error),
+        }
     }
 
     fn readdir(
@@ -1276,6 +1494,9 @@ impl Filesystem for SemanticFilesystem {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::{collections::VecDeque, sync::Arc};
+
+    use futures::stream;
     use semantic_data::{
         bundles::directory::DIRECTORY_CLASS_ID,
         filestore::{ATTR_FILE_BYTE_SIZE, ATTR_FILE_FILENAME, FILE_CLASS_ID},
@@ -1296,6 +1517,119 @@ mod tests {
         }
     }
 
+    #[derive(Clone, Copy)]
+    enum StreamPlan {
+        Complete,
+        ErrorAfter(usize),
+        EofAfter(usize),
+        OpenError,
+    }
+
+    #[derive(Default)]
+    struct ReadMockState {
+        stream_offsets: Vec<u64>,
+        exact_ranges: Vec<(u64, u32)>,
+        plans: VecDeque<StreamPlan>,
+    }
+
+    struct ReadMockClient {
+        data: Bytes,
+        state: Arc<Mutex<ReadMockState>>,
+    }
+
+    impl RpcClientDyn for ReadMockClient {
+        fn invoke_value(
+            &self,
+            _command: String,
+            _payload: Value,
+        ) -> semantic_rpc::client::RpcClientFuture<std::result::Result<Value, RpcClientError>>
+        {
+            Box::pin(async { Ok(Value::Null) })
+        }
+
+        fn stream_file_from(
+            &self,
+            _id: String,
+            _scope_id: Option<String>,
+            offset: u64,
+        ) -> semantic_rpc::client::RpcClientFuture<
+            std::result::Result<FileDownloadByteStream, RpcClientError>,
+        > {
+            let start = usize::try_from(offset)
+                .unwrap_or(usize::MAX)
+                .min(self.data.len());
+            let plan = {
+                let mut state = self.state.lock().unwrap();
+                state.stream_offsets.push(offset);
+                state.plans.pop_front().unwrap_or(StreamPlan::Complete)
+            };
+            if matches!(plan, StreamPlan::OpenError) {
+                return Box::pin(async {
+                    Err(RpcClientError::Transport(
+                        "mock stream open failed".to_string(),
+                    ))
+                });
+            }
+            let mut items = Vec::new();
+            let (available, fail) = match plan {
+                StreamPlan::Complete => (self.data.len() - start, false),
+                StreamPlan::ErrorAfter(length) => (length.min(self.data.len() - start), true),
+                StreamPlan::EofAfter(length) => (length.min(self.data.len() - start), false),
+                StreamPlan::OpenError => unreachable!("handled above"),
+            };
+            for chunk in self.data.slice(start..start + available).chunks(2) {
+                items.push(Ok(Bytes::copy_from_slice(chunk)));
+            }
+            if fail {
+                items.push(Err(RpcClientError::Transport(
+                    "mock stream aborted".to_string(),
+                )));
+            }
+            Box::pin(async move { Ok(Box::pin(stream::iter(items)) as FileDownloadByteStream) })
+        }
+
+        fn read_file_range(
+            &self,
+            _id: String,
+            _scope_id: Option<String>,
+            offset: u64,
+            size: u32,
+        ) -> semantic_rpc::client::RpcClientFuture<std::result::Result<Bytes, RpcClientError>>
+        {
+            let start = usize::try_from(offset)
+                .unwrap_or(usize::MAX)
+                .min(self.data.len());
+            let end = start.saturating_add(size as usize).min(self.data.len());
+            self.state.lock().unwrap().exact_ranges.push((offset, size));
+            let bytes = self.data.slice(start..end);
+            Box::pin(async move { Ok(bytes) })
+        }
+    }
+
+    fn read_handle(
+        data: Bytes,
+        plans: impl IntoIterator<Item = StreamPlan>,
+    ) -> (
+        tokio::runtime::Runtime,
+        RawReadHandle,
+        Arc<Mutex<ReadMockState>>,
+    ) {
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .build()
+            .unwrap();
+        let state = Arc::new(Mutex::new(ReadMockState {
+            plans: plans.into_iter().collect(),
+            ..ReadMockState::default()
+        }));
+        let client = RpcClient::new(ReadMockClient {
+            data: data.clone(),
+            state: Arc::clone(&state),
+        });
+        let bridge = RuntimeBridge::new(client, runtime.handle().clone());
+        let handle = RawReadHandle::new(bridge, "file-1".to_string(), None, data.len() as u64);
+        (runtime, handle, state)
+    }
+
     #[test]
     fn sequential_writes_accept_contiguous_offsets() {
         let mut write = SequentialWrite::default();
@@ -1310,6 +1644,121 @@ mod tests {
         assert_eq!(write.accept(0, 4), Ok(()));
         assert_eq!(write.accept(3, 1), Err(()));
         assert_eq!(write.accept(4, 1), Err(()));
+    }
+
+    #[test]
+    fn sequential_reads_reuse_one_open_ended_stream() {
+        let (_runtime, mut handle, state) =
+            read_handle(Bytes::from_static(b"abcdefgh"), [StreamPlan::Complete]);
+        assert_eq!(&handle.read(0, 2).unwrap()[..], b"ab");
+        assert_eq!(&handle.read(2, 2).unwrap()[..], b"cd");
+        let state = state.lock().unwrap();
+        assert_eq!(state.stream_offsets, vec![0]);
+        assert!(state.exact_ranges.is_empty());
+    }
+
+    #[test]
+    fn small_forward_skip_drains_the_active_stream() {
+        let (_runtime, mut handle, state) =
+            read_handle(Bytes::from_static(b"abcdefgh"), [StreamPlan::Complete]);
+        assert_eq!(&handle.read(0, 2).unwrap()[..], b"ab");
+        assert_eq!(&handle.read(6, 2).unwrap()[..], b"gh");
+        let state = state.lock().unwrap();
+        assert_eq!(state.stream_offsets, vec![0]);
+        assert!(state.exact_ranges.is_empty());
+    }
+
+    #[test]
+    fn distant_read_uses_exact_range_without_discarding_active_stream() {
+        let distant = MAX_FORWARD_STREAM_GAP + 16;
+        let data = Bytes::from(vec![b'x'; distant as usize + 8]);
+        let (_runtime, mut handle, state) = read_handle(data, [StreamPlan::Complete]);
+        assert_eq!(handle.read(0, 2).unwrap().len(), 2);
+        assert_eq!(handle.read(distant, 2).unwrap().len(), 2);
+        assert_eq!(handle.read(2, 2).unwrap().len(), 2);
+        let state = state.lock().unwrap();
+        assert_eq!(state.stream_offsets, vec![0]);
+        assert_eq!(state.exact_ranges, vec![(distant, 2)]);
+    }
+
+    #[test]
+    fn consecutive_reads_at_a_distant_position_promote_a_new_stream() {
+        let distant = MAX_FORWARD_STREAM_GAP + 16;
+        let data = Bytes::from(vec![b'x'; distant as usize + 8]);
+        let (_runtime, mut handle, state) =
+            read_handle(data, [StreamPlan::Complete, StreamPlan::Complete]);
+        handle.read(0, 2).unwrap();
+        handle.read(distant, 2).unwrap();
+        handle.read(distant + 2, 2).unwrap();
+        let state = state.lock().unwrap();
+        assert_eq!(state.stream_offsets, vec![0, distant + 2]);
+        assert_eq!(state.exact_ranges, vec![(distant, 2)]);
+    }
+
+    #[test]
+    fn reads_stop_at_known_eof() {
+        let (_runtime, mut handle, state) =
+            read_handle(Bytes::from_static(b"abcdefgh"), [StreamPlan::Complete]);
+        assert_eq!(&handle.read(6, 8).unwrap()[..], b"gh");
+        assert!(handle.read(8, 8).unwrap().is_empty());
+        assert_eq!(state.lock().unwrap().stream_offsets, vec![6]);
+    }
+
+    #[test]
+    fn aborted_stream_resumes_at_exact_cursor_after_partial_data() {
+        let (_runtime, mut handle, state) = read_handle(
+            Bytes::from_static(b"abcdefgh"),
+            [StreamPlan::ErrorAfter(2), StreamPlan::Complete],
+        );
+        assert_eq!(&handle.read(0, 4).unwrap()[..], b"abcd");
+        assert_eq!(state.lock().unwrap().stream_offsets, vec![0, 2]);
+    }
+
+    #[test]
+    fn premature_stream_eof_resumes_at_exact_cursor() {
+        let (_runtime, mut handle, state) = read_handle(
+            Bytes::from_static(b"abcdefgh"),
+            [StreamPlan::EofAfter(2), StreamPlan::Complete],
+        );
+        assert_eq!(&handle.read(0, 4).unwrap()[..], b"abcd");
+        assert_eq!(state.lock().unwrap().stream_offsets, vec![0, 2]);
+    }
+
+    #[test]
+    fn stream_resume_stops_after_bounded_failures() {
+        let (_runtime, mut handle, state) = read_handle(
+            Bytes::from_static(b"abcdefgh"),
+            [
+                StreamPlan::ErrorAfter(2),
+                StreamPlan::OpenError,
+                StreamPlan::OpenError,
+            ],
+        );
+        assert!(handle.read(0, 4).is_err());
+        assert_eq!(state.lock().unwrap().stream_offsets, vec![0, 2, 2]);
+    }
+
+    #[test]
+    fn release_drops_per_open_read_state() {
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .build()
+            .unwrap();
+        let bridge = RuntimeBridge::new(RpcClient::new(MockClient), runtime.handle().clone());
+        let mut state = FilesystemState::from_snapshot(
+            bridge.clone(),
+            Snapshot {
+                entities: BTreeMap::new(),
+                links: Vec::new(),
+            },
+            MountConfig::default(),
+        );
+        let fh =
+            state.allocate_read_handle(RawReadHandle::new(bridge, "file-1".to_string(), None, 4));
+        let read_state = Arc::clone(&state.read_handles[&fh]);
+        assert_eq!(Arc::strong_count(&read_state), 2);
+        assert!(state.release_read_handle(fh));
+        assert!(!state.read_handles.contains_key(&fh));
+        assert_eq!(Arc::strong_count(&read_state), 1);
     }
 
     #[test]

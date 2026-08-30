@@ -15,7 +15,9 @@ use crate::command::RpcCommandSpec;
 use crate::convert::{RpcDecode, RpcEncode};
 use crate::error::RpcClientError;
 #[cfg(feature = "client")]
-use crate::file::{FileUploadProgressSender, FileUploadRequest, FileUploadResponse};
+use crate::file::{
+    FileDownloadByteStream, FileUploadProgressSender, FileUploadRequest, FileUploadResponse,
+};
 use crate::protocol::{RpcRequest, RpcResponse, RpcResult};
 #[cfg(feature = "client")]
 use bytes::Bytes;
@@ -80,6 +82,19 @@ pub trait RpcClientDyn: RpcClientThreadBounds + 'static {
 
     fn file_url(&self, _id: &str) -> Option<String> {
         None
+    }
+
+    fn stream_file_from(
+        &self,
+        _id: String,
+        _scope_id: Option<String>,
+        _offset: u64,
+    ) -> RpcClientFuture<std::result::Result<FileDownloadByteStream, RpcClientError>> {
+        Box::pin(async {
+            Err(RpcClientError::Transport(
+                "file downloads are not supported by this client".to_string(),
+            ))
+        })
     }
 
     #[cfg(feature = "client")]
@@ -150,6 +165,17 @@ impl RpcClient {
 
     pub fn file_url(&self, id: &str) -> Option<String> {
         self.inner.file_url(id)
+    }
+
+    pub async fn stream_file_from(
+        &self,
+        id: impl Into<String>,
+        scope_id: Option<String>,
+        offset: u64,
+    ) -> std::result::Result<FileDownloadByteStream, RpcClientError> {
+        self.inner
+            .stream_file_from(id.into(), scope_id, offset)
+            .await
     }
 
     #[cfg(feature = "client")]

@@ -1,6 +1,7 @@
 use std::sync::{Arc, Mutex, mpsc as std_mpsc};
 
 use bytes::Bytes;
+use futures::StreamExt as _;
 use futures::channel::mpsc;
 use semantic_data::{
     builtin::DEFAULT_COLLECTION,
@@ -12,7 +13,7 @@ use semantic_data::{
 };
 use semantic_rpc::{
     RpcClient, RpcClientError,
-    file::{FileUploadContent, FileUploadRequest, FileUploadResponse},
+    file::{FileDownloadByteStream, FileUploadContent, FileUploadRequest, FileUploadResponse},
 };
 use tokio::runtime::Handle;
 
@@ -71,6 +72,27 @@ impl RuntimeBridge {
     ) -> std::result::Result<Bytes, String> {
         self.runtime
             .block_on(self.client.read_file_range(id, scope_id, offset, size))
+            .map_err(|error| error.to_string())
+    }
+
+    pub fn stream_file_from(
+        &self,
+        id: String,
+        scope_id: Option<String>,
+        offset: u64,
+    ) -> std::result::Result<FileDownloadByteStream, String> {
+        self.runtime
+            .block_on(self.client.stream_file_from(id, scope_id, offset))
+            .map_err(|error| error.to_string())
+    }
+
+    pub fn next_download_chunk(
+        &self,
+        stream: &mut FileDownloadByteStream,
+    ) -> std::result::Result<Option<Bytes>, String> {
+        self.runtime
+            .block_on(stream.next())
+            .transpose()
             .map_err(|error| error.to_string())
     }
 

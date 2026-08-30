@@ -531,6 +531,27 @@ mod tests {
                     .method("GET")
                     .uri(format!("/api/v1/file/{id}"))
                     .header("x-semantic-scope", "default")
+                    .header("range", "bytes=3-")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), http::StatusCode::PARTIAL_CONTENT);
+        assert_eq!(
+            response.headers().get(http::header::CONTENT_RANGE).unwrap(),
+            "bytes 3-5/6"
+        );
+        let bytes = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+        assert_eq!(&bytes[..], b"def");
+
+        let response = server
+            .router()
+            .oneshot(
+                Request::builder()
+                    .method("GET")
+                    .uri(format!("/api/v1/file/{id}"))
+                    .header("x-semantic-scope", "default")
                     .header("range", "bytes=-2")
                     .body(Body::empty())
                     .unwrap(),

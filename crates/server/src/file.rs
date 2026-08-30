@@ -11,7 +11,9 @@ use http::header::{
     RANGE,
 };
 use http::{HeaderMap, StatusCode};
-use semantic_app::{AppRequestContext, FileContent, FileCreateRequest, FileSizedStream};
+use semantic_app::{
+    AppRequestContext, FileByteRange, FileContent, FileCreateRequest, FileSizedStream,
+};
 use semantic_data::value::{Object, Value};
 use semantic_media::mime;
 
@@ -94,15 +96,18 @@ pub async fn download_handler(
         Ok(ctx) => ctx,
         Err(err) => return server_error_response(err),
     };
-    let file = match state.app.files().read(&ctx, None, id).await {
-        Ok(file) => file,
+    let reader = match state.app.files().open(&ctx, None, id).await {
+        Ok(reader) => reader,
         Err(err) => return app_error_response(err),
     };
-    let bytes = match file.stream.try_collect::<BytesMut>().await {
-        Ok(bytes) => bytes.freeze(),
-        Err(err) => return app_error_response(err),
+    let total_len = match reader.byte_size {
+        Some(total_len) => total_len,
+        None => {
+            return app_error_response(semantic_app::AppError::InvalidFileMetadata(
+                "object store did not report a byte size".to_string(),
+            ));
+        }
     };
-    let total_len = bytes.len() as u64;
     let selected = match headers.get(RANGE) {
         Some(range) => match parse_range_header(range, total_len) {
             Ok(range) => Some(range),
@@ -110,19 +115,21 @@ pub async fn download_handler(
         },
         None => None,
     };
+    let store_range = selected
+        .as_ref()
+        .map(|range| FileByteRange::bounded(range.start, range.end.saturating_add(1)));
+    let file = match reader.read(store_range).await {
+        Ok(file) => file,
+        Err(err) => return app_error_response(err),
+    };
 
-    let (status, body, content_range) = match selected {
-        Some(range) => {
-            let start = range.start as usize;
-            let end = range.end as usize;
-            let body = bytes.slice(start..=end);
-            (
-                StatusCode::PARTIAL_CONTENT,
-                body,
-                Some(format!("bytes {}-{}/{}", range.start, range.end, total_len)),
-            )
-        }
-        None => (StatusCode::OK, bytes, None),
+    let (status, content_len, content_range) = match selected {
+        Some(range) => (
+            StatusCode::PARTIAL_CONTENT,
+            range.end - range.start + 1,
+            Some(format!("bytes {}-{}/{}", range.start, range.end, total_len)),
+        ),
+        None => (StatusCode::OK, total_len, None),
     };
 
     let mut builder = Response::builder().status(status);
@@ -138,7 +145,7 @@ pub async fn download_handler(
     );
     headers_out.insert(
         CONTENT_LENGTH,
-        HeaderValue::from_str(&body.len().to_string()).expect("valid content length"),
+        HeaderValue::from_str(&content_len.to_string()).expect("valid content length"),
     );
     if let Some(content_range) = content_range {
         headers_out.insert(CONTENT_RANGE, header_value(&content_range));
@@ -148,7 +155,7 @@ pub async fn download_handler(
     }
 
     builder
-        .body(Body::from(body))
+        .body(Body::from_stream(file.stream))
         .expect("file response should be buildable")
 }
 

@@ -17,8 +17,8 @@ pub use context::AppRequestContext;
 pub use db::{DbOpenRequest, DbProvider, SemanticDb};
 pub use error::AppError;
 pub use file::{
-    FileByteStream, FileContent, FileCreateRequest, FileReadResult, FileRecord, FileService,
-    FileSizedStream,
+    FileByteRange, FileByteStream, FileContent, FileCreateRequest, FileReadResult, FileReader,
+    FileRecord, FileService, FileSizedStream,
 };
 pub use media::{MediaAnalysisConfig, MediaAnalysisOutcome, MediaAnalysisService};
 pub use scope::{DbScopeId, ScopeInfo, ScopeManager, ScopeOpenOptions, ScopeVisibility};

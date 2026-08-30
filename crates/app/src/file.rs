@@ -3,7 +3,9 @@ use std::sync::{Arc, Mutex};
 use bytes::Bytes;
 use futures_util::stream::BoxStream;
 use futures_util::{StreamExt as _, TryStreamExt as _};
-use objstore::{DataSource, ObjStore as _, ObjStoreError, Operation, Put, SizedValueStream};
+use objstore::{
+    DataSource, DynObjStore, ObjStore as _, ObjStoreError, Operation, Put, SizedValueStream,
+};
 use semantic_data::builtin::{ATTR_ID, ATTR_TYPE};
 use semantic_data::filestore::{
     ATTR_FILE_BYTE_SIZE, ATTR_FILE_CONTENT_HASH_SHA256, ATTR_FILE_FILENAME,
@@ -17,6 +19,8 @@ use crate::{
     AppError, AppRequestContext, DbScopeId, MediaAnalysisConfig, MediaAnalysisService,
     media::merge_analysis_attributes,
 };
+
+pub use objstore::ByteRange as FileByteRange;
 
 pub type FileByteStream = BoxStream<'static, std::result::Result<Bytes, AppError>>;
 
@@ -58,6 +62,43 @@ pub struct FileReadResult {
     pub mime_type: Option<String>,
     pub content_hash_sha256: Option<String>,
     pub stream: FileByteStream,
+}
+
+pub struct FileReader {
+    pub record: EntityRecord,
+    pub filestore_locator: String,
+    pub byte_size: Option<u64>,
+    pub mime_type: Option<String>,
+    pub content_hash_sha256: Option<String>,
+    store: DynObjStore,
+}
+
+impl FileReader {
+    pub async fn read(
+        self,
+        range: Option<FileByteRange>,
+    ) -> std::result::Result<FileReadResult, AppError> {
+        let builder = self.store.build_stream(&self.filestore_locator);
+        let builder = match range {
+            Some(range) => builder.with_range(range),
+            None => builder,
+        };
+        let stream = builder
+            .send()
+            .await?
+            .ok_or_else(|| AppError::FileNotFound(self.record.id.clone()))?
+            .map_err(AppError::ObjectStore)
+            .boxed();
+
+        Ok(FileReadResult {
+            record: self.record,
+            filestore_locator: self.filestore_locator,
+            byte_size: self.byte_size,
+            mime_type: self.mime_type,
+            content_hash_sha256: self.content_hash_sha256,
+            stream,
+        })
+    }
 }
 
 impl FileService {
@@ -172,6 +213,15 @@ impl FileService {
         scope_id: Option<DbScopeId>,
         id: String,
     ) -> std::result::Result<FileReadResult, AppError> {
+        self.open(ctx, scope_id, id).await?.read(None).await
+    }
+
+    pub async fn open(
+        &self,
+        ctx: &AppRequestContext,
+        scope_id: Option<DbScopeId>,
+        id: String,
+    ) -> std::result::Result<FileReader, AppError> {
         let scope_id = ctx.resolve_scope_id(scope_id).await?;
         let db = ctx.resolve_db(Some(scope_id.clone())).await?;
         let Some(record) = db.get(DEFAULT_COLLECTION.to_string(), id.clone()).await? else {
@@ -184,18 +234,17 @@ impl FileService {
         let content_hash_sha256 = optional_file_string(&record, "content_hash_sha256")?;
 
         let store = ctx.default_file_store(Some(scope_id)).await?;
-        let Some((meta, stream)) = store.get_stream_with_meta(&filestore_locator).await? else {
+        let Some(meta) = store.meta(&filestore_locator).await? else {
             return Err(AppError::FileNotFound(id));
         };
-        let stream = stream.map_err(AppError::ObjectStore).boxed();
 
-        Ok(FileReadResult {
+        Ok(FileReader {
             record,
             filestore_locator,
             byte_size: byte_size.or(meta.size),
             mime_type: mime_type.or(meta.mime_type),
             content_hash_sha256: content_hash_sha256.or(meta.hash_sha256.map(hex::encode)),
-            stream,
+            store,
         })
     }
 }

@@ -7,8 +7,9 @@ use crate::client::{RpcClient, RpcClientDyn, request, resolve_response};
 use crate::command::RpcCommandSpec;
 use crate::error::RpcClientError;
 use crate::file::{
-    FileUploadByteStream, FileUploadContent, FileUploadPhase, FileUploadProgressSender,
-    FileUploadRequest, FileUploadResponse, derive_file_api_prefix, emit_progress,
+    FileDownloadByteStream, FileUploadByteStream, FileUploadContent, FileUploadPhase,
+    FileUploadProgressSender, FileUploadRequest, FileUploadResponse, derive_file_api_prefix,
+    emit_progress,
 };
 use crate::protocol::RpcResponse;
 
@@ -181,6 +182,65 @@ impl HttpRpcClient {
             .await
             .map_err(|err| RpcClientError::Transport(err.to_string()))
     }
+
+    pub async fn stream_file_from(
+        &self,
+        id: &str,
+        scope_id: Option<&str>,
+        offset: u64,
+    ) -> Result<FileDownloadByteStream, RpcClientError> {
+        let mut url = format!("{}/{}", self.file_api_prefix, path_encode(id));
+        if let Some(scope_id) = scope_id {
+            url.push_str("?scope=");
+            url.push_str(&form_encode(scope_id));
+        }
+        let response = self
+            .client
+            .get(url)
+            .header(reqwest::header::RANGE, format!("bytes={offset}-"))
+            .send()
+            .await
+            .map_err(|err| RpcClientError::Transport(err.to_string()))?;
+        let status = response.status();
+        if status == reqwest::StatusCode::RANGE_NOT_SATISFIABLE {
+            return Ok(stream::empty().boxed());
+        }
+        if !status.is_success() {
+            return Err(RpcClientError::Transport(format!(
+                "file download failed with status {status}"
+            )));
+        }
+        if offset > 0 && status != reqwest::StatusCode::PARTIAL_CONTENT {
+            return Err(RpcClientError::Protocol(format!(
+                "file download requested offset {offset}, but server returned status {status}"
+            )));
+        }
+        if status == reqwest::StatusCode::PARTIAL_CONTENT {
+            let content_range = response
+                .headers()
+                .get(reqwest::header::CONTENT_RANGE)
+                .and_then(|value| value.to_str().ok())
+                .ok_or_else(|| {
+                    RpcClientError::Protocol(
+                        "partial file download response is missing Content-Range".to_string(),
+                    )
+                })?;
+            let actual_offset = content_range_start(content_range).ok_or_else(|| {
+                RpcClientError::Protocol(format!(
+                    "invalid file download Content-Range: {content_range}"
+                ))
+            })?;
+            if actual_offset != offset {
+                return Err(RpcClientError::Protocol(format!(
+                    "file download requested offset {offset}, but response starts at {actual_offset}"
+                )));
+            }
+        }
+        Ok(response
+            .bytes_stream()
+            .map(|result| result.map_err(|err| RpcClientError::Transport(err.to_string())))
+            .boxed())
+    }
 }
 
 impl RpcClientDyn for HttpRpcClient {
@@ -205,6 +265,20 @@ impl RpcClientDyn for HttpRpcClient {
 
     fn file_url(&self, id: &str) -> Option<String> {
         Some(format!("{}/{}", self.file_api_prefix, id))
+    }
+
+    fn stream_file_from(
+        &self,
+        id: String,
+        scope_id: Option<String>,
+        offset: u64,
+    ) -> crate::client::RpcClientFuture<Result<FileDownloadByteStream, RpcClientError>> {
+        let client = self.clone();
+        Box::pin(async move {
+            client
+                .stream_file_from(&id, scope_id.as_deref(), offset)
+                .await
+        })
     }
 
     fn read_file_range(
@@ -310,5 +384,24 @@ fn short_body(body: &str) -> String {
         body.to_string()
     } else {
         format!("{}...", body.chars().take(MAX).collect::<String>())
+    }
+}
+
+fn content_range_start(value: &str) -> Option<u64> {
+    let range = value.strip_prefix("bytes ")?.split_once('/')?.0;
+    let start = range.split_once('-')?.0;
+    start.parse().ok()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::content_range_start;
+
+    #[test]
+    fn parses_content_range_start() {
+        assert_eq!(content_range_start("bytes 42-99/100"), Some(42));
+        assert_eq!(content_range_start("bytes 42-99/*"), Some(42));
+        assert_eq!(content_range_start("bytes */100"), None);
+        assert_eq!(content_range_start("items 42-99/100"), None);
     }
 }

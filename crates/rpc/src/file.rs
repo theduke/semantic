@@ -10,6 +10,9 @@ use crate::RpcClientError;
 pub type FileUploadByteStream =
     Pin<Box<dyn Stream<Item = std::result::Result<Bytes, RpcClientError>> + Send + 'static>>;
 
+pub type FileDownloadByteStream =
+    Pin<Box<dyn Stream<Item = std::result::Result<Bytes, RpcClientError>> + Send + 'static>>;
+
 pub enum FileUploadContent {
     Bytes(Bytes),
     Stream {
