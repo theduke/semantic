@@ -369,6 +369,10 @@ pub struct ValidationLimits {
     pub max_nodes: usize,
     pub max_text_bytes: usize,
     pub max_attribute_bytes: usize,
+    pub max_table_rows: usize,
+    pub max_table_columns: usize,
+    pub max_table_cells: usize,
+    pub max_table_span_work: usize,
 }
 
 impl Default for ValidationLimits {
@@ -378,6 +382,10 @@ impl Default for ValidationLimits {
             max_nodes: 100_000,
             max_text_bytes: 10 * 1024 * 1024,
             max_attribute_bytes: 2 * 1024 * 1024,
+            max_table_rows: 1_000,
+            max_table_columns: 1_000,
+            max_table_cells: 100_000,
+            max_table_span_work: 1_000_000,
         }
     }
 }

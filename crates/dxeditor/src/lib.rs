@@ -7,14 +7,18 @@ pub mod component;
 pub mod component_spec;
 pub mod document;
 pub mod document_v2;
+pub mod engine_manifest;
 pub mod extension;
 pub mod format;
 pub mod input;
 #[cfg(feature = "markdown")]
 pub mod markdown;
+#[cfg(feature = "markdown")]
+pub mod markdown_v2;
 pub mod migrate;
 pub mod protocol;
 pub mod render;
+mod render_v2;
 pub mod selection;
 pub mod state;
 pub mod suggestion;
@@ -38,7 +42,8 @@ pub use component_spec::{
     AttributeSpec, AttributeType, ClipboardPolicy, ComponentBehavior, ComponentCatalog,
     ComponentCatalogError, ComponentKind, ComponentSpec, ContentRule, DomDescriptor,
     FORMAT_MARKDOWN, FORMAT_PLAIN_TEXT, FORMAT_TYPED_DOCUMENT, FormatCapability, IdentityPolicy,
-    PlainTextFallback, is_safe_url, register_standard_component_specs, validate_component_document,
+    PlainTextFallback, UrlRole, is_safe_media_url, is_safe_url, is_safe_url_for_role,
+    register_standard_component_specs, validate_component_document,
 };
 pub use document::{
     BlockNode, EditorDocument, InlineNode, Mark, NodeContent, NodeId, TableCell, TableNode,
@@ -53,6 +58,10 @@ pub use document_v2::{
     TaskItemAttributes, UnknownComponentAttributes, UnknownComponentPolicy, ValidationIssue,
     ValidationLimits, normalize_component_document,
 };
+pub use engine_manifest::{
+    ENGINE_MANIFEST_VERSION, EditorEngineManifest, EngineCommandManifest, EngineComponentManifest,
+    EngineFeatureManifest,
+};
 pub use extension::EditorExtension;
 pub use format::{
     DecodeOptions, DecodedDocument, DiagnosticSeverity, DocumentFormat, DocumentFormatRegistry,
@@ -61,6 +70,8 @@ pub use format::{
     TYPED_DOCUMENT_JSON_SCHEMA, TypedDocumentCodec, register_standard_document_formats,
 };
 pub use input::{InputEvent, reconcile_block_text, transaction_for_event};
+#[cfg(feature = "markdown")]
+pub use markdown_v2::MarkdownDocumentFormat;
 pub use migrate::{
     MigrationError, MigrationOptions, migrate_v1_to_v2, migrate_v1_to_v2_with, migrate_v2_to_v1,
 };

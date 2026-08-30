@@ -27,7 +27,8 @@ pub struct AppRootProps {
 
 impl PartialEq for AppRootProps {
     fn eq(&self, other: &Self) -> bool {
-        self.initial_scope_id == other.initial_scope_id
+        self.client == other.client
+            && self.initial_scope_id == other.initial_scope_id
             && self.file_api_prefix == other.file_api_prefix
     }
 }

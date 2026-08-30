@@ -1,4 +1,4 @@
-import { Editor, Extension, Node, mergeAttributes, type JSONContent } from '@tiptap/core'
+import { Editor, Node, mergeAttributes, type JSONContent } from '@tiptap/core'
 import Document from '@tiptap/extension-document'
 import Paragraph from '@tiptap/extension-paragraph'
 import Text from '@tiptap/extension-text'
@@ -24,6 +24,10 @@ import TaskList from '@tiptap/extension-task-list'
 import TaskItem from '@tiptap/extension-task-item'
 import { Dropcursor, Gapcursor, UndoRedo } from '@tiptap/extensions'
 import { Slice, type Schema } from '@tiptap/pm/model'
+import { EditorState } from '@tiptap/pm/state'
+import { CellSelection } from '@tiptap/pm/tables'
+import { SemanticId } from './extensions/semantic-id'
+import { stripCopiedIdentities, validateSemanticIds } from './identity'
 
 type Attributes = Record<string, unknown>
 type MarkV1 = { component: string; attrs: Attributes }
@@ -52,6 +56,24 @@ export type ComponentDocumentV2 = {
 }
 
 export type MentionCandidate = { id: string; label: string; detail?: string }
+export type EngineManifest = {
+  version: number
+  document_catalog_fingerprint: string
+  clipboard_schema_fingerprint: string
+  format_id: string
+  aria_label: string
+  components: Array<{ id: string; adapter: string; format_capability: 'native' | 'opaque' | 'unsupported' }>
+  commands: Array<{ id: string; enabled: boolean; disabled_reason?: string }>
+  features: {
+    table_headers: boolean
+    table_alignment: boolean
+    persistent_table_widths: boolean
+    table_spans: boolean
+    media: boolean
+    tasks: boolean
+    opaque_content: boolean
+  }
+}
 export type MentionProvider = (
   query: string,
   context: { signal: AbortSignal; sessionId: string },
@@ -62,18 +84,22 @@ export interface MountOptions {
   schemaFingerprint?: string
   document: ComponentDocumentV2
   readonly: boolean
+  ariaLabel?: string
+  formatId?: string
+  manifest?: EngineManifest
   emit: (event: unknown) => void
   mentionProvider?: MentionProvider
 }
 
 export interface EditorSession {
   command(command: string, attrs?: Attributes): boolean
-  replaceDocument(document: ComponentDocumentV2): void
+  replaceDocument(document: ComponentDocumentV2, historyPolicy?: 'preserve' | 'reset'): void
   snapshot(): ComponentDocumentV2
   destroy(): void
 }
 
-const safeUrl = (value: string): boolean => {
+export const safeUrl = (value: string): boolean => {
+  if (!value || value !== value.trim() || /[\s\u0000-\u001f\u007f\\]/u.test(value)) return false
   try {
     const parsed = new URL(value, window.location.origin)
     return ['http:', 'https:', 'mailto:', 'tel:'].includes(parsed.protocol)
@@ -82,17 +108,18 @@ const safeUrl = (value: string): boolean => {
   }
 }
 
-const safeImageUrl = (value: string): boolean => {
+export const safeImageUrl = (value: string): boolean => {
+  if (!value || value !== value.trim() || /[\s\u0000-\u001f\u007f\\]/u.test(value) || !/^https?:\/\//iu.test(value)) return false
   try {
-    return ['http:', 'https:'].includes(new URL(value, window.location.origin).protocol)
+    return ['http:', 'https:'].includes(new URL(value).protocol)
   } catch {
     return false
   }
 }
 
 export const INTERNAL_CLIPBOARD_MIME = 'application/x-semantic-dxeditor+json'
-export const INTERNAL_CLIPBOARD_VERSION = 1
-export const INTERNAL_SCHEMA_FINGERPRINT = 'semantic.pm-slice.v1:2026-08-30'
+export const INTERNAL_CLIPBOARD_VERSION = 2
+export const INTERNAL_SCHEMA_FINGERPRINT = 'semantic.pm-slice.v2:2026-08-30'
 
 type ClipboardEnvelope = {
   version: number
@@ -127,7 +154,10 @@ export const encodeInternalClipboard = (slice: Slice, schemaFingerprint = INTERN
   version: INTERNAL_CLIPBOARD_VERSION,
   schema: 'semantic.prosemirror-slice',
   schemaFingerprint,
-  slice: slice.toJSON(),
+  slice: {
+    ...slice.toJSON(),
+    content: (slice.toJSON().content ?? []).map(stripCopiedIdentities),
+  },
 } satisfies ClipboardEnvelope)
 
 export const decodeInternalClipboard = (
@@ -178,31 +208,6 @@ export const parseTsvGrid = (text: string): string[][] | null => {
   if (!width || rows.length > 100 || width > 100 || rows.length * width > 10_000) return null
   return rows.map(row => [...row, ...Array.from({ length: width - row.length }, () => '')])
 }
-
-const SemanticId = Extension.create({
-  name: 'semanticId',
-  addGlobalAttributes() {
-    return [{
-      types: ['paragraph', 'heading', 'blockquote', 'codeBlock', 'bulletList', 'orderedList',
-        'listItem', 'taskList', 'taskItem', 'horizontalRule', 'table', 'tableRow', 'tableCell',
-        'tableHeader', 'image', 'opaqueBlock'],
-      attributes: {
-        semanticId: {
-          default: null,
-          parseHTML: element => element.getAttribute('data-semantic-id'),
-          renderHTML: attrs => attrs.semanticId ? { 'data-semantic-id': attrs.semanticId } : {},
-        },
-        alignment: {
-          default: null,
-          parseHTML: element => element.getAttribute('data-alignment'),
-          renderHTML: attrs => ['left', 'center', 'right'].includes(String(attrs.alignment))
-            ? { 'data-alignment': attrs.alignment, style: `text-align: ${attrs.alignment}` }
-            : {},
-        },
-      },
-    }]
-  },
-})
 
 const Mention = Node.create({
   name: 'semanticMention',
@@ -466,7 +471,7 @@ const nodeAttrs = (node: ComponentNodeV2): Attributes => ({
 const opaquePmNode = (node: ComponentNodeV2, inline: boolean): JSONContent => ({
   type: inline ? 'opaqueInline' : 'opaqueBlock',
   attrs: {
-    semanticId: node.id ?? id(inline ? 'opaque-inline' : 'opaque-block'),
+    semanticId: node.id,
     source: String(node.attrs?.source ?? node.attrs?.fallback ?? ''),
     construct: node.attrs?.construct ?? null,
     originalNode: node,
@@ -479,15 +484,15 @@ const v2NodeToPm = (node: ComponentNodeV2, inlineContext = false): JSONContent =
   const inline = () => (node.content ?? []).map(child => v2NodeToPm(child, true))
   switch (node.kind) {
     case 'text': return { type: 'text', text: node.text ?? '', marks: v2MarksToPm(node.marks) }
-    case 'hard_break': return { type: 'hardBreak' }
+    case 'hard_break': return { type: 'hardBreak', attrs }
     case 'mention': return {
       type: 'semanticMention',
-      attrs: { semanticId: node.id ?? id('mention'), entityId: node.attrs?.entity_id ?? '', label: node.attrs?.label ?? '' },
+      attrs: { semanticId: node.id, entityId: node.attrs?.entity_id ?? '', label: node.attrs?.label ?? '' },
     }
     case 'image': {
       const src = String(node.attrs?.src ?? '')
       return safeImageUrl(src)
-        ? { type: 'image', attrs: { semanticId: node.id ?? id('image'), src, alt: node.attrs?.alt ?? '', title: node.attrs?.title ?? null } }
+        ? { type: 'image', attrs: { semanticId: node.id, src, alt: node.attrs?.alt ?? '', title: node.attrs?.title ?? null } }
         : opaquePmNode(node, inlineContext)
     }
     case 'opaque_markdown_inline': return opaquePmNode(node, true)
@@ -518,12 +523,15 @@ export const v2ToPm = (document: ComponentDocumentV2): JSONContent => {
   if (document.schema !== 'semantic.component-document' || document.version !== 2 || document.root.kind !== 'document') {
     throw new Error('unsupported component document schema')
   }
-  return {
+  const converted: JSONContent = {
     type: 'doc',
     content: document.root.content?.length
       ? document.root.content.map(node => v2NodeToPm(node, false))
       : [{ type: 'paragraph', attrs: { semanticId: id('paragraph') } }],
   }
+  const identityIssue = validateSemanticIds(converted)
+  if (identityIssue) throw new Error(identityIssue)
+  return converted
 }
 
 const cleanAttrs = (attrs: Attributes = {}): Attributes => Object.fromEntries(
@@ -546,61 +554,75 @@ const originalOpaqueNode = (node: JSONContent): ComponentNodeV2 | null => {
 }
 
 const pmNodeToV2 = (node: JSONContent): ComponentNodeV2 => {
-  const semanticId = String(node.attrs?.semanticId ?? id(node.type || 'node'))
+  const semanticId = (): string => {
+    const value = typeof node.attrs?.semanticId === 'string' ? node.attrs.semanticId.trim() : ''
+    if (!value) throw new Error(`node '${node.type}' is missing semanticId`)
+    return value
+  }
   const content = () => (node.content ?? []).map(pmNodeToV2)
   switch (node.type) {
     case 'text': return { kind: 'text', text: node.text ?? '', ...(node.marks?.length ? { marks: pmMarksToV2(node.marks) } : {}) }
-    case 'hardBreak': return { kind: 'hard_break' }
+    case 'hardBreak': return { kind: 'hard_break', id: semanticId() }
     case 'semanticMention': return {
-      kind: 'mention', id: semanticId,
+      kind: 'mention', id: semanticId(),
       attrs: { entity_id: String(node.attrs?.entityId ?? ''), label: String(node.attrs?.label ?? '') },
     }
     case 'image': return {
-      kind: 'image', id: semanticId,
+      kind: 'image', id: semanticId(),
       attrs: cleanAttrs({ src: node.attrs?.src, alt: node.attrs?.alt ?? '', title: node.attrs?.title }),
     }
-    case 'paragraph': return { kind: 'paragraph', id: semanticId, content: content() }
-    case 'heading': return { kind: 'heading', id: semanticId, attrs: { level: Number(node.attrs?.level ?? 1) }, content: content() }
-    case 'blockquote': return { kind: 'blockquote', id: semanticId, content: content() }
+    case 'paragraph': return { kind: 'paragraph', id: semanticId(), content: content() }
+    case 'heading': return { kind: 'heading', id: semanticId(), attrs: { level: Number(node.attrs?.level ?? 1) }, content: content() }
+    case 'blockquote': return { kind: 'blockquote', id: semanticId(), content: content() }
     case 'codeBlock': return {
-      kind: 'code_block', id: semanticId,
+      kind: 'code_block', id: semanticId(),
       ...(node.attrs?.language ? { attrs: { info: String(node.attrs.language) } } : {}), content: content(),
     }
-    case 'horizontalRule': return { kind: 'thematic_break', id: semanticId }
-    case 'bulletList': return { kind: 'bullet_list', id: semanticId, content: content() }
-    case 'orderedList': return { kind: 'ordered_list', id: semanticId, attrs: { start: Number(node.attrs?.start ?? 1) }, content: content() }
-    case 'taskList': return { kind: 'task_list', id: semanticId, content: content() }
-    case 'listItem': return { kind: 'list_item', id: semanticId, content: content() }
-    case 'taskItem': return { kind: 'task_item', id: semanticId, attrs: { checked: node.attrs?.checked === true }, content: content() }
-    case 'table': return { kind: 'table', id: semanticId, content: content() }
-    case 'tableRow': return { kind: 'table_row', id: semanticId, content: content() }
+    case 'horizontalRule': return { kind: 'thematic_break', id: semanticId() }
+    case 'bulletList': return { kind: 'bullet_list', id: semanticId(), content: content() }
+    case 'orderedList': return { kind: 'ordered_list', id: semanticId(), attrs: { start: Number(node.attrs?.start ?? 1) }, content: content() }
+    case 'taskList': return { kind: 'task_list', id: semanticId(), content: content() }
+    case 'listItem': return { kind: 'list_item', id: semanticId(), content: content() }
+    case 'taskItem': return { kind: 'task_item', id: semanticId(), attrs: { checked: node.attrs?.checked === true }, content: content() }
+    case 'table': return { kind: 'table', id: semanticId(), content: content() }
+    case 'tableRow': return { kind: 'table_row', id: semanticId(), content: content() }
     case 'tableHeader':
     case 'tableCell': return {
-      kind: node.type === 'tableHeader' ? 'table_header' : 'table_cell', id: semanticId,
+      kind: node.type === 'tableHeader' ? 'table_header' : 'table_cell', id: semanticId(),
       attrs: cleanAttrs({
         colspan: Number(node.attrs?.colspan ?? 1), rowspan: Number(node.attrs?.rowspan ?? 1),
         alignment: node.attrs?.alignment, colwidth: node.attrs?.colwidth,
       }),
       content: content(),
     }
-    case 'opaqueInline': return originalOpaqueNode(node) ?? {
-      kind: 'opaque_markdown_inline', id: semanticId,
-      attrs: cleanAttrs({ source: String(node.attrs?.source ?? ''), fallback: String(node.attrs?.source ?? ''), construct: node.attrs?.construct }),
+    case 'opaqueInline': {
+      const original = originalOpaqueNode(node)
+      return original ? { ...original, id: semanticId() } : {
+        kind: 'opaque_markdown_inline', id: semanticId(),
+        attrs: cleanAttrs({ source: String(node.attrs?.source ?? ''), fallback: String(node.attrs?.source ?? ''), construct: node.attrs?.construct }),
+      }
     }
-    case 'opaqueBlock': return originalOpaqueNode(node) ?? {
-      kind: 'opaque_markdown_block', id: semanticId,
-      attrs: cleanAttrs({ source: String(node.attrs?.source ?? ''), fallback: String(node.attrs?.source ?? ''), construct: node.attrs?.construct }),
+    case 'opaqueBlock': {
+      const original = originalOpaqueNode(node)
+      return original ? { ...original, id: semanticId() } : {
+        kind: 'opaque_markdown_block', id: semanticId(),
+        attrs: cleanAttrs({ source: String(node.attrs?.source ?? ''), fallback: String(node.attrs?.source ?? ''), construct: node.attrs?.construct }),
+      }
     }
-    default: return { kind: 'unknown_component', id: semanticId, attrs: { original_kind: node.type, fallback: '', payload: node } }
+    default: return { kind: 'unknown_component', id: semanticId(), attrs: { original_kind: node.type, fallback: '', payload: node } }
   }
 }
 
-export const pmToV2 = (document: JSONContent, metadata: Attributes = {}): ComponentDocumentV2 => ({
-  schema: 'semantic.component-document',
-  version: 2,
-  root: { kind: 'document', content: (document.content ?? []).map(pmNodeToV2) },
-  ...(Object.keys(metadata).length ? { metadata } : {}),
-})
+export const pmToV2 = (document: JSONContent, metadata: Attributes = {}): ComponentDocumentV2 => {
+  const identityIssue = validateSemanticIds(document)
+  if (identityIssue) throw new Error(identityIssue)
+  return {
+    schema: 'semantic.component-document',
+    version: 2,
+    root: { kind: 'document', content: (document.content ?? []).map(pmNodeToV2) },
+    ...(Object.keys(metadata).length ? { metadata } : {}),
+  }
+}
 
 const button = (label: string, title: string, action: () => void): HTMLButtonElement => {
   const value = window.document.createElement('button')
@@ -621,8 +643,26 @@ const positionSurface = (surface: HTMLElement, rect: DOMRect, wrapper: HTMLEleme
 }
 
 export const mount = (host: HTMLElement, options: MountOptions): EditorSession => {
+	  const knownAdapters = new Set([
+	    'document', 'paragraph', 'heading', 'blockquote', 'bulletList', 'orderedList', 'taskList',
+	    'listItem', 'taskItem', 'codeBlock', 'horizontalRule', 'table', 'tableRow', 'tableHeader',
+	    'tableCell', 'text', 'hardBreak', 'image', 'semanticMention', 'opaqueBlock', 'opaqueInline',
+	    'bold', 'italic', 'strike', 'code', 'link',
+	  ])
+	  if (options.manifest) {
+	    if (options.manifest.version !== 1) throw new Error(`unsupported engine manifest version ${options.manifest.version}`)
+	    if (options.schemaFingerprint && options.manifest.document_catalog_fingerprint !== options.schemaFingerprint) {
+	      throw new Error('engine manifest catalog fingerprint does not match the mounted session')
+	    }
+	    const missing = options.manifest.components.find(component => !knownAdapters.has(component.adapter))
+	    if (missing) throw new Error(`component '${missing.id}' requires missing behavior adapter '${missing.adapter}'`)
+	  }
+	  const commandManifest = new Map(options.manifest?.commands.map(command => [command.id, command]) ?? [])
+	  const commandEnabled = (command: string): boolean => commandManifest.get(command)?.enabled ?? true
   const wrapper = host.closest<HTMLElement>('.dxeditor') ?? host.parentElement ?? host
   const overlays = wrapper.querySelector<HTMLElement>('[data-dxeditor-overlays]') ?? wrapper
+  const clipboardSchemaFingerprint = options.manifest?.clipboard_schema_fingerprint
+    ?? `${options.schemaFingerprint ?? 'standard'}:${INTERNAL_SCHEMA_FINGERPRINT}`
   const bubble = window.document.createElement('div')
   bubble.className = 'dxeditor-engine__surface dxeditor-engine__bubble'
   bubble.setAttribute('role', 'toolbar')
@@ -635,6 +675,7 @@ export const mount = (host: HTMLElement, options: MountOptions): EditorSession =
   slash.className = 'dxeditor-engine__surface dxeditor-engine__slash'
   slash.setAttribute('role', 'listbox')
   slash.setAttribute('aria-label', 'Insert block')
+  slash.id = `dxeditor-slash-${options.sessionId}`
   slash.hidden = true
   const blockMenu = window.document.createElement('div')
   blockMenu.className = 'dxeditor-engine__surface dxeditor-engine__block-menu'
@@ -698,26 +739,39 @@ export const mount = (host: HTMLElement, options: MountOptions): EditorSession =
   mentions.className = 'dxeditor-engine__surface dxeditor-engine__slash'
   mentions.setAttribute('role', 'listbox')
   mentions.setAttribute('aria-label', 'Mention suggestions')
+  mentions.id = `dxeditor-mentions-${options.sessionId}`
   mentions.hidden = true
   overlays.append(bubble, blockControls, slash, blockMenu, linkPopover, tableControls, mediaPopover, mentions)
 
-  let revision = 0
-  let updateTimer: number | undefined
+	  let revision = 0
+	  let lastEmittedSnapshot: string | null = null
   let destroyed = false
   let suppressUpdate = false
   let slashInsertionMode = false
   let pendingImageInsertAt: number | null = null
   let mentionRequest: AbortController | null = null
   let mentionQuery: string | null = null
-  let mentionTimer: number | undefined
-  let documentMetadata = options.document.metadata ?? {}
+	  let mentionTimer: number | undefined
+	  let activeOptionIndex = 0
+	  let dismissedSlash: string | null = null
+	  let dismissedMention: string | null = null
+	  let documentMetadata = options.document.metadata ?? {}
+	  let lastCommandState = ''
+	  const emitCommandState = (value: Editor): void => {
+	    const state = JSON.stringify({ can_undo: value.can().undo(), can_redo: value.can().redo() })
+	    if (state === lastCommandState) return
+	    lastCommandState = state
+	    options.emit({ kind: 'commandState', session_id: options.sessionId, ...JSON.parse(state) })
+	  }
   const extensions = [
     Document, Paragraph, Text, Heading.configure({ levels: [1, 2, 3, 4, 5, 6] }), Bold, Italic, Strike, Code,
     Blockquote, CodeBlock, BulletList, OrderedList, ListItem, TaskList, TaskItem.configure({ nested: true }),
     HardBreak, HorizontalRule, SafeImage.configure({ allowBase64: false, inline: true }),
     SafeLink.configure({ openOnClick: false, autolink: true, defaultProtocol: 'https', protocols: ['http', 'https', 'mailto', 'tel'],
       isAllowedUri: url => safeUrl(url) }),
-    Table.configure({ resizable: true }), TableRow, TableHeader, TableCell,
+	    // Column widths and spans are not Markdown-persistable. Keep resize disabled until a
+	    // typed format manifest explicitly enables it.
+	    Table.configure({ resizable: options.manifest?.features.persistent_table_widths ?? false }), TableRow, TableHeader, TableCell,
     Mention, OpaqueBlock, OpaqueInline, SemanticId, Gapcursor, Dropcursor, UndoRedo,
   ]
 
@@ -727,7 +781,7 @@ export const mount = (host: HTMLElement, options: MountOptions): EditorSession =
     content: v2ToPm(options.document),
     editable: !options.readonly,
     editorProps: {
-      attributes: { class: 'dxeditor-engine__content', 'aria-label': 'Document editor', spellcheck: 'true' },
+	      attributes: { class: 'dxeditor-engine__content', 'aria-label': options.manifest?.aria_label ?? options.ariaLabel ?? 'Document editor', spellcheck: 'true' },
       transformPastedHTML: html => html.replace(/<(script|style|iframe|object|embed|form)[^>]*>[\s\S]*?<\/\1>/gi, ''),
       handleDOMEvents: {
         copy: (view, event) => writeClipboard(view, event as ClipboardEvent, false),
@@ -735,7 +789,7 @@ export const mount = (host: HTMLElement, options: MountOptions): EditorSession =
       },
       handlePaste: (view, event) => {
         const internal = event.clipboardData?.getData(INTERNAL_CLIPBOARD_MIME) ?? ''
-        const decoded = decodeInternalClipboard(internal, view.state.schema, options.schemaFingerprint)
+        const decoded = decodeInternalClipboard(internal, view.state.schema, clipboardSchemaFingerprint)
         if (decoded) {
           event.preventDefault()
           view.dispatch(view.state.tr.replaceSelection(decoded).scrollIntoView().setMeta('uiEvent', 'paste'))
@@ -749,21 +803,35 @@ export const mount = (host: HTMLElement, options: MountOptions): EditorSession =
         return false
       },
     },
-    onCreate: () => options.emit({ kind: 'ready', session_id: options.sessionId }),
-    onUpdate: () => {
-      if (suppressUpdate || destroyed) return
-      window.clearTimeout(updateTimer)
-      updateTimer = window.setTimeout(() => {
-        revision += 1
-        options.emit({ kind: 'documentChange', session_id: options.sessionId, revision, document: pmToV2(editor.getJSON(), documentMetadata) })
-      }, 180)
-    },
-    onSelectionUpdate: ({ editor }) => updateSurfaces(editor),
-    onTransaction: ({ editor }) => updateSurfaces(editor),
-    onBlur: () => {
-      if (!destroyed) options.emit({ kind: 'blur', session_id: options.sessionId, revision, document: pmToV2(editor.getJSON(), documentMetadata) })
-    },
-  })
+	    onCreate: ({ editor }) => {
+	      options.emit({ kind: 'ready', session_id: options.sessionId })
+	      emitCommandState(editor)
+	    },
+	    onUpdate: () => { flush('transaction') },
+	    onTransaction: ({ editor }) => { updateSurfaces(editor); emitCommandState(editor) },
+	    onBlur: () => {
+	      if (destroyed) return
+	      flush('blur')
+	      options.emit({ kind: 'blur', session_id: options.sessionId, revision, document: pmToV2(editor.getJSON(), documentMetadata) })
+	    },
+	  })
+	  lastEmittedSnapshot = JSON.stringify(pmToV2(editor.getJSON(), documentMetadata))
+
+	  function flush(reason: 'transaction' | 'blur' | 'replace' | 'destroy'): boolean {
+	    if (suppressUpdate || destroyed) return false
+	    try {
+	      const document = pmToV2(editor.getJSON(), documentMetadata)
+	      const serialized = JSON.stringify(document)
+	      if (serialized === lastEmittedSnapshot) return false
+	      revision += 1
+	      lastEmittedSnapshot = serialized
+	      options.emit({ kind: 'documentChange', session_id: options.sessionId, revision, document, reason })
+	      return true
+	    } catch (error) {
+	      options.emit({ kind: 'error', session_id: options.sessionId, code: 'invalidSnapshot', message: String(error), revision, recoverable: true })
+	      return false
+	    }
+	  }
 
   function writeClipboard(view: Editor['view'], event: ClipboardEvent, cut: boolean): boolean {
     const selection = view.state.selection
@@ -774,7 +842,7 @@ export const mount = (host: HTMLElement, options: MountOptions): EditorSession =
     event.clipboardData.clearData()
     event.clipboardData.setData('text/html', serialized.dom.innerHTML)
     event.clipboardData.setData('text/plain', serialized.text)
-    event.clipboardData.setData(INTERNAL_CLIPBOARD_MIME, encodeInternalClipboard(serialized.slice, options.schemaFingerprint))
+    event.clipboardData.setData(INTERNAL_CLIPBOARD_MIME, encodeInternalClipboard(serialized.slice, clipboardSchemaFingerprint))
     if (cut) view.dispatch(view.state.tr.deleteSelection().scrollIntoView().setMeta('uiEvent', 'cut'))
     return true
   }
@@ -841,6 +909,7 @@ export const mount = (host: HTMLElement, options: MountOptions): EditorSession =
   }
 
   const run = (name: string, attrs: Attributes = {}): boolean => {
+	    if (!commandEnabled(name)) return false
     const chain = editor.chain().focus()
     switch (name) {
       case 'undo': return chain.undo().run()
@@ -967,17 +1036,25 @@ export const mount = (host: HTMLElement, options: MountOptions): EditorSession =
   }
 
   ;[['B', 'Bold', 'bold'], ['I', 'Italic', 'italic'], ['S', 'Strikethrough', 'strike'], ['<>', 'Inline code', 'code']]
-    .forEach(([label, title, command]) => bubble.append(button(label, title, () => run(command))))
-  bubble.append(button('Link', 'Add or edit link', () => {
-    const link = editor.getAttributes('link')
-    linkInput.value = String(link.href ?? '')
-    linkTitleInput.value = String(link.title ?? '')
-    linkError.textContent = ''
-    linkPopover.hidden = false
-    positionSurface(linkPopover, bubble.getBoundingClientRect(), wrapper)
-    linkInput.focus()
-    linkInput.select()
-  }))
+	    .filter(([, , command]) => commandEnabled(command))
+	    .forEach(([label, title, command]) => {
+	      const control = button(label, title, () => run(command))
+	      control.dataset.command = command
+	      control.setAttribute('aria-pressed', 'false')
+	      bubble.append(control)
+	    })
+  if (commandEnabled('link')) {
+    bubble.append(button('Link', 'Add or edit link', () => {
+      const link = editor.getAttributes('link')
+      linkInput.value = String(link.href ?? '')
+      linkTitleInput.value = String(link.title ?? '')
+      linkError.textContent = ''
+      linkPopover.hidden = false
+      positionSurface(linkPopover, bubble.getBoundingClientRect(), wrapper)
+      linkInput.focus()
+      linkInput.select()
+    }))
+  }
   const applyLink = (): void => {
     const href = linkInput.value.trim()
     if (href && !safeUrl(href)) {
@@ -1050,12 +1127,13 @@ export const mount = (host: HTMLElement, options: MountOptions): EditorSession =
   blockMenu.append(button('Move up', 'Move block up', () => { moveCurrentBlock(-1); blockMenu.hidden = true }))
   blockMenu.append(button('Move down', 'Move block down', () => { moveCurrentBlock(1); blockMenu.hidden = true }))
   blockMenu.append(button('Delete', 'Delete block', () => { deleteCurrentBlock(); blockMenu.hidden = true }))
+	  blockMenu.querySelectorAll('button').forEach(item => item.setAttribute('role', 'menuitem'))
   const insertions: Array<[string, string, Attributes?]> = [
     ['Text', 'paragraph'], ['Heading 1', 'heading', { level: 1 }], ['Heading 2', 'heading', { level: 2 }],
     ['Bulleted list', 'bulletList'], ['Numbered list', 'orderedList'], ['Task list', 'taskList'],
     ['Quote', 'blockquote'], ['Code block', 'codeBlock'], ['Divider', 'horizontalRule'], ['Table', 'table'], ['Image', 'image'],
   ]
-  insertions.forEach(([label, command, attrs]) => {
+  insertions.filter(([, command]) => commandEnabled(command)).forEach(([label, command, attrs]) => {
     const item = button(label, `Insert ${label}`, () => {
       if (command === 'image') {
         const position = slashInsertionMode ? currentTopLevelRange()?.to ?? null : null
@@ -1073,7 +1151,8 @@ export const mount = (host: HTMLElement, options: MountOptions): EditorSession =
     ['− Column', 'Delete column', 'deleteColumn'], ['Header', 'Toggle header row', 'toggleHeaderRow'],
     ['⇤', 'Align cell left', 'alignCell', 'left'], ['↔', 'Align cell center', 'alignCell', 'center'], ['⇥', 'Align cell right', 'alignCell', 'right'],
     ['Delete', 'Delete table', 'deleteTable']]
-    .forEach(([label, title, command, alignment]) => tableControls.append(button(label, title, () => run(command, alignment ? { alignment } : {}))))
+	    .filter(([, , command]) => commandEnabled(command))
+	    .forEach(([label, title, command, alignment]) => tableControls.append(button(label, title, () => run(command, alignment ? { alignment } : {}))))
 
   const currentMention = (): { from: number; to: number; query: string } | null => {
     const { $from } = editor.state.selection
@@ -1082,6 +1161,26 @@ export const mount = (host: HTMLElement, options: MountOptions): EditorSession =
     const match = /(?:^|\s)@([^\s@]{0,64})$/.exec(before)
     return match ? { from: $from.pos - match[1].length - 1, to: $from.pos, query: match[1] } : null
   }
+
+	  const mentionKey = (range: { from: number; to: number; query: string }): string =>
+	    `${range.from}:${range.to}:${range.query}`
+
+	  const syncListbox = (surface: HTMLElement, reset = false): void => {
+	    const items = Array.from(surface.querySelectorAll<HTMLButtonElement>('button[role="option"]'))
+	      .filter(item => !item.hidden && !item.disabled)
+	    if (reset) activeOptionIndex = 0
+	    activeOptionIndex = Math.max(0, Math.min(activeOptionIndex, Math.max(0, items.length - 1)))
+	    items.forEach((item, index) => {
+	      item.id ||= `${surface.id}-option-${index}`
+	      item.tabIndex = -1
+	      item.setAttribute('aria-selected', String(index === activeOptionIndex))
+	    })
+	    editor.view.dom.setAttribute('aria-expanded', String(items.length > 0))
+	    editor.view.dom.setAttribute('aria-controls', surface.id)
+	    const active = items[activeOptionIndex]
+	    if (active) editor.view.dom.setAttribute('aria-activedescendant', active.id)
+	    else editor.view.dom.removeAttribute('aria-activedescendant')
+	  }
 
   const closeMentions = (): void => {
     window.clearTimeout(mentionTimer)
@@ -1095,6 +1194,8 @@ export const mount = (host: HTMLElement, options: MountOptions): EditorSession =
   const updateMentions = (): void => {
     const match = options.mentionProvider ? currentMention() : null
     if (!match) { closeMentions(); return }
+	    if (dismissedMention === mentionKey(match)) { closeMentions(); return }
+	    if (dismissedMention) dismissedMention = null
     const caret = editor.view.coordsAtPos(match.to)
     mentions.hidden = false
     positionSurface(mentions, new DOMRect(caret.left, caret.bottom, 1, 1), wrapper)
@@ -1134,6 +1235,7 @@ export const mount = (host: HTMLElement, options: MountOptions): EditorSession =
           empty.setAttribute('role', 'status')
           mentions.append(empty)
         }
+	        syncListbox(mentions, true)
       } catch (error) {
         if (request.signal.aborted) return
         mentions.replaceChildren()
@@ -1146,10 +1248,14 @@ export const mount = (host: HTMLElement, options: MountOptions): EditorSession =
   }
 
   function updateSurfaces(value: Editor): void {
-    if (destroyed || options.readonly) return
+    if (destroyed || options.readonly || value.view.composing) return
     const { from, to, empty } = value.state.selection
+    const cellSelection = value.state.selection instanceof CellSelection
     const imageActive = value.isActive('image')
-    bubble.hidden = empty || imageActive
+	    bubble.querySelectorAll<HTMLButtonElement>('[data-command]').forEach(control => {
+	      control.setAttribute('aria-pressed', String(value.isActive(control.dataset.command ?? '')))
+	    })
+    bubble.hidden = empty || imageActive || cellSelection
     blockControls.hidden = !empty
     tableControls.hidden = !value.isActive('table')
     if (!bubble.hidden) {
@@ -1185,12 +1291,20 @@ export const mount = (host: HTMLElement, options: MountOptions): EditorSession =
     const textBefore = parent.textBetween(0, value.state.selection.$from.parentOffset, undefined, '\ufffc')
     const slashMatch = /(?:^|\s)\/([^\s/]*)$/.exec(textBefore)
     if (slashMatch && empty) {
+	      const slashKey = `${from}:${slashMatch[1]}`
+	      if (dismissedSlash === slashKey) {
+	        slash.hidden = true
+	        updateMentions()
+	        return
+	      }
+	      if (dismissedSlash) dismissedSlash = null
       slashInsertionMode = false
       slash.hidden = false
       const caret = value.view.coordsAtPos(from)
       positionSurface(slash, new DOMRect(caret.left, caret.bottom, 1, 1), wrapper)
       const query = slashMatch[1].toLocaleLowerCase()
       slash.querySelectorAll<HTMLButtonElement>('button').forEach(item => { item.hidden = !item.textContent?.toLocaleLowerCase().includes(query) })
+	      syncListbox(slash, true)
     } else if (!slashInsertionMode && window.document.activeElement && !slash.contains(window.document.activeElement)) {
       slash.hidden = true
     }
@@ -1209,30 +1323,94 @@ export const mount = (host: HTMLElement, options: MountOptions): EditorSession =
     }
   }
   window.document.addEventListener('pointerdown', outside, true)
-  editor.view.dom.addEventListener('keydown', event => {
+  let geometryFrame: number | null = null
+  const refreshGeometry = (): void => {
+    if (geometryFrame !== null || destroyed) return
+    geometryFrame = window.requestAnimationFrame(() => {
+      geometryFrame = null
+      if ([bubble, slash, blockControls, blockMenu, linkPopover, tableControls, mediaPopover, mentions]
+        .some(surface => !surface.hidden)) updateSurfaces(editor)
+    })
+  }
+  window.addEventListener('scroll', refreshGeometry, true)
+  window.addEventListener('resize', refreshGeometry)
+  window.visualViewport?.addEventListener('resize', refreshGeometry)
+  window.visualViewport?.addEventListener('scroll', refreshGeometry)
+	  const editorKeydown = (event: KeyboardEvent): void => {
+	    const activeListbox = !mentions.hidden ? mentions : !slash.hidden ? slash : null
+	    const items = activeListbox
+	      ? Array.from(activeListbox.querySelectorAll<HTMLButtonElement>('button[role="option"]')).filter(item => !item.hidden && !item.disabled)
+	      : []
+	    if (activeListbox && items.length && ['ArrowDown', 'ArrowUp', 'Home', 'End'].includes(event.key)) {
+	      event.preventDefault()
+	      event.stopPropagation()
+	      if (event.key === 'Home') activeOptionIndex = 0
+	      else if (event.key === 'End') activeOptionIndex = items.length - 1
+	      else activeOptionIndex = (activeOptionIndex + (event.key === 'ArrowDown' ? 1 : -1) + items.length) % items.length
+	      syncListbox(activeListbox)
+	      return
+	    }
+	    if (activeListbox && items.length && event.key === 'Enter' && !event.isComposing) {
+	      event.preventDefault()
+	      event.stopPropagation()
+	      items[activeOptionIndex]?.click()
+	      return
+	    }
     if (event.key === 'Escape') {
+	      const mention = currentMention()
+	      if (!mentions.hidden && mention) dismissedMention = mentionKey(mention)
+	      const { $from } = editor.state.selection
+	      const before = $from.parent.textBetween(0, $from.parentOffset, undefined, '\ufffc')
+	      const slashMatch = /(?:^|\s)\/([^\s/]*)$/.exec(before)
+	      if (!slash.hidden && slashMatch) dismissedSlash = `${$from.pos}:${slashMatch[1]}`
       slash.hidden = true; blockMenu.hidden = true; linkPopover.hidden = true; mediaPopover.hidden = true
       bubble.hidden = true; tableControls.hidden = true; pendingImageInsertAt = null; closeMentions(); editor.commands.focus()
+	      editor.view.dom.setAttribute('aria-expanded', 'false')
+	      editor.view.dom.removeAttribute('aria-activedescendant')
     }
-  })
+	  }
+	  editor.view.dom.addEventListener('keydown', editorKeydown, true)
   updateSurfaces(editor)
 
   return {
     command: run,
-    replaceDocument(document) {
-      closeMentions()
-      suppressUpdate = true
-      documentMetadata = document.metadata ?? {}
-      editor.commands.setContent(v2ToPm(document), { emitUpdate: false })
-      suppressUpdate = false
-    },
+	    replaceDocument(document, historyPolicy = 'reset') {
+	      closeMentions()
+	      flush('replace')
+	      suppressUpdate = true
+	      documentMetadata = document.metadata ?? {}
+	      const replacement = editor.schema.nodeFromJSON(v2ToPm(document))
+	      if (historyPolicy === 'reset') {
+	        editor.view.updateState(EditorState.create({
+	          schema: editor.schema,
+	          doc: replacement,
+	          plugins: editor.state.plugins,
+	        }))
+	      } else {
+	        const transaction = editor.state.tr
+	          .replaceWith(0, editor.state.doc.content.size, replacement.content)
+	          .setMeta('addToHistory', false)
+	          .setMeta('externalReplacement', true)
+	        editor.view.dispatch(transaction)
+	      }
+	      lastEmittedSnapshot = JSON.stringify(pmToV2(editor.getJSON(), documentMetadata))
+	      suppressUpdate = false
+	      updateSurfaces(editor)
+	      emitCommandState(editor)
+	    },
     snapshot: () => pmToV2(editor.getJSON(), documentMetadata),
-    destroy() {
-      if (destroyed) return
-      destroyed = true
-      window.clearTimeout(updateTimer)
-      closeMentions()
-      window.document.removeEventListener('pointerdown', outside, true)
+	    destroy() {
+	      if (destroyed) return
+	      flush('destroy')
+	      destroyed = true
+	      closeMentions()
+	      window.document.removeEventListener('pointerdown', outside, true)
+	      if (geometryFrame !== null) window.cancelAnimationFrame(geometryFrame)
+	      window.removeEventListener('scroll', refreshGeometry, true)
+	      window.removeEventListener('resize', refreshGeometry)
+	      window.visualViewport?.removeEventListener('resize', refreshGeometry)
+	      window.visualViewport?.removeEventListener('scroll', refreshGeometry)
+	      editor.view.dom.removeEventListener('keydown', editorKeydown, true)
       editor.destroy()
       bubble.remove(); blockControls.remove(); slash.remove(); blockMenu.remove(); linkPopover.remove(); tableControls.remove(); mediaPopover.remove(); mentions.remove()
     },
@@ -1249,7 +1427,9 @@ export const createRegistry = () => {
       return session
     },
     command(id: string, command: string, attrs?: Attributes) { return sessions.get(id)?.command(command, attrs) ?? false },
-    replaceDocument(id: string, document: ComponentDocumentV2) { sessions.get(id)?.replaceDocument(document) },
+	    replaceDocument(id: string, document: ComponentDocumentV2, historyPolicy: 'preserve' | 'reset' = 'reset') {
+	      sessions.get(id)?.replaceDocument(document, historyPolicy)
+	    },
     snapshot(id: string) { return sessions.get(id)?.snapshot() },
     destroy(id: string) { sessions.get(id)?.destroy(); sessions.delete(id) },
   }

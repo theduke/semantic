@@ -224,6 +224,8 @@ impl DocumentFormatRegistry {
 
 pub fn register_standard_document_formats(registry: &mut DocumentFormatRegistry) {
     registry.register(Arc::new(TypedDocumentCodec::new()));
+    #[cfg(feature = "markdown")]
+    registry.register(Arc::new(crate::markdown_v2::MarkdownDocumentFormat::new()));
     registry.register(Arc::new(LegacyV1DocumentFormat::new()));
     registry.register(Arc::new(PlainTextDocumentFormat::new()));
 }

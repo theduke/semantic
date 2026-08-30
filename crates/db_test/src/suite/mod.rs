@@ -2332,6 +2332,34 @@ async fn test_relationships_generic_embedded(db: &Db) {
                     indexing_mode: RelationIndexingMode::Enabled,
                     meta: Meta::default(),
                 },
+            })
+            .with_op(DdlOperation::UpsertAttribute {
+                attribute: AttributeType {
+                    id: "shared.rel.secondary_ref".to_string(),
+                    name: "secondary_ref".to_string(),
+                    ty: Type {
+                        kind: TypeKind::Ref(semantic_data::schema::core::type_ref::TypeRef {
+                            name: "id".to_string(),
+                            args: vec![],
+                        }),
+                        constraints: vec![],
+                        annotations: vec![],
+                    },
+                    constraints: vec![],
+                    meta: Meta::default(),
+                },
+            })
+            .with_op(DdlOperation::UpsertRelationship {
+                relationship: RelationType {
+                    id: "shared.rel.secondary".to_string(),
+                    name: "secondary".to_string(),
+                    source_collection: "shared_suite_rel_nodes".to_string(),
+                    mode: RelationMode::Embedded {
+                        attribute: "shared.rel.secondary_ref".to_string(),
+                    },
+                    indexing_mode: RelationIndexingMode::Enabled,
+                    meta: Meta::default(),
+                },
             }),
     )
     .await
@@ -2351,6 +2379,7 @@ async fn test_relationships_generic_embedded(db: &Db) {
     let mut c = Object::new();
     c.insert("id", Value::String("c".to_string()));
     c.insert("shared.rel.parent_ref", Value::String("b".to_string()));
+    c.insert("shared.rel.secondary_ref", Value::String("d".to_string()));
     db.insert("shared_suite_rel_nodes", "c", c)
         .await
         .expect("insert c should succeed");
@@ -2385,6 +2414,84 @@ async fn test_relationships_generic_embedded(db: &Db) {
         .await
         .expect("ast relation query should succeed");
     assert_eq!(row_ids(&ast_rows), vec!["b", "c"]);
+
+    let relation_and_scalar = db
+        .select(
+            SelectQuery::new()
+                .with_collection("shared_suite_rel_nodes")
+                .with_predicate(Expr::Binary {
+                    op: BinaryOp::And,
+                    left: Box::new(eq_predicate(
+                        FieldPath::from_fields(["id"]),
+                        Value::String("c".to_string()),
+                    )),
+                    right: Box::new(Expr::RelationExists {
+                        relation: Box::new(Expr::Operand(Operand::Literal(Value::String(
+                            "shared.rel.parent".to_string(),
+                        )))),
+                        source: Box::new(Expr::Operand(Operand::Field(FieldPath::from_fields([
+                            "id",
+                        ])))),
+                        target: Box::new(Expr::Operand(Operand::Literal(Value::String(
+                            "a".to_string(),
+                        )))),
+                        transitive: true,
+                        max_depth: None,
+                    }),
+                }),
+        )
+        .await
+        .expect("relationship and indexed scalar query should succeed");
+    assert_eq!(row_ids(&relation_and_scalar), vec!["c"]);
+
+    let relation = |id: &str, target: &str, transitive| Expr::RelationExists {
+        relation: Box::new(Expr::Operand(Operand::Literal(Value::String(
+            id.to_string(),
+        )))),
+        source: Box::new(Expr::Operand(Operand::Field(FieldPath::from_fields([
+            "id",
+        ])))),
+        target: Box::new(Expr::Operand(Operand::Literal(Value::String(
+            target.to_string(),
+        )))),
+        transitive,
+        max_depth: None,
+    };
+    let two_relationships = db
+        .select(
+            SelectQuery::new()
+                .with_collection("shared_suite_rel_nodes")
+                .with_predicate(Expr::Binary {
+                    op: BinaryOp::And,
+                    left: Box::new(relation("shared.rel.parent", "a", true)),
+                    right: Box::new(relation("shared.rel.secondary", "d", false)),
+                }),
+        )
+        .await
+        .expect("two relationship predicates should compose");
+    assert_eq!(row_ids(&two_relationships), vec!["c"]);
+
+    let max_depth_rows = db
+        .select(
+            SelectQuery::new()
+                .with_collection("shared_suite_rel_nodes")
+                .with_predicate(Expr::RelationExists {
+                    relation: Box::new(Expr::Operand(Operand::Literal(Value::String(
+                        "shared.rel.parent".to_string(),
+                    )))),
+                    source: Box::new(Expr::Operand(Operand::Field(FieldPath::from_fields([
+                        "id",
+                    ])))),
+                    target: Box::new(Expr::Operand(Operand::Literal(Value::String(
+                        "a".to_string(),
+                    )))),
+                    transitive: true,
+                    max_depth: Some(Box::new(Expr::Operand(Operand::Literal(Value::U64(1))))),
+                }),
+        )
+        .await
+        .expect("bounded transitive relationship query should succeed");
+    assert_eq!(row_ids(&max_depth_rows), vec!["b"]);
 
     let direct_rows = db
         .select(

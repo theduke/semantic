@@ -1,23 +1,36 @@
-import { describe, expect, it } from 'vitest'
-import { Schema, Slice } from '@tiptap/pm/model'
+import { beforeEach, describe, expect, it } from 'vitest'
+import { Fragment, Schema, Slice } from '@tiptap/pm/model'
+import urlPolicyCases from '../../assets/url_policy_cases.json'
 import {
   decodeInternalClipboard,
   encodeInternalClipboard,
   INTERNAL_CLIPBOARD_VERSION,
+  mount,
   parseTsvGrid,
   pmToV1,
   pmToV2,
+  safeImageUrl,
+  safeUrl,
   v1ToPm,
   v2ToPm,
   type ComponentDocumentV2,
+  type EngineManifest,
 } from './index'
+
+beforeEach(() => {
+  Range.prototype.getClientRects = () => ({
+    0: new DOMRect(), length: 1, item: () => new DOMRect(),
+    [Symbol.iterator]: function* () { yield new DOMRect() },
+  }) as DOMRectList
+  Range.prototype.getBoundingClientRect = () => new DOMRect()
+})
 
 const clipboardSchema = new Schema({
   nodes: {
     doc: { content: 'block+' },
-    paragraph: { group: 'block', content: 'inline*' },
+    paragraph: { group: 'block', content: 'inline*', attrs: { semanticId: { default: null } } },
     text: { group: 'inline' },
-    image: { group: 'inline', inline: true, attrs: { src: {}, alt: { default: null }, title: { default: null } } },
+    image: { group: 'inline', inline: true, attrs: { semanticId: { default: null }, src: {}, alt: { default: null }, title: { default: null } } },
   },
   marks: { link: { attrs: { href: {} } } },
 })
@@ -158,6 +171,17 @@ describe('internal clipboard envelope', () => {
     expect(decodeInternalClipboard(encoded, clipboardSchema, 'catalog-a')).not.toBeNull()
     expect(decodeInternalClipboard(encoded, clipboardSchema, 'catalog-b')).toBeNull()
   })
+
+  it('strips copied semantic identities before the slice is inserted', () => {
+    const paragraph = clipboardSchema.node('paragraph', { semanticId: 'paragraph-source' }, [
+      clipboardSchema.node('image', { semanticId: 'image-source', src: 'https://example.com/a.png' }),
+    ])
+    const decoded = decodeInternalClipboard(
+      encodeInternalClipboard(new Slice(Fragment.from(paragraph), 0, 0)), clipboardSchema,
+    )
+    expect(decoded?.content.firstChild?.attrs.semanticId).toBeNull()
+    expect(decoded?.content.firstChild?.firstChild?.attrs.semanticId).toBeNull()
+  })
 })
 
 describe('rectangular TSV parsing', () => {
@@ -170,5 +194,142 @@ describe('rectangular TSV parsing', () => {
   it('leaves ordinary text and malformed quoted data to normal paste', () => {
     expect(parseTsvGrid('ordinary text')).toBeNull()
     expect(parseTsvGrid('"unterminated\tvalue')).toBeNull()
+  })
+})
+
+describe('URL role policies', () => {
+  it('matches the shared hyperlink and media conformance corpus', () => {
+    for (const fixture of urlPolicyCases) {
+      expect(safeUrl(fixture.value), `hyperlink: ${fixture.value}`).toBe(fixture.hyperlink)
+      expect(safeImageUrl(fixture.value), `media: ${fixture.value}`).toBe(fixture.media)
+    }
+  })
+})
+
+const paragraphDocument = (id: string, text: string): ComponentDocumentV2 => ({
+  schema: 'semantic.component-document',
+  version: 2,
+  root: { kind: 'document', content: [{
+    kind: 'paragraph', id, content: text ? [{ kind: 'text', text }] : [],
+  }] },
+})
+
+const allIds = (document: ComponentDocumentV2): string[] => {
+  const ids: string[] = []
+  const visit = (node: NonNullable<ComponentDocumentV2['root']>) => {
+    if (node.id) ids.push(node.id)
+    node.content?.forEach(visit)
+  }
+  visit(document.root)
+  return ids
+}
+
+describe('session durability, identity, and history', () => {
+  it('emits a document-changing command synchronously and destroy does not duplicate it', () => {
+    document.body.innerHTML = '<div class="dxeditor"><div id="host"></div></div>'
+    const events: Array<{ kind?: string; revision?: number }> = []
+    const session = mount(document.querySelector('#host')!, {
+      sessionId: 'session-sync', document: paragraphDocument('paragraph-1', 'one'), readonly: false,
+      emit: event => events.push(event as { kind?: string; revision?: number }),
+    })
+    expect(session.command('horizontalRule')).toBe(true)
+    const changes = events.filter(event => event.kind === 'documentChange')
+    expect(changes).toHaveLength(1)
+    expect(changes[0]?.revision).toBe(1)
+    session.destroy()
+    expect(events.filter(event => event.kind === 'documentChange')).toHaveLength(1)
+  })
+
+  it('keeps generated IDs stable and unique across repeated snapshots and table growth', () => {
+    document.body.innerHTML = '<div class="dxeditor"><div id="host"></div></div>'
+    const session = mount(document.querySelector('#host')!, {
+      sessionId: 'session-ids', document: paragraphDocument('paragraph-1', 'one'), readonly: false,
+      emit: () => {},
+    })
+    expect(session.command('table')).toBe(true)
+    expect(session.command('addRowAfter')).toBe(true)
+    const first = session.snapshot()
+    const second = session.snapshot()
+    expect(second).toEqual(first)
+    const ids = allIds(first)
+    expect(ids.every(Boolean)).toBe(true)
+    expect(new Set(ids).size).toBe(ids.length)
+    session.destroy()
+  })
+
+  it('reset replacement clears history so undo cannot resurrect the old revision', () => {
+    document.body.innerHTML = '<div class="dxeditor"><div id="host"></div></div>'
+    const session = mount(document.querySelector('#host')!, {
+      sessionId: 'session-history', document: paragraphDocument('paragraph-1', 'local'), readonly: false,
+      emit: () => {},
+    })
+    expect(session.command('horizontalRule')).toBe(true)
+    session.replaceDocument(paragraphDocument('paragraph-server', 'server'), 'reset')
+    session.command('undo')
+    expect(session.snapshot().root.content).toEqual(paragraphDocument('paragraph-server', 'server').root.content)
+    session.destroy()
+  })
+
+  it('preserve replacement maps retained history without restoring replaced text', () => {
+    document.body.innerHTML = '<div class="dxeditor"><div id="host"></div></div>'
+    const session = mount(document.querySelector('#host')!, {
+      sessionId: 'session-preserve', document: paragraphDocument('paragraph-1', 'local'), readonly: false,
+      emit: () => {},
+    })
+    expect(session.command('heading', { level: 1 })).toBe(true)
+    session.replaceDocument(paragraphDocument('paragraph-server', 'server'), 'preserve')
+    session.command('undo')
+    expect(session.snapshot().root.content?.[0]?.content?.[0]?.text).toBe('server')
+    session.destroy()
+  })
+
+  it('rejects missing and duplicate imported identities before mount', () => {
+    const missing = paragraphDocument('', 'missing')
+    missing.root.content![0]!.id = undefined
+    expect(() => v2ToPm(missing)).toThrow(/missing semanticId/)
+    const duplicate = paragraphDocument('duplicate', 'one')
+    duplicate.root.content!.push({ kind: 'paragraph', id: 'duplicate', content: [] })
+    expect(() => v2ToPm(duplicate)).toThrow(/duplicate semanticId/)
+  })
+})
+
+const engineManifest = (overrides: Partial<EngineManifest> = {}): EngineManifest => ({
+  version: 1,
+  document_catalog_fingerprint: 'fixture-catalog',
+  clipboard_schema_fingerprint: 'fixture-clipboard',
+  format_id: 'markdown',
+  aria_label: 'Fixture editor',
+  components: [],
+  commands: [],
+  features: {
+    table_headers: true, table_alignment: true, persistent_table_widths: false,
+    table_spans: false, media: true, tasks: true, opaque_content: true,
+  },
+  ...overrides,
+})
+
+describe('engine capability manifest', () => {
+  it('fails mount with an actionable missing adapter error', () => {
+    document.body.innerHTML = '<div class="dxeditor"><div id="host"></div></div>'
+    expect(() => mount(document.querySelector('#host')!, {
+      sessionId: 'session-manifest', schemaFingerprint: 'fixture-catalog',
+      document: paragraphDocument('paragraph-1', 'one'), readonly: false, emit: () => {},
+      manifest: engineManifest({
+        components: [{ id: 'widget', adapter: 'missing', format_capability: 'native' }],
+      }),
+    })).toThrow(/component 'widget'.*missing behavior adapter 'missing'/)
+  })
+
+  it('does not expose commands disabled by the active output format', () => {
+    document.body.innerHTML = '<div class="dxeditor"><div id="host"></div></div>'
+    const session = mount(document.querySelector('#host')!, {
+      sessionId: 'session-capability', schemaFingerprint: 'fixture-catalog',
+      document: paragraphDocument('paragraph-1', 'one'), readonly: false, emit: () => {},
+      manifest: engineManifest({
+        commands: [{ id: 'image', enabled: false, disabled_reason: 'not persistable' }],
+      }),
+    })
+    expect(session.command('image', { src: 'https://example.com/a.png' })).toBe(false)
+    session.destroy()
   })
 })

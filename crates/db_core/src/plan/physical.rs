@@ -57,8 +57,16 @@ pub struct PhysicalJoinKey {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PhysicalJoinAlgorithm {
     Hash,
+    IndexNestedLoop,
     NestedLoop,
     Merge,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct PhysicalIndexProbe {
+    pub source: SourceRef,
+    pub field: FieldRef,
+    pub residual_predicate: Option<Expr>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -68,6 +76,7 @@ pub enum PhysicalJoinCondition {
     Eq {
         left: PhysicalJoinKey,
         right: PhysicalJoinKey,
+        residual_predicate: Option<Expr>,
     },
 }
 
@@ -95,6 +104,7 @@ pub struct PhysicalJoinPlan {
     pub join_type: JoinType,
     pub algorithm: PhysicalJoinAlgorithm,
     pub condition: PhysicalJoinCondition,
+    pub index_probe: Option<PhysicalIndexProbe>,
     pub left_binding: String,
     pub right_binding: String,
 }

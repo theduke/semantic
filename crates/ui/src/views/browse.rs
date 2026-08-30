@@ -43,22 +43,18 @@ pub fn BrowsePage(
             .ok_or_else(|| format!("No SQL text found in local storage for hash {hash}")),
         None => Ok(default_query(&collection_name, page_size, page)),
     };
-    let resource = use_resource({
-        let client = client.clone();
-        let scope_id = scope_id.clone();
-        let query = query.clone();
-        move || {
+    let resource = use_resource(use_reactive(
+        (&query, &scope_id),
+        move |(query, scope_id)| {
             let client = client.clone();
-            let scope_id = scope_id.clone();
-            let query = query.clone();
             async move {
                 match query {
                     Ok(query) => run_query(client, scope_id, query).await,
                     Err(err) => Err(err),
                 }
             }
-        }
-    });
+        },
+    ));
     let custom_sql = sql.is_some();
     let mut show_filters = use_signal(|| false);
     let mut grid_columns = use_signal(|| 1_usize);

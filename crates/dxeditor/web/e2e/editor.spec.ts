@@ -71,9 +71,28 @@ test('uses cancellable contextual mention suggestions', async ({ page }) => {
   const editor = page.locator('.ProseMirror')
   await editor.click()
   await page.keyboard.press('End')
-  await page.keyboard.type(' @ali')
+  await page.keyboard.type(' @al')
   await page.getByRole('option', { name: /Mention Alice/ }).click()
   await expect(editor.locator('[data-semantic-mention="entity-alice"]')).toHaveText('@Alice')
+})
+
+test('operates slash and mention listboxes without moving focus from the editor', async ({ page }) => {
+  const editor = page.locator('.ProseMirror')
+  await editor.click()
+  await page.keyboard.press('End')
+  await page.keyboard.type(' /hea')
+  await expect(page.getByRole('listbox', { name: 'Insert block' })).toBeVisible()
+  await expect(editor).toHaveAttribute('aria-expanded', 'true')
+  await page.keyboard.press('Enter')
+  await expect(editor.locator('h1')).toBeVisible()
+
+  await editor.click()
+  await page.keyboard.press('End')
+  await page.keyboard.type(' @al')
+  await expect(page.getByRole('option', { name: /Mention Alice/ })).toBeVisible()
+  await page.keyboard.press('ArrowDown')
+  await page.keyboard.press('Enter')
+  await expect(editor.locator('[data-semantic-mention="entity-alpine"]')).toHaveText('@Alpine')
 })
 
 test('writes validated internal clipboard data with interoperable fallbacks', async ({ page }) => {
@@ -92,8 +111,51 @@ test('writes validated internal clipboard data with interoperable fallbacks', as
   expect(clipboard.text).toContain('Select this text')
   expect(clipboard.html).toContain('Select this text')
   expect(JSON.parse(clipboard.internal)).toMatchObject({
-    version: 1, schema: 'semantic.prosemirror-slice', schemaFingerprint: 'fixture-schema',
+    version: 2, schema: 'semantic.prosemirror-slice',
+    schemaFingerprint: 'fixture-schema:semantic.pm-slice.v2:2026-08-30',
   })
+})
+
+test('publishes local ownership immediately and keeps snapshot identities stable', async ({ page }) => {
+  const editor = page.locator('.ProseMirror')
+  await page.evaluate(() => { (window as unknown as { editorEvents: unknown[] }).editorEvents = [] })
+  await editor.click()
+  await page.keyboard.press('End')
+  await page.keyboard.type('!')
+  const result = await page.evaluate(() => {
+    const fixture = window as unknown as {
+      editorEvents: Array<{ kind?: string; revision?: number; document?: unknown }>
+      editorSession: { snapshot(): unknown }
+    }
+    const changes = fixture.editorEvents.filter(event => event.kind === 'documentChange')
+    return { changes, first: fixture.editorSession.snapshot(), second: fixture.editorSession.snapshot() }
+  })
+  expect(result.changes).toHaveLength(1)
+  expect(result.changes[0]?.revision).toBe(1)
+  expect(result.second).toEqual(result.first)
+})
+
+test('reset replacement prevents undo from crossing an external revision', async ({ page }) => {
+  const editor = page.locator('.ProseMirror')
+  await editor.click()
+  await page.keyboard.press('End')
+  await page.keyboard.type(' local')
+  const text = await page.evaluate(() => {
+    const fixture = window as unknown as {
+      editorSession: {
+        replaceDocument(document: unknown, historyPolicy: 'reset'): void
+        command(name: string): boolean
+        snapshot(): { root: { content?: Array<{ content?: Array<{ text?: string }> }> } }
+      }
+    }
+    fixture.editorSession.replaceDocument({
+      schema: 'semantic.component-document', version: 2,
+      root: { kind: 'document', content: [{ kind: 'paragraph', id: 'server-paragraph', content: [{ kind: 'text', text: 'server' }] }] },
+    }, 'reset')
+    fixture.editorSession.command('undo')
+    return fixture.editorSession.snapshot().root.content?.[0]?.content?.[0]?.text
+  })
+  expect(text).toBe('server')
 })
 
 test('grows a table for rectangular TSV paste', async ({ page }) => {

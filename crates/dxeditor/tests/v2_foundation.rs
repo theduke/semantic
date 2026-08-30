@@ -1,5 +1,6 @@
 use dxeditor::document_v2::{
-    COMPONENT_DOCUMENT_FORMAT, COMPONENT_HEADING_V2, COMPONENT_IMAGE, COMPONENT_UNKNOWN,
+    COMPONENT_DOCUMENT_FORMAT, COMPONENT_HEADING_V2, COMPONENT_IMAGE, COMPONENT_PARAGRAPH_V2,
+    COMPONENT_TABLE_CELL_V2, COMPONENT_TABLE_ROW_V2, COMPONENT_TABLE_V2, COMPONENT_UNKNOWN,
     HeadingAttributes, MARK_BOLD_V2,
 };
 use dxeditor::{
@@ -120,6 +121,27 @@ fn validation_rejects_unsafe_urls_and_invalid_tree_shapes() {
             .iter()
             .any(|issue| issue.code == "unexpected_content")
     );
+}
+
+#[test]
+fn url_roles_distinguish_navigation_from_media_sources() {
+    use dxeditor::{is_safe_media_url, is_safe_url};
+
+    let fixtures: Vec<Value> =
+        serde_json::from_str(include_str!("../assets/url_policy_cases.json")).unwrap();
+    for fixture in fixtures {
+        let value = fixture["value"].as_str().unwrap();
+        assert_eq!(
+            is_safe_url(value),
+            fixture["hyperlink"].as_bool().unwrap(),
+            "hyperlink: {value}"
+        );
+        assert_eq!(
+            is_safe_media_url(value),
+            fixture["media"].as_bool().unwrap(),
+            "media: {value}"
+        );
+    }
 }
 
 #[test]
@@ -300,6 +322,99 @@ fn validation_limits_are_enforced() {
     .unwrap_err();
 
     assert!(error.issues.iter().any(|issue| issue.code == "text_limit"));
+}
+
+fn table_cell(id: &str, paragraph_id: &str) -> ComponentNode {
+    ComponentNode::container(
+        COMPONENT_TABLE_CELL_V2,
+        Some(NodeId::new(id)),
+        vec![ComponentNode::container(
+            COMPONENT_PARAGRAPH_V2,
+            Some(NodeId::new(paragraph_id)),
+            Vec::new(),
+        )],
+    )
+}
+
+#[test]
+fn table_validation_uses_effective_span_geometry() {
+    let catalog = ComponentCatalog::standard().unwrap();
+    let mut spanning = table_cell("cell-a", "paragraph-a");
+    spanning.attrs.insert("rowspan".to_string(), json!(2));
+    let table = ComponentNode::container(
+        COMPONENT_TABLE_V2,
+        Some(NodeId::new("table")),
+        vec![
+            ComponentNode::container(
+                COMPONENT_TABLE_ROW_V2,
+                Some(NodeId::new("row-a")),
+                vec![spanning, table_cell("cell-b", "paragraph-b")],
+            ),
+            ComponentNode::container(
+                COMPONENT_TABLE_ROW_V2,
+                Some(NodeId::new("row-b")),
+                vec![table_cell("cell-c", "paragraph-c")],
+            ),
+        ],
+    );
+    validate_component_document(
+        &ComponentDocumentV2::new(vec![table]),
+        &catalog,
+        &ValidationLimits::default(),
+        UnknownComponentPolicy::Reject,
+    )
+    .unwrap();
+}
+
+#[test]
+fn table_validation_rejects_holes_bad_widths_and_out_of_bounds_spans() {
+    let catalog = ComponentCatalog::standard().unwrap();
+    let mut wide = table_cell("cell-a", "paragraph-a");
+    wide.attrs.insert("colspan".to_string(), json!(2));
+    wide.attrs.insert("colwidth".to_string(), json!([120]));
+    let mut out_of_bounds = table_cell("cell-c", "paragraph-c");
+    out_of_bounds.attrs.insert("rowspan".to_string(), json!(2));
+    let table = ComponentNode::container(
+        COMPONENT_TABLE_V2,
+        Some(NodeId::new("table")),
+        vec![
+            ComponentNode::container(
+                COMPONENT_TABLE_ROW_V2,
+                Some(NodeId::new("row-a")),
+                vec![wide],
+            ),
+            ComponentNode::container(
+                COMPONENT_TABLE_ROW_V2,
+                Some(NodeId::new("row-b")),
+                vec![out_of_bounds],
+            ),
+        ],
+    );
+    let error = validate_component_document(
+        &ComponentDocumentV2::new(vec![table]),
+        &catalog,
+        &ValidationLimits::default(),
+        UnknownComponentPolicy::Reject,
+    )
+    .unwrap_err();
+    assert!(
+        error
+            .issues
+            .iter()
+            .any(|issue| issue.code == "invalid_colwidth")
+    );
+    assert!(
+        error
+            .issues
+            .iter()
+            .any(|issue| issue.code == "table_span_bounds")
+    );
+    assert!(
+        error
+            .issues
+            .iter()
+            .any(|issue| issue.code == "table_map_hole")
+    );
 }
 
 #[test]

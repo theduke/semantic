@@ -75,6 +75,38 @@ pub trait AsyncPhysicalDataSource: Send + Sync {
         )
     }
 
+    fn index_lookup_filtered_stream(
+        &self,
+        source: SourceRef,
+        field: FieldRef,
+        value: Value,
+        residual_predicate: Option<Expr>,
+    ) -> SendableRecordBatchStream {
+        let stream = self.index_lookup_stream(source, field, value);
+        match residual_predicate {
+            Some(predicate) => filter_batch_stream(stream, predicate),
+            None => stream,
+        }
+    }
+
+    fn index_lookup_many_stream(
+        &self,
+        source: SourceRef,
+        field: FieldRef,
+        values: Vec<Value>,
+        residual_predicate: Option<Expr>,
+    ) -> SendableRecordBatchStream {
+        stream::select_all(values.into_iter().map(|value| {
+            self.index_lookup_filtered_stream(
+                source.clone(),
+                field.clone(),
+                value,
+                residual_predicate.clone(),
+            )
+        }))
+        .boxed()
+    }
+
     fn scan(&self, source: SourceRef) -> BoxFuture<'static, CoreResult<Vec<DynObject>>> {
         collect_dyn_stream(self.scan_stream(source)).boxed()
     }
@@ -154,20 +186,31 @@ fn execute_physical_dyn_stream(
             value,
             residual_predicate,
         }) => {
-            let base = source.index_lookup_stream(source_ref, field, value);
-            if let Some(residual) = residual_predicate {
+            if residual_predicate
+                .as_ref()
+                .is_some_and(expr_contains_subquery)
+            {
                 stream::once(async move {
+                    let residual = residual_predicate.expect("checked residual predicate");
                     let residual =
-                        resolve_expr_subqueries_async(&residual, source, &context, options).await?;
-                    Ok(rows_to_batches(
-                        filter_dyn_rows(collect_dyn_stream(base).await?, &residual),
-                        options.batch_size,
+                        resolve_expr_subqueries_async(&residual, source.clone(), &context, options)
+                            .await?;
+                    Ok(source.index_lookup_filtered_stream(
+                        source_ref,
+                        field,
+                        value,
+                        Some(residual),
                     ))
                 })
                 .try_flatten()
                 .boxed()
             } else {
-                base
+                source.index_lookup_filtered_stream(
+                    source_ref,
+                    field,
+                    value,
+                    residual_predicate,
+                )
             }
         }
         PhysicalPlan::Values { values } => rows_to_batches(
@@ -536,8 +579,38 @@ fn execute_join_stream(
     options: ExecutionOptions,
 ) -> RecordBatchStream<'_> {
     stream::once(async move {
-        if let PhysicalJoinCondition::Predicate(predicate) = &join.condition {
-            join.condition = PhysicalJoinCondition::Predicate(
+        match &join.condition {
+            PhysicalJoinCondition::Predicate(predicate) => {
+                join.condition = PhysicalJoinCondition::Predicate(
+                    resolve_expr_subqueries_async(predicate, source.clone(), &context, options)
+                        .await?,
+                );
+            }
+            PhysicalJoinCondition::Eq {
+                left,
+                right,
+                residual_predicate: Some(residual),
+            } => {
+                join.condition = PhysicalJoinCondition::Eq {
+                    left: left.clone(),
+                    right: right.clone(),
+                    residual_predicate: Some(
+                        resolve_expr_subqueries_async(
+                            residual,
+                            source.clone(),
+                            &context,
+                            options,
+                        )
+                        .await?,
+                    ),
+                };
+            }
+            _ => {}
+        }
+        if let Some(probe) = &mut join.index_probe
+            && let Some(predicate) = &probe.residual_predicate
+        {
+            probe.residual_predicate = Some(
                 resolve_expr_subqueries_async(predicate, source.clone(), &context, options).await?,
             );
         }
@@ -547,7 +620,19 @@ fn execute_join_stream(
             {
                 execute_hash_join_stream(join, source.clone(), context.clone(), options)
             }
+            PhysicalJoinAlgorithm::IndexNestedLoop
+                if join.index_probe.is_some()
+                    && matches!(join.condition, PhysicalJoinCondition::Eq { .. }) =>
+            {
+                execute_index_nested_loop_join_stream(
+                    join,
+                    source.clone(),
+                    context.clone(),
+                    options,
+                )
+            }
             PhysicalJoinAlgorithm::Hash
+            | PhysicalJoinAlgorithm::IndexNestedLoop
             | PhysicalJoinAlgorithm::NestedLoop
             | PhysicalJoinAlgorithm::Merge => {
                 execute_nested_loop_join_stream(join, source.clone(), context.clone(), options)
@@ -555,6 +640,51 @@ fn execute_join_stream(
         };
         Ok(out)
     })
+    .try_flatten()
+    .boxed()
+}
+
+fn execute_index_nested_loop_join_stream(
+    join: PhysicalJoinPlan,
+    source: Arc<dyn AsyncPhysicalDataSource + '_>,
+    context: QueryContext,
+    options: ExecutionOptions,
+) -> RecordBatchStream<'_> {
+    stream::once(async move {
+        let left_rows = collect_dyn_stream(execute_physical_dyn_stream(
+            *join.left.clone(),
+            source.clone(),
+            context,
+            options,
+        ))
+        .await?;
+        let probe = join
+            .index_probe
+            .clone()
+            .expect("indexed join execution requires probe metadata");
+        let PhysicalJoinCondition::Eq { left, .. } = &join.condition else {
+            return execute_hash_join(&join, left_rows, Vec::new());
+        };
+        let values = left_rows
+            .iter()
+            .filter_map(|row| value_ref_for_join_key(row.as_ref(), left).map(ValueRef::into_owned))
+            .collect::<BTreeSet<_>>()
+            .into_iter()
+            .collect::<Vec<_>>();
+        let right_rows = if values.is_empty() {
+            Vec::new()
+        } else {
+            collect_dyn_stream(source.index_lookup_many_stream(
+                probe.source,
+                probe.field,
+                values,
+                probe.residual_predicate,
+            ))
+            .await?
+        };
+        execute_hash_join(&join, left_rows, right_rows)
+    })
+    .map_ok(move |rows| rows_to_batches(rows, options.batch_size))
     .try_flatten()
     .boxed()
 }
@@ -916,6 +1046,28 @@ impl AsyncPhysicalDataSource for BorrowedAsyncPhysicalDataSource<'_> {
         value: Value,
     ) -> SendableRecordBatchStream {
         self.inner.index_lookup_stream(source, field, value)
+    }
+
+    fn index_lookup_filtered_stream(
+        &self,
+        source: SourceRef,
+        field: FieldRef,
+        value: Value,
+        residual_predicate: Option<Expr>,
+    ) -> SendableRecordBatchStream {
+        self.inner
+            .index_lookup_filtered_stream(source, field, value, residual_predicate)
+    }
+
+    fn index_lookup_many_stream(
+        &self,
+        source: SourceRef,
+        field: FieldRef,
+        values: Vec<Value>,
+        residual_predicate: Option<Expr>,
+    ) -> SendableRecordBatchStream {
+        self.inner
+            .index_lookup_many_stream(source, field, values, residual_predicate)
     }
 }
 
@@ -1502,7 +1654,12 @@ fn execute_hash_join_build_right(
     left_rows: Vec<DynObject>,
     right_rows: Vec<DynObject>,
 ) -> CoreResult<Vec<DynObject>> {
-    let PhysicalJoinCondition::Eq { left, right } = &join.condition else {
+    let PhysicalJoinCondition::Eq {
+        left,
+        right,
+        residual_predicate,
+    } = &join.condition
+    else {
         return execute_nested_loop_join(join, left_rows, right_rows);
     };
 
@@ -1536,8 +1693,18 @@ fn execute_hash_join_build_right(
             continue;
         };
 
+        let mut matched_any = false;
         if let Some(matches) = right_index.get(&left_key) {
             for (right_idx, right_obj) in matches {
+                if !join_residual_matches(
+                    join,
+                    left_row.as_ref(),
+                    right_obj,
+                    residual_predicate.as_ref(),
+                ) {
+                    continue;
+                }
+                matched_any = true;
                 right_matched[*right_idx] = true;
                 out.push(Box::new(bind_join_result_obj(
                     Some(left_row.as_ref()),
@@ -1546,7 +1713,8 @@ fn execute_hash_join_build_right(
                     &join.right_binding,
                 )) as DynObject);
             }
-        } else if matches!(join.join_type, JoinType::Left | JoinType::Full) {
+        }
+        if !matched_any && matches!(join.join_type, JoinType::Left | JoinType::Full) {
             out.push(Box::new(bind_join_result(
                 Some(left_row.as_ref()),
                 None,
@@ -1578,7 +1746,12 @@ fn execute_hash_join_build_left(
     left_rows: Vec<DynObject>,
     right_rows: Vec<DynObject>,
 ) -> CoreResult<Vec<DynObject>> {
-    let PhysicalJoinCondition::Eq { left, right } = &join.condition else {
+    let PhysicalJoinCondition::Eq {
+        left,
+        right,
+        residual_predicate,
+    } = &join.condition
+    else {
         return execute_nested_loop_join(join, left_rows, right_rows);
     };
 
@@ -1607,6 +1780,14 @@ fn execute_hash_join_build_left(
         if let Some(matches) = left_index.get(&right_key) {
             let right_obj = right_row.to_object();
             for (left_idx, left_obj) in matches {
+                if !join_residual_matches(
+                    join,
+                    left_obj,
+                    right_row.as_ref(),
+                    residual_predicate.as_ref(),
+                ) {
+                    continue;
+                }
                 out_by_left[*left_idx].push(Box::new(bind_join_result_obj(
                     Some(left_obj),
                     Some(&right_obj),
@@ -1686,15 +1867,40 @@ fn join_pair_matches(
             );
             matches!(evaluate_join_predicate(&merged, predicate), SqlTruth::True)
         }
-        PhysicalJoinCondition::Eq { left: l, right: r } => {
+        PhysicalJoinCondition::Eq {
+            left: l,
+            right: r,
+            residual_predicate,
+        } => {
             let lv = value_ref_for_join_key(left, l);
             let rv = value_ref_for_join_key(right, r);
             match (lv, rv) {
-                (Some(lv), Some(rv)) => lv.into_owned() == rv.into_owned(),
+                (Some(lv), Some(rv)) => {
+                    lv.into_owned() == rv.into_owned()
+                        && join_residual_matches(join, left, right, residual_predicate.as_ref())
+                }
                 _ => false,
             }
         }
     }
+}
+
+fn join_residual_matches(
+    join: &PhysicalJoinPlan,
+    left: &dyn QueryObjectAccess,
+    right: &dyn QueryObjectAccess,
+    residual: Option<&Expr>,
+) -> bool {
+    let Some(residual) = residual else {
+        return true;
+    };
+    let merged = bind_join_result(
+        Some(left),
+        Some(right),
+        &join.left_binding,
+        &join.right_binding,
+    );
+    matches!(evaluate_join_predicate(&merged, residual), SqlTruth::True)
 }
 
 #[derive(Clone, Copy)]
@@ -2572,6 +2778,7 @@ mod tests {
         rows: Vec<Object>,
         filtered_calls: AtomicUsize,
         index_calls: AtomicUsize,
+        index_many_calls: AtomicUsize,
     }
 
     impl AsyncInlineSource {
@@ -2580,6 +2787,7 @@ mod tests {
                 rows,
                 filtered_calls: AtomicUsize::new(0),
                 index_calls: AtomicUsize::new(0),
+                index_many_calls: AtomicUsize::new(0),
             }
         }
     }
@@ -2623,6 +2831,33 @@ mod tests {
                     ))),
                     right: Box::new(Expr::Operand(Operand::Literal(value))),
                 },
+            )
+        }
+
+        fn index_lookup_many_stream(
+            &self,
+            _source: SourceRef,
+            field: FieldRef,
+            values: Vec<Value>,
+            residual_predicate: Option<Expr>,
+        ) -> SendableRecordBatchStream {
+            self.index_many_calls
+                .fetch_add(1, AtomicOrdering::Relaxed);
+            let path = field_path_for_ref(&field).unwrap_or_else(|| FieldPath::from_fields(["id"]));
+            rows_to_batches(
+                self.rows
+                    .iter()
+                    .filter(|row| {
+                        row.value_at_path_ref(&path)
+                            .is_some_and(|value| values.contains(&value.into_owned()))
+                            && residual_predicate
+                                .as_ref()
+                                .is_none_or(|predicate| evaluate_filter_expr(*row, predicate))
+                    })
+                    .cloned()
+                    .map(|row| Box::new(row) as DynObject)
+                    .collect(),
+                2,
             )
         }
     }
@@ -3089,6 +3324,74 @@ mod tests {
     }
 
     #[test]
+    fn indexed_join_batches_probes_and_preserves_left_and_nonunique_rows() {
+        let mut right_match = obj_i64("id", 1);
+        right_match.insert("active", Value::Bool(true));
+        right_match.insert("name", Value::String("first".to_string()));
+        let mut right_filtered = obj_i64("id", 1);
+        right_filtered.insert("active", Value::Bool(false));
+        right_filtered.insert("name", Value::String("second".to_string()));
+        let source = Arc::new(AsyncInlineSource::new(vec![right_match, right_filtered]));
+        let left_rows = vec![obj_i64("fk", 1), obj_i64("fk", 1), obj_i64("fk", 2)];
+        let right_source = SourceRef {
+            source_name: Some("right".to_string()),
+            collection_id: None,
+            binding: Some("r".to_string()),
+            backend_tag: None,
+        };
+        let plan = PhysicalPlan::Join(PhysicalJoinPlan {
+            left: Box::new(PhysicalPlan::Values { values: left_rows }),
+            right: Box::new(PhysicalPlan::Source(PhysicalSource::Scan {
+                source: right_source.clone(),
+            })),
+            join_type: JoinType::Left,
+            algorithm: PhysicalJoinAlgorithm::IndexNestedLoop,
+            condition: PhysicalJoinCondition::Eq {
+                left: PhysicalJoinKey {
+                    field: FieldRef::Path(FieldPath::from_fields(["fk"])),
+                    source_path: FieldPath::from_fields(["fk"]),
+                },
+                right: PhysicalJoinKey {
+                    field: FieldRef::Path(FieldPath::from_fields(["id"])),
+                    source_path: FieldPath::from_fields(["id"]),
+                },
+                residual_predicate: None,
+            },
+            index_probe: Some(crate::plan::PhysicalIndexProbe {
+                source: right_source,
+                field: FieldRef::Path(FieldPath::from_fields(["id"])),
+                residual_predicate: Some(Expr::Binary {
+                    op: semantic_data::query::BinaryOp::Eq,
+                    left: Box::new(Expr::Operand(Operand::Field(FieldPath::from_fields([
+                        "active",
+                    ])))),
+                    right: Box::new(Expr::Operand(Operand::Literal(Value::Bool(true)))),
+                }),
+            }),
+            left_binding: "l".to_string(),
+            right_binding: "r".to_string(),
+        });
+
+        let rows = run_async(execute_physical_plan_collect(
+            plan,
+            source.clone(),
+            QueryContext::default(),
+            ExecutionOptions::default(),
+        ))
+        .unwrap();
+
+        assert_eq!(rows.len(), 3);
+        assert_eq!(source.index_many_calls.load(AtomicOrdering::Relaxed), 1);
+        assert_eq!(source.index_calls.load(AtomicOrdering::Relaxed), 0);
+        assert_eq!(
+            rows.iter()
+                .filter(|row| row.get("r") == Some(&Value::Null))
+                .count(),
+            1
+        );
+    }
+
+    #[test]
     fn executes_hash_join() {
         let mut l1 = Object::new();
         l1.insert("id", Value::I64(1));
@@ -3131,7 +3434,9 @@ mod tests {
                     field: FieldRef::Path(FieldPath::from_fields(["rid"])),
                     source_path: FieldPath::from_fields(["rid"]),
                 },
+                residual_predicate: None,
             },
+            index_probe: None,
             left_binding: "l".to_string(),
             right_binding: "r".to_string(),
         });
@@ -3163,30 +3468,25 @@ mod tests {
             })
         };
         let plan = |join_type, residual| {
-            let equality = Expr::Binary {
-                op: semantic_data::query::BinaryOp::Eq,
-                left: Box::new(Expr::Operand(Operand::Field(FieldPath::from_fields([
-                    "l", "id",
-                ])))),
-                right: Box::new(Expr::Operand(Operand::Field(FieldPath::from_fields([
-                    "r", "id",
-                ])))),
-            };
             PhysicalPlan::Join(PhysicalJoinPlan {
                 left: Box::new(source_ref("left")),
                 right: Box::new(source_ref("right")),
                 join_type,
-                algorithm: if residual {
-                    PhysicalJoinAlgorithm::NestedLoop
-                } else {
-                    PhysicalJoinAlgorithm::Hash
-                },
+                algorithm: PhysicalJoinAlgorithm::Hash,
                 condition: if residual {
-                    PhysicalJoinCondition::Predicate(Expr::Binary {
-                        op: semantic_data::query::BinaryOp::And,
-                        left: Box::new(equality),
-                        right: Box::new(Expr::Operand(Operand::Literal(Value::Bool(true)))),
-                    })
+                    PhysicalJoinCondition::Eq {
+                        left: PhysicalJoinKey {
+                            field: FieldRef::Path(FieldPath::from_fields(["id"])),
+                            source_path: FieldPath::from_fields(["id"]),
+                        },
+                        right: PhysicalJoinKey {
+                            field: FieldRef::Path(FieldPath::from_fields(["id"])),
+                            source_path: FieldPath::from_fields(["id"]),
+                        },
+                        residual_predicate: Some(Expr::Operand(Operand::Literal(Value::Bool(
+                            true,
+                        )))),
+                    }
                 } else {
                     PhysicalJoinCondition::Eq {
                         left: PhysicalJoinKey {
@@ -3197,8 +3497,10 @@ mod tests {
                             field: FieldRef::Path(FieldPath::from_fields(["id"])),
                             source_path: FieldPath::from_fields(["id"]),
                         },
+                        residual_predicate: None,
                     }
                 },
+                index_probe: None,
                 left_binding: "l".to_string(),
                 right_binding: "r".to_string(),
             })

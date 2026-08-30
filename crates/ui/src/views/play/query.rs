@@ -1,7 +1,4 @@
-use semantic_data::{
-    builtin::DEFAULT_COLLECTION,
-    filestore::{ATTR_FILE_MEDIA_DURATION, ATTR_FILE_MIME_TYPE, ATTR_TITLE, FILE_CLASS_ID},
-};
+use semantic_data::{builtin::DEFAULT_COLLECTION, filestore::FILE_CLASS_ID};
 
 const PAGE_SIZE: usize = 1_000;
 
@@ -57,29 +54,17 @@ pub fn playlist_query(
     }
     let mime_predicate = kinds
         .iter()
-        .map(|kind| {
-            format!(
-                "e.{} LIKE {}",
-                sql_ident(ATTR_FILE_MIME_TYPE),
-                sql_string(kind)
-            )
-        })
+        .map(|kind| format!("e.mime_type LIKE {}", sql_string(kind)))
         .collect::<Vec<_>>()
         .join(" OR ");
     let search_predicate = if filter.search.trim().is_empty() {
         String::new()
     } else {
         let pattern = sql_string(&format!("%{}%", filter.search.trim()));
-        format!(
-            " AND (e.id ILIKE {pattern} OR e.title ILIKE {pattern} OR e.{} ILIKE {pattern})",
-            sql_ident(ATTR_TITLE),
-        )
+        format!(" AND (e.id ILIKE {pattern} OR e.title ILIKE {pattern})",)
     };
     Ok(format!(
-        "SELECT e.id AS id, e.type AS type, e.title AS title, e.{title} AS semantic_title, e.{mime} AS mime_type, e.{duration} AS media_duration FROM {collection} AS e WHERE e.type = {file_class} AND ({mime_predicate}){search_predicate} ORDER BY e.title ASC, e.id ASC LIMIT {PAGE_SIZE} OFFSET {offset}",
-        title = sql_ident(ATTR_TITLE),
-        mime = sql_ident(ATTR_FILE_MIME_TYPE),
-        duration = sql_ident(ATTR_FILE_MEDIA_DURATION),
+        "SELECT e.id AS id, e.type AS type, e.title AS title, e.mime_type AS mime_type, e.media_duration AS media_duration FROM {collection} AS e WHERE e.type IN ({file_class}) AND ({mime_predicate}){search_predicate} ORDER BY e.title ASC, e.id ASC LIMIT {PAGE_SIZE} OFFSET {offset}",
         collection = sql_ident(&filter.collection),
         file_class = sql_string(FILE_CLASS_ID),
     ))
@@ -91,7 +76,7 @@ pub fn page_size() -> usize {
 
 fn default_raw_query(collection: &str) -> String {
     format!(
-        "SELECT * FROM {} WHERE type = {} ORDER BY id ASC LIMIT 100000",
+        "SELECT * FROM {} WHERE type IN ({}) ORDER BY id ASC LIMIT 100000",
         sql_ident(collection),
         sql_string(FILE_CLASS_ID),
     )

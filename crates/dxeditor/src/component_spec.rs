@@ -49,6 +49,13 @@ pub enum AttributeType {
     Array,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum UrlRole {
+    Hyperlink,
+    Media,
+}
+
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct AttributeSpec {
     pub value_type: AttributeType,
@@ -62,6 +69,8 @@ pub struct AttributeSpec {
     pub maximum: Option<i64>,
     #[serde(default)]
     pub url: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub url_role: Option<UrlRole>,
 }
 
 impl AttributeSpec {
@@ -73,6 +82,7 @@ impl AttributeSpec {
             minimum: None,
             maximum: None,
             url: false,
+            url_role: None,
         }
     }
 
@@ -84,6 +94,7 @@ impl AttributeSpec {
             minimum: None,
             maximum: None,
             url: false,
+            url_role: None,
         }
     }
 
@@ -100,6 +111,13 @@ impl AttributeSpec {
 
     pub fn url(mut self) -> Self {
         self.url = true;
+        self.url_role = Some(UrlRole::Hyperlink);
+        self
+    }
+
+    pub fn media_url(mut self) -> Self {
+        self.url = true;
+        self.url_role = Some(UrlRole::Media);
         self
     }
 }
@@ -701,7 +719,7 @@ impl Validator<'_> {
             }
             if spec.url
                 && let Some(url) = value.as_str()
-                && !is_safe_url(url)
+                && !is_safe_url_for_role(url, spec.url_role.unwrap_or(UrlRole::Hyperlink))
             {
                 self.issue(
                     "unsafe_url",
@@ -714,21 +732,131 @@ impl Validator<'_> {
 
     fn validate_table_shapes(&mut self, node: &ComponentNode, path: &str) {
         if node.kind.0 == COMPONENT_TABLE_V2 {
-            let widths = node
-                .content
-                .iter()
-                .map(|row| row.content.len())
-                .collect::<BTreeSet<_>>();
-            if widths.len() > 1 || widths.contains(&0) {
-                self.issue(
-                    "non_rectangular_table",
-                    path,
-                    "table rows must have the same non-zero number of cells",
-                );
-            }
+            self.validate_table_geometry(node, path);
         }
         for (index, child) in node.content.iter().enumerate() {
             self.validate_table_shapes(child, &format!("{path}.content[{index}]"));
+        }
+    }
+
+    fn validate_table_geometry(&mut self, table: &ComponentNode, path: &str) {
+        let row_count = table.content.len();
+        if row_count == 0 || row_count > self.limits.max_table_rows {
+            self.issue(
+                "table_row_limit",
+                path,
+                "table has an invalid number of rows",
+            );
+            return;
+        }
+
+        let mut occupied = vec![vec![false; self.limits.max_table_columns]; row_count];
+        let mut effective_width = 0usize;
+        let mut physical_cells = 0usize;
+        let mut span_work = 0usize;
+
+        for (row_index, row) in table.content.iter().enumerate() {
+            let mut column = 0usize;
+            for (cell_index, cell) in row.content.iter().enumerate() {
+                physical_cells = physical_cells.saturating_add(1);
+                while column < self.limits.max_table_columns && occupied[row_index][column] {
+                    column += 1;
+                }
+                let colspan = cell
+                    .attrs
+                    .get("colspan")
+                    .and_then(Value::as_u64)
+                    .unwrap_or(1) as usize;
+                let rowspan = cell
+                    .attrs
+                    .get("rowspan")
+                    .and_then(Value::as_u64)
+                    .unwrap_or(1) as usize;
+                let cell_path = format!("{path}.content[{row_index}].content[{cell_index}]");
+                if colspan == 0 || rowspan == 0 {
+                    self.issue(
+                        "invalid_table_span",
+                        &cell_path,
+                        "table spans must be positive",
+                    );
+                    continue;
+                }
+                if column.saturating_add(colspan) > self.limits.max_table_columns
+                    || row_index.saturating_add(rowspan) > row_count
+                {
+                    self.issue(
+                        "table_span_bounds",
+                        &cell_path,
+                        "table span exceeds table bounds",
+                    );
+                    continue;
+                }
+                span_work = span_work.saturating_add(colspan.saturating_mul(rowspan));
+                if span_work > self.limits.max_table_span_work {
+                    self.issue(
+                        "table_span_work_limit",
+                        path,
+                        "table spans exceed the validation work limit",
+                    );
+                    return;
+                }
+                let mut overlaps = false;
+                for row in occupied.iter().skip(row_index).take(rowspan) {
+                    overlaps |= row[column..column + colspan].iter().any(|value| *value);
+                }
+                if overlaps {
+                    self.issue("overlapping_table_span", &cell_path, "table cells overlap");
+                    continue;
+                }
+                for row in occupied.iter_mut().skip(row_index).take(rowspan) {
+                    row[column..column + colspan].fill(true);
+                }
+                if let Some(widths) = cell.attrs.get("colwidth") {
+                    let valid = widths.as_array().is_some_and(|widths| {
+                        widths.len() == colspan
+                            && widths.iter().all(|width| {
+                                width
+                                    .as_u64()
+                                    .is_some_and(|width| width > 0 && width <= 100_000)
+                            })
+                    });
+                    if !valid {
+                        self.issue(
+                            "invalid_colwidth",
+                            &cell_path,
+                            "colwidth must contain one positive width per spanned column",
+                        );
+                    }
+                }
+                column += colspan;
+                effective_width = effective_width.max(column);
+            }
+        }
+
+        if physical_cells > self.limits.max_table_cells {
+            self.issue(
+                "table_cell_limit",
+                path,
+                "table exceeds the cell-count limit",
+            );
+            return;
+        }
+        if effective_width == 0 || effective_width > self.limits.max_table_columns {
+            self.issue(
+                "table_column_limit",
+                path,
+                "table has an invalid effective width",
+            );
+            return;
+        }
+        for (row_index, row) in occupied.iter().enumerate() {
+            if row[..effective_width].iter().any(|value| !value) {
+                self.issue(
+                    "table_map_hole",
+                    &format!("{path}.content[{row_index}]"),
+                    "table geometry contains a hole or inconsistent effective width",
+                );
+            }
         }
     }
 
@@ -759,21 +887,41 @@ fn has_safe_unknown_fallback(node: &ComponentNode) -> bool {
 }
 
 pub fn is_safe_url(url: &str) -> bool {
-    let trimmed = url.trim();
-    if trimmed.is_empty() || trimmed.chars().any(char::is_control) {
+    is_safe_url_for_role(url, UrlRole::Hyperlink)
+}
+
+pub fn is_safe_media_url(url: &str) -> bool {
+    is_safe_url_for_role(url, UrlRole::Media)
+}
+
+pub fn is_safe_url_for_role(url: &str, role: UrlRole) -> bool {
+    if url.is_empty()
+        || url != url.trim()
+        || url
+            .chars()
+            .any(|character| character.is_control() || character.is_whitespace())
+        || url.contains('\\')
+    {
         return false;
     }
-    if trimmed.starts_with('/') || trimmed.starts_with('#') || trimmed.starts_with("./") {
-        return true;
+    let scheme = url
+        .split_once(':')
+        .map(|(scheme, _)| scheme.to_ascii_lowercase());
+    match role {
+        UrlRole::Media => url::Url::parse(url).is_ok_and(|parsed| {
+            matches!(parsed.scheme(), "http" | "https") && parsed.host_str().is_some()
+        }),
+        UrlRole::Hyperlink => {
+            if scheme.is_none() {
+                return true;
+            }
+            url::Url::parse(url).is_ok_and(|parsed| match parsed.scheme() {
+                "http" | "https" => parsed.host_str().is_some(),
+                "mailto" | "tel" => !parsed.path().is_empty(),
+                _ => false,
+            })
+        }
     }
-
-    let Some((scheme, _)) = trimmed.split_once(':') else {
-        return true;
-    };
-    matches!(
-        scheme.to_ascii_lowercase().as_str(),
-        "http" | "https" | "mailto" | "semantic"
-    )
 }
 
 pub fn register_standard_component_specs(
@@ -1004,7 +1152,10 @@ pub fn register_standard_component_specs(
             empty(),
             "img",
         )
-        .attribute("src", AttributeSpec::required(AttributeType::String).url())
+        .attribute(
+            "src",
+            AttributeSpec::required(AttributeType::String).media_url(),
+        )
         .attribute(
             "alt",
             AttributeSpec::optional(AttributeType::String).with_default(json!("")),

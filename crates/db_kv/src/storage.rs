@@ -12,7 +12,10 @@ pub use memory::MemoryKvEngine;
 
 const ENTITY_FORMAT_VERSION_PREFIX_LEN: usize = std::mem::size_of::<u16>();
 const ENTITY_FORMAT_VERSION_V1_MSGPACK: u16 = 1;
-const INDEX_FORMAT_VERSION_V1_MSGPACK: u16 = 1;
+// Version 2 forces legacy indexes to be rebuilt. Some databases could retain a
+// format marker without complete index entries, which made indexed equality
+// queries return false empty results.
+const INDEX_FORMAT_VERSION_V2_MSGPACK: u16 = 2;
 
 #[derive(facet::Facet, Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
 #[repr(C)]
@@ -497,7 +500,7 @@ pub(crate) fn index_format_key(index: LocalIndexId) -> Vec<u8> {
 }
 
 pub(crate) fn index_format_value() -> Vec<u8> {
-    INDEX_FORMAT_VERSION_V1_MSGPACK.to_le_bytes().to_vec()
+    INDEX_FORMAT_VERSION_V2_MSGPACK.to_le_bytes().to_vec()
 }
 
 fn encode_index_value_token(value: &Value) -> std::result::Result<String, DbError> {

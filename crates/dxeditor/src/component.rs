@@ -482,6 +482,11 @@ pub fn Editor(
         )
     })();
     let schema_fingerprint = catalog.schema_fingerprint();
+    let engine_manifest = crate::engine_manifest::EditorEngineManifest::new(
+        catalog.component_specs(),
+        output_format.clone(),
+        aria_label.clone(),
+    );
     let initial_external_revision = Revision(external_revision.unwrap_or_default());
     let mut status = use_signal(|| "Ready".to_string());
     let mut block_count = use_signal(|| initial_document.root.content.len());
@@ -493,6 +498,8 @@ pub fn Editor(
     let mut dirty = use_signal(|| false);
     let mut current_external_revision = use_signal(|| initial_external_revision);
     let mut last_local_revision = use_signal(|| Revision::ZERO);
+    let mut can_undo = use_signal(|| false);
+    let mut can_redo = use_signal(|| false);
     let output_catalog = catalog.clone();
     let output_format_for_event = output_format.clone();
     let expected_session_id = session_id.clone();
@@ -607,6 +614,7 @@ pub fn Editor(
                         class: "dxeditor__button",
                         r#type: "button",
                         aria_label: "Undo",
+                        disabled: !can_undo(),
                             onclick: move |_| run_history_command(
                                 &undo_session,
                                 &undo_schema_fingerprint,
@@ -620,6 +628,7 @@ pub fn Editor(
                         class: "dxeditor__button",
                         r#type: "button",
                         aria_label: "Redo",
+                        disabled: !can_redo(),
                             onclick: move |_| run_history_command(
                                 &redo_session,
                                 &redo_schema_fingerprint,
@@ -648,10 +657,7 @@ pub fn Editor(
                     }
                 }
             } else if readonly {
-                ReadOnlyDocument {
-                    document: migrate_v2_to_v1(&initial_document)
-                        .unwrap_or_else(|_| EditorDocument::plain_text(initial_document.text_content()))
-                }
+                crate::render_v2::ReadOnlyDocumentV2 { document: initial_document }
             } else {
                 div {
                     class: "dxeditor__document",
@@ -668,6 +674,9 @@ pub fn Editor(
                     ),
                     document_value: initial_document,
                     readonly,
+                    aria_label: aria_label.clone(),
+                    format_id: output_format.clone(),
+                    manifest: engine_manifest,
                     on_event: move |event| {
                         match event {
                             EngineEvent::Ready { session }
@@ -688,14 +697,19 @@ pub fn Editor(
                                     current_external_revision(),
                                 ) && revision > last_local_revision() =>
                             {
+                                if let Err(error) = validate_browser_snapshot(&output_catalog, &document) {
+                                    status.set(format!("Editor snapshot rejected: {error}"));
+                                    dirty.set(true);
+                                    return;
+                                }
                                 last_local_revision.set(revision);
                                 block_count.set(document.root.content.len());
                                 word_count.set(document_word_count(&document));
                                 current_document.set(document.clone());
+                                dirty.set(true);
                                 match encode_editor_payload(&output_catalog, &document, &output_format_for_event) {
                                     Ok(payload) => {
                                         status.set(format!("Unsaved revision {revision}"));
-                                        dirty.set(true);
                                         last_emitted.set(Some((payload.clone(), revision)));
                                         on_change.call(payload);
                                     }
@@ -710,13 +724,15 @@ pub fn Editor(
                                     current_external_revision(),
                                 ) && revision >= last_local_revision() =>
                             {
-                                last_local_revision.set(revision);
-                                current_document.set(document.clone());
-                                if let Ok(payload) = encode_editor_payload(&output_catalog, &document, &output_format_for_event) {
-                                    status.set(format!("Revision {revision} flushed"));
-                                    last_emitted.set(Some((payload.clone(), revision)));
-                                    on_change.call(payload);
+                                if let Err(error) = validate_browser_snapshot(&output_catalog, &document) {
+                                    status.set(format!("Editor snapshot rejected on blur: {error}"));
+                                    dirty.set(true);
+                                    return;
                                 }
+                                // Document changes are emitted synchronously. Blur is only a
+                                // durability/focus boundary and must not duplicate `on_change`.
+                                last_local_revision.set(revision);
+                                status.set(if dirty() { format!("Unsaved revision {revision}") } else { "Saved".to_string() });
                             }
                             EngineEvent::MentionQuery { session, request_id, query }
                                 if session_matches(
@@ -761,7 +777,18 @@ pub fn Editor(
                                     });
                                 });
                             }
-                            EngineEvent::Error { session, message }
+                            EngineEvent::CommandState { session, can_undo: next_can_undo, can_redo: next_can_redo }
+                                if session_matches(
+                                    &session,
+                                    &expected_session_id,
+                                    &expected_schema_fingerprint,
+                                    current_external_revision(),
+                                ) =>
+                            {
+                                can_undo.set(next_can_undo);
+                                can_redo.set(next_can_redo);
+                            }
+                            EngineEvent::Error { session, message, .. }
                                 if session_matches(
                                     &session,
                                     &expected_session_id,
@@ -831,6 +858,25 @@ fn encode_editor_payload(
         .codecs()
         .encode(&legacy, format)
         .map_err(|error| error.to_string())
+}
+
+fn validate_browser_snapshot(
+    catalog: &EditorCatalog,
+    document: &ComponentDocumentV2,
+) -> Result<(), String> {
+    validate_component_document(
+        document,
+        catalog.component_specs(),
+        &ValidationLimits::default(),
+        UnknownComponentPolicy::PreserveOpaque,
+    )
+    .map_err(|error| {
+        error
+            .issues
+            .first()
+            .map(|issue| format!("{} at {}: {}", issue.code, issue.path, issue.message))
+            .unwrap_or_else(|| error.to_string())
+    })
 }
 
 fn session_matches(
@@ -1008,22 +1054,7 @@ fn render_marked_text(text: String, marks: &[Mark], index: usize) -> Element {
 }
 
 fn safe_link_url(url: &str) -> bool {
-    let value = url.trim();
-    if value.is_empty() || value.chars().any(char::is_control) {
-        return false;
-    }
-    if value.starts_with('/') || value.starts_with('#') || value.starts_with("./") {
-        return true;
-    }
-    value
-        .split_once(':')
-        .map(|(scheme, _)| {
-            matches!(
-                scheme.to_ascii_lowercase().as_str(),
-                "http" | "https" | "mailto" | "tel"
-            )
-        })
-        .unwrap_or(true)
+    crate::component_spec::is_safe_url(url)
 }
 
 fn document_word_count(document: &ComponentDocumentV2) -> usize {
@@ -1154,5 +1185,20 @@ mod tests {
 
         let encoded = encode_editor_payload(&catalog, &document, "markdown").unwrap();
         assert!(encoded.value.as_str().unwrap().contains("# Hello"));
+    }
+
+    #[test]
+    fn browser_snapshots_are_validated_before_component_state_acceptance() {
+        let catalog = EditorCatalog::default();
+        let mut duplicate = ComponentDocumentV2::plain_text("one");
+        let cloned = duplicate.root.content[0].clone();
+        duplicate.root.content.push(cloned);
+        let error = validate_browser_snapshot(&catalog, &duplicate).unwrap_err();
+        assert!(error.contains("duplicate_node_id"));
+
+        let mut missing = ComponentDocumentV2::plain_text("one");
+        missing.root.content[0].id = None;
+        let error = validate_browser_snapshot(&catalog, &missing).unwrap_err();
+        assert!(error.contains("missing_node_id"));
     }
 }

@@ -13,7 +13,7 @@ pub(super) const ATTR_RELATION_TO: &str = "semantic:relation:to";
 
 pub(super) fn root_query() -> String {
     qualified_query(format!(
-        "SELECT d.* FROM {entities} AS d WHERE d.type = {directory_class} ORDER BY d.title ASC, d.id ASC",
+        "SELECT d.* FROM {entities} AS d WHERE d.type IN ({directory_class}) ORDER BY d.title ASC, d.id ASC",
         entities = sql_ident(ENTITIES_COLLECTION),
         directory_class = sql_string(DIRECTORY_CLASS_ID),
     ))
@@ -21,7 +21,7 @@ pub(super) fn root_query() -> String {
 
 pub(super) fn directory_nodes_query() -> String {
     qualified_query(format!(
-        "SELECT n.id AS id, n.{node_from} AS directory_from, n.{relation_to} AS directory_to, n.{node_order} AS directory_order FROM {entities} AS n WHERE n.type = {node_class}",
+        "SELECT n.id AS id, n.{node_from} AS directory_from, n.{relation_to} AS directory_to, n.{node_order} AS directory_order FROM {entities} AS n WHERE n.type IN ({node_class})",
         entities = sql_ident(ENTITIES_COLLECTION),
         node_from = sql_ident(ATTR_DIRECTORY_NODE_FROM),
         node_order = sql_ident(ATTR_DIRECTORY_NODE_ORDER),
@@ -186,7 +186,7 @@ pub(super) fn child_query(
 
 pub(super) fn child_directories_query(parent_id: &str, limit: usize, offset: usize) -> String {
     qualified_query(format!(
-        "SELECT child.*, n.{node_order} AS directory_order FROM {entities} AS n INNER JOIN {entities}._ AS child ON n.{relation_to} = child.id WHERE n.{relation_relation} = {node_relation} AND n.{node_from} = {parent_id} AND child.type = {directory_class} ORDER BY n.{node_order} ASC, child.title ASC, child.id ASC LIMIT {limit} OFFSET {offset}",
+        "SELECT child.*, n.{node_order} AS directory_order FROM {entities} AS n INNER JOIN {entities}._ AS child ON n.{relation_to} = child.id WHERE n.{relation_relation} = {node_relation} AND n.{node_from} = {parent_id} AND child.type IN ({directory_class}) ORDER BY n.{node_order} ASC, child.title ASC, child.id ASC LIMIT {limit} OFFSET {offset}",
         entities = sql_ident(ENTITIES_COLLECTION),
         node_from = sql_ident(ATTR_DIRECTORY_NODE_FROM),
         node_order = sql_ident(ATTR_DIRECTORY_NODE_ORDER),

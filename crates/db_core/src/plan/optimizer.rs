@@ -9,11 +9,11 @@ use crate::QueryContext;
 use crate::catalog::CollectionSchema;
 use crate::plan::{
     FieldRef, LogicalJoinCondition, LogicalJoinPlan, LogicalPlan, PhysicalJoinAlgorithm,
-    PhysicalJoinCondition, PhysicalJoinKey, PhysicalJoinPlan, PhysicalOrderField, PhysicalPlan,
-    PhysicalProjectionField, PhysicalSource, SourceRef, StatsProvider, build_logical_plan,
-    source_ref_for_collection,
+    PhysicalIndexProbe, PhysicalJoinCondition, PhysicalJoinKey, PhysicalJoinPlan,
+    PhysicalOrderField, PhysicalPlan, PhysicalProjectionField, PhysicalSource, SourceRef,
+    StatsProvider, build_logical_plan, source_ref_for_collection,
 };
-use crate::query::{Expr, Operand, QueryField, SelectQuery};
+use crate::query::{Expr, Operand, QueryField, SelectQuery, evaluate_usize_expr};
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct PlanPair {
@@ -214,10 +214,12 @@ impl LogicalRewritePass for FilterLiftPass {
                 },
                 LogicalPlan::Source {
                     source,
-                    pushed_predicate: None,
+                    pushed_predicate,
                 } => LogicalPlan::Source {
                     source,
-                    pushed_predicate: Some(predicate),
+                    pushed_predicate: combine_conjuncts(
+                        pushed_predicate.into_iter().chain(std::iter::once(predicate)),
+                    ),
                 },
                 other => LogicalPlan::Filter {
                     input: Box::new(other),
@@ -260,17 +262,331 @@ impl LogicalRewritePass for JoinPredicatePushdownPass {
     }
 
     fn rewrite(&self, plan: LogicalPlan, _context: &QueryContext) -> LogicalPlan {
-        rewrite_plan(plan, &|node| match node {
-            LogicalPlan::Join(mut join) => {
-                if let LogicalJoinCondition::Predicate(predicate) = &join.condition {
-                    join.condition =
-                        LogicalJoinCondition::Predicate(flatten_boolean_expr(predicate.clone()));
-                }
-                LogicalPlan::Join(join)
-            }
-            other => other,
-        })
+        rewrite_plan(plan, &push_join_predicates)
     }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ExprBinding {
+    None,
+    Left,
+    Right,
+    Both,
+    Unknown,
+}
+
+fn push_join_predicates(node: LogicalPlan) -> LogicalPlan {
+    match node {
+        LogicalPlan::Filter { input, predicate } => match *input {
+            LogicalPlan::Join(mut join) => {
+                let (left_bindings, right_bindings) = join_binding_sets(&join);
+                let mut left = Vec::new();
+                let mut right = Vec::new();
+                let mut residual = Vec::new();
+                for predicate in top_level_conjuncts(predicate) {
+                    match expression_binding(&predicate, &left_bindings, &right_bindings) {
+                        ExprBinding::Left
+                            if matches!(join.join_type, JoinType::Inner | JoinType::Left) =>
+                        {
+                            left.push(predicate)
+                        }
+                        ExprBinding::Right
+                            if matches!(join.join_type, JoinType::Inner | JoinType::Right) =>
+                        {
+                            right.push(predicate)
+                        }
+                        _ => residual.push(predicate),
+                    }
+                }
+                if let Some(predicate) = combine_conjuncts(left) {
+                    join.left = Box::new(push_predicate_to_input(*join.left, predicate));
+                }
+                if let Some(predicate) = combine_conjuncts(right) {
+                    join.right = Box::new(push_predicate_to_input(*join.right, predicate));
+                }
+                let join = push_on_predicates(join);
+                match combine_conjuncts(residual) {
+                    Some(predicate) => LogicalPlan::Filter {
+                        input: Box::new(LogicalPlan::Join(join)),
+                        predicate,
+                    },
+                    None => LogicalPlan::Join(join),
+                }
+            }
+            other => LogicalPlan::Filter {
+                input: Box::new(other),
+                predicate,
+            },
+        },
+        LogicalPlan::Join(join) => LogicalPlan::Join(push_on_predicates(join)),
+        other => other,
+    }
+}
+
+fn push_on_predicates(mut join: LogicalJoinPlan) -> LogicalJoinPlan {
+    let LogicalJoinCondition::Predicate(predicate) = join.condition.clone() else {
+        return join;
+    };
+    let (left_bindings, right_bindings) = join_binding_sets(&join);
+    let mut left = Vec::new();
+    let mut right = Vec::new();
+    let mut residual = Vec::new();
+    for predicate in top_level_conjuncts(predicate) {
+        match expression_binding(&predicate, &left_bindings, &right_bindings) {
+            ExprBinding::Left
+                if matches!(join.join_type, JoinType::Inner | JoinType::Right) =>
+            {
+                left.push(predicate)
+            }
+            ExprBinding::Right
+                if matches!(join.join_type, JoinType::Inner | JoinType::Left) =>
+            {
+                right.push(predicate)
+            }
+            _ => residual.push(predicate),
+        }
+    }
+    if let Some(predicate) = combine_conjuncts(left) {
+        join.left = Box::new(push_predicate_to_input(*join.left, predicate));
+    }
+    if let Some(predicate) = combine_conjuncts(right) {
+        join.right = Box::new(push_predicate_to_input(*join.right, predicate));
+    }
+    join.condition = combine_conjuncts(residual)
+        .map(LogicalJoinCondition::Predicate)
+        .unwrap_or(LogicalJoinCondition::True);
+    join
+}
+
+fn push_predicate_to_input(input: LogicalPlan, mut predicate: Expr) -> LogicalPlan {
+    if let LogicalPlan::Source {
+        source,
+        pushed_predicate,
+    } = input
+    {
+        if let Some(binding) = source.binding.as_deref() {
+            strip_direct_binding(&mut predicate, binding);
+        }
+        return LogicalPlan::Source {
+            source,
+            pushed_predicate: combine_conjuncts(
+                pushed_predicate.into_iter().chain(std::iter::once(predicate)),
+            ),
+        };
+    }
+    LogicalPlan::Filter {
+        input: Box::new(input),
+        predicate,
+    }
+}
+
+fn join_binding_sets(
+    join: &LogicalJoinPlan,
+) -> (
+    std::collections::HashSet<String>,
+    std::collections::HashSet<String>,
+) {
+    let mut left = std::collections::HashSet::new();
+    let mut right = std::collections::HashSet::new();
+    collect_binding_names(&join.left, &mut left);
+    collect_binding_names(&join.right, &mut right);
+    left.insert(join.left_binding.clone());
+    right.insert(join.right_binding.clone());
+    (left, right)
+}
+
+fn collect_binding_names(plan: &LogicalPlan, out: &mut std::collections::HashSet<String>) {
+    match plan {
+        LogicalPlan::Source { source, .. } => {
+            if let Some(binding) = source.binding.as_ref().or(source.source_name.as_ref()) {
+                out.insert(binding.clone());
+            }
+        }
+        LogicalPlan::Join(join) => {
+            collect_binding_names(&join.left, out);
+            collect_binding_names(&join.right, out);
+            out.insert(join.left_binding.clone());
+            out.insert(join.right_binding.clone());
+        }
+        LogicalPlan::Filter { input, .. }
+        | LogicalPlan::Sort { input, .. }
+        | LogicalPlan::Project { input, .. }
+        | LogicalPlan::Aggregate { input, .. }
+        | LogicalPlan::Limit { input, .. }
+        | LogicalPlan::Distinct { input }
+        | LogicalPlan::Exchange { input, .. }
+        | LogicalPlan::RepartitionHash { input, .. }
+        | LogicalPlan::ApplyExists { input, .. }
+        | LogicalPlan::ApplyInSubquery { input, .. } => collect_binding_names(input, out),
+        LogicalPlan::Union { inputs, .. } => {
+            for input in inputs {
+                collect_binding_names(input, out);
+            }
+        }
+        LogicalPlan::Values { .. } => {}
+    }
+}
+
+fn expression_binding(
+    expr: &Expr,
+    left_bindings: &std::collections::HashSet<String>,
+    right_bindings: &std::collections::HashSet<String>,
+) -> ExprBinding {
+    fn merge(left: ExprBinding, right: ExprBinding) -> ExprBinding {
+        match (left, right) {
+            (ExprBinding::Unknown, _) | (_, ExprBinding::Unknown) => ExprBinding::Unknown,
+            (ExprBinding::None, other) | (other, ExprBinding::None) => other,
+            (ExprBinding::Left, ExprBinding::Left) => ExprBinding::Left,
+            (ExprBinding::Right, ExprBinding::Right) => ExprBinding::Right,
+            _ => ExprBinding::Both,
+        }
+    }
+    fn path_binding(
+        path: &FieldPath,
+        left: &std::collections::HashSet<String>,
+        right: &std::collections::HashSet<String>,
+    ) -> ExprBinding {
+        let Some(PathSegment::Field(first)) = path.segments().first() else {
+            return ExprBinding::Left;
+        };
+        let in_left = left.contains(first);
+        let in_right = right.contains(first);
+        match (in_left, in_right) {
+            (true, false) => ExprBinding::Left,
+            (false, true) => ExprBinding::Right,
+            (true, true) => ExprBinding::Unknown,
+            (false, false) => ExprBinding::Left,
+        }
+    }
+    fn recurse(
+        expr: &Expr,
+        left: &std::collections::HashSet<String>,
+        right: &std::collections::HashSet<String>,
+    ) -> ExprBinding {
+        match expr {
+            Expr::Operand(Operand::Literal(_)) => ExprBinding::None,
+            Expr::Operand(Operand::Field(path)) => path_binding(path, left, right),
+            Expr::Unary { expr, .. } | Expr::IsNull { expr, .. } => recurse(expr, left, right),
+            Expr::Binary { left: a, right: b, .. }
+            | Expr::PatternMatch { expr: a, pattern: b, .. }
+            | Expr::RegexMatch { expr: a, pattern: b, .. } => {
+                merge(recurse(a, left, right), recurse(b, left, right))
+            }
+            Expr::IfElse { cond, then_expr, else_expr } => merge(
+                recurse(cond, left, right),
+                merge(recurse(then_expr, left, right), recurse(else_expr, left, right)),
+            ),
+            Expr::Coalesce(items) => items.iter().fold(ExprBinding::None, |binding, item| {
+                merge(binding, recurse(item, left, right))
+            }),
+            Expr::Function { args, .. } => args.iter().fold(ExprBinding::None, |binding, arg| {
+                match arg {
+                    crate::FunctionArg::Expr(expr) => merge(binding, recurse(expr, left, right)),
+                    crate::FunctionArg::Wildcard => ExprBinding::Unknown,
+                }
+            }),
+            Expr::Aggregate { .. } | Expr::Subquery(_) | Expr::Exists { .. } => {
+                ExprBinding::Unknown
+            }
+            Expr::InList { expr, list, .. } => list.iter().fold(
+                recurse(expr, left, right),
+                |binding, item| merge(binding, recurse(item, left, right)),
+            ),
+            Expr::Between { expr, low, high, .. } => merge(
+                recurse(expr, left, right),
+                merge(recurse(low, left, right), recurse(high, left, right)),
+            ),
+            Expr::RelationExists { relation, source, target, max_depth, .. } => {
+                let mut binding = merge(
+                    recurse(relation, left, right),
+                    merge(recurse(source, left, right), recurse(target, left, right)),
+                );
+                if let Some(max_depth) = max_depth {
+                    binding = merge(binding, recurse(max_depth, left, right));
+                }
+                binding
+            }
+        }
+    }
+    recurse(expr, left_bindings, right_bindings)
+}
+
+fn strip_direct_binding(expr: &mut Expr, binding: &str) {
+    fn strip_path(path: &mut FieldPath, binding: &str) {
+        if matches!(path.segments().first(), Some(PathSegment::Field(first)) if first == binding)
+            && path.segments().len() > 1
+        {
+            path.0.remove(0);
+        }
+    }
+    match expr {
+        Expr::Operand(Operand::Field(path)) => strip_path(path, binding),
+        Expr::Operand(Operand::Literal(_)) | Expr::Subquery(_) | Expr::Exists { .. } => {}
+        Expr::Unary { expr, .. } | Expr::IsNull { expr, .. } => strip_direct_binding(expr, binding),
+        Expr::Binary { left, right, .. }
+        | Expr::PatternMatch { expr: left, pattern: right, .. }
+        | Expr::RegexMatch { expr: left, pattern: right, .. } => {
+            strip_direct_binding(left, binding);
+            strip_direct_binding(right, binding);
+        }
+        Expr::IfElse { cond, then_expr, else_expr } => {
+            strip_direct_binding(cond, binding);
+            strip_direct_binding(then_expr, binding);
+            strip_direct_binding(else_expr, binding);
+        }
+        Expr::Coalesce(items) => {
+            for item in items {
+                strip_direct_binding(item, binding);
+            }
+        }
+        Expr::Function { args, .. } => {
+            for arg in args {
+                if let crate::FunctionArg::Expr(expr) = arg {
+                    strip_direct_binding(expr, binding);
+                }
+            }
+        }
+        Expr::Aggregate { arg, .. } => {
+            if let crate::FunctionArg::Expr(expr) = arg.as_mut() {
+                strip_direct_binding(expr, binding);
+            }
+        }
+        Expr::InList { expr, list, .. } => {
+            strip_direct_binding(expr, binding);
+            for item in list {
+                strip_direct_binding(item, binding);
+            }
+        }
+        Expr::Between { expr, low, high, .. } => {
+            strip_direct_binding(expr, binding);
+            strip_direct_binding(low, binding);
+            strip_direct_binding(high, binding);
+        }
+        Expr::RelationExists { relation, source, target, max_depth, .. } => {
+            strip_direct_binding(relation, binding);
+            strip_direct_binding(source, binding);
+            strip_direct_binding(target, binding);
+            if let Some(max_depth) = max_depth {
+                strip_direct_binding(max_depth, binding);
+            }
+        }
+    }
+}
+
+fn top_level_conjuncts(expr: Expr) -> Vec<Expr> {
+    let mut out = Vec::new();
+    collect_binary_terms(expr, BinaryOp::And, &mut out);
+    out
+}
+
+fn combine_conjuncts(items: impl IntoIterator<Item = Expr>) -> Option<Expr> {
+    let mut items = items.into_iter();
+    let first = items.next()?;
+    Some(items.fold(first, |left, right| Expr::Binary {
+        op: BinaryOp::And,
+        left: Box::new(left),
+        right: Box::new(right),
+    }))
 }
 
 #[derive(Debug, Clone)]
@@ -855,16 +1171,21 @@ impl PhysicalLoweringPass for CoreLoweringPass {
                 inputs: inputs.iter().map(input).collect(),
                 all: *all,
             },
-            LogicalPlan::Join(join) => {
-                let condition = lower_join_condition(join, context);
-                let algorithm = choose_join_algorithm(&condition, stats);
-                PhysicalPlan::Join(PhysicalJoinPlan {
+                LogicalPlan::Join(join) => {
+                    let condition = lower_join_condition(join, context);
+                    let index_probe = choose_index_join_probe(join, &condition, stats, context);
+                    let algorithm = index_probe
+                        .as_ref()
+                        .map(|_| PhysicalJoinAlgorithm::IndexNestedLoop)
+                        .unwrap_or_else(|| choose_join_algorithm(&condition, stats));
+                    PhysicalPlan::Join(PhysicalJoinPlan {
                     left: Box::new(input(&join.left)),
                     right: Box::new(input(&join.right)),
                     join_type: join.join_type,
-                    algorithm,
-                    condition,
-                    left_binding: join.left_binding.clone(),
+                        algorithm,
+                        condition,
+                        index_probe,
+                        left_binding: join.left_binding.clone(),
                     right_binding: join.right_binding.clone(),
                 })
             }
@@ -916,6 +1237,85 @@ impl PhysicalLoweringPass for CoreLoweringPass {
     }
 }
 
+fn choose_index_join_probe(
+    join: &LogicalJoinPlan,
+    condition: &PhysicalJoinCondition,
+    stats: Option<&dyn StatsProvider>,
+    context: &QueryContext,
+) -> Option<PhysicalIndexProbe> {
+    if !matches!(join.join_type, JoinType::Inner | JoinType::Left) {
+        return None;
+    }
+    let PhysicalJoinCondition::Eq { right, .. } = condition else {
+        return None;
+    };
+    let LogicalPlan::Source {
+        source,
+        pushed_predicate,
+    } = join.right.as_ref()
+    else {
+        return None;
+    };
+    let stats = stats?;
+    let field = resolve_field_ref_for_source(context, source, &right.source_path);
+    if stats.has_equality_index(source, &field) != Some(true) {
+        return None;
+    }
+    let left_rows = estimate_logical_rows(&join.left, stats, context)?;
+    let right_rows = stats.relation_stats(source)?.row_count.max(1.0);
+    if left_rows > right_rows {
+        return None;
+    }
+    Some(PhysicalIndexProbe {
+        source: source.clone(),
+        field,
+        residual_predicate: pushed_predicate.clone(),
+    })
+}
+
+fn estimate_logical_rows(
+    plan: &LogicalPlan,
+    stats: &dyn StatsProvider,
+    context: &QueryContext,
+) -> Option<f64> {
+    match plan {
+        LogicalPlan::Source {
+            source,
+            pushed_predicate,
+        } => {
+            let rows = stats.relation_stats(source)?.row_count.max(1.0);
+            let Some(predicate) = pushed_predicate else {
+                return Some(rows);
+            };
+            let Some((path, _)) = extract_equality_lookup(predicate) else {
+                return Some(rows);
+            };
+            let field = resolve_field_ref_for_source(context, source, &path);
+            Some(rows * estimate_equality_selectivity(stats, source, &field))
+        }
+        LogicalPlan::Filter { input, .. } => {
+            estimate_logical_rows(input, stats, context).map(|rows| rows * 0.25)
+        }
+        LogicalPlan::Limit { input, limit, .. } => {
+            let rows = estimate_logical_rows(input, stats, context)?;
+            Some(
+                evaluate_usize_expr(limit.as_ref()?).map_or(rows, |limit| rows.min(limit as f64)),
+            )
+        }
+        LogicalPlan::Sort { input, .. }
+        | LogicalPlan::Project { input, .. }
+        | LogicalPlan::Distinct { input }
+        | LogicalPlan::Exchange { input, .. }
+        | LogicalPlan::RepartitionHash { input, .. }
+        | LogicalPlan::ApplyExists { input, .. }
+        | LogicalPlan::ApplyInSubquery { input, .. } => estimate_logical_rows(input, stats, context),
+        LogicalPlan::Values { values } => Some(values.len() as f64),
+        LogicalPlan::Aggregate { .. }
+        | LogicalPlan::Union { .. }
+        | LogicalPlan::Join(_) => None,
+    }
+}
+
 fn to_projection_field(field: &QueryField, context: &QueryContext) -> PhysicalProjectionField {
     let (field_ref, source_path) = match field.expr.as_ref() {
         crate::query::Expr::Operand(crate::query::Operand::Field(path)) => (
@@ -959,6 +1359,7 @@ fn lower_join_condition(join: &LogicalJoinPlan, context: &QueryContext) -> Physi
                 field: resolve_field_ref_for_path(context, right),
                 source_path: right.clone(),
             },
+            residual_predicate: None,
         },
     }
 }
@@ -968,24 +1369,35 @@ fn try_lower_equi_join_predicate(
     predicate: &Expr,
     context: &QueryContext,
 ) -> Option<PhysicalJoinCondition> {
-    let Expr::Binary {
-        op: BinaryOp::Eq,
-        left,
-        right,
-    } = predicate
-    else {
-        return None;
-    };
-    let Expr::Operand(Operand::Field(left)) = left.as_ref() else {
-        return None;
-    };
-    let Expr::Operand(Operand::Field(right)) = right.as_ref() else {
-        return None;
-    };
-
-    let direct = orient_equi_join_paths(join, left, right)
-        .or_else(|| orient_equi_join_paths(join, right, left))?;
-    let (left, right) = direct;
+    let conjuncts = top_level_conjuncts(predicate.clone());
+    let (index, left, right) = conjuncts
+        .iter()
+        .enumerate()
+        .find_map(|(index, predicate)| {
+            let Expr::Binary {
+                op: BinaryOp::Eq,
+                left,
+                right,
+            } = predicate
+            else {
+                return None;
+            };
+            let Expr::Operand(Operand::Field(left)) = left.as_ref() else {
+                return None;
+            };
+            let Expr::Operand(Operand::Field(right)) = right.as_ref() else {
+                return None;
+            };
+            orient_equi_join_paths(join, left, right)
+                .or_else(|| orient_equi_join_paths(join, right, left))
+                .map(|(left, right)| (index, left, right))
+        })?;
+    let residual_predicate = combine_conjuncts(
+        conjuncts
+            .into_iter()
+            .enumerate()
+            .filter_map(|(candidate, predicate)| (candidate != index).then_some(predicate)),
+    );
     Some(PhysicalJoinCondition::Eq {
         left: PhysicalJoinKey {
             field: resolve_field_ref_for_path(context, &left),
@@ -995,6 +1407,7 @@ fn try_lower_equi_join_predicate(
             field: resolve_field_ref_for_path(context, &right),
             source_path: right,
         },
+        residual_predicate,
     })
 }
 
@@ -1003,7 +1416,12 @@ fn orient_equi_join_paths(
     left: &FieldPath,
     right: &FieldPath,
 ) -> Option<(FieldPath, FieldPath)> {
-    let (left_binding, left_tail) = split_qualified_path(left)?;
+    let (left_binding, left_tail, left_qualified) = match split_qualified_path(left) {
+        Some((binding, tail)) if logical_plan_has_binding(&join.left, binding) => {
+            (binding, tail, true)
+        }
+        _ => (join.left_binding.as_str(), left.clone(), false),
+    };
     let (right_binding, right_tail) = split_qualified_path(right)?;
     if right_binding != join.right_binding
         || !logical_plan_has_binding(&join.left, left_binding)
@@ -1012,10 +1430,10 @@ fn orient_equi_join_paths(
         return None;
     }
 
-    let left_path = if left_binding == join.left_binding {
-        left_tail
-    } else {
+    let left_path = if left_qualified && left_binding != join.left_binding {
         left.clone()
+    } else {
+        left_tail
     };
     Some((left_path, right_tail))
 }
@@ -1064,9 +1482,6 @@ fn choose_scan_source(
     stats: Option<&dyn StatsProvider>,
     context: &QueryContext,
 ) -> PhysicalPlan {
-    if expr_contains_relationship_expr(&predicate) {
-        return PhysicalPlan::Source(PhysicalSource::FilteredScan { source, predicate });
-    }
     let Some((field_path, value)) = extract_equality_lookup(&predicate) else {
         return PhysicalPlan::Source(PhysicalSource::FilteredScan { source, predicate });
     };
@@ -1318,6 +1733,17 @@ fn flatten_boolean_expr(expr: Expr) -> Expr {
             op: semantic_data::query::UnaryOp::Not,
             expr: Box::new(flatten_boolean_expr(*expr)),
         },
+        Expr::InList {
+            expr,
+            mut list,
+            negated: false,
+        } if list.len() == 1 => Expr::Binary {
+            op: BinaryOp::Eq,
+            left: Box::new(flatten_boolean_expr(*expr)),
+            right: Box::new(flatten_boolean_expr(
+                list.pop().expect("singleton list has one item"),
+            )),
+        },
         other => other,
     }
 }
@@ -1390,53 +1816,6 @@ fn remove_single_lookup_predicate(
             }
         }
         other => Some(other),
-    }
-}
-
-fn expr_contains_relationship_expr(expr: &crate::query::Expr) -> bool {
-    match expr {
-        crate::query::Expr::RelationExists { .. } => true,
-        crate::query::Expr::Operand(_) => false,
-        crate::query::Expr::Unary { expr, .. } => expr_contains_relationship_expr(expr),
-        crate::query::Expr::Binary { left, right, .. } => {
-            expr_contains_relationship_expr(left) || expr_contains_relationship_expr(right)
-        }
-        crate::query::Expr::IfElse {
-            cond,
-            then_expr,
-            else_expr,
-        } => {
-            expr_contains_relationship_expr(cond)
-                || expr_contains_relationship_expr(then_expr)
-                || expr_contains_relationship_expr(else_expr)
-        }
-        crate::query::Expr::Coalesce(items) => items.iter().any(expr_contains_relationship_expr),
-        crate::query::Expr::Function { args, .. } => args.iter().any(|arg| match arg {
-            crate::FunctionArg::Expr(expr) => expr_contains_relationship_expr(expr),
-            crate::FunctionArg::Wildcard => false,
-        }),
-        crate::query::Expr::Aggregate { arg, .. } => match arg.as_ref() {
-            crate::FunctionArg::Expr(expr) => expr_contains_relationship_expr(expr),
-            crate::FunctionArg::Wildcard => false,
-        },
-        crate::query::Expr::InList { expr, list, .. } => {
-            expr_contains_relationship_expr(expr)
-                || list.iter().any(expr_contains_relationship_expr)
-        }
-        crate::query::Expr::Subquery(_) => false,
-        crate::query::Expr::Between {
-            expr, low, high, ..
-        } => {
-            expr_contains_relationship_expr(expr)
-                || expr_contains_relationship_expr(low)
-                || expr_contains_relationship_expr(high)
-        }
-        crate::query::Expr::PatternMatch { expr, pattern, .. }
-        | crate::query::Expr::RegexMatch { expr, pattern, .. } => {
-            expr_contains_relationship_expr(expr) || expr_contains_relationship_expr(pattern)
-        }
-        crate::query::Expr::IsNull { expr, .. } => expr_contains_relationship_expr(expr),
-        crate::query::Expr::Exists { .. } => false,
     }
 }
 
@@ -1526,6 +1905,256 @@ mod tests {
         join
     }
 
+    fn eq_literal(path: impl IntoIterator<Item = &'static str>, value: &str) -> Expr {
+        Expr::Binary {
+            op: BinaryOp::Eq,
+            left: Box::new(field(path)),
+            right: Box::new(Expr::Operand(Operand::Literal(Value::String(
+                value.to_string(),
+            )))),
+        }
+    }
+
+    fn test_join(join_type: JoinType, condition: LogicalJoinCondition) -> LogicalJoinPlan {
+        LogicalJoinPlan {
+            left: Box::new(bound_source("items", "s")),
+            right: Box::new(bound_source("artists", "a")),
+            join_type,
+            condition,
+            left_binding: "s".to_string(),
+            right_binding: "a".to_string(),
+        }
+    }
+
+    fn source_predicate(plan: &LogicalPlan) -> Option<&Expr> {
+        let LogicalPlan::Source {
+            pushed_predicate, ..
+        } = plan
+        else {
+            panic!("expected source")
+        };
+        pushed_predicate.as_ref()
+    }
+
+    #[test]
+    fn inner_where_pushes_single_side_conjuncts_and_keeps_cross_side_residual() {
+        let left = eq_literal(["s", "kind"], "song");
+        let right = eq_literal(["a", "active"], "yes");
+        let cross = Expr::Binary {
+            op: BinaryOp::Eq,
+            left: Box::new(field(["s", "artist_id"])),
+            right: Box::new(field(["a", "id"])),
+        };
+        let predicate = combine_conjuncts([left.clone(), right.clone(), cross.clone()])
+            .expect("predicates");
+        let plan = JoinPredicatePushdownPass.rewrite(
+            LogicalPlan::Filter {
+                input: Box::new(LogicalPlan::Join(test_join(
+                    JoinType::Inner,
+                    LogicalJoinCondition::True,
+                ))),
+                predicate,
+            },
+            &QueryContext::default(),
+        );
+
+        let LogicalPlan::Filter { input, predicate } = plan else {
+            panic!("expected cross-side residual filter")
+        };
+        assert_eq!(predicate, cross);
+        let LogicalPlan::Join(join) = *input else {
+            panic!("expected join")
+        };
+        assert_eq!(source_predicate(&join.left), Some(&eq_literal(["kind"], "song")));
+        assert_eq!(
+            source_predicate(&join.right),
+            Some(&eq_literal(["active"], "yes"))
+        );
+    }
+
+    #[test]
+    fn outer_where_pushdown_preserves_null_extended_side() {
+        for (join_type, left_pushed, right_pushed) in [
+            (JoinType::Left, true, false),
+            (JoinType::Right, false, true),
+            (JoinType::Full, false, false),
+        ] {
+            let predicate = combine_conjuncts([
+                eq_literal(["s", "kind"], "song"),
+                eq_literal(["a", "active"], "yes"),
+            ])
+            .expect("predicates");
+            let plan = JoinPredicatePushdownPass.rewrite(
+                LogicalPlan::Filter {
+                    input: Box::new(LogicalPlan::Join(test_join(
+                        join_type,
+                        LogicalJoinCondition::True,
+                    ))),
+                    predicate,
+                },
+                &QueryContext::default(),
+            );
+            let (join, has_residual) = match plan {
+                LogicalPlan::Filter { input, .. } => match *input {
+                    LogicalPlan::Join(join) => (join, true),
+                    _ => panic!("expected join"),
+                },
+                LogicalPlan::Join(join) => (join, false),
+                _ => panic!("expected join or filter"),
+            };
+            assert_eq!(source_predicate(&join.left).is_some(), left_pushed);
+            assert_eq!(source_predicate(&join.right).is_some(), right_pushed);
+            assert_eq!(has_residual, !(left_pushed && right_pushed));
+        }
+    }
+
+    #[test]
+    fn outer_on_pushdown_only_filters_non_preserved_input() {
+        for (join_type, left_pushed, right_pushed) in [
+            (JoinType::Inner, true, true),
+            (JoinType::Left, false, true),
+            (JoinType::Right, true, false),
+            (JoinType::Full, false, false),
+        ] {
+            let condition = combine_conjuncts([
+                eq_literal(["s", "kind"], "song"),
+                eq_literal(["a", "active"], "yes"),
+            ])
+            .expect("predicates");
+            let LogicalPlan::Join(join) = JoinPredicatePushdownPass.rewrite(
+                LogicalPlan::Join(test_join(
+                    join_type,
+                    LogicalJoinCondition::Predicate(condition),
+                )),
+                &QueryContext::default(),
+            ) else {
+                panic!("expected join")
+            };
+            assert_eq!(source_predicate(&join.left).is_some(), left_pushed);
+            assert_eq!(source_predicate(&join.right).is_some(), right_pushed);
+            assert_eq!(
+                matches!(join.condition, LogicalJoinCondition::True),
+                left_pushed && right_pushed
+            );
+        }
+    }
+
+    #[test]
+    fn pushdown_combines_existing_predicates_and_does_not_split_or() {
+        let mut join = test_join(JoinType::Inner, LogicalJoinCondition::True);
+        let LogicalPlan::Source {
+            pushed_predicate, ..
+        } = join.left.as_mut()
+        else {
+            panic!("expected source")
+        };
+        *pushed_predicate = Some(eq_literal(["existing"], "yes"));
+        let or_predicate = Expr::Binary {
+            op: BinaryOp::Or,
+            left: Box::new(eq_literal(["s", "kind"], "song")),
+            right: Box::new(eq_literal(["a", "active"], "yes")),
+        };
+        let plan = JoinPredicatePushdownPass.rewrite(
+            LogicalPlan::Filter {
+                input: Box::new(LogicalPlan::Join(join)),
+                predicate: combine_conjuncts([
+                    eq_literal(["s", "new"], "yes"),
+                    or_predicate.clone(),
+                ])
+                .expect("predicates"),
+            },
+            &QueryContext::default(),
+        );
+        let LogicalPlan::Filter { input, predicate } = plan else {
+            panic!("expected OR residual")
+        };
+        assert_eq!(predicate, or_predicate);
+        let LogicalPlan::Join(join) = *input else {
+            panic!("expected join")
+        };
+        assert!(matches!(
+            source_predicate(&join.left),
+            Some(Expr::Binary { op: BinaryOp::And, .. })
+        ));
+    }
+
+    #[test]
+    fn singleton_in_normalizes_to_equality() {
+        let normalized = flatten_boolean_expr(Expr::InList {
+            expr: Box::new(field(["type"])),
+            list: vec![Expr::Operand(Operand::Literal(Value::String(
+                "directory".to_string(),
+            )))],
+            negated: false,
+        });
+        assert!(matches!(
+            normalized,
+            Expr::Binary {
+                op: BinaryOp::Eq,
+                ..
+            }
+        ));
+    }
+
+    struct IndexedJoinStats;
+
+    impl StatsProvider for IndexedJoinStats {
+        fn relation_stats(&self, _source: &SourceRef) -> Option<crate::plan::RelationStats> {
+            Some(crate::plan::RelationStats { row_count: 100.0 })
+        }
+
+        fn field_stats(
+            &self,
+            _source: &SourceRef,
+            _field: &FieldRef,
+        ) -> Option<crate::plan::FieldStats> {
+            Some(crate::plan::FieldStats {
+                distinct_count: Some(10.0),
+                null_fraction: Some(0.0),
+            })
+        }
+
+        fn has_equality_index(&self, _source: &SourceRef, _field: &FieldRef) -> Option<bool> {
+            Some(true)
+        }
+    }
+
+    #[test]
+    fn lowering_selects_indexed_probe_only_for_supported_join_types() {
+        let condition = LogicalJoinCondition::Predicate(Expr::Binary {
+            op: BinaryOp::Eq,
+            left: Box::new(field(["s", "artist_id"])),
+            right: Box::new(field(["a", "id"])),
+        });
+        for (join_type, expected) in [
+            (JoinType::Inner, PhysicalJoinAlgorithm::IndexNestedLoop),
+            (JoinType::Left, PhysicalJoinAlgorithm::IndexNestedLoop),
+            (JoinType::Right, PhysicalJoinAlgorithm::Hash),
+            (JoinType::Full, PhysicalJoinAlgorithm::Hash),
+        ] {
+            let mut join = test_join(join_type, condition.clone());
+            let LogicalPlan::Source {
+                pushed_predicate, ..
+            } = join.left.as_mut()
+            else {
+                panic!("expected source")
+            };
+            *pushed_predicate = Some(eq_literal(["kind"], "song"));
+            let physical = Optimizer::new()
+                .add_lowering_pass(CoreLoweringPass)
+                .lower_to_physical(
+                    &LogicalPlan::Join(join),
+                    Some(&IndexedJoinStats),
+                    &QueryContext::default(),
+                );
+            let PhysicalPlan::Join(join) = physical else {
+                panic!("expected join")
+            };
+            assert_eq!(join.algorithm, expected);
+            assert_eq!(join.index_probe.is_some(), expected == PhysicalJoinAlgorithm::IndexNestedLoop);
+        }
+    }
+
     #[test]
     fn exact_qualified_equi_join_uses_hash_algorithm() {
         let join = lower_test_join(Expr::Binary {
@@ -1535,7 +2164,7 @@ mod tests {
         });
 
         assert_eq!(join.algorithm, PhysicalJoinAlgorithm::Hash);
-        let PhysicalJoinCondition::Eq { left, right } = join.condition else {
+        let PhysicalJoinCondition::Eq { left, right, .. } = join.condition else {
             panic!("expected equality join condition");
         };
         assert_eq!(left.source_path, FieldPath::from_fields(["artist_id"]));
@@ -1551,7 +2180,7 @@ mod tests {
         });
 
         assert_eq!(join.algorithm, PhysicalJoinAlgorithm::Hash);
-        let PhysicalJoinCondition::Eq { left, right } = join.condition else {
+        let PhysicalJoinCondition::Eq { left, right, .. } = join.condition else {
             panic!("expected equality join condition");
         };
         assert_eq!(left.source_path, FieldPath::from_fields(["artist_id"]));
@@ -1559,7 +2188,7 @@ mod tests {
     }
 
     #[test]
-    fn ambiguous_or_residual_join_predicates_remain_nested_loops() {
+    fn ambiguous_join_predicates_remain_nested_loops_and_residual_equality_hashes() {
         let ambiguous = lower_test_join(Expr::Binary {
             op: BinaryOp::Eq,
             left: Box::new(field(["artist_id"])),
@@ -1584,10 +2213,13 @@ mod tests {
                 right: Box::new(Expr::Operand(Operand::Literal(Value::Bool(true)))),
             }),
         });
-        assert_eq!(residual.algorithm, PhysicalJoinAlgorithm::NestedLoop);
+        assert_eq!(residual.algorithm, PhysicalJoinAlgorithm::Hash);
         assert!(matches!(
             residual.condition,
-            PhysicalJoinCondition::Predicate(_)
+            PhysicalJoinCondition::Eq {
+                residual_predicate: Some(_),
+                ..
+            }
         ));
     }
 

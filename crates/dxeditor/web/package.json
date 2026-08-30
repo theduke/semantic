@@ -5,6 +5,7 @@
   "type": "module",
   "scripts": {
     "build": "esbuild src/index.ts --bundle --format=iife --global-name=SemanticEditorEngine --target=es2020 --minify --outfile=dist/editor.iife.js",
+    "verify:bundle": "node scripts/verify-bundle.mjs",
     "check": "tsc --noEmit",
     "test": "vitest run src --environment jsdom",
     "test:e2e": "npm run build && playwright test",

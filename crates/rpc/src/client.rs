@@ -23,6 +23,16 @@ pub struct RpcClient {
 }
 
 #[cfg(feature = "client")]
+impl PartialEq for RpcClient {
+    fn eq(&self, other: &Self) -> bool {
+        Rc::ptr_eq(&self.inner, &other.inner)
+    }
+}
+
+#[cfg(feature = "client")]
+impl Eq for RpcClient {}
+
+#[cfg(feature = "client")]
 pub trait RpcClientDyn: 'static {
     fn invoke_value(
         &self,

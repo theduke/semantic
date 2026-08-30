@@ -1,11 +1,14 @@
 use dioxus::prelude::*;
+use std::sync::atomic::{AtomicBool, Ordering};
 
 use crate::{
     document_v2::ComponentDocumentV2,
+    engine_manifest::EditorEngineManifest,
     protocol::{EngineCommand, EngineEvent, ProtocolSession, SessionRevisionGuard},
 };
 
 const ENGINE_SCRIPT: &str = include_str!("../../web/dist/editor.iife.js");
+static ENGINE_INSTALL_STARTED: AtomicBool = AtomicBool::new(false);
 
 #[component]
 pub(crate) fn EditorBridge(
@@ -13,6 +16,9 @@ pub(crate) fn EditorBridge(
     session: ProtocolSession,
     document_value: ComponentDocumentV2,
     readonly: bool,
+    aria_label: String,
+    format_id: String,
+    manifest: EditorEngineManifest,
     on_event: EventHandler<EngineEvent>,
 ) -> Element {
     let destroy = EngineCommand::Destroy {
@@ -25,6 +31,9 @@ pub(crate) fn EditorBridge(
             session: session.clone(),
             document: document_value.clone(),
             readonly,
+            aria_label: aria_label.clone(),
+            format_id: format_id.clone(),
+            manifest: manifest.clone(),
         };
         let Ok(editor_id_json) = serde_json::to_string(&editor_id) else {
             return;
@@ -36,9 +45,23 @@ pub(crate) fn EditorBridge(
             return;
         };
         let readonly = matches!(mount, EngineCommand::Mount { readonly: true, .. });
+        let Ok(aria_label_json) = serde_json::to_string(&aria_label) else {
+            return;
+        };
+        let Ok(format_id_json) = serde_json::to_string(&format_id) else {
+            return;
+        };
+        let Ok(manifest_json) = serde_json::to_string(&manifest) else {
+            return;
+        };
+        let engine_bootstrap = if ENGINE_INSTALL_STARTED.swap(true, Ordering::AcqRel) {
+            ""
+        } else {
+            ENGINE_SCRIPT
+        };
         let script = format!(
             r#"
-{ENGINE_SCRIPT}
+{engine_bootstrap}
 const editorId = {editor_id_json};
 const protocol = {session_json};
 const sessionId = protocol.session_id;
@@ -55,6 +78,9 @@ if (!host || !window.__semanticDxEditor) {{
       sessionId,
       schemaFingerprint: protocol.schema_fingerprint,
       readonly: {readonly},
+      ariaLabel: {aria_label_json},
+      formatId: {format_id_json},
+      manifest: {manifest_json},
       document: {document_json},
       mentionProvider: (query, context) => new Promise((resolve, reject) => {{
         const requestId = (protocolState.nextMentionRequestId ?? 0) + 1;
@@ -81,9 +107,9 @@ if (!host || !window.__semanticDxEditor) {{
 "#
         );
         let guard_session = session.clone();
+        let mut eval = document::eval(&script);
         spawn(async move {
             let mut guard = SessionRevisionGuard::new(guard_session);
-            let mut eval = document::eval(&script);
             while let Ok(event) = eval.recv::<EngineEvent>().await {
                 if guard.accept(&event).is_ok() {
                     on_event.call(event);
@@ -123,7 +149,9 @@ window.__semanticDxEditor?.command({session_id}, {command}, {args});
             )
         }
         EngineCommand::ReplaceDocument {
-            session, document, ..
+            session,
+            document,
+            history_policy,
         } => {
             let Ok(session_id) = serde_json::to_string(&session.session_id) else {
                 return;
@@ -134,13 +162,16 @@ window.__semanticDxEditor?.command({session_id}, {command}, {args});
             let Ok(document) = serde_json::to_string(document) else {
                 return;
             };
+            let Ok(history_policy) = serde_json::to_string(history_policy) else {
+                return;
+            };
             format!(
                 r#"(() => {{
 const state = window.__semanticDxEditorProtocol?.get({session_id});
 if (!state || state.protocol_version !== {} || state.schema_fingerprint !== {schema_fingerprint}
     || state.external_revision >= {}) return;
 state.external_revision = {};
-window.__semanticDxEditor?.replaceDocument({session_id}, {document});
+window.__semanticDxEditor?.replaceDocument({session_id}, {document}, {history_policy});
 }})();"#,
                 session.protocol_version, session.external_revision.0, session.external_revision.0
             )

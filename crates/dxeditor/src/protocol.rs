@@ -2,6 +2,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 use crate::document_v2::ComponentDocumentV2;
+use crate::engine_manifest::EditorEngineManifest;
 
 pub const EDITOR_PROTOCOL_VERSION: u32 = 2;
 
@@ -62,6 +63,9 @@ pub enum EngineCommand {
         session: ProtocolSession,
         document: ComponentDocumentV2,
         readonly: bool,
+        aria_label: String,
+        format_id: String,
+        manifest: EditorEngineManifest,
     },
     ReplaceDocument {
         #[serde(flatten)]
@@ -120,11 +124,33 @@ pub enum EngineEvent {
         request_id: u64,
         query: String,
     },
+    CommandState {
+        #[serde(flatten)]
+        session: ProtocolSession,
+        can_undo: bool,
+        can_redo: bool,
+    },
     Error {
         #[serde(flatten)]
         session: ProtocolSession,
+        #[serde(default = "default_engine_error_code")]
+        code: String,
         message: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        path: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        revision: Option<Revision>,
+        #[serde(default = "default_true")]
+        recoverable: bool,
     },
+}
+
+fn default_engine_error_code() -> String {
+    "engine_error".to_string()
+}
+
+fn default_true() -> bool {
+    true
 }
 
 impl EngineEvent {
@@ -134,6 +160,7 @@ impl EngineEvent {
             | Self::DocumentChange { session, .. }
             | Self::Blur { session, .. }
             | Self::MentionQuery { session, .. }
+            | Self::CommandState { session, .. }
             | Self::Error { session, .. } => session,
         }
     }
@@ -141,7 +168,8 @@ impl EngineEvent {
     pub fn revision(&self) -> Option<Revision> {
         match self {
             Self::DocumentChange { revision, .. } | Self::Blur { revision, .. } => Some(*revision),
-            Self::Ready { .. } | Self::MentionQuery { .. } | Self::Error { .. } => None,
+            Self::Error { revision, .. } => *revision,
+            Self::Ready { .. } | Self::MentionQuery { .. } | Self::CommandState { .. } => None,
         }
     }
 }
@@ -227,6 +255,7 @@ impl SessionRevisionGuard {
             }
             EngineEvent::Ready { .. }
             | EngineEvent::MentionQuery { .. }
+            | EngineEvent::CommandState { .. }
             | EngineEvent::Error { .. } => {}
         }
         Ok(())
@@ -281,6 +310,13 @@ mod tests {
             session: session(7),
             document: ComponentDocumentV2::plain_text("hello"),
             readonly: false,
+            aria_label: "Document editor".to_string(),
+            format_id: "markdown".to_string(),
+            manifest: EditorEngineManifest::new(
+                &crate::component_spec::ComponentCatalog::standard().unwrap(),
+                "markdown",
+                "Document editor",
+            ),
         };
         let value = serde_json::to_value(command).unwrap();
         assert_eq!(value["kind"], "mount");

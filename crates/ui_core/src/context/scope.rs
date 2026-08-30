@@ -1,5 +1,6 @@
 use dioxus::prelude::{
-    ReadableExt, Signal, WritableExt, use_context, use_context_provider, use_signal,
+    ReadableExt, Signal, WritableExt, use_context, use_context_provider, use_effect, use_reactive,
+    use_signal,
 };
 
 #[derive(Clone, Copy)]
@@ -23,8 +24,12 @@ impl UiScopeContext {
 }
 
 pub fn provide_ui_scope_context(scope_id: Option<String>) -> UiScopeContext {
-    let active_scope_id = use_signal(|| scope_id);
-    use_context_provider(|| UiScopeContext::new(active_scope_id))
+    let mut active_scope_id = use_signal(|| scope_id.clone());
+    let context = use_context_provider(|| UiScopeContext::new(active_scope_id));
+    use_effect(use_reactive((&scope_id,), move |(scope_id,)| {
+        active_scope_id.set(scope_id);
+    }));
+    context
 }
 
 pub fn use_ui_scope_context() -> UiScopeContext {
