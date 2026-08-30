@@ -45,7 +45,30 @@ pub async fn run(args: Args) -> std::result::Result<(), CliError> {
         ..MountConfig::default()
     };
 
-    semantic_fuse::mount(client, args.mountpoint, config)
+    semantic_fuse::mount_with_shutdown(client, args.mountpoint, config, shutdown_signal())
         .await
         .map_err(CliError::from)
+}
+
+async fn shutdown_signal() {
+    #[cfg(unix)]
+    {
+        let mut terminate =
+            match tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate()) {
+                Ok(signal) => signal,
+                Err(_) => {
+                    let _ = tokio::signal::ctrl_c().await;
+                    return;
+                }
+            };
+        tokio::select! {
+            _ = tokio::signal::ctrl_c() => {}
+            _ = terminate.recv() => {}
+        }
+    }
+
+    #[cfg(not(unix))]
+    {
+        let _ = tokio::signal::ctrl_c().await;
+    }
 }

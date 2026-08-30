@@ -53,6 +53,14 @@ operations through the native, thread-safe `RpcClient` abstraction. File
 content is read through ranged RPC requests, so reads do not require loading
 the entire blob into memory.
 
+The `semantic` CLI passes Ctrl-C and SIGTERM to the mount as an explicit
+shutdown request. The FUSE session is unmounted and its worker is joined before
+the command exits. A crash or SIGKILL can still leave a disconnected kernel
+mount behind. On the next start, the library recognizes the mountpoint's
+`ENOTCONN` error, lazily detaches that stale mount with `fusermount3` (or
+`fusermount`), and mounts the new session. Healthy active mounts are never
+detached by this recovery path.
+
 New file uploads use a bounded channel to stream bytes directly to the upload
 endpoint with backpressure; they are not accumulated in a local temporary file
 by default. Writes must arrive at the current sequential offset. An
