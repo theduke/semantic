@@ -26,6 +26,7 @@ import { Dropcursor, Gapcursor, UndoRedo } from '@tiptap/extensions'
 import { Slice, type Schema } from '@tiptap/pm/model'
 import { EditorState } from '@tiptap/pm/state'
 import { CellSelection } from '@tiptap/pm/tables'
+import { CoreParagraphBehavior, plainTextParagraphSlice } from './core/paragraph-behavior'
 import { SemanticId } from './extensions/semantic-id'
 import { stripCopiedIdentities, validateSemanticIds } from './identity'
 
@@ -337,7 +338,7 @@ const v1InlineToPm = (nodes: InlineV1[]): JSONContent[] => nodes.flatMap<JSONCon
     const src = String(node.attrs.src ?? '')
     return safeImageUrl(src) ? [{ type: 'image', attrs: { semanticId: node.id, src, alt: node.text, title: node.attrs.title ?? null } }] : []
   }
-  if (node.component === 'hard_break') return [{ type: 'hardBreak' }]
+  if (node.component === 'hard_break') return [{ type: 'hardBreak', attrs: { semanticId: node.id } }]
   if (node.component === 'raw_html') return [{ type: 'opaqueInline', attrs: { semanticId: node.id, source: node.text } }]
   if (node.text.length === 0) return []
   return [{ type: 'text', text: node.text, marks: v1MarksToPm(node.marks) }]
@@ -411,7 +412,7 @@ const pmInlineToV1 = (nodes: JSONContent[] = []): InlineV1[] => nodes.flatMap<In
       : []
   }
   if (node.type === 'hardBreak') {
-    return [{ id: id('hard-break'), component: 'hard_break', attrs: {}, text: '\n', marks: [] }]
+    return [{ id: node.attrs?.semanticId ?? id('hard-break'), component: 'hard_break', attrs: {}, text: '\n', marks: [] }]
   }
   if (node.type === 'opaqueInline') return [{ id: node.attrs?.semanticId ?? id('raw'), component: 'raw_html', attrs: {}, text: String(node.attrs?.source ?? ''), marks: [] }]
   return [{ id: id('text'), component: 'text', attrs: {}, text: node.text ?? '', marks: pmMarksToV1(node.marks) }]
@@ -789,7 +790,7 @@ export const mount = (host: HTMLElement, options: MountOptions): EditorSession =
 	    // Column widths and spans are not Markdown-persistable. Keep resize disabled until a
 	    // typed format manifest explicitly enables it.
 	    Table.configure({ resizable: options.manifest?.features.persistent_table_widths ?? false }), TableRow, TableHeader, TableCell,
-    Mention, OpaqueBlock, OpaqueInline, SemanticId, Gapcursor, Dropcursor, UndoRedo,
+    Mention, OpaqueBlock, OpaqueInline, SemanticId, CoreParagraphBehavior, Gapcursor, Dropcursor, UndoRedo,
   ]
 
   const editor = new Editor({
@@ -800,6 +801,7 @@ export const mount = (host: HTMLElement, options: MountOptions): EditorSession =
     editorProps: {
 	      attributes: { class: 'dxeditor-engine__content', 'aria-label': options.manifest?.aria_label ?? options.ariaLabel ?? 'Document editor', spellcheck: 'true' },
       transformPastedHTML: html => html.replace(/<(script|style|iframe|object|embed|form)[^>]*>[\s\S]*?<\/\1>/gi, ''),
+      clipboardTextParser: (text, $context) => plainTextParagraphSlice(text, $context.doc.type.schema, $context.marks()),
       handleDOMEvents: {
         copy: (view, event) => writeClipboard(view, event as ClipboardEvent, false),
         cut: (view, event) => writeClipboard(view, event as ClipboardEvent, true),

@@ -88,6 +88,65 @@ test('targets each hovered block from a stable left gutter', async ({ page }) =>
   await expect(editor.locator('p')).toHaveText(['Alpha', 'Bravo', 'Charlie'])
 })
 
+test('grows one paragraph across newlines and splits only at an empty line', async ({ page }) => {
+  const editor = page.locator('.ProseMirror')
+  const paragraph = editor.locator('[data-semantic-id="block-1"]')
+  await editor.click()
+  await page.keyboard.press('Control+End')
+  await page.keyboard.press('Enter')
+  await page.keyboard.type('Second line')
+
+  await expect(editor.locator('p')).toHaveCount(1)
+  await expect(paragraph.locator('br')).toHaveCount(1)
+  const multiline = await page.evaluate(() => {
+    const session = (window as unknown as { editorSession: { snapshot: () => unknown } }).editorSession
+    return session.snapshot()
+  }) as { root: { content: Array<{ id: string; content?: Array<{ kind: string; text?: string }> }> } }
+  expect(multiline.root.content).toHaveLength(1)
+  expect(multiline.root.content[0]?.id).toBe('block-1')
+  expect(multiline.root.content[0]?.content?.map(node => [node.kind, node.text])).toEqual([
+    ['text', 'Select this text'], ['hard_break', undefined], ['text', 'Second line'],
+  ])
+
+  await page.keyboard.press('Enter')
+  await page.keyboard.press('Enter')
+  await expect(editor.locator('p')).toHaveCount(2)
+  const split = await page.evaluate(() => {
+    const session = (window as unknown as { editorSession: { snapshot: () => unknown } }).editorSession
+    return session.snapshot()
+  }) as { root: { content: Array<{ id: string; content?: unknown[] }> } }
+  expect(split.root.content[0]?.id).toBe('block-1')
+  expect(split.root.content[0]?.content).toHaveLength(3)
+  expect(split.root.content[1]?.id).toBeTruthy()
+  expect(split.root.content[1]?.id).not.toBe('block-1')
+  expect(split.root.content[1]?.content ?? []).toEqual([])
+})
+
+test('pastes single newlines into a paragraph and blank lines into blocks', async ({ page }) => {
+  const editor = page.locator('.ProseMirror')
+  await editor.click()
+  await page.keyboard.press('ControlOrMeta+A')
+  await editor.evaluate(element => {
+    const data = new DataTransfer()
+    data.setData('text/plain', 'alpha\nbeta\n\ngamma')
+    element.dispatchEvent(new ClipboardEvent('paste', { bubbles: true, cancelable: true, clipboardData: data }))
+  })
+
+  await expect(editor.locator('p')).toHaveCount(2)
+  await expect(editor.locator('p').first().locator('br')).toHaveCount(1)
+  const snapshot = await page.evaluate(() => {
+    const session = (window as unknown as { editorSession: { snapshot: () => unknown } }).editorSession
+    return session.snapshot()
+  }) as { root: { content: Array<{ id?: string; content?: Array<{ kind: string; text?: string }> }> } }
+  expect(snapshot.root.content.map(block => block.content?.map(node => [node.kind, node.text]))).toEqual([
+    [['text', 'alpha'], ['hard_break', undefined], ['text', 'beta']],
+    [['text', 'gamma']],
+  ])
+  const ids = snapshot.root.content.map(block => block.id)
+  expect(ids.every(Boolean)).toBe(true)
+  expect(new Set(ids).size).toBe(ids.length)
+})
+
 test('rejects unsafe links without losing the mapped selection', async ({ page }) => {
   const editor = page.locator('.ProseMirror')
   await editor.click()

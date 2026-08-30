@@ -949,6 +949,35 @@ mod tests {
     }
 
     #[test]
+    fn multiline_paragraph_round_trips_as_one_semantic_block() {
+        let mut hard_break = ComponentNode::new(COMPONENT_HARD_BREAK);
+        hard_break.id = Some(NodeId::new("break-1"));
+        let document = ComponentDocumentV2::new(vec![ComponentNode::paragraph(
+            NodeId::new("paragraph-1"),
+            vec![
+                ComponentNode::text("first"),
+                hard_break,
+                ComponentNode::text("second"),
+            ],
+        )]);
+
+        assert_eq!(document.text_content(), "first\nsecond");
+        let markdown = encode(&document);
+        assert_eq!(markdown, "first  \nsecond");
+
+        let decoded = decode(&markdown);
+        assert_eq!(decoded.root.content.len(), 1);
+        assert_eq!(decoded.root.content[0].kind.0, COMPONENT_PARAGRAPH_V2);
+        assert_eq!(decoded.root.content[0].content.len(), 3);
+        assert_eq!(
+            decoded.root.content[0].content[1].kind.0,
+            COMPONENT_HARD_BREAK
+        );
+        assert_eq!(decoded.text_content(), "first\nsecond");
+        assert_eq!(encode(&decoded), markdown);
+    }
+
+    #[test]
     fn opaque_html_source_survives_neighbor_edits() {
         let source = "before\n\n<section data-x=\"1\">raw</section>\n\nafter";
         let mut document = decode(source);

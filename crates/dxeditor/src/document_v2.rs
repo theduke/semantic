@@ -194,6 +194,9 @@ impl ComponentNode {
         if let Some(text) = &self.text {
             return text.clone();
         }
+        if self.kind.0 == COMPONENT_HARD_BREAK {
+            return "\n".to_string();
+        }
 
         let separator = if self.kind.0 == COMPONENT_DOCUMENT
             || self.kind.0 == COMPONENT_BLOCKQUOTE

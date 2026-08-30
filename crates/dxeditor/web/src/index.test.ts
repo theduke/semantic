@@ -16,6 +16,7 @@ import {
   type ComponentDocumentV2,
   type EngineManifest,
 } from './index'
+import { plainTextParagraphSlice } from './core/paragraph-behavior'
 
 beforeEach(() => {
   Range.prototype.getClientRects = () => ({
@@ -30,6 +31,7 @@ const clipboardSchema = new Schema({
     doc: { content: 'block+' },
     paragraph: { group: 'block', content: 'inline*', attrs: { semanticId: { default: null } } },
     text: { group: 'inline' },
+    hardBreak: { group: 'inline', inline: true, attrs: { semanticId: { default: null } } },
     image: { group: 'inline', inline: true, attrs: { semanticId: { default: null }, src: {}, alt: { default: null }, title: { default: null } } },
   },
   marks: { link: { attrs: { href: {} } } },
@@ -57,6 +59,20 @@ describe('document wire adapters', () => {
         }] }],
       }] }] }] },
     })
+  })
+
+  it('keeps a multiline paragraph and its semantic identities intact', () => {
+    const document: ComponentDocumentV2 = {
+      schema: 'semantic.component-document', version: 2,
+      root: { kind: 'document', content: [{
+        kind: 'paragraph', id: 'paragraph-multiline', content: [
+          { kind: 'text', text: 'first' },
+          { kind: 'hard_break', id: 'break-1' },
+          { kind: 'text', text: 'second' },
+        ],
+      }] },
+    }
+    expect(pmToV2(v2ToPm(document))).toEqual(document)
   })
 
   it('preserves unknown v2 nodes as inert opaque nodes', () => {
@@ -91,6 +107,25 @@ describe('document wire adapters', () => {
       component: 'heading',
       attrs: { level: 2 },
       content: { kind: 'Inline', value: [{ text: 'A title', marks: [{ component: 'bold' }] }] },
+    })
+  })
+
+  it('preserves legacy inline hard-break identity', () => {
+    const document = {
+      schema: 'dxeditor.document.v1', meta: {}, blocks: [{
+        id: 'paragraph-1', component: 'paragraph', attrs: {},
+        content: { kind: 'Inline' as const, value: [
+          { id: 'text-1', component: 'text', attrs: {}, text: 'first', marks: [] },
+          { id: 'break-1', component: 'hard_break', attrs: {}, text: '\n', marks: [] },
+          { id: 'text-2', component: 'text', attrs: {}, text: 'second', marks: [] },
+        ] },
+      }],
+    }
+    const roundTrip = pmToV1(v1ToPm(document))
+    expect(roundTrip.blocks[0]?.id).toBe('paragraph-1')
+    const inline = roundTrip.blocks[0]?.content.value as Array<{ id: string; component: string; text: string }>
+    expect(inline[1]).toMatchObject({
+      id: 'break-1', component: 'hard_break', text: '\n',
     })
   })
 
@@ -194,6 +229,20 @@ describe('rectangular TSV parsing', () => {
   it('leaves ordinary text and malformed quoted data to normal paste', () => {
     expect(parseTsvGrid('ordinary text')).toBeNull()
     expect(parseTsvGrid('"unterminated\tvalue')).toBeNull()
+  })
+})
+
+describe('plain text paragraph parsing', () => {
+  it('keeps single newlines inline and uses blank lines as block boundaries', () => {
+    const slice = plainTextParagraphSlice('alpha\r\nbeta\n\ngamma', clipboardSchema)
+    expect(slice.content.toJSON()).toEqual([
+      { type: 'paragraph', attrs: { semanticId: null }, content: [
+        { type: 'text', text: 'alpha' },
+        { type: 'hardBreak', attrs: { semanticId: null } },
+        { type: 'text', text: 'beta' },
+      ] },
+      { type: 'paragraph', attrs: { semanticId: null }, content: [{ type: 'text', text: 'gamma' }] },
+    ])
   })
 })
 
