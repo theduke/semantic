@@ -142,7 +142,12 @@ impl PlayerState {
             self.queue
                 .iter()
                 .position(|entry| entry.occurrence_id == occurrence)
-                .or_else(|| (!self.queue.is_empty()).then_some(index.min(self.queue.len() - 1)))
+                .or_else(|| {
+                    self.queue
+                        .len()
+                        .checked_sub(1)
+                        .map(|last_index| index.min(last_index))
+                })
         });
         if active_occurrence == Some(removed.occurrence_id) {
             self.switch_session();
