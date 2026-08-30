@@ -1,5 +1,7 @@
 use std::collections::{BTreeMap, BTreeSet};
-use std::sync::Arc;
+#[cfg(test)]
+use std::sync::atomic::{AtomicUsize, Ordering as AtomicOrdering};
+use std::sync::{Arc, Mutex};
 
 use futures::{StreamExt, stream};
 use semantic_data::query::FieldFormat;
@@ -493,11 +495,9 @@ impl<E: KvEngine> KvDb<E> {
                 .ok_or_else(|| DbError::UnknownCollectionByName {
                     name: collection_name.clone(),
                 })?;
-            (
-                canonicalize_select_query(&query, catalog.as_ref(), collection)?,
-                Some(self.stats_for_collection(collection)?),
-                collection.name.clone(),
-            )
+            let query = canonicalize_select_query(&query, catalog.as_ref(), collection)?;
+            let stats = self.stats_for_query(&query, collection)?;
+            (query, Some(stats), collection.name.clone())
         };
         let optimizer = semantic_db_core::Optimizer::core();
         let context = self.query_context();
@@ -601,9 +601,10 @@ impl<E: KvEngine> KvDb<E> {
                         ));
                     }
                 };
+                let stats = self.stats_for_query(&select, collection)?;
                 (
                     select,
-                    Some(self.stats_for_collection(collection)?),
+                    Some(stats),
                     collection.name.clone(),
                     Some(collection.lid),
                 )
@@ -829,6 +830,9 @@ impl<E: KvEngine> KvDb<E> {
             db: self,
             catalog: self.catalog(),
             default_collection: default_collection.map(ToOwned::to_owned),
+            local_ref_lookups: Mutex::new(BTreeMap::new()),
+            #[cfg(test)]
+            local_ref_lookup_builds: AtomicUsize::new(0),
         };
         semantic_db_core::execute_physical_plan_with_source(plan, &source, &context)
             .map_err(|err| DbError::InvalidQuery(err.to_string()))
@@ -2119,10 +2123,38 @@ impl<E: KvEngine> KvDb<E> {
             .map(ToString::to_string)
     }
 
+    fn stats_for_query(
+        &self,
+        query: &SelectQuery,
+        base_collection: &CollectionSchema,
+    ) -> std::result::Result<QueryStatsSnapshot, DbError> {
+        let catalog = self.catalog();
+        let mut collection_ids = BTreeSet::from([base_collection.lid]);
+        for join in &query.joins {
+            let collection = match join.source.collection.as_deref() {
+                Some(name) => catalog.collection_by_name(name).ok_or_else(|| {
+                    DbError::UnknownCollectionByName {
+                        name: name.to_string(),
+                    }
+                })?,
+                None => base_collection,
+            };
+            collection_ids.insert(collection.lid);
+        }
+        let mut collections = Vec::with_capacity(collection_ids.len());
+        for collection_id in collection_ids {
+            let collection = catalog
+                .collection_by_lid(collection_id)
+                .ok_or(DbError::UnknownCollection(collection_id))?;
+            collections.push(self.stats_for_collection(collection)?);
+        }
+        Ok(QueryStatsSnapshot { collections })
+    }
+
     fn stats_for_collection(
         &self,
         collection: &CollectionSchema,
-    ) -> std::result::Result<CollectionStatsSnapshot, DbError> {
+    ) -> std::result::Result<CollectionStatsEntry, DbError> {
         let row_count = self.store.scan_collection(collection.lid)?.len() as f64;
         let mut indexed_fields = BTreeSet::new();
         let mut unique_fields = BTreeSet::new();
@@ -2151,7 +2183,7 @@ impl<E: KvEngine> KvDb<E> {
             }
         }
 
-        Ok(CollectionStatsSnapshot {
+        Ok(CollectionStatsEntry {
             source: collection.name.clone(),
             row_count,
             indexed_fields,
@@ -2295,6 +2327,9 @@ struct KvPhysicalDataSource<'a, E: KvEngine> {
     db: &'a KvDb<E>,
     catalog: std::sync::Arc<Catalog>,
     default_collection: Option<String>,
+    local_ref_lookups: Mutex<BTreeMap<LocalCollectionId, Arc<BTreeMap<String, Object>>>>,
+    #[cfg(test)]
+    local_ref_lookup_builds: AtomicUsize,
 }
 
 struct KvCollectionScan {
@@ -2306,13 +2341,34 @@ struct KvCollectionScan {
 }
 
 impl<E: KvEngine> KvPhysicalDataSource<'_, E> {
+    fn local_ref_lookup(
+        &self,
+        collection: &CollectionSchema,
+    ) -> semantic_db_core::CoreResult<Arc<BTreeMap<String, Object>>> {
+        let mut lookups = self.local_ref_lookups.lock().map_err(|_| {
+            semantic_db_core::CoreError::new("local reference lookup cache lock was poisoned")
+        })?;
+        if let Some(lookup) = lookups.get(&collection.lid) {
+            return Ok(lookup.clone());
+        }
+        let rows = self
+            .db
+            .store
+            .scan_collection_stream(collection.lid)
+            .map_err(|err| semantic_db_core::CoreError::new(err.to_string()))?;
+        let lookup = build_local_ref_lookup(self.catalog.as_ref(), collection, rows)?;
+        #[cfg(test)]
+        self.local_ref_lookup_builds
+            .fetch_add(1, AtomicOrdering::Relaxed);
+        lookups.insert(collection.lid, lookup.clone());
+        Ok(lookup)
+    }
+
     fn try_relation_lookup_ids(
         &self,
         source_collection: &CollectionSchema,
         predicate: &semantic_db_core::Expr,
-    ) -> semantic_db_core::CoreResult<
-        Option<(Vec<String>, Option<semantic_db_core::Expr>)>,
-    > {
+    ) -> semantic_db_core::CoreResult<Option<(Vec<String>, Option<semantic_db_core::Expr>)>> {
         let Some((relation, residual)) = split_first_relation_conjunct(predicate) else {
             return Ok(None);
         };
@@ -2338,13 +2394,18 @@ impl<E: KvEngine> KvPhysicalDataSource<'_, E> {
         };
         let relation_id = semantic_db_core::evaluate_expr(&Object::new(), relation)
             .and_then(|value| value.as_str().map(ToString::to_string));
-        let max_depth = max_depth
-            .as_ref()
-            .map(|expr| {
-                semantic_db_core::evaluate_expr(&Object::new(), expr)
-                    .and_then(|value| value_to_usize(&value))
-            })
-            .flatten();
+        let max_depth = match max_depth.as_ref() {
+            None => None,
+            Some(expr) => {
+                let Some(value) = semantic_db_core::evaluate_expr(&Object::new(), expr) else {
+                    return Ok(None);
+                };
+                let Some(depth) = value_to_usize(&value) else {
+                    return Ok(None);
+                };
+                Some(depth)
+            }
+        };
         let Some(relation_id) = relation_id else {
             return Ok(None);
         };
@@ -2496,13 +2557,7 @@ impl<E: KvEngine> KvPhysicalDataSource<'_, E> {
         &self,
         collection: &CollectionSchema,
     ) -> semantic_db_core::CoreResult<KvCollectionScan> {
-        let lookup_rows = self
-            .db
-            .store
-            .scan_collection_stream(collection.lid)
-            .map_err(|err| semantic_db_core::CoreError::new(err.to_string()))?;
-        let local_ref_lookup =
-            build_local_ref_lookup(self.catalog.as_ref(), collection, lookup_rows)?;
+        let local_ref_lookup = self.local_ref_lookup(collection)?;
         let (field_names, attr_names) = collection_field_maps(collection);
         let rows = self
             .db
@@ -2575,11 +2630,7 @@ impl<E: KvEngine> KvPhysicalDataSource<'_, E> {
         rows: Vec<StoredEntity>,
         predicate: &semantic_db_core::Expr,
     ) -> semantic_db_core::CoreResult<KvCollectionScan> {
-        let local_ref_lookup = build_local_ref_lookup(
-            self.catalog.as_ref(),
-            collection,
-            rows.iter().cloned().map(Ok),
-        )?;
+        let local_ref_lookup = self.local_ref_lookup(collection)?;
         let (field_names, attr_names) = collection_field_maps(collection);
         let mut filtered = Vec::new();
         for row in rows {
@@ -2613,12 +2664,12 @@ impl<E: KvEngine> KvPhysicalDataSource<'_, E> {
         {
             let scan = self.materialize_ids(collection, ids)?;
             if let Some(residual) = residual {
-                let rows = scan.rows.collect::<semantic_db_core::CoreResult<Vec<_>>>()?;
+                let rows = scan
+                    .rows
+                    .collect::<std::result::Result<Vec<_>, semantic_db_core::CoreError>>()?;
                 return Ok((
                     vec![self.collection_scan_filtered_with_relationships(
-                        collection,
-                        rows,
-                        &residual,
+                        collection, rows, &residual,
                     )?],
                     true,
                 ));
@@ -2661,13 +2712,7 @@ impl<E: KvEngine> KvPhysicalDataSource<'_, E> {
         collection: &CollectionSchema,
         ids: Vec<String>,
     ) -> semantic_db_core::CoreResult<KvCollectionScan> {
-        let lookup_rows = self
-            .db
-            .store
-            .scan_collection_stream(collection.lid)
-            .map_err(|err| semantic_db_core::CoreError::new(err.to_string()))?;
-        let local_ref_lookup =
-            build_local_ref_lookup(self.catalog.as_ref(), collection, lookup_rows)?;
+        let local_ref_lookup = self.local_ref_lookup(collection)?;
         let mut rows = Vec::with_capacity(ids.len());
         for id in ids {
             if let Some(entity) = self
@@ -3322,12 +3367,12 @@ impl<E: KvEngine> semantic_db_core::AsyncPhysicalDataSource for KvPhysicalDataSo
                             scan.collection_id
                         ))
                     })?;
-                let rows = scan.rows.collect::<semantic_db_core::CoreResult<Vec<_>>>()?;
-                filtered_scans.push(self.collection_scan_filtered_with_relationships(
-                    collection,
-                    rows,
-                    &predicate,
-                )?);
+                let rows = scan
+                    .rows
+                    .collect::<std::result::Result<Vec<_>, semantic_db_core::CoreError>>()?;
+                filtered_scans.push(
+                    self.collection_scan_filtered_with_relationships(collection, rows, &predicate)?,
+                );
             }
             Ok(Self::scans_to_stream(filtered_scans, None))
         })();
@@ -3353,10 +3398,13 @@ impl<E: KvEngine> semantic_db_core::AsyncPhysicalDataSource for KvPhysicalDataSo
             let Some(field_path) = field_path else {
                 return Ok(None);
             };
-            let top_level = field_path.segments().first().and_then(|segment| match segment {
-                PathSegment::Field(field) => Some(field.as_str()),
-                _ => None,
-            });
+            let top_level = field_path
+                .segments()
+                .first()
+                .and_then(|segment| match segment {
+                    PathSegment::Field(field) => Some(field.as_str()),
+                    _ => None,
+                });
             let index = if field_path.segments().len() == 1 {
                 top_level
                     .and_then(|field| self.catalog.find_equality_index(collection.lid, field))
@@ -3393,11 +3441,11 @@ impl<E: KvEngine> semantic_db_core::AsyncPhysicalDataSource for KvPhysicalDataSo
             let scan = self.materialize_ids(collection, ids.into_iter().collect())?;
             let scans = if let Some(predicate) = residual_predicate.clone() {
                 if expr_contains_relationship(&predicate) {
-                    let rows = scan.rows.collect::<semantic_db_core::CoreResult<Vec<_>>>()?;
+                    let rows = scan
+                        .rows
+                        .collect::<std::result::Result<Vec<_>, semantic_db_core::CoreError>>()?;
                     vec![self.collection_scan_filtered_with_relationships(
-                        collection,
-                        rows,
-                        &predicate,
+                        collection, rows, &predicate,
                     )?]
                 } else {
                     return Ok(Some(Self::scans_to_stream(vec![scan], Some(predicate))));
@@ -3431,9 +3479,7 @@ impl<E: KvEngine> KvPhysicalDataSource<'_, E> {
         field: &semantic_db_core::FieldRef,
     ) -> Option<FieldPath> {
         match field {
-            semantic_db_core::FieldRef::CanonicalName(name) => {
-                Some(FieldPath::from_fields([name]))
-            }
+            semantic_db_core::FieldRef::CanonicalName(name) => Some(FieldPath::from_fields([name])),
             semantic_db_core::FieldRef::FieldId(field_id) => collection
                 .field_name_by_id(*field_id)
                 .map(|name| FieldPath::from_fields([name])),
@@ -3539,7 +3585,11 @@ fn is_row_id_expr(expr: &semantic_db_core::Expr, source_collection: &CollectionS
     path.segments().len() == 1 && source_collection.canonical_field_name(first) == "id"
 }
 
-struct CollectionStatsSnapshot {
+struct QueryStatsSnapshot {
+    collections: Vec<CollectionStatsEntry>,
+}
+
+struct CollectionStatsEntry {
     source: String,
     collection_id: LocalCollectionId,
     row_count: f64,
@@ -3552,20 +3602,24 @@ struct CollectionStatsSnapshot {
     has_path_equality_index: bool,
 }
 
-impl semantic_db_core::StatsProvider for CollectionStatsSnapshot {
+impl QueryStatsSnapshot {
+    fn collection(&self, source: &semantic_db_core::SourceRef) -> Option<&CollectionStatsEntry> {
+        self.collections.iter().find(|collection| {
+            source.source_name.as_deref() == Some(collection.source.as_str())
+                || source.collection_id == Some(collection.collection_id)
+        })
+    }
+}
+
+impl semantic_db_core::StatsProvider for QueryStatsSnapshot {
     fn relation_stats(
         &self,
         source: &semantic_db_core::SourceRef,
     ) -> Option<semantic_db_core::RelationStats> {
-        if source.source_name.as_deref() == Some(self.source.as_str())
-            || source.collection_id == Some(self.collection_id)
-        {
-            Some(semantic_db_core::RelationStats {
-                row_count: self.row_count,
-            })
-        } else {
-            None
-        }
+        let collection = self.collection(source)?;
+        Some(semantic_db_core::RelationStats {
+            row_count: collection.row_count,
+        })
     }
 
     fn field_stats(
@@ -3573,18 +3627,18 @@ impl semantic_db_core::StatsProvider for CollectionStatsSnapshot {
         source: &semantic_db_core::SourceRef,
         field: &semantic_db_core::FieldRef,
     ) -> Option<semantic_db_core::FieldStats> {
-        if source.source_name.as_deref() != Some(self.source.as_str())
-            && source.collection_id != Some(self.collection_id)
-        {
-            return None;
-        }
+        let collection = self.collection(source)?;
 
         let unique = match field {
-            semantic_db_core::FieldRef::CanonicalName(name) => self.unique_fields.contains(name),
-            semantic_db_core::FieldRef::FieldId(field_id) => {
-                self.unique_field_ids.contains(field_id)
+            semantic_db_core::FieldRef::CanonicalName(name) => {
+                collection.unique_fields.contains(name)
             }
-            semantic_db_core::FieldRef::AttrId(attr_id) => self.unique_attr_ids.contains(attr_id),
+            semantic_db_core::FieldRef::FieldId(field_id) => {
+                collection.unique_field_ids.contains(field_id)
+            }
+            semantic_db_core::FieldRef::AttrId(attr_id) => {
+                collection.unique_attr_ids.contains(attr_id)
+            }
             semantic_db_core::FieldRef::Path(path) => path
                 .segments()
                 .first()
@@ -3592,24 +3646,25 @@ impl semantic_db_core::StatsProvider for CollectionStatsSnapshot {
                     semantic_data::value::PathSegment::Field(name) => Some(name),
                     _ => None,
                 })
-                .is_some_and(|name| self.unique_fields.contains(name)),
+                .is_some_and(|name| collection.unique_fields.contains(name)),
         };
         if unique {
             return Some(semantic_db_core::FieldStats {
-                distinct_count: Some(self.row_count.max(1.0)),
+                distinct_count: Some(collection.row_count.max(1.0)),
                 null_fraction: Some(0.0),
             });
         }
 
         let indexed = match field {
             semantic_db_core::FieldRef::CanonicalName(name) => {
-                self.indexed_fields.contains(name) || self.has_path_equality_index
+                collection.indexed_fields.contains(name) || collection.has_path_equality_index
             }
             semantic_db_core::FieldRef::FieldId(field_id) => {
-                self.indexed_field_ids.contains(field_id) || self.has_path_equality_index
+                collection.indexed_field_ids.contains(field_id)
+                    || collection.has_path_equality_index
             }
             semantic_db_core::FieldRef::AttrId(attr_id) => {
-                self.indexed_attr_ids.contains(attr_id) || self.has_path_equality_index
+                collection.indexed_attr_ids.contains(attr_id) || collection.has_path_equality_index
             }
             semantic_db_core::FieldRef::Path(path) => {
                 path.segments()
@@ -3618,13 +3673,13 @@ impl semantic_db_core::StatsProvider for CollectionStatsSnapshot {
                         semantic_data::value::PathSegment::Field(name) => Some(name),
                         _ => None,
                     })
-                    .is_some_and(|name| self.indexed_fields.contains(name))
-                    || self.has_path_equality_index
+                    .is_some_and(|name| collection.indexed_fields.contains(name))
+                    || collection.has_path_equality_index
             }
         };
         if indexed {
             return Some(semantic_db_core::FieldStats {
-                distinct_count: Some((self.row_count / 8.0).max(1.0)),
+                distinct_count: Some((collection.row_count / 8.0).max(1.0)),
                 null_fraction: Some(0.0),
             });
         }
@@ -3637,20 +3692,17 @@ impl semantic_db_core::StatsProvider for CollectionStatsSnapshot {
         source: &semantic_db_core::SourceRef,
         field: &semantic_db_core::FieldRef,
     ) -> Option<bool> {
-        if source.source_name.as_deref() != Some(self.source.as_str())
-            && source.collection_id != Some(self.collection_id)
-        {
-            return None;
-        }
+        let collection = self.collection(source)?;
         let indexed = match field {
             semantic_db_core::FieldRef::CanonicalName(name) => {
-                self.indexed_fields.contains(name) || self.has_path_equality_index
+                collection.indexed_fields.contains(name) || collection.has_path_equality_index
             }
             semantic_db_core::FieldRef::FieldId(field_id) => {
-                self.indexed_field_ids.contains(field_id) || self.has_path_equality_index
+                collection.indexed_field_ids.contains(field_id)
+                    || collection.has_path_equality_index
             }
             semantic_db_core::FieldRef::AttrId(attr_id) => {
-                self.indexed_attr_ids.contains(attr_id) || self.has_path_equality_index
+                collection.indexed_attr_ids.contains(attr_id) || collection.has_path_equality_index
             }
             semantic_db_core::FieldRef::Path(path) => {
                 path.segments()
@@ -3659,8 +3711,8 @@ impl semantic_db_core::StatsProvider for CollectionStatsSnapshot {
                         semantic_data::value::PathSegment::Field(name) => Some(name),
                         _ => None,
                     })
-                    .is_some_and(|name| self.indexed_fields.contains(name))
-                    || self.has_path_equality_index
+                    .is_some_and(|name| collection.indexed_fields.contains(name))
+                    || collection.has_path_equality_index
             }
         };
         Some(indexed)
@@ -3693,6 +3745,9 @@ fn format_field_path(path: &FieldPath) -> String {
 #[cfg(test)]
 mod tests {
     use std::collections::BTreeMap;
+    use std::sync::Arc;
+    use std::sync::Mutex;
+    use std::sync::atomic::{AtomicUsize, Ordering as AtomicOrdering};
 
     use semantic_data::{
         expr::{CallExpr, Callee, Expr as SchemaExpr},
@@ -3715,17 +3770,112 @@ mod tests {
         value::{DateTime, FieldPath, Object, PathSegment, Value},
     };
 
-    use semantic_data::query::{BinaryOp, FieldFormat, SortDirection};
+    use semantic_data::query::{BinaryOp, FieldFormat, JoinType, SortDirection};
     use semantic_db_core::catalog::{CollectionKind, IntegrityMode};
     use semantic_db_core::{
         ALL_COLLECTION_ALIAS, Batch, BatchOperation, CORE_CATALOG_SCHEMA_COLLECTION,
-        DEFAULT_COLLECTION, DdlBatch, DdlCollectionKind, DdlOperation, Expr, Operand, OrderBy,
-        Query, QueryField, QueryResult, SelectQuery, TransactionConcurrency, TransactionOptions,
-        UpdateQuery, canonicalize_select_query,
+        DEFAULT_COLLECTION, DdlBatch, DdlCollectionKind, DdlOperation, Expr, JoinCondition,
+        JoinQuery, JoinSource, Operand, OrderBy, Query, QueryField, QueryResult, SelectQuery,
+        TransactionConcurrency, TransactionOptions, UpdateQuery, canonicalize_select_query,
     };
     use semantic_db_core::{DbConfig, DbError, MigrationMismatchPolicy};
 
-    use super::{KvDb, KvWriteOp, QueryPlan, RELATION_EDGES_COLLECTION};
+    use super::{KvDb, KvPhysicalDataSource, KvWriteOp, QueryPlan, RELATION_EDGES_COLLECTION};
+    use crate::storage::MemoryKvEngine;
+
+    fn physical_source(db: &KvDb<MemoryKvEngine>) -> KvPhysicalDataSource<'_, MemoryKvEngine> {
+        KvPhysicalDataSource {
+            db,
+            catalog: db.catalog(),
+            default_collection: None,
+            local_ref_lookups: Mutex::new(BTreeMap::new()),
+            local_ref_lookup_builds: AtomicUsize::new(0),
+        }
+    }
+
+    fn relation_with_max_depth(max_depth: Option<Expr>) -> Expr {
+        Expr::RelationExists {
+            relation: Box::new(Expr::Operand(Operand::Literal(Value::String(
+                "test.parent".to_string(),
+            )))),
+            source: Box::new(Expr::Operand(Operand::Field(FieldPath::from_fields([
+                "id",
+            ])))),
+            target: Box::new(Expr::Operand(Operand::Literal(Value::String(
+                "root".to_string(),
+            )))),
+            transitive: true,
+            max_depth: max_depth.map(Box::new),
+        }
+    }
+
+    #[test]
+    fn indexed_materialization_reuses_query_scoped_local_ref_lookup() {
+        let mut db = KvDb::in_memory();
+        db.create_collection("cache_items", CollectionKind::Polymorphic)
+            .unwrap();
+        for id in ["a", "b"] {
+            let mut object = Object::new();
+            object.insert("id", Value::String(id.to_string()));
+            db.insert("cache_items", id, object).unwrap();
+        }
+        let catalog = db.catalog();
+        let collection = catalog.collection_by_name("cache_items").unwrap();
+        let source = physical_source(&db);
+
+        let first = source
+            .materialize_ids(collection, vec!["a".to_string()])
+            .unwrap();
+        let second = source
+            .materialize_ids(collection, vec!["b".to_string()])
+            .unwrap();
+
+        assert!(Arc::ptr_eq(
+            &first.local_ref_lookup,
+            &second.local_ref_lookup
+        ));
+        assert_eq!(
+            source.local_ref_lookup_builds.load(AtomicOrdering::Relaxed),
+            1
+        );
+    }
+
+    #[test]
+    fn relation_lookup_only_accepts_constant_nonnegative_max_depth() {
+        let mut db = KvDb::in_memory();
+        db.create_collection("relation_nodes", CollectionKind::Polymorphic)
+            .unwrap();
+        let catalog = db.catalog();
+        let collection = catalog.collection_by_name("relation_nodes").unwrap();
+        let source = physical_source(&db);
+
+        for invalid in [
+            Expr::Operand(Operand::Field(FieldPath::from_fields(["depth"]))),
+            Expr::Operand(Operand::Literal(Value::Null)),
+            Expr::Operand(Operand::Literal(Value::String("1".to_string()))),
+            Expr::Operand(Operand::Literal(Value::I64(-1))),
+        ] {
+            assert_eq!(
+                source
+                    .try_exact_relation_lookup_ids(
+                        collection,
+                        &relation_with_max_depth(Some(invalid)),
+                    )
+                    .unwrap(),
+                None
+            );
+        }
+
+        assert!(
+            source
+                .try_exact_relation_lookup_ids(
+                    collection,
+                    &relation_with_max_depth(Some(Expr::Operand(Operand::Literal(Value::U64(1,))))),
+                )
+                .unwrap()
+                .is_some()
+        );
+    }
 
     #[test]
     fn initialization_creates_default_entities_collection() {
@@ -3737,6 +3887,195 @@ mod tests {
         assert_eq!(
             entities.integrity_mode,
             IntegrityMode::StrictRegisteredSchema
+        );
+    }
+
+    #[test]
+    fn directory_shaped_self_join_uses_indexed_probe_and_returns_order_rows() {
+        let mut db = KvDb::in_memory();
+        db.create_collection("tree_entities", CollectionKind::Polymorphic)
+            .unwrap();
+        for (id, kind, from, to, order) in [
+            ("dir-a", "directory", None, None, None),
+            ("dir-b", "directory", None, None, None),
+            ("file-a", "file", None, None, None),
+            ("node-a", "node", Some("root"), Some("dir-a"), Some(2_u64)),
+            ("node-b", "node", Some("root"), Some("dir-b"), Some(1_u64)),
+            ("node-c", "node", Some("root"), Some("file-a"), Some(3_u64)),
+            ("node-d", "node", Some("root"), Some("dir-a"), Some(4_u64)),
+            (
+                "other-parent",
+                "node",
+                Some("elsewhere"),
+                Some("dir-b"),
+                Some(0_u64),
+            ),
+            (
+                "missing-target",
+                "node",
+                Some("root"),
+                Some("does-not-exist"),
+                Some(5_u64),
+            ),
+        ] {
+            let mut object = Object::new();
+            object.insert("id", Value::String(id.to_string()));
+            object.insert("kind", Value::String(kind.to_string()));
+            if let Some(from) = from {
+                object.insert("from", Value::String(from.to_string()));
+            }
+            if let Some(to) = to {
+                object.insert("to", Value::String(to.to_string()));
+            }
+            if let Some(order) = order {
+                object.insert("order", Value::U64(order));
+            }
+            db.insert("tree_entities", id, object).unwrap();
+        }
+
+        let field = |path| Expr::Operand(Operand::Field(FieldPath::from_fields(path)));
+        let query = SelectQuery::new()
+            .with_collection("tree_entities")
+            .with_source_alias("n")
+            .with_joins(vec![JoinQuery {
+                source: JoinSource {
+                    collection: Some("tree_entities".to_string()),
+                    class: None,
+                },
+                alias: Some("child".to_string()),
+                join_type: JoinType::Inner,
+                condition: JoinCondition::OnExpr(Expr::Binary {
+                    op: BinaryOp::Eq,
+                    left: Box::new(field(["n", "to"])),
+                    right: Box::new(field(["child", "id"])),
+                }),
+                predicate: None,
+            }])
+            .with_predicate(Expr::Binary {
+                op: BinaryOp::And,
+                left: Box::new(Expr::Binary {
+                    op: BinaryOp::Eq,
+                    left: Box::new(field(["n", "from"])),
+                    right: Box::new(Expr::Operand(Operand::Literal(Value::String(
+                        "root".to_string(),
+                    )))),
+                }),
+                right: Box::new(Expr::InList {
+                    expr: Box::new(field(["child", "kind"])),
+                    list: vec![Expr::Operand(Operand::Literal(Value::String(
+                        "directory".to_string(),
+                    )))],
+                    negated: false,
+                }),
+            });
+
+        let explain = db.explain_query(Query::Select(query.clone())).unwrap();
+        let semantic_db_core::PhysicalPlan::Join(join) = explain.physical else {
+            panic!("expected physical join")
+        };
+        assert_eq!(
+            join.algorithm,
+            semantic_db_core::PhysicalJoinAlgorithm::IndexNestedLoop
+        );
+        assert!(join.index_probe.is_some());
+
+        let query = query
+            .with_projection(vec![
+                QueryField {
+                    expr: Box::new(field(["n", "id"])),
+                    alias: Some("node_id".to_string()),
+                    wildcard: None,
+                },
+                QueryField {
+                    expr: Box::new(field(["child", "id"])),
+                    alias: Some("child_id".to_string()),
+                    wildcard: None,
+                },
+                QueryField {
+                    expr: Box::new(field(["n", "order"])),
+                    alias: Some("order".to_string()),
+                    wildcard: None,
+                },
+            ])
+            .with_order_by(vec![OrderBy {
+                expr: field(["n", "order"]),
+                direction: SortDirection::Asc,
+            }])
+            .with_offset(1)
+            .with_limit(2);
+        let rows = db.select(query).unwrap();
+        assert_eq!(rows.len(), 2);
+        assert_eq!(
+            rows[0].get("node_id"),
+            Some(&Value::String("node-a".into()))
+        );
+        assert_eq!(
+            rows[0].get("child_id"),
+            Some(&Value::String("dir-a".into()))
+        );
+        assert_eq!(rows[0].get("order"), Some(&Value::U64(2)));
+        assert_eq!(
+            rows[1].get("node_id"),
+            Some(&Value::String("node-d".into()))
+        );
+        assert_eq!(
+            rows[1].get("child_id"),
+            Some(&Value::String("dir-a".into()))
+        );
+        assert_eq!(rows[1].get("order"), Some(&Value::U64(4)));
+    }
+
+    #[test]
+    fn cross_collection_join_uses_right_collection_index_stats() {
+        let mut db = KvDb::in_memory();
+        db.create_collection("orders", CollectionKind::Polymorphic)
+            .unwrap();
+        db.create_collection("customers", CollectionKind::Polymorphic)
+            .unwrap();
+
+        let mut order = Object::new();
+        order.insert("id", Value::String("order-1".to_string()));
+        order.insert("customer_id", Value::String("customer-1".to_string()));
+        db.insert("orders", "order-1", order).unwrap();
+        for index in 0..8 {
+            let id = format!("customer-{index}");
+            let mut customer = Object::new();
+            customer.insert("id", Value::String(id.clone()));
+            db.insert("customers", id, customer).unwrap();
+        }
+
+        let field = |path| Expr::Operand(Operand::Field(FieldPath::from_fields(path)));
+        let query = SelectQuery::new()
+            .with_collection("orders")
+            .with_source_alias("o")
+            .with_joins(vec![JoinQuery {
+                source: JoinSource {
+                    collection: Some("customers".to_string()),
+                    class: None,
+                },
+                alias: Some("c".to_string()),
+                join_type: JoinType::Inner,
+                condition: JoinCondition::OnExpr(Expr::Binary {
+                    op: BinaryOp::Eq,
+                    left: Box::new(field(["o", "customer_id"])),
+                    right: Box::new(field(["c", "id"])),
+                }),
+                predicate: None,
+            }]);
+
+        let explain = db.explain_query(Query::Select(query)).unwrap();
+        let semantic_db_core::PhysicalPlan::Join(join) = explain.physical else {
+            panic!("expected physical join")
+        };
+        assert_eq!(
+            join.algorithm,
+            semantic_db_core::PhysicalJoinAlgorithm::IndexNestedLoop
+        );
+        assert_eq!(
+            join.index_probe
+                .as_ref()
+                .and_then(|probe| probe.source.source_name.as_deref()),
+            Some("customers")
         );
     }
 

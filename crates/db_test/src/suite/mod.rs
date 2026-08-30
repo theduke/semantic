@@ -2367,28 +2367,31 @@ async fn test_relationships_generic_embedded(db: &Db) {
 
     let mut a = Object::new();
     a.insert("id", Value::String("a".to_string()));
+    a.insert("depth", Value::U64(1));
     db.insert("shared_suite_rel_nodes", "a", a)
         .await
         .expect("insert a should succeed");
     let mut b = Object::new();
     b.insert("id", Value::String("b".to_string()));
+    b.insert("depth", Value::U64(1));
     b.insert("shared.rel.parent_ref", Value::String("a".to_string()));
     db.insert("shared_suite_rel_nodes", "b", b)
         .await
         .expect("insert b should succeed");
+    let mut d = Object::new();
+    d.insert("id", Value::String("d".to_string()));
+    d.insert("depth", Value::U64(1));
+    db.insert("shared_suite_rel_nodes", "d", d)
+        .await
+        .expect("insert d should succeed");
     let mut c = Object::new();
     c.insert("id", Value::String("c".to_string()));
+    c.insert("depth", Value::U64(2));
     c.insert("shared.rel.parent_ref", Value::String("b".to_string()));
     c.insert("shared.rel.secondary_ref", Value::String("d".to_string()));
     db.insert("shared_suite_rel_nodes", "c", c)
         .await
         .expect("insert c should succeed");
-    let mut d = Object::new();
-    d.insert("id", Value::String("d".to_string()));
-    db.insert("shared_suite_rel_nodes", "d", d)
-        .await
-        .expect("insert d should succeed");
-
     let ast_rows = db
         .select(
             SelectQuery::new()
@@ -2492,6 +2495,62 @@ async fn test_relationships_generic_embedded(db: &Db) {
         .await
         .expect("bounded transitive relationship query should succeed");
     assert_eq!(row_ids(&max_depth_rows), vec!["b"]);
+
+    let row_dependent_max_depth = db
+        .select(
+            SelectQuery::new()
+                .with_collection("shared_suite_rel_nodes")
+                .with_predicate(Expr::RelationExists {
+                    relation: Box::new(Expr::Operand(Operand::Literal(Value::String(
+                        "shared.rel.parent".to_string(),
+                    )))),
+                    source: Box::new(Expr::Operand(Operand::Field(FieldPath::from_fields([
+                        "id",
+                    ])))),
+                    target: Box::new(Expr::Operand(Operand::Literal(Value::String(
+                        "a".to_string(),
+                    )))),
+                    transitive: true,
+                    max_depth: Some(Box::new(Expr::Operand(Operand::Field(
+                        FieldPath::from_fields(["depth"]),
+                    )))),
+                })
+                .with_order_by(vec![OrderBy {
+                    expr: Expr::Operand(Operand::Field(FieldPath::from_fields(["id"]))),
+                    direction: SortDirection::Asc,
+                }]),
+        )
+        .await
+        .expect("row-dependent relationship max depth should use normal evaluation");
+    assert_eq!(row_ids(&row_dependent_max_depth), vec!["b", "c"]);
+
+    for invalid_max_depth in [Value::Null, Value::String("1".to_string()), Value::I64(-1)] {
+        let result = db
+            .select(
+                SelectQuery::new()
+                    .with_collection("shared_suite_rel_nodes")
+                    .with_predicate(Expr::RelationExists {
+                        relation: Box::new(Expr::Operand(Operand::Literal(Value::String(
+                            "shared.rel.parent".to_string(),
+                        )))),
+                        source: Box::new(Expr::Operand(Operand::Field(FieldPath::from_fields([
+                            "id",
+                        ])))),
+                        target: Box::new(Expr::Operand(Operand::Literal(Value::String(
+                            "a".to_string(),
+                        )))),
+                        transitive: true,
+                        max_depth: Some(Box::new(Expr::Operand(Operand::Literal(
+                            invalid_max_depth,
+                        )))),
+                    }),
+            )
+            .await;
+        assert!(
+            result.is_err(),
+            "invalid max_depth should preserve its error"
+        );
+    }
 
     let direct_rows = db
         .select(

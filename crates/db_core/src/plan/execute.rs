@@ -82,6 +82,24 @@ pub trait AsyncPhysicalDataSource: Send + Sync {
         value: Value,
         residual_predicate: Option<Expr>,
     ) -> SendableRecordBatchStream {
+        if residual_predicate
+            .as_ref()
+            .is_some_and(expr_contains_relation_exists)
+        {
+            let lookup = Expr::Binary {
+                op: semantic_data::query::BinaryOp::Eq,
+                left: Box::new(Expr::Operand(Operand::Field(
+                    field_path_for_ref(&field).unwrap_or_else(|| FieldPath::from_fields(["id"])),
+                ))),
+                right: Box::new(Expr::Operand(Operand::Literal(value))),
+            };
+            let predicate = Expr::Binary {
+                op: semantic_data::query::BinaryOp::And,
+                left: Box::new(lookup),
+                right: Box::new(residual_predicate.expect("checked above")),
+            };
+            return self.scan_filtered_stream(source, predicate);
+        }
         let stream = self.index_lookup_stream(source, field, value);
         match residual_predicate {
             Some(predicate) => filter_batch_stream(stream, predicate),
@@ -109,6 +127,56 @@ pub trait AsyncPhysicalDataSource: Send + Sync {
 
     fn scan(&self, source: SourceRef) -> BoxFuture<'static, CoreResult<Vec<DynObject>>> {
         collect_dyn_stream(self.scan_stream(source)).boxed()
+    }
+}
+
+fn expr_contains_relation_exists(expr: &Expr) -> bool {
+    match expr {
+        Expr::RelationExists { .. } => true,
+        Expr::Unary { expr, .. } | Expr::IsNull { expr, .. } => expr_contains_relation_exists(expr),
+        Expr::Binary { left, right, .. }
+        | Expr::PatternMatch {
+            expr: left,
+            pattern: right,
+            ..
+        }
+        | Expr::RegexMatch {
+            expr: left,
+            pattern: right,
+            ..
+        } => expr_contains_relation_exists(left) || expr_contains_relation_exists(right),
+        Expr::IfElse {
+            cond,
+            then_expr,
+            else_expr,
+        } => {
+            expr_contains_relation_exists(cond)
+                || expr_contains_relation_exists(then_expr)
+                || expr_contains_relation_exists(else_expr)
+        }
+        Expr::Coalesce(items) | Expr::InList { list: items, .. } => {
+            let in_list_expr = match expr {
+                Expr::InList { expr, .. } => expr_contains_relation_exists(expr),
+                _ => false,
+            };
+            in_list_expr || items.iter().any(expr_contains_relation_exists)
+        }
+        Expr::Function { args, .. } => args.iter().any(|arg| match arg {
+            FunctionArg::Expr(expr) => expr_contains_relation_exists(expr),
+            FunctionArg::Wildcard => false,
+        }),
+        Expr::Aggregate { arg, .. } => match arg.as_ref() {
+            FunctionArg::Expr(expr) => expr_contains_relation_exists(expr),
+            FunctionArg::Wildcard => false,
+        },
+        Expr::Between {
+            expr, low, high, ..
+        } => {
+            expr_contains_relation_exists(expr)
+                || expr_contains_relation_exists(low)
+                || expr_contains_relation_exists(high)
+        }
+        Expr::Operand(_) | Expr::Subquery(_) | Expr::Exists { .. } => false,
     }
 }
 
@@ -205,12 +273,7 @@ fn execute_physical_dyn_stream(
                 .try_flatten()
                 .boxed()
             } else {
-                source.index_lookup_filtered_stream(
-                    source_ref,
-                    field,
-                    value,
-                    residual_predicate,
-                )
+                source.index_lookup_filtered_stream(source_ref, field, value, residual_predicate)
             }
         }
         PhysicalPlan::Values { values } => rows_to_batches(
@@ -595,13 +658,8 @@ fn execute_join_stream(
                     left: left.clone(),
                     right: right.clone(),
                     residual_predicate: Some(
-                        resolve_expr_subqueries_async(
-                            residual,
-                            source.clone(),
-                            &context,
-                            options,
-                        )
-                        .await?,
+                        resolve_expr_subqueries_async(residual, source.clone(), &context, options)
+                            .await?,
                     ),
                 };
             }
@@ -2841,8 +2899,7 @@ mod tests {
             values: Vec<Value>,
             residual_predicate: Option<Expr>,
         ) -> SendableRecordBatchStream {
-            self.index_many_calls
-                .fetch_add(1, AtomicOrdering::Relaxed);
+            self.index_many_calls.fetch_add(1, AtomicOrdering::Relaxed);
             let path = field_path_for_ref(&field).unwrap_or_else(|| FieldPath::from_fields(["id"]));
             rows_to_batches(
                 self.rows
@@ -2876,6 +2933,32 @@ mod tests {
         }
     }
 
+    struct RelationAwareDefaultSource {
+        filtered_calls: AtomicUsize,
+    }
+
+    impl AsyncPhysicalDataSource for RelationAwareDefaultSource {
+        fn scan_stream(&self, _source: SourceRef) -> SendableRecordBatchStream {
+            panic!("relationship residual must not use the generic row evaluator")
+        }
+
+        fn scan_filtered_stream(
+            &self,
+            _source: SourceRef,
+            predicate: Expr,
+        ) -> SendableRecordBatchStream {
+            self.filtered_calls.fetch_add(1, AtomicOrdering::Relaxed);
+            assert!(matches!(
+                predicate,
+                Expr::Binary {
+                    op: semantic_data::query::BinaryOp::And,
+                    ..
+                }
+            ));
+            rows_to_batches(vec![Box::new(obj_i64("id", 7)) as DynObject], 1)
+        }
+    }
+
     fn obj_i64(field: &str, value: i64) -> Object {
         let mut row = Object::new();
         row.insert(field, Value::I64(value));
@@ -2903,6 +2986,42 @@ mod tests {
             batches.iter().map(Vec::len).collect::<Vec<_>>(),
             vec![2, 2, 1]
         );
+    }
+
+    #[test]
+    fn default_indexed_residual_delegates_relationships_to_filtered_scan() {
+        let source = RelationAwareDefaultSource {
+            filtered_calls: AtomicUsize::new(0),
+        };
+        let relation = Expr::RelationExists {
+            relation: Box::new(Expr::Operand(Operand::Literal(Value::String(
+                "parent".to_string(),
+            )))),
+            source: Box::new(Expr::Operand(Operand::Field(FieldPath::from_fields([
+                "id",
+            ])))),
+            target: Box::new(Expr::Operand(Operand::Literal(Value::String(
+                "root".to_string(),
+            )))),
+            transitive: false,
+            max_depth: None,
+        };
+
+        let rows = run_async(collect_dyn_stream(source.index_lookup_filtered_stream(
+            SourceRef {
+                source_name: Some("items".to_string()),
+                collection_id: None,
+                binding: None,
+                backend_tag: None,
+            },
+            FieldRef::Path(FieldPath::from_fields(["id"])),
+            Value::I64(7),
+            Some(relation),
+        )))
+        .unwrap();
+
+        assert_eq!(rows.len(), 1);
+        assert_eq!(source.filtered_calls.load(AtomicOrdering::Relaxed), 1);
     }
 
     #[test]
@@ -3536,6 +3655,49 @@ mod tests {
             )
             .unwrap();
             assert_eq!(residual, hash, "join type {join_type:?}");
+        }
+    }
+
+    #[test]
+    fn hash_join_residual_controls_outer_join_match_tracking() {
+        let join = |join_type| PhysicalJoinPlan {
+            left: Box::new(PhysicalPlan::Values { values: Vec::new() }),
+            right: Box::new(PhysicalPlan::Values { values: Vec::new() }),
+            join_type,
+            algorithm: PhysicalJoinAlgorithm::Hash,
+            condition: PhysicalJoinCondition::Eq {
+                left: PhysicalJoinKey {
+                    field: FieldRef::Path(FieldPath::from_fields(["id"])),
+                    source_path: FieldPath::from_fields(["id"]),
+                },
+                right: PhysicalJoinKey {
+                    field: FieldRef::Path(FieldPath::from_fields(["id"])),
+                    source_path: FieldPath::from_fields(["id"]),
+                },
+                residual_predicate: Some(Expr::Binary {
+                    op: semantic_data::query::BinaryOp::Eq,
+                    left: Box::new(Expr::Operand(Operand::Field(FieldPath::from_fields([
+                        "r", "active",
+                    ])))),
+                    right: Box::new(Expr::Operand(Operand::Literal(Value::Bool(true)))),
+                }),
+            },
+            index_probe: None,
+            left_binding: "l".to_string(),
+            right_binding: "r".to_string(),
+        };
+        for (join_type, expected_rows) in [
+            (JoinType::Inner, 0),
+            (JoinType::Left, 1),
+            (JoinType::Right, 1),
+            (JoinType::Full, 2),
+        ] {
+            let left = vec![Box::new(obj_i64("id", 1)) as DynObject];
+            let mut right_row = obj_i64("id", 1);
+            right_row.insert("active", Value::Bool(false));
+            let right = vec![Box::new(right_row) as DynObject];
+            let rows = execute_hash_join(&join(join_type), left, right).unwrap();
+            assert_eq!(rows.len(), expected_rows, "{join_type:?}");
         }
     }
 
