@@ -1,4 +1,4 @@
-use std::collections::BTreeMap;
+use std::{collections::BTreeMap, rc::Rc};
 
 use semantic_data::schema::{AttributeType, ClassType};
 use semantic_db_core::catalog::{CatalogStorageSnapshot, StoredCollection};
@@ -20,6 +20,11 @@ pub struct UiCatalogConfig {
 
 #[derive(Clone)]
 pub struct UiCatalog {
+    inner: Rc<UiCatalogInner>,
+}
+
+#[derive(Clone)]
+struct UiCatalogInner {
     snapshot: CatalogStorageSnapshot,
     attributes_by_id: BTreeMap<String, AttributeType>,
     attributes_by_name: BTreeMap<String, AttributeType>,
@@ -46,106 +51,108 @@ impl UiCatalog {
     }
 
     pub fn snapshot(&self) -> &CatalogStorageSnapshot {
-        &self.snapshot
+        &self.inner.snapshot
     }
 
     pub fn render_registry(&self) -> &RenderRegistry {
-        &self.render_registry
+        &self.inner.render_registry
     }
 
     pub fn render_registry_mut(&mut self) -> &mut RenderRegistry {
-        &mut self.render_registry
+        &mut Rc::make_mut(&mut self.inner).render_registry
     }
 
     pub fn render_settings(&self) -> &RenderSettings {
-        &self.render_settings
+        &self.inner.render_settings
     }
 
     pub fn render_settings_mut(&mut self) -> &mut RenderSettings {
-        &mut self.render_settings
+        &mut Rc::make_mut(&mut self.inner).render_settings
     }
 
     pub fn form_registry(&self) -> &UiFormRegistry {
-        &self.form_registry
+        &self.inner.form_registry
     }
 
     pub fn form_registry_mut(&mut self) -> &mut UiFormRegistry {
-        &mut self.form_registry
+        &mut Rc::make_mut(&mut self.inner).form_registry
     }
 
     pub fn media_renderers(&self) -> &[MediaRendererRegistration] {
-        &self.media_renderers
+        &self.inner.media_renderers
     }
 
     pub fn media_playback_renderers(&self) -> &[MediaPlaybackRendererRegistration] {
-        &self.media_playback_renderers
+        &self.inner.media_playback_renderers
     }
 
     pub fn menu_sections(&self) -> &[MenuSection] {
-        &self.menu_sections
+        &self.inner.menu_sections
     }
 
     pub fn entity_navigation(&self) -> &EntityNavigation {
-        &self.entity_navigation
+        &self.inner.entity_navigation
     }
 
     pub fn entity_navigation_mut(&mut self) -> &mut EntityNavigation {
-        &mut self.entity_navigation
+        &mut Rc::make_mut(&mut self.inner).entity_navigation
     }
 
     pub fn entity_actions(&self) -> &[EntityActionRegistration] {
-        &self.entity_actions
+        &self.inner.entity_actions
     }
 
     pub(crate) fn entity_actions_mut(&mut self) -> &mut Vec<EntityActionRegistration> {
-        &mut self.entity_actions
+        &mut Rc::make_mut(&mut self.inner).entity_actions
     }
 
     pub fn set_entity_href_builder(&mut self, builder: EntityHrefBuilder) {
-        self.entity_navigation.href = Some(builder);
+        self.entity_navigation_mut().href = Some(builder);
     }
 
     pub fn set_entity_open_handler(&mut self, handler: EntityOpenHandler) {
-        self.entity_navigation.open = Some(handler);
+        self.entity_navigation_mut().open = Some(handler);
     }
 
     pub fn set_entity_link_renderer(&mut self, renderer: EntityLinkRenderer) {
-        self.entity_navigation.link_renderer = Some(renderer);
+        self.entity_navigation_mut().link_renderer = Some(renderer);
     }
 
     pub fn register_media_renderer(&mut self, renderer: MediaRendererRegistration) {
-        self.media_renderers.push(renderer);
+        Rc::make_mut(&mut self.inner).media_renderers.push(renderer);
     }
 
     pub fn register_media_playback_renderer(
         &mut self,
         renderer: MediaPlaybackRendererRegistration,
     ) {
-        self.media_playback_renderers.push(renderer);
+        Rc::make_mut(&mut self.inner)
+            .media_playback_renderers
+            .push(renderer);
     }
 
     pub fn register_menu_section(&mut self, section: MenuSection) {
-        self.menu_sections.push(section);
+        Rc::make_mut(&mut self.inner).menu_sections.push(section);
     }
 
     pub(crate) fn attributes_by_id(&self) -> &BTreeMap<String, AttributeType> {
-        &self.attributes_by_id
+        &self.inner.attributes_by_id
     }
 
     pub(crate) fn attributes_by_name(&self) -> &BTreeMap<String, AttributeType> {
-        &self.attributes_by_name
+        &self.inner.attributes_by_name
     }
 
     pub(crate) fn classes_by_id(&self) -> &BTreeMap<String, ClassType> {
-        &self.classes_by_id
+        &self.inner.classes_by_id
     }
 
     pub(crate) fn classes_by_name(&self) -> &BTreeMap<String, ClassType> {
-        &self.classes_by_name
+        &self.inner.classes_by_name
     }
 
     pub(crate) fn collections_by_name(&self) -> &BTreeMap<String, StoredCollection> {
-        &self.collections_by_name
+        &self.inner.collections_by_name
     }
 }
 
@@ -183,20 +190,22 @@ impl UiCatalogBuilder {
             .collect();
         Self {
             catalog: UiCatalog {
-                snapshot,
-                attributes_by_id,
-                attributes_by_name,
-                classes_by_id,
-                classes_by_name,
-                collections_by_name,
-                render_registry: RenderRegistry::default(),
-                render_settings: RenderSettings::default(),
-                form_registry: UiFormRegistry::default(),
-                media_renderers: Vec::new(),
-                media_playback_renderers: Vec::new(),
-                menu_sections: Vec::new(),
-                entity_navigation: EntityNavigation::default(),
-                entity_actions: Vec::new(),
+                inner: Rc::new(UiCatalogInner {
+                    snapshot,
+                    attributes_by_id,
+                    attributes_by_name,
+                    classes_by_id,
+                    classes_by_name,
+                    collections_by_name,
+                    render_registry: RenderRegistry::default(),
+                    render_settings: RenderSettings::default(),
+                    form_registry: UiFormRegistry::default(),
+                    media_renderers: Vec::new(),
+                    media_playback_renderers: Vec::new(),
+                    menu_sections: Vec::new(),
+                    entity_navigation: EntityNavigation::default(),
+                    entity_actions: Vec::new(),
+                }),
             },
             config: UiCatalogConfig {
                 register_default_renderers: true,
@@ -218,5 +227,44 @@ impl UiCatalogBuilder {
             register_default_form_renderers(&mut self.catalog);
         }
         self.catalog
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::rc::Rc;
+
+    use semantic_db_core::catalog::CatalogStorageSnapshot;
+
+    use super::UiCatalog;
+
+    #[test]
+    fn clones_share_storage_until_mutated() {
+        let catalog = UiCatalog::from_snapshot(empty_snapshot());
+        let mut configured = catalog.clone();
+
+        assert!(Rc::ptr_eq(&catalog.inner, &configured.inner));
+
+        configured.render_settings_mut().show_media = false;
+
+        assert!(!Rc::ptr_eq(&catalog.inner, &configured.inner));
+        assert!(catalog.render_settings().show_media);
+        assert!(!configured.render_settings().show_media);
+    }
+
+    fn empty_snapshot() -> CatalogStorageSnapshot {
+        CatalogStorageSnapshot {
+            attributes: Vec::new(),
+            type_defs: Vec::new(),
+            record_types: Vec::new(),
+            classes: Vec::new(),
+            collections: Vec::new(),
+            indexes: Vec::new(),
+            relationships: Vec::new(),
+            packages: Vec::new(),
+            applied_migrations: Vec::new(),
+            next_field_id: 0,
+            auto_index_enabled: false,
+        }
     }
 }

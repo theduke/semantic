@@ -47,7 +47,6 @@ pub struct PlayerState {
     pub cycle: bool,
     pub image_interval: Option<Duration>,
     pub image_remaining: Option<Duration>,
-    pub progress: PlaybackProgress,
     pub playlist_open: bool,
     pub filter_open: bool,
     pub entity_dialog_open: bool,
@@ -72,7 +71,6 @@ impl Default for PlayerState {
             cycle: false,
             image_interval: Some(Duration::from_secs(5)),
             image_remaining: None,
-            progress: PlaybackProgress::default(),
             playlist_open: true,
             filter_open: false,
             entity_dialog_open: false,
@@ -120,6 +118,69 @@ impl PlayerState {
         }
         self.active_index = Some(index);
         self.switch_session();
+    }
+
+    pub fn retry_current(&mut self) {
+        if self.active_index.is_some() {
+            self.switch_session();
+        }
+    }
+
+    pub fn remove(&mut self, index: usize) {
+        if index >= self.queue.len() {
+            return;
+        }
+        let active_occurrence = self.active_entry().map(|entry| entry.occurrence_id);
+        let mut queue = self.queue.as_ref().clone();
+        let removed = queue.remove(index);
+        self.queue = Rc::new(queue);
+        let mut failed = self.failed_occurrences.as_ref().clone();
+        failed.remove(&removed.occurrence_id);
+        self.failed_occurrences = Rc::new(failed);
+
+        self.active_index = active_occurrence.and_then(|occurrence| {
+            self.queue
+                .iter()
+                .position(|entry| entry.occurrence_id == occurrence)
+                .or_else(|| (!self.queue.is_empty()).then_some(index.min(self.queue.len() - 1)))
+        });
+        if active_occurrence == Some(removed.occurrence_id) {
+            self.switch_session();
+        }
+    }
+
+    pub fn clear(&mut self) {
+        if self.queue.is_empty() {
+            return;
+        }
+        self.queue_generation = self.queue_generation.wrapping_add(1);
+        self.queue = Rc::new(Vec::new());
+        self.failed_occurrences = Rc::new(BTreeSet::new());
+        self.active_index = None;
+        self.switch_session();
+    }
+
+    pub fn move_entry(&mut self, index: usize, new_index: usize) {
+        if index >= self.queue.len() || new_index >= self.queue.len() || index == new_index {
+            return;
+        }
+        let active_occurrence = self.active_entry().map(|entry| entry.occurrence_id);
+        let mut queue = self.queue.as_ref().clone();
+        let entry = queue.remove(index);
+        queue.insert(new_index, entry);
+        self.queue = Rc::new(queue);
+        self.active_index = active_occurrence.and_then(|occurrence| {
+            self.queue
+                .iter()
+                .position(|entry| entry.occurrence_id == occurrence)
+        });
+    }
+
+    pub fn event_is_current(&self, event: &MediaPlaybackEvent) -> bool {
+        event.session_id == self.playback_session
+            && self
+                .active_entry()
+                .is_some_and(|entry| entry.occurrence_id == event.occurrence_id)
     }
 
     pub fn next(&mut self) {
@@ -212,14 +273,9 @@ impl PlayerState {
     }
 
     pub fn apply_media_event(&mut self, event: MediaPlaybackEvent) {
-        let Some((active_occurrence, active_duration, active_kind)) =
-            self.active_entry().map(|active| {
-                (
-                    active.occurrence_id,
-                    active.known_duration_seconds,
-                    active.media_kind,
-                )
-            })
+        let Some((active_occurrence, active_kind)) = self
+            .active_entry()
+            .map(|active| (active.occurrence_id, active.media_kind))
         else {
             return;
         };
@@ -230,12 +286,13 @@ impl PlayerState {
             MediaPlaybackEventKind::Mounted => {
                 self.observed_media_state = ObservedMediaState::Loading
             }
-            MediaPlaybackEventKind::Loaded { duration_seconds } => {
+            MediaPlaybackEventKind::Loaded {
+                duration_seconds: _,
+            } => {
                 let mut failed = self.failed_occurrences.as_ref().clone();
                 failed.remove(&active_occurrence);
                 self.failed_occurrences = Rc::new(failed);
                 self.observed_media_state = ObservedMediaState::Ready;
-                self.progress.duration_seconds = duration_seconds.or(active_duration);
                 if active_kind == MediaKind::Image {
                     self.image_remaining = self.image_interval;
                 }
@@ -249,15 +306,7 @@ impl PlayerState {
                 self.observed_media_state = ObservedMediaState::Paused;
                 self.playback_intent = PlaybackIntent::Paused;
             }
-            MediaPlaybackEventKind::Progress {
-                current_seconds,
-                duration_seconds,
-            } => {
-                self.progress.current_seconds = current_seconds.max(0.0);
-                if duration_seconds.is_some() {
-                    self.progress.duration_seconds = duration_seconds;
-                }
-            }
+            MediaPlaybackEventKind::Progress { .. } => {}
             MediaPlaybackEventKind::Finished => {
                 self.consecutive_failures = 0;
                 self.next();
@@ -338,23 +387,11 @@ impl PlayerState {
         let Some(index) = self.active_index else {
             return;
         };
-        let mut queue = self.queue.as_ref().clone();
-        let removed = queue.remove(index);
-        self.queue = Rc::new(queue);
-        let mut failed = self.failed_occurrences.as_ref().clone();
-        failed.remove(&removed.occurrence_id);
-        self.failed_occurrences = Rc::new(failed);
-        self.active_index = if self.queue.is_empty() {
-            None
-        } else {
-            Some(index.min(self.queue.len() - 1))
-        };
-        self.switch_session();
+        self.remove(index);
     }
 
     fn switch_session(&mut self) {
         self.playback_session = self.playback_session.wrapping_add(1);
-        self.progress = PlaybackProgress::default();
         if self.active_index.is_none() {
             self.playback_intent = PlaybackIntent::Paused;
         }

@@ -33,7 +33,13 @@ pub fn EntityDeleteButton(
     let client = use_rpc_client();
     let scope_id = use_active_scope_id();
     let mut open = use_signal(|| false);
+    let mut pending = use_signal(|| false);
     let mut error = use_signal(|| None::<String>);
+    let confirmation_target = if target.is_default_collection() {
+        target.id.clone()
+    } else {
+        format!("{}/{}", target.collection_or_default(), target.id)
+    };
 
     rsx! {
         dxcomp::Button {
@@ -41,23 +47,56 @@ pub fn EntityDeleteButton(
             size: dxcomp::ButtonSize::IconSm,
             title: "Delete",
             aria_label: "Delete entity",
-            onclick: move |_| open.set(true),
+            disabled: pending(),
+            onclick: move |_| {
+                error.set(None);
+                open.set(true);
+            },
             Trash2 { size: "1rem" }
         }
         dxcomp::AlertDialog {
             open: open(),
-            on_open_change: move |next_open: bool| open.set(next_open),
+            on_open_change: move |next_open: bool| {
+                if !pending() {
+                    if !next_open {
+                        error.set(None);
+                    }
+                    open.set(next_open);
+                }
+            },
             dxcomp::AlertDialogTitle { "Delete Entity" }
             dxcomp::AlertDialogDescription {
-                "This permanently deletes the entity from the current scope."
+                span { "This permanently deletes the entity from the current scope." }
+                span { class: "semantic-entity-delete__target-label", "Target" }
+                code {
+                    class: "semantic-entity-delete__target",
+                    title: confirmation_target.clone(),
+                    "{confirmation_target}"
+                }
+            }
+            if let Some(error) = error.read().as_ref() {
+                p { class: "semantic-error", role: "alert", "{error}" }
             }
             dxcomp::AlertDialogActions {
-                dxcomp::AlertDialogCancel {
-                    on_click: move |_| open.set(false),
+                dxcomp::Button {
+                    variant: dxcomp::ButtonVariant::Outline,
+                    disabled: pending(),
+                    onclick: move |_| {
+                        error.set(None);
+                        open.set(false);
+                    },
                     "Cancel"
                 }
-                dxcomp::AlertDialogAction {
-                    on_click: move |_| {
+                dxcomp::Button {
+                    variant: dxcomp::ButtonVariant::Destructive,
+                    disabled: pending(),
+                    aria_busy: pending(),
+                    onclick: move |_| {
+                        if pending() {
+                            return;
+                        }
+                        pending.set(true);
+                        error.set(None);
                         let client = client.clone();
                         let scope_id = scope_id.clone();
                         let target = target.clone();
@@ -65,22 +104,24 @@ pub fn EntityDeleteButton(
                         spawn(async move {
                             match delete_entity(client, scope_id, target.clone()).await {
                                 Ok(()) => {
+                                    pending.set(false);
+                                    open.set(false);
                                     if let Some(on_deleted) = on_deleted {
                                         on_deleted.call(target);
                                     } else {
                                         reload_window();
                                     }
                                 }
-                                Err(err) => error.set(Some(err)),
+                                Err(err) => {
+                                    pending.set(false);
+                                    error.set(Some(err));
+                                }
                             }
                         });
                     },
-                    "Delete"
+                    if pending() { "Deleting…" } else { "Delete" }
                 }
             }
-        }
-        if let Some(error) = error.read().as_ref() {
-            span { class: "semantic-error", "{error}" }
         }
     }
 }

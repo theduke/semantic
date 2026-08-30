@@ -3,6 +3,6 @@ mod card;
 
 pub use actions::{EntityDeleteButton, EntityOpenButton};
 pub use card::{
-    EntityCard, EntityDisplayMode, EntityDisplayRenderer, EntityList, EntityRenderOptions,
-    EntityTableRow,
+    EntityCard, EntityDetail, EntityDetailActions, EntityDisplayMode, EntityDisplayRenderer,
+    EntityList, EntityRenderOptions, EntityTableRow, entity_title,
 };

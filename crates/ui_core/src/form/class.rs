@@ -14,9 +14,10 @@ use semantic_db_core::catalog::OBJECT_TYPE_FIELD;
 use crate::{
     ValueView,
     form::{
-        AttributeFormRenderContext, ClassFormRenderContext, SemanticFormErrors, SemanticFormMode,
-        SemanticFormSubmit, build_class_form_options, is_empty_value, render_value_form_scope,
-        value_field_spec,
+        AttributeFormRenderContext, ClassFormRenderContext, SemanticFormActionLabels,
+        SemanticFormErrors, SemanticFormMode, SemanticFormSubmit, SemanticFormSubmitFailure,
+        SemanticFormSubmitOutcome, build_class_form_options, is_empty_value,
+        render_value_form_scope, value_field_spec,
     },
     ui_catalog::{RenderMode, use_ui_catalog},
 };
@@ -34,6 +35,14 @@ pub struct ClassFormField {
 pub struct ClassFormFieldLabel {
     pub text: String,
     pub title: Option<String>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct ClassFormFieldDomIds {
+    control: String,
+    label: String,
+    help: String,
+    errors: String,
 }
 
 pub fn class_form_field_label(field: &ClassFormField) -> ClassFormFieldLabel {
@@ -56,6 +65,62 @@ pub fn class_form_field_label(field: &ClassFormField) -> ClassFormFieldLabel {
     }
 }
 
+fn class_form_field_description(field: &ClassFormField) -> Option<String> {
+    field
+        .class_attribute
+        .meta
+        .description
+        .clone()
+        .or_else(|| field.attribute.meta.description.clone())
+}
+
+fn class_form_field_dom_ids(path: &str) -> ClassFormFieldDomIds {
+    let encoded = if path.is_empty() {
+        "root".to_string()
+    } else {
+        path.as_bytes()
+            .iter()
+            .map(|byte| format!("{byte:02x}"))
+            .collect::<String>()
+    };
+    let base = format!("semantic-form-field-{encoded}");
+    ClassFormFieldDomIds {
+        control: format!("{base}-control"),
+        label: format!("{base}-label"),
+        help: format!("{base}-help"),
+        errors: format!("{base}-errors"),
+    }
+}
+
+fn class_form_field_state(field: &ClassFormField, readonly: bool) -> &'static str {
+    if field.class_attribute.computed.is_some() {
+        "Computed"
+    } else if readonly {
+        "Read only"
+    } else if field.class_attribute.required {
+        "Required"
+    } else {
+        "Optional"
+    }
+}
+
+fn field_errors(meta: &dxform::FieldMeta) -> Vec<dxform::FormError> {
+    let mut errors = meta.errors.clone();
+    errors.extend(meta.submit_errors.clone());
+    errors
+}
+
+fn described_by(ids: &ClassFormFieldDomIds, has_help: bool, has_errors: bool) -> Option<String> {
+    let mut relationships = Vec::new();
+    if has_help {
+        relationships.push(ids.help.as_str());
+    }
+    if has_errors {
+        relationships.push(ids.errors.as_str());
+    }
+    (!relationships.is_empty()).then(|| relationships.join(" "))
+}
+
 #[component]
 pub fn DynamicClassForm(
     class: ClassType,
@@ -65,9 +130,23 @@ pub fn DynamicClassForm(
     id: Option<String>,
     scope_id: Option<String>,
     submit: Option<SemanticFormSubmit>,
+    #[props(default)] action_labels: SemanticFormActionLabels,
+    #[props(default)] on_dirty_change: Option<EventHandler<bool>>,
+    #[props(default)] on_submitting_change: Option<EventHandler<bool>>,
+    #[props(default)] on_submit_success: Option<EventHandler<SemanticFormSubmitOutcome>>,
+    #[props(default)] on_submit_failure: Option<EventHandler<SemanticFormSubmitFailure>>,
 ) -> Element {
     let options = build_class_form_options(class, object, mode, collection, id, scope_id, submit);
-    rsx! { crate::form::DynamicValueForm { options } }
+    rsx! {
+        crate::form::DynamicValueForm {
+            options,
+            action_labels,
+            on_dirty_change,
+            on_submitting_change,
+            on_submit_success,
+            on_submit_failure,
+        }
+    }
 }
 
 pub fn default_class_form_renderer(ctx: ClassFormRenderContext) -> Element {
@@ -227,6 +306,8 @@ fn ClassFormFieldRow(
 ) -> Element {
     let catalog = use_ui_catalog();
     let label = class_form_field_label(&field);
+    let description = class_form_field_description(&field);
+    let field_state = class_form_field_state(&field, readonly);
     let field_for_spec = field.clone();
     let catalog_for_spec = catalog.clone();
     let field_handle = use_field(scope.clone(), move || {
@@ -238,11 +319,15 @@ fn ClassFormFieldRow(
             catalog_for_spec,
         )
     });
+    let ids = class_form_field_dom_ids(field_handle.path().as_str());
     if readonly || field.class_attribute.computed.is_some() {
         return rsx! {
             ReadonlyClassFormField {
                 field: field_handle,
                 label,
+                description,
+                field_state,
+                ids,
                 type_hint: field.attribute.ty.clone(),
             }
         };
@@ -274,16 +359,41 @@ fn ClassFormFieldRow(
             mode,
         })
     };
+    let errors = field_errors(&field_handle.meta());
+    let has_errors = !errors.is_empty();
+    let aria_describedby = described_by(&ids, description.is_some(), has_errors);
     rsx! {
         tr { class: "semantic-form__field",
             if let Some(title) = label.title.as_ref() {
-                th { scope: "row", class: "semantic-form__label", title: "{title}", "{label.text}" }
+                th {
+                    id: ids.label.clone(),
+                    scope: "row",
+                    class: "semantic-form__label",
+                    title: "{title}",
+                    span { class: "semantic-form__label-text", "{label.text}" }
+                    span { class: "semantic-form__field-state", "{field_state}" }
+                }
             } else {
-                th { scope: "row", class: "semantic-form__label", "{label.text}" }
+                th {
+                    id: ids.label.clone(),
+                    scope: "row",
+                    class: "semantic-form__label",
+                    span { class: "semantic-form__label-text", "{label.text}" }
+                    span { class: "semantic-form__field-state", "{field_state}" }
+                }
             }
-            td { class: "semantic-form__control",
+            td {
+                id: ids.control,
+                class: "semantic-form__control",
+                role: "group",
+                aria_labelledby: ids.label,
+                aria_describedby,
+                aria_invalid: has_errors,
                 {body}
-                SemanticFormErrors { errors: field_handle.meta().errors }
+                if let Some(description) = description {
+                    p { id: ids.help, class: "semantic-form__help", "{description}" }
+                }
+                SemanticFormErrors { id: ids.errors, errors }
             }
         }
     }
@@ -379,17 +489,33 @@ fn ExtraClassFormFieldRow(
         )
     });
     let field_scope = field.scope();
+    let ids = class_form_field_dom_ids(field.path().as_str());
+    let errors = field_errors(&field.meta());
+    let has_errors = !errors.is_empty();
+    let aria_describedby = described_by(&ids, false, has_errors);
     rsx! {
         tr { class: "semantic-form__field semantic-form__field--extra",
-            th { scope: "row", class: "semantic-form__label", "{field_name}" }
-            td { class: "semantic-form__control",
+            th {
+                id: ids.label.clone(),
+                scope: "row",
+                class: "semantic-form__label",
+                span { class: "semantic-form__label-text", "{field_name}" }
+                span { class: "semantic-form__field-state", "Unregistered" }
+            }
+            td {
+                id: ids.control,
+                class: "semantic-form__control",
+                role: "group",
+                aria_labelledby: ids.label,
+                aria_describedby,
+                aria_invalid: has_errors,
                 {render_value_form_scope(crate::form::ValueFormRenderContext {
                     path: field.path(),
                     scope: field_scope,
                     value_type: None,
                     mode,
                 })}
-                SemanticFormErrors { errors: field.meta().errors }
+                SemanticFormErrors { id: ids.errors, errors }
             }
         }
     }
@@ -399,22 +525,99 @@ fn ExtraClassFormFieldRow(
 fn ReadonlyClassFormField(
     field: dxform::FieldHandle<Value, Value>,
     label: ClassFormFieldLabel,
+    description: Option<String>,
+    field_state: &'static str,
+    ids: ClassFormFieldDomIds,
     type_hint: semantic_data::schema::Type,
 ) -> Element {
+    let errors = field_errors(&field.meta());
+    let has_errors = !errors.is_empty();
+    let aria_describedby = described_by(&ids, description.is_some(), has_errors);
     rsx! {
         tr { class: "semantic-form__field semantic-form__field--readonly",
             if let Some(title) = label.title.as_ref() {
-                th { scope: "row", class: "semantic-form__label", title: "{title}", "{label.text}" }
+                th {
+                    id: ids.label.clone(),
+                    scope: "row",
+                    class: "semantic-form__label",
+                    title: "{title}",
+                    span { class: "semantic-form__label-text", "{label.text}" }
+                    span { class: "semantic-form__field-state", "{field_state}" }
+                }
             } else {
-                th { scope: "row", class: "semantic-form__label", "{label.text}" }
+                th {
+                    id: ids.label.clone(),
+                    scope: "row",
+                    class: "semantic-form__label",
+                    span { class: "semantic-form__label-text", "{label.text}" }
+                    span { class: "semantic-form__field-state", "{field_state}" }
+                }
             }
-            td { class: "semantic-form__control",
+            td {
+                id: ids.control,
+                class: "semantic-form__control",
+                role: "group",
+                aria_labelledby: ids.label,
+                aria_describedby,
+                aria_invalid: has_errors,
                 ValueView {
                     value: field.value(),
                     type_hint: Some(type_hint),
                     mode: RenderMode::Detail
                 }
+                if let Some(description) = description {
+                    p { id: ids.help, class: "semantic-form__help", "{description}" }
+                }
+                SemanticFormErrors { id: ids.errors, errors }
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn field_dom_ids_are_stable_and_do_not_collapse_punctuation() {
+        let colon = class_form_field_dom_ids("semantic:title");
+        let dash = class_form_field_dom_ids("semantic-title");
+
+        assert_eq!(
+            colon.label,
+            "semantic-form-field-73656d616e7469633a7469746c65-label"
+        );
+        assert_ne!(colon, dash);
+        assert_eq!(
+            described_by(&colon, true, true),
+            Some(format!("{} {}", colon.help, colon.errors))
+        );
+        assert_eq!(described_by(&colon, false, false), None);
+    }
+
+    #[test]
+    fn field_shell_state_distinguishes_required_optional_and_readonly() {
+        let mut field = synthetic_id_form_field(ATTR_ID.to_string());
+        assert_eq!(class_form_field_state(&field, false), "Required");
+
+        field.class_attribute.required = false;
+        assert_eq!(class_form_field_state(&field, false), "Optional");
+        assert_eq!(class_form_field_state(&field, true), "Read only");
+    }
+
+    #[test]
+    fn class_specific_description_overrides_attribute_help() {
+        let mut field = synthetic_id_form_field(ATTR_ID.to_string());
+        field.attribute.meta.description = Some("Attribute help".to_string());
+        assert_eq!(
+            class_form_field_description(&field).as_deref(),
+            Some("Attribute help")
+        );
+
+        field.class_attribute.meta.description = Some("Class help".to_string());
+        assert_eq!(
+            class_form_field_description(&field).as_deref(),
+            Some("Class help")
+        );
     }
 }

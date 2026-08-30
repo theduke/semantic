@@ -1,3 +1,5 @@
+use std::rc::Rc;
+
 use dioxus::prelude::*;
 use semantic_data::schema::ClassType;
 use semantic_data::value::{Object, Value};
@@ -95,35 +97,115 @@ pub fn EntityCard(
                 }
                 dxcomp::CardContent {
                     div { class: "semantic-entity-card__body",
-                        match (options.renderer, render_class.clone()) {
-                            (EntityDisplayRenderer::Custom, Some(class)) => rsx! {
-                                ClassView {
-                                    class,
-                                    object: object.clone(),
-                                    collection: options.collection.clone(),
-                                    id: id.clone(),
-                                    mode
-                                }
-                            },
-                            (EntityDisplayRenderer::Table, Some(class)) => rsx! {
-                                ClassView {
-                                    class,
-                                    object: object.clone(),
-                                    collection: options.collection.clone(),
-                                    id: id.clone(),
-                                    mode: RenderMode::Detail
-                                }
-                            },
-                            _ => rsx! {
-                                EntityPreviewBody {
-                                    object: object.clone(),
-                                }
-                            },
+                        EntityRenderBody {
+                            object: Rc::new(object.clone()),
+                            class: render_class,
+                            collection: options.collection.clone(),
+                            id: id.clone(),
+                            renderer: options.renderer,
+                            mode,
                         }
                     }
                 }
             }
         }
+    }
+}
+
+/// Full entity renderer without list-card identity chrome.
+///
+/// Detail pages and embedded detail dialogs can share this renderer while
+/// retaining registered renderer and action behavior. The object is reference
+/// counted so page state can retain it during refreshes without cloning the
+/// complete value tree.
+#[component]
+pub fn EntityDetail(
+    target: EntityTarget,
+    object: Rc<Object>,
+    #[props(default = EntityDisplayRenderer::Custom)] renderer: EntityDisplayRenderer,
+    #[props(default = true)] actions: bool,
+    #[props(default)] on_delete: Option<EventHandler<EntityTarget>>,
+) -> Element {
+    let catalog = use_ui_catalog();
+    let class = catalog.object_class(object.as_ref()).cloned();
+
+    rsx! {
+        article { class: "semantic-entity-detail",
+            if actions {
+                div { class: "semantic-entity-detail__actions",
+                    EntityDetailActions {
+                        target: target.clone(),
+                        object: object.clone(),
+                        on_delete,
+                    }
+                }
+            }
+            div { class: "semantic-entity-detail__body",
+                EntityRenderBody {
+                    object,
+                    class,
+                    collection: target.collection.clone(),
+                    id: Some(target.id.clone()),
+                    renderer,
+                    mode: RenderMode::Detail,
+                }
+            }
+        }
+    }
+}
+
+/// Registered actions intended for a full entity detail context.
+#[component]
+pub fn EntityDetailActions(
+    target: EntityTarget,
+    object: Rc<Object>,
+    #[props(default)] on_delete: Option<EventHandler<EntityTarget>>,
+    #[props(default)] excluded_action_ids: Vec<String>,
+) -> Element {
+    rsx! {
+        EntityActions {
+            target,
+            object: object.as_ref().clone(),
+            on_delete,
+            placement: EntityActionPlacement::Detail,
+            excluded_action_ids,
+        }
+    }
+}
+
+#[component]
+fn EntityRenderBody(
+    object: Rc<Object>,
+    class: Option<ClassType>,
+    collection: Option<String>,
+    id: Option<String>,
+    renderer: EntityDisplayRenderer,
+    mode: RenderMode,
+) -> Element {
+    match (renderer, class) {
+        (EntityDisplayRenderer::Custom, Some(class)) => rsx! {
+            ClassView {
+                class,
+                object: object.as_ref().clone(),
+                collection,
+                id,
+                mode,
+            }
+        },
+        (EntityDisplayRenderer::Table, Some(class)) => rsx! {
+            ClassView {
+                class,
+                object: object.as_ref().clone(),
+                collection,
+                id,
+                mode: RenderMode::Detail,
+            }
+        },
+        _ => rsx! {
+            EntityPreviewBody {
+                object: object.as_ref().clone(),
+            }
+        },
     }
 }
 
@@ -246,6 +328,7 @@ fn EntityActions(
     object: Object,
     on_delete: Option<EventHandler<EntityTarget>>,
     placement: EntityActionPlacement,
+    #[props(default)] excluded_action_ids: Vec<String>,
 ) -> Element {
     let catalog = use_ui_catalog();
     let class = catalog.object_class(&object).cloned();
@@ -257,6 +340,7 @@ fn EntityActions(
         on_delete,
     };
     let mut actions = catalog.entity_actions_for(&ctx);
+    actions.retain(|action| !excluded_action_ids.contains(&action.id));
     actions.sort_by_key(|action| entity_action_order(&action.id));
     rsx! {
         dxcomp::Toolbar {
@@ -326,8 +410,16 @@ fn object_id(object: &Object) -> Option<String> {
     object.get("id").and_then(Value::as_str).map(str::to_string)
 }
 
-fn entity_title(object: &Object, id: Option<&str>, class_name: Option<&str>) -> String {
-    for field in ["title", "name", "semantic:title"] {
+pub fn entity_title(object: &Object, id: Option<&str>, class_name: Option<&str>) -> String {
+    for field in [
+        "semantic:title",
+        "title",
+        "name",
+        "display_name",
+        "semantic:base:person:display_name",
+        "semantic:base:file:filename",
+        "filename",
+    ] {
         if let Some(title) = object.get(field).and_then(Value::as_str)
             && !title.trim().is_empty()
         {
@@ -355,5 +447,29 @@ fn value_preview(value: &Value) -> String {
         Value::F32(value) => value.to_string(),
         Value::F64(value) => value.to_string(),
         other => format!("{other:?}"),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use semantic_data::value::{Object, Value};
+
+    use super::entity_title;
+
+    #[test]
+    fn entity_title_prefers_semantic_identity_fields_and_falls_back_to_id() {
+        let mut object = Object::new();
+        object.insert("filename", Value::String("photo.jpg".to_string()));
+        assert_eq!(entity_title(&object, Some("file-1"), None), "photo.jpg");
+
+        object.insert("name", Value::String("Summer photo".to_string()));
+        assert_eq!(entity_title(&object, Some("file-1"), None), "Summer photo");
+
+        object.insert("semantic:title", Value::String("Featured".to_string()));
+        assert_eq!(entity_title(&object, Some("file-1"), None), "Featured");
+        assert_eq!(
+            entity_title(&Object::new(), Some("entity-1"), None),
+            "entity-1"
+        );
     }
 }

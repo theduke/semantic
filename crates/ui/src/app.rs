@@ -4,6 +4,7 @@ use dioxus::prelude::*;
 use dioxus_icons::lucide::Pencil;
 use semantic_data::value::Value;
 use semantic_rpc::RpcClient;
+use semantic_ui_core::components::ToastProvider;
 use semantic_ui_core::{
     EntityActionContext, EntityActionPlacement, EntityActionRegistration, EntityTarget,
     RenderSettings, UiCatalog, UiCatalogProvider, ValueRenderContext, provide_rpc_client,
@@ -106,7 +107,9 @@ pub fn AppRoot(props: AppRootProps) -> Element {
         UiCatalogProvider {
             render_settings,
             configure_catalog: configure_ui_catalog,
-            Router::<Route> {}
+            ToastProvider {
+                Router::<Route> {}
+            }
         }
     }
 }
@@ -127,49 +130,45 @@ fn entity_href(target: &EntityTarget) -> Option<String> {
     if target.id.is_empty() {
         return None;
     }
-    if target.is_default_collection() {
-        Some(format!("/entities/{}", target.id))
-    } else {
-        Some(format!(
-            "/collections/{}/{}",
-            target.collection_or_default(),
-            target.id
-        ))
+    Some(entity_route(target).to_string())
+}
+
+pub(crate) fn entity_route(target: &EntityTarget) -> Route {
+    match &target.collection {
+        Some(collection) => Route::CollectionEntityPage {
+            collection: collection.clone(),
+            id: target.id.clone(),
+        },
+        None => Route::DefaultEntityPage {
+            id: target.id.clone(),
+        },
+    }
+}
+
+pub(crate) fn entity_edit_route(target: &EntityTarget) -> Route {
+    match &target.collection {
+        Some(collection) => Route::CollectionEditEntityPage {
+            collection: collection.clone(),
+            id: target.id.clone(),
+        },
+        None => Route::DefaultEditEntityPage {
+            id: target.id.clone(),
+        },
     }
 }
 
 fn entity_link(target: EntityTarget, content: Element) -> Element {
-    if target.is_default_collection() {
-        rsx! {
-            Link {
-                to: Route::DefaultEntityPage { id: target.id },
-                class: "semantic-ref semantic-ref--link",
-                {content}
-            }
-        }
-    } else {
-        rsx! {
-            Link {
-                to: Route::CollectionEntityPage {
-                    collection: target.collection_or_default().to_string(),
-                    id: target.id
-                },
-                class: "semantic-ref semantic-ref--link",
-                {content}
-            }
+    rsx! {
+        Link {
+            to: entity_route(&target),
+            class: "semantic-ref semantic-ref--link",
+            {content}
         }
     }
 }
 
 fn entity_open(target: EntityTarget) {
-    if target.is_default_collection() {
-        navigator().push(Route::DefaultEntityPage { id: target.id });
-    } else {
-        navigator().push(Route::CollectionEntityPage {
-            collection: target.collection_or_default().to_string(),
-            id: target.id,
-        });
-    }
+    navigator().push(entity_route(&target));
 }
 
 fn register_entity_actions(catalog: &mut UiCatalog) {
@@ -189,32 +188,15 @@ fn register_entity_actions(catalog: &mut UiCatalog) {
 }
 
 fn entity_edit_link(target: EntityTarget) -> Element {
-    if target.is_default_collection() {
-        rsx! {
-            Link {
-                to: Route::DefaultEditEntityPage { id: target.id },
-                class: "dx-button semantic-entity-action",
-                "data-style": "outline",
-                "data-size": "icon-sm",
-                title: "Edit",
-                aria_label: "Edit entity",
-                Pencil { size: "1rem" }
-            }
-        }
-    } else {
-        rsx! {
-            Link {
-                to: Route::CollectionEditEntityPage {
-                    collection: target.collection_or_default().to_string(),
-                    id: target.id
-                },
-                class: "dx-button semantic-entity-action",
-                "data-style": "outline",
-                "data-size": "icon-sm",
-                title: "Edit",
-                aria_label: "Edit entity",
-                Pencil { size: "1rem" }
-            }
+    rsx! {
+        Link {
+            to: entity_edit_route(&target),
+            class: "dx-button semantic-entity-action",
+            "data-style": "outline",
+            "data-size": "icon-sm",
+            title: "Edit",
+            aria_label: "Edit entity",
+            Pencil { size: "1rem" }
         }
     }
 }
@@ -255,17 +237,48 @@ mod tests {
             entity_href(&EntityTarget::default_collection("id-1")).as_deref(),
             Some("/entities/id-1")
         );
+        let explicit_default = Route::CollectionEntityPage {
+            collection: DEFAULT_COLLECTION.to_string(),
+            id: "id-1".to_string(),
+        };
         assert_eq!(
             entity_href(&EntityTarget::new(
                 Some(DEFAULT_COLLECTION.to_string()),
                 "id-1"
-            ))
-            .as_deref(),
-            Some("/entities/id-1")
+            )),
+            Some(explicit_default.to_string())
         );
         assert_eq!(
             entity_href(&EntityTarget::new(Some("custom".to_string()), "id-1")).as_deref(),
             Some("/collections/custom/id-1")
+        );
+        assert_eq!(entity_href(&EntityTarget::default_collection("")), None);
+    }
+
+    #[test]
+    fn named_entity_routes_encode_and_round_trip_supported_path_characters() {
+        let target = EntityTarget::new(
+            Some("Photo sets?#{}".to_string()),
+            "résumé #1?{}".to_string(),
+        );
+        let detail_route = entity_route(&target);
+        let href = entity_href(&target).expect("non-empty entity ID has an href");
+
+        assert_eq!(href, detail_route.to_string());
+        assert!(!href.contains(' '));
+        assert!(href.contains("%3F"));
+        assert!(href.contains("%23"));
+        assert!(href.contains("%7B"));
+        assert_eq!(
+            href.parse::<Route>().expect("detail route parses"),
+            detail_route
+        );
+
+        let edit_route = entity_edit_route(&target);
+        let edit_href = edit_route.to_string();
+        assert_eq!(
+            edit_href.parse::<Route>().expect("edit route parses"),
+            edit_route
         );
     }
 }

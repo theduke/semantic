@@ -44,11 +44,12 @@ pub fn FileTreePicker(props: FileTreePickerProps) -> Element {
     let mut filter = use_signal(String::new);
     let expanded = use_signal(BTreeSet::<String>::new);
     let show_files = props.show_files;
-    let rows = use_resource(move || {
-        let client = client.clone();
-        let scope_id = scope_id.clone();
-        async move { load_file_tree_rows(client, scope_id, show_files).await }
-    });
+    let rows = use_resource(use_reactive(
+        (&client, &scope_id, &show_files),
+        move |(client, scope_id, show_files)| async move {
+            load_file_tree_rows(client, scope_id, show_files).await
+        },
+    ));
     let rows = rows.read().clone();
 
     rsx! {
@@ -63,7 +64,7 @@ pub fn FileTreePicker(props: FileTreePickerProps) -> Element {
                     oninput: move |event| filter.set(event.value()),
                 }
             }
-            div { class: "semantic-directory-picker__tree",
+            div { id: "semantic-directory-picker-tree", class: "semantic-directory-picker__tree", role: "tree", aria_label: "Files and directories",
                 match rows {
                     None => rsx! { div { class: "semantic-loading", "Loading tree..." } },
                     Some(Err(error)) => rsx! { div { class: "semantic-error", "{error}" } },
@@ -126,11 +127,17 @@ fn DirectoryPickerRow(
         div {
             class: "semantic-directory-picker__row",
             "data-selected": selected,
+            role: "treeitem",
+            aria_selected: selected,
+            aria_expanded: if has_children { Some(is_expanded) } else { None },
             style: "--semantic-directory-depth: {padding}px",
             button {
                 class: "semantic-directory-picker__expander",
                 r#type: "button",
                 title: if is_expanded { "Collapse directory" } else { "Expand directory" },
+                aria_label: if is_expanded { "Collapse directory" } else { "Expand directory" },
+                aria_expanded: is_expanded,
+                aria_controls: "semantic-directory-picker-tree",
                 disabled: disabled || filtering || !has_children || row.cycle,
                 onclick: {
                     let id = row.item.id.clone();

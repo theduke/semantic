@@ -37,7 +37,10 @@ pub use submit::{
 };
 pub use textarea::AutoExpandingTextarea;
 pub(crate) use util::mode_from_render_mode;
-pub use util::{DynamicFormActions, DynamicValueForm, SemanticFormErrors, render_value_form_scope};
+pub use util::{
+    DynamicFormActions, DynamicValueForm, SemanticFormActionLabels, SemanticFormErrors,
+    SemanticFormSubmitFailure, SemanticFormSubmitOutcome, render_value_form_scope,
+};
 pub use validation::{
     is_empty_value, validate_value_against_type, validate_value_constraints,
     validators_for_attribute,

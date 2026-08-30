@@ -8,19 +8,17 @@ mod query;
 mod stage;
 mod state;
 
-use std::time::Duration;
-
 use browser_bridge::{PlayerShortcut, toggle_fullscreen, use_player_browser_bridge};
 use controller::PlayerController;
 use data::{get_object, load_playlist};
 use dioxus::prelude::*;
 use entity_dialog::PlayerEntityDialog;
 use filters::PlayerFilters;
-use playlist::{PlayerPlaylist, PlaylistResizeHandle, scroll_to_index};
+use playlist::{PlayerPlaylist, PlaylistResizeHandle};
 use query::PlaylistFilter;
 use semantic_ui_core::{MediaHandleRegistration, MediaKind, use_active_scope_id, use_rpc_client};
 use stage::PlayerStage;
-use state::{ObservedMediaState, PlaybackIntent, PlayerState};
+use state::{ObservedMediaState, PlaybackIntent, PlaybackProgress, PlayerState};
 
 use self::controls::PlayerControls;
 mod controls;
@@ -30,18 +28,26 @@ pub fn PlayPage() -> Element {
     let client = use_rpc_client();
     let scope_id = use_active_scope_id();
     let mut state = use_signal(PlayerState::default);
+    let progress = use_signal(PlaybackProgress::default);
     let handle = use_signal(|| None::<MediaHandleRegistration>);
-    let controller = PlayerController { state, handle };
+    let controller = PlayerController {
+        state,
+        progress,
+        handle,
+    };
     let mut draft = use_signal(PlaylistFilter::default);
-    let mut loading = use_signal(|| false);
+    let mut loading = use_signal(|| true);
+    let mut playlist_loaded = use_signal(|| false);
+    let mut initial_retry_revision = use_signal(|| 0_u64);
     let mut filter_error = use_signal(|| None::<String>);
     let mut queue_warning = use_signal(|| None::<String>);
     let mut request_generation = use_signal(|| 0_u64);
     let mut follow_active = use_signal(|| true);
 
     use_future(move || async move {
-        let eval =
-            document::eval(r#"return localStorage.getItem('semantic:player:playlist-open:v1');"#);
+        let eval = document::eval(
+            r#"return localStorage.getItem('semantic:player:playlist-open:v2') ?? localStorage.getItem('semantic:player:playlist-open:v1');"#,
+        );
         if let Ok(value) = eval.await {
             if let Some(open) = value.as_str().map(|value| value != "false") {
                 state.write().playlist_open = open;
@@ -49,20 +55,25 @@ pub fn PlayPage() -> Element {
         }
     });
 
+    let initial_load_key = use_memo(use_reactive(
+        &(scope_id.clone(), *initial_retry_revision.read()),
+        |key| key,
+    ));
     use_future({
         let client = client.clone();
-        let scope_id = scope_id.clone();
         move || {
             let client = client.clone();
-            let scope_id = scope_id.clone();
+            let (scope_id, _retry_revision) = initial_load_key();
             async move {
                 loading.set(true);
+                filter_error.set(None);
                 request_generation += 1;
                 let generation = *request_generation.read();
                 match load_playlist(client, scope_id, PlaylistFilter::default()).await {
                     Ok(result) if generation == *request_generation.read() => {
                         controller.replace(result.entries);
                         queue_warning.set(result.warning);
+                        playlist_loaded.set(true);
                     }
                     Err(error) if generation == *request_generation.read() => {
                         filter_error.set(Some(error))
@@ -76,10 +87,12 @@ pub fn PlayPage() -> Element {
         }
     });
 
+    let active_scope = use_memo(use_reactive(&scope_id, |scope_id| scope_id));
     let active_request = use_memo(move || {
         let state = state.read();
         state.active_entry().map(|entry| {
             (
+                active_scope(),
                 state.queue_generation,
                 state.playback_session,
                 entry.target.clone(),
@@ -88,37 +101,42 @@ pub fn PlayPage() -> Element {
     });
     let mut active_object = use_resource({
         let client = client.clone();
-        let scope_id = scope_id.clone();
         move || {
             let client = client.clone();
-            let scope_id = scope_id.clone();
             let request = active_request();
             async move {
                 match request {
-                    Some((_, _, target)) => Some(get_object(client, scope_id, target).await),
+                    Some((scope_id, _, _, target)) => {
+                        Some(get_object(client, scope_id, target).await)
+                    }
                     None => None,
                 }
             }
         }
     });
 
-    use_future(move || async move {
-        loop {
-            dioxus_sdk_time::sleep(Duration::from_millis(100)).await;
-            let should_tick = {
-                let current = state.read();
-                current.playback_intent == PlaybackIntent::Playing
-                    && current.observed_media_state == ObservedMediaState::Ready
-                    && current
-                        .active_entry()
-                        .is_some_and(|entry| entry.media_kind == MediaKind::Image)
+    let image_deadline = use_memo(move || {
+        let current = state.read();
+        (current.playback_intent == PlaybackIntent::Playing
+            && current.observed_media_state == ObservedMediaState::Ready
+            && current
+                .active_entry()
+                .is_some_and(|entry| entry.media_kind == MediaKind::Image))
+        .then(|| {
+            current
+                .image_remaining
+                .map(|remaining| (current.playback_session, remaining))
+        })
+        .flatten()
+    });
+    let _image_timer = use_resource(move || {
+        let deadline = image_deadline();
+        async move {
+            let Some((session, remaining)) = deadline else {
+                return;
             };
-            if should_tick {
-                let session = state.read().playback_session;
-                state
-                    .write()
-                    .tick_image(Duration::from_millis(100), session);
-            }
+            dioxus_sdk_time::sleep(remaining).await;
+            state.write().tick_image(remaining, session);
         }
     });
 
@@ -154,15 +172,6 @@ pub fn PlayPage() -> Element {
         EventHandler::new(move |fullscreen| state.write().fullscreen = fullscreen),
     );
 
-    let active_index_memo = use_memo(move || state.read().active_index);
-    use_effect(move || {
-        if *follow_active.read() {
-            if let Some(index) = active_index_memo() {
-                scroll_to_index(index);
-            }
-        }
-    });
-
     let current = state.read().clone();
     let active_entry = current.active_entry().cloned();
     let active_result = active_object
@@ -173,10 +182,6 @@ pub fn PlayPage() -> Element {
         .as_ref()
         .map(|entry| entry.title.clone())
         .unwrap_or_else(|| "Nothing selected".to_string());
-    let dialog_object = active_result
-        .as_ref()
-        .and_then(|result| result.as_ref().ok())
-        .cloned();
     let dialog_target = active_entry.as_ref().map(|entry| entry.target.clone());
 
     let replace_handler = load_handler(
@@ -189,6 +194,7 @@ pub fn PlayPage() -> Element {
         queue_warning,
         request_generation,
         state,
+        playlist_loaded,
     );
     let append_handler = load_handler(
         client,
@@ -200,16 +206,18 @@ pub fn PlayPage() -> Element {
         queue_warning,
         request_generation,
         state,
+        playlist_loaded,
     );
 
     rsx! {
         section { id: "semantic-player-root", class: "semantic-player",
+            h1 { class: "semantic-visually-hidden", "Media player" }
             PlayerControls {
                 queue_len: current.queue.len(), active_index: current.active_index,
                 title: current_title.clone(), intent: current.playback_intent,
                 muted: current.muted, cycle: current.cycle, playlist_open: current.playlist_open,
                 filter_open: current.filter_open, fullscreen: current.fullscreen,
-                image_interval: current.image_interval, progress: current.progress,
+                image_interval: current.image_interval, progress,
                 on_filter: move |_| { let open = !state.read().filter_open; state.write().filter_open = open; },
                 on_playlist: move |_| {
                     let open = !state.read().playlist_open;
@@ -247,14 +255,20 @@ pub fn PlayPage() -> Element {
                         entry: active_entry.clone(), object: active_result.clone(),
                         session_id: current.playback_session, playing: current.playback_intent,
                         muted: current.muted,
+                        playlist_loading: *loading.read(), playlist_loaded: *playlist_loaded.read(),
+                        playlist_error: filter_error(),
                         on_handle: move |registration| controller.register_handle(registration),
                         on_event: move |event| controller.media_event(event),
+                        on_retry_playlist: move |_| initial_retry_revision += 1,
+                        on_edit_filter: move |_| state.write().filter_open = true,
+                        on_retry_object: move |_| active_object.restart(),
+                        on_skip: move |_| controller.next(),
                     }
                     if let Some(error) = current.transient_error.clone() {
                         div { class: "semantic-player__transient-error", role: "alert",
                             span { "{error}" }
                             dxcomp::Button { size: dxcomp::ButtonSize::Xs, variant: dxcomp::ButtonVariant::Outline,
-                                onclick: move |_| { state.write().transient_error = None; active_object.restart(); }, "Retry" }
+                                onclick: move |_| controller.retry_current(), "Retry media" }
                             dxcomp::Button { size: dxcomp::ButtonSize::Xs, variant: dxcomp::ButtonVariant::Outline,
                                 onclick: move |_| controller.next(), "Skip" }
                         }
@@ -267,6 +281,9 @@ pub fn PlayPage() -> Element {
                                 failed_occurrences: current.failed_occurrences.clone(),
                                 follow_active: *follow_active.read(),
                                 on_select: move |index| controller.select(index),
+                                on_remove: move |index| controller.remove(index),
+                                on_move: move |(index, new_index)| controller.move_entry(index, new_index),
+                                on_clear: move |_| controller.clear(),
                                 on_follow_change: move |follow| follow_active.set(follow),
                                 on_close: move |_| {
                                     state.write().playlist_open = false;
@@ -277,9 +294,10 @@ pub fn PlayPage() -> Element {
             }
             PlayerEntityDialog {
                 open: current.entity_dialog_open, title: current_title,
-                object: dialog_object, target: dialog_target,
+                object: active_result, target: dialog_target,
                 on_open_change: move |open| { if open { controller.open_dialog(); } else { controller.close_dialog(); } },
                 on_deleted: move |_| controller.remove_active(),
+                on_retry: move |_| active_object.restart(),
             }
         }
     }
@@ -296,6 +314,7 @@ fn load_handler(
     mut queue_warning: Signal<Option<String>>,
     mut request_generation: Signal<u64>,
     mut state: Signal<PlayerState>,
+    mut playlist_loaded: Signal<bool>,
 ) -> EventHandler<PlaylistFilter> {
     EventHandler::new(move |filter| {
         if *loading.read() {
@@ -316,6 +335,7 @@ fn load_handler(
                         controller.replace(result.entries);
                     }
                     queue_warning.set(result.warning);
+                    playlist_loaded.set(true);
                     state.write().filter_open = false;
                 }
                 Err(error) if generation == *request_generation.read() => {
@@ -333,9 +353,9 @@ fn load_handler(
 fn store_playlist_open(open: bool) {
     spawn(async move {
         let eval = document::eval(if open {
-            "localStorage.setItem('semantic:player:playlist-open:v1', 'true');"
+            "localStorage.setItem('semantic:player:playlist-open:v2', 'true');"
         } else {
-            "localStorage.setItem('semantic:player:playlist-open:v1', 'false');"
+            "localStorage.setItem('semantic:player:playlist-open:v2', 'false');"
         });
         let _ = eval.await;
     });

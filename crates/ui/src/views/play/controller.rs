@@ -1,11 +1,12 @@
 use dioxus::prelude::*;
-use semantic_ui_core::{MediaHandleRegistration, MediaPlaybackEvent};
+use semantic_ui_core::{MediaHandleRegistration, MediaPlaybackEvent, MediaPlaybackEventKind};
 
-use super::state::{PlaybackIntent, PlayerState, QueueEntry};
+use super::state::{PlaybackIntent, PlaybackProgress, PlayerState, QueueEntry};
 
 #[derive(Clone, Copy)]
 pub struct PlayerController {
     pub state: Signal<PlayerState>,
+    pub progress: Signal<PlaybackProgress>,
     pub handle: Signal<Option<MediaHandleRegistration>>,
 }
 
@@ -14,6 +15,7 @@ impl PlayerController {
         self.pause_current();
         self.handle.set(None);
         self.state.write().replace(entries);
+        self.progress.set(PlaybackProgress::default());
     }
 
     pub fn append(mut self, entries: Vec<QueueEntry>) {
@@ -27,6 +29,7 @@ impl PlayerController {
         self.pause_current();
         self.handle.set(None);
         self.state.write().select(index);
+        self.progress.set(PlaybackProgress::default());
     }
 
     pub fn next(mut self) {
@@ -35,6 +38,7 @@ impl PlayerController {
         self.state.write().next();
         if self.state.read().playback_session != session {
             self.handle.set(None);
+            self.progress.set(PlaybackProgress::default());
         }
     }
 
@@ -44,6 +48,7 @@ impl PlayerController {
         self.state.write().previous();
         if self.state.read().playback_session != session {
             self.handle.set(None);
+            self.progress.set(PlaybackProgress::default());
         }
     }
 
@@ -67,10 +72,11 @@ impl PlayerController {
         }
     }
 
-    pub fn seek(self, seconds: f64) {
+    pub fn seek(mut self, seconds: f64) {
         if let Some(registration) = self.valid_handle() {
             if let Some(handle) = registration.handle {
                 handle.0.seek(seconds);
+                self.progress.write().current_seconds = seconds.max(0.0);
             }
         }
     }
@@ -98,10 +104,36 @@ impl PlayerController {
     }
 
     pub fn media_event(mut self, event: MediaPlaybackEvent) {
+        if !self.state.read().event_is_current(&event) {
+            return;
+        }
+        match &event.kind {
+            MediaPlaybackEventKind::Progress {
+                current_seconds,
+                duration_seconds,
+            } => {
+                let mut progress = self.progress.write();
+                progress.current_seconds = current_seconds.max(0.0);
+                if duration_seconds.is_some() {
+                    progress.duration_seconds = *duration_seconds;
+                }
+                return;
+            }
+            MediaPlaybackEventKind::Loaded { duration_seconds } => {
+                let known_duration = self
+                    .state
+                    .read()
+                    .active_entry()
+                    .and_then(|entry| entry.known_duration_seconds);
+                self.progress.write().duration_seconds = duration_seconds.or(known_duration);
+            }
+            _ => {}
+        }
         let old_session = self.state.read().playback_session;
         self.state.write().apply_media_event(event);
         if self.state.read().playback_session != old_session {
             self.handle.set(None);
+            self.progress.set(PlaybackProgress::default());
         }
     }
 
@@ -120,6 +152,37 @@ impl PlayerController {
         self.pause_current();
         self.handle.set(None);
         self.state.write().remove_active();
+        self.progress.set(PlaybackProgress::default());
+    }
+
+    pub fn retry_current(mut self) {
+        self.pause_current();
+        self.handle.set(None);
+        self.state.write().retry_current();
+        self.progress.set(PlaybackProgress::default());
+    }
+
+    pub fn remove(mut self, index: usize) {
+        let old_session = self.state.read().playback_session;
+        if self.state.read().active_index == Some(index) {
+            self.pause_current();
+        }
+        self.state.write().remove(index);
+        if self.state.read().playback_session != old_session {
+            self.handle.set(None);
+            self.progress.set(PlaybackProgress::default());
+        }
+    }
+
+    pub fn clear(mut self) {
+        self.pause_current();
+        self.handle.set(None);
+        self.state.write().clear();
+        self.progress.set(PlaybackProgress::default());
+    }
+
+    pub fn move_entry(mut self, index: usize, new_index: usize) {
+        self.state.write().move_entry(index, new_index);
     }
 
     fn valid_handle(self) -> Option<MediaHandleRegistration> {

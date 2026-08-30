@@ -1,6 +1,12 @@
-use dioxus::html::FileData;
-use dioxus::prelude::*;
-use futures::StreamExt as _;
+use std::{cell::RefCell, collections::HashMap, rc::Rc};
+
+use dioxus::{html::FileData, prelude::*};
+use futures::{
+    StreamExt as _,
+    channel::mpsc::{UnboundedReceiver, UnboundedSender, unbounded},
+    future::{AbortHandle, Abortable},
+    lock::Mutex,
+};
 use semantic_data::builtin::DEFAULT_COLLECTION;
 use semantic_data::filestore::{ATTR_DESCRIPTION, ATTR_PARENT, ATTR_TITLE};
 use semantic_data::value::{Object, Value};
@@ -10,13 +16,40 @@ use semantic_rpc::file::{
 };
 use semantic_ui_core::{
     ClassView, EntityAutocomplete, FileTreePicker, FileTreeSelection, ObjectView, RenderMode,
-    add_items_to_directory, use_active_scope_id, use_rpc_client, use_ui_catalog,
+    add_items_to_directory,
+    components::{InlineNotice, NoticeVariant},
+    use_active_scope_id, use_rpc_client, use_ui_catalog,
 };
 
-use crate::views::Route;
+use crate::{
+    components::{
+        ConfirmAction, ConfirmActionRequest, ConfirmActionVariant, DropZone, JobProgress,
+        PageHeader,
+    },
+    views::Route,
+};
 
 type QueueItemId = u64;
+type UploadEntry = (QueueItemId, Signal<UploadQueueItem>);
+type WorkReceiver = Rc<Mutex<UnboundedReceiver<UploadWork>>>;
+type AbortRegistry = Rc<RefCell<HashMap<QueueItemId, (u64, AbortHandle)>>>;
+
+#[derive(Clone)]
+struct UploadWorkerHandle {
+    sender: UnboundedSender<UploadWork>,
+    aborts: AbortRegistry,
+}
+
+impl PartialEq for UploadWorkerHandle {
+    fn eq(&self, other: &Self) -> bool {
+        Rc::ptr_eq(&self.aborts, &other.aborts)
+    }
+}
+
 const MAX_FILE_UPLOAD_SIZE: u64 = 100 * 1024 * 1024 * 1024;
+const MAX_QUEUE_ITEMS: usize = 1_000;
+const MAX_COMPLETED_HISTORY: usize = 50;
+const INITIAL_VISIBLE_PER_GROUP: usize = 50;
 
 fn upload_entity_route(collection: String, id: String) -> Route {
     if collection == DEFAULT_COLLECTION {
@@ -36,258 +69,189 @@ struct UploadQueueItem {
     title: String,
     description: String,
     status: UploadItemStatus,
-    progress: Option<FileUploadProgress>,
+    progress: Signal<Option<FileUploadProgress>>,
     error: Option<String>,
     result: Option<FileUploadResponse>,
+    generation: u64,
+    started_options: Option<UploadRequestOptions>,
 }
 
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum UploadItemStatus {
+    Ready,
     Queued,
     Reading,
     Uploading,
-    Done,
+    Finalizing,
+    Cancelling,
+    Success,
+    Partial,
     Error,
-    Removed,
+    Canceled,
 }
 
-#[allow(dead_code)]
-enum UploadCommand {
-    AddFiles(Vec<FileData>),
-    Remove(QueueItemId),
-    ClearFinished,
-    ClearAll,
-    UpdateMetadata {
-        id: QueueItemId,
-        title: String,
-        description: String,
-    },
-    UploadOne(QueueItemId),
-    UploadAll,
-    Progress {
-        id: QueueItemId,
-        progress: FileUploadProgress,
-    },
-    Completed {
-        id: QueueItemId,
-        response: FileUploadResponse,
-    },
-    Failed {
-        id: QueueItemId,
-        error: String,
-    },
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+struct UploadRequestOptions {
+    destination_directory: Option<String>,
+    parent_entity: Option<String>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum UploadWorkKind {
+    Upload,
+    DirectoryLink,
+}
+
+#[derive(Clone, Debug)]
+struct UploadWork {
+    id: QueueItemId,
+    generation: u64,
+    kind: UploadWorkKind,
+    options: UploadRequestOptions,
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+struct UploadSummary {
+    total: usize,
+    queued: usize,
+    active: usize,
+    attention: usize,
+    completed: usize,
+    uploaded_bytes: u64,
+    total_bytes: u64,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+struct UploadNotice {
+    message: String,
+    variant: NoticeVariant,
 }
 
 #[component]
 pub fn UploadPage() -> Element {
     let client = use_rpc_client();
-    let result_client = client.clone();
     let scope_id = use_active_scope_id();
-    let catalog = use_ui_catalog();
-    let mut queue = use_signal(Vec::<UploadQueueItem>::new);
-    let mut notice = use_signal(|| None::<String>);
-    let mut next_id = use_signal(|| 1_u64);
+    let mut queue = use_signal(Vec::<UploadEntry>::new);
+    let summary = use_signal(UploadSummary::default);
+    let mut notice = use_signal(|| None::<UploadNotice>);
+    let next_id = use_signal(|| 1_u64);
     let mut destination_directory = use_signal(|| None::<FileTreeSelection>);
     let mut parent_entity = use_signal(|| None::<String>);
+    let mut clear_confirm_open = use_signal(|| false);
+    let mut visible_per_group = use_signal(|| INITIAL_VISIBLE_PER_GROUP);
+    let aborts = use_hook(|| Rc::new(RefCell::new(HashMap::new())));
+    let (work_tx, work_rx) = use_hook(|| {
+        let (tx, rx) = unbounded::<UploadWork>();
+        (tx, Rc::new(Mutex::new(rx)))
+    });
 
-    let commands = use_coroutine(move |mut rx: UnboundedReceiver<UploadCommand>| {
-        let client = client.clone();
-        let scope_id = scope_id.clone();
-        async move {
-            while let Some(command) = rx.next().await {
-                match command {
-                    UploadCommand::AddFiles(files) => {
-                        let mut queue_write = queue.write();
-                        for file in files {
-                            let name = file.name();
-                            let mime_type = normalize_mime_type(&file);
-                            if queue_write.iter().any(|item| same_file(item, &file)) {
-                                continue;
-                            }
-                            let id = *next_id.read();
-                            next_id.set(id + 1);
-                            let title = title_from_filename(&name);
-                            let byte_size = file.size();
-                            queue_write.push(UploadQueueItem {
-                                id,
-                                file,
-                                name,
-                                mime_type,
-                                byte_size,
-                                title,
-                                description: String::new(),
-                                status: UploadItemStatus::Queued,
-                                progress: None,
-                                error: None,
-                                result: None,
-                            });
-                        }
-                        drop(queue_write);
-                        notice.set(None);
-                    }
-                    UploadCommand::Remove(id) => {
-                        if !is_busy(&queue.read(), id) {
-                            mark_removed_or_drop(&mut queue.write(), id);
-                        }
-                    }
-                    UploadCommand::ClearFinished => {
-                        queue.write().retain(|item| {
-                            !matches!(
-                                item.status,
-                                UploadItemStatus::Done | UploadItemStatus::Removed
-                            )
-                        });
-                    }
-                    UploadCommand::ClearAll => {
-                        if !queue.read().iter().any(|item| {
-                            matches!(
-                                item.status,
-                                UploadItemStatus::Reading | UploadItemStatus::Uploading
-                            )
-                        }) {
-                            queue.write().clear();
-                        }
-                    }
-                    UploadCommand::UpdateMetadata {
-                        id,
-                        title,
-                        description,
-                    } => {
-                        if let Some(item) = queue.write().iter_mut().find(|item| item.id == id) {
-                            item.title = title;
-                            item.description = description;
-                        }
-                    }
-                    UploadCommand::UploadOne(id) => {
-                        upload_item(
-                            id,
-                            queue,
-                            client.clone(),
-                            scope_id.clone(),
-                            destination_directory
-                                .read()
-                                .as_ref()
-                                .map(|item| item.id.clone()),
-                            parent_entity.read().clone(),
-                        )
-                        .await;
-                    }
-                    UploadCommand::UploadAll => {
-                        let ids = queue
-                            .read()
-                            .iter()
-                            .filter(|item| {
-                                matches!(
-                                    item.status,
-                                    UploadItemStatus::Queued | UploadItemStatus::Error
-                                )
-                            })
-                            .map(|item| item.id)
-                            .collect::<Vec<_>>();
-                        for id in ids {
-                            upload_item(
-                                id,
-                                queue,
-                                client.clone(),
-                                scope_id.clone(),
-                                destination_directory
-                                    .read()
-                                    .as_ref()
-                                    .map(|item| item.id.clone()),
-                                parent_entity.read().clone(),
-                            )
-                            .await;
-                        }
-                    }
-                    UploadCommand::Progress { id, progress } => {
-                        if let Some(item) = queue.write().iter_mut().find(|item| item.id == id) {
-                            item.status = match progress.phase {
-                                FileUploadPhase::Preparing => UploadItemStatus::Reading,
-                                FileUploadPhase::Uploading | FileUploadPhase::Finalizing => {
-                                    UploadItemStatus::Uploading
-                                }
-                                FileUploadPhase::Done => UploadItemStatus::Done,
-                            };
-                            item.progress = Some(progress);
-                        }
-                    }
-                    UploadCommand::Completed { id, response } => {
-                        if let Some(item) = queue.write().iter_mut().find(|item| item.id == id) {
-                            item.status = UploadItemStatus::Done;
-                            item.error = None;
-                            item.result = Some(response);
-                        }
-                    }
-                    UploadCommand::Failed { id, error } => {
-                        if let Some(item) = queue.write().iter_mut().find(|item| item.id == id) {
-                            item.status = UploadItemStatus::Error;
-                            item.error = Some(error);
-                        }
-                    }
-                }
+    use_upload_worker(
+        queue,
+        summary,
+        client.clone(),
+        scope_id.clone(),
+        work_rx.clone(),
+        aborts.clone(),
+    );
+    use_upload_worker(
+        queue,
+        summary,
+        client.clone(),
+        scope_id.clone(),
+        work_rx.clone(),
+        aborts.clone(),
+    );
+    use_upload_worker(queue, summary, client, scope_id, work_rx, aborts.clone());
+    let worker = UploadWorkerHandle {
+        sender: work_tx.clone(),
+        aborts,
+    };
+
+    let defaults = UploadRequestOptions {
+        destination_directory: destination_directory
+            .read()
+            .as_ref()
+            .map(|item| item.id.clone()),
+        parent_entity: parent_entity.read().clone(),
+    };
+    let mut ready = Vec::new();
+    let mut active = Vec::new();
+    let mut attention = Vec::new();
+    let mut complete = Vec::new();
+    for (id, item) in queue.read().iter().copied() {
+        match item.read().status {
+            UploadItemStatus::Ready => ready.push((id, item)),
+            UploadItemStatus::Queued
+            | UploadItemStatus::Reading
+            | UploadItemStatus::Uploading
+            | UploadItemStatus::Finalizing
+            | UploadItemStatus::Cancelling => active.push((id, item)),
+            UploadItemStatus::Error | UploadItemStatus::Canceled | UploadItemStatus::Partial => {
+                attention.push((id, item));
             }
+            UploadItemStatus::Success => complete.push((id, item)),
         }
-    });
-
-    let busy = queue.read().iter().any(|item| {
-        matches!(
-            item.status,
-            UploadItemStatus::Reading | UploadItemStatus::Uploading
-        )
-    });
-    let visible_queue_items = queue
-        .read()
-        .iter()
-        .filter(|item| {
-            !matches!(
-                item.status,
-                UploadItemStatus::Done | UploadItemStatus::Removed
-            )
-        })
-        .cloned()
-        .collect::<Vec<_>>();
-
-    let results = queue
-        .read()
-        .iter()
-        .filter_map(|item| item.result.clone())
-        .collect::<Vec<_>>();
+    }
+    let busy = !active.is_empty();
+    let has_more = [ready.len(), active.len(), attention.len(), complete.len()]
+        .into_iter()
+        .any(|count| count > visible_per_group());
+    let queue_len = queue.read().len();
+    let ready_to_start = ready.clone();
+    let attention_to_retry = attention.clone();
+    let has_complete = !complete.is_empty();
+    let header_actions = rsx! {
+        dxcomp::Button {
+            disabled: ready.is_empty(),
+            onclick: {
+                let work_tx = work_tx.clone();
+                let defaults = defaults.clone();
+                move |_| {
+                    for (_, item) in ready_to_start.iter().copied() {
+                        start_work(item, UploadWorkKind::Upload, defaults.clone(), &work_tx);
+                    }
+                    refresh_summary(queue, summary);
+                }
+            },
+            "Upload ready"
+        }
+        dxcomp::Button {
+            variant: dxcomp::ButtonVariant::Outline,
+            disabled: !attention.iter().any(|(_, item)| matches!(item.read().status, UploadItemStatus::Error | UploadItemStatus::Canceled)),
+            onclick: {
+                let work_tx = work_tx.clone();
+                let defaults = defaults.clone();
+                move |_| {
+                    for (_, item) in attention_to_retry.iter().copied() {
+                        if matches!(item.read().status, UploadItemStatus::Error | UploadItemStatus::Canceled) {
+                            start_work(item, UploadWorkKind::Upload, defaults.clone(), &work_tx);
+                        }
+                    }
+                    refresh_summary(queue, summary);
+                }
+            },
+            "Retry failed"
+        }
+    };
 
     rsx! {
         section { class: "semantic-upload",
-            div { class: "semantic-upload__header",
-                h2 { "Upload Files" }
-                div { class: "semantic-upload__actions",
-                    dxcomp::Button {
-                        disabled: busy,
-                        onclick: move |_| commands.send(UploadCommand::UploadAll),
-                        "Upload all"
-                    }
-                    dxcomp::Button {
-                        variant: dxcomp::ButtonVariant::Outline,
-                        disabled: busy,
-                        onclick: move |_| commands.send(UploadCommand::ClearFinished),
-                        "Clear finished"
-                    }
-                    dxcomp::Button {
-                        variant: dxcomp::ButtonVariant::Outline,
-                        disabled: busy,
-                        onclick: move |_| commands.send(UploadCommand::ClearAll),
-                        "Clear queue"
-                    }
-                }
+            PageHeader {
+                title: "Upload files",
+                description: "Create file entities and optionally organize them as they upload. Up to three files transfer at once.",
+                actions: header_actions,
             }
+            UploadAggregate { summary }
             section { class: "semantic-upload__defaults",
                 div { class: "semantic-upload__defaults-header",
                     div {
-                        h3 { "Apply to all uploads" }
-                        p { "Choose shared organization and relationship settings for this queue." }
+                        h2 { "Defaults for new uploads" }
+                        p { "These settings are captured when each upload starts; changing them never alters active transfers." }
                     }
                     if destination_directory.read().is_some() || parent_entity.read().is_some() {
                         dxcomp::Button {
                             variant: dxcomp::ButtonVariant::Ghost,
                             size: dxcomp::ButtonSize::Sm,
-                            disabled: busy,
                             onclick: move |_| {
                                 destination_directory.set(None);
                                 parent_entity.set(None);
@@ -311,7 +275,7 @@ pub fn UploadPage() -> Element {
                         select_directories: true,
                         select_files: false,
                         filter_placeholder: "Filter directories",
-                        disabled: busy,
+                        disabled: false,
                         on_select: move |selection| destination_directory.set(Some(selection)),
                     }
                 }
@@ -322,70 +286,136 @@ pub fn UploadPage() -> Element {
                     }
                     EntityAutocomplete {
                         value: parent_entity.read().clone(),
-                        disabled: busy,
+                        disabled: false,
                         placeholder: "Search for a parent entity",
                         aria_label: "Parent entity",
                         on_value_change: move |value| parent_entity.set(value),
                     }
                 }
             }
-            label { class: "semantic-upload__selector",
-                input {
-                    r#type: "file",
-                    multiple: true,
-                    onchange: move |event| commands.send(UploadCommand::AddFiles(event.files()))
+            DropZone {
+                id: "semantic-upload-input",
+                label: "Choose files or drop them here",
+                hint: "All file types are accepted. Maximum 100 GiB per file; duplicate selections are skipped.",
+                on_files: move |files| add_files(files, queue, summary, next_id, notice),
+            }
+            if let Some(current_notice) = notice.read().clone() {
+                InlineNotice {
+                    message: current_notice.message,
+                    variant: current_notice.variant,
+                    on_dismiss: move |_| notice.set(None),
                 }
             }
-            if let Some(message) = notice.read().clone() {
-                div { class: "semantic-upload__error", "{message}" }
+            if queue_len == 0 {
+                div { class: "semantic-upload__empty",
+                    h2 { "No files queued" }
+                    p { "Selected files will appear here with editable metadata before upload." }
+                }
+            } else {
+                UploadGroup { title: "Ready", entries: ready, visible: visible_per_group(), defaults: defaults.clone(), worker: worker.clone(), queue, summary }
+                UploadGroup { title: "In progress", entries: active, visible: visible_per_group(), defaults: defaults.clone(), worker: worker.clone(), queue, summary }
+                UploadGroup { title: "Needs attention", entries: attention, visible: visible_per_group(), defaults: defaults.clone(), worker: worker.clone(), queue, summary }
+                UploadGroup { title: "Complete", entries: complete, visible: visible_per_group(), defaults, worker, queue, summary }
+                if has_more {
+                    dxcomp::Button {
+                        variant: dxcomp::ButtonVariant::Outline,
+                        onclick: move |_| visible_per_group.with_mut(|limit| *limit += INITIAL_VISIBLE_PER_GROUP),
+                        "Show more queue items"
+                    }
+                }
+                div { class: "semantic-upload__footer-actions",
+                    dxcomp::Button {
+                        variant: dxcomp::ButtonVariant::Outline,
+                        disabled: !has_complete,
+                        onclick: move |_| {
+                            queue.write().retain(|(_, item)| item.read().status != UploadItemStatus::Success);
+                            refresh_summary(queue, summary);
+                        },
+                        "Clear completed"
+                    }
+                    dxcomp::Button {
+                        variant: dxcomp::ButtonVariant::Ghost,
+                        disabled: busy,
+                        onclick: move |_| clear_confirm_open.set(true),
+                        "Clear queue"
+                    }
+                }
             }
+            ConfirmAction {
+                open: clear_confirm_open(),
+                title: "Clear upload queue",
+                target: format!("{queue_len} queued files"),
+                body: "Remove every queued item and its unsaved metadata? Completed file entities are not deleted.",
+                confirm_label: "Clear queue",
+                variant: ConfirmActionVariant::Danger,
+                on_open_change: move |open| clear_confirm_open.set(open),
+                on_confirm: move |request: ConfirmActionRequest| {
+                    queue.write().clear();
+                    refresh_summary(queue, summary);
+                    request.complete(Ok(()));
+                },
+            }
+        }
+    }
+}
+
+#[component]
+fn UploadAggregate(summary: Signal<UploadSummary>) -> Element {
+    let summary = summary.read().clone();
+    let label = if summary.active > 0 {
+        format!(
+            "{} active · {} queued · {} need attention · {} complete",
+            summary.active, summary.queued, summary.attention, summary.completed
+        )
+    } else {
+        format!(
+            "{} queued · {} need attention · {} complete",
+            summary.queued, summary.attention, summary.completed
+        )
+    };
+    rsx! {
+        section { class: "semantic-upload__aggregate", aria_label: "Upload queue summary",
+            div {
+                strong { "{summary.total} files" }
+                span { "{label}" }
+            }
+            JobProgress {
+                id: "semantic-upload-aggregate-progress",
+                label: if summary.total_bytes > 0 { format!("{} of {} transferred", format_byte_size(summary.uploaded_bytes), format_byte_size(summary.total_bytes)) } else { "Waiting to upload".to_string() },
+                current: summary.uploaded_bytes,
+                total: (summary.total_bytes > 0).then_some(summary.total_bytes),
+                state: if summary.active > 0 { "running" } else { "idle" },
+            }
+        }
+    }
+}
+
+#[component]
+fn UploadGroup(
+    title: String,
+    entries: Vec<UploadEntry>,
+    visible: usize,
+    defaults: UploadRequestOptions,
+    worker: UploadWorkerHandle,
+    queue: Signal<Vec<UploadEntry>>,
+    summary: Signal<UploadSummary>,
+) -> Element {
+    if entries.is_empty() {
+        return rsx! {};
+    }
+    let count = entries.len();
+    rsx! {
+        section { class: "semantic-upload__group",
+            h2 { "{title}" span { "{count}" } }
             div { class: "semantic-upload__queue",
-                for item in visible_queue_items {
-                    UploadQueueRow { item, commands }
-                }
-            }
-            if !results.is_empty() {
-                div { class: "semantic-upload__results",
-                    h3 { "Created Files" }
-                    for result in results {
-                        div { class: "semantic-upload__result",
-                            div { class: "semantic-upload__result-actions",
-                                Link {
-                                    to: upload_entity_route(
-                                        result.collection.clone(),
-                                        result.id.clone(),
-                                    ),
-                                    "Entity"
-                                }
-                                if let Some(url) = result_client.file_url(&result.id) {
-                                    a {
-                                        href: "{url}",
-                                        target: "_blank",
-                                        rel: "noopener noreferrer",
-                                        "File"
-                                    }
-                                }
-                            }
-                            {
-                                let class = catalog.object_class(&result.object).cloned();
-                                rsx! {
-                                    if let Some(class) = class {
-                                        ClassView {
-                                            class,
-                                            object: with_id(result.object.clone(), &result.id),
-                                            collection: Some(result.collection.clone()),
-                                            id: Some(result.id.clone()),
-                                            mode: RenderMode::Preview
-                                        }
-                                    } else {
-                                        ObjectView {
-                                            object: with_id(result.object.clone(), &result.id),
-                                            mode: RenderMode::Preview
-                                        }
-                                    }
-                                }
-                            }
-                        }
+                for (id, item) in entries.into_iter().take(visible) {
+                    UploadQueueRow {
+                        key: "{id}",
+                        item,
+                        defaults: defaults.clone(),
+                        worker: worker.clone(),
+                        queue,
+                        summary,
                     }
                 }
             }
@@ -394,76 +424,116 @@ pub fn UploadPage() -> Element {
 }
 
 #[component]
-fn UploadQueueRow(item: UploadQueueItem, commands: Coroutine<UploadCommand>) -> Element {
-    let id = item.id;
-    let disabled = matches!(
-        item.status,
-        UploadItemStatus::Reading | UploadItemStatus::Uploading
-    );
-    let progress = item.progress.clone();
-    let title = item.title.clone();
-    let description = item.description.clone();
+fn UploadQueueRow(
+    item: Signal<UploadQueueItem>,
+    defaults: UploadRequestOptions,
+    worker: UploadWorkerHandle,
+    queue: Signal<Vec<UploadEntry>>,
+    summary: Signal<UploadSummary>,
+) -> Element {
+    let snapshot = item.read().clone();
+    let id = snapshot.id;
+    let status = snapshot.status;
+    let busy = status.is_busy();
+    let title_id = format!("upload-{id}-title");
+    let description_id = format!("upload-{id}-description");
+    let progress = snapshot.progress;
+    let progress_snapshot = progress.read().clone();
+    let (progress_label, progress_current, progress_total) =
+        progress_details(status, progress_snapshot.as_ref());
+    let mime_label = snapshot
+        .mime_type
+        .clone()
+        .unwrap_or_else(|| "Unknown type".to_string());
+
     rsx! {
-        div { class: "semantic-upload__item",
+        article { class: "semantic-upload__item", "data-status": status.slug(),
             div { class: "semantic-upload__item-main",
-                div {
-                    strong { "{item.name}" }
-                    div { class: "semantic-upload__item-meta",
-                        span { "{item.mime_type.clone().unwrap_or_else(|| \"application/octet-stream\".to_string())}" }
-                        span { "{format_byte_size(item.byte_size)}" }
-                        span { "{status_label(&item.status)}" }
+                div { class: "semantic-upload__item-heading",
+                    strong { title: snapshot.name.clone(), "{snapshot.name}" }
+                    span { class: "semantic-upload__status", "data-status": status.slug(), "{status.label()}" }
+                }
+                div { class: "semantic-upload__item-meta",
+                    span { "{mime_label}" }
+                    span { "{format_byte_size(snapshot.byte_size)}" }
+                    if let Some(options) = snapshot.started_options.as_ref() {
+                        if options.destination_directory.is_some() || options.parent_entity.is_some() {
+                            span { "Start settings captured" }
+                        }
                     }
                 }
                 div { class: "semantic-upload__metadata",
-                    input {
-                        value: "{title}",
-                        placeholder: "Title",
-                        disabled,
-                        oninput: {
-                            let description = description.clone();
-                            move |event: FormEvent| {
-                                commands.send(UploadCommand::UpdateMetadata {
-                                    id,
-                                    title: event.value(),
-                                    description: description.clone(),
-                                });
-                            }
+                    label { r#for: title_id.clone(),
+                        span { "Title" }
+                        input {
+                            id: title_id,
+                            value: snapshot.title,
+                            disabled: busy || matches!(status, UploadItemStatus::Success | UploadItemStatus::Partial),
+                            oninput: move |event| item.write().title = event.value(),
                         }
                     }
-                    textarea {
-                        value: "{description}",
-                        placeholder: "Description",
-                        disabled,
-                        oninput: {
-                            let title = title.clone();
-                            move |event: FormEvent| {
-                                commands.send(UploadCommand::UpdateMetadata {
-                                    id,
-                                    title: title.clone(),
-                                    description: event.value(),
-                                });
-                            }
+                    label { r#for: description_id.clone(),
+                        span { "Description" }
+                        textarea {
+                            id: description_id,
+                            value: snapshot.description,
+                            disabled: busy || matches!(status, UploadItemStatus::Success | UploadItemStatus::Partial),
+                            oninput: move |event| item.write().description = event.value(),
                         }
                     }
                 }
-                ProgressView { progress }
-                if let Some(error) = item.error.clone() {
-                    div { class: "semantic-upload__error", "{error}" }
+                JobProgress {
+                    id: format!("upload-{id}-progress"),
+                    label: progress_label,
+                    current: progress_current,
+                    total: progress_total,
+                    state: status.slug(),
+                }
+                if let Some(error) = snapshot.error {
+                    InlineNotice { message: error, variant: if status == UploadItemStatus::Partial { NoticeVariant::Warning } else { NoticeVariant::Error } }
+                }
+                if snapshot.result.is_some() {
+                    UploadResultPreview { item }
                 }
             }
             div { class: "semantic-upload__item-actions",
-                dxcomp::Button {
-                    size: dxcomp::ButtonSize::Sm,
-                    disabled,
-                    onclick: move |_| commands.send(UploadCommand::UploadOne(id)),
-                    if item.status == UploadItemStatus::Error { "Retry" } else { "Upload" }
+                if busy {
+                    dxcomp::Button {
+                        variant: dxcomp::ButtonVariant::Outline,
+                        size: dxcomp::ButtonSize::Sm,
+                        disabled: status == UploadItemStatus::Cancelling,
+                        onclick: move |_| cancel_item(item, &worker.aborts, queue, summary),
+                        if status == UploadItemStatus::Cancelling { "Cancelling…" } else { "Cancel" }
+                    }
+                } else if status == UploadItemStatus::Partial {
+                    dxcomp::Button {
+                        size: dxcomp::ButtonSize::Sm,
+                        onclick: {
+                            let sender = worker.sender.clone();
+                            move |_| start_work(item, UploadWorkKind::DirectoryLink, snapshot.started_options.clone().unwrap_or_default(), &sender)
+                        },
+                        "Retry organization"
+                    }
+                } else if matches!(status, UploadItemStatus::Ready | UploadItemStatus::Error | UploadItemStatus::Canceled) {
+                    dxcomp::Button {
+                        size: dxcomp::ButtonSize::Sm,
+                        onclick: {
+                            let sender = worker.sender.clone();
+                            move |_| start_work(item, UploadWorkKind::Upload, defaults.clone(), &sender)
+                        },
+                        if status == UploadItemStatus::Ready { "Upload" } else { "Retry" }
+                    }
                 }
-                dxcomp::Button {
-                    variant: dxcomp::ButtonVariant::Outline,
-                    size: dxcomp::ButtonSize::Sm,
-                    disabled,
-                    onclick: move |_| commands.send(UploadCommand::Remove(id)),
-                    "Remove"
+                if !busy {
+                    dxcomp::Button {
+                        variant: dxcomp::ButtonVariant::Ghost,
+                        size: dxcomp::ButtonSize::Sm,
+                        onclick: move |_| {
+                            queue.write().retain(|(entry_id, _)| *entry_id != id);
+                            refresh_summary(queue, summary);
+                        },
+                        "Remove"
+                    }
                 }
             }
         }
@@ -471,158 +541,255 @@ fn UploadQueueRow(item: UploadQueueItem, commands: Coroutine<UploadCommand>) -> 
 }
 
 #[component]
-fn ProgressView(progress: Option<FileUploadProgress>) -> Element {
-    let (label, percent) = match progress {
-        Some(progress) => {
-            let label = match progress.phase {
-                FileUploadPhase::Preparing => "Preparing".to_string(),
-                FileUploadPhase::Uploading => match progress.total_bytes {
-                    Some(total) if total > 0 => {
-                        format!(
-                            "Uploading {}%",
-                            progress.uploaded_bytes.saturating_mul(100) / total
-                        )
-                    }
-                    _ => "Uploading".to_string(),
-                },
-                FileUploadPhase::Finalizing => "Finalizing".to_string(),
-                FileUploadPhase::Done => "Done".to_string(),
-            };
-            let percent = progress
-                .total_bytes
-                .filter(|total| *total > 0)
-                .map(|total| (progress.uploaded_bytes as f64 / total as f64 * 100.0).min(100.0));
-            (label, percent)
-        }
-        None => ("Queued".to_string(), Some(0.0)),
+fn UploadResultPreview(item: Signal<UploadQueueItem>) -> Element {
+    let client = use_rpc_client();
+    let catalog = use_ui_catalog();
+    let Some(result) = item.read().result.clone() else {
+        return rsx! {};
     };
+    let class = catalog.object_class(&result.object).cloned();
     rsx! {
-        div { class: "semantic-upload__progress",
-            div {
-                class: "semantic-upload__progress-bar",
-                style: percent.map(|percent| format!("width: {percent:.0}%")).unwrap_or_default()
+        div { class: "semantic-upload__result",
+            div { class: "semantic-upload__result-actions",
+                Link { to: upload_entity_route(result.collection.clone(), result.id.clone()), "View entity" }
+                if let Some(url) = client.file_url(&result.id) {
+                    a { href: "{url}", target: "_blank", rel: "noopener noreferrer", "Open file" }
+                }
             }
-            span { "{label}" }
+            if let Some(class) = class {
+                ClassView {
+                    class,
+                    object: with_id(result.object.clone(), &result.id),
+                    collection: Some(result.collection.clone()),
+                    id: Some(result.id.clone()),
+                    mode: RenderMode::Preview,
+                }
+            } else {
+                ObjectView { object: with_id(result.object, &result.id), mode: RenderMode::Preview }
+            }
         }
     }
 }
 
-async fn upload_item(
-    id: QueueItemId,
-    mut queue: Signal<Vec<UploadQueueItem>>,
+fn use_upload_worker(
+    queue: Signal<Vec<UploadEntry>>,
+    summary: Signal<UploadSummary>,
     client: semantic_rpc::RpcClient,
     scope_id: Option<String>,
-    destination_directory: Option<String>,
-    parent_entity: Option<String>,
+    receiver: WorkReceiver,
+    aborts: AbortRegistry,
 ) {
-    let item = {
-        let mut queue = queue.write();
-        let Some(item) = queue.iter_mut().find(|item| item.id == id) else {
-            return;
-        };
-        if matches!(
-            item.status,
-            UploadItemStatus::Reading | UploadItemStatus::Uploading | UploadItemStatus::Done
-        ) {
-            return;
+    use_future(move || {
+        let client = client.clone();
+        let scope_id = scope_id.clone();
+        let receiver = receiver.clone();
+        let aborts = aborts.clone();
+        async move {
+            loop {
+                let work = {
+                    let mut receiver = receiver.lock().await;
+                    receiver.next().await
+                };
+                let Some(work) = work else { break };
+                let Some(mut item) = find_item(queue, work.id) else {
+                    continue;
+                };
+                if item.read().generation != work.generation {
+                    continue;
+                }
+                let (abort_handle, registration) = AbortHandle::new_pair();
+                aborts
+                    .borrow_mut()
+                    .insert(work.id, (work.generation, abort_handle));
+                let operation = match work.kind {
+                    UploadWorkKind::Upload => {
+                        Abortable::new(
+                            upload_item(
+                                item,
+                                queue,
+                                summary,
+                                client.clone(),
+                                scope_id.clone(),
+                                work.options,
+                            ),
+                            registration,
+                        )
+                        .await
+                    }
+                    UploadWorkKind::DirectoryLink => {
+                        Abortable::new(
+                            retry_directory_link(
+                                item,
+                                queue,
+                                summary,
+                                client.clone(),
+                                scope_id.clone(),
+                                work.options,
+                            ),
+                            registration,
+                        )
+                        .await
+                    }
+                };
+                if aborts
+                    .borrow()
+                    .get(&work.id)
+                    .is_some_and(|(generation, _)| *generation == work.generation)
+                {
+                    aborts.borrow_mut().remove(&work.id);
+                }
+                if operation.is_err() && item.read().generation == work.generation {
+                    let mut item = item.write();
+                    item.status = UploadItemStatus::Canceled;
+                    item.error =
+                        Some("Upload canceled. No resumable transfer was created.".to_string());
+                }
+                prune_completed_history(queue);
+                refresh_summary(queue, summary);
+            }
         }
+    });
+}
+
+async fn upload_item(
+    mut item: Signal<UploadQueueItem>,
+    queue: Signal<Vec<UploadEntry>>,
+    summary: Signal<UploadSummary>,
+    client: semantic_rpc::RpcClient,
+    scope_id: Option<String>,
+    options: UploadRequestOptions,
+) {
+    let snapshot = {
+        let mut item = item.write();
         item.status = UploadItemStatus::Reading;
         item.error = None;
-        item.progress = Some(FileUploadProgress {
+        item.result = None;
+        item.started_options = Some(options.clone());
+        let byte_size = item.byte_size;
+        let mut progress = item.progress;
+        progress.set(Some(FileUploadProgress {
             uploaded_bytes: 0,
-            total_bytes: Some(item.byte_size),
+            total_bytes: Some(byte_size),
             phase: FileUploadPhase::Preparing,
-        });
+        }));
         item.clone()
     };
-    if item.byte_size > MAX_FILE_UPLOAD_SIZE {
-        set_failed(
-            queue,
-            id,
-            "File exceeds the 100 GiB upload limit".to_string(),
-        );
-        return;
-    }
-    let content = match file_upload_content(&item.file) {
+    refresh_summary(queue, summary);
+    let content = match file_upload_content(&snapshot.file) {
         Ok(content) => content,
-        Err(err) => {
-            set_failed(queue, id, err.to_string());
+        Err(error) => {
+            set_failed(item, error.to_string());
             return;
         }
     };
-    let (progress_tx, mut progress_rx) = futures::channel::mpsc::unbounded::<FileUploadProgress>();
-    let mut progress_queue = queue;
+    let (progress_tx, mut progress_rx) = unbounded::<FileUploadProgress>();
+    let mut progress_signal = snapshot.progress;
+    let mut progress_item = item;
     spawn(async move {
         while let Some(progress) = progress_rx.next().await {
-            if let Some(item) = progress_queue.write().iter_mut().find(|item| item.id == id) {
-                item.status = match progress.phase {
-                    FileUploadPhase::Preparing => UploadItemStatus::Reading,
-                    FileUploadPhase::Uploading | FileUploadPhase::Finalizing => {
-                        UploadItemStatus::Uploading
-                    }
-                    FileUploadPhase::Done => UploadItemStatus::Done,
-                };
-                item.progress = Some(progress);
+            if progress_item.read().status == UploadItemStatus::Cancelling {
+                continue;
             }
+            match progress.phase {
+                FileUploadPhase::Preparing => {
+                    progress_item.write().status = UploadItemStatus::Reading
+                }
+                FileUploadPhase::Uploading => {
+                    progress_item.write().status = UploadItemStatus::Uploading
+                }
+                FileUploadPhase::Finalizing => {
+                    progress_item.write().status = UploadItemStatus::Finalizing
+                }
+                FileUploadPhase::Done => {}
+            }
+            progress_signal.set(Some(progress));
+            refresh_summary(queue, summary);
         }
     });
     let request = FileUploadRequest {
         scope_id: scope_id.clone(),
         id: None,
-        filename: Some(item.name.clone()),
-        mime_type: detect_mime_type(&item.name, item.mime_type.as_deref(), &[]),
-        entity: metadata_entity(&item.title, &item.description, parent_entity.as_deref()),
+        filename: Some(snapshot.name.clone()),
+        mime_type: detect_mime_type(&snapshot.name, snapshot.mime_type.as_deref(), &[]),
+        entity: metadata_entity(
+            &snapshot.title,
+            &snapshot.description,
+            options.parent_entity.as_deref(),
+        ),
         content,
     };
     match client.upload_file(request, Some(progress_tx)).await {
         Ok(response) => {
-            let directory_error = if let Some(directory_id) = destination_directory {
-                add_items_to_directory(client, scope_id, directory_id, vec![response.id.clone()])
+            item.write().result = Some(response.clone());
+            if let Some(directory_id) = options.destination_directory {
+                item.write().status = UploadItemStatus::Finalizing;
+                refresh_summary(queue, summary);
+                match add_items_to_directory(client, scope_id, directory_id, vec![response.id])
                     .await
-                    .err()
-                    .map(|error| {
-                        format!("Upload completed, but adding it to the directory failed: {error}")
-                    })
+                {
+                    Ok(()) => set_succeeded(item),
+                    Err(error) => {
+                        let mut item = item.write();
+                        item.status = UploadItemStatus::Partial;
+                        item.error = Some(format!(
+                            "The file and entity were created, but adding the entity to the directory failed: {error}"
+                        ));
+                    }
+                }
             } else {
-                None
-            };
-            if let Some(item) = queue.write().iter_mut().find(|item| item.id == id) {
-                item.status = UploadItemStatus::Done;
-                item.error = directory_error;
-                item.result = Some(response);
+                set_succeeded(item);
             }
         }
-        Err(err) => {
-            set_failed(queue, id, err.to_string());
+        Err(error) => set_failed(item, error.to_string()),
+    }
+}
+
+async fn retry_directory_link(
+    mut item: Signal<UploadQueueItem>,
+    queue: Signal<Vec<UploadEntry>>,
+    summary: Signal<UploadSummary>,
+    client: semantic_rpc::RpcClient,
+    scope_id: Option<String>,
+    options: UploadRequestOptions,
+) {
+    let (Some(directory_id), Some(response)) =
+        (options.destination_directory, item.read().result.clone())
+    else {
+        set_failed(
+            item,
+            "The captured directory or upload result is no longer available.".to_string(),
+        );
+        return;
+    };
+    item.write().status = UploadItemStatus::Finalizing;
+    refresh_summary(queue, summary);
+    match add_items_to_directory(client, scope_id, directory_id, vec![response.id]).await {
+        Ok(()) => set_succeeded(item),
+        Err(error) => {
+            let mut item = item.write();
+            item.status = UploadItemStatus::Partial;
+            item.error = Some(format!(
+                "The file exists, but adding its entity to the directory still failed: {error}"
+            ));
         }
     }
 }
 
-fn set_failed(mut queue: Signal<Vec<UploadQueueItem>>, id: QueueItemId, error: String) {
-    if let Some(item) = queue.write().iter_mut().find(|item| item.id == id) {
-        item.status = UploadItemStatus::Error;
-        item.error = Some(error);
-    }
+fn set_succeeded(mut item: Signal<UploadQueueItem>) {
+    item.write().status = UploadItemStatus::Success;
+    item.write().error = None;
+    let byte_size = item.read().byte_size;
+    let mut progress = item.read().progress;
+    progress.set(Some(FileUploadProgress {
+        uploaded_bytes: byte_size,
+        total_bytes: Some(byte_size),
+        phase: FileUploadPhase::Done,
+    }));
 }
 
-fn is_busy(queue: &[UploadQueueItem], id: QueueItemId) -> bool {
-    queue.iter().any(|item| {
-        item.id == id
-            && matches!(
-                item.status,
-                UploadItemStatus::Reading | UploadItemStatus::Uploading
-            )
-    })
-}
-
-fn mark_removed_or_drop(queue: &mut Vec<UploadQueueItem>, id: QueueItemId) {
-    queue.retain_mut(|item| {
-        if item.id != id {
-            return true;
-        }
-        item.status = UploadItemStatus::Removed;
-        false
-    });
+fn set_failed(mut item: Signal<UploadQueueItem>, error: String) {
+    item.write().status = UploadItemStatus::Error;
+    item.write().error = Some(error);
 }
 
 fn same_file(item: &UploadQueueItem, file: &FileData) -> bool {
@@ -634,6 +801,279 @@ fn same_file(item: &UploadQueueItem, file: &FileData) -> bool {
 
 fn normalize_mime_type(file: &FileData) -> Option<String> {
     detect_mime_type(&file.name(), file.content_type().as_deref(), &[])
+}
+
+impl UploadItemStatus {
+    fn is_busy(self) -> bool {
+        matches!(
+            self,
+            Self::Queued | Self::Reading | Self::Uploading | Self::Finalizing | Self::Cancelling
+        )
+    }
+
+    fn label(self) -> &'static str {
+        match self {
+            Self::Ready => "Ready",
+            Self::Queued => "Queued",
+            Self::Reading => "Reading",
+            Self::Uploading => "Uploading",
+            Self::Finalizing => "Finalizing",
+            Self::Cancelling => "Cancelling",
+            Self::Success => "Complete",
+            Self::Partial => "Partially complete",
+            Self::Error => "Failed",
+            Self::Canceled => "Canceled",
+        }
+    }
+
+    fn slug(self) -> &'static str {
+        match self {
+            Self::Ready => "ready",
+            Self::Queued => "queued",
+            Self::Reading => "reading",
+            Self::Uploading => "uploading",
+            Self::Finalizing => "finalizing",
+            Self::Cancelling => "cancelling",
+            Self::Success => "success",
+            Self::Partial => "partial",
+            Self::Error => "error",
+            Self::Canceled => "canceled",
+        }
+    }
+}
+
+fn add_files(
+    files: Vec<FileData>,
+    mut queue: Signal<Vec<UploadEntry>>,
+    summary: Signal<UploadSummary>,
+    mut next_id: Signal<QueueItemId>,
+    mut notice: Signal<Option<UploadNotice>>,
+) {
+    let mut added = 0;
+    let mut duplicates = 0;
+    let mut oversized = 0;
+    let mut invalid = 0;
+    let mut full = 0;
+
+    for file in files {
+        if queue.read().len() >= MAX_QUEUE_ITEMS {
+            full += 1;
+            continue;
+        }
+        if file.name().trim().is_empty() {
+            invalid += 1;
+            continue;
+        }
+        if file.size() > MAX_FILE_UPLOAD_SIZE {
+            oversized += 1;
+            continue;
+        }
+        if queue
+            .read()
+            .iter()
+            .any(|(_, item)| same_file(&item.read(), &file))
+        {
+            duplicates += 1;
+            continue;
+        }
+
+        let id = *next_id.read();
+        next_id.set(id.saturating_add(1));
+        let name = file.name();
+        let byte_size = file.size();
+        let item = Signal::new(UploadQueueItem {
+            id,
+            mime_type: normalize_mime_type(&file),
+            title: title_from_filename(&name),
+            file,
+            name,
+            byte_size,
+            description: String::new(),
+            status: UploadItemStatus::Ready,
+            progress: Signal::new(None),
+            error: None,
+            result: None,
+            generation: 0,
+            started_options: None,
+        });
+        queue.write().push((id, item));
+        added += 1;
+    }
+
+    refresh_summary(queue, summary);
+    notice.set(if duplicates + oversized + invalid + full == 0 {
+        (added > 0).then(|| UploadNotice {
+            message: format!(
+                "Added {added} file{} to the queue.",
+                if added == 1 { "" } else { "s" }
+            ),
+            variant: NoticeVariant::Success,
+        })
+    } else {
+        let mut reasons = Vec::new();
+        if duplicates > 0 {
+            reasons.push(format!(
+                "{duplicates} duplicate{}",
+                if duplicates == 1 { "" } else { "s" }
+            ));
+        }
+        if oversized > 0 {
+            reasons.push(format!("{oversized} over the 100 GiB limit"));
+        }
+        if invalid > 0 {
+            reasons.push(format!("{invalid} without a valid filename"));
+        }
+        if full > 0 {
+            reasons.push(format!(
+                "{full} beyond the {MAX_QUEUE_ITEMS}-item queue limit"
+            ));
+        }
+        Some(UploadNotice {
+            message: format!("Added {added}; skipped {}.", reasons.join(", ")),
+            variant: NoticeVariant::Warning,
+        })
+    });
+}
+
+fn start_work(
+    mut item: Signal<UploadQueueItem>,
+    kind: UploadWorkKind,
+    options: UploadRequestOptions,
+    work_tx: &UnboundedSender<UploadWork>,
+) {
+    let work = {
+        let mut item = item.write();
+        let can_start = match kind {
+            UploadWorkKind::Upload => matches!(
+                item.status,
+                UploadItemStatus::Ready | UploadItemStatus::Error | UploadItemStatus::Canceled
+            ),
+            UploadWorkKind::DirectoryLink => item.status == UploadItemStatus::Partial,
+        };
+        if !can_start {
+            return;
+        }
+        item.generation = item.generation.saturating_add(1);
+        item.status = match kind {
+            UploadWorkKind::Upload => UploadItemStatus::Queued,
+            UploadWorkKind::DirectoryLink => UploadItemStatus::Finalizing,
+        };
+        item.error = None;
+        item.started_options = Some(options.clone());
+        UploadWork {
+            id: item.id,
+            generation: item.generation,
+            kind,
+            options,
+        }
+    };
+    if work_tx.unbounded_send(work).is_err() {
+        set_failed(
+            item,
+            "The upload worker is unavailable. Reload and try again.".to_string(),
+        );
+    }
+}
+
+fn cancel_item(
+    mut item: Signal<UploadQueueItem>,
+    aborts: &AbortRegistry,
+    queue: Signal<Vec<UploadEntry>>,
+    summary: Signal<UploadSummary>,
+) {
+    let generation = item.read().generation;
+    let aborting = aborts
+        .borrow()
+        .get(&item.read().id)
+        .filter(|(active_generation, _)| *active_generation == generation)
+        .map(|(_, handle)| {
+            handle.abort();
+        })
+        .is_some();
+    if aborting {
+        item.write().status = UploadItemStatus::Cancelling;
+    } else {
+        let mut item = item.write();
+        item.generation = item.generation.saturating_add(1);
+        item.status = UploadItemStatus::Canceled;
+        item.error = Some("Upload canceled before transfer started.".to_string());
+    }
+    refresh_summary(queue, summary);
+}
+
+fn find_item(queue: Signal<Vec<UploadEntry>>, id: QueueItemId) -> Option<Signal<UploadQueueItem>> {
+    queue
+        .read()
+        .iter()
+        .find_map(|(entry_id, item)| (*entry_id == id).then_some(*item))
+}
+
+fn refresh_summary(queue: Signal<Vec<UploadEntry>>, mut summary: Signal<UploadSummary>) {
+    let mut next = UploadSummary::default();
+    for (_, item) in queue.read().iter() {
+        let item = item.read();
+        next.total += 1;
+        next.total_bytes = next.total_bytes.saturating_add(item.byte_size);
+        match item.status {
+            UploadItemStatus::Ready | UploadItemStatus::Queued => next.queued += 1,
+            UploadItemStatus::Reading
+            | UploadItemStatus::Uploading
+            | UploadItemStatus::Finalizing
+            | UploadItemStatus::Cancelling => next.active += 1,
+            UploadItemStatus::Error | UploadItemStatus::Canceled | UploadItemStatus::Partial => {
+                next.attention += 1;
+            }
+            UploadItemStatus::Success => next.completed += 1,
+        }
+        let uploaded = item
+            .progress
+            .read()
+            .as_ref()
+            .map(|progress| progress.uploaded_bytes)
+            .unwrap_or(0)
+            .min(item.byte_size);
+        next.uploaded_bytes = next.uploaded_bytes.saturating_add(uploaded);
+    }
+    if *summary.peek() != next {
+        summary.set(next);
+    }
+}
+
+fn prune_completed_history(mut queue: Signal<Vec<UploadEntry>>) {
+    let completed = queue
+        .read()
+        .iter()
+        .filter(|(_, item)| item.read().status == UploadItemStatus::Success)
+        .count();
+    let mut remove = completed.saturating_sub(MAX_COMPLETED_HISTORY);
+    if remove == 0 {
+        return;
+    }
+    queue.write().retain(|(_, item)| {
+        if remove > 0 && item.read().status == UploadItemStatus::Success {
+            remove -= 1;
+            false
+        } else {
+            true
+        }
+    });
+}
+
+fn progress_details(
+    status: UploadItemStatus,
+    progress: Option<&FileUploadProgress>,
+) -> (String, u64, Option<u64>) {
+    let current = progress
+        .map(|progress| progress.uploaded_bytes)
+        .unwrap_or(0);
+    let total = progress.and_then(|progress| progress.total_bytes);
+    let label = match (status, total) {
+        (UploadItemStatus::Uploading, Some(total)) if total > 0 => {
+            format!("Uploading {}%", current.saturating_mul(100) / total)
+        }
+        _ => status.label().to_string(),
+    };
+    (label, current, total)
 }
 
 #[cfg(not(target_arch = "wasm32"))]
@@ -742,17 +1182,6 @@ fn with_id(mut object: Object, id: &str) -> Object {
         object.insert("id", Value::String(id.to_string()));
     }
     object
-}
-
-fn status_label(status: &UploadItemStatus) -> &'static str {
-    match status {
-        UploadItemStatus::Queued => "Queued",
-        UploadItemStatus::Reading => "Reading",
-        UploadItemStatus::Uploading => "Uploading",
-        UploadItemStatus::Done => "Done",
-        UploadItemStatus::Error => "Error",
-        UploadItemStatus::Removed => "Removed",
-    }
 }
 
 fn format_byte_size(size: u64) -> String {

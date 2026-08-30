@@ -6,6 +6,25 @@ use semantic_rpc::RpcClient;
 use crate::context::{use_active_scope_id, use_rpc_client};
 use crate::ui_catalog::{RenderSettings, UiCatalog, UiCatalogError};
 
+#[derive(Clone, PartialEq)]
+struct CatalogSourceKey {
+    client: RpcClient,
+    scope_id: Option<String>,
+}
+
+#[derive(Clone, PartialEq)]
+struct CatalogRequestKey {
+    source: CatalogSourceKey,
+    reload_revision: u64,
+    render_settings: Option<RenderSettings>,
+    configure_catalog: Option<Callback<UiCatalog, UiCatalog>>,
+}
+
+struct CatalogLoadResult {
+    request: CatalogRequestKey,
+    result: std::result::Result<UiCatalog, UiCatalogError>,
+}
+
 #[derive(Clone, Copy)]
 pub struct UiCatalogContext {
     catalog: Signal<Option<UiCatalog>>,
@@ -105,37 +124,98 @@ pub fn UiCatalogProvider(
     children: Element,
 ) -> Element {
     let mut catalog_signal = use_signal(|| None::<UiCatalog>);
+    let mut loaded_source = use_signal(|| None::<CatalogSourceKey>);
+    let mut observed_source = use_signal(|| None::<CatalogSourceKey>);
+    let mut applied_request = use_signal(|| None::<CatalogRequestKey>);
     let mut status = use_signal(|| CatalogLoadStatus::Loading);
+    let mut reload_revision = use_signal(|| 0_u64);
     let client = use_rpc_client();
     let scope_id = use_active_scope_id();
-    let mut resource = use_resource(move || {
-        let client = client.clone();
-        let scope_id = scope_id.clone();
-        let render_settings = render_settings.clone();
-        async move { load_catalog(client, scope_id, render_settings, configure_catalog).await }
+    let source = CatalogSourceKey {
+        client: client.clone(),
+        scope_id: scope_id.clone(),
+    };
+    let request = CatalogRequestKey {
+        source: source.clone(),
+        reload_revision: *reload_revision.read(),
+        render_settings,
+        configure_catalog,
+    };
+    let resource = use_resource(use_reactive((&request,), move |(request,)| {
+        let request_for_result = request.clone();
+        async move {
+            let result = load_catalog(
+                request.source.client,
+                request.source.scope_id,
+                request.render_settings,
+                request.configure_catalog,
+            )
+            .await;
+            CatalogLoadResult {
+                request: request_for_result,
+                result,
+            }
+        }
+    }));
+    let reload = Callback::new(move |_| {
+        let revision = *reload_revision.peek();
+        reload_revision.set(revision.wrapping_add(1));
     });
     use_context_provider(|| UiCatalogContext::new(catalog_signal));
-    use_context_provider(|| UiCatalogReload {
-        reload: Callback::new(move |_| resource.restart()),
-        status,
-    });
+    use_context_provider(|| UiCatalogReload { reload, status });
 
-    match &*resource.read_unchecked() {
-        Some(Ok(catalog)) => {
-            catalog_signal.set(Some(catalog.clone()));
-            status.set(CatalogLoadStatus::Ready);
-        }
-        Some(Err(err)) => {
-            status.set(CatalogLoadStatus::Failed(err.to_string()));
-        }
-        None => {
+    use_effect(use_reactive((&source,), move |(source,)| {
+        if observed_source.peek().as_ref() != Some(&source) {
+            observed_source.set(Some(source.clone()));
+            if loaded_source.peek().as_ref() != Some(&source) {
+                catalog_signal.set(None);
+                loaded_source.set(None);
+            }
             status.set(CatalogLoadStatus::Loading);
         }
-    }
+    }));
 
-    match &*catalog_signal.read() {
-        Some(_) => rsx! { {children} },
-        None => match &*status.read() {
+    let resource_state = resource.state();
+    let request_for_completion = request.clone();
+    use_effect(move || match *resource_state.read() {
+        UseResourceState::Pending | UseResourceState::Paused | UseResourceState::Stopped => {
+            if applied_request.peek().as_ref() != Some(&request_for_completion)
+                && !matches!(*status.peek(), CatalogLoadStatus::Loading)
+            {
+                status.set(CatalogLoadStatus::Loading);
+            }
+        }
+        UseResourceState::Ready => {
+            let value = resource.read();
+            let Some(completion) = value.as_ref() else {
+                status.set(CatalogLoadStatus::Loading);
+                return;
+            };
+            if completion.request != request_for_completion
+                || applied_request.peek().as_ref() == Some(&completion.request)
+            {
+                return;
+            }
+            applied_request.set(Some(completion.request.clone()));
+            match &completion.result {
+                Ok(catalog) => {
+                    catalog_signal.set(Some(catalog.clone()));
+                    loaded_source.set(Some(completion.request.source.clone()));
+                    status.set(CatalogLoadStatus::Ready);
+                }
+                Err(err) => {
+                    status.set(CatalogLoadStatus::Failed(err.to_string()));
+                }
+            }
+        }
+    });
+
+    let catalog_is_current =
+        catalog_signal.read().is_some() && loaded_source.read().as_ref() == Some(&source);
+    if catalog_is_current {
+        rsx! { {children} }
+    } else {
+        match &*status.read() {
             CatalogLoadStatus::Loading => rsx! {
                 div { class: "semantic-loading", "Loading catalog..." }
             },
@@ -145,9 +225,9 @@ pub fn UiCatalogProvider(
             CatalogLoadStatus::Failed(message) => rsx! {
                 div { class: "semantic-error",
                     p { "Catalog load failed: {message}" }
-                    button { onclick: move |_| resource.restart(), "Retry" }
+                    button { onclick: move |_| reload.call(()), "Retry" }
                 }
             },
-        },
+        }
     }
 }

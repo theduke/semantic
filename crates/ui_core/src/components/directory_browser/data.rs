@@ -1053,7 +1053,7 @@ fn directory_node_id(parent_id: &str, child_id: &str) -> String {
     )
 }
 
-fn hex_id_part(value: &str) -> String {
+pub(super) fn hex_id_part(value: &str) -> String {
     value
         .as_bytes()
         .iter()
