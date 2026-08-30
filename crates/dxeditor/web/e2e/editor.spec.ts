@@ -1,6 +1,32 @@
 import AxeBuilder from '@axe-core/playwright'
 import { expect, test } from '@playwright/test'
 
+const tableDocument = (rows = 3, columns = 3) => ({
+  schema: 'semantic.component-document',
+  version: 2,
+  root: {
+    kind: 'document',
+    content: [
+      { id: 'outside-block', kind: 'paragraph', content: [{ kind: 'text', text: 'Outside selection' }] },
+      {
+        id: 'table-1', kind: 'table',
+        content: Array.from({ length: rows }, (_, row) => ({
+          id: `row-${row + 1}`, kind: 'table_row',
+          content: Array.from({ length: columns }, (_, column) => ({
+            id: `cell-${row + 1}-${column + 1}`,
+            kind: row === 0 ? 'table_header' : 'table_cell',
+            content: [{
+              id: `paragraph-${row + 1}-${column + 1}`,
+              kind: 'paragraph',
+              content: [{ kind: 'text', text: `R${row + 1}C${column + 1}` }],
+            }],
+          })),
+        })),
+      },
+    ],
+  },
+})
+
 test.beforeEach(async ({ page }) => {
   await page.goto('/e2e/editor.html')
   await expect(page.locator('.ProseMirror')).toBeVisible()
@@ -20,18 +46,150 @@ test('keeps the idle canvas quiet and surfaces selection actions contextually', 
   })).toBe('semantic.component-document')
 })
 
-test('inserts blocks from contextual add controls and edits tables locally', async ({ page }) => {
+test('anchors table edge controls and one action handle to every visible row', async ({ page }) => {
   const editor = page.locator('.ProseMirror')
-  await editor.click()
-  await page.getByRole('button', { name: 'Add a block' }).click()
-  await page.getByRole('option', { name: 'Insert Table' }).click()
-  await expect(editor.locator('table')).toBeVisible()
-  await editor.locator('td').first().click()
+  await page.evaluate(document => {
+    const session = (window as unknown as { editorSession: { replaceDocument: (document: unknown) => void } }).editorSession
+    session.replaceDocument(document)
+  }, tableDocument())
+  await editor.locator('[data-semantic-id="outside-block"]').click()
+  const table = editor.locator('table')
+  await table.hover()
   const tableToolbar = page.getByRole('toolbar', { name: 'Table actions' })
   await expect(tableToolbar).toBeVisible()
-  const before = await editor.locator('tr').count()
-  await tableToolbar.getByRole('button', { name: 'Add row after' }).click()
-  await expect(editor.locator('tr')).toHaveCount(before + 1)
+  const addRow = tableToolbar.getByRole('button', { name: 'Add row at bottom' })
+  const addColumn = tableToolbar.getByRole('button', { name: 'Add column at right' })
+  const rowHandles = page.getByRole('toolbar', { name: 'Table row actions' })
+    .locator('.dxeditor-engine__table-row-handle')
+  await expect(rowHandles).toHaveCount(3)
+
+  const [tableBox, addRowBox, addColumnBox] = await Promise.all([
+    table.boundingBox(), addRow.boundingBox(), addColumn.boundingBox(),
+  ])
+  expect(tableBox).not.toBeNull()
+  expect(addRowBox).not.toBeNull()
+  expect(addColumnBox).not.toBeNull()
+  expect(Math.abs(addRowBox!.x - tableBox!.x)).toBeLessThan(2)
+  expect(Math.abs(addRowBox!.width - tableBox!.width)).toBeLessThan(2)
+  expect(addRowBox!.y).toBeGreaterThanOrEqual(tableBox!.y + tableBox!.height)
+  expect(Math.abs(addColumnBox!.y - tableBox!.y)).toBeLessThan(2)
+  expect(Math.abs(addColumnBox!.height - tableBox!.height)).toBeLessThan(2)
+  expect(addColumnBox!.x).toBeGreaterThanOrEqual(tableBox!.x + tableBox!.width)
+
+  for (let index = 0; index < 3; index += 1) {
+    const [rowBox, handleBox] = await Promise.all([
+      editor.locator('tr').nth(index).boundingBox(), rowHandles.nth(index).boundingBox(),
+    ])
+    expect(rowBox).not.toBeNull()
+    expect(handleBox).not.toBeNull()
+    expect(handleBox!.x + handleBox!.width).toBeLessThan(tableBox!.x)
+    expect(Math.abs((handleBox!.y + handleBox!.height / 2) - (rowBox!.y + rowBox!.height / 2))).toBeLessThan(2)
+  }
+
+  await addRow.click()
+  await expect(editor.locator('tr')).toHaveCount(4)
+  await addColumn.click()
+  await expect(editor.locator('tr').first().locator('th, td')).toHaveCount(4)
+  await expect(rowHandles).toHaveCount(4)
+
+  // A content-driven row resize is observed and the handle remains centered.
+  await editor.locator('th').first().click()
+  await page.keyboard.press('End')
+  await page.keyboard.press('Enter')
+  await page.keyboard.type('A much taller header line')
+  await expect.poll(async () => {
+    const [rowBox, handleBox] = await Promise.all([
+      editor.locator('tr').first().boundingBox(), rowHandles.first().boundingBox(),
+    ])
+    return rowBox && handleBox
+      ? Math.abs((handleBox.y + handleBox.height / 2) - (rowBox.y + rowBox.height / 2))
+      : 100
+  }).toBeLessThan(2)
+
+  // Viewport resize and captured scrolling both refresh overlay geometry.
+  await page.setViewportSize({ width: 1000, height: 600 })
+  await page.evaluate(() => {
+    document.body.style.minHeight = '1400px'
+    window.scrollTo(0, 70)
+  })
+  await expect.poll(async () => {
+    const [resizedTable, resizedAddRow, resizedColumn] = await Promise.all([
+      table.boundingBox(), addRow.boundingBox(), addColumn.boundingBox(),
+    ])
+    if (!resizedTable || !resizedAddRow || !resizedColumn) return false
+    return Math.abs(resizedAddRow.x - resizedTable.x) < 2
+      && resizedAddRow.y >= resizedTable.y + resizedTable.height
+      && Math.abs(resizedColumn.y - resizedTable.y) < 2
+      && resizedColumn.x >= resizedTable.x + resizedTable.width
+  }).toBe(true)
+})
+
+test('keeps row menu actions and drag reordering bound to explicit rows', async ({ page }) => {
+  const editor = page.locator('.ProseMirror')
+  await page.evaluate(document => {
+    const session = (window as unknown as { editorSession: { replaceDocument: (document: unknown) => void } }).editorSession
+    session.replaceDocument(document)
+  }, tableDocument(4, 2))
+  await editor.locator('[data-semantic-id="outside-block"]').click()
+  await editor.locator('tr').nth(1).hover()
+  const menu = page.getByRole('menu', { name: 'Row actions' })
+
+  const firstHandle = page.locator('.dxeditor-engine__table-row-handle[data-row-id="row-1"]')
+  const lastHandle = page.locator('.dxeditor-engine__table-row-handle[data-row-id="row-4"]')
+  await firstHandle.click()
+  await expect(firstHandle).toHaveAttribute('aria-expanded', 'true')
+  await expect(menu).toBeVisible()
+  await expect(menu.getByRole('menuitem', { name: 'Move row up' })).toBeDisabled()
+  await menu.press('Escape')
+  await lastHandle.click()
+  await expect(menu.getByRole('menuitem', { name: 'Move row down' })).toBeDisabled()
+  await menu.press('Escape')
+
+  // Selection remains outside the table while the explicit row-2 handle opens the menu.
+  const rowTwo = page.locator('.dxeditor-engine__table-row-handle[data-row-id="row-2"]')
+  await rowTwo.focus()
+  await rowTwo.press('Enter')
+  await expect(menu).toBeVisible()
+  await expect(menu.getByRole('menuitem', { name: 'Move row up' })).toBeFocused()
+  await page.keyboard.press('ArrowDown')
+  await expect(menu.getByRole('menuitem', { name: 'Move row down' })).toBeFocused()
+  await page.keyboard.press('Enter')
+  await expect.poll(() => page.evaluate(() => {
+    const snapshot = (window as unknown as { editorSession: { snapshot: () => { root: { content: Array<{ kind: string; content?: Array<{ id?: string }> }> } } } }).editorSession.snapshot()
+    return snapshot.root.content.find(block => block.kind === 'table')?.content?.map(row => row.id)
+  })).toEqual(['row-1', 'row-3', 'row-2', 'row-4'])
+
+  // The same handle is both the menu trigger and a native draggable row handle.
+  await rowTwo.dragTo(lastHandle)
+  await expect.poll(() => page.evaluate(() => {
+    const snapshot = (window as unknown as { editorSession: { snapshot: () => { root: { content: Array<{ kind: string; content?: Array<{ id?: string }> }> } } } }).editorSession.snapshot()
+    return snapshot.root.content.find(block => block.kind === 'table')?.content?.map(row => row.id)
+  })).toEqual(['row-1', 'row-3', 'row-4', 'row-2'])
+
+  const rowThree = page.locator('.dxeditor-engine__table-row-handle[data-row-id="row-3"]')
+  await rowThree.click()
+  await menu.getByRole('menuitem', { name: 'Delete row' }).click()
+  await expect.poll(() => page.evaluate(() => {
+    const snapshot = (window as unknown as { editorSession: { snapshot: () => { root: { content: Array<{ kind: string; content?: Array<{ id?: string }> }> } } } }).editorSession.snapshot()
+    return snapshot.root.content.find(block => block.kind === 'table')?.content?.map(row => row.id)
+  })).toEqual(['row-1', 'row-4', 'row-2'])
+})
+
+test('does not expose table mutation controls in readonly sessions', async ({ page }) => {
+  await page.evaluate(document => {
+    const fixture = window as unknown as {
+      SemanticEditorEngine: { mount: (host: Element, options: unknown) => unknown }
+      editorSession: { destroy: () => void }
+    }
+    fixture.editorSession.destroy()
+    fixture.editorSession = fixture.SemanticEditorEngine.mount(
+      window.document.querySelector('[data-dxeditor-host]')!,
+      { sessionId: 'readonly-table', document, readonly: true, emit: () => {} },
+    ) as { destroy: () => void }
+  }, tableDocument())
+  await page.locator('.ProseMirror table').hover()
+  await expect(page.getByRole('toolbar', { name: 'Table actions' })).toBeHidden()
+  await expect(page.getByRole('toolbar', { name: 'Table row actions' })).toBeHidden()
 })
 
 test('targets each hovered block from a stable left gutter', async ({ page }) => {

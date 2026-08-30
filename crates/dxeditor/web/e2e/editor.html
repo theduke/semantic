@@ -13,6 +13,12 @@
       .dxeditor-engine__slash, .dxeditor-engine__block-menu, .dxeditor-engine__link-popover { flex-direction: column; }
       .dxeditor-engine__block-controls { border: 0; box-shadow: none; padding: 0; }
       .dxeditor-engine__entity-link { color: var(--dxeditor-entity-link-color, #176b87); }
+      .dxeditor-engine__table-controls, .dxeditor-engine__table-row-controls { position: absolute; inset: 0; pointer-events: none; }
+      .dxeditor-engine__table-controls[hidden], .dxeditor-engine__table-row-controls[hidden] { display: none; }
+      .dxeditor-engine__table-controls .dxeditor-engine__button, .dxeditor-engine__table-row-handle { position: absolute; z-index: 2; box-sizing: border-box; border: 1px solid #aaa; background: white; pointer-events: auto; }
+      .dxeditor-engine__table-add-row { min-height: 24px; padding: 0; }
+      .dxeditor-engine__table-add-column { min-width: 24px; padding: 0; }
+      .dxeditor-engine__table-row-handle { min-width: 28px; min-height: 28px; padding: 2px 4px; cursor: grab; }
       table, td, th { border: 1px solid #888; border-collapse: collapse; padding: 4px; }
     </style>
   </head>

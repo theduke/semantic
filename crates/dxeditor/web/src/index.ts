@@ -23,9 +23,16 @@ import TableHeader from '@tiptap/extension-table-header'
 import TaskList from '@tiptap/extension-task-list'
 import TaskItem from '@tiptap/extension-task-item'
 import { Dropcursor, Gapcursor, UndoRedo } from '@tiptap/extensions'
-import { Slice, type Schema } from '@tiptap/pm/model'
-import { EditorState } from '@tiptap/pm/state'
-import { CellSelection } from '@tiptap/pm/tables'
+import { Slice, type Node as ProseMirrorNode, type Schema } from '@tiptap/pm/model'
+import { EditorState, type Transaction } from '@tiptap/pm/state'
+import {
+  CellSelection,
+  TableMap,
+  addColumnAfter as addTableColumnAfter,
+  addRowAfter as addTableRowAfter,
+  deleteRow as deleteTableRow,
+  moveTableRow,
+} from '@tiptap/pm/tables'
 import { CoreParagraphBehavior, plainTextParagraphSlice } from './core/paragraph-behavior'
 import { SemanticId } from './extensions/semantic-id'
 import { stripCopiedIdentities, validateSemanticIds } from './identity'
@@ -676,6 +683,10 @@ const positionSurface = (surface: HTMLElement, rect: DOMRect, wrapper: HTMLEleme
 }
 
 type TopLevelBlockTarget = { semanticId: string | null; fallbackPosition: number }
+type TableTarget = { semanticId: string | null; fallbackPosition: number }
+type TableRowTarget = { table: TableTarget; semanticId: string | null; fallbackIndex: number }
+type TableRange = { from: number; to: number; index: number; node: ProseMirrorNode; target: TableTarget }
+type TableRowRange = { table: TableRange; from: number; to: number; index: number; node: ProseMirrorNode; target: TableRowTarget }
 
 const positionAdjacentSurface = (surface: HTMLElement, rect: DOMRect, wrapper: HTMLElement): void => {
   const bounds = wrapper.getBoundingClientRect()
@@ -755,10 +766,21 @@ export const mount = (host: HTMLElement, options: MountOptions): EditorSession =
   linkActions.className = 'dxeditor-engine__link-actions'
   linkPopover.append(linkLabel, linkTitleLabel, linkError, linkActions)
   const tableControls = window.document.createElement('div')
-  tableControls.className = 'dxeditor-engine__surface dxeditor-engine__table-controls'
+  tableControls.className = 'dxeditor-engine__table-controls'
   tableControls.setAttribute('role', 'toolbar')
   tableControls.setAttribute('aria-label', 'Table actions')
   tableControls.hidden = true
+  const tableRowControls = window.document.createElement('div')
+  tableRowControls.className = 'dxeditor-engine__table-row-controls'
+  tableRowControls.setAttribute('role', 'toolbar')
+  tableRowControls.setAttribute('aria-label', 'Table row actions')
+  tableRowControls.hidden = true
+  const tableRowMenu = window.document.createElement('div')
+  tableRowMenu.className = 'dxeditor-engine__surface dxeditor-engine__block-menu dxeditor-engine__table-row-menu'
+  tableRowMenu.setAttribute('role', 'menu')
+  tableRowMenu.setAttribute('aria-label', 'Row actions')
+  tableRowMenu.id = `dxeditor-table-row-menu-${options.sessionId}`
+  tableRowMenu.hidden = true
   const mediaPopover = window.document.createElement('div')
   mediaPopover.className = 'dxeditor-engine__surface dxeditor-engine__link-popover'
   mediaPopover.setAttribute('role', 'dialog')
@@ -810,7 +832,20 @@ export const mount = (host: HTMLElement, options: MountOptions): EditorSession =
   entityPreview.setAttribute('role', 'dialog')
   entityPreview.setAttribute('aria-label', 'Entity preview')
   entityPreview.hidden = true
-  overlays.append(bubble, blockControls, slash, blockMenu, linkPopover, tableControls, mediaPopover, mentions, entityPopover, entityPreview)
+  overlays.append(
+    bubble,
+    blockControls,
+    slash,
+    blockMenu,
+    linkPopover,
+    tableControls,
+    tableRowControls,
+    tableRowMenu,
+    mediaPopover,
+    mentions,
+    entityPopover,
+    entityPreview,
+  )
 
 	  let revision = 0
 	  let lastEmittedSnapshot: string | null = null
@@ -822,6 +857,13 @@ export const mount = (host: HTMLElement, options: MountOptions): EditorSession =
   let blockTargetHovered = false
   let menuBlockTarget: TopLevelBlockTarget | null = null
   let blockMenuTrigger: HTMLButtonElement | null = null
+  let activeTableTarget: TableTarget | null = null
+  let tableTargetHovered = false
+  let menuTableRowTarget: TableRowTarget | null = null
+  let tableRowMenuTrigger: HTMLButtonElement | null = null
+  let draggedTableRowTarget: TableRowTarget | null = null
+  let dropTableRowTarget: TableRowTarget | null = null
+  let dropAfterRow = false
   let pendingImageInsertAt: number | null = null
   let mentionRequest: AbortController | null = null
   let mentionQuery: string | null = null
@@ -1070,6 +1112,176 @@ export const mount = (host: HTMLElement, options: MountOptions): EditorSession =
       }
     })
     return match
+  }
+
+  const tableRange = (target: TableTarget | null = null): TableRange | null => {
+    let fallback: TableRange | null = null
+    let identityMatch: TableRange | null = null
+    const selectionPosition = editor.state.selection.$from.pos
+    editor.state.doc.forEach((node, offset, index) => {
+      if (node.type.name !== 'table') return
+      const semanticId = typeof node.attrs.semanticId === 'string' ? node.attrs.semanticId : null
+      const range: TableRange = {
+        from: offset,
+        to: offset + node.nodeSize,
+        index,
+        node,
+        target: { semanticId, fallbackPosition: offset },
+      }
+      if (target?.semanticId && semanticId === target.semanticId) identityMatch = range
+      const position = target?.fallbackPosition ?? selectionPosition
+      if (position >= offset && position <= offset + node.nodeSize) fallback = range
+    })
+    return target?.semanticId ? identityMatch : fallback
+  }
+
+  const tableRowRange = (target: TableRowTarget | null): TableRowRange | null => {
+    if (!target) return null
+    const table = tableRange(target.table)
+    if (!table) return null
+    let offset = table.from + 1
+    let fallback: TableRowRange | null = null
+    let identityMatch: TableRowRange | null = null
+    table.node.forEach((node, _rowOffset, index) => {
+      const semanticId = typeof node.attrs.semanticId === 'string' ? node.attrs.semanticId : null
+      const range: TableRowRange = {
+        table,
+        from: offset,
+        to: offset + node.nodeSize,
+        index,
+        node,
+        target: { table: table.target, semanticId, fallbackIndex: index },
+      }
+      if (target.semanticId && semanticId === target.semanticId) identityMatch = range
+      if (index === target.fallbackIndex) fallback = range
+      offset += node.nodeSize
+    })
+    return target.semanticId ? identityMatch : fallback
+  }
+
+  const tableElement = (range: TableRange): HTMLTableElement | null => {
+    const dom = editor.view.nodeDOM(range.from)
+    if (dom instanceof HTMLTableElement) return dom
+    return dom instanceof HTMLElement ? dom.querySelector('table') : null
+  }
+
+  const tableRowElement = (range: TableRowRange): HTMLTableRowElement | null => {
+    const dom = editor.view.nodeDOM(range.from)
+    if (dom instanceof HTMLTableRowElement) return dom
+    return dom instanceof HTMLElement ? dom.querySelector('tr') : null
+  }
+
+  const tableTargetFromDom = (domTarget: EventTarget | null): TableTarget | null => {
+    if (!(domTarget instanceof globalThis.Node)) return null
+    let match: TableTarget | null = null
+    editor.state.doc.forEach((node, offset) => {
+      if (match || node.type.name !== 'table') return
+      const range = tableRange({
+        semanticId: typeof node.attrs.semanticId === 'string' ? node.attrs.semanticId : null,
+        fallbackPosition: offset,
+      })
+      if (!range) return
+      const dom = tableElement(range)
+      if (dom && (dom === domTarget || dom.contains(domTarget))) match = range.target
+    })
+    return match
+  }
+
+  const tableRowTargetFromDom = (domTarget: EventTarget | null): TableRowTarget | null => {
+    const tableTarget = tableTargetFromDom(domTarget)
+    const table = tableRange(tableTarget)
+    if (!table || !(domTarget instanceof globalThis.Node)) return null
+    let match: TableRowTarget | null = null
+    table.node.forEach((node, _rowOffset, index) => {
+      if (match) return
+      const target: TableRowTarget = {
+        table: table.target,
+        semanticId: typeof node.attrs.semanticId === 'string' ? node.attrs.semanticId : null,
+        fallbackIndex: index,
+      }
+      const range = tableRowRange(target)
+      const dom = range ? tableRowElement(range) : null
+      if (dom && (dom === domTarget || dom.contains(domTarget))) match = target
+    })
+    return match
+  }
+
+  const selectTableCell = (range: TableRange, row: number, column: number): boolean => {
+    const map = TableMap.get(range.node)
+    if (!map.height || !map.width) return false
+    const cell = range.from + 1 + map.positionAt(
+      Math.max(0, Math.min(row, map.height - 1)),
+      Math.max(0, Math.min(column, map.width - 1)),
+      range.node,
+    )
+    editor.view.dispatch(editor.state.tr.setSelection(CellSelection.create(editor.state.doc, cell)))
+    return true
+  }
+
+  const addBottomTableRow = (target: TableTarget | null): boolean => {
+    if (!commandEnabled('addRowAfter')) return false
+    const range = tableRange(target)
+    if (!range) return false
+    const map = TableMap.get(range.node)
+    if (!selectTableCell(range, map.height - 1, 0)) return false
+    return addTableRowAfter(editor.state, editor.view.dispatch)
+  }
+
+  const addRightTableColumn = (target: TableTarget | null): boolean => {
+    if (!commandEnabled('addColumnAfter')) return false
+    const range = tableRange(target)
+    if (!range) return false
+    const map = TableMap.get(range.node)
+    if (!selectTableCell(range, 0, map.width - 1)) return false
+    return addTableColumnAfter(editor.state, editor.view.dispatch)
+  }
+
+  const deleteTargetTableRow = (target: TableRowTarget | null): boolean => {
+    if (!commandEnabled('deleteRow')) return false
+    const row = tableRowRange(target)
+    if (!row || !selectTableCell(row.table, row.index, 0)) return false
+    return deleteTableRow(editor.state, editor.view.dispatch)
+  }
+
+  const moveTargetTableRow = (target: TableRowTarget | null, destination: number): boolean => {
+    const row = tableRowRange(target)
+    if (!row) return false
+    const boundedDestination = Math.max(0, Math.min(destination, row.table.node.childCount - 1))
+    if (boundedDestination === row.index) return false
+    const originalAttrs = Array.from({ length: row.table.node.childCount }, (_, index) => row.table.node.child(index).attrs)
+    const attrsByFirstCell = new Map<string, ProseMirrorNode['attrs']>()
+    row.table.node.forEach(originalRow => {
+      const semanticId = originalRow.firstChild?.attrs.semanticId
+      if (typeof semanticId === 'string') attrsByFirstCell.set(semanticId, originalRow.attrs)
+    })
+    const [movedAttrs] = originalAttrs.splice(row.index, 1)
+    if (movedAttrs) originalAttrs.splice(boundedDestination, 0, movedAttrs)
+    if (!selectTableCell(row.table, row.index, 0)) return false
+    const pendingMove: { transaction?: Transaction } = {}
+    const moved = moveTableRow({
+      from: row.index,
+      to: boundedDestination,
+      select: false,
+      pos: editor.state.selection.from,
+    })(editor.state, transaction => { pendingMove.transaction = transaction })
+    const moveTransaction = pendingMove.transaction
+    if (!moved || !moveTransaction) return false
+
+    // prosemirror-tables intentionally reconstructs row nodes at their original indexes,
+    // which leaves custom row attrs behind while moving their cells. Reassociate semantic
+    // identity and any application row attrs with the moved cell content before dispatch.
+    const movedTable = moveTransaction.doc.nodeAt(row.table.from)
+    if (movedTable?.type.name === 'table') {
+      let rowPosition = row.table.from + 1
+      movedTable.forEach((movedRow, _offset, index) => {
+        const firstCellId = movedRow.firstChild?.attrs.semanticId
+        const attrs = typeof firstCellId === 'string' ? attrsByFirstCell.get(firstCellId) : undefined
+        moveTransaction.setNodeMarkup(rowPosition, undefined, attrs ?? originalAttrs[index] ?? movedRow.attrs)
+        rowPosition += movedRow.nodeSize
+      })
+    }
+    editor.view.dispatch(moveTransaction)
+    return true
   }
 
   const deleteBlock = (target: TopLevelBlockTarget | null): void => {
@@ -1372,12 +1584,115 @@ export const mount = (host: HTMLElement, options: MountOptions): EditorSession =
     item.dataset.extension = 'entity-link'
     slash.append(item)
   }
-  ;[['+ Row', 'Add row after', 'addRowAfter'], ['− Row', 'Delete row', 'deleteRow'], ['+ Column', 'Add column after', 'addColumnAfter'],
-    ['− Column', 'Delete column', 'deleteColumn'], ['Header', 'Toggle header row', 'toggleHeaderRow'],
-    ['⇤', 'Align cell left', 'alignCell', 'left'], ['↔', 'Align cell center', 'alignCell', 'center'], ['⇥', 'Align cell right', 'alignCell', 'right'],
-    ['Delete', 'Delete table', 'deleteTable']]
-	    .filter(([, , command]) => commandEnabled(command))
-	    .forEach(([label, title, command, alignment]) => tableControls.append(button(label, title, () => run(command, alignment ? { alignment } : {}))))
+  const addBottomRowButton = button('+', 'Add row at bottom', () => { addBottomTableRow(activeTableTarget) })
+  addBottomRowButton.classList.add('dxeditor-engine__table-add-row')
+  addBottomRowButton.disabled = !commandEnabled('addRowAfter')
+  const addRightColumnButton = button('+', 'Add column at right', () => { addRightTableColumn(activeTableTarget) })
+  addRightColumnButton.classList.add('dxeditor-engine__table-add-column')
+  addRightColumnButton.disabled = !commandEnabled('addColumnAfter')
+  tableControls.append(addBottomRowButton, addRightColumnButton)
+
+  const tableRowKey = (target: TableRowTarget): string => target.semanticId
+    ? `id:${target.semanticId}`
+    : `index:${target.fallbackIndex}`
+  const clearTableRowDropState = (): void => {
+    dropTableRowTarget = null
+    tableRowControls.querySelectorAll<HTMLElement>('[data-drop-position]').forEach(control => {
+      delete control.dataset.dropPosition
+    })
+  }
+  const clearTableRowDrag = (): void => {
+    draggedTableRowTarget = null
+    clearTableRowDropState()
+    tableRowControls.querySelectorAll<HTMLButtonElement>('[aria-grabbed="true"]').forEach(control => {
+      control.setAttribute('aria-grabbed', 'false')
+    })
+  }
+  const closeTableRowMenu = (restoreFocus = false): void => {
+    tableRowMenu.hidden = true
+    tableRowMenuTrigger?.setAttribute('aria-expanded', 'false')
+    if (restoreFocus) tableRowMenuTrigger?.focus()
+    tableRowMenuTrigger = null
+    menuTableRowTarget = null
+  }
+  const finishTableRowAction = (): void => closeTableRowMenu(false)
+  const moveRowUpButton = button('Move up', 'Move row up', () => {
+    const row = tableRowRange(menuTableRowTarget)
+    if (row) moveTargetTableRow(row.target, row.index - 1)
+    finishTableRowAction()
+  })
+  const moveRowDownButton = button('Move down', 'Move row down', () => {
+    const row = tableRowRange(menuTableRowTarget)
+    if (row) moveTargetTableRow(row.target, row.index + 1)
+    finishTableRowAction()
+  })
+  const deleteRowButton = button('Delete', 'Delete row', () => {
+    deleteTargetTableRow(menuTableRowTarget)
+    finishTableRowAction()
+  })
+  deleteRowButton.disabled = !commandEnabled('deleteRow')
+  tableRowMenu.append(moveRowUpButton, moveRowDownButton, deleteRowButton)
+  tableRowMenu.querySelectorAll('button').forEach(item => item.setAttribute('role', 'menuitem'))
+
+  const openTableRowMenu = (target: TableRowTarget, trigger: HTMLButtonElement): void => {
+    const row = tableRowRange(target)
+    if (!row) return
+    menuTableRowTarget = row.target
+    tableRowMenuTrigger?.setAttribute('aria-expanded', 'false')
+    tableRowMenuTrigger = trigger
+    trigger.setAttribute('aria-expanded', 'true')
+    moveRowUpButton.disabled = row.index === 0
+    moveRowDownButton.disabled = row.index === row.table.node.childCount - 1
+    tableRowMenu.hidden = false
+    positionAdjacentSurface(tableRowMenu, trigger.getBoundingClientRect(), wrapper)
+    tableRowMenu.querySelector<HTMLButtonElement>('button:not(:disabled)')?.focus()
+  }
+
+  tableRowMenu.addEventListener('keydown', event => {
+    const items = Array.from(tableRowMenu.querySelectorAll<HTMLButtonElement>('button:not(:disabled)'))
+    const index = Math.max(0, items.indexOf(window.document.activeElement as HTMLButtonElement))
+    if (event.key === 'Escape') {
+      event.preventDefault()
+      closeTableRowMenu(true)
+    } else if (event.key === 'ArrowDown' || event.key === 'ArrowUp' || event.key === 'Home' || event.key === 'End') {
+      event.preventDefault()
+      const next = event.key === 'Home' ? 0
+        : event.key === 'End' ? items.length - 1
+          : (index + (event.key === 'ArrowDown' ? 1 : -1) + items.length) % items.length
+      items[next]?.focus()
+    }
+  })
+
+  const updateTableRowDropTarget = (event: DragEvent, target: TableRowTarget, rowElement: HTMLElement): void => {
+    if (!draggedTableRowTarget) return
+    event.preventDefault()
+    if (event.dataTransfer) event.dataTransfer.dropEffect = 'move'
+    clearTableRowDropState()
+    dropTableRowTarget = target
+    const rect = rowElement.getBoundingClientRect()
+    const midpointDelta = event.clientY - (rect.top + rect.height / 2)
+    const source = tableRowRange(draggedTableRowTarget)
+    const destination = tableRowRange(target)
+    dropAfterRow = Math.abs(midpointDelta) < 3 && source && destination
+      ? source.index < destination.index
+      : midpointDelta >= 0
+    const control = Array.from(tableRowControls.querySelectorAll<HTMLElement>('[data-row-key]'))
+      .find(candidate => candidate.dataset.rowKey === tableRowKey(target))
+    if (control) control.dataset.dropPosition = dropAfterRow ? 'after' : 'before'
+  }
+
+  const dropTableRow = (event: DragEvent): void => {
+    if (!draggedTableRowTarget || !dropTableRowTarget) return
+    event.preventDefault()
+    const source = tableRowRange(draggedTableRowTarget)
+    const destinationRow = tableRowRange(dropTableRowTarget)
+    if (source && destinationRow && source.table.from === destinationRow.table.from) {
+      const insertionIndex = destinationRow.index + (dropAfterRow ? 1 : 0)
+      const destination = insertionIndex - (source.index < insertionIndex ? 1 : 0)
+      moveTargetTableRow(source.target, destination)
+    }
+    clearTableRowDrag()
+  }
 
   const currentMention = (): { from: number; to: number; query: string } | null => {
     const { $from } = editor.state.selection
@@ -1577,9 +1892,162 @@ export const mount = (host: HTMLElement, options: MountOptions): EditorSession =
     }
     blockControls.hidden = false
     const bounds = wrapper.getBoundingClientRect()
-    blockControls.style.left = `${rect.left - bounds.left - blockControls.offsetWidth - 6}px`
+    const tableRowGutter = editor.state.doc.child(range.index).type.name === 'table' ? 34 : 0
+    blockControls.style.left = `${rect.left - bounds.left - blockControls.offsetWidth - 6 - tableRowGutter}px`
     blockControls.style.top = `${rect.top - bounds.top}px`
     blockControls.dataset.blockId = range.target.semanticId ?? ''
+  }
+
+  const tableRowControlTargets = new WeakMap<HTMLButtonElement, TableRowTarget>()
+  const createTableRowControl = (): HTMLButtonElement => {
+    const control = window.document.createElement('button')
+    control.type = 'button'
+    control.className = 'dxeditor-engine__button dxeditor-engine__table-row-handle'
+    control.textContent = '⋮⋮'
+    control.draggable = true
+    control.setAttribute('aria-haspopup', 'menu')
+    control.setAttribute('aria-controls', tableRowMenu.id)
+    control.setAttribute('aria-expanded', 'false')
+    control.setAttribute('aria-grabbed', 'false')
+    const openMenu = (): void => {
+      const target = tableRowControlTargets.get(control)
+      if (target) openTableRowMenu(target, control)
+    }
+    control.addEventListener('pointerup', () => {
+      if (!draggedTableRowTarget) openMenu()
+    })
+    control.addEventListener('click', event => {
+      // Draggable buttons do not reliably emit pointer clicks in Chromium. The
+      // pointerup path covers pointing devices; detail=0 preserves keyboard use.
+      if (event.detail === 0) openMenu()
+    })
+    control.addEventListener('dragstart', event => {
+      const target = tableRowControlTargets.get(control)
+      if (!target || !event.dataTransfer) {
+        event.preventDefault()
+        return
+      }
+      draggedTableRowTarget = target
+      activeTableTarget = target.table
+      tableTargetHovered = true
+      control.setAttribute('aria-grabbed', 'true')
+      event.dataTransfer.effectAllowed = 'move'
+      event.dataTransfer.setData('application/x-dxeditor-table-row', tableRowKey(target))
+      event.dataTransfer.setData('text/plain', control.getAttribute('aria-label') ?? 'Table row')
+    })
+    control.addEventListener('dragover', event => {
+      const target = tableRowControlTargets.get(control)
+      const row = tableRowRange(target ?? null)
+      const element = row ? tableRowElement(row) : null
+      if (target && element) updateTableRowDropTarget(event, target, element)
+    })
+    control.addEventListener('drop', dropTableRow)
+    control.addEventListener('dragend', clearTableRowDrag)
+    return control
+  }
+
+  const hideTableControls = (): void => {
+    tableControls.hidden = true
+    tableRowControls.hidden = true
+    tableRowControls.querySelectorAll<HTMLButtonElement>('.dxeditor-engine__table-row-handle').forEach(control => {
+      control.hidden = true
+    })
+  }
+
+  const positionTableControls = (): void => {
+    if (options.readonly) {
+      hideTableControls()
+      closeTableRowMenu(false)
+      return
+    }
+    const target = menuTableRowTarget?.table ?? draggedTableRowTarget?.table ?? activeTableTarget
+    const range = tableRange(target)
+    if (!range) {
+      hideTableControls()
+      if (!tableRowMenu.hidden) closeTableRowMenu(false)
+      return
+    }
+    const table = tableElement(range)
+    if (!table) {
+      hideTableControls()
+      return
+    }
+    const rect = table.getBoundingClientRect()
+    const viewportHeight = window.visualViewport?.height ?? window.innerHeight
+    const viewportWidth = window.visualViewport?.width ?? window.innerWidth
+    if (rect.bottom < 0 || rect.top > viewportHeight || rect.right < 0 || rect.left > viewportWidth) {
+      hideTableControls()
+      return
+    }
+    activeTableTarget = range.target
+    tableControls.hidden = false
+    tableRowControls.hidden = false
+    tableControls.dataset.tableId = range.target.semanticId ?? ''
+    tableRowControls.dataset.tableId = range.target.semanticId ?? ''
+    const bounds = wrapper.getBoundingClientRect()
+    addBottomRowButton.style.left = `${rect.left - bounds.left}px`
+    addBottomRowButton.style.top = `${rect.bottom - bounds.top + 4}px`
+    addBottomRowButton.style.width = `${rect.width}px`
+    addRightColumnButton.style.left = `${rect.right - bounds.left + 4}px`
+    addRightColumnButton.style.top = `${rect.top - bounds.top}px`
+    addRightColumnButton.style.height = `${rect.height}px`
+
+    const existing = new Map(Array.from(
+      tableRowControls.querySelectorAll<HTMLButtonElement>('.dxeditor-engine__table-row-handle'),
+    ).map(control => [control.dataset.rowKey ?? '', control]))
+    const retained = new Set<HTMLButtonElement>()
+    let rowOffset = range.from + 1
+    range.node.forEach((node, _offset, index) => {
+      const target: TableRowTarget = {
+        table: range.target,
+        semanticId: typeof node.attrs.semanticId === 'string' ? node.attrs.semanticId : null,
+        fallbackIndex: index,
+      }
+      const key = tableRowKey(target)
+      const control = existing.get(key) ?? createTableRowControl()
+      retained.add(control)
+      tableRowControlTargets.set(control, target)
+      control.dataset.rowKey = key
+      control.dataset.rowId = target.semanticId ?? ''
+      control.setAttribute('aria-label', `Row ${index + 1} actions`)
+      control.title = `Row ${index + 1} actions; drag to reorder`
+      tableRowControls.append(control)
+      const rowRange: TableRowRange = {
+        table: range,
+        from: rowOffset,
+        to: rowOffset + node.nodeSize,
+        index,
+        node,
+        target,
+      }
+      const row = tableRowElement(rowRange)
+      rowOffset += node.nodeSize
+      if (!row) {
+        control.hidden = true
+        return
+      }
+      const rowRect = row.getBoundingClientRect()
+      control.hidden = rowRect.bottom < 0 || rowRect.top > viewportHeight
+      if (control.hidden) return
+      const width = control.offsetWidth || 28
+      const height = control.offsetHeight || 28
+      control.style.left = `${rect.left - bounds.left - width - 6}px`
+      control.style.top = `${rowRect.top - bounds.top + Math.max(0, (rowRect.height - height) / 2)}px`
+    })
+    existing.forEach(control => {
+      if (!retained.has(control)) control.remove()
+    })
+
+    if (!tableRowMenu.hidden && menuTableRowTarget) {
+      const menuKey = tableRowKey(menuTableRowTarget)
+      const trigger = Array.from(tableRowControls.querySelectorAll<HTMLButtonElement>('.dxeditor-engine__table-row-handle'))
+        .find(control => control.dataset.rowKey === menuKey && !control.hidden)
+      if (trigger) {
+        tableRowMenuTrigger = trigger
+        trigger.setAttribute('aria-expanded', 'true')
+        positionAdjacentSurface(tableRowMenu, trigger.getBoundingClientRect(), wrapper)
+      } else closeTableRowMenu(false)
+    }
   }
 
   function updateSurfaces(value: Editor): void {
@@ -1593,15 +2061,12 @@ export const mount = (host: HTMLElement, options: MountOptions): EditorSession =
     bubble.hidden = empty || imageActive || cellSelection
     if (!blockTargetHovered && blockMenu.hidden) activeBlockTarget = topLevelRange()?.target ?? null
     positionBlockControls()
-    tableControls.hidden = !value.isActive('table')
+    if (!tableTargetHovered && tableRowMenu.hidden && !draggedTableRowTarget) activeTableTarget = tableRange()?.target ?? null
+    positionTableControls()
     if (!bubble.hidden) {
       const start = value.view.coordsAtPos(from)
       const end = value.view.coordsAtPos(to)
       positionSurface(bubble, new DOMRect(Math.min(start.left, end.left), Math.min(start.top, end.top), Math.abs(end.right - start.left), Math.max(start.bottom, end.bottom) - Math.min(start.top, end.top)), wrapper)
-    }
-    if (!tableControls.hidden) {
-      const caret = value.view.coordsAtPos(from)
-      positionSurface(tableControls, new DOMRect(caret.left, caret.top, 1, caret.bottom - caret.top), wrapper)
     }
     if (imageActive) {
       const caret = value.view.coordsAtPos(from)
@@ -1652,7 +2117,13 @@ export const mount = (host: HTMLElement, options: MountOptions): EditorSession =
   }
   const blockPointerLeave = (event: PointerEvent): void => {
     const related = event.relatedTarget
-    if (related instanceof globalThis.Node && (blockControls.contains(related) || blockMenu.contains(related))) return
+    if (related instanceof globalThis.Node && (
+      blockControls.contains(related)
+      || blockMenu.contains(related)
+      || tableControls.contains(related)
+      || tableRowControls.contains(related)
+      || tableRowMenu.contains(related)
+    )) return
     blockTargetHovered = false
     if (blockMenu.hidden) activeBlockTarget = topLevelRange()?.target ?? null
     positionBlockControls()
@@ -1660,14 +2131,57 @@ export const mount = (host: HTMLElement, options: MountOptions): EditorSession =
   editor.view.dom.addEventListener('pointermove', blockPointerMove)
   editor.view.dom.addEventListener('pointerleave', blockPointerLeave)
 
+  const tablePointerMove = (event: PointerEvent): void => {
+    if (options.readonly) return
+    const target = tableTargetFromDom(event.target)
+    if (!target) {
+      if (tableTargetHovered && tableRowMenu.hidden && !draggedTableRowTarget) {
+        tableTargetHovered = false
+        activeTableTarget = tableRange()?.target ?? null
+        positionTableControls()
+      }
+      return
+    }
+    tableTargetHovered = true
+    activeTableTarget = target
+    positionTableControls()
+  }
+  const tablePointerLeave = (event: PointerEvent): void => {
+    const related = event.relatedTarget
+    if (related instanceof globalThis.Node && (
+      tableControls.contains(related)
+      || tableRowControls.contains(related)
+      || tableRowMenu.contains(related)
+    )) return
+    tableTargetHovered = false
+    if (tableRowMenu.hidden && !draggedTableRowTarget) activeTableTarget = tableRange()?.target ?? null
+    positionTableControls()
+  }
+  const tableDragOver = (event: DragEvent): void => {
+    if (!draggedTableRowTarget) return
+    const target = tableRowTargetFromDom(event.target)
+    const row = tableRowRange(target)
+    const element = row ? tableRowElement(row) : null
+    if (target && element) updateTableRowDropTarget(event, target, element)
+  }
+  editor.view.dom.addEventListener('pointermove', tablePointerMove)
+  editor.view.dom.addEventListener('pointerleave', tablePointerLeave)
+  editor.view.dom.addEventListener('dragover', tableDragOver)
+  editor.view.dom.addEventListener('drop', dropTableRow)
+  ;[tableControls, tableRowControls, tableRowMenu].forEach(surface => {
+    surface.addEventListener('pointerenter', () => { tableTargetHovered = true })
+    surface.addEventListener('pointerleave', tablePointerLeave)
+  })
+
   const outside = (event: PointerEvent) => {
     const target = event.target as globalThis.Node
-    if (![bubble, slash, blockControls, blockMenu, linkPopover, tableControls, mediaPopover, mentions, entityPopover, entityPreview].some(surface => surface.contains(target))) {
+    if (![bubble, slash, blockControls, blockMenu, linkPopover, tableControls, tableRowControls, tableRowMenu, mediaPopover, mentions, entityPopover, entityPreview].some(surface => surface.contains(target))) {
       slash.hidden = true
       slashInsertionMode = false
       slashBlockTarget = null
       blockMenu.hidden = true
       menuBlockTarget = null
+      closeTableRowMenu(false)
       linkPopover.hidden = true
       closeEntityPopover()
       closeEntityPreview()
@@ -1681,7 +2195,7 @@ export const mount = (host: HTMLElement, options: MountOptions): EditorSession =
     if (geometryFrame !== null || destroyed) return
     geometryFrame = window.requestAnimationFrame(() => {
       geometryFrame = null
-      if ([bubble, slash, blockControls, blockMenu, linkPopover, tableControls, mediaPopover, mentions, entityPopover, entityPreview]
+      if ([bubble, slash, blockControls, blockMenu, linkPopover, tableControls, tableRowControls, tableRowMenu, mediaPopover, mentions, entityPopover, entityPreview]
         .some(surface => !surface.hidden)) updateSurfaces(editor)
     })
   }
@@ -1719,7 +2233,7 @@ export const mount = (host: HTMLElement, options: MountOptions): EditorSession =
 	      const slashMatch = /(?:^|\s)\/([^\s/]*)$/.exec(before)
 	      if (!slash.hidden && slashMatch) dismissedSlash = `${$from.pos}:${slashMatch[1]}`
       slash.hidden = true; slashBlockTarget = null; blockMenu.hidden = true; menuBlockTarget = null; linkPopover.hidden = true; mediaPopover.hidden = true
-      bubble.hidden = true; tableControls.hidden = true; pendingImageInsertAt = null; closeMentions(); closeEntityPopover(); closeEntityPreview(); editor.commands.focus()
+      bubble.hidden = true; hideTableControls(); closeTableRowMenu(false); clearTableRowDrag(); pendingImageInsertAt = null; closeMentions(); closeEntityPopover(); closeEntityPreview(); editor.commands.focus()
 	      editor.view.dom.setAttribute('aria-expanded', 'false')
 	      editor.view.dom.removeAttribute('aria-activedescendant')
     }
@@ -1772,12 +2286,16 @@ export const mount = (host: HTMLElement, options: MountOptions): EditorSession =
 	      geometryObserver?.disconnect()
 	      editor.view.dom.removeEventListener('pointermove', blockPointerMove)
 	      editor.view.dom.removeEventListener('pointerleave', blockPointerLeave)
+	      editor.view.dom.removeEventListener('pointermove', tablePointerMove)
+	      editor.view.dom.removeEventListener('pointerleave', tablePointerLeave)
+	      editor.view.dom.removeEventListener('dragover', tableDragOver)
+	      editor.view.dom.removeEventListener('drop', dropTableRow)
 	      editor.view.dom.removeEventListener('pointerover', entityPointerOver)
 	      editor.view.dom.removeEventListener('pointerout', entityPointerOut)
 	      editor.view.dom.removeEventListener('click', entityClick)
 	      editor.view.dom.removeEventListener('keydown', editorKeydown, true)
       editor.destroy()
-      bubble.remove(); blockControls.remove(); slash.remove(); blockMenu.remove(); linkPopover.remove(); tableControls.remove(); mediaPopover.remove(); mentions.remove(); entityPopover.remove(); entityPreview.remove()
+      bubble.remove(); blockControls.remove(); slash.remove(); blockMenu.remove(); linkPopover.remove(); tableControls.remove(); tableRowControls.remove(); tableRowMenu.remove(); mediaPopover.remove(); mentions.remove(); entityPopover.remove(); entityPreview.remove()
     },
   }
 }

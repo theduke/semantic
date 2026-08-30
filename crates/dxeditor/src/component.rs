@@ -534,6 +534,65 @@ const DXEDITOR_STYLE: &str = r#"
   padding: 2px 5px;
 }
 
+.dxeditor-engine__table-controls,
+.dxeditor-engine__table-row-controls {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+}
+
+.dxeditor-engine__table-controls[hidden],
+.dxeditor-engine__table-row-controls[hidden] {
+  display: none;
+}
+
+.dxeditor-engine__table-controls .dxeditor-engine__button,
+.dxeditor-engine__table-row-handle {
+  position: absolute;
+  z-index: 2;
+  box-sizing: border-box;
+  border: 1px solid #d8dee7;
+  background: #fff;
+  box-shadow: 0 2px 8px rgb(23 32 42 / 12%);
+  pointer-events: auto;
+}
+
+.dxeditor-engine__table-add-row {
+  min-height: 24px;
+  border-radius: 5px;
+  padding: 0;
+}
+
+.dxeditor-engine__table-add-column {
+  min-width: 24px;
+  border-radius: 5px;
+  padding: 0;
+}
+
+.dxeditor-engine__table-row-handle {
+  min-width: 28px;
+  min-height: 28px;
+  padding: 2px 4px;
+  cursor: grab;
+}
+
+.dxeditor-engine__table-row-handle:active,
+.dxeditor-engine__table-row-handle[aria-grabbed="true"] {
+  cursor: grabbing;
+}
+
+.dxeditor-engine__table-row-handle[data-drop-position="before"] {
+  border-top: 3px solid #176b87;
+}
+
+.dxeditor-engine__table-row-handle[data-drop-position="after"] {
+  border-bottom: 3px solid #176b87;
+}
+
+.dxeditor-engine__table-row-menu .dxeditor-engine__button {
+  text-align: left;
+}
+
 .dxeditor__error {
   border: 1px solid #b42318;
   border-radius: 6px;
@@ -545,15 +604,6 @@ const DXEDITOR_STYLE: &str = r#"
 @media (max-width: 640px) {
   .dxeditor[data-engine="tiptap-prosemirror"] .dxeditor__document {
     padding: 18px 56px;
-  }
-
-  .dxeditor-engine__table-controls {
-    position: fixed;
-    right: 8px;
-    bottom: max(8px, env(safe-area-inset-bottom));
-    left: 8px !important;
-    top: auto !important;
-    overflow-x: auto;
   }
 }
 "#;

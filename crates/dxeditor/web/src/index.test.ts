@@ -354,6 +354,76 @@ const paragraphDocument = (id: string, text: string): ComponentDocumentV2 => ({
   }] },
 })
 
+const tableDocument = (rows = 3, columns = 2): ComponentDocumentV2 => ({
+  schema: 'semantic.component-document',
+  version: 2,
+  root: { kind: 'document', content: [{
+    kind: 'table', id: 'table-1', content: Array.from({ length: rows }, (_, row) => ({
+      kind: 'table_row', id: `row-${row + 1}`, content: Array.from({ length: columns }, (_, column) => ({
+        kind: row === 0 ? 'table_header' : 'table_cell',
+        id: `cell-${row + 1}-${column + 1}`,
+        content: [{
+          kind: 'paragraph', id: `paragraph-${row + 1}-${column + 1}`,
+          content: [{ kind: 'text', text: `R${row + 1}C${column + 1}` }],
+        }],
+      })),
+    })),
+  }] },
+})
+
+describe('table widget controls', () => {
+  it('targets explicit rows independently of the cell selection and honors boundaries', () => {
+    document.body.innerHTML = '<div class="dxeditor"><div id="host"></div><div data-dxeditor-overlays></div></div>'
+    const session = mount(document.querySelector('#host')!, {
+      sessionId: 'table-rows', document: tableDocument(), readonly: false, emit: () => {},
+    })
+
+    const handles = () => Array.from(document.querySelectorAll<HTMLButtonElement>('.dxeditor-engine__table-row-handle'))
+    expect(handles().map(handle => handle.getAttribute('aria-label'))).toEqual([
+      'Row 1 actions', 'Row 2 actions', 'Row 3 actions',
+    ])
+    handles()[0]!.click()
+    expect((document.querySelector('[title="Move row up"]') as HTMLButtonElement).disabled).toBe(true)
+    ;(document.querySelector('[title="Move row up"]') as HTMLButtonElement).click()
+    expect(session.snapshot().root.content?.[0]?.content?.map(row => row.id)).toEqual(['row-1', 'row-2', 'row-3'])
+
+    handles()[1]!.click()
+    expect((document.querySelector('[title="Move row down"]') as HTMLButtonElement).disabled).toBe(false)
+    ;(document.querySelector('[title="Move row down"]') as HTMLButtonElement).click()
+    expect(session.snapshot().root.content?.[0]?.content?.map(row => row.id)).toEqual(['row-1', 'row-3', 'row-2'])
+
+    const movedHandle = handles().find(handle => handle.dataset.rowId === 'row-2')!
+    movedHandle.click()
+    expect((document.querySelector('[title="Move row down"]') as HTMLButtonElement).disabled).toBe(true)
+    ;(document.querySelector('[title="Delete row"]') as HTMLButtonElement).click()
+    expect(session.snapshot().root.content?.[0]?.content?.map(row => row.id)).toEqual(['row-1', 'row-3'])
+    session.destroy()
+  })
+
+  it('adds only at the table edges and does not expose editing controls in readonly mode', () => {
+    document.body.innerHTML = '<div class="dxeditor"><div id="host"></div><div data-dxeditor-overlays></div></div>'
+    const session = mount(document.querySelector('#host')!, {
+      sessionId: 'table-edges', document: tableDocument(2, 2), readonly: false, emit: () => {},
+    })
+    ;(document.querySelector('[title="Add row at bottom"]') as HTMLButtonElement).click()
+    ;(document.querySelector('[title="Add column at right"]') as HTMLButtonElement).click()
+    const table = session.snapshot().root.content?.[0]
+    expect(table?.content).toHaveLength(3)
+    expect(table?.content?.every(row => row.content?.length === 3)).toBe(true)
+    session.destroy()
+
+    document.body.innerHTML = '<div class="dxeditor"><div id="host"></div><div data-dxeditor-overlays></div></div>'
+    const readonly = mount(document.querySelector('#host')!, {
+      sessionId: 'table-readonly', document: tableDocument(), readonly: true, emit: () => {},
+    })
+    document.querySelector('tr')?.dispatchEvent(new Event('pointermove', { bubbles: true }))
+    expect((document.querySelector('[aria-label="Table actions"]') as HTMLElement).hidden).toBe(true)
+    expect((document.querySelector('[aria-label="Table row actions"]') as HTMLElement).hidden).toBe(true)
+    expect(document.querySelectorAll('.dxeditor-engine__table-row-handle')).toHaveLength(0)
+    readonly.destroy()
+  })
+})
+
 const allIds = (document: ComponentDocumentV2): string[] => {
   const ids: string[] = []
   const visit = (node: NonNullable<ComponentDocumentV2['root']>) => {
