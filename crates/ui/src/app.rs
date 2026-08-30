@@ -79,7 +79,7 @@ pub fn launch_web() {
 
 fn boot_app() -> Element {
     let props = BOOT
-        .with(|boot| boot.borrow_mut().take())
+        .with(|boot| boot.borrow().clone())
         .expect("semantic UI launch state missing");
     rsx! {
         AppRoot {
