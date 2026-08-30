@@ -34,6 +34,60 @@ test('inserts blocks from contextual add controls and edits tables locally', asy
   await expect(editor.locator('tr')).toHaveCount(before + 1)
 })
 
+test('targets each hovered block from a stable left gutter', async ({ page }) => {
+  const editor = page.locator('.ProseMirror')
+  await page.evaluate(() => {
+    const session = (window as unknown as { editorSession: { replaceDocument: (document: unknown) => void } }).editorSession
+    session.replaceDocument({
+      schema: 'semantic.component-document',
+      version: 2,
+      root: {
+        kind: 'document',
+        content: [
+          { id: 'block-alpha', kind: 'paragraph', content: [{ kind: 'text', text: 'Alpha' }] },
+          { id: 'block-bravo', kind: 'paragraph', content: [{ kind: 'text', text: 'Bravo' }] },
+          { id: 'block-charlie', kind: 'paragraph', content: [{ kind: 'text', text: 'Charlie' }] },
+        ],
+      },
+    })
+  })
+
+  // Keep the editor selection in Alpha while targeting Bravo by hover.
+  await editor.locator('[data-semantic-id="block-alpha"]').click()
+  const bravo = editor.locator('[data-semantic-id="block-bravo"]')
+  await bravo.hover()
+  const controls = page.getByRole('toolbar', { name: 'Current block' })
+  await expect(controls).toBeVisible()
+  await expect(controls).toHaveAttribute('data-block-id', 'block-bravo')
+  const geometry = await Promise.all([controls.boundingBox(), bravo.boundingBox()])
+  expect(geometry[0]).not.toBeNull()
+  expect(geometry[1]).not.toBeNull()
+  expect(geometry[0]!.x + geometry[0]!.width).toBeLessThan(geometry[1]!.x)
+  expect(Math.abs(geometry[0]!.y - geometry[1]!.y)).toBeLessThan(2)
+
+  await controls.getByRole('button', { name: 'Block actions' }).click()
+  const menu = page.getByRole('menu', { name: 'Block actions' })
+  await expect(menu.getByRole('menuitem', { name: 'Move block up' })).toBeEnabled()
+  await menu.getByRole('menuitem', { name: 'Duplicate block' }).click()
+  await expect(editor.locator('p')).toHaveText(['Alpha', 'Bravo', 'Bravo', 'Charlie'])
+
+  // The explicit semantic target survives the menu focus change and document edits.
+  await editor.locator('[data-semantic-id="block-bravo"]').hover()
+  await controls.getByRole('button', { name: 'Block actions' }).click()
+  await menu.getByRole('menuitem', { name: 'Move block down' }).click()
+  const movedIds = await page.evaluate(() => {
+    const session = (window as unknown as { editorSession: { snapshot: () => { root: { content?: Array<{ id?: string }> } } } }).editorSession
+    return session.snapshot().root.content?.map(block => block.id)
+  })
+  expect(movedIds?.[2]).toBe('block-bravo')
+
+  await editor.locator('[data-semantic-id="block-bravo"]').hover()
+  await controls.getByRole('button', { name: 'Block actions' }).click()
+  await menu.getByRole('menuitem', { name: 'Delete block' }).click()
+  await expect(editor.locator('[data-semantic-id="block-bravo"]')).toHaveCount(0)
+  await expect(editor.locator('p')).toHaveText(['Alpha', 'Bravo', 'Charlie'])
+})
+
 test('rejects unsafe links without losing the mapped selection', async ({ page }) => {
   const editor = page.locator('.ProseMirror')
   await editor.click()

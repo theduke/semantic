@@ -642,6 +642,16 @@ const positionSurface = (surface: HTMLElement, rect: DOMRect, wrapper: HTMLEleme
   surface.style.top = `${Math.max(8, rect.top - bounds.top - surface.offsetHeight - 8)}px`
 }
 
+type TopLevelBlockTarget = { semanticId: string | null; fallbackPosition: number }
+
+const positionAdjacentSurface = (surface: HTMLElement, rect: DOMRect, wrapper: HTMLElement): void => {
+  const bounds = wrapper.getBoundingClientRect()
+  const left = Math.max(8, Math.min(rect.right - bounds.left + 6, bounds.width - surface.offsetWidth - 8))
+  const top = Math.max(8, Math.min(rect.top - bounds.top, bounds.height - surface.offsetHeight - 8))
+  surface.style.left = `${left}px`
+  surface.style.top = `${top}px`
+}
+
 export const mount = (host: HTMLElement, options: MountOptions): EditorSession => {
 	  const knownAdapters = new Set([
 	    'document', 'paragraph', 'heading', 'blockquote', 'bulletList', 'orderedList', 'taskList',
@@ -670,6 +680,8 @@ export const mount = (host: HTMLElement, options: MountOptions): EditorSession =
   bubble.hidden = true
   const blockControls = window.document.createElement('div')
   blockControls.className = 'dxeditor-engine__surface dxeditor-engine__block-controls'
+  blockControls.setAttribute('role', 'toolbar')
+  blockControls.setAttribute('aria-label', 'Current block')
   blockControls.hidden = true
   const slash = window.document.createElement('div')
   slash.className = 'dxeditor-engine__surface dxeditor-engine__slash'
@@ -748,6 +760,11 @@ export const mount = (host: HTMLElement, options: MountOptions): EditorSession =
   let destroyed = false
   let suppressUpdate = false
   let slashInsertionMode = false
+  let slashBlockTarget: TopLevelBlockTarget | null = null
+  let activeBlockTarget: TopLevelBlockTarget | null = null
+  let blockTargetHovered = false
+  let menuBlockTarget: TopLevelBlockTarget | null = null
+  let blockMenuTrigger: HTMLButtonElement | null = null
   let pendingImageInsertAt: number | null = null
   let mentionRequest: AbortController | null = null
   let mentionQuery: string | null = null
@@ -953,19 +970,51 @@ export const mount = (host: HTMLElement, options: MountOptions): EditorSession =
     }
   }
 
-  const currentTopLevelRange = (): { from: number; to: number } | null => {
-    const resolved = editor.state.selection.$from
-    if (resolved.depth < 1) return null
-    return { from: resolved.before(1), to: resolved.after(1) }
+  type TopLevelBlockRange = { from: number; to: number; index: number; target: TopLevelBlockTarget }
+
+  const topLevelRange = (target: TopLevelBlockTarget | null = null): TopLevelBlockRange | null => {
+    let fallback: TopLevelBlockRange | null = null
+    let identityMatch: TopLevelBlockRange | null = null
+    const selectionPosition = editor.state.selection.$from.pos
+    editor.state.doc.forEach((node, offset, index) => {
+      const semanticId = typeof node.attrs.semanticId === 'string' ? node.attrs.semanticId : null
+      const range = {
+        from: offset,
+        to: offset + node.nodeSize,
+        index,
+        target: { semanticId, fallbackPosition: offset },
+      }
+      if (target?.semanticId && semanticId === target.semanticId) identityMatch = range
+      const position = target?.fallbackPosition ?? selectionPosition
+      if (position >= offset && position <= offset + node.nodeSize) fallback = range
+    })
+    // Never redirect an identity-backed action to the node that merely inherited its old
+    // position after an external edit. A vanished target should make the action a no-op.
+    return target?.semanticId ? identityMatch : fallback
   }
 
-  const deleteCurrentBlock = (): void => {
-    const range = currentTopLevelRange()
+  const targetFromDom = (domTarget: EventTarget | null): TopLevelBlockTarget | null => {
+    if (!(domTarget instanceof globalThis.Node)) return null
+    let match: TopLevelBlockTarget | null = null
+    editor.state.doc.forEach((node, offset) => {
+      if (match) return
+      const dom = editor.view.nodeDOM(offset)
+      if (!(dom instanceof HTMLElement) || (dom !== domTarget && !dom.contains(domTarget))) return
+      match = {
+        semanticId: typeof node.attrs.semanticId === 'string' ? node.attrs.semanticId : null,
+        fallbackPosition: offset,
+      }
+    })
+    return match
+  }
+
+  const deleteBlock = (target: TopLevelBlockTarget | null): void => {
+    const range = topLevelRange(target)
     if (range) editor.chain().focus().deleteRange(range).run()
   }
 
-  const duplicateCurrentBlock = (): void => {
-    const range = currentTopLevelRange()
+  const duplicateBlock = (target: TopLevelBlockTarget | null): void => {
+    const range = topLevelRange(target)
     if (!range) return
     const source = editor.state.doc.nodeAt(range.from)
     if (!source) return
@@ -979,12 +1028,11 @@ export const mount = (host: HTMLElement, options: MountOptions): EditorSession =
     editor.commands.focus(range.to + 1)
   }
 
-  const moveCurrentBlock = (direction: -1 | 1): void => {
-    const range = currentTopLevelRange()
+  const moveBlock = (target: TopLevelBlockTarget | null, direction: -1 | 1): void => {
+    const range = topLevelRange(target)
     if (!range) return
-    const resolved = editor.state.selection.$from
-    const index = resolved.index(0)
-    const source = editor.state.doc.child(index)
+    const { index } = range
+    const source = editor.state.doc.child(range.index)
     if (direction < 0) {
       if (index === 0) return
       const destination = range.from - editor.state.doc.child(index - 1).nodeSize
@@ -1005,8 +1053,8 @@ export const mount = (host: HTMLElement, options: MountOptions): EditorSession =
     if (match) editor.commands.deleteRange({ from: $from.pos - match[1].length, to: $from.pos })
   }
 
-  const insertBlockAfterCurrent = (name: string, attrs: Attributes = {}): void => {
-    const range = currentTopLevelRange()
+  const insertBlockAfter = (name: string, attrs: Attributes = {}, target: TopLevelBlockTarget | null = null): void => {
+    const range = topLevelRange(target)
     if (!range) return
     if (name === 'table') {
       const rows: JSONContent[] = Array.from({ length: 3 }, (_, row) => ({
@@ -1112,22 +1160,45 @@ export const mount = (host: HTMLElement, options: MountOptions): EditorSession =
     if (event.key === 'Enter') { event.preventDefault(); applyMedia() }
     if (event.key === 'Escape') { pendingImageInsertAt = null; mediaPopover.hidden = true; editor.commands.focus() }
   }))
-  blockControls.append(button('+', 'Add a block', () => {
+  const addBlockButton = button('+', 'Add a block', () => {
+    slashBlockTarget = activeBlockTarget
     slashInsertionMode = true
     slash.hidden = false
-    positionSurface(slash, blockControls.getBoundingClientRect(), wrapper)
+    positionAdjacentSurface(slash, blockControls.getBoundingClientRect(), wrapper)
     slash.querySelector<HTMLButtonElement>('button')?.focus()
-  }))
-  blockControls.append(button('⋮⋮', 'Block actions', () => {
+  })
+  const blockActionsButton = button('⋮⋮', 'Block actions', () => {
+    menuBlockTarget = activeBlockTarget
+    blockMenuTrigger = blockActionsButton
     blockMenu.hidden = false
-    positionSurface(blockMenu, blockControls.getBoundingClientRect(), wrapper)
-    blockMenu.querySelector<HTMLButtonElement>('button')?.focus()
-  }))
-  blockMenu.append(button('Duplicate', 'Duplicate block', () => { duplicateCurrentBlock(); blockMenu.hidden = true }))
-  blockMenu.append(button('Move up', 'Move block up', () => { moveCurrentBlock(-1); blockMenu.hidden = true }))
-  blockMenu.append(button('Move down', 'Move block down', () => { moveCurrentBlock(1); blockMenu.hidden = true }))
-  blockMenu.append(button('Delete', 'Delete block', () => { deleteCurrentBlock(); blockMenu.hidden = true }))
+    const range = topLevelRange(menuBlockTarget)
+    moveUpButton.disabled = !range || range.index === 0
+    moveDownButton.disabled = !range || range.index === editor.state.doc.childCount - 1
+    positionAdjacentSurface(blockMenu, blockControls.getBoundingClientRect(), wrapper)
+    blockMenu.querySelector<HTMLButtonElement>('button:not(:disabled)')?.focus()
+  })
+  blockControls.append(addBlockButton, blockActionsButton)
+  const duplicateButton = button('Duplicate', 'Duplicate block', () => { duplicateBlock(menuBlockTarget); blockMenu.hidden = true })
+  const moveUpButton = button('Move up', 'Move block up', () => { moveBlock(menuBlockTarget, -1); blockMenu.hidden = true })
+  const moveDownButton = button('Move down', 'Move block down', () => { moveBlock(menuBlockTarget, 1); blockMenu.hidden = true })
+  const deleteButton = button('Delete', 'Delete block', () => { deleteBlock(menuBlockTarget); blockMenu.hidden = true })
+  blockMenu.append(duplicateButton, moveUpButton, moveDownButton, deleteButton)
 	  blockMenu.querySelectorAll('button').forEach(item => item.setAttribute('role', 'menuitem'))
+  blockMenu.addEventListener('keydown', event => {
+    const items = Array.from(blockMenu.querySelectorAll<HTMLButtonElement>('button:not(:disabled)'))
+    const index = Math.max(0, items.indexOf(window.document.activeElement as HTMLButtonElement))
+    if (event.key === 'Escape') {
+      event.preventDefault()
+      blockMenu.hidden = true
+      blockMenuTrigger?.focus()
+    } else if (event.key === 'ArrowDown' || event.key === 'ArrowUp' || event.key === 'Home' || event.key === 'End') {
+      event.preventDefault()
+      const next = event.key === 'Home' ? 0
+        : event.key === 'End' ? items.length - 1
+          : (index + (event.key === 'ArrowDown' ? 1 : -1) + items.length) % items.length
+      items[next]?.focus()
+    }
+  })
   const insertions: Array<[string, string, Attributes?]> = [
     ['Text', 'paragraph'], ['Heading 1', 'heading', { level: 1 }], ['Heading 2', 'heading', { level: 2 }],
     ['Bulleted list', 'bulletList'], ['Numbered list', 'orderedList'], ['Task list', 'taskList'],
@@ -1136,13 +1207,14 @@ export const mount = (host: HTMLElement, options: MountOptions): EditorSession =
   insertions.filter(([, command]) => commandEnabled(command)).forEach(([label, command, attrs]) => {
     const item = button(label, `Insert ${label}`, () => {
       if (command === 'image') {
-        const position = slashInsertionMode ? currentTopLevelRange()?.to ?? null : null
+        const position = slashInsertionMode ? topLevelRange(slashBlockTarget)?.to ?? null : null
         if (!slashInsertionMode) removeSlashTrigger()
         openMediaPopover(position)
-      } else if (slashInsertionMode) insertBlockAfterCurrent(command, attrs)
+      } else if (slashInsertionMode) insertBlockAfter(command, attrs, slashBlockTarget)
       else { removeSlashTrigger(); run(command, attrs) }
       slash.hidden = true
       slashInsertionMode = false
+      slashBlockTarget = null
     })
     item.setAttribute('role', 'option')
     slash.append(item)
@@ -1247,6 +1319,35 @@ export const mount = (host: HTMLElement, options: MountOptions): EditorSession =
     }, 120)
   }
 
+  const positionBlockControls = (): void => {
+    if (options.readonly) {
+      blockControls.hidden = true
+      return
+    }
+    const range = topLevelRange(activeBlockTarget)
+    if (!range) {
+      blockControls.hidden = true
+      return
+    }
+    activeBlockTarget = range.target
+    const dom = editor.view.nodeDOM(range.from)
+    if (!(dom instanceof HTMLElement)) {
+      blockControls.hidden = true
+      return
+    }
+    const rect = dom.getBoundingClientRect()
+    const viewportHeight = window.visualViewport?.height ?? window.innerHeight
+    if (rect.bottom < 0 || rect.top > viewportHeight) {
+      blockControls.hidden = true
+      return
+    }
+    blockControls.hidden = false
+    const bounds = wrapper.getBoundingClientRect()
+    blockControls.style.left = `${rect.left - bounds.left - blockControls.offsetWidth - 6}px`
+    blockControls.style.top = `${rect.top - bounds.top}px`
+    blockControls.dataset.blockId = range.target.semanticId ?? ''
+  }
+
   function updateSurfaces(value: Editor): void {
     if (destroyed || options.readonly || value.view.composing) return
     const { from, to, empty } = value.state.selection
@@ -1254,19 +1355,15 @@ export const mount = (host: HTMLElement, options: MountOptions): EditorSession =
     const imageActive = value.isActive('image')
 	    bubble.querySelectorAll<HTMLButtonElement>('[data-command]').forEach(control => {
 	      control.setAttribute('aria-pressed', String(value.isActive(control.dataset.command ?? '')))
-	    })
+    })
     bubble.hidden = empty || imageActive || cellSelection
-    blockControls.hidden = !empty
+    if (!blockTargetHovered && blockMenu.hidden) activeBlockTarget = topLevelRange()?.target ?? null
+    positionBlockControls()
     tableControls.hidden = !value.isActive('table')
     if (!bubble.hidden) {
       const start = value.view.coordsAtPos(from)
       const end = value.view.coordsAtPos(to)
       positionSurface(bubble, new DOMRect(Math.min(start.left, end.left), Math.min(start.top, end.top), Math.abs(end.right - start.left), Math.max(start.bottom, end.bottom) - Math.min(start.top, end.top)), wrapper)
-    }
-    if (!blockControls.hidden) {
-      const caret = value.view.coordsAtPos(from)
-      positionSurface(blockControls, new DOMRect(caret.left, caret.top, 1, caret.bottom - caret.top), wrapper)
-      blockControls.style.top = `${Math.max(8, caret.top - wrapper.getBoundingClientRect().top)}px`
     }
     if (!tableControls.hidden) {
       const caret = value.view.coordsAtPos(from)
@@ -1311,12 +1408,32 @@ export const mount = (host: HTMLElement, options: MountOptions): EditorSession =
     updateMentions()
   }
 
+  const blockPointerMove = (event: PointerEvent): void => {
+    if (options.readonly) return
+    const target = targetFromDom(event.target)
+    if (!target) return
+    blockTargetHovered = true
+    activeBlockTarget = target
+    positionBlockControls()
+  }
+  const blockPointerLeave = (event: PointerEvent): void => {
+    const related = event.relatedTarget
+    if (related instanceof globalThis.Node && (blockControls.contains(related) || blockMenu.contains(related))) return
+    blockTargetHovered = false
+    if (blockMenu.hidden) activeBlockTarget = topLevelRange()?.target ?? null
+    positionBlockControls()
+  }
+  editor.view.dom.addEventListener('pointermove', blockPointerMove)
+  editor.view.dom.addEventListener('pointerleave', blockPointerLeave)
+
   const outside = (event: PointerEvent) => {
     const target = event.target as globalThis.Node
     if (![bubble, slash, blockControls, blockMenu, linkPopover, tableControls, mediaPopover, mentions].some(surface => surface.contains(target))) {
       slash.hidden = true
       slashInsertionMode = false
+      slashBlockTarget = null
       blockMenu.hidden = true
+      menuBlockTarget = null
       linkPopover.hidden = true
       if (!editor.isActive('image')) mediaPopover.hidden = true
       closeMentions()
@@ -1336,6 +1453,8 @@ export const mount = (host: HTMLElement, options: MountOptions): EditorSession =
   window.addEventListener('resize', refreshGeometry)
   window.visualViewport?.addEventListener('resize', refreshGeometry)
   window.visualViewport?.addEventListener('scroll', refreshGeometry)
+	  const geometryObserver = typeof ResizeObserver === 'undefined' ? null : new ResizeObserver(refreshGeometry)
+	  geometryObserver?.observe(editor.view.dom)
 	  const editorKeydown = (event: KeyboardEvent): void => {
 	    const activeListbox = !mentions.hidden ? mentions : !slash.hidden ? slash : null
 	    const items = activeListbox
@@ -1363,7 +1482,7 @@ export const mount = (host: HTMLElement, options: MountOptions): EditorSession =
 	      const before = $from.parent.textBetween(0, $from.parentOffset, undefined, '\ufffc')
 	      const slashMatch = /(?:^|\s)\/([^\s/]*)$/.exec(before)
 	      if (!slash.hidden && slashMatch) dismissedSlash = `${$from.pos}:${slashMatch[1]}`
-      slash.hidden = true; blockMenu.hidden = true; linkPopover.hidden = true; mediaPopover.hidden = true
+      slash.hidden = true; slashBlockTarget = null; blockMenu.hidden = true; menuBlockTarget = null; linkPopover.hidden = true; mediaPopover.hidden = true
       bubble.hidden = true; tableControls.hidden = true; pendingImageInsertAt = null; closeMentions(); editor.commands.focus()
 	      editor.view.dom.setAttribute('aria-expanded', 'false')
 	      editor.view.dom.removeAttribute('aria-activedescendant')
@@ -1410,6 +1529,9 @@ export const mount = (host: HTMLElement, options: MountOptions): EditorSession =
 	      window.removeEventListener('resize', refreshGeometry)
 	      window.visualViewport?.removeEventListener('resize', refreshGeometry)
 	      window.visualViewport?.removeEventListener('scroll', refreshGeometry)
+	      geometryObserver?.disconnect()
+	      editor.view.dom.removeEventListener('pointermove', blockPointerMove)
+	      editor.view.dom.removeEventListener('pointerleave', blockPointerLeave)
 	      editor.view.dom.removeEventListener('keydown', editorKeydown, true)
       editor.destroy()
       bubble.remove(); blockControls.remove(); slash.remove(); blockMenu.remove(); linkPopover.remove(); tableControls.remove(); mediaPopover.remove(); mentions.remove()

@@ -6,12 +6,12 @@
     <title>dxeditor browser fixture</title>
     <style>
       .dxeditor { position: relative; width: 760px; margin: 80px auto; }
-      [data-dxeditor-host] { min-height: 300px; padding: 30px 50px; }
+      [data-dxeditor-host] { min-height: 300px; padding: 30px 64px; }
       [data-dxeditor-overlays] { position: absolute; inset: 0; pointer-events: none; }
       .dxeditor-engine__surface { position: absolute; z-index: 2; display: flex; gap: 4px; padding: 4px; background: white; border: 1px solid #aaa; pointer-events: auto; }
       .dxeditor-engine__surface[hidden] { display: none; }
       .dxeditor-engine__slash, .dxeditor-engine__block-menu, .dxeditor-engine__link-popover { flex-direction: column; }
-      .dxeditor-engine__block-controls { transform: translateX(-100%); }
+      .dxeditor-engine__block-controls { border: 0; box-shadow: none; padding: 0; }
       table, td, th { border: 1px solid #888; border-collapse: collapse; padding: 4px; }
     </style>
   </head>

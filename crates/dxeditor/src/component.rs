@@ -212,7 +212,7 @@ const DXEDITOR_STYLE: &str = r#"
 .dxeditor[data-engine="tiptap-prosemirror"] .dxeditor__document {
   display: block;
   min-height: 260px;
-  padding: 22px 48px;
+  padding: 22px 64px;
 }
 
 .dxeditor-engine__content {
@@ -368,6 +368,11 @@ const DXEDITOR_STYLE: &str = r#"
   outline: 2px solid transparent;
 }
 
+.dxeditor-engine__button:disabled {
+  color: #a8b4c2;
+  cursor: default;
+}
+
 .dxeditor-engine__slash {
   flex-direction: column;
   width: 230px;
@@ -422,7 +427,17 @@ const DXEDITOR_STYLE: &str = r#"
 }
 
 .dxeditor-engine__block-controls {
-  transform: translateX(-100%);
+  align-items: flex-start;
+  border: 0;
+  background: transparent;
+  box-shadow: none;
+  padding: 0;
+}
+
+.dxeditor-engine__block-controls .dxeditor-engine__button {
+  min-width: 26px;
+  min-height: 26px;
+  padding: 2px 5px;
 }
 
 .dxeditor__error {
@@ -435,7 +450,7 @@ const DXEDITOR_STYLE: &str = r#"
 
 @media (max-width: 640px) {
   .dxeditor[data-engine="tiptap-prosemirror"] .dxeditor__document {
-    padding: 18px 20px;
+    padding: 18px 56px;
   }
 
   .dxeditor-engine__table-controls {
