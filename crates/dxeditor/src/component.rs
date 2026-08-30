@@ -226,6 +226,46 @@ const DXEDITOR_STYLE: &str = r#"
   margin: 0.2rem 0;
 }
 
+.dxeditor-engine__content ul[data-type="taskList"],
+.dxeditor__task-list {
+  margin-left: 0;
+  padding-left: 0;
+  list-style: none;
+}
+
+.dxeditor-engine__content ul[data-type="taskList"] > li,
+.dxeditor__task-item {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.5rem;
+}
+
+.dxeditor-engine__content ul[data-type="taskList"] > li > label,
+.dxeditor__task-item > input[type="checkbox"] {
+  flex: 0 0 auto;
+  margin-top: 0.35em;
+}
+
+.dxeditor-engine__content ul[data-type="taskList"] > li > label > input {
+  margin: 0;
+}
+
+.dxeditor-engine__content ul[data-type="taskList"] > li > div,
+.dxeditor__task-item-content {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.dxeditor-engine__content ul[data-type="taskList"] > li > div > :first-child,
+.dxeditor__task-item-content > :first-child {
+  margin-top: 0;
+}
+
+.dxeditor-engine__content ul[data-type="taskList"] > li > div > :last-child,
+.dxeditor__task-item-content > :last-child {
+  margin-bottom: 0;
+}
+
 .dxeditor-engine__content h1,
 .dxeditor-engine__content h2,
 .dxeditor-engine__content h3 {
@@ -945,13 +985,21 @@ fn ReadOnlyBlock(block: BlockNode) -> Element {
                 .get("ordered")
                 .and_then(Value::as_bool)
                 .unwrap_or(false);
+            let task = block
+                .attrs
+                .get("task")
+                .and_then(Value::as_bool)
+                .unwrap_or(false);
             let NodeContent::Blocks(items) = block.content else {
                 return rsx! {};
             };
             if ordered {
                 rsx! { ol { for item in items { ReadOnlyListItem { block: item } } } }
             } else {
-                rsx! { ul { for item in items { ReadOnlyListItem { block: item } } } }
+                rsx! { ul {
+                    class: if task { "dxeditor__task-list" } else { "" },
+                    for item in items { ReadOnlyListItem { block: item } }
+                } }
             }
         }
         COMPONENT_TABLE => {
@@ -998,10 +1046,15 @@ fn ReadOnlyListItem(block: BlockNode) -> Element {
     let checked = block.attrs.get("checked").and_then(Value::as_bool);
     rsx! {
         li {
+            class: if checked.is_some() { "dxeditor__task-item" } else { "" },
             if let Some(checked) = checked {
                 input { r#type: "checkbox", checked, disabled: true, aria_label: "Task complete" }
+                div { class: "dxeditor__task-item-content",
+                    ReadOnlyContent { content: block.content }
+                }
+            } else {
+                ReadOnlyContent { content: block.content }
             }
-            ReadOnlyContent { content: block.content }
         }
     }
 }
@@ -1157,6 +1210,15 @@ pub fn DocumentView(document: EditorDocument, #[props(default)] catalog: EditorC
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn task_items_share_a_single_row_layout_in_editable_and_readonly_views() {
+        assert!(
+            DXEDITOR_STYLE.contains(".dxeditor-engine__content ul[data-type=\"taskList\"] > li,")
+        );
+        assert!(DXEDITOR_STYLE.contains(".dxeditor__task-item {\n  display: flex;"));
+        assert!(DXEDITOR_STYLE.contains(".dxeditor__task-item-content {"));
+    }
 
     #[test]
     fn legacy_v1_payloads_cross_the_component_boundary_as_v2() {

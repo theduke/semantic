@@ -49,12 +49,19 @@ fn ReadOnlyNodeV2(node: ComponentNode) -> Element {
             rsx! { ul { class: "dxeditor__task-list", ListChildren { nodes: node.content } } }
         }
         COMPONENT_LIST_ITEM_V2 | COMPONENT_TASK_ITEM => {
+            let is_task = node.kind.0 == COMPONENT_TASK_ITEM;
             let checked = node.attrs.get("checked").and_then(Value::as_bool);
-            rsx! { li {
+            rsx! { li { class: if is_task { "dxeditor__task-item" } else { "" },
                 if let Some(checked) = checked {
                     input { r#type: "checkbox", checked, disabled: true, aria_label: if checked { "Completed task" } else { "Incomplete task" } }
                 }
-                BlockChildren { nodes: node.content }
+                if is_task {
+                    div { class: "dxeditor__task-item-content",
+                        BlockChildren { nodes: node.content }
+                    }
+                } else {
+                    BlockChildren { nodes: node.content }
+                }
             } }
         }
         COMPONENT_TABLE_V2 => rsx! { TableV2 { node } },
@@ -253,6 +260,11 @@ mod tests {
             .document;
         let html = dioxus_ssr::render_element(rsx! { ReadOnlyDocumentV2 { document } });
         assert!(html.contains("type=\"checkbox\""), "{html}");
+        assert!(html.contains("class=\"dxeditor__task-item\""), "{html}");
+        assert!(
+            html.contains("class=\"dxeditor__task-item-content\""),
+            "{html}"
+        );
         assert!(html.contains("<img"), "{html}");
         assert!(html.contains("<br/>"), "{html}");
         assert!(html.contains("href=\"https://example.com\""), "{html}");
