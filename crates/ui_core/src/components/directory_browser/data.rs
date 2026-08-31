@@ -1107,10 +1107,7 @@ fn dedupe_ids(item_ids: Vec<String>) -> Vec<String> {
 }
 
 fn unix_time_millis() -> u128 {
-    std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map(|duration| duration.as_millis())
-        .unwrap_or_default()
+    (time::UtcDateTime::now().unix_timestamp_nanos().max(0) / 1_000_000) as u128
 }
 
 struct BreadcrumbLoad {

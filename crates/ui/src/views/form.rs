@@ -768,12 +768,13 @@ fn class_label(class: &ClassType) -> String {
 }
 
 fn new_entity_id() -> String {
-    let nanos = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map(|duration| duration.as_nanos())
-        .unwrap_or_default();
+    let nanos = current_unix_nanos();
     let sequence = ENTITY_ID_SEQUENCE.fetch_add(1, Ordering::Relaxed);
     new_entity_id_from_parts(nanos, sequence)
+}
+
+fn current_unix_nanos() -> u128 {
+    time::UtcDateTime::now().unix_timestamp_nanos().max(0) as u128
 }
 
 fn new_entity_id_from_parts(nanos: u128, sequence: u32) -> String {

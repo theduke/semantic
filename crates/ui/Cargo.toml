@@ -14,7 +14,12 @@ version.workspace = true
 [features]
 default = ["markdown"]
 markdown = ["semantic_ui_core/markdown"]
-web = ["markdown", "dioxus/web", "semantic_rpc/client-http-web"]
+web = [
+  "markdown",
+  "dioxus/web",
+  "semantic_rpc/client-http-web",
+  "time/wasm-bindgen",
+]
 desktop = ["markdown", "dioxus/desktop", "semantic_rpc/client-http-native"]
 standalone = [
   "markdown",
@@ -43,6 +48,7 @@ semantic_db_core = { path = "../db_core", optional = true }
 semantic_db_redb = { path = "../db_redb", optional = true }
 semantic_rpc = { path = "../rpc", features = ["client"] }
 semantic_ui_core = { path = "../ui_core", default-features = false }
+time = { workspace = true }
 tracing = { workspace = true }
 web-sys = { version = "0.3.82", features = ["Blob", "File", "Storage", "Window"] }
 
