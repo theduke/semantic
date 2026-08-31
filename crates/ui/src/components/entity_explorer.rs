@@ -57,6 +57,9 @@ pub fn DataToolbar(
     density: ResultDensity,
     advanced_open: bool,
     custom_query: bool,
+    #[props(default)] filters_open: bool,
+    #[props(default)] active_filter_count: usize,
+    #[props(default)] show_filters: bool,
     #[props(default = true)] show_advanced: bool,
     #[props(default = "Browse controls".to_string())] toolbar_label: String,
     on_collection_change: EventHandler<String>,
@@ -65,6 +68,7 @@ pub fn DataToolbar(
     on_grid_columns_change: EventHandler<usize>,
     on_density_change: EventHandler<ResultDensity>,
     on_advanced_open_change: EventHandler<bool>,
+    #[props(default)] on_filters_open_change: Option<EventHandler<bool>>,
 ) -> Element {
     let collection_in_catalog = collections.iter().any(|candidate| candidate == &collection);
 
@@ -157,6 +161,19 @@ pub fn DataToolbar(
                     aria_pressed: advanced_open,
                     onclick: move |_| on_advanced_open_change.call(!advanced_open),
                     if custom_query { "Advanced SQL active" } else { "Advanced SQL" }
+                }
+            }
+            if show_filters {
+                dxcomp::Button {
+                    size: dxcomp::ButtonSize::Sm,
+                    variant: if filters_open || active_filter_count > 0 { dxcomp::ButtonVariant::Primary } else { dxcomp::ButtonVariant::Outline },
+                    aria_pressed: filters_open,
+                    onclick: move |_| {
+                        if let Some(handler) = on_filters_open_change {
+                            handler.call(!filters_open);
+                        }
+                    },
+                    if active_filter_count > 0 { "Filters ({active_filter_count})" } else { "Filters" }
                 }
             }
         }

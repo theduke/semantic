@@ -1698,6 +1698,158 @@ pre {
   justify-content: flex-end;
 }
 
+.semantic-query-builder-panel,
+.semantic-query-builder {
+  display: grid;
+  min-width: 0;
+  gap: var(--semantic-space-4);
+}
+
+.semantic-query-builder-panel,
+.semantic-query-builder {
+  padding: var(--semantic-space-4);
+  border: 1px solid var(--semantic-border-soft);
+  border-radius: var(--semantic-radius-lg);
+  background: var(--semantic-surface);
+  box-shadow: var(--semantic-shadow-1);
+}
+
+.semantic-query-builder-panel > .semantic-query-builder {
+  padding: 0;
+  border: 0;
+  box-shadow: none;
+}
+
+.semantic-query-builder__heading,
+.semantic-query-builder__group-toolbar,
+.semantic-query-builder__add-actions,
+.semantic-query-builder__actions,
+.semantic-query-builder__match {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--semantic-space-2);
+}
+
+.semantic-query-builder__heading,
+.semantic-query-builder__group-toolbar {
+  justify-content: space-between;
+}
+
+.semantic-query-builder__heading h2,
+.semantic-query-builder__heading p,
+.semantic-query-builder__empty,
+.semantic-query-builder__error {
+  margin: 0;
+}
+
+.semantic-query-builder__heading h2 {
+  font-size: var(--semantic-font-size-section-title);
+}
+
+.semantic-query-builder__heading p,
+.semantic-query-builder small,
+.semantic-query-builder__empty {
+  color: var(--semantic-text-muted);
+  font-size: var(--semantic-font-size-label);
+}
+
+.semantic-query-builder__badge {
+  padding: var(--semantic-space-1) var(--semantic-space-2);
+  border-radius: var(--semantic-radius-pill);
+  background: var(--semantic-color-selected);
+  color: var(--semantic-accent);
+  font-size: var(--semantic-font-size-caption);
+  font-weight: 700;
+}
+
+.semantic-query-builder__search,
+.semantic-query-builder__rule label {
+  display: grid;
+  min-width: 0;
+  gap: var(--semantic-space-1);
+  color: var(--semantic-text-muted);
+  font-size: var(--semantic-font-size-label);
+}
+
+.semantic-query-builder__search input,
+.semantic-query-builder__rule :is(input, select) {
+  box-sizing: border-box;
+  width: 100%;
+  min-height: 38px;
+  padding: var(--semantic-space-2) var(--semantic-space-3);
+  border: 1px solid var(--semantic-border);
+  border-radius: var(--semantic-radius-md);
+  background: var(--semantic-surface);
+  color: var(--semantic-text);
+}
+
+.semantic-query-builder__search input:focus-visible,
+.semantic-query-builder__rule :is(input, select):focus-visible {
+  border-color: var(--semantic-color-focus);
+  box-shadow: var(--semantic-focus-ring);
+  outline: none;
+}
+
+.semantic-query-builder__group {
+  display: grid;
+  min-width: 0;
+  gap: var(--semantic-space-3);
+  margin: 0;
+  padding: var(--semantic-space-3);
+  border: 1px solid var(--semantic-border);
+  border-inline-start: 3px solid var(--semantic-accent);
+  border-radius: var(--semantic-radius-md);
+}
+
+.semantic-query-builder__group legend {
+  padding-inline: var(--semantic-space-1);
+  font-size: var(--semantic-font-size-label);
+  font-weight: 700;
+}
+
+.semantic-query-builder__negate {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--semantic-space-2);
+  color: var(--semantic-text);
+  font-size: var(--semantic-font-size-label);
+}
+
+.semantic-query-builder__children,
+.semantic-query-builder__nested {
+  display: grid;
+  min-width: 0;
+  gap: var(--semantic-space-3);
+}
+
+.semantic-query-builder__nested {
+  margin-inline-start: var(--semantic-space-3);
+}
+
+.semantic-query-builder__rule {
+  display: grid;
+  grid-template-columns: minmax(180px, 1.25fr) minmax(160px, 1fr) minmax(180px, 1.25fr) auto;
+  align-items: end;
+  gap: var(--semantic-space-2);
+  padding: var(--semantic-space-2);
+  border-radius: var(--semantic-radius-md);
+  background: var(--semantic-surface-muted);
+}
+
+.semantic-query-builder__remove {
+  margin-block-end: 3px;
+}
+
+.semantic-query-builder__actions {
+  justify-content: flex-end;
+}
+
+.semantic-query-builder__error {
+  color: var(--semantic-danger);
+  font-size: var(--semantic-font-size-label);
+}
+
 /* Read-only query workbench. Keep the result surface dense and independently scrollable. */
 .semantic-query__results {
   display: grid;
@@ -2167,6 +2319,25 @@ pre {
   .semantic-query-editor__heading {
     align-items: flex-start;
     flex-direction: column;
+  }
+
+  .semantic-query-builder,
+  .semantic-query-builder-panel {
+    padding: var(--semantic-space-3);
+  }
+
+  .semantic-query-builder__heading,
+  .semantic-query-builder__group-toolbar {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .semantic-query-builder__rule {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .semantic-query-builder__nested {
+    margin-inline-start: 0;
   }
 
   .semantic-entity-results--grid-2,

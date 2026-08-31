@@ -812,6 +812,7 @@ fn edit_return_destination(collection: Option<&str>) -> Route {
             renderer: None,
             page: None,
             page_size: None,
+            filters: None,
             sql: None,
         },
     }

@@ -283,6 +283,7 @@ fn advanced_browse_route(collection: String, page_size: usize) -> Route {
         renderer: Some("custom".to_string()),
         page: Some(0),
         page_size: Some(clamp_page_size(page_size)),
+        filters: None,
         sql: None,
     }
 }

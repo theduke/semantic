@@ -14,7 +14,8 @@ use semantic_ui_core::{
 use crate::{
     components::{
         DataToolbar, EntityExplorer, EntityResults, PageHeader, Pagination, QueryEditor,
-        ResultDensity,
+        ResultDensity, StructuredQuery, StructuredQueryBuilder, compile_structured_predicate,
+        decode_structured_query, encode_structured_query, fields_for_collection,
     },
     views::Route,
 };
@@ -50,6 +51,7 @@ pub fn BrowsePage(
     renderer: Option<String>,
     page: Option<usize>,
     page_size: Option<usize>,
+    filters: Option<String>,
     sql: Option<String>,
 ) -> Element {
     let client = use_rpc_client();
@@ -63,6 +65,13 @@ pub fn BrowsePage(
     let page = clamp_page(page.unwrap_or(0));
     let page_size = clamp_page_size(page_size.unwrap_or(DEFAULT_PAGE_SIZE));
     let custom_sql = sql.is_some();
+    let decoded_filters = filters.as_deref().map(decode_structured_query).transpose();
+    let route_filter_error = decoded_filters.as_ref().err().cloned();
+    let applied_filters = decoded_filters
+        .as_ref()
+        .ok()
+        .and_then(|query| query.clone())
+        .unwrap_or_default();
     let collections = use_memo(move || -> Rc<[String]> {
         catalog_signal
             .read()
@@ -76,8 +85,28 @@ pub fn BrowsePage(
             })
             .unwrap_or_default()
     });
+    let query_fields = use_memo({
+        let collection_name = collection_name.clone();
+        move || {
+            catalog_signal
+                .read()
+                .as_ref()
+                .map(|catalog| fields_for_collection(catalog, &collection_name))
+                .unwrap_or_default()
+        }
+    });
 
-    let applied_query = resolve_applied_query(&collection_name, page_size, page, sql.as_deref());
+    let applied_query = match &decoded_filters {
+        Err(error) if !custom_sql => Err(error.clone()),
+        _ => resolve_applied_query(
+            &collection_name,
+            page_size,
+            page,
+            sql.as_deref(),
+            (!custom_sql).then_some(&applied_filters),
+            &query_fields(),
+        ),
+    };
     let draft_source = match sql.as_deref() {
         Some(reference) => load_sql_reference(reference).unwrap_or_default(),
         None => default_query(&collection_name, page_size, page),
@@ -85,15 +114,25 @@ pub fn BrowsePage(
     let mut sql_input = use_signal(|| draft_source.clone());
     let mut sql_error = use_signal(|| None::<String>);
     let mut advanced_open = use_signal(|| custom_sql);
+    let mut filters_open = use_signal(|| filters.is_some() && !custom_sql);
+    let mut filter_draft = use_signal(|| applied_filters.clone());
+    let mut filter_error = use_signal(|| route_filter_error.clone());
     let mut grid_columns = use_signal(|| 1_usize);
     let mut density = use_signal(ResultDensity::default);
 
     use_effect(use_reactive(
-        (&draft_source, &custom_sql),
-        move |(draft_source, custom_sql)| {
+        (
+            &draft_source,
+            &custom_sql,
+            &applied_filters,
+            &route_filter_error,
+        ),
+        move |(draft_source, custom_sql, applied_filters, route_filter_error)| {
             sql_input.set(draft_source);
             sql_error.set(None);
             advanced_open.set(custom_sql);
+            filter_draft.set(applied_filters);
+            filter_error.set(route_filter_error);
         },
     ));
 
@@ -200,6 +239,9 @@ pub fn BrowsePage(
                         density: *density.read(),
                         advanced_open: *advanced_open.read(),
                         custom_query: custom_sql,
+                        filters_open: *filters_open.read(),
+                        active_filter_count: applied_filters.active_count(),
+                        show_filters: true,
                         on_collection_change: {
                             let view = view_string(display_mode);
                             let renderer = renderer_string(renderer_mode);
@@ -211,11 +253,13 @@ pub fn BrowsePage(
                                     Some(0),
                                     Some(page_size),
                                     None,
+                                    None,
                                 ));
                             }
                         },
                         on_display_mode_change: {
                             let collection = collection.clone();
+                            let filters = filters.clone();
                             let sql = sql.clone();
                             move |mode| {
                                 navigator().push(browse_route(
@@ -224,12 +268,14 @@ pub fn BrowsePage(
                                     Some(renderer_string(renderer_mode)),
                                     Some(page),
                                     Some(page_size),
+                                    filters.clone(),
                                     sql.clone(),
                                 ));
                             }
                         },
                         on_renderer_change: {
                             let collection = collection.clone();
+                            let filters = filters.clone();
                             let sql = sql.clone();
                             move |renderer| {
                                 navigator().push(browse_route(
@@ -238,17 +284,81 @@ pub fn BrowsePage(
                                     Some(renderer_string(renderer)),
                                     Some(page),
                                     Some(page_size),
+                                    filters.clone(),
                                     sql.clone(),
                                 ));
                             }
                         },
                         on_grid_columns_change: move |columns: usize| grid_columns.set(columns.clamp(1, 3)),
                         on_density_change: move |next_density: ResultDensity| density.set(next_density),
-                        on_advanced_open_change: move |open: bool| advanced_open.set(open),
+                        on_advanced_open_change: move |open: bool| {
+                            advanced_open.set(open);
+                            if open { filters_open.set(false); }
+                        },
+                        on_filters_open_change: move |open: bool| {
+                            filters_open.set(open);
+                            if open { advanced_open.set(false); }
+                        },
                     }
                 },
-                advanced: (*advanced_open.read()).then(|| rsx! {
-                    QueryEditor {
+                advanced: if *filters_open.read() {
+                    Some(rsx! {
+                        div { class: "semantic-query-builder-panel",
+                            StructuredQueryBuilder {
+                                draft: filter_draft(),
+                                fields: query_fields(),
+                                error: filter_error(),
+                                on_change: move |next| {
+                                    filter_draft.set(next);
+                                    filter_error.set(None);
+                                },
+                            }
+                            div { class: "semantic-query-builder__actions",
+                                dxcomp::Button {
+                                    onclick: {
+                                        let collection = collection.clone();
+                                        move |_| {
+                                            let draft = filter_draft();
+                                            match compile_structured_predicate(&draft, &query_fields(), None, &["title"]) {
+                                                Ok(_) if draft.active_count() == 0 => {
+                                                    navigator().push(browse_route(
+                                                        collection.clone(), Some(view_string(display_mode)), Some(renderer_string(renderer_mode)),
+                                                        Some(0), Some(page_size), None, None,
+                                                    ));
+                                                }
+                                                Ok(_) => match encode_structured_query(&draft) {
+                                                    Ok(encoded) => {
+                                                        navigator().push(browse_route(
+                                                            collection.clone(), Some(view_string(display_mode)), Some(renderer_string(renderer_mode)),
+                                                            Some(0), Some(page_size), Some(encoded), None,
+                                                        ));
+                                                    }
+                                                    Err(error) => filter_error.set(Some(error)),
+                                                },
+                                                Err(error) => filter_error.set(Some(error)),
+                                            }
+                                        }
+                                    },
+                                    "Apply filters"
+                                }
+                                dxcomp::Button {
+                                    variant: dxcomp::ButtonVariant::Outline,
+                                    onclick: {
+                                        let collection = collection.clone();
+                                        move |_| {
+                                            navigator().push(browse_route(
+                                                collection.clone(), Some(view_string(display_mode)), Some(renderer_string(renderer_mode)),
+                                                Some(0), Some(page_size), None, None,
+                                            ));
+                                        }
+                                    },
+                                    "Clear filters"
+                                }
+                            }
+                        }
+                    })
+                } else if *advanced_open.read() {
+                    Some(rsx! { QueryEditor {
                         draft: sql_input.read().clone(),
                         error: sql_error.read().clone(),
                         non_portable: non_portable_sql,
@@ -269,6 +379,7 @@ pub fn BrowsePage(
                                             Some(renderer_string(renderer_mode)),
                                             Some(0),
                                             Some(page_size),
+                                            None,
                                             Some(reference),
                                         ));
                                     }
@@ -286,11 +397,12 @@ pub fn BrowsePage(
                                     Some(0),
                                     Some(page_size),
                                     None,
+                                    None,
                                 ));
                             }
                         },
-                    }
-                }),
+                    } })
+                } else { None },
 
                 if custom_sql {
                     InlineNotice {
@@ -328,6 +440,13 @@ pub fn BrowsePage(
                             action_label: "Edit query",
                             on_action: move |_| advanced_open.set(true),
                         }
+                    } else if applied_filters.active_count() > 0 {
+                        EmptyState {
+                            title: "No entities match these filters",
+                            description: "Edit or clear the visual filters to broaden the result set.",
+                            action_label: "Edit filters",
+                            on_action: move |_| filters_open.set(true),
+                        }
                     } else {
                         EmptyState {
                             title: "This collection is empty",
@@ -359,6 +478,7 @@ pub fn BrowsePage(
                             disabled: loading,
                             on_page_change: {
                                 let collection = collection.clone();
+                                let filters = filters.clone();
                                 move |next_page| {
                                     navigator().push(browse_route(
                                         collection.clone(),
@@ -366,12 +486,14 @@ pub fn BrowsePage(
                                         Some(renderer_string(renderer_mode)),
                                         Some(clamp_page(next_page)),
                                         Some(page_size),
+                                        filters.clone(),
                                         None,
                                     ));
                                 }
                             },
                             on_page_size_change: {
                                 let collection = collection.clone();
+                                let filters = filters.clone();
                                 move |next_page_size| {
                                     navigator().push(browse_route(
                                         collection.clone(),
@@ -379,6 +501,7 @@ pub fn BrowsePage(
                                         Some(renderer_string(renderer_mode)),
                                         Some(0),
                                         Some(clamp_page_size(next_page_size)),
+                                        filters.clone(),
                                         None,
                                     ));
                                 }
@@ -397,6 +520,7 @@ fn browse_route(
     renderer: Option<String>,
     page: Option<usize>,
     page_size: Option<usize>,
+    filters: Option<String>,
     sql: Option<String>,
 ) -> Route {
     Route::BrowsePage {
@@ -405,6 +529,7 @@ fn browse_route(
         renderer,
         page,
         page_size,
+        filters,
         sql,
     }
 }
@@ -444,6 +569,8 @@ fn resolve_applied_query(
     page_size: usize,
     page: usize,
     reference: Option<&str>,
+    filters: Option<&StructuredQuery>,
+    fields: &[crate::components::QueryField],
 ) -> std::result::Result<String, String> {
     match reference {
         Some(reference) => {
@@ -454,21 +581,48 @@ fn resolve_applied_query(
             })?;
             validate_read_only_sql(&query)
         }
-        None => Ok(default_query(collection, page_size, page)),
+        None => {
+            let predicate = filters
+                .map(|filters| compile_structured_predicate(filters, fields, None, &["title"]))
+                .transpose()?
+                .flatten();
+            Ok(collection_query(
+                collection,
+                page_size,
+                page,
+                predicate.as_deref(),
+            ))
+        }
     }
 }
 
 fn default_query(collection: &str, page_size: usize, page: usize) -> String {
-    let relation_filter = if collection == DEFAULT_COLLECTION {
-        format!(" WHERE type != '{RELATION_CLASS_ID}'")
-    } else {
+    collection_query(collection, page_size, page, None)
+}
+
+fn collection_query(
+    collection: &str,
+    page_size: usize,
+    page: usize,
+    predicate: Option<&str>,
+) -> String {
+    let mut predicates = Vec::new();
+    if collection == DEFAULT_COLLECTION {
+        predicates.push(format!("type != '{RELATION_CLASS_ID}'"));
+    }
+    if let Some(predicate) = predicate {
+        predicates.push(format!("({predicate})"));
+    }
+    let where_clause = if predicates.is_empty() {
         String::new()
+    } else {
+        format!(" WHERE {}", predicates.join(" AND "))
     };
 
     format!(
         "SELECT * FROM {}{} LIMIT {} OFFSET {}",
         sql_ident(collection),
-        relation_filter,
+        where_clause,
         clamp_page_size(page_size),
         clamp_page(page).saturating_mul(clamp_page_size(page_size))
     )
@@ -685,6 +839,9 @@ thread_local! {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::components::{
+        FilterGroup, FilterNode, FilterOperator, FilterRule, QueryField, QueryFieldKind,
+    };
 
     #[test]
     fn default_entities_query_excludes_relation_entities() {
@@ -729,5 +886,32 @@ mod tests {
 
         let hash = stable_hash_hex(query);
         assert_eq!(load_sql_reference(&hash).as_deref(), Some(query));
+    }
+
+    #[test]
+    fn structured_filters_keep_normal_pagination_and_default_constraints() {
+        let filters = StructuredQuery {
+            root: FilterGroup {
+                children: vec![FilterNode::Rule(FilterRule {
+                    field: "score".to_string(),
+                    operator: FilterOperator::Greater,
+                    values: vec!["7".to_string()],
+                })],
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        let fields = vec![QueryField {
+            name: "score".to_string(),
+            label: "Score".to_string(),
+            description: None,
+            kind: QueryFieldKind::SignedInteger,
+            deprecated: false,
+        }];
+        let query = resolve_applied_query(DEFAULT_COLLECTION, 25, 2, None, Some(&filters), &fields)
+            .unwrap();
+        assert!(query.contains("type != 'semantic:relation'"));
+        assert!(query.contains("(\"score\" > 7)"));
+        assert!(query.ends_with("LIMIT 25 OFFSET 50"));
     }
 }

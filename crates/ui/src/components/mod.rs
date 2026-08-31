@@ -4,6 +4,7 @@ mod entity_explorer;
 mod entity_page_header;
 mod form_page;
 mod page_header;
+mod query_builder;
 mod shell;
 mod upload_primitives;
 
@@ -23,6 +24,12 @@ pub use form_page::{
     UnsavedChangesPromptProps,
 };
 pub use page_header::{PageHeader, PageHeaderProps};
+pub use query_builder::{
+    FilterGroup, FilterNode, FilterOperator, FilterRule, GroupCombinator, QueryField,
+    QueryFieldKind, StructuredQuery, StructuredQueryBuilder, StructuredQueryBuilderProps,
+    compile_structured_predicate, decode_structured_query, encode_structured_query,
+    fields_for_collection, sql_ident, sql_string,
+};
 pub use shell::{AppFrame, AppFrameVariant, AppShell, PlayerShell, PrimaryNav};
 pub use upload_primitives::{DropZone, DropZoneProps, JobProgress, JobProgressProps};
 

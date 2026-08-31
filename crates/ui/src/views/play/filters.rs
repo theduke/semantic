@@ -1,6 +1,10 @@
 use dioxus::prelude::*;
 use semantic_ui_core::use_ui_catalog;
 
+use crate::components::{
+    StructuredQueryBuilder, compile_structured_predicate, fields_for_collection,
+};
+
 use super::query::{PlaylistFilter, playlist_query};
 
 #[component]
@@ -30,15 +34,25 @@ pub fn PlayerFilters(
     let advanced_draft = draft.clone();
     let sql_draft = draft.clone();
     let expand_draft = draft.clone();
-    let replace_draft = draft.clone();
     let add_draft = draft.clone();
     let advanced_replace_draft = draft.clone();
     let clear_advanced_draft = draft.clone();
-    let validation_error = draft
-        .advanced_sql
-        .then(|| playlist_query(&draft, 0).err())
-        .flatten();
+    let query_fields = fields_for_collection(&catalog, &draft.collection);
+    let structured_result =
+        compile_structured_predicate(&draft.structured, &query_fields, Some("e"), &[]);
+    let validation_error = if draft.advanced_sql {
+        playlist_query(&draft, 0).err()
+    } else {
+        structured_result
+            .as_ref()
+            .err()
+            .cloned()
+            .or_else(|| playlist_query(&draft, 0).err())
+    };
     let displayed_error = error.or(validation_error);
+    let structured_draft = draft.clone();
+    let prepared_replace = prepare_structured_filter(&draft, &structured_result);
+    let prepared_add = prepared_replace.clone();
     rsx! {
         section { id: "semantic-player-filter", class: "semantic-player__filter-panel", aria_label: "Playlist filter",
             header {
@@ -51,7 +65,7 @@ pub fn PlayerFilters(
                 select {
                     value: "{draft.collection}", disabled: draft.advanced_sql,
                     onchange: move |event: FormEvent| {
-                        let mut next = collection_draft.clone(); next.collection = event.value(); on_change.call(next);
+                        on_change.call(change_collection(collection_draft.clone(), event.value()));
                     },
                     if !collection_in_catalog {
                         option { value: "{draft.collection}", "{draft.collection} (not in catalog)" }
@@ -81,6 +95,21 @@ pub fn PlayerFilters(
                 label { input { r#type: "checkbox", checked: draft.video,
                     onchange: move |event| { let mut next = video_draft.clone(); next.video = event.checked(); on_change.call(next); }
                 } "Video" }
+            }
+            if !draft.advanced_sql {
+                StructuredQueryBuilder {
+                    title: "More conditions".to_string(),
+                    description: "Add optional, type-aware conditions. Nested groups can match all, any, or exclude matches.".to_string(),
+                    draft: draft.structured.clone(),
+                    fields: query_fields.clone(),
+                    show_search: false,
+                    on_change: move |structured| {
+                        let mut next = structured_draft.clone();
+                        next.structured = structured;
+                        next.structured_predicate = None;
+                        on_change.call(next);
+                    },
+                }
             }
             label { class: "semantic-player__filter-check",
                 input { r#type: "checkbox", checked: draft.expand_to_media,
@@ -123,12 +152,70 @@ pub fn PlayerFilters(
             }
             div { class: "semantic-player__filter-actions",
                 if !draft.advanced_sql {
-                    dxcomp::Button { disabled: loading, onclick: move |_| on_replace.call(replace_draft.clone()),
+                    dxcomp::Button { disabled: loading || prepared_replace.is_none(), onclick: move |_| {
+                        if let Some(filter) = prepared_replace.clone() { on_replace.call(filter); }
+                    },
                         if loading { "Loading…" } else { "Replace" } }
                 }
-                dxcomp::Button { disabled: loading, variant: dxcomp::ButtonVariant::Outline,
-                    onclick: move |_| on_add.call(add_draft.clone()), "Add" }
+                dxcomp::Button { disabled: loading || (!draft.advanced_sql && prepared_add.is_none()), variant: dxcomp::ButtonVariant::Outline,
+                    onclick: move |_| {
+                        if draft.advanced_sql { on_add.call(add_draft.clone()); }
+                        else if let Some(filter) = prepared_add.clone() { on_add.call(filter); }
+                    }, "Add" }
             }
         }
+    }
+}
+
+fn prepare_structured_filter(
+    draft: &PlaylistFilter,
+    predicate: &std::result::Result<Option<String>, String>,
+) -> Option<PlaylistFilter> {
+    let mut prepared = draft.clone();
+    prepared.structured_predicate = predicate.clone().ok()?;
+    Some(prepared)
+}
+
+fn change_collection(mut draft: PlaylistFilter, collection: String) -> PlaylistFilter {
+    draft.collection = collection;
+    // Structured fields are collection-specific. Discard both the editable
+    // tree and its last compiled predicate so a collection switch cannot leave
+    // an invisible, invalid filter that prevents the player from loading.
+    draft.structured = Default::default();
+    draft.structured_predicate = None;
+    draft
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::components::{FilterNode, FilterOperator, FilterRule};
+
+    #[test]
+    fn collection_change_clears_collection_specific_structured_state() {
+        let mut draft = PlaylistFilter {
+            collection: "old".into(),
+            search: "keep me".into(),
+            images: true,
+            ..Default::default()
+        };
+        draft
+            .structured
+            .root
+            .children
+            .push(FilterNode::Rule(FilterRule {
+                field: "old_field".into(),
+                operator: FilterOperator::Equals,
+                values: vec!["value".into()],
+            }));
+        draft.structured_predicate = Some("\"old_field\" = 'value'".into());
+
+        let changed = change_collection(draft, "new".into());
+
+        assert_eq!(changed.collection, "new");
+        assert_eq!(changed.structured, Default::default());
+        assert_eq!(changed.structured_predicate, None);
+        assert_eq!(changed.search, "keep me");
+        assert!(changed.images);
     }
 }

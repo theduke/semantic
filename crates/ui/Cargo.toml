@@ -34,6 +34,9 @@ dioxus-sdk-time = "0.7.0"
 dxcomp = { path = "../dxcomp" }
 futures = "0.3.31"
 infer = { version = "0.19.0", default-features = false }
+regex = "1.12.2"
+serde = { workspace = true, features = ["derive"] }
+serde_json = { workspace = true }
 semantic_app = { path = "../app", optional = true }
 semantic_data = { workspace = true }
 semantic_db_core = { path = "../db_core", optional = true }

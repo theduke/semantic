@@ -126,6 +126,7 @@ pub fn PrimaryNav() -> Element {
                         renderer: None,
                         page: None,
                         page_size: None,
+                        filters: None,
                         sql: None,
                     },
                     label: "Browse",
@@ -268,6 +269,7 @@ mod tests {
             renderer: None,
             page: Some(3),
             page_size: Some(25),
+            filters: None,
             sql: None,
         };
         let tree = Route::TreePage {

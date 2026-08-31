@@ -19,6 +19,7 @@ pub fn HomePage() -> Element {
                         renderer: None,
                         page: None,
                         page_size: None,
+                        filters: None,
                         sql: None,
                     },
                     class: "semantic-route-panel semantic-surface",

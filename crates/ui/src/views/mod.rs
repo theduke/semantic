@@ -47,13 +47,14 @@ pub enum Route {
     DefaultEditEntityPage { id: String },
     #[route("/collections/:collection/:id/edit")]
     CollectionEditEntityPage { collection: String, id: String },
-    #[route("/browse?:collection&:view&:renderer&:page&:page_size&:sql")]
+    #[route("/browse?:collection&:view&:renderer&:page&:page_size&:filters&:sql")]
     BrowsePage {
         collection: Option<String>,
         view: Option<String>,
         renderer: Option<String>,
         page: Option<usize>,
         page_size: Option<usize>,
+        filters: Option<String>,
         sql: Option<String>,
     },
     #[route("/data/query")]

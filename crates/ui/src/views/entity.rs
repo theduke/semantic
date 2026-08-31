@@ -191,6 +191,7 @@ fn entity_return_route(target: &EntityTarget) -> Route {
             renderer: None,
             page: None,
             page_size: None,
+            filters: None,
             sql: None,
         },
     }
