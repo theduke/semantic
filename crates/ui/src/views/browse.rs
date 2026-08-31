@@ -907,6 +907,7 @@ mod tests {
             description: None,
             kind: QueryFieldKind::SignedInteger,
             deprecated: false,
+            choices: Vec::new(),
         }];
         let query = resolve_applied_query(DEFAULT_COLLECTION, 25, 2, None, Some(&filters), &fields)
             .unwrap();

@@ -10,6 +10,7 @@ const FILTER_STATE_PREFIX: &str = "v1:";
 const MAX_FILTER_STATE_BYTES: usize = 6_000;
 const MAX_DEPTH: usize = 5;
 const MAX_NODES: usize = 50;
+const MAX_LIST_VALUES: usize = 50;
 const MAX_VALUE_BYTES: usize = 4_096;
 
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -92,12 +93,16 @@ pub struct FilterRule {
 }
 
 impl FilterRule {
-    fn new(field: String, kind: QueryFieldKind) -> Self {
-        let operator = operators_for_kind(kind)[0];
+    fn new(field: &QueryField) -> Self {
+        let operator = operators_for_kind(field.kind)[0];
         Self {
-            field,
+            field: field.name.clone(),
             operator,
-            values: vec![default_value(kind)],
+            values: if operator.value_count() == 0 {
+                Vec::new()
+            } else {
+                vec![default_value(field.kind)]
+            },
         }
     }
 }
@@ -118,6 +123,7 @@ pub enum FilterOperator {
     Less,
     LessOrEqual,
     Between,
+    In,
     IsNull,
     IsNotNull,
 }
@@ -138,6 +144,7 @@ impl FilterOperator {
             Self::Less => "is less than",
             Self::LessOrEqual => "is at most",
             Self::Between => "is between",
+            Self::In => "is any of",
             Self::IsNull => "is missing",
             Self::IsNotNull => "is present",
         }
@@ -145,7 +152,7 @@ impl FilterOperator {
 
     fn value_count(self) -> usize {
         match self {
-            Self::IsNull | Self::IsNotNull => 0,
+            Self::In | Self::IsNull | Self::IsNotNull => 0,
             Self::Between => 2,
             _ => 1,
         }
@@ -162,15 +169,39 @@ pub enum QueryFieldKind {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
+pub struct QueryFieldChoice {
+    pub value: String,
+    pub label: String,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct QueryField {
     pub name: String,
     pub label: String,
     pub description: Option<String>,
     pub kind: QueryFieldKind,
     pub deprecated: bool,
+    pub choices: Vec<QueryFieldChoice>,
 }
 
 pub fn fields_for_collection(catalog: &UiCatalog, collection: &str) -> Rc<[QueryField]> {
+    let mut class_choices = catalog
+        .classes()
+        .map(|class| QueryFieldChoice {
+            value: class.id.clone(),
+            label: class
+                .meta
+                .title
+                .clone()
+                .unwrap_or_else(|| class.name.clone()),
+        })
+        .collect::<Vec<_>>();
+    class_choices.sort_by(|left, right| {
+        left.label
+            .to_lowercase()
+            .cmp(&right.label.to_lowercase())
+            .then_with(|| left.value.cmp(&right.value))
+    });
     let mut fields = catalog
         .collection_by_name(collection)
         .map(|collection| {
@@ -179,6 +210,11 @@ pub fn fields_for_collection(catalog: &UiCatalog, collection: &str) -> Rc<[Query
                 .iter()
                 .map(|stored| {
                     let name = stored.canonical_field.clone();
+                    let choices = if name == "type" {
+                        class_choices.clone()
+                    } else {
+                        Vec::new()
+                    };
                     if let Some(attribute) = catalog.attribute_by_id(&name) {
                         QueryField {
                             name,
@@ -190,6 +226,7 @@ pub fn fields_for_collection(catalog: &UiCatalog, collection: &str) -> Rc<[Query
                             description: attribute.meta.description.clone(),
                             kind: classify_type(&attribute.ty),
                             deprecated: attribute.meta.deprecated.is_some(),
+                            choices,
                         }
                     } else {
                         let label = match name.as_str() {
@@ -212,6 +249,7 @@ pub fn fields_for_collection(catalog: &UiCatalog, collection: &str) -> Rc<[Query
                             description: None,
                             kind,
                             deprecated: false,
+                            choices,
                         }
                     }
                 })
@@ -230,6 +268,11 @@ pub fn fields_for_collection(catalog: &UiCatalog, collection: &str) -> Rc<[Query
                         QueryFieldKind::Text
                     },
                     deprecated: false,
+                    choices: if name == "type" {
+                        class_choices.clone()
+                    } else {
+                        Vec::new()
+                    },
                 })
                 .collect()
         });
@@ -282,6 +325,7 @@ fn operators_for_kind(kind: QueryFieldKind) -> &'static [FilterOperator] {
         QueryFieldKind::Text => &[
             Equals,
             NotEquals,
+            In,
             Contains,
             NotContains,
             StartsWith,
@@ -294,6 +338,7 @@ fn operators_for_kind(kind: QueryFieldKind) -> &'static [FilterOperator] {
         QueryFieldKind::SignedInteger | QueryFieldKind::Float => &[
             Equals,
             NotEquals,
+            In,
             Greater,
             GreaterOrEqual,
             Less,
@@ -302,7 +347,7 @@ fn operators_for_kind(kind: QueryFieldKind) -> &'static [FilterOperator] {
             IsNull,
             IsNotNull,
         ],
-        QueryFieldKind::Bool => &[Equals, NotEquals, IsNull, IsNotNull],
+        QueryFieldKind::Bool => &[Equals, NotEquals, In, IsNull, IsNotNull],
         QueryFieldKind::PresenceOnly => &[IsNull, IsNotNull],
     }
 }
@@ -320,12 +365,12 @@ fn can_add_rule(root_node_count: usize, has_field: bool) -> bool {
 }
 
 fn can_add_group(depth: usize, root_node_count: usize, has_field: bool) -> bool {
-    has_field && depth < MAX_DEPTH && root_node_count.saturating_add(2) <= MAX_NODES
+    has_field && depth < MAX_DEPTH && root_node_count < MAX_NODES
 }
 
-fn seeded_group(field: QueryField) -> FilterGroup {
+fn empty_group(combinator: GroupCombinator) -> FilterGroup {
     FilterGroup {
-        children: vec![FilterNode::Rule(FilterRule::new(field.name, field.kind))],
+        combinator,
         ..FilterGroup::default()
     }
 }
@@ -477,6 +522,23 @@ fn compile_rule(
     match rule.operator {
         IsNull => Ok(format!("{ident} IS NULL")),
         IsNotNull => Ok(format!("{ident} IS NOT NULL")),
+        In => {
+            if rule.values.is_empty() {
+                return Err(format!("{} needs at least one value.", field.label));
+            }
+            if rule.values.len() > MAX_LIST_VALUES {
+                return Err(format!(
+                    "{} accepts at most {MAX_LIST_VALUES} values.",
+                    field.label
+                ));
+            }
+            let values = rule
+                .values
+                .iter()
+                .map(|value| compile_value(value, field.kind, &field.label))
+                .collect::<std::result::Result<Vec<_>, _>>()?;
+            Ok(format!("{ident} IN ({})", values.join(", ")))
+        }
         Between => {
             let low = compile_value(&rule.values[0], field.kind, &field.label)?;
             let high = compile_value(&rule.values[1], field.kind, &field.label)?;
@@ -649,50 +711,57 @@ fn FilterGroupEditor(
     depth: usize,
     on_change: EventHandler<StructuredQuery>,
 ) -> Element {
+    let mut chooser_open = use_signal(|| false);
     let group = group_at(&query.root, &path).cloned().unwrap_or_default();
-    let all_query = query.clone();
-    let any_query = query.clone();
     let negate_query = query.clone();
-    let add_rule_query = query.clone();
-    let add_group_query = query.clone();
-    let all_path = path.clone();
-    let any_path = path.clone();
+    let add_query = query.clone();
     let negate_path = path.clone();
-    let add_rule_path = path.clone();
-    let add_group_path = path.clone();
-    let first_field = fields.first().cloned();
-    let add_rule_field = first_field.clone();
-    let add_group_field = first_field.clone();
+    let add_path = path.clone();
+    let first_field = fields.iter().find(|field| field.name != "type").cloned();
+    let type_field = fields
+        .iter()
+        .find(|field| field.name == "type" && !field.choices.is_empty())
+        .cloned();
     let root_node_count = query.root.node_count();
+    let can_add_field = can_add_rule(root_node_count, first_field.is_some());
+    let can_add_type = can_add_rule(root_node_count, type_field.is_some());
+    let can_add_nested = can_add_group(
+        depth,
+        root_node_count,
+        first_field.is_some() || type_field.is_some(),
+    );
+    let can_add_any = can_add_field || can_add_type || can_add_nested;
+    let chooser_id = if path.is_empty() {
+        "semantic-query-builder-add-root".to_string()
+    } else {
+        format!(
+            "semantic-query-builder-add-{}",
+            path.iter()
+                .map(usize::to_string)
+                .collect::<Vec<_>>()
+                .join("-")
+        )
+    };
+    let group_title = if depth == 0 {
+        match group.combinator {
+            GroupCombinator::All => "Filters",
+            GroupCombinator::Any => "Filters (OR)",
+        }
+    } else {
+        match group.combinator {
+            GroupCombinator::All => "AND group",
+            GroupCombinator::Any => "OR group",
+        }
+    };
+    let group_help = match group.combinator {
+        GroupCombinator::All => "Every filter in this group must match.",
+        GroupCombinator::Any => "At least one filter in this group must match.",
+    };
     rsx! {
         fieldset { class: "semantic-query-builder__group", "data-depth": depth,
-            legend { if depth == 0 { "Conditions" } else { "Nested conditions" } }
+            legend { "{group_title}" }
             div { class: "semantic-query-builder__group-toolbar",
-                span { "Match" }
-                div { class: "semantic-query-builder__match", role: "group", aria_label: "Group matching rule",
-                    dxcomp::Button {
-                        size: dxcomp::ButtonSize::Sm,
-                        variant: if group.combinator == GroupCombinator::All { dxcomp::ButtonVariant::Primary } else { dxcomp::ButtonVariant::Outline },
-                        aria_pressed: group.combinator == GroupCombinator::All,
-                        onclick: move |_| {
-                            let mut next = all_query.clone();
-                            if let Some(group) = group_at_mut(&mut next.root, &all_path) { group.combinator = GroupCombinator::All; }
-                            on_change.call(next);
-                        },
-                        "all"
-                    }
-                    dxcomp::Button {
-                        size: dxcomp::ButtonSize::Sm,
-                        variant: if group.combinator == GroupCombinator::Any { dxcomp::ButtonVariant::Primary } else { dxcomp::ButtonVariant::Outline },
-                        aria_pressed: group.combinator == GroupCombinator::Any,
-                        onclick: move |_| {
-                            let mut next = any_query.clone();
-                            if let Some(group) = group_at_mut(&mut next.root, &any_path) { group.combinator = GroupCombinator::Any; }
-                            on_change.call(next);
-                        },
-                        "any"
-                    }
-                }
+                small { "{group_help}" }
                 label { class: "semantic-query-builder__negate",
                     input {
                         r#type: "checkbox",
@@ -710,9 +779,9 @@ fn FilterGroupEditor(
                 if group.children.is_empty() {
                     p { class: "semantic-query-builder__empty",
                         if depth == 0 {
-                            "No conditions yet. All records match."
+                            "No filters yet. Add one to narrow the results."
                         } else {
-                            "This nested group needs a condition before the query can run."
+                            "This group is empty. Add a filter before applying the query."
                         }
                     }
                 }
@@ -757,30 +826,64 @@ fn FilterGroupEditor(
                 dxcomp::Button {
                     size: dxcomp::ButtonSize::Sm,
                     variant: dxcomp::ButtonVariant::Outline,
-                    disabled: !can_add_rule(root_node_count, add_rule_field.is_some()),
-                    onclick: move |_| {
-                        let Some(field) = add_rule_field.clone() else { return; };
-                        let mut next = add_rule_query.clone();
-                        if let Some(group) = group_at_mut(&mut next.root, &add_rule_path) {
-                            group.children.push(FilterNode::Rule(FilterRule::new(field.name, field.kind)));
-                        }
-                        on_change.call(next);
-                    },
-                    "Add condition"
+                    disabled: !can_add_any,
+                    aria_expanded: chooser_open(),
+                    aria_controls: chooser_id.clone(),
+                    onclick: move |_| chooser_open.toggle(),
+                    "+ Add filter"
                 }
-                dxcomp::Button {
-                    size: dxcomp::ButtonSize::Sm,
-                    variant: dxcomp::ButtonVariant::Outline,
-                    disabled: !can_add_group(depth, root_node_count, add_group_field.is_some()),
-                    onclick: move |_| {
-                        let Some(field) = add_group_field.clone() else { return; };
-                        let mut next = add_group_query.clone();
-                        if let Some(group) = group_at_mut(&mut next.root, &add_group_path) {
-                            group.children.push(FilterNode::Group(seeded_group(field)));
+                if chooser_open() {
+                    div { id: chooser_id, class: "semantic-query-builder__add-chooser",
+                        label {
+                            span { "Filter type" }
+                            select {
+                                value: "",
+                                aria_label: "Choose filter type",
+                                onchange: move |event: FormEvent| {
+                                    let value = event.value();
+                                    let mut next = add_query.clone();
+                                    let Some(group) = group_at_mut(&mut next.root, &add_path) else {
+                                        chooser_open.set(false);
+                                        return;
+                                    };
+                                    match value.as_str() {
+                                        "type" => {
+                                            let Some(field) = type_field.clone() else { return; };
+                                            group.children.push(FilterNode::Rule(FilterRule {
+                                                field: field.name,
+                                                operator: FilterOperator::In,
+                                                values: Vec::new(),
+                                            }));
+                                        }
+                                        "field" => {
+                                            let Some(field) = first_field.clone() else { return; };
+                                            group.children.push(FilterNode::Rule(FilterRule::new(&field)));
+                                        }
+                                        "and" if can_add_nested => group.children.push(FilterNode::Group(
+                                            empty_group(GroupCombinator::All),
+                                        )),
+                                        "or" if can_add_nested => group.children.push(FilterNode::Group(
+                                            empty_group(GroupCombinator::Any),
+                                        )),
+                                        _ => return,
+                                    }
+                                    chooser_open.set(false);
+                                    on_change.call(next);
+                                },
+                                option { value: "", disabled: true, selected: true, "Choose a filter type…" }
+                                option { value: "type", disabled: !can_add_type, "Type" }
+                                option { value: "field", disabled: !can_add_field, "Field comparison" }
+                                option { value: "and", disabled: !can_add_nested, "AND group" }
+                                option { value: "or", disabled: !can_add_nested, "OR group" }
+                            }
                         }
-                        on_change.call(next);
-                    },
-                    "Add group"
+                        dxcomp::Button {
+                            size: dxcomp::ButtonSize::Xs,
+                            variant: dxcomp::ButtonVariant::Ghost,
+                            onclick: move |_| chooser_open.set(false),
+                            "Cancel"
+                        }
+                    }
                 }
             }
         }
@@ -801,6 +904,17 @@ fn FilterRuleEditor(
         .iter()
         .find(|field| field.name == rule.field)
         .cloned();
+    if let Some(field) = selected_field
+        .as_ref()
+        .filter(|field| {
+            field.name == "type" && !field.choices.is_empty() && rule.operator == FilterOperator::In
+        })
+        .cloned()
+    {
+        return rsx! {
+            TypeFilterEditor { query, path, field, on_change }
+        };
+    }
     let kind = selected_field
         .as_ref()
         .map_or(QueryFieldKind::Text, |field| field.kind);
@@ -814,10 +928,12 @@ fn FilterRuleEditor(
     let operator_path = path.clone();
     let bool_value_path = path.clone();
     let text_value_path = path.clone();
+    let list_value_path = path.clone();
     let second_value_path = path.clone();
     let remove_path = path.clone();
     let bool_value_query = value_query.clone();
     let text_value_query = value_query.clone();
+    let list_value_query = value_query.clone();
     let field_label = selected_field
         .as_ref()
         .map_or(rule.field.as_str(), |field| field.label.as_str());
@@ -828,6 +944,11 @@ fn FilterRuleEditor(
         .cloned()
         .unwrap_or_else(|| "true".to_string());
     let second_value = rule.values.get(1).cloned().unwrap_or_default();
+    let list_values = rule.values.join("\n");
+    let field_choices = selected_field
+        .as_ref()
+        .map(|field| field.choices.clone())
+        .unwrap_or_default();
     let input_type = match kind {
         QueryFieldKind::SignedInteger | QueryFieldKind::Float => "number",
         _ => "text",
@@ -840,15 +961,18 @@ fn FilterRuleEditor(
                     value: "{rule.field}",
                     onchange: move |event: FormEvent| {
                         let field_name = event.value();
-                        let field_kind = field_lookup.iter().find(|field| field.name == field_name).map_or(QueryFieldKind::Text, |field| field.kind);
+                        let Some(field) = field_lookup.iter().find(|field| field.name == field_name) else { return; };
                         let mut next = field_query.clone();
-                        if let Some(rule) = rule_at_mut(&mut next.root, &field_path) { *rule = FilterRule::new(field_name, field_kind); }
+                        if let Some(rule) = rule_at_mut(&mut next.root, &field_path) { *rule = FilterRule::new(field); }
                         on_change.call(next);
                     },
                     if selected_field.is_none() {
                         option { value: "{rule.field}", "{rule.field} (unavailable)" }
                     }
-                    for field in fields.iter() {
+                    if selected_field.as_ref().is_some_and(|field| field.name == "type") {
+                        option { value: "type", "Type (legacy comparison)" }
+                    }
+                    for field in fields.iter().filter(|field| field.name != "type") {
                         option { key: "{field.name}", value: "{field.name}",
                             if field.deprecated { "{field.label} (deprecated)" } else { "{field.label}" }
                         }
@@ -876,7 +1000,61 @@ fn FilterRuleEditor(
                     }
                 }
             }
-            if rule.operator.value_count() > 0 {
+            if rule.operator == FilterOperator::In {
+                if field_choices.is_empty() {
+                    label { class: "semantic-query-builder__list-input",
+                        span { "Values" }
+                        textarea {
+                            value: "{list_values}",
+                            rows: "4",
+                            aria_label: "Values for {field_label}, one per line",
+                            placeholder: "One value per line",
+                            oninput: move |event: FormEvent| {
+                                let values = event
+                                    .value()
+                                    .lines()
+                                    .map(str::trim)
+                                    .filter(|value| !value.is_empty())
+                                    .map(str::to_string)
+                                    .collect();
+                                let mut next = list_value_query.clone();
+                                set_rule_values(&mut next.root, &list_value_path, values);
+                                on_change.call(next);
+                            }
+                        }
+                        small { "Enter up to {MAX_LIST_VALUES} values, one per line." }
+                    }
+                } else {
+                    fieldset { class: "semantic-query-builder__class-picker",
+                        legend { "Classes" }
+                        div { class: "semantic-query-builder__class-options",
+                            for choice in field_choices.iter() {
+                                {
+                                    let checked = rule.values.contains(&choice.value);
+                                    let choice_value = choice.value.clone();
+                                    let choice_query = query.clone();
+                                    let choice_path = path.clone();
+                                    rsx! {
+                                        label { key: "{choice.value}", title: "{choice.value}",
+                                            input {
+                                                r#type: "checkbox",
+                                                checked,
+                                                onchange: move |_| {
+                                                    let mut next = choice_query.clone();
+                                                    toggle_rule_value(&mut next.root, &choice_path, &choice_value);
+                                                    on_change.call(next);
+                                                }
+                                            }
+                                            span { "{choice.label}" }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                        small { "Select one or more known classes." }
+                    }
+                }
+            } else if rule.operator.value_count() > 0 {
                 label {
                     span { if rule.operator == FilterOperator::Between { "From" } else { "Value" } }
                     if kind == QueryFieldKind::Bool {
@@ -889,6 +1067,20 @@ fn FilterRuleEditor(
                             },
                             option { value: "true", "True" }
                             option { value: "false", "False" }
+                        }
+                    } else if !field_choices.is_empty() {
+                        select {
+                            value: "{first_value}",
+                            aria_label: "Value for {field_label}",
+                            onchange: move |event: FormEvent| {
+                                let mut next = text_value_query.clone();
+                                set_rule_value(&mut next.root, &text_value_path, 0, event.value());
+                                on_change.call(next);
+                            },
+                            option { value: "", disabled: true, "Select a class" }
+                            for choice in field_choices.iter() {
+                                option { key: "{choice.value}", value: "{choice.value}", "{choice.label}" }
+                            }
                         }
                     } else {
                         input {
@@ -935,6 +1127,93 @@ fn FilterRuleEditor(
     }
 }
 
+#[component]
+fn TypeFilterEditor(
+    query: StructuredQuery,
+    path: Vec<usize>,
+    field: QueryField,
+    on_change: EventHandler<StructuredQuery>,
+) -> Element {
+    let Some(rule) = rule_at(&query.root, &path).cloned() else {
+        return rsx! {};
+    };
+    let selected_count = rule.values.len();
+    let clear_query = query.clone();
+    let clear_path = path.clone();
+    let remove_query = query.clone();
+    let remove_path = path.clone();
+    rsx! {
+        div { class: "semantic-query-builder__rule semantic-query-builder__type-filter",
+            div { class: "semantic-query-builder__type-heading",
+                div {
+                    strong { "Type" }
+                    small {
+                        if selected_count == 0 {
+                            "Select one or more classes (up to {MAX_LIST_VALUES})."
+                        } else if selected_count == 1 {
+                            "1 class selected"
+                        } else {
+                            "{selected_count} classes selected"
+                        }
+                    }
+                }
+                div { class: "semantic-query-builder__type-actions",
+                    dxcomp::Button {
+                        size: dxcomp::ButtonSize::Xs,
+                        variant: dxcomp::ButtonVariant::Ghost,
+                        disabled: selected_count == 0,
+                        onclick: move |_| {
+                            let mut next = clear_query.clone();
+                            set_rule_values(&mut next.root, &clear_path, Vec::new());
+                            on_change.call(next);
+                        },
+                        "Clear"
+                    }
+                    dxcomp::Button {
+                        size: dxcomp::ButtonSize::Xs,
+                        variant: dxcomp::ButtonVariant::Ghost,
+                        aria_label: "Remove type filter",
+                        onclick: move |_| {
+                            let mut next = remove_query.clone();
+                            remove_node(&mut next.root, &remove_path);
+                            on_change.call(next);
+                        },
+                        "Remove"
+                    }
+                }
+            }
+            fieldset { class: "semantic-query-builder__class-picker",
+                legend { "Classes" }
+                div { class: "semantic-query-builder__class-options",
+                    for choice in field.choices.iter() {
+                        {
+                            let checked = rule.values.contains(&choice.value);
+                            let choice_value = choice.value.clone();
+                            let choice_query = query.clone();
+                            let choice_path = path.clone();
+                            rsx! {
+                                label { key: "{choice.value}", title: "{choice.value}",
+                                    input {
+                                        r#type: "checkbox",
+                                        checked,
+                                        disabled: !checked && selected_count >= MAX_LIST_VALUES,
+                                        onchange: move |_| {
+                                            let mut next = choice_query.clone();
+                                            toggle_rule_value(&mut next.root, &choice_path, &choice_value);
+                                            on_change.call(next);
+                                        }
+                                    }
+                                    span { "{choice.label}" }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
 fn operator_key(operator: FilterOperator) -> &'static str {
     use FilterOperator::*;
     match operator {
@@ -951,6 +1230,7 @@ fn operator_key(operator: FilterOperator) -> &'static str {
         Less => "lt",
         LessOrEqual => "lte",
         Between => "between",
+        In => "in",
         IsNull => "null",
         IsNotNull => "not_null",
     }
@@ -972,6 +1252,7 @@ fn parse_operator(value: &str) -> Option<FilterOperator> {
         "lt" => Less,
         "lte" => LessOrEqual,
         "between" => Between,
+        "in" => In,
         "null" => IsNull,
         "not_null" => IsNotNull,
         _ => return None,
@@ -1025,6 +1306,22 @@ fn set_rule_value(root: &mut FilterGroup, path: &[usize], index: usize, value: S
     }
 }
 
+fn set_rule_values(root: &mut FilterGroup, path: &[usize], values: Vec<String>) {
+    if let Some(rule) = rule_at_mut(root, path) {
+        rule.values = values;
+    }
+}
+
+fn toggle_rule_value(root: &mut FilterGroup, path: &[usize], value: &str) {
+    if let Some(rule) = rule_at_mut(root, path) {
+        if let Some(index) = rule.values.iter().position(|candidate| candidate == value) {
+            rule.values.remove(index);
+        } else {
+            rule.values.push(value.to_string());
+        }
+    }
+}
+
 fn remove_node(root: &mut FilterGroup, path: &[usize]) {
     let Some((index, parent)) = path.split_last() else {
         return;
@@ -1051,6 +1348,7 @@ mod tests {
                 description: None,
                 kind: QueryFieldKind::Text,
                 deprecated: false,
+                choices: Vec::new(),
             },
             QueryField {
                 name: "score".into(),
@@ -1058,6 +1356,7 @@ mod tests {
                 description: None,
                 kind: QueryFieldKind::SignedInteger,
                 deprecated: false,
+                choices: Vec::new(),
             },
         ]
     }
@@ -1157,6 +1456,7 @@ mod tests {
                 description: None,
                 kind: QueryFieldKind::SignedInteger,
                 deprecated: false,
+                choices: Vec::new(),
             },
             QueryField {
                 name: "float".into(),
@@ -1164,6 +1464,7 @@ mod tests {
                 description: None,
                 kind: QueryFieldKind::Float,
                 deprecated: false,
+                choices: Vec::new(),
             },
         ];
         let query = |field: &str, value: &str| StructuredQuery {
@@ -1198,6 +1499,7 @@ mod tests {
             description: None,
             kind: QueryFieldKind::PresenceOnly,
             deprecated: false,
+            choices: Vec::new(),
         }];
         assert_eq!(
             operators_for_kind(QueryFieldKind::PresenceOnly),
@@ -1219,18 +1521,44 @@ mod tests {
     }
 
     #[test]
-    fn nested_groups_are_seeded_and_use_the_root_node_budget() {
-        let field = fields().remove(0);
-        let group = seeded_group(field);
-        assert_eq!(group.node_count(), 1);
-        assert!(matches!(group.children.as_slice(), [FilterNode::Rule(_)]));
+    fn empty_groups_use_the_requested_combinator_and_root_node_budget() {
+        let group = empty_group(GroupCombinator::Any);
+        assert_eq!(group.node_count(), 0);
+        assert_eq!(group.combinator, GroupCombinator::Any);
+        assert!(group.children.is_empty());
 
         assert!(can_add_rule(MAX_NODES - 1, true));
         assert!(!can_add_rule(MAX_NODES, true));
-        assert!(can_add_group(0, MAX_NODES - 2, true));
-        assert!(!can_add_group(0, MAX_NODES - 1, true));
+        assert!(can_add_group(0, MAX_NODES - 1, true));
+        assert!(!can_add_group(0, MAX_NODES, true));
         assert!(!can_add_group(0, 0, false));
         assert!(!can_add_group(MAX_DEPTH, 0, true));
+    }
+
+    #[test]
+    fn in_compiles_typed_values_and_rejects_empty_lists() {
+        let query = |values| StructuredQuery {
+            root: FilterGroup {
+                children: vec![FilterNode::Rule(FilterRule {
+                    field: "score".into(),
+                    operator: FilterOperator::In,
+                    values,
+                })],
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+
+        let sql = compile_structured_predicate(
+            &query(vec!["1".into(), "2".into(), "-3".into()]),
+            &fields(),
+            None,
+            &[],
+        )
+        .unwrap()
+        .unwrap();
+        assert_eq!(sql, "(\"score\" IN (1, 2, -3))");
+        assert!(compile_structured_predicate(&query(Vec::new()), &fields(), None, &[]).is_err());
     }
 
     #[test]

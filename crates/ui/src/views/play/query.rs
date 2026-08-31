@@ -163,6 +163,7 @@ mod tests {
             description: None,
             kind: QueryFieldKind::SignedInteger,
             deprecated: false,
+            choices: Vec::new(),
         }];
         let structured = StructuredQuery {
             root: FilterGroup {

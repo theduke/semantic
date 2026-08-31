@@ -1724,7 +1724,10 @@ pre {
 .semantic-query-builder__group-toolbar,
 .semantic-query-builder__add-actions,
 .semantic-query-builder__actions,
-.semantic-query-builder__match {
+.semantic-query-builder__match,
+.semantic-query-builder__add-chooser,
+.semantic-query-builder__type-heading,
+.semantic-query-builder__type-actions {
   display: flex;
   flex-wrap: wrap;
   align-items: center;
@@ -1764,7 +1767,8 @@ pre {
 }
 
 .semantic-query-builder__search,
-.semantic-query-builder__rule label {
+.semantic-query-builder__rule > label,
+.semantic-query-builder__add-chooser > label {
   display: grid;
   min-width: 0;
   gap: var(--semantic-space-1);
@@ -1773,7 +1777,8 @@ pre {
 }
 
 .semantic-query-builder__search input,
-.semantic-query-builder__rule :is(input, select) {
+.semantic-query-builder__rule > label :is(input, select, textarea),
+.semantic-query-builder__add-chooser select {
   box-sizing: border-box;
   width: 100%;
   min-height: 38px;
@@ -1785,7 +1790,8 @@ pre {
 }
 
 .semantic-query-builder__search input:focus-visible,
-.semantic-query-builder__rule :is(input, select):focus-visible {
+.semantic-query-builder__rule > label :is(input, select, textarea):focus-visible,
+.semantic-query-builder__add-chooser select:focus-visible {
   border-color: var(--semantic-color-focus);
   box-shadow: var(--semantic-focus-ring);
   outline: none;
@@ -1806,6 +1812,10 @@ pre {
   padding-inline: var(--semantic-space-1);
   font-size: var(--semantic-font-size-label);
   font-weight: 700;
+}
+
+.semantic-query-builder__group-toolbar > small {
+  flex: 1;
 }
 
 .semantic-query-builder__negate {
@@ -1835,6 +1845,89 @@ pre {
   padding: var(--semantic-space-2);
   border-radius: var(--semantic-radius-md);
   background: var(--semantic-surface-muted);
+}
+
+.semantic-query-builder__list-input textarea {
+  min-height: 7rem;
+  resize: vertical;
+}
+
+.semantic-query-builder__add-chooser {
+  min-width: min(100%, 24rem);
+  padding: var(--semantic-space-2);
+  border: 1px solid var(--semantic-border-soft);
+  border-radius: var(--semantic-radius-md);
+  background: var(--semantic-surface-muted);
+}
+
+.semantic-query-builder__add-chooser > label {
+  flex: 1;
+}
+
+.semantic-query-builder__type-filter {
+  grid-template-columns: minmax(0, 1fr);
+  align-items: stretch;
+}
+
+.semantic-query-builder__type-heading {
+  justify-content: space-between;
+}
+
+.semantic-query-builder__type-heading > div:first-child {
+  display: grid;
+  gap: var(--semantic-space-1);
+}
+
+.semantic-query-builder__class-picker {
+  display: grid;
+  min-width: 0;
+  gap: var(--semantic-space-2);
+  margin: 0;
+  padding: var(--semantic-space-2);
+  border: 1px solid var(--semantic-border-soft);
+  border-radius: var(--semantic-radius-md);
+  background: var(--semantic-surface);
+}
+
+.semantic-query-builder__class-picker legend {
+  padding-inline: var(--semantic-space-1);
+  color: var(--semantic-text-muted);
+  font-size: var(--semantic-font-size-label);
+  font-weight: 700;
+}
+
+.semantic-query-builder__class-options {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+  max-height: 15rem;
+  overflow: auto;
+  gap: var(--semantic-space-1) var(--semantic-space-3);
+  padding: var(--semantic-space-1);
+}
+
+.semantic-query-builder__class-options label {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--semantic-space-2);
+  min-width: 0;
+  padding: var(--semantic-space-1);
+  border-radius: var(--semantic-radius-sm);
+  color: var(--semantic-text);
+  font-size: var(--semantic-font-size-label);
+  cursor: pointer;
+}
+
+.semantic-query-builder__class-options label:hover {
+  background: var(--semantic-color-hover);
+}
+
+.semantic-query-builder__class-options input {
+  flex: 0 0 auto;
+  margin-block-start: 0.15rem;
+}
+
+.semantic-query-builder__class-options span {
+  overflow-wrap: anywhere;
 }
 
 .semantic-query-builder__remove {
