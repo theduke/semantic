@@ -142,22 +142,31 @@ pub fn GlobalSearch() -> Element {
                             query.set(event.value());
                             active_index.set(0);
                         },
-                        onkeydown: move |event: KeyboardEvent| match event.key() {
-                            Key::ArrowDown if !results.is_empty() => {
+                        onkeydown: move |event: KeyboardEvent| {
+                            let key = event.key();
+                            let key_text = key.to_string();
+                            let ctrl = event.modifiers().ctrl();
+                            let move_next = key == Key::ArrowDown
+                                || (ctrl && matches!(key_text.as_str(), "n" | "N"));
+                            let move_previous = key == Key::ArrowUp
+                                || (ctrl && matches!(key_text.as_str(), "p" | "P"));
+
+                            if move_next {
                                 event.prevent_default();
-                                active_index.set((active_index() + 1).min(results.len() - 1));
-                            }
-                            Key::ArrowUp if !results.is_empty() => {
+                                if !results.is_empty() {
+                                    active_index.set((active_index() + 1).min(results.len() - 1));
+                                }
+                            } else if move_previous {
                                 event.prevent_default();
-                                active_index.set(active_index().saturating_sub(1));
-                            }
-                            Key::Enter if !results.is_empty() => {
+                                if !results.is_empty() {
+                                    active_index.set(active_index().saturating_sub(1));
+                                }
+                            } else if key == Key::Enter && !results.is_empty() {
                                 event.prevent_default();
                                 let route = entity_route(&results[selected_index].target);
                                 close_dialog();
                                 navigator.push(route);
                             }
-                            _ => {}
                         },
                     }
                     if loading {
@@ -248,7 +257,7 @@ pub fn GlobalSearch() -> Element {
                 }
 
                 div { class: "semantic-global-search__footer", aria_hidden: "true",
-                    span { kbd { "↑" } kbd { "↓" } " navigate" }
+                    span { kbd { "↑" } kbd { "↓" } " / " kbd { "Ctrl N" } kbd { "Ctrl P" } " navigate" }
                     span { kbd { "Enter" } " open" }
                     span { kbd { "Esc" } " close" }
                 }
