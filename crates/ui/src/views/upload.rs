@@ -7,7 +7,6 @@ use futures::{
     future::{AbortHandle, Abortable},
     lock::Mutex,
 };
-use semantic_data::builtin::DEFAULT_COLLECTION;
 use semantic_data::filestore::{ATTR_DESCRIPTION, ATTR_PARENT, ATTR_TITLE};
 use semantic_data::value::{Object, Value};
 use semantic_rpc::RpcClientError;
@@ -15,18 +14,14 @@ use semantic_rpc::file::{
     FileUploadContent, FileUploadPhase, FileUploadProgress, FileUploadRequest, FileUploadResponse,
 };
 use semantic_ui_core::{
-    ClassView, EntityAutocomplete, FileTreePicker, FileTreeSelection, ObjectView, RenderMode,
-    add_items_to_directory,
+    EntityAutocomplete, EntityCard, EntityDisplayRenderer, EntityRenderOptions, FileTreePicker,
+    FileTreeSelection, add_items_to_directory,
     components::{InlineNotice, NoticeVariant},
-    use_active_scope_id, use_rpc_client, use_ui_catalog,
+    use_active_scope_id, use_rpc_client,
 };
 
-use crate::{
-    components::{
-        ConfirmAction, ConfirmActionRequest, ConfirmActionVariant, DropZone, JobProgress,
-        PageHeader,
-    },
-    views::Route,
+use crate::components::{
+    ConfirmAction, ConfirmActionRequest, ConfirmActionVariant, DropZone, JobProgress, PageHeader,
 };
 
 type QueueItemId = u64;
@@ -50,14 +45,6 @@ const MAX_FILE_UPLOAD_SIZE: u64 = 100 * 1024 * 1024 * 1024;
 const MAX_QUEUE_ITEMS: usize = 1_000;
 const MAX_COMPLETED_HISTORY: usize = 50;
 const INITIAL_VISIBLE_PER_GROUP: usize = 50;
-
-fn upload_entity_route(collection: String, id: String) -> Route {
-    if collection == DEFAULT_COLLECTION {
-        Route::DefaultEntityPage { id }
-    } else {
-        Route::CollectionEntityPage { collection, id }
-    }
-}
 
 #[derive(Clone, Debug, PartialEq)]
 struct UploadQueueItem {
@@ -200,7 +187,6 @@ pub fn UploadPage() -> Element {
     let queue_len = queue.read().len();
     let ready_to_start = ready.clone();
     let attention_to_retry = attention.clone();
-    let has_complete = !complete.is_empty();
     let retryable_count = attention
         .iter()
         .filter(|(_, item)| {
@@ -221,78 +207,71 @@ pub fn UploadPage() -> Element {
     } else {
         format!("Retry {retryable_count} files")
     };
-    let header_actions = (queue_len > 0 && (!ready.is_empty() || has_retryable)).then(|| {
-        rsx! {
-            if !ready.is_empty() {
-                dxcomp::Button {
-                    onclick: {
-                        let work_tx = work_tx.clone();
-                        let defaults = defaults.clone();
-                        move |_| {
-                            for (_, item) in ready_to_start.iter().copied() {
-                                start_work(item, UploadWorkKind::Upload, defaults.clone(), &work_tx);
-                            }
-                            refresh_summary(queue, summary);
-                        }
-                    },
-                    "{upload_label}"
-                }
-            }
-            if has_retryable {
-                dxcomp::Button {
-                    variant: dxcomp::ButtonVariant::Outline,
-                    onclick: {
-                        let work_tx = work_tx.clone();
-                        let defaults = defaults.clone();
-                        move |_| {
-                            for (_, item) in attention_to_retry.iter().copied() {
-                                if matches!(item.read().status, UploadItemStatus::Error | UploadItemStatus::Canceled) {
-                                    start_work(item, UploadWorkKind::Upload, defaults.clone(), &work_tx);
-                                }
-                            }
-                            refresh_summary(queue, summary);
-                        }
-                    },
-                    "{retry_label}"
-                }
-            }
-        }
-    });
-
     rsx! {
         section { class: "semantic-upload",
-            PageHeader {
-                title: "Upload files",
-                description: "Upload files to your library.",
-                actions: header_actions,
-            }
+            PageHeader { title: "Upload" }
             DropZone {
                 id: "semantic-upload-input",
                 label: "Drop files here",
                 hint: "Any file type · Up to 100 GiB each",
                 on_files: move |files| add_files(files, queue, summary, next_id, notice),
             }
+            if queue_len > 0 {
+                div { class: "semantic-upload__selection-actions",
+                    if !ready.is_empty() {
+                        dxcomp::Button {
+                            onclick: {
+                                let work_tx = work_tx.clone();
+                                let defaults = defaults.clone();
+                                move |_| {
+                                    for (_, item) in ready_to_start.iter().copied() {
+                                        start_work(item, UploadWorkKind::Upload, defaults.clone(), &work_tx);
+                                    }
+                                    refresh_summary(queue, summary);
+                                }
+                            },
+                            "{upload_label}"
+                        }
+                    }
+                    if has_retryable {
+                        dxcomp::Button {
+                            variant: dxcomp::ButtonVariant::Outline,
+                            onclick: {
+                                let work_tx = work_tx.clone();
+                                let defaults = defaults.clone();
+                                move |_| {
+                                    for (_, item) in attention_to_retry.iter().copied() {
+                                        if matches!(item.read().status, UploadItemStatus::Error | UploadItemStatus::Canceled) {
+                                            start_work(item, UploadWorkKind::Upload, defaults.clone(), &work_tx);
+                                        }
+                                    }
+                                    refresh_summary(queue, summary);
+                                }
+                            },
+                            "{retry_label}"
+                        }
+                    }
+                    dxcomp::Button {
+                        variant: dxcomp::ButtonVariant::Outline,
+                        disabled: busy,
+                        onclick: move |_| clear_confirm_open.set(true),
+                        "Clear all"
+                    }
+                }
+            }
             div { class: "semantic-upload__settings-toggle",
                 dxcomp::Button {
                     variant: dxcomp::ButtonVariant::Outline,
-                    size: dxcomp::ButtonSize::Sm,
                     aria_expanded: settings_open(),
                     aria_controls: "semantic-upload-settings",
                     onclick: move |_| settings_open.toggle(),
-                    if settings_open() { "Hide organization" } else { "Organize files" }
-                }
-                span {
-                    if destination_directory.read().is_some() || parent_entity.read().is_some() {
-                        "Organization applied"
-                    } else {
-                        "Optional directory and parent"
-                    }
+                    if settings_open() { "Hide metadata" } else { "Add metadata" }
                 }
             }
             if settings_open() {
                 section { id: "semantic-upload-settings", class: "semantic-upload__defaults",
                     div { class: "semantic-upload__defaults-header",
-                        h2 { "Organize files" }
+                        h2 { "Metadata" }
                         if destination_directory.read().is_some() || parent_entity.read().is_some() {
                             dxcomp::Button {
                                 variant: dxcomp::ButtonVariant::Ghost,
@@ -363,31 +342,13 @@ pub fn UploadPage() -> Element {
                         "Show more queue items"
                     }
                 }
-                div { class: "semantic-upload__footer-actions",
-                    if has_complete {
-                        dxcomp::Button {
-                            variant: dxcomp::ButtonVariant::Outline,
-                            onclick: move |_| {
-                                queue.write().retain(|(_, item)| item.read().status != UploadItemStatus::Success);
-                                refresh_summary(queue, summary);
-                            },
-                            "Clear completed"
-                        }
-                    }
-                    dxcomp::Button {
-                        variant: dxcomp::ButtonVariant::Ghost,
-                        disabled: busy,
-                        onclick: move |_| clear_confirm_open.set(true),
-                        "Clear queue"
-                    }
-                }
             }
             ConfirmAction {
                 open: clear_confirm_open(),
-                title: "Clear upload queue",
+                title: "Clear all files",
                 target: format!("{queue_len} queued files"),
                 body: "Uploaded files won't be deleted.",
-                confirm_label: "Clear queue",
+                confirm_label: "Clear all",
                 variant: ConfirmActionVariant::Danger,
                 on_open_change: move |open| clear_confirm_open.set(open),
                 on_confirm: move |request: ConfirmActionRequest| {
@@ -487,6 +448,8 @@ fn UploadQueueRow(
     let id = snapshot.id;
     let status = snapshot.status;
     let busy = status.is_busy();
+    let has_result = snapshot.result.is_some();
+    let can_cancel = upload_can_be_canceled(status, has_result);
     let title_id = format!("upload-{id}-title");
     let description_id = format!("upload-{id}-description");
     let progress = snapshot.progress;
@@ -551,12 +514,12 @@ fn UploadQueueRow(
                 if let Some(error) = snapshot.error {
                     InlineNotice { message: error, variant: if status == UploadItemStatus::Partial { NoticeVariant::Warning } else { NoticeVariant::Error } }
                 }
-                if snapshot.result.is_some() {
+                if has_result && matches!(status, UploadItemStatus::Success | UploadItemStatus::Partial) {
                     UploadResultPreview { item }
                 }
             }
             div { class: "semantic-upload__item-actions",
-                if busy {
+                if can_cancel {
                     dxcomp::Button {
                         variant: dxcomp::ButtonVariant::Outline,
                         size: dxcomp::ButtonSize::Sm,
@@ -611,30 +574,18 @@ fn UploadQueueRow(
 
 #[component]
 fn UploadResultPreview(item: Signal<UploadQueueItem>) -> Element {
-    let client = use_rpc_client();
-    let catalog = use_ui_catalog();
     let Some(result) = item.read().result.clone() else {
         return rsx! {};
     };
-    let class = catalog.object_class(&result.object).cloned();
     rsx! {
-        div { class: "semantic-upload__result",
-            div { class: "semantic-upload__result-actions",
-                Link { to: upload_entity_route(result.collection.clone(), result.id.clone()), "View entity" }
-                if let Some(url) = client.file_url(&result.id) {
-                    a { href: "{url}", target: "_blank", rel: "noopener noreferrer", "Open file" }
-                }
-            }
-            if let Some(class) = class {
-                ClassView {
-                    class,
-                    object: with_id(result.object.clone(), &result.id),
-                    collection: Some(result.collection.clone()),
-                    id: Some(result.id.clone()),
-                    mode: RenderMode::Preview,
-                }
-            } else {
-                ObjectView { object: with_id(result.object, &result.id), mode: RenderMode::Preview }
+        EntityCard {
+            object: result.object,
+            options: EntityRenderOptions {
+                collection: Some(result.collection),
+                id: Some(result.id),
+                renderer: EntityDisplayRenderer::Custom,
+                preview: true,
+                actions: true,
             }
         }
     }
@@ -908,6 +859,10 @@ impl UploadItemStatus {
             Self::Canceled => "canceled",
         }
     }
+}
+
+fn upload_can_be_canceled(status: UploadItemStatus, has_result: bool) -> bool {
+    status.is_busy() && !has_result
 }
 
 fn add_files(
@@ -1242,13 +1197,6 @@ fn metadata_entity(title: &str, description: &str, parent_entity: Option<&str>) 
     entity
 }
 
-fn with_id(mut object: Object, id: &str) -> Object {
-    if !object.contains_key("id") {
-        object.insert("id", Value::String(id.to_string()));
-    }
-    object
-}
-
 fn format_byte_size(size: u64) -> String {
     const UNITS: [&str; 5] = ["B", "KB", "MB", "GB", "TB"];
     let mut value = size as f64;
@@ -1333,5 +1281,12 @@ mod tests {
     fn byte_size_formats_compactly() {
         assert_eq!(format_byte_size(12), "12 B");
         assert_eq!(format_byte_size(1536), "1.5 KB");
+    }
+
+    #[test]
+    fn completed_or_materialized_upload_cannot_be_canceled() {
+        assert!(upload_can_be_canceled(UploadItemStatus::Uploading, false));
+        assert!(!upload_can_be_canceled(UploadItemStatus::Finalizing, true));
+        assert!(!upload_can_be_canceled(UploadItemStatus::Success, true));
     }
 }

@@ -2214,6 +2214,64 @@ fn DirectoryOperationDialog(
         .cloned()
         .unwrap_or_default();
     let open = dialog.is_some();
+    if let Some(DirectoryDialog::NewDirectory { parent }) = dialog.as_ref() {
+        let parent = parent.clone();
+        let create_busy = busy_operations.contains(&DirectoryOperation::Create);
+        return rsx! {
+            div {
+                class: "dx-dialog-backdrop semantic-directory-browser__new-directory-backdrop",
+                "data-state": "open",
+                onclick: move |_| commands.send(DirectoryBrowserCommand::CloseDialog),
+                form {
+                    class: "dx-dialog semantic-directory-browser__new-directory-dialog",
+                    role: "dialog",
+                    aria_modal: "true",
+                    aria_labelledby: "semantic-new-directory-title",
+                    onclick: move |event| event.stop_propagation(),
+                    onkeydown: move |event: KeyboardEvent| {
+                        if event.key().to_string() == "Escape" {
+                            event.prevent_default();
+                            commands.send(DirectoryBrowserCommand::CloseDialog);
+                        }
+                    },
+                    onsubmit: move |event| {
+                        event.prevent_default();
+                        if !create_busy && !title().trim().is_empty() {
+                            commands.send(DirectoryBrowserCommand::CreateDirectory {
+                                parent: parent.clone(),
+                                title: title(),
+                            });
+                        }
+                    },
+                    h2 { id: "semantic-new-directory-title", class: "dx-dialog-title", "New Directory" }
+                    if let Some(error) = error {
+                        div { class: "semantic-error semantic-directory-browser__dialog-error", role: "alert", "{error}" }
+                    }
+                    label { class: "semantic-directory-browser__dialog-field",
+                        span { "Title" }
+                        input {
+                            autofocus: true,
+                            value: "{title()}",
+                            oninput: move |event| title.set(event.value()),
+                        }
+                    }
+                    div { class: "semantic-directory-browser__dialog-actions",
+                        dxcomp::Button {
+                            r#type: "button",
+                            variant: dxcomp::ButtonVariant::Outline,
+                            onclick: move |_| commands.send(DirectoryBrowserCommand::CloseDialog),
+                            "Cancel"
+                        }
+                        dxcomp::Button {
+                            r#type: "submit",
+                            disabled: title().trim().is_empty() || create_busy,
+                            if create_busy { "Creating…" } else { "Create" }
+                        }
+                    }
+                }
+            }
+        };
+    }
     rsx! {
         dxcomp::Dialog {
             open,
@@ -2226,31 +2284,7 @@ fn DirectoryOperationDialog(
                 div { class: "semantic-error semantic-directory-browser__dialog-error", role: "alert", "{error}" }
             }
             match dialog {
-                Some(DirectoryDialog::NewDirectory { parent }) => rsx! {
-                    dxcomp::DialogTitle { "New Directory" }
-                    label { class: "semantic-directory-browser__dialog-field",
-                        span { "Title" }
-                        input {
-                            value: "{title()}",
-                            oninput: move |event| title.set(event.value()),
-                        }
-                    }
-                    div { class: "semantic-directory-browser__dialog-actions",
-                        dxcomp::Button {
-                            variant: dxcomp::ButtonVariant::Outline,
-                            onclick: move |_| commands.send(DirectoryBrowserCommand::CloseDialog),
-                            "Cancel"
-                        }
-                        dxcomp::Button {
-                            disabled: title().trim().is_empty() || busy_operations.contains(&DirectoryOperation::Create),
-                            onclick: move |_| commands.send(DirectoryBrowserCommand::CreateDirectory {
-                                parent: parent.clone(),
-                                title: title(),
-                            }),
-                            if busy_operations.contains(&DirectoryOperation::Create) { "Creating…" } else { "Create" }
-                        }
-                    }
-                },
+                Some(DirectoryDialog::NewDirectory { .. }) => rsx! {},
                 Some(DirectoryDialog::AddExisting { parent }) => rsx! {
                     dxcomp::DialogTitle { "Add Existing Item" }
                     dxcomp::Combobox::<String> {

@@ -3,13 +3,17 @@ use std::rc::Rc;
 use dioxus::prelude::*;
 use semantic_data::value::{Object, Value};
 use semantic_ui_core::{
-    EntityDetail, EntityDetailActions, EntityTarget,
+    EntityActionPlacement, EntityCard, EntityDisplayRenderer, EntityRenderOptions, EntityTarget,
     components::{EmptyState, ErrorState, LoadingSkeleton, RefreshingIndicator},
     context::{Toast, use_toast_dispatcher},
     entity_title, use_active_scope_id, use_rpc_client, use_ui_catalog_context,
 };
 
-use crate::{app::entity_route, components::EntityPageHeader, views::Route};
+use crate::{
+    app::{entity_edit_route, entity_route, use_entity_edit_navigation},
+    components::EntityPageHeader,
+    views::Route,
+};
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 struct EntityQueryKey {
@@ -50,6 +54,7 @@ fn EntityPageView(collection: Option<String>, id: String) -> Element {
     let scope_id = use_active_scope_id();
     let catalog_signal = use_ui_catalog_context().catalog_signal();
     let toast = use_toast_dispatcher();
+    let edit_navigation = use_entity_edit_navigation();
     let target = EntityTarget::new(collection.clone(), id.clone());
     let query_key = use_memo(use_reactive(
         &EntityQueryKey {
@@ -107,7 +112,6 @@ fn EntityPageView(collection: Option<String>, id: String) -> Element {
         .unwrap_or_else(|| id.clone());
     let target_key = entity_route(&target).to_string();
     let return_route = entity_return_route(&target);
-    let delete_return_route = return_route.clone();
 
     rsx! {
         section {
@@ -119,22 +123,8 @@ fn EntityPageView(collection: Option<String>, id: String) -> Element {
                 title: title.clone(),
                 class_name: class_name.clone(),
                 refreshing: loading,
-                editable: object.is_some(),
+                editable: false,
                 on_refresh: move |_| resource.restart(),
-                registered_actions: object.clone().map(|object| rsx! {
-                    EntityDetailActions {
-                        target: target.clone(),
-                        object,
-                        excluded_action_ids: vec!["open".to_string(), "edit".to_string()],
-                        on_delete: move |_deleted_target: EntityTarget| {
-                            toast.show(
-                                Toast::success("The entity was permanently deleted.")
-                                    .title("Entity deleted"),
-                            );
-                            navigator().push(delete_return_route.clone());
-                        },
-                    }
-                }),
             }
 
             if loading && object.is_none() {
@@ -170,10 +160,28 @@ fn EntityPageView(collection: Option<String>, id: String) -> Element {
                 if loading {
                     RefreshingIndicator { label: "Refreshing entity details" }
                 }
-                EntityDetail {
-                    target,
-                    object,
-                    actions: false,
+                EntityCard {
+                    object: object.as_ref().clone(),
+                    options: EntityRenderOptions {
+                        collection: target.collection.clone(),
+                        id: Some(target.id.clone()),
+                        renderer: EntityDisplayRenderer::Custom,
+                        preview: false,
+                        actions: true,
+                    },
+                    action_placement: EntityActionPlacement::Detail,
+                    excluded_action_ids: vec!["open".to_string()],
+                    on_edit: move |target: EntityTarget| {
+                        edit_navigation.begin_from_detail(target.clone());
+                        navigator().push(entity_edit_route(&target));
+                    },
+                    on_delete: move |_deleted_target: EntityTarget| {
+                        toast.show(
+                            Toast::success("The entity was permanently deleted.")
+                                .title("Entity deleted"),
+                        );
+                        navigator().go_back();
+                    },
                 }
             }
         }

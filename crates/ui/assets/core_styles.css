@@ -1291,31 +1291,6 @@ pre {
   min-width: 0;
 }
 
-.semantic-entity-detail {
-  display: grid;
-  min-width: 0;
-  gap: var(--semantic-space-3);
-  padding: clamp(var(--semantic-space-3), 2vw, var(--semantic-space-5));
-  border: 1px solid var(--semantic-border-soft);
-  border-radius: var(--semantic-radius-lg);
-  background: var(--semantic-surface);
-  box-shadow: var(--semantic-shadow-1);
-}
-
-.semantic-entity-detail__actions {
-  display: flex;
-  justify-content: flex-end;
-}
-
-.semantic-entity-detail__body {
-  min-width: 0;
-}
-
-.semantic-entity-detail__body > .semantic-class > header {
-  padding-block-end: var(--semantic-space-3);
-  border-block-end: 1px solid var(--semantic-border-soft);
-}
-
 .semantic-entity-page__recovery {
   display: flex;
   justify-content: flex-start;
@@ -2697,10 +2672,8 @@ pre {
   width: min(32rem, 55%);
 }
 
-.semantic-upload__actions,
-.semantic-upload__item-actions,
-.semantic-upload__result-actions,
-.semantic-upload__footer-actions {
+.semantic-upload__selection-actions,
+.semantic-upload__item-actions {
   display: flex;
   flex-wrap: wrap;
   gap: var(--semantic-space-2);
@@ -2708,15 +2681,7 @@ pre {
 }
 
 .semantic-upload__settings-toggle {
-  display: flex;
-  flex-wrap: wrap;
-  gap: var(--semantic-space-2) var(--semantic-space-3);
-  align-items: center;
-}
-
-.semantic-upload__settings-toggle span {
-  color: var(--semantic-text-muted);
-  font-size: 13px;
+  display: block;
 }
 
 .semantic-upload__defaults {
@@ -2996,13 +2961,6 @@ pre {
   align-self: start;
 }
 
-.semantic-upload__result {
-  display: grid;
-  gap: var(--semantic-space-3);
-  padding-top: var(--semantic-space-3);
-  border-top: 1px solid var(--semantic-border-soft);
-}
-
 .semantic-upload__progress {
   position: relative;
   height: 22px;
@@ -3031,12 +2989,6 @@ pre {
 .semantic-upload__error {
   color: var(--semantic-danger);
   overflow-wrap: anywhere;
-}
-
-.semantic-upload__footer-actions {
-  justify-content: flex-end;
-  padding-top: var(--semantic-space-2);
-  border-top: 1px solid var(--semantic-border-soft);
 }
 
 .semantic-directory-browser {
@@ -3121,6 +3073,28 @@ pre {
 
 .semantic-directory-browser__dialog-field input {
   min-width: min(28rem, 70vw);
+}
+
+.dx-dialog.semantic-directory-browser__new-directory-dialog {
+  width: min(22rem, calc(100% - 2rem));
+  padding: var(--semantic-space-4);
+  gap: var(--semantic-space-3);
+}
+
+.semantic-directory-browser__new-directory-dialog
+  .semantic-directory-browser__dialog-field {
+  margin-block: 0;
+}
+
+.semantic-directory-browser__new-directory-dialog
+  .semantic-directory-browser__dialog-field input {
+  width: 100%;
+  min-width: 0;
+}
+
+.semantic-directory-browser__new-directory-dialog
+  .semantic-directory-browser__dialog-actions {
+  justify-content: flex-end;
 }
 
 .semantic-directory-browser__dialog-error {
@@ -3900,7 +3874,6 @@ pre {
 
   .semantic-drop-zone,
   .semantic-upload__item,
-  .semantic-upload__result,
   .semantic-upload__metadata,
   .semantic-upload__defaults-grid {
     grid-template-columns: 1fr;

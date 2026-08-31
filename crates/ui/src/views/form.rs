@@ -11,7 +11,7 @@ use semantic_data::{
     value::{Object, Value},
 };
 use semantic_ui_core::{
-    DynamicClassForm, SemanticFormMode, SemanticFormSubmit, SubmitError,
+    DynamicClassForm, EntityTarget, SemanticFormMode, SemanticFormSubmit, SubmitError,
     components::{
         EmptyState, ErrorState, InlineNotice, LoadingSkeleton, NoticeVariant, RefreshingIndicator,
     },
@@ -23,6 +23,7 @@ use semantic_ui_core::{
 };
 
 use crate::{
+    app::use_entity_edit_navigation,
     components::{ConfirmActionRequest, FormPage, UnsavedChangesPrompt},
     views::Route,
 };
@@ -451,6 +452,10 @@ fn EditEntityPageView(collection: Option<String>, id: String, scope_id: Option<S
     let client = use_rpc_client();
     let catalog = use_ui_catalog();
     let reload_catalog = use_ui_catalog_reload().reload;
+    let edit_navigation = use_entity_edit_navigation();
+    let edit_target = EntityTarget::new(collection.clone(), id.clone());
+    let return_to_previous_detail =
+        use_signal(move || edit_navigation.consume_detail_return(&edit_target));
     let query_key = use_memo(use_reactive(
         &EditEntityQueryKey {
             scope_id: scope_id.clone(),
@@ -557,6 +562,8 @@ fn EditEntityPageView(collection: Option<String>, id: String, scope_id: Option<S
                         );
                         if confirm {
                             pending_cancel.set(true);
+                        } else if return_to_previous_detail() {
+                            navigator.go_back();
                         } else {
                             navigator.push(destination);
                         }
@@ -681,7 +688,11 @@ fn EditEntityPageView(collection: Option<String>, id: String, scope_id: Option<S
                                             Toast::success("The saved entity is ready to view.")
                                                 .title("Changes saved"),
                                         );
-                                        navigator.push(detail_route.clone());
+                                        if return_to_previous_detail() {
+                                            navigator.go_back();
+                                        } else {
+                                            navigator.push(detail_route.clone());
+                                        }
                                     },
                                     on_submit_failure: move |failure: SemanticFormSubmitFailure| {
                                         let message = failure
@@ -703,7 +714,11 @@ fn EditEntityPageView(collection: Option<String>, id: String, scope_id: Option<S
                         description: "This entity's class is not registered in the active catalog, so raw editing is disabled.",
                         action_label: "View entity details",
                         on_action: move |_| {
-                            navigator.push(detail_route.clone());
+                            if return_to_previous_detail() {
+                                navigator.go_back();
+                            } else {
+                                navigator.push(detail_route.clone());
+                            }
                         },
                     }
                     div { class: "semantic-edit-entity__recovery",
@@ -724,7 +739,11 @@ fn EditEntityPageView(collection: Option<String>, id: String, scope_id: Option<S
             on_open_change: move |open: bool| pending_cancel.set(open),
             on_discard: move |request: ConfirmActionRequest| {
                 pending_cancel.set(false);
-                navigator.push(edit_entity_destination(collection.as_deref(), &id));
+                if return_to_previous_detail() {
+                    navigator.go_back();
+                } else {
+                    navigator.push(edit_entity_destination(collection.as_deref(), &id));
+                }
                 request.complete(Ok(()));
             },
         }
@@ -1046,7 +1065,7 @@ mod tests {
     }
 
     #[test]
-    fn edit_cancel_only_prompts_for_a_dirty_form_and_never_uses_history() {
+    fn edit_cancel_preserves_a_deterministic_detail_fallback() {
         let (clean_destination, clean_confirm) = edit_cancel_action(None, "entity-1", false);
         assert!(!clean_confirm);
         assert_eq!(

@@ -26,6 +26,29 @@ pub struct AppRootProps {
     pub file_api_prefix: Option<String>,
 }
 
+#[derive(Clone, Copy)]
+pub(crate) struct EntityEditNavigation {
+    detail_return_target: Signal<Option<EntityTarget>>,
+}
+
+impl EntityEditNavigation {
+    pub(crate) fn begin_from_detail(mut self, target: EntityTarget) {
+        self.detail_return_target.set(Some(target));
+    }
+
+    pub(crate) fn consume_detail_return(mut self, target: &EntityTarget) -> bool {
+        let matches = self.detail_return_target.read().as_ref() == Some(target);
+        if matches {
+            self.detail_return_target.set(None);
+        }
+        matches
+    }
+}
+
+pub(crate) fn use_entity_edit_navigation() -> EntityEditNavigation {
+    use_context()
+}
+
 impl PartialEq for AppRootProps {
     fn eq(&self, other: &Self) -> bool {
         self.client == other.client
@@ -96,6 +119,10 @@ fn boot_app() -> Element {
 pub fn AppRoot(props: AppRootProps) -> Element {
     provide_rpc_client(props.client);
     provide_ui_scope_context(props.initial_scope_id);
+    let detail_return_target = use_signal(|| None);
+    use_context_provider(|| EntityEditNavigation {
+        detail_return_target,
+    });
     let render_settings = props.file_api_prefix.map(|file_api_prefix| {
         let mut settings = RenderSettings::default();
         settings.file_api_prefix = file_api_prefix;

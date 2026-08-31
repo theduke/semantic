@@ -1,6 +1,7 @@
 use std::rc::Rc;
 
 use dioxus::prelude::*;
+use dioxus_icons::lucide::Pencil;
 use semantic_data::schema::ClassType;
 use semantic_data::value::{Object, Value};
 
@@ -34,7 +35,10 @@ pub struct EntityRenderOptions {
 pub fn EntityCard(
     object: Object,
     options: EntityRenderOptions,
+    #[props(default)] on_edit: Option<EventHandler<EntityTarget>>,
     #[props(default)] on_delete: Option<EventHandler<EntityTarget>>,
+    #[props(default = EntityActionPlacement::Card)] action_placement: EntityActionPlacement,
+    #[props(default)] excluded_action_ids: Vec<String>,
 ) -> Element {
     let catalog = use_ui_catalog();
     let class = catalog.object_class(&object).cloned();
@@ -88,8 +92,10 @@ pub fn EntityCard(
                                 EntityActions {
                                     target,
                                     object: object.clone(),
+                                    on_edit,
                                     on_delete,
-                                    placement: EntityActionPlacement::Card
+                                    placement: action_placement,
+                                    excluded_action_ids,
                                 }
                             }
                         }
@@ -108,67 +114,6 @@ pub fn EntityCard(
                     }
                 }
             }
-        }
-    }
-}
-
-/// Full entity renderer without list-card identity chrome.
-///
-/// Detail pages and embedded detail dialogs can share this renderer while
-/// retaining registered renderer and action behavior. The object is reference
-/// counted so page state can retain it during refreshes without cloning the
-/// complete value tree.
-#[component]
-pub fn EntityDetail(
-    target: EntityTarget,
-    object: Rc<Object>,
-    #[props(default = EntityDisplayRenderer::Custom)] renderer: EntityDisplayRenderer,
-    #[props(default = true)] actions: bool,
-    #[props(default)] on_delete: Option<EventHandler<EntityTarget>>,
-) -> Element {
-    let catalog = use_ui_catalog();
-    let class = catalog.object_class(object.as_ref()).cloned();
-
-    rsx! {
-        article { class: "semantic-entity-detail",
-            if actions {
-                div { class: "semantic-entity-detail__actions",
-                    EntityDetailActions {
-                        target: target.clone(),
-                        object: object.clone(),
-                        on_delete,
-                    }
-                }
-            }
-            div { class: "semantic-entity-detail__body",
-                EntityRenderBody {
-                    object,
-                    class,
-                    collection: target.collection.clone(),
-                    id: Some(target.id.clone()),
-                    renderer,
-                    mode: RenderMode::Detail,
-                }
-            }
-        }
-    }
-}
-
-/// Registered actions intended for a full entity detail context.
-#[component]
-pub fn EntityDetailActions(
-    target: EntityTarget,
-    object: Rc<Object>,
-    #[props(default)] on_delete: Option<EventHandler<EntityTarget>>,
-    #[props(default)] excluded_action_ids: Vec<String>,
-) -> Element {
-    rsx! {
-        EntityActions {
-            target,
-            object: object.as_ref().clone(),
-            on_delete,
-            placement: EntityActionPlacement::Detail,
-            excluded_action_ids,
         }
     }
 }
@@ -326,6 +271,7 @@ fn EntityLink(target: EntityTarget, text: String) -> Element {
 fn EntityActions(
     target: EntityTarget,
     object: Object,
+    #[props(default)] on_edit: Option<EventHandler<EntityTarget>>,
     on_delete: Option<EventHandler<EntityTarget>>,
     placement: EntityActionPlacement,
     #[props(default)] excluded_action_ids: Vec<String>,
@@ -348,9 +294,34 @@ fn EntityActions(
             aria_label: "Entity actions",
             dxcomp::ToolbarGroup {
                 for action in actions {
-                    {(action.render)(ctx.clone())}
+                    if action.id == "edit" {
+                        if let Some(on_edit) = on_edit {
+                            EntityEditButton {
+                                target: ctx.target.clone(),
+                                on_edit,
+                            }
+                        } else {
+                            {(action.render)(ctx.clone())}
+                        }
+                    } else {
+                        {(action.render)(ctx.clone())}
+                    }
                 }
             }
+        }
+    }
+}
+
+#[component]
+fn EntityEditButton(target: EntityTarget, on_edit: EventHandler<EntityTarget>) -> Element {
+    rsx! {
+        dxcomp::Button {
+            variant: dxcomp::ButtonVariant::Outline,
+            size: dxcomp::ButtonSize::IconSm,
+            title: "Edit",
+            aria_label: "Edit entity",
+            onclick: move |_| on_edit.call(target.clone()),
+            Pencil { size: "1rem" }
         }
     }
 }
