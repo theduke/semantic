@@ -244,14 +244,37 @@ pub fn value_to_text(value: &Value) -> String {
         Value::IpAddr(value) => value.to_string(),
         Value::Duration(value) => format!("{value:?}"),
         Value::Time(value) => format!("{value:?}"),
-        Value::Date(value) => format!("{value:?}"),
-        Value::DateTime(value) => format!("{value:?}"),
+        Value::Date(value) => format_date(time::Date::from(*value)),
+        Value::DateTime(value) => format_datetime(time::OffsetDateTime::from(*value)),
         Value::Bytes(value) => format!("{} bytes", value.len()),
         Value::String(value) => value.clone(),
         Value::List(value) => format!("{} items", value.len()),
         Value::Map(value) => format!("{value:?}"),
         Value::Object(value) => format!("{} fields", value.len()),
         Value::Variant(value) => format!("{value:?}"),
+    }
+}
+
+fn format_date(value: time::Date) -> String {
+    format!(
+        "{:04}-{:02}-{:02}",
+        value.year(),
+        u8::from(value.month()),
+        value.day()
+    )
+}
+
+fn format_datetime(value: time::OffsetDateTime) -> String {
+    let date = format_date(value.date());
+    if value.second() == 0 && value.nanosecond() == 0 {
+        format!("{date} {:02}:{:02}", value.hour(), value.minute())
+    } else {
+        format!(
+            "{date} {:02}:{:02}:{:02}",
+            value.hour(),
+            value.minute(),
+            value.second()
+        )
     }
 }
 
@@ -275,6 +298,32 @@ mod tests {
         assert_eq!(
             file_link_id(&Value::String("file-locator".to_string()), None),
             Some("file-locator")
+        );
+    }
+
+    #[test]
+    fn value_to_text_formats_dates() {
+        let date = time::Date::from_calendar_date(2026, time::Month::August, 31).expect("date");
+
+        assert_eq!(value_to_text(&Value::Date(date.into())), "2026-08-31");
+    }
+
+    #[test]
+    fn value_to_text_formats_datetimes_with_optional_seconds() {
+        let date = time::Date::from_calendar_date(2026, time::Month::August, 31).expect("date");
+        let without_seconds = date.with_hms(2, 43, 0).expect("datetime").assume_utc();
+        let with_seconds = date
+            .with_hms_nano(2, 43, 58, 790_000_000)
+            .expect("datetime")
+            .assume_utc();
+
+        assert_eq!(
+            value_to_text(&Value::DateTime(without_seconds.into())),
+            "2026-08-31 02:43"
+        );
+        assert_eq!(
+            value_to_text(&Value::DateTime(with_seconds.into())),
+            "2026-08-31 02:43:58"
         );
     }
 }
