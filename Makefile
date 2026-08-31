@@ -4,7 +4,11 @@ DATA_DIR ?= ./data
 SEMANTIC_INTERFACE ?= 127.0.0.1
 SEMANTIC_PORT ?= 8888
 
-.PHONY: server server-release ui-standalone ui-desktop ui-web
+.PHONY: build-release server server-release ui-standalone ui-desktop ui-web
+
+build-release:
+	dx build --web --release --package semantic_ui --no-default-features --features web --debug-symbols=false --locked
+	cargo build --release --package semantic_cli --bin semantic --features embed-ui --locked
 
 server:
 	mkdir -p $(DATA_DIR)
