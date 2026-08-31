@@ -1438,6 +1438,98 @@ pre {
   object-fit: contain;
 }
 
+.semantic-file-detail {
+  display: grid;
+  min-width: 0;
+  gap: var(--semantic-space-4);
+}
+
+.semantic-file-detail__header {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: var(--semantic-space-3);
+}
+
+.semantic-file-detail__title {
+  display: grid;
+  min-width: 0;
+  gap: var(--semantic-space-1);
+}
+
+.semantic-file-detail__title h2 {
+  margin: 0;
+  overflow-wrap: anywhere;
+  font-size: 20px;
+}
+
+.semantic-file-detail__title code {
+  overflow-wrap: anywhere;
+}
+
+.semantic-file-detail__toolbar,
+.semantic-file-detail__dialog-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--semantic-space-2);
+}
+
+.semantic-file-detail__image-button {
+  display: block;
+  width: fit-content;
+  max-width: 100%;
+  padding: 0;
+  border: 1px solid var(--semantic-border-soft);
+  border-radius: var(--semantic-radius);
+  background: var(--semantic-surface);
+  cursor: zoom-in;
+  overflow: hidden;
+}
+
+.semantic-file-detail__image,
+.semantic-file-detail__video {
+  display: block;
+  width: auto;
+  max-width: min(720px, 100%);
+  max-height: 480px;
+  object-fit: contain;
+}
+
+.semantic-file-detail__video {
+  width: min(720px, 100%);
+  background: var(--semantic-color-media-stage);
+}
+
+.dx-dialog.semantic-file-detail__image-dialog {
+  width: min(96vw, 1200px);
+  max-width: min(96vw, 1200px);
+  max-height: 94vh;
+  text-align: left;
+}
+
+.semantic-file-detail__image-dialog-body {
+  display: grid;
+  min-width: 0;
+  min-height: 0;
+  flex: 1 1 auto;
+  place-items: center;
+  overflow: auto;
+}
+
+.semantic-file-detail__image-full {
+  display: block;
+  width: auto;
+  height: auto;
+  max-width: 100%;
+  max-height: calc(94vh - 9rem);
+  object-fit: contain;
+}
+
+.semantic-file-detail__dialog-actions {
+  justify-content: flex-end;
+}
+
 .semantic-note {
   display: grid;
   gap: var(--semantic-space-4);

@@ -3,6 +3,7 @@ pub(crate) mod defaults;
 mod entity_actions;
 mod entity_navigation;
 mod error;
+mod files;
 mod lookup;
 mod media;
 mod menu;

@@ -264,6 +264,18 @@ mod tests {
         );
     }
 
+    #[test]
+    fn defaults_register_the_file_class_renderer() {
+        let catalog = UiCatalog::from_snapshot(empty_snapshot());
+
+        assert!(
+            catalog
+                .render_registry()
+                .class_renderer(semantic_data::filestore::FILE_CLASS_ID)
+                .is_some()
+        );
+    }
+
     fn empty_snapshot() -> CatalogStorageSnapshot {
         CatalogStorageSnapshot {
             attributes: Vec::new(),
