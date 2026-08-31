@@ -528,10 +528,23 @@ const DXEDITOR_STYLE: &str = r#"
   padding: 0;
 }
 
+.dxeditor-engine__block-controls::after,
+.dxeditor-engine__table-row-handle::after {
+  position: absolute;
+  inset-block: 0;
+  left: 100%;
+  width: 6px;
+  content: "";
+}
+
 .dxeditor-engine__block-controls .dxeditor-engine__button {
+  width: 26px;
+  height: 26px;
   min-width: 26px;
   min-height: 26px;
-  padding: 2px 5px;
+  padding: 0;
+  font-size: 16px;
+  line-height: 1;
 }
 
 .dxeditor-engine__table-controls,

@@ -217,11 +217,27 @@ test('targets each hovered block from a stable left gutter', async ({ page }) =>
   const controls = page.getByRole('toolbar', { name: 'Current block' })
   await expect(controls).toBeVisible()
   await expect(controls).toHaveAttribute('data-block-id', 'block-bravo')
+  const addBlock = controls.getByRole('button', { name: 'Add a block' })
+  const blockActions = controls.getByRole('button', { name: 'Block actions' })
+  await expect(blockActions).toHaveText('⋮')
+  const buttonGeometry = await Promise.all([addBlock.boundingBox(), blockActions.boundingBox()])
+  expect(buttonGeometry[0]).not.toBeNull()
+  expect(buttonGeometry[1]).not.toBeNull()
+  expect(buttonGeometry[0]!.width).toBe(buttonGeometry[1]!.width)
+  expect(buttonGeometry[0]!.height).toBe(buttonGeometry[1]!.height)
   const geometry = await Promise.all([controls.boundingBox(), bravo.boundingBox()])
   expect(geometry[0]).not.toBeNull()
   expect(geometry[1]).not.toBeNull()
   expect(geometry[0]!.x + geometry[0]!.width).toBeLessThan(geometry[1]!.x)
   expect(Math.abs(geometry[0]!.y - geometry[1]!.y)).toBeLessThan(2)
+
+  // The visual gap is an invisible hover bridge, so crossing it cannot retarget
+  // the controls to the selected block before the pointer reaches the gutter.
+  const gutterY = geometry[0]!.y + geometry[0]!.height / 2
+  const gutterGapX = (geometry[0]!.x + geometry[0]!.width + geometry[1]!.x) / 2
+  await page.mouse.move(geometry[1]!.x + 2, gutterY)
+  await page.mouse.move(gutterGapX, gutterY, { steps: 4 })
+  await expect(controls).toHaveAttribute('data-block-id', 'block-bravo')
 
   await controls.getByRole('button', { name: 'Block actions' }).click()
   const menu = page.getByRole('menu', { name: 'Block actions' })

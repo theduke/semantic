@@ -1526,7 +1526,7 @@ export const mount = (host: HTMLElement, options: MountOptions): EditorSession =
     positionAdjacentSurface(slash, blockControls.getBoundingClientRect(), wrapper)
     slash.querySelector<HTMLButtonElement>('button')?.focus()
   })
-  const blockActionsButton = button('⋮⋮', 'Block actions', () => {
+  const blockActionsButton = button('⋮', 'Block actions', () => {
     menuBlockTarget = activeBlockTarget
     blockMenuTrigger = blockActionsButton
     blockMenu.hidden = false
