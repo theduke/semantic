@@ -3,6 +3,7 @@ mod copyable_code;
 mod entity_explorer;
 mod entity_page_header;
 mod form_page;
+mod global_search;
 mod page_header;
 mod query_builder;
 mod shell;
@@ -23,6 +24,7 @@ pub use form_page::{
     FormActionStatus, FormActions, FormActionsProps, FormPage, FormPageProps, UnsavedChangesPrompt,
     UnsavedChangesPromptProps,
 };
+pub use global_search::GlobalSearch;
 pub use page_header::{PageHeader, PageHeaderProps};
 pub use query_builder::{
     FilterGroup, FilterNode, FilterOperator, FilterRule, GroupCombinator, QueryField,

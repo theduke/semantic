@@ -1,5 +1,6 @@
 use dioxus::prelude::*;
 
+use super::GlobalSearch;
 use crate::views::Route;
 
 const MAIN_CONTENT_ID: &str = "semantic-main-content";
@@ -50,12 +51,15 @@ pub fn PlayerShell() -> Element {
 fn AppFrameHeader() -> Element {
     rsx! {
         header { class: "semantic-ui__header",
-            Link {
-                to: Route::HomePage,
-                class: "semantic-ui__brand",
-                aria_label: "Semantic home",
-                span { aria_hidden: "true", class: "semantic-ui__brand-mark", "S" }
-                span { class: "semantic-ui__brand-name", "Semantic" }
+            div { class: "semantic-ui__identity",
+                Link {
+                    to: Route::HomePage,
+                    class: "semantic-ui__brand",
+                    aria_label: "Semantic home",
+                    span { aria_hidden: "true", class: "semantic-ui__brand-mark", "S" }
+                    span { class: "semantic-ui__brand-name", "Semantic" }
+                }
+                GlobalSearch {}
             }
             PrimaryNav {}
         }

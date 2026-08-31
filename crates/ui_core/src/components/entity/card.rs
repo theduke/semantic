@@ -10,6 +10,17 @@ use crate::ui_catalog::{
     EntityActionContext, EntityActionPlacement, EntityTarget, RenderMode, use_ui_catalog,
 };
 
+/// Object fields considered, in priority order, when deriving an entity title.
+pub const ENTITY_TITLE_FIELDS: [&str; 7] = [
+    "semantic:title",
+    "title",
+    "name",
+    "display_name",
+    "semantic:base:person:display_name",
+    "semantic:base:file:filename",
+    "filename",
+];
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum EntityDisplayRenderer {
     Custom,
@@ -382,15 +393,7 @@ fn object_id(object: &Object) -> Option<String> {
 }
 
 pub fn entity_title(object: &Object, id: Option<&str>, class_name: Option<&str>) -> String {
-    for field in [
-        "semantic:title",
-        "title",
-        "name",
-        "display_name",
-        "semantic:base:person:display_name",
-        "semantic:base:file:filename",
-        "filename",
-    ] {
+    for field in ENTITY_TITLE_FIELDS {
         if let Some(title) = object.get(field).and_then(Value::as_str)
             && !title.trim().is_empty()
         {

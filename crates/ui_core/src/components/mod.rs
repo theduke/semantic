@@ -19,8 +19,8 @@ pub use directory_browser::{
 };
 pub use empty::EmptyState;
 pub use entity::{
-    EntityCard, EntityDeleteButton, EntityDisplayMode, EntityDisplayRenderer, EntityList,
-    EntityOpenButton, EntityRenderOptions, EntityTableRow, entity_title,
+    ENTITY_TITLE_FIELDS, EntityCard, EntityDeleteButton, EntityDisplayMode, EntityDisplayRenderer,
+    EntityList, EntityOpenButton, EntityRenderOptions, EntityTableRow, entity_title,
 };
 pub use entity_autocomplete::{EntityAutocomplete, EntityAutocompleteProps};
 pub use error::{ErrorState, ErrorView};

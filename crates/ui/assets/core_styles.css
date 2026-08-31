@@ -994,6 +994,27 @@ pre {
   text-decoration: none;
 }
 
+.semantic-ui__identity {
+  display: inline-flex;
+  flex: 0 0 auto;
+  align-items: center;
+  gap: var(--semantic-space-2);
+}
+
+.semantic-ui__identity > .semantic-icon-button {
+  width: 34px;
+  min-width: 34px;
+  min-height: 34px;
+  padding: 0;
+  border-color: transparent;
+  color: var(--semantic-color-text-muted);
+}
+
+.semantic-ui__identity > .semantic-icon-button:hover {
+  border-color: var(--semantic-border-soft);
+  color: var(--semantic-text);
+}
+
 .semantic-ui__brand-mark {
   display: inline-grid;
   width: 32px;
@@ -1038,6 +1059,255 @@ pre {
     calc(var(--semantic-page-gutter) + var(--semantic-safe-right))
     calc(var(--semantic-page-gutter) + var(--semantic-safe-bottom))
     calc(var(--semantic-page-gutter) + var(--semantic-safe-left));
+}
+
+/* Global entity search uses a compact command-palette layout while retaining
+   the shared dialog's focus management and modal behavior. */
+.semantic-global-search.dx-dialog {
+  top: max(calc(var(--semantic-safe-top) + 12vh), 5rem);
+  width: min(42rem, calc(100% - 2rem));
+  max-width: 42rem;
+  max-height: min(42rem, calc(100dvh - 7rem));
+  padding: 0;
+  gap: 0;
+  overflow: hidden;
+  transform: translate(-50%, 0);
+}
+
+.semantic-global-search__heading {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: var(--semantic-space-4);
+  padding: var(--semantic-space-5) var(--semantic-space-5) var(--semantic-space-3);
+}
+
+.semantic-global-search__heading > div {
+  display: grid;
+  gap: var(--semantic-space-1);
+}
+
+.semantic-global-search__heading .dx-dialog-title,
+.semantic-global-search__heading .dx-dialog-description {
+  margin: 0;
+}
+
+.semantic-global-search__shortcut,
+.semantic-global-search__footer kbd {
+  display: inline-grid;
+  min-width: 1.6rem;
+  min-height: 1.45rem;
+  place-items: center;
+  padding: 0 var(--semantic-space-1);
+  border: 1px solid var(--semantic-border);
+  border-bottom-width: 2px;
+  border-radius: var(--semantic-radius-sm);
+  background: var(--semantic-surface-muted);
+  color: var(--semantic-color-text-muted);
+  font-family: var(--semantic-font);
+  font-size: 11px;
+  font-weight: 650;
+  line-height: 1;
+  white-space: nowrap;
+}
+
+.semantic-global-search__shortcut {
+  flex: 0 0 auto;
+  margin-top: 2px;
+}
+
+.semantic-global-search__input-wrap {
+  position: relative;
+  display: flex;
+  align-items: center;
+  margin: 0 var(--semantic-space-5);
+  color: var(--semantic-color-text-muted);
+}
+
+.semantic-global-search__input-wrap > svg {
+  position: absolute;
+  z-index: 1;
+  left: var(--semantic-space-3);
+  pointer-events: none;
+}
+
+.semantic-global-search__input {
+  width: 100%;
+  min-height: 48px;
+  box-sizing: border-box;
+  padding: var(--semantic-space-3) 44px var(--semantic-space-3) 42px;
+  border: 1px solid var(--semantic-border);
+  border-radius: var(--semantic-radius-md);
+  background: var(--semantic-surface);
+  color: var(--semantic-text);
+  font: inherit;
+  font-size: 16px;
+}
+
+.semantic-global-search__input::placeholder {
+  color: var(--semantic-color-text-subtle);
+}
+
+.semantic-global-search__spinner {
+  position: absolute;
+  right: var(--semantic-space-3);
+  width: 16px;
+  height: 16px;
+  box-sizing: border-box;
+  border: 2px solid var(--semantic-border);
+  border-top-color: var(--semantic-accent);
+  border-radius: 50%;
+  animation: semantic-refresh-spin 700ms linear infinite;
+}
+
+.semantic-global-search__help {
+  margin: var(--semantic-space-2) var(--semantic-space-5) var(--semantic-space-3);
+  color: var(--semantic-color-text-subtle);
+  font-size: var(--semantic-font-size-caption);
+}
+
+.semantic-global-search__body {
+  min-height: 10rem;
+  overflow-y: auto;
+  border-top: 1px solid var(--semantic-border-soft);
+}
+
+.semantic-global-search__results {
+  display: grid;
+  padding: var(--semantic-space-2);
+  margin: 0;
+  gap: 2px;
+  list-style: none;
+}
+
+.semantic-global-search__result {
+  display: grid;
+  width: 100%;
+  min-height: 58px;
+  box-sizing: border-box;
+  padding: var(--semantic-space-2) var(--semantic-space-3);
+  border: 1px solid transparent;
+  border-radius: var(--semantic-radius-md);
+  appearance: none;
+  background: transparent;
+  color: var(--semantic-text);
+  cursor: pointer;
+  font: inherit;
+  gap: 3px;
+  text-align: left;
+}
+
+.semantic-global-search__result:hover,
+.semantic-global-search__results [aria-selected="true"] .semantic-global-search__result {
+  border-color: color-mix(in srgb, var(--semantic-accent) 15%, var(--semantic-border-soft));
+  background: var(--semantic-color-selected);
+}
+
+.semantic-global-search__result-main,
+.semantic-global-search__result-meta {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  gap: var(--semantic-space-2);
+}
+
+.semantic-global-search__result-main strong {
+  overflow: hidden;
+  flex: 1 1 auto;
+  font-size: var(--semantic-font-size-body);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.semantic-global-search__class {
+  overflow: hidden;
+  max-width: 44%;
+  flex: 0 1 auto;
+  padding: 2px var(--semantic-space-2);
+  border-radius: var(--semantic-radius-pill);
+  background: var(--semantic-surface-muted);
+  color: var(--semantic-color-text-muted);
+  font-size: var(--semantic-font-size-caption);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.semantic-global-search__result-meta {
+  color: var(--semantic-color-text-subtle);
+  font-size: var(--semantic-font-size-caption);
+}
+
+.semantic-global-search__result-meta code {
+  overflow: hidden;
+  color: inherit;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.semantic-global-search__message {
+  display: grid;
+  min-height: 10rem;
+  box-sizing: border-box;
+  place-content: center;
+  padding: var(--semantic-space-6);
+  color: var(--semantic-color-text-muted);
+  gap: var(--semantic-space-1);
+  text-align: center;
+}
+
+.semantic-global-search__message strong {
+  color: var(--semantic-text);
+}
+
+.semantic-global-search__footer {
+  display: flex;
+  align-items: center;
+  gap: var(--semantic-space-4);
+  padding: var(--semantic-space-2) var(--semantic-space-5);
+  border-top: 1px solid var(--semantic-border-soft);
+  background: var(--semantic-surface-muted);
+  color: var(--semantic-color-text-subtle);
+  font-size: 11px;
+}
+
+.semantic-global-search__footer span {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--semantic-space-1);
+}
+
+@media (max-width: 560px) {
+  .semantic-global-search.dx-dialog {
+    top: calc(var(--semantic-safe-top) + var(--semantic-space-2));
+    width: calc(100% - 1rem);
+    max-height: calc(100dvh - var(--semantic-safe-top) - var(--semantic-space-4));
+  }
+
+  .semantic-global-search__heading {
+    padding: var(--semantic-space-4) var(--semantic-space-4) var(--semantic-space-3);
+  }
+
+  .semantic-global-search__shortcut {
+    display: none;
+  }
+
+  .semantic-global-search__input-wrap {
+    margin-inline: var(--semantic-space-4);
+  }
+
+  .semantic-global-search__help {
+    margin-inline: var(--semantic-space-4);
+  }
+
+  .semantic-global-search__footer {
+    justify-content: space-between;
+    padding-inline: var(--semantic-space-4);
+    gap: var(--semantic-space-2);
+  }
+
+  .semantic-global-search__footer span:first-child {
+    display: none;
+  }
 }
 
 .semantic-entity,
