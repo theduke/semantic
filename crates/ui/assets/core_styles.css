@@ -1,34 +1,36 @@
 :root {
   /* Semantic owns these tokens, but deliberately does not force a color scheme
      on third-party components. Theme selection is opt-in below. */
-  --semantic-color-canvas: #f7f8fa;
+  --semantic-color-canvas: #f6f7fb;
   --semantic-color-surface-1: #ffffff;
-  --semantic-color-surface-2: #f3f5f7;
-  --semantic-color-surface-3: #e9edf2;
-  --semantic-color-text: #17202a;
-  --semantic-color-text-muted: #617084;
-  --semantic-color-text-subtle: #78869a;
-  --semantic-color-border: #d8dee6;
-  --semantic-color-border-soft: #e7ebf0;
-  --semantic-color-primary: #176b87;
-  --semantic-color-primary-hover: #105b74;
-  --semantic-color-primary-active: #0c4a60;
-  --semantic-color-focus: #16789a;
-  --semantic-color-success: #18794e;
-  --semantic-color-success-surface: #eaf7f0;
-  --semantic-color-warning: #8a5800;
-  --semantic-color-warning-surface: #fff7d6;
-  --semantic-color-danger: #b42318;
-  --semantic-color-danger-surface: #fff0ee;
-  --semantic-color-info: #176b87;
-  --semantic-color-info-surface: #edf7fa;
-  --semantic-color-selected: #e4f2f6;
-  --semantic-color-hover: #fbfcfd;
-  --semantic-color-pressed: #eef1f4;
-  --semantic-color-skeleton: #e7ebf0;
-  --semantic-color-skeleton-highlight: #f5f7f9;
-  --semantic-color-media-stage: #111418;
-  --semantic-color-media-stage-text: #f7f8fa;
+  --semantic-color-surface-2: #f1f3f8;
+  --semantic-color-surface-3: #e8ebf2;
+  --semantic-color-text: #161b2c;
+  --semantic-color-text-muted: #606a7f;
+  --semantic-color-text-subtle: #818a9d;
+  --semantic-color-border: #d4d9e4;
+  --semantic-color-border-soft: #e7eaf0;
+  --semantic-color-primary: #4f46e5;
+  --semantic-color-primary-hover: #4338ca;
+  --semantic-color-primary-active: #3730a3;
+  --semantic-color-on-primary: #ffffff;
+  --semantic-color-focus: #6366f1;
+  --semantic-color-success: #15803d;
+  --semantic-color-success-surface: #ecfdf3;
+  --semantic-color-warning: #a15c07;
+  --semantic-color-warning-surface: #fffbeb;
+  --semantic-color-danger: #c0262d;
+  --semantic-color-danger-surface: #fff1f2;
+  --semantic-color-on-danger: #ffffff;
+  --semantic-color-info: #2563eb;
+  --semantic-color-info-surface: #eff6ff;
+  --semantic-color-selected: #eef2ff;
+  --semantic-color-hover: #f8f9fc;
+  --semantic-color-pressed: #eef0f5;
+  --semantic-color-skeleton: #e8ebf2;
+  --semantic-color-skeleton-highlight: #f8f9fc;
+  --semantic-color-media-stage: #0b1020;
+  --semantic-color-media-stage-text: #f6f7fb;
 
   /* Compatibility aliases used by the current UI. */
   --semantic-bg: var(--semantic-color-canvas);
@@ -60,25 +62,25 @@
     "SFMono-Regular", Consolas, "Liberation Mono", Menlo, monospace;
   --semantic-font-size-caption: 12px;
   --semantic-font-size-label: 13px;
-  --semantic-font-size-body: 14px;
+  --semantic-font-size-body: 15px;
   --semantic-font-size-section-title: clamp(18px, 2vw, 22px);
   --semantic-font-size-page-title: clamp(24px, 3vw, 32px);
   --semantic-line-height-tight: 1.2;
   --semantic-line-height-body: 1.45;
   --semantic-line-height-reading: 1.65;
 
-  --semantic-radius-sm: 4px;
-  --semantic-radius-md: 6px;
-  --semantic-radius-lg: 10px;
+  --semantic-radius-sm: 6px;
+  --semantic-radius-md: 9px;
+  --semantic-radius-lg: 14px;
   --semantic-radius-pill: 999px;
   --semantic-radius: var(--semantic-radius-md);
-  --semantic-shadow-1: 0 4px 14px rgb(23 32 42 / 7%);
-  --semantic-shadow-2: 0 10px 30px rgb(23 32 42 / 10%);
+  --semantic-shadow-1: 0 1px 2px rgb(23 32 51 / 5%), 0 5px 16px rgb(23 32 51 / 5%);
+  --semantic-shadow-2: 0 18px 44px rgb(23 32 51 / 12%), 0 3px 10px rgb(23 32 51 / 6%);
   --semantic-focus-ring: 0 0 0 3px color-mix(in srgb, var(--semantic-color-focus) 24%, transparent);
 
   --semantic-content-width: 1180px;
   --semantic-content-width-narrow: 760px;
-  --semantic-header-height: 64px;
+  --semantic-header-height: 68px;
   --semantic-sidebar-width: 240px;
   --semantic-safe-top: env(safe-area-inset-top, 0px);
   --semantic-safe-right: env(safe-area-inset-right, 0px);
@@ -86,13 +88,13 @@
   --semantic-safe-left: env(safe-area-inset-left, 0px);
 
   --semantic-disabled-opacity: 0.52;
-  --semantic-transition-duration-fast: 120ms;
-  --semantic-transition-easing: ease;
+  --semantic-transition-duration-fast: 150ms;
+  --semantic-transition-easing: cubic-bezier(0.2, 0, 0, 1);
   --semantic-transition-fast: var(--semantic-transition-duration-fast) var(--semantic-transition-easing);
 }
 
 /* Keep the shared component library on the same palette as the app. The
-   additional element selector wins over its later, generic :root defaults. */
+   component sheet owns structure; these application tokens own the theme. */
 html:root {
   --primary-color: var(--semantic-color-surface-1);
   --primary-color-1: var(--semantic-color-canvas);
@@ -116,9 +118,24 @@ html:root {
   --secondary-warning-color: var(--semantic-color-warning);
   --primary-error-color: var(--semantic-color-danger);
   --secondary-error-color: color-mix(in srgb, var(--semantic-color-danger) 84%, black);
-  --contrast-error-color: var(--semantic-color-surface-1);
+  --contrast-error-color: var(--semantic-color-on-danger);
   --primary-info-color: var(--semantic-color-info-surface);
   --secondary-info-color: var(--semantic-color-info);
+  --dx-accent: var(--semantic-color-primary);
+  --dx-accent-hover: var(--semantic-color-primary-hover);
+  --dx-accent-active: var(--semantic-color-primary-active);
+  --dx-accent-contrast: var(--semantic-color-on-primary);
+  --dx-control-background: var(--semantic-color-surface-1);
+  --dx-control-background-hover: var(--semantic-color-surface-2);
+  --dx-control-border: var(--semantic-color-border);
+  --dx-control-border-hover: color-mix(in srgb, var(--semantic-color-primary) 42%, var(--semantic-color-border));
+  --dx-radius-sm: var(--semantic-radius-sm);
+  --dx-radius-md: var(--semantic-radius-md);
+  --dx-radius-lg: var(--semantic-radius-lg);
+  --dx-shadow-xs: 0 1px 2px rgb(23 32 51 / 6%);
+  --dx-shadow-md: var(--semantic-shadow-2);
+  --dx-focus-ring: var(--semantic-focus-ring);
+  --dx-transition: var(--semantic-transition-fast);
 }
 
 :root[data-semantic-theme="light"] {
@@ -127,72 +144,67 @@ html:root {
 
 :root[data-semantic-theme="dark"] {
   color-scheme: dark;
-  --semantic-color-canvas: #101419;
-  --semantic-color-surface-1: #171c22;
-  --semantic-color-surface-2: #1e252d;
-  --semantic-color-surface-3: #27303a;
-  --semantic-color-text: #edf2f7;
-  --semantic-color-text-muted: #a8b4c3;
-  --semantic-color-text-subtle: #8997a8;
-  --semantic-color-border: #3c4856;
-  --semantic-color-border-soft: #2c3641;
-  --semantic-color-primary: #67bdd5;
-  --semantic-color-primary-hover: #8bcde0;
-  --semantic-color-primary-active: #4aa8c2;
-  --semantic-color-focus: #70c8e0;
-  --semantic-color-success: #64c995;
-  --semantic-color-success-surface: #173629;
-  --semantic-color-warning: #f1c15d;
-  --semantic-color-warning-surface: #3b2e12;
-  --semantic-color-danger: #ff8f86;
-  --semantic-color-danger-surface: #401d1d;
-  --semantic-color-info: #75c4da;
-  --semantic-color-info-surface: #15333d;
-  --semantic-color-selected: #173b47;
-  --semantic-color-hover: #202831;
-  --semantic-color-pressed: #29343f;
-  --semantic-color-skeleton: #2b3540;
-  --semantic-color-skeleton-highlight: #3a4653;
+  --semantic-color-canvas: #0f1220;
+  --semantic-color-surface-1: #171a2b;
+  --semantic-color-surface-2: #1e2235;
+  --semantic-color-surface-3: #292e43;
+  --semantic-color-text: #f1f3f9;
+  --semantic-color-text-muted: #aeb6ca;
+  --semantic-color-text-subtle: #8791aa;
+  --semantic-color-border: #3b425a;
+  --semantic-color-border-soft: #2a3044;
+  --semantic-color-primary: #9b9cf6;
+  --semantic-color-primary-hover: #b8b8ff;
+  --semantic-color-primary-active: #818cf8;
+  --semantic-color-on-primary: #121526;
+  --semantic-color-focus: #a5b4fc;
+  --semantic-color-success: #6ee7a0;
+  --semantic-color-success-surface: #142b20;
+  --semantic-color-warning: #f6c65b;
+  --semantic-color-warning-surface: #332713;
+  --semantic-color-danger: #fb8c94;
+  --semantic-color-danger-surface: #371b24;
+  --semantic-color-on-danger: #2a0d12;
+  --semantic-color-info: #80b4ff;
+  --semantic-color-info-surface: #172742;
+  --semantic-color-selected: #25284d;
+  --semantic-color-hover: #20243a;
+  --semantic-color-pressed: #2a2f48;
+  --semantic-color-skeleton: #292e43;
+  --semantic-color-skeleton-highlight: #3b425a;
   --semantic-shadow-1: 0 4px 14px rgb(0 0 0 / 24%);
   --semantic-shadow-2: 0 10px 30px rgb(0 0 0 / 34%);
 }
 
-* {
-  box-sizing: border-box;
+html {
+  min-height: 100%;
+  background: var(--semantic-bg);
+  color: var(--semantic-text);
+  scrollbar-color: var(--semantic-color-border) transparent;
 }
 
 body {
+  min-width: 320px;
+  min-height: 100vh;
   margin: 0;
   background: var(--semantic-bg);
   color: var(--semantic-text);
   font-family: var(--semantic-font);
   font-size: var(--semantic-font-size-body);
   line-height: var(--semantic-line-height-body);
+  text-rendering: optimizeLegibility;
+  -webkit-font-smoothing: antialiased;
 }
 
-button,
-input,
-select,
-textarea {
-  font: inherit;
-}
-
-button {
-  border: 1px solid var(--semantic-border);
-  border-radius: var(--semantic-radius);
-  background: var(--semantic-surface);
+::selection {
+  background: color-mix(in srgb, var(--semantic-accent) 24%, transparent);
   color: var(--semantic-text);
-  padding: 6px 10px;
-  cursor: pointer;
-  transition:
-    border-color var(--semantic-transition-fast),
-    background-color var(--semantic-transition-fast),
-    color var(--semantic-transition-fast);
 }
 
-button:hover:not(:disabled, [aria-disabled="true"]) {
-  border-color: var(--semantic-color-primary-hover);
-  color: var(--semantic-color-primary-hover);
+a {
+  color: var(--semantic-accent);
+  text-decoration-thickness: from-font;
+  text-underline-offset: 0.18em;
 }
 
 :where(a[href], button, input, select, textarea, summary, [tabindex]:not([tabindex="-1"])):focus-visible {
@@ -201,10 +213,8 @@ button:hover:not(:disabled, [aria-disabled="true"]) {
   box-shadow: var(--semantic-focus-ring);
 }
 
-:where(button, input, select, textarea):disabled,
-:where(button, [role="button"])[aria-disabled="true"] {
-  cursor: not-allowed;
-  opacity: var(--semantic-disabled-opacity);
+:where(input, select, textarea):focus-visible {
+  background-color: var(--semantic-surface);
 }
 
 code,
@@ -435,7 +445,7 @@ pre {
   display: grid;
   min-width: 0;
   gap: var(--semantic-space-3);
-  padding-block-end: var(--semantic-space-4);
+  padding-block-end: var(--semantic-space-5);
   border-bottom: 1px solid var(--semantic-border-soft);
 }
 
@@ -487,7 +497,8 @@ pre {
 .semantic-page-header__title {
   margin: 0;
   font-size: var(--semantic-font-size-page-title);
-  font-weight: 720;
+  font-weight: 750;
+  letter-spacing: -0.025em;
   line-height: var(--semantic-line-height-tight);
   overflow-wrap: anywhere;
 }
@@ -513,6 +524,8 @@ pre {
 .semantic-section__title {
   margin: 0;
   font-size: var(--semantic-font-size-section-title);
+  font-weight: 720;
+  letter-spacing: -0.012em;
   line-height: var(--semantic-line-height-tight);
 }
 
@@ -526,7 +539,7 @@ pre {
 }
 
 .semantic-surface {
-  border: 1px solid var(--semantic-border-soft);
+  border: 1px solid var(--semantic-border);
   border-radius: var(--semantic-radius-lg);
   background: var(--semantic-surface);
   box-shadow: var(--semantic-shadow-1);
@@ -535,13 +548,13 @@ pre {
 .semantic-button--primary {
   border-color: var(--semantic-accent);
   background: var(--semantic-accent);
-  color: var(--semantic-color-surface-1);
+  color: var(--semantic-color-on-primary);
 }
 
 .semantic-button--primary:hover:not(:disabled, [aria-disabled="true"]) {
   border-color: var(--semantic-color-primary-hover);
   background: var(--semantic-color-primary-hover);
-  color: var(--semantic-color-surface-1);
+  color: var(--semantic-color-on-primary);
 }
 
 .semantic-button--danger {
@@ -951,8 +964,10 @@ pre {
     calc(var(--semantic-page-gutter) + var(--semantic-safe-right))
     var(--semantic-space-3)
     calc(var(--semantic-page-gutter) + var(--semantic-safe-left));
-  border-bottom: 1px solid var(--semantic-border);
-  background: var(--semantic-surface);
+  border-bottom: 1px solid color-mix(in srgb, var(--semantic-border) 82%, transparent);
+  background: color-mix(in srgb, var(--semantic-surface) 92%, transparent);
+  box-shadow: 0 1px 0 rgb(23 32 51 / 2%), 0 5px 18px rgb(23 32 51 / 4%);
+  backdrop-filter: blur(16px) saturate(1.25);
 }
 
 .semantic-ui__header h1 {
@@ -984,9 +999,11 @@ pre {
   width: 32px;
   height: 32px;
   place-items: center;
+  border: 1px solid color-mix(in srgb, white 18%, transparent);
   border-radius: var(--semantic-radius-md);
-  background: var(--semantic-accent);
-  color: var(--semantic-color-surface-1);
+  background: linear-gradient(145deg, var(--semantic-color-primary-hover), var(--semantic-accent));
+  box-shadow: 0 4px 12px color-mix(in srgb, var(--semantic-accent) 24%, transparent);
+  color: var(--semantic-color-on-primary);
   font-weight: 800;
 }
 
@@ -1002,9 +1019,15 @@ pre {
 }
 
 .semantic-ui__header .semantic-primary-nav__link {
-  min-height: 32px;
-  padding: 5px var(--semantic-space-2);
+  min-height: 36px;
+  padding: 6px var(--semantic-space-3);
+  border: 1px solid transparent;
   white-space: nowrap;
+}
+
+.semantic-ui__header .semantic-primary-nav__link[data-active="true"] {
+  border-color: color-mix(in srgb, var(--semantic-accent) 16%, var(--semantic-border-soft));
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, white 24%, transparent);
 }
 
 .semantic-ui__main {
@@ -1123,12 +1146,12 @@ pre {
 
 .semantic-form__select {
   width: min(100%, 240px);
-  min-height: 36px;
+  min-height: var(--dx-control-height);
+  padding-inline: var(--semantic-space-3) 2.25rem;
   border: 1px solid var(--semantic-border);
   border-radius: var(--semantic-radius);
-  background: var(--semantic-surface);
+  background-color: var(--semantic-surface);
   color: var(--semantic-text);
-  padding: 0 var(--semantic-space-3);
 }
 
 .semantic-form__control :is(input, select, textarea):focus-visible {
@@ -1564,6 +1587,26 @@ pre {
   line-height: 1.65;
 }
 
+.semantic-note__formatted :is(h1, h2, h3, h4, h5, h6) {
+  margin-block: 1.4em 0.5em;
+  color: var(--semantic-text);
+  line-height: var(--semantic-line-height-tight);
+}
+
+.semantic-note__formatted :is(p, ul, ol, blockquote, pre) {
+  margin-block: 0.8em;
+}
+
+.semantic-note__formatted :is(ul, ol) {
+  padding-inline-start: 1.5rem;
+}
+
+.semantic-note__formatted blockquote {
+  padding-inline-start: var(--semantic-space-4);
+  border-inline-start: 3px solid var(--semantic-border);
+  color: var(--semantic-text-muted);
+}
+
 .semantic-note__formatted > :first-child {
   margin-top: 0;
 }
@@ -1647,10 +1690,11 @@ pre {
   flex-wrap: wrap;
   align-items: end;
   gap: var(--semantic-space-3);
-  padding: var(--semantic-space-3);
-  border: 1px solid var(--semantic-border-soft);
+  padding: var(--semantic-space-4);
+  border: 1px solid var(--semantic-border);
   border-radius: var(--semantic-radius-lg);
-  background: var(--semantic-surface-muted);
+  background: var(--semantic-surface);
+  box-shadow: var(--semantic-shadow-1);
 }
 
 .semantic-data-toolbar__field {
@@ -1667,11 +1711,11 @@ pre {
 
 .semantic-data-toolbar__field select,
 .semantic-result-pagination select {
-  min-height: 36px;
-  padding: var(--semantic-space-1) var(--semantic-space-3);
+  min-height: var(--dx-control-height);
+  padding: var(--semantic-space-1) 2.25rem var(--semantic-space-1) var(--semantic-space-3);
   border: 1px solid var(--semantic-border);
   border-radius: var(--semantic-radius-md);
-  background: var(--semantic-surface);
+  background-color: var(--semantic-surface);
   color: var(--semantic-text);
 }
 
@@ -1877,8 +1921,13 @@ pre {
   padding: var(--semantic-space-2) var(--semantic-space-3);
   border: 1px solid var(--semantic-border);
   border-radius: var(--semantic-radius-md);
-  background: var(--semantic-surface);
+  background-color: var(--semantic-surface);
   color: var(--semantic-text);
+}
+
+.semantic-query-builder__rule > label select,
+.semantic-query-builder__add-chooser select {
+  padding-inline-end: 2.25rem;
 }
 
 .semantic-query-builder__search input:focus-visible,
@@ -2262,7 +2311,7 @@ pre {
   border: 1px solid var(--semantic-accent);
   border-radius: var(--semantic-radius-md);
   background: var(--semantic-accent);
-  color: var(--semantic-surface);
+  color: var(--semantic-color-on-primary);
   font-size: var(--semantic-font-size-label);
   font-weight: 650;
   text-decoration: none;

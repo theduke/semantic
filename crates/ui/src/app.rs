@@ -102,8 +102,8 @@ pub fn AppRoot(props: AppRootProps) -> Element {
         settings
     });
     rsx! {
-        document::Stylesheet { href: CORE_STYLES }
         dxcomp::Stylesheet {}
+        document::Stylesheet { href: CORE_STYLES }
         UiCatalogProvider {
             render_settings,
             configure_catalog: configure_ui_catalog,
