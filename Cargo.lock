@@ -8525,6 +8525,7 @@ name = "semantic_ui"
 version = "0.0.1"
 dependencies = [
  "async-trait",
+ "base64",
  "bytes",
  "dioxus",
  "dioxus-icons",

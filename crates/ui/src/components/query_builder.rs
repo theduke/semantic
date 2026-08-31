@@ -1,13 +1,15 @@
 use std::rc::Rc;
 
+use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD};
 use dioxus::prelude::*;
 use regex::RegexBuilder;
 use semantic_data::schema::{NumberType, Type, TypeKind};
 use semantic_ui_core::UiCatalog;
 use serde::{Deserialize, Serialize};
 
-const FILTER_STATE_PREFIX: &str = "v1:";
+const FILTER_STATE_PREFIX: &str = "v2:";
 const MAX_FILTER_STATE_BYTES: usize = 6_000;
+const MAX_ENCODED_FILTER_STATE_BYTES: usize = 8_000;
 const MAX_DEPTH: usize = 5;
 const MAX_NODES: usize = 50;
 const MAX_LIST_VALUES: usize = 50;
@@ -380,17 +382,26 @@ pub fn encode_structured_query(query: &StructuredQuery) -> std::result::Result<S
     if json.len() > MAX_FILTER_STATE_BYTES {
         return Err("This filter is too large to store in a portable URL.".to_string());
     }
-    Ok(format!("{FILTER_STATE_PREFIX}{json}"))
+    Ok(format!(
+        "{FILTER_STATE_PREFIX}{}",
+        URL_SAFE_NO_PAD.encode(json)
+    ))
 }
 
 pub fn decode_structured_query(value: &str) -> std::result::Result<StructuredQuery, String> {
-    let json = value
+    let encoded = value
         .strip_prefix(FILTER_STATE_PREFIX)
         .ok_or_else(|| "This filter link uses an unsupported format.".to_string())?;
+    if encoded.len() > MAX_ENCODED_FILTER_STATE_BYTES {
+        return Err("This filter link is too large.".to_string());
+    }
+    let json = URL_SAFE_NO_PAD
+        .decode(encoded)
+        .map_err(|_| "This filter link is invalid.".to_string())?;
     if json.len() > MAX_FILTER_STATE_BYTES {
         return Err("This filter link is too large.".to_string());
     }
-    serde_json::from_str(json).map_err(|_| "This filter link is invalid.".to_string())
+    serde_json::from_slice(&json).map_err(|_| "This filter link is invalid.".to_string())
 }
 
 pub fn compile_structured_predicate(
@@ -1562,14 +1573,22 @@ mod tests {
     }
 
     #[test]
-    fn codec_is_versioned_and_round_trips() {
+    fn codec_is_url_safe_and_round_trips() {
         let query = StructuredQuery {
-            search: "music".into(),
+            search: "music + video / live?".into(),
             ..Default::default()
         };
         let encoded = encode_structured_query(&query).unwrap();
         assert!(encoded.starts_with(FILTER_STATE_PREFIX));
+        assert!(
+            encoded[FILTER_STATE_PREFIX.len()..]
+                .chars()
+                .all(
+                    |character| character.is_ascii_alphanumeric() || matches!(character, '-' | '_')
+                )
+        );
         assert_eq!(decode_structured_query(&encoded).unwrap(), query);
+        assert!(decode_structured_query("v1:{}").is_err());
         assert!(decode_structured_query("v2:{}").is_err());
     }
 }
