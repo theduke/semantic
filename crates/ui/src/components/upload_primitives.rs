@@ -5,9 +5,9 @@ use dioxus::{
 
 /// Keyboard-accessible file picker with drag-and-drop enhancement.
 ///
-/// The native input remains visible and operable; dropping files is only an
-/// additional interaction. Clipboard files are intentionally not advertised
-/// because Dioxus 0.7 does not expose them through its clipboard event.
+/// The native input remains keyboard operable; dropping files is an additional
+/// interaction. Clipboard files are intentionally not advertised because
+/// Dioxus 0.7 does not expose them through its clipboard event.
 #[component]
 pub fn DropZone(
     id: String,
@@ -50,6 +50,13 @@ pub fn DropZone(
                 strong { "{label}" }
                 span { id: hint_id.clone(), "{hint}" }
             }
+            label {
+                class: "dx-button semantic-drop-zone__button",
+                "data-style": "primary",
+                "data-size": "default",
+                r#for: id.clone(),
+                "Choose files"
+            }
             input {
                 id,
                 class: "semantic-drop-zone__input",
@@ -80,6 +87,10 @@ pub fn JobProgress(
 ) -> Element {
     let label_id = format!("{id}-label");
     let current = total.map(|total| current.min(total)).unwrap_or(current);
+    let is_active = matches!(
+        state.as_str(),
+        "running" | "queued" | "reading" | "uploading" | "finalizing" | "cancelling"
+    );
 
     rsx! {
         div { class: "semantic-job-progress", "data-state": state,
@@ -90,8 +101,10 @@ pub fn JobProgress(
                     value: "{current}",
                     aria_labelledby: label_id.clone(),
                 }
-            } else {
+            } else if is_active {
                 progress { id, aria_labelledby: label_id.clone() }
+            } else {
+                progress { id, max: "1", value: "0", aria_labelledby: label_id.clone() }
             }
             span { id: label_id, class: "semantic-job-progress__label", "{label}" }
         }

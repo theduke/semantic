@@ -2577,8 +2577,25 @@ pre {
   font-size: 13px;
 }
 
+.semantic-drop-zone__button {
+  cursor: pointer;
+}
+
 .semantic-drop-zone__input {
-  max-width: 18rem;
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  border: 0;
+  margin: -1px;
+  clip: rect(0, 0, 0, 0);
+  clip-path: inset(50%);
+  overflow: hidden;
+  white-space: nowrap;
+}
+
+.semantic-drop-zone:has(.semantic-drop-zone__input:focus-visible) .semantic-drop-zone__button {
+  box-shadow: var(--semantic-focus-ring);
 }
 
 .semantic-job-progress {
@@ -2641,6 +2658,18 @@ pre {
   align-items: center;
 }
 
+.semantic-upload__settings-toggle {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--semantic-space-2) var(--semantic-space-3);
+  align-items: center;
+}
+
+.semantic-upload__settings-toggle span {
+  color: var(--semantic-text-muted);
+  font-size: 13px;
+}
+
 .semantic-upload__defaults {
   display: grid;
   gap: var(--semantic-space-4);
@@ -2666,6 +2695,26 @@ pre {
 .semantic-upload__default-label span {
   color: var(--semantic-text-muted);
   font-size: 13px;
+}
+
+.semantic-upload__defaults-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 3fr) minmax(16rem, 2fr);
+  border: 1px solid var(--semantic-border-soft);
+  border-radius: var(--semantic-radius);
+  overflow: hidden;
+}
+
+.semantic-upload__default-section {
+  display: grid;
+  align-content: start;
+  gap: var(--semantic-space-3);
+  min-width: 0;
+  padding: var(--semantic-space-4);
+}
+
+.semantic-upload__default-section + .semantic-upload__default-section {
+  border-inline-start: 1px solid var(--semantic-border-soft);
 }
 
 .semantic-upload__default-field,
@@ -2870,6 +2919,10 @@ pre {
   display: grid;
   grid-template-columns: minmax(160px, 1fr) minmax(220px, 2fr);
   gap: var(--semantic-space-3);
+  padding: var(--semantic-space-3);
+  border: 1px solid var(--semantic-border-soft);
+  border-radius: var(--semantic-radius);
+  background: var(--semantic-surface-muted);
 }
 
 .semantic-upload__metadata label {
@@ -3799,8 +3852,14 @@ pre {
   .semantic-drop-zone,
   .semantic-upload__item,
   .semantic-upload__result,
-  .semantic-upload__metadata {
+  .semantic-upload__metadata,
+  .semantic-upload__defaults-grid {
     grid-template-columns: 1fr;
+  }
+
+  .semantic-upload__default-section + .semantic-upload__default-section {
+    border-block-start: 1px solid var(--semantic-border-soft);
+    border-inline-start: 0;
   }
 
   .semantic-upload__aggregate,
@@ -3813,8 +3872,8 @@ pre {
     width: 100%;
   }
 
-  .semantic-drop-zone__input {
-    max-width: 100%;
+  .semantic-drop-zone__button {
+    width: 100%;
   }
 
   .semantic-directory-browser__toolbar,
