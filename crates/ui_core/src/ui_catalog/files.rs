@@ -75,38 +75,40 @@ fn FileDetailView(object: Object, id: Option<String>, mode: RenderMode) -> Eleme
                         code { "{id}" }
                     }
                 }
-                if let Some(source) = source.clone() {
-                    a {
-                        class: "dx-button semantic-file-detail__open",
-                        "data-style": "outline",
-                        "data-size": "sm",
-                        href: source,
-                        target: "_blank",
-                        rel: "noopener noreferrer",
-                        "Open file"
-                    }
-                }
             }
-            if can_show_data {
+            if can_show_data || source.is_some() {
                 div {
                     class: "semantic-file-detail__toolbar",
                     role: "group",
-                    aria_label: "File view mode",
-                    dxcomp::Button {
-                        r#type: "button",
-                        variant: if show_media { dxcomp::ButtonVariant::Primary } else { dxcomp::ButtonVariant::Outline },
-                        size: dxcomp::ButtonSize::Sm,
-                        aria_pressed: show_media,
-                        onclick: move |_| view_mode.set(FileViewMode::Media),
-                        "Media"
+                    aria_label: "File actions",
+                    if can_show_data {
+                        dxcomp::Button {
+                            r#type: "button",
+                            variant: if show_media { dxcomp::ButtonVariant::Primary } else { dxcomp::ButtonVariant::Outline },
+                            size: dxcomp::ButtonSize::Sm,
+                            aria_pressed: show_media,
+                            onclick: move |_| view_mode.set(FileViewMode::Media),
+                            "Media"
+                        }
+                        dxcomp::Button {
+                            r#type: "button",
+                            variant: if show_media { dxcomp::ButtonVariant::Outline } else { dxcomp::ButtonVariant::Primary },
+                            size: dxcomp::ButtonSize::Sm,
+                            aria_pressed: !show_media,
+                            onclick: move |_| view_mode.set(FileViewMode::Data),
+                            "Data"
+                        }
                     }
-                    dxcomp::Button {
-                        r#type: "button",
-                        variant: if show_media { dxcomp::ButtonVariant::Outline } else { dxcomp::ButtonVariant::Primary },
-                        size: dxcomp::ButtonSize::Sm,
-                        aria_pressed: !show_media,
-                        onclick: move |_| view_mode.set(FileViewMode::Data),
-                        "Data"
+                    if let Some(open_source) = source.clone() {
+                        a {
+                            class: "dx-button semantic-file-detail__open",
+                            "data-style": "outline",
+                            "data-size": "sm",
+                            href: open_source,
+                            target: "_blank",
+                            rel: "noopener noreferrer",
+                            "Open"
+                        }
                     }
                 }
             }
