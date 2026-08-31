@@ -3994,33 +3994,37 @@ pre {
 }
 
 .semantic-note-form__content-table,
-.semantic-note-form__content-table tbody,
-.semantic-note-form__content-table tr {
+.semantic-note-form__content-table > tbody,
+.semantic-note-form__content-table > tbody > tr {
   display: grid;
   width: 100%;
 }
 
-.semantic-note-form__content-table th,
-.semantic-note-form__content-table td {
+.semantic-note-form__content-table > tbody > tr > th,
+.semantic-note-form__content-table > tbody > tr > td {
   display: grid;
   width: 100%;
   max-width: none;
   white-space: normal;
 }
 
-.semantic-note-form__content-table th {
-  padding: var(--semantic-space-3) var(--semantic-space-4) var(--semantic-space-2);
-  border-bottom: 0;
+.semantic-note-form__content-table > tbody > tr > th {
+  display: none;
 }
 
-.semantic-note-form__content-table td {
-  padding: 0 var(--semantic-space-4) var(--semantic-space-4);
+.semantic-note-form__content-table > tbody > tr > td {
+  padding: 0;
 }
 
 .semantic-note-form__document .dxeditor,
 .semantic-note-form__document .semantic-form__auto-textarea.dx-textarea {
   width: 100%;
   max-width: none;
+}
+
+.semantic-note-form__document .dxeditor-engine__content:focus-visible {
+  box-shadow: none;
+  outline: none;
 }
 
 .semantic-note-form[data-format="markdown"] .dxeditor__document {
