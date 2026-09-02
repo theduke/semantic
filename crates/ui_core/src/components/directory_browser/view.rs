@@ -4,7 +4,7 @@ use dioxus::logger::tracing::{error, info, warn};
 use dioxus::prelude::*;
 use dioxus_icons::lucide::{
     ChevronDown, ChevronRight, ClipboardPaste, Copy, FileText, Folder, FolderPlus, Grid2x2, Link,
-    List, PanelLeft, Pencil, Plus, RefreshCw, Scissors, Trash2, X,
+    List, PanelLeft, Pencil, Plus, RefreshCw, Scissors, Trash2, Upload, X,
 };
 use futures::StreamExt;
 
@@ -22,8 +22,8 @@ use super::{
     },
     picker::{FileTreePicker, FileTreeSelection},
     types::{
-        BrowseViewMode, DirectoryBrowseItem, DirectoryBrowserProps, DirectoryPage, DirectorySort,
-        DirectoryTreeRow,
+        BrowseViewMode, DirectoryActionTarget, DirectoryBrowseItem, DirectoryBrowserProps,
+        DirectoryPage, DirectorySort, DirectoryTreeRow,
     },
 };
 
@@ -183,6 +183,8 @@ struct DirectoryBrowserSignals {
     content_generation: Signal<u64>,
     tree_generation: Signal<u64>,
     dialog_generation: Signal<u64>,
+    content_loading: Signal<bool>,
+    tree_loading: Signal<bool>,
     content_state: Signal<LoadState<DirectoryPage>>,
     tree_state: Signal<LoadState<Vec<DirectoryTreeRow>>>,
 }
@@ -507,6 +509,10 @@ fn use_directory_browser_coroutine(
                             item_id = item_id.as_str(),
                             "directory browser navigate to tree root"
                         );
+                        let next = expanded_for_open((state.expanded_tree)(), &item_id);
+                        if next != (state.expanded_tree)() {
+                            state.expanded_tree.set(next);
+                        }
                         navigate_to_tree_root(Some(item_id));
                     }
                     DirectoryBrowserCommand::ToggleSelection(item) => {
@@ -1042,6 +1048,8 @@ pub fn DirectoryBrowser(props: DirectoryBrowserProps) -> Element {
     let content_generation = use_signal(|| 0_u64);
     let tree_generation = use_signal(|| 0_u64);
     let dialog_generation = use_signal(|| 0_u64);
+    let content_loading = use_signal(|| true);
+    let tree_loading = use_signal(|| true);
     let content_state = use_signal(|| LoadState::<DirectoryPage>::Loading);
     let tree_state = use_signal(|| LoadState::<Vec<DirectoryTreeRow>>::Loading);
 
@@ -1067,6 +1075,8 @@ pub fn DirectoryBrowser(props: DirectoryBrowserProps) -> Element {
         content_generation,
         tree_generation,
         dialog_generation,
+        content_loading,
+        tree_loading,
         content_state,
         tree_state,
     };
@@ -1090,7 +1100,16 @@ pub fn DirectoryBrowser(props: DirectoryBrowserProps) -> Element {
         LoadState::Loading | LoadState::Error(_) => "Tree".to_string(),
     };
     let busy = busy_operations();
-    let content_busy = matches!(&*content_state.read(), LoadState::Loading);
+    let content_busy = content_loading();
+    let current_target = match (&*content_state.read(), current_root(), content_busy) {
+        (LoadState::Ready(_), Some(id), false) => Some(DirectoryActionTarget {
+            id,
+            title: current_root_title.clone(),
+        }),
+        (LoadState::Loading | LoadState::Error(_), _, _)
+        | (LoadState::Ready(_), None, _)
+        | (LoadState::Ready(_), Some(_), true) => None,
+    };
     let focused_dom_id = focused_item()
         .filter(|id| visible_ids.iter().any(|visible_id| visible_id == id))
         .map(|id| directory_item_dom_id(&id));
@@ -1115,6 +1134,15 @@ pub fn DirectoryBrowser(props: DirectoryBrowserProps) -> Element {
             }
         },
     ));
+
+    let refresh_revision = props.refresh_revision;
+    let mut observed_refresh_revision = use_signal(|| refresh_revision);
+    use_effect(use_reactive((&refresh_revision,), move |(revision,)| {
+        if observed_refresh_revision() != revision {
+            observed_refresh_revision.set(revision);
+            commands.send(DirectoryBrowserCommand::Refresh);
+        }
+    }));
 
     rsx! {
         section { class: "semantic-directory-browser", aria_label: "Directory browser",
@@ -1148,61 +1176,8 @@ pub fn DirectoryBrowser(props: DirectoryBrowserProps) -> Element {
                         },
                     }
                 }
-                div { class: "semantic-directory-browser__toolbar-controls",
-                    dxcomp::Button {
-                        variant: dxcomp::ButtonVariant::Outline,
-                        size: dxcomp::ButtonSize::IconSm,
-                        title: "New Directory",
-                        aria_label: "New directory",
-                        disabled: busy.contains(&DirectoryOperation::Create),
-                        onclick: {
-                            let current_root = current_root();
-                            move |_| {
-                                commands.send(DirectoryBrowserCommand::OpenDialog(DirectoryDialog::NewDirectory {
-                                    parent: current_root.clone(),
-                                }));
-                            }
-                        },
-                        FolderPlus { size: "1rem" }
-                    }
-                    dxcomp::Button {
-                        variant: dxcomp::ButtonVariant::Outline,
-                        size: dxcomp::ButtonSize::IconSm,
-                        title: "Add Existing Item",
-                        aria_label: "Add existing item",
-                        disabled: current_root().is_none() || busy.contains(&DirectoryOperation::AddExisting),
-                        onclick: {
-                            let current_root = current_root();
-                            move |_| {
-                                if let Some(parent) = current_root.clone() {
-                                    commands.send(DirectoryBrowserCommand::OpenDialog(DirectoryDialog::AddExisting {
-                                        parent,
-                                    }));
-                                }
-                            }
-                        },
-                        Link { size: "1rem" }
-                    }
-                    dxcomp::Button {
-                        variant: dxcomp::ButtonVariant::Outline,
-                        size: dxcomp::ButtonSize::IconSm,
-                        title: "Rename current directory",
-                        aria_label: "Rename current directory",
-                        disabled: current_root().is_none() || busy.contains(&DirectoryOperation::Rename),
-                        onclick: {
-                            let current_root = current_root();
-                            let current_root_title = current_root_title.clone();
-                            move |_| {
-                                if let Some(item_id) = current_root.clone() {
-                                    commands.send(DirectoryBrowserCommand::OpenDialog(DirectoryDialog::Rename {
-                                        item_id,
-                                        title: current_root_title.clone(),
-                                    }));
-                                }
-                            }
-                        },
-                        Pencil { size: "1rem" }
-                    }
+                div { class: "semantic-directory-browser__command-row",
+                div { class: "semantic-directory-browser__toolbar-controls", role: "group", aria_label: "View controls",
                     dxcomp::Button {
                         variant: dxcomp::ButtonVariant::Outline,
                         size: dxcomp::ButtonSize::IconSm,
@@ -1269,6 +1244,89 @@ pub fn DirectoryBrowser(props: DirectoryBrowserProps) -> Element {
                         onclick: move |_| commands.send(DirectoryBrowserCommand::Refresh),
                         RefreshCw { size: "1rem" }
                     }
+                }
+                div { class: "semantic-directory-browser__current-actions", role: "group", aria_label: "Current directory actions",
+                    dxcomp::Button {
+                        variant: dxcomp::ButtonVariant::Outline,
+                        size: dxcomp::ButtonSize::IconSm,
+                        title: "New Directory",
+                        aria_label: "New directory",
+                        disabled: busy.contains(&DirectoryOperation::Create),
+                        onclick: {
+                            let current_root = current_root();
+                            move |_| {
+                                commands.send(DirectoryBrowserCommand::OpenDialog(DirectoryDialog::NewDirectory {
+                                    parent: current_root.clone(),
+                                }));
+                            }
+                        },
+                        FolderPlus { size: "1rem" }
+                    }
+                    dxcomp::Button {
+                        variant: dxcomp::ButtonVariant::Outline,
+                        size: dxcomp::ButtonSize::IconSm,
+                        title: "Add Existing Item",
+                        aria_label: "Add existing item",
+                        disabled: current_target.is_none() || busy.contains(&DirectoryOperation::AddExisting),
+                        onclick: {
+                            let current_root = current_root();
+                            move |_| {
+                                if let Some(parent) = current_root.clone() {
+                                    commands.send(DirectoryBrowserCommand::OpenDialog(DirectoryDialog::AddExisting {
+                                        parent,
+                                    }));
+                                }
+                            }
+                        },
+                        Link { size: "1rem" }
+                    }
+                    dxcomp::Button {
+                        variant: dxcomp::ButtonVariant::Outline,
+                        size: dxcomp::ButtonSize::IconSm,
+                        title: "Rename current directory",
+                        aria_label: "Rename current directory",
+                        disabled: current_target.is_none() || busy.contains(&DirectoryOperation::Rename),
+                        onclick: {
+                            let current_root = current_root();
+                            let current_root_title = current_root_title.clone();
+                            move |_| {
+                                if let Some(item_id) = current_root.clone() {
+                                    commands.send(DirectoryBrowserCommand::OpenDialog(DirectoryDialog::Rename {
+                                        item_id,
+                                        title: current_root_title.clone(),
+                                    }));
+                                }
+                            }
+                        },
+                        Pencil { size: "1rem" }
+                    }
+                    if let Some(on_create_entity) = props.on_create_entity {
+                        dxcomp::Button {
+                            variant: dxcomp::ButtonVariant::Outline,
+                            size: dxcomp::ButtonSize::Sm,
+                            disabled: current_target.is_none() || content_busy,
+                            onclick: {
+                                let target = current_target.clone();
+                                move |_| if let Some(target) = target.clone() { on_create_entity.call(target) }
+                            },
+                            Plus { size: "1rem" }
+                            "Create"
+                        }
+                    }
+                    if let Some(on_upload_files) = props.on_upload_files {
+                        dxcomp::Button {
+                            variant: dxcomp::ButtonVariant::Outline,
+                            size: dxcomp::ButtonSize::Sm,
+                            disabled: current_target.is_none() || content_busy,
+                            onclick: {
+                                let target = current_target.clone();
+                                move |_| if let Some(target) = target.clone() { on_upload_files.call(target) }
+                            },
+                            Upload { size: "1rem" }
+                            "Upload"
+                        }
+                    }
+                }
                 }
             }
             div {
@@ -1443,7 +1501,7 @@ pub fn DirectoryBrowser(props: DirectoryBrowserProps) -> Element {
                     }
                 },
                 if tree_open() {
-                    aside { id: "semantic-directory-tree", class: "semantic-directory-browser__tree", role: "tree", aria_label: "Directory hierarchy",
+                    aside { id: "semantic-directory-tree", class: "semantic-directory-browser__tree", role: "tree", aria_label: "Directory hierarchy", aria_busy: tree_loading(),
                         match &*tree_state.read() {
                             LoadState::Ready(rows) => rsx! {
                                 if rows.is_empty() {
@@ -1470,9 +1528,6 @@ pub fn DirectoryBrowser(props: DirectoryBrowserProps) -> Element {
                                             }
                                         }
                                     }
-                                    p { class: "semantic-directory-browser__cap-notice", role: "note",
-                                        "Each expanded directory level displays up to 200 folders."
-                                    }
                                 }
                             },
                             LoadState::Error(err) => rsx! { div { class: "semantic-error", "{err}" } },
@@ -1481,7 +1536,9 @@ pub fn DirectoryBrowser(props: DirectoryBrowserProps) -> Element {
                     }
                 }
                 dxcomp::ContextMenu {
+                    class: "semantic-directory-browser__content-menu",
                     dxcomp::ContextMenuTrigger {
+                        class: "semantic-directory-browser__content-trigger",
                         div { class: "semantic-directory-browser__content", role: "region", aria_label: "Directory contents", aria_busy: content_busy,
                             match &*content_state.read() {
                                 LoadState::Ready(page_data) => rsx! {
@@ -2567,6 +2624,7 @@ async fn reload_current_content(
         page_size,
         sort,
         state.content_state,
+        state.content_loading,
         state.content_generation,
         generation,
     ));
@@ -2594,6 +2652,7 @@ async fn reload_current_tree(
         scope_id,
         expanded,
         state.tree_state,
+        state.tree_loading,
         state.tree_generation,
         generation,
     ));
@@ -2618,6 +2677,7 @@ async fn reload_content(
     page_size: usize,
     sort: DirectorySort,
     mut content_state: Signal<LoadState<DirectoryPage>>,
+    mut content_loading: Signal<bool>,
     content_generation: Signal<u64>,
     generation: u64,
 ) {
@@ -2629,7 +2689,7 @@ async fn reload_content(
         scope_id = scope_id.as_deref(),
         "directory browser loading content"
     );
-    content_state.set(LoadState::Loading);
+    content_loading.set(true);
     let next = match load_directory_page(client, scope_id, root, page, page_size, sort).await {
         Ok(page_data) => {
             info!(
@@ -2650,6 +2710,7 @@ async fn reload_content(
     };
     if *content_generation.peek() == generation {
         content_state.set(next);
+        content_loading.set(false);
     } else {
         info!(
             generation,
@@ -2663,6 +2724,7 @@ async fn reload_tree(
     scope_id: Option<String>,
     expanded: BTreeSet<String>,
     mut tree_state: Signal<LoadState<Vec<DirectoryTreeRow>>>,
+    mut tree_loading: Signal<bool>,
     tree_generation: Signal<u64>,
     generation: u64,
 ) {
@@ -2671,7 +2733,7 @@ async fn reload_tree(
         scope_id = scope_id.as_deref(),
         "directory browser loading tree"
     );
-    tree_state.set(LoadState::Loading);
+    tree_loading.set(true);
     let next = match load_tree_rows(client, scope_id, expanded).await {
         Ok(rows) => {
             info!(row_count = rows.len(), "directory browser tree loaded");
@@ -2684,6 +2746,7 @@ async fn reload_tree(
     };
     if *tree_generation.peek() == generation {
         tree_state.set(next);
+        tree_loading.set(false);
     } else {
         info!(generation, "directory browser ignored stale tree response");
     }
@@ -2733,4 +2796,22 @@ fn url_query_escape(value: &str) -> String {
             }
         })
         .collect()
+}
+
+fn expanded_for_open(mut expanded: BTreeSet<String>, item_id: &str) -> BTreeSet<String> {
+    expanded.insert(item_id.to_string());
+    expanded
+}
+
+#[cfg(test)]
+mod tests {
+    use super::expanded_for_open;
+    use std::collections::BTreeSet;
+
+    #[test]
+    fn opening_a_tree_directory_expands_it_idempotently() {
+        let expanded = expanded_for_open(BTreeSet::new(), "directory-1");
+        assert!(expanded.contains("directory-1"));
+        assert_eq!(expanded_for_open(expanded.clone(), "directory-1"), expanded);
+    }
 }

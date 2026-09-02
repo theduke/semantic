@@ -25,6 +25,21 @@ pub struct DirectoryBrowserProps {
 
     #[props(default)]
     pub config: DirectoryBrowserConfig,
+
+    #[props(default)]
+    pub on_create_entity: Option<EventHandler<DirectoryActionTarget>>,
+
+    #[props(default)]
+    pub on_upload_files: Option<EventHandler<DirectoryActionTarget>>,
+
+    #[props(default)]
+    pub refresh_revision: u64,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct DirectoryActionTarget {
+    pub id: String,
+    pub title: String,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

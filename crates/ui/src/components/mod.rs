@@ -1,5 +1,6 @@
 mod action_primitives;
 mod copyable_code;
+mod entity_create_form;
 mod entity_explorer;
 mod entity_page_header;
 mod form_page;
@@ -15,6 +16,9 @@ pub use action_primitives::{
     IconButtonVariant,
 };
 pub use copyable_code::{CopyRequest, CopyableCode, CopyableCodeProps};
+pub use entity_create_form::{
+    EntityCreateFailure, EntityCreateForm, EntityCreateFormProps, EntityCreateOutcome,
+};
 pub use entity_explorer::{
     DataToolbar, DataToolbarProps, EntityExplorer, EntityExplorerProps, EntityResults,
     EntityResultsProps, Pagination, PaginationProps, QueryEditor, QueryEditorProps, ResultDensity,

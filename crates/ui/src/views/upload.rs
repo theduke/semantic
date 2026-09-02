@@ -14,8 +14,8 @@ use semantic_rpc::file::{
     FileUploadContent, FileUploadPhase, FileUploadProgress, FileUploadRequest, FileUploadResponse,
 };
 use semantic_ui_core::{
-    EntityAutocomplete, EntityCard, EntityDisplayRenderer, EntityRenderOptions, FileTreePicker,
-    FileTreeSelection, add_items_to_directory,
+    DirectoryActionTarget, EntityAutocomplete, EntityCard, EntityDisplayRenderer,
+    EntityRenderOptions, FileTreePicker, FileTreeSelection, add_items_to_directory,
     components::{InlineNotice, NoticeVariant},
     use_active_scope_id, use_rpc_client,
 };
@@ -116,6 +116,21 @@ struct UploadNotice {
 
 #[component]
 pub fn UploadPage() -> Element {
+    rsx! {
+        section { class: "semantic-upload",
+            PageHeader { title: "Upload" }
+            UploadWorkspace {}
+        }
+    }
+}
+
+#[component]
+pub fn UploadWorkspace(
+    #[props(default)] destination: Option<DirectoryActionTarget>,
+    #[props(default)] compact: bool,
+    #[props(default)] on_directory_changed: Option<EventHandler<()>>,
+    #[props(default)] on_busy_change: Option<EventHandler<bool>>,
+) -> Element {
     let client = use_rpc_client();
     let scope_id = use_active_scope_id();
     let mut queue = use_signal(Vec::<UploadEntry>::new);
@@ -126,6 +141,7 @@ pub fn UploadPage() -> Element {
     let mut parent_entity = use_signal(|| None::<String>);
     let mut settings_open = use_signal(|| false);
     let mut clear_confirm_open = use_signal(|| false);
+    let mut directory_change_notified = use_signal(|| false);
     let mut visible_per_group = use_signal(|| INITIAL_VISIBLE_PER_GROUP);
     let aborts = use_hook(|| Rc::new(RefCell::new(HashMap::new())));
     let (work_tx, work_rx) = use_hook(|| {
@@ -156,10 +172,10 @@ pub fn UploadPage() -> Element {
     };
 
     let defaults = UploadRequestOptions {
-        destination_directory: destination_directory
-            .read()
-            .as_ref()
-            .map(|item| item.id.clone()),
+        destination_directory: upload_destination_directory(
+            destination.as_ref(),
+            destination_directory.read().as_ref(),
+        ),
         parent_entity: parent_entity.read().clone(),
     };
     let mut ready = Vec::new();
@@ -181,6 +197,26 @@ pub fn UploadPage() -> Element {
         }
     }
     let busy = !active.is_empty();
+    let has_fixed_destination = destination.is_some();
+    use_effect(move || {
+        if let Some(on_busy_change) = on_busy_change {
+            on_busy_change.call(busy);
+        }
+    });
+    use_effect(move || {
+        let summary = summary();
+        if has_fixed_destination
+            && summary.completed > 0
+            && summary.active == 0
+            && summary.queued == 0
+            && !directory_change_notified()
+        {
+            directory_change_notified.set(true);
+            if let Some(on_directory_changed) = on_directory_changed {
+                on_directory_changed.call(());
+            }
+        }
+    });
     let has_more = [ready.len(), active.len(), attention.len(), complete.len()]
         .into_iter()
         .any(|count| count > visible_per_group());
@@ -208,8 +244,12 @@ pub fn UploadPage() -> Element {
         format!("Retry {retryable_count} files")
     };
     rsx! {
-        section { class: "semantic-upload",
-            PageHeader { title: "Upload" }
+        section { class: if compact { "semantic-upload-workspace semantic-upload-workspace--compact" } else { "semantic-upload-workspace" },
+            if let Some(destination) = destination.as_ref() {
+                p { class: "semantic-upload-workspace__destination",
+                    "Files will be uploaded and linked to " strong { "{destination.title}" } "."
+                }
+            }
             DropZone {
                 id: "semantic-upload-input",
                 label: "Drop files here",
@@ -259,6 +299,7 @@ pub fn UploadPage() -> Element {
                     }
                 }
             }
+            if !compact {
             div { class: "semantic-upload__settings-toggle",
                 dxcomp::Button {
                     variant: dxcomp::ButtonVariant::Outline,
@@ -268,7 +309,8 @@ pub fn UploadPage() -> Element {
                     if settings_open() { "Hide metadata" } else { "Add metadata" }
                 }
             }
-            if settings_open() {
+            }
+            if !compact && settings_open() {
                 section { id: "semantic-upload-settings", class: "semantic-upload__defaults",
                     div { class: "semantic-upload__defaults-header",
                         h2 { "Metadata" }
@@ -1181,6 +1223,15 @@ fn title_from_filename(name: &str) -> String {
         .to_string()
 }
 
+fn upload_destination_directory(
+    fixed: Option<&DirectoryActionTarget>,
+    selected: Option<&FileTreeSelection>,
+) -> Option<String> {
+    fixed
+        .map(|directory| directory.id.clone())
+        .or_else(|| selected.map(|directory| directory.id.clone()))
+}
+
 fn metadata_entity(title: &str, description: &str, parent_entity: Option<&str>) -> Object {
     let mut entity = Object::new();
     let title = title.trim();
@@ -1288,5 +1339,23 @@ mod tests {
         assert!(upload_can_be_canceled(UploadItemStatus::Uploading, false));
         assert!(!upload_can_be_canceled(UploadItemStatus::Finalizing, true));
         assert!(!upload_can_be_canceled(UploadItemStatus::Success, true));
+    }
+
+    #[test]
+    fn fixed_directory_destination_cannot_be_overridden() {
+        let fixed = DirectoryActionTarget {
+            id: "fixed".to_string(),
+            title: "Fixed".to_string(),
+        };
+        let selected = FileTreeSelection {
+            id: "selected".to_string(),
+            title: "Selected".to_string(),
+            is_directory: true,
+        };
+
+        assert_eq!(
+            upload_destination_directory(Some(&fixed), Some(&selected)).as_deref(),
+            Some("fixed")
+        );
     }
 }

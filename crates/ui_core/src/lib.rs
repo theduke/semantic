@@ -7,12 +7,13 @@ pub mod ui_catalog;
 pub mod components;
 
 pub use components::{
-    AttributeValueView, ClassView, DirectoryBrowser, DirectoryBrowserConfig, DirectoryBrowserProps,
-    ENTITY_TITLE_FIELDS, EntityAutocomplete, EntityAutocompleteProps, EntityCard,
-    EntityDeleteButton, EntityDisplayMode, EntityDisplayRenderer, EntityList, EntityOpenButton,
-    EntityRenderOptions, EntityTableRow, ErrorView, FileTreePicker, FileTreePickerProps,
-    FileTreeSelection, LoadingView, MediaPlaybackView, MediaView, ObjectView, ValueView,
-    add_items_to_directory, entity_title, register_default_playback_renderers,
+    AttributeValueView, ClassView, DirectoryActionTarget, DirectoryBrowser, DirectoryBrowserConfig,
+    DirectoryBrowserProps, ENTITY_TITLE_FIELDS, EntityAutocomplete, EntityAutocompleteProps,
+    EntityCard, EntityDeleteButton, EntityDisplayMode, EntityDisplayRenderer, EntityList,
+    EntityOpenButton, EntityRenderOptions, EntityTableRow, ErrorView, FileTreePicker,
+    FileTreePickerProps, FileTreeSelection, LoadingView, MediaPlaybackView, MediaView, ObjectView,
+    ValueView, add_items_to_directory, create_entity_in_directory, entity_title,
+    register_default_playback_renderers,
 };
 pub use context::{
     UiScopeContext, provide_rpc_client, provide_ui_scope_context, use_active_scope_id,

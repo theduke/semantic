@@ -1,7 +1,4 @@
-use std::{
-    rc::Rc,
-    sync::atomic::{AtomicU32, Ordering},
-};
+use std::rc::Rc;
 
 use dioxus::prelude::*;
 use futures::FutureExt;
@@ -16,76 +13,18 @@ use semantic_ui_core::{
         EmptyState, ErrorState, InlineNotice, LoadingSkeleton, NoticeVariant, RefreshingIndicator,
     },
     context::{Toast, use_toast_dispatcher},
-    default_value_for_class,
     form::{SemanticFormActionLabels, SemanticFormSubmitFailure, SemanticFormSubmitOutcome},
     rpc_batch_upsert_submit_handler_with_primary_id, use_active_scope_id, use_rpc_client,
-    use_ui_catalog, use_ui_catalog_context, use_ui_catalog_reload,
+    use_ui_catalog, use_ui_catalog_reload,
 };
 
 use crate::{
     app::use_entity_edit_navigation,
-    components::{ConfirmActionRequest, FormPage, UnsavedChangesPrompt},
+    components::{
+        ConfirmActionRequest, EntityCreateForm, EntityCreateOutcome, FormPage, UnsavedChangesPrompt,
+    },
     views::Route,
 };
-
-static ENTITY_ID_SEQUENCE: AtomicU32 = AtomicU32::new(0);
-
-#[derive(Clone, Debug, Default, PartialEq)]
-struct CreateEntityCatalogOptions {
-    classes: Rc<[ClassType]>,
-    collections: Rc<[String]>,
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum SelectorKind {
-    Class,
-    Collection,
-}
-
-#[derive(Clone, Debug, PartialEq, Eq)]
-struct PendingSelection {
-    kind: SelectorKind,
-    value: String,
-}
-
-impl PendingSelection {
-    fn target_label(&self) -> String {
-        match self.kind {
-            SelectorKind::Class => format!("class `{}`", self.value),
-            SelectorKind::Collection => format!("collection `{}`", self.value),
-        }
-    }
-}
-
-#[derive(Clone, Debug, PartialEq)]
-enum PendingCreateAction {
-    Selection(PendingSelection),
-    Cancel(Route),
-}
-
-impl PendingCreateAction {
-    fn target_label(&self) -> String {
-        match self {
-            Self::Selection(selection) => selection.target_label(),
-            Self::Cancel(_) => "entity list".to_string(),
-        }
-    }
-}
-
-#[derive(Clone, Debug, PartialEq, Eq)]
-enum SelectorTransition {
-    Unchanged,
-    Apply(PendingSelection),
-    Confirm(PendingSelection),
-}
-
-#[derive(Clone, Debug, Default, PartialEq, Eq)]
-enum CreateSubmitFeedback {
-    #[default]
-    Idle,
-    Succeeded,
-    Failed(String),
-}
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 struct EditEntityQueryKey {
@@ -108,90 +47,49 @@ enum EditSubmitFeedback {
     Failed(String),
 }
 
-fn selector_transition(
-    kind: SelectorKind,
-    current: &str,
-    next: String,
-    dirty: bool,
-) -> SelectorTransition {
-    if current == next {
-        SelectorTransition::Unchanged
-    } else {
-        let selection = PendingSelection { kind, value: next };
-        if dirty {
-            SelectorTransition::Confirm(selection)
-        } else {
-            SelectorTransition::Apply(selection)
-        }
-    }
-}
-
 #[component]
 pub fn CreateEntityPage() -> Element {
     let client = use_rpc_client();
     let scope_id = use_active_scope_id();
     let catalog = use_ui_catalog();
-    let catalog_signal = use_ui_catalog_context().catalog_signal();
-    let reload_catalog = use_ui_catalog_reload().reload;
-    let catalog_options = use_memo(move || {
-        catalog_signal
-            .read()
-            .as_ref()
-            .map(|catalog| CreateEntityCatalogOptions {
-                classes: catalog.classes().cloned().collect::<Vec<_>>().into(),
-                collections: catalog
-                    .collections()
-                    .map(|collection| collection.name.clone())
-                    .collect::<Vec<_>>()
-                    .into(),
-            })
-            .unwrap_or_default()
-    });
-    let classes = catalog_options.read().classes.clone();
-    let collections = catalog_options.read().collections.clone();
-    let initial_class_id = classes.first().map(|class| class.id.clone());
-    let initial_collection = collections.first().cloned();
-    let mut selected_class_id = use_signal(move || initial_class_id);
-    let mut selected_collection = use_signal(move || initial_collection);
-    let mut draft_id = use_signal(new_entity_id);
-    let mut dirty = use_signal(|| false);
-    let mut submitting = use_signal(|| false);
-    let mut submit_feedback = use_signal(CreateSubmitFeedback::default);
-    let mut pending_action = use_signal(|| None::<PendingCreateAction>);
     let navigator = use_navigator();
     let toast = use_toast_dispatcher();
-
-    let class_id = selected_class_id.read().clone().unwrap_or_default();
-    let collection = selected_collection.read().clone().unwrap_or_default();
-    let selected_class = classes.iter().find(|class| class.id == class_id).cloned();
-    let primary_id_field = primary_id_field_for_collection(&catalog, &collection);
-    let current_status = if submitting() {
-        "Creating entity…".to_string()
-    } else {
-        match &*submit_feedback.read() {
-            CreateSubmitFeedback::Failed(message) => message.clone(),
-            CreateSubmitFeedback::Succeeded => "Entity created.".to_string(),
-            CreateSubmitFeedback::Idle if dirty() => "Unsaved changes".to_string(),
-            CreateSubmitFeedback::Idle => "Ready to create".to_string(),
+    let mut dirty = use_signal(|| false);
+    let mut submitting = use_signal(|| false);
+    let mut selected_collection = use_signal(String::new);
+    let mut cancel_confirm_open = use_signal(|| false);
+    let submit = SemanticFormSubmit::async_(move |ctx| {
+        let client = client.clone();
+        let scope_id = scope_id.clone();
+        let catalog = catalog.clone();
+        async move {
+            let collection = ctx
+                .collection
+                .filter(|collection| !collection.trim().is_empty())
+                .ok_or_else(|| SubmitError::message("collection is required"))?;
+            let Value::Object(object) = ctx.value else {
+                return Err(SubmitError::message("submitted value must be an object"));
+            };
+            let primary_id_field = primary_id_field_for_collection(&catalog, &collection);
+            let id = submitted_primary_id(&object, &primary_id_field)?;
+            let mut payload = Object::new();
+            if let Some(scope_id) = scope_id {
+                payload.insert("scope_id", Value::String(scope_id));
+            }
+            payload.insert(
+                "operations",
+                Value::List(vec![Value::Object(batch_upsert_operation(
+                    collection, id, object,
+                ))]),
+            );
+            client
+                .invoke_value("semantic.db.batch", Value::Object(payload))
+                .await
+                .map(|_| ())
+                .map_err(|error| SubmitError::message(error.to_string()))
         }
-    };
-    let apply_selection = Callback::new(move |selection: PendingSelection| {
-        match selection.kind {
-            SelectorKind::Class => selected_class_id.set(Some(selection.value)),
-            SelectorKind::Collection => selected_collection.set(Some(selection.value)),
-        }
-        draft_id.set(new_entity_id());
-        dirty.set(false);
-        submitting.set(false);
-        submit_feedback.set(CreateSubmitFeedback::Idle);
+        .boxed_local()
     });
-    let pending_target = pending_action
-        .read()
-        .as_ref()
-        .map(PendingCreateAction::target_label)
-        .unwrap_or_else(|| "another destination".to_string());
-    let cancel_collection = collection.clone();
-    let picker_collection = collection.clone();
 
     rsx! {
         FormPage {
@@ -209,210 +107,37 @@ pub fn CreateEntityPage() -> Element {
                     r#type: "button",
                     disabled: submitting(),
                     onclick: move |_| {
-                        let destination = cancel_destination(&cancel_collection);
                         if dirty() {
-                            pending_action.set(Some(PendingCreateAction::Cancel(destination)));
+                            cancel_confirm_open.set(true);
                         } else {
-                            navigator.push(destination);
+                            navigator.push(cancel_destination(&selected_collection()));
                         }
                     },
                     "Cancel"
                 }
             },
-            context_label: "New entity destination",
-            context: rsx! {
-                div { class: "semantic-create-entity__context",
-                    div { class: "semantic-create-entity__picker",
-                        label { class: "semantic-create-entity__picker-label", "Class" }
-                        p { class: "semantic-create-entity__picker-help", "Controls the fields and validation shown below." }
-                        if !classes.is_empty() {
-                            dxcomp::Combobox::<String> {
-                                value: Some(selected_class_id.into()),
-                                on_value_change: move |value| {
-                                    if let Some(value) = value {
-                                        match selector_transition(SelectorKind::Class, &class_id, value, dirty()) {
-                                            SelectorTransition::Unchanged => {}
-                                            SelectorTransition::Apply(selection) => apply_selection.call(selection),
-                                            SelectorTransition::Confirm(selection) => pending_action.set(
-                                                Some(PendingCreateAction::Selection(selection)),
-                                            ),
-                                        }
-                                    }
-                                },
-                                disabled: submitting(),
-                                placeholder: "Filter classes",
-                                aria_label: "Entity class",
-                                list_aria_label: "Entity classes",
-                                dxcomp::ComboboxEmpty { "No class found." }
-                                for (index, option) in classes.iter().enumerate() {
-                                    dxcomp::ComboboxOption::<String> {
-                                        index,
-                                        value: option.id.clone(),
-                                        text_value: class_label(option),
-                                        "{class_label(option)}"
-                                    }
-                                }
-                            }
-                        }
-                    }
-                    div { class: "semantic-create-entity__picker",
-                        label { class: "semantic-create-entity__picker-label", "Collection" }
-                        p { class: "semantic-create-entity__picker-help", "Determines where the entity is stored and its detail route." }
-                        if !collections.is_empty() {
-                            dxcomp::Combobox::<String> {
-                                value: Some(selected_collection.into()),
-                                on_value_change: move |value| {
-                                    if let Some(value) = value {
-                                        match selector_transition(
-                                            SelectorKind::Collection,
-                                            &picker_collection,
-                                            value,
-                                            dirty(),
-                                        ) {
-                                            SelectorTransition::Unchanged => {}
-                                            SelectorTransition::Apply(selection) => apply_selection.call(selection),
-                                            SelectorTransition::Confirm(selection) => pending_action.set(
-                                                Some(PendingCreateAction::Selection(selection)),
-                                            ),
-                                        }
-                                    }
-                                },
-                                disabled: submitting(),
-                                placeholder: "Filter collections",
-                                aria_label: "Entity collection",
-                                list_aria_label: "Entity collections",
-                                dxcomp::ComboboxEmpty { "No collection found." }
-                                for (index, option) in collections.iter().enumerate() {
-                                    dxcomp::ComboboxOption::<String> {
-                                        index,
-                                        value: option.clone(),
-                                        text_value: option.clone(),
-                                        "{option}"
-                                    }
-                                }
-                            }
-                        }
-                    }
-                    p {
-                        class: "semantic-create-entity__status",
-                        role: "status",
-                        aria_live: "polite",
-                        "{current_status}"
-                    }
-                }
-            },
-            if classes.is_empty() {
-                EmptyState {
-                    title: "No entity classes available",
-                    description: "The active catalog does not define a class that can supply this form.",
-                    action_label: "Refresh catalog",
-                    on_action: move |_| reload_catalog.call(()),
-                }
-            } else if collections.is_empty() {
-                EmptyState {
-                    title: "No collections available",
-                    description: "Add or load a collection before creating an entity.",
-                    action_label: "Refresh catalog",
-                    on_action: move |_| reload_catalog.call(()),
-                }
-            } else if let Some(class) = selected_class {
-                {
-                    let mut object = match default_value_for_class(&class, &catalog) {
-                        Value::Object(object) => object,
-                        _ => Object::new(),
-                    };
-                    object.insert("type", Value::String(class.id.clone()));
-                    object.insert(primary_id_field.clone(), Value::String(draft_id()));
-                    let submit = rpc_batch_upsert_submit_handler_from_primary_id_field(
-                        client.clone(),
-                        scope_id.clone(),
-                        collection.clone(),
-                        primary_id_field.clone(),
+            EntityCreateForm {
+                submit,
+                on_collection_change: move |collection| selected_collection.set(collection),
+                on_dirty_change: move |next| dirty.set(next),
+                on_submitting_change: move |next| submitting.set(next),
+                on_created: move |outcome: EntityCreateOutcome| {
+                    dirty.set(false);
+                    toast.show(
+                        Toast::success("The entity is ready to view.").title("Entity created"),
                     );
-                    rsx! {
-                        div {
-                            class: "semantic-create-entity__form",
-                            key: "{class.id}:{collection}:{draft_id}",
-                            DynamicClassForm {
-                                class: class.clone(),
-                                object,
-                                mode: SemanticFormMode::Create,
-                                collection: Some(collection.clone()),
-                                id: None,
-                                scope_id: scope_id.clone(),
-                                submit: Some(submit),
-                                action_labels: SemanticFormActionLabels::create_entity(),
-                                on_dirty_change: move |next_dirty| dirty.set(next_dirty),
-                                on_submitting_change: move |next_submitting| {
-                                    submitting.set(next_submitting);
-                                    if next_submitting {
-                                        submit_feedback.set(CreateSubmitFeedback::Idle);
-                                    }
-                                },
-                                on_submit_success: move |outcome: SemanticFormSubmitOutcome| {
-                                    let Value::Object(object) = outcome.value else {
-                                        submit_feedback.set(CreateSubmitFeedback::Failed(
-                                            "Created entity response did not contain an object.".to_string(),
-                                        ));
-                                        return;
-                                    };
-                                    match submitted_primary_id(&object, &primary_id_field) {
-                                        Ok(submitted_id) => {
-                                            submit_feedback.set(CreateSubmitFeedback::Succeeded);
-                                            dirty.set(false);
-                                            toast.show(
-                                                Toast::success("The entity is ready to view.")
-                                                    .title("Entity created"),
-                                            );
-                                            navigator.push(entity_destination(&collection, &submitted_id));
-                                        }
-                                        Err(error) => submit_feedback.set(CreateSubmitFeedback::Failed(
-                                            error.message.unwrap_or_else(|| {
-                                                "Created entity did not contain a usable ID.".to_string()
-                                            }),
-                                        )),
-                                    }
-                                },
-                                on_submit_failure: move |failure: SemanticFormSubmitFailure| {
-                                    let message = failure
-                                        .errors
-                                        .first()
-                                        .map(|error| error.message.clone())
-                                        .unwrap_or_else(|| "Entity creation failed. Review the form and retry.".to_string());
-                                    submit_feedback.set(CreateSubmitFeedback::Failed(message));
-                                },
-                            }
-                        }
-                    }
-                }
-            } else {
-                EmptyState {
-                    title: "Selected class is unavailable",
-                    description: "The catalog changed and no longer contains this class. Refresh to choose an available class.",
-                    action_label: "Refresh catalog",
-                    on_action: move |_| reload_catalog.call(()),
-                }
+                    navigator.push(entity_destination(&outcome.collection, &outcome.id));
+                },
             }
         }
         UnsavedChangesPrompt {
-            open: pending_action.read().is_some(),
-            target: pending_target,
-            body: "Changing destination or leaving this page will discard the current entity draft.",
-            on_open_change: move |open: bool| {
-                if !open {
-                    pending_action.set(None);
-                }
-            },
+            open: cancel_confirm_open(),
+            target: "entity list",
+            body: "Leaving this page will discard the current entity draft.",
+            on_open_change: move |open| cancel_confirm_open.set(open),
             on_discard: move |request: ConfirmActionRequest| {
-                let action = pending_action.peek().clone();
-                pending_action.set(None);
-                match action {
-                    Some(PendingCreateAction::Selection(selection)) => apply_selection.call(selection),
-                    Some(PendingCreateAction::Cancel(destination)) => {
-                        navigator.push(destination);
-                    }
-                    None => {}
-                }
+                cancel_confirm_open.set(false);
+                navigator.push(cancel_destination(&selected_collection()));
                 request.complete(Ok(()));
             },
         }
@@ -786,20 +511,6 @@ fn class_label(class: &ClassType) -> String {
         .unwrap_or_else(|| class.name.clone())
 }
 
-fn new_entity_id() -> String {
-    let nanos = current_unix_nanos();
-    let sequence = ENTITY_ID_SEQUENCE.fetch_add(1, Ordering::Relaxed);
-    new_entity_id_from_parts(nanos, sequence)
-}
-
-fn current_unix_nanos() -> u128 {
-    time::UtcDateTime::now().unix_timestamp_nanos().max(0) as u128
-}
-
-fn new_entity_id_from_parts(nanos: u128, sequence: u32) -> String {
-    format!("entity-{nanos:032x}-{sequence:08x}")
-}
-
 fn entity_destination(collection: &str, id: &str) -> Route {
     if collection == DEFAULT_COLLECTION {
         Route::DefaultEntityPage { id: id.to_string() }
@@ -891,42 +602,6 @@ fn primary_id_field_for_collection(
         .unwrap_or_else(|| ATTR_ID.to_string())
 }
 
-fn rpc_batch_upsert_submit_handler_from_primary_id_field(
-    client: semantic_rpc::RpcClient,
-    scope_id: Option<String>,
-    collection: String,
-    primary_id_field: String,
-) -> SemanticFormSubmit {
-    SemanticFormSubmit::async_(move |ctx| {
-        let client = client.clone();
-        let scope_id = scope_id.clone();
-        let collection = collection.clone();
-        let primary_id_field = primary_id_field.clone();
-        async move {
-            let Value::Object(object) = ctx.value else {
-                return Err(SubmitError::message("submitted value must be an object"));
-            };
-            let id = submitted_primary_id(&object, &primary_id_field)?;
-            let mut payload = Object::new();
-            if let Some(scope_id) = scope_id {
-                payload.insert("scope_id", Value::String(scope_id));
-            }
-            payload.insert(
-                "operations",
-                Value::List(vec![Value::Object(batch_upsert_operation(
-                    collection, id, object,
-                ))]),
-            );
-            client
-                .invoke_value("semantic.db.batch", Value::Object(payload))
-                .await
-                .map(|_| ())
-                .map_err(|err| SubmitError::message(err.to_string()))
-        }
-        .boxed_local()
-    })
-}
-
 fn submitted_primary_id(
     object: &Object,
     primary_id_field: &str,
@@ -950,48 +625,6 @@ fn batch_upsert_operation(collection: String, id: String, object: Object) -> Obj
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn generated_entity_id_parts_have_stable_collision_resistant_format() {
-        assert_eq!(
-            new_entity_id_from_parts(0x1234, 0x2a),
-            "entity-00000000000000000000000000001234-0000002a"
-        );
-        assert_ne!(
-            new_entity_id_from_parts(0x1234, 0x2a),
-            new_entity_id_from_parts(0x1234, 0x2b)
-        );
-    }
-
-    #[test]
-    fn selector_change_requires_confirmation_only_for_a_dirty_draft() {
-        let pending = PendingSelection {
-            kind: SelectorKind::Class,
-            value: "semantic:Note".to_string(),
-        };
-        assert_eq!(
-            selector_transition(
-                SelectorKind::Class,
-                "semantic:Document",
-                pending.value.clone(),
-                false,
-            ),
-            SelectorTransition::Apply(pending.clone())
-        );
-        assert_eq!(
-            selector_transition(
-                SelectorKind::Class,
-                "semantic:Document",
-                pending.value.clone(),
-                true,
-            ),
-            SelectorTransition::Confirm(pending)
-        );
-        assert_eq!(
-            selector_transition(SelectorKind::Collection, "notes", "notes".to_string(), true,),
-            SelectorTransition::Unchanged
-        );
-    }
 
     #[test]
     fn entity_destination_uses_default_and_named_detail_routes() {

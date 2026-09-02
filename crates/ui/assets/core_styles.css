@@ -3272,9 +3272,15 @@ pre {
 
 .semantic-directory-browser__toolbar {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) auto;
   gap: var(--semantic-space-3);
+}
+
+.semantic-directory-browser__command-row {
+  display: flex;
+  flex-wrap: wrap;
   align-items: center;
+  justify-content: space-between;
+  gap: var(--semantic-space-3);
 }
 
 .semantic-directory-browser__selection-toolbar {
@@ -3294,12 +3300,27 @@ pre {
 
 .semantic-directory-browser__breadcrumbs,
 .semantic-directory-browser__toolbar-controls,
+.semantic-directory-browser__current-actions,
 .semantic-directory-browser__view-toggle,
 .semantic-directory-browser__dialog-actions {
   display: flex;
   flex-wrap: wrap;
   gap: var(--semantic-space-2);
   align-items: center;
+}
+
+.semantic-directory-browser__toolbar-controls,
+.semantic-directory-browser__current-actions {
+  padding: var(--semantic-space-2);
+  border: 1px solid var(--semantic-border-soft);
+  border-radius: var(--semantic-radius);
+  background: var(--semantic-surface);
+  box-shadow: var(--semantic-shadow-xs);
+}
+
+.semantic-directory-browser__current-actions {
+  justify-content: flex-end;
+  margin-inline-start: auto;
 }
 
 .semantic-directory-browser__breadcrumb {
@@ -3378,6 +3399,42 @@ pre {
   overscroll-behavior: contain;
 }
 
+.dx-dialog.semantic-tree-action-dialog {
+  width: min(64rem, calc(100vw - 2rem));
+  max-height: min(90vh, 56rem);
+  overflow: hidden;
+}
+
+.semantic-tree-action-dialog__body {
+  min-height: 0;
+  overflow: auto;
+  padding-inline-end: var(--semantic-space-1);
+  overscroll-behavior: contain;
+}
+
+.semantic-upload-workspace {
+  display: grid;
+  gap: var(--semantic-space-4);
+  min-width: 0;
+}
+
+.semantic-upload-workspace--compact {
+  gap: var(--semantic-space-3);
+}
+
+.semantic-upload-workspace__destination {
+  margin: 0;
+  color: var(--semantic-text-muted);
+}
+
+.semantic-create-entity__context--embedded {
+  margin-block-end: var(--semantic-space-4);
+  padding: var(--semantic-space-3);
+  border: 1px solid var(--semantic-border-soft);
+  border-radius: var(--semantic-radius);
+  background: var(--semantic-surface-subtle);
+}
+
 .semantic-directory-browser__empty-actions {
   display: flex;
   flex-wrap: wrap;
@@ -3389,8 +3446,9 @@ pre {
 .semantic-directory-browser__body {
   display: grid;
   gap: var(--semantic-space-4);
-  min-height: 0;
+  min-height: 32rem;
   min-width: 0;
+  align-items: stretch;
 }
 
 .semantic-directory-browser__body[data-tree-open="true"] {
@@ -3399,6 +3457,15 @@ pre {
 
 .semantic-directory-browser__body[data-tree-open="false"] {
   grid-template-columns: minmax(0, 1fr);
+}
+
+.semantic-directory-browser__content-menu,
+.semantic-directory-browser__content-trigger {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  min-width: 0;
+  min-height: 0;
+  align-self: stretch;
 }
 
 .semantic-directory-browser__tree,
@@ -3414,13 +3481,6 @@ pre {
   padding: var(--semantic-space-2);
   overflow: auto;
   scrollbar-gutter: stable both-edges;
-}
-
-.semantic-directory-browser__cap-notice {
-  margin: var(--semantic-space-3) var(--semantic-space-2) 0;
-  color: var(--semantic-text-muted);
-  font-size: 12px;
-  line-height: 1.4;
 }
 
 .semantic-directory-browser__content {
@@ -4173,9 +4233,20 @@ pre {
     grid-template-columns: 1fr;
   }
 
+  .semantic-directory-browser__command-row,
+  .semantic-directory-browser__toolbar-controls,
+  .semantic-directory-browser__current-actions {
+    width: 100%;
+  }
+
+  .semantic-directory-browser__current-actions {
+    margin-inline-start: 0;
+  }
+
   .semantic-directory-browser__body[data-tree-open="true"],
   .semantic-directory-browser__body[data-tree-open="false"] {
     grid-template-columns: minmax(0, 1fr);
+    min-height: 28rem;
   }
 
   .semantic-directory-browser__row {

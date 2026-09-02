@@ -403,6 +403,45 @@ pub async fn add_items_to_directory(
     add_items_to_directory_inner(client, scope_id, target_directory_id, item_ids).await
 }
 
+/// Creates an entity and its directory link in one ordered database batch.
+pub async fn create_entity_in_directory(
+    client: semantic_rpc::RpcClient,
+    scope_id: Option<String>,
+    target_directory_id: String,
+    entity_id: String,
+    entity: Object,
+) -> std::result::Result<(), String> {
+    validate_directory(client.clone(), scope_id.clone(), &target_directory_id).await?;
+    let order =
+        next_directory_order(client.clone(), scope_id.clone(), &target_directory_id).await?;
+    run_batch_operations(
+        client,
+        scope_id,
+        create_entity_in_directory_operations(&target_directory_id, &entity_id, entity, order),
+    )
+    .await
+}
+
+fn create_entity_in_directory_operations(
+    target_directory_id: &str,
+    entity_id: &str,
+    entity: Object,
+    order: u64,
+) -> Vec<Value> {
+    vec![
+        Value::Object(batch_upsert_operation(
+            ENTITIES_COLLECTION.to_string(),
+            entity_id.to_string(),
+            entity,
+        )),
+        Value::Object(batch_upsert_operation(
+            ENTITIES_COLLECTION.to_string(),
+            directory_node_id(target_directory_id, entity_id),
+            directory_node_object(target_directory_id, entity_id, order),
+        )),
+    ]
+}
+
 pub(super) async fn copy_items_to_directory(
     client: semantic_rpc::RpcClient,
     scope_id: Option<String>,
@@ -1358,5 +1397,43 @@ mod tests {
 
         assert_eq!(item.title, "item-2");
         assert_eq!(item.created_at, None);
+    }
+
+    #[test]
+    fn create_entity_directory_batch_puts_entity_before_link() {
+        let mut entity = Object::new();
+        entity.insert("id", Value::String("entity-1".to_string()));
+
+        let operations =
+            create_entity_in_directory_operations("directory-1", "entity-1", entity, 7);
+
+        assert_eq!(operations.len(), 2);
+        let Value::Object(entity_operation) = &operations[0] else {
+            panic!("entity operation must be an object");
+        };
+        assert_eq!(
+            entity_operation.get("collection"),
+            Some(&Value::String(ENTITIES_COLLECTION.to_string()))
+        );
+        assert_eq!(
+            entity_operation.get("id"),
+            Some(&Value::String("entity-1".to_string()))
+        );
+
+        let Value::Object(link_operation) = &operations[1] else {
+            panic!("link operation must be an object");
+        };
+        let Some(Value::Object(link)) = link_operation.get("object") else {
+            panic!("link operation must contain the directory node");
+        };
+        assert_eq!(
+            link.get(ATTR_DIRECTORY_NODE_FROM),
+            Some(&Value::String("directory-1".to_string()))
+        );
+        assert_eq!(
+            link.get(ATTR_RELATION_TO),
+            Some(&Value::String("entity-1".to_string()))
+        );
+        assert_eq!(link.get(ATTR_DIRECTORY_NODE_ORDER), Some(&Value::U64(7)));
     }
 }
