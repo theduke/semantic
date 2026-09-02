@@ -26,6 +26,7 @@ facet-json = "0.43.2"
 futures = "0.3.31"
 pulldown-cmark = { version = "0.13.0", optional = true }
 regex = "1.12.2"
+semantic_base = { path = "../base" }
 semantic_data = { workspace = true }
 semantic_db_core = { path = "../db_core" }
 semantic_rpc = { path = "../rpc", features = ["client"] }
@@ -41,6 +42,5 @@ dxeditor = { path = "../dxeditor", default-features = false, features = ["markdo
 dxeditor = { path = "../dxeditor", default-features = false, features = ["markdown", "web"], optional = true }
 
 [dev-dependencies]
-semantic_base = { path = "../base" }
 semantic_db_kv = { path = "../db_kv" }
 tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }

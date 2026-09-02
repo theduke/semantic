@@ -91,6 +91,17 @@ mod tests {
                 "entity.json",
                 "files",
             ],
+            &[
+                "semantic",
+                "api",
+                "upload",
+                "--tree",
+                "--target-directory",
+                "directory-1",
+                "--replace",
+                "--non-interactive",
+                "files",
+            ],
         ];
 
         for command in commands {
@@ -98,6 +109,52 @@ mod tests {
                 panic!("failed to parse {command:?}: {error}");
             });
         }
+    }
+
+    #[test]
+    fn parses_tree_upload_options() {
+        let args = Args::try_parse_from([
+            "semantic",
+            "api",
+            "upload",
+            "--tree",
+            "--target-dir",
+            "directory-1",
+            "--replace",
+            "--non-interactive",
+            "photos",
+        ])
+        .expect("parse tree upload");
+        let SubCmd::Api(args) = args.command else {
+            panic!("expected api command");
+        };
+        let api::SubCmd::Upload(args) = args.command else {
+            panic!("expected upload command");
+        };
+        assert!(args.tree);
+        assert!(args.replace);
+        assert!(args.non_interactive);
+        assert_eq!(args.target_directory.as_deref(), Some("directory-1"));
+        assert_eq!(args.paths, vec![PathBuf::from("photos")]);
+
+        assert!(
+            Args::try_parse_from(["semantic", "api", "upload", "--replace", "photos"]).is_err()
+        );
+        assert!(
+            Args::try_parse_from(["semantic", "api", "upload", "--non-interactive", "photos",])
+                .is_err()
+        );
+        assert!(
+            Args::try_parse_from([
+                "semantic",
+                "api",
+                "upload",
+                "--tree",
+                "--recursive",
+                "photos",
+            ])
+            .is_err()
+        );
     }
 
     #[test]

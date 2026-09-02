@@ -5,35 +5,49 @@ use crate::CliError;
 #[derive(Debug, clap::Args)]
 pub struct Args {
     /// Path to the local redb database.
-    #[arg(long)]
+    ///
+    /// Defaults to <data-dir>/db/default; <data-dir> defaults to the current
+    /// directory or SEMANTIC_DATA_DIR when set.
+    #[arg(long, value_name = "PATH")]
     pub db: Option<PathBuf>,
 
-    /// URI of the blob store used for file contents.
-    #[arg(long)]
+    /// Blob-store URI used for uploaded file contents.
+    ///
+    /// Defaults to a file URI for <data-dir>/blob/default.
+    #[arg(long, value_name = "URI")]
     pub blob_uri: Option<String>,
 
-    /// Socket address to bind, overriding --interface and --port.
-    #[arg(long)]
+    /// Exact socket address to bind, overriding --interface and --port.
+    #[arg(long, value_name = "ADDRESS")]
     pub bind: Option<String>,
 
-    /// Directory used for persistent semantic data.
-    #[arg(long)]
+    /// Base directory for persistent database and blob data.
+    ///
+    /// Overrides SEMANTIC_DATA_DIR; defaults to the current directory.
+    #[arg(long, value_name = "PATH")]
     pub data_dir: Option<PathBuf>,
 
-    /// Directory used for temporary semantic data.
-    #[arg(long)]
+    /// Directory used for temporary data, overriding SEMANTIC_TEMP_DIR.
+    #[arg(long, value_name = "PATH")]
     pub temp_dir: Option<PathBuf>,
 
-    /// Enable automatic media analysis.
+    /// Enable automatic media analysis, overriding a disabled environment setting.
+    ///
+    /// This behavior is enabled by default and can be configured with
+    /// SEMANTIC_AUTO_ANALYZE_MEDIA.
     #[arg(long)]
     pub auto_analyze_media: bool,
 
-    /// Network interface on which to listen.
-    #[arg(long)]
+    /// Interface or host on which to listen.
+    ///
+    /// Overrides SEMANTIC_INTERFACE; defaults to 127.0.0.1.
+    #[arg(long, value_name = "HOST")]
     pub interface: Option<String>,
 
-    /// Network port on which to listen.
-    #[arg(long)]
+    /// TCP port on which to listen.
+    ///
+    /// Overrides SEMANTIC_PORT; defaults to 8888.
+    #[arg(long, value_name = "PORT")]
     pub port: Option<u16>,
 }
 

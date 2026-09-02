@@ -21,13 +21,18 @@ embed-ui = ["semantic_server/embed-ui"]
 
 [dependencies]
 clap = { version = "4.5.48", features = ["derive", "env"] }
+dialoguer = { version = "0.12.0", features = ["fuzzy-select"] }
 futures = "0.3.31"
+hex = { workspace = true }
 semantic_app = { path = "../app" }
+semantic_base = { path = "../base" }
 semantic_data = { path = "../data" }
 semantic_fuse = { path = "../fuse" }
 semantic_rpc = { path = "../rpc", features = ["client-http-native"] }
 semantic_server = { path = "../server" }
 serde_json = { workspace = true }
+sha2 = { workspace = true }
 thiserror = "2.0.17"
 tokio = { workspace = true, features = ["fs", "macros", "net", "rt-multi-thread", "signal"] }
 tokio-util = { version = "0.7.17", features = ["io"] }
+uuid = { workspace = true, features = ["v4"] }

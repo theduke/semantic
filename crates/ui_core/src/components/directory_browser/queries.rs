@@ -1,45 +1,32 @@
 use std::collections::BTreeSet;
 
+pub(super) use semantic_base::directory_query::{
+    ATTR_RELATION_RELATION, ATTR_RELATION_TO, sql_ident, sql_string,
+};
+use semantic_base::directory_query::{
+    DirectoryChildFilter, DirectoryQueryPage, DirectorySort as QuerySort, directories_query,
+    directory_children_query, directory_links_query, directory_parent_query,
+    directory_tree_items_query,
+};
 use semantic_data::bundles::directory::{
-    ATTR_DIRECTORY_NODE_FROM, ATTR_DIRECTORY_NODE_ORDER, ATTR_TITLE, DIRECTORY_CLASS_ID,
-    DIRECTORY_NODE_CLASS_ID, DIRECTORY_NODE_RELATION_ID,
+    ATTR_DIRECTORY_NODE_FROM, ATTR_DIRECTORY_NODE_ORDER, ATTR_TITLE, DIRECTORY_NODE_CLASS_ID,
+    DIRECTORY_NODE_RELATION_ID,
 };
 
 use super::types::DirectorySort;
 
 pub(super) const ENTITIES_COLLECTION: &str = semantic_data::builtin::DEFAULT_COLLECTION;
-pub(super) const ATTR_RELATION_RELATION: &str = "semantic:relation:relation";
-pub(super) const ATTR_RELATION_TO: &str = "semantic:relation:to";
 
 pub(super) fn root_query() -> String {
-    qualified_query(format!(
-        "SELECT d.* FROM {entities} AS d WHERE d.type IN ({directory_class}) ORDER BY d.title ASC, d.id ASC",
-        entities = sql_ident(ENTITIES_COLLECTION),
-        directory_class = sql_string(DIRECTORY_CLASS_ID),
-    ))
+    directories_query(DirectoryQueryPage::All)
 }
 
 pub(super) fn directory_nodes_query() -> String {
-    qualified_query(format!(
-        "SELECT n.id AS id, n.{node_from} AS directory_from, n.{relation_to} AS directory_to, n.{node_order} AS directory_order FROM {entities} AS n WHERE n.type IN ({node_class})",
-        entities = sql_ident(ENTITIES_COLLECTION),
-        node_from = sql_ident(ATTR_DIRECTORY_NODE_FROM),
-        node_order = sql_ident(ATTR_DIRECTORY_NODE_ORDER),
-        relation_to = sql_ident(ATTR_RELATION_TO),
-        node_class = sql_string(DIRECTORY_NODE_CLASS_ID),
-    ))
+    directory_links_query(DirectoryQueryPage::All)
 }
 
 pub(super) fn file_tree_items_query() -> String {
-    qualified_query(format!(
-        "SELECT child.*, n.{node_from} AS directory_from, n.{relation_to} AS directory_to, n.{node_order} AS directory_order FROM {entities} AS n INNER JOIN {entities}._ AS child ON n.{relation_to} = child.id WHERE n.{relation_relation} = {node_relation} ORDER BY n.{node_order} ASC, child.title ASC, child.id ASC",
-        entities = sql_ident(ENTITIES_COLLECTION),
-        node_from = sql_ident(ATTR_DIRECTORY_NODE_FROM),
-        node_order = sql_ident(ATTR_DIRECTORY_NODE_ORDER),
-        relation_relation = sql_ident(ATTR_RELATION_RELATION),
-        relation_to = sql_ident(ATTR_RELATION_TO),
-        node_relation = sql_string(DIRECTORY_NODE_RELATION_ID),
-    ))
+    directory_tree_items_query(DirectoryQueryPage::All)
 }
 
 pub(super) fn child_links_query(parent_id: &str, child_ids: &[String]) -> String {
@@ -171,76 +158,41 @@ pub(super) fn child_query(
     limit: usize,
     offset: usize,
 ) -> String {
-    qualified_query(format!(
-        "SELECT child.*, n.{node_order} AS directory_order FROM {entities} AS n INNER JOIN {entities}._ AS child ON n.{relation_to} = child.id WHERE n.{relation_relation} = {node_relation} AND n.{node_from} = {parent_id} ORDER BY {order_by} LIMIT {limit} OFFSET {offset}",
-        entities = sql_ident(ENTITIES_COLLECTION),
-        node_from = sql_ident(ATTR_DIRECTORY_NODE_FROM),
-        node_order = sql_ident(ATTR_DIRECTORY_NODE_ORDER),
-        relation_relation = sql_ident(ATTR_RELATION_RELATION),
-        relation_to = sql_ident(ATTR_RELATION_TO),
-        node_relation = sql_string(DIRECTORY_NODE_RELATION_ID),
-        parent_id = sql_string(parent_id),
-        order_by = sort_order_by(sort),
-    ))
+    directory_children_query(
+        parent_id,
+        DirectoryChildFilter::All,
+        query_sort(sort),
+        DirectoryQueryPage::new(limit, offset),
+    )
 }
 
 pub(super) fn child_directories_query(parent_id: &str, limit: usize, offset: usize) -> String {
-    qualified_query(format!(
-        "SELECT child.*, n.{node_order} AS directory_order FROM {entities} AS n INNER JOIN {entities}._ AS child ON n.{relation_to} = child.id WHERE n.{relation_relation} = {node_relation} AND n.{node_from} = {parent_id} AND child.type IN ({directory_class}) ORDER BY n.{node_order} ASC, child.title ASC, child.id ASC LIMIT {limit} OFFSET {offset}",
-        entities = sql_ident(ENTITIES_COLLECTION),
-        node_from = sql_ident(ATTR_DIRECTORY_NODE_FROM),
-        node_order = sql_ident(ATTR_DIRECTORY_NODE_ORDER),
-        relation_relation = sql_ident(ATTR_RELATION_RELATION),
-        relation_to = sql_ident(ATTR_RELATION_TO),
-        node_relation = sql_string(DIRECTORY_NODE_RELATION_ID),
-        parent_id = sql_string(parent_id),
-        directory_class = sql_string(DIRECTORY_CLASS_ID),
-    ))
+    directory_children_query(
+        parent_id,
+        DirectoryChildFilter::Directories,
+        QuerySort::Order,
+        DirectoryQueryPage::new(limit, offset),
+    )
 }
 
 pub(super) fn parent_query(child_id: &str) -> String {
-    qualified_query(format!(
-        "SELECT n.id AS id, n.{node_from} AS directory_from, n.{node_order} AS directory_order FROM {entities} AS n WHERE n.{relation_relation} = {node_relation} AND n.{relation_to} = {child_id} ORDER BY n.{node_order} ASC, n.id ASC LIMIT 1",
-        entities = sql_ident(ENTITIES_COLLECTION),
-        node_from = sql_ident(ATTR_DIRECTORY_NODE_FROM),
-        node_order = sql_ident(ATTR_DIRECTORY_NODE_ORDER),
-        relation_relation = sql_ident(ATTR_RELATION_RELATION),
-        relation_to = sql_ident(ATTR_RELATION_TO),
-        node_relation = sql_string(DIRECTORY_NODE_RELATION_ID),
-        child_id = sql_string(child_id),
-    ))
+    directory_parent_query(child_id)
 }
 
 fn qualified_query(query: String) -> String {
     format!("{query} FORMAT qualified")
 }
 
-pub(super) fn sort_order_by(sort: DirectorySort) -> &'static str {
+fn query_sort(sort: DirectorySort) -> QuerySort {
     match sort {
-        DirectorySort::Order => {
-            "n.\"semantic:base:directory_node:order\" ASC, child.title ASC, child.id ASC"
-        }
-        DirectorySort::TitleAsc => "child.title ASC, child.id ASC",
-        DirectorySort::TitleDesc => "child.title DESC, child.id ASC",
-        DirectorySort::TypeAsc => "child.type ASC, child.title ASC, child.id ASC",
-        DirectorySort::CreatedAtDesc => "child.created_at DESC, child.title ASC, child.id ASC",
-        DirectorySort::UpdatedAtDesc => "child.updated_at DESC, child.title ASC, child.id ASC",
-        DirectorySort::IdAsc => "child.id ASC",
+        DirectorySort::Order => QuerySort::Order,
+        DirectorySort::TitleAsc => QuerySort::TitleAsc,
+        DirectorySort::TitleDesc => QuerySort::TitleDesc,
+        DirectorySort::TypeAsc => QuerySort::TypeAsc,
+        DirectorySort::CreatedAtDesc => QuerySort::CreatedAtDesc,
+        DirectorySort::UpdatedAtDesc => QuerySort::UpdatedAtDesc,
+        DirectorySort::IdAsc => QuerySort::IdAsc,
     }
-}
-
-pub(super) fn sql_string(value: &str) -> String {
-    format!("'{}'", value.replace('\'', "''"))
-}
-
-pub(super) fn sql_ident(value: &str) -> String {
-    if value
-        .chars()
-        .all(|ch| ch == '_' || ch.is_ascii_alphanumeric())
-    {
-        return value.to_string();
-    }
-    format!("\"{}\"", value.replace('"', "\"\""))
 }
 
 fn search_predicate(search: &str) -> String {
@@ -667,11 +619,10 @@ mod tests {
 
     #[test]
     fn sort_options_map_to_stable_ordering() {
-        assert_eq!(
-            sort_order_by(DirectorySort::TitleDesc),
-            "child.title DESC, child.id ASC"
-        );
-        assert_eq!(sort_order_by(DirectorySort::IdAsc), "child.id ASC");
+        let title = child_query("parent", DirectorySort::TitleDesc, 10, 0);
+        assert!(title.contains("ORDER BY child.title DESC, child.id ASC"));
+        let id = child_query("parent", DirectorySort::IdAsc, 10, 0);
+        assert!(id.contains("ORDER BY child.id ASC"));
     }
 
     async fn insert_directory(db: &Db, id: &str, title: &str) {

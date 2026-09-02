@@ -5,13 +5,14 @@ use semantic_fuse::{EntityFormat, MountConfig};
 
 #[derive(Debug, clap::Args)]
 pub struct Args {
-    /// Directory on which to mount the semantic filesystem.
+    /// Existing local directory on which to mount the semantic filesystem.
+    #[arg(value_name = "MOUNTPOINT")]
     pub mountpoint: PathBuf,
 
     #[command(flatten)]
     pub client: ApiClientArgs,
 
-    /// Entity document format: json or yaml.
+    /// Format used to expose entity documents: `json` or `yaml`.
     #[arg(long, default_value = "json")]
     pub format: EntityFormat,
 
@@ -19,7 +20,7 @@ pub struct Args {
     #[arg(long)]
     pub allow_other: bool,
 
-    /// Disable all mutations.
+    /// Mount read-only and reject mutations through the filesystem.
     #[arg(long)]
     pub read_only: bool,
 }

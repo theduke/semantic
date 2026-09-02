@@ -50,7 +50,9 @@ pub struct ClassSchema {
     pub attributes: BTreeMap<String, LocalAttrId>,
 }
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(facet::Facet, Debug, Clone, PartialEq)]
+#[repr(C)]
+#[facet(rename_all = "snake_case")]
 pub enum CollectionKind {
     Untyped,
     Schema,

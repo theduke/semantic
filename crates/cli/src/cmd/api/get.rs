@@ -5,7 +5,8 @@ use crate::cmd::shared::{ApiClientArgs, CollectionArgs, OutputArgs};
 
 #[derive(Debug, clap::Args)]
 pub struct Args {
-    /// Record ID.
+    /// ID of the record to fetch.
+    #[arg(value_name = "ID")]
     pub id: String,
 
     #[command(flatten)]

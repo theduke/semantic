@@ -1,5 +1,7 @@
 use std::collections::BTreeMap;
 
+use base64::{Engine, engine::general_purpose::URL_SAFE_NO_PAD};
+use chrono::{Datelike, Timelike};
 use semantic_data::schema::{
     AnyType, BoolType, BytesEncoding, BytesType, FloatWidth, IntWidth, IpAddrType, NumberType,
     OptionalType, StringType, TemporalType, TimeUnit, TimeZoneSpec, TimestampType, Type, TypeKind,
@@ -7,6 +9,8 @@ use semantic_data::schema::{
 use semantic_data::value::{Object, OrderedF64, Value};
 use semantic_db_core::DbError;
 use tokio_postgres::Row;
+
+use crate::codec::{decode_value, encode_value};
 
 /// Quote a Postgres identifier, escaping embedded double quotes by doubling them.
 pub fn quote_ident(name: &str) -> String {
@@ -80,16 +84,16 @@ pub fn pg_type_to_semantic(data_type: &str, is_nullable: bool, numeric_scale: Op
 
 /// Convert a tokio_postgres Row into a semantic Object.
 ///
-/// Each column is stored under the key `postgres:{table_name}:{column_name}`.
+/// Each column is stored under the schema-qualified collection key.
 /// If a column is named `id`, its value is also stored under `postgres:id`.
-pub fn row_to_object(row: &Row, table_name: &str) -> Result<Object, DbError> {
+pub fn row_to_object(row: &Row, collection_name: &str) -> Result<Object, DbError> {
     let mut obj = BTreeMap::new();
 
     for (i, column) in row.columns().iter().enumerate() {
         let name = column.name();
         let type_name = column.type_().name();
-        let value = column_to_value(row, i, type_name);
-        let key = format!("postgres:{}:{}", table_name, name);
+        let value = column_to_value(row, i, type_name)?;
+        let key = format!("{}:{}", collection_name, name);
         obj.insert(key.clone(), value.clone());
 
         // Additionally store the raw id column value at "postgres:id".
@@ -101,46 +105,201 @@ pub fn row_to_object(row: &Row, table_name: &str) -> Result<Object, DbError> {
 }
 
 /// Extract a single column from a Row and convert to semantic Value.
-fn column_to_value(row: &Row, i: usize, type_name: &str) -> Value {
+fn column_to_value(row: &Row, i: usize, type_name: &str) -> Result<Value, DbError> {
+    let decode_error = |error| {
+        DbError::Deserialization(format!(
+            "could not decode PostgreSQL column '{}' of type '{}': {error}",
+            row.columns()[i].name(),
+            type_name
+        ))
+    };
     match type_name {
-        "text" | "varchar" | "char" | "character varying" | "character" => row
-            .get::<_, Option<&str>>(i)
+        "text" | "varchar" | "bpchar" | "char" | "character varying" | "character" => Ok(row
+            .try_get::<_, Option<&str>>(i)
+            .map_err(decode_error)?
             .map(|s| Value::String(s.to_string()))
-            .unwrap_or(Value::Null),
-        "int4" => row
-            .get::<_, Option<i32>>(i)
+            .unwrap_or(Value::Null)),
+        "int2" => Ok(row
+            .try_get::<_, Option<i16>>(i)
+            .map_err(decode_error)?
+            .map(Value::I16)
+            .unwrap_or(Value::Null)),
+        "int4" => Ok(row
+            .try_get::<_, Option<i32>>(i)
+            .map_err(decode_error)?
             .map(Value::I32)
-            .unwrap_or(Value::Null),
-        "int8" => row
-            .get::<_, Option<i64>>(i)
+            .unwrap_or(Value::Null)),
+        "int8" => Ok(row
+            .try_get::<_, Option<i64>>(i)
+            .map_err(decode_error)?
             .map(Value::I64)
-            .unwrap_or(Value::Null),
-        "float8" => row
-            .get::<_, Option<f64>>(i)
+            .unwrap_or(Value::Null)),
+        "float4" => Ok(row
+            .try_get::<_, Option<f32>>(i)
+            .map_err(decode_error)?
+            .map(|v| Value::F32(v.into()))
+            .unwrap_or(Value::Null)),
+        "float8" => Ok(row
+            .try_get::<_, Option<f64>>(i)
+            .map_err(decode_error)?
             .map(|v| Value::F64(OrderedF64::from(v)))
-            .unwrap_or(Value::Null),
-        "bool" | "boolean" => row
-            .get::<_, Option<bool>>(i)
+            .unwrap_or(Value::Null)),
+        "numeric" => Ok(row
+            .try_get::<_, Option<PgNumeric>>(i)
+            .map_err(decode_error)?
+            .map(|value| Value::F64(OrderedF64::from(value.0)))
+            .unwrap_or(Value::Null)),
+        "bool" | "boolean" => Ok(row
+            .try_get::<_, Option<bool>>(i)
+            .map_err(decode_error)?
             .map(Value::Bool)
-            .unwrap_or(Value::Null),
-        "uuid" => row
-            .get::<_, Option<uuid::Uuid>>(i)
+            .unwrap_or(Value::Null)),
+        "uuid" => Ok(row
+            .try_get::<_, Option<uuid::Uuid>>(i)
+            .map_err(decode_error)?
             .map(|u| Value::Uuid(semantic_data::value::Uuid::from(u)))
-            .unwrap_or(Value::Null),
-        "jsonb" | "json" => row
-            .get::<_, Option<serde_json::Value>>(i)
+            .unwrap_or(Value::Null)),
+        "jsonb" | "json" => Ok(row
+            .try_get::<_, Option<serde_json::Value>>(i)
+            .map_err(decode_error)?
             .map(json_value_to_semantic)
-            .unwrap_or(Value::Null),
-        "bytea" => row
-            .get::<_, Option<Vec<u8>>>(i)
+            .unwrap_or(Value::Null)),
+        "bytea" => Ok(row
+            .try_get::<_, Option<Vec<u8>>>(i)
+            .map_err(decode_error)?
             .map(|b| Value::Bytes(bytes::Bytes::from(b)))
-            .unwrap_or(Value::Null),
-        _ => {
-            // Fallback: try text representation.
-            row.get::<_, Option<&str>>(i)
-                .map(|s| Value::String(s.to_string()))
-                .unwrap_or(Value::Null)
+            .unwrap_or(Value::Null)),
+        "date" => Ok(row
+            .try_get::<_, Option<chrono::NaiveDate>>(i)
+            .map_err(decode_error)?
+            .map(chrono_date_to_value)
+            .transpose()?
+            .unwrap_or(Value::Null)),
+        "time" => Ok(row
+            .try_get::<_, Option<chrono::NaiveTime>>(i)
+            .map_err(decode_error)?
+            .map(chrono_time_to_value)
+            .transpose()?
+            .unwrap_or(Value::Null)),
+        "timestamp" => Ok(row
+            .try_get::<_, Option<chrono::NaiveDateTime>>(i)
+            .map_err(decode_error)?
+            .map(|value| chrono_datetime_to_value(value.and_utc()))
+            .transpose()?
+            .unwrap_or(Value::Null)),
+        "timestamptz" => Ok(row
+            .try_get::<_, Option<chrono::DateTime<chrono::Utc>>>(i)
+            .map_err(decode_error)?
+            .map(chrono_datetime_to_value)
+            .transpose()?
+            .unwrap_or(Value::Null)),
+        "inet" | "cidr" => Ok(row
+            .try_get::<_, Option<cidr::IpInet>>(i)
+            .map_err(decode_error)?
+            .map(|value| Value::IpAddr(value.address()))
+            .unwrap_or(Value::Null)),
+        "_int2" => decode_array(row, i, |value: i16| Value::I16(value)),
+        "_int4" => decode_array(row, i, |value: i32| Value::I32(value)),
+        "_int8" => decode_array(row, i, |value: i64| Value::I64(value)),
+        "_float4" => decode_array(row, i, |value: f32| Value::F32(value.into())),
+        "_float8" => decode_array(row, i, |value: f64| Value::F64(value.into())),
+        "_bool" => decode_array(row, i, Value::Bool),
+        "_text" | "_varchar" | "_bpchar" => decode_array(row, i, Value::String),
+        "_uuid" => decode_array(row, i, |value: uuid::Uuid| Value::Uuid(value.into())),
+        _ => Err(DbError::Deserialization(format!(
+            "unsupported PostgreSQL result type '{}' for column '{}'",
+            type_name,
+            row.columns()[i].name()
+        ))),
+    }
+}
+
+fn decode_array<T>(row: &Row, index: usize, convert: impl Fn(T) -> Value) -> Result<Value, DbError>
+where
+    T: for<'a> tokio_postgres::types::FromSql<'a>,
+{
+    let values = row
+        .try_get::<_, Option<Vec<Option<T>>>>(index)
+        .map_err(|error| DbError::Deserialization(error.to_string()))?;
+    Ok(values
+        .map(|values| {
+            Value::List(
+                values
+                    .into_iter()
+                    .map(|value| value.map(&convert).unwrap_or(Value::Null))
+                    .collect(),
+            )
+        })
+        .unwrap_or(Value::Null))
+}
+
+fn chrono_date_to_value(value: chrono::NaiveDate) -> Result<Value, DbError> {
+    let month = time::Month::try_from(value.month() as u8)
+        .map_err(|error| DbError::Deserialization(error.to_string()))?;
+    let date = time::Date::from_calendar_date(value.year(), month, value.day() as u8)
+        .map_err(|error| DbError::Deserialization(error.to_string()))?;
+    Ok(Value::Date(date.into()))
+}
+
+fn chrono_time_to_value(value: chrono::NaiveTime) -> Result<Value, DbError> {
+    let time = time::Time::from_hms_nano(
+        value.hour() as u8,
+        value.minute() as u8,
+        value.second() as u8,
+        value.nanosecond(),
+    )
+    .map_err(|error| DbError::Deserialization(error.to_string()))?;
+    Ok(Value::Time(time.into()))
+}
+
+fn chrono_datetime_to_value(value: chrono::DateTime<chrono::Utc>) -> Result<Value, DbError> {
+    let nanos = value
+        .timestamp_nanos_opt()
+        .ok_or_else(|| DbError::Deserialization("timestamp is outside nanosecond range".into()))?;
+    let datetime = time::OffsetDateTime::from_unix_timestamp_nanos(i128::from(nanos))
+        .map_err(|error| DbError::Deserialization(error.to_string()))?;
+    Ok(Value::DateTime(datetime.into()))
+}
+
+#[derive(Debug)]
+struct PgNumeric(f64);
+
+impl<'a> tokio_postgres::types::FromSql<'a> for PgNumeric {
+    fn from_sql(
+        _ty: &tokio_postgres::types::Type,
+        raw: &'a [u8],
+    ) -> Result<Self, Box<dyn std::error::Error + Sync + Send>> {
+        if raw.len() < 8 {
+            return Err("numeric payload is shorter than its header".into());
         }
+        let read_i16 = |offset: usize| i16::from_be_bytes([raw[offset], raw[offset + 1]]);
+        let digits = usize::try_from(read_i16(0)).map_err(|_| "negative numeric digit count")?;
+        let weight = i32::from(read_i16(2));
+        let sign = u16::from_be_bytes([raw[4], raw[5]]);
+        if sign == 0xC000 {
+            return Ok(Self(f64::NAN));
+        }
+        if raw.len() != 8 + digits * 2 {
+            return Err("numeric payload length does not match digit count".into());
+        }
+        let mut value = 0.0;
+        for index in 0..digits {
+            let offset = 8 + index * 2;
+            let digit = u16::from_be_bytes([raw[offset], raw[offset + 1]]);
+            if digit >= 10_000 {
+                return Err("numeric base-10000 digit is invalid".into());
+            }
+            value += f64::from(digit) * 10_000_f64.powi(weight - index as i32);
+        }
+        match sign {
+            0x0000 => Ok(Self(value)),
+            0x4000 => Ok(Self(-value)),
+            _ => Err("unsupported numeric sign code".into()),
+        }
+    }
+
+    fn accepts(ty: &tokio_postgres::types::Type) -> bool {
+        *ty == tokio_postgres::types::Type::NUMERIC
     }
 }
 
@@ -196,6 +355,25 @@ pub fn parse_entity_id(
     table_name: &str,
     pk_column_count: usize,
 ) -> Result<Vec<String>, DbError> {
+    if let Some(payload) = id.strip_prefix("pg1.") {
+        let bytes = URL_SAFE_NO_PAD
+            .decode(payload)
+            .map_err(|err| DbError::InvalidQuery(format!("invalid pg1 entity id: {err}")))?;
+        let tuple: Vec<serde_json::Value> = serde_json::from_slice(&bytes)
+            .map_err(|err| DbError::InvalidQuery(format!("invalid pg1 entity id: {err}")))?;
+        if tuple.len() != pk_column_count {
+            return Err(DbError::InvalidQuery(format!(
+                "expected {pk_column_count} PK values in id '{id}', got {}",
+                tuple.len()
+            )));
+        }
+        return tuple
+            .iter()
+            .map(decode_value)
+            .map(|value| value.and_then(pk_value_to_text))
+            .collect();
+    }
+
     let prefix = format!("{}-", table_name);
     let remainder = id
         .strip_prefix(&prefix)
@@ -216,6 +394,52 @@ pub fn parse_entity_id(
         )));
     }
     Ok(parts.into_iter().map(|s| s.to_string()).collect())
+}
+
+/// Encode a typed primary-key tuple without delimiter ambiguity.
+pub fn encode_entity_id(values: &[Value]) -> Result<String, DbError> {
+    let tuple = values.iter().map(encode_value).collect::<Vec<_>>();
+    let bytes =
+        serde_json::to_vec(&tuple).map_err(|err| DbError::Serialization(err.to_string()))?;
+    Ok(format!("pg1.{}", URL_SAFE_NO_PAD.encode(bytes)))
+}
+
+fn pk_value_to_text(value: Value) -> Result<String, DbError> {
+    match value {
+        Value::String(value) => Ok(value),
+        Value::Bool(value) => Ok(value.to_string()),
+        Value::I8(value) => Ok(value.to_string()),
+        Value::I16(value) => Ok(value.to_string()),
+        Value::I32(value) => Ok(value.to_string()),
+        Value::I64(value) => Ok(value.to_string()),
+        Value::I128(value) => Ok(value.to_string()),
+        Value::U8(value) => Ok(value.to_string()),
+        Value::U16(value) => Ok(value.to_string()),
+        Value::U32(value) => Ok(value.to_string()),
+        Value::U64(value) => Ok(value.to_string()),
+        Value::U128(value) => Ok(value.to_string()),
+        Value::F32(value) => Ok(value.into_inner().to_string()),
+        Value::F64(value) => Ok(value.into_inner().to_string()),
+        Value::Uuid(value) => {
+            let value: uuid::Uuid = value.into();
+            Ok(value.to_string())
+        }
+        Value::IpAddr(value) => Ok(value.to_string()),
+        Value::Bytes(value) => Ok(format!("\\x{}", hex_bytes(&value))),
+        other => Err(DbError::InvalidQuery(format!(
+            "PostgreSQL primary-key value cannot be bound from semantic value {other:?}"
+        ))),
+    }
+}
+
+fn hex_bytes(bytes: &[u8]) -> String {
+    const HEX: &[u8; 16] = b"0123456789abcdef";
+    let mut output = String::with_capacity(bytes.len() * 2);
+    for byte in bytes {
+        output.push(HEX[(byte >> 4) as usize] as char);
+        output.push(HEX[(byte & 0x0f) as usize] as char);
+    }
+    output
 }
 
 #[cfg(test)]
@@ -261,6 +485,21 @@ mod tests {
     fn test_parse_entity_id_wrong_count() {
         let err = parse_entity_id("t-1::2::3", "t", 2).unwrap_err();
         assert!(matches!(err, DbError::InvalidQuery(_)));
+    }
+
+    #[test]
+    fn versioned_entity_id_round_trips_delimiters_and_types() {
+        let id = encode_entity_id(&[
+            Value::String("a::b".into()),
+            Value::I32(42),
+            Value::Uuid(uuid::Uuid::nil().into()),
+        ])
+        .unwrap();
+        assert!(id.starts_with("pg1."));
+        assert_eq!(
+            parse_entity_id(&id, "ignored", 3).unwrap(),
+            vec!["a::b", "42", "00000000-0000-0000-0000-000000000000"]
+        );
     }
 
     #[test]

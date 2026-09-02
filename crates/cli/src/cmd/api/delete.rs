@@ -5,7 +5,9 @@ use crate::cmd::shared::{ApiClientArgs, CollectionArgs, ConfirmationArgs, Output
 
 #[derive(Debug, clap::Args)]
 pub struct Args {
-    /// Record IDs.
+    /// IDs of the records to permanently delete.
+    ///
+    /// All IDs are submitted as one batch operation.
     #[arg(required = true, num_args = 1.., value_name = "ID")]
     pub ids: Vec<String>,
 

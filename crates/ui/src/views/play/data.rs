@@ -1,11 +1,11 @@
 use std::collections::{BTreeSet, VecDeque};
 
+use semantic_base::directory_query::{
+    DirectoryChildFilter, DirectoryQueryPage, DirectorySort,
+    directory_children_query as build_directory_children_query,
+};
 use semantic_data::{
-    builtin::DEFAULT_COLLECTION,
-    bundles::directory::{
-        ATTR_DIRECTORY_NODE_FROM, ATTR_DIRECTORY_NODE_ORDER, DIRECTORY_CLASS_ID,
-        DIRECTORY_NODE_RELATION_ID,
-    },
+    bundles::directory::DIRECTORY_CLASS_ID,
     filestore::{ATTR_FILE_MEDIA_DURATION, ATTR_FILE_MIME_TYPE, ATTR_TITLE},
     value::{Object, Value},
 };
@@ -13,14 +13,12 @@ use semantic_rpc::RpcClient;
 use semantic_ui_core::{EntityTarget, MediaKind, media_kind_for_object};
 
 use super::{
-    query::{PlaylistFilter, page_size, playlist_query, sql_ident, sql_string},
+    query::{PlaylistFilter, page_size, playlist_query},
     state::QueueEntry,
 };
 
 const MAX_RESULTS: usize = 100_000;
 const MAX_EXPANSION_DEPTH: usize = 32;
-const ATTR_RELATION_RELATION: &str = "semantic:relation:relation";
-const ATTR_RELATION_TO: &str = "semantic:relation:to";
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct PlaylistLoad {
@@ -174,15 +172,11 @@ async fn expand_rows(
 }
 
 fn directory_children_query(parent_id: &str, limit: usize, offset: usize) -> String {
-    format!(
-        "SELECT child.*, n.{node_order} AS directory_order FROM {entities} AS n INNER JOIN {entities}._ AS child ON n.{relation_to} = child.id WHERE n.{relation_relation} = {node_relation} AND n.{node_from} = {parent_id} ORDER BY n.{node_order} ASC, child.title ASC, child.id ASC LIMIT {limit} OFFSET {offset} FORMAT qualified",
-        node_order = sql_ident(ATTR_DIRECTORY_NODE_ORDER),
-        entities = sql_ident(DEFAULT_COLLECTION),
-        relation_to = sql_ident(ATTR_RELATION_TO),
-        relation_relation = sql_ident(ATTR_RELATION_RELATION),
-        node_relation = sql_string(DIRECTORY_NODE_RELATION_ID),
-        node_from = sql_ident(ATTR_DIRECTORY_NODE_FROM),
-        parent_id = sql_string(parent_id),
+    build_directory_children_query(
+        parent_id,
+        DirectoryChildFilter::All,
+        DirectorySort::Order,
+        DirectoryQueryPage::new(limit, offset),
     )
 }
 
@@ -248,6 +242,8 @@ fn object_string<'a>(object: &'a Object, keys: &[&str]) -> Option<&'a str> {
 
 #[cfg(test)]
 mod tests {
+    use semantic_data::builtin::DEFAULT_COLLECTION;
+
     use super::*;
 
     #[test]

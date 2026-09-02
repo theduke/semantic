@@ -11,12 +11,17 @@ pub const DEFAULT_RPC_URL: &str = "http://127.0.0.1:8888/api/v1/rpc";
 
 #[derive(Clone, Debug, Args)]
 pub struct ApiClientArgs {
-    /// Semantic HTTP RPC endpoint.
-    #[arg(long, env = "SEMANTIC_RPC_URL", default_value = DEFAULT_RPC_URL)]
+    /// Semantic HTTP RPC endpoint URL.
+    ///
+    /// May also be set with SEMANTIC_RPC_URL.
+    #[arg(long, env = "SEMANTIC_RPC_URL", default_value = DEFAULT_RPC_URL, value_name = "URL")]
     pub rpc_url: String,
 
-    /// Database scope for the request.
-    #[arg(long, env = "SEMANTIC_SCOPE")]
+    /// Database scope ID for the request.
+    ///
+    /// May also be set with SEMANTIC_SCOPE; when omitted, the server chooses
+    /// its default scope.
+    #[arg(long, env = "SEMANTIC_SCOPE", value_name = "SCOPE_ID")]
     pub scope: Option<String>,
 }
 
@@ -38,8 +43,10 @@ impl ApiClientArgs {
 
 #[derive(Clone, Debug, Default, Args)]
 pub struct CollectionArgs {
-    /// Collection containing the record (defaults to the server's default collection).
-    #[arg(long, short = 'c')]
+    /// Collection containing the affected records.
+    ///
+    /// When omitted, the server's default collection is used.
+    #[arg(long, short = 'c', value_name = "COLLECTION")]
     pub collection: Option<String>,
 }
 
@@ -53,7 +60,7 @@ impl CollectionArgs {
 
 #[derive(Clone, Debug, Default, Args)]
 pub struct OutputArgs {
-    /// Pretty-print JSON output.
+    /// Pretty-print the JSON response instead of emitting compact single-line JSON.
     #[arg(long)]
     pub pretty: bool,
 }
@@ -80,7 +87,7 @@ impl OutputArgs {
 
 #[derive(Clone, Debug, Default, Args)]
 pub struct FileInputArgs {
-    /// Read input from this file; use '-' or omit it to read standard input.
+    /// UTF-8 input file; use '-' or omit INPUT to read from standard input.
     #[arg(value_name = "INPUT")]
     pub input: Option<PathBuf>,
 }
@@ -126,7 +133,10 @@ impl FileInputArgs {
 
 #[derive(Clone, Debug, Default, Args)]
 pub struct ConfirmationArgs {
-    /// Confirm the destructive operation without prompting.
+    /// Authorize the destructive operation.
+    ///
+    /// No interactive prompt is shown; without this flag the command exits
+    /// without making the request.
     #[arg(long, short = 'y')]
     pub yes: bool,
 }

@@ -25,6 +25,7 @@ const TYPE_DEF_FIELD: &str = "type_def";
 const RECORD_FIELD: &str = "record";
 const CLASS_FIELD: &str = "class";
 const INTEGRITY_MODE_FIELD: &str = "integrity_mode";
+const COLLECTION_KIND_FIELD: &str = "collection_kind";
 const INTERNAL_FIELD: &str = "internal";
 const FIELD_IDS_FIELD: &str = "field_ids";
 const COLLECTION_FIELD: &str = "collection";
@@ -158,12 +159,18 @@ pub fn load_catalog<E: KvEngine>(
     for row in &collections_rows {
         let lid = object_lid(&row.object)?;
         let name = object_string_field(&row.object, "name")?;
+        let kind = object_json_field_default(
+            &row.object,
+            COLLECTION_KIND_FIELD,
+            semantic_db_core::catalog::CollectionKind::Schema,
+        )?;
         let integrity_mode: IntegrityMode = object_json_field(&row.object, INTEGRITY_MODE_FIELD)?;
         let internal = object_bool_field_default(&row.object, INTERNAL_FIELD, false);
         let field_ids: Vec<StoredFieldId> = object_json_field(&row.object, FIELD_IDS_FIELD)?;
         collections.push(StoredCollection {
             lid,
             name,
+            kind: Some(kind),
             integrity_mode,
             internal,
             field_ids,
@@ -318,6 +325,13 @@ pub fn catalog_write_ops<E: KvEngine>(
                 canonical_field: canonical_field.to_string(),
             })
             .collect::<Vec<_>>();
+        entity.object.insert(
+            COLLECTION_KIND_FIELD.to_string(),
+            Value::String(
+                facet_json::to_string(&item.kind)
+                    .map_err(|err| DbError::Serialization(err.to_string()))?,
+            ),
+        );
         entity.object.insert(
             INTEGRITY_MODE_FIELD.to_string(),
             Value::String(

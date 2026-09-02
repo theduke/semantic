@@ -911,6 +911,7 @@ impl Catalog {
                 .map(|(lid, col)| StoredCollection {
                     lid,
                     name: col.name.clone(),
+                    kind: Some(col.kind.clone()),
                     integrity_mode: col.integrity_mode,
                     internal: col.internal,
                     field_ids: col
@@ -1205,7 +1206,7 @@ impl Catalog {
             let schema = catalog.build_collection_schema_for_lid(
                 item.lid,
                 item.name.clone(),
-                CollectionKind::Schema,
+                item.kind.unwrap_or(CollectionKind::Schema),
                 item.integrity_mode,
                 item.internal,
                 Some(&field_ids),

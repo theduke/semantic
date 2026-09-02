@@ -24,15 +24,15 @@ impl QueryFormat {
 
 #[derive(Debug, clap::Args)]
 pub struct Args {
-    /// Query text. If omitted, the query is read from standard input.
+    /// Query text; when omitted, read the query as UTF-8 from standard input.
     #[arg(value_name = "QUERY", conflicts_with = "file")]
     pub query: Option<String>,
 
-    /// Read the query from a UTF-8 file.
+    /// Read the query as UTF-8 from this file instead of QUERY or standard input.
     #[arg(long, short = 'f', value_name = "PATH")]
     pub file: Option<PathBuf>,
 
-    /// Query language.
+    /// Language used to parse the query.
     #[arg(long, value_enum, default_value = "sql")]
     pub format: QueryFormat,
 

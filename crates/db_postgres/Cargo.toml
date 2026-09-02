@@ -13,18 +13,27 @@ version.workspace = true
 
 [dependencies]
 async-trait = "0.1.89"
+base64 = "0.22.1"
 bytes = { workspace = true }
+chrono = "0.4"
+cidr = "0.3"
 deadpool-postgres = "0.14"
 facet = { version = "0.43.2", features = ["time", "uuid", "bytes"] }
+facet-json = "0.43.2"
+futures = "0.3.31"
 ordered-float = { workspace = true }
 serde = { workspace = true, features = ["derive"] }
 serde_json = { workspace = true }
+sha2 = "0.10"
 semantic_data = { workspace = true }
 semantic_db_core = { path = "../db_core" }
+semantic_db_kv = { path = "../db_kv" }
 tokio = { version = "1.48.0", features = ["sync"] }
-tokio-postgres = { version = "0.7", features = ["with-uuid-1", "with-serde_json-1", "with-chrono-0_4"] }
+tokio-postgres = { version = "0.7", features = ["with-uuid-1", "with-serde_json-1", "with-chrono-0_4", "with-cidr-0_3"] }
 tracing = { workspace = true }
+time = { workspace = true }
 uuid = { workspace = true, features = ["serde"] }
 
 [dev-dependencies]
+semantic_db_test = { path = "../db_test" }
 tokio = { version = "1.48.0", features = ["rt-multi-thread", "macros"] }

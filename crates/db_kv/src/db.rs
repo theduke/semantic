@@ -293,6 +293,13 @@ impl<E: KvEngine> KvDb<E> {
         &self.catalog
     }
 
+    /// Replace the in-memory catalog with an authoritative durable snapshot.
+    /// Storage adapters use this after opening the KV representation when their
+    /// catalog snapshot is committed atomically outside the KV keyspace.
+    pub fn replace_catalog_snapshot(&mut self, catalog: Catalog) {
+        self.catalog.replace(catalog);
+    }
+
     pub fn create_collection(
         &mut self,
         name: impl Into<String>,
@@ -1487,35 +1494,7 @@ impl<E: KvEngine> KvDb<E> {
         rows: Vec<Object>,
         format: FieldFormat,
     ) -> Vec<Object> {
-        rows.into_iter()
-            .map(|row| self.format_output_object(catalog, row, format))
-            .collect()
-    }
-
-    fn format_output_object(
-        &self,
-        catalog: &Catalog,
-        object: Object,
-        format: FieldFormat,
-    ) -> Object {
-        if format == FieldFormat::Qualified {
-            return object;
-        }
-
-        let mut out = Object::new();
-        for (key, value) in object {
-            let next_key = if let Some(attribute) = catalog.attribute_by_id(&key) {
-                match format {
-                    FieldFormat::Qualified => attribute.names.qualified_name.clone(),
-                    FieldFormat::Underscore => attribute.names.underscore_name.clone(),
-                    FieldFormat::Plain => attribute.names.plain_name.clone(),
-                }
-            } else {
-                key
-            };
-            out.insert(next_key, value);
-        }
-        out
+        semantic_db_core::format_output_rows(catalog, rows, format)
     }
 
     fn ddl_cleanup_ops(

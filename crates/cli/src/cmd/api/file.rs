@@ -12,13 +12,14 @@ pub struct Args {
 
 #[derive(Debug, Subcommand)]
 pub enum SubCmd {
-    /// Analyze a previously uploaded file and persist its metadata.
+    /// Analyze an uploaded file and persist the resulting metadata.
     Analyze(AnalyzeArgs),
 }
 
 #[derive(Debug, clap::Args)]
 pub struct AnalyzeArgs {
-    /// Persisted file record ID.
+    /// ID of the persisted file record to analyze.
+    #[arg(value_name = "ID")]
     pub id: String,
 
     #[command(flatten)]

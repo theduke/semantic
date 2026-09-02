@@ -54,6 +54,7 @@ pub struct StoredClass {
 pub struct StoredCollection {
     pub lid: LocalCollectionId,
     pub name: String,
+    pub kind: Option<crate::catalog::CollectionKind>,
     pub integrity_mode: IntegrityMode,
     pub internal: bool,
     pub field_ids: Vec<StoredFieldId>,

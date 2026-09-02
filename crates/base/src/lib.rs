@@ -1,4 +1,5 @@
 pub mod bundle;
+pub mod directory_query;
 pub mod migrations;
 pub mod schema;
 

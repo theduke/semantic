@@ -19,28 +19,35 @@ pub struct Args {
 
 #[derive(Debug, Subcommand)]
 pub enum SubCmd {
-    /// Execute a SQL or PRQL query.
+    /// Execute a SQL or PRQL query and print the API result as JSON.
     Query(query::Args),
 
-    /// Get a record by ID.
+    /// Fetch one record by ID from a collection.
     Get(get::Args),
 
-    /// Delete a record by ID.
+    /// Permanently delete one or more records by ID.
     Delete(delete::Args),
 
-    /// Fetch the database catalog.
+    /// Fetch the database catalog, including known schema metadata.
     Catalog(catalog::Args),
 
-    /// Manage schema packages.
+    /// Create or update schema packages.
     Package(package::Args),
 
-    /// Work with persisted files.
+    /// Run operations on previously uploaded files.
     File(file::Args),
 
-    /// Apply a JSON batch of database operations.
+    /// Apply database operations from a JSON batch.
+    ///
+    /// INPUT may be a batch object or a bare array of operations. Use '-' or
+    /// omit INPUT to read JSON from standard input. Bare arrays are wrapped in
+    /// the API's batch object automatically.
+    ///
+    /// Batch operations may be destructive and are submitted without a
+    /// confirmation prompt.
     Apply(apply::Args),
 
-    /// Upload one or more files.
+    /// Upload files, optionally traversing local directories.
     Upload(upload::Args),
 }
 

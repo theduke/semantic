@@ -415,7 +415,7 @@ impl<E: KvEngine> EntityStore<E> {
     }
 }
 
-fn decode_entity(payload: &[u8]) -> std::result::Result<StoredEntity, DbError> {
+pub fn decode_entity(payload: &[u8]) -> std::result::Result<StoredEntity, DbError> {
     let Some((version, body)) = split_entity_payload_prefix(payload) else {
         return Err(DbError::Deserialization(
             "entity payload missing format version prefix".to_string(),
@@ -429,7 +429,7 @@ fn decode_entity(payload: &[u8]) -> std::result::Result<StoredEntity, DbError> {
     }
 }
 
-pub(crate) fn encode_entity(entity: &StoredEntity) -> std::result::Result<Vec<u8>, DbError> {
+pub fn encode_entity(entity: &StoredEntity) -> std::result::Result<Vec<u8>, DbError> {
     let wire = StoredEntityWire {
         id: entity.id.clone(),
         collection: entity.collection,
@@ -453,6 +453,14 @@ fn entity_prefix(collection: LocalCollectionId) -> Vec<u8> {
 
 pub(crate) fn entity_key(collection: LocalCollectionId, id: &str) -> Vec<u8> {
     format!("c/{}/e/{}", collection.0, id).into_bytes()
+}
+
+/// Decode an entity key into its collection and entity identifier.
+pub fn parse_entity_key(key: &[u8]) -> Option<(LocalCollectionId, &str)> {
+    let key = std::str::from_utf8(key).ok()?;
+    let key = key.strip_prefix("c/")?;
+    let (collection, id) = key.split_once("/e/")?;
+    Some((LocalCollectionId(collection.parse().ok()?), id))
 }
 
 fn index_value_prefix(
@@ -595,4 +603,19 @@ fn split_entity_payload_prefix(payload: &[u8]) -> Option<(u16, &[u8])> {
     prefix.copy_from_slice(&payload[..ENTITY_FORMAT_VERSION_PREFIX_LEN]);
     let version = u16::from_le_bytes(prefix);
     Some((version, &payload[ENTITY_FORMAT_VERSION_PREFIX_LEN..]))
+}
+
+#[cfg(test)]
+mod entity_key_tests {
+    use super::*;
+
+    #[test]
+    fn parses_entity_key_with_delimiters_in_id() {
+        let key = entity_key(LocalCollectionId(12), "path/with/e/delimiters");
+        assert_eq!(
+            parse_entity_key(&key),
+            Some((LocalCollectionId(12), "path/with/e/delimiters"))
+        );
+        assert_eq!(parse_entity_key(b"i/12/v/token/e/id"), None);
+    }
 }

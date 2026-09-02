@@ -12,7 +12,10 @@ pub struct Args {
 
 #[derive(Debug, Subcommand)]
 pub enum SubCmd {
-    /// Create or update a package from a facet-json document.
+    /// Create or update a schema package from a Facet JSON document.
+    ///
+    /// Reads the document from INPUT, or from standard input when INPUT is
+    /// omitted or is '-'.
     Upsert(UpsertArgs),
 }
 
