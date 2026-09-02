@@ -8317,12 +8317,16 @@ name = "semantic_cli"
 version = "0.0.1"
 dependencies = [
  "clap",
+ "futures",
  "semantic_app",
+ "semantic_data",
  "semantic_fuse",
  "semantic_rpc",
  "semantic_server",
+ "serde_json",
  "thiserror 2.0.18",
  "tokio",
+ "tokio-util",
 ]
 
 [[package]]

@@ -1,26 +1,15 @@
 use std::path::PathBuf;
 
+use crate::{CliError, cmd::shared::ApiClientArgs};
 use semantic_fuse::{EntityFormat, MountConfig};
-use semantic_rpc::transport::http_client::HttpRpcClient;
-
-use crate::CliError;
 
 #[derive(Debug, clap::Args)]
 pub struct Args {
     /// Directory on which to mount the semantic filesystem.
     pub mountpoint: PathBuf,
 
-    /// Semantic HTTP RPC endpoint.
-    #[arg(
-        long,
-        env = "SEMANTIC_RPC_URL",
-        default_value = "http://127.0.0.1:8888/api/v1/rpc"
-    )]
-    pub rpc_url: String,
-
-    /// Database scope exposed by this mount.
-    #[arg(long)]
-    pub scope: Option<String>,
+    #[command(flatten)]
+    pub client: ApiClientArgs,
 
     /// Entity document format: json or yaml.
     #[arg(long, default_value = "json")]
@@ -36,9 +25,9 @@ pub struct Args {
 }
 
 pub async fn run(args: Args) -> std::result::Result<(), CliError> {
-    let client = HttpRpcClient::new(args.rpc_url).into();
+    let client = args.client.rpc_client();
     let config = MountConfig {
-        scope_id: args.scope,
+        scope_id: args.client.scope,
         format: args.format,
         allow_other: args.allow_other,
         read_only: args.read_only,

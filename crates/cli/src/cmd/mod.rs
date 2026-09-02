@@ -1,5 +1,7 @@
+pub mod api;
 pub mod fuse;
 pub mod server;
+pub mod shared;
 
 use clap::{Parser, Subcommand};
 
@@ -12,6 +14,9 @@ pub struct Args {
 
 #[derive(Debug, Subcommand)]
 pub enum SubCmd {
+    /// Invoke the Semantic HTTP API.
+    Api(api::Args),
+
     /// Mount a semantic database as a filesystem.
     Fuse(fuse::Args),
 
@@ -26,7 +31,74 @@ mod tests {
     use clap::{CommandFactory, Parser};
     use semantic_fuse::EntityFormat;
 
-    use super::{Args, SubCmd};
+    use super::{Args, SubCmd, api};
+
+    #[test]
+    fn parses_api_command_namespace() {
+        let args = Args::try_parse_from([
+            "semantic",
+            "api",
+            "get",
+            "record-1",
+            "--collection",
+            "notes",
+            "--scope",
+            "research",
+            "--pretty",
+        ])
+        .expect("parse api command");
+
+        let SubCmd::Api(args) = args.command else {
+            panic!("expected api command");
+        };
+        let api::SubCmd::Get(args) = args.command else {
+            panic!("expected get command");
+        };
+        assert_eq!(args.id, "record-1");
+        assert_eq!(args.collection.collection.as_deref(), Some("notes"));
+        assert_eq!(args.client.scope.as_deref(), Some("research"));
+        assert!(args.output.pretty);
+
+        let mut command = Args::command();
+        let help = command
+            .find_subcommand_mut("api")
+            .expect("api subcommand")
+            .render_long_help()
+            .to_string();
+        for name in [
+            "query", "get", "delete", "catalog", "package", "file", "apply", "upload",
+        ] {
+            assert!(help.contains(name), "missing api subcommand {name}");
+        }
+    }
+
+    #[test]
+    fn parses_all_first_wave_api_commands() {
+        let commands: &[&[&str]] = &[
+            &["semantic", "api", "query", "select 1", "--format", "sql"],
+            &["semantic", "api", "get", "record-1"],
+            &["semantic", "api", "delete", "record-1", "record-2", "--yes"],
+            &["semantic", "api", "catalog"],
+            &["semantic", "api", "package", "upsert", "package.json"],
+            &["semantic", "api", "file", "analyze", "file-1"],
+            &["semantic", "api", "apply", "batch.json"],
+            &[
+                "semantic",
+                "api",
+                "upload",
+                "--recursive",
+                "--entity",
+                "entity.json",
+                "files",
+            ],
+        ];
+
+        for command in commands {
+            Args::try_parse_from(*command).unwrap_or_else(|error| {
+                panic!("failed to parse {command:?}: {error}");
+            });
+        }
+    }
 
     #[test]
     fn parses_fuse_command_and_renders_help() {
@@ -49,8 +121,8 @@ mod tests {
             panic!("expected fuse command");
         };
         assert_eq!(args.mountpoint, PathBuf::from("/mnt/semantic"));
-        assert_eq!(args.rpc_url, "http://localhost:9000/api/v1/rpc");
-        assert_eq!(args.scope.as_deref(), Some("research"));
+        assert_eq!(args.client.rpc_url, "http://localhost:9000/api/v1/rpc");
+        assert_eq!(args.client.scope.as_deref(), Some("research"));
         assert_eq!(args.format, EntityFormat::Yaml);
         assert!(args.allow_other);
         assert!(args.read_only);
