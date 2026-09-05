@@ -199,6 +199,22 @@ where
         self.value_signal.read().clone()
     }
 
+    /// Update this scope's value, preserving the form's dirty tracking.
+    pub fn update_value(&self, update: impl FnOnce(&mut T)) {
+        let mut value = self.value();
+        update(&mut value);
+        self.set_value(value);
+    }
+
+    /// Unregister a dynamic child and its descendants before removing its value.
+    /// This also removes stale validation errors and submit-time value appliers.
+    pub fn unregister_field(&self, name: &str) {
+        let path = self.path.child(name);
+        self.root
+            .with_registry(|registry| registry.remove_descendants(&path));
+        self.root.recompute_all_meta();
+    }
+
     pub fn root_value(&self) -> Root {
         self.root.values()
     }

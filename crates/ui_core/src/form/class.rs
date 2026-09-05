@@ -1,9 +1,10 @@
 use std::collections::BTreeSet;
 
 use dioxus::prelude::*;
+use dioxus_icons::lucide::{Plus, Search, X};
 use dxform::{FormScope, use_field};
 use semantic_data::{
-    builtin::ATTR_ID,
+    builtin::{ATTR_ID, ATTR_TYPE},
     schema::{
         AttributeRef, AttributeType, ClassAttribute, ClassType, Meta, StringType, Type, TypeKind,
     },
@@ -16,8 +17,8 @@ use crate::{
     form::{
         AttributeFormRenderContext, ClassFormRenderContext, SemanticFormActionLabels,
         SemanticFormErrors, SemanticFormMode, SemanticFormSubmit, SemanticFormSubmitFailure,
-        SemanticFormSubmitOutcome, build_class_form_options, is_empty_value,
-        render_value_form_scope, value_field_spec,
+        SemanticFormSubmitOutcome, build_class_form_options, default_value_for_type,
+        is_empty_value, render_value_form_scope, value_field_spec,
     },
     ui_catalog::{RenderMode, use_ui_catalog},
 };
@@ -216,13 +217,15 @@ pub fn render_class_form_body_with_options(
                 .iter()
                 .flat_map(|field| [field.field_name.clone(), field.storage_field_name.clone()]),
         )
-        .chain(std::iter::once(OBJECT_TYPE_FIELD.to_string()))
+        .chain([ATTR_ID, ATTR_TYPE, OBJECT_TYPE_FIELD, "semantic:catalog:id"].map(str::to_string))
+        .chain(primary_id_field)
+        .chain(options.excluded_fields.iter().cloned())
         .collect::<BTreeSet<_>>();
     let extra_fields = match ctx.scope.value() {
         Value::Object(object) => object
             .iter()
             .filter(|(key, _)| !known_field_names.contains(*key))
-            .map(|(key, value)| (key.clone(), value.clone()))
+            .map(|(key, _)| key.clone())
             .collect::<Vec<_>>(),
         _ => Vec::new(),
     };
@@ -273,16 +276,22 @@ pub fn render_class_form_body_with_options(
                                 }
                             }
                         }
-                        for (field_name, value) in extra_fields {
+                        for field_name in extra_fields {
                             ExtraClassFormFieldRow {
                                 key: "{field_name}",
                                 scope: ctx.scope.clone(),
                                 field_name,
-                                value,
                                 mode: ctx.mode,
+                                removable: !ctx.class.strict_schema,
                             }
                         }
                     }
+                }
+            }
+            if !ctx.class.strict_schema {
+                AdditionalAttributePicker {
+                    scope: ctx.scope.clone(),
+                    excluded: known_field_names,
                 }
             }
         }
@@ -534,35 +543,247 @@ fn normalize_primary_id_form_field(
 }
 
 #[component]
+fn AdditionalAttributePicker(
+    scope: FormScope<Value, Value>,
+    excluded: BTreeSet<String>,
+) -> Element {
+    let catalog = use_ui_catalog();
+    let mut open = use_signal(|| false);
+    let mut query = use_signal(String::new);
+    let mut active = use_signal(|| 0usize);
+    let mut trigger = use_signal(|| None::<std::rc::Rc<MountedData>>);
+    let list_id = format!(
+        "{}-attributes",
+        class_form_field_dom_ids(scope.path().as_str()).control
+    );
+    let candidates = additional_attribute_candidates(
+        catalog.attributes(),
+        &excluded,
+        &scope.value(),
+        &query.read(),
+    );
+    let count = candidates.len();
+    let active_index = (*active.read()).min(count.saturating_sub(1));
+    let add_scope = scope.clone();
+    let add = EventHandler::new(move |attribute: AttributeType| {
+        add_scope.update_value(|value| {
+            if let Value::Object(object) = value {
+                object
+                    .entry(attribute.id.clone())
+                    .or_insert_with(|| default_value_for_type(&attribute.ty));
+            }
+        });
+        query.set(String::new());
+        active.set(0);
+        open.set(false);
+        spawn(async move {
+            let mounted = trigger.peek().clone();
+            if let Some(mounted) = mounted {
+                let _ = mounted.set_focus(true).await;
+            }
+        });
+    });
+    let keyboard_candidates = candidates.clone();
+    rsx! {
+        section { class: "semantic-attribute-picker", aria_label: "Additional attributes",
+            div { class: "semantic-attribute-picker__header",
+                div {
+                    h3 { "Additional attributes" }
+                    p { "Add details beyond this class’s schema." }
+                }
+                button {
+                    class: "semantic-attribute-picker__trigger",
+                    r#type: "button",
+                    aria_expanded: *open.read(),
+                    aria_controls: list_id.clone(),
+                    onmounted: move |event| trigger.set(Some(event.data())),
+                    onclick: move |_| { open.toggle(); query.set(String::new()); active.set(0); },
+                    Plus { size: "1rem" }
+                    "Add attribute"
+                }
+            }
+            if *open.read() {
+                div { class: "semantic-attribute-picker__panel",
+                    div { class: "semantic-attribute-picker__search",
+                        Search { size: "1rem" }
+                        input {
+                            r#type: "search",
+                            role: "combobox",
+                            aria_label: "Search attributes by title or ID",
+                            aria_autocomplete: "list",
+                            aria_expanded: true,
+                            aria_controls: list_id.clone(),
+                            aria_activedescendant: (count > 0).then(|| format!("{list_id}-{active_index}")),
+                            placeholder: "Search by title or ID…",
+                            value: "{query}",
+                            onmounted: move |event| async move { let _ = event.set_focus(true).await; },
+                            oninput: move |event| { query.set(event.value()); active.set(0); },
+                            onkeydown: move |event| {
+                                match event.key() {
+                                    Key::ArrowDown => { event.prevent_default(); active.set((active_index + 1).min(count.saturating_sub(1))); }
+                                    Key::ArrowUp => { event.prevent_default(); active.set(active_index.saturating_sub(1)); }
+                                    Key::Enter => {
+                                        event.prevent_default();
+                                        if let Some(attribute) = keyboard_candidates.get(active_index) { add.call(attribute.clone()); }
+                                    }
+                                    Key::Escape => {
+                                        event.prevent_default();
+                                        event.stop_propagation();
+                                        open.set(false);
+                                        spawn(async move {
+                                            let mounted = trigger.peek().clone();
+                                            if let Some(mounted) = mounted { let _ = mounted.set_focus(true).await; }
+                                        });
+                                    }
+                                    _ => {}
+                                }
+                            },
+                        }
+                    }
+                    div { class: "semantic-attribute-picker__results", id: list_id.clone(), role: "listbox", aria_label: "Available attributes",
+                        for (index, attribute) in candidates.into_iter().enumerate() {
+                            button {
+                                key: "{attribute.id}",
+                                id: format!("{list_id}-{index}"),
+                                class: "semantic-attribute-picker__option",
+                                r#type: "button",
+                                role: "option",
+                                tabindex: "-1",
+                                aria_selected: index == active_index,
+                                onmousedown: move |event| event.prevent_default(),
+                                onclick: {
+                                    let attribute = attribute.clone();
+                                    move |_| add.call(attribute.clone())
+                                },
+                                div { class: "semantic-attribute-picker__option-text",
+                                    span { "{attribute.meta.title.as_deref().unwrap_or(&attribute.name)}" }
+                                    code { "{attribute.id}" }
+                                    if let Some(description) = &attribute.meta.description {
+                                        small { "{description}" }
+                                    }
+                                }
+                                Plus { size: "1rem" }
+                            }
+                        }
+                        if count == 0 {
+                            div { class: "semantic-attribute-picker__empty",
+                                if query.read().is_empty() { "All available attributes are already included." }
+                                else { "No matching attributes. Try a different title or ID." }
+                            }
+                        }
+                    }
+                    div { class: "semantic-attribute-picker__hint", role: "status",
+                        "{count} available · ↑ ↓ to browse · Enter to add · Esc to close"
+                    }
+                }
+            }
+        }
+    }
+}
+
+fn additional_attribute_candidates<'a>(
+    attributes: impl Iterator<Item = &'a AttributeType>,
+    excluded: &BTreeSet<String>,
+    value: &Value,
+    query: &str,
+) -> Vec<AttributeType> {
+    let query = query.trim().to_lowercase();
+    let mut attributes = attributes.filter(|attribute| {
+        !excluded.contains(&attribute.id)
+            && !excluded.contains(&attribute.name)
+            && !matches!(attribute.id.as_str(), ATTR_ID | ATTR_TYPE | "semantic:catalog:id")
+            && !matches!(value, Value::Object(object) if object.contains_key(&attribute.id) || object.contains_key(&attribute.name))
+            && (query.is_empty()
+                || attribute.id.to_lowercase().contains(&query)
+                || attribute.name.to_lowercase().contains(&query)
+                || attribute.meta.title.as_deref().unwrap_or_default().to_lowercase().contains(&query))
+    }).cloned().collect::<Vec<_>>();
+    attributes.sort_by_cached_key(|attribute| {
+        (
+            attribute
+                .meta
+                .title
+                .as_deref()
+                .unwrap_or(&attribute.name)
+                .to_lowercase(),
+            attribute.id.clone(),
+        )
+    });
+    attributes
+}
+
+#[component]
 fn ExtraClassFormFieldRow(
     scope: FormScope<Value, Value>,
     field_name: String,
-    value: Value,
     mode: SemanticFormMode,
+    removable: bool,
 ) -> Element {
+    let catalog = use_ui_catalog();
+    let attribute = catalog
+        .attribute_by_id(&field_name)
+        .or_else(|| catalog.attribute_by_name(&field_name))
+        .cloned();
+    let label = attribute
+        .as_ref()
+        .and_then(|attribute| attribute.meta.title.clone())
+        .unwrap_or_else(|| field_name.clone());
+    let description = attribute
+        .as_ref()
+        .and_then(|attribute| attribute.meta.description.clone());
+    let value_type = attribute.as_ref().map(|attribute| attribute.ty.clone());
+    let validators = attribute
+        .as_ref()
+        .map(|attribute| {
+            crate::form::validators_for_attribute(
+                attribute,
+                &ClassAttribute {
+                    attribute: AttributeRef {
+                        id: attribute.id.clone(),
+                    },
+                    required: false,
+                    ui_order: None,
+                    computed: None,
+                    constraints: Vec::new(),
+                    meta: Meta::default(),
+                },
+            )
+        })
+        .unwrap_or_default();
     let field_name_for_spec = field_name.clone();
-    let field = use_field(scope, move || {
-        value_field_spec(
-            field_name_for_spec,
-            value,
+    let field = use_field(scope.clone(), move || {
+        let mut spec = value_field_spec(
+            field_name_for_spec.clone(),
+            Value::Null,
             std::rc::Rc::new(is_empty_value),
-            Vec::new(),
+            validators,
             dxform::ValidationStrategy::submit(),
-        )
+        );
+        // Reset can remove a newly added attribute before its row unmounts.
+        // Its still-registered value applier must not recreate that missing key.
+        spec.set = std::rc::Rc::new(move |parent, value| {
+            if let Value::Object(object) = parent {
+                if object.contains_key(&field_name_for_spec) || !value.is_nullish() {
+                    object.insert(field_name_for_spec.clone(), value);
+                }
+            }
+        });
+        spec
     });
     let field_scope = field.scope();
     let ids = class_form_field_dom_ids(field.path().as_str());
     let errors = field_errors(&field.meta());
     let has_errors = !errors.is_empty();
-    let aria_describedby = described_by(&ids, false, has_errors);
+    let aria_describedby = described_by(&ids, description.is_some(), has_errors);
     rsx! {
         tr { class: "semantic-form__field semantic-form__field--extra",
             th {
                 id: ids.label.clone(),
                 scope: "row",
                 class: "semantic-form__label",
-                span { class: "semantic-form__label-text", "{field_name}" }
-                span { class: "semantic-form__field-state", "Unregistered" }
+                span { class: "semantic-form__label-text", "{label}" }
+                code { class: "semantic-form__attribute-id", "{field_name}" }
+                span { class: "semantic-form__field-state", if attribute.is_some() { "Additional" } else { "Unregistered" } }
             }
             td {
                 id: ids.control,
@@ -574,10 +795,28 @@ fn ExtraClassFormFieldRow(
                 {render_value_form_scope(crate::form::ValueFormRenderContext {
                     path: field.path(),
                     scope: field_scope,
-                    value_type: None,
+                    value_type,
                     mode,
                 })}
+                if let Some(description) = description {
+                    p { id: ids.help, class: "semantic-form__help", "{description}" }
+                }
                 SemanticFormErrors { id: ids.errors, errors }
+                if removable {
+                    button {
+                        class: "semantic-form__remove-attribute",
+                        r#type: "button",
+                        aria_label: format!("Remove {label} attribute"),
+                        onclick: move |_| {
+                            scope.unregister_field(&field_name);
+                            scope.update_value(|value| {
+                                if let Value::Object(object) = value { object.remove(&field_name); }
+                            });
+                        },
+                        X { size: "0.875rem" }
+                        "Remove attribute"
+                    }
+                }
             }
         }
     }
@@ -644,6 +883,53 @@ fn ReadonlyClassFormField(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn additional_attributes_filter_title_id_and_exclude_present_or_class_fields() {
+        let make = |id: &str, name: &str, title: &str| {
+            let mut attribute = synthetic_id_form_field(id.to_string()).attribute;
+            attribute.name = name.to_string();
+            attribute.meta.title = Some(title.to_string());
+            attribute
+        };
+        let attributes = vec![
+            make(ATTR_ID, ATTR_ID, "Id"),
+            make(ATTR_TYPE, ATTR_TYPE, "Type"),
+            make("semantic:catalog:id", "catalog_id", "Catalog ID"),
+            make("test:class", "class_field", "Class field"),
+            make("test:present", "present", "Present field"),
+            make("test:alias", "alias", "Present alias"),
+            make("test:zebra", "zebra", "Alpha title"),
+            make("test:alpha", "alpha", "Zebra title"),
+        ];
+        let excluded = BTreeSet::from(["test:class".to_string()]);
+        let value = Value::Object(Object::from_iter([
+            ("test:present".to_string(), Value::Null),
+            ("alias".to_string(), Value::Null),
+        ]));
+        let candidates = additional_attribute_candidates(attributes.iter(), &excluded, &value, "");
+        assert_eq!(
+            candidates
+                .iter()
+                .map(|attribute| attribute.id.as_str())
+                .collect::<Vec<_>>(),
+            ["test:zebra", "test:alpha"]
+        );
+        let by_title = additional_attribute_candidates(
+            attributes.iter(),
+            &excluded,
+            &value,
+            "  ALPHA TITLE  ",
+        );
+        assert_eq!(by_title[0].id, "test:zebra");
+        let by_id =
+            additional_attribute_candidates(attributes.iter(), &excluded, &value, "TEST:ALPHA");
+        assert_eq!(by_id[0].id, "test:alpha");
+        assert!(
+            additional_attribute_candidates(attributes.iter(), &excluded, &value, "missing")
+                .is_empty()
+        );
+    }
 
     #[test]
     fn field_dom_ids_are_stable_and_do_not_collapse_punctuation() {

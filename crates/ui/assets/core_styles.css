@@ -1394,6 +1394,181 @@ pre {
   line-height: var(--semantic-line-height-body);
 }
 
+.semantic-form__attribute-id {
+  display: block;
+  margin-top: 4px;
+  color: var(--semantic-text-muted);
+  font-size: 11px;
+  font-weight: 400;
+  overflow-wrap: anywhere;
+}
+
+.semantic-form__remove-attribute {
+  display: inline-flex;
+  align-items: center;
+  justify-self: start;
+  gap: 5px;
+  padding: 4px 0;
+  border: 0;
+  background: transparent;
+  color: var(--semantic-text-muted);
+  cursor: pointer;
+  font-size: 12px;
+}
+
+.semantic-form__remove-attribute:hover {
+  color: var(--semantic-color-danger);
+}
+
+.semantic-attribute-picker {
+  padding: 16px;
+  border: 1px dashed var(--semantic-border);
+  border-radius: var(--semantic-radius-lg);
+  background: var(--semantic-surface);
+}
+
+.semantic-attribute-picker__header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 12px;
+}
+
+.semantic-attribute-picker__header h3 {
+  margin: 0 0 4px;
+  font-size: 14px;
+  font-weight: 650;
+}
+
+.semantic-attribute-picker__header p {
+  margin: 0;
+  color: var(--semantic-text-muted);
+  font-size: 12px;
+}
+
+.semantic-attribute-picker__trigger {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  min-height: 36px;
+  padding: 7px 12px;
+  border: 1px solid var(--semantic-border);
+  border-radius: var(--semantic-radius);
+  background: var(--semantic-surface);
+  color: var(--semantic-color-primary);
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.semantic-attribute-picker__trigger:hover,
+.semantic-attribute-picker__trigger[aria-expanded="true"] {
+  border-color: var(--semantic-color-primary);
+  background: color-mix(in srgb, var(--semantic-color-primary) 6%, var(--semantic-surface));
+}
+
+.semantic-attribute-picker__panel {
+  margin-top: 14px;
+  overflow: hidden;
+  border: 1px solid var(--semantic-border);
+  border-radius: var(--semantic-radius);
+  box-shadow: var(--semantic-shadow-1);
+}
+
+.semantic-attribute-picker__search {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 12px;
+  border-bottom: 1px solid var(--semantic-border-soft);
+  color: var(--semantic-text-muted);
+}
+
+.semantic-attribute-picker__search input {
+  width: 100%;
+  min-width: 0;
+  padding: 4px 0;
+  border: 0;
+  outline: none;
+  background: transparent;
+  color: var(--semantic-text);
+  font: inherit;
+  font-size: 13px;
+}
+
+.semantic-attribute-picker__search:focus-within {
+  box-shadow: inset 0 -2px var(--semantic-color-focus);
+}
+
+.semantic-attribute-picker__results {
+  max-height: 320px;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+}
+
+.semantic-attribute-picker__option {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  width: 100%;
+  padding: 11px 13px;
+  border: 0;
+  border-bottom: 1px solid var(--semantic-border-soft);
+  background: var(--semantic-surface);
+  color: var(--semantic-text);
+  text-align: left;
+  cursor: pointer;
+}
+
+.semantic-attribute-picker__option:hover,
+.semantic-attribute-picker__option[aria-selected="true"] {
+  background: color-mix(in srgb, var(--semantic-color-primary) 8%, var(--semantic-surface));
+}
+
+.semantic-attribute-picker__option > svg {
+  flex-shrink: 0;
+  color: var(--semantic-color-primary);
+}
+
+.semantic-attribute-picker__option-text {
+  display: grid;
+  gap: 3px;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.semantic-attribute-picker__option-text span {
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.semantic-attribute-picker__option-text code,
+.semantic-attribute-picker__option-text small {
+  color: var(--semantic-text-muted);
+  font-size: 11px;
+}
+
+.semantic-attribute-picker__hint,
+.semantic-attribute-picker__empty {
+  padding: 12px;
+  color: var(--semantic-text-muted);
+  font-size: 12px;
+}
+
+.semantic-attribute-picker__hint {
+  border-top: 1px solid var(--semantic-border-soft);
+  background: var(--semantic-surface-muted);
+  font-size: 11px;
+}
+
+.semantic-attribute-picker button:focus-visible,
+.semantic-form__remove-attribute:focus-visible {
+  outline: 2px solid var(--semantic-color-focus);
+  outline-offset: 2px;
+}
+
 .semantic-form-screen__meta-table th {
   width: 170px;
 }

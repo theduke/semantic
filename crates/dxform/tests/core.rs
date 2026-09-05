@@ -87,6 +87,53 @@ fn run_in_runtime(f: impl FnOnce() + 'static) {
 }
 
 #[test]
+fn dynamic_field_removal_discards_descendants_and_preserves_reset() {
+    run_in_runtime(|| {
+        let form = FormRoot::new(std::collections::BTreeMap::from([(
+            "extra".to_string(),
+            "initial".to_string(),
+        )]));
+        let scope = form.scope();
+        let extra = scope.field(FieldSpec::new(
+            "extra",
+            |values: &std::collections::BTreeMap<String, String>| {
+                values.get("extra").cloned().unwrap_or_default()
+            },
+            |values, value| {
+                values.insert("extra".to_string(), value);
+            },
+        ));
+        let leaf = extra.scope().field(FieldSpec::new(
+            "value",
+            |value: &String| value.clone(),
+            |parent, value| *parent = value,
+        ));
+        leaf.set_value("edited".to_string());
+        scope.unregister_field("extra");
+        scope.update_value(|values| {
+            values.remove("extra");
+        });
+        assert!(
+            form.values().is_empty(),
+            "unmounted child appliers must not resurrect removed values"
+        );
+        assert!(form.meta().dirty);
+
+        scope.update_value(|values| {
+            values.insert("new".to_string(), "added".to_string());
+        });
+        assert_eq!(form.values().get("new").map(String::as_str), Some("added"));
+        form.reset();
+        assert_eq!(
+            form.values().get("extra").map(String::as_str),
+            Some("initial")
+        );
+        assert!(!form.values().contains_key("new"));
+        assert!(!form.meta().dirty);
+    });
+}
+
+#[test]
 fn field_change_marks_root_dirty_and_reset_clears_it() {
     run_in_runtime(|| {
         let form = FormRoot::new(Person::default());
