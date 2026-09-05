@@ -541,6 +541,7 @@ fn register_table(
         name: table.name.clone(),
         inherits: None,
         extends: vec![],
+        strict_schema: false,
         attributes: class_attrs,
         constraints: vec![pk_constraint],
         meta: Meta::default(),

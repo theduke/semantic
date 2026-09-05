@@ -94,6 +94,7 @@ pub fn directory_class() -> ClassType {
         name: "Directory".to_string(),
         inherits: None,
         extends: Vec::new(),
+        strict_schema: false,
         attributes: BTreeMap::from([
             (
                 "title".to_string(),
@@ -125,6 +126,7 @@ pub fn directory_node_class() -> ClassType {
             id: RELATION_CLASS_ID.to_string(),
         }),
         extends: Vec::new(),
+        strict_schema: false,
         attributes: BTreeMap::from([
             (
                 "relation".to_string(),
@@ -236,6 +238,7 @@ fn migration_directory_class() -> ClassType {
         name: "Directory".to_string(),
         inherits: None,
         extends: Vec::new(),
+        strict_schema: false,
         attributes: BTreeMap::from([
             (
                 "title".to_string(),
@@ -267,6 +270,7 @@ fn migration_directory_node_class() -> ClassType {
             id: RELATION_CLASS_ID.to_string(),
         }),
         extends: Vec::new(),
+        strict_schema: false,
         attributes: BTreeMap::from([
             (
                 "relation".to_string(),

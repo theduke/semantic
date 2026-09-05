@@ -3122,6 +3122,7 @@ mod tests {
                         name: "Article".to_string(),
                         inherits: None,
                         extends: vec![],
+                        strict_schema: false,
                         attributes: BTreeMap::from([
                             ("local:test:Summary".to_string(), class_attribute("Title")),
                             ("title_alias".to_string(), class_attribute("Summary")),
@@ -3249,6 +3250,7 @@ mod tests {
                     name: "Article".to_string(),
                     inherits: None,
                     extends: vec![],
+                    strict_schema: false,
                     attributes: BTreeMap::new(),
                     constraints: vec![ClassConstraint::MultiFieldExpr {
                         expr: semantic_data::expr::Expr::Literal(

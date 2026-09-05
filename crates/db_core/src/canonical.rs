@@ -1081,6 +1081,7 @@ mod tests {
                 name: "Article".to_string(),
                 inherits: None,
                 extends: vec![],
+                strict_schema: false,
                 attributes: BTreeMap::new(),
                 constraints: vec![],
                 meta: Meta::default(),
@@ -1203,6 +1204,7 @@ mod tests {
                 name: "Relation".to_string(),
                 inherits: None,
                 extends: vec![],
+                strict_schema: false,
                 attributes: BTreeMap::from([(
                     "from".to_string(),
                     semantic_data::schema::ClassAttribute {
@@ -1228,6 +1230,7 @@ mod tests {
                     id: "semantic:relation".to_string(),
                 }),
                 extends: vec![],
+                strict_schema: false,
                 attributes: BTreeMap::from([(
                     "from".to_string(),
                     semantic_data::schema::ClassAttribute {

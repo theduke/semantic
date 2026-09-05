@@ -30,6 +30,7 @@ pub fn class() -> ClassType {
         name: "Note".to_string(),
         inherits: None,
         extends: Vec::new(),
+        strict_schema: false,
         attributes: BTreeMap::from([
             (
                 "note_format".to_string(),

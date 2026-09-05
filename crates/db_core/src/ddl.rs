@@ -449,6 +449,7 @@ pub fn core_catalog_schema_batch() -> DdlBatch {
         name: "CatalogEntry".to_string(),
         inherits: None,
         extends: vec![],
+        strict_schema: false,
         attributes: attrs,
         constraints: vec![],
         meta: Meta::default(),
@@ -460,6 +461,7 @@ pub fn core_catalog_schema_batch() -> DdlBatch {
             id: CORE_CATALOG_ENTRY_CLASS_ID.to_string(),
         }),
         extends: vec![],
+        strict_schema: false,
         attributes: std::collections::BTreeMap::new(),
         constraints: vec![],
         meta: Meta::default(),
@@ -520,6 +522,7 @@ pub fn core_catalog_schema_batch() -> DdlBatch {
         name: "Relation".to_string(),
         inherits: None,
         extends: vec![],
+        strict_schema: false,
         attributes: relation_attrs,
         constraints: vec![],
         meta: Meta::default(),
@@ -1128,6 +1131,7 @@ mod tests {
             name: "TreeNode".to_string(),
             inherits: None,
             extends: vec![],
+            strict_schema: false,
             attributes: BTreeMap::from([(
                 "payload".to_string(),
                 ClassAttribute {

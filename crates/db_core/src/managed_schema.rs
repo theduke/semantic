@@ -640,6 +640,7 @@ mod tests {
             name: "TreeNode".to_string(),
             inherits: None,
             extends: vec![],
+            strict_schema: false,
             attributes: BTreeMap::from([(
                 "payload".to_string(),
                 ClassAttribute {

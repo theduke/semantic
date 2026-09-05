@@ -23,7 +23,7 @@ pub enum ObjectNormalizationError {
         alias: String,
         canonical: String,
     },
-    #[error("field '{field}' is not allowed in closed collection '{collection}'")]
+    #[error("field '{field}' is not allowed in collection '{collection}'")]
     UnknownField { collection: String, field: String },
     #[error(
         "type mismatch in collection '{collection}' for field '{field}': expected {expected}, got {actual}"
@@ -128,6 +128,7 @@ fn normalize_object_for_collection_inner(
     let mut registered_field_required = FnvHashMap::default();
     let mut registered_field_default_exprs = FnvHashMap::default();
     let mut reject_unknown_fields = collection.is_closed_field_set();
+    let mut restrict_to_class_attributes = false;
 
     if collection.kind == CollectionKind::Untyped {
         normalize_aliases(collection, object, |key| {
@@ -138,6 +139,7 @@ fn normalize_object_for_collection_inner(
             object,
             &registered_field_types,
             reject_unknown_fields,
+            restrict_to_class_attributes,
         );
     }
 
@@ -156,13 +158,15 @@ fn normalize_object_for_collection_inner(
                 });
             }
             if let Some(class_lid) = class_ids.first().copied() {
-                if let Some(class) = catalog.class_by_lid(class_lid) {
-                    if should_canonicalize_object_type(&object_type) {
-                        object.insert(
-                            OBJECT_TYPE_FIELD.to_string(),
-                            Value::String(class.class.id.clone()),
-                        );
-                    }
+                let class = catalog
+                    .class_by_lid(class_lid)
+                    .expect("class id must resolve in catalog");
+                restrict_to_class_attributes = class.class.strict_schema;
+                if should_canonicalize_object_type(&object_type) {
+                    object.insert(
+                        OBJECT_TYPE_FIELD.to_string(),
+                        Value::String(class.class.id.clone()),
+                    );
                 }
                 let mut class_aliases = FnvHashMap::default();
                 collect_class_fields(
@@ -179,8 +183,9 @@ fn normalize_object_for_collection_inner(
                         .cloned()
                         .or_else(|| Some(collection.canonical_field_name(key).to_string()))
                 })?;
-                reject_unknown_fields |=
-                    collection.integrity_mode == IntegrityMode::StrictRegisteredSchema;
+                reject_unknown_fields |= collection.integrity_mode
+                    == IntegrityMode::StrictRegisteredSchema
+                    || restrict_to_class_attributes;
             } else if let Some(record_lid) = record_ids.first().copied() {
                 normalize_aliases(collection, object, |key| {
                     Some(collection.canonical_field_name(key).to_string())
@@ -254,6 +259,7 @@ fn normalize_object_for_collection_inner(
         object,
         &registered_field_types,
         reject_unknown_fields,
+        restrict_to_class_attributes,
     )
 }
 
@@ -607,10 +613,14 @@ fn validate_object_fields(
     object: &Object,
     registered_field_types: &FnvHashMap<String, Type>,
     reject_unknown_fields: bool,
+    restrict_to_class_attributes: bool,
 ) -> ObjectNormalizationResult<()> {
     if reject_unknown_fields {
         for key in object.keys() {
-            if !collection.knows_field(key) && !registered_field_types.contains_key(key) {
+            let known_field = registered_field_types.contains_key(key)
+                || is_special_builtin_field(key)
+                || (!restrict_to_class_attributes && collection.knows_field(key));
+            if !known_field {
                 return Err(ObjectNormalizationError::UnknownField {
                     collection: collection.name.clone(),
                     field: key.clone(),
@@ -1458,6 +1468,7 @@ mod tests {
                 name: "Article".to_string(),
                 inherits: None,
                 extends: vec![],
+                strict_schema: false,
                 attributes: BTreeMap::from([(
                     "title".to_string(),
                     ClassAttribute {
@@ -1508,6 +1519,111 @@ mod tests {
                 .and_then(semantic_data::value::Value::as_str),
             Some("hello")
         );
+    }
+
+    #[test]
+    fn strict_class_allows_inherited_attributes_and_rejects_other_registered_attributes() {
+        let mut catalog = Catalog::new();
+        for (id, name) in [
+            ("semantic:base:title", "title"),
+            ("semantic:article:body", "body"),
+            ("semantic:video:duration", "duration"),
+        ] {
+            let _ = catalog.upsert_attribute(semantic_data::schema::AttributeType {
+                id: id.to_string(),
+                name: name.to_string(),
+                ty: string_type(),
+                constraints: vec![],
+                meta: Meta::default(),
+            });
+        }
+        let class = |id: &str,
+                     name: &str,
+                     inherits: Option<&str>,
+                     strict_schema: bool,
+                     alias: &str,
+                     attribute_id: &str| ClassType {
+            id: id.to_string(),
+            name: name.to_string(),
+            inherits: inherits.map(|id| semantic_data::schema::ClassRef { id: id.to_string() }),
+            extends: vec![],
+            strict_schema,
+            attributes: BTreeMap::from([(
+                alias.to_string(),
+                ClassAttribute {
+                    attribute: AttributeRef {
+                        id: attribute_id.to_string(),
+                    },
+                    required: false,
+                    ui_order: None,
+                    computed: None,
+                    constraints: vec![],
+                    meta: Meta::default(),
+                },
+            )]),
+            constraints: vec![],
+            meta: Meta::default(),
+        };
+        for class in [
+            class(
+                "semantic:base",
+                "Base",
+                None,
+                false,
+                "title",
+                "semantic:base:title",
+            ),
+            class(
+                "semantic:article",
+                "Article",
+                Some("semantic:base"),
+                true,
+                "body",
+                "semantic:article:body",
+            ),
+            class(
+                "semantic:video",
+                "Video",
+                None,
+                false,
+                "duration",
+                "semantic:video:duration",
+            ),
+        ] {
+            let _ = catalog.upsert_class(class).unwrap();
+        }
+        let _ = catalog
+            .upsert_collection("items", CollectionKind::Schema, IntegrityMode::Permissive)
+            .unwrap();
+        let collection = catalog.collection_by_name("items").unwrap();
+
+        let mut valid = semantic_data::value::Object::new();
+        valid.insert(
+            OBJECT_TYPE_FIELD.to_string(),
+            semantic_data::value::Value::String("semantic:article".to_string()),
+        );
+        valid.insert(
+            "title".to_string(),
+            semantic_data::value::Value::String("hello".to_string()),
+        );
+        valid.insert(
+            "body".to_string(),
+            semantic_data::value::Value::String("world".to_string()),
+        );
+        normalize_object_for_collection(&catalog, collection, &mut valid).unwrap();
+        assert!(valid.contains_key("semantic:base:title"));
+        assert!(valid.contains_key("semantic:article:body"));
+
+        valid.insert(
+            "semantic:video:duration".to_string(),
+            semantic_data::value::Value::String("10m".to_string()),
+        );
+        let err = normalize_object_for_collection(&catalog, collection, &mut valid).unwrap_err();
+        assert!(matches!(
+            err,
+            ObjectNormalizationError::UnknownField { field, .. }
+                if field == "semantic:video:duration"
+        ));
     }
 
     #[test]
@@ -1564,6 +1680,7 @@ mod tests {
                 name: "Article".to_string(),
                 inherits: None,
                 extends: vec![],
+                strict_schema: false,
                 attributes: BTreeMap::from([
                     (
                         "title".to_string(),

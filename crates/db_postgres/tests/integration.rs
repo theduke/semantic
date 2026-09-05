@@ -532,6 +532,7 @@ async fn test_relational_managed_strict_projection_and_reopen() {
                     name: "Article".to_string(),
                     inherits: None,
                     extends: vec![],
+                    strict_schema: false,
                     attributes: std::collections::BTreeMap::from([(
                         "title".to_string(),
                         ClassAttribute {

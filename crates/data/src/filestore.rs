@@ -567,6 +567,7 @@ fn file_class_with_attributes(attributes: &[(&str, &str, u32, Option<&'static st
         name: "File".to_string(),
         inherits: None,
         extends: Vec::new(),
+        strict_schema: false,
         attributes,
         constraints: Vec::new(),
         meta: meta_with_title("File"),

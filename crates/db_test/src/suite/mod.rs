@@ -3,9 +3,9 @@ use std::future::Future;
 use std::pin::Pin;
 
 use semantic_data::query::{
-    AggregateOp, BinaryOp, DeleteQuery, Expr, FunctionArg, JoinCondition, JoinQuery, JoinSource,
-    JoinType, Operand, OrderBy, PatternMatchKind, QueryField, QueryInput, SelectQuery,
-    SortDirection, TextQueryFormat, UpdateQuery,
+    AggregateOp, Batch, BatchOperation, BinaryOp, DeleteQuery, Expr, FunctionArg, JoinCondition,
+    JoinQuery, JoinSource, JoinType, Operand, OrderBy, PatternMatchKind, QueryField, QueryInput,
+    SelectQuery, SortDirection, TextQueryFormat, UpdateQuery,
 };
 use semantic_data::schema::{
     ClassAttribute, ClassType, Meta, Migration, MigrationCollectionKind, MigrationDdlOperation,
@@ -65,6 +65,7 @@ pub async fn test_db(db: &Db) {
     test_builtin_type_filter_query(db).await;
     test_class_collection_alias_query(db).await;
     test_strict_registered_schema_typeless_insert(db).await;
+    test_strict_class_attributes(db).await;
 }
 
 async fn test_schema_registration(db: &Db) {
@@ -236,6 +237,167 @@ async fn test_strict_registered_schema_typeless_insert(db: &Db) {
     }
 }
 
+async fn test_strict_class_attributes(db: &Db) {
+    const COLLECTION: &str = "shared_suite_strict_class";
+    const ARTICLE_CLASS: &str = "shared:strict:article";
+    const ARTICLE_TITLE: &str = "shared:strict:article:title";
+    const VIDEO_CLASS: &str = "shared:strict:video";
+    const VIDEO_DURATION: &str = "shared:strict:video:duration";
+
+    let class =
+        |id: &str, name: &str, strict_schema: bool, alias: &str, attribute_id: &str| ClassType {
+            id: id.to_string(),
+            name: name.to_string(),
+            inherits: None,
+            extends: vec![],
+            strict_schema,
+            attributes: BTreeMap::from([(
+                alias.to_string(),
+                ClassAttribute {
+                    attribute: AttributeRef {
+                        id: attribute_id.to_string(),
+                    },
+                    required: false,
+                    ui_order: None,
+                    computed: None,
+                    constraints: vec![],
+                    meta: Meta::default(),
+                },
+            )]),
+            constraints: vec![],
+            meta: Meta::default(),
+        };
+    db.execute_ddl(
+        DdlBatch::new()
+            .with_op(DdlOperation::UpsertAttribute {
+                attribute: blog_string_attribute(ARTICLE_TITLE, "title"),
+            })
+            .with_op(DdlOperation::UpsertAttribute {
+                attribute: blog_string_attribute(VIDEO_DURATION, "duration"),
+            })
+            .with_op(DdlOperation::UpsertClass {
+                class: class(ARTICLE_CLASS, "StrictArticle", true, "title", ARTICLE_TITLE),
+            })
+            .with_op(DdlOperation::UpsertClass {
+                class: class(
+                    VIDEO_CLASS,
+                    "StrictVideo",
+                    false,
+                    "duration",
+                    VIDEO_DURATION,
+                ),
+            })
+            .with_op(DdlOperation::UpsertCollection {
+                name: COLLECTION.to_string(),
+                kind: DdlCollectionKind::Polymorphic,
+                integrity_mode: IntegrityMode::Permissive,
+            }),
+    )
+    .await
+    .expect("strict class schema setup should succeed");
+
+    let article = |id: &str| {
+        let mut object = Object::new();
+        object.insert("id", Value::String(id.to_string()));
+        object.insert("type", Value::String(ARTICLE_CLASS.to_string()));
+        object.insert(ARTICLE_TITLE, Value::String("hello".to_string()));
+        object
+    };
+    db.insert(COLLECTION, "article-1", article("article-1"))
+        .await
+        .expect("strict class should accept its declared attributes");
+
+    let mut invalid_insert = article("invalid-insert");
+    invalid_insert.insert(VIDEO_DURATION, Value::String("10m".to_string()));
+    let err = db
+        .insert(COLLECTION, "invalid-insert", invalid_insert)
+        .await
+        .expect_err("strict class insert should reject another class's attribute");
+    assert!(
+        err.to_string().contains("not allowed"),
+        "unexpected error: {err}"
+    );
+
+    let invalid_update = UpdateQuery::new()
+        .with_collection(COLLECTION)
+        .with_predicate(eq_predicate(
+            FieldPath::from_fields(["id"]),
+            Value::String("article-1".to_string()),
+        ))
+        .set(
+            FieldPath::from_fields([VIDEO_DURATION]),
+            Expr::Operand(Operand::Literal(Value::String("10m".to_string()))),
+        );
+    let err = db
+        .update_where(invalid_update.clone())
+        .await
+        .expect_err("strict class update should reject another class's attribute");
+    assert!(
+        err.to_string().contains("not allowed"),
+        "unexpected error: {err}"
+    );
+
+    let mut invalid_batch_insert = article("invalid-batch");
+    invalid_batch_insert.insert(VIDEO_DURATION, Value::String("10m".to_string()));
+    let err = db
+        .execute_batch(Batch::new().with_op(BatchOperation::Upsert {
+            collection: COLLECTION.to_string(),
+            id: "invalid-batch".to_string(),
+            object: invalid_batch_insert,
+        }))
+        .await
+        .expect_err("strict class batch insert should reject another class's attribute");
+    assert!(
+        err.to_string().contains("not allowed"),
+        "unexpected error: {err}"
+    );
+
+    let err = db
+        .execute_batch(Batch::new().with_op(BatchOperation::Update {
+            collection: COLLECTION.to_string(),
+            query: invalid_update,
+        }))
+        .await
+        .expect_err("strict class batch update should reject another class's attribute");
+    assert!(
+        err.to_string().contains("not allowed"),
+        "unexpected error: {err}"
+    );
+
+    if db
+        .supported_text_query_formats()
+        .contains(&TextQueryFormat::Sql)
+    {
+        let err = db
+            .query_text(
+                TextQueryFormat::Sql,
+                format!(
+                    "INSERT INTO {COLLECTION} (id, type, \"{ARTICLE_TITLE}\", \"{VIDEO_DURATION}\") VALUES ('invalid-sql', '{ARTICLE_CLASS}', 'hello', '10m')"
+                ),
+            )
+            .await
+            .expect_err("strict class SQL insert should reject another class's attribute");
+        assert!(
+            err.to_string().contains("not allowed"),
+            "unexpected error: {err}"
+        );
+
+        let err = db
+            .query_text(
+                TextQueryFormat::Sql,
+                format!(
+                    "UPDATE {COLLECTION} SET \"{VIDEO_DURATION}\" = '10m' WHERE id = 'article-1'"
+                ),
+            )
+            .await
+            .expect_err("strict class SQL update should reject another class's attribute");
+        assert!(
+            err.to_string().contains("not allowed"),
+            "unexpected error: {err}"
+        );
+    }
+}
+
 async fn test_select_query(db: &Db) {
     db.create_collection("shared_suite_select", CollectionKind::Polymorphic)
         .await
@@ -327,6 +489,7 @@ async fn test_class_collection_alias_query(db: &Db) {
                     name: "AliasRelation".to_string(),
                     inherits: None,
                     extends: vec![],
+                    strict_schema: false,
                     attributes: BTreeMap::from([(
                         "from".to_string(),
                         ClassAttribute {
@@ -352,6 +515,7 @@ async fn test_class_collection_alias_query(db: &Db) {
                         id: "shared.alias.relation".to_string(),
                     }),
                     extends: vec![],
+                    strict_schema: false,
                     attributes: BTreeMap::from([(
                         "from".to_string(),
                         ClassAttribute {
@@ -2662,6 +2826,7 @@ async fn test_relationships_generic_external(db: &Db) {
                         id: RELATION_CLASS_ID.to_string(),
                     }),
                     extends: vec![],
+                    strict_schema: false,
                     attributes: std::collections::BTreeMap::from([(
                         "weight".to_string(),
                         ClassAttribute {
@@ -2791,6 +2956,7 @@ async fn test_relationships_generic_external(db: &Db) {
                     name: "Directory".to_string(),
                     inherits: None,
                     extends: vec![],
+                    strict_schema: false,
                     attributes: BTreeMap::new(),
                     constraints: vec![],
                     meta: Meta::default(),
@@ -2804,6 +2970,7 @@ async fn test_relationships_generic_external(db: &Db) {
                         id: RELATION_CLASS_ID.to_string(),
                     }),
                     extends: vec![],
+                    strict_schema: false,
                     attributes: BTreeMap::from([
                         (
                             "from".to_string(),
@@ -3078,6 +3245,7 @@ fn blog_post_class(include_body: bool) -> ClassType {
         name: "BlogPost".to_string(),
         inherits: None,
         extends: vec![],
+        strict_schema: false,
         attributes,
         constraints: vec![],
         meta: Meta::default(),
