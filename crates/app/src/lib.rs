@@ -445,6 +445,12 @@ mod tests {
         entity.insert("semantic:title", Value::String("Hello".to_string()));
         entity.insert("type", Value::String("wrong".to_string()));
         entity.insert("filestore_locator", Value::String("wrong".to_string()));
+        entity.insert(
+            "uploaded_at",
+            Value::DateTime(time::OffsetDateTime::UNIX_EPOCH.into()),
+        );
+
+        let before_upload = time::OffsetDateTime::now_utc();
 
         let record = app
             .files()
@@ -462,6 +468,7 @@ mod tests {
             )
             .await
             .unwrap();
+        let after_upload = time::OffsetDateTime::now_utc();
 
         assert_eq!(
             record.id,
@@ -487,6 +494,12 @@ mod tests {
             record.object.get("semantic:title").and_then(Value::as_str),
             Some("Hello")
         );
+        let Some(Value::DateTime(uploaded_at)) = record.object.get("uploaded_at") else {
+            panic!("expected uploaded_at datetime");
+        };
+        let uploaded_at = time::OffsetDateTime::from(*uploaded_at);
+        assert!(uploaded_at >= before_upload);
+        assert!(uploaded_at <= after_upload);
 
         let read = app.files().read(&ctx, None, record.id).await.unwrap();
         let bytes = read.stream.try_collect::<bytes::BytesMut>().await.unwrap();

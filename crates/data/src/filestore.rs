@@ -12,6 +12,7 @@ pub const INIT_MIGRATION_NAME: &str = "001_init";
 pub const GENERIC_METADATA_MIGRATION_NAME: &str = "002_generic_metadata";
 pub const FILEKIND_MIGRATION_NAME: &str = "003_filekind";
 pub const MEDIA_METADATA_MIGRATION_NAME: &str = "004_media_metadata";
+pub const UPLOADED_AT_MIGRATION_NAME: &str = "005_uploaded_at";
 
 pub const FILE_CLASS_ID: &str = "semantic:filestore:file";
 
@@ -24,6 +25,7 @@ pub const ATTR_FILE_BYTE_SIZE: &str = "semantic:filestore:file:byte_size";
 pub const ATTR_FILE_MIME_TYPE: &str = "semantic:filestore:file:mime_type";
 pub const ATTR_FILE_FILEKIND: &str = "semantic:filestore:file:filekind";
 pub const ATTR_FILE_CONTENT_HASH_SHA256: &str = "semantic:filestore:file:content_hash_sha256";
+pub const ATTR_FILE_UPLOADED_AT: &str = "semantic:file:uploaded_at";
 pub const ATTR_FILE_MEDIA_PIXEL_WIDTH: &str = "semantic:filestore:file:media_pixel_width";
 pub const ATTR_FILE_MEDIA_PIXEL_HEIGHT: &str = "semantic:filestore:file:media_pixel_height";
 pub const ATTR_FILE_MEDIA_DURATION: &str = "semantic:filestore:file:media_duration";
@@ -49,6 +51,7 @@ pub const FILE_FILENAME_ATTRIBUTE_ID: &str = ATTR_FILE_FILENAME;
 pub const FILE_BYTE_SIZE_ATTRIBUTE_ID: &str = ATTR_FILE_BYTE_SIZE;
 pub const FILE_MIME_TYPE_ATTRIBUTE_ID: &str = ATTR_FILE_MIME_TYPE;
 pub const FILE_CONTENT_HASH_SHA256_ATTRIBUTE_ID: &str = ATTR_FILE_CONTENT_HASH_SHA256;
+pub const FILE_UPLOADED_AT_ATTRIBUTE_ID: &str = ATTR_FILE_UPLOADED_AT;
 pub const FILE_MEDIA_PIXEL_WIDTH_ATTRIBUTE_ID: &str = ATTR_FILE_MEDIA_PIXEL_WIDTH;
 pub const FILE_MEDIA_PIXEL_HEIGHT_ATTRIBUTE_ID: &str = ATTR_FILE_MEDIA_PIXEL_HEIGHT;
 pub const FILE_MEDIA_DURATION_ATTRIBUTE_ID: &str = ATTR_FILE_MEDIA_DURATION;
@@ -75,6 +78,7 @@ pub fn package() -> Package {
             generic_metadata_migration(),
             filekind_migration(),
             media_metadata_migration(),
+            uploaded_at_migration(),
         ],
         version: None,
         meta: Meta::default(),
@@ -170,7 +174,7 @@ pub fn media_metadata_migration() -> Migration {
     }
     operations.push(MigrationOperation::Ddl(
         MigrationDdlOperation::UpsertClass {
-            class: file_class(),
+            class: media_metadata_migration_file_class(),
         },
     ));
 
@@ -179,6 +183,28 @@ pub fn media_metadata_migration() -> Migration {
         name: MEDIA_METADATA_MIGRATION_NAME.to_string(),
         description: Some("Add media analysis metadata to files.".to_string()),
         operations,
+        meta: Meta::default(),
+    }
+}
+
+pub fn uploaded_at_migration() -> Migration {
+    Migration {
+        module: MODULE_NAME.to_string(),
+        name: UPLOADED_AT_MIGRATION_NAME.to_string(),
+        description: Some("Add file upload timestamps.".to_string()),
+        operations: vec![
+            MigrationOperation::Ddl(MigrationDdlOperation::UpsertAttribute {
+                attribute: migration_attribute(
+                    ATTR_FILE_UPLOADED_AT,
+                    "uploaded_at",
+                    migration_datetime_type(),
+                    "Uploaded At",
+                ),
+            }),
+            MigrationOperation::Ddl(MigrationDdlOperation::UpsertClass {
+                class: file_class(),
+            }),
+        ],
         meta: Meta::default(),
     }
 }
@@ -201,6 +227,12 @@ pub fn file_attributes() -> Vec<AttributeType> {
             ATTR_FILE_CONTENT_HASH_SHA256,
             "content_hash_sha256",
             string_type(),
+        ),
+        attribute_with_title(
+            ATTR_FILE_UPLOADED_AT,
+            "uploaded_at",
+            datetime_type(),
+            "Uploaded At",
         ),
         attribute(
             ATTR_FILE_MEDIA_PIXEL_WIDTH,
@@ -337,6 +369,12 @@ pub fn file_class() -> ClassType {
             ATTR_FILE_MEDIA_CONTAINER_FORMAT,
             230,
             None,
+        ),
+        (
+            "uploaded_at",
+            ATTR_FILE_UPLOADED_AT,
+            240,
+            Some("Uploaded At"),
         ),
     ])
 }
@@ -545,6 +583,12 @@ fn filekind_migration_file_class() -> ClassType {
     ])
 }
 
+fn media_metadata_migration_file_class() -> ClassType {
+    let mut class = file_class();
+    class.attributes.remove("uploaded_at");
+    class
+}
+
 fn file_class_with_attributes(attributes: &[(&str, &str, u32, Option<&'static str>)]) -> ClassType {
     let class_attribute =
         |attribute_id, ui_order| class_attribute_with_ui_order(attribute_id, false, Some(ui_order));
@@ -605,6 +649,10 @@ fn migration_float64_type() -> Type {
 
 fn migration_duration_type() -> Type {
     Type::new(TypeKind::Temporal(TemporalType::Duration))
+}
+
+fn migration_datetime_type() -> Type {
+    Type::new(TypeKind::Temporal(TemporalType::DateTime))
 }
 
 fn migration_ref_type(name: &str) -> Type {
@@ -724,6 +772,10 @@ fn duration_type() -> Type {
     Type::new(TypeKind::Temporal(TemporalType::Duration))
 }
 
+fn datetime_type() -> Type {
+    Type::new(TypeKind::Temporal(TemporalType::DateTime))
+}
+
 fn filekind_type() -> Type {
     Type::new(TypeKind::Enum(EnumType {
         repr: EnumRepr::String,
@@ -799,9 +851,10 @@ fn title_word(word: &str) -> String {
 mod tests {
     use crate::filestore::{
         ATTR_FILE_CONTENT_HASH_SHA256, ATTR_FILE_FILEKIND, ATTR_FILE_FILESTORE_LOCATOR,
-        ATTR_FILE_MEDIA_DURATION, ATTR_FILE_MEDIA_PIXEL_WIDTH, ATTR_PARENT, ATTR_TITLE,
-        FILE_CLASS_ID, FILEKIND_MIGRATION_NAME, GENERIC_METADATA_MIGRATION_NAME,
-        INIT_MIGRATION_NAME, MEDIA_METADATA_MIGRATION_NAME, MODULE_NAME, PACKAGE_NAME, package,
+        ATTR_FILE_MEDIA_DURATION, ATTR_FILE_MEDIA_PIXEL_WIDTH, ATTR_FILE_UPLOADED_AT, ATTR_PARENT,
+        ATTR_TITLE, FILE_CLASS_ID, FILEKIND_MIGRATION_NAME, GENERIC_METADATA_MIGRATION_NAME,
+        INIT_MIGRATION_NAME, MEDIA_METADATA_MIGRATION_NAME, MODULE_NAME, PACKAGE_NAME,
+        UPLOADED_AT_MIGRATION_NAME, package,
     };
     use crate::schema::{
         EnumRepr, FloatWidth, Migration, MigrationDdlOperation, MigrationOperation, NumberType,
@@ -815,11 +868,12 @@ mod tests {
         assert_eq!(package.name, PACKAGE_NAME);
         assert_eq!(package.root.name, MODULE_NAME);
         assert!(package.modules.is_empty());
-        assert_eq!(package.migrations.len(), 4);
+        assert_eq!(package.migrations.len(), 5);
         assert_eq!(package.migrations[0].name, INIT_MIGRATION_NAME);
         assert_eq!(package.migrations[1].name, GENERIC_METADATA_MIGRATION_NAME);
         assert_eq!(package.migrations[2].name, FILEKIND_MIGRATION_NAME);
         assert_eq!(package.migrations[3].name, MEDIA_METADATA_MIGRATION_NAME);
+        assert_eq!(package.migrations[4].name, UPLOADED_AT_MIGRATION_NAME);
         assert!(package.root.classes.contains_key(FILE_CLASS_ID));
         assert!(package.root.attributes.contains_key(ATTR_TITLE));
         assert!(package.root.attributes.contains_key(ATTR_PARENT));
@@ -849,6 +903,7 @@ mod tests {
                 .attributes
                 .contains_key(ATTR_FILE_MEDIA_DURATION)
         );
+        assert!(package.root.attributes.contains_key(ATTR_FILE_UPLOADED_AT));
     }
 
     #[test]
@@ -927,12 +982,31 @@ mod tests {
 
         let class = migration_upsert_class(&migration);
         assert!(class.attributes.contains_key("media_duration"));
+        assert!(!class.attributes.contains_key("uploaded_at"));
         assert!(
             class
                 .attributes
                 .values()
                 .all(|attribute| !attribute.required)
         );
+    }
+
+    #[test]
+    fn uploaded_at_migration_only_adds_uploaded_at_attribute() {
+        let migration = super::uploaded_at_migration();
+
+        assert_eq!(
+            migration_upsert_attribute_ids(&migration),
+            vec![ATTR_FILE_UPLOADED_AT]
+        );
+
+        let class = migration_upsert_class(&migration);
+        let uploaded_at = class
+            .attributes
+            .get("uploaded_at")
+            .expect("uploaded_at class attribute should exist");
+        assert!(!uploaded_at.required);
+        assert_eq!(uploaded_at.attribute.id, ATTR_FILE_UPLOADED_AT);
     }
 
     #[test]
@@ -965,6 +1039,7 @@ mod tests {
             super::generic_metadata_migration(),
             super::filekind_migration(),
             super::media_metadata_migration(),
+            super::uploaded_at_migration(),
         ] {
             for operation in migration.operations {
                 if let MigrationOperation::Ddl(MigrationDdlOperation::UpsertAttribute {
@@ -1024,6 +1099,7 @@ mod tests {
                 "File Store Locator",
             ),
             ("mime_type", super::ATTR_FILE_MIME_TYPE, "MIME Type"),
+            ("uploaded_at", super::ATTR_FILE_UPLOADED_AT, "Uploaded At"),
         ];
 
         let attributes = super::file_attributes()
@@ -1153,6 +1229,12 @@ mod tests {
                 .get(super::ATTR_FILE_MEDIA_VIDEO_FRAMES_PER_SECOND)
                 .map(|attribute| &attribute.ty.kind),
             Some(TypeKind::Number(NumberType::Float(FloatWidth::F64)))
+        ));
+        assert!(matches!(
+            attributes
+                .get(super::ATTR_FILE_UPLOADED_AT)
+                .map(|attribute| &attribute.ty.kind),
+            Some(TypeKind::Temporal(TemporalType::DateTime))
         ));
     }
 

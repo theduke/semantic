@@ -11,7 +11,7 @@ use semantic_data::filestore::{
     ATTR_FILE_BYTE_SIZE, ATTR_FILE_CONTENT_HASH_SHA256, ATTR_FILE_FILENAME,
     ATTR_FILE_FILESTORE_LOCATOR, ATTR_FILE_MIME_TYPE, FILE_CLASS_ID,
 };
-use semantic_data::value::{Object, Value};
+use semantic_data::value::{DateTime, Object, Value};
 use semantic_db_core::{DEFAULT_COLLECTION, EntityRecord};
 use sha2::{Digest as _, Sha256};
 
@@ -146,6 +146,7 @@ impl FileService {
         let mut object = request.entity;
         object.insert(ATTR_ID, Value::String(id.clone()));
         object.insert(ATTR_TYPE, Value::String(FILE_CLASS_ID.to_string()));
+        object.insert("uploaded_at", Value::DateTime(DateTime::now_utc()));
         object.insert(
             "filestore_locator",
             Value::String(filestore_locator.clone()),
