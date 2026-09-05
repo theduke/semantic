@@ -5,7 +5,6 @@
     nixpkgs.url = github:NixOS/nixpkgs/nixos-unstable;
     flakeutils = {
       url = "github:numtide/flake-utils";
-      inputs.nixpkgs.follows = "nixpkgs";
     };
     naersk = {
       url = "github:nmattia/naersk";
