@@ -80,6 +80,7 @@
             # Base dependencies needed for normal workspace development.
             packages =
               (with pkgs; [
+                bashInteractive
                 rustToolchain
                 pkg-config
                 openssl
