@@ -59,8 +59,12 @@ pub enum Route {
     },
     #[route("/data/query")]
     QueryPage,
-    #[route("/tree?:root")]
-    TreePage { root: Option<String> },
+    #[route("/tree?:root&:hierarchy&:kind")]
+    TreePage {
+        root: Option<String>,
+        hierarchy: Option<bool>,
+        kind: Option<String>,
+    },
     #[route("/upload")]
     UploadPage,
     #[end_layout]

@@ -245,6 +245,7 @@ mod tests {
 
     use super::*;
     use crate::components::directory_browser::types::DirectoryBrowseItem;
+    use crate::components::directory_browser::types::DirectoryLocationKind;
 
     fn row(id: &str, title: &str, depth: usize) -> DirectoryTreeRow {
         DirectoryTreeRow {
@@ -255,12 +256,14 @@ mod tests {
                 title: title.to_string(),
                 type_id: None,
                 is_directory: true,
+                has_semantic_children: false,
                 order: None,
                 created_at: None,
                 updated_at: None,
             },
             depth,
             cycle: false,
+            location_kind: DirectoryLocationKind::Directory,
         }
     }
 

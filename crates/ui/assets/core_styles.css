@@ -3510,6 +3510,28 @@ pre {
   background: var(--semantic-bg);
 }
 
+.semantic-directory-browser__tree-row[data-virtual-root="true"],
+.semantic-directory-browser__row[data-virtual-root="true"],
+.semantic-directory-browser__tile[data-virtual-root="true"] {
+  box-shadow: inset 3px 0 0 var(--semantic-accent);
+}
+
+.semantic-directory-browser__virtual-label {
+  display: inline-flex;
+  width: fit-content;
+  padding: 1px var(--semantic-space-2);
+  border: 1px solid var(--semantic-border);
+  border-radius: 999px;
+  color: var(--semantic-accent);
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+}
+
+.semantic-directory-browser__parent-cell {
+  min-width: 0;
+}
+
 .semantic-directory-browser__tree-link[data-selected="true"],
 .semantic-directory-browser__row[data-selected="true"],
 .semantic-directory-browser__tile[data-selected="true"] {
@@ -3584,7 +3606,7 @@ pre {
   cursor: grabbing;
 }
 
-.semantic-directory-browser__tree-link span {
+.semantic-directory-browser__tree-link span:not(.semantic-directory-browser__virtual-label) {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -3592,7 +3614,7 @@ pre {
 
 .semantic-directory-browser__row {
   display: grid;
-  grid-template-columns: 28px minmax(140px, 1.4fr) minmax(100px, 0.8fr) minmax(120px, 1fr) 56px minmax(100px, 0.8fr);
+  grid-template-columns: 28px minmax(140px, 1.4fr) 64px minmax(100px, 0.8fr) minmax(120px, 1fr) 56px minmax(100px, 0.8fr);
   gap: var(--semantic-space-3);
   align-items: center;
   width: 100%;
@@ -3635,7 +3657,7 @@ pre {
 
 .semantic-directory-browser__tile {
   display: grid;
-  grid-template-rows: 36px auto auto auto;
+  grid-template-rows: 36px repeat(4, auto);
   gap: var(--semantic-space-2);
   align-content: start;
   min-width: 0;
@@ -4264,6 +4286,14 @@ pre {
     min-width: 0;
     overflow-wrap: anywhere;
     white-space: normal;
+  }
+
+  .semantic-directory-browser__parent-cell {
+    grid-column: 2;
+  }
+
+  .semantic-directory-browser__parent-cell:empty {
+    display: none;
   }
 
   .semantic-player__body {

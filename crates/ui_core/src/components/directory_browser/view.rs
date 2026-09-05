@@ -3,8 +3,8 @@ use std::{collections::BTreeSet, time::Duration};
 use dioxus::logger::tracing::{error, info, warn};
 use dioxus::prelude::*;
 use dioxus_icons::lucide::{
-    ChevronDown, ChevronRight, ClipboardPaste, Copy, FileText, Folder, FolderPlus, Grid2x2, Link,
-    List, PanelLeft, Pencil, Plus, RefreshCw, Scissors, Trash2, Upload, X,
+    ChevronDown, ChevronRight, ClipboardPaste, Copy, FileText, Folder, FolderPlus, FolderTree,
+    Grid2x2, Link, List, PanelLeft, Pencil, Plus, RefreshCw, Scissors, Trash2, Upload, X,
 };
 use futures::StreamExt;
 
@@ -23,7 +23,7 @@ use super::{
     picker::{FileTreePicker, FileTreeSelection},
     types::{
         BrowseViewMode, DirectoryActionTarget, DirectoryBrowseItem, DirectoryBrowserProps,
-        DirectoryPage, DirectorySort, DirectoryTreeRow,
+        DirectoryLocationKind, DirectoryPage, DirectorySort, DirectoryTreeRow,
     },
 };
 
@@ -67,13 +67,25 @@ struct DirectoryClipboard {
     source_directory_id: Option<String>,
 }
 
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct DirectoryMembershipTarget {
+    directory_id: String,
+    location_kind: DirectoryLocationKind,
+}
+
+impl DirectoryMembershipTarget {
+    fn is_supported(&self) -> bool {
+        self.location_kind.supports_directory_membership()
+    }
+}
+
 #[derive(Clone, Debug, PartialEq)]
 enum DirectoryDialog {
     NewDirectory {
-        parent: Option<String>,
+        parent: Option<DirectoryMembershipTarget>,
     },
     AddExisting {
-        parent: String,
+        target: DirectoryMembershipTarget,
     },
     Rename {
         item_id: String,
@@ -100,6 +112,8 @@ enum DirectoryBrowserCommand {
         root: Option<String>,
         default_page_size: usize,
         default_tree_open: bool,
+        hierarchy: bool,
+        location_kind: DirectoryLocationKind,
     },
     SetSort(DirectorySort),
     SetPageSize(usize),
@@ -118,7 +132,12 @@ enum DirectoryBrowserCommand {
         suppress_click: bool,
     },
     OpenItem(DirectoryBrowseItem),
-    OpenTreeRoot(String),
+    OpenTreeRoot {
+        item_id: String,
+        location_kind: DirectoryLocationKind,
+    },
+    BrowseSemanticParent(String),
+    ViewItem(DirectoryBrowseItem),
     ToggleSelection(DirectoryBrowseItem),
     SelectRange(DirectoryBrowseItem),
     MoveFocus {
@@ -131,7 +150,7 @@ enum DirectoryBrowserCommand {
     ClearSelection,
     CutSelected,
     CopySelected,
-    PasteInto(String),
+    PasteInto(DirectoryMembershipTarget),
     RemoveSelected,
     ConfirmRemove {
         parent: String,
@@ -141,11 +160,11 @@ enum DirectoryBrowserCommand {
     OpenDialog(DirectoryDialog),
     CloseDialog,
     CreateDirectory {
-        parent: Option<String>,
+        parent: Option<DirectoryMembershipTarget>,
         title: String,
     },
     AddExisting {
-        parent: String,
+        target: DirectoryMembershipTarget,
         item_id: String,
     },
     RenameItem {
@@ -163,6 +182,8 @@ enum DirectoryBrowserCommand {
 #[derive(Clone, Copy)]
 struct DirectoryBrowserSignals {
     current_root: Signal<Option<String>>,
+    hierarchy: Signal<bool>,
+    location_kind: Signal<DirectoryLocationKind>,
     page: Signal<usize>,
     page_size: Signal<usize>,
     sort: Signal<DirectorySort>,
@@ -189,6 +210,22 @@ struct DirectoryBrowserSignals {
     tree_state: Signal<LoadState<Vec<DirectoryTreeRow>>>,
 }
 
+fn can_mutate_directory_membership(state: DirectoryBrowserSignals) -> bool {
+    location_supports_directory_membership(
+        (state.location_kind)(),
+        (state.hierarchy)(),
+        (state.current_root)().is_some(),
+    )
+}
+
+fn location_supports_directory_membership(
+    kind: DirectoryLocationKind,
+    hierarchy: bool,
+    has_root: bool,
+) -> bool {
+    kind.supports_directory_membership() && (!hierarchy || has_root)
+}
+
 fn use_directory_browser_coroutine(
     mut state: DirectoryBrowserSignals,
 ) -> Coroutine<DirectoryBrowserCommand> {
@@ -204,10 +241,18 @@ fn use_directory_browser_coroutine(
                     DirectoryBrowserCommand::SyncInputs {
                         client,
                         scope_id,
-                        root,
+                        mut root,
                         default_page_size,
                         default_tree_open,
+                        hierarchy,
+                        mut location_kind,
                     } => {
+                        if !hierarchy && location_kind == DirectoryLocationKind::SemanticParent {
+                            root = None;
+                        }
+                        if root.is_none() {
+                            location_kind = DirectoryLocationKind::Directory;
+                        }
                         info!(
                             root = root.as_deref(),
                             scope_id = scope_id.as_deref(),
@@ -223,6 +268,12 @@ fn use_directory_browser_coroutine(
                         if !initialized {
                             initialized = true;
                             state.current_root.set(root);
+                            state.hierarchy.set(hierarchy);
+                            state.location_kind.set(if hierarchy {
+                                location_kind
+                            } else {
+                                DirectoryLocationKind::Directory
+                            });
                             state.page.set(0);
                             state.page_size.set(default_page_size.max(1));
                             state.tree_open.set(default_tree_open);
@@ -230,6 +281,8 @@ fn use_directory_browser_coroutine(
                             state.selected_items.set(BTreeSet::new());
                             state.focused_item.set(None);
                             state.selection_anchor.set(None);
+                            state.dragged_item.set(None);
+                            state.suppress_click.set(false);
                             state.clipboard.set(None);
                             state.pending_dialog.set(None);
                             state.move_error.set(None);
@@ -251,7 +304,14 @@ fn use_directory_browser_coroutine(
                             continue;
                         }
 
-                        let root_changed = (state.current_root)() != root;
+                        let next_kind = if hierarchy {
+                            location_kind
+                        } else {
+                            DirectoryLocationKind::Directory
+                        };
+                        let root_changed = (state.current_root)() != root
+                            || (state.hierarchy)() != hierarchy
+                            || (state.location_kind)() != next_kind;
                         info!(
                             root_changed,
                             scope_changed,
@@ -261,11 +321,15 @@ fn use_directory_browser_coroutine(
                         );
                         if root_changed {
                             state.current_root.set(root);
+                            state.hierarchy.set(hierarchy);
+                            state.location_kind.set(next_kind);
                             state.page.set(0);
                             state.selected_item.set(None);
                             state.selected_items.set(BTreeSet::new());
                             state.focused_item.set(None);
                             state.selection_anchor.set(None);
+                            state.dragged_item.set(None);
+                            state.suppress_click.set(false);
                         }
                         if root_changed || scope_changed {
                             state
@@ -384,6 +448,9 @@ fn use_directory_browser_coroutine(
                             .await;
                     }
                     DirectoryBrowserCommand::BeginDrag(item_id) => {
+                        if !can_mutate_directory_membership(state) {
+                            continue;
+                        }
                         info!(item_id = item_id.as_str(), "directory browser begin drag");
                         state.suppress_click.set(false);
                         state.dragged_item.set(Some(item_id));
@@ -398,6 +465,10 @@ fn use_directory_browser_coroutine(
                         is_directory,
                         suppress_click: should_suppress_click,
                     } => {
+                        if !can_mutate_directory_membership(state) {
+                            state.dragged_item.set(None);
+                            continue;
+                        }
                         if operation_busy(state.busy_operations, DirectoryOperation::Move) {
                             state
                                 .move_error
@@ -487,7 +558,17 @@ fn use_directory_browser_coroutine(
                                 item_id = item.id.as_str(),
                                 "directory browser navigate to directory item"
                             );
-                            navigate_to_tree_root(Some(item.id));
+                            navigate_to_tree_location(
+                                Some(item.id),
+                                (state.hierarchy)(),
+                                DirectoryLocationKind::Directory,
+                            );
+                        } else if (state.hierarchy)() && item.has_semantic_children {
+                            navigate_to_tree_location(
+                                Some(item.id),
+                                true,
+                                DirectoryLocationKind::SemanticParent,
+                            );
                         } else {
                             info!(
                                 item_id = item.id.as_str(),
@@ -496,7 +577,10 @@ fn use_directory_browser_coroutine(
                             state.selected_item.set(Some(item));
                         }
                     }
-                    DirectoryBrowserCommand::OpenTreeRoot(item_id) => {
+                    DirectoryBrowserCommand::OpenTreeRoot {
+                        item_id,
+                        location_kind,
+                    } => {
                         if (state.suppress_click)() {
                             info!(
                                 item_id = item_id.as_str(),
@@ -509,11 +593,26 @@ fn use_directory_browser_coroutine(
                             item_id = item_id.as_str(),
                             "directory browser navigate to tree root"
                         );
-                        let next = expanded_for_open((state.expanded_tree)(), &item_id);
+                        let next =
+                            expanded_for_open((state.expanded_tree)(), location_kind, &item_id);
                         if next != (state.expanded_tree)() {
                             state.expanded_tree.set(next);
                         }
-                        navigate_to_tree_root(Some(item_id));
+                        navigate_to_tree_location(
+                            Some(item_id),
+                            (state.hierarchy)(),
+                            location_kind,
+                        );
+                    }
+                    DirectoryBrowserCommand::BrowseSemanticParent(item_id) => {
+                        navigate_to_tree_location(
+                            Some(item_id),
+                            true,
+                            DirectoryLocationKind::SemanticParent,
+                        );
+                    }
+                    DirectoryBrowserCommand::ViewItem(item) => {
+                        state.selected_item.set(Some(item));
                     }
                     DirectoryBrowserCommand::ToggleSelection(item) => {
                         let mut next = (state.selected_items)();
@@ -572,7 +671,17 @@ fn use_directory_browser_coroutine(
                             && let Some(item) = visible_item(state.content_state, &id)
                         {
                             if item.is_directory {
-                                navigate_to_tree_root(Some(item.id));
+                                navigate_to_tree_location(
+                                    Some(item.id),
+                                    (state.hierarchy)(),
+                                    DirectoryLocationKind::Directory,
+                                );
+                            } else if (state.hierarchy)() && item.has_semantic_children {
+                                navigate_to_tree_location(
+                                    Some(item.id),
+                                    true,
+                                    DirectoryLocationKind::SemanticParent,
+                                );
                             } else {
                                 state.selected_item.set(Some(item));
                             }
@@ -589,6 +698,13 @@ fn use_directory_browser_coroutine(
                         state.focused_item.set(None);
                     }
                     DirectoryBrowserCommand::CutSelected => {
+                        if !can_mutate_directory_membership(state) {
+                            state.move_error.set(Some(
+                                "Cut is only available in a directory-membership location"
+                                    .to_string(),
+                            ));
+                            continue;
+                        }
                         let item_ids = (state.selected_items)();
                         if !item_ids.is_empty() {
                             state.clipboard.set(Some(DirectoryClipboard {
@@ -608,7 +724,14 @@ fn use_directory_browser_coroutine(
                             }));
                         }
                     }
-                    DirectoryBrowserCommand::PasteInto(target_directory_id) => {
+                    DirectoryBrowserCommand::PasteInto(target) => {
+                        if !target.is_supported() {
+                            state.move_error.set(Some(
+                                "Paste requires a real directory location; open the directory first"
+                                    .to_string(),
+                            ));
+                            continue;
+                        }
                         if operation_busy(state.busy_operations, DirectoryOperation::Paste) {
                             continue;
                         }
@@ -622,6 +745,7 @@ fn use_directory_browser_coroutine(
                             continue;
                         };
                         let item_ids = clipboard.item_ids.iter().cloned().collect::<Vec<_>>();
+                        let target_directory_id = target.directory_id;
                         set_operation_busy(state.busy_operations, DirectoryOperation::Paste, true);
                         let scope_id = active_scope_id.clone();
                         let reload_client = client.clone();
@@ -668,6 +792,13 @@ fn use_directory_browser_coroutine(
                     }
                     DirectoryBrowserCommand::RemoveSelected => {
                         if operation_busy(state.busy_operations, DirectoryOperation::Remove) {
+                            continue;
+                        }
+                        if !can_mutate_directory_membership(state) {
+                            state.move_error.set(Some(
+                                "Remove is only available in a directory-membership location"
+                                    .to_string(),
+                            ));
                             continue;
                         }
                         let Some(parent) = (state.current_root)() else {
@@ -790,7 +921,11 @@ fn use_directory_browser_coroutine(
                                     if let Some(root) = (state.current_root)()
                                         && item_ids.iter().any(|item_id| item_id == &root)
                                     {
-                                        navigate_to_tree_root(None);
+                                        navigate_to_tree_location(
+                                            None,
+                                            (state.hierarchy)(),
+                                            DirectoryLocationKind::Directory,
+                                        );
                                     }
                                     state.selected_items.set(BTreeSet::new());
                                     if (state.dialog_generation)() == dialog_generation {
@@ -813,6 +948,21 @@ fn use_directory_browser_coroutine(
                         });
                     }
                     DirectoryBrowserCommand::OpenDialog(dialog) => {
+                        let unsupported_destination = match &dialog {
+                            DirectoryDialog::NewDirectory {
+                                parent: Some(target),
+                            }
+                            | DirectoryDialog::AddExisting { target } => !target.is_supported(),
+                            _ => false,
+                        };
+                        if unsupported_destination {
+                            state.dialog_error.set(Some(
+                                "Directory membership actions require opening the real directory location first"
+                                    .to_string(),
+                            ));
+                            state.pending_dialog.set(None);
+                            continue;
+                        }
                         state
                             .dialog_generation
                             .set((state.dialog_generation)().saturating_add(1));
@@ -827,6 +977,12 @@ fn use_directory_browser_coroutine(
                         state.pending_dialog.set(None);
                     }
                     DirectoryBrowserCommand::CreateDirectory { parent, title } => {
+                        if parent.as_ref().is_some_and(|target| !target.is_supported()) {
+                            state.dialog_error.set(Some(
+                                "Creating a child requires a real directory location".to_string(),
+                            ));
+                            continue;
+                        }
                         if operation_busy(state.busy_operations, DirectoryOperation::Create) {
                             continue;
                         }
@@ -841,6 +997,7 @@ fn use_directory_browser_coroutine(
                         set_operation_busy(state.busy_operations, DirectoryOperation::Create, true);
                         let scope_id = active_scope_id.clone();
                         let reload_client = client.clone();
+                        let parent = parent.map(|target| target.directory_id);
                         spawn(async move {
                             match create_directory(client, scope_id.clone(), parent, title).await {
                                 Ok(_) => {
@@ -863,7 +1020,13 @@ fn use_directory_browser_coroutine(
                             );
                         });
                     }
-                    DirectoryBrowserCommand::AddExisting { parent, item_id } => {
+                    DirectoryBrowserCommand::AddExisting { target, item_id } => {
+                        if !target.is_supported() {
+                            state.dialog_error.set(Some(
+                                "Adding an item requires a real directory location".to_string(),
+                            ));
+                            continue;
+                        }
                         if operation_busy(state.busy_operations, DirectoryOperation::AddExisting) {
                             continue;
                         }
@@ -882,6 +1045,7 @@ fn use_directory_browser_coroutine(
                         );
                         let scope_id = active_scope_id.clone();
                         let reload_client = client.clone();
+                        let parent = target.directory_id;
                         spawn(async move {
                             match add_items_to_directory(
                                 client,
@@ -955,6 +1119,12 @@ fn use_directory_browser_coroutine(
                         target,
                         item_ids,
                     } => {
+                        if !can_mutate_directory_membership(state) {
+                            state.dialog_error.set(Some(
+                                "Moving items requires a directory-membership source".to_string(),
+                            ));
+                            continue;
+                        }
                         if operation_busy(state.busy_operations, DirectoryOperation::MoveTo) {
                             continue;
                         }
@@ -1022,6 +1192,14 @@ pub fn DirectoryBrowser(props: DirectoryBrowserProps) -> Element {
         let root = root.clone();
         use_signal(move || root)
     };
+    let hierarchy = {
+        let hierarchy = props.hierarchy;
+        use_signal(move || hierarchy)
+    };
+    let location_kind = {
+        let location_kind = props.location_kind;
+        use_signal(move || location_kind)
+    };
     let page = use_signal(|| 0usize);
     let page_size = {
         let default_page_size = config.default_page_size;
@@ -1055,6 +1233,8 @@ pub fn DirectoryBrowser(props: DirectoryBrowserProps) -> Element {
 
     let state = DirectoryBrowserSignals {
         current_root,
+        hierarchy,
+        location_kind,
         page,
         page_size,
         sort,
@@ -1102,14 +1282,22 @@ pub fn DirectoryBrowser(props: DirectoryBrowserProps) -> Element {
     let busy = busy_operations();
     let content_busy = content_loading();
     let current_target = match (&*content_state.read(), current_root(), content_busy) {
-        (LoadState::Ready(_), Some(id), false) => Some(DirectoryActionTarget {
-            id,
-            title: current_root_title.clone(),
-        }),
+        (LoadState::Ready(page), Some(id), false) if page.can_mutate_directory => {
+            Some(DirectoryActionTarget {
+                id,
+                title: current_root_title.clone(),
+            })
+        }
         (LoadState::Loading | LoadState::Error(_), _, _)
         | (LoadState::Ready(_), None, _)
-        | (LoadState::Ready(_), Some(_), true) => None,
+        | (LoadState::Ready(_), Some(_), true)
+        | (LoadState::Ready(_), Some(_), false) => None,
     };
+    let directory_membership_capable = location_supports_directory_membership(
+        location_kind(),
+        hierarchy(),
+        current_root().is_some(),
+    );
     let focused_dom_id = focused_item()
         .filter(|id| visible_ids.iter().any(|visible_id| visible_id == id))
         .map(|id| directory_item_dom_id(&id));
@@ -1120,16 +1308,27 @@ pub fn DirectoryBrowser(props: DirectoryBrowserProps) -> Element {
             &config.default_page_size,
             &config.default_tree_open,
             &scope_id,
+            &props.hierarchy,
+            &props.location_kind,
         ),
         {
             let client = client.clone();
-            move |(root, default_page_size, default_tree_open, scope_id)| {
+            move |(
+                root,
+                default_page_size,
+                default_tree_open,
+                scope_id,
+                hierarchy,
+                location_kind,
+            )| {
                 commands.send(DirectoryBrowserCommand::SyncInputs {
                     client: client.clone(),
                     scope_id,
                     root,
                     default_page_size,
                     default_tree_open,
+                    hierarchy,
+                    location_kind,
                 });
             }
         },
@@ -1152,14 +1351,20 @@ pub fn DirectoryBrowser(props: DirectoryBrowserProps) -> Element {
                         LoadState::Ready(page_data) => rsx! {
                             button {
                                 class: "semantic-directory-browser__breadcrumb",
-                                onclick: move |_| navigate_to_tree_root(None),
+                                onclick: {
+                                    let hierarchy = hierarchy();
+                                    move |_| navigate_to_tree_location(None, hierarchy, DirectoryLocationKind::Directory)
+                                },
                                 "Tree"
                             }
                             for crumb in page_data.breadcrumbs.iter().cloned() {
                                 span { class: "semantic-directory-browser__breadcrumb-separator", "/" }
                                 button {
                                     class: "semantic-directory-browser__breadcrumb",
-                                    onclick: move |_| navigate_to_tree_root(Some(crumb.id.clone())),
+                                    onclick: {
+                                        let hierarchy = hierarchy();
+                                        move |_| navigate_to_tree_location(Some(crumb.id.clone()), hierarchy, crumb.kind)
+                                    },
                                     "{crumb.title}"
                                 }
                             }
@@ -1170,7 +1375,10 @@ pub fn DirectoryBrowser(props: DirectoryBrowserProps) -> Element {
                         LoadState::Loading | LoadState::Error(_) => rsx! {
                             button {
                                 class: "semantic-directory-browser__breadcrumb",
-                                onclick: move |_| navigate_to_tree_root(None),
+                                onclick: {
+                                    let hierarchy = hierarchy();
+                                    move |_| navigate_to_tree_location(None, hierarchy, DirectoryLocationKind::Directory)
+                                },
                                 "Tree"
                             }
                         },
@@ -1178,6 +1386,26 @@ pub fn DirectoryBrowser(props: DirectoryBrowserProps) -> Element {
                 }
                 div { class: "semantic-directory-browser__command-row",
                 div { class: "semantic-directory-browser__toolbar-controls", role: "group", aria_label: "View controls",
+                    dxcomp::Button {
+                        variant: if hierarchy() { dxcomp::ButtonVariant::Primary } else { dxcomp::ButtonVariant::Outline },
+                        size: dxcomp::ButtonSize::Sm,
+                        title: "Browse parent/child relationships",
+                        aria_label: "Browse parent/child relationships",
+                        aria_pressed: hierarchy(),
+                        onclick: {
+                            let root = current_root();
+                            let kind = location_kind();
+                            move |_| {
+                                if hierarchy() {
+                                    navigate_to_tree_location(None, false, DirectoryLocationKind::Directory);
+                                } else {
+                                    navigate_to_tree_location(root.clone(), true, kind);
+                                }
+                            }
+                        },
+                        FolderTree { size: "1rem" }
+                        "Parent/child"
+                    }
                     dxcomp::Button {
                         variant: dxcomp::ButtonVariant::Outline,
                         size: dxcomp::ButtonSize::IconSm,
@@ -1251,16 +1479,31 @@ pub fn DirectoryBrowser(props: DirectoryBrowserProps) -> Element {
                         size: dxcomp::ButtonSize::IconSm,
                         title: "New Directory",
                         aria_label: "New directory",
-                        disabled: busy.contains(&DirectoryOperation::Create),
+                        disabled: !directory_membership_capable || busy.contains(&DirectoryOperation::Create),
                         onclick: {
                             let current_root = current_root();
+                            let location_kind = location_kind();
                             move |_| {
                                 commands.send(DirectoryBrowserCommand::OpenDialog(DirectoryDialog::NewDirectory {
-                                    parent: current_root.clone(),
+                                    parent: current_root.clone().map(|directory_id| DirectoryMembershipTarget {
+                                        directory_id,
+                                        location_kind,
+                                    }),
                                 }));
                             }
                         },
                         FolderPlus { size: "1rem" }
+                    }
+                    if let LoadState::Ready(page_data) = &*content_state.read()
+                        && let Some(item) = page_data.current_entity.clone()
+                    {
+                        dxcomp::Button {
+                            variant: dxcomp::ButtonVariant::Outline,
+                            size: dxcomp::ButtonSize::Sm,
+                            onclick: move |_| commands.send(DirectoryBrowserCommand::ViewItem(item.clone())),
+                            FileText { size: "1rem" }
+                            "View entity"
+                        }
                     }
                     dxcomp::Button {
                         variant: dxcomp::ButtonVariant::Outline,
@@ -1270,10 +1513,14 @@ pub fn DirectoryBrowser(props: DirectoryBrowserProps) -> Element {
                         disabled: current_target.is_none() || busy.contains(&DirectoryOperation::AddExisting),
                         onclick: {
                             let current_root = current_root();
+                            let location_kind = location_kind();
                             move |_| {
                                 if let Some(parent) = current_root.clone() {
                                     commands.send(DirectoryBrowserCommand::OpenDialog(DirectoryDialog::AddExisting {
-                                        parent,
+                                        target: DirectoryMembershipTarget {
+                                            directory_id: parent,
+                                            location_kind,
+                                        },
                                     }));
                                 }
                             }
@@ -1336,7 +1583,7 @@ pub fn DirectoryBrowser(props: DirectoryBrowserProps) -> Element {
                 dxcomp::Button {
                     variant: dxcomp::ButtonVariant::Outline,
                     size: dxcomp::ButtonSize::Sm,
-                disabled: selected_count == 0 || current_root().is_none() || busy.contains(&DirectoryOperation::Remove),
+                disabled: selected_count == 0 || current_root().is_none() || !directory_membership_capable || busy.contains(&DirectoryOperation::Remove),
                     onclick: move |_| commands.send(DirectoryBrowserCommand::RemoveSelected),
                     X { size: "1rem" }
                     "Remove"
@@ -1344,7 +1591,7 @@ pub fn DirectoryBrowser(props: DirectoryBrowserProps) -> Element {
                 dxcomp::Button {
                     variant: dxcomp::ButtonVariant::Outline,
                     size: dxcomp::ButtonSize::Sm,
-                    disabled: selected_count == 0,
+                    disabled: selected_count == 0 || !directory_membership_capable,
                     onclick: move |_| commands.send(DirectoryBrowserCommand::CutSelected),
                     Scissors { size: "1rem" }
                     "Cut"
@@ -1360,12 +1607,18 @@ pub fn DirectoryBrowser(props: DirectoryBrowserProps) -> Element {
                 dxcomp::Button {
                     variant: dxcomp::ButtonVariant::Outline,
                     size: dxcomp::ButtonSize::Sm,
-                    disabled: clipboard().is_none() || current_root().is_none() || busy.contains(&DirectoryOperation::Paste),
+                    disabled: clipboard().is_none() || current_root().is_none() || !directory_membership_capable || busy.contains(&DirectoryOperation::Paste),
                     onclick: {
                         let current_root = current_root();
+                        let location_kind = location_kind();
                         move |_| {
                             if let Some(parent) = current_root.clone() {
-                                commands.send(DirectoryBrowserCommand::PasteInto(parent));
+                                commands.send(DirectoryBrowserCommand::PasteInto(
+                                    DirectoryMembershipTarget {
+                                        directory_id: parent,
+                                        location_kind,
+                                    },
+                                ));
                             }
                         }
                     },
@@ -1375,7 +1628,7 @@ pub fn DirectoryBrowser(props: DirectoryBrowserProps) -> Element {
                 dxcomp::Button {
                     variant: dxcomp::ButtonVariant::Outline,
                     size: dxcomp::ButtonSize::Sm,
-                    disabled: selected_count == 0 || busy.contains(&DirectoryOperation::MoveTo),
+                    disabled: selected_count == 0 || !directory_membership_capable || busy.contains(&DirectoryOperation::MoveTo),
                     onclick: {
                         let source = current_root();
                         let item_ids = selected_items().into_iter().collect::<Vec<_>>();
@@ -1438,11 +1691,11 @@ pub fn DirectoryBrowser(props: DirectoryBrowserProps) -> Element {
                                     item_ids: selected_items().iter().cloned().collect(),
                                 }))
                             }
-                            "Delete" => {
+                            "Delete" if directory_membership_capable => {
                                 event.prevent_default();
                                 Some(DirectoryBrowserCommand::RemoveSelected)
                             }
-                            "x" | "X" if modifiers.ctrl() || modifiers.meta() => {
+                            "x" | "X" if (modifiers.ctrl() || modifiers.meta()) && directory_membership_capable => {
                                 event.prevent_default();
                                 Some(DirectoryBrowserCommand::CutSelected)
                             }
@@ -1450,9 +1703,14 @@ pub fn DirectoryBrowser(props: DirectoryBrowserProps) -> Element {
                                 event.prevent_default();
                                 Some(DirectoryBrowserCommand::CopySelected)
                             }
-                            "v" | "V" if modifiers.ctrl() || modifiers.meta() => {
+                            "v" | "V" if (modifiers.ctrl() || modifiers.meta()) && directory_membership_capable => {
                                 event.prevent_default();
-                                current_root().map(DirectoryBrowserCommand::PasteInto)
+                                current_root().map(|directory_id| {
+                                    DirectoryBrowserCommand::PasteInto(DirectoryMembershipTarget {
+                                        directory_id,
+                                        location_kind: location_kind(),
+                                    })
+                                })
                             }
                             "F2" => current_root().map(|item_id| {
                                 DirectoryBrowserCommand::OpenDialog(DirectoryDialog::Rename {
@@ -1515,10 +1773,11 @@ pub fn DirectoryBrowser(props: DirectoryBrowserProps) -> Element {
                                                 .as_ref()
                                                 .is_some_and(|clipboard| clipboard.mode == DirectoryClipboardMode::Cut && clipboard.item_ids.contains(&row_id));
                                             rsx! {
-                                        DirectoryTreeRowView {
-                                            key: "{row.item.id}-{row.depth}",
-                                            row,
-                                            active_root: current_root(),
+                                            DirectoryTreeRowView {
+                                                key: "{row.item.id}-{row.depth}-{row.location_kind:?}",
+                                                row,
+                                                active_root: current_root(),
+                                                active_kind: location_kind(),
                                             selected: row_selected,
                                             cut: row_cut,
                                             dragged_item: dragged_item(),
@@ -1546,6 +1805,8 @@ pub fn DirectoryBrowser(props: DirectoryBrowserProps) -> Element {
                                         if page_data.items.is_empty() {
                                             DirectoryEmptyState {
                                                 root: current_root(),
+                                                location_kind: location_kind(),
+                                                allow_directory_actions: directory_membership_capable,
                                                 clipboard_available: clipboard().is_some(),
                                                 commands,
                                             }
@@ -1589,8 +1850,10 @@ pub fn DirectoryBrowser(props: DirectoryBrowserProps) -> Element {
                             }
                         }
                     }
-                    DirectoryBackgroundContextMenuContent {
-                        root: current_root(),
+                                DirectoryBackgroundContextMenuContent {
+                                    root: current_root(),
+                                    location_kind: location_kind(),
+                                    allow_directory_actions: directory_membership_capable,
                         clipboard_available: clipboard().is_some(),
                         commands,
                     }
@@ -1726,6 +1989,7 @@ fn DirectoryListRow(
             "data-cut": cut,
             "data-focused": focused,
             "data-dragging": dragged_item.as_deref() == Some(item.id.as_str()),
+            "data-virtual-root": item.has_semantic_children,
             "data-drop-target": dragged_item.is_some() && item.is_directory && dragged_item.as_deref() != Some(item.id.as_str()),
             "data-draggable": true,
             aria_pressed: selected,
@@ -1753,19 +2017,30 @@ fn DirectoryListRow(
                     commands.send(DirectoryBrowserCommand::OpenItem(click_item.clone()));
                 }
             },
-            if item.is_directory {
+            if item.has_semantic_children && !item.is_directory {
+                FolderTree { size: "1.2rem" }
+            } else if item.is_directory {
                 Folder { size: "1.2rem" }
             } else {
                 FileText { size: "1.2rem" }
             }
             span { class: "semantic-directory-browser__item-title", "{item.title}" }
+            span { class: "semantic-directory-browser__parent-cell",
+                if item.has_semantic_children {
+                    span { class: "semantic-directory-browser__virtual-label", "Parent" }
+                }
+            }
             span { class: "semantic-directory-browser__item-type", "{type_label}" }
             code { class: "semantic-directory-browser__item-id", "{item.id}" }
             span { class: "semantic-directory-browser__item-order", "{order}" }
             span { class: "semantic-directory-browser__item-date", "{updated}" }
         }
             }
-            DirectoryItemContextMenuContent { item, commands }
+            DirectoryItemContextMenuContent {
+                item,
+                represented_location_kind: DirectoryLocationKind::Directory,
+                commands,
+            }
         }
     }
 }
@@ -1791,6 +2066,7 @@ fn DirectoryTile(
             "data-cut": cut,
             "data-focused": focused,
             "data-dragging": dragged_item.as_deref() == Some(item.id.as_str()),
+            "data-virtual-root": item.has_semantic_children,
             "data-drop-target": dragged_item.is_some() && item.is_directory && dragged_item.as_deref() != Some(item.id.as_str()),
             "data-draggable": true,
             aria_pressed: selected,
@@ -1818,17 +2094,26 @@ fn DirectoryTile(
                     commands.send(DirectoryBrowserCommand::OpenItem(click_item.clone()));
                 }
             },
-            if item.is_directory {
+            if item.has_semantic_children && !item.is_directory {
+                FolderTree { size: "2rem" }
+            } else if item.is_directory {
                 Folder { size: "2rem" }
             } else {
                 FileText { size: "2rem" }
             }
             span { class: "semantic-directory-browser__item-title", "{item.title}" }
+            if item.has_semantic_children {
+                span { class: "semantic-directory-browser__virtual-label", "Parent" }
+            }
             span { class: "semantic-directory-browser__item-type", "{type_label}" }
             code { class: "semantic-directory-browser__item-id", "{item.id}" }
         }
             }
-            DirectoryItemContextMenuContent { item, commands }
+            DirectoryItemContextMenuContent {
+                item,
+                represented_location_kind: DirectoryLocationKind::Directory,
+                commands,
+            }
         }
     }
 }
@@ -1837,6 +2122,7 @@ fn DirectoryTile(
 fn DirectoryTreeRowView(
     row: DirectoryTreeRow,
     active_root: Option<String>,
+    active_kind: DirectoryLocationKind,
     selected: bool,
     cut: bool,
     dragged_item: Option<String>,
@@ -1845,14 +2131,16 @@ fn DirectoryTreeRowView(
 ) -> Element {
     let item = row.item.clone();
     let click_item = item.clone();
-    let expander_item_id = item.id.clone();
-    let is_active = active_root.as_deref() == Some(item.id.as_str());
-    let is_expanded = expanded.read().contains(&item.id);
+    let row_kind = row.location_kind;
+    let is_active = active_root.as_deref() == Some(item.id.as_str()) && active_kind == row_kind;
+    let expansion_key = location_expansion_key(row_kind, &item.id);
+    let is_expanded = expanded.read().contains(&expansion_key);
     let padding = row.depth * 16;
     rsx! {
         div {
             class: "semantic-directory-browser__tree-row",
             "data-active": is_active,
+            "data-virtual-root": row_kind == DirectoryLocationKind::SemanticParent,
             role: "treeitem",
             aria_selected: selected,
             aria_expanded: is_expanded,
@@ -1864,9 +2152,9 @@ fn DirectoryTreeRowView(
                 aria_controls: "semantic-directory-tree",
                 disabled: row.cycle,
                 onclick: {
-                    let item_id = expander_item_id.clone();
+                    let expansion_key = expansion_key.clone();
                     move |_| {
-                        commands.send(DirectoryBrowserCommand::ToggleTreeExpansion(item_id.clone()));
+                        commands.send(DirectoryBrowserCommand::ToggleTreeExpansion(expansion_key.clone()));
                     }
                 },
                 if is_expanded {
@@ -1894,7 +2182,13 @@ fn DirectoryTreeRowView(
                             let target_id = item.id.clone();
                             move |event: MouseEvent| {
                                 event.stop_propagation();
-                                move_dragged_item_to_directory(None, target_id.clone(), true, true, commands);
+                                move_dragged_item_to_directory(
+                                    None,
+                                    target_id.clone(),
+                                    row_kind == DirectoryLocationKind::Directory && item.is_directory,
+                                    true,
+                                    commands,
+                                );
                             }
                         },
                         onclick: move |event: MouseEvent| {
@@ -1906,14 +2200,28 @@ fn DirectoryTreeRowView(
                                 event.prevent_default();
                                 commands.send(DirectoryBrowserCommand::ToggleSelection(click_item.clone()));
                             } else {
-                                commands.send(DirectoryBrowserCommand::OpenTreeRoot(click_item.id.clone()));
+                                commands.send(DirectoryBrowserCommand::OpenTreeRoot {
+                                    item_id: click_item.id.clone(),
+                                    location_kind: row_kind,
+                                });
                             }
                         },
-                        Folder { size: "1rem" }
+                        if row_kind == DirectoryLocationKind::SemanticParent {
+                            FolderTree { size: "1rem" }
+                        } else {
+                            Folder { size: "1rem" }
+                        }
                         span { "{item.title}" }
+                        if row_kind == DirectoryLocationKind::SemanticParent {
+                            span { class: "semantic-directory-browser__virtual-label", "Parent" }
+                        }
                     }
                 }
-                DirectoryItemContextMenuContent { item, commands }
+                DirectoryItemContextMenuContent {
+                    item,
+                    represented_location_kind: row_kind,
+                    commands,
+                }
             }
         }
     }
@@ -1922,23 +2230,45 @@ fn DirectoryTreeRowView(
 #[component]
 fn DirectoryItemContextMenuContent(
     item: DirectoryBrowseItem,
+    represented_location_kind: DirectoryLocationKind,
     commands: Coroutine<DirectoryBrowserCommand>,
 ) -> Element {
     let item_id = item.id.clone();
     let item_title = item.title.clone();
     let open_item = item.clone();
+    let view_item = item.clone();
     let is_directory = item.is_directory;
+    let has_semantic_children = item.has_semantic_children;
+    let is_directory_destination =
+        is_directory && represented_location_kind.supports_directory_membership();
     rsx! {
         dxcomp::ContextMenuContent {
             dxcomp::ContextMenuItem {
                 value: "open".to_string(),
                 index: 0usize,
                 on_select: move |_| commands.send(DirectoryBrowserCommand::OpenItem(open_item.clone())),
-                "Open"
+                if is_directory { "Open directory" } else if has_semantic_children { "Browse children" } else { "View entity" }
+            }
+            if has_semantic_children && is_directory {
+                dxcomp::ContextMenuItem {
+                    value: "browse-children".to_string(),
+                    index: 1usize,
+                    on_select: {
+                        let item_id = item_id.clone();
+                        move |_| commands.send(DirectoryBrowserCommand::BrowseSemanticParent(item_id.clone()))
+                    },
+                    "Browse children"
+                }
+            }
+            dxcomp::ContextMenuItem {
+                value: "view-entity".to_string(),
+                index: 2usize,
+                on_select: move |_| commands.send(DirectoryBrowserCommand::ViewItem(view_item.clone())),
+                "View entity"
             }
             dxcomp::ContextMenuItem {
                 value: "rename".to_string(),
-                index: 1usize,
+                index: 3usize,
                 on_select: {
                     let item_id = item_id.clone();
                     let item_title = item_title.clone();
@@ -1951,7 +2281,7 @@ fn DirectoryItemContextMenuContent(
             }
             dxcomp::ContextMenuItem {
                 value: "cut".to_string(),
-                index: 2usize,
+                index: 4usize,
                 on_select: {
                     let item_id = item_id.clone();
                     move |_| {
@@ -1963,7 +2293,7 @@ fn DirectoryItemContextMenuContent(
             }
             dxcomp::ContextMenuItem {
                 value: "copy".to_string(),
-                index: 3usize,
+                index: 5usize,
                 on_select: {
                     let item_id = item_id.clone();
                     move |_| {
@@ -1973,34 +2303,45 @@ fn DirectoryItemContextMenuContent(
                 },
                 "Copy"
             }
-            if is_directory {
+            if is_directory_destination {
                 dxcomp::ContextMenuItem {
                     value: "new-child".to_string(),
-                    index: 4usize,
+                    index: 6usize,
                     on_select: {
                         let item_id = item_id.clone();
                         move |_| commands.send(DirectoryBrowserCommand::OpenDialog(DirectoryDialog::NewDirectory {
-                            parent: Some(item_id.clone()),
+                            parent: Some(DirectoryMembershipTarget {
+                                directory_id: item_id.clone(),
+                                location_kind: represented_location_kind,
+                            }),
                         }))
                     },
                     "New Child Directory"
                 }
                 dxcomp::ContextMenuItem {
                     value: "paste-into".to_string(),
-                    index: 5usize,
+                    index: 7usize,
                     on_select: {
                         let item_id = item_id.clone();
-                        move |_| commands.send(DirectoryBrowserCommand::PasteInto(item_id.clone()))
+                        move |_| commands.send(DirectoryBrowserCommand::PasteInto(
+                            DirectoryMembershipTarget {
+                                directory_id: item_id.clone(),
+                                location_kind: represented_location_kind,
+                            },
+                        ))
                     },
                     "Paste Into Directory"
                 }
                 dxcomp::ContextMenuItem {
                     value: "add-existing".to_string(),
-                    index: 6usize,
+                    index: 8usize,
                     on_select: {
                         let item_id = item_id.clone();
                         move |_| commands.send(DirectoryBrowserCommand::OpenDialog(DirectoryDialog::AddExisting {
-                            parent: item_id.clone(),
+                            target: DirectoryMembershipTarget {
+                                directory_id: item_id.clone(),
+                                location_kind: represented_location_kind,
+                            },
                         }))
                     },
                     "Add Existing Item"
@@ -2008,7 +2349,7 @@ fn DirectoryItemContextMenuContent(
             }
             dxcomp::ContextMenuItem {
                 value: "remove".to_string(),
-                index: 7usize,
+                index: 9usize,
                 on_select: {
                     let item_id = item_id.clone();
                     move |_| {
@@ -2020,7 +2361,7 @@ fn DirectoryItemContextMenuContent(
             }
             dxcomp::ContextMenuItem {
                 value: "delete".to_string(),
-                index: 8usize,
+                index: 10usize,
                 on_select: {
                     let item_id = item_id.clone();
                     move |_| commands.send(DirectoryBrowserCommand::OpenDialog(DirectoryDialog::ConfirmDelete {
@@ -2031,7 +2372,7 @@ fn DirectoryItemContextMenuContent(
             }
             dxcomp::ContextMenuItem {
                 value: "refresh".to_string(),
-                index: 9usize,
+                index: 11usize,
                 on_select: move |_| commands.send(DirectoryBrowserCommand::Refresh),
                 "Refresh"
             }
@@ -2042,30 +2383,42 @@ fn DirectoryItemContextMenuContent(
 #[component]
 fn DirectoryBackgroundContextMenuContent(
     root: Option<String>,
+    location_kind: DirectoryLocationKind,
+    allow_directory_actions: bool,
     clipboard_available: bool,
     commands: Coroutine<DirectoryBrowserCommand>,
 ) -> Element {
     rsx! {
         dxcomp::ContextMenuContent {
-            dxcomp::ContextMenuItem {
-                value: "new-directory".to_string(),
-                index: 0usize,
-                on_select: {
-                    let root = root.clone();
-                    move |_| commands.send(DirectoryBrowserCommand::OpenDialog(DirectoryDialog::NewDirectory {
-                        parent: root.clone(),
-                    }))
-                },
-                "New Directory"
+            if allow_directory_actions {
+                dxcomp::ContextMenuItem {
+                    value: "new-directory".to_string(),
+                    index: 0usize,
+                    on_select: {
+                        let root = root.clone();
+                        move |_| commands.send(DirectoryBrowserCommand::OpenDialog(DirectoryDialog::NewDirectory {
+                            parent: root.clone().map(|directory_id| DirectoryMembershipTarget {
+                                directory_id,
+                                location_kind,
+                            }),
+                        }))
+                    },
+                    "New Directory"
+                }
             }
-            if let Some(parent) = root.clone() {
+            if allow_directory_actions && let Some(parent) = root.clone() {
                 dxcomp::ContextMenuItem {
                     value: "paste".to_string(),
                     index: 1usize,
                     disabled: !clipboard_available,
                     on_select: {
                         let parent = parent.clone();
-                        move |_| commands.send(DirectoryBrowserCommand::PasteInto(parent.clone()))
+                        move |_| commands.send(DirectoryBrowserCommand::PasteInto(
+                            DirectoryMembershipTarget {
+                                directory_id: parent.clone(),
+                                location_kind,
+                            },
+                        ))
                     },
                     "Paste"
                 }
@@ -2075,7 +2428,10 @@ fn DirectoryBackgroundContextMenuContent(
                     on_select: {
                         let parent = parent.clone();
                         move |_| commands.send(DirectoryBrowserCommand::OpenDialog(DirectoryDialog::AddExisting {
-                            parent: parent.clone(),
+                            target: DirectoryMembershipTarget {
+                                directory_id: parent.clone(),
+                                location_kind,
+                            },
                         }))
                     },
                     "Add Existing Item"
@@ -2094,6 +2450,8 @@ fn DirectoryBackgroundContextMenuContent(
 #[component]
 fn DirectoryEmptyState(
     root: Option<String>,
+    location_kind: DirectoryLocationKind,
+    allow_directory_actions: bool,
     clipboard_available: bool,
     commands: Coroutine<DirectoryBrowserCommand>,
 ) -> Element {
@@ -2105,26 +2463,34 @@ fn DirectoryEmptyState(
     rsx! {
         div { class: "semantic-empty semantic-directory-browser__empty-actions",
             span { "{title}" }
-            dxcomp::Button {
-                variant: dxcomp::ButtonVariant::Outline,
-                size: dxcomp::ButtonSize::Sm,
-                onclick: {
-                    let root = root.clone();
-                    move |_| commands.send(DirectoryBrowserCommand::OpenDialog(DirectoryDialog::NewDirectory {
-                        parent: root.clone(),
-                    }))
-                },
-                Plus { size: "1rem" }
-                "New Directory"
+            if allow_directory_actions {
+                dxcomp::Button {
+                    variant: dxcomp::ButtonVariant::Outline,
+                    size: dxcomp::ButtonSize::Sm,
+                    onclick: {
+                        let root = root.clone();
+                        move |_| commands.send(DirectoryBrowserCommand::OpenDialog(DirectoryDialog::NewDirectory {
+                            parent: root.clone().map(|directory_id| DirectoryMembershipTarget {
+                                directory_id,
+                                location_kind,
+                            }),
+                        }))
+                    },
+                    Plus { size: "1rem" }
+                    "New Directory"
+                }
             }
-            if let Some(parent) = root.clone() {
+            if allow_directory_actions && let Some(parent) = root.clone() {
                 dxcomp::Button {
                     variant: dxcomp::ButtonVariant::Outline,
                     size: dxcomp::ButtonSize::Sm,
                     onclick: {
                         let parent = parent.clone();
                         move |_| commands.send(DirectoryBrowserCommand::OpenDialog(DirectoryDialog::AddExisting {
-                            parent: parent.clone(),
+                            target: DirectoryMembershipTarget {
+                                directory_id: parent.clone(),
+                                location_kind,
+                            },
                         }))
                     },
                     Link { size: "1rem" }
@@ -2136,7 +2502,12 @@ fn DirectoryEmptyState(
                         size: dxcomp::ButtonSize::Sm,
                         onclick: {
                             let parent = parent.clone();
-                            move |_| commands.send(DirectoryBrowserCommand::PasteInto(parent.clone()))
+                            move |_| commands.send(DirectoryBrowserCommand::PasteInto(
+                                DirectoryMembershipTarget {
+                                    directory_id: parent.clone(),
+                                    location_kind,
+                                },
+                            ))
                         },
                         ClipboardPaste { size: "1rem" }
                         "Paste"
@@ -2248,7 +2619,7 @@ fn DirectoryOperationDialog(
         move_target.set(None);
     }));
     let add_parent = match dialog.as_ref() {
-        Some(DirectoryDialog::AddExisting { parent }) => Some(parent.clone()),
+        Some(DirectoryDialog::AddExisting { target }) => Some(target.directory_id.clone()),
         _ => None,
     };
     let options = use_resource(move || {
@@ -2342,7 +2713,7 @@ fn DirectoryOperationDialog(
             }
             match dialog {
                 Some(DirectoryDialog::NewDirectory { .. }) => rsx! {},
-                Some(DirectoryDialog::AddExisting { parent }) => rsx! {
+                Some(DirectoryDialog::AddExisting { target }) => rsx! {
                     dxcomp::DialogTitle { "Add Existing Item" }
                     dxcomp::Combobox::<String> {
                         default_value: add_selected(),
@@ -2384,7 +2755,7 @@ fn DirectoryOperationDialog(
                             onclick: move |_| {
                                 if let Some(item_id) = add_selected() {
                                     commands.send(DirectoryBrowserCommand::AddExisting {
-                                        parent: parent.clone(),
+                                        target: target.clone(),
                                         item_id,
                                     });
                                 }
@@ -2616,6 +2987,8 @@ async fn reload_current_content(
     let page = (state.page)();
     let page_size = (state.page_size)();
     let sort = (state.sort)();
+    let hierarchy = (state.hierarchy)();
+    let location_kind = (state.location_kind)();
     spawn(reload_content(
         client,
         scope_id,
@@ -2623,6 +2996,8 @@ async fn reload_current_content(
         page,
         page_size,
         sort,
+        hierarchy,
+        location_kind,
         state.content_state,
         state.content_loading,
         state.content_generation,
@@ -2647,10 +3022,12 @@ async fn reload_current_tree(
     let generation = (state.tree_generation)().saturating_add(1);
     state.tree_generation.set(generation);
     let expanded = (state.expanded_tree)();
+    let hierarchy = (state.hierarchy)();
     spawn(reload_tree(
         client,
         scope_id,
         expanded,
+        hierarchy,
         state.tree_state,
         state.tree_loading,
         state.tree_generation,
@@ -2676,6 +3053,8 @@ async fn reload_content(
     page: usize,
     page_size: usize,
     sort: DirectorySort,
+    hierarchy: bool,
+    location_kind: DirectoryLocationKind,
     mut content_state: Signal<LoadState<DirectoryPage>>,
     mut content_loading: Signal<bool>,
     content_generation: Signal<u64>,
@@ -2690,7 +3069,18 @@ async fn reload_content(
         "directory browser loading content"
     );
     content_loading.set(true);
-    let next = match load_directory_page(client, scope_id, root, page, page_size, sort).await {
+    let next = match load_directory_page(
+        client,
+        scope_id,
+        root,
+        page,
+        page_size,
+        sort,
+        hierarchy,
+        location_kind,
+    )
+    .await
+    {
         Ok(page_data) => {
             info!(
                 item_count = page_data.items.len(),
@@ -2723,6 +3113,7 @@ async fn reload_tree(
     client: semantic_rpc::RpcClient,
     scope_id: Option<String>,
     expanded: BTreeSet<String>,
+    hierarchy: bool,
     mut tree_state: Signal<LoadState<Vec<DirectoryTreeRow>>>,
     mut tree_loading: Signal<bool>,
     tree_generation: Signal<u64>,
@@ -2734,7 +3125,7 @@ async fn reload_tree(
         "directory browser loading tree"
     );
     tree_loading.set(true);
-    let next = match load_tree_rows(client, scope_id, expanded).await {
+    let next = match load_tree_rows(client, scope_id, expanded, hierarchy).await {
         Ok(rows) => {
             info!(row_count = rows.len(), "directory browser tree loaded");
             LoadState::Ready(rows)
@@ -2775,12 +3166,34 @@ fn move_dragged_item_to_directory(
     });
 }
 
-fn navigate_to_tree_root(root: Option<String>) {
-    let target = match root {
-        Some(root) => format!("/tree?root={}", url_query_escape(&root)),
-        None => "/tree".to_string(),
-    };
-    let _ = navigator().push(target);
+fn navigate_to_tree_location(
+    root: Option<String>,
+    hierarchy: bool,
+    location_kind: DirectoryLocationKind,
+) {
+    let _ = navigator().push(tree_location_url(root, hierarchy, location_kind));
+}
+
+fn tree_location_url(
+    root: Option<String>,
+    hierarchy: bool,
+    location_kind: DirectoryLocationKind,
+) -> String {
+    let mut fields = Vec::new();
+    if let Some(root) = root {
+        fields.push(format!("root={}", url_query_escape(&root)));
+    }
+    if hierarchy {
+        fields.push("hierarchy=true".to_string());
+    }
+    if let Some(kind) = location_kind.as_query_value() {
+        fields.push(format!("kind={kind}"));
+    }
+    if fields.is_empty() {
+        "/tree".to_string()
+    } else {
+        format!("/tree?{}", fields.join("&"))
+    }
 }
 
 fn url_query_escape(value: &str) -> String {
@@ -2798,20 +3211,94 @@ fn url_query_escape(value: &str) -> String {
         .collect()
 }
 
-fn expanded_for_open(mut expanded: BTreeSet<String>, item_id: &str) -> BTreeSet<String> {
-    expanded.insert(item_id.to_string());
+fn expanded_for_open(
+    mut expanded: BTreeSet<String>,
+    kind: DirectoryLocationKind,
+    item_id: &str,
+) -> BTreeSet<String> {
+    expanded.insert(location_expansion_key(kind, item_id));
     expanded
+}
+
+fn location_expansion_key(kind: DirectoryLocationKind, item_id: &str) -> String {
+    let prefix = match kind {
+        DirectoryLocationKind::Directory => "directory",
+        DirectoryLocationKind::SemanticParent => "parent",
+    };
+    format!("{prefix}:{item_id}")
 }
 
 #[cfg(test)]
 mod tests {
-    use super::expanded_for_open;
+    use super::{
+        DirectoryMembershipTarget, expanded_for_open, location_supports_directory_membership,
+        tree_location_url,
+    };
+    use crate::components::directory_browser::types::DirectoryLocationKind;
     use std::collections::BTreeSet;
 
     #[test]
     fn opening_a_tree_directory_expands_it_idempotently() {
-        let expanded = expanded_for_open(BTreeSet::new(), "directory-1");
-        assert!(expanded.contains("directory-1"));
-        assert_eq!(expanded_for_open(expanded.clone(), "directory-1"), expanded);
+        let expanded = expanded_for_open(
+            BTreeSet::new(),
+            DirectoryLocationKind::Directory,
+            "directory-1",
+        );
+        assert!(expanded.contains("directory:directory-1"));
+        assert_eq!(
+            expanded_for_open(
+                expanded.clone(),
+                DirectoryLocationKind::Directory,
+                "directory-1"
+            ),
+            expanded
+        );
+    }
+
+    #[test]
+    fn tree_location_url_preserves_hierarchy_kind_and_escaping() {
+        assert_eq!(
+            tree_location_url(
+                Some("parent/id 'one'".to_string()),
+                true,
+                DirectoryLocationKind::SemanticParent,
+            ),
+            "/tree?root=parent%2Fid%20%27one%27&hierarchy=true&kind=parent"
+        );
+        assert_eq!(
+            tree_location_url(None, false, DirectoryLocationKind::Directory),
+            "/tree"
+        );
+    }
+
+    #[test]
+    fn parent_attribute_locations_never_enable_directory_membership_actions() {
+        assert!(
+            !DirectoryMembershipTarget {
+                directory_id: "dual-role-directory".to_string(),
+                location_kind: DirectoryLocationKind::SemanticParent,
+            }
+            .is_supported()
+        );
+        assert!(!location_supports_directory_membership(
+            DirectoryLocationKind::SemanticParent,
+            true,
+            true,
+        ));
+        assert!(!location_supports_directory_membership(
+            DirectoryLocationKind::Directory,
+            true,
+            false,
+        ));
+        assert!(location_supports_directory_membership(
+            DirectoryLocationKind::Directory,
+            true,
+            true,
+        ));
+        assert!(location_supports_directory_membership(
+            DirectoryLocationKind::Directory,
+            false,
+            false,
+        ));
     }
 }

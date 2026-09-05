@@ -5,7 +5,7 @@ use semantic_data::{
     value::Value,
 };
 use semantic_ui_core::{
-    DirectoryActionTarget, SemanticFormSubmit, SubmitError,
+    DirectoryActionTarget, DirectoryLocationKind, SemanticFormSubmit, SubmitError,
     context::{Toast, use_toast_dispatcher},
     create_entity_in_directory, use_active_scope_id, use_rpc_client,
 };
@@ -24,7 +24,7 @@ enum TreeDialog {
 }
 
 #[component]
-pub fn TreePage(root: Option<String>) -> Element {
+pub fn TreePage(root: Option<String>, hierarchy: Option<bool>, kind: Option<String>) -> Element {
     let client = use_rpc_client();
     let scope_id = use_active_scope_id();
     let toast = use_toast_dispatcher();
@@ -85,6 +85,8 @@ pub fn TreePage(root: Option<String>) -> Element {
             h1 { class: "semantic-visually-hidden", "Directory tree" }
             semantic_ui_core::DirectoryBrowser {
                 root,
+                hierarchy: hierarchy.unwrap_or(false),
+                location_kind: DirectoryLocationKind::from_query_value(kind.as_deref()),
                 refresh_revision: refresh_revision(),
                 on_create_entity: move |target| {
                     create_dirty.set(false);

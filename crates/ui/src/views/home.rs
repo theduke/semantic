@@ -28,7 +28,7 @@ pub fn HomePage() -> Element {
                     span { aria_hidden: "true", "Browse entities →" }
                 }
                 Link {
-                    to: Route::TreePage { root: None },
+                    to: Route::TreePage { root: None, hierarchy: None, kind: None },
                     class: "semantic-route-panel semantic-surface",
                     h2 { "Tree" }
                     p { "Arrange entities in directories and move through their hierarchy." }

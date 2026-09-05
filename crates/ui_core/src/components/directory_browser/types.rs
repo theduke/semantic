@@ -23,6 +23,14 @@ pub struct DirectoryBrowserProps {
     #[props(default)]
     pub root: Option<String>,
 
+    /// Enables browsing the canonical `semantic:parent` hierarchy.
+    #[props(default)]
+    pub hierarchy: bool,
+
+    /// The relation represented by `root`.
+    #[props(default)]
+    pub location_kind: DirectoryLocationKind,
+
     #[props(default)]
     pub config: DirectoryBrowserConfig,
 
@@ -34,6 +42,33 @@ pub struct DirectoryBrowserProps {
 
     #[props(default)]
     pub refresh_revision: u64,
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, PartialOrd, Ord)]
+pub enum DirectoryLocationKind {
+    #[default]
+    Directory,
+    SemanticParent,
+}
+
+impl DirectoryLocationKind {
+    pub fn as_query_value(self) -> Option<&'static str> {
+        match self {
+            Self::Directory => None,
+            Self::SemanticParent => Some("parent"),
+        }
+    }
+
+    pub fn from_query_value(value: Option<&str>) -> Self {
+        match value {
+            Some("parent") => Self::SemanticParent,
+            _ => Self::Directory,
+        }
+    }
+
+    pub(super) fn supports_directory_membership(self) -> bool {
+        self == Self::Directory
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -117,6 +152,7 @@ pub(super) struct DirectoryBrowseItem {
     pub title: String,
     pub type_id: Option<String>,
     pub is_directory: bool,
+    pub has_semantic_children: bool,
     pub order: Option<u64>,
     pub created_at: Option<String>,
     pub updated_at: Option<String>,
@@ -126,6 +162,7 @@ pub(super) struct DirectoryBrowseItem {
 pub(super) struct DirectoryBreadcrumb {
     pub id: String,
     pub title: String,
+    pub kind: DirectoryLocationKind,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -134,6 +171,9 @@ pub(super) struct DirectoryPage {
     pub has_next: bool,
     pub breadcrumbs: Vec<DirectoryBreadcrumb>,
     pub breadcrumb_cycle: bool,
+    pub location_kind: DirectoryLocationKind,
+    pub current_entity: Option<DirectoryBrowseItem>,
+    pub can_mutate_directory: bool,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -141,4 +181,5 @@ pub(super) struct DirectoryTreeRow {
     pub item: DirectoryBrowseItem,
     pub depth: usize,
     pub cycle: bool,
+    pub location_kind: DirectoryLocationKind,
 }

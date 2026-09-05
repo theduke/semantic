@@ -13,13 +13,18 @@ use super::{
         child_directories_query, child_ids_query, child_links_query, child_query,
         directory_nodes_query, directory_outgoing_links_query, file_tree_items_query,
         max_child_order_query, parent_count_query, parent_links_query, parent_query, root_query,
+        semantic_children_query, semantic_navigable_children_query,
+        semantic_parent_ids_for_candidates_query, semantic_parent_query,
+        semantic_parent_roots_query,
     },
     types::{
-        DirectoryBreadcrumb, DirectoryBrowseItem, DirectoryPage, DirectorySort, DirectoryTreeRow,
+        DirectoryBreadcrumb, DirectoryBrowseItem, DirectoryLocationKind, DirectoryPage,
+        DirectorySort, DirectoryTreeRow,
     },
 };
 
 const DEFAULT_TREE_LIMIT: usize = 200;
+const MAX_HIERARCHY_DEPTH: usize = 64;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(super) struct UnlinkOutcome {
@@ -35,46 +40,88 @@ pub(super) async fn load_directory_page(
     page: usize,
     page_size: usize,
     sort: DirectorySort,
+    hierarchy: bool,
+    location_kind: DirectoryLocationKind,
 ) -> std::result::Result<DirectoryPage, String> {
     let page_size = page_size.max(1);
     let offset = page.saturating_mul(page_size);
-    let breadcrumbs = if let Some(root) = root.as_deref() {
+    let location_kind = if hierarchy {
+        location_kind
+    } else {
+        DirectoryLocationKind::Directory
+    };
+    let (breadcrumbs, current_entity) = if let Some(root) = root.as_deref() {
         let root_object =
             load_entity(client.clone(), scope_id.clone(), ENTITIES_COLLECTION, root).await?;
         let Some(root_object) = root_object else {
-            return Err("Directory not found".to_string());
+            return Err("Browse location not found".to_string());
         };
-        if !is_directory_object(&root_object) {
+        if location_kind == DirectoryLocationKind::Directory && !is_directory_object(&root_object) {
             return Err(format!("{root} is not a directory"));
         }
-        load_breadcrumbs(client.clone(), scope_id.clone(), root).await?
+        let breadcrumbs = match location_kind {
+            DirectoryLocationKind::Directory => {
+                load_breadcrumbs(client.clone(), scope_id.clone(), root).await?
+            }
+            DirectoryLocationKind::SemanticParent => {
+                load_semantic_breadcrumbs(client.clone(), scope_id.clone(), root).await?
+            }
+        };
+        (breadcrumbs, Some(row_to_item(root_object)))
     } else {
-        BreadcrumbLoad {
-            breadcrumbs: Vec::new(),
-            cycle: false,
-        }
+        (
+            BreadcrumbLoad {
+                breadcrumbs: Vec::new(),
+                cycle: false,
+            },
+            None,
+        )
     };
-    let rows = if let Some(root) = root.as_deref() {
+    let rows = if location_kind == DirectoryLocationKind::SemanticParent {
+        let Some(root) = root.as_deref() else {
+            return Err("A semantic parent location requires an entity ID".to_string());
+        };
         run_select_query(
-            client,
-            scope_id,
+            client.clone(),
+            scope_id.clone(),
+            semantic_children_query(root, sort, page_size + 1, offset),
+        )
+        .await?
+    } else if let Some(root) = root.as_deref() {
+        run_select_query(
+            client.clone(),
+            scope_id.clone(),
             child_query(root, sort, page_size + 1, offset),
         )
         .await?
+    } else if hierarchy {
+        run_select_query(
+            client.clone(),
+            scope_id.clone(),
+            semantic_parent_roots_query(sort, page_size + 1, offset),
+        )
+        .await?
     } else {
-        let roots = load_root_directory_rows(client, scope_id).await?;
+        let roots = load_root_directory_rows(client.clone(), scope_id.clone()).await?;
         roots
             .into_iter()
             .skip(offset)
             .take(page_size + 1)
             .collect::<Vec<_>>()
     };
-    let (items, has_next) = page_items_from_rows(rows, page_size);
+    let (mut items, has_next) = page_items_from_rows(rows, page_size);
+    if hierarchy {
+        classify_semantic_parents(client, scope_id, &mut items).await?;
+    }
     Ok(DirectoryPage {
         items,
         has_next,
         breadcrumbs: breadcrumbs.breadcrumbs,
         breadcrumb_cycle: breadcrumbs.cycle,
+        location_kind,
+        current_entity,
+        can_mutate_directory: location_kind.supports_directory_membership()
+            && (!hierarchy || root.is_some()),
     })
 }
 
@@ -82,10 +129,23 @@ pub(super) async fn load_tree_rows(
     client: semantic_rpc::RpcClient,
     scope_id: Option<String>,
     expanded: BTreeSet<String>,
+    hierarchy: bool,
 ) -> std::result::Result<Vec<DirectoryTreeRow>, String> {
     let mut rows = Vec::new();
-    let roots = load_root_directory_rows(client.clone(), scope_id.clone()).await?;
-    let roots = roots.into_iter().map(row_to_item).collect::<Vec<_>>();
+    let roots = if hierarchy {
+        run_select_query(
+            client.clone(),
+            scope_id.clone(),
+            semantic_parent_roots_query(DirectorySort::Order, DEFAULT_TREE_LIMIT, 0),
+        )
+        .await?
+    } else {
+        load_root_directory_rows(client.clone(), scope_id.clone()).await?
+    };
+    let mut roots = roots.into_iter().map(row_to_item).collect::<Vec<_>>();
+    if hierarchy {
+        classify_semantic_parents(client.clone(), scope_id.clone(), &mut roots).await?;
+    }
     let mut path = BTreeSet::new();
     for item in roots.into_iter().take(DEFAULT_TREE_LIMIT) {
         push_tree_row(
@@ -96,6 +156,12 @@ pub(super) async fn load_tree_rows(
             &expanded,
             &mut path,
             0,
+            if hierarchy {
+                DirectoryLocationKind::SemanticParent
+            } else {
+                DirectoryLocationKind::Directory
+            },
+            hierarchy,
         )
         .await?;
     }
@@ -199,6 +265,7 @@ fn append_picker_tree_rows(
             item,
             depth,
             cycle: true,
+            location_kind: DirectoryLocationKind::Directory,
         });
         return;
     }
@@ -209,6 +276,7 @@ fn append_picker_tree_rows(
         item,
         depth,
         cycle: false,
+        location_kind: DirectoryLocationKind::Directory,
     });
     path.insert(id.to_string());
     if let Some(child_rows) = children.get(id) {
@@ -731,24 +799,44 @@ async fn push_tree_row(
     expanded: &BTreeSet<String>,
     path: &mut BTreeSet<String>,
     depth: usize,
+    location_kind: DirectoryLocationKind,
+    hierarchy: bool,
 ) -> std::result::Result<(), String> {
-    let cycle = path.contains(&item.id);
+    let cycle = path.contains(&item.id) || depth >= MAX_HIERARCHY_DEPTH;
     rows.push(DirectoryTreeRow {
         item: item.clone(),
         depth,
         cycle,
+        location_kind,
     });
-    if cycle || !expanded.contains(&item.id) {
+    if cycle || !expanded.contains(&location_expansion_key(location_kind, &item.id)) {
         return Ok(());
     }
     path.insert(item.id.clone());
-    let children = run_select_query(
-        client.clone(),
-        scope_id.clone(),
-        child_directories_query(&item.id, DEFAULT_TREE_LIMIT, 0),
-    )
-    .await?;
-    for child in children.into_iter().map(row_to_item) {
+    let children_query = match location_kind {
+        DirectoryLocationKind::Directory => {
+            child_directories_query(&item.id, DEFAULT_TREE_LIMIT, 0)
+        }
+        DirectoryLocationKind::SemanticParent => {
+            semantic_navigable_children_query(&item.id, DirectorySort::Order, DEFAULT_TREE_LIMIT, 0)
+        }
+    };
+    let children = run_select_query(client.clone(), scope_id.clone(), children_query).await?;
+    let mut children = children.into_iter().map(row_to_item).collect::<Vec<_>>();
+    if hierarchy {
+        classify_semantic_parents(client.clone(), scope_id.clone(), &mut children).await?;
+    }
+    for child in children
+        .into_iter()
+        .filter(|child| child.is_directory || child.has_semantic_children)
+    {
+        let child_kind = if location_kind == DirectoryLocationKind::SemanticParent
+            && child.has_semantic_children
+        {
+            DirectoryLocationKind::SemanticParent
+        } else {
+            DirectoryLocationKind::Directory
+        };
         Box::pin(push_tree_row(
             rows,
             client.clone(),
@@ -757,11 +845,21 @@ async fn push_tree_row(
             expanded,
             path,
             depth + 1,
+            child_kind,
+            hierarchy,
         ))
         .await?;
     }
     path.remove(&item.id);
     Ok(())
+}
+
+fn location_expansion_key(kind: DirectoryLocationKind, id: &str) -> String {
+    let prefix = match kind {
+        DirectoryLocationKind::Directory => "directory",
+        DirectoryLocationKind::SemanticParent => "parent",
+    };
+    format!("{prefix}:{id}")
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -997,7 +1095,7 @@ async fn target_has_ancestor(
 ) -> std::result::Result<bool, String> {
     let mut seen = BTreeSet::new();
     let mut pending = vec![target_id.to_string()];
-    for _ in 0..64 {
+    for _ in 0..MAX_HIERARCHY_DEPTH {
         let Some(current_id) = pending.pop() else {
             return Ok(false);
         };
@@ -1163,7 +1261,7 @@ async fn load_breadcrumbs(
     let mut seen = BTreeSet::from([root.to_string()]);
     let mut current = root.to_string();
     let mut cycle = false;
-    for _ in 0..64 {
+    for _ in 0..MAX_HIERARCHY_DEPTH {
         let rows =
             run_select_query(client.clone(), scope_id.clone(), parent_query(&current)).await?;
         let Some(parent) = rows
@@ -1195,9 +1293,83 @@ async fn load_breadcrumbs(
         breadcrumbs.push(DirectoryBreadcrumb {
             title: object_title(&object, &id),
             id,
+            kind: DirectoryLocationKind::Directory,
         });
     }
     Ok(BreadcrumbLoad { breadcrumbs, cycle })
+}
+
+async fn load_semantic_breadcrumbs(
+    client: semantic_rpc::RpcClient,
+    scope_id: Option<String>,
+    root: &str,
+) -> std::result::Result<BreadcrumbLoad, String> {
+    let mut objects = Vec::new();
+    let mut seen = BTreeSet::from([root.to_string()]);
+    let mut current = root.to_string();
+    let mut cycle = false;
+    if let Some(object) =
+        load_entity(client.clone(), scope_id.clone(), ENTITIES_COLLECTION, root).await?
+    {
+        objects.push((root.to_string(), object));
+    }
+    for _ in 0..64 {
+        let rows = run_select_query(
+            client.clone(),
+            scope_id.clone(),
+            semantic_parent_query(&current),
+        )
+        .await?;
+        let Some(object) = rows.into_iter().next() else {
+            break;
+        };
+        let Some(parent) = object_string(&object, "id").map(str::to_string) else {
+            break;
+        };
+        if !seen.insert(parent.clone()) {
+            cycle = true;
+            break;
+        }
+        objects.push((parent.clone(), object));
+        current = parent;
+    }
+    objects.reverse();
+    Ok(BreadcrumbLoad {
+        breadcrumbs: objects
+            .into_iter()
+            .map(|(id, object)| DirectoryBreadcrumb {
+                title: object_title(&object, &id),
+                id,
+                kind: DirectoryLocationKind::SemanticParent,
+            })
+            .collect(),
+        cycle,
+    })
+}
+
+async fn classify_semantic_parents(
+    client: semantic_rpc::RpcClient,
+    scope_id: Option<String>,
+    items: &mut [DirectoryBrowseItem],
+) -> std::result::Result<(), String> {
+    let candidate_ids = items.iter().map(|item| item.id.clone()).collect::<Vec<_>>();
+    if candidate_ids.is_empty() {
+        return Ok(());
+    }
+    let rows = run_select_query(
+        client,
+        scope_id,
+        semantic_parent_ids_for_candidates_query(&candidate_ids),
+    )
+    .await?;
+    let parent_ids = rows
+        .iter()
+        .filter_map(|row| object_string(row, "semantic_parent"))
+        .collect::<BTreeSet<_>>();
+    for item in items {
+        item.has_semantic_children = parent_ids.contains(item.id.as_str());
+    }
+    Ok(())
 }
 
 async fn load_entity(
@@ -1286,6 +1458,7 @@ fn row_to_item(row: Object) -> DirectoryBrowseItem {
     DirectoryBrowseItem {
         title: object_title(&row, &id),
         is_directory: is_directory_object(&row),
+        has_semantic_children: false,
         order: value_as_u64(
             row.get("directory_order")
                 .or_else(|| row.get("order"))

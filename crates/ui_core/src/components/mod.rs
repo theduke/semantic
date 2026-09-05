@@ -15,8 +15,8 @@ mod value;
 pub use class::ClassView;
 pub use directory_browser::{
     DirectoryActionTarget, DirectoryBrowser, DirectoryBrowserConfig, DirectoryBrowserProps,
-    FileTreePicker, FileTreePickerProps, FileTreeSelection, add_items_to_directory,
-    create_entity_in_directory,
+    DirectoryLocationKind, FileTreePicker, FileTreePickerProps, FileTreeSelection,
+    add_items_to_directory, create_entity_in_directory,
 };
 pub use empty::EmptyState;
 pub use entity::{

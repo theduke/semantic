@@ -138,7 +138,7 @@ pub fn PrimaryNav() -> Element {
                     on_navigate: move |_| menu_open.set(false),
                 }
                 PrimaryNavLink {
-                    to: Route::TreePage { root: None },
+                    to: Route::TreePage { root: None, hierarchy: None, kind: None },
                     label: "Tree",
                     active: nav_item_is_active(&route, NavItem::Tree),
                     on_navigate: move |_| menu_open.set(false),
@@ -278,6 +278,8 @@ mod tests {
         };
         let tree = Route::TreePage {
             root: Some("folder".to_string()),
+            hierarchy: Some(true),
+            kind: Some("parent".to_string()),
         };
 
         assert!(nav_item_is_active(&browse, NavItem::Browse));

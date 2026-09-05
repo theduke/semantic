@@ -9,9 +9,10 @@ use semantic_base::directory_query::{
     directory_tree_items_query,
 };
 use semantic_data::bundles::directory::{
-    ATTR_DIRECTORY_NODE_FROM, ATTR_DIRECTORY_NODE_ORDER, ATTR_TITLE, DIRECTORY_NODE_CLASS_ID,
-    DIRECTORY_NODE_RELATION_ID,
+    ATTR_CREATED_AT, ATTR_DIRECTORY_NODE_FROM, ATTR_DIRECTORY_NODE_ORDER, ATTR_TITLE,
+    ATTR_UPDATED_AT, DIRECTORY_CLASS_ID, DIRECTORY_NODE_CLASS_ID, DIRECTORY_NODE_RELATION_ID,
 };
+use semantic_data::filestore::ATTR_PARENT;
 
 use super::types::DirectorySort;
 
@@ -179,6 +180,83 @@ pub(super) fn parent_query(child_id: &str) -> String {
     directory_parent_query(child_id)
 }
 
+/// Returns every existing entity referenced as a canonical semantic parent.
+///
+/// Pagination happens in SQL and the uncorrelated `IN` subquery both deduplicates
+/// high fan-out parents and excludes dangling parent IDs.
+pub(super) fn semantic_parent_roots_query(
+    sort: DirectorySort,
+    limit: usize,
+    offset: usize,
+) -> String {
+    qualified_query(format!(
+        "SELECT parent.* FROM {entities} AS parent WHERE parent.id IN (SELECT DISTINCT child.{parent_attr} FROM {entities} AS child) ORDER BY {order_by} LIMIT {limit} OFFSET {offset}",
+        entities = sql_ident(ENTITIES_COLLECTION),
+        parent_attr = sql_ident(ATTR_PARENT),
+        order_by = semantic_order_by(sort, "parent"),
+    ))
+}
+
+pub(super) fn semantic_children_query(
+    parent_id: &str,
+    sort: DirectorySort,
+    limit: usize,
+    offset: usize,
+) -> String {
+    qualified_query(format!(
+        "SELECT child.* FROM {entities} AS child WHERE child.{parent_attr} = {parent_id} ORDER BY {order_by} LIMIT {limit} OFFSET {offset}",
+        entities = sql_ident(ENTITIES_COLLECTION),
+        parent_attr = sql_ident(ATTR_PARENT),
+        parent_id = sql_string(parent_id),
+        order_by = semantic_order_by(sort, "child"),
+    ))
+}
+
+/// Returns semantic children that can be navigated further in the tree.
+///
+/// The parent-ID lookup is intentionally uncorrelated so filtering happens
+/// before pagination without relying on correlated subquery support.
+pub(super) fn semantic_navigable_children_query(
+    parent_id: &str,
+    sort: DirectorySort,
+    limit: usize,
+    offset: usize,
+) -> String {
+    qualified_query(format!(
+        "SELECT child.* FROM {entities} AS child WHERE child.{parent_attr} = {parent_id} AND (child.type = {directory_class} OR child.id IN (SELECT DISTINCT descendant.{parent_attr} FROM {entities} AS descendant)) ORDER BY {order_by} LIMIT {limit} OFFSET {offset}",
+        entities = sql_ident(ENTITIES_COLLECTION),
+        parent_attr = sql_ident(ATTR_PARENT),
+        parent_id = sql_string(parent_id),
+        directory_class = sql_string(DIRECTORY_CLASS_ID),
+        order_by = semantic_order_by(sort, "child"),
+    ))
+}
+
+pub(super) fn semantic_parent_query(child_id: &str) -> String {
+    qualified_query(format!(
+        "SELECT parent.* FROM {entities} AS child INNER JOIN {entities}._ AS parent ON child.{parent_attr} = parent.id WHERE child.id = {child_id} LIMIT 1",
+        entities = sql_ident(ENTITIES_COLLECTION),
+        parent_attr = sql_ident(ATTR_PARENT),
+        child_id = sql_string(child_id),
+    ))
+}
+
+pub(super) fn semantic_parent_ids_for_candidates_query(candidate_ids: &[String]) -> String {
+    if candidate_ids.is_empty() {
+        return qualified_query(format!(
+            "SELECT child.{parent_attr} AS semantic_parent FROM {entities} AS child WHERE 1 = 0",
+            entities = sql_ident(ENTITIES_COLLECTION),
+            parent_attr = sql_ident(ATTR_PARENT),
+        ));
+    }
+    qualified_query(format!(
+        "SELECT DISTINCT child.{parent_attr} AS semantic_parent FROM {entities} AS child WHERE child.{parent_attr} IN ({candidate_ids}) ORDER BY semantic_parent ASC",
+        entities = sql_ident(ENTITIES_COLLECTION),
+        parent_attr = sql_ident(ATTR_PARENT),
+        candidate_ids = sql_string_list(candidate_ids),
+    ))
+}
+
 fn qualified_query(query: String) -> String {
     format!("{query} FORMAT qualified")
 }
@@ -192,6 +270,27 @@ fn query_sort(sort: DirectorySort) -> QuerySort {
         DirectorySort::CreatedAtDesc => QuerySort::CreatedAtDesc,
         DirectorySort::UpdatedAtDesc => QuerySort::UpdatedAtDesc,
         DirectorySort::IdAsc => QuerySort::IdAsc,
+    }
+}
+
+fn semantic_order_by(sort: DirectorySort, alias: &str) -> String {
+    match sort {
+        DirectorySort::Order | DirectorySort::TitleAsc => {
+            format!("{alias}.title ASC, {alias}.id ASC")
+        }
+        DirectorySort::TitleDesc => format!("{alias}.title DESC, {alias}.id ASC"),
+        DirectorySort::TypeAsc => {
+            format!("{alias}.type ASC, {alias}.title ASC, {alias}.id ASC")
+        }
+        DirectorySort::CreatedAtDesc => format!(
+            "{alias}.{created_at} DESC, {alias}.title ASC, {alias}.id ASC",
+            created_at = sql_ident(ATTR_CREATED_AT),
+        ),
+        DirectorySort::UpdatedAtDesc => format!(
+            "{alias}.{updated_at} DESC, {alias}.title ASC, {alias}.id ASC",
+            updated_at = sql_ident(ATTR_UPDATED_AT),
+        ),
+        DirectorySort::IdAsc => format!("{alias}.id ASC"),
     }
 }
 
@@ -226,7 +325,7 @@ mod tests {
         ATTR_DIRECTORY_NODE_FROM, ATTR_DIRECTORY_NODE_ORDER, ATTR_TITLE, DIRECTORY_CLASS_ID,
         DIRECTORY_NODE_CLASS_ID, DIRECTORY_NODE_RELATION_ID,
     };
-    use semantic_data::query::QueryInput;
+    use semantic_data::query::{Batch, BatchOperation, QueryInput};
     use semantic_data::value::{Object, Value};
     use semantic_db_core::{Db, QueryResult};
     use semantic_db_kv::{KvBackend, KvDb};
@@ -623,6 +722,195 @@ mod tests {
         assert!(title.contains("ORDER BY child.title DESC, child.id ASC"));
         let id = child_query("parent", DirectorySort::IdAsc, 10, 0);
         assert!(id.contains("ORDER BY child.id ASC"));
+        let semantic = semantic_children_query("parent", DirectorySort::Order, 10, 0);
+        assert!(semantic.contains("ORDER BY child.title ASC, child.id ASC"));
+        let roots = semantic_parent_roots_query(DirectorySort::Order, 10, 0);
+        assert!(roots.contains("parent.id IN (SELECT DISTINCT"));
+        assert!(!roots.contains("EXISTS"));
+    }
+
+    #[tokio::test]
+    async fn semantic_parent_queries_discover_and_page_direct_relationships() {
+        let db = Db::new(KvBackend::new(KvDb::in_memory()));
+        db.upsert_package(semantic_base::package())
+            .await
+            .expect("base package should register");
+
+        insert_entity(&db, "parent-a", "semantic:base:person", "Alpha").await;
+        insert_entity(&db, "parent-b", "semantic:base:person", "Beta").await;
+        insert_entity(&db, "leaf", "semantic:base:person", "Leaf").await;
+        insert_parented_entity(&db, "child-a1", "Child A1", Some("parent-a")).await;
+        insert_parented_entity(&db, "child-a2", "Child A2", Some("parent-a")).await;
+        insert_parented_entity(&db, "nested", "Nested", Some("parent-b")).await;
+        insert_parented_entity(&db, "grandchild", "Grandchild", Some("nested")).await;
+        insert_parented_entity(&db, "unparented", "Unparented", None).await;
+
+        let QueryResult::Select(first_page) = db
+            .query(QueryInput::sql(semantic_parent_roots_query(
+                DirectorySort::Order,
+                2,
+                0,
+            )))
+            .await
+            .expect("semantic roots query should run")
+        else {
+            panic!("semantic roots query should select rows");
+        };
+        let QueryResult::Select(second_page) = db
+            .query(QueryInput::sql(semantic_parent_roots_query(
+                DirectorySort::Order,
+                2,
+                2,
+            )))
+            .await
+            .expect("semantic roots query should page")
+        else {
+            panic!("semantic roots query should select rows");
+        };
+        assert_eq!(row_ids(&first_page), vec!["parent-a", "parent-b"]);
+        assert_eq!(row_ids(&second_page), vec!["nested"]);
+
+        let QueryResult::Select(children) = db
+            .query(QueryInput::sql(semantic_children_query(
+                "parent-a",
+                DirectorySort::Order,
+                10,
+                0,
+            )))
+            .await
+            .expect("semantic children query should run")
+        else {
+            panic!("semantic children query should select rows");
+        };
+        assert_eq!(row_ids(&children), vec!["child-a1", "child-a2"]);
+
+        let QueryResult::Select(classified) = db
+            .query(QueryInput::sql(semantic_parent_ids_for_candidates_query(
+                &[
+                    "parent-a".to_string(),
+                    "leaf".to_string(),
+                    "nested".to_string(),
+                ],
+            )))
+            .await
+            .expect("batch classification query should run")
+        else {
+            panic!("batch classification query should select rows");
+        };
+        let ids = classified
+            .iter()
+            .filter_map(|row| row.get("semantic_parent").and_then(Value::as_str))
+            .collect::<Vec<_>>();
+        assert_eq!(ids, vec!["nested", "parent-a"]);
+    }
+
+    #[tokio::test]
+    async fn navigable_semantic_children_are_filtered_before_limit() {
+        let db = Db::new(KvBackend::new(KvDb::in_memory()));
+        db.upsert_package(semantic_base::package())
+            .await
+            .expect("base package should register");
+
+        insert_entity(&db, "root", "semantic:base:person", "Root").await;
+        let mut batch = Batch::new();
+        for index in 0..201 {
+            let id = format!("leaf-{index:03}");
+            let mut leaf = Object::new();
+            leaf.insert("id", Value::String(id.clone()));
+            leaf.insert("type", Value::String("semantic:base:person".to_string()));
+            leaf.insert("title", Value::String(format!("A leaf {index:03}")));
+            leaf.insert(ATTR_PARENT, Value::String("root".to_string()));
+            batch = batch.with_op(BatchOperation::Upsert {
+                collection: ENTITIES_COLLECTION.to_string(),
+                id,
+                object: leaf,
+            });
+        }
+        for (id, title, parent) in [
+            ("nested", "Z nested", "root"),
+            ("grandchild", "Grandchild", "nested"),
+        ] {
+            let mut object = Object::new();
+            object.insert("id", Value::String(id.to_string()));
+            object.insert("type", Value::String("semantic:base:person".to_string()));
+            object.insert("title", Value::String(title.to_string()));
+            object.insert(ATTR_PARENT, Value::String(parent.to_string()));
+            batch = batch.with_op(BatchOperation::Upsert {
+                collection: ENTITIES_COLLECTION.to_string(),
+                id: id.to_string(),
+                object,
+            });
+        }
+        db.execute_batch(batch)
+            .await
+            .expect("semantic hierarchy should insert");
+
+        let query = semantic_navigable_children_query("root", DirectorySort::Order, 200, 0);
+        assert!(!query.contains("EXISTS"));
+        let QueryResult::Select(children) = db
+            .query(QueryInput::sql(query))
+            .await
+            .expect("navigable semantic children query should run")
+        else {
+            panic!("navigable semantic children query should select rows");
+        };
+        assert_eq!(row_ids(&children), vec!["nested"]);
+    }
+
+    #[tokio::test]
+    async fn semantic_parent_queries_handle_cycles_and_escaped_ids() {
+        let db = Db::new(KvBackend::new(KvDb::in_memory()));
+        db.upsert_package(semantic_base::package())
+            .await
+            .expect("base package should register");
+        insert_parented_entities(
+            &db,
+            &[
+                ("self", "Self", Some("self")),
+                ("cycle-a", "Cycle A", Some("cycle-b")),
+                ("cycle-b", "Cycle B", Some("cycle-a")),
+            ],
+        )
+        .await;
+        insert_entity(&db, "quote'parent", "semantic:base:person", "Quoted").await;
+        insert_parented_entity(&db, "quoted-child", "Quoted Child", Some("quote'parent")).await;
+
+        let QueryResult::Select(self_children) = db
+            .query(QueryInput::sql(semantic_children_query(
+                "self",
+                DirectorySort::Order,
+                10,
+                0,
+            )))
+            .await
+            .expect("self-cycle query should run")
+        else {
+            panic!("self-cycle query should select rows");
+        };
+        assert_eq!(row_ids(&self_children), vec!["self"]);
+
+        let QueryResult::Select(parent) = db
+            .query(QueryInput::sql(semantic_parent_query("cycle-a")))
+            .await
+            .expect("semantic parent query should run")
+        else {
+            panic!("semantic parent query should select rows");
+        };
+        assert_eq!(row_ids(&parent), vec!["cycle-b"]);
+
+        let QueryResult::Select(quoted_children) = db
+            .query(QueryInput::sql(semantic_children_query(
+                "quote'parent",
+                DirectorySort::Order,
+                10,
+                0,
+            )))
+            .await
+            .expect("escaped parent query should run")
+        else {
+            panic!("escaped parent query should select rows");
+        };
+        assert_eq!(row_ids(&quoted_children), vec!["quoted-child"]);
     }
 
     async fn insert_directory(db: &Db, id: &str, title: &str) {
@@ -637,6 +925,31 @@ mod tests {
         db.insert(ENTITIES_COLLECTION, id, entity)
             .await
             .expect("entity should insert");
+    }
+
+    async fn insert_parented_entity(db: &Db, id: &str, title: &str, parent: Option<&str>) {
+        insert_parented_entities(db, &[(id, title, parent)]).await;
+    }
+
+    async fn insert_parented_entities(db: &Db, entities: &[(&str, &str, Option<&str>)]) {
+        let mut batch = Batch::new();
+        for (id, title, parent) in entities {
+            let mut object = Object::new();
+            object.insert("id", Value::String((*id).to_string()));
+            object.insert("type", Value::String("semantic:base:person".to_string()));
+            object.insert("title", Value::String((*title).to_string()));
+            if let Some(parent) = parent {
+                object.insert(ATTR_PARENT, Value::String((*parent).to_string()));
+            }
+            batch = batch.with_op(BatchOperation::Upsert {
+                collection: ENTITIES_COLLECTION.to_string(),
+                id: (*id).to_string(),
+                object,
+            });
+        }
+        db.execute_batch(batch)
+            .await
+            .expect("parented entities should insert");
     }
 
     async fn insert_directory_node(db: &Db, id: &str, parent: &str, child: &str, order: u64) {
