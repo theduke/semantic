@@ -64,6 +64,9 @@ impl std::fmt::Debug for BackendCryptoConfig {
 }
 
 #[derive(serde::Serialize, serde::Deserialize, PartialEq, Eq, Clone)]
+#[serde(transparent)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[cfg_attr(feature = "schema", derive(ts_rs::TS))]
 pub struct SecretString(pub String);
 
 impl Deref for SecretString {

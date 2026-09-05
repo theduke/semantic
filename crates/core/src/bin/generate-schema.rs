@@ -59,6 +59,7 @@ fn main() {
         .and::<api::ImportRawReply>()
         .and::<api::ImportRaw>()
         .and::<api::BlobFsConfig>()
+        .and::<api::SecretString>()
         .and::<api::TagCreate>()
         .and::<api::ApiResponse<api::Reply>>()
         .and::<api::ApiError>()

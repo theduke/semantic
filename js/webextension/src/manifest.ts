@@ -26,7 +26,7 @@ const sharedManifest = {
   permissions: [
     "storage",
     "bookmarks"
-  ],
+  ] as chrome.runtime.ManifestPermissions[],
 };
 
 const browserAction = {

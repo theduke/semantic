@@ -3,7 +3,7 @@ import browser from "webextension-polyfill";
 import { Api, newSelect } from 'semantic/dist/api';
 
 import { v4 as uuidv4 } from 'uuid';
-import { exprAnd, exprAttr, exprEq, exprIn, exprIsEntityType, exprList, exprLiteral } from "semantic/dist/db";
+import { exprAnd, exprAttr, exprIn, exprIsEntityType, exprList, exprLiteral } from "semantic/dist/db";
 import { FACTOR_ID, FACTOR_TYPE, SemanticBookmark, SEMANTIC_TITLE, SEMANTIC_URL, TY_SEMANTIC_BOOKMARK } from "semantic/dist/schema";
 
 browser.runtime.onInstalled.addListener(() => {
@@ -188,4 +188,3 @@ start();
 
 
 (window as any).start = start;
-
