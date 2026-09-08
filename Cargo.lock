@@ -8653,6 +8653,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "semantic_sdk_export"
+version = "0.0.1"
+dependencies = [
+ "facet",
+ "facet-json",
+ "semantic_base",
+ "semantic_data",
+ "semantic_db_core",
+]
+
+[[package]]
 name = "semantic_server"
 version = "0.0.1"
 dependencies = [

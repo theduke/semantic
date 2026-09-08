@@ -1,0 +1,20 @@
+[package]
+name = "semantic_sdk_export"
+authors.workspace = true
+keywords.workspace = true
+repository.workspace = true
+homepage.workspace = true
+license.workspace = true
+readme.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+categories.workspace = true
+version.workspace = true
+publish = false
+
+[dependencies]
+facet = "0.43.2"
+facet-json = "0.43.2"
+semantic_base = { path = "../base" }
+semantic_data = { workspace = true }
+semantic_db_core = { path = "../db_core", default-features = false }

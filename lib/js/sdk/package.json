@@ -1,0 +1,50 @@
+{
+  "name": "@semantic/sdk",
+  "version": "0.0.1",
+  "description": "TypeScript types, builders and RPC client for Semantic",
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "bin": {
+    "semantic-ts-generate": "./dist/generator/cli.js"
+  },
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    },
+    "./generated/*": {
+      "types": "./dist/generated/*.d.ts",
+      "import": "./dist/generated/*.js"
+    },
+    "./generator": {
+      "types": "./dist/generator/index.d.ts",
+      "import": "./dist/generator/index.js"
+    },
+    "./core": {
+      "types": "./dist/generated/core.d.ts",
+      "import": "./dist/generated/core.js"
+    }
+  },
+  "files": [
+    "dist",
+    "README.md"
+  ],
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "test": "npm run build && node --test dist/test/*.test.js",
+    "generate": "npm run build && node dist/generator/generate.js && npm run build",
+    "generate:check": "npm run build && SEMANTIC_GENERATE_CHECK=1 node dist/generator/generate.js",
+    "generate:package": "npm run build && node dist/generator/cli.js"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.0",
+    "typescript": "^5.7.0"
+  },
+  "dependencies": {
+    "prettier": "^3.6.2"
+  }
+}
