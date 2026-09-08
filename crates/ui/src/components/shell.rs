@@ -73,6 +73,7 @@ enum NavItem {
     Tree,
     CreateEntity,
     Upload,
+    AudioRecording,
     Player,
     Data,
 }
@@ -157,6 +158,12 @@ pub fn PrimaryNav() -> Element {
                     active: nav_item_is_active(&route, NavItem::Upload),
                     on_navigate: move |_| menu_open.set(false),
                 }
+                PrimaryNavLink {
+                    to: Route::AudioRecordingPage,
+                    label: "Record audio",
+                    active: nav_item_is_active(&route, NavItem::AudioRecording),
+                    on_navigate: move |_| menu_open.set(false),
+                }
             }
             NavGroup { label: "Tools",
                 PrimaryNavLink {
@@ -226,6 +233,7 @@ fn nav_item_is_active(route: &Route, item: NavItem) -> bool {
             | (Route::TreePage { .. }, NavItem::Tree)
             | (Route::CreateEntityPage, NavItem::CreateEntity)
             | (Route::UploadPage, NavItem::Upload)
+            | (Route::AudioRecordingPage, NavItem::AudioRecording)
             | (Route::PlayPage, NavItem::Player)
             | (Route::DataPage, NavItem::Data)
             | (Route::CatalogPage, NavItem::Data)

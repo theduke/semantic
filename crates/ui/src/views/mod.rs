@@ -1,3 +1,4 @@
+mod audio_recording;
 mod browse;
 mod catalog;
 mod collection;
@@ -10,6 +11,7 @@ mod query;
 mod tree;
 mod upload;
 
+pub use audio_recording::AudioRecordingPage;
 pub use browse::BrowsePage;
 pub use catalog::CatalogPage;
 pub use collection::CollectionPage;
@@ -67,6 +69,8 @@ pub enum Route {
     },
     #[route("/upload")]
     UploadPage,
+    #[route("/create/audio-recording")]
+    AudioRecordingPage,
     #[end_layout]
     #[layout(PlayerShell)]
     #[route("/play")]

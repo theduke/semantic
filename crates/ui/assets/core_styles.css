@@ -3011,6 +3011,60 @@ pre {
   gap: var(--semantic-space-4);
 }
 
+.semantic-audio-recording {
+  display: grid;
+  gap: var(--semantic-space-6);
+}
+
+.semantic-audio-recording__panel {
+  display: grid;
+  gap: var(--semantic-space-5);
+  max-width: 52rem;
+  padding: var(--semantic-space-6);
+  border: 1px solid var(--semantic-color-border);
+  border-radius: var(--semantic-radius-lg);
+  background: var(--semantic-color-surface-1);
+}
+
+.semantic-audio-recording__sources,
+.semantic-audio-recording__field {
+  display: grid;
+  gap: var(--semantic-space-2);
+}
+
+.semantic-audio-recording__sources {
+  grid-template-columns: repeat(auto-fit, minmax(16rem, 1fr));
+}
+
+.semantic-audio-recording__field > span {
+  font-weight: 650;
+}
+
+.semantic-audio-recording__field :is(input, select) {
+  min-height: 2.5rem;
+  padding: 0 var(--semantic-space-3);
+  border: 1px solid var(--semantic-color-border);
+  border-radius: var(--semantic-radius-md);
+  background: var(--semantic-color-surface-1);
+  color: var(--semantic-color-text);
+}
+
+.semantic-audio-recording__hint {
+  grid-column: 1 / -1;
+  margin: 0;
+  color: var(--semantic-color-text-muted);
+}
+
+.semantic-audio-recording__actions {
+  display: flex;
+  align-items: center;
+  gap: var(--semantic-space-4);
+}
+
+.semantic-audio-recording__status {
+  color: var(--semantic-color-text-muted);
+}
+
 .semantic-drop-zone {
   display: grid;
   grid-template-columns: minmax(0, 1fr) auto;

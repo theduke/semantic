@@ -8704,6 +8704,7 @@ dependencies = [
  "dxcomp",
  "futures",
  "infer",
+ "js-sys",
  "regex",
  "semantic_app",
  "semantic_base",
@@ -8714,11 +8715,13 @@ dependencies = [
  "semantic_ui_core",
  "serde",
  "serde_json",
+ "tempfile",
  "time",
  "tokio",
  "tokio-util",
  "tracing",
  "wasm-bindgen",
+ "wasm-bindgen-futures",
  "web-sys",
 ]
 
