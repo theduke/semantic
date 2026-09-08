@@ -1,15 +1,9 @@
 use dioxus::prelude::*;
 use semantic_data::{
-    filestore::ATTR_TITLE,
+    attr::ATTR_TITLE,
     value::{Object, Value},
 };
-use semantic_rpc::file::{FileUploadContent, FileUploadRequest};
-use semantic_ui_core::{
-    components::{InlineNotice, NoticeVariant},
-    use_active_scope_id, use_rpc_client,
-};
-
-use crate::components::PageHeader;
+use semantic_rpc::file::{FileUploadContent, FileUploadRequest, FileUploadResponse};
 
 #[cfg(not(target_arch = "wasm32"))]
 use native::NativeRecorder as Recorder;
@@ -21,226 +15,27 @@ enum RecordingState {
     Idle,
     Starting,
     Recording,
+    Pausing,
+    Paused,
+    Resuming,
     Stopping,
     Uploading,
     ReadyToUpload,
-    Complete(String),
+    Complete(FileUploadResponse),
 }
 
-#[component]
-pub fn AudioRecordingPage() -> Element {
-    let client = use_rpc_client();
-    let scope_id = use_active_scope_id();
-    let mut state = use_signal(|| RecordingState::Idle);
-    let mut error = use_signal(|| None::<String>);
-    let mut title = use_signal(|| "Audio recording".to_string());
-    let mut completed = use_signal(|| None::<CompletedRecording>);
-    let recorder = use_hook(Recorder::default);
-    let cleanup = recorder.clone();
-    use_drop(move || cleanup.close());
+mod page;
+mod preview;
+pub use page::AudioRecordingPage;
 
-    #[cfg(not(target_arch = "wasm32"))]
-    let mut sources = use_signal(Vec::<native::AudioSource>::new);
-    #[cfg(not(target_arch = "wasm32"))]
-    let mut mic_source = use_signal(String::new);
-    #[cfg(not(target_arch = "wasm32"))]
-    let mut system_source = use_signal(String::new);
-
-    #[cfg(not(target_arch = "wasm32"))]
-    use_effect(move || {
-        spawn(async move {
-            match native::list_sources().await {
-                Ok(found) => {
-                    if mic_source().is_empty() {
-                        if let Some(source) = found.iter().find(|source| !source.monitor) {
-                            mic_source.set(source.name.clone());
-                        }
-                    }
-                    if system_source().is_empty() {
-                        if let Some(source) = found.iter().find(|source| source.monitor) {
-                            system_source.set(source.name.clone());
-                        }
-                    }
-                    sources.set(found);
-                }
-                Err(message) => error.set(Some(message)),
-            }
-        });
-    });
-
-    let is_recording = state() == RecordingState::Recording;
-    let has_recording = completed.read().is_some();
-    let is_busy = matches!(
-        state(),
-        RecordingState::Starting | RecordingState::Stopping | RecordingState::Uploading
-    );
-
-    #[cfg(target_arch = "wasm32")]
-    let source_controls = rsx! {
-        p { class: "semantic-audio-recording__hint",
-            "Your browser will ask for microphone permission. Recording stays local until you stop and upload it."
-        }
-    };
-    #[cfg(not(target_arch = "wasm32"))]
-    let source_controls = rsx! {
-        div { class: "semantic-audio-recording__sources",
-            label { class: "semantic-audio-recording__field",
-                span { "Microphone" }
-                select {
-                    value: mic_source(),
-                    disabled: is_recording || is_busy || has_recording,
-                    onchange: move |event| mic_source.set(event.value()),
-                    option { value: "", "Select a microphone" }
-                    for source in sources().into_iter().filter(|source| !source.monitor) {
-                        option { value: source.name.clone(), "{source.description}" }
-                    }
-                }
-            }
-            label { class: "semantic-audio-recording__field",
-                span { "System audio" }
-                select {
-                    value: system_source(),
-                    disabled: is_recording || is_busy || has_recording,
-                    onchange: move |event| system_source.set(event.value()),
-                    option { value: "", "Select a monitor source" }
-                    for source in sources().into_iter().filter(|source| source.monitor) {
-                        option { value: source.name.clone(), "{source.description}" }
-                    }
-                }
-            }
-            p { class: "semantic-audio-recording__hint",
-                "Desktop recording mixes the selected microphone and system monitor using pactl and ffmpeg."
-            }
-        }
-    };
-
-    rsx! {
-        section { class: "semantic-audio-recording",
-            PageHeader {
-                title: "Record audio",
-                description: "Capture audio, then save it using the regular file upload pipeline."
-            }
-            if let Some(message) = error() {
-                InlineNotice {
-                    message,
-                    variant: NoticeVariant::Error,
-                    on_dismiss: move |_| error.set(None),
-                }
-            }
-            div { class: "semantic-audio-recording__panel",
-                label { class: "semantic-audio-recording__field",
-                    span { "Recording title" }
-                    input {
-                        value: title(),
-                        disabled: is_recording || is_busy,
-                        oninput: move |event| title.set(event.value()),
-                    }
-                }
-
-                {source_controls}
-
-                div { class: "semantic-audio-recording__actions",
-                    if has_recording {
-                        dxcomp::Button {
-                            disabled: is_busy,
-                            onclick: {
-                                let client = client.clone();
-                                let scope_id = scope_id.clone();
-                                move |_| {
-                                    let Some(recording) = completed.peek().clone() else { return };
-                                    spawn(save_recording(client.clone(), scope_id.clone(), title(), recording, completed, state, error));
-                                }
-                            },
-                            "Retry upload"
-                        }
-                        dxcomp::Button {
-                            variant: dxcomp::ButtonVariant::Destructive,
-                            disabled: is_busy,
-                            onclick: move |_| {
-                                completed.set(None);
-                                error.set(None);
-                                state.set(RecordingState::Idle);
-                            },
-                            "Discard recording"
-                        }
-                    } else if !is_recording {
-                        dxcomp::Button {
-                            disabled: is_busy,
-                            onclick: {
-                                let recorder = recorder.clone();
-                                move |_| {
-                                    error.set(None);
-                                    state.set(RecordingState::Starting);
-                                    #[cfg(target_arch = "wasm32")]
-                                    let (mic, system) = (String::new(), String::new());
-                                    #[cfg(not(target_arch = "wasm32"))]
-                                    let (mic, system) = (mic_source(), system_source());
-                                    let recorder = recorder.clone();
-                                    spawn(async move {
-                                        match recorder.start(&mic, &system).await {
-                                            Ok(()) => {
-                                                state.set(RecordingState::Recording);
-                                                #[cfg(not(target_arch = "wasm32"))]
-                                                if let Some(message) = recorder.wait_for_failure().await {
-                                                    if state() == RecordingState::Recording {
-                                                        state.set(RecordingState::Idle);
-                                                        error.set(Some(message));
-                                                    }
-                                                }
-                                            }
-                                            Err(message) => {
-                                                state.set(RecordingState::Idle);
-                                                error.set(Some(message));
-                                            }
-                                        }
-                                    });
-                                }
-                            },
-                            if state() == RecordingState::Starting { "Starting…" } else { "Start recording" }
-                        }
-                    } else {
-                        dxcomp::Button {
-                            variant: dxcomp::ButtonVariant::Destructive,
-                            onclick: {
-                                let recorder = recorder.clone();
-                                move |_| {
-                                    state.set(RecordingState::Stopping);
-                                    let recording_title = title();
-                                    let client = client.clone();
-                                    let scope_id = scope_id.clone();
-                                    let recorder = recorder.clone();
-                                    spawn(async move {
-                                        match recorder.stop().await {
-                                            Ok(recording) => {
-                                                completed.set(Some(recording.clone()));
-                                                save_recording(client, scope_id, recording_title, recording, completed, state, error).await;
-                                            }
-                                            Err(message) => { state.set(RecordingState::Idle); error.set(Some(message)); }
-                                        }
-                                    });
-                                }
-                            },
-                            "Stop and upload"
-                        }
-                    }
-                    span { class: "semantic-audio-recording__status",
-                        {match state() {
-                            RecordingState::Idle => "Ready".to_string(),
-                            RecordingState::Starting => "Starting recorder…".to_string(),
-                            RecordingState::Recording => "Recording now".to_string(),
-                            RecordingState::Stopping => "Finishing recording…".to_string(),
-                            RecordingState::Uploading => "Uploading…".to_string(),
-                            RecordingState::ReadyToUpload => "Recording kept on this page. Retry upload or discard it.".to_string(),
-                            RecordingState::Complete(ref id) => format!("Uploaded as {id}"),
-                        }}
-                    }
-                }
-            }
-        }
+fn normalized_level(decibels: f32) -> f32 {
+    if !decibels.is_finite() {
+        return 0.0;
     }
+    ((decibels + 60.0) / 60.0).clamp(0.0, 1.0)
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq)]
 struct CompletedRecording {
     bytes: bytes::Bytes,
     extension: &'static str,
@@ -275,7 +70,7 @@ async fn upload_recording(
     scope_id: Option<String>,
     title: String,
     recording: CompletedRecording,
-) -> std::result::Result<String, String> {
+) -> std::result::Result<FileUploadResponse, String> {
     let mut entity = Object::new();
     let title = title.trim();
     if !title.is_empty() {
@@ -296,7 +91,6 @@ async fn upload_recording(
             None,
         )
         .await
-        .map(|response| response.id)
         .map_err(|error| format!("Recording finished, but upload failed: {error}"))
 }
 
@@ -356,7 +150,7 @@ mod native {
     use tempfile::NamedTempFile;
     use tokio::{
         io::{AsyncRead, AsyncReadExt as _, AsyncWriteExt as _},
-        process::{Child, Command},
+        process::{Child, ChildStdin, Command},
         sync::{oneshot, watch},
         task::JoinHandle,
         time::timeout,
@@ -374,10 +168,18 @@ mod native {
     #[derive(Default, Clone)]
     pub struct NativeRecorder(Arc<Mutex<RecorderState>>);
 
+    impl PartialEq for NativeRecorder {
+        fn eq(&self, other: &Self) -> bool {
+            Arc::ptr_eq(&self.0, &other.0)
+        }
+    }
+
     #[derive(Default)]
     struct RecorderState {
         closed: bool,
         session: Option<NativeSession>,
+        segments: Vec<CompletedRecording>,
+        sources: (String, String),
     }
 
     // Dropping the stop sender cancels the supervisor, which kills and reaps the child
@@ -385,6 +187,7 @@ mod native {
     struct NativeSession {
         stop: Option<oneshot::Sender<()>>,
         result: watch::Receiver<Option<Result<CompletedRecording, String>>>,
+        level: Arc<Mutex<Option<(std::time::Instant, f32)>>>,
     }
 
     const STOP_TIMEOUT: Duration = Duration::from_secs(5);
@@ -407,21 +210,57 @@ mod native {
                 })?;
             let (stop, stop_rx) = oneshot::channel();
             let (result_tx, result) = watch::channel(None);
+            let level = Arc::new(Mutex::new(None));
+            let capture_level = level.clone();
             tokio::spawn(async move {
-                let result = supervise(child, output, stop_rx, stop_timeout).await;
+                let result = supervise(child, output, stop_rx, stop_timeout, capture_level).await;
                 let _ = result_tx.send(Some(result));
             });
             Ok(Self {
                 stop: Some(stop),
                 result,
+                level,
             })
         }
     }
 
     impl NativeRecorder {
+        pub fn is_recording(&self) -> bool {
+            self.0
+                .lock()
+                .unwrap()
+                .session
+                .as_ref()
+                .is_some_and(|session| session.result.borrow().is_none())
+        }
+
+        pub fn level(&self) -> Option<f32> {
+            let inner = self.0.lock().unwrap();
+            let level = *inner.session.as_ref()?.level.lock().unwrap();
+            level
+                .filter(|(at, _)| at.elapsed() < Duration::from_secs(2))
+                .map(|(_, value)| value)
+        }
+
         pub async fn start(&self, mic: &str, system: &str) -> std::result::Result<(), String> {
-            if mic.is_empty() || system.is_empty() {
-                return Err("Select both a microphone and a system-audio source.".to_string());
+            {
+                let mut inner = self.0.lock().unwrap();
+                if inner
+                    .session
+                    .as_ref()
+                    .is_some_and(|session| session.result.borrow().is_none())
+                {
+                    return Err("A desktop recording is already active.".to_string());
+                }
+                inner.segments.clear();
+                inner.sources = (mic.to_string(), system.to_string());
+            }
+            self.start_segment(mic, system).await
+        }
+
+        async fn start_segment(&self, mic: &str, system: &str) -> Result<(), String> {
+            if mic.is_empty() && system.is_empty() {
+                return Err("Choose at least one audio source.".to_string());
             }
             let output = tempfile::Builder::new()
                 .prefix("semantic-recording-")
@@ -429,28 +268,21 @@ mod native {
                 .tempfile()
                 .map_err(|error| format!("Could not create a temporary recording: {error}"))?;
             let mut command = Command::new("ffmpeg");
+            command.args(["-hide_banner", "-loglevel", "warning", "-y"]);
+            let sources: Vec<_> = [mic, system]
+                .into_iter()
+                .filter(|source| !source.is_empty())
+                .collect();
+            for source in &sources {
+                command.args(["-thread_queue_size", "4096", "-f", "pulse", "-i", source]);
+            }
+            if sources.len() == 2 {
+                command.args(["-filter_complex", "[0:a][1:a]amix=inputs=2:duration=longest:dropout_transition=0,astats=metadata=1:reset=1,ametadata=mode=print:key=lavfi.astats.Overall.RMS_level:file='pipe\\:2'[aout]", "-map", "[aout]"]);
+            } else {
+                command.args(["-af", "astats=metadata=1:reset=1,ametadata=mode=print:key=lavfi.astats.Overall.RMS_level:file='pipe\\:2'"]);
+            }
             command
                 .args([
-                    "-hide_banner",
-                    "-loglevel",
-                    "warning",
-                    "-y",
-                    "-thread_queue_size",
-                    "4096",
-                    "-f",
-                    "pulse",
-                    "-i",
-                    mic,
-                    "-thread_queue_size",
-                    "4096",
-                    "-f",
-                    "pulse",
-                    "-i",
-                    system,
-                    "-filter_complex",
-                    "[0:a][1:a]amix=inputs=2:duration=longest:dropout_transition=0[aout]",
-                    "-map",
-                    "[aout]",
                     "-ac",
                     "2",
                     "-ar",
@@ -485,7 +317,7 @@ mod native {
             }
         }
 
-        pub async fn stop(&self) -> std::result::Result<CompletedRecording, String> {
+        async fn stop_segment(&self) -> std::result::Result<CompletedRecording, String> {
             let Some(mut session) = self.0.lock().unwrap().session.take() else {
                 return Err("No desktop recording is active.".to_string());
             };
@@ -495,16 +327,148 @@ mod native {
             wait_for_result(&mut session.result).await
         }
 
+        // Pausing closes capture completely. Suspending ffmpeg would leave Pulse
+        // buffers and wall-clock timestamps running, leaking paused audio on resume.
+        pub async fn pause(&self) -> Result<(), String> {
+            let segment = self.stop_segment().await?;
+            self.0.lock().unwrap().segments.push(segment);
+            Ok(())
+        }
+
+        pub async fn resume(&self) -> Result<(), String> {
+            let (mic, system) = self.0.lock().unwrap().sources.clone();
+            self.start_segment(&mic, &system).await
+        }
+
+        pub async fn stop(&self) -> Result<CompletedRecording, String> {
+            let active = self.0.lock().unwrap().session.is_some();
+            if active {
+                self.pause().await?;
+            }
+            let segments = self.0.lock().unwrap().segments.clone();
+            let recording = join_segments(&segments).await?;
+            self.0.lock().unwrap().segments.clear();
+            Ok(recording)
+        }
+
         pub async fn wait_for_failure(&self) -> Option<String> {
             let mut result = self.0.lock().unwrap().session.as_ref()?.result.clone();
-            wait_for_result(&mut result).await.err()
+            let error = wait_for_result(&mut result).await.err();
+            if error.is_some() {
+                let mut inner = self.0.lock().unwrap();
+                // Do not clear a newer resumed session if an older watcher wins
+                // a race with a user action.
+                if inner
+                    .session
+                    .as_ref()
+                    .is_some_and(|session| session.result.same_channel(&result))
+                {
+                    inner.session = None;
+                } else {
+                    return None;
+                }
+            }
+            error
+        }
+
+        pub fn discard(&self) {
+            let mut inner = self.0.lock().unwrap();
+            inner.session = None;
+            inner.segments.clear();
         }
 
         pub fn close(&self) {
             let mut inner = self.0.lock().unwrap();
             inner.closed = true;
             inner.session = None;
+            inner.segments.clear();
         }
+    }
+
+    async fn join_segments(segments: &[CompletedRecording]) -> Result<CompletedRecording, String> {
+        if segments.len() == 1 {
+            return Ok(segments[0].clone());
+        }
+        if segments.is_empty() {
+            return Err("No audio was captured.".to_string());
+        }
+        // The concat demuxer removes each segment's container headers and writes
+        // a single seekable MP3. All segment files share the same encoder settings.
+        let directory = tempfile::Builder::new()
+            .prefix("semantic-recording-")
+            .tempdir()
+            .map_err(|error| format!("Could not prepare recording: {error}"))?;
+        let mut manifest = String::new();
+        for (index, segment) in segments.iter().enumerate() {
+            let name = format!("segment-{index}.mp3");
+            tokio::fs::write(directory.path().join(&name), &segment.bytes)
+                .await
+                .map_err(|error| format!("Could not prepare audio segment: {error}"))?;
+            manifest.push_str(&format!("file '{name}'\n"));
+        }
+        tokio::fs::write(directory.path().join("segments.txt"), manifest)
+            .await
+            .map_err(|error| format!("Could not prepare recording: {error}"))?;
+        let output = directory.path().join("recording.mp3");
+        let mut command = Command::new("ffmpeg");
+        command
+            .current_dir(directory.path())
+            .args([
+                "-hide_banner",
+                "-loglevel",
+                "error",
+                "-nostdin",
+                "-f",
+                "concat",
+                "-safe",
+                "1",
+                "-i",
+                "segments.txt",
+                "-c",
+                "copy",
+            ])
+            .arg(&output)
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::piped())
+            .kill_on_drop(true);
+        let mut child = command
+            .spawn()
+            .map_err(|error| format!("Could not join audio segments: {error}"))?;
+        let mut stderr = StderrTask(tokio::spawn(drain_stderr(
+            child.stderr.take().expect("piped stderr"),
+        )));
+        let status = match timeout(Duration::from_secs(60), child.wait()).await {
+            Ok(result) => {
+                result.map_err(|error| format!("Could not join audio segments: {error}"))?
+            }
+            Err(_) => {
+                let _ = child.kill().await;
+                return Err("Joining audio segments timed out.".to_string());
+            }
+        };
+        let diagnostics = (&mut stderr.0)
+            .await
+            .ok()
+            .and_then(Result::ok)
+            .unwrap_or_default();
+        if !status.success() {
+            return Err(format!(
+                "Could not join audio segments: {}",
+                String::from_utf8_lossy(&diagnostics)
+            ));
+        }
+        let bytes = tokio::fs::read(output)
+            .await
+            .map_err(|error| format!("Could not read recording: {error}"))?;
+        if bytes.is_empty() {
+            return Err("The joined recording is empty.".to_string());
+        }
+        Ok(CompletedRecording {
+            bytes: bytes.into(),
+            extension: "mp3",
+            mime_type: "audio/mpeg".to_string(),
+        })
     }
 
     async fn wait_for_result(
@@ -530,7 +494,15 @@ mod native {
     }
 
     async fn drain_stderr(mut reader: impl AsyncRead + Unpin) -> Result<Vec<u8>, String> {
+        drain_stderr_with_level(&mut reader, None).await
+    }
+
+    async fn drain_stderr_with_level(
+        mut reader: impl AsyncRead + Unpin,
+        level: Option<Arc<Mutex<Option<(std::time::Instant, f32)>>>>,
+    ) -> Result<Vec<u8>, String> {
         let mut tail = Vec::new();
+        let mut partial = Vec::new();
         let mut buffer = [0; 4096];
         loop {
             let count = reader
@@ -540,20 +512,47 @@ mod native {
             if count == 0 {
                 return Ok(tail);
             }
+            if let Some(level) = &level {
+                partial.extend_from_slice(&buffer[..count]);
+                if let Some(last_newline) = partial.iter().rposition(|byte| *byte == b'\n') {
+                    for line in partial[..=last_newline].split(|byte| *byte == b'\n') {
+                        if let Some(value) = parse_level(line) {
+                            *level.lock().unwrap() = Some((std::time::Instant::now(), value));
+                        }
+                    }
+                    partial.drain(..=last_newline);
+                }
+                if partial.len() > STDERR_LIMIT {
+                    partial.clear();
+                }
+            }
             let overflow = (tail.len() + count).saturating_sub(STDERR_LIMIT);
             tail.drain(..overflow);
             tail.extend_from_slice(&buffer[..count]);
         }
     }
 
-    async fn stop_child(child: &mut Child, stop_timeout: Duration) -> Result<(), String> {
+    fn parse_level(line: &[u8]) -> Option<f32> {
+        let value = std::str::from_utf8(line)
+            .ok()?
+            .trim()
+            .strip_prefix("lavfi.astats.Overall.RMS_level=")?;
+        Some(super::normalized_level(value.parse().ok()?))
+    }
+
+    async fn stop_child(
+        child: &mut Child,
+        stdin: Option<ChildStdin>,
+        stop_timeout: Duration,
+    ) -> Result<(), String> {
         match timeout(stop_timeout, async {
-            if let Some(mut stdin) = child.stdin.take() {
-                stdin
-                    .write_all(b"q\n")
-                    .await
-                    .map_err(|error| format!("Could not request recording stop: {error}"))?;
-            }
+            let mut stdin =
+                stdin.ok_or_else(|| "The recorder control pipe is unavailable.".to_string())?;
+            stdin
+                .write_all(b"q\n")
+                .await
+                .map_err(|error| format!("Could not request recording stop: {error}"))?;
+            drop(stdin);
             let status = child
                 .wait()
                 .await
@@ -576,9 +575,15 @@ mod native {
         output: NamedTempFile,
         stop: oneshot::Receiver<()>,
         stop_timeout: Duration,
+        level: Arc<Mutex<Option<(std::time::Instant, f32)>>>,
     ) -> Result<CompletedRecording, String> {
-        let mut stderr = StderrTask(tokio::spawn(drain_stderr(
+        // Child::wait closes Child::stdin as soon as it is polled. Keep the
+        // command pipe separately owned while supervising so Stop/Pause can
+        // still send ffmpeg's quit command after an arbitrarily long recording.
+        let stdin = child.stdin.take();
+        let mut stderr = StderrTask(tokio::spawn(drain_stderr_with_level(
             child.stderr.take().expect("piped stderr"),
+            Some(level),
         )));
         let result = tokio::select! {
             status = child.wait() => Err(match status {
@@ -586,7 +591,7 @@ mod native {
                 Err(error) => format!("Could not monitor ffmpeg: {error}"),
             }),
             requested = stop => match requested {
-                Ok(()) => stop_child(&mut child, stop_timeout).await,
+                Ok(()) => stop_child(&mut child, stdin, stop_timeout).await,
                 Err(_) => Err("Recording cancelled.".to_string()),
             },
         };
@@ -681,6 +686,162 @@ mod native {
     #[cfg(test)]
     mod tests {
         use super::*;
+
+        #[test]
+        fn parses_levels_without_confusing_diagnostics_for_audio() {
+            assert_eq!(
+                parse_level(b"lavfi.astats.Overall.RMS_level=-30.0"),
+                Some(0.5)
+            );
+            assert_eq!(
+                parse_level(b"lavfi.astats.Overall.RMS_level=-inf"),
+                Some(0.0)
+            );
+            assert_eq!(
+                parse_level(b"lavfi.astats.Overall.RMS_level=4.0"),
+                Some(1.0)
+            );
+            assert_eq!(parse_level(b"ffmpeg failed"), None);
+        }
+
+        #[tokio::test]
+        async fn level_parser_handles_partial_pipe_reads() {
+            let (mut writer, reader) = tokio::io::duplex(8);
+            let level = Arc::new(Mutex::new(None));
+            let observed = level.clone();
+            let drain = tokio::spawn(drain_stderr_with_level(reader, Some(level)));
+            writer
+                .write_all(b"lavfi.astats.Overall.RMS_level=-12.0\n")
+                .await
+                .unwrap();
+            drop(writer);
+            drain.await.unwrap().unwrap();
+            assert_eq!(observed.lock().unwrap().unwrap().1, 0.8);
+        }
+
+        #[cfg(unix)]
+        #[tokio::test]
+        async fn pause_finalizes_and_retains_audio_until_stop() {
+            let (session, path) =
+                session("printf audio > \"$1\"; read line", Duration::from_secs(1));
+            let recorder = NativeRecorder::default();
+            recorder.0.lock().unwrap().session = Some(session);
+            assert!(recorder.is_recording());
+            recorder.pause().await.unwrap();
+            assert!(!recorder.is_recording());
+            assert!(!path.exists());
+            assert_eq!(recorder.0.lock().unwrap().segments.len(), 1);
+            let recording = recorder.stop().await.unwrap();
+            assert_eq!(recording.bytes.as_ref(), b"audio");
+            assert!(recorder.0.lock().unwrap().segments.is_empty());
+        }
+
+        #[cfg(unix)]
+        #[tokio::test]
+        async fn supervision_keeps_control_pipe_open_until_explicit_stop() {
+            let (mut session, path) = session(
+                "printf 'lavfi.astats.Overall.RMS_level=-30\\n' >&2; read command && [ \"$command\" = q ] && printf 'received quit command' > \"$1\"",
+                Duration::from_secs(1),
+            );
+            // Wait for the child's readiness message through the supervised
+            // stderr reader. This guarantees the supervisor has begun polling
+            // Child::wait before we request stop; no scheduling sleeps needed.
+            timeout(Duration::from_secs(5), async {
+                while session.level.lock().unwrap().is_none() {
+                    tokio::task::yield_now().await;
+                }
+            })
+            .await
+            .unwrap();
+            session.stop.take().unwrap().send(()).unwrap();
+            let recording = result(&mut session).await.unwrap();
+            assert_eq!(recording.bytes.as_ref(), b"received quit command");
+            assert!(!path.exists());
+        }
+
+        #[tokio::test]
+        async fn joined_segments_form_one_playable_recording() {
+            if Command::new("ffmpeg")
+                .arg("-version")
+                .stdout(Stdio::null())
+                .stderr(Stdio::null())
+                .status()
+                .await
+                .is_err()
+            {
+                eprintln!("Skipping MP3 integration test: ffmpeg is unavailable");
+                return;
+            }
+            let output = Command::new("ffmpeg")
+                .args([
+                    "-hide_banner",
+                    "-loglevel",
+                    "error",
+                    "-f",
+                    "lavfi",
+                    "-i",
+                    "sine=frequency=440:duration=0.25",
+                    "-ac",
+                    "2",
+                    "-ar",
+                    "48000",
+                    "-c:a",
+                    "libmp3lame",
+                    "-b:a",
+                    "192k",
+                    "-f",
+                    "mp3",
+                    "pipe:1",
+                ])
+                .output()
+                .await
+                .unwrap();
+            assert!(
+                output.status.success(),
+                "{}",
+                String::from_utf8_lossy(&output.stderr)
+            );
+            let segment = CompletedRecording {
+                bytes: output.stdout.into(),
+                extension: "mp3",
+                mime_type: "audio/mpeg".to_string(),
+            };
+            let joined = join_segments(&[segment.clone(), segment]).await.unwrap();
+            let mut child = Command::new("ffmpeg")
+                .args([
+                    "-hide_banner",
+                    "-loglevel",
+                    "error",
+                    "-i",
+                    "pipe:0",
+                    "-f",
+                    "s16le",
+                    "pipe:1",
+                ])
+                .stdin(Stdio::piped())
+                .stdout(Stdio::piped())
+                .stderr(Stdio::piped())
+                .spawn()
+                .unwrap();
+            child
+                .stdin
+                .take()
+                .unwrap()
+                .write_all(&joined.bytes)
+                .await
+                .unwrap();
+            let decoded = child.wait_with_output().await.unwrap();
+            assert!(
+                decoded.status.success(),
+                "{}",
+                String::from_utf8_lossy(&decoded.stderr)
+            );
+            let seconds = decoded.stdout.len() as f64 / (48_000.0 * 2.0 * 2.0);
+            assert!(
+                (0.45..0.65).contains(&seconds),
+                "unexpected decoded duration: {seconds}"
+            );
+        }
         #[test]
         fn parses_microphone_and_monitor_sources() {
             let sources = parse_sources(
@@ -932,7 +1093,11 @@ mod tests {
             ));
             assert_eq!(
                 state(),
-                RecordingState::Complete("recording-id".to_string())
+                RecordingState::Complete(FileUploadResponse {
+                    id: "recording-id".to_string(),
+                    collection: "files".to_string(),
+                    object: Object::new(),
+                })
             );
             assert!(completed.peek().is_none());
             assert!(error().is_none());

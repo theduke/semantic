@@ -3014,13 +3014,14 @@ pre {
 .semantic-audio-recording {
   display: grid;
   gap: var(--semantic-space-6);
+  max-width: 64rem;
 }
 
 .semantic-audio-recording__panel {
   display: grid;
   gap: var(--semantic-space-5);
-  max-width: 52rem;
-  padding: var(--semantic-space-6);
+  min-width: 0;
+  padding: clamp(16px, 4vw, 32px);
   border: 1px solid var(--semantic-color-border);
   border-radius: var(--semantic-radius-lg);
   background: var(--semantic-color-surface-1);
@@ -3033,7 +3034,8 @@ pre {
 }
 
 .semantic-audio-recording__sources {
-  grid-template-columns: repeat(auto-fit, minmax(16rem, 1fr));
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 16rem), 1fr));
+  gap: var(--semantic-space-4);
 }
 
 .semantic-audio-recording__field > span {
@@ -3041,7 +3043,9 @@ pre {
 }
 
 .semantic-audio-recording__field :is(input, select) {
-  min-height: 2.5rem;
+  min-height: 2.75rem;
+  min-width: 0;
+  width: 100%;
   padding: 0 var(--semantic-space-3);
   border: 1px solid var(--semantic-color-border);
   border-radius: var(--semantic-radius-md);
@@ -3059,10 +3063,148 @@ pre {
   display: flex;
   align-items: center;
   gap: var(--semantic-space-4);
+  flex-wrap: wrap;
+  padding-top: var(--semantic-space-4);
+  border-top: 1px solid var(--semantic-color-border-soft);
 }
 
 .semantic-audio-recording__status {
   color: var(--semantic-color-text-muted);
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  gap: var(--semantic-space-2);
+  margin: 0;
+  font-weight: 650;
+}
+
+.semantic-audio-recording__steps {
+  display: flex;
+  gap: clamp(16px, 4vw, 40px);
+  padding: 0;
+  margin: 0;
+  list-style: none;
+  font-size: var(--semantic-font-size-label);
+  color: var(--semantic-color-text-muted);
+}
+
+.semantic-audio-recording__steps li {
+  display: flex;
+  align-items: center;
+  gap: var(--semantic-space-2);
+}
+
+.semantic-audio-recording__steps li > span {
+  display: grid;
+  place-items: center;
+  width: 1.75rem;
+  height: 1.75rem;
+  border-radius: var(--semantic-radius-pill);
+  background: var(--semantic-color-surface-2);
+}
+
+.semantic-audio-recording__steps li[data-active="true"] {
+  font-weight: 650;
+  color: var(--semantic-color-primary);
+}
+
+.semantic-audio-recording__steps li[data-active="true"] > span {
+  color: var(--semantic-color-on-primary);
+  background: var(--semantic-color-primary);
+}
+
+.semantic-audio-recording__capture {
+  display: grid;
+  gap: var(--semantic-space-3);
+  text-align: center;
+  padding: var(--semantic-space-6) 0;
+}
+
+.semantic-audio-recording__timer {
+  font-family: var(--semantic-font-mono);
+  font-size: clamp(3rem, 10vw, 5rem);
+  font-variant-numeric: tabular-nums;
+  letter-spacing: -0.04em;
+  line-height: 1.1;
+}
+
+.semantic-audio-recording__indicator {
+  width: 0.6rem;
+  height: 0.6rem;
+  border-radius: 50%;
+  background: var(--semantic-color-text-subtle);
+}
+
+.semantic-audio-recording__levels {
+  display: grid;
+  gap: var(--semantic-space-2);
+  width: min(100%, 28rem);
+  justify-self: center;
+}
+
+.semantic-audio-recording__levels svg {
+  width: 100%;
+  height: 3rem;
+  fill: var(--semantic-color-primary);
+}
+
+.semantic-audio-recording__capture[data-state="recording"] .semantic-audio-recording__indicator {
+  background: var(--semantic-color-danger);
+}
+
+.semantic-audio-recording__capture[data-state="paused"] .semantic-audio-recording__indicator {
+  background: var(--semantic-color-warning);
+}
+
+.semantic-audio-recording__source-section,
+.semantic-audio-recording__review-heading,
+.semantic-audio-recording__result {
+  display: grid;
+  gap: var(--semantic-space-3);
+  min-width: 0;
+}
+
+.semantic-audio-recording :is(h2, p) {
+  margin: 0;
+}
+
+.semantic-audio-recording h2 {
+  font-size: var(--semantic-font-size-section-title);
+}
+
+.semantic-audio-recording__source-section > button {
+  justify-self: start;
+}
+
+.semantic-audio-recording__playback {
+  display: block;
+  width: 100%;
+  min-width: 0;
+}
+
+.semantic-audio-recording__result-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: var(--semantic-space-4);
+  margin-bottom: var(--semantic-space-3);
+}
+
+.semantic-audio-recording__field :is(input, select):focus-visible {
+  outline: 2px solid var(--semantic-color-focus);
+  outline-offset: 2px;
+}
+
+@media (max-width: 480px) {
+  .semantic-audio-recording__actions {
+    gap: var(--semantic-space-2);
+  }
+
+  .semantic-audio-recording__actions > button {
+    flex: 1 1 100%;
+    min-height: 2.75rem;
+  }
 }
 
 .semantic-drop-zone {

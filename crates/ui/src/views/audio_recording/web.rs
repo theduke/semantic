@@ -18,6 +18,12 @@ const CLOSED: &str = "The recording page has been closed.";
 #[derive(Clone, Default)]
 pub(super) struct BrowserRecorder(Rc<RecorderState>);
 
+impl PartialEq for BrowserRecorder {
+    fn eq(&self, other: &Self) -> bool {
+        Rc::ptr_eq(&self.0, &other.0)
+    }
+}
+
 #[derive(Default)]
 struct RecorderState {
     closed: Cell<bool>,
@@ -26,6 +32,19 @@ struct RecorderState {
 }
 
 impl BrowserRecorder {
+    pub fn is_recording(&self) -> bool {
+        self.0
+            .session
+            .borrow()
+            .as_ref()
+            .is_some_and(|session| session.recorder.state() == RecordingState::Recording)
+    }
+
+    pub fn level(&self) -> Option<f32> {
+        let session = self.0.session.borrow();
+        session.as_ref()?.meter.as_ref()?.level()
+    }
+
     pub async fn start(&self, _mic: &str, _system: &str) -> Result<(), String> {
         if self.0.closed.get() {
             return Err(CLOSED.to_string());
@@ -55,6 +74,28 @@ impl BrowserRecorder {
         receiver
             .await
             .map_err(|_| "Microphone initialization was cancelled.".to_string())?
+    }
+
+    pub async fn pause(&self) -> Result<(), String> {
+        let session = self.0.session.borrow();
+        let session = session
+            .as_ref()
+            .ok_or_else(|| "No browser recording is active.".to_string())?;
+        session
+            .recorder
+            .pause()
+            .map_err(|error| browser_error("Could not pause recording", error))
+    }
+
+    pub async fn resume(&self) -> Result<(), String> {
+        let session = self.0.session.borrow();
+        let session = session
+            .as_ref()
+            .ok_or_else(|| "No browser recording is active.".to_string())?;
+        session
+            .recorder
+            .resume()
+            .map_err(|error| browser_error("Could not resume recording", error))
     }
 
     pub async fn stop(&self) -> Result<CompletedRecording, String> {
@@ -110,6 +151,10 @@ impl BrowserRecorder {
 
     pub fn close(&self) {
         self.0.closed.set(true);
+        self.discard();
+    }
+
+    pub fn discard(&self) {
         if let Some(session) = self.0.session.borrow_mut().take() {
             session.release();
         }
@@ -186,6 +231,7 @@ impl Capture {
 
 struct BrowserSession {
     recorder: MediaRecorder,
+    meter: Option<AudioMeter>,
     stream: MicrophoneStream,
     capture: Rc<RefCell<Capture>>,
     finished: RefCell<Option<oneshot::Receiver<Result<(), String>>>>,
@@ -200,6 +246,7 @@ impl BrowserSession {
     fn start(stream: MicrophoneStream) -> Result<Self, String> {
         let options = MediaRecorderOptions::new();
         if let Some(mime) = [
+            "audio/mpeg",
             "audio/webm;codecs=opus",
             "audio/webm",
             "audio/ogg;codecs=opus",
@@ -252,6 +299,7 @@ impl BrowserSession {
         recorder.set_onerror(Some(on_error.as_ref().unchecked_ref()));
         let session = Self {
             recorder,
+            meter: AudioMeter::new(&stream.0).ok(),
             stream,
             capture,
             finished: RefCell::new(Some(receiver)),
@@ -278,9 +326,66 @@ impl BrowserSession {
             let _ = self.recorder.stop();
         }
         self.stream.stop();
+        if let Some(meter) = &self.meter {
+            meter.close();
+        }
         let mut capture = self.capture.borrow_mut();
         capture.finish(Err("Browser recording was cancelled.".to_string()));
         capture.chunks.clear();
+    }
+}
+
+struct AudioMeter {
+    context: web_sys::AudioContext,
+    analyser: web_sys::AnalyserNode,
+    _source: web_sys::MediaStreamAudioSourceNode,
+    samples: RefCell<Vec<f32>>,
+}
+
+impl AudioMeter {
+    fn new(stream: &MediaStream) -> Result<Self, JsValue> {
+        let context = web_sys::AudioContext::new()?;
+        let result = (|| {
+            let analyser = context.create_analyser()?;
+            analyser.set_fft_size(256);
+            let source = context.create_media_stream_source(stream)?;
+            source.connect_with_audio_node(&analyser)?;
+            // No connection to the destination: microphone monitoring must not
+            // play back through the speakers or introduce feedback.
+            let _ = context.resume();
+            Ok(Self {
+                context: context.clone(),
+                analyser,
+                _source: source,
+                samples: RefCell::new(vec![0.0; 256]),
+            })
+        })();
+        if result.is_err() {
+            let _ = context.close();
+        }
+        result
+    }
+
+    fn level(&self) -> Option<f32> {
+        if self.context.state() != web_sys::AudioContextState::Running {
+            return None;
+        }
+        let mut samples = self.samples.borrow_mut();
+        self.analyser.get_float_time_domain_data(&mut samples);
+        let rms = (samples.iter().map(|sample| sample * sample).sum::<f32>()
+            / samples.len() as f32)
+            .sqrt();
+        Some(super::normalized_level(20.0 * rms.max(1e-6).log10()))
+    }
+
+    fn close(&self) {
+        let _ = self.context.close();
+    }
+}
+
+impl Drop for AudioMeter {
+    fn drop(&mut self) {
+        self.close();
     }
 }
 

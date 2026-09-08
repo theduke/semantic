@@ -51,6 +51,7 @@ semantic_db_redb = { path = "../db_redb", optional = true }
 semantic_rpc = { path = "../rpc", features = ["client"] }
 semantic_ui_core = { path = "../ui_core", default-features = false }
 time = { workspace = true }
+web-time = "1.1.0"
 tracing = { workspace = true }
 web-sys = { version = "0.3.82", features = ["Blob", "File", "Storage", "Window"] }
 
@@ -65,6 +66,12 @@ wasm-bindgen = "=0.2.121"
 wasm-bindgen-futures = "0.4.71"
 web-sys = { version = "0.3.82", features = [
   "BlobEvent",
+  "BlobPropertyBag",
+  "AudioContext",
+  "AudioContextState",
+  "AudioNode",
+  "AnalyserNode",
+  "MediaStreamAudioSourceNode",
   "DomException",
   "Event",
   "MediaDevices",
@@ -76,4 +83,5 @@ web-sys = { version = "0.3.82", features = [
   "MediaStreamTrack",
   "Navigator",
   "RecordingState",
+  "Url",
 ] }
