@@ -175,11 +175,13 @@ pub struct Dimensions {
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ImageAnalysis {
+    pub materialized_mime_type: Option<String>,
     pub dimensions: Dimensions,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct VideoAnalysis {
+    pub materialized_mime_type: Option<String>,
     pub duration: Duration,
     pub has_audio: bool,
     pub dimensions: Option<Dimensions>,
@@ -197,6 +199,7 @@ pub struct VideoAnalysis {
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct AudioAnalysis {
+    pub materialized_mime_type: Option<String>,
     pub duration: Duration,
     pub bitrate: Option<u64>,
     pub audio_bitrate: Option<u64>,
@@ -215,6 +218,14 @@ pub enum FileAnalysis {
 }
 
 impl FileAnalysis {
+    pub fn materialized_mime_type(&self) -> Option<&str> {
+        match self {
+            Self::Image(image) => image.materialized_mime_type.as_deref(),
+            Self::Video(video) => video.materialized_mime_type.as_deref(),
+            Self::Audio(audio) => audio.materialized_mime_type.as_deref(),
+        }
+    }
+
     pub fn dimensions(&self) -> Option<&Dimensions> {
         match self {
             Self::Image(image) => Some(&image.dimensions),
@@ -285,12 +296,14 @@ impl FileAnalyzer for ImageAnalyzer {
         if !mime::is_image(mime_analysis.best_effort()) {
             return Ok(None);
         }
+        let mime_type = mime_analysis.best_effort().map(ToOwned::to_owned);
 
         tokio::task::spawn_blocking(move || {
             let reader =
                 image::ImageReader::new(std::io::Cursor::new(bytes)).with_guessed_format()?;
             let dimensions = reader.into_dimensions()?;
             Ok(Some(FileAnalysis::Image(ImageAnalysis {
+                materialized_mime_type: mime_type,
                 dimensions: Dimensions {
                     width: dimensions.0.into(),
                     height: dimensions.1.into(),
@@ -357,14 +370,26 @@ impl FileAnalyzer for FfprobeAnalyzer {
             None => ffprobe_stream(input, self.ffprobe_bin.as_deref()).await?,
         };
 
-        if mime::is_video(declared_mime_type.as_deref()) {
-            Ok(Some(FileAnalysis::Video(video_analysis(probe)?)))
-        } else if mime::is_audio(declared_mime_type.as_deref()) {
-            Ok(Some(FileAnalysis::Audio(audio_analysis(probe)?)))
-        } else if has_stream(&probe, "video") {
-            Ok(Some(FileAnalysis::Video(video_analysis(probe)?)))
-        } else if has_stream(&probe, "audio") {
-            Ok(Some(FileAnalysis::Audio(audio_analysis(probe)?)))
+        let has_audio = has_stream(&probe, "audio");
+        let has_video = has_stream(&probe, "video");
+        if mime::is_audio(declared_mime_type.as_deref()) && has_audio {
+            // Prefer audio for audio containers that also expose cover art as a video stream.
+            Ok(Some(FileAnalysis::Audio(audio_analysis(
+                probe,
+                declared_mime_type.as_deref(),
+            )?)))
+        } else if has_video {
+            Ok(Some(FileAnalysis::Video(video_analysis(
+                probe,
+                declared_mime_type.as_deref(),
+            )?)))
+        } else if has_audio {
+            // Header-only MIME detection identifies containers such as WebM as video even
+            // when they contain audio only. The probed streams are authoritative here.
+            Ok(Some(FileAnalysis::Audio(audio_analysis(
+                probe,
+                declared_mime_type.as_deref(),
+            )?)))
         } else {
             Ok(None)
         }
@@ -478,6 +503,7 @@ fn has_stream(probe: &ffprobe::FfProbe, kind: &'static str) -> bool {
 
 fn video_analysis(
     probe: ffprobe::FfProbe,
+    input_mime_type: Option<&str>,
 ) -> std::result::Result<VideoAnalysis, MediaAnalysisError> {
     let video_stream = probe
         .streams
@@ -498,7 +524,13 @@ fn video_analysis(
         .map(duration_from_secs_f64)
         .ok_or(MediaAnalysisError::MissingDuration { kind: "video" })?;
 
+    let mime_type = materialized_mime_type(
+        MediaKind::Video,
+        input_mime_type,
+        Some(probe.format.format_name.as_str()),
+    );
     Ok(VideoAnalysis {
+        materialized_mime_type: mime_type,
         duration,
         has_audio: audio_stream.is_some(),
         dimensions: dimensions(video_stream),
@@ -517,6 +549,7 @@ fn video_analysis(
 
 fn audio_analysis(
     probe: ffprobe::FfProbe,
+    input_mime_type: Option<&str>,
 ) -> std::result::Result<AudioAnalysis, MediaAnalysisError> {
     let audio_stream = probe
         .streams
@@ -533,7 +566,13 @@ fn audio_analysis(
         .map(duration_from_secs_f64)
         .ok_or(MediaAnalysisError::MissingDuration { kind: "audio" })?;
 
+    let mime_type = materialized_mime_type(
+        MediaKind::Audio,
+        input_mime_type,
+        Some(probe.format.format_name.as_str()),
+    );
     Ok(AudioAnalysis {
+        materialized_mime_type: mime_type,
         duration,
         bitrate: parse_u64(probe.format.bit_rate.as_deref()),
         audio_bitrate: parse_u64(audio_stream.bit_rate.as_deref()),
@@ -544,6 +583,44 @@ fn audio_analysis(
         audio_sample_rate: parse_u64(audio_stream.sample_rate.as_deref()),
         container_format: Some(probe.format.format_name).filter(|value| !value.is_empty()),
     })
+}
+
+#[derive(Clone, Copy)]
+enum MediaKind {
+    Audio,
+    Video,
+}
+
+fn materialized_mime_type(
+    kind: MediaKind,
+    input_mime_type: Option<&str>,
+    container_format: Option<&str>,
+) -> Option<String> {
+    let input_mime_type = mime::normalize_declared(input_mime_type);
+    let input_matches_kind = match kind {
+        MediaKind::Audio => mime::is_audio(input_mime_type.as_deref()),
+        MediaKind::Video => mime::is_video(input_mime_type.as_deref()),
+    };
+    if input_matches_kind {
+        return input_mime_type;
+    }
+
+    let formats = container_format?.split(',').collect::<Vec<_>>();
+    let contains = |format: &str| formats.contains(&format);
+    match kind {
+        MediaKind::Audio if contains("webm") => Some("audio/webm".to_string()),
+        MediaKind::Audio if contains("matroska") => Some("audio/x-matroska".to_string()),
+        MediaKind::Audio if contains("mp3") => Some("audio/mpeg".to_string()),
+        MediaKind::Audio if contains("ogg") => Some("audio/ogg".to_string()),
+        MediaKind::Audio if contains("wav") => Some("audio/wav".to_string()),
+        MediaKind::Audio if contains("flac") => Some("audio/flac".to_string()),
+        MediaKind::Audio if contains("aac") => Some("audio/aac".to_string()),
+        MediaKind::Audio if contains("mp4") || contains("m4a") => Some("audio/mp4".to_string()),
+        MediaKind::Video if contains("webm") => Some("video/webm".to_string()),
+        MediaKind::Video if contains("matroska") => Some("video/x-matroska".to_string()),
+        MediaKind::Video if contains("mp4") => Some("video/mp4".to_string()),
+        _ => None,
+    }
 }
 
 fn dimensions(stream: &ffprobe::Stream) -> Option<Dimensions> {
@@ -590,7 +667,11 @@ fn parse_u64(value: Option<&str>) -> Option<u64> {
 
 #[cfg(test)]
 mod tests {
+    use std::sync::atomic::{AtomicU64, Ordering};
+
     use super::*;
+
+    static NEXT_FAKE_FFPROBE_ID: AtomicU64 = AtomicU64::new(0);
 
     const PNG_1X1: &[u8] = &[
         0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0x00, 0x00, 0x00, 0x0d, 0x49, 0x48, 0x44,
@@ -650,6 +731,7 @@ mod tests {
         assert_eq!(
             analysis,
             FileAnalysis::Image(ImageAnalysis {
+                materialized_mime_type: Some("image/png".to_string()),
                 dimensions: Dimensions {
                     width: 1,
                     height: 1,
@@ -691,8 +773,41 @@ mod tests {
         assert_eq!(
             analysis,
             Some(FileAnalysis::Video(
-                video_analysis(fake_video_probe()).unwrap()
+                video_analysis(fake_video_probe(), Some("video/mp4")).unwrap()
             ))
+        );
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn ffprobe_uses_audio_stream_for_audio_only_webm() {
+        let probe = fake_audio_probe();
+        let script = fake_ffprobe_with_probe(
+            "case \" $* \" in *\" -f matroska,webm \"*) ;; *) exit 41 ;; esac\n\
+             [ \"$(cat)\" = \"audio bytes\" ] || exit 42",
+            &probe,
+        );
+        let expected = FileAnalysis::Audio(audio_analysis(probe, Some("video/webm")).unwrap());
+        let input = FileAnalysisInput::from_bytes(Bytes::from_static(b"audio bytes"))
+            .with_filename("recording.webm")
+            .with_declared_mime_type("video/webm");
+
+        let analysis = FfprobeAnalyzer::new(AnalyzerConfig::default())
+            .with_ffprobe_bin(script.path())
+            .analyze(input)
+            .await
+            .unwrap();
+
+        assert_eq!(analysis, Some(expected));
+        assert_eq!(
+            analysis
+                .as_ref()
+                .and_then(FileAnalysis::materialized_mime_type),
+            Some("audio/webm")
+        );
+        assert_eq!(
+            analysis.and_then(|analysis| analysis.duration()),
+            Some(Duration::from_millis(120))
         );
     }
 
@@ -717,18 +832,27 @@ mod tests {
         assert_eq!(
             analysis,
             Some(FileAnalysis::Video(
-                video_analysis(fake_video_probe()).unwrap()
+                video_analysis(fake_video_probe(), Some("video/mp4")).unwrap()
             ))
         );
     }
 
     #[cfg(unix)]
     fn fake_ffprobe(assertions: &str) -> TempMediaFile {
+        fake_ffprobe_with_probe(assertions, &fake_video_probe())
+    }
+
+    #[cfg(unix)]
+    fn fake_ffprobe_with_probe(assertions: &str, probe: &ffprobe::FfProbe) -> TempMediaFile {
         use std::os::unix::fs::PermissionsExt as _;
 
-        let probe_json = serde_json::to_string(&fake_video_probe()).unwrap();
+        let probe_json = serde_json::to_string(probe).unwrap();
         let script = TempMediaFile {
-            path: std::env::temp_dir().join(temp_file_name(Some("fake-ffprobe"))),
+            path: std::env::temp_dir().join(format!(
+                "semantic-media-fake-ffprobe-{}-{}",
+                std::process::id(),
+                NEXT_FAKE_FFPROBE_ID.fetch_add(1, Ordering::Relaxed)
+            )),
         };
         std::fs::write(
             script.path(),
@@ -755,6 +879,25 @@ mod tests {
             format: ffprobe::Format {
                 duration: Some("2.5".to_string()),
                 format_name: "mov,mp4,m4a,3gp,3g2,mj2".to_string(),
+                ..ffprobe::Format::default()
+            },
+        }
+    }
+
+    #[cfg(unix)]
+    fn fake_audio_probe() -> ffprobe::FfProbe {
+        ffprobe::FfProbe {
+            streams: vec![ffprobe::Stream {
+                codec_type: Some("audio".to_string()),
+                codec_name: Some("opus".to_string()),
+                duration: Some("0.12".to_string()),
+                channels: Some(1),
+                sample_rate: Some("48000".to_string()),
+                ..ffprobe::Stream::default()
+            }],
+            format: ffprobe::Format {
+                duration: Some("0.12".to_string()),
+                format_name: "matroska,webm".to_string(),
                 ..ffprobe::Format::default()
             },
         }
@@ -800,7 +943,7 @@ mod tests {
             },
         };
 
-        let analysis = video_analysis(probe).expect("video analysis");
+        let analysis = video_analysis(probe, Some("video/mp4")).expect("video analysis");
 
         assert_eq!(analysis.duration, Duration::from_millis(12_500));
         assert_eq!(

@@ -175,6 +175,13 @@ pub fn merge_analysis_attributes(object: &mut Object, analysis: &FileAnalysis) {
 
 pub fn analysis_attributes(analysis: &FileAnalysis) -> Object {
     let mut out = Object::new();
+    out.insert(
+        "filekind",
+        Value::String(analysis_kind(analysis).to_string()),
+    );
+    if let Some(mime_type) = analysis.materialized_mime_type() {
+        out.insert("mime_type", Value::String(mime_type.to_string()));
+    }
     if let Some(dimensions) = analysis.dimensions() {
         out.insert(ATTR_FILE_MEDIA_PIXEL_WIDTH, Value::U64(dimensions.width));
         out.insert(ATTR_FILE_MEDIA_PIXEL_HEIGHT, Value::U64(dimensions.height));
@@ -326,4 +333,42 @@ fn object_string(object: &Object, field: &str) -> Option<String> {
         .get(field)
         .and_then(Value::as_str)
         .map(ToOwned::to_owned)
+}
+
+#[cfg(test)]
+mod tests {
+    use std::time::Duration;
+
+    use semantic_media::{AudioAnalysis, FileAnalysis};
+
+    use super::{Object, Value, merge_analysis_attributes};
+
+    #[test]
+    fn materialized_audio_type_replaces_provisional_video_classification() {
+        let mut object = Object::new();
+        object.insert("mime_type", Value::String("video/webm".to_string()));
+        object.insert("filekind", Value::String("video".to_string()));
+        let analysis = FileAnalysis::Audio(AudioAnalysis {
+            materialized_mime_type: Some("audio/webm".to_string()),
+            duration: Duration::from_millis(120),
+            bitrate: None,
+            audio_bitrate: None,
+            audio_codec: Some("opus".to_string()),
+            audio_channels: Some(1),
+            audio_sample_rate: Some(48_000),
+            container_format: Some("matroska,webm".to_string()),
+        });
+
+        merge_analysis_attributes(&mut object, &analysis);
+
+        assert_eq!(
+            object.get("mime_type").and_then(Value::as_str),
+            Some("audio/webm")
+        );
+        assert_eq!(
+            object.get("filekind").and_then(Value::as_str),
+            Some("audio")
+        );
+        assert!(object.contains_key(semantic_data::filestore::ATTR_FILE_MEDIA_DURATION));
+    }
 }
