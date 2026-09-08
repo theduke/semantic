@@ -749,20 +749,13 @@ async fn upload_item(
     let mut progress_item = item;
     spawn(async move {
         while let Some(progress) = progress_rx.next().await {
-            if progress_item.read().status == UploadItemStatus::Cancelling {
+            let current_status = progress_item.read().status;
+            if current_status == UploadItemStatus::Cancelling {
                 continue;
             }
-            match progress.phase {
-                FileUploadPhase::Preparing => {
-                    progress_item.write().status = UploadItemStatus::Reading
-                }
-                FileUploadPhase::Uploading => {
-                    progress_item.write().status = UploadItemStatus::Uploading
-                }
-                FileUploadPhase::Finalizing => {
-                    progress_item.write().status = UploadItemStatus::Finalizing
-                }
-                FileUploadPhase::Done => {}
+            let next_status = status_after_progress(current_status, &progress.phase);
+            if next_status != current_status {
+                progress_item.write().status = next_status;
             }
             progress_signal.set(Some(progress));
             refresh_summary(queue, summary);
@@ -901,6 +894,19 @@ impl UploadItemStatus {
             Self::Error => "error",
             Self::Canceled => "canceled",
         }
+    }
+}
+
+fn status_after_progress(current: UploadItemStatus, phase: &FileUploadPhase) -> UploadItemStatus {
+    if !current.is_busy() {
+        return current;
+    }
+
+    match phase {
+        FileUploadPhase::Preparing => UploadItemStatus::Reading,
+        FileUploadPhase::Uploading => UploadItemStatus::Uploading,
+        FileUploadPhase::Finalizing => UploadItemStatus::Finalizing,
+        FileUploadPhase::Done => current,
     }
 }
 
@@ -1340,6 +1346,21 @@ mod tests {
         assert!(upload_can_be_canceled(UploadItemStatus::Uploading, false));
         assert!(!upload_can_be_canceled(UploadItemStatus::Finalizing, true));
         assert!(!upload_can_be_canceled(UploadItemStatus::Success, true));
+    }
+
+    #[test]
+    fn buffered_progress_does_not_regress_a_completed_upload() {
+        for phase in [
+            FileUploadPhase::Preparing,
+            FileUploadPhase::Uploading,
+            FileUploadPhase::Finalizing,
+            FileUploadPhase::Done,
+        ] {
+            assert_eq!(
+                status_after_progress(UploadItemStatus::Success, &phase),
+                UploadItemStatus::Success
+            );
+        }
     }
 
     #[test]
