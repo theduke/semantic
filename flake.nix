@@ -11,10 +11,6 @@
       url = "github:oxalica/rust-overlay";
       inputs.nixpkgs.follows = "nixpkgs";
     };
-    dioxus-components = {
-      url = "github:DioxusLabs/dioxus-components/02801f27e4b3e30606e5c77e435c9d955c708eb3";
-      flake = false;
-    };
   };
 
   outputs =
@@ -74,6 +70,10 @@
           };
           cargoDeps = rustPlatform.importCargoLock {
             lockFile = ./Cargo.lock;
+            outputHashes = {
+              "dioxus-attributes-0.1.0" = "sha256-RLV2EbE0/AoDNLWrt0BMqbnPkSb8jR1PHL/YbFjHFJM=";
+              "logfs-0.1.1" = "sha256-ftHXyiw190VHnypzycpQFCY84aBZ0ezuOYu8x87rbgs=";
+            };
           };
 
           baseDeps = {
@@ -168,13 +168,6 @@
               wasm-bindgen-cli
             ];
             buildInputs = baseDeps.buildInputs;
-
-            postPatch = ''
-              substituteInPlace crates/dxcomp/Cargo.toml \
-                --replace-fail \
-                'path = "/home/theduke/dev/github.com/DioxusLabs/dioxus-components/primitives"' \
-                'path = "${inputs.dioxus-components}/primitives"'
-            '';
 
             buildPhase = ''
               runHook preBuild

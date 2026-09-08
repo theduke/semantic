@@ -2361,6 +2361,7 @@ dependencies = [
 [[package]]
 name = "dioxus-attributes"
 version = "0.1.0"
+source = "git+https://github.com/DioxusLabs/dioxus-components?rev=02801f27e4b3e30606e5c77e435c9d955c708eb3#02801f27e4b3e30606e5c77e435c9d955c708eb3"
 dependencies = [
  "dioxus-rsx",
  "proc-macro2",
@@ -2833,6 +2834,7 @@ dependencies = [
 [[package]]
 name = "dioxus-primitives"
 version = "0.0.1"
+source = "git+https://github.com/DioxusLabs/dioxus-components?rev=02801f27e4b3e30606e5c77e435c9d955c708eb3#02801f27e4b3e30606e5c77e435c9d955c708eb3"
 dependencies = [
  "dioxus",
  "dioxus-attributes",
@@ -5626,6 +5628,7 @@ checksum = "5e5032e24019045c762d3c0f28f5b6b8bbf38563a65908389bf7978758920897"
 [[package]]
 name = "logfs"
 version = "0.1.1"
+source = "git+https://github.com/theduke/logfs?rev=367d386360b4c21d20bf4940a0894eec1edcff50#367d386360b4c21d20bf4940a0894eec1edcff50"
 dependencies = [
  "backtrace",
  "bincode",

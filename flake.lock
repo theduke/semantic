@@ -1,22 +1,5 @@
 {
   "nodes": {
-    "dioxus-components": {
-      "flake": false,
-      "locked": {
-        "lastModified": 1780074071,
-        "narHash": "sha256-RLV2EbE0/AoDNLWrt0BMqbnPkSb8jR1PHL/YbFjHFJM=",
-        "owner": "DioxusLabs",
-        "repo": "dioxus-components",
-        "rev": "02801f27e4b3e30606e5c77e435c9d955c708eb3",
-        "type": "github"
-      },
-      "original": {
-        "owner": "DioxusLabs",
-        "repo": "dioxus-components",
-        "rev": "02801f27e4b3e30606e5c77e435c9d955c708eb3",
-        "type": "github"
-      }
-    },
     "flake-parts": {
       "inputs": {
         "nixpkgs-lib": "nixpkgs-lib"
@@ -68,7 +51,6 @@
     },
     "root": {
       "inputs": {
-        "dioxus-components": "dioxus-components",
         "flake-parts": "flake-parts",
         "nixpkgs": "nixpkgs",
         "rust-overlay": "rust-overlay"
