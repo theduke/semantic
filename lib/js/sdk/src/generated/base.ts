@@ -43,6 +43,7 @@ export type Note = {
   created_at?: created_at;
   note_content: note_content;
   note_format: note_format;
+  title?: title;
   updated_at?: updated_at;
 } & SemanticObject;
 export type Person = {

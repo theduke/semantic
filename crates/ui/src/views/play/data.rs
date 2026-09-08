@@ -5,8 +5,9 @@ use semantic_base::directory_query::{
     directory_children_query as build_directory_children_query,
 };
 use semantic_data::{
+    attr::ATTR_TITLE,
     bundles::directory::DIRECTORY_CLASS_ID,
-    filestore::{ATTR_FILE_MEDIA_DURATION, ATTR_FILE_MIME_TYPE, ATTR_TITLE},
+    filestore::{ATTR_FILE_MEDIA_DURATION, ATTR_FILE_MIME_TYPE},
     value::{Object, Value},
 };
 use semantic_rpc::RpcClient;

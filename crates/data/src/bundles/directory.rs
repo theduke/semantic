@@ -1,5 +1,6 @@
 use std::collections::BTreeMap;
 
+use crate::attr::ATTR_TITLE;
 use crate::builtin::DEFAULT_COLLECTION;
 use crate::schema::{
     AttributeRef, AttributeType, ClassAttribute, ClassRef, ClassType, Constraint, Meta, Migration,
@@ -16,7 +17,6 @@ pub const DIRECTORY_CLASS_ID: &str = "semantic:base:directory";
 pub const DIRECTORY_NODE_CLASS_ID: &str = "semantic:base:directory_node";
 pub const DIRECTORY_NODE_RELATION_ID: &str = "semantic:base:directory_node";
 
-pub const ATTR_TITLE: &str = "semantic:title";
 pub const ATTR_DESCRIPTION: &str = "semantic:description";
 pub const ATTR_CREATED_AT: &str = "semantic:created_at";
 pub const ATTR_UPDATED_AT: &str = "semantic:updated_at";

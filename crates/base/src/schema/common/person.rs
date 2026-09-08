@@ -1,12 +1,14 @@
 use std::collections::BTreeMap;
 
-use semantic_data::schema::{AttributeType, ClassType};
+use semantic_data::{
+    attr::ATTR_TITLE,
+    schema::{AttributeType, ClassType},
+};
 
 use super::helpers;
 
 pub const CLASS_ID: &str = "semantic:base:person";
 
-pub const ATTR_TITLE: &str = semantic_data::bundles::directory::ATTR_TITLE;
 pub const ATTR_DISPLAY_NAME: &str = "semantic:base:person:display_name";
 pub const ATTR_GIVEN_NAME: &str = "semantic:base:person:given_name";
 pub const ATTR_FAMILY_NAME: &str = "semantic:base:person:family_name";

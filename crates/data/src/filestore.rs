@@ -1,5 +1,6 @@
 use std::collections::BTreeMap;
 
+use crate::attr::ATTR_TITLE;
 use crate::schema::{
     AttributeRef, AttributeType, BoolType, ClassAttribute, ClassType, Constraint, EnumRepr,
     EnumType, EnumVariant, FloatWidth, Meta, Migration, MigrationDdlOperation, MigrationOperation,
@@ -16,7 +17,6 @@ pub const UPLOADED_AT_MIGRATION_NAME: &str = "005_uploaded_at";
 
 pub const FILE_CLASS_ID: &str = "semantic:filestore:file";
 
-pub const ATTR_TITLE: &str = "semantic:title";
 pub const ATTR_DESCRIPTION: &str = "semantic:description";
 pub const ATTR_PARENT: &str = "semantic:parent";
 pub const ATTR_FILE_FILESTORE_LOCATOR: &str = "semantic:filestore:file:filestore_locator";
@@ -44,7 +44,6 @@ pub const ATTR_FILE_MEDIA_AUDIO_SAMPLE_RATE: &str =
     "semantic:filestore:file:media_audio_sample_rate";
 pub const ATTR_FILE_MEDIA_CONTAINER_FORMAT: &str = "semantic:filestore:file:media_container_format";
 
-pub const TITLE_ATTRIBUTE_ID: &str = ATTR_TITLE;
 pub const DESCRIPTION_ATTRIBUTE_ID: &str = ATTR_DESCRIPTION;
 pub const FILE_FILESTORE_LOCATOR_ATTRIBUTE_ID: &str = ATTR_FILE_FILESTORE_LOCATOR;
 pub const FILE_FILENAME_ATTRIBUTE_ID: &str = ATTR_FILE_FILENAME;
@@ -849,10 +848,11 @@ fn title_word(word: &str) -> String {
 
 #[cfg(test)]
 mod tests {
+    use crate::attr::ATTR_TITLE;
     use crate::filestore::{
         ATTR_FILE_CONTENT_HASH_SHA256, ATTR_FILE_FILEKIND, ATTR_FILE_FILESTORE_LOCATOR,
         ATTR_FILE_MEDIA_DURATION, ATTR_FILE_MEDIA_PIXEL_WIDTH, ATTR_FILE_UPLOADED_AT, ATTR_PARENT,
-        ATTR_TITLE, FILE_CLASS_ID, FILEKIND_MIGRATION_NAME, GENERIC_METADATA_MIGRATION_NAME,
+        FILE_CLASS_ID, FILEKIND_MIGRATION_NAME, GENERIC_METADATA_MIGRATION_NAME,
         INIT_MIGRATION_NAME, MEDIA_METADATA_MIGRATION_NAME, MODULE_NAME, PACKAGE_NAME,
         UPLOADED_AT_MIGRATION_NAME, package,
     };
@@ -1084,7 +1084,7 @@ mod tests {
     #[test]
     fn file_fields_have_explicit_titles() {
         let expected = [
-            ("title", super::ATTR_TITLE, "Title"),
+            ("title", ATTR_TITLE, "Title"),
             ("byte_size", super::ATTR_FILE_BYTE_SIZE, "Byte Size"),
             (
                 "content_hash_sha256",
@@ -1135,7 +1135,7 @@ mod tests {
             .collect::<std::collections::BTreeMap<_, _>>();
         assert_eq!(
             attributes
-                .get(super::ATTR_TITLE)
+                .get(ATTR_TITLE)
                 .and_then(|attribute| attribute.meta.title.as_deref()),
             Some("Title")
         );

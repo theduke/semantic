@@ -7,7 +7,8 @@ use futures::{
     future::{AbortHandle, Abortable},
     lock::Mutex,
 };
-use semantic_data::filestore::{ATTR_DESCRIPTION, ATTR_PARENT, ATTR_TITLE};
+use semantic_data::attr::ATTR_TITLE;
+use semantic_data::filestore::{ATTR_DESCRIPTION, ATTR_PARENT};
 use semantic_data::value::{Object, Value};
 use semantic_rpc::RpcClientError;
 use semantic_rpc::file::{

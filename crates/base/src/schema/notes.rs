@@ -1,9 +1,12 @@
 use std::collections::BTreeMap;
 
-use semantic_data::expr::{CallExpr, Callee, Expr};
 use semantic_data::schema::{
     AttributeRef, AttributeType, ClassAttribute, ClassType, Constraint, EnumRepr, EnumType,
     EnumVariant, Type, TypeKind,
+};
+use semantic_data::{
+    attr::ATTR_TITLE,
+    expr::{CallExpr, Callee, Expr},
 };
 
 use super::common::helpers;
@@ -32,6 +35,7 @@ pub fn class() -> ClassType {
         extends: Vec::new(),
         strict_schema: false,
         attributes: BTreeMap::from([
+            ("title".to_string(), class_attribute(ATTR_TITLE, false, 5)),
             (
                 "note_format".to_string(),
                 class_attribute(ATTR_NOTE_FORMAT, true, 10),
@@ -87,6 +91,7 @@ fn class_attribute(attribute_id: &str, required: bool, ui_order: u32) -> ClassAt
             _ => Vec::new(),
         },
         meta: helpers::meta_with_title(match attribute_id {
+            ATTR_TITLE => "Title",
             ATTR_NOTE_FORMAT => "Note Format",
             ATTR_NOTE_CONTENT => "Note Content",
             ATTR_CREATED_AT => "Created At",
@@ -125,8 +130,8 @@ mod tests {
     use semantic_data::schema::{EnumRepr, TypeKind};
 
     use super::{
-        ATTR_CREATED_AT, ATTR_NOTE_CONTENT, ATTR_NOTE_FORMAT, ATTR_UPDATED_AT, FORMAT_MARKDOWN,
-        FORMAT_TEXT,
+        ATTR_CREATED_AT, ATTR_NOTE_CONTENT, ATTR_NOTE_FORMAT, ATTR_TITLE, ATTR_UPDATED_AT,
+        FORMAT_MARKDOWN, FORMAT_TEXT,
     };
 
     #[test]
@@ -151,6 +156,7 @@ mod tests {
     fn note_class_declares_required_attributes() {
         let class = super::class();
 
+        assert_eq!(class.attributes["title"].attribute.id, ATTR_TITLE);
         assert_eq!(
             class.attributes["note_format"].attribute.id,
             ATTR_NOTE_FORMAT
@@ -161,6 +167,7 @@ mod tests {
         );
         assert!(class.attributes["note_format"].required);
         assert!(class.attributes["note_content"].required);
+        assert!(!class.attributes["title"].required);
 
         assert_eq!(class.attributes["created_at"].attribute.id, ATTR_CREATED_AT);
         assert_eq!(class.attributes["updated_at"].attribute.id, ATTR_UPDATED_AT);

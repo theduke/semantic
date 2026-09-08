@@ -10,9 +10,10 @@ use semantic_base::directory_query::{
     DirectorySort, directories_query, directory_by_id_query, directory_children_query,
     directory_links_query, root_directories_named_query,
 };
+use semantic_data::attr::ATTR_TITLE;
 use semantic_data::builtin::{ATTR_ID, ATTR_TYPE, DEFAULT_COLLECTION};
 use semantic_data::bundles::directory::{
-    ATTR_DIRECTORY_NODE_FROM, ATTR_DIRECTORY_NODE_ORDER, ATTR_TITLE, DIRECTORY_CLASS_ID,
+    ATTR_DIRECTORY_NODE_FROM, ATTR_DIRECTORY_NODE_ORDER, DIRECTORY_CLASS_ID,
     DIRECTORY_NODE_CLASS_ID, DIRECTORY_NODE_RELATION_ID,
 };
 use semantic_data::filestore::{ATTR_FILE_CONTENT_HASH_SHA256, ATTR_FILE_FILENAME, FILE_CLASS_ID};

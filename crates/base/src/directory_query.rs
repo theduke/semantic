@@ -5,9 +5,10 @@
 //! rows can be consumed consistently across native and web clients.
 
 use semantic_data::{
+    attr::ATTR_TITLE,
     builtin::DEFAULT_COLLECTION,
     bundles::directory::{
-        ATTR_DIRECTORY_NODE_FROM, ATTR_DIRECTORY_NODE_ORDER, ATTR_TITLE, DIRECTORY_CLASS_ID,
+        ATTR_DIRECTORY_NODE_FROM, ATTR_DIRECTORY_NODE_ORDER, DIRECTORY_CLASS_ID,
         DIRECTORY_NODE_CLASS_ID, DIRECTORY_NODE_RELATION_ID,
     },
 };

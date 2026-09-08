@@ -1,9 +1,10 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use dioxus::logger::tracing::info;
+use semantic_data::attr::ATTR_TITLE;
 use semantic_data::bundles::directory::{
-    ATTR_CREATED_AT, ATTR_DIRECTORY_NODE_FROM, ATTR_DIRECTORY_NODE_ORDER, ATTR_TITLE,
-    ATTR_UPDATED_AT, DIRECTORY_CLASS_ID, DIRECTORY_NODE_CLASS_ID, DIRECTORY_NODE_RELATION_ID,
+    ATTR_CREATED_AT, ATTR_DIRECTORY_NODE_FROM, ATTR_DIRECTORY_NODE_ORDER, ATTR_UPDATED_AT,
+    DIRECTORY_CLASS_ID, DIRECTORY_NODE_CLASS_ID, DIRECTORY_NODE_RELATION_ID,
 };
 use semantic_data::value::{DateTime, Object, Value};
 

@@ -1,10 +1,9 @@
 use std::rc::Rc;
 
 use dioxus::prelude::*;
+use semantic_data::attr::ATTR_TITLE;
 use semantic_data::builtin::ATTR_ID;
-use semantic_data::filestore::{
-    ATTR_FILE_CONTENT_HASH_SHA256, ATTR_FILE_FILENAME, ATTR_TITLE, FILE_CLASS_ID,
-};
+use semantic_data::filestore::{ATTR_FILE_CONTENT_HASH_SHA256, ATTR_FILE_FILENAME, FILE_CLASS_ID};
 use semantic_data::value::{Object, Value};
 
 use crate::components::ValueView;

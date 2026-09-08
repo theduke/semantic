@@ -1,7 +1,8 @@
 use std::rc::Rc;
 
 use dioxus::prelude::*;
-use semantic_data::filestore::{ATTR_FILE_FILENAME, ATTR_TITLE};
+use semantic_data::attr::ATTR_TITLE;
+use semantic_data::filestore::ATTR_FILE_FILENAME;
 use semantic_data::value::{Object, Value};
 
 use crate::ui_catalog::{
