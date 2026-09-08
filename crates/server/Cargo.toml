@@ -14,6 +14,7 @@ version.workspace = true
 [features]
 default = ["redb"]
 embed-ui = ["dep:include_dir", "dep:mime_guess"]
+logfs = ["dep:semantic_db_log"]
 redb = ["dep:semantic_db_redb"]
 
 [dependencies]
@@ -27,6 +28,7 @@ mime_guess = { version = "2.0.5", optional = true }
 semantic_app = { path = "../app" }
 semantic_data = { workspace = true }
 semantic_db_core = { path = "../db_core" }
+semantic_db_log = { path = "../db_log", optional = true }
 semantic_db_redb = { path = "../db_redb", optional = true }
 semantic_media = { path = "../media", default-features = false }
 semantic_rpc = { path = "../rpc", features = ["server-axum-ws"] }

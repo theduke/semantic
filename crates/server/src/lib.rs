@@ -2,6 +2,7 @@ mod auth;
 mod config;
 mod error;
 mod file;
+mod logfs;
 mod redb;
 mod router;
 #[cfg(feature = "embed-ui")]
@@ -11,6 +12,8 @@ mod ws;
 pub use auth::{HeaderPrincipalResolver, NoAuthPrincipalResolver, PrincipalResolver};
 pub use config::ServerConfig;
 pub use error::ServerError;
+#[cfg(feature = "logfs")]
+pub use logfs::LogFsDbProvider;
 #[cfg(feature = "redb")]
 pub use redb::RedbDbProvider;
 pub use router::SemanticServer;
@@ -50,6 +53,50 @@ impl SemanticServer {
         let app = semantic_app::SemanticApp::builder()
             .with_config(app_config)
             .with_provider(RedbDbProvider)
+            .with_default_scope(scope_id.clone(), db)
+            .with_default_file_store_uri(scope_id, blob_uri)
+            .register_builtin_commands()?
+            .build()?;
+        Ok(Self::new(app))
+    }
+}
+
+#[cfg(feature = "logfs")]
+impl SemanticServer {
+    pub fn local_logfs(
+        path: impl AsRef<std::path::Path>,
+    ) -> std::result::Result<Self, ServerError> {
+        let app_config = semantic_app::AppConfig::from_env();
+        let blob_uri = app_config
+            .default_blob_uri()
+            .map_err(|err| ServerError::App(semantic_app::AppError::InvalidRequest(err)))?;
+        Self::local_logfs_with_app_config_and_blob_store(path, app_config, blob_uri)
+    }
+
+    pub fn local_logfs_with_blob_store(
+        path: impl AsRef<std::path::Path>,
+        blob_uri: String,
+    ) -> std::result::Result<Self, ServerError> {
+        Self::local_logfs_with_app_config_and_blob_store(
+            path,
+            semantic_app::AppConfig::from_env(),
+            blob_uri,
+        )
+    }
+
+    pub fn local_logfs_with_app_config_and_blob_store(
+        path: impl AsRef<std::path::Path>,
+        app_config: semantic_app::AppConfig,
+        blob_uri: String,
+    ) -> std::result::Result<Self, ServerError> {
+        let backend =
+            semantic_db_log::open_backend(path, semantic_data::schema::DbOpenMode::AutoCreate)?;
+        let db: std::sync::Arc<dyn semantic_app::SemanticDb> =
+            std::sync::Arc::new(semantic_db_core::Db::new(backend));
+        let scope_id = semantic_app::DbScopeId::new("default");
+        let app = semantic_app::SemanticApp::builder()
+            .with_config(app_config)
+            .with_provider(LogFsDbProvider)
             .with_default_scope(scope_id.clone(), db)
             .with_default_file_store_uri(scope_id, blob_uri)
             .register_builtin_commands()?

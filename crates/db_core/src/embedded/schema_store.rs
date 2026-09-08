@@ -1,21 +1,18 @@
-use semantic_data::value::{Object, Value};
-use semantic_db_core::DbError;
-use semantic_db_core::catalog::{
+use crate::DbError;
+use crate::catalog::{
     Catalog, IntegrityMode, StoredAppliedMigration, StoredAttribute, StoredClass, StoredCollection,
     StoredFieldId, StoredIndex, StoredPackage, StoredRecordType, StoredRelationship, StoredTypeDef,
 };
-use semantic_db_core::{
+use crate::{
     CORE_CATALOG_ATTRIBUTE_ENTRY_CLASS_ID, CORE_CATALOG_CLASS_ENTRY_CLASS_ID,
     CORE_CATALOG_COLLECTION_ENTRY_CLASS_ID, CORE_CATALOG_INDEX_ENTRY_CLASS_ID,
     CORE_CATALOG_META_ENTRY_CLASS_ID, CORE_CATALOG_RECORD_TYPE_ENTRY_CLASS_ID,
     CORE_CATALOG_SCHEMA_COLLECTION, CORE_CATALOG_TYPE_DEF_ENTRY_CLASS_ID,
     catalog::OBJECT_TYPE_FIELD,
 };
+use semantic_data::value::{Object, Value};
 
-use crate::storage::{
-    EntityStore, KvEngine, KvWriteOp, StoredEntity, StoredEntityKind, collect_index_entries,
-    encode_entity, entity_key, index_key,
-};
+use crate::embedded::storage::{EntityStorage, StorageWriteOp, StoredEntity, StoredEntityKind};
 
 const META_ROW_ID: &str = "__catalog_meta__";
 const LID_FIELD: &str = "lid";
@@ -39,7 +36,7 @@ const PACKAGES_FIELD: &str = "packages";
 const APPLIED_MIGRATIONS_FIELD: &str = "applied_migrations";
 
 struct CatalogCollections {
-    schema: semantic_db_core::catalog::LocalCollectionId,
+    schema: crate::catalog::LocalCollectionId,
 }
 
 fn core_collection_ids(catalog: &Catalog) -> std::result::Result<CatalogCollections, DbError> {
@@ -65,7 +62,7 @@ const ENTRY_TYPE_INDEX: &str = CORE_CATALOG_INDEX_ENTRY_CLASS_ID;
 const ENTRY_TYPE_META: &str = CORE_CATALOG_META_ENTRY_CLASS_ID;
 
 fn encode_entity_base(
-    collection: semantic_db_core::catalog::LocalCollectionId,
+    collection: crate::catalog::LocalCollectionId,
     entry_type: &str,
     id: String,
     lid: usize,
@@ -86,8 +83,8 @@ fn encode_entity_base(
     }
 }
 
-pub fn load_catalog<E: KvEngine>(
-    store: &EntityStore<E>,
+pub fn load_catalog<S: EntityStorage>(
+    store: &S,
     bootstrap_catalog: &Catalog,
 ) -> std::result::Result<Option<Catalog>, DbError> {
     let core = core_collection_ids(bootstrap_catalog)?;
@@ -162,7 +159,7 @@ pub fn load_catalog<E: KvEngine>(
         let kind = object_json_field_default(
             &row.object,
             COLLECTION_KIND_FIELD,
-            semantic_db_core::catalog::CollectionKind::Schema,
+            crate::catalog::CollectionKind::Schema,
         )?;
         let integrity_mode: IntegrityMode = object_json_field(&row.object, INTEGRITY_MODE_FIELD)?;
         let internal = object_bool_field_default(&row.object, INTERNAL_FIELD, false);
@@ -180,10 +177,8 @@ pub fn load_catalog<E: KvEngine>(
     for row in &indexes_rows {
         let lid = object_lid(&row.object)?;
         let name = object_string_field(&row.object, "name")?;
-        let collection = semantic_db_core::catalog::LocalCollectionId(object_usize_field(
-            &row.object,
-            COLLECTION_FIELD,
-        )?);
+        let collection =
+            crate::catalog::LocalCollectionId(object_usize_field(&row.object, COLLECTION_FIELD)?);
         let field = object_string_field(&row.object, FIELD_FIELD)?;
         let kind: semantic_data::schema::IndexKind = object_json_field_default(
             &row.object,
@@ -237,20 +232,16 @@ pub fn load_catalog<E: KvEngine>(
     Ok(Some(catalog))
 }
 
-pub fn catalog_write_ops<E: KvEngine>(
-    store: &EntityStore<E>,
+pub fn catalog_write_ops<S: EntityStorage>(
+    _store: &S,
     catalog: &Catalog,
-) -> std::result::Result<Vec<KvWriteOp>, DbError> {
+) -> std::result::Result<Vec<StorageWriteOp>, DbError> {
     let core = core_collection_ids(catalog)?;
-    let mut ops = Vec::<KvWriteOp>::new();
+    let mut ops = Vec::<StorageWriteOp>::new();
 
-    for key in store.collection_keys(core.schema)? {
-        ops.push(KvWriteOp::Delete { key });
-    }
+    ops.push(StorageWriteOp::ClearCollection(core.schema));
     for index in catalog.indexes_for_collection(core.schema) {
-        for key in store.index_keys(index.lid)? {
-            ops.push(KvWriteOp::Delete { key });
-        }
+        ops.push(StorageWriteOp::ResetIndex(index.lid));
     }
 
     for (lid, item) in catalog.attributes() {
@@ -522,10 +513,10 @@ where
     facet_json::from_str::<T>(value).map_err(|err| DbError::Deserialization(err.to_string()))
 }
 
-fn load_rows_by_entry_type<E: KvEngine>(
-    store: &EntityStore<E>,
+fn load_rows_by_entry_type<S: EntityStorage>(
+    store: &S,
     _catalog: &Catalog,
-    collection: semantic_db_core::catalog::LocalCollectionId,
+    collection: crate::catalog::LocalCollectionId,
     entry_type: &str,
 ) -> std::result::Result<Vec<StoredEntity>, DbError> {
     Ok(store
@@ -540,38 +531,16 @@ fn load_rows_by_entry_type<E: KvEngine>(
 fn push_entity_with_indexes(
     catalog: &Catalog,
     entity: &StoredEntity,
-    ops: &mut Vec<KvWriteOp>,
+    ops: &mut Vec<StorageWriteOp>,
 ) -> std::result::Result<(), DbError> {
-    let collection = semantic_db_core::catalog::LocalCollectionId(entity.collection);
-    ops.push(KvWriteOp::Put {
-        key: entity_key(collection, &entity.id),
-        value: encode_entity(entity)?,
-    });
+    let collection = crate::catalog::LocalCollectionId(entity.collection);
+    ops.push(StorageWriteOp::PutEntity(entity.clone()));
     for index in catalog.indexes_for_collection(collection) {
-        ops.push(KvWriteOp::Put {
-            key: crate::storage::index_format_key(index.lid),
-            value: crate::storage::index_format_value(),
+        ops.push(StorageWriteOp::IndexEntity {
+            index: index.clone(),
+            entity_id: entity.id.clone(),
+            object: entity.object.clone(),
         });
-        match index.schema.kind {
-            semantic_data::schema::IndexKind::Equality => {
-                if let Some(value) = entity.object.get(&index.canonical_field) {
-                    ops.push(KvWriteOp::Put {
-                        key: index_key(index.lid, None, value, &entity.id)?,
-                        value: Vec::new(),
-                    });
-                }
-            }
-            semantic_data::schema::IndexKind::PathEquality => {
-                for (path, value) in collect_index_entries(&entity.object) {
-                    ops.push(KvWriteOp::Put {
-                        key: index_key(index.lid, Some(&path), &value, &entity.id)?,
-                        value: Vec::new(),
-                    });
-                }
-            }
-            semantic_data::schema::IndexKind::Range
-            | semantic_data::schema::IndexKind::FullText => {}
-        }
     }
     Ok(())
 }

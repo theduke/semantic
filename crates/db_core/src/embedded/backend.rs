@@ -1,28 +1,28 @@
 use std::sync::{Arc, RwLock};
 
-use async_trait::async_trait;
-use semantic_data::schema::{Package, RelationType};
-use semantic_data::value::Object;
-use semantic_db_core::catalog::{Catalog, CollectionKind, LocalCollectionId};
-use semantic_db_core::{
+use crate::catalog::{Catalog, CollectionKind, LocalCollectionId};
+use crate::{
     AsyncRuntime, Backend, Batch, BatchOutcome, DbError, DdlBatch, DdlOutcome, DeleteQuery,
     EntityRecord, MutationStats, PackageRegistrationOutcome, Query, QueryExplain, QueryPlan,
     QueryResult, TextQueryInput, UpdateQuery, spawn_blocking_on,
 };
+use async_trait::async_trait;
+use semantic_data::schema::{Package, RelationType};
+use semantic_data::value::Object;
 
-use crate::{KvDb, KvEngine};
+use crate::embedded::{EmbeddedDb, EntityStorage};
 
-pub struct KvBackend<E: KvEngine> {
-    db: Arc<RwLock<KvDb<E>>>,
+pub struct EmbeddedBackend<S: EntityStorage> {
+    db: Arc<RwLock<EmbeddedDb<S>>>,
     runtime: Arc<dyn AsyncRuntime>,
 }
 
-impl<E: KvEngine> KvBackend<E> {
-    pub fn new(db: KvDb<E>) -> Self {
+impl<S: EntityStorage> EmbeddedBackend<S> {
+    pub fn new(db: EmbeddedDb<S>) -> Self {
         Self::with_runtime(db, default_runtime())
     }
 
-    pub fn with_runtime(db: KvDb<E>, runtime: Arc<dyn AsyncRuntime>) -> Self {
+    pub fn with_runtime(db: EmbeddedDb<S>, runtime: Arc<dyn AsyncRuntime>) -> Self {
         Self {
             db: Arc::new(RwLock::new(db)),
             runtime,
@@ -32,20 +32,20 @@ impl<E: KvEngine> KvBackend<E> {
 
 #[cfg(feature = "tokio")]
 fn default_runtime() -> Arc<dyn AsyncRuntime> {
-    Arc::new(semantic_db_core::TokioAsyncRuntime)
+    Arc::new(crate::TokioAsyncRuntime)
 }
 
 #[cfg(not(feature = "tokio"))]
 fn default_runtime() -> Arc<dyn AsyncRuntime> {
-    Arc::new(semantic_db_core::InlineAsyncRuntime)
+    Arc::new(crate::InlineAsyncRuntime)
 }
 
 fn lock_poisoned_error() -> DbError {
-    DbError::Storage("kv backend rwlock poisoned".to_string())
+    DbError::Storage("embedded backend rwlock poisoned".to_string())
 }
 
 #[async_trait]
-impl<E: KvEngine> Backend for KvBackend<E> {
+impl<S: EntityStorage> Backend for EmbeddedBackend<S> {
     async fn catalog(&self) -> std::result::Result<Arc<Catalog>, DbError> {
         let db = Arc::clone(&self.db);
         spawn_blocking_on(self.runtime.as_ref(), move || {
@@ -224,22 +224,22 @@ impl<E: KvEngine> Backend for KvBackend<E> {
 
 #[cfg(test)]
 mod tests {
-    use semantic_db_core::Backend;
+    use crate::Backend;
 
     use super::*;
-    use crate::MemoryKvEngine;
+    use crate::embedded::MemoryEntityStorage;
 
     fn assert_backend_impl<T: Backend>() {}
 
     #[test]
     fn kv_backend_blanket_impl_compiles() {
-        assert_backend_impl::<KvBackend<MemoryKvEngine>>();
+        assert_backend_impl::<EmbeddedBackend<MemoryEntityStorage>>();
     }
 
     #[cfg(feature = "tokio")]
     #[test]
     fn kv_backend_runtime_constructors_compile() {
-        let db = KvDb::new(MemoryKvEngine::new());
-        let _ = KvBackend::with_runtime(db, Arc::new(semantic_db_core::TokioAsyncRuntime));
+        let db = EmbeddedDb::new(MemoryEntityStorage::new());
+        let _ = EmbeddedBackend::with_runtime(db, Arc::new(crate::TokioAsyncRuntime));
     }
 }

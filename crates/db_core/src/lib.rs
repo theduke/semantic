@@ -5,6 +5,7 @@ mod config;
 mod context;
 mod ddl;
 mod defaults;
+pub mod embedded;
 mod error;
 mod federation;
 mod managed_schema;

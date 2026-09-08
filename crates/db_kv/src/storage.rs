@@ -1,10 +1,15 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use base64::{Engine, engine::general_purpose::URL_SAFE_NO_PAD};
+use semantic_data::schema::IndexKind;
 use semantic_data::value::serde::typed::{TypedRef, TypedValue};
 use semantic_data::value::{FieldPath, Object, PathSegment, Value};
 use semantic_db_core::DbError;
 use semantic_db_core::catalog::{LocalCollectionId, LocalIndexId};
+use semantic_db_core::embedded::{
+    BoxEntityIdScan, BoxEntityScan, EntityStorage, StorageCommitOutcome,
+    StorageTransactionCapabilities, StorageWriteOp, StoredEntity, StoredEntityKind,
+};
 use serde::{Deserialize, Serialize};
 
 pub mod memory;
@@ -20,58 +25,9 @@ const INDEX_FORMAT_VERSION_V2_MSGPACK: u16 = 2;
 #[derive(facet::Facet, Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
 #[repr(C)]
 #[facet(rename_all = "snake_case")]
-pub enum StoredEntityKind {
-    Untyped,
-    Record,
-    Class,
-}
-
-#[derive(facet::Facet, Debug, Clone, PartialEq, Eq)]
-pub struct StoredEntity {
-    pub id: String,
-    pub collection: usize,
-    pub kind: StoredEntityKind,
-    pub object: Object,
-}
-
-#[derive(facet::Facet, Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
-#[repr(C)]
-#[facet(rename_all = "snake_case")]
 pub enum KvWriteOp {
     Put { key: Vec<u8>, value: Vec<u8> },
     Delete { key: Vec<u8> },
-}
-
-#[derive(facet::Facet, Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq)]
-#[repr(C)]
-#[facet(rename_all = "snake_case")]
-pub struct KvTransactionCapabilities {
-    pub conflict_detection: bool,
-    pub mvcc: bool,
-    pub snapshot_reads: bool,
-}
-
-impl Default for KvTransactionCapabilities {
-    fn default() -> Self {
-        Self {
-            conflict_detection: false,
-            mvcc: false,
-            snapshot_reads: false,
-        }
-    }
-}
-
-#[derive(facet::Facet, Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq)]
-#[repr(C)]
-#[facet(rename_all = "snake_case")]
-pub enum KvCommitOutcome {
-    Committed {
-        revision: Option<u64>,
-    },
-    Conflict {
-        expected_revision: Option<u64>,
-        actual_revision: Option<u64>,
-    },
 }
 
 pub type KvScanItem = std::result::Result<(Vec<u8>, Vec<u8>), DbError>;
@@ -90,8 +46,8 @@ pub trait KvEngine: std::fmt::Debug + Send + Sync + 'static {
         self.scan_prefix_stream(prefix.to_vec())?.collect()
     }
 
-    fn tx_capabilities(&self) -> KvTransactionCapabilities {
-        KvTransactionCapabilities::default()
+    fn tx_capabilities(&self) -> StorageTransactionCapabilities {
+        StorageTransactionCapabilities::default()
     }
 
     fn current_revision(&self) -> std::result::Result<Option<u64>, DbError> {
@@ -119,9 +75,9 @@ pub trait KvEngine: std::fmt::Debug + Send + Sync + 'static {
         &mut self,
         ops: &[KvWriteOp],
         _expected_revision: Option<u64>,
-    ) -> std::result::Result<KvCommitOutcome, DbError> {
+    ) -> std::result::Result<StorageCommitOutcome, DbError> {
         self.write_batch(ops)?;
-        Ok(KvCommitOutcome::Committed {
+        Ok(StorageCommitOutcome::Committed {
             revision: self.current_revision()?,
         })
     }
@@ -241,7 +197,7 @@ impl<E: KvEngine> EntityStore<E> {
         self.engine
     }
 
-    pub fn tx_capabilities(&self) -> KvTransactionCapabilities {
+    pub fn tx_capabilities(&self) -> StorageTransactionCapabilities {
         self.engine.tx_capabilities()
     }
 
@@ -410,9 +366,159 @@ impl<E: KvEngine> EntityStore<E> {
         &mut self,
         ops: &[KvWriteOp],
         expected_revision: Option<u64>,
-    ) -> std::result::Result<KvCommitOutcome, DbError> {
+    ) -> std::result::Result<StorageCommitOutcome, DbError> {
         self.engine.write_batch_conditional(ops, expected_revision)
     }
+}
+
+impl<E: KvEngine> EntityStorage for EntityStore<E> {
+    fn get_entity(
+        &self,
+        collection: LocalCollectionId,
+        id: &str,
+    ) -> std::result::Result<Option<StoredEntity>, DbError> {
+        EntityStore::get_entity(self, collection, id)
+    }
+
+    fn scan_collection_stream(
+        &self,
+        collection: LocalCollectionId,
+    ) -> std::result::Result<BoxEntityScan, DbError> {
+        Ok(Box::new(EntityStore::scan_collection_stream(
+            self, collection,
+        )?))
+    }
+
+    fn scan_collection_at_revision_stream(
+        &self,
+        collection: LocalCollectionId,
+        revision: u64,
+    ) -> std::result::Result<BoxEntityScan, DbError> {
+        Ok(Box::new(EntityStore::scan_collection_at_revision_stream(
+            self, collection, revision,
+        )?))
+    }
+
+    fn scan_index_value_stream(
+        &self,
+        index: LocalIndexId,
+        path: Option<&FieldPath>,
+        value: &Value,
+    ) -> std::result::Result<BoxEntityIdScan, DbError> {
+        Ok(Box::new(EntityStore::scan_index_value_stream(
+            self, index, path, value,
+        )?))
+    }
+
+    fn index_needs_rebuild(&self, index: LocalIndexId) -> std::result::Result<bool, DbError> {
+        Ok(self.engine.get(&index_format_key(index))?.as_deref()
+            != Some(index_format_value().as_slice()))
+    }
+
+    fn tx_capabilities(&self) -> StorageTransactionCapabilities {
+        self.engine.tx_capabilities()
+    }
+
+    fn current_revision(&self) -> std::result::Result<Option<u64>, DbError> {
+        self.engine.current_revision()
+    }
+
+    fn apply_batch(&mut self, ops: &[StorageWriteOp]) -> std::result::Result<(), DbError> {
+        let lowered = self.lower_write_ops(ops)?;
+        self.engine.write_batch(&lowered)
+    }
+
+    fn apply_batch_conditional(
+        &mut self,
+        ops: &[StorageWriteOp],
+        expected_revision: Option<u64>,
+    ) -> std::result::Result<StorageCommitOutcome, DbError> {
+        let lowered = self.lower_write_ops(ops)?;
+        self.engine
+            .write_batch_conditional(&lowered, expected_revision)
+    }
+}
+
+impl<E: KvEngine> EntityStore<E> {
+    fn lower_write_ops(
+        &self,
+        operations: &[StorageWriteOp],
+    ) -> std::result::Result<Vec<KvWriteOp>, DbError> {
+        let mut lowered = Vec::new();
+        for operation in operations {
+            match operation {
+                StorageWriteOp::PutEntity(entity) => lowered.push(KvWriteOp::Put {
+                    key: entity_key(LocalCollectionId(entity.collection), &entity.id),
+                    value: encode_entity(entity)?,
+                }),
+                StorageWriteOp::ClearCollection(collection) => {
+                    push_prefix_deletes(
+                        &mut lowered,
+                        self.engine.scan_prefix(&entity_prefix(*collection))?,
+                        &entity_prefix(*collection),
+                    );
+                }
+                StorageWriteOp::ClearIndex(index) => {
+                    push_prefix_deletes(
+                        &mut lowered,
+                        self.engine.scan_prefix(&index_prefix(*index))?,
+                        &index_prefix(*index),
+                    );
+                }
+                StorageWriteOp::ResetIndex(index) => {
+                    push_prefix_deletes(
+                        &mut lowered,
+                        self.engine.scan_prefix(&index_prefix(*index))?,
+                        &index_prefix(*index),
+                    );
+                    lowered.push(KvWriteOp::Put {
+                        key: index_format_key(*index),
+                        value: index_format_value(),
+                    });
+                }
+                StorageWriteOp::IndexEntity {
+                    index,
+                    entity_id,
+                    object,
+                } => match index.schema.kind {
+                    IndexKind::Equality => {
+                        if let Some(value) = object.get(&index.canonical_field) {
+                            lowered.push(KvWriteOp::Put {
+                                key: index_key(index.lid, None, value, entity_id)?,
+                                value: Vec::new(),
+                            });
+                        }
+                    }
+                    IndexKind::PathEquality => {
+                        for (path, value) in collect_index_entries(object) {
+                            lowered.push(KvWriteOp::Put {
+                                key: index_key(index.lid, Some(&path), &value, entity_id)?,
+                                value: Vec::new(),
+                            });
+                        }
+                    }
+                    IndexKind::Range | IndexKind::FullText => {}
+                },
+            }
+        }
+        Ok(lowered)
+    }
+}
+
+fn push_prefix_deletes(
+    operations: &mut Vec<KvWriteOp>,
+    existing: Vec<(Vec<u8>, Vec<u8>)>,
+    prefix: &[u8],
+) {
+    let mut keys = existing
+        .into_iter()
+        .map(|(key, _)| key)
+        .collect::<BTreeSet<_>>();
+    keys.extend(operations.iter().filter_map(|operation| match operation {
+        KvWriteOp::Put { key, .. } if key.starts_with(prefix) => Some(key.clone()),
+        _ => None,
+    }));
+    operations.extend(keys.into_iter().map(|key| KvWriteOp::Delete { key }));
 }
 
 pub fn decode_entity(payload: &[u8]) -> std::result::Result<StoredEntity, DbError> {
@@ -433,7 +539,7 @@ pub fn encode_entity(entity: &StoredEntity) -> std::result::Result<Vec<u8>, DbEr
     let wire = StoredEntityWire {
         id: entity.id.clone(),
         collection: entity.collection,
-        kind: entity.kind.clone(),
+        kind: (&entity.kind).into(),
         object: entity
             .object
             .iter()
@@ -576,8 +682,35 @@ fn collect_value_entries(value: &Value, path: &mut FieldPath, out: &mut Vec<(Fie
 struct StoredEntityWire {
     id: String,
     collection: usize,
-    kind: StoredEntityKind,
+    kind: StoredEntityKindWire,
     object: BTreeMap<String, TypedValue>,
+}
+
+#[derive(Serialize, Deserialize)]
+enum StoredEntityKindWire {
+    Untyped,
+    Record,
+    Class,
+}
+
+impl From<&StoredEntityKind> for StoredEntityKindWire {
+    fn from(value: &StoredEntityKind) -> Self {
+        match value {
+            StoredEntityKind::Untyped => Self::Untyped,
+            StoredEntityKind::Record => Self::Record,
+            StoredEntityKind::Class => Self::Class,
+        }
+    }
+}
+
+impl From<StoredEntityKindWire> for StoredEntityKind {
+    fn from(value: StoredEntityKindWire) -> Self {
+        match value {
+            StoredEntityKindWire::Untyped => Self::Untyped,
+            StoredEntityKindWire::Record => Self::Record,
+            StoredEntityKindWire::Class => Self::Class,
+        }
+    }
 }
 
 fn decode_msgpack_entity_v1(payload: &[u8]) -> std::result::Result<StoredEntity, DbError> {
@@ -590,7 +723,7 @@ fn decode_msgpack_entity_v1(payload: &[u8]) -> std::result::Result<StoredEntity,
     Ok(StoredEntity {
         id: wire.id,
         collection: wire.collection,
-        kind: wire.kind,
+        kind: wire.kind.into(),
         object,
     })
 }
@@ -606,8 +739,23 @@ fn split_entity_payload_prefix(payload: &[u8]) -> Option<(u16, &[u8])> {
 }
 
 #[cfg(test)]
-mod entity_key_tests {
+mod tests {
     use super::*;
+    use semantic_data::schema::{IndexSchema as DataIndexSchema, KeyPath};
+    use semantic_db_core::catalog::IndexSchema;
+
+    #[derive(Serialize)]
+    struct LegacyStoredEntityWire {
+        id: String,
+        collection: usize,
+        kind: LegacyStoredEntityKind,
+        object: BTreeMap<String, TypedValue>,
+    }
+
+    #[derive(Serialize)]
+    enum LegacyStoredEntityKind {
+        Untyped,
+    }
 
     #[test]
     fn parses_entity_key_with_delimiters_in_id() {
@@ -617,5 +765,186 @@ mod entity_key_tests {
             Some((LocalCollectionId(12), "path/with/e/delimiters"))
         );
         assert_eq!(parse_entity_key(b"i/12/v/token/e/id"), None);
+    }
+
+    #[test]
+    fn decodes_original_v1_entity_kind_variant_names() {
+        let legacy = LegacyStoredEntityWire {
+            id: "one".to_string(),
+            collection: 7,
+            kind: LegacyStoredEntityKind::Untyped,
+            object: BTreeMap::new(),
+        };
+        let mut encoded = ENTITY_FORMAT_VERSION_V1_MSGPACK.to_le_bytes().to_vec();
+        encoded.extend(rmp_serde::to_vec_named(&legacy).unwrap());
+
+        assert_eq!(
+            decode_entity(&encoded).unwrap(),
+            StoredEntity {
+                id: "one".to_string(),
+                collection: 7,
+                kind: StoredEntityKind::Untyped,
+                object: Object::new(),
+            }
+        );
+    }
+
+    #[test]
+    fn lowering_preserves_clear_after_staged_entity_put() {
+        let collection = LocalCollectionId(7);
+        let mut store = EntityStore::new(MemoryKvEngine::new());
+        let entity = StoredEntity {
+            id: "one".to_string(),
+            collection: collection.0,
+            kind: StoredEntityKind::Untyped,
+            object: Object::new(),
+        };
+
+        store
+            .apply_batch(&[
+                StorageWriteOp::PutEntity(entity),
+                StorageWriteOp::ClearCollection(collection),
+            ])
+            .unwrap();
+
+        assert_eq!(store.get_entity(collection, "one").unwrap(), None);
+    }
+
+    #[test]
+    fn lowering_preserves_index_reset_and_clear_order() {
+        let index = IndexSchema {
+            lid: LocalIndexId(3),
+            schema: DataIndexSchema {
+                id: "items.by_kind".to_string(),
+                name: "by_kind".to_string(),
+                kind: IndexKind::Equality,
+                collection: "items".to_string(),
+                key_path: KeyPath {
+                    segments: vec!["kind".to_string()],
+                },
+                unique: false,
+            },
+            collection: LocalCollectionId(7),
+            canonical_field: "kind".to_string(),
+            field_id: None,
+            attr_id: None,
+        };
+        let mut object = Object::new();
+        object.insert("kind", Value::String("music".to_string()));
+        let mut store = EntityStore::new(MemoryKvEngine::new());
+
+        store
+            .apply_batch(&[
+                StorageWriteOp::ResetIndex(index.lid),
+                StorageWriteOp::IndexEntity {
+                    index: index.clone(),
+                    entity_id: "one".to_string(),
+                    object: object.clone(),
+                },
+                StorageWriteOp::ClearIndex(index.lid),
+            ])
+            .unwrap();
+        assert!(store.index_needs_rebuild(index.lid).unwrap());
+        assert!(
+            store
+                .scan_index_value(index.lid, None, &Value::String("music".to_string()))
+                .unwrap()
+                .is_empty()
+        );
+
+        store
+            .apply_batch(&[
+                StorageWriteOp::ClearIndex(index.lid),
+                StorageWriteOp::ResetIndex(index.lid),
+                StorageWriteOp::IndexEntity {
+                    index: index.clone(),
+                    entity_id: "one".to_string(),
+                    object,
+                },
+            ])
+            .unwrap();
+        assert!(!store.index_needs_rebuild(index.lid).unwrap());
+        assert_eq!(
+            store
+                .scan_index_value(index.lid, None, &Value::String("music".to_string()))
+                .unwrap(),
+            vec!["one".to_string()]
+        );
+    }
+
+    #[test]
+    fn index_entries_are_additive_idempotent_and_resettable() {
+        let index = IndexSchema {
+            lid: LocalIndexId(3),
+            schema: DataIndexSchema {
+                id: "items.by_kind".to_string(),
+                name: "by_kind".to_string(),
+                kind: IndexKind::Equality,
+                collection: "items".to_string(),
+                key_path: KeyPath {
+                    segments: vec!["kind".to_string()],
+                },
+                unique: false,
+            },
+            collection: LocalCollectionId(7),
+            canonical_field: "kind".to_string(),
+            field_id: None,
+            attr_id: None,
+        };
+        let mut old = Object::new();
+        old.insert("kind", Value::String("old".to_string()));
+        let mut new = Object::new();
+        new.insert("kind", Value::String("new".to_string()));
+        let mut store = EntityStore::new(MemoryKvEngine::new());
+
+        store
+            .apply_batch(&[
+                StorageWriteOp::ResetIndex(index.lid),
+                StorageWriteOp::IndexEntity {
+                    index: index.clone(),
+                    entity_id: "one".to_string(),
+                    object: old.clone(),
+                },
+                StorageWriteOp::IndexEntity {
+                    index: index.clone(),
+                    entity_id: "one".to_string(),
+                    object: new.clone(),
+                },
+                StorageWriteOp::IndexEntity {
+                    index: index.clone(),
+                    entity_id: "one".to_string(),
+                    object: new,
+                },
+            ])
+            .unwrap();
+        assert_eq!(
+            store
+                .scan_index_value(index.lid, None, &Value::String("old".to_string()))
+                .unwrap(),
+            vec!["one".to_string()]
+        );
+        assert_eq!(
+            store
+                .scan_index_value(index.lid, None, &Value::String("new".to_string()))
+                .unwrap(),
+            vec!["one".to_string()]
+        );
+
+        store
+            .apply_batch(&[
+                StorageWriteOp::ResetIndex(index.lid),
+                StorageWriteOp::IndexEntity {
+                    index: index.clone(),
+                    entity_id: "one".to_string(),
+                    object: old,
+                },
+            ])
+            .unwrap();
+        assert!(
+            store
+                .scan_index_value(index.lid, None, &Value::String("new".to_string()))
+                .unwrap()
+                .is_empty()
+        );
     }
 }

@@ -7,10 +7,14 @@ use semantic_data::value::Value;
 use semantic_db_core::catalog::{
     Catalog, CollectionKind, IntegrityMode, LocalClassId, LocalCollectionId,
 };
+use semantic_db_core::embedded::{
+    EmbeddedDb, StorageCommitOutcome, StorageTransactionCapabilities, StoredEntity,
+    StoredEntityKind,
+};
 use semantic_db_core::{DEFAULT_COLLECTION, DbConfig, DbError};
 use semantic_db_kv::{
-    BoxKvPrefixScan, KvCommitOutcome, KvDb, KvEngine, KvTransactionCapabilities, KvWriteOp,
-    StoredEntity, StoredEntityKind, decode_entity, encode_entity, parse_entity_key,
+    BoxKvPrefixScan, EntityStore, KvEngine, KvWriteOp, decode_entity, encode_entity,
+    parse_entity_key,
 };
 use sha2::{Digest, Sha256};
 use tokio_postgres::Transaction;
@@ -99,8 +103,8 @@ impl KvEngine for PostgresSnapshotEngine {
         Ok(())
     }
 
-    fn tx_capabilities(&self) -> KvTransactionCapabilities {
-        KvTransactionCapabilities {
+    fn tx_capabilities(&self) -> StorageTransactionCapabilities {
+        StorageTransactionCapabilities {
             conflict_detection: true,
             mvcc: false,
             snapshot_reads: false,
@@ -115,16 +119,16 @@ impl KvEngine for PostgresSnapshotEngine {
         &mut self,
         ops: &[KvWriteOp],
         expected_revision: Option<u64>,
-    ) -> Result<KvCommitOutcome, DbError> {
+    ) -> Result<StorageCommitOutcome, DbError> {
         let actual = Some(self.revision);
         if expected_revision.is_some() && expected_revision != actual {
-            return Ok(KvCommitOutcome::Conflict {
+            return Ok(StorageCommitOutcome::Conflict {
                 expected_revision,
                 actual_revision: actual,
             });
         }
         self.write_batch(ops)?;
-        Ok(KvCommitOutcome::Committed {
+        Ok(StorageCommitOutcome::Committed {
             revision: Some(self.revision),
         })
     }
@@ -238,7 +242,7 @@ pub(crate) async fn lock_and_load(
     schema_name: &str,
     config: DbConfig,
     for_write: bool,
-) -> Result<KvDb<PostgresSnapshotEngine>, DbError> {
+) -> Result<EmbeddedDb<EntityStore<PostgresSnapshotEngine>>, DbError> {
     if for_write {
         transaction
             .query_one(
@@ -299,8 +303,11 @@ pub(crate) async fn lock_and_load(
             encode_entity(&entity)?,
         );
     }
-    let mut db = KvDb::open_with_config(
-        PostgresSnapshotEngine::from_entries(entries, revision.max(0) as u64),
+    let mut db = EmbeddedDb::open_with_config(
+        EntityStore::new(PostgresSnapshotEngine::from_entries(
+            entries,
+            revision.max(0) as u64,
+        )),
         config,
     )?;
     if snapshot
@@ -321,7 +328,7 @@ pub(crate) async fn lock_and_load(
 pub(crate) async fn save(
     transaction: &Transaction<'_>,
     schema_name: &str,
-    db: KvDb<PostgresSnapshotEngine>,
+    db: EmbeddedDb<EntityStore<PostgresSnapshotEngine>>,
     layout: &str,
 ) -> Result<semantic_db_core::catalog::Catalog, DbError> {
     let catalog = db.catalog().as_ref().clone();
@@ -329,7 +336,8 @@ pub(crate) async fn save(
         .map_err(|err| DbError::Serialization(err.to_string()))?;
     let snapshot: serde_json::Value =
         serde_json::from_str(&snapshot).map_err(|err| DbError::Serialization(err.to_string()))?;
-    let (_, engine) = db.into_parts();
+    let (_, storage) = db.into_parts();
+    let engine = storage.into_inner();
     let schema = quote_ident(schema_name);
     let kv_put = transaction
         .prepare(&format!(
@@ -1722,9 +1730,9 @@ mod tests {
                 Some(0),
             )
             .unwrap();
-        assert!(matches!(committed, KvCommitOutcome::Committed { .. }));
+        assert!(matches!(committed, StorageCommitOutcome::Committed { .. }));
         let conflict = engine.write_batch_conditional(&[], Some(0)).unwrap();
-        assert!(matches!(conflict, KvCommitOutcome::Conflict { .. }));
+        assert!(matches!(conflict, StorageCommitOutcome::Conflict { .. }));
     }
 
     #[test]

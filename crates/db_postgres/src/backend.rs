@@ -5,12 +5,13 @@ use deadpool_postgres::Pool;
 use semantic_data::schema::{Package, RelationType};
 use semantic_data::value::Object;
 use semantic_db_core::catalog::{Catalog, CollectionKind, LocalCollectionId, SharedCatalog};
+use semantic_db_core::embedded::EmbeddedDb;
 use semantic_db_core::{
     AccessPath, Backend, Batch, BatchOutcome, DbError, DdlBatch, DdlOutcome, EntityRecord,
     PackageRegistrationOutcome, Query, QueryExplain, QueryPlan, QueryResult, SqlDialectKind,
     TextQueryInput,
 };
-use semantic_db_kv::KvDb;
+use semantic_db_kv::EntityStore;
 use tokio::sync::Mutex;
 use tokio_postgres::IsolationLevel;
 
@@ -204,7 +205,9 @@ impl PostgresBackend {
     async fn with_semantic_db<T>(
         &self,
         write: bool,
-        mut operation: impl FnMut(&mut KvDb<PostgresSnapshotEngine>) -> Result<T, DbError>,
+        mut operation: impl FnMut(
+            &mut EmbeddedDb<EntityStore<PostgresSnapshotEngine>>,
+        ) -> Result<T, DbError>,
     ) -> Result<T, DbError> {
         if write && self.options.ownership == PostgresSchemaOwnership::ReadOnly {
             return Err(DbError::InvalidQuery(Self::WRITE_ERROR.to_string()));

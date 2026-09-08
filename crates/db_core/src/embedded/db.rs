@@ -3,14 +3,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::sync::atomic::{AtomicUsize, Ordering as AtomicOrdering};
 use std::sync::{Arc, Mutex};
 
-use futures::{StreamExt, stream};
-use semantic_data::query::FieldFormat;
-use semantic_data::schema::{IndexKind, core::type_kind::TypeKind, core::type_node::Type};
-use semantic_data::schema::{
-    Migration, MigrationOperation, Package, RelationIndexingMode, RelationMode, RelationType,
-};
-use semantic_data::value::{FieldPath, Object, PathSegment, Value, ValueRef};
-use semantic_db_core::{
+use crate::{
     ALL_COLLECTION_ALIAS, AccessPath, AppliedMigration, Batch, BatchOperation, BatchOutcome,
     CORE_CATALOG_SCHEMA_COLLECTION, DEFAULT_COLLECTION, DeleteQuery, EntityRecord, InsertQuery,
     InsertSource, MutationStats, PackageRegistrationOutcome, Query, QueryExplain, QueryPlan,
@@ -21,22 +14,27 @@ use semantic_db_core::{
     normalize_package_definition, prepare_object_for_write, ref_target_class_ids,
     resolved_field_types_for_object, touched_collections, validate_package_migrations,
 };
-use semantic_db_core::{
-    CoreError, DbConfig, DbError, DefaultExpressionContext, MigrationMismatchPolicy,
+use crate::{CoreError, DbConfig, DbError, DefaultExpressionContext, MigrationMismatchPolicy};
+use futures::{StreamExt, stream};
+use semantic_data::query::FieldFormat;
+use semantic_data::schema::{IndexKind, core::type_kind::TypeKind, core::type_node::Type};
+use semantic_data::schema::{
+    Migration, MigrationOperation, Package, RelationIndexingMode, RelationMode, RelationType,
 };
+use semantic_data::value::{FieldPath, Object, PathSegment, Value, ValueRef};
 
-use crate::{
-    schema_store::{catalog_write_ops, load_catalog},
-    storage::{
-        EntityStore, KvCommitOutcome, KvEngine, KvTransactionCapabilities, KvWriteOp,
-        MemoryKvEngine, StoredEntity, StoredEntityKind,
-    },
-};
-use semantic_db_core::catalog::{
+use crate::catalog::{
     ATTR_RELATION_FROM, ATTR_RELATION_TO, Catalog, CollectionKind, CollectionSchema, IntegrityMode,
     LocalAttrId, LocalCollectionId, LocalFieldId, OBJECT_TYPE_FIELD, SharedCatalog,
 };
-use semantic_db_core::{
+use crate::embedded::{
+    schema_store::{catalog_write_ops, load_catalog},
+    storage::{
+        EntityStorage, StorageCommitOutcome, StorageTransactionCapabilities, StorageWriteOp,
+        StoredEntity, StoredEntityKind,
+    },
+};
+use crate::{
     DdlBatch, DdlCollectionKind, DdlOperation, DdlOutcome, QueryContext, TransactionConcurrency,
     TransactionOptions, apply_ddl_batch, fresh_catalog_with_core_schema,
     run_with_transaction_retries,
@@ -53,52 +51,49 @@ const REL_EDGE_SOURCE_INDEX_NAME: &str = "__rel_source_idx";
 const REL_EDGE_TARGET_INDEX_NAME: &str = "__rel_target_idx";
 
 #[derive(Debug)]
-pub struct KvDb<E: KvEngine> {
+pub struct EmbeddedDb<S: EntityStorage> {
     catalog: SharedCatalog,
-    store: EntityStore<E>,
+    storage: S,
     config: DbConfig,
 }
 
-impl KvDb<MemoryKvEngine> {
-    pub fn in_memory() -> Self {
-        Self::new(MemoryKvEngine::new())
+#[cfg(test)]
+impl EmbeddedDb<crate::embedded::storage::MemoryEntityStorage> {
+    fn in_memory() -> Self {
+        Self::new(crate::embedded::storage::MemoryEntityStorage::new())
     }
 
-    pub fn in_memory_with_config(config: DbConfig) -> Self {
-        Self::new_with_config(MemoryKvEngine::new(), config)
-    }
-
-    pub fn in_memory_mvcc() -> Self {
-        Self::new(MemoryKvEngine::with_mvcc(true))
+    fn in_memory_with_config(config: DbConfig) -> Self {
+        Self::new_with_config(crate::embedded::storage::MemoryEntityStorage::new(), config)
     }
 }
 
-impl<E: KvEngine> KvDb<E> {
+impl<S: EntityStorage> EmbeddedDb<S> {
     fn query_context(&self) -> QueryContext {
         QueryContext::from_shared(&self.catalog)
     }
 
-    pub fn new(engine: E) -> Self {
+    pub fn new(engine: S) -> Self {
         Self::open(engine).expect("database initialization failed")
     }
 
-    pub fn new_with_config(engine: E, config: DbConfig) -> Self {
+    pub fn new_with_config(engine: S, config: DbConfig) -> Self {
         Self::open_with_config(engine, config).expect("database initialization failed")
     }
 
-    pub fn open(engine: E) -> std::result::Result<Self, DbError> {
+    pub fn open(engine: S) -> std::result::Result<Self, DbError> {
         Self::open_with_config(engine, DbConfig::default())
     }
 
-    pub fn open_with_config(engine: E, config: DbConfig) -> std::result::Result<Self, DbError> {
-        let mut store = EntityStore::new(engine);
+    pub fn open_with_config(engine: S, config: DbConfig) -> std::result::Result<Self, DbError> {
+        let mut storage = engine;
         let bootstrap_catalog = fresh_catalog_with_core_schema()
             .map_err(|err| DbError::InvalidQuery(err.to_string()))?;
-        let loaded_catalog = if let Some(catalog) = load_catalog(&store, &bootstrap_catalog)? {
+        let loaded_catalog = if let Some(catalog) = load_catalog(&storage, &bootstrap_catalog)? {
             catalog
         } else {
-            let ops = catalog_write_ops(&store, &bootstrap_catalog)?;
-            store.write_batch(&ops)?;
+            let ops = catalog_write_ops(&storage, &bootstrap_catalog)?;
+            storage.apply_batch(&ops)?;
             bootstrap_catalog
         };
         let core_schema_was_internal = loaded_catalog
@@ -113,12 +108,12 @@ impl<E: KvEngine> KvDb<E> {
                 .is_some_and(|collection| collection.internal);
         catalog_changed |= mark_collection_internal(&mut catalog, CORE_CATALOG_SCHEMA_COLLECTION)?;
         if catalog_changed {
-            let ops = catalog_write_ops(&store, &catalog)?;
-            store.write_batch(&ops)?;
+            let ops = catalog_write_ops(&storage, &catalog)?;
+            storage.apply_batch(&ops)?;
         }
         let mut db = Self {
             catalog: SharedCatalog::new(catalog),
-            store,
+            storage,
             config,
         };
         if db
@@ -169,7 +164,7 @@ impl<E: KvEngine> KvDb<E> {
         let mut index_ops = Vec::new();
         db.backfill_missing_index_storage(&mut index_ops)?;
         if !index_ops.is_empty() {
-            db.store.write_batch(&index_ops)?;
+            db.storage.apply_batch(&index_ops)?;
         }
         Ok(db)
     }
@@ -179,26 +174,20 @@ impl<E: KvEngine> KvDb<E> {
         if !mark_collection_internal(&mut catalog, name)? {
             return Ok(());
         }
-        let ops = catalog_write_ops(&self.store, &catalog)?;
-        self.store.write_batch(&ops)?;
+        let ops = catalog_write_ops(&self.storage, &catalog)?;
+        self.storage.apply_batch(&ops)?;
         self.catalog.replace(catalog);
         Ok(())
     }
 
     fn backfill_missing_index_storage(
         &self,
-        ops: &mut Vec<KvWriteOp>,
+        ops: &mut Vec<StorageWriteOp>,
     ) -> std::result::Result<(), DbError> {
         let catalog = self.catalog();
         let mut indexes = Vec::new();
-        let current_format = crate::storage::index_format_value();
         for (index_id, index) in catalog.indexes() {
-            if self
-                .store
-                .get_raw(&crate::storage::index_format_key(index_id))?
-                .as_deref()
-                != Some(current_format.as_slice())
-            {
+            if self.storage.index_needs_rebuild(index_id)? {
                 indexes.push(index.clone());
             }
         }
@@ -210,7 +199,7 @@ impl<E: KvEngine> KvDb<E> {
         before: &Catalog,
         after: &Catalog,
         read_revision: Option<u64>,
-        ops: &mut Vec<KvWriteOp>,
+        ops: &mut Vec<StorageWriteOp>,
     ) -> std::result::Result<(), DbError> {
         let indexes = after
             .indexes()
@@ -230,9 +219,9 @@ impl<E: KvEngine> KvDb<E> {
     fn backfill_indexes(
         &self,
         catalog: &Catalog,
-        indexes: &[semantic_db_core::catalog::IndexSchema],
+        indexes: &[crate::catalog::IndexSchema],
         read_revision: Option<u64>,
-        ops: &mut Vec<KvWriteOp>,
+        ops: &mut Vec<StorageWriteOp>,
     ) -> std::result::Result<(), DbError> {
         if indexes.is_empty() {
             return Ok(());
@@ -257,24 +246,18 @@ impl<E: KvEngine> KvDb<E> {
             }
 
             for index in &collection_indexes {
-                for key in self.store.index_keys(index.lid)? {
-                    ops.push(KvWriteOp::Delete { key });
-                }
-                ops.push(KvWriteOp::Put {
-                    key: crate::storage::index_format_key(index.lid),
-                    value: crate::storage::index_format_value(),
-                });
+                ops.push(StorageWriteOp::ResetIndex(index.lid));
             }
 
-            let rows = if self.store.tx_capabilities().snapshot_reads {
+            let rows = if self.storage.tx_capabilities().snapshot_reads {
                 if let Some(revision) = read_revision {
-                    self.store
+                    self.storage
                         .scan_collection_at_revision(collection.lid, revision)?
                 } else {
-                    self.store.scan_collection(collection.lid)?
+                    self.storage.scan_collection(collection.lid)?
                 }
             } else {
-                self.store.scan_collection(collection.lid)?
+                self.storage.scan_collection(collection.lid)?
             };
             for row in rows {
                 for index in &collection_indexes {
@@ -294,8 +277,8 @@ impl<E: KvEngine> KvDb<E> {
     }
 
     /// Replace the in-memory catalog with an authoritative durable snapshot.
-    /// Storage adapters use this after opening the KV representation when their
-    /// catalog snapshot is committed atomically outside the KV keyspace.
+    /// Storage adapters use this when their catalog snapshot is committed
+    /// atomically outside the entity storage implementation.
     pub fn replace_catalog_snapshot(&mut self, catalog: Catalog) {
         self.catalog.replace(catalog);
     }
@@ -307,9 +290,9 @@ impl<E: KvEngine> KvDb<E> {
     ) -> std::result::Result<LocalCollectionId, DbError> {
         let name = name.into();
         let ddl_kind = match kind {
-            CollectionKind::Untyped => semantic_db_core::DdlCollectionKind::Untyped,
-            CollectionKind::Schema => semantic_db_core::DdlCollectionKind::Schema,
-            CollectionKind::Polymorphic => semantic_db_core::DdlCollectionKind::Polymorphic,
+            CollectionKind::Untyped => crate::DdlCollectionKind::Untyped,
+            CollectionKind::Schema => crate::DdlCollectionKind::Schema,
+            CollectionKind::Polymorphic => crate::DdlCollectionKind::Polymorphic,
         };
         let ddl = DdlBatch::new().with_op(DdlOperation::UpsertCollection {
             name: name.clone(),
@@ -378,7 +361,7 @@ impl<E: KvEngine> KvDb<E> {
 
         let txn_result = run_with_transaction_retries(TransactionOptions::default(), |_| {
             let catalog_snapshot = self.catalog.snapshot();
-            let read_revision = self.store.current_revision()?;
+            let read_revision = self.storage.current_revision()?;
             let (next_catalog, before, after, executed_migrations) = self.apply_package_update(
                 catalog_snapshot.catalog.as_ref(),
                 read_revision,
@@ -392,7 +375,7 @@ impl<E: KvEngine> KvDb<E> {
                 read_revision,
                 &mut extra_ops,
             )?;
-            extra_ops.extend(catalog_write_ops(&self.store, &next_catalog)?);
+            extra_ops.extend(catalog_write_ops(&self.storage, &next_catalog)?);
 
             match self.persist_dataset_delta(
                 &next_catalog,
@@ -401,7 +384,7 @@ impl<E: KvEngine> KvDb<E> {
                 read_revision,
                 &extra_ops,
             )? {
-                KvCommitOutcome::Committed { .. } => {
+                StorageCommitOutcome::Committed { .. } => {
                     self.catalog
                         .compare_and_swap(catalog_snapshot.version, next_catalog)
                         .map_err(|mismatch| {
@@ -414,7 +397,7 @@ impl<E: KvEngine> KvDb<E> {
                         executed_migrations,
                     })
                 }
-                KvCommitOutcome::Conflict {
+                StorageCommitOutcome::Conflict {
                     expected_revision,
                     actual_revision,
                 } => Err(DbError::TransactionConflict(format!(
@@ -431,8 +414,8 @@ impl<E: KvEngine> KvDb<E> {
         self.catalog().auto_index_enabled()
     }
 
-    pub fn into_parts(self) -> (SharedCatalog, E) {
-        (self.catalog, self.store.into_inner())
+    pub fn into_parts(self) -> (SharedCatalog, S) {
+        (self.catalog, self.storage)
     }
 
     pub fn insert(
@@ -462,7 +445,7 @@ impl<E: KvEngine> KvDb<E> {
             }
         })?;
 
-        let Some(entity) = self.store.get_entity(collection_schema.lid, id)? else {
+        let Some(entity) = self.storage.get_entity(collection_schema.lid, id)? else {
             return Ok(None);
         };
 
@@ -506,17 +489,17 @@ impl<E: KvEngine> KvDb<E> {
             let stats = self.stats_for_query(&query, collection)?;
             (query, Some(stats), collection.name.clone())
         };
-        let optimizer = semantic_db_core::Optimizer::core();
+        let optimizer = crate::Optimizer::core();
         let context = self.query_context();
         let stats_provider = stats
             .as_ref()
-            .map(|value| value as &dyn semantic_db_core::StatsProvider);
+            .map(|value| value as &dyn crate::StatsProvider);
         let pair = optimizer.optimize_query(&query, Some(source.clone()), stats_provider, &context);
         let mut rows = self.execute_physical_plan(&pair.physical, Some(source.as_str()))?;
         let catalog = self.catalog();
         // Inject computed attributes.
         for row in &mut rows {
-            let _ = semantic_db_core::inject_computed_attributes(catalog.as_ref(), row);
+            let _ = crate::inject_computed_attributes(catalog.as_ref(), row);
         }
         Ok(self.format_output_rows(catalog.as_ref(), rows, query.field_format))
     }
@@ -584,7 +567,7 @@ impl<E: KvEngine> KvDb<E> {
                         group_by: Vec::new(),
                         having: None,
                         order_by: Vec::new(),
-                        offset: semantic_db_core::Expr::from(0usize),
+                        offset: crate::Expr::from(0usize),
                         limit: query.limit,
                         field_format: query.field_format,
                     },
@@ -598,7 +581,7 @@ impl<E: KvEngine> KvDb<E> {
                         group_by: Vec::new(),
                         having: None,
                         order_by: Vec::new(),
-                        offset: semantic_db_core::Expr::from(0usize),
+                        offset: crate::Expr::from(0usize),
                         limit: query.limit,
                         field_format: query.field_format,
                     },
@@ -617,11 +600,11 @@ impl<E: KvEngine> KvDb<E> {
                 )
             };
 
-        let optimizer = semantic_db_core::Optimizer::core();
+        let optimizer = crate::Optimizer::core();
         let context = self.query_context();
         let stats_provider = stats
             .as_ref()
-            .map(|value| value as &dyn semantic_db_core::StatsProvider);
+            .map(|value| value as &dyn crate::StatsProvider);
         let pair = optimizer.optimize_query(&select, Some(source), stats_provider, &context);
         let access_path = if let Some(collection_lid) = collection_for_access_path {
             if let Some(collection) = self.catalog().collection_by_lid(collection_lid) {
@@ -643,7 +626,7 @@ impl<E: KvEngine> KvDb<E> {
     pub fn insert_query(
         &mut self,
         query: InsertQuery,
-    ) -> std::result::Result<semantic_db_core::InsertResult, DbError> {
+    ) -> std::result::Result<crate::InsertResult, DbError> {
         let collection_name = query.collection_or_default().to_string();
         let catalog = self.catalog();
         let collection = catalog
@@ -696,7 +679,7 @@ impl<E: KvEngine> KvDb<E> {
                 .map(|id| {
                     stored_rows
                         .get(id)
-                        .map(|object| semantic_db_core::project_object(object, &returning))
+                        .map(|object| crate::project_object(object, &returning))
                         .ok_or_else(|| DbError::EntityNotFound {
                             collection: collection.name.clone(),
                             id: id.clone(),
@@ -704,7 +687,7 @@ impl<E: KvEngine> KvDb<E> {
                 })
                 .collect::<std::result::Result<Vec<_>, _>>()?
         };
-        Ok(semantic_db_core::InsertResult {
+        Ok(crate::InsertResult {
             inserted,
             returning: self.format_output_rows(
                 catalog.as_ref(),
@@ -742,7 +725,7 @@ impl<E: KvEngine> KvDb<E> {
         &self,
         collection: &CollectionSchema,
         target_columns: &[String],
-        rows: Vec<Vec<semantic_db_core::Expr>>,
+        rows: Vec<Vec<crate::Expr>>,
     ) -> std::result::Result<Vec<Object>, DbError> {
         if target_columns.is_empty() {
             return Err(DbError::InvalidQuery(format!(
@@ -761,13 +744,12 @@ impl<E: KvEngine> KvDb<E> {
             }
             let mut object = Object::new();
             for (idx, expr) in row.iter().enumerate() {
-                let value =
-                    semantic_db_core::evaluate_expr(&Object::new(), expr).ok_or_else(|| {
-                        DbError::InvalidQuery(format!(
-                            "failed to evaluate INSERT value expression for column '{}'",
-                            target_columns[idx]
-                        ))
-                    })?;
+                let value = crate::evaluate_expr(&Object::new(), expr).ok_or_else(|| {
+                    DbError::InvalidQuery(format!(
+                        "failed to evaluate INSERT value expression for column '{}'",
+                        target_columns[idx]
+                    ))
+                })?;
                 object.insert(target_columns[idx].clone(), value);
             }
             out.push(object);
@@ -829,11 +811,11 @@ impl<E: KvEngine> KvDb<E> {
 
     pub fn execute_physical_plan(
         &self,
-        plan: &semantic_db_core::PhysicalPlan,
+        plan: &crate::PhysicalPlan,
         default_collection: Option<&str>,
     ) -> std::result::Result<Vec<Object>, DbError> {
         let context = self.query_context();
-        let source = KvPhysicalDataSource {
+        let source = EmbeddedPhysicalDataSource {
             db: self,
             catalog: self.catalog(),
             default_collection: default_collection.map(ToOwned::to_owned),
@@ -841,7 +823,7 @@ impl<E: KvEngine> KvDb<E> {
             #[cfg(test)]
             local_ref_lookup_builds: AtomicUsize::new(0),
         };
-        semantic_db_core::execute_physical_plan_with_source(plan, &source, &context)
+        crate::execute_physical_plan_with_source(plan, &source, &context)
             .map_err(|err| DbError::InvalidQuery(err.to_string()))
     }
 
@@ -856,7 +838,7 @@ impl<E: KvEngine> KvDb<E> {
     pub fn update_where_returning(
         &mut self,
         query: UpdateQuery,
-    ) -> std::result::Result<semantic_db_core::UpdateResult, DbError> {
+    ) -> std::result::Result<crate::UpdateResult, DbError> {
         evaluate_mutation_limit(query.limit.as_ref())
             .map_err(|err| DbError::InvalidQuery(err.to_string()))?;
         let collection = query.collection_or_default().to_string();
@@ -877,7 +859,7 @@ impl<E: KvEngine> KvDb<E> {
         });
         let txn_result = run_with_transaction_retries(TransactionOptions::default(), |_| {
             let catalog_snapshot = self.catalog.snapshot();
-            let read_revision = self.store.current_revision()?;
+            let read_revision = self.storage.current_revision()?;
             let before = self.load_dataset_for_batch(
                 catalog_snapshot.catalog.as_ref(),
                 &touched,
@@ -885,7 +867,7 @@ impl<E: KvEngine> KvDb<E> {
             )?;
             let mut after = before.clone();
 
-            let mut result = semantic_db_core::UpdateResult {
+            let mut result = crate::UpdateResult {
                 stats: MutationStats {
                     matched: 0,
                     affected: 0,
@@ -895,14 +877,14 @@ impl<E: KvEngine> KvDb<E> {
             if let Some(coll) = after.get_mut(&collection_name) {
                 let mut entities = coll
                     .iter()
-                    .map(|(id, object)| semantic_db_core::Entity {
+                    .map(|(id, object)| crate::Entity {
                         id: id.clone(),
                         collection: collection_name.clone(),
                         object: object.clone(),
                     })
                     .collect::<Vec<_>>();
                 let default_context = DefaultExpressionContext::now();
-                result = semantic_db_core::apply_update_with_returning_and_prepare(
+                result = crate::apply_update_with_returning_and_prepare(
                     &query,
                     &mut entities,
                     |_, object| {
@@ -935,8 +917,8 @@ impl<E: KvEngine> KvDb<E> {
                 read_revision,
                 &[],
             )? {
-                KvCommitOutcome::Committed { .. } => Ok(result),
-                KvCommitOutcome::Conflict {
+                StorageCommitOutcome::Committed { .. } => Ok(result),
+                StorageCommitOutcome::Conflict {
                     expected_revision,
                     actual_revision,
                 } => Err(DbError::TransactionConflict(format!(
@@ -960,7 +942,7 @@ impl<E: KvEngine> KvDb<E> {
     pub fn delete_where_returning(
         &mut self,
         query: DeleteQuery,
-    ) -> std::result::Result<semantic_db_core::DeleteResult, DbError> {
+    ) -> std::result::Result<crate::DeleteResult, DbError> {
         evaluate_mutation_limit(query.limit.as_ref())
             .map_err(|err| DbError::InvalidQuery(err.to_string()))?;
         let collection = query.collection_or_default().to_string();
@@ -981,7 +963,7 @@ impl<E: KvEngine> KvDb<E> {
         });
         let txn_result = run_with_transaction_retries(TransactionOptions::default(), |_| {
             let catalog_snapshot = self.catalog.snapshot();
-            let read_revision = self.store.current_revision()?;
+            let read_revision = self.storage.current_revision()?;
             let before = self.load_dataset_for_batch(
                 catalog_snapshot.catalog.as_ref(),
                 &touched,
@@ -989,21 +971,21 @@ impl<E: KvEngine> KvDb<E> {
             )?;
             let mut after = before.clone();
 
-            let mut result = semantic_db_core::DeleteResult {
+            let mut result = crate::DeleteResult {
                 deleted: 0,
                 returning: Vec::new(),
             };
             if let Some(coll) = after.get_mut(&collection_name) {
                 let entities = coll
                     .iter()
-                    .map(|(id, object)| semantic_db_core::Entity {
+                    .map(|(id, object)| crate::Entity {
                         id: id.clone(),
                         collection: collection_name.clone(),
                         object: object.clone(),
                     })
                     .collect::<Vec<_>>();
                 let (remaining, delete_result) =
-                    semantic_db_core::apply_delete_with_remaining(&query, entities);
+                    crate::apply_delete_with_remaining(&query, entities);
                 result = delete_result;
                 coll.clear();
                 for entity in remaining {
@@ -1024,8 +1006,8 @@ impl<E: KvEngine> KvDb<E> {
                 read_revision,
                 &[],
             )? {
-                KvCommitOutcome::Committed { .. } => Ok(result),
-                KvCommitOutcome::Conflict {
+                StorageCommitOutcome::Committed { .. } => Ok(result),
+                StorageCommitOutcome::Conflict {
                     expected_revision,
                     actual_revision,
                 } => Err(DbError::TransactionConflict(format!(
@@ -1051,7 +1033,7 @@ impl<E: KvEngine> KvDb<E> {
         options: TransactionOptions,
     ) -> std::result::Result<BatchOutcome, DbError> {
         validate_batch_mutation_limits(&batch)?;
-        let caps = self.store.tx_capabilities();
+        let caps = self.storage.tx_capabilities();
         if options.concurrency == TransactionConcurrency::Mvcc && !caps.mvcc {
             return Err(DbError::InvalidQuery(
                 "mvcc transaction requested but backend does not support mvcc".to_string(),
@@ -1066,7 +1048,7 @@ impl<E: KvEngine> KvDb<E> {
         let txn_result = run_with_transaction_retries(options, |_| {
             let catalog_snapshot = self.catalog.snapshot();
             let batch = self.canonicalize_batch(&batch, catalog_snapshot.catalog.as_ref())?;
-            let read_revision = self.store.current_revision()?;
+            let read_revision = self.storage.current_revision()?;
             let dataset = self.load_dataset_for_batch(
                 catalog_snapshot.catalog.as_ref(),
                 &batch,
@@ -1091,8 +1073,8 @@ impl<E: KvEngine> KvDb<E> {
                 read_revision,
                 &[],
             )? {
-                KvCommitOutcome::Committed { .. } => Ok(out),
-                KvCommitOutcome::Conflict {
+                StorageCommitOutcome::Committed { .. } => Ok(out),
+                StorageCommitOutcome::Conflict {
                     expected_revision,
                     actual_revision,
                 } => Err(DbError::TransactionConflict(format!(
@@ -1121,7 +1103,7 @@ impl<E: KvEngine> KvDb<E> {
 
         let txn_result = run_with_transaction_retries(options, |_| {
             let catalog_snapshot = self.catalog.snapshot();
-            let read_revision = self.store.current_revision()?;
+            let read_revision = self.storage.current_revision()?;
             let (next_catalog, ddl_outcome) =
                 apply_ddl_batch(catalog_snapshot.catalog.as_ref(), &ddl)
                     .map_err(|err| DbError::InvalidQuery(err.to_string()))?;
@@ -1133,7 +1115,7 @@ impl<E: KvEngine> KvDb<E> {
                 read_revision,
                 &mut extra_ops,
             )?;
-            extra_ops.extend(catalog_write_ops(&self.store, &next_catalog)?);
+            extra_ops.extend(catalog_write_ops(&self.storage, &next_catalog)?);
             self.rebuild_relationship_edges(&next_catalog, &BTreeMap::new(), &mut extra_ops)?;
 
             let dataset = BTreeMap::new();
@@ -1144,7 +1126,7 @@ impl<E: KvEngine> KvDb<E> {
                 read_revision,
                 &extra_ops,
             )? {
-                KvCommitOutcome::Committed { .. } => {
+                StorageCommitOutcome::Committed { .. } => {
                     self.catalog
                         .compare_and_swap(catalog_snapshot.version, next_catalog)
                         .map_err(|mismatch| {
@@ -1155,7 +1137,7 @@ impl<E: KvEngine> KvDb<E> {
                         })?;
                     Ok(ddl_outcome)
                 }
-                KvCommitOutcome::Conflict {
+                StorageCommitOutcome::Conflict {
                     expected_revision,
                     actual_revision,
                 } => Err(DbError::TransactionConflict(format!(
@@ -1401,15 +1383,15 @@ impl<E: KvEngine> KvDb<E> {
         let Some(collection) = catalog.collection_by_name(collection_name) else {
             return Ok(BTreeMap::new());
         };
-        let rows = if self.store.tx_capabilities().snapshot_reads {
+        let rows = if self.storage.tx_capabilities().snapshot_reads {
             if let Some(revision) = read_revision {
-                self.store
+                self.storage
                     .scan_collection_at_revision(collection.lid, revision)?
             } else {
-                self.store.scan_collection(collection.lid)?
+                self.storage.scan_collection(collection.lid)?
             }
         } else {
-            self.store.scan_collection(collection.lid)?
+            self.storage.scan_collection(collection.lid)?
         };
         Ok(rows
             .into_iter()
@@ -1494,29 +1476,25 @@ impl<E: KvEngine> KvDb<E> {
         rows: Vec<Object>,
         format: FieldFormat,
     ) -> Vec<Object> {
-        semantic_db_core::format_output_rows(catalog, rows, format)
+        crate::format_output_rows(catalog, rows, format)
     }
 
     fn ddl_cleanup_ops(
         &self,
         before: &Catalog,
         after: &Catalog,
-    ) -> std::result::Result<Vec<KvWriteOp>, DbError> {
+    ) -> std::result::Result<Vec<StorageWriteOp>, DbError> {
         let mut ops = Vec::new();
 
         for (index_lid, _) in before.indexes() {
             if after.index_by_lid(index_lid).is_none() {
-                for key in self.store.index_keys(index_lid)? {
-                    ops.push(KvWriteOp::Delete { key });
-                }
+                ops.push(StorageWriteOp::ClearIndex(index_lid));
             }
         }
 
         for (collection_lid, _) in before.collections() {
             if after.collection_by_lid(collection_lid).is_none() {
-                for key in self.store.collection_keys(collection_lid)? {
-                    ops.push(KvWriteOp::Delete { key });
-                }
+                ops.push(StorageWriteOp::ClearCollection(collection_lid));
             }
         }
 
@@ -1532,7 +1510,7 @@ impl<E: KvEngine> KvDb<E> {
             .collection_by_lid(collection)
             .ok_or(DbError::UnknownCollection(collection))?;
 
-        self.store
+        self.storage
             .scan_collection(collection)?
             .into_iter()
             .map(|item| {
@@ -1545,8 +1523,8 @@ impl<E: KvEngine> KvDb<E> {
             .collect()
     }
 
-    pub fn tx_capabilities(&self) -> KvTransactionCapabilities {
-        self.store.tx_capabilities()
+    pub fn tx_capabilities(&self) -> StorageTransactionCapabilities {
+        self.storage.tx_capabilities()
     }
 
     fn load_dataset_for_batch(
@@ -1563,15 +1541,15 @@ impl<E: KvEngine> KvDb<E> {
                     name: collection_name.clone(),
                 })?;
 
-            let rows = if self.store.tx_capabilities().snapshot_reads {
+            let rows = if self.storage.tx_capabilities().snapshot_reads {
                 if let Some(revision) = read_revision {
-                    self.store
+                    self.storage
                         .scan_collection_at_revision(collection.lid, revision)?
                 } else {
-                    self.store.scan_collection(collection.lid)?
+                    self.storage.scan_collection(collection.lid)?
                 }
             } else {
-                self.store.scan_collection(collection.lid)?
+                self.storage.scan_collection(collection.lid)?
             };
 
             let mut objects = BTreeMap::new();
@@ -1589,9 +1567,12 @@ impl<E: KvEngine> KvDb<E> {
         before: &BTreeMap<String, BTreeMap<String, Object>>,
         after: &BTreeMap<String, BTreeMap<String, Object>>,
         expected_revision: Option<u64>,
-        additional_ops: &[KvWriteOp],
-    ) -> std::result::Result<KvCommitOutcome, DbError> {
-        let mut ops = Vec::<KvWriteOp>::new();
+        prelude_ops: &[StorageWriteOp],
+    ) -> std::result::Result<StorageCommitOutcome, DbError> {
+        // Apply DDL cleanup, index backfills, and catalog persistence first. A
+        // package migration can both create an index and rewrite its collection;
+        // the post-migration dataset below must be the final source of index rows.
+        let mut ops = prelude_ops.to_vec();
         let mut normalized_after = BTreeMap::<String, BTreeMap<String, Object>>::new();
 
         for (collection_name, new_rows) in after {
@@ -1641,25 +1622,14 @@ impl<E: KvEngine> KvDb<E> {
                 continue;
             }
 
-            for key in self.store.collection_keys(collection_schema.lid)? {
-                ops.push(KvWriteOp::Delete { key });
-            }
+            ops.push(StorageWriteOp::ClearCollection(collection_schema.lid));
 
             let indexes: Vec<_> = catalog
                 .indexes_for_collection(collection_schema.lid)
                 .cloned()
                 .collect();
             for index in &indexes {
-                for key in self.store.index_keys(index.lid)? {
-                    ops.push(KvWriteOp::Delete { key });
-                }
-            }
-
-            for index in &indexes {
-                ops.push(KvWriteOp::Put {
-                    key: crate::storage::index_format_key(index.lid),
-                    value: crate::storage::index_format_value(),
-                });
+                ops.push(StorageWriteOp::ResetIndex(index.lid));
             }
 
             for (id, object) in normalized_rows {
@@ -1677,57 +1647,39 @@ impl<E: KvEngine> KvDb<E> {
         }
 
         self.rebuild_relationship_edges(catalog, &normalized_after, &mut ops)?;
-        ops.extend_from_slice(additional_ops);
 
-        if self.store.tx_capabilities().conflict_detection {
-            self.store.write_batch_conditional(&ops, expected_revision)
+        if self.storage.tx_capabilities().conflict_detection {
+            self.storage
+                .apply_batch_conditional(&ops, expected_revision)
         } else {
-            self.store.write_batch(&ops)?;
-            Ok(KvCommitOutcome::Committed {
-                revision: self.store.current_revision()?,
+            self.storage.apply_batch(&ops)?;
+            Ok(StorageCommitOutcome::Committed {
+                revision: self.storage.current_revision()?,
             })
         }
     }
 
     fn push_entity_ops(
         &self,
-        ops: &mut Vec<KvWriteOp>,
+        ops: &mut Vec<StorageWriteOp>,
         entity: &StoredEntity,
     ) -> std::result::Result<(), DbError> {
-        let key = crate::storage::entity_key(LocalCollectionId(entity.collection), &entity.id);
-        let value = crate::storage::encode_entity(entity)?;
-        ops.push(KvWriteOp::Put { key, value });
+        ops.push(StorageWriteOp::PutEntity(entity.clone()));
         Ok(())
     }
 
     fn push_index_ops(
         &self,
-        ops: &mut Vec<KvWriteOp>,
-        index: &semantic_db_core::catalog::IndexSchema,
+        ops: &mut Vec<StorageWriteOp>,
+        index: &crate::catalog::IndexSchema,
         entity_id: &str,
         object: &Object,
     ) -> std::result::Result<(), DbError> {
-        match index.schema.kind {
-            IndexKind::Equality => {
-                if let Some(value) = object.get(&index.canonical_field) {
-                    let key = crate::storage::index_key(index.lid, None, value, entity_id)?;
-                    ops.push(KvWriteOp::Put {
-                        key,
-                        value: Vec::new(),
-                    });
-                }
-            }
-            IndexKind::PathEquality => {
-                for (path, value) in crate::storage::collect_index_entries(object) {
-                    let key = crate::storage::index_key(index.lid, Some(&path), &value, entity_id)?;
-                    ops.push(KvWriteOp::Put {
-                        key,
-                        value: Vec::new(),
-                    });
-                }
-            }
-            IndexKind::Range | IndexKind::FullText => {}
-        }
+        ops.push(StorageWriteOp::IndexEntity {
+            index: index.clone(),
+            entity_id: entity_id.to_string(),
+            object: object.clone(),
+        });
         Ok(())
     }
 
@@ -1857,28 +1809,18 @@ impl<E: KvEngine> KvDb<E> {
         &self,
         catalog: &Catalog,
         after: &BTreeMap<String, BTreeMap<String, Object>>,
-        ops: &mut Vec<KvWriteOp>,
+        ops: &mut Vec<StorageWriteOp>,
     ) -> std::result::Result<(), DbError> {
         let Some(rel_collection) = catalog.collection_by_name(RELATION_EDGES_COLLECTION) else {
             return Ok(());
         };
-        for key in self.store.collection_keys(rel_collection.lid)? {
-            ops.push(KvWriteOp::Delete { key });
-        }
+        ops.push(StorageWriteOp::ClearCollection(rel_collection.lid));
         let indexes: Vec<_> = catalog
             .indexes_for_collection(rel_collection.lid)
             .cloned()
             .collect();
         for index in &indexes {
-            for key in self.store.index_keys(index.lid)? {
-                ops.push(KvWriteOp::Delete { key });
-            }
-        }
-        for index in &indexes {
-            ops.push(KvWriteOp::Put {
-                key: crate::storage::index_format_key(index.lid),
-                value: crate::storage::index_format_value(),
-            });
+            ops.push(StorageWriteOp::ResetIndex(index.lid));
         }
 
         let rows = self.compute_relationship_edges(catalog, after)?;
@@ -1921,7 +1863,7 @@ impl<E: KvEngine> KvDb<E> {
                     .map(|(id, object)| (id.clone(), object.clone()))
                     .collect::<Vec<_>>()
             } else {
-                self.store
+                self.storage
                     .scan_collection(source_collection.lid)?
                     .into_iter()
                     .map(|row| (row.id, row.object))
@@ -2134,7 +2076,7 @@ impl<E: KvEngine> KvDb<E> {
         &self,
         collection: &CollectionSchema,
     ) -> std::result::Result<CollectionStatsEntry, DbError> {
-        let row_count = self.store.scan_collection(collection.lid)?.len() as f64;
+        let row_count = self.storage.scan_collection(collection.lid)?.len() as f64;
         let mut indexed_fields = BTreeSet::new();
         let mut unique_fields = BTreeSet::new();
         let mut indexed_field_ids = BTreeSet::new();
@@ -2179,32 +2121,30 @@ impl<E: KvEngine> KvDb<E> {
     fn access_path_from_physical(
         &self,
         collection: &CollectionSchema,
-        physical: &semantic_db_core::PhysicalPlan,
+        physical: &crate::PhysicalPlan,
     ) -> AccessPath {
-        fn find_lookup(
-            plan: &semantic_db_core::PhysicalPlan,
-        ) -> Option<(&semantic_db_core::FieldRef, &Value)> {
+        fn find_lookup(plan: &crate::PhysicalPlan) -> Option<(&crate::FieldRef, &Value)> {
             match plan {
-                semantic_db_core::PhysicalPlan::Source(
-                    semantic_db_core::PhysicalSource::IndexLookup { field, value, .. },
-                ) => Some((field, value)),
-                semantic_db_core::PhysicalPlan::Filter { input, .. }
-                | semantic_db_core::PhysicalPlan::Sort { input, .. }
-                | semantic_db_core::PhysicalPlan::Project { input, .. }
-                | semantic_db_core::PhysicalPlan::Aggregate { input, .. }
-                | semantic_db_core::PhysicalPlan::Limit { input, .. }
-                | semantic_db_core::PhysicalPlan::Distinct { input, .. }
-                | semantic_db_core::PhysicalPlan::Materialize { input, .. }
-                | semantic_db_core::PhysicalPlan::Exchange { input, .. }
-                | semantic_db_core::PhysicalPlan::RepartitionHash { input, .. } => {
-                    find_lookup(input)
-                }
-                semantic_db_core::PhysicalPlan::Union { .. }
-                | semantic_db_core::PhysicalPlan::Values { .. }
-                | semantic_db_core::PhysicalPlan::Join(..)
-                | semantic_db_core::PhysicalPlan::ApplyExists { .. }
-                | semantic_db_core::PhysicalPlan::ApplyInSubquery { .. }
-                | semantic_db_core::PhysicalPlan::Source(_) => None,
+                crate::PhysicalPlan::Source(crate::PhysicalSource::IndexLookup {
+                    field,
+                    value,
+                    ..
+                }) => Some((field, value)),
+                crate::PhysicalPlan::Filter { input, .. }
+                | crate::PhysicalPlan::Sort { input, .. }
+                | crate::PhysicalPlan::Project { input, .. }
+                | crate::PhysicalPlan::Aggregate { input, .. }
+                | crate::PhysicalPlan::Limit { input, .. }
+                | crate::PhysicalPlan::Distinct { input, .. }
+                | crate::PhysicalPlan::Materialize { input, .. }
+                | crate::PhysicalPlan::Exchange { input, .. }
+                | crate::PhysicalPlan::RepartitionHash { input, .. } => find_lookup(input),
+                crate::PhysicalPlan::Union { .. }
+                | crate::PhysicalPlan::Values { .. }
+                | crate::PhysicalPlan::Join(..)
+                | crate::PhysicalPlan::ApplyExists { .. }
+                | crate::PhysicalPlan::ApplyInSubquery { .. }
+                | crate::PhysicalPlan::Source(_) => None,
             }
         }
 
@@ -2213,11 +2153,11 @@ impl<E: KvEngine> KvDb<E> {
         };
 
         let field_path = match field_ref {
-            semantic_db_core::FieldRef::CanonicalName(name) => Some(FieldPath::from_fields([name])),
-            semantic_db_core::FieldRef::FieldId(field_id) => collection
+            crate::FieldRef::CanonicalName(name) => Some(FieldPath::from_fields([name])),
+            crate::FieldRef::FieldId(field_id) => collection
                 .field_name_by_id(*field_id)
                 .map(|name| FieldPath::from_fields([name])),
-            semantic_db_core::FieldRef::AttrId(attr_id) => {
+            crate::FieldRef::AttrId(attr_id) => {
                 let mut out = None;
                 for (field_id, _) in collection.fields() {
                     if collection.attr_for_field_id(field_id) == Some(*attr_id) {
@@ -2229,7 +2169,7 @@ impl<E: KvEngine> KvDb<E> {
                 }
                 out
             }
-            semantic_db_core::FieldRef::Path(path) => Some(path.clone()),
+            crate::FieldRef::Path(path) => Some(path.clone()),
         };
         let Some(field_path) = field_path else {
             return AccessPath::FullScan;
@@ -2265,8 +2205,8 @@ impl<E: KvEngine> KvDb<E> {
     }
 }
 
-fn infer_project_key_for_insert(expr: &semantic_db_core::Expr) -> String {
-    if let semantic_db_core::Expr::Operand(semantic_db_core::Operand::Field(path)) = expr {
+fn infer_project_key_for_insert(expr: &crate::Expr) -> String {
+    if let crate::Expr::Operand(crate::Operand::Field(path)) = expr {
         for segment in path.segments().iter().rev() {
             if let PathSegment::Field(name) = segment {
                 return name.clone();
@@ -2290,20 +2230,16 @@ fn infer_entity_kind(catalog: &Catalog, object: &Object) -> StoredEntityKind {
     }
 }
 
-fn equality_expr(path: FieldPath, value: Value) -> semantic_db_core::Expr {
-    semantic_db_core::Expr::Binary {
+fn equality_expr(path: FieldPath, value: Value) -> crate::Expr {
+    crate::Expr::Binary {
         op: semantic_data::query::BinaryOp::Eq,
-        left: Box::new(semantic_db_core::Expr::Operand(
-            semantic_db_core::Operand::Field(path),
-        )),
-        right: Box::new(semantic_db_core::Expr::Operand(
-            semantic_db_core::Operand::Literal(value),
-        )),
+        left: Box::new(crate::Expr::Operand(crate::Operand::Field(path))),
+        right: Box::new(crate::Expr::Operand(crate::Operand::Literal(value))),
     }
 }
 
-struct KvPhysicalDataSource<'a, E: KvEngine> {
-    db: &'a KvDb<E>,
+struct EmbeddedPhysicalDataSource<'a, S: EntityStorage> {
+    db: &'a EmbeddedDb<S>,
     catalog: std::sync::Arc<Catalog>,
     default_collection: Option<String>,
     local_ref_lookups: Mutex<BTreeMap<LocalCollectionId, Arc<BTreeMap<String, Object>>>>,
@@ -2311,30 +2247,31 @@ struct KvPhysicalDataSource<'a, E: KvEngine> {
     local_ref_lookup_builds: AtomicUsize,
 }
 
-struct KvCollectionScan {
+struct EmbeddedCollectionScan {
     collection_id: LocalCollectionId,
-    rows: Box<dyn Iterator<Item = semantic_db_core::CoreResult<StoredEntity>> + Send>,
+    rows: Box<dyn Iterator<Item = crate::CoreResult<StoredEntity>> + Send>,
     field_names: BTreeMap<LocalFieldId, String>,
     attr_names: BTreeMap<LocalAttrId, String>,
     local_ref_lookup: Arc<BTreeMap<String, Object>>,
 }
 
-impl<E: KvEngine> KvPhysicalDataSource<'_, E> {
+impl<S: EntityStorage> EmbeddedPhysicalDataSource<'_, S> {
     fn local_ref_lookup(
         &self,
         collection: &CollectionSchema,
-    ) -> semantic_db_core::CoreResult<Arc<BTreeMap<String, Object>>> {
-        let mut lookups = self.local_ref_lookups.lock().map_err(|_| {
-            semantic_db_core::CoreError::new("local reference lookup cache lock was poisoned")
-        })?;
+    ) -> crate::CoreResult<Arc<BTreeMap<String, Object>>> {
+        let mut lookups = self
+            .local_ref_lookups
+            .lock()
+            .map_err(|_| crate::CoreError::new("local reference lookup cache lock was poisoned"))?;
         if let Some(lookup) = lookups.get(&collection.lid) {
             return Ok(lookup.clone());
         }
         let rows = self
             .db
-            .store
+            .storage
             .scan_collection_stream(collection.lid)
-            .map_err(|err| semantic_db_core::CoreError::new(err.to_string()))?;
+            .map_err(|err| crate::CoreError::new(err.to_string()))?;
         let lookup = build_local_ref_lookup(self.catalog.as_ref(), collection, rows)?;
         #[cfg(test)]
         self.local_ref_lookup_builds
@@ -2346,8 +2283,8 @@ impl<E: KvEngine> KvPhysicalDataSource<'_, E> {
     fn try_relation_lookup_ids(
         &self,
         source_collection: &CollectionSchema,
-        predicate: &semantic_db_core::Expr,
-    ) -> semantic_db_core::CoreResult<Option<(Vec<String>, Option<semantic_db_core::Expr>)>> {
+        predicate: &crate::Expr,
+    ) -> crate::CoreResult<Option<(Vec<String>, Option<crate::Expr>)>> {
         let Some((relation, residual)) = split_first_relation_conjunct(predicate) else {
             return Ok(None);
         };
@@ -2359,9 +2296,9 @@ impl<E: KvEngine> KvPhysicalDataSource<'_, E> {
     fn try_exact_relation_lookup_ids(
         &self,
         source_collection: &CollectionSchema,
-        predicate: &semantic_db_core::Expr,
-    ) -> semantic_db_core::CoreResult<Option<Vec<String>>> {
-        let semantic_db_core::Expr::RelationExists {
+        predicate: &crate::Expr,
+    ) -> crate::CoreResult<Option<Vec<String>>> {
+        let crate::Expr::RelationExists {
             relation,
             source,
             target,
@@ -2371,12 +2308,12 @@ impl<E: KvEngine> KvPhysicalDataSource<'_, E> {
         else {
             return Ok(None);
         };
-        let relation_id = semantic_db_core::evaluate_expr(&Object::new(), relation)
+        let relation_id = crate::evaluate_expr(&Object::new(), relation)
             .and_then(|value| value.as_str().map(ToString::to_string));
         let max_depth = match max_depth.as_ref() {
             None => None,
             Some(expr) => {
-                let Some(value) = semantic_db_core::evaluate_expr(&Object::new(), expr) else {
+                let Some(value) = crate::evaluate_expr(&Object::new(), expr) else {
                     return Ok(None);
                 };
                 let Some(depth) = value_to_usize(&value) else {
@@ -2396,7 +2333,7 @@ impl<E: KvEngine> KvPhysicalDataSource<'_, E> {
         let source_is_row_id = is_row_id_expr(source, source_collection);
         let target_is_row_id = is_row_id_expr(target, source_collection);
         if source_is_row_id && !target_is_row_id {
-            let Some(target_id) = semantic_db_core::evaluate_expr(&Object::new(), target)
+            let Some(target_id) = crate::evaluate_expr(&Object::new(), target)
                 .and_then(|value| value.as_str().map(ToString::to_string))
             else {
                 return Ok(None);
@@ -2412,7 +2349,7 @@ impl<E: KvEngine> KvPhysicalDataSource<'_, E> {
             return Ok(Some(ids));
         }
         if target_is_row_id && !source_is_row_id {
-            let Some(source_id) = semantic_db_core::evaluate_expr(&Object::new(), source)
+            let Some(source_id) = crate::evaluate_expr(&Object::new(), source)
                 .and_then(|value| value.as_str().map(ToString::to_string))
             else {
                 return Ok(None);
@@ -2439,17 +2376,17 @@ impl<E: KvEngine> KvPhysicalDataSource<'_, E> {
         endpoint_field: &str,
         transitive: bool,
         max_depth: Option<usize>,
-    ) -> semantic_db_core::CoreResult<Vec<String>> {
+    ) -> crate::CoreResult<Vec<String>> {
         let ids = if let Some(index) = self.catalog.find_equality_index(rel_collection, key_field) {
             self.db
-                .store
+                .storage
                 .scan_index_value(index.lid, None, &Value::String(key_value))
-                .map_err(|err| semantic_db_core::CoreError::new(err.to_string()))?
+                .map_err(|err| crate::CoreError::new(err.to_string()))?
         } else {
             self.db
-                .store
+                .storage
                 .scan_collection(rel_collection)
-                .map_err(|err| semantic_db_core::CoreError::new(err.to_string()))?
+                .map_err(|err| crate::CoreError::new(err.to_string()))?
                 .into_iter()
                 .map(|entity| entity.id)
                 .collect()
@@ -2458,9 +2395,9 @@ impl<E: KvEngine> KvPhysicalDataSource<'_, E> {
         for id in ids {
             let Some(edge) = self
                 .db
-                .store
+                .storage
                 .get_entity(rel_collection, &id)
-                .map_err(|err| semantic_db_core::CoreError::new(err.to_string()))?
+                .map_err(|err| crate::CoreError::new(err.to_string()))?
             else {
                 continue;
             };
@@ -2484,7 +2421,7 @@ impl<E: KvEngine> KvPhysicalDataSource<'_, E> {
         Ok(out.into_iter().collect())
     }
 
-    fn source_name<'a>(&'a self, source: &'a semantic_db_core::SourceRef) -> Option<&'a str> {
+    fn source_name<'a>(&'a self, source: &'a crate::SourceRef) -> Option<&'a str> {
         source
             .source_name
             .as_deref()
@@ -2493,7 +2430,7 @@ impl<E: KvEngine> KvPhysicalDataSource<'_, E> {
 
     fn resolve_collection<'a>(
         &'a self,
-        source: &'a semantic_db_core::SourceRef,
+        source: &'a crate::SourceRef,
     ) -> std::result::Result<&'a CollectionSchema, DbError> {
         if let Some(collection_id) = source.collection_id {
             return self
@@ -2511,7 +2448,7 @@ impl<E: KvEngine> KvPhysicalDataSource<'_, E> {
             })
     }
 
-    fn scan_all_collections(&self) -> semantic_db_core::CoreResult<Vec<KvCollectionScan>> {
+    fn scan_all_collections(&self) -> crate::CoreResult<Vec<EmbeddedCollectionScan>> {
         let mut scans = Vec::new();
         for (_, collection) in self.catalog.collections() {
             scans.push(self.collection_scan(collection)?);
@@ -2521,34 +2458,32 @@ impl<E: KvEngine> KvPhysicalDataSource<'_, E> {
 
     fn scan_collections(
         &self,
-        source: &semantic_db_core::SourceRef,
-    ) -> semantic_db_core::CoreResult<Vec<KvCollectionScan>> {
+        source: &crate::SourceRef,
+    ) -> crate::CoreResult<Vec<EmbeddedCollectionScan>> {
         if self.is_all_alias_source(source) {
             return self.scan_all_collections();
         }
         let collection = self
             .resolve_collection(source)
-            .map_err(|err| semantic_db_core::CoreError::new(err.to_string()))?;
+            .map_err(|err| crate::CoreError::new(err.to_string()))?;
         Ok(vec![self.collection_scan(collection)?])
     }
 
     fn collection_scan(
         &self,
         collection: &CollectionSchema,
-    ) -> semantic_db_core::CoreResult<KvCollectionScan> {
+    ) -> crate::CoreResult<EmbeddedCollectionScan> {
         let local_ref_lookup = self.local_ref_lookup(collection)?;
         let (field_names, attr_names) = collection_field_maps(collection);
         let rows = self
             .db
-            .store
+            .storage
             .scan_collection_stream(collection.lid)
-            .map_err(|err| semantic_db_core::CoreError::new(err.to_string()))?;
-        Ok(KvCollectionScan {
+            .map_err(|err| crate::CoreError::new(err.to_string()))?;
+        Ok(EmbeddedCollectionScan {
             collection_id: collection.lid,
             rows: Box::new(
-                rows.map(|row| {
-                    row.map_err(|err| semantic_db_core::CoreError::new(err.to_string()))
-                }),
+                rows.map(|row| row.map_err(|err| crate::CoreError::new(err.to_string()))),
             ),
             field_names,
             attr_names,
@@ -2557,12 +2492,12 @@ impl<E: KvEngine> KvPhysicalDataSource<'_, E> {
     }
 
     fn scans_to_stream(
-        scans: Vec<KvCollectionScan>,
-        predicate: Option<semantic_db_core::Expr>,
-    ) -> semantic_db_core::SendableRecordBatchStream {
-        let batch_size = semantic_db_core::DEFAULT_EXECUTION_BATCH_SIZE;
+        scans: Vec<EmbeddedCollectionScan>,
+        predicate: Option<crate::Expr>,
+    ) -> crate::SendableRecordBatchStream {
+        let batch_size = crate::DEFAULT_EXECUTION_BATCH_SIZE;
         stream::unfold(
-            (scans.into_iter(), None::<KvCollectionScan>, predicate),
+            (scans.into_iter(), None::<EmbeddedCollectionScan>, predicate),
             move |(mut scans, mut current, predicate)| async move {
                 let mut batch = Vec::with_capacity(batch_size);
                 while batch.len() < batch_size {
@@ -2587,10 +2522,11 @@ impl<E: KvEngine> KvPhysicalDataSource<'_, E> {
                         attr_names: scan.attr_names.clone(),
                         local_ref_lookup: Some(scan.local_ref_lookup.clone()),
                     };
-                    if predicate.as_ref().is_none_or(|predicate| {
-                        semantic_db_core::evaluate_filter_expr(&view, predicate)
-                    }) {
-                        batch.push(Box::new(view) as semantic_db_core::DynObject);
+                    if predicate
+                        .as_ref()
+                        .is_none_or(|predicate| crate::evaluate_filter_expr(&view, predicate))
+                    {
+                        batch.push(Box::new(view) as crate::DynObject);
                     }
                 }
                 if batch.is_empty() {
@@ -2607,8 +2543,8 @@ impl<E: KvEngine> KvPhysicalDataSource<'_, E> {
         &self,
         collection: &CollectionSchema,
         rows: Vec<StoredEntity>,
-        predicate: &semantic_db_core::Expr,
-    ) -> semantic_db_core::CoreResult<KvCollectionScan> {
+        predicate: &crate::Expr,
+    ) -> crate::CoreResult<EmbeddedCollectionScan> {
         let local_ref_lookup = self.local_ref_lookup(collection)?;
         let (field_names, attr_names) = collection_field_maps(collection);
         let mut filtered = Vec::new();
@@ -2624,7 +2560,7 @@ impl<E: KvEngine> KvPhysicalDataSource<'_, E> {
                 filtered.push(row);
             }
         }
-        Ok(KvCollectionScan {
+        Ok(EmbeddedCollectionScan {
             collection_id: collection.lid,
             rows: Box::new(filtered.into_iter().map(Ok)),
             field_names,
@@ -2635,9 +2571,9 @@ impl<E: KvEngine> KvPhysicalDataSource<'_, E> {
 
     fn scan_filtered_collections(
         &self,
-        source: &semantic_db_core::SourceRef,
-        predicate: &semantic_db_core::Expr,
-    ) -> semantic_db_core::CoreResult<(Vec<KvCollectionScan>, bool)> {
+        source: &crate::SourceRef,
+        predicate: &crate::Expr,
+    ) -> crate::CoreResult<(Vec<EmbeddedCollectionScan>, bool)> {
         if let Ok(collection) = self.resolve_collection(source)
             && let Some((ids, residual)) = self.try_relation_lookup_ids(collection, predicate)?
         {
@@ -2645,7 +2581,7 @@ impl<E: KvEngine> KvPhysicalDataSource<'_, E> {
             if let Some(residual) = residual {
                 let rows = scan
                     .rows
-                    .collect::<std::result::Result<Vec<_>, semantic_db_core::CoreError>>()?;
+                    .collect::<std::result::Result<Vec<_>, crate::CoreError>>()?;
                 return Ok((
                     vec![self.collection_scan_filtered_with_relationships(
                         collection, rows, &residual,
@@ -2663,9 +2599,9 @@ impl<E: KvEngine> KvPhysicalDataSource<'_, E> {
             for (_, collection) in self.catalog.collections() {
                 let rows = self
                     .db
-                    .store
+                    .storage
                     .scan_collection(collection.lid)
-                    .map_err(|err| semantic_db_core::CoreError::new(err.to_string()))?;
+                    .map_err(|err| crate::CoreError::new(err.to_string()))?;
                 scans.push(
                     self.collection_scan_filtered_with_relationships(collection, rows, predicate)?,
                 );
@@ -2674,12 +2610,12 @@ impl<E: KvEngine> KvPhysicalDataSource<'_, E> {
         }
         let collection = self
             .resolve_collection(source)
-            .map_err(|err| semantic_db_core::CoreError::new(err.to_string()))?;
+            .map_err(|err| crate::CoreError::new(err.to_string()))?;
         let rows = self
             .db
-            .store
+            .storage
             .scan_collection(collection.lid)
-            .map_err(|err| semantic_db_core::CoreError::new(err.to_string()))?;
+            .map_err(|err| crate::CoreError::new(err.to_string()))?;
         Ok((
             vec![self.collection_scan_filtered_with_relationships(collection, rows, predicate)?],
             true,
@@ -2690,21 +2626,21 @@ impl<E: KvEngine> KvPhysicalDataSource<'_, E> {
         &self,
         collection: &CollectionSchema,
         ids: Vec<String>,
-    ) -> semantic_db_core::CoreResult<KvCollectionScan> {
+    ) -> crate::CoreResult<EmbeddedCollectionScan> {
         let local_ref_lookup = self.local_ref_lookup(collection)?;
         let mut rows = Vec::with_capacity(ids.len());
         for id in ids {
             if let Some(entity) = self
                 .db
-                .store
+                .storage
                 .get_entity(collection.lid, &id)
-                .map_err(|err| semantic_db_core::CoreError::new(err.to_string()))?
+                .map_err(|err| crate::CoreError::new(err.to_string()))?
             {
                 rows.push(entity);
             }
         }
         let (field_names, attr_names) = collection_field_maps(collection);
-        Ok(KvCollectionScan {
+        Ok(EmbeddedCollectionScan {
             collection_id: collection.lid,
             rows: Box::new(rows.into_iter().map(Ok)),
             field_names,
@@ -2713,52 +2649,46 @@ impl<E: KvEngine> KvPhysicalDataSource<'_, E> {
         })
     }
 
-    fn is_all_alias_source(&self, source: &semantic_db_core::SourceRef) -> bool {
+    fn is_all_alias_source(&self, source: &crate::SourceRef) -> bool {
         self.source_name(source)
             .is_some_and(is_all_collection_alias)
     }
 
     fn evaluate_predicate_with_relationships(
         &self,
-        row: &dyn semantic_db_core::ObjectAccess,
-        predicate: &semantic_db_core::Expr,
-    ) -> semantic_db_core::CoreResult<bool> {
+        row: &dyn crate::ObjectAccess,
+        predicate: &crate::Expr,
+    ) -> crate::CoreResult<bool> {
         match predicate {
-            semantic_db_core::Expr::RelationExists {
+            crate::Expr::RelationExists {
                 relation,
                 source,
                 target,
                 transitive,
                 max_depth,
             } => {
-                let relation_id = semantic_db_core::evaluate_expr(row, relation)
+                let relation_id = crate::evaluate_expr(row, relation)
                     .and_then(|value| value.as_str().map(ToString::to_string))
                     .ok_or_else(|| {
-                        semantic_db_core::CoreError::new(
-                            "relationship expression requires string relation id",
-                        )
+                        crate::CoreError::new("relationship expression requires string relation id")
                     })?;
-                let source_id = semantic_db_core::evaluate_expr(row, source)
+                let source_id = crate::evaluate_expr(row, source)
                     .and_then(|value| value.as_str().map(ToString::to_string))
                     .ok_or_else(|| {
-                        semantic_db_core::CoreError::new(
-                            "relationship expression requires string source id",
-                        )
+                        crate::CoreError::new("relationship expression requires string source id")
                     })?;
-                let target_id = semantic_db_core::evaluate_expr(row, target)
+                let target_id = crate::evaluate_expr(row, target)
                     .and_then(|value| value.as_str().map(ToString::to_string))
                     .ok_or_else(|| {
-                        semantic_db_core::CoreError::new(
-                            "relationship expression requires string target id",
-                        )
+                        crate::CoreError::new("relationship expression requires string target id")
                     })?;
                 let max_depth = max_depth
                     .as_ref()
                     .map(|expr| {
-                        semantic_db_core::evaluate_expr(row, expr)
+                        crate::evaluate_expr(row, expr)
                             .and_then(|value| value_to_usize(&value))
                             .ok_or_else(|| {
-                                semantic_db_core::CoreError::new(
+                                crate::CoreError::new(
                                     "relationship expression max_depth must be a positive integer",
                                 )
                             })
@@ -2772,23 +2702,23 @@ impl<E: KvEngine> KvPhysicalDataSource<'_, E> {
                     max_depth,
                 )
             }
-            semantic_db_core::Expr::Binary {
+            crate::Expr::Binary {
                 op: semantic_data::query::BinaryOp::And,
                 left,
                 right,
             } => Ok(self.evaluate_predicate_with_relationships(row, left)?
                 && self.evaluate_predicate_with_relationships(row, right)?),
-            semantic_db_core::Expr::Binary {
+            crate::Expr::Binary {
                 op: semantic_data::query::BinaryOp::Or,
                 left,
                 right,
             } => Ok(self.evaluate_predicate_with_relationships(row, left)?
                 || self.evaluate_predicate_with_relationships(row, right)?),
-            semantic_db_core::Expr::Unary {
+            crate::Expr::Unary {
                 op: semantic_data::query::UnaryOp::Not,
                 expr,
             } => Ok(!self.evaluate_predicate_with_relationships(row, expr)?),
-            _ => Ok(semantic_db_core::evaluate_filter_expr(row, predicate)),
+            _ => Ok(crate::evaluate_filter_expr(row, predicate)),
         }
     }
 
@@ -2799,7 +2729,7 @@ impl<E: KvEngine> KvPhysicalDataSource<'_, E> {
         target_id: &str,
         transitive: bool,
         max_depth: Option<usize>,
-    ) -> semantic_db_core::CoreResult<bool> {
+    ) -> crate::CoreResult<bool> {
         let Some(rel_collection) = self.catalog.collection_by_name(RELATION_EDGES_COLLECTION)
         else {
             return Ok(false);
@@ -2810,14 +2740,14 @@ impl<E: KvEngine> KvPhysicalDataSource<'_, E> {
             .find_equality_index(rel_collection.lid, REL_EDGE_SOURCE_KEY_FIELD)
         {
             self.db
-                .store
+                .storage
                 .scan_index_value(index.lid, None, &source_key)
-                .map_err(|err| semantic_db_core::CoreError::new(err.to_string()))?
+                .map_err(|err| crate::CoreError::new(err.to_string()))?
         } else {
             self.db
-                .store
+                .storage
                 .scan_collection(rel_collection.lid)
-                .map_err(|err| semantic_db_core::CoreError::new(err.to_string()))?
+                .map_err(|err| crate::CoreError::new(err.to_string()))?
                 .into_iter()
                 .map(|entity| entity.id)
                 .collect()
@@ -2825,9 +2755,9 @@ impl<E: KvEngine> KvPhysicalDataSource<'_, E> {
         for candidate_id in candidate_ids {
             let Some(edge) = self
                 .db
-                .store
+                .storage
                 .get_entity(rel_collection.lid, &candidate_id)
-                .map_err(|err| semantic_db_core::CoreError::new(err.to_string()))?
+                .map_err(|err| crate::CoreError::new(err.to_string()))?
             else {
                 continue;
             };
@@ -2888,9 +2818,9 @@ struct KvObjectView {
     local_ref_lookup: Option<Arc<BTreeMap<String, Object>>>,
 }
 
-impl semantic_db_core::ObjectAccess for KvObjectView {
+impl crate::ObjectAccess for KvObjectView {
     fn value_at_path_ref<'a>(&'a self, path: &FieldPath) -> Option<ValueRef<'a>> {
-        if let Some(value) = semantic_db_core::ObjectAccess::value_at_path_ref(&self.object, path) {
+        if let Some(value) = crate::ObjectAccess::value_at_path_ref(&self.object, path) {
             return Some(value);
         }
         if let [PathSegment::Field(field)] = path.segments()
@@ -2908,13 +2838,13 @@ impl semantic_db_core::ObjectAccess for KvObjectView {
     fn value_at_attr_ref<'a>(&'a self, attr: LocalAttrId) -> Option<ValueRef<'a>> {
         let name = self.attr_names.get(&attr)?;
         let path = FieldPath::from_fields([name.as_str()]);
-        semantic_db_core::ObjectAccess::value_at_path_ref(&self.object, &path)
+        crate::ObjectAccess::value_at_path_ref(&self.object, &path)
     }
 
     fn value_at_field_ref<'a>(&'a self, field: LocalFieldId) -> Option<ValueRef<'a>> {
         let name = self.field_names.get(&field)?;
         let path = FieldPath::from_fields([name.as_str()]);
-        semantic_db_core::ObjectAccess::value_at_path_ref(&self.object, &path)
+        crate::ObjectAccess::value_at_path_ref(&self.object, &path)
     }
 
     fn collection_id(&self) -> Option<LocalCollectionId> {
@@ -2930,7 +2860,7 @@ fn build_local_ref_lookup(
     catalog: &Catalog,
     collection: &CollectionSchema,
     rows: impl IntoIterator<Item = std::result::Result<StoredEntity, DbError>>,
-) -> semantic_db_core::CoreResult<Arc<BTreeMap<String, Object>>> {
+) -> crate::CoreResult<Arc<BTreeMap<String, Object>>> {
     let mut lookup = BTreeMap::new();
     let mut id_keys = vec![
         collection.canonical_field_name("id").to_string(),
@@ -2945,7 +2875,7 @@ fn build_local_ref_lookup(
         }
     }
     for row in rows {
-        let row = row.map_err(|err| semantic_db_core::CoreError::new(err.to_string()))?;
+        let row = row.map_err(|err| crate::CoreError::new(err.to_string()))?;
         let id = id_keys
             .iter()
             .find_map(|key| row.object.get(key).and_then(Value::as_str));
@@ -3016,14 +2946,14 @@ fn collection_field_maps(
     (field_names, attr_names)
 }
 
-fn expr_contains_relationship(expr: &semantic_db_core::Expr) -> bool {
+fn expr_contains_relationship(expr: &crate::Expr) -> bool {
     match expr {
-        semantic_db_core::Expr::RelationExists { .. } => true,
-        semantic_db_core::Expr::Binary { left, right, .. } => {
+        crate::Expr::RelationExists { .. } => true,
+        crate::Expr::Binary { left, right, .. } => {
             expr_contains_relationship(left) || expr_contains_relationship(right)
         }
-        semantic_db_core::Expr::Unary { expr, .. } => expr_contains_relationship(expr),
-        semantic_db_core::Expr::IfElse {
+        crate::Expr::Unary { expr, .. } => expr_contains_relationship(expr),
+        crate::Expr::IfElse {
             cond,
             then_expr,
             else_expr,
@@ -3032,43 +2962,39 @@ fn expr_contains_relationship(expr: &semantic_db_core::Expr) -> bool {
                 || expr_contains_relationship(then_expr)
                 || expr_contains_relationship(else_expr)
         }
-        semantic_db_core::Expr::Coalesce(exprs) => exprs.iter().any(expr_contains_relationship),
-        semantic_db_core::Expr::Function { args, .. } => args.iter().any(|arg| match arg {
-            semantic_db_core::FunctionArg::Expr(expr) => expr_contains_relationship(expr),
-            semantic_db_core::FunctionArg::Wildcard => false,
+        crate::Expr::Coalesce(exprs) => exprs.iter().any(expr_contains_relationship),
+        crate::Expr::Function { args, .. } => args.iter().any(|arg| match arg {
+            crate::FunctionArg::Expr(expr) => expr_contains_relationship(expr),
+            crate::FunctionArg::Wildcard => false,
         }),
-        semantic_db_core::Expr::Aggregate { arg, .. } => match arg.as_ref() {
-            semantic_db_core::FunctionArg::Expr(expr) => expr_contains_relationship(expr),
-            semantic_db_core::FunctionArg::Wildcard => false,
+        crate::Expr::Aggregate { arg, .. } => match arg.as_ref() {
+            crate::FunctionArg::Expr(expr) => expr_contains_relationship(expr),
+            crate::FunctionArg::Wildcard => false,
         },
-        semantic_db_core::Expr::InList { expr, list, .. } => {
+        crate::Expr::InList { expr, list, .. } => {
             expr_contains_relationship(expr) || list.iter().any(expr_contains_relationship)
         }
-        semantic_db_core::Expr::Between {
+        crate::Expr::Between {
             expr, low, high, ..
         } => {
             expr_contains_relationship(expr)
                 || expr_contains_relationship(low)
                 || expr_contains_relationship(high)
         }
-        semantic_db_core::Expr::PatternMatch { expr, pattern, .. }
-        | semantic_db_core::Expr::RegexMatch { expr, pattern, .. } => {
+        crate::Expr::PatternMatch { expr, pattern, .. }
+        | crate::Expr::RegexMatch { expr, pattern, .. } => {
             expr_contains_relationship(expr) || expr_contains_relationship(pattern)
         }
-        semantic_db_core::Expr::IsNull { expr, .. } => expr_contains_relationship(expr),
-        semantic_db_core::Expr::Operand(_)
-        | semantic_db_core::Expr::Subquery(_)
-        | semantic_db_core::Expr::Exists { .. } => false,
+        crate::Expr::IsNull { expr, .. } => expr_contains_relationship(expr),
+        crate::Expr::Operand(_) | crate::Expr::Subquery(_) | crate::Expr::Exists { .. } => false,
     }
 }
 
-fn split_first_relation_conjunct(
-    expr: &semantic_db_core::Expr,
-) -> Option<(semantic_db_core::Expr, Option<semantic_db_core::Expr>)> {
-    if matches!(expr, semantic_db_core::Expr::RelationExists { .. }) {
+fn split_first_relation_conjunct(expr: &crate::Expr) -> Option<(crate::Expr, Option<crate::Expr>)> {
+    if matches!(expr, crate::Expr::RelationExists { .. }) {
         return Some((expr.clone(), None));
     }
-    let semantic_db_core::Expr::Binary {
+    let crate::Expr::Binary {
         op: semantic_data::query::BinaryOp::And,
         left,
         right,
@@ -3091,13 +3017,13 @@ fn split_first_relation_conjunct(
 }
 
 fn combine_optional_predicates(
-    left: Option<semantic_db_core::Expr>,
-    right: Option<semantic_db_core::Expr>,
-) -> Option<semantic_db_core::Expr> {
+    left: Option<crate::Expr>,
+    right: Option<crate::Expr>,
+) -> Option<crate::Expr> {
     match (left, right) {
         (None, None) => None,
         (Some(expr), None) | (None, Some(expr)) => Some(expr),
-        (Some(left), Some(right)) => Some(semantic_db_core::Expr::Binary {
+        (Some(left), Some(right)) => Some(crate::Expr::Binary {
             op: semantic_data::query::BinaryOp::And,
             left: Box::new(left),
             right: Box::new(right),
@@ -3282,11 +3208,8 @@ fn type_allows_nullish(ty: &Type) -> bool {
     }
 }
 
-impl<E: KvEngine> semantic_db_core::AsyncPhysicalDataSource for KvPhysicalDataSource<'_, E> {
-    fn scan_stream(
-        &self,
-        source: semantic_db_core::SourceRef,
-    ) -> semantic_db_core::SendableRecordBatchStream {
+impl<S: EntityStorage> crate::AsyncPhysicalDataSource for EmbeddedPhysicalDataSource<'_, S> {
+    fn scan_stream(&self, source: crate::SourceRef) -> crate::SendableRecordBatchStream {
         match self.scan_collections(&source) {
             Ok(scans) => Self::scans_to_stream(scans, None),
             Err(err) => stream::once(async move { Err(err) }).boxed(),
@@ -3295,9 +3218,9 @@ impl<E: KvEngine> semantic_db_core::AsyncPhysicalDataSource for KvPhysicalDataSo
 
     fn scan_filtered_stream(
         &self,
-        source: semantic_db_core::SourceRef,
-        predicate: semantic_db_core::Expr,
-    ) -> semantic_db_core::SendableRecordBatchStream {
+        source: crate::SourceRef,
+        predicate: crate::Expr,
+    ) -> crate::SendableRecordBatchStream {
         match self.scan_filtered_collections(&source, &predicate) {
             Ok((scans, true)) => Self::scans_to_stream(scans, None),
             Ok((scans, false)) => Self::scans_to_stream(scans, Some(predicate)),
@@ -3307,10 +3230,10 @@ impl<E: KvEngine> semantic_db_core::AsyncPhysicalDataSource for KvPhysicalDataSo
 
     fn index_lookup_stream(
         &self,
-        source: semantic_db_core::SourceRef,
-        field: semantic_db_core::FieldRef,
+        source: crate::SourceRef,
+        field: crate::FieldRef,
         value: Value,
-    ) -> semantic_db_core::SendableRecordBatchStream {
+    ) -> crate::SendableRecordBatchStream {
         match self.index_lookup_collections(&source, &field, &value) {
             Ok((scans, predicate)) => Self::scans_to_stream(scans, predicate),
             Err(err) => stream::once(async move { Err(err) }).boxed(),
@@ -3319,11 +3242,11 @@ impl<E: KvEngine> semantic_db_core::AsyncPhysicalDataSource for KvPhysicalDataSo
 
     fn index_lookup_filtered_stream(
         &self,
-        source: semantic_db_core::SourceRef,
-        field: semantic_db_core::FieldRef,
+        source: crate::SourceRef,
+        field: crate::FieldRef,
         value: Value,
-        residual_predicate: Option<semantic_db_core::Expr>,
-    ) -> semantic_db_core::SendableRecordBatchStream {
+        residual_predicate: Option<crate::Expr>,
+    ) -> crate::SendableRecordBatchStream {
         let result = (|| {
             let (scans, lookup_predicate) =
                 self.index_lookup_collections(&source, &field, &value)?;
@@ -3341,14 +3264,14 @@ impl<E: KvEngine> semantic_db_core::AsyncPhysicalDataSource for KvPhysicalDataSo
                     .catalog
                     .collection_by_lid(scan.collection_id)
                     .ok_or_else(|| {
-                        semantic_db_core::CoreError::new(format!(
+                        crate::CoreError::new(format!(
                             "unknown collection {:?} during indexed residual filtering",
                             scan.collection_id
                         ))
                     })?;
                 let rows = scan
                     .rows
-                    .collect::<std::result::Result<Vec<_>, semantic_db_core::CoreError>>()?;
+                    .collect::<std::result::Result<Vec<_>, crate::CoreError>>()?;
                 filtered_scans.push(
                     self.collection_scan_filtered_with_relationships(collection, rows, &predicate)?,
                 );
@@ -3364,15 +3287,15 @@ impl<E: KvEngine> semantic_db_core::AsyncPhysicalDataSource for KvPhysicalDataSo
 
     fn index_lookup_many_stream(
         &self,
-        source: semantic_db_core::SourceRef,
-        field: semantic_db_core::FieldRef,
+        source: crate::SourceRef,
+        field: crate::FieldRef,
         values: Vec<Value>,
-        residual_predicate: Option<semantic_db_core::Expr>,
-    ) -> semantic_db_core::SendableRecordBatchStream {
+        residual_predicate: Option<crate::Expr>,
+    ) -> crate::SendableRecordBatchStream {
         let result = (|| {
             let collection = self
                 .resolve_collection(&source)
-                .map_err(|err| semantic_db_core::CoreError::new(err.to_string()))?;
+                .map_err(|err| crate::CoreError::new(err.to_string()))?;
             let field_path = self.field_path_for_lookup(collection, &field);
             let Some(field_path) = field_path else {
                 return Ok(None);
@@ -3412,9 +3335,9 @@ impl<E: KvEngine> semantic_db_core::AsyncPhysicalDataSource for KvPhysicalDataSo
             for value in &values {
                 ids.extend(
                     self.db
-                        .store
+                        .storage
                         .scan_index_value(index_id, index_path.as_ref(), value)
-                        .map_err(|err| semantic_db_core::CoreError::new(err.to_string()))?,
+                        .map_err(|err| crate::CoreError::new(err.to_string()))?,
                 );
             }
             let scan = self.materialize_ids(collection, ids.into_iter().collect())?;
@@ -3422,7 +3345,7 @@ impl<E: KvEngine> semantic_db_core::AsyncPhysicalDataSource for KvPhysicalDataSo
                 if expr_contains_relationship(&predicate) {
                     let rows = scan
                         .rows
-                        .collect::<std::result::Result<Vec<_>, semantic_db_core::CoreError>>()?;
+                        .collect::<std::result::Result<Vec<_>, crate::CoreError>>()?;
                     vec![self.collection_scan_filtered_with_relationships(
                         collection, rows, &predicate,
                     )?]
@@ -3451,38 +3374,36 @@ impl<E: KvEngine> semantic_db_core::AsyncPhysicalDataSource for KvPhysicalDataSo
     }
 }
 
-impl<E: KvEngine> KvPhysicalDataSource<'_, E> {
+impl<S: EntityStorage> EmbeddedPhysicalDataSource<'_, S> {
     fn field_path_for_lookup(
         &self,
         collection: &CollectionSchema,
-        field: &semantic_db_core::FieldRef,
+        field: &crate::FieldRef,
     ) -> Option<FieldPath> {
         match field {
-            semantic_db_core::FieldRef::CanonicalName(name) => Some(FieldPath::from_fields([name])),
-            semantic_db_core::FieldRef::FieldId(field_id) => collection
+            crate::FieldRef::CanonicalName(name) => Some(FieldPath::from_fields([name])),
+            crate::FieldRef::FieldId(field_id) => collection
                 .field_name_by_id(*field_id)
                 .map(|name| FieldPath::from_fields([name])),
-            semantic_db_core::FieldRef::AttrId(attr_id) => {
-                collection.fields().find_map(|(field_id, _)| {
-                    (collection.attr_for_field_id(field_id) == Some(*attr_id))
-                        .then(|| collection.field_name_by_id(field_id))
-                        .flatten()
-                        .map(|name| FieldPath::from_fields([name]))
-                })
-            }
-            semantic_db_core::FieldRef::Path(path) => Some(path.clone()),
+            crate::FieldRef::AttrId(attr_id) => collection.fields().find_map(|(field_id, _)| {
+                (collection.attr_for_field_id(field_id) == Some(*attr_id))
+                    .then(|| collection.field_name_by_id(field_id))
+                    .flatten()
+                    .map(|name| FieldPath::from_fields([name]))
+            }),
+            crate::FieldRef::Path(path) => Some(path.clone()),
         }
     }
 
     fn index_lookup_collections(
         &self,
-        source: &semantic_db_core::SourceRef,
-        field: &semantic_db_core::FieldRef,
+        source: &crate::SourceRef,
+        field: &crate::FieldRef,
         value: &Value,
-    ) -> semantic_db_core::CoreResult<(Vec<KvCollectionScan>, Option<semantic_db_core::Expr>)> {
+    ) -> crate::CoreResult<(Vec<EmbeddedCollectionScan>, Option<crate::Expr>)> {
         let collection = self
             .resolve_collection(source)
-            .map_err(|err| semantic_db_core::CoreError::new(err.to_string()))?;
+            .map_err(|err| crate::CoreError::new(err.to_string()))?;
 
         let field_path = self.field_path_for_lookup(collection, field);
         let Some(field_path) = field_path else {
@@ -3500,14 +3421,14 @@ impl<E: KvEngine> KvPhysicalDataSource<'_, E> {
             if field_path.segments().len() == 1 {
                 if let Some(index) = self.catalog.find_equality_index(collection.lid, top_level) {
                     self.db
-                        .store
+                        .storage
                         .scan_index_value(index.lid, None, value)
-                        .map_err(|err| semantic_db_core::CoreError::new(err.to_string()))?
+                        .map_err(|err| crate::CoreError::new(err.to_string()))?
                 } else if let Some(index) = self.catalog.find_path_equality_index(collection.lid) {
                     self.db
-                        .store
+                        .storage
                         .scan_index_value(index.lid, Some(&field_path), value)
-                        .map_err(|err| semantic_db_core::CoreError::new(err.to_string()))?
+                        .map_err(|err| crate::CoreError::new(err.to_string()))?
                 } else {
                     let predicate = equality_expr(field_path, value.clone());
                     return Ok((self.scan_collections(source)?, Some(predicate)));
@@ -3519,9 +3440,9 @@ impl<E: KvEngine> KvPhysicalDataSource<'_, E> {
                     .any(|segment| matches!(segment, PathSegment::Index(_)));
                 if has_index_segment {
                     self.db
-                        .store
+                        .storage
                         .scan_index_value(index.lid, Some(&field_path), value)
-                        .map_err(|err| semantic_db_core::CoreError::new(err.to_string()))?
+                        .map_err(|err| crate::CoreError::new(err.to_string()))?
                 } else {
                     let predicate = equality_expr(field_path, value.clone());
                     return Ok((self.scan_collections(source)?, Some(predicate)));
@@ -3554,8 +3475,8 @@ fn value_to_usize(value: &Value) -> Option<usize> {
     }
 }
 
-fn is_row_id_expr(expr: &semantic_db_core::Expr, source_collection: &CollectionSchema) -> bool {
-    let semantic_db_core::Expr::Operand(semantic_db_core::Operand::Field(path)) = expr else {
+fn is_row_id_expr(expr: &crate::Expr, source_collection: &CollectionSchema) -> bool {
+    let crate::Expr::Operand(crate::Operand::Field(path)) = expr else {
         return false;
     };
     let Some(PathSegment::Field(first)) = path.segments().first() else {
@@ -3582,7 +3503,7 @@ struct CollectionStatsEntry {
 }
 
 impl QueryStatsSnapshot {
-    fn collection(&self, source: &semantic_db_core::SourceRef) -> Option<&CollectionStatsEntry> {
+    fn collection(&self, source: &crate::SourceRef) -> Option<&CollectionStatsEntry> {
         self.collections.iter().find(|collection| {
             source.source_name.as_deref() == Some(collection.source.as_str())
                 || source.collection_id == Some(collection.collection_id)
@@ -3590,35 +3511,26 @@ impl QueryStatsSnapshot {
     }
 }
 
-impl semantic_db_core::StatsProvider for QueryStatsSnapshot {
-    fn relation_stats(
-        &self,
-        source: &semantic_db_core::SourceRef,
-    ) -> Option<semantic_db_core::RelationStats> {
+impl crate::StatsProvider for QueryStatsSnapshot {
+    fn relation_stats(&self, source: &crate::SourceRef) -> Option<crate::RelationStats> {
         let collection = self.collection(source)?;
-        Some(semantic_db_core::RelationStats {
+        Some(crate::RelationStats {
             row_count: collection.row_count,
         })
     }
 
     fn field_stats(
         &self,
-        source: &semantic_db_core::SourceRef,
-        field: &semantic_db_core::FieldRef,
-    ) -> Option<semantic_db_core::FieldStats> {
+        source: &crate::SourceRef,
+        field: &crate::FieldRef,
+    ) -> Option<crate::FieldStats> {
         let collection = self.collection(source)?;
 
         let unique = match field {
-            semantic_db_core::FieldRef::CanonicalName(name) => {
-                collection.unique_fields.contains(name)
-            }
-            semantic_db_core::FieldRef::FieldId(field_id) => {
-                collection.unique_field_ids.contains(field_id)
-            }
-            semantic_db_core::FieldRef::AttrId(attr_id) => {
-                collection.unique_attr_ids.contains(attr_id)
-            }
-            semantic_db_core::FieldRef::Path(path) => path
+            crate::FieldRef::CanonicalName(name) => collection.unique_fields.contains(name),
+            crate::FieldRef::FieldId(field_id) => collection.unique_field_ids.contains(field_id),
+            crate::FieldRef::AttrId(attr_id) => collection.unique_attr_ids.contains(attr_id),
+            crate::FieldRef::Path(path) => path
                 .segments()
                 .first()
                 .and_then(|segment| match segment {
@@ -3628,24 +3540,24 @@ impl semantic_db_core::StatsProvider for QueryStatsSnapshot {
                 .is_some_and(|name| collection.unique_fields.contains(name)),
         };
         if unique {
-            return Some(semantic_db_core::FieldStats {
+            return Some(crate::FieldStats {
                 distinct_count: Some(collection.row_count.max(1.0)),
                 null_fraction: Some(0.0),
             });
         }
 
         let indexed = match field {
-            semantic_db_core::FieldRef::CanonicalName(name) => {
+            crate::FieldRef::CanonicalName(name) => {
                 collection.indexed_fields.contains(name) || collection.has_path_equality_index
             }
-            semantic_db_core::FieldRef::FieldId(field_id) => {
+            crate::FieldRef::FieldId(field_id) => {
                 collection.indexed_field_ids.contains(field_id)
                     || collection.has_path_equality_index
             }
-            semantic_db_core::FieldRef::AttrId(attr_id) => {
+            crate::FieldRef::AttrId(attr_id) => {
                 collection.indexed_attr_ids.contains(attr_id) || collection.has_path_equality_index
             }
-            semantic_db_core::FieldRef::Path(path) => {
+            crate::FieldRef::Path(path) => {
                 path.segments()
                     .first()
                     .and_then(|segment| match segment {
@@ -3657,7 +3569,7 @@ impl semantic_db_core::StatsProvider for QueryStatsSnapshot {
             }
         };
         if indexed {
-            return Some(semantic_db_core::FieldStats {
+            return Some(crate::FieldStats {
                 distinct_count: Some((collection.row_count / 8.0).max(1.0)),
                 null_fraction: Some(0.0),
             });
@@ -3668,22 +3580,22 @@ impl semantic_db_core::StatsProvider for QueryStatsSnapshot {
 
     fn has_equality_index(
         &self,
-        source: &semantic_db_core::SourceRef,
-        field: &semantic_db_core::FieldRef,
+        source: &crate::SourceRef,
+        field: &crate::FieldRef,
     ) -> Option<bool> {
         let collection = self.collection(source)?;
         let indexed = match field {
-            semantic_db_core::FieldRef::CanonicalName(name) => {
+            crate::FieldRef::CanonicalName(name) => {
                 collection.indexed_fields.contains(name) || collection.has_path_equality_index
             }
-            semantic_db_core::FieldRef::FieldId(field_id) => {
+            crate::FieldRef::FieldId(field_id) => {
                 collection.indexed_field_ids.contains(field_id)
                     || collection.has_path_equality_index
             }
-            semantic_db_core::FieldRef::AttrId(attr_id) => {
+            crate::FieldRef::AttrId(attr_id) => {
                 collection.indexed_attr_ids.contains(attr_id) || collection.has_path_equality_index
             }
-            semantic_db_core::FieldRef::Path(path) => {
+            crate::FieldRef::Path(path) => {
                 path.segments()
                     .first()
                     .and_then(|segment| match segment {
@@ -3749,21 +3661,23 @@ mod tests {
         value::{DateTime, FieldPath, Object, PathSegment, Value},
     };
 
-    use semantic_data::query::{BinaryOp, FieldFormat, JoinType, SortDirection};
-    use semantic_db_core::catalog::{CollectionKind, IntegrityMode};
-    use semantic_db_core::{
+    use crate::catalog::{CollectionKind, IntegrityMode};
+    use crate::{
         ALL_COLLECTION_ALIAS, Batch, BatchOperation, CORE_CATALOG_SCHEMA_COLLECTION,
         DEFAULT_COLLECTION, DdlBatch, DdlCollectionKind, DdlOperation, Expr, JoinCondition,
         JoinQuery, JoinSource, Operand, OrderBy, Query, QueryField, QueryResult, SelectQuery,
         TransactionConcurrency, TransactionOptions, UpdateQuery, canonicalize_select_query,
     };
-    use semantic_db_core::{DbConfig, DbError, MigrationMismatchPolicy};
+    use crate::{DbConfig, DbError, MigrationMismatchPolicy};
+    use semantic_data::query::{BinaryOp, FieldFormat, JoinType, SortDirection};
 
-    use super::{KvDb, KvPhysicalDataSource, KvWriteOp, QueryPlan, RELATION_EDGES_COLLECTION};
-    use crate::storage::MemoryKvEngine;
+    use super::{EmbeddedDb, EmbeddedPhysicalDataSource, QueryPlan, RELATION_EDGES_COLLECTION};
+    use crate::embedded::storage::{EntityStorage, MemoryEntityStorage};
 
-    fn physical_source(db: &KvDb<MemoryKvEngine>) -> KvPhysicalDataSource<'_, MemoryKvEngine> {
-        KvPhysicalDataSource {
+    fn physical_source(
+        db: &EmbeddedDb<MemoryEntityStorage>,
+    ) -> EmbeddedPhysicalDataSource<'_, MemoryEntityStorage> {
+        EmbeddedPhysicalDataSource {
             db,
             catalog: db.catalog(),
             default_collection: None,
@@ -3790,7 +3704,7 @@ mod tests {
 
     #[test]
     fn indexed_materialization_reuses_query_scoped_local_ref_lookup() {
-        let mut db = KvDb::in_memory();
+        let mut db = EmbeddedDb::in_memory();
         db.create_collection("cache_items", CollectionKind::Polymorphic)
             .unwrap();
         for id in ["a", "b"] {
@@ -3821,7 +3735,7 @@ mod tests {
 
     #[test]
     fn relation_lookup_only_accepts_constant_nonnegative_max_depth() {
-        let mut db = KvDb::in_memory();
+        let mut db = EmbeddedDb::in_memory();
         db.create_collection("relation_nodes", CollectionKind::Polymorphic)
             .unwrap();
         let catalog = db.catalog();
@@ -3858,7 +3772,7 @@ mod tests {
 
     #[test]
     fn initialization_creates_default_entities_collection() {
-        let db = KvDb::in_memory();
+        let db = EmbeddedDb::in_memory();
         let catalog = db.catalog();
         let entities = catalog
             .collection_by_name(DEFAULT_COLLECTION)
@@ -3871,7 +3785,7 @@ mod tests {
 
     #[test]
     fn directory_shaped_self_join_uses_indexed_probe_and_returns_order_rows() {
-        let mut db = KvDb::in_memory();
+        let mut db = EmbeddedDb::in_memory();
         db.create_collection("tree_entities", CollectionKind::Polymorphic)
             .unwrap();
         for (id, kind, from, to, order) in [
@@ -3949,12 +3863,12 @@ mod tests {
             });
 
         let explain = db.explain_query(Query::Select(query.clone())).unwrap();
-        let semantic_db_core::PhysicalPlan::Join(join) = explain.physical else {
+        let crate::PhysicalPlan::Join(join) = explain.physical else {
             panic!("expected physical join")
         };
         assert_eq!(
             join.algorithm,
-            semantic_db_core::PhysicalJoinAlgorithm::IndexNestedLoop
+            crate::PhysicalJoinAlgorithm::IndexNestedLoop
         );
         assert!(join.index_probe.is_some());
 
@@ -4006,7 +3920,7 @@ mod tests {
 
     #[test]
     fn cross_collection_join_uses_right_collection_index_stats() {
-        let mut db = KvDb::in_memory();
+        let mut db = EmbeddedDb::in_memory();
         db.create_collection("orders", CollectionKind::Polymorphic)
             .unwrap();
         db.create_collection("customers", CollectionKind::Polymorphic)
@@ -4043,12 +3957,12 @@ mod tests {
             }]);
 
         let explain = db.explain_query(Query::Select(query)).unwrap();
-        let semantic_db_core::PhysicalPlan::Join(join) = explain.physical else {
+        let crate::PhysicalPlan::Join(join) = explain.physical else {
             panic!("expected physical join")
         };
         assert_eq!(
             join.algorithm,
-            semantic_db_core::PhysicalJoinAlgorithm::IndexNestedLoop
+            crate::PhysicalJoinAlgorithm::IndexNestedLoop
         );
         assert_eq!(
             join.index_probe
@@ -4060,7 +3974,7 @@ mod tests {
 
     #[test]
     fn initialization_marks_kv_internal_collections() {
-        let db = KvDb::in_memory();
+        let db = EmbeddedDb::in_memory();
         let catalog = db.catalog();
 
         assert!(
@@ -4085,7 +3999,7 @@ mod tests {
 
     #[test]
     fn rejects_direct_internal_collection_mutation() {
-        let mut db = KvDb::in_memory();
+        let mut db = EmbeddedDb::in_memory();
         let err = db
             .insert(CORE_CATALOG_SCHEMA_COLLECTION, "entry", Object::new())
             .expect_err("internal insert should be rejected");
@@ -4099,7 +4013,7 @@ mod tests {
 
     #[test]
     fn internal_schema_collection_remains_queryable() {
-        let db = KvDb::in_memory();
+        let db = EmbeddedDb::in_memory();
         let rows = db
             .select(SelectQuery::new().with_collection(CORE_CATALOG_SCHEMA_COLLECTION))
             .expect("schema collection should remain queryable");
@@ -4109,13 +4023,13 @@ mod tests {
 
     #[test]
     fn initialization_enables_auto_indexing() {
-        let db = KvDb::in_memory();
+        let db = EmbeddedDb::in_memory();
         assert!(db.auto_index_enabled());
     }
 
     #[test]
     fn applied_migration_mismatch_fails_by_default() {
-        let mut db = KvDb::in_memory();
+        let mut db = EmbeddedDb::in_memory();
         let package = simple_schema_package("Original migration.");
         db.upsert_package(package.clone()).unwrap();
 
@@ -4132,7 +4046,7 @@ mod tests {
 
     #[test]
     fn applied_migration_mismatch_can_be_logged() {
-        let mut db = KvDb::in_memory_with_config(DbConfig {
+        let mut db = EmbeddedDb::in_memory_with_config(DbConfig {
             migration_mismatch_policy: MigrationMismatchPolicy::Log,
         });
         let package = simple_schema_package("Original migration.");
@@ -4148,10 +4062,10 @@ mod tests {
 
     #[test]
     fn query_executes_ddl_variant_and_returns_unit_result() {
-        let mut db = KvDb::in_memory();
+        let mut db = EmbeddedDb::in_memory();
 
         let result = db
-            .query(Query::Ddl(semantic_db_core::DdlQuery {
+            .query(Query::Ddl(crate::DdlQuery {
                 batch: DdlBatch::new().with_op(DdlOperation::UpsertAttribute {
                     attribute: AttributeType {
                         id: "shared:test:age".to_string(),
@@ -4173,7 +4087,7 @@ mod tests {
 
     #[test]
     fn nested_ref_path_lookup_matches_child_row() {
-        let mut db = KvDb::in_memory();
+        let mut db = EmbeddedDb::in_memory();
         db.create_collection("ref_paths", CollectionKind::Polymorphic)
             .unwrap();
 
@@ -4211,7 +4125,7 @@ mod tests {
             }]);
         let catalog = db.catalog();
         let collection = catalog.collection_by_name("ref_paths").unwrap();
-        let stored_rows = db.store.scan_collection(collection.lid).unwrap();
+        let stored_rows = db.storage.scan_collection(collection.lid).unwrap();
         let lookup = super::build_local_ref_lookup(
             catalog.as_ref(),
             collection,
@@ -4249,7 +4163,7 @@ mod tests {
 
     #[test]
     fn ref_field_rejects_missing_target() {
-        let mut db = KvDb::in_memory();
+        let mut db = EmbeddedDb::in_memory();
         register_ref_schema(&mut db, ref_ty("person"));
 
         let err = db
@@ -4264,7 +4178,7 @@ mod tests {
             )
             .expect_err("missing ref target should be rejected");
 
-        assert!(matches!(err, semantic_db_core::DbError::InvalidQuery(_)));
+        assert!(matches!(err, crate::DbError::InvalidQuery(_)));
         assert!(
             err.to_string().contains("missing target id 'person-99'"),
             "{err}"
@@ -4273,7 +4187,7 @@ mod tests {
 
     #[test]
     fn ref_field_accepts_existing_target() {
-        let mut db = KvDb::in_memory();
+        let mut db = EmbeddedDb::in_memory();
         register_ref_schema(&mut db, ref_ty("person"));
 
         db.insert(
@@ -4296,7 +4210,7 @@ mod tests {
 
     #[test]
     fn ref_field_accepts_same_batch_target() {
-        let mut db = KvDb::in_memory();
+        let mut db = EmbeddedDb::in_memory();
         register_ref_schema(&mut db, ref_ty("person"));
 
         db.execute_batch(
@@ -4321,7 +4235,7 @@ mod tests {
 
     #[test]
     fn ref_field_rejects_wrong_target_class() {
-        let mut db = KvDb::in_memory();
+        let mut db = EmbeddedDb::in_memory();
         register_ref_schema(&mut db, ref_ty("person"));
 
         db.insert(
@@ -4342,13 +4256,13 @@ mod tests {
             )
             .expect_err("wrong ref target class should be rejected");
 
-        assert!(matches!(err, semantic_db_core::DbError::InvalidQuery(_)));
+        assert!(matches!(err, crate::DbError::InvalidQuery(_)));
         assert!(err.to_string().contains("local:person"), "{err}");
     }
 
     #[test]
     fn ref_field_accepts_subclass_target() {
-        let mut db = KvDb::in_memory();
+        let mut db = EmbeddedDb::in_memory();
         register_ref_schema(&mut db, ref_ty("person"));
 
         db.insert(DEFAULT_COLLECTION, "emp-1", entity("emp-1", "employee", []))
@@ -4367,7 +4281,7 @@ mod tests {
 
     #[test]
     fn optional_ref_allows_null() {
-        let mut db = KvDb::in_memory();
+        let mut db = EmbeddedDb::in_memory();
         register_ref_schema(
             &mut db,
             ty(TypeKind::Optional(OptionalType {
@@ -4385,7 +4299,7 @@ mod tests {
 
     #[test]
     fn ref_requires_string_value() {
-        let mut db = KvDb::in_memory();
+        let mut db = EmbeddedDb::in_memory();
         register_ref_schema(&mut db, ref_ty("person"));
 
         let err = db
@@ -4396,13 +4310,13 @@ mod tests {
             )
             .expect_err("non-string ref should be rejected");
 
-        assert!(matches!(err, semantic_db_core::DbError::InvalidQuery(_)));
+        assert!(matches!(err, crate::DbError::InvalidQuery(_)));
         assert!(err.to_string().contains("must be a string id"), "{err}");
     }
 
     #[test]
     fn untyped_query_works() {
-        let mut db = KvDb::in_memory();
+        let mut db = EmbeddedDb::in_memory();
         db.create_collection("events", CollectionKind::Polymorphic)
             .unwrap();
 
@@ -4430,7 +4344,7 @@ mod tests {
 
     #[test]
     fn select_from_all_collection_alias_combines_collections() {
-        let mut db = KvDb::in_memory();
+        let mut db = EmbeddedDb::in_memory();
         db.create_collection("events", CollectionKind::Polymorphic)
             .unwrap();
         db.create_collection("articles", CollectionKind::Polymorphic)
@@ -4458,7 +4372,7 @@ mod tests {
 
     #[test]
     fn typed_class_rows_normalize_aliases_and_store_class_kind() {
-        let mut db = KvDb::in_memory();
+        let mut db = EmbeddedDb::in_memory();
 
         let title_attr = AttributeType {
             id: "core.title".to_string(),
@@ -4530,16 +4444,19 @@ mod tests {
 
         let collection = db.catalog().collection_by_name("articles").unwrap().clone();
         let stored = db
-            .store
+            .storage
             .get_entity(collection.lid, "art-1")
             .unwrap()
             .unwrap();
-        assert_eq!(stored.kind, crate::storage::StoredEntityKind::Class);
+        assert_eq!(
+            stored.kind,
+            crate::embedded::storage::StoredEntityKind::Class
+        );
     }
 
     #[test]
     fn default_expressions_apply_to_unset_fields_on_insert_and_update() {
-        let mut db = KvDb::in_memory();
+        let mut db = EmbeddedDb::in_memory();
         db.transact_ddl(
             DdlBatch::new()
                 .with_op(DdlOperation::UpsertAttribute {
@@ -4594,7 +4511,7 @@ mod tests {
         }))
         .unwrap();
 
-        let update_title = |db: &mut KvDb<_>, id: &str, title: &str| {
+        let update_title = |db: &mut EmbeddedDb<_>, id: &str, title: &str| {
             db.update_where(
                 UpdateQuery::new()
                     .with_collection(DEFAULT_COLLECTION)
@@ -4735,7 +4652,7 @@ mod tests {
 
     #[test]
     fn typed_closed_record_rows_reject_unknown_fields() {
-        let mut db = KvDb::in_memory();
+        let mut db = EmbeddedDb::in_memory();
 
         let mut fields = BTreeMap::new();
         fields.insert(
@@ -4795,7 +4712,7 @@ mod tests {
 
     #[test]
     fn indexed_equality_query_and_unique_enforcement() {
-        let mut db = KvDb::in_memory();
+        let mut db = EmbeddedDb::in_memory();
         let people = db
             .create_collection("people", CollectionKind::Polymorphic)
             .unwrap();
@@ -4832,7 +4749,7 @@ mod tests {
 
     #[test]
     fn index_entries_update_on_upsert_and_delete() {
-        let mut db = KvDb::in_memory();
+        let mut db = EmbeddedDb::in_memory();
         let events = db
             .create_collection("events", CollectionKind::Polymorphic)
             .unwrap();
@@ -4889,7 +4806,7 @@ mod tests {
 
     #[test]
     fn open_rebuilds_outdated_index_storage() {
-        let mut db = KvDb::in_memory();
+        let mut db = EmbeddedDb::in_memory();
         let events = db
             .create_collection("events", CollectionKind::Polymorphic)
             .unwrap();
@@ -4906,19 +4823,7 @@ mod tests {
             .find_equality_index(events, "kind")
             .unwrap()
             .lid;
-        let mut corrupt_index_ops = db
-            .store
-            .index_keys(kind_index)
-            .unwrap()
-            .into_iter()
-            .filter(|key| key != &crate::storage::index_format_key(kind_index))
-            .map(|key| KvWriteOp::Delete { key })
-            .collect::<Vec<_>>();
-        corrupt_index_ops.push(KvWriteOp::Put {
-            key: crate::storage::index_format_key(kind_index),
-            value: 1_u16.to_le_bytes().to_vec(),
-        });
-        db.store.write_batch(&corrupt_index_ops).unwrap();
+        db.storage.corrupt_index(kind_index);
 
         let query = SelectQuery::new()
             .with_collection("events")
@@ -4929,7 +4834,7 @@ mod tests {
         assert_eq!(db.select(query.clone()).unwrap().len(), 0);
 
         let (_catalog, engine) = db.into_parts();
-        let reopened = KvDb::open(engine).unwrap();
+        let reopened = EmbeddedDb::open(engine).unwrap();
 
         let rows = reopened.select(query).unwrap();
         assert_eq!(rows.len(), 1);
@@ -4941,7 +4846,7 @@ mod tests {
 
     #[test]
     fn creating_index_backfills_existing_rows() {
-        let mut db = KvDb::in_memory();
+        let mut db = EmbeddedDb::in_memory();
         let events = db
             .create_collection("events", CollectionKind::Polymorphic)
             .unwrap();
@@ -4970,7 +4875,7 @@ mod tests {
 
     #[test]
     fn query_order_by_sorts_rows() {
-        let mut db = KvDb::in_memory();
+        let mut db = EmbeddedDb::in_memory();
         db.create_collection("events", CollectionKind::Polymorphic)
             .unwrap();
 
@@ -5008,7 +4913,7 @@ mod tests {
 
     #[test]
     fn planner_reports_index_lookup() {
-        let mut db = KvDb::in_memory();
+        let mut db = EmbeddedDb::in_memory();
         let events = db
             .create_collection("events", CollectionKind::Polymorphic)
             .unwrap();
@@ -5033,7 +4938,7 @@ mod tests {
 
     #[test]
     fn planner_uses_auto_index_for_simple_equality_without_explicit_index() {
-        let mut db = KvDb::in_memory();
+        let mut db = EmbeddedDb::in_memory();
         db.create_collection("events", CollectionKind::Polymorphic)
             .unwrap();
         db.set_auto_index_enabled(true).unwrap();
@@ -5048,7 +4953,7 @@ mod tests {
             .unwrap();
         match plan {
             QueryPlan::IndexLookup { index_name, .. } => {
-                assert_eq!(index_name, semantic_db_core::catalog::AUTO_PATH_INDEX_NAME);
+                assert_eq!(index_name, crate::catalog::AUTO_PATH_INDEX_NAME);
             }
             _ => panic!("expected index lookup plan"),
         }
@@ -5056,7 +4961,7 @@ mod tests {
 
     #[test]
     fn auto_index_simple_equality_query_returns_matching_entities() {
-        let mut db = KvDb::in_memory();
+        let mut db = EmbeddedDb::in_memory();
         db.create_collection("events", CollectionKind::Polymorphic)
             .unwrap();
         db.set_auto_index_enabled(true).unwrap();
@@ -5093,7 +4998,7 @@ mod tests {
 
     #[test]
     fn builtin_type_field_can_be_projected_and_filtered() {
-        let mut db = KvDb::in_memory();
+        let mut db = EmbeddedDb::in_memory();
         db.create_collection("entities", CollectionKind::Polymorphic)
             .unwrap();
 
@@ -5107,7 +5012,7 @@ mod tests {
             .select(
                 SelectQuery::new()
                     .with_collection("entities")
-                    .with_projection(vec![semantic_db_core::QueryField {
+                    .with_projection(vec![crate::QueryField {
                         expr: Box::new(Expr::Operand(Operand::Field(FieldPath::from_fields([
                             "type",
                         ])))),
@@ -5137,9 +5042,9 @@ mod tests {
             Some(&Value::String("dir1".to_string()))
         );
 
-        let sql_project = semantic_db_core::sql::parse_sql_query(
+        let sql_project = crate::sql::parse_sql_query(
             "SELECT type FROM entities LIMIT 10",
-            semantic_db_core::SqlDialectKind::Generic,
+            crate::SqlDialectKind::Generic,
         )
         .unwrap()
         .query;
@@ -5152,9 +5057,9 @@ mod tests {
             Some(&Value::String("semantic:base:directory".to_string()))
         );
 
-        let sql_filter = semantic_db_core::sql::parse_sql_query(
+        let sql_filter = crate::sql::parse_sql_query(
             "SELECT * FROM entities WHERE type = 'semantic:base:directory' LIMIT 10",
-            semantic_db_core::SqlDialectKind::Generic,
+            crate::SqlDialectKind::Generic,
         )
         .unwrap()
         .query;
@@ -5171,7 +5076,7 @@ mod tests {
 
     #[test]
     fn auto_index_nested_paths_work_with_planner_and_mutations() {
-        let mut db = KvDb::in_memory();
+        let mut db = EmbeddedDb::in_memory();
         db.create_collection("events", CollectionKind::Polymorphic)
             .unwrap();
         db.set_auto_index_enabled(true).unwrap();
@@ -5203,7 +5108,7 @@ mod tests {
             .unwrap();
         match plan {
             QueryPlan::IndexLookup { index_name, .. } => {
-                assert_eq!(index_name, semantic_db_core::catalog::AUTO_PATH_INDEX_NAME);
+                assert_eq!(index_name, crate::catalog::AUTO_PATH_INDEX_NAME);
             }
             _ => panic!("expected index lookup plan"),
         }
@@ -5239,7 +5144,7 @@ mod tests {
 
     #[test]
     fn update_query_supports_returning_projection() {
-        let mut db = KvDb::in_memory();
+        let mut db = EmbeddedDb::in_memory();
         db.create_collection("items", CollectionKind::Polymorphic)
             .unwrap();
 
@@ -5279,7 +5184,7 @@ mod tests {
 
     #[test]
     fn delete_query_supports_returning_projection() {
-        let mut db = KvDb::in_memory();
+        let mut db = EmbeddedDb::in_memory();
         db.create_collection("items", CollectionKind::Polymorphic)
             .unwrap();
 
@@ -5288,7 +5193,7 @@ mod tests {
         row.insert("kind", Value::String("music".to_string()));
         db.insert("items", "i1", row).unwrap();
 
-        let delete = semantic_db_core::DeleteQuery::new()
+        let delete = crate::DeleteQuery::new()
             .with_predicate(eq_predicate(
                 FieldPath::from_fields(["kind"]),
                 Value::String("music".to_string()),
@@ -5317,7 +5222,7 @@ mod tests {
 
     #[test]
     fn delete_returning_rebuilds_from_single_limited_traversal() {
-        let mut db = KvDb::in_memory();
+        let mut db = EmbeddedDb::in_memory();
         db.create_collection("items", CollectionKind::Polymorphic)
             .unwrap();
         for id in ["i1", "i2", "i3"] {
@@ -5326,7 +5231,7 @@ mod tests {
             db.insert("items", id, row).unwrap();
         }
 
-        let query = semantic_db_core::DeleteQuery::new()
+        let query = crate::DeleteQuery::new()
             .with_collection("items")
             .with_limit(2)
             .with_returning(vec![QueryField {
@@ -5354,7 +5259,7 @@ mod tests {
 
     #[test]
     fn programmatic_mutations_reject_invalid_limits_without_writes() {
-        let mut db = KvDb::in_memory();
+        let mut db = EmbeddedDb::in_memory();
         db.create_collection("items", CollectionKind::Polymorphic)
             .unwrap();
 
@@ -5380,7 +5285,7 @@ mod tests {
             Some(Value::I64(1))
         );
 
-        let delete = semantic_db_core::DeleteQuery::new()
+        let delete = crate::DeleteQuery::new()
             .with_collection("items")
             .with_limit(invalid_limit);
         let error = db.delete_where(delete).unwrap_err();
@@ -5390,7 +5295,7 @@ mod tests {
 
     #[test]
     fn mvcc_transaction_requires_mvcc_backend() {
-        let mut db = KvDb::in_memory();
+        let mut db = EmbeddedDb::in_memory();
         db.create_collection("events", CollectionKind::Polymorphic)
             .unwrap();
 
@@ -5408,7 +5313,7 @@ mod tests {
 
     #[test]
     fn select_output_field_format_rewrites_registered_attribute_keys() {
-        let mut db = KvDb::in_memory();
+        let mut db = EmbeddedDb::in_memory();
         db.create_collection("items", CollectionKind::Schema)
             .unwrap();
         db.transact_ddl(DdlBatch::new().with_op(DdlOperation::UpsertAttribute {
@@ -5521,7 +5426,10 @@ mod tests {
         }
     }
 
-    fn register_ref_schema(db: &mut KvDb<crate::storage::MemoryKvEngine>, author_ty: Type) {
+    fn register_ref_schema(
+        db: &mut EmbeddedDb<crate::embedded::storage::MemoryEntityStorage>,
+        author_ty: Type,
+    ) {
         db.transact_ddl(
             DdlBatch::new()
                 .with_op(DdlOperation::UpsertAttribute {

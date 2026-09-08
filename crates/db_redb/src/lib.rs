@@ -1,9 +1,10 @@
 use redb::{ReadableTable, TableDefinition};
 use semantic_data::schema::DbOpenMode;
-use semantic_db_core::{DbConfig, DbError};
-use semantic_db_kv::{
-    BoxKvPrefixScan, KvCommitOutcome, KvEngine, KvTransactionCapabilities, KvWriteOp,
+use semantic_db_core::embedded::{
+    EmbeddedBackend, EmbeddedDb, StorageCommitOutcome, StorageTransactionCapabilities,
 };
+use semantic_db_core::{DbConfig, DbError};
+use semantic_db_kv::{BoxKvPrefixScan, EntityStore, KvEngine, KvWriteOp};
 use std::path::Path;
 use std::sync::Arc;
 
@@ -149,8 +150,8 @@ impl KvEngine for RedbKvEngine {
         Ok(())
     }
 
-    fn tx_capabilities(&self) -> KvTransactionCapabilities {
-        KvTransactionCapabilities {
+    fn tx_capabilities(&self) -> StorageTransactionCapabilities {
+        StorageTransactionCapabilities {
             conflict_detection: true,
             mvcc: false,
             snapshot_reads: false,
@@ -167,7 +168,7 @@ impl KvEngine for RedbKvEngine {
         &mut self,
         ops: &[KvWriteOp],
         expected_revision: Option<u64>,
-    ) -> std::result::Result<KvCommitOutcome, DbError> {
+    ) -> std::result::Result<StorageCommitOutcome, DbError> {
         let write_txn = self.db.begin_write().map_err(storage_err)?;
         let next_revision;
         {
@@ -175,7 +176,7 @@ impl KvEngine for RedbKvEngine {
             let actual = read_revision_table(&table)?;
             if let Some(expected) = expected_revision {
                 if actual != Some(expected) {
-                    return Ok(KvCommitOutcome::Conflict {
+                    return Ok(StorageCommitOutcome::Conflict {
                         expected_revision: Some(expected),
                         actual_revision: actual,
                     });
@@ -200,7 +201,7 @@ impl KvEngine for RedbKvEngine {
             next_revision = Some(revision);
         }
         write_txn.commit().map_err(storage_err)?;
-        Ok(KvCommitOutcome::Committed {
+        Ok(StorageCommitOutcome::Committed {
             revision: next_revision,
         })
     }
@@ -239,8 +240,8 @@ fn read_revision_table(
     Ok(Some(u64::from_be_bytes(buf)))
 }
 
-pub type RedbDatabase = semantic_db_kv::KvDb<RedbKvEngine>;
-pub type RedbBackend = semantic_db_kv::KvBackend<RedbKvEngine>;
+pub type RedbDatabase = EmbeddedDb<EntityStore<RedbKvEngine>>;
+pub type RedbBackend = EmbeddedBackend<EntityStore<RedbKvEngine>>;
 
 pub fn open_backend(
     path: impl AsRef<Path>,
@@ -255,7 +256,7 @@ pub fn open_backend_with_config(
     config: DbConfig,
 ) -> std::result::Result<RedbBackend, DbError> {
     let engine = RedbKvEngine::open(path, mode)?;
-    let db = RedbDatabase::open_with_config(engine, config)?;
+    let db = RedbDatabase::open_with_config(EntityStore::new(engine), config)?;
     Ok(RedbBackend::new(db))
 }
 
@@ -275,7 +276,7 @@ mod tests {
 
         {
             let engine = RedbKvEngine::open(&path, DbOpenMode::AutoCreate).unwrap();
-            let mut db = RedbDatabase::new(engine);
+            let mut db = RedbDatabase::new(semantic_db_kv::EntityStore::new(engine));
             db.create_collection("items", CollectionKind::Polymorphic)
                 .unwrap();
 
@@ -287,7 +288,7 @@ mod tests {
 
         {
             let engine = RedbKvEngine::open(path, DbOpenMode::OpenExisting).unwrap();
-            let mut db = RedbDatabase::new(engine);
+            let mut db = RedbDatabase::new(semantic_db_kv::EntityStore::new(engine));
             db.create_collection("items", CollectionKind::Polymorphic)
                 .unwrap();
             let out = db
@@ -305,7 +306,7 @@ mod tests {
 
         {
             let engine = RedbKvEngine::open(&path, DbOpenMode::AutoCreate).unwrap();
-            let mut db = RedbDatabase::new(engine);
+            let mut db = RedbDatabase::new(semantic_db_kv::EntityStore::new(engine));
             db.create_collection("items", CollectionKind::Polymorphic)
                 .unwrap();
 
@@ -324,7 +325,7 @@ mod tests {
 
         {
             let engine = RedbKvEngine::open(&path, DbOpenMode::OpenExisting).unwrap();
-            let db = RedbDatabase::new(engine);
+            let db = RedbDatabase::new(semantic_db_kv::EntityStore::new(engine));
 
             let by_id = db
                 .select(

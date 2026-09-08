@@ -68,8 +68,32 @@ pub(crate) fn open_db(db_uri: &str) -> std::result::Result<Db, CliError> {
             let backend = semantic_db_redb::open_backend(rest, DbOpenMode::AutoCreate)?;
             Ok(Db::new(backend))
         }
+        "logfs" => {
+            if rest.is_empty() {
+                return Err(CliError::Message(format!(
+                    "invalid logfs uri '{db_uri}': missing database path"
+                )));
+            }
+            let backend = semantic_db_log::open_backend(rest, DbOpenMode::AutoCreate)?;
+            Ok(Db::new(backend))
+        }
         _ => Err(CliError::Message(format!(
             "unsupported db uri scheme '{scheme}'"
         ))),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn opens_logfs_uri() {
+        let dir = tempfile::tempdir().unwrap();
+        let uri = format!("logfs://{}", dir.path().join("database.log").display());
+        super::open_db(&uri).unwrap();
+    }
+
+    #[test]
+    fn rejects_empty_logfs_path() {
+        assert!(super::open_db("logfs://").is_err());
     }
 }

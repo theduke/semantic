@@ -1,5 +1,5 @@
 [package]
-name = "semantic_db_kv"
+name = "semantic_db_log"
 authors.workspace = true
 keywords.workspace = true
 repository.workspace = true
@@ -11,18 +11,20 @@ rust-version.workspace = true
 categories.workspace = true
 version.workspace = true
 
-[features]
-default = ["tokio"]
-tokio = ["semantic_db_core/tokio"]
-
 [dependencies]
-base64 = "0.22.1"
-facet = { version = "0.43.2", features = ["time", "uuid", "bytes"] }
+bytes = { workspace = true }
+logfs = { path = "../../../logfs/logfs" }
+objstore = "0.1.0-alpha.3"
 rmp-serde = "1.3.0"
 serde = { workspace = true, features = ["derive"] }
 semantic_data = { workspace = true }
-semantic_db_core = { path = "../db_core" }
+semantic_db_core = { path = "../db_core", features = ["tokio"] }
+semantic_db_kv = { path = "../db_kv" }
+sha2 = { workspace = true }
+tokio = { workspace = true, features = ["rt-multi-thread"] }
 
 [dev-dependencies]
+objstore_fs = "0.1.0-alpha.3"
 semantic_db_test = { path = "../db_test" }
-tokio = { version = "1.48.0", features = ["rt-multi-thread", "macros"] }
+tempfile = "3.23.0"
+tokio = { workspace = true, features = ["rt-multi-thread", "macros"] }

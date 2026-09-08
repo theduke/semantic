@@ -328,7 +328,7 @@ mod tests {
     use semantic_data::query::{Batch, BatchOperation, QueryInput};
     use semantic_data::value::{Object, Value};
     use semantic_db_core::{Db, QueryResult};
-    use semantic_db_kv::{KvBackend, KvDb};
+    use semantic_db_kv::{MemoryBackend, open_memory};
 
     use super::*;
 
@@ -357,7 +357,7 @@ mod tests {
 
     #[tokio::test]
     async fn root_query_finds_directory_entities() {
-        let db = Db::new(KvBackend::new(KvDb::in_memory()));
+        let db = Db::new(MemoryBackend::new(open_memory().unwrap()));
         db.upsert_package(semantic_base::package())
             .await
             .expect("base package should register");
@@ -387,7 +387,7 @@ mod tests {
 
     #[tokio::test]
     async fn directory_nodes_query_returns_child_ids() {
-        let db = Db::new(KvBackend::new(KvDb::in_memory()));
+        let db = Db::new(MemoryBackend::new(open_memory().unwrap()));
         db.upsert_package(semantic_base::package())
             .await
             .expect("base package should register");
@@ -413,7 +413,7 @@ mod tests {
 
     #[tokio::test]
     async fn root_query_includes_directory_with_parent_node_for_rust_filtering() {
-        let db = Db::new(KvBackend::new(KvDb::in_memory()));
+        let db = Db::new(MemoryBackend::new(open_memory().unwrap()));
         db.upsert_package(semantic_base::package())
             .await
             .expect("base package should register");
@@ -435,7 +435,7 @@ mod tests {
 
     #[tokio::test]
     async fn root_query_ignores_non_directory_entities() {
-        let db = Db::new(KvBackend::new(KvDb::in_memory()));
+        let db = Db::new(MemoryBackend::new(open_memory().unwrap()));
         db.upsert_package(semantic_base::package())
             .await
             .expect("base package should register");
@@ -456,7 +456,7 @@ mod tests {
 
     #[tokio::test]
     async fn child_query_finds_items_for_parent_directory() {
-        let db = Db::new(KvBackend::new(KvDb::in_memory()));
+        let db = Db::new(MemoryBackend::new(open_memory().unwrap()));
         db.upsert_package(semantic_base::package())
             .await
             .expect("base package should register");
@@ -487,7 +487,7 @@ mod tests {
 
     #[tokio::test]
     async fn child_directories_query_filters_to_directory_children() {
-        let db = Db::new(KvBackend::new(KvDb::in_memory()));
+        let db = Db::new(MemoryBackend::new(open_memory().unwrap()));
         db.upsert_package(semantic_base::package())
             .await
             .expect("base package should register");
@@ -511,7 +511,7 @@ mod tests {
 
     #[tokio::test]
     async fn parent_query_finds_parent_directory_id() {
-        let db = Db::new(KvBackend::new(KvDb::in_memory()));
+        let db = Db::new(MemoryBackend::new(open_memory().unwrap()));
         db.upsert_package(semantic_base::package())
             .await
             .expect("base package should register");
@@ -536,7 +536,7 @@ mod tests {
 
     #[tokio::test]
     async fn parent_query_returns_lowest_order_parent_node() {
-        let db = Db::new(KvBackend::new(KvDb::in_memory()));
+        let db = Db::new(MemoryBackend::new(open_memory().unwrap()));
         db.upsert_package(semantic_base::package())
             .await
             .expect("base package should register");
@@ -611,7 +611,7 @@ mod tests {
 
     #[tokio::test]
     async fn child_links_query_returns_matching_parent_child_links() {
-        let db = Db::new(KvBackend::new(KvDb::in_memory()));
+        let db = Db::new(MemoryBackend::new(open_memory().unwrap()));
         db.upsert_package(semantic_base::package())
             .await
             .expect("base package should register");
@@ -645,7 +645,7 @@ mod tests {
 
     #[tokio::test]
     async fn addable_entities_query_filters_existing_children() {
-        let db = Db::new(KvBackend::new(KvDb::in_memory()));
+        let db = Db::new(MemoryBackend::new(open_memory().unwrap()));
         db.upsert_package(semantic_base::package())
             .await
             .expect("base package should register");
@@ -669,7 +669,7 @@ mod tests {
 
     #[tokio::test]
     async fn addable_entities_query_searches_id_and_attr_title() {
-        let db = Db::new(KvBackend::new(KvDb::in_memory()));
+        let db = Db::new(MemoryBackend::new(open_memory().unwrap()));
         db.upsert_package(semantic_base::package())
             .await
             .expect("base package should register");
@@ -731,7 +731,7 @@ mod tests {
 
     #[tokio::test]
     async fn semantic_parent_queries_discover_and_page_direct_relationships() {
-        let db = Db::new(KvBackend::new(KvDb::in_memory()));
+        let db = Db::new(MemoryBackend::new(open_memory().unwrap()));
         db.upsert_package(semantic_base::package())
             .await
             .expect("base package should register");
@@ -806,7 +806,7 @@ mod tests {
 
     #[tokio::test]
     async fn navigable_semantic_children_are_filtered_before_limit() {
-        let db = Db::new(KvBackend::new(KvDb::in_memory()));
+        let db = Db::new(MemoryBackend::new(open_memory().unwrap()));
         db.upsert_package(semantic_base::package())
             .await
             .expect("base package should register");
@@ -859,7 +859,7 @@ mod tests {
 
     #[tokio::test]
     async fn semantic_parent_queries_handle_cycles_and_escaped_ids() {
-        let db = Db::new(KvBackend::new(KvDb::in_memory()));
+        let db = Db::new(MemoryBackend::new(open_memory().unwrap()));
         db.upsert_package(semantic_base::package())
             .await
             .expect("base package should register");

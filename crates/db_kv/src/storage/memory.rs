@@ -1,8 +1,9 @@
 use std::collections::BTreeMap;
 
 use semantic_db_core::DbError;
+use semantic_db_core::embedded::{StorageCommitOutcome, StorageTransactionCapabilities};
 
-use super::{BoxKvPrefixScan, KvCommitOutcome, KvEngine, KvTransactionCapabilities, KvWriteOp};
+use super::{BoxKvPrefixScan, KvEngine, KvWriteOp};
 
 #[derive(Debug, Clone, Default)]
 pub struct MemoryKvEngine {
@@ -96,8 +97,8 @@ impl KvEngine for MemoryKvEngine {
         Ok(())
     }
 
-    fn tx_capabilities(&self) -> KvTransactionCapabilities {
-        KvTransactionCapabilities {
+    fn tx_capabilities(&self) -> StorageTransactionCapabilities {
+        StorageTransactionCapabilities {
             conflict_detection: true,
             mvcc: self.mvcc_snapshots.is_some(),
             snapshot_reads: self.mvcc_snapshots.is_some(),
@@ -140,18 +141,18 @@ impl KvEngine for MemoryKvEngine {
         &mut self,
         ops: &[KvWriteOp],
         expected_revision: Option<u64>,
-    ) -> std::result::Result<KvCommitOutcome, DbError> {
+    ) -> std::result::Result<StorageCommitOutcome, DbError> {
         let actual = Some(self.revision);
         if let Some(expected) = expected_revision
             && actual != Some(expected)
         {
-            return Ok(KvCommitOutcome::Conflict {
+            return Ok(StorageCommitOutcome::Conflict {
                 expected_revision: Some(expected),
                 actual_revision: actual,
             });
         }
         self.write_batch(ops)?;
-        Ok(KvCommitOutcome::Committed {
+        Ok(StorageCommitOutcome::Committed {
             revision: Some(self.revision),
         })
     }
@@ -159,7 +160,7 @@ impl KvEngine for MemoryKvEngine {
 
 #[cfg(test)]
 mod tests {
-    use super::{KvCommitOutcome, KvEngine, KvWriteOp, MemoryKvEngine};
+    use super::{KvEngine, KvWriteOp, MemoryKvEngine, StorageCommitOutcome};
 
     #[test]
     fn conditional_write_reports_conflict() {
@@ -182,7 +183,7 @@ mod tests {
             .unwrap();
         assert_eq!(
             out,
-            KvCommitOutcome::Conflict {
+            StorageCommitOutcome::Conflict {
                 expected_revision: Some(0),
                 actual_revision: Some(1),
             }
@@ -210,18 +211,5 @@ mod tests {
         let past = engine.scan_prefix_at_revision(b"pref/", rev1).unwrap();
         assert_eq!(past.len(), 1);
         assert_eq!(past[0].1, b"one".to_vec());
-    }
-
-    #[tokio::test(flavor = "multi_thread")]
-    async fn memory_backend_testsuite() {
-        use crate::{KvBackend, KvDb};
-        use semantic_db_core::Db;
-
-        let engine = MemoryKvEngine::new();
-        let db = KvDb::open(engine).unwrap();
-        let backend = KvBackend::new(db);
-        let db = Db::new(backend);
-
-        semantic_db_test::suite::test_db(&db).await;
     }
 }

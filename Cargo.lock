@@ -157,6 +157,21 @@ dependencies = [
 ]
 
 [[package]]
+name = "alloc-no-stdlib"
+version = "2.0.4"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "cc7bb162ec39d46ab1ca8c77bf72e890535becd1751bb45f64c597edb4c8c6b3"
+
+[[package]]
+name = "alloc-stdlib"
+version = "0.2.4"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "0e76a019e91224d279006ff972f1e984179a6e9feb050adba6ce8274aef23195"
+dependencies = [
+ "alloc-no-stdlib",
+]
+
+[[package]]
 name = "allocator-api2"
 version = "0.2.21"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -836,6 +851,15 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "72b3254f16251a8381aa12e40e3c4d2f0199f8c6508fbecb9d91f575e0fbb8c6"
 
 [[package]]
+name = "bincode"
+version = "1.3.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "b1f45e9417d87227c7a56d22e471c6206462cba514c7590c09aff4cf6d1ddcad"
+dependencies = [
+ "serde",
+]
+
+[[package]]
 name = "bit-set"
 version = "0.5.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1065,6 +1089,27 @@ dependencies = [
  "futures-io",
  "futures-lite",
  "piper",
+]
+
+[[package]]
+name = "brotli"
+version = "8.0.4"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "5cc91aac060a7a1e25823bdccbfb6af1875b88f17c6daac97894eed8207166b3"
+dependencies = [
+ "alloc-no-stdlib",
+ "alloc-stdlib",
+ "brotli-decompressor",
+]
+
+[[package]]
+name = "brotli-decompressor"
+version = "5.0.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "3a32acac15fe1967bc3986b2a6347dffc965602354ea6f450ad07e8bfd253583"
+dependencies = [
+ "alloc-no-stdlib",
+ "alloc-stdlib",
 ]
 
 [[package]]
@@ -3727,6 +3772,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "fs2"
+version = "0.4.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "9564fc758e15025b46aa6643b1b77d047d1a56a1aea6e01002ac0c7026876213"
+dependencies = [
+ "libc",
+ "winapi",
+]
+
+[[package]]
 name = "fsevent-sys"
 version = "4.1.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -5567,6 +5622,23 @@ name = "log"
 version = "0.4.29"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "5e5032e24019045c762d3c0f28f5b6b8bbf38563a65908389bf7978758920897"
+
+[[package]]
+name = "logfs"
+version = "0.1.1"
+dependencies = [
+ "backtrace",
+ "bincode",
+ "bitflags 2.11.0",
+ "brotli",
+ "fs2",
+ "generic-array",
+ "ring",
+ "serde",
+ "sha2 0.10.9",
+ "tracing",
+ "zeroize",
+]
 
 [[package]]
 name = "longest-increasing-subsequence"
@@ -8409,10 +8481,12 @@ dependencies = [
  "rustyline",
  "semantic_data",
  "semantic_db_core",
+ "semantic_db_log",
  "semantic_db_redb",
  "serde",
  "serde_json",
  "serde_yaml",
+ "tempfile",
  "thiserror 2.0.18",
  "tokio",
  "tracing",
@@ -8424,6 +8498,7 @@ version = "0.0.1"
 dependencies = [
  "async-trait",
  "facet",
+ "facet-json",
  "fnv",
  "futures",
  "prqlc",
@@ -8432,24 +8507,40 @@ dependencies = [
  "sqlparser 0.61.0",
  "thiserror 2.0.18",
  "tokio",
+ "tracing",
 ]
 
 [[package]]
 name = "semantic_db_kv"
 version = "0.0.1"
 dependencies = [
- "async-trait",
  "base64",
  "facet",
- "facet-json",
- "futures",
  "rmp-serde",
  "semantic_data",
  "semantic_db_core",
  "semantic_db_test",
  "serde",
  "tokio",
- "tracing",
+]
+
+[[package]]
+name = "semantic_db_log"
+version = "0.0.1"
+dependencies = [
+ "bytes",
+ "logfs",
+ "objstore",
+ "objstore_fs",
+ "rmp-serde",
+ "semantic_data",
+ "semantic_db_core",
+ "semantic_db_kv",
+ "semantic_db_test",
+ "serde",
+ "sha2 0.10.9",
+ "tempfile",
+ "tokio",
 ]
 
 [[package]]
@@ -8575,6 +8666,7 @@ dependencies = [
  "semantic_app",
  "semantic_data",
  "semantic_db_core",
+ "semantic_db_log",
  "semantic_db_redb",
  "semantic_media",
  "semantic_rpc",
