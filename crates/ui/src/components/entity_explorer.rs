@@ -4,6 +4,7 @@ use dioxus::prelude::*;
 use semantic_data::value::{Object, Value};
 use semantic_ui_core::{
     EntityCard, EntityDisplayMode, EntityDisplayRenderer, EntityRenderOptions, EntityTableRow,
+    EntityTarget,
 };
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -183,12 +184,13 @@ pub fn DataToolbar(
 /// Keyed entity cards/table rows shared by Browse and Collection.
 #[component]
 pub fn EntityResults(
-    rows: Rc<[Object]>,
+    rows: Vec<Object>,
     display_mode: EntityDisplayMode,
     renderer: EntityDisplayRenderer,
     collection: Option<String>,
     grid_columns: usize,
     density: ResultDensity,
+    #[props(default)] on_delete: Option<EventHandler<EntityTarget>>,
 ) -> Element {
     let grid_columns = grid_columns.clamp(1, 3);
     let density_class = density.class();
@@ -207,7 +209,8 @@ pub fn EntityResults(
                             renderer,
                             preview: true,
                             actions: true,
-                        }
+                        },
+                        on_delete,
                     }
                 }
             }

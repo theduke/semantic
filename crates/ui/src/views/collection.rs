@@ -244,7 +244,7 @@ pub fn CollectionPage(collection: String) -> Element {
                         }
                     }
                     EntityResults {
-                        rows: result.rows.clone(),
+                        rows: result.rows.to_vec(),
                         display_mode: current_display_mode,
                         renderer: current_renderer,
                         collection: Some(collection.clone()),

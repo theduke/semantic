@@ -41,7 +41,8 @@ struct BrowseQueryKey {
 #[derive(Clone)]
 struct BrowseQueryResponse {
     key: BrowseQueryKey,
-    result: std::result::Result<Rc<[Object]>, String>,
+    result: std::result::Result<Vec<Object>, String>,
+    has_more: bool,
 }
 
 #[component]
@@ -148,6 +149,7 @@ pub fn BrowsePage(
         },
         |key| key,
     ));
+    let mut results = use_signal(|| None::<BrowseQueryResponse>);
     let mut resource = use_resource({
         let client = client.clone();
         move || {
@@ -155,38 +157,41 @@ pub fn BrowsePage(
             let key = query_key();
             async move {
                 let result = match &key.query {
-                    Ok(query) => run_query(client, key.scope_id.clone(), query.clone())
-                        .await
-                        .map(|rows| rows.into()),
+                    Ok(query) => run_query(client, key.scope_id.clone(), query.clone()).await,
                     Err(error) => Err(error.clone()),
                 };
-                BrowseQueryResponse { key, result }
+                let has_more = result
+                    .as_ref()
+                    .is_ok_and(|rows| rows.len() == key.page_size);
+                results.set(Some(BrowseQueryResponse {
+                    key,
+                    result,
+                    has_more,
+                }));
             }
         }
     });
 
     let current_key = query_key();
     let loading = *resource.state().read() == UseResourceState::Pending;
-    let response = resource.read().clone();
+    let response = results.read();
     let current_response = response
         .as_ref()
-        .filter(|response| response.key == current_key)
-        .cloned();
+        .filter(|response| response.key == current_key);
     let retained_rows = loading
         .then(|| {
             response
                 .as_ref()
                 .and_then(|response| response.result.as_ref().ok())
-                .cloned()
         })
         .flatten();
     let current_rows = current_response
         .as_ref()
-        .and_then(|response| response.result.as_ref().ok().map(|rows| rows.clone()));
+        .and_then(|response| response.result.as_ref().ok());
     let rows = if loading {
-        retained_rows.clone()
+        retained_rows
     } else {
-        current_rows.clone().or(retained_rows.clone())
+        current_rows.or(retained_rows)
     };
     let error = (!loading)
         .then(|| current_response.as_ref())
@@ -196,10 +201,11 @@ pub fn BrowsePage(
         && current_response
             .as_ref()
             .and_then(|response| response.result.as_ref().ok())
-            .is_some_and(|rows| rows.is_empty());
-    let has_more = current_rows
+            .is_some()
+        && rows.as_ref().is_some_and(|rows| rows.is_empty());
+    let has_more = current_response
         .as_ref()
-        .is_some_and(|rows| rows.len() == page_size);
+        .is_some_and(|response| response.has_more);
     let non_portable_sql = sql
         .as_deref()
         .is_some_and(|reference| !reference.starts_with(INLINE_SQL_PREFIX));
@@ -469,6 +475,17 @@ pub fn BrowsePage(
                         collection: Some(collection_name.clone()),
                         grid_columns: *grid_columns.read(),
                         density: *density.read(),
+                        on_delete: {
+                            let displayed_key = response.as_ref().map(|response| response.key.clone());
+                            move |target: semantic_ui_core::EntityTarget| {
+                                if let Some(response) = results.write().as_mut()
+                                    && Some(&response.key) == displayed_key.as_ref()
+                                    && let Ok(rows) = &mut response.result
+                                {
+                                    rows.retain(|object| object.get("id").and_then(Value::as_str) != Some(target.id.as_str()));
+                                }
+                            }
+                        },
                     }
                     if !custom_sql {
                         Pagination {
