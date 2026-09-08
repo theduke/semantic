@@ -25,6 +25,10 @@ use crate::components::{
     ConfirmAction, ConfirmActionRequest, ConfirmActionVariant, DropZone, JobProgress, PageHeader,
 };
 
+#[cfg(all(feature = "web", target_arch = "wasm32"))]
+#[path = "upload_clipboard.rs"]
+mod clipboard;
+
 type QueueItemId = u64;
 type UploadEntry = (QueueItemId, Signal<UploadQueueItem>);
 type WorkReceiver = Rc<Mutex<UnboundedReceiver<UploadWork>>>;
@@ -120,7 +124,7 @@ pub fn UploadPage() -> Element {
     rsx! {
         section { class: "semantic-upload",
             PageHeader { title: "Upload" }
-            UploadWorkspace {}
+            UploadWorkspace { paste_images: true }
         }
     }
 }
@@ -129,6 +133,7 @@ pub fn UploadPage() -> Element {
 pub fn UploadWorkspace(
     #[props(default)] destination: Option<DirectoryActionTarget>,
     #[props(default)] compact: bool,
+    #[props(default)] paste_images: bool,
     #[props(default)] on_directory_changed: Option<EventHandler<()>>,
     #[props(default)] on_busy_change: Option<EventHandler<bool>>,
 ) -> Element {
@@ -138,6 +143,12 @@ pub fn UploadWorkspace(
     let summary = use_signal(UploadSummary::default);
     let mut notice = use_signal(|| None::<UploadNotice>);
     let next_id = use_signal(|| 1_u64);
+    let paste_images = paste_images && cfg!(all(feature = "web", target_arch = "wasm32"));
+    #[cfg(all(feature = "web", target_arch = "wasm32"))]
+    clipboard::use_image_paste(
+        paste_images,
+        EventHandler::new(move |files| add_files(files, queue, summary, next_id, notice)),
+    );
     let mut destination_directory = use_signal(|| None::<FileTreeSelection>);
     let mut parent_entity = use_signal(|| None::<String>);
     let mut settings_open = use_signal(|| false);
@@ -254,7 +265,7 @@ pub fn UploadWorkspace(
             DropZone {
                 id: "semantic-upload-input",
                 label: "Drop files here",
-                hint: "Any file type · Up to 100 GiB each",
+                hint: if paste_images { "Any file type · Up to 100 GiB each · Paste images with Ctrl+V / ⌘V" } else { "Any file type · Up to 100 GiB each" },
                 on_files: move |files| add_files(files, queue, summary, next_id, notice),
             }
             if queue_len > 0 {

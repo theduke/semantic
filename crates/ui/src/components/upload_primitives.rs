@@ -6,8 +6,7 @@ use dioxus::{
 /// Keyboard-accessible file picker with drag-and-drop enhancement.
 ///
 /// The native input remains keyboard operable; dropping files is an additional
-/// interaction. Clipboard files are intentionally not advertised because
-/// Dioxus 0.7 does not expose them through its clipboard event.
+/// interaction. Clipboard support, when available, is handled by the workspace.
 #[component]
 pub fn DropZone(
     id: String,

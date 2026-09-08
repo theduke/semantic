@@ -66,6 +66,11 @@ wasm-bindgen = "=0.2.121"
 wasm-bindgen-futures = "0.4.71"
 web-sys = { version = "0.3.82", features = [
   "BlobEvent",
+  "ClipboardEvent",
+  "DataTransfer",
+  "DataTransferItem",
+  "DataTransferItemList",
+  "FileReader",
   "BlobPropertyBag",
   "AudioContext",
   "AudioContextState",
@@ -73,6 +78,8 @@ web-sys = { version = "0.3.82", features = [
   "AnalyserNode",
   "MediaStreamAudioSourceNode",
   "DomException",
+  "Document",
+  "Element",
   "Event",
   "MediaDevices",
   "MediaRecorder",
