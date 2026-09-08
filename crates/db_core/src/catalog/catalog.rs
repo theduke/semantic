@@ -756,11 +756,41 @@ impl Catalog {
         unique: bool,
         kind: IndexKind,
     ) -> Result<LocalIndexId, CatalogError> {
+        let name = name.into();
         let collection_schema = self
             .collections
             .get(collection)
             .ok_or(CatalogError::UnknownCollection(collection))?;
-        let field = field.into();
+        let key = Self::index_key(&collection_schema.name, &name);
+        let lid = self
+            .indexes
+            .get_key_id(&key)
+            .unwrap_or_else(|| self.indexes.next_id());
+        let index =
+            self.build_index_schema_for_lid(lid, name, collection, field.into(), unique, kind)?;
+
+        self.indexes
+            .insert_fixed(lid, verbatim_nameset(&key), index);
+        let ids = self.collection_indexes.entry(collection).or_default();
+        if !ids.contains(&lid) {
+            ids.push(lid);
+        }
+        Ok(lid)
+    }
+
+    fn build_index_schema_for_lid(
+        &self,
+        lid: LocalIndexId,
+        name: String,
+        collection: LocalCollectionId,
+        field: String,
+        unique: bool,
+        kind: IndexKind,
+    ) -> Result<IndexSchema, CatalogError> {
+        let collection_schema = self
+            .collections
+            .get(collection)
+            .ok_or(CatalogError::UnknownCollection(collection))?;
         let canonical_field = collection_schema.canonical_field_name(&field).to_string();
         if kind == IndexKind::Equality
             && collection_schema.is_closed_field_set()
@@ -772,11 +802,7 @@ impl Catalog {
             )));
         }
 
-        let name = name.into();
-        let key = Self::index_key(&collection_schema.name, &name);
-        let existing_lid = self.indexes.get_key_id(&key);
-        let lid = existing_lid.unwrap_or(self.indexes.next_id());
-        let index = IndexSchema {
+        Ok(IndexSchema {
             lid,
             schema: semantic_data::schema::IndexSchema {
                 id: format!("{}.{}", collection_schema.name, name),
@@ -806,15 +832,7 @@ impl Catalog {
                     .field_id(&field)
                     .and_then(|field_id| collection_schema.attr_for_field_id(field_id))
             },
-        };
-
-        self.indexes
-            .insert_fixed(lid, verbatim_nameset(&key), index);
-        let ids = self.collection_indexes.entry(collection).or_default();
-        if !ids.contains(&lid) {
-            ids.push(lid);
-        }
-        Ok(lid)
+        })
     }
 
     pub fn delete_index(&mut self, collection: LocalCollectionId, name: &str) -> bool {
@@ -1226,26 +1244,23 @@ impl Catalog {
                     .ok_or(CatalogError::UnknownCollection(item.collection))?;
                 Self::index_key(&collection.name, &item.name)
             };
-            let _ = catalog.upsert_index_with_kind(
+            // Index storage is keyed by the saved ID; restoring must not allocate another one.
+            let index = catalog.build_index_schema_for_lid(
+                item.lid,
                 item.name,
                 item.collection,
                 item.field,
                 item.unique,
                 item.kind,
             )?;
-            if let Some(index) = catalog.indexes.get_key(&key) {
-                let index_value = index.clone();
-                catalog
-                    .indexes
-                    .insert_fixed(item.lid, verbatim_nameset(&key), index_value);
-                let ids = catalog
-                    .collection_indexes
-                    .entry(item.collection)
-                    .or_default();
-                if !ids.contains(&item.lid) {
-                    ids.push(item.lid);
-                }
-            }
+            catalog
+                .indexes
+                .insert_fixed(item.lid, verbatim_nameset(&key), index);
+            catalog
+                .collection_indexes
+                .entry(item.collection)
+                .or_default()
+                .push(item.lid);
         }
         for item in relationships {
             let _ = catalog.upsert_relationship(item.relationship.clone())?;
@@ -2960,6 +2975,41 @@ mod tests {
     };
 
     use super::*;
+
+    #[test]
+    fn restoring_indexes_preserves_sparse_ids_in_any_row_order() {
+        let mut catalog = Catalog::new();
+        for name in ["directories", "other"] {
+            catalog
+                .register_collection(name, CollectionKind::Polymorphic)
+                .unwrap();
+        }
+        let mut snapshot = catalog.to_storage_snapshot();
+        for index in &mut snapshot.indexes {
+            index.lid = LocalIndexId(index.lid.0 * 2 + 3);
+        }
+        snapshot.indexes.reverse();
+        let expected = snapshot.indexes.clone();
+
+        let restored = Catalog::from_storage_snapshot(snapshot).unwrap();
+
+        assert_eq!(restored.indexes().count(), expected.len());
+        for saved in &expected {
+            let index = restored.index_by_lid(saved.lid).unwrap();
+            assert_eq!(index.lid, saved.lid);
+            assert_eq!(index.collection, saved.collection);
+            assert_eq!(index.schema.name, saved.name);
+            assert_eq!(index.canonical_field, saved.field);
+            assert_eq!(
+                restored
+                    .indexes_for_collection(saved.collection)
+                    .filter(|candidate| candidate.schema.name == saved.name)
+                    .map(|candidate| candidate.lid)
+                    .collect::<Vec<_>>(),
+                vec![saved.lid]
+            );
+        }
+    }
 
     #[test]
     fn normalize_type_def_qualifies_nested_record_and_union_refs() {

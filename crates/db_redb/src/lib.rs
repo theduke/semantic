@@ -303,10 +303,11 @@ mod tests {
     fn redb_reopen_preserves_builtin_id_and_type_indexes() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("db");
+        let expected_indexes;
 
         {
             let engine = RedbKvEngine::open(&path, DbOpenMode::AutoCreate).unwrap();
-            let mut db = RedbDatabase::new(semantic_db_kv::EntityStore::new(engine));
+            let mut db = RedbDatabase::open(semantic_db_kv::EntityStore::new(engine)).unwrap();
             db.create_collection("items", CollectionKind::Polymorphic)
                 .unwrap();
 
@@ -321,11 +322,24 @@ mod tests {
             second.insert("type", Value::String("semantic:test:other".into()));
             second.insert("name", Value::String("second".into()));
             db.insert("items", "item2", second).unwrap();
+            expected_indexes = db
+                .catalog()
+                .indexes()
+                .map(|(lid, index)| (lid, index.clone()))
+                .collect::<Vec<_>>();
         }
 
         {
             let engine = RedbKvEngine::open(&path, DbOpenMode::OpenExisting).unwrap();
-            let db = RedbDatabase::new(semantic_db_kv::EntityStore::new(engine));
+            let db = RedbDatabase::open(semantic_db_kv::EntityStore::new(engine)).unwrap();
+            let catalog = db.catalog();
+            assert_eq!(catalog.indexes().count(), expected_indexes.len());
+            for (lid, expected) in &expected_indexes {
+                let index = catalog.index_by_lid(*lid).unwrap();
+                assert_eq!(index.lid, *lid);
+                assert_eq!(index.collection, expected.collection);
+                assert_eq!(index.schema.id, expected.schema.id);
+            }
 
             let by_id = db
                 .select(
