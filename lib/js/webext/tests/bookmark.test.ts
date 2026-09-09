@@ -7,6 +7,7 @@ import {
   bookmarkLookupSql,
   captureBookmark,
   captureBookmarkSerialized,
+  createWebBookmarkId,
   findBookmark,
   normalizeWebsiteUrl,
   type BookmarkClient,
@@ -57,6 +58,13 @@ test("rejects unsupported or credential-bearing website URLs", () => {
   }
 });
 
+test("creates a prefixed short UUID for new bookmarks", () => {
+  assert.equal(
+    createWebBookmarkId("123e4567-e89b-12d3-a456-426614174000"),
+    "webbookmark-123e4567e89b",
+  );
+});
+
 test("returns an existing bookmark and does not insert", async () => {
   const client = new FakeClient([{ id: "saved-1", title: "Saved" }]);
   const result = await captureBookmark(
@@ -91,6 +99,7 @@ test("creates a typed WebBookmark with optional description", async () => {
       id: "new-1",
       collection: "entities",
       object: {
+        id: "new-1",
         type: "semantic:base:web_bookmark",
         url: "https://example.test/page",
         title: "Page title",

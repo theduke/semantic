@@ -193,6 +193,47 @@ test("HTTP transport uses the tagged RPC envelope", async () => {
   assert.equal((parseJson(body) as { command: string }).command, "x");
 });
 
+test("HTTP transport calls the global fetch with the correct receiver", async () => {
+  const originalFetch = globalThis.fetch;
+  let receiver: unknown;
+  globalThis.fetch = async function (this: unknown) {
+    receiver = this;
+    return new Response('{"id":1,"result":{"ok":"void"}}');
+  } as typeof fetch;
+
+  try {
+    await new HttpTransport("https://example.test/rpc").invoke("x", {});
+    assert.equal(receiver, globalThis);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test("HTTP transport errors include the endpoint and underlying error", async () => {
+  const endpoint = "http://127.0.0.1:3000/api/v1/rpc";
+  const fetcher: typeof fetch = async () => {
+    throw new TypeError("Failed to fetch");
+  };
+
+  await assert.rejects(
+    new HttpTransport(endpoint, { fetch: fetcher }).invoke("x", {}),
+    new RegExp(
+      `HTTP RPC request to ${endpoint.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")} failed: TypeError: Failed to fetch`,
+    ),
+  );
+});
+
+test("HTTP transport status errors include the endpoint and status text", async () => {
+  const endpoint = "https://example.test/api/v1/rpc";
+  const fetcher: typeof fetch = async () =>
+    new Response(null, { status: 503, statusText: "Service Unavailable" });
+
+  await assert.rejects(
+    new HttpTransport(endpoint, { fetch: fetcher }).invoke("x", {}),
+    /HTTP RPC request to https:\/\/example\.test\/api\/v1\/rpc failed: 503 Service Unavailable/,
+  );
+});
+
 class FakeSocket implements WebSocketLike {
   readyState: number;
   sent: string[] = [];

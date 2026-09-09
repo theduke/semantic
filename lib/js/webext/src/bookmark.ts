@@ -58,6 +58,12 @@ export function fallbackTitle(url: string): string {
   return new URL(normalizeWebsiteUrl(url)).hostname;
 }
 
+export function createWebBookmarkId(
+  uuid: string = crypto.randomUUID(),
+): string {
+  return `webbookmark-${uuid.replaceAll("-", "").slice(0, 12)}`;
+}
+
 export function escapeSqlString(value: string): string {
   return value.replaceAll("'", "''");
 }
@@ -94,7 +100,7 @@ export async function captureBookmark(
   client: BookmarkClient,
   config: ExtensionConfig,
   input: BookmarkInput,
-  createId: () => string = () => crypto.randomUUID(),
+  createId: () => string = createWebBookmarkId,
 ): Promise<{ created: boolean; bookmark: BookmarkLink }> {
   const url = normalizeWebsiteUrl(input.url);
   const existing = await findBookmark(client, config, url);
@@ -104,6 +110,7 @@ export async function captureBookmark(
   const description = input.description?.trim();
   const id = createId();
   const entity: WebBookmark = {
+    id,
     type: WEB_BOOKMARK_CLASS,
     url,
     title,

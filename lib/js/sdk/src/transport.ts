@@ -27,6 +27,10 @@ const request = (command: string, payload: SemanticValue): RpcEnvelope => ({
   command,
   payload: encodeTagged(payload),
 });
+const errorDescription = (error: unknown): string => {
+  if (error instanceof Error) return `${error.name}: ${error.message}`;
+  return String(error);
+};
 function resolve(raw: unknown): SemanticValue | undefined {
   const response = raw as RpcResponse;
   if (!response || typeof response !== "object" || !("result" in response))
@@ -57,8 +61,12 @@ export class HttpTransport implements RpcTransport {
     private readonly options: HttpTransportOptions = {},
   ) {
     this.endpoint = endpoint;
-    this.fetcher = options.fetch ?? globalThis.fetch;
-    if (!this.fetcher) throw new TransportError("fetch is not available");
+    if (options.fetch) {
+      this.fetcher = options.fetch;
+    } else {
+      if (!globalThis.fetch) throw new TransportError("fetch is not available");
+      this.fetcher = globalThis.fetch.bind(globalThis);
+    }
   }
   async invoke(
     command: string,
@@ -76,18 +84,25 @@ export class HttpTransport implements RpcTransport {
     try {
       response = await this.fetcher(this.endpoint, init);
     } catch (cause) {
-      throw new TransportError("HTTP RPC request failed", undefined, { cause });
+      throw new TransportError(
+        `HTTP RPC request to ${this.endpoint} failed: ${errorDescription(cause)}`,
+        undefined,
+        { cause },
+      );
     }
     if (!response.ok)
       throw new TransportError(
-        `HTTP RPC request failed with status ${response.status}`,
+        `HTTP RPC request to ${this.endpoint} failed: ${response.status}${response.statusText ? ` ${response.statusText}` : ""}`,
         response.status,
       );
     try {
       return resolve(parseJson(await response.text()));
     } catch (cause) {
       if (cause instanceof RpcError) throw cause;
-      throw new ProtocolError("invalid HTTP RPC response", { cause });
+      throw new ProtocolError(
+        `Invalid HTTP RPC response from ${this.endpoint}: ${errorDescription(cause)}`,
+        { cause },
+      );
     }
   }
 }
