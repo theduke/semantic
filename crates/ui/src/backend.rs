@@ -9,13 +9,14 @@ use semantic_app::{
 use semantic_data::schema::DbOpenMode;
 use semantic_data::value::Value;
 use semantic_rpc::{
-    RpcClientDyn, RpcClientError, RpcRequest,
+    RpcClientDyn,
     client::resolve_response,
     file::{
         FileDownloadByteStream, FileUploadContent, FileUploadPhase, FileUploadProgressSender,
         FileUploadRequest, FileUploadResponse, emit_progress,
     },
 };
+use semantic_rpc_core::{RpcClientError, RpcRequest};
 use std::sync::Arc;
 use tracing::info;
 

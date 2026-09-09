@@ -16,6 +16,7 @@ default = ["base"]
 base = ["dep:semantic_base"]
 
 [dependencies]
+semantic_rpc_core = { path = "../rpc_core" }
 async-trait = "0.1.89"
 bytes = { workspace = true }
 dirs = "6.0.0"

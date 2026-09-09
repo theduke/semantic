@@ -14,8 +14,8 @@ use fuser::{
 };
 use futures::SinkExt as _;
 use semantic_data::value::Value;
-use semantic_rpc::RpcClientError;
 use semantic_rpc::file::FileDownloadByteStream;
+use semantic_rpc_core::RpcClientError;
 
 use crate::{
     layout::{
@@ -1502,7 +1502,8 @@ mod tests {
         filestore::{ATTR_FILE_BYTE_SIZE, ATTR_FILE_FILENAME, FILE_CLASS_ID},
         value::Object,
     };
-    use semantic_rpc::{RpcClient, RpcClientDyn, RpcClientError};
+    use semantic_rpc::{RpcClient, RpcClientDyn};
+    use semantic_rpc_core::RpcClientError;
 
     struct MockClient;
 

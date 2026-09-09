@@ -11,9 +11,9 @@ use tokio_tungstenite::tungstenite::Message;
 use tokio_tungstenite::{MaybeTlsStream, WebSocketStream, connect_async};
 
 use crate::client::{RpcClient, RpcClientDyn, request, resolve_response};
-use crate::command::RpcCommandSpec;
-use crate::error::RpcClientError;
-use crate::protocol::RpcResponse;
+use semantic_rpc_core::command::RpcCommandSpec;
+use semantic_rpc_core::error::RpcClientError;
+use semantic_rpc_core::protocol::RpcResponse;
 
 type Socket = WebSocketStream<MaybeTlsStream<TcpStream>>;
 type Pending = Arc<Mutex<BTreeMap<u64, oneshot::Sender<Result<Value, RpcClientError>>>>>;

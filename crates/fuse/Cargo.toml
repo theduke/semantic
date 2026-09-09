@@ -12,6 +12,7 @@ categories.workspace = true
 version.workspace = true
 
 [dependencies]
+semantic_rpc_core = { path = "../rpc_core" }
 bytes = { workspace = true }
 fuser = "0.18.0"
 futures = "0.3.31"

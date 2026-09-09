@@ -7,7 +7,8 @@ use axum::response::IntoResponse;
 use futures_util::{SinkExt, StreamExt};
 use http::HeaderMap;
 use semantic_app::AppRequestContext;
-use semantic_rpc::{RpcError, RpcRequest, RpcResponse};
+
+use semantic_rpc_core::{RpcError, RpcRequest, RpcResponse};
 use tokio::sync::mpsc;
 
 use crate::router::{ServerState, scope_from_parts};

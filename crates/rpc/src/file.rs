@@ -5,7 +5,7 @@ use futures::Stream;
 use futures::channel::mpsc::UnboundedSender;
 use semantic_data::value::{Object, Value};
 
-use crate::RpcClientError;
+use semantic_rpc_core::RpcClientError;
 
 pub type FileUploadByteStream =
     Pin<Box<dyn Stream<Item = std::result::Result<Bytes, RpcClientError>> + Send + 'static>>;
@@ -177,8 +177,9 @@ fn split_absolute_origin(value: &str) -> Option<(&str, &str)> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{RpcClientDyn, error::RpcClientError};
+    use crate::RpcClientDyn;
     use futures::FutureExt as _;
+    use semantic_rpc_core::RpcClientError;
 
     struct UnsupportedClient;
 

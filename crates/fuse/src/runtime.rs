@@ -12,9 +12,10 @@ use semantic_data::{
     value::{Object, Value},
 };
 use semantic_rpc::{
-    RpcClient, RpcClientError,
+    RpcClient,
     file::{FileDownloadByteStream, FileUploadContent, FileUploadRequest, FileUploadResponse},
 };
+use semantic_rpc_core::RpcClientError;
 use tokio::runtime::Handle;
 
 use crate::layout::MountConfig;

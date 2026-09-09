@@ -8,8 +8,8 @@ pub enum UiCatalogError {
     Decode(String),
 }
 
-impl From<semantic_rpc::RpcClientError> for UiCatalogError {
-    fn from(value: semantic_rpc::RpcClientError) -> Self {
+impl From<semantic_rpc_core::RpcClientError> for UiCatalogError {
+    fn from(value: semantic_rpc_core::RpcClientError) -> Self {
         Self::Rpc(value.to_string())
     }
 }

@@ -205,7 +205,8 @@ mod tests {
     use super::*;
     use std::sync::{Arc, Mutex};
 
-    use semantic_rpc::{RpcClientDyn, RpcClientError};
+    use semantic_rpc::RpcClientDyn;
+    use semantic_rpc_core::RpcClientError;
 
     struct MockClient {
         calls: Arc<Mutex<Vec<(String, Value)>>>,

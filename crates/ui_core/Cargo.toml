@@ -16,6 +16,7 @@ default = ["markdown"]
 markdown = ["dep:dxeditor", "dep:pulldown-cmark"]
 
 [dependencies]
+semantic_rpc_core = { path = "../rpc_core" }
 bytes = { workspace = true }
 dioxus = { workspace = true, features = ["router"] }
 dioxus-icons = "0.1.0"

@@ -18,8 +18,9 @@ use semantic_data::bundles::directory::{
 };
 use semantic_data::filestore::{ATTR_FILE_CONTENT_HASH_SHA256, ATTR_FILE_FILENAME, FILE_CLASS_ID};
 use semantic_data::value::{Object, Value};
+use semantic_rpc::RpcClient;
 use semantic_rpc::file::{FileUploadContent, FileUploadRequest};
-use semantic_rpc::{RpcClient, RpcClientError};
+use semantic_rpc_core::RpcClientError;
 use sha2::{Digest as _, Sha256};
 
 use crate::CliError;

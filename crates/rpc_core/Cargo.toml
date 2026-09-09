@@ -1,5 +1,5 @@
 [package]
-name = "semantic_base"
+name = "semantic_rpc_core"
 authors.workspace = true
 keywords.workspace = true
 repository.workspace = true
@@ -12,8 +12,6 @@ categories.workspace = true
 version.workspace = true
 
 [dependencies]
-semantic_rpc_core = { path = "../rpc_core" }
 semantic_data = { workspace = true }
-
-[dev-dependencies]
-semantic_db_core = { path = "../db_core" }
+serde = { workspace = true, features = ["derive"] }
+thiserror = "2.0.17"

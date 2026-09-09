@@ -4,8 +4,8 @@ use axum::extract::State;
 use axum::routing::post;
 use axum::{Json, Router};
 
-use crate::protocol::{RpcRequest, RpcResponse};
 use crate::registry::RpcRegistry;
+use semantic_rpc_core::protocol::{RpcRequest, RpcResponse};
 
 pub struct RpcState<Ctx> {
     pub registry: Arc<RpcRegistry<Ctx>>,

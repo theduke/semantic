@@ -18,6 +18,7 @@ logfs = ["dep:semantic_db_log", "dep:objstore_logfs"]
 redb = ["dep:semantic_db_redb"]
 
 [dependencies]
+semantic_rpc_core = { path = "../rpc_core" }
 async-trait = "0.1.89"
 objstore = { workspace = true }
 objstore_fs = { workspace = true }

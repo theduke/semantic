@@ -10,7 +10,8 @@ use semantic_db_core::{
     Batch, BatchOperation, BatchOutcome, BatchStats, DEFAULT_COLLECTION, DeleteResult,
     InsertResult, MutationStats, QueryResult, TextQueryFormat, TextQueryInput, UpdateResult,
 };
-use semantic_rpc::{RpcCommand, RpcCommandSpec, RpcRegistry, RpcRequest, RpcResponse};
+use semantic_rpc::RpcRegistry;
+use semantic_rpc_core::{RpcCommand, RpcCommandSpec, RpcRequest, RpcResponse, RuntimePackage};
 
 use crate::object_store::{ObjectStoreId, ObjectStoreManager, ObjectStoreOpenRequest};
 use crate::{
@@ -46,6 +47,7 @@ enum DefaultObjectStore {
 pub struct SemanticAppBuilder {
     providers: BTreeMap<String, Arc<dyn DbProvider>>,
     registry: RpcRegistry<AppRequestContext>,
+    packages: Vec<Package>,
     default_scope: Option<DefaultScope>,
     default_object_store: Option<DefaultObjectStore>,
     idle_ttl: Duration,
@@ -57,6 +59,7 @@ impl SemanticApp {
         SemanticAppBuilder {
             providers: BTreeMap::new(),
             registry: RpcRegistry::new(),
+            packages: Vec::new(),
             default_scope: None,
             default_object_store: None,
             idle_ttl: Duration::from_secs(15 * 60),
@@ -158,6 +161,22 @@ impl SemanticAppBuilder {
         Ok(self)
     }
 
+    /// Register a package's handlers and schema.
+    ///
+    /// Handlers are available application-wide. Schemas are applied lazily to the
+    /// default database, alongside the built-in packages, before its first use.
+    /// Explicitly opened scopes retain their existing schema initialization behavior.
+    pub fn register_package(
+        mut self,
+        package: impl RuntimePackage<AppRequestContext>,
+    ) -> Result<Self, AppError> {
+        for command in package.commands() {
+            self.registry.register_dyn(command)?;
+        }
+        self.packages.push(package.schema());
+        Ok(self)
+    }
+
     pub fn register_builtin_commands(mut self) -> std::result::Result<Self, AppError> {
         self.registry.register(ScopeOpenCommand)?;
         self.registry.register(ScopeUseCommand)?;
@@ -174,8 +193,15 @@ impl SemanticAppBuilder {
         Ok(self)
     }
 
-    pub fn build(self) -> std::result::Result<SemanticApp, AppError> {
-        let scopes = ScopeManager::new(self.providers, self.idle_ttl);
+    pub fn build(mut self) -> std::result::Result<SemanticApp, AppError> {
+        let packages = std::mem::take(&mut self.packages);
+        #[cfg(feature = "base")]
+        {
+            self = self.register_package(semantic_base::BasePackage)?;
+        }
+        self.packages.push(semantic_data::filestore::package());
+        self.packages.extend(packages);
+        let scopes = ScopeManager::with_packages(self.providers, self.idle_ttl, self.packages);
         let object_stores = ObjectStoreManager::new(Vec::new());
         if let Some(default_scope) = self.default_scope {
             match default_scope {

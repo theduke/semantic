@@ -11,16 +11,16 @@ use futures::future::BoxFuture;
 use futures::future::LocalBoxFuture;
 use semantic_data::value::Value;
 
-use crate::command::RpcCommandSpec;
-use crate::convert::{RpcDecode, RpcEncode};
-use crate::error::RpcClientError;
 #[cfg(feature = "client")]
 use crate::file::{
     FileDownloadByteStream, FileUploadProgressSender, FileUploadRequest, FileUploadResponse,
 };
-use crate::protocol::{RpcRequest, RpcResponse, RpcResult};
 #[cfg(feature = "client")]
 use bytes::Bytes;
+use semantic_rpc_core::command::RpcCommandSpec;
+use semantic_rpc_core::convert::{RpcDecode, RpcEncode};
+use semantic_rpc_core::error::RpcClientError;
+use semantic_rpc_core::protocol::{RpcRequest, RpcResponse, RpcResult};
 
 static NEXT_REQUEST_ID: AtomicU64 = AtomicU64::new(1);
 

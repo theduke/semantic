@@ -1,10 +1,6 @@
 pub mod client;
-pub mod command;
-pub mod convert;
-pub mod error;
 #[cfg(feature = "client")]
 pub mod file;
-pub mod protocol;
 pub mod registry;
 
 #[cfg(feature = "client")]
@@ -15,8 +11,4 @@ pub mod server;
 
 #[cfg(feature = "client")]
 pub use client::{RpcClient, RpcClientDyn};
-pub use command::{CommandAdapter, DynCommand, RpcCommand, RpcCommandSpec};
-pub use convert::{RpcDecode, RpcEncode};
-pub use error::{RegisterError, RpcClientError, RpcError};
-pub use protocol::{RpcRequest, RpcRequestId, RpcResponse, RpcResult};
 pub use registry::RpcRegistry;

@@ -6,7 +6,8 @@ use axum::routing::{get, post};
 use axum::{Json, Router};
 use http::HeaderMap;
 use semantic_app::{AppRequestContext, DbScopeId, SemanticApp};
-use semantic_rpc::{RpcRequest, RpcResponse};
+
+use semantic_rpc_core::{RpcRequest, RpcResponse};
 use tokio::net::TcpListener;
 
 use crate::{NoAuthPrincipalResolver, PrincipalResolver, ServerConfig, ServerError};

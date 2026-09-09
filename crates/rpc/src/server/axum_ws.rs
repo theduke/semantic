@@ -6,8 +6,8 @@ use axum::routing::get;
 use futures_util::{SinkExt, StreamExt};
 use tokio::sync::mpsc;
 
-use crate::error::RpcError;
-use crate::protocol::{RpcRequest, RpcResponse};
+use semantic_rpc_core::error::RpcError;
+use semantic_rpc_core::protocol::{RpcRequest, RpcResponse};
 
 pub use super::axum::RpcState;
 

@@ -39,9 +39,93 @@ mod tests {
         Batch, BatchOperation, BatchOutcome, BatchStats, DbError, EntityRecord,
         PackageRegistrationOutcome, QueryResult, TextQueryInput,
     };
-    use semantic_rpc::{RpcRequest, RpcResponse, RpcResult};
+
+    use semantic_rpc_core::{RpcRequest, RpcResponse, RpcResult};
 
     use super::*;
+
+    struct TestPackage;
+    struct PackageEcho;
+
+    impl semantic_rpc_core::RuntimePackage<AppRequestContext> for TestPackage {
+        fn schema(&self) -> semantic_data::schema::Package {
+            let mut schema = semantic_data::filestore::package();
+            schema.name = "test".to_string();
+            schema
+        }
+
+        fn commands(&self) -> Vec<Box<dyn semantic_rpc_core::DynCommand<AppRequestContext>>> {
+            vec![Box::new(semantic_rpc_core::CommandAdapter::new(
+                PackageEcho,
+            ))]
+        }
+    }
+
+    impl semantic_rpc_core::RpcCommandSpec for PackageEcho {
+        type Payload = Value;
+        type Output = Value;
+        type Error = AppError;
+        const NAME: &'static str = "test.package.echo";
+
+        fn signature(&self) -> semantic_data::schema::FunctionType {
+            semantic_data::schema::FunctionType {
+                params: Vec::new(),
+                results: Vec::new(),
+                throws: None,
+                async_fn: true,
+            }
+        }
+    }
+
+    impl semantic_rpc_core::RpcCommand<AppRequestContext> for PackageEcho {
+        fn call<'a>(
+            &'a self,
+            ctx: &'a AppRequestContext,
+            payload: Value,
+        ) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<Value, AppError>> + Send + 'a>>
+        {
+            Box::pin(async move {
+                ctx.resolve_db(None).await?;
+                Ok(payload)
+            })
+        }
+    }
+
+    #[tokio::test]
+    async fn runtime_package_registers_handlers_and_initializes_schema_once() {
+        let db = Arc::new(MockDb::new("default"));
+        let app = SemanticApp::builder()
+            .with_default_scope(DbScopeId::new("default"), db.clone())
+            .register_package(TestPackage)
+            .unwrap()
+            .build()
+            .unwrap();
+
+        #[cfg(feature = "base")]
+        assert_eq!(db.package_count.load(Ordering::Relaxed), 0);
+        for _ in 0..2 {
+            let response = app
+                .invoke(
+                    ctx(&app, Principal::system()),
+                    request("test.package.echo", Value::U8(42)),
+                )
+                .await;
+            assert_eq!(response.result, RpcResult::Ok(Value::U8(42)));
+        }
+        #[cfg(feature = "base")]
+        assert_eq!(db.package_count.load(Ordering::Relaxed), 3);
+    }
+
+    #[test]
+    fn runtime_package_rejects_duplicate_handlers() {
+        let result = SemanticApp::builder()
+            .register_command(PackageEcho)
+            .unwrap()
+            .register_package(TestPackage);
+        assert!(matches!(result, Err(AppError::RpcRegister(
+            semantic_rpc_core::RegisterError::DuplicateCommand(name)
+        )) if name == "test.package.echo"));
+    }
 
     struct MockDb {
         name: String,

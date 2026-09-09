@@ -1,8 +1,8 @@
 use std::collections::BTreeMap;
 
-use crate::command::{CommandAdapter, DynCommand, RpcCommand};
-use crate::error::{RegisterError, RpcError};
-use crate::protocol::{RpcRequest, RpcResponse};
+use semantic_rpc_core::command::{CommandAdapter, DynCommand, RpcCommand};
+use semantic_rpc_core::error::{RegisterError, RpcError};
+use semantic_rpc_core::protocol::{RpcRequest, RpcResponse};
 
 pub struct RpcRegistry<Ctx> {
     commands: BTreeMap<String, Box<dyn DynCommand<Ctx>>>,
@@ -20,13 +20,17 @@ impl<Ctx> RpcRegistry<Ctx> {
         C: RpcCommand<Ctx>,
         Ctx: Sync,
     {
-        let name = C::NAME.to_owned();
+        self.register_dyn(Box::new(CommandAdapter::new(command)))
+    }
+
+    /// Register an erased handler, rejecting duplicate command names.
+    pub fn register_dyn(&mut self, command: Box<dyn DynCommand<Ctx>>) -> Result<(), RegisterError> {
+        let name = command.name().to_owned();
         if self.commands.contains_key(&name) {
             return Err(RegisterError::DuplicateCommand(name));
         }
 
-        self.commands
-            .insert(name, Box::new(CommandAdapter::new(command)));
+        self.commands.insert(name, command);
 
         Ok(())
     }
@@ -61,7 +65,7 @@ mod tests {
     use semantic_data::schema::FunctionType;
     use semantic_data::value::Value;
 
-    use crate::{RpcCommand, RpcCommandSpec, RpcResult};
+    use semantic_rpc_core::{RpcCommand, RpcCommandSpec, RpcResult};
 
     use super::RpcRegistry;
 
@@ -70,7 +74,7 @@ mod tests {
     impl RpcCommandSpec for EchoCommand {
         type Payload = Value;
         type Output = Value;
-        type Error = crate::RpcError;
+        type Error = semantic_rpc_core::RpcError;
 
         const NAME: &'static str = "test.echo";
 
@@ -102,7 +106,7 @@ mod tests {
         let response = registry
             .invoke(
                 &(),
-                crate::RpcRequest {
+                semantic_rpc_core::RpcRequest {
                     id: 7,
                     command: "test.echo".to_string(),
                     payload: Value::U8(42),
@@ -121,7 +125,7 @@ mod tests {
         let response = registry
             .invoke(
                 &(),
-                crate::RpcRequest {
+                semantic_rpc_core::RpcRequest {
                     id: 9,
                     command: "missing".to_string(),
                     payload: Value::Void,

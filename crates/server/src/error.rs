@@ -14,13 +14,13 @@ impl From<semantic_db_core::DbError> for ServerError {
     }
 }
 
-impl From<ServerError> for semantic_rpc::RpcError {
+impl From<ServerError> for semantic_rpc_core::RpcError {
     fn from(value: ServerError) -> Self {
         match value {
             ServerError::App(err) => err.into(),
-            ServerError::Io(err) => semantic_rpc::RpcError::internal(err.to_string()),
+            ServerError::Io(err) => semantic_rpc_core::RpcError::internal(err.to_string()),
             ServerError::InvalidHeader(message) => {
-                semantic_rpc::RpcError::new("invalid_request", message)
+                semantic_rpc_core::RpcError::new("invalid_request", message)
             }
         }
     }

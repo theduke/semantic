@@ -83,11 +83,21 @@ pub struct ScopeManager {
     providers: BTreeMap<String, Arc<dyn DbProvider>>,
     idle_ttl: Duration,
     state: RwLock<ScopeState>,
+    packages: Vec<semantic_data::schema::Package>,
 }
 
 impl ScopeManager {
     pub fn new(providers: BTreeMap<String, Arc<dyn DbProvider>>, idle_ttl: Duration) -> Self {
+        Self::with_packages(providers, idle_ttl, default_packages())
+    }
+
+    pub(crate) fn with_packages(
+        providers: BTreeMap<String, Arc<dyn DbProvider>>,
+        idle_ttl: Duration,
+        packages: Vec<semantic_data::schema::Package>,
+    ) -> Self {
         Self {
+            packages,
             providers,
             idle_ttl,
             state: RwLock::new(ScopeState::default()),
@@ -242,7 +252,7 @@ impl ScopeManager {
 
         if let Some((db, schema_initialized)) = existing {
             if !schema_initialized {
-                initialize_default_db(&db).await?;
+                initialize_default_db(&db, &self.packages).await?;
                 let mut state = self.write_state()?;
                 let entry = state
                     .entries
@@ -257,7 +267,7 @@ impl ScopeManager {
         let provider = self.provider_for_uri(&request.uri)?;
         let db = provider.open(request, principal).await?;
         if !schema_initialized {
-            initialize_default_db(&db).await?;
+            initialize_default_db(&db, &self.packages).await?;
         }
         let mut state = self.write_state()?;
         let entry = state
@@ -383,12 +393,22 @@ fn owner_for(principal: &Principal, visibility: &ScopeVisibility) -> PrincipalId
     }
 }
 
-async fn initialize_default_db(db: &Arc<dyn SemanticDb>) -> std::result::Result<(), AppError> {
-    #[cfg(feature = "base")]
-    db.upsert_package(semantic_base::package()).await?;
+pub(crate) fn default_packages() -> Vec<semantic_data::schema::Package> {
+    vec![
+        #[cfg(feature = "base")]
+        <semantic_base::BasePackage as semantic_rpc_core::RuntimePackage<
+            crate::AppRequestContext,
+        >>::schema(&semantic_base::BasePackage),
+        semantic_data::filestore::package(),
+    ]
+}
 
-    db.upsert_package(semantic_data::filestore::package())
-        .await?;
-
+async fn initialize_default_db(
+    db: &Arc<dyn SemanticDb>,
+    packages: &[semantic_data::schema::Package],
+) -> Result<(), AppError> {
+    for package in packages {
+        db.upsert_package(package.clone()).await?;
+    }
     Ok(())
 }

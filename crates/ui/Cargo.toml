@@ -31,6 +31,7 @@ standalone = [
 ]
 
 [dependencies]
+semantic_rpc_core = { path = "../rpc_core" }
 async-trait = { version = "0.1.89", optional = true }
 base64 = "0.22.1"
 bytes = { workspace = true }

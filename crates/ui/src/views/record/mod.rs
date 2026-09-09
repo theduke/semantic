@@ -1076,7 +1076,8 @@ mod tests {
     #[test]
     fn failed_upload_retains_audio_and_successful_retry_clears_it() {
         use semantic_rpc::file::{FileUploadProgressSender, FileUploadResponse};
-        use semantic_rpc::{RpcClient, RpcClientDyn, RpcClientError, client::RpcClientFuture};
+        use semantic_rpc::{RpcClient, RpcClientDyn, client::RpcClientFuture};
+        use semantic_rpc_core::RpcClientError;
         use std::sync::{Arc, Mutex};
 
         struct RetryClient(Arc<Mutex<Vec<FileUploadRequest>>>);

@@ -12,9 +12,9 @@ use semantic_data::value::Value;
 use wasm_bindgen_futures::spawn_local;
 
 use crate::client::{RpcClient, RpcClientDyn, request, resolve_response};
-use crate::command::RpcCommandSpec;
-use crate::error::RpcClientError;
-use crate::protocol::RpcResponse;
+use semantic_rpc_core::command::RpcCommandSpec;
+use semantic_rpc_core::error::RpcClientError;
+use semantic_rpc_core::protocol::RpcResponse;
 
 type Pending = Rc<RefCell<BTreeMap<u64, oneshot::Sender<Result<Value, RpcClientError>>>>>;
 

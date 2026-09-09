@@ -40,7 +40,7 @@ mod tests {
         Batch, BatchOutcome, DbError, EntityRecord, PackageRegistrationOutcome, QueryResult,
         TextQueryInput,
     };
-    use semantic_rpc::{RpcRequest, RpcResponse, RpcResult};
+    use semantic_rpc_core::{RpcRequest, RpcResponse, RpcResult};
     use tower::ServiceExt;
 
     use super::*;

@@ -10,10 +10,10 @@ use futures::{
 use semantic_data::attr::ATTR_TITLE;
 use semantic_data::filestore::{ATTR_DESCRIPTION, ATTR_PARENT};
 use semantic_data::value::{Object, Value};
-use semantic_rpc::RpcClientError;
 use semantic_rpc::file::{
     FileUploadContent, FileUploadPhase, FileUploadProgress, FileUploadRequest, FileUploadResponse,
 };
+use semantic_rpc_core::RpcClientError;
 use semantic_ui_core::{
     DirectoryActionTarget, EntityAutocomplete, EntityCard, EntityDisplayRenderer,
     EntityRenderOptions, FileTreePicker, FileTreeSelection, add_items_to_directory,
