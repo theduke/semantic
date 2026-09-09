@@ -856,17 +856,36 @@ pub fn core_catalog_schema_batch() -> DdlBatch {
 }
 
 pub fn core_schema_migrations() -> Vec<Migration> {
-    vec![Migration {
-        module: CORE_SCHEMA_MODULE.to_string(),
-        name: "001_core_catalog_schema".to_string(),
-        description: Some("Initialize core catalog schema".to_string()),
-        operations: core_catalog_schema_batch()
-            .operations
-            .into_iter()
-            .map(|operation| MigrationOperation::Ddl(ddl_to_migration_ddl(operation)))
-            .collect(),
-        meta: Meta::default(),
-    }]
+    vec![
+        Migration {
+            module: CORE_SCHEMA_MODULE.to_string(),
+            name: "001_core_catalog_schema".to_string(),
+            description: Some("Initialize core catalog schema".to_string()),
+            operations: core_catalog_schema_batch()
+                .operations
+                .into_iter()
+                .map(|operation| MigrationOperation::Ddl(ddl_to_migration_ddl(operation)))
+                .collect(),
+            meta: Meta::default(),
+        },
+        Migration {
+            module: CORE_SCHEMA_MODULE.to_string(),
+            name: "002_url".to_string(),
+            description: Some("Add the shared URL attribute and its non-unique index.".to_string()),
+            operations: vec![
+                MigrationOperation::Ddl(MigrationDdlOperation::UpsertAttribute {
+                    attribute: semantic_data::attr::url_attribute(),
+                }),
+                MigrationOperation::Ddl(MigrationDdlOperation::UpsertIndex {
+                    name: semantic_data::attr::ATTR_URL.to_string(),
+                    collection: semantic_data::builtin::DEFAULT_COLLECTION.to_string(),
+                    field: semantic_data::attr::ATTR_URL.to_string(),
+                    unique: false,
+                }),
+            ],
+            meta: Meta::default(),
+        },
+    ]
 }
 
 pub fn apply_core_schema_migrations(
@@ -874,6 +893,21 @@ pub fn apply_core_schema_migrations(
 ) -> Result<(Catalog, Vec<AppliedMigration>), CoreError> {
     let mut next_catalog = catalog.clone();
     let mut executed_migrations = Vec::<AppliedMigration>::new();
+
+    // Core indexes need the default collection on fresh databases. Preserve any
+    // existing collection configuration when upgrading.
+    if next_catalog
+        .collection_by_name(semantic_data::builtin::DEFAULT_COLLECTION)
+        .is_none()
+    {
+        next_catalog
+            .upsert_collection(
+                semantic_data::builtin::DEFAULT_COLLECTION,
+                CollectionKind::Polymorphic,
+                IntegrityMode::StrictRegisteredSchema,
+            )
+            .map_err(|err| CoreError::new(err.to_string()))?;
+    }
 
     for migration in core_schema_migrations() {
         if let Some(applied) =
@@ -1110,7 +1144,7 @@ mod tests {
     #[test]
     fn core_schema_migrations_are_idempotent() {
         let (catalog, first_run) = apply_core_schema_migrations(&Catalog::new()).unwrap();
-        assert_eq!(first_run.len(), 1);
+        assert_eq!(first_run.len(), 2);
 
         let (_, second_run) = apply_core_schema_migrations(&catalog).unwrap();
         assert!(second_run.is_empty());
@@ -1123,6 +1157,36 @@ mod tests {
             catalog.applied_migrations().next().is_some(),
             "fresh catalog should include applied core migrations"
         );
+    }
+
+    #[test]
+    fn core_url_is_indexed_without_base_or_auto_indexing() {
+        use semantic_data::{attr::ATTR_URL, builtin::DEFAULT_COLLECTION};
+
+        let mut original = Catalog::new();
+        original.set_auto_index_enabled(false);
+        let collection = original
+            .upsert_collection(
+                DEFAULT_COLLECTION,
+                CollectionKind::Polymorphic,
+                IntegrityMode::Permissive,
+            )
+            .unwrap();
+        let (catalog, _) = apply_core_schema_migrations(&original).unwrap();
+        let attribute = catalog
+            .attribute_by_lid(catalog.attribute_id(ATTR_URL).unwrap())
+            .unwrap();
+        assert_eq!(attribute.attribute, semantic_data::attr::url_attribute());
+        assert_eq!(
+            catalog
+                .collection_by_lid(collection)
+                .unwrap()
+                .integrity_mode,
+            IntegrityMode::Permissive
+        );
+        let index = catalog.find_equality_index(collection, ATTR_URL).unwrap();
+        assert!(!index.schema.unique);
+        assert_eq!(index.attr_id, Some(attribute.lid));
     }
 
     fn recursive_node_class() -> ClassType {

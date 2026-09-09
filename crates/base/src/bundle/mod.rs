@@ -5,7 +5,7 @@ use semantic_data::schema::{Meta, Module, Package};
 
 use crate::{
     migrations,
-    schema::{common, notes},
+    schema::{common, notes, web_bookmark},
 };
 
 pub const PACKAGE_NAME: &str = "semantic.base";
@@ -23,12 +23,14 @@ pub fn root_module() -> Module {
         attributes.insert(attribute.id.clone(), attribute);
     }
 
+    let bookmark_class = web_bookmark::class();
     let person_class = common::person::class();
     let note_class = notes::class();
     let directory_classes = directory::classes();
     let mut classes = BTreeMap::from([
         (person_class.id.clone(), person_class),
         (note_class.id.clone(), note_class),
+        (bookmark_class.id.clone(), bookmark_class),
     ]);
     for class in directory_classes {
         classes.insert(class.id.clone(), class);

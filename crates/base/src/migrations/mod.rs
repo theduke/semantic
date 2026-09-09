@@ -3,11 +3,26 @@ use semantic_data::schema::{Meta, Migration, MigrationDdlOperation, MigrationOpe
 
 use crate::{
     bundle::MODULE_NAME,
-    schema::{common, notes},
+    schema::{common, notes, web_bookmark},
 };
 
 pub const INIT_MIGRATION_NAME: &str = "001_init";
 pub const NOTES_MIGRATION_NAME: &str = "003_notes";
+pub const WEB_BOOKMARK_MIGRATION_NAME: &str = "004_web_bookmark";
+
+pub fn web_bookmark_migration() -> Migration {
+    Migration {
+        module: MODULE_NAME.to_string(),
+        name: WEB_BOOKMARK_MIGRATION_NAME.to_string(),
+        description: Some("Add web bookmarks.".to_string()),
+        operations: vec![MigrationOperation::Ddl(
+            MigrationDdlOperation::UpsertClass {
+                class: web_bookmark::class(),
+            },
+        )],
+        meta: Meta::default(),
+    }
+}
 
 pub fn init() -> Migration {
     let mut operations = Vec::new();
@@ -37,6 +52,7 @@ pub fn all() -> Vec<Migration> {
     let mut migrations = vec![init()];
     migrations.extend(directory::migrations());
     migrations.push(notes_migration());
+    migrations.push(web_bookmark_migration());
     migrations
 }
 
