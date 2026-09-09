@@ -1,0 +1,42 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Save to Semantic</title>
+    <link rel="stylesheet" href="styles.css" />
+    <script src="popup.js" defer></script>
+  </head>
+  <body class="popup-page">
+    <main>
+      <header>
+        <p class="eyebrow">Semantic</p>
+        <h1>Save website</h1>
+      </header>
+      <form id="bookmark-form">
+        <label for="url">Website URL</label>
+        <input id="url" name="url" type="url" readonly required />
+
+        <label for="title">Title</label>
+        <input id="title" name="title" type="text" maxlength="500" required />
+
+        <label for="description">Description <span>(optional)</span></label>
+        <textarea id="description" name="description" rows="4"></textarea>
+
+        <button id="submit" type="submit">Save bookmark</button>
+      </form>
+      <p id="status" class="status" role="status" aria-live="polite"></p>
+      <a
+        id="result"
+        class="result-link"
+        href="#"
+        target="_blank"
+        rel="noopener noreferrer"
+        hidden
+      ></a>
+      <a id="configure" class="secondary-link" href="options.html"
+        >Configure Semantic</a
+      >
+    </main>
+  </body>
+</html>

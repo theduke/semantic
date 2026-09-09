@@ -61,3 +61,10 @@ export type Person = {
   parent?: parent;
   title?: title;
 } & SemanticObject;
+export type WebBookmark = {
+  created_at?: created_at;
+  description?: base_description_2;
+  title?: title;
+  updated_at?: updated_at;
+  url: SemanticValue;
+} & SemanticObject;

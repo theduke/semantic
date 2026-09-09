@@ -4,7 +4,7 @@ DATA_DIR ?= ./data
 SEMANTIC_INTERFACE ?= 127.0.0.1
 SEMANTIC_PORT ?= 8888
 
-.PHONY: build-release server server-release ui-standalone ui-desktop ui-web
+.PHONY: build-release server server-release ui-standalone ui-desktop ui-web webextension-check webextension-bundle
 
 build-release:
 	dx build --web --release --package semantic_ui --no-default-features --features web --debug-symbols=false --locked
@@ -27,6 +27,20 @@ ui-desktop:
 
 ui-web:
 	dx serve --web --package semantic_ui --no-default-features --features web
+
+webextension-check:
+	npm --prefix lib/js/sdk ci
+	npm --prefix lib/js/sdk run build
+	npm --prefix lib/js/webext ci
+	npm --prefix lib/js/webext run format:check
+	npm --prefix lib/js/webext run check
+	npm --prefix lib/js/webext test
+
+webextension-bundle:
+	npm --prefix lib/js/sdk ci
+	npm --prefix lib/js/sdk run build
+	npm --prefix lib/js/webext ci
+	npm --prefix lib/js/webext run bundle
 
 # Run a postgres server with docker.
 # To connect, use user postgres, password postgres
