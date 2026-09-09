@@ -21,7 +21,7 @@ mod tests {
         assert_eq!(package.name, bundle::PACKAGE_NAME);
         assert_eq!(package.root.name, bundle::MODULE_NAME);
         assert!(package.modules.is_empty());
-        assert_eq!(package.migrations.len(), 4);
+        assert_eq!(package.migrations.len(), 5);
         assert_eq!(package.migrations[0].name, migrations::INIT_MIGRATION_NAME);
         assert_eq!(package.migrations[2].name, migrations::NOTES_MIGRATION_NAME);
 
@@ -80,6 +80,28 @@ mod tests {
     #[test]
     fn migrations_validate_against_package_schema() {
         semantic_db_core::validate_package_migrations(&bundle::package()).unwrap();
+    }
+
+    #[test]
+    fn bookmark_title_migration_preserves_the_original_definition() {
+        let original = migrations::web_bookmark_migration();
+        let updated = migrations::web_bookmark_title_migration();
+        assert_eq!(updated.name, migrations::WEB_BOOKMARK_TITLE_MIGRATION_NAME);
+        let MigrationOperation::Ddl(MigrationDdlOperation::UpsertClass { class }) =
+            &original.operations[0]
+        else {
+            panic!("expected bookmark class migration");
+        };
+        assert_eq!(class.meta.title.as_deref(), Some("Web Bookmark"));
+        let mut expected = class.clone();
+        expected.meta.title = Some("WebBookmark".to_string());
+        assert_eq!(expected, web_bookmark::class());
+        assert_eq!(
+            updated.operations,
+            vec![MigrationOperation::Ddl(
+                MigrationDdlOperation::UpsertClass { class: expected }
+            )]
+        );
     }
 
     #[test]

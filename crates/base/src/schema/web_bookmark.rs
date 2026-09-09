@@ -44,6 +44,6 @@ pub fn class() -> ClassType {
         strict_schema: false,
         attributes,
         constraints: Vec::new(),
-        meta: helpers::meta_with_title("Web Bookmark"),
+        meta: helpers::meta_with_title("WebBookmark"),
     }
 }

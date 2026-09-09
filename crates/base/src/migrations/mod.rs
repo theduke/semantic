@@ -9,16 +9,18 @@ use crate::{
 pub const INIT_MIGRATION_NAME: &str = "001_init";
 pub const NOTES_MIGRATION_NAME: &str = "003_notes";
 pub const WEB_BOOKMARK_MIGRATION_NAME: &str = "004_web_bookmark";
+pub const WEB_BOOKMARK_TITLE_MIGRATION_NAME: &str = "005_web_bookmark_title";
 
 pub fn web_bookmark_migration() -> Migration {
+    // Preserve the definition already recorded by existing databases.
+    let mut class = web_bookmark::class();
+    class.meta.title = Some("Web Bookmark".to_string());
     Migration {
         module: MODULE_NAME.to_string(),
         name: WEB_BOOKMARK_MIGRATION_NAME.to_string(),
         description: Some("Add web bookmarks.".to_string()),
         operations: vec![MigrationOperation::Ddl(
-            MigrationDdlOperation::UpsertClass {
-                class: web_bookmark::class(),
-            },
+            MigrationDdlOperation::UpsertClass { class },
         )],
         meta: Meta::default(),
     }
@@ -53,7 +55,22 @@ pub fn all() -> Vec<Migration> {
     migrations.extend(directory::migrations());
     migrations.push(notes_migration());
     migrations.push(web_bookmark_migration());
+    migrations.push(web_bookmark_title_migration());
     migrations
+}
+
+pub fn web_bookmark_title_migration() -> Migration {
+    Migration {
+        module: MODULE_NAME.to_string(),
+        name: WEB_BOOKMARK_TITLE_MIGRATION_NAME.to_string(),
+        description: Some("Set the web bookmark display title to WebBookmark.".to_string()),
+        operations: vec![MigrationOperation::Ddl(
+            MigrationDdlOperation::UpsertClass {
+                class: web_bookmark::class(),
+            },
+        )],
+        meta: Meta::default(),
+    }
 }
 
 pub fn notes_migration() -> Migration {

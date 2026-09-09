@@ -54,7 +54,13 @@ pub fn EntityCard(
     let catalog = use_ui_catalog();
     let class = catalog.object_class(&object).cloned();
     let id = options.id.clone().or_else(|| object_id(&object));
-    let class_name = class.as_ref().map(|class| class.name.clone());
+    let class_name = class.as_ref().map(|class| {
+        class
+            .meta
+            .title
+            .clone()
+            .unwrap_or_else(|| class.name.clone())
+    });
     let title = entity_title(&object, id.as_deref(), class_name.as_deref());
     let show_id = id.as_deref().is_some_and(|id| id != title);
     let target = id
@@ -65,10 +71,6 @@ pub fn EntityCard(
     } else {
         RenderMode::Detail
     };
-    let render_class = class.clone().filter(|class| {
-        options.renderer == EntityDisplayRenderer::Custom
-            && class_has_custom_renderer(&catalog, class)
-    });
 
     rsx! {
         article { class: "semantic-entity-card",
@@ -116,7 +118,7 @@ pub fn EntityCard(
                     div { class: "semantic-entity-card__body",
                         EntityRenderBody {
                             object: Rc::new(object.clone()),
-                            class: render_class,
+                            class: class.clone(),
                             collection: options.collection.clone(),
                             id: id.clone(),
                             renderer: options.renderer,
@@ -170,7 +172,13 @@ pub fn EntityTableRow(object: Object, collection: Option<String>) -> Element {
     let catalog = use_ui_catalog();
     let class = catalog.object_class(&object).cloned();
     let id = object_id(&object);
-    let class_name = class.as_ref().map(|class| class.name.clone());
+    let class_name = class.as_ref().map(|class| {
+        class
+            .meta
+            .title
+            .clone()
+            .unwrap_or_else(|| class.name.clone())
+    });
     let title = entity_title(&object, id.as_deref(), class_name.as_deref());
     let type_label = class_name.unwrap_or_else(|| {
         object
@@ -345,20 +353,6 @@ fn entity_action_order(action_id: &str) -> u8 {
         "open_external" => 3,
         _ => 10,
     }
-}
-
-fn class_has_custom_renderer(catalog: &crate::ui_catalog::UiCatalog, class: &ClassType) -> bool {
-    catalog
-        .render_registry()
-        .class_renderer(&class.id)
-        .is_some()
-        || class.inherits.as_ref().is_some_and(|parent| {
-            catalog
-                .render_registry()
-                .class_renderer(&parent.id)
-                .is_some()
-                && catalog.class_inherits(&class.id, &parent.id)
-        })
 }
 
 #[component]

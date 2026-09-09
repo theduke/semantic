@@ -68,7 +68,7 @@ pub fn ClassView(
     rsx! {
         article { class: "semantic-class",
             header {
-                h2 { "{class.name}" }
+                h2 { "{class.meta.title.as_deref().unwrap_or(&class.name)}" }
                 if let Some(id) = id {
                     code { "{id}" }
                 }

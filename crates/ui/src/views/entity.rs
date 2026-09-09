@@ -104,7 +104,13 @@ fn EntityPageView(collection: Option<String>, id: String) -> Element {
             .read()
             .as_ref()
             .and_then(|catalog| catalog.object_class(object.as_ref()))
-            .map(|class| class.name.clone())
+            .map(|class| {
+                class
+                    .meta
+                    .title
+                    .clone()
+                    .unwrap_or_else(|| class.name.clone())
+            })
     });
     let title = object
         .as_ref()
