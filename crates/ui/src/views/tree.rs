@@ -24,7 +24,11 @@ enum TreeDialog {
 }
 
 #[component]
-pub fn TreePage(root: Option<String>, hierarchy: Option<bool>, kind: Option<String>) -> Element {
+pub fn TreePage(
+    root: ReadSignal<Option<String>>,
+    hierarchy: ReadSignal<Option<bool>>,
+    kind: ReadSignal<Option<String>>,
+) -> Element {
     let client = use_rpc_client();
     let scope_id = use_active_scope_id();
     let toast = use_toast_dispatcher();
@@ -84,9 +88,9 @@ pub fn TreePage(root: Option<String>, hierarchy: Option<bool>, kind: Option<Stri
         section { class: "semantic-tree-page semantic-route-stack",
             h1 { class: "semantic-visually-hidden", "Directory tree" }
             semantic_ui_core::DirectoryBrowser {
-                root,
-                hierarchy: hierarchy.unwrap_or(false),
-                location_kind: DirectoryLocationKind::from_query_value(kind.as_deref()),
+                root: root(),
+                hierarchy: hierarchy().unwrap_or(false),
+                location_kind: DirectoryLocationKind::from_query_value(kind.read().as_deref()),
                 refresh_revision: refresh_revision(),
                 on_create_entity: move |target| {
                     create_dirty.set(false);

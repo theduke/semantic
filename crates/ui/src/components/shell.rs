@@ -73,7 +73,7 @@ enum NavItem {
     Tree,
     CreateEntity,
     Upload,
-    AudioRecording,
+    Record,
     Player,
     Data,
 }
@@ -159,9 +159,9 @@ pub fn PrimaryNav() -> Element {
                     on_navigate: move |_| menu_open.set(false),
                 }
                 PrimaryNavLink {
-                    to: Route::AudioRecordingPage,
-                    label: "Record audio",
-                    active: nav_item_is_active(&route, NavItem::AudioRecording),
+                    to: Route::RecordPage,
+                    label: "Record",
+                    active: nav_item_is_active(&route, NavItem::Record),
                     on_navigate: move |_| menu_open.set(false),
                 }
             }
@@ -233,7 +233,7 @@ fn nav_item_is_active(route: &Route, item: NavItem) -> bool {
             | (Route::TreePage { .. }, NavItem::Tree)
             | (Route::CreateEntityPage, NavItem::CreateEntity)
             | (Route::UploadPage, NavItem::Upload)
-            | (Route::AudioRecordingPage, NavItem::AudioRecording)
+            | (Route::RecordPage, NavItem::Record)
             | (Route::PlayPage, NavItem::Player)
             | (Route::DataPage, NavItem::Data)
             | (Route::CatalogPage, NavItem::Data)
@@ -295,5 +295,7 @@ mod tests {
         assert!(nav_item_is_active(&Route::DataPage, NavItem::Data));
         assert!(nav_item_is_active(&Route::CatalogPage, NavItem::Data));
         assert!(nav_item_is_active(&Route::QueryPage, NavItem::Data));
+        assert!(nav_item_is_active(&Route::RecordPage, NavItem::Record));
+        assert_eq!(Route::RecordPage.to_string(), "/create/record");
     }
 }

@@ -3011,13 +3011,13 @@ pre {
   gap: var(--semantic-space-4);
 }
 
-.semantic-audio-recording {
+.semantic-record {
   display: grid;
   gap: var(--semantic-space-6);
   max-width: 64rem;
 }
 
-.semantic-audio-recording__panel {
+.semantic-record__panel {
   display: grid;
   gap: var(--semantic-space-5);
   min-width: 0;
@@ -3027,22 +3027,120 @@ pre {
   background: var(--semantic-color-surface-1);
 }
 
-.semantic-audio-recording__sources,
-.semantic-audio-recording__field {
+.semantic-record__modes {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: var(--semantic-space-3);
+}
+
+.semantic-record__mode {
+  display: grid;
+  align-content: start;
+  gap: var(--semantic-space-2);
+  padding: var(--semantic-space-4);
+  border: 1px solid var(--semantic-color-border);
+  border-radius: var(--semantic-radius-lg);
+  background: var(--semantic-color-surface-1);
+  color: var(--semantic-color-text-muted);
+  font: inherit;
+  font-size: var(--semantic-font-size-label);
+  text-align: left;
+  cursor: pointer;
+}
+
+.semantic-record__mode-label {
+  display: flex;
+  align-items: center;
+  gap: var(--semantic-space-2);
+  color: var(--semantic-color-text);
+  font-size: 1rem;
+  font-weight: 650;
+}
+
+.semantic-record__mode-label > span {
+  display: flex;
+}
+
+.semantic-record__photo-placeholder {
+  display: grid;
+  place-items: center;
+  min-height: 8rem;
+  color: var(--semantic-color-text-subtle);
+}
+
+.semantic-record__mode[aria-pressed="true"] {
+  border-color: var(--semantic-color-primary);
+  box-shadow: inset 0 0 0 1px var(--semantic-color-primary);
+  background: var(--semantic-color-surface-2);
+}
+
+.semantic-record__mode:not(:disabled):hover {
+  border-color: var(--semantic-color-primary);
+  background: var(--semantic-color-surface-2);
+}
+
+.semantic-record__mode:disabled {
+  cursor: default;
+}
+
+.semantic-record__mode:disabled:not([aria-pressed="true"]) {
+  opacity: 0.5;
+}
+
+.semantic-record__mode:focus-visible,
+.semantic-record__audio-option input:focus-visible {
+  outline: 2px solid var(--semantic-color-focus);
+  outline-offset: 3px;
+}
+
+.semantic-record__visual {
+  display: block;
+  width: 100%;
+  min-width: 0;
+  max-height: 32rem;
+  aspect-ratio: 16 / 9;
+  object-fit: contain;
+  border-radius: var(--semantic-radius-md);
+  background: #111;
+}
+
+.semantic-record__audio-option {
+  display: flex;
+  align-items: center;
+  gap: var(--semantic-space-2);
+  min-height: 2.75rem;
+  width: fit-content;
+  font-weight: 600;
+}
+
+.semantic-record__audio-option input {
+  width: 1.125rem;
+  height: 1.125rem;
+  accent-color: var(--semantic-color-primary);
+}
+
+@media (max-width: 720px) {
+  .semantic-record__modes {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+.semantic-record__sources,
+.semantic-record__field {
   display: grid;
   gap: var(--semantic-space-2);
 }
 
-.semantic-audio-recording__sources {
+.semantic-record__sources {
   grid-template-columns: repeat(auto-fit, minmax(min(100%, 16rem), 1fr));
   gap: var(--semantic-space-4);
 }
 
-.semantic-audio-recording__field > span {
+.semantic-record__field > span {
   font-weight: 650;
 }
 
-.semantic-audio-recording__field :is(input, select) {
+.semantic-record__field :is(input, select) {
   min-height: 2.75rem;
   min-width: 0;
   width: 100%;
@@ -3053,13 +3151,13 @@ pre {
   color: var(--semantic-color-text);
 }
 
-.semantic-audio-recording__hint {
+.semantic-record__hint {
   grid-column: 1 / -1;
   margin: 0;
   color: var(--semantic-color-text-muted);
 }
 
-.semantic-audio-recording__actions {
+.semantic-record__actions {
   display: flex;
   align-items: center;
   gap: var(--semantic-space-4);
@@ -3068,7 +3166,7 @@ pre {
   border-top: 1px solid var(--semantic-color-border-soft);
 }
 
-.semantic-audio-recording__status {
+.semantic-record__status {
   color: var(--semantic-color-text-muted);
   display: flex;
   justify-content: center;
@@ -3078,7 +3176,7 @@ pre {
   font-weight: 650;
 }
 
-.semantic-audio-recording__steps {
+.semantic-record__steps {
   display: flex;
   gap: clamp(16px, 4vw, 40px);
   padding: 0;
@@ -3088,13 +3186,13 @@ pre {
   color: var(--semantic-color-text-muted);
 }
 
-.semantic-audio-recording__steps li {
+.semantic-record__steps li {
   display: flex;
   align-items: center;
   gap: var(--semantic-space-2);
 }
 
-.semantic-audio-recording__steps li > span {
+.semantic-record__steps li > span {
   display: grid;
   place-items: center;
   width: 1.75rem;
@@ -3103,24 +3201,24 @@ pre {
   background: var(--semantic-color-surface-2);
 }
 
-.semantic-audio-recording__steps li[data-active="true"] {
+.semantic-record__steps li[data-active="true"] {
   font-weight: 650;
   color: var(--semantic-color-primary);
 }
 
-.semantic-audio-recording__steps li[data-active="true"] > span {
+.semantic-record__steps li[data-active="true"] > span {
   color: var(--semantic-color-on-primary);
   background: var(--semantic-color-primary);
 }
 
-.semantic-audio-recording__capture {
+.semantic-record__capture {
   display: grid;
   gap: var(--semantic-space-3);
   text-align: center;
   padding: var(--semantic-space-6) 0;
 }
 
-.semantic-audio-recording__timer {
+.semantic-record__timer {
   font-family: var(--semantic-font-mono);
   font-size: clamp(3rem, 10vw, 5rem);
   font-variant-numeric: tabular-nums;
@@ -3128,61 +3226,61 @@ pre {
   line-height: 1.1;
 }
 
-.semantic-audio-recording__indicator {
+.semantic-record__indicator {
   width: 0.6rem;
   height: 0.6rem;
   border-radius: 50%;
   background: var(--semantic-color-text-subtle);
 }
 
-.semantic-audio-recording__levels {
+.semantic-record__levels {
   display: grid;
   gap: var(--semantic-space-2);
   width: min(100%, 28rem);
   justify-self: center;
 }
 
-.semantic-audio-recording__levels svg {
+.semantic-record__levels svg {
   width: 100%;
   height: 3rem;
   fill: var(--semantic-color-primary);
 }
 
-.semantic-audio-recording__capture[data-state="recording"] .semantic-audio-recording__indicator {
+.semantic-record__capture[data-state="recording"] .semantic-record__indicator {
   background: var(--semantic-color-danger);
 }
 
-.semantic-audio-recording__capture[data-state="paused"] .semantic-audio-recording__indicator {
+.semantic-record__capture[data-state="paused"] .semantic-record__indicator {
   background: var(--semantic-color-warning);
 }
 
-.semantic-audio-recording__source-section,
-.semantic-audio-recording__review-heading,
-.semantic-audio-recording__result {
+.semantic-record__source-section,
+.semantic-record__review-heading,
+.semantic-record__result {
   display: grid;
   gap: var(--semantic-space-3);
   min-width: 0;
 }
 
-.semantic-audio-recording :is(h2, p) {
+.semantic-record :is(h2, p) {
   margin: 0;
 }
 
-.semantic-audio-recording h2 {
+.semantic-record h2 {
   font-size: var(--semantic-font-size-section-title);
 }
 
-.semantic-audio-recording__source-section > button {
+.semantic-record__source-section > button {
   justify-self: start;
 }
 
-.semantic-audio-recording__playback {
+.semantic-record__playback {
   display: block;
   width: 100%;
   min-width: 0;
 }
 
-.semantic-audio-recording__result-heading {
+.semantic-record__result-heading {
   display: flex;
   align-items: center;
   justify-content: space-between;
@@ -3191,17 +3289,17 @@ pre {
   margin-bottom: var(--semantic-space-3);
 }
 
-.semantic-audio-recording__field :is(input, select):focus-visible {
+.semantic-record__field :is(input, select):focus-visible {
   outline: 2px solid var(--semantic-color-focus);
   outline-offset: 2px;
 }
 
 @media (max-width: 480px) {
-  .semantic-audio-recording__actions {
+  .semantic-record__actions {
     gap: var(--semantic-space-2);
   }
 
-  .semantic-audio-recording__actions > button {
+  .semantic-record__actions > button {
     flex: 1 1 100%;
     min-height: 2.75rem;
   }

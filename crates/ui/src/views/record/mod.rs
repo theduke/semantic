@@ -13,6 +13,7 @@ use web::BrowserRecorder as Recorder;
 #[derive(Clone, Debug, PartialEq)]
 enum RecordingState {
     Idle,
+    Preview,
     Starting,
     Recording,
     Pausing,
@@ -26,7 +27,52 @@ enum RecordingState {
 
 mod page;
 mod preview;
-pub use page::AudioRecordingPage;
+pub use page::RecordPage;
+
+/// Capture modes share review and upload, while device access stays platform-specific.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+enum CaptureMode {
+    #[default]
+    Audio,
+    Photo,
+    Video,
+    Screen,
+}
+
+impl CaptureMode {
+    const ALL: [Self; 4] = [Self::Audio, Self::Photo, Self::Video, Self::Screen];
+
+    fn label(self) -> &'static str {
+        match self {
+            Self::Audio => "Audio",
+            Self::Photo => "Photo",
+            Self::Video => "Camera video",
+            Self::Screen => "Screen",
+        }
+    }
+
+    fn description(self) -> &'static str {
+        match self {
+            Self::Audio => "Capture your voice",
+            Self::Photo => "Take a webcam photo",
+            Self::Video => "Record with your webcam",
+            Self::Screen => "Record a tab, window, or screen",
+        }
+    }
+
+    fn title(self) -> &'static str {
+        match self {
+            Self::Audio => "Audio recording",
+            Self::Photo => "Webcam photo",
+            Self::Video => "Camera recording",
+            Self::Screen => "Screen recording",
+        }
+    }
+
+    fn is_camera(self) -> bool {
+        matches!(self, Self::Photo | Self::Video)
+    }
+}
 
 fn normalized_level(decibels: f32) -> f32 {
     if !decibels.is_finite() {
@@ -77,7 +123,14 @@ async fn upload_recording(
         entity.insert(ATTR_TITLE, Value::String(title.to_string()));
     }
     let timestamp = time::OffsetDateTime::now_utc().unix_timestamp();
-    let filename = format!("audio-recording-{timestamp}.{}", recording.extension);
+    let prefix = if recording.mime_type.starts_with("image/") {
+        "photo"
+    } else if recording.mime_type.starts_with("video/") {
+        "video-recording"
+    } else {
+        "audio-recording"
+    };
+    let filename = format!("{prefix}-{timestamp}.{}", recording.extension);
     client
         .upload_file(
             FileUploadRequest {
@@ -132,7 +185,9 @@ fn recording_extension(mime: &str) -> &'static str {
     {
         "audio/webm" | "video/webm" => "webm",
         "audio/ogg" | "application/ogg" => "ogg",
-        "audio/mp4" | "video/mp4" => "m4a",
+        "audio/mp4" => "m4a",
+        "video/mp4" => "mp4",
+        "image/png" => "png",
         "audio/mpeg" => "mp3",
         "audio/aac" => "aac",
         "audio/wav" | "audio/wave" | "audio/x-wav" => "wav",
@@ -966,6 +1021,9 @@ mod tests {
             ("audio/webm;codecs=opus", "webm"),
             ("audio/ogg;codecs=opus", "ogg"),
             ("audio/mp4;codecs=mp4a.40.2", "m4a"),
+            ("video/mp4;codecs=avc1", "mp4"),
+            ("video/webm;codecs=vp8,opus", "webm"),
+            ("image/png", "png"),
             ("audio/mpeg", "mp3"),
             ("audio/unknown", "bin"),
             ("", "bin"),

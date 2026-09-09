@@ -18,11 +18,10 @@ impl PlaybackUrl {
             options.set_type(&recording.mime_type);
             let blob = web_sys::Blob::new_with_u8_array_sequence_and_options(&parts, &options)
                 .map_err(|_| {
-                    "Could not prepare audio playback. You can still upload the recording."
-                        .to_string()
+                    "Could not prepare the preview. You can still upload your capture.".to_string()
                 })?;
             web_sys::Url::create_object_url_with_blob(&blob).map_err(|_| {
-                "Could not create an audio preview. You can still upload the recording.".to_string()
+                "Could not create a preview. You can still upload your capture.".to_string()
             })?
         };
         // Desktop bytes are already loaded for upload. A media data URL works in

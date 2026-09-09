@@ -11,7 +11,7 @@ use web_sys::{
     MediaStream, MediaStreamConstraints, MediaStreamTrack, RecordingState,
 };
 
-use super::CompletedRecording;
+use super::{CaptureMode, CompletedRecording};
 
 const CLOSED: &str = "The recording page has been closed.";
 
@@ -29,6 +29,7 @@ struct RecorderState {
     closed: Cell<bool>,
     starting: Cell<bool>,
     session: RefCell<Option<Rc<BrowserSession>>>,
+    preview: RefCell<Option<CaptureStream>>,
 }
 
 impl BrowserRecorder {
@@ -45,7 +46,53 @@ impl BrowserRecorder {
         session.as_ref()?.meter.as_ref()?.level()
     }
 
-    pub async fn start(&self, _mic: &str, _system: &str) -> Result<(), String> {
+    pub fn stream(&self) -> Option<MediaStream> {
+        self.0
+            .preview
+            .borrow()
+            .as_ref()
+            // MediaStream::clone() clones its tracks; clone the JS handle only.
+            .map(|stream| Clone::clone(&stream.0))
+            .or_else(|| {
+                self.0
+                    .session
+                    .borrow()
+                    .as_ref()
+                    .map(|session| Clone::clone(&session.stream.0))
+            })
+    }
+
+    pub fn finished(&self) -> bool {
+        self.0
+            .session
+            .borrow()
+            .as_ref()
+            .is_some_and(|session| session.capture.borrow().completion.is_none())
+    }
+
+    pub fn preview_ended(&self) -> bool {
+        self.0.preview.borrow().as_ref().is_some_and(|stream| {
+            stream.0.get_video_tracks().iter().all(|track| {
+                track.unchecked_into::<MediaStreamTrack>().ready_state()
+                    == web_sys::MediaStreamTrackState::Ended
+            })
+        })
+    }
+
+    pub fn has_audio(&self) -> bool {
+        self.stream()
+            .is_some_and(|stream| stream.get_audio_tracks().length() > 0)
+    }
+
+    pub async fn prepare(&self, mode: CaptureMode, audio: bool) -> Result<(), String> {
+        self.acquire(mode, audio, true).await
+    }
+
+    pub async fn start(&self, mode: CaptureMode, audio: bool) -> Result<(), String> {
+        self.acquire(mode, audio, false).await
+    }
+
+    async fn acquire(&self, mode: CaptureMode, audio: bool, preview: bool) -> Result<(), String> {
         if self.0.closed.get() {
             return Err(CLOSED.to_string());
         }
@@ -54,26 +101,84 @@ impl BrowserRecorder {
         }
         self.0.starting.set(true);
         let state = self.0.clone();
+        let prepared = state.preview.borrow_mut().take();
         let (sender, receiver) = oneshot::channel();
         // Component tasks are cancelled on unmount, but getUserMedia cannot be
         // cancelled. Always receive its eventual stream so its tracks get stopped.
         spawn_local(async move {
-            let result = acquire_microphone().await.and_then(|stream| {
+            let result = match prepared {
+                Some(stream) => Ok(stream),
+                None => acquire_stream(mode, audio).await,
+            }
+            .and_then(|stream| {
                 if state.closed.get() || sender.is_canceled() {
                     return Err(CLOSED.to_string());
                 }
-                let session = BrowserSession::start(stream)?;
-                *state.session.borrow_mut() = Some(Rc::new(session));
+                if preview {
+                    *state.preview.borrow_mut() = Some(stream);
+                } else {
+                    let session = BrowserSession::start(stream, mode)?;
+                    *state.session.borrow_mut() = Some(Rc::new(session));
+                }
                 Ok(())
             });
             state.starting.set(false);
             if sender.send(result).is_err() {
                 state.session.borrow_mut().take();
+                state.preview.borrow_mut().take();
             }
         });
         receiver
             .await
-            .map_err(|_| "Microphone initialization was cancelled.".to_string())?
+            .map_err(|_| "Capture initialization was cancelled.".to_string())?
+    }
+
+    pub fn photograph(
+        &self,
+        video: &web_sys::HtmlVideoElement,
+    ) -> Result<CompletedRecording, String> {
+        use base64::Engine as _;
+        if video.ready_state() < web_sys::HtmlMediaElement::HAVE_CURRENT_DATA
+            || video.video_width() == 0
+            || video.video_height() == 0
+            || self.preview_ended()
+        {
+            return Err(
+                "The camera is not ready yet. Wait for the live preview, then try again."
+                    .to_string(),
+            );
+        }
+        let document = web_sys::window()
+            .and_then(|window| window.document())
+            .ok_or_else(|| "No browser document is available.".to_string())?;
+        let canvas = document
+            .create_element("canvas")
+            .map_err(|error| browser_error("Could not prepare photo", error))?
+            .dyn_into::<web_sys::HtmlCanvasElement>()
+            .map_err(|error| browser_error("Could not prepare photo canvas", error.into()))?;
+        canvas.set_width(video.video_width());
+        canvas.set_height(video.video_height());
+        let context = canvas
+            .get_context("2d")
+            .map_err(|error| browser_error("Could not prepare photo", error))?
+            .ok_or_else(|| "Photo capture is not supported by this browser.".to_string())?
+            .dyn_into::<web_sys::CanvasRenderingContext2d>()
+            .map_err(|error| browser_error("Could not prepare photo context", error.into()))?;
+        context
+            .draw_image_with_html_video_element(video, 0.0, 0.0)
+            .map_err(|error| browser_error("Could not capture photo", error))?;
+        let data = canvas
+            .to_data_url_with_type("image/png")
+            .map_err(|error| browser_error("Could not encode photo", error))?;
+        let (_, encoded) = data
+            .split_once(',')
+            .ok_or_else(|| "The browser returned an invalid photo.".to_string())?;
+        let bytes = base64::engine::general_purpose::STANDARD
+            .decode(encoded)
+            .map_err(|_| "The browser returned an invalid photo.".to_string())?;
+        let recording = super::browser_recording(bytes, "image/png".to_string(), None)?;
+        self.discard();
+        Ok(recording)
     }
 
     pub async fn pause(&self) -> Result<(), String> {
@@ -155,6 +260,7 @@ impl BrowserRecorder {
     }
 
     pub fn discard(&self) {
+        self.0.preview.borrow_mut().take();
         if let Some(session) = self.0.session.borrow_mut().take() {
             session.release();
         }
@@ -171,49 +277,63 @@ impl Drop for StopCleanup {
     }
 }
 
-struct MicrophoneStream(MediaStream);
+struct CaptureStream(MediaStream);
 
-impl MicrophoneStream {
+impl CaptureStream {
     fn stop(&self) {
         stop_tracks(&self.0);
     }
 }
 
-impl Drop for MicrophoneStream {
+impl Drop for CaptureStream {
     fn drop(&mut self) {
         self.stop();
     }
 }
 
-async fn acquire_microphone() -> Result<MicrophoneStream, String> {
+async fn acquire_stream(mode: CaptureMode, audio: bool) -> Result<CaptureStream, String> {
     let window = web_sys::window().ok_or_else(|| "No browser window is available.".to_string())?;
-    if !js_sys::Reflect::has(&window, &JsValue::from_str("MediaRecorder")).unwrap_or(false) {
-        return Err("This browser does not support audio recording.".to_string());
+    if mode != CaptureMode::Photo
+        && !js_sys::Reflect::has(&window, &JsValue::from_str("MediaRecorder")).unwrap_or(false)
+    {
+        return Err(
+            "This browser does not support media recording. Try a current browser.".to_string(),
+        );
     }
     let devices = window.navigator().media_devices().map_err(|error| {
         browser_error(
-            "Microphone access requires a supported browser and HTTPS or localhost",
+            "Capture requires a supported browser and HTTPS or localhost",
             error,
         )
     })?;
     if devices.is_undefined() || devices.is_null() {
-        return Err(
-            "Microphone access requires a supported browser and HTTPS or localhost.".to_string(),
-        );
+        return Err("Capture requires a supported browser and HTTPS or localhost.".to_string());
     }
-    let constraints = MediaStreamConstraints::new();
-    constraints.set_audio(&JsValue::TRUE);
-    let request = devices
-        .get_user_media_with_constraints(&constraints)
-        .map_err(|error| browser_error("Could not request microphone access", error))?;
+    let request = if mode == CaptureMode::Screen {
+        if !js_sys::Reflect::has(&devices, &JsValue::from_str("getDisplayMedia")).unwrap_or(false) {
+            return Err("Screen recording is unavailable in this browser. Try a desktop browser that supports screen sharing.".to_string());
+        }
+        let options = web_sys::DisplayMediaStreamConstraints::new();
+        options.set_video(&JsValue::TRUE);
+        options.set_audio(&JsValue::from_bool(audio));
+        devices.get_display_media_with_constraints(&options)
+    } else {
+        let constraints = MediaStreamConstraints::new();
+        constraints.set_audio(&JsValue::from_bool(mode == CaptureMode::Audio || (mode == CaptureMode::Video && audio)));
+        constraints.set_video(&JsValue::from_bool(mode.is_camera()));
+        devices.get_user_media_with_constraints(&constraints)
+    }.map_err(|error| browser_error("Could not request capture access", error))?;
     let stream = JsFuture::from(request)
         .await
-        .map_err(|error| browser_error("Could not access the microphone", error))?
-        .dyn_into::<MediaStream>()
         .map_err(|error| {
-            browser_error("The browser returned an invalid microphone stream", error)
-        })?;
-    Ok(MicrophoneStream(stream))
+            browser_error(
+                "Capture did not start. Allow access or select a source and try again",
+                error,
+            )
+        })?
+        .dyn_into::<MediaStream>()
+        .map_err(|error| browser_error("The browser returned an invalid capture stream", error))?;
+    Ok(CaptureStream(stream))
 }
 
 struct Capture {
@@ -232,7 +352,7 @@ impl Capture {
 struct BrowserSession {
     recorder: MediaRecorder,
     meter: Option<AudioMeter>,
-    stream: MicrophoneStream,
+    stream: CaptureStream,
     capture: Rc<RefCell<Capture>>,
     finished: RefCell<Option<oneshot::Receiver<Result<(), String>>>>,
     released: Cell<bool>,
@@ -240,26 +360,40 @@ struct BrowserSession {
     _on_data: Closure<dyn FnMut(BlobEvent)>,
     _on_stop: Closure<dyn FnMut(Event)>,
     _on_error: Closure<dyn FnMut(Event)>,
+    _on_ended: Closure<dyn FnMut(Event)>,
 }
 
 impl BrowserSession {
-    fn start(stream: MicrophoneStream) -> Result<Self, String> {
+    fn start(stream: CaptureStream, mode: CaptureMode) -> Result<Self, String> {
         let options = MediaRecorderOptions::new();
-        if let Some(mime) = [
+        let audio_mimes = [
             "audio/mpeg",
             "audio/webm;codecs=opus",
             "audio/webm",
             "audio/ogg;codecs=opus",
             "audio/mp4",
-        ]
-        .into_iter()
-        .find(|mime| MediaRecorder::is_type_supported(mime))
+        ];
+        let video_mimes = [
+            "video/webm;codecs=vp9,opus",
+            "video/webm;codecs=vp8,opus",
+            "video/webm",
+            "video/mp4",
+        ];
+        let candidates: &[&str] = if mode == CaptureMode::Audio {
+            &audio_mimes
+        } else {
+            &video_mimes
+        };
+        if let Some(mime) = candidates
+            .iter()
+            .copied()
+            .find(|mime| MediaRecorder::is_type_supported(mime))
         {
             options.set_mime_type(mime);
         }
         let recorder =
             MediaRecorder::new_with_media_stream_and_media_recorder_options(&stream.0, &options)
-                .map_err(|error| browser_error("Could not initialize audio recording", error))?;
+                .map_err(|error| browser_error("Could not initialize recording", error))?;
         let (sender, receiver) = oneshot::channel();
         let capture = Rc::new(RefCell::new(Capture {
             chunks: Vec::new(),
@@ -275,7 +409,7 @@ impl BrowserSession {
         };
         let on_stop = {
             let capture = capture.clone();
-            let stream = stream.0.clone();
+            let stream = Clone::clone(&stream.0);
             Closure::new(move |_: Event| {
                 stop_tracks(&stream);
                 capture.borrow_mut().finish(Ok(()));
@@ -283,7 +417,7 @@ impl BrowserSession {
         };
         let on_error = {
             let capture = capture.clone();
-            let stream = stream.0.clone();
+            let stream = Clone::clone(&stream.0);
             Closure::new(move |event: Event| {
                 stop_tracks(&stream);
                 let message = event
@@ -297,6 +431,20 @@ impl BrowserSession {
         recorder.set_ondataavailable(Some(on_data.as_ref().unchecked_ref()));
         recorder.set_onstop(Some(on_stop.as_ref().unchecked_ref()));
         recorder.set_onerror(Some(on_error.as_ref().unchecked_ref()));
+        // Ending screen sharing must finalize video even if an audio track remains live.
+        let on_ended = {
+            let recorder = recorder.clone();
+            Closure::new(move |_: Event| {
+                if recorder.state() != RecordingState::Inactive {
+                    let _ = recorder.stop();
+                }
+            })
+        };
+        for track in stream.0.get_tracks().iter() {
+            track
+                .unchecked_into::<MediaStreamTrack>()
+                .set_onended(Some(on_ended.as_ref().unchecked_ref()));
+        }
         let session = Self {
             recorder,
             meter: AudioMeter::new(&stream.0).ok(),
@@ -307,11 +455,12 @@ impl BrowserSession {
             _on_data: on_data,
             _on_stop: on_stop,
             _on_error: on_error,
+            _on_ended: on_ended,
         };
         session
             .recorder
             .start_with_time_slice(1000)
-            .map_err(|error| browser_error("Could not start audio recording", error))?;
+            .map_err(|error| browser_error("Could not start recording", error))?;
         Ok(session)
     }
 
@@ -322,6 +471,9 @@ impl BrowserSession {
         self.recorder.set_ondataavailable(None);
         self.recorder.set_onstop(None);
         self.recorder.set_onerror(None);
+        for track in self.stream.0.get_tracks().iter() {
+            track.unchecked_into::<MediaStreamTrack>().set_onended(None);
+        }
         if self.recorder.state() != RecordingState::Inactive {
             let _ = self.recorder.stop();
         }
@@ -337,6 +489,7 @@ impl BrowserSession {
 
 struct AudioMeter {
     context: web_sys::AudioContext,
+    closed: Cell<bool>,
     analyser: web_sys::AnalyserNode,
     _source: web_sys::MediaStreamAudioSourceNode,
     samples: RefCell<Vec<f32>>,
@@ -355,6 +508,7 @@ impl AudioMeter {
             let _ = context.resume();
             Ok(Self {
                 context: context.clone(),
+                closed: Cell::new(false),
                 analyser,
                 _source: source,
                 samples: RefCell::new(vec![0.0; 256]),
@@ -379,7 +533,10 @@ impl AudioMeter {
     }
 
     fn close(&self) {
-        let _ = self.context.close();
+        if !self.closed.replace(true) && self.context.state() != web_sys::AudioContextState::Closed
+        {
+            let _ = self.context.close();
+        }
     }
 }
 

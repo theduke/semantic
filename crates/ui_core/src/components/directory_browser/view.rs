@@ -1885,33 +1885,31 @@ pub fn DirectoryBrowser(props: DirectoryBrowserProps) -> Element {
 
 #[component]
 fn DirectoryList(
-    items: Vec<DirectoryBrowseItem>,
-    selected_items: BTreeSet<String>,
-    cut_items: BTreeSet<String>,
-    focused_item: Option<String>,
-    dragged_item: Option<String>,
+    items: ReadSignal<Vec<DirectoryBrowseItem>>,
+    selected_items: ReadSignal<BTreeSet<String>>,
+    cut_items: ReadSignal<BTreeSet<String>>,
+    focused_item: ReadSignal<Option<String>>,
+    dragged_item: ReadSignal<Option<String>>,
     commands: Coroutine<DirectoryBrowserCommand>,
 ) -> Element {
-    let count = items.len();
-    let mut item_count = use_signal(move || count);
-    use_effect(use_reactive((&count,), move |(count,)| {
-        item_count.set(count);
-    }));
+    let item_count = use_memo(move || items.read().len());
     rsx! {
         dxcomp::VirtualList {
             count: item_count,
             estimate_size: move |_| 56,
             render_item: move |index: usize| {
-                let Some(item) = items.get(index).cloned() else {
+                // Read the data in the virtual list's render scope so updates
+                // invalidate its rows even when the item count stays the same.
+                let Some(item) = items.read().get(index).cloned() else {
                     return rsx! {};
                 };
                 rsx! {
                     DirectoryListRow {
                         key: "{item.id}",
-                        selected: selected_items.contains(&item.id),
-                        cut: cut_items.contains(&item.id),
-                        focused: focused_item.as_deref() == Some(item.id.as_str()),
-                        dragged_item: dragged_item.clone(),
+                        selected: selected_items.read().contains(&item.id),
+                        cut: cut_items.read().contains(&item.id),
+                        focused: focused_item.read().as_deref() == Some(item.id.as_str()),
+                        dragged_item: dragged_item(),
                         item,
                         commands,
                     }
@@ -1923,35 +1921,35 @@ fn DirectoryList(
 
 #[component]
 fn DirectoryGrid(
-    items: Vec<DirectoryBrowseItem>,
-    selected_items: BTreeSet<String>,
-    cut_items: BTreeSet<String>,
-    focused_item: Option<String>,
-    dragged_item: Option<String>,
+    items: ReadSignal<Vec<DirectoryBrowseItem>>,
+    selected_items: ReadSignal<BTreeSet<String>>,
+    cut_items: ReadSignal<BTreeSet<String>>,
+    focused_item: ReadSignal<Option<String>>,
+    dragged_item: ReadSignal<Option<String>>,
     commands: Coroutine<DirectoryBrowserCommand>,
 ) -> Element {
     let columns = 4usize;
-    let rows = items.len().div_ceil(columns);
-    let mut row_count = use_signal(move || rows);
-    use_effect(use_reactive((&rows,), move |(rows,)| {
-        row_count.set(rows);
-    }));
+    let row_count = use_memo(move || items.read().len().div_ceil(columns));
     rsx! {
         dxcomp::VirtualList {
             count: row_count,
             estimate_size: move |_| 132,
             render_item: move |row_index: usize| {
+                let items = items.read();
                 let start = row_index * columns;
                 let end = (start + columns).min(items.len());
+                let Some(row_items) = items.get(start..end) else {
+                    return rsx! {};
+                };
                 rsx! {
                     div { class: "semantic-directory-browser__grid-row",
-                        for item in items[start..end].iter().cloned() {
+                        for item in row_items.iter().cloned() {
                             DirectoryTile {
                                 key: "{item.id}",
-                                selected: selected_items.contains(&item.id),
-                                cut: cut_items.contains(&item.id),
-                                focused: focused_item.as_deref() == Some(item.id.as_str()),
-                                dragged_item: dragged_item.clone(),
+                                selected: selected_items.read().contains(&item.id),
+                                cut: cut_items.read().contains(&item.id),
+                                focused: focused_item.read().as_deref() == Some(item.id.as_str()),
+                                dragged_item: dragged_item(),
                                 item,
                                 commands,
                             }
@@ -3252,6 +3250,10 @@ fn location_expansion_key(kind: DirectoryLocationKind, item_id: &str) -> String 
     };
     format!("{prefix}:{item_id}")
 }
+
+#[cfg(test)]
+#[path = "view_tests.rs"]
+mod listing_tests;
 
 #[cfg(test)]
 mod tests {

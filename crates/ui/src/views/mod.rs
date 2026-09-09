@@ -1,4 +1,3 @@
-mod audio_recording;
 mod browse;
 mod catalog;
 mod collection;
@@ -8,10 +7,10 @@ mod form;
 mod home;
 mod play;
 mod query;
+mod record;
 mod tree;
 mod upload;
 
-pub use audio_recording::AudioRecordingPage;
 pub use browse::BrowsePage;
 pub use catalog::CatalogPage;
 pub use collection::CollectionPage;
@@ -21,6 +20,7 @@ pub use form::{CollectionEditEntityPage, CreateEntityPage, DefaultEditEntityPage
 pub use home::HomePage;
 pub use play::PlayPage;
 pub use query::QueryPage;
+pub use record::RecordPage;
 pub use tree::TreePage;
 pub use upload::UploadPage;
 
@@ -69,8 +69,8 @@ pub enum Route {
     },
     #[route("/upload")]
     UploadPage,
-    #[route("/create/audio-recording")]
-    AudioRecordingPage,
+    #[route("/create/record")]
+    RecordPage,
     #[end_layout]
     #[layout(PlayerShell)]
     #[route("/play")]

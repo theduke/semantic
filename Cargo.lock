@@ -8746,6 +8746,7 @@ dependencies = [
  "semantic_db_core",
  "semantic_db_kv",
  "semantic_rpc",
+ "serde_json",
  "thiserror 2.0.18",
  "time",
  "tokio",
