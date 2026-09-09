@@ -8609,9 +8609,12 @@ dependencies = [
 name = "semantic_base"
 version = "0.0.1"
 dependencies = [
+ "futures",
  "semantic_data",
  "semantic_db_core",
+ "semantic_db_kv",
  "semantic_rpc_core",
+ "tokio",
 ]
 
 [[package]]
@@ -8930,6 +8933,7 @@ version = "0.0.1"
 dependencies = [
  "bytes",
  "dioxus",
+ "dioxus-html",
  "dioxus-icons",
  "dioxus-sdk-time",
  "dxcomp",

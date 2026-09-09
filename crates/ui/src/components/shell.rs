@@ -71,6 +71,7 @@ enum NavItem {
     Home,
     Browse,
     Tree,
+    Labels,
     CreateEntity,
     Upload,
     Record,
@@ -124,6 +125,11 @@ pub fn PrimaryNav() -> Element {
                 }
             }
             NavGroup { label: "Explore",
+                PrimaryNavLink {
+                    to: Route::LabelsPage, label: "Labels",
+                    active: nav_item_is_active(&route, NavItem::Labels),
+                    on_navigate: move |_| menu_open.set(false),
+                }
                 PrimaryNavLink {
                     to: Route::BrowsePage {
                         collection: None,
@@ -231,6 +237,7 @@ fn nav_item_is_active(route: &Route, item: NavItem) -> bool {
             | (Route::CollectionEditEntityPage { .. }, NavItem::Browse)
             | (Route::BrowsePage { .. }, NavItem::Browse)
             | (Route::TreePage { .. }, NavItem::Tree)
+            | (Route::LabelsPage, NavItem::Labels)
             | (Route::CreateEntityPage, NavItem::CreateEntity)
             | (Route::UploadPage, NavItem::Upload)
             | (Route::RecordPage, NavItem::Record)

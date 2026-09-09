@@ -24,8 +24,9 @@ use semantic_data::schema::{
 use semantic_data::value::{FieldPath, Object, PathSegment, Value, ValueRef};
 
 use crate::catalog::{
-    ATTR_RELATION_FROM, ATTR_RELATION_TO, Catalog, CollectionKind, CollectionSchema, IntegrityMode,
-    LocalAttrId, LocalCollectionId, LocalFieldId, OBJECT_TYPE_FIELD, SharedCatalog,
+    ATTR_RELATION_FROM, ATTR_RELATION_RELATION, ATTR_RELATION_TO, Catalog, CollectionKind,
+    CollectionSchema, IntegrityMode, LocalAttrId, LocalCollectionId, LocalFieldId,
+    OBJECT_TYPE_FIELD, SharedCatalog,
 };
 use crate::embedded::{
     schema_store::{catalog_write_ops, load_catalog},
@@ -1896,6 +1897,21 @@ impl<S: EntityStorage> EmbeddedDb<S> {
                 }
                 RelationMode::External => {
                     for (_, object) in &source_rows {
+                        let discriminator = Self::external_relation_field_name(
+                            catalog,
+                            source_collection,
+                            object,
+                            "relation",
+                            ATTR_RELATION_RELATION,
+                        );
+                        // Legacy relation collections omit the discriminator. Explicit
+                        // discriminators isolate relations sharing a collection.
+                        if object
+                            .get(&discriminator)
+                            .is_some_and(|value| value.as_str() != Some(relationship.id.as_str()))
+                        {
+                            continue;
+                        }
                         let Some(source_id) = Self::external_relation_field_value(
                             catalog,
                             source_collection,
@@ -3781,6 +3797,89 @@ mod tests {
             entities.integrity_mode,
             IntegrityMode::StrictRegisteredSchema
         );
+    }
+
+    #[test]
+    fn external_relation_indexes_respect_discriminators_in_shared_collections() {
+        use crate::catalog::{ATTR_RELATION_FROM, ATTR_RELATION_RELATION, ATTR_RELATION_TO};
+        use semantic_data::schema::{RelationIndexingMode, RelationMode, RelationType};
+
+        let mut db = EmbeddedDb::in_memory();
+        for id in ["first", "second"] {
+            db.upsert_relationship(RelationType {
+                id: id.into(),
+                name: id.into(),
+                source_collection: DEFAULT_COLLECTION.into(),
+                mode: RelationMode::External,
+                indexing_mode: RelationIndexingMode::Enabled,
+                meta: Meta::default(),
+            })
+            .unwrap();
+        }
+        // Untyped canonical attributes, typed aliases, and legacy rows all share
+        // the collection. Distinct endpoints also detect accidental path mixing.
+        for (id, relation, typed) in [
+            ("canonical", Some("first"), false),
+            ("aliases", Some("second"), true),
+            ("legacy", None, false),
+        ] {
+            let mut object = Object::new();
+            object.insert("id", Value::String(id.into()));
+            if typed {
+                object.insert(
+                    "type",
+                    Value::String(crate::catalog::RELATION_CLASS_ID.into()),
+                );
+            }
+            object.insert(
+                if typed { "from" } else { ATTR_RELATION_FROM },
+                Value::String(format!("{id}-source")),
+            );
+            object.insert(
+                if typed { "to" } else { ATTR_RELATION_TO },
+                Value::String(format!("{id}-target")),
+            );
+            if let Some(relation) = relation {
+                object.insert(
+                    if typed {
+                        "relation"
+                    } else {
+                        ATTR_RELATION_RELATION
+                    },
+                    Value::String(relation.into()),
+                );
+            }
+            db.insert(DEFAULT_COLLECTION, id, object).unwrap();
+        }
+        let edges = db
+            .select(SelectQuery::new().with_collection(RELATION_EDGES_COLLECTION))
+            .unwrap();
+        let actual: std::collections::BTreeSet<_> = edges
+            .iter()
+            .map(|edge| {
+                (
+                    edge.get("relation").unwrap().as_str().unwrap().to_string(),
+                    edge.get("source").unwrap().as_str().unwrap().to_string(),
+                    edge.get("target").unwrap().as_str().unwrap().to_string(),
+                )
+            })
+            .collect();
+        let expected = [
+            ("first", "canonical"),
+            ("second", "aliases"),
+            ("first", "legacy"),
+            ("second", "legacy"),
+        ]
+        .into_iter()
+        .map(|(relation, id)| {
+            (
+                relation.to_string(),
+                format!("{id}-source"),
+                format!("{id}-target"),
+            )
+        })
+        .collect();
+        assert_eq!(actual, expected);
     }
 
     #[test]

@@ -1,3 +1,5 @@
+mod labels;
+pub use labels::LabelsPage;
 mod browse;
 mod catalog;
 mod collection;
@@ -33,6 +35,8 @@ pub enum Route {
     #[layout(AppShell)]
     #[route("/")]
     HomePage,
+    #[route("/labels")]
+    LabelsPage,
     #[route("/data")]
     DataPage,
     #[route("/data/catalog")]

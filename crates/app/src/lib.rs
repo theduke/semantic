@@ -5,6 +5,8 @@ mod context;
 mod db;
 mod error;
 mod file;
+#[cfg(feature = "base")]
+mod labels;
 mod media;
 mod object_store;
 mod scope;

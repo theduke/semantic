@@ -1,3 +1,5 @@
+pub mod labels;
+pub use labels::{EntityLabelsButton, LabelEditor, LabelEditorProps};
 mod class;
 mod directory_browser;
 mod empty;

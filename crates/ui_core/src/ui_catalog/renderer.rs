@@ -23,6 +23,7 @@ pub struct ValueRenderContext {
 #[derive(Clone, PartialEq)]
 pub struct RenderSettings {
     pub show_media: bool,
+    pub enable_label_editor: bool,
     pub file_api_prefix: String,
 }
 
@@ -30,6 +31,7 @@ impl Default for RenderSettings {
     fn default() -> Self {
         Self {
             show_media: true,
+            enable_label_editor: true,
             file_api_prefix: "/api/v1/file".to_string(),
         }
     }

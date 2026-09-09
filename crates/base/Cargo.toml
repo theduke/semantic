@@ -12,8 +12,12 @@ categories.workspace = true
 version.workspace = true
 
 [dependencies]
+futures = "0.3.31"
+
 semantic_rpc_core = { path = "../rpc_core" }
 semantic_data = { workspace = true }
 
 [dev-dependencies]
+semantic_db_kv = { path = "../db_kv" }
+tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }
 semantic_db_core = { path = "../db_core" }

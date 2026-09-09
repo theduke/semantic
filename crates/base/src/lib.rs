@@ -1,5 +1,6 @@
 pub mod bundle;
 pub mod directory_query;
+pub mod labels;
 pub mod migrations;
 pub mod schema;
 
@@ -9,13 +10,13 @@ pub use bundle::{MODULE_NAME, PACKAGE_NAME, package, root_module};
 #[derive(Clone, Copy, Debug, Default)]
 pub struct BasePackage;
 
-impl<Ctx> semantic_rpc_core::RuntimePackage<Ctx> for BasePackage {
+impl<Ctx: labels::LabelContext> semantic_rpc_core::RuntimePackage<Ctx> for BasePackage {
     fn schema(&self) -> semantic_data::schema::Package {
         bundle::package()
     }
 
     fn commands(&self) -> Vec<Box<dyn semantic_rpc_core::DynCommand<Ctx>>> {
-        Vec::new()
+        labels::commands()
     }
 }
 
@@ -30,14 +31,12 @@ mod tests {
 
     #[test]
     fn package_has_expected_structure() {
-        let package = <crate::BasePackage as semantic_rpc_core::RuntimePackage<()>>::schema(
-            &crate::BasePackage,
-        );
+        let package = crate::package();
 
         assert_eq!(package.name, bundle::PACKAGE_NAME);
         assert_eq!(package.root.name, bundle::MODULE_NAME);
         assert!(package.modules.is_empty());
-        assert_eq!(package.migrations.len(), 6);
+        assert_eq!(package.migrations.len(), 8);
         assert_eq!(package.migrations[0].name, migrations::INIT_MIGRATION_NAME);
         assert_eq!(package.migrations[2].name, migrations::NOTES_MIGRATION_NAME);
 
@@ -124,9 +123,7 @@ mod tests {
     fn bookmark_references_core_url_without_redeclaring_it() {
         use semantic_data::attr::ATTR_URL;
 
-        let package = <crate::BasePackage as semantic_rpc_core::RuntimePackage<()>>::schema(
-            &crate::BasePackage,
-        );
+        let package = crate::package();
         assert!(!package.root.attributes.contains_key(ATTR_URL));
         let bookmark = &package.root.classes[web_bookmark::CLASS_ID];
         assert_eq!(bookmark.attributes["url"].attribute.id, ATTR_URL);

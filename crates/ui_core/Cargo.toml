@@ -43,6 +43,7 @@ dxeditor = { path = "../dxeditor", default-features = false, features = ["markdo
 dxeditor = { path = "../dxeditor", default-features = false, features = ["markdown", "web"], optional = true }
 
 [dev-dependencies]
+dioxus-html = { version = "0.7.9", features = ["serialize"] }
 serde_json = { workspace = true }
 semantic_db_kv = { path = "../db_kv" }
 tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }

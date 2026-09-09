@@ -11,7 +11,8 @@ use crate::ui_catalog::{
 };
 
 /// Object fields considered, in priority order, when deriving an entity title.
-pub const ENTITY_TITLE_FIELDS: [&str; 7] = [
+pub const ENTITY_TITLE_FIELDS: [&str; 8] = [
+    "semantic:base:label:name",
     "semantic:title",
     "title",
     "name",

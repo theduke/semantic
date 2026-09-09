@@ -1,3 +1,4 @@
+pub use components::{EntityLabelsButton, LabelEditor, LabelEditorProps};
 pub mod context;
 #[cfg(feature = "markdown")]
 mod editor_entity_links;

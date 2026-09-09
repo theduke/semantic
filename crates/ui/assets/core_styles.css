@@ -6086,3 +6086,82 @@ pre {
     gap: var(--semantic-space-1);
   }
 }
+
+/* Labels: neutral surfaces keep arbitrary label colors decorative and text readable. */
+.semantic-label-manager { max-width: 1240px; margin-inline: auto; }
+.semantic-label-manager__layout { display: grid; grid-template-columns: minmax(270px, 2fr) minmax(0, 3fr); border: 1px solid var(--semantic-border); border-radius: 16px; background: var(--semantic-surface); overflow: hidden; min-height: 540px; }
+.semantic-label-manager__hierarchy { padding: 24px 16px; border-right: 1px solid var(--semantic-border-soft); min-width: 0; }
+.semantic-label-manager__details { padding: 24px 28px; min-width: 0; }
+.semantic-label-manager__toolbar { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 20px; }
+.semantic-label-manager__toolbar h2 { font-size: 1.05rem; margin: 0; }
+.semantic-label-field { display: flex; flex-direction: column; gap: 8px; font-size: .875rem; font-weight: 550; min-width: 0; }
+.semantic-label-field input:not([type=color]), .semantic-label-field textarea, .semantic-label-field select { width: 100%; box-sizing: border-box; font: inherit; font-weight: 400; color: var(--semantic-text); background: var(--semantic-surface); border: 1px solid var(--semantic-border); border-radius: 8px; padding: 10px 12px; min-height: 42px; }
+.semantic-label-field textarea { resize: vertical; }
+.semantic-label-field small { color: var(--semantic-text-muted); font-weight: 400; line-height: 1.6; }
+.semantic-label-muted { color: var(--semantic-text-muted); font-size: .8125rem; font-weight: 400; }
+.semantic-label-color { width: 10px; height: 10px; flex: 0 0 10px; display: inline-block; border-radius: 50%; box-shadow: inset 0 0 0 1px rgb(0 0 0 / .1); }
+.semantic-label-mode { flex-shrink: 0; color: var(--semantic-text-muted); background: var(--semantic-surface-muted); border: 1px solid var(--semantic-border-soft); border-radius: 5px; padding: 2px 6px; font-size: .6875rem; font-weight: 500; white-space: nowrap; }
+.semantic-label-tree { list-style: none; padding: 0; margin: 12px 0 0; }
+.semantic-label-tree .semantic-label-tree { margin: 2px 0 2px 19px; padding-left: 8px; border-left: 1px solid var(--semantic-border-soft); }
+.semantic-label-tree .semantic-label-tree:empty { display: none; }
+.semantic-label-tree__row { display: flex; align-items: center; border-radius: 8px; min-height: 42px; margin-block: 2px; }
+.semantic-label-tree__row:hover { background: var(--semantic-color-hover); }
+.semantic-label-tree__row[data-selected=true] { background: var(--semantic-color-selected); }
+.semantic-label-tree__toggle, .semantic-label-tree__select { border: 0; background: transparent; color: var(--semantic-text); cursor: pointer; font: inherit; min-height: 40px; }
+.semantic-label-tree__toggle, .semantic-label-tree__spacer { width: 28px; flex: 0 0 28px; }
+.semantic-label-tree__toggle { font-size: 1.25rem; border-radius: 6px; }
+.semantic-label-tree__select { display: flex; align-items: center; gap: 9px; flex: 1; min-width: 0; text-align: left; padding: 8px 10px 8px 0; font-size: .875rem; }
+.semantic-label-tree__select > span:not(.semantic-label-color) { overflow-wrap: anywhere; }
+.semantic-label-tree__select .semantic-label-mode { margin-left: auto; }
+.semantic-label-form { display: grid; gap: 24px; }
+.semantic-label-form .semantic-label-manager__toolbar { margin-bottom: 0; }
+.semantic-label-form__fields { display: grid; gap: 22px; margin: 0; padding: 0; border: 0; min-width: 0; }
+.semantic-label-form__fields:disabled { opacity: .65; }
+.semantic-label-color-controls { display: flex; align-items: center; flex-wrap: wrap; gap: 10px; }
+.semantic-label-color-controls input[type=color] { width: 36px; height: 32px; padding: 2px; border: 1px solid var(--semantic-border); border-radius: 6px; background: var(--semantic-surface); cursor: pointer; }
+.semantic-label-swatch { border: 2px solid var(--semantic-surface); border-radius: 50%; width: 24px; height: 24px; cursor: pointer; outline: 1px solid var(--semantic-border-soft); }
+.semantic-label-text-button[aria-pressed=true] { color: var(--semantic-text); background: var(--semantic-surface); outline: 2px solid var(--semantic-border-soft); border-radius: 6px; text-decoration: none; }
+.semantic-label-swatch[aria-pressed=true] { outline: 2px solid var(--semantic-text); }
+.semantic-label-text-button { border: 0; background: transparent; color: var(--semantic-text-muted); font: inherit; text-decoration: underline; cursor: pointer; padding: 6px; }
+.semantic-label-options > .semantic-label-section-title { margin: 0; padding: 10px 12px; background: var(--semantic-surface); border-bottom: 1px solid var(--semantic-border-soft); }
+.semantic-label-form__actions { display: flex; justify-content: flex-end; align-items: center; gap: 10px; flex-wrap: wrap; padding-top: 20px; border-top: 1px solid var(--semantic-border-soft); }
+.semantic-label-form__actions > span { margin-right: auto; }
+.semantic-label-form__delete { display: flex; gap: 16px; align-items: center; justify-content: space-between; border-top: 1px solid var(--semantic-border-soft); padding-top: 22px; margin-top: 14px; font-size: .8125rem; }
+.semantic-label-form__delete p { color: var(--semantic-text-muted); margin: 6px 0 0; line-height: 1.5; }
+.semantic-label-empty { padding: 32px 16px; color: var(--semantic-text-muted); text-align: center; font-size: .875rem; line-height: 1.7; }
+.semantic-label-empty h2, .semantic-label-empty h3 { color: var(--semantic-text); font-weight: 600; }
+.semantic-label-empty--details { max-width: 390px; margin: 65px auto; }
+.dx-dialog.semantic-label-dialog { width: min(640px, calc(100vw - 32px)); max-width: 640px; box-sizing: border-box; }
+.semantic-label-editor { width: 100%; min-width: 0; display: flex; flex-direction: column; gap: 20px; max-height: calc(100dvh - 100px); }
+.semantic-label-editor__heading { display: flex; justify-content: space-between; align-items: flex-start; gap: 20px; }
+.semantic-label-editor__heading p { margin-bottom: 0; line-height: 1.5; }
+.semantic-label-section-title { font-size: .75rem; color: var(--semantic-text-muted); margin-bottom: 10px; font-weight: 600; }
+.semantic-label-chips { display: flex; flex-wrap: wrap; gap: 8px; max-height: 120px; overflow: auto; padding: 2px; }
+.semantic-label-chip { display: inline-flex; align-items: center; gap: 7px; padding: 6px 9px; border: 1px solid var(--semantic-border); border-radius: 7px; background: var(--semantic-surface); color: var(--semantic-text); font: inherit; font-size: .8125rem; cursor: pointer; max-width: 100%; overflow-wrap: anywhere; }
+.semantic-label-chip:hover { background: var(--semantic-surface-muted); }
+.semantic-label-chip > span:last-child { color: var(--semantic-text-muted); margin-left: 3px; }
+.semantic-label-options { overflow-y: auto; min-height: 100px; max-height: 340px; border: 1px solid var(--semantic-border-soft); border-radius: 10px; overscroll-behavior: contain; }
+.semantic-label-option { display: flex; align-items: center; gap: 10px; padding: 12px; cursor: pointer; border-bottom: 1px solid var(--semantic-border-soft); }
+.semantic-label-option:last-child { border-bottom: 0; }
+.semantic-label-option:hover { background: var(--semantic-color-hover); }
+.semantic-label-option[data-selected=true] { background: var(--semantic-color-selected); }
+.semantic-label-option input { accent-color: var(--semantic-accent); width: 16px; height: 16px; flex-shrink: 0; }
+.semantic-label-option__text { display: flex; flex-direction: column; gap: 4px; min-width: 0; flex: 1; overflow-wrap: anywhere; }
+.semantic-label-option__text strong { font-size: .875rem; font-weight: 550; }
+.semantic-label-option__text small { font-size: .75rem; color: var(--semantic-text-muted); }
+.semantic-label-editor__footer { display: flex; gap: 10px; align-items: center; border-top: 1px solid var(--semantic-border-soft); padding-top: 16px; }
+.semantic-label-editor__footer > span { flex: 1; }
+.semantic-label-manager :is(button, input, select, textarea):focus-visible, .semantic-label-editor :is(button, input):focus-visible { outline: 2px solid var(--semantic-color-focus); outline-offset: 3px; }
+@media (max-width: 760px) {
+  .semantic-label-manager__layout { grid-template-columns: 1fr; }
+  .semantic-label-manager__hierarchy { border-right: 0; border-bottom: 1px solid var(--semantic-border-soft); max-height: 360px; overflow: auto; }
+  .semantic-label-manager__details { padding: 24px 18px; }
+  .semantic-label-empty--details { margin-block: 10px; }
+  .semantic-label-editor { gap: 16px; }
+  .semantic-label-editor__footer { flex-wrap: wrap; }
+  .semantic-label-editor__footer > span { flex-basis: 100%; }
+}
+.semantic-label-tree__toggle, .semantic-label-tree__select, .semantic-label-text-button { box-shadow: none; }
+.semantic-label-swatch { min-height: 24px; padding: 0; box-shadow: none; }
+
+.semantic-label-editor .semantic-label-chip { min-height: 32px; box-shadow: none; }

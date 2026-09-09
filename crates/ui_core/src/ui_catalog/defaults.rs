@@ -135,6 +135,21 @@ pub fn register_defaults(catalog: &mut UiCatalog) {
 
 fn register_default_entity_actions(catalog: &mut UiCatalog) {
     catalog.register_entity_action(EntityActionRegistration {
+        id: "labels".into(),
+        label: "Edit labels".into(),
+        icon: None,
+        class_id: None,
+        placements: vec![
+            EntityActionPlacement::Card,
+            EntityActionPlacement::Detail,
+            EntityActionPlacement::BrowseRow,
+        ],
+        enabled: Rc::new(|ctx| !ctx.target.id.is_empty()),
+        render: Rc::new(
+            |ctx| rsx! { crate::components::EntityLabelsButton { target: ctx.target } },
+        ),
+    });
+    catalog.register_entity_action(EntityActionRegistration {
         id: "open".to_string(),
         label: "Open".to_string(),
         icon: None,

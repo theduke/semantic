@@ -56,6 +56,8 @@ pub fn all() -> Vec<Migration> {
     migrations.push(notes_migration());
     migrations.push(web_bookmark_migration());
     migrations.push(web_bookmark_title_migration());
+    migrations.push(crate::schema::labels::migration());
+    migrations.push(crate::schema::labels::group_migration());
     migrations.push(creatable_in_ui_migration());
     migrations
 }

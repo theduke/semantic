@@ -5,7 +5,7 @@ use semantic_data::schema::{Meta, Module, Package};
 
 use crate::{
     migrations,
-    schema::{common, notes, web_bookmark},
+    schema::{common, labels, notes, web_bookmark},
 };
 
 pub const PACKAGE_NAME: &str = "semantic.base";
@@ -19,7 +19,7 @@ pub fn root_module() -> Module {
     for attribute in directory::attributes() {
         attributes.insert(attribute.id.clone(), attribute);
     }
-    for attribute in notes::attributes() {
+    for attribute in notes::attributes().into_iter().chain(labels::attributes()) {
         attributes.insert(attribute.id.clone(), attribute);
     }
 
@@ -32,7 +32,7 @@ pub fn root_module() -> Module {
         (note_class.id.clone(), note_class),
         (bookmark_class.id.clone(), bookmark_class),
     ]);
-    for class in directory_classes {
+    for class in directory_classes.into_iter().chain(labels::classes()) {
         classes.insert(class.id.clone(), class);
     }
 
