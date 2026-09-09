@@ -14,11 +14,14 @@ version.workspace = true
 [features]
 default = ["redb"]
 embed-ui = ["dep:include_dir", "dep:mime_guess"]
-logfs = ["dep:semantic_db_log"]
+logfs = ["dep:semantic_db_log", "dep:objstore_logfs"]
 redb = ["dep:semantic_db_redb"]
 
 [dependencies]
 async-trait = "0.1.89"
+objstore = { workspace = true }
+objstore_fs = { workspace = true }
+objstore_logfs = { workspace = true, optional = true }
 axum = { version = "0.8.7", default-features = true, features = ["json", "ws"] }
 bytes = { workspace = true }
 futures-util = "0.3.31"
@@ -38,4 +41,5 @@ tokio = { workspace = true, features = ["net", "rt-multi-thread", "sync"] }
 tracing = { workspace = true }
 
 [dev-dependencies]
+tempfile = "3.20.0"
 tower = { version = "0.5.2", features = ["util"] }

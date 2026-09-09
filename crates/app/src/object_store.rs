@@ -43,9 +43,9 @@ struct ScopeObjectStores {
     default_store: Option<ObjectStoreId>,
 }
 
-struct ObjectStoreEntry {
-    request: ObjectStoreOpenRequest,
-    store: Option<DynObjStore>,
+enum ObjectStoreEntry {
+    Request(ObjectStoreOpenRequest),
+    Opened(DynObjStore),
 }
 
 #[derive(Default)]
@@ -83,13 +83,27 @@ impl ObjectStoreManager {
         if set_default {
             scope.default_store = Some(store_id.clone());
         }
-        scope.entries.insert(
-            store_id,
-            ObjectStoreEntry {
-                request,
-                store: None,
-            },
-        );
+        scope
+            .entries
+            .insert(store_id, ObjectStoreEntry::Request(request));
+        Ok(())
+    }
+
+    pub fn attach_store(
+        &self,
+        scope_id: DbScopeId,
+        store_id: ObjectStoreId,
+        store: DynObjStore,
+        set_default: bool,
+    ) -> Result<(), AppError> {
+        let mut state = self.write_state()?;
+        let scope = state.scopes.entry(scope_id).or_default();
+        if set_default {
+            scope.default_store = Some(store_id.clone());
+        }
+        scope
+            .entries
+            .insert(store_id, ObjectStoreEntry::Opened(store));
         Ok(())
     }
 
@@ -109,7 +123,7 @@ impl ObjectStoreManager {
         scope_id: &DbScopeId,
         store_id: &ObjectStoreId,
     ) -> std::result::Result<DynObjStore, AppError> {
-        let (existing, request) = {
+        {
             let state = self.read_state()?;
             let scope = state
                 .scopes
@@ -118,13 +132,13 @@ impl ObjectStoreManager {
             let entry = scope.entries.get(store_id).ok_or_else(|| {
                 AppError::UnknownObjectStore(scope_id.to_string(), store_id.to_string())
             })?;
-            (entry.store.clone(), entry.request.clone())
-        };
-        if let Some(store) = existing {
-            return Ok(store);
+            if let ObjectStoreEntry::Opened(store) = entry {
+                return Ok(Arc::clone(store));
+            }
         }
 
-        let store = self.builder.build(&request.uri)?;
+        // Recheck and build under the write lock so concurrent callers cannot
+        // open the same physical store twice (notably an exclusive logfs file).
         let mut state = self.write_state()?;
         let scope = state
             .scopes
@@ -133,7 +147,11 @@ impl ObjectStoreManager {
         let entry = scope.entries.get_mut(store_id).ok_or_else(|| {
             AppError::UnknownObjectStore(scope_id.to_string(), store_id.to_string())
         })?;
-        entry.store = Some(Arc::clone(&store));
+        let store = match entry {
+            ObjectStoreEntry::Opened(store) => return Ok(Arc::clone(store)),
+            ObjectStoreEntry::Request(request) => self.builder.build(&request.uri)?,
+        };
+        *entry = ObjectStoreEntry::Opened(Arc::clone(&store));
         Ok(store)
     }
 
@@ -161,5 +179,75 @@ impl ObjectStoreManager {
         self.state
             .write()
             .map_err(|_| AppError::InvalidRequest("object store state lock poisoned".to_string()))
+    }
+}
+#[cfg(test)]
+mod tests {
+    use std::sync::Barrier;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    use super::*;
+
+    #[derive(Debug)]
+    struct CountingProvider {
+        store: DynObjStore,
+        opens: Arc<AtomicUsize>,
+    }
+
+    impl ObjStoreProvider for CountingProvider {
+        type Config = objstore_fs::FsObjStoreConfig;
+
+        fn kind(&self) -> &'static str {
+            "counting"
+        }
+        fn url_scheme(&self) -> &str {
+            "counting"
+        }
+        fn build(&self, _url: &url::Url) -> Result<DynObjStore, objstore::ObjStoreError> {
+            self.opens.fetch_add(1, Ordering::SeqCst);
+            // Give competing callers time to attempt resolving the same entry.
+            std::thread::sleep(std::time::Duration::from_millis(20));
+            Ok(Arc::clone(&self.store))
+        }
+    }
+
+    #[test]
+    fn concurrent_resolution_opens_store_once() {
+        let path = std::env::temp_dir().join(format!("semantic-store-{}", uuid::Uuid::new_v4()));
+        let store: DynObjStore = Arc::new(
+            objstore_fs::FsObjStore::new(objstore_fs::FsObjStoreConfig::new(path.clone())).unwrap(),
+        );
+        let opens = Arc::new(AtomicUsize::new(0));
+        let manager = ObjectStoreManager::new(vec![Arc::new(CountingProvider {
+            store: Arc::clone(&store),
+            opens: Arc::clone(&opens),
+        })]);
+        let scope = DbScopeId::new("default");
+        manager
+            .attach_store_request(
+                scope.clone(),
+                ObjectStoreId::new("default"),
+                ObjectStoreOpenRequest {
+                    uri: "counting://".into(),
+                },
+                true,
+            )
+            .unwrap();
+        let start = Barrier::new(8);
+        std::thread::scope(|threads| {
+            for _ in 0..8 {
+                threads.spawn(|| {
+                    start.wait();
+                    assert!(Arc::ptr_eq(
+                        &manager.resolve_default_store(&scope).unwrap(),
+                        &store
+                    ));
+                });
+            }
+        });
+        assert_eq!(opens.load(Ordering::SeqCst), 1);
+        drop(manager);
+        drop(store);
+        std::fs::remove_dir_all(path).unwrap();
     }
 }

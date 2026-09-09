@@ -35,12 +35,6 @@ pub enum CliError {
     #[error("failed to build default semantic blob store URI: {0}")]
     DefaultBlobUri(String),
 
-    #[error("failed to create semantic server database directory {path}: {source}")]
-    CreateDatabaseDirectory {
-        path: std::path::PathBuf,
-        source: std::io::Error,
-    },
-
     #[error("failed to bind semantic server to {address}: {source}")]
     Bind {
         address: String,

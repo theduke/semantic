@@ -14,7 +14,7 @@ pub use auth::{Principal, PrincipalId, PrincipalKind};
 pub use command::{SemanticApp, SemanticAppBuilder, SemanticAppInner};
 pub use config::AppConfig;
 pub use context::AppRequestContext;
-pub use db::{DbOpenRequest, DbProvider, SemanticDb};
+pub use db::{DbBackend, DbOpenRequest, DbProvider, SemanticDb};
 pub use error::AppError;
 pub use file::{
     FileByteRange, FileByteStream, FileContent, FileCreateRequest, FileReadResult, FileReader,

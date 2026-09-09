@@ -34,9 +34,14 @@ impl DbProvider for RedbDbProvider {
         request: DbOpenRequest,
         _principal: &Principal,
     ) -> std::result::Result<Arc<dyn semantic_app::SemanticDb>, AppError> {
-        let path = request.uri.strip_prefix("redb://").ok_or_else(|| {
+        let path = request.uri.strip_prefix("redb:").ok_or_else(|| {
             AppError::InvalidRequest(format!("invalid redb uri '{}'", request.uri))
         })?;
+        if path.starts_with("//") {
+            return Err(AppError::InvalidRequest(
+                "use 'redb:PATH' for a local database URI".into(),
+            ));
+        }
         if path.is_empty() {
             return Err(AppError::InvalidRequest(
                 "invalid redb uri: missing database path".to_string(),
@@ -344,7 +349,7 @@ pub fn build_embedded_handle_with_app_config_and_blob_store(
     blob_uri: String,
 ) -> std::result::Result<EmbeddedAppHandle, String> {
     let scope_id = DbScopeId::new("local");
-    let db_uri = format!("redb://{}", db_path.as_ref().to_string_lossy());
+    let db_uri = format!("redb:{}", db_path.as_ref().to_string_lossy());
     let app = SemanticApp::builder()
         .with_config(app_config)
         .with_provider(RedbDbProvider)

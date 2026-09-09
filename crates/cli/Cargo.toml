@@ -29,7 +29,7 @@ semantic_base = { path = "../base" }
 semantic_data = { path = "../data" }
 semantic_fuse = { path = "../fuse" }
 semantic_rpc = { path = "../rpc", features = ["client-http-native"] }
-semantic_server = { path = "../server" }
+semantic_server = { path = "../server", features = ["logfs"] }
 serde_json = { workspace = true }
 sha2 = { workspace = true }
 thiserror = "2.0.17"

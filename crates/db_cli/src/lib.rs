@@ -55,8 +55,14 @@ pub async fn run() -> std::result::Result<(), CliError> {
 
 pub(crate) fn open_db(db_uri: &str) -> std::result::Result<Db, CliError> {
     let (scheme, rest) = db_uri
-        .split_once("://")
+        .split_once(':')
         .ok_or_else(|| CliError::Message(format!("invalid db uri '{db_uri}'")))?;
+
+    if rest.starts_with("//") {
+        return Err(CliError::Message(format!(
+            "use '{scheme}:PATH' for a local database URI"
+        )));
+    }
 
     match scheme {
         "redb" => {
@@ -88,12 +94,20 @@ mod tests {
     #[test]
     fn opens_logfs_uri() {
         let dir = tempfile::tempdir().unwrap();
-        let uri = format!("logfs://{}", dir.path().join("database.log").display());
+        let uri = format!("logfs:{}", dir.path().join("database.log").display());
         super::open_db(&uri).unwrap();
     }
 
     #[test]
     fn rejects_empty_logfs_path() {
-        assert!(super::open_db("logfs://").is_err());
+        assert!(super::open_db("logfs:").is_err());
+    }
+
+    #[test]
+    fn rejects_database_url_syntax() {
+        for uri in ["redb://relative.db", "logfs:///absolute.log"] {
+            let error = super::open_db(uri).err().expect("invalid database URI");
+            assert!(error.to_string().contains(":PATH"));
+        }
     }
 }

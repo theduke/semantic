@@ -21,8 +21,8 @@ bytes = { workspace = true }
 dirs = "6.0.0"
 futures-util = "0.3.31"
 hex = { workspace = true }
-objstore = "0.1.0-alpha.3"
-objstore_fs = "0.1.0-alpha.3"
+objstore = { workspace = true }
+objstore_fs = { workspace = true }
 ordered-float = { workspace = true }
 semantic_data = { workspace = true }
 semantic_base = { path = "../base", optional = true }

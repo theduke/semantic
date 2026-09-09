@@ -152,3 +152,40 @@ pub trait DbProvider: Send + Sync + 'static {
         principal: &Principal,
     ) -> std::result::Result<Arc<dyn SemanticDb>, AppError>;
 }
+
+/// A database backend with a typed configuration and scheme-specific URI parser.
+///
+/// Unlike URLs, database URIs may have opaque payloads such as `log:<blob>`.
+/// Implementations receive the complete URI and own its configuration syntax.
+/// The blanket `DbProvider` implementation provides dynamic URI dispatch.
+#[async_trait]
+pub trait DbBackend: Send + Sync + 'static {
+    type Config: Send + Sync;
+
+    fn scheme(&self) -> &str;
+
+    fn parse_uri(&self, uri: &str) -> Result<Self::Config, AppError>;
+
+    async fn open_config(
+        &self,
+        config: Self::Config,
+        mode: DbOpenMode,
+        principal: &Principal,
+    ) -> Result<Arc<dyn SemanticDb>, AppError>;
+}
+
+#[async_trait]
+impl<B: DbBackend> DbProvider for B {
+    fn scheme(&self) -> &str {
+        DbBackend::scheme(self)
+    }
+
+    async fn open(
+        &self,
+        request: DbOpenRequest,
+        principal: &Principal,
+    ) -> Result<Arc<dyn SemanticDb>, AppError> {
+        self.open_config(self.parse_uri(&request.uri)?, request.mode, principal)
+            .await
+    }
+}

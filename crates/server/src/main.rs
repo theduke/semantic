@@ -8,29 +8,27 @@ fn main() {
             std::process::exit(2);
         }
     };
-    let db_path = arg_value(&args, "--db")
-        .map(Into::into)
-        .unwrap_or_else(|| app_config.default_db_path());
-    let blob_uri = match arg_value(&args, "--blob-uri") {
-        Some(uri) => uri,
-        None => app_config
-            .default_blob_uri()
-            .expect("build default semantic blob store uri"),
-    };
+    let db_uri = arg_value(&args, "--db-uri").or_else(|| std::env::var("SEMANTIC_DB_URI").ok());
+    let db_uri = db_uri.unwrap_or_else(|| {
+        let path = app_config.default_db_path();
+        let path = path.to_str().expect("UTF-8 database path");
+        format!("redb:{path}")
+    });
+    let blob_uri =
+        match arg_value(&args, "--blob-uri").or_else(|| std::env::var("SEMANTIC_BLOB_URI").ok()) {
+            Some(uri) => uri,
+            None => app_config
+                .default_blob_uri()
+                .expect("build default semantic blob store uri"),
+        };
     let bind = arg_value(&args, "--bind").unwrap_or_else(|| server_config.bind_address());
-    if let Some(parent) = db_path.parent()
-        && !parent.as_os_str().is_empty()
-    {
-        std::fs::create_dir_all(parent).expect("create semantic server database directory");
-    }
 
     let runtime = tokio::runtime::Runtime::new().expect("tokio runtime");
     runtime.block_on(async move {
-        let server = semantic_server::SemanticServer::local_redb_with_app_config_and_blob_store(
-            db_path, app_config, blob_uri,
-        )
-        .expect("local redb semantic server")
-        .with_config(server_config);
+        let server = semantic_server::SemanticServer::from_uris(db_uri, blob_uri, app_config)
+            .await
+            .expect("open semantic server storage")
+            .with_config(server_config);
         let listener = tokio::net::TcpListener::bind(&bind)
             .await
             .expect("bind semantic server");

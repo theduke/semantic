@@ -2,6 +2,66 @@
 
 The `semantic_cli` crate provides the `semantic` command-line application.
 
+## Server storage
+
+With no storage flags, `semantic server` uses redb at `<data-dir>/db/default`
+and filesystem blobs at `<data-dir>/blob/default`. `--data-dir` overrides
+`SEMANTIC_DATA_DIR`; the default is the platform user data directory.
+
+Select the database with `--db-uri` (or `SEMANTIC_DB_URI`):
+
+| Database URI | Backend |
+| --- | --- |
+| `redb:PATH` | Local redb database |
+| `logfs:PATH` | Direct local logfs database |
+| `log:<blob>` | Log database sharing the already-opened blob object store |
+
+Local paths may be absolute or relative to the working directory. They are
+literal paths, with no URL decoding.
+
+`--blob-uri` (or `SEMANTIC_BLOB_URI`) uses objstore's URI parser. The server
+registers filesystem (`fs`) and logfs (`logfs`) object-store providers. CLI
+values override the corresponding environment variables.
+
+To put both the database and blobs in one logfs file:
+
+```sh
+semantic server \
+  --blob-uri 'logfs:///srv/semantic/store.log?allow_create=true' \
+  --db-uri 'log:<blob>'
+```
+
+The parent directory must exist. `allow_create=true` allows objstore to create
+the logfs file. Quote `log:<blob>` to prevent shell redirection.
+
+Shared mode opens the physical object store once, then uses `db/default/wal/v1/`
+for database events and `blob/default/` for uploaded contents. Reopening the
+shared database through the scope API reuses its existing database instance,
+so there is only one WAL writer. `OpenExisting` requires an existing WAL.
+Switching an existing installation to shared mode does not migrate its data;
+direct `logfs:PATH` and shared mode have different storage layouts.
+
+The shared database inherits the selected object-store provider's durability
+and consistency guarantees. The pinned objstore logfs provider uses buffered
+writes and does not implement conditional puts; the server ensures one WAL
+writer and isolates its keys, but shared mode does not provide the direct
+logfs database's durable-commit guarantees on power loss. Filesystem objstore
+also lacks the guarantees required for a production WAL.
+
+For separate storage:
+
+```sh
+semantic server \
+  --db-uri 'redb:/srv/semantic/database.redb' \
+  --blob-uri 'fs:///srv/semantic/blobs'
+```
+
+Database backends implement `semantic_app::DbBackend`, providing a typed
+`Config`, `parse_uri`, and `open_config`. Its blanket `DbProvider` implementation
+adapts these to the application's existing scheme registry; dispatch splits
+at the first `:` and leaves the remainder to the backend. Existing custom
+`DbProvider` implementations remain supported.
+
 ## Command architecture
 
 The top-level parser is `cmd::Args`, and its subcommand enum is

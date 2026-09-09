@@ -199,12 +199,35 @@ mod tests {
     }
 
     #[test]
+    fn parses_shared_database_uri() {
+        let args = Args::try_parse_from([
+            "semantic",
+            "server",
+            "--db-uri",
+            "log:<blob>",
+            "--blob-uri",
+            "logfs:///srv/semantic/store.log?allow_create=true",
+        ])
+        .unwrap();
+        let SubCmd::Server(args) = args.command else {
+            panic!("expected server command");
+        };
+        assert_eq!(args.db_uri.as_deref(), Some("log:<blob>"));
+    }
+
+    #[test]
+    fn rejects_removed_database_path_option() {
+        let error = Args::try_parse_from(["semantic", "server", "--db", "local.db"]).unwrap_err();
+        assert_eq!(error.kind(), clap::error::ErrorKind::UnknownArgument);
+    }
+
+    #[test]
     fn parses_server_command_and_renders_help() {
         let args = Args::try_parse_from([
             "semantic",
             "server",
-            "--db",
-            "/var/lib/semantic/db",
+            "--db-uri",
+            "redb:/var/lib/semantic/db",
             "--blob-uri",
             "fs:///var/lib/semantic/blob",
             "--bind",
@@ -224,7 +247,7 @@ mod tests {
         let SubCmd::Server(args) = args.command else {
             panic!("expected server command");
         };
-        assert_eq!(args.db, Some(PathBuf::from("/var/lib/semantic/db")));
+        assert_eq!(args.db_uri.as_deref(), Some("redb:/var/lib/semantic/db"));
         assert_eq!(
             args.blob_uri.as_deref(),
             Some("fs:///var/lib/semantic/blob")
@@ -242,7 +265,7 @@ mod tests {
             .expect("server subcommand")
             .render_long_help()
             .to_string();
-        assert!(help.contains("--db"));
+        assert!(help.contains("--db-uri"));
         assert!(help.contains("--blob-uri"));
         assert!(help.contains("--bind"));
         assert!(help.contains("--data-dir"));

@@ -350,7 +350,7 @@ impl ScopeManager {
 
     fn provider_for_uri(&self, uri: &str) -> std::result::Result<Arc<dyn DbProvider>, AppError> {
         let scheme = uri
-            .split_once("://")
+            .split_once(':')
             .map(|(scheme, _)| scheme)
             .ok_or_else(|| AppError::InvalidRequest(format!("invalid database uri '{uri}'")))?;
         self.providers

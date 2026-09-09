@@ -4,17 +4,17 @@ use crate::CliError;
 
 #[derive(Debug, clap::Args)]
 pub struct Args {
-    /// Path to the local redb database.
+    /// Database URI: redb:PATH, logfs:PATH, or log:<blob>.
     ///
-    /// Defaults to <data-dir>/db/default; <data-dir> defaults to the platform
-    /// user data directory or SEMANTIC_DATA_DIR when set.
-    #[arg(long, value_name = "PATH")]
-    pub db: Option<PathBuf>,
+    /// log:<blob> shares the configured blob store with the log database.
+    /// Defaults to a redb database at <data-dir>/db/default.
+    #[arg(long, env = "SEMANTIC_DB_URI", value_name = "URI")]
+    pub db_uri: Option<String>,
 
     /// Blob-store URI used for uploaded file contents.
     ///
     /// Defaults to a file URI for <data-dir>/blob/default.
-    #[arg(long, value_name = "URI")]
+    #[arg(long, env = "SEMANTIC_BLOB_URI", value_name = "URI")]
     pub blob_uri: Option<String>,
 
     /// Exact socket address to bind, overriding --interface and --port.
@@ -55,7 +55,16 @@ pub struct Args {
 pub async fn run(args: Args) -> std::result::Result<(), CliError> {
     let app_config = app_config(&args);
     let server_config = server_config(&args)?;
-    let db_path = args.db.unwrap_or_else(|| app_config.default_db_path());
+    let db_uri = match args.db_uri {
+        Some(uri) => uri,
+        None => {
+            let path = app_config.default_db_path();
+            let path = path.to_str().ok_or_else(|| {
+                CliError::InvalidInput("database URI requires a UTF-8 path".into())
+            })?;
+            format!("redb:{path}")
+        }
+    };
     let blob_uri = match args.blob_uri {
         Some(uri) => uri,
         None => app_config
@@ -64,19 +73,9 @@ pub async fn run(args: Args) -> std::result::Result<(), CliError> {
     };
     let bind = args.bind.unwrap_or_else(|| server_config.bind_address());
 
-    if let Some(parent) = db_path.parent()
-        && !parent.as_os_str().is_empty()
-    {
-        std::fs::create_dir_all(parent).map_err(|source| CliError::CreateDatabaseDirectory {
-            path: parent.to_path_buf(),
-            source,
-        })?;
-    }
-
-    let server = semantic_server::SemanticServer::local_redb_with_app_config_and_blob_store(
-        db_path, app_config, blob_uri,
-    )?
-    .with_config(server_config);
+    let server = semantic_server::SemanticServer::from_uris(db_uri, blob_uri, app_config)
+        .await?
+        .with_config(server_config);
     let listener = tokio::net::TcpListener::bind(&bind)
         .await
         .map_err(|source| CliError::Bind {

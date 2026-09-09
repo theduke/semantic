@@ -40,6 +40,7 @@ enum DefaultScope {
 
 enum DefaultObjectStore {
     Request(DbScopeId, ObjectStoreId, ObjectStoreOpenRequest),
+    Opened(DbScopeId, ObjectStoreId, objstore::DynObjStore),
 }
 
 pub struct SemanticAppBuilder {
@@ -114,6 +115,20 @@ impl SemanticAppBuilder {
         self
     }
 
+    /// Attach an already-opened store, preserving shared ownership of its handle.
+    pub fn with_default_file_store(
+        mut self,
+        scope_id: DbScopeId,
+        store: objstore::DynObjStore,
+    ) -> Self {
+        self.default_object_store = Some(DefaultObjectStore::Opened(
+            scope_id,
+            ObjectStoreId::new(DEFAULT_FILE_STORE_ID),
+            store,
+        ));
+        self
+    }
+
     pub fn with_idle_ttl(mut self, ttl: Duration) -> Self {
         self.idle_ttl = ttl;
         self
@@ -174,6 +189,9 @@ impl SemanticAppBuilder {
             match default_object_store {
                 DefaultObjectStore::Request(scope_id, store_id, request) => {
                     object_stores.attach_store_request(scope_id, store_id, request, true)?;
+                }
+                DefaultObjectStore::Opened(scope_id, store_id, store) => {
+                    object_stores.attach_store(scope_id, store_id, store, true)?;
                 }
             }
         }

@@ -6666,8 +6666,7 @@ dependencies = [
 [[package]]
 name = "objstore"
 version = "0.1.0-alpha.3"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "8a51ac1200ff9f3299705396fb31bbb1f64722445543e181f40dba1d9391c965"
+source = "git+https://github.com/theduke/objstore?rev=061a7fe3dcfd3707d886b0b74f4a99036162aeae#061a7fe3dcfd3707d886b0b74f4a99036162aeae"
 dependencies = [
  "async-trait",
  "bytes",
@@ -6683,8 +6682,7 @@ dependencies = [
 [[package]]
 name = "objstore_fs"
 version = "0.1.0-alpha.3"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "cf37099077a0d5eadf9f0c75434637a69a7961c3fad2841bb086e638a54ae06d"
+source = "git+https://github.com/theduke/objstore?rev=061a7fe3dcfd3707d886b0b74f4a99036162aeae#061a7fe3dcfd3707d886b0b74f4a99036162aeae"
 dependencies = [
  "async-trait",
  "bytes",
@@ -6696,6 +6694,27 @@ dependencies = [
  "tokio",
  "tokio-util",
  "url",
+]
+
+[[package]]
+name = "objstore_logfs"
+version = "0.1.0-alpha.3"
+source = "git+https://github.com/theduke/objstore?rev=061a7fe3dcfd3707d886b0b74f4a99036162aeae#061a7fe3dcfd3707d886b0b74f4a99036162aeae"
+dependencies = [
+ "async-trait",
+ "base64",
+ "bytes",
+ "futures",
+ "logfs",
+ "objstore",
+ "serde",
+ "serde_bytes",
+ "serde_json",
+ "sha2 0.10.9",
+ "time",
+ "tokio",
+ "url",
+ "zeroize",
 ]
 
 [[package]]
@@ -8678,6 +8697,9 @@ dependencies = [
  "http",
  "include_dir",
  "mime_guess",
+ "objstore",
+ "objstore_fs",
+ "objstore_logfs",
  "semantic_app",
  "semantic_data",
  "semantic_db_core",
@@ -8686,6 +8708,7 @@ dependencies = [
  "semantic_media",
  "semantic_rpc",
  "serde_json",
+ "tempfile",
  "thiserror 2.0.18",
  "tokio",
  "tower",
@@ -8793,6 +8816,16 @@ dependencies = [
  "js-sys",
  "serde",
  "wasm-bindgen",
+]
+
+[[package]]
+name = "serde_bytes"
+version = "0.11.19"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "a5d440709e79d88e51ac01c4b72fc6cb7314017bb7da9eeff678aa94c10e3ea8"
+dependencies = [
+ "serde",
+ "serde_core",
 ]
 
 [[package]]

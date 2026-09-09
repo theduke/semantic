@@ -8,7 +8,7 @@
 //! currently supported.
 //!
 //! The CLI and server provider accept local URIs such as
-//! `logfs:///absolute/path/database.log`. Library callers can use
+//! `logfs:/absolute/path/database.log`. Library callers can use
 //! [`open_backend`] or construct an [`ObjStoreLogStore`] and pass it to
 //! [`open_backend_from_store`]. ObjStore durability and atomic-create behavior
 //! depend on the selected provider, and one writer per WAL namespace is
