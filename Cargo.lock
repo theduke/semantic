@@ -8406,6 +8406,7 @@ version = "0.0.1"
 dependencies = [
  "async-trait",
  "bytes",
+ "dirs",
  "facet-json",
  "futures-util",
  "hex",

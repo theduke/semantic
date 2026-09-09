@@ -10,7 +10,7 @@ pub struct AppConfig {
 impl Default for AppConfig {
     fn default() -> Self {
         Self {
-            data_dir: None,
+            data_dir: default_data_dir(),
             temp_dir: None,
             auto_analyze_media: true,
         }
@@ -38,7 +38,9 @@ impl AppConfig {
     }
 
     pub fn from_env() -> Self {
-        let data_dir = std::env::var_os("SEMANTIC_DATA_DIR").map(PathBuf::from);
+        let data_dir = std::env::var_os("SEMANTIC_DATA_DIR")
+            .map(PathBuf::from)
+            .or_else(default_data_dir);
         let temp_dir = std::env::var_os("SEMANTIC_TEMP_DIR").map(PathBuf::from);
         let auto_analyze_media = std::env::var("SEMANTIC_AUTO_ANALYZE_MEDIA")
             .ok()
@@ -82,6 +84,10 @@ impl AppConfig {
     }
 }
 
+fn default_data_dir() -> Option<PathBuf> {
+    dirs::data_dir().map(|path| path.join("semantic"))
+}
+
 fn parse_bool(value: &str) -> Option<bool> {
     match value.trim().to_ascii_lowercase().as_str() {
         "1" | "true" | "yes" | "on" => Some(true),
@@ -122,6 +128,14 @@ mod tests {
             !AppConfig::new()
                 .with_auto_analyze_media(false)
                 .auto_analyze_media
+        );
+    }
+
+    #[test]
+    fn data_dir_defaults_to_platform_data_directory() {
+        assert_eq!(
+            AppConfig::default().data_dir,
+            dirs::data_dir().map(|path| path.join("semantic"))
         );
     }
 }

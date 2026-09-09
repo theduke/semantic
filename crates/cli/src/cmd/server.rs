@@ -6,8 +6,8 @@ use crate::CliError;
 pub struct Args {
     /// Path to the local redb database.
     ///
-    /// Defaults to <data-dir>/db/default; <data-dir> defaults to the current
-    /// directory or SEMANTIC_DATA_DIR when set.
+    /// Defaults to <data-dir>/db/default; <data-dir> defaults to the platform
+    /// user data directory or SEMANTIC_DATA_DIR when set.
     #[arg(long, value_name = "PATH")]
     pub db: Option<PathBuf>,
 
@@ -23,7 +23,8 @@ pub struct Args {
 
     /// Base directory for persistent database and blob data.
     ///
-    /// Overrides SEMANTIC_DATA_DIR; defaults to the current directory.
+    /// Overrides SEMANTIC_DATA_DIR; defaults to the platform user data directory
+    /// (for example, ~/.local/share/semantic on Linux).
     #[arg(long, value_name = "PATH")]
     pub data_dir: Option<PathBuf>,
 
