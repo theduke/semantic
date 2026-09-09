@@ -652,6 +652,17 @@ impl Catalog {
         &mut self,
         relationship: RelationType,
     ) -> Result<LocalRelationId, CatalogError> {
+        self.validate_relationship(&relationship)?;
+        let key = relationship.id.clone();
+        Ok(self
+            .relationships
+            .insert(verbatim_nameset(&key), |lid| RelationshipSchema {
+                lid,
+                relationship,
+            }))
+    }
+
+    fn validate_relationship(&self, relationship: &RelationType) -> Result<(), CatalogError> {
         let source_collection = self
             .collection_by_name(&relationship.source_collection)
             .ok_or_else(|| {
@@ -699,13 +710,7 @@ impl Catalog {
                 }
             }
         }
-        let key = relationship.id.clone();
-        Ok(self
-            .relationships
-            .insert(verbatim_nameset(&key), |lid| RelationshipSchema {
-                lid,
-                relationship,
-            }))
+        Ok(())
     }
 
     pub fn delete_relationship(&mut self, id: &str) -> bool {
@@ -1263,15 +1268,17 @@ impl Catalog {
                 .push(item.lid);
         }
         for item in relationships {
-            let _ = catalog.upsert_relationship(item.relationship.clone())?;
-            if let Some(existing) = catalog.relationship_by_id(&item.relationship.id) {
-                let value = existing.clone();
-                catalog.relationships.insert_fixed(
-                    item.lid,
-                    verbatim_nameset(&item.relationship.id),
-                    value,
-                );
-            }
+            catalog.validate_relationship(&item.relationship)?;
+            let key = item.relationship.id.clone();
+            // Restore both the map slot and embedded ID without allocating a temporary entry.
+            catalog.relationships.insert_fixed(
+                item.lid,
+                verbatim_nameset(&key),
+                RelationshipSchema {
+                    lid: item.lid,
+                    relationship: item.relationship,
+                },
+            );
         }
         for item in packages {
             catalog.upsert_package(item.package);
@@ -2980,8 +2987,11 @@ mod tests {
     fn restoring_indexes_preserves_sparse_ids_in_any_row_order() {
         let mut catalog = Catalog::new();
         for name in ["directories", "other"] {
-            catalog
+            let collection = catalog
                 .register_collection(name, CollectionKind::Polymorphic)
+                .unwrap();
+            catalog
+                .upsert_index("by_name", collection, "name", true)
                 .unwrap();
         }
         let mut snapshot = catalog.to_storage_snapshot();
@@ -2991,7 +3001,7 @@ mod tests {
         snapshot.indexes.reverse();
         let expected = snapshot.indexes.clone();
 
-        let restored = Catalog::from_storage_snapshot(snapshot).unwrap();
+        let mut restored = Catalog::from_storage_snapshot(snapshot).unwrap();
 
         assert_eq!(restored.indexes().count(), expected.len());
         for saved in &expected {
@@ -3000,6 +3010,8 @@ mod tests {
             assert_eq!(index.collection, saved.collection);
             assert_eq!(index.schema.name, saved.name);
             assert_eq!(index.canonical_field, saved.field);
+            assert_eq!(index.schema.unique, saved.unique);
+            assert_eq!(index.schema.kind, saved.kind);
             assert_eq!(
                 restored
                     .indexes_for_collection(saved.collection)
@@ -3009,6 +3021,165 @@ mod tests {
                 vec![saved.lid]
             );
         }
+
+        let collection = restored.collection_by_name("directories").unwrap().lid;
+        let saved = expected
+            .iter()
+            .find(|index| index.collection == collection && index.name == "by_name")
+            .unwrap();
+        let updated = restored
+            .upsert_index("by_name", collection, "title", false)
+            .unwrap();
+        assert_eq!(updated, saved.lid);
+        assert_eq!(restored.indexes().count(), expected.len());
+        let index = restored.index_by_lid(updated).unwrap();
+        assert_eq!(index.canonical_field, "title");
+        assert!(!index.schema.unique);
+        assert!(restored.delete_index(collection, "by_name"));
+        assert!(!restored.delete_index(collection, "by_name"));
+        assert!(restored.index_by_lid(updated).is_none());
+        assert!(
+            restored
+                .indexes_for_collection(collection)
+                .all(|index| index.schema.name != "by_name")
+        );
+        let recreated = restored
+            .upsert_index("by_name", collection, "name", true)
+            .unwrap();
+        assert!(recreated > expected.iter().map(|index| index.lid).max().unwrap());
+        let new_id = restored
+            .upsert_index("by_title", collection, "title", false)
+            .unwrap();
+        assert!(new_id > recreated);
+        assert_eq!(restored.indexes().count(), expected.len() + 1);
+        let snapshot = restored.to_storage_snapshot();
+        assert_eq!(
+            Catalog::from_storage_snapshot(snapshot.clone())
+                .unwrap()
+                .to_storage_snapshot(),
+            snapshot
+        );
+    }
+
+    #[test]
+    fn restoring_relationships_preserves_sparse_ids_and_lifecycle() {
+        let mut catalog = Catalog::new();
+        for name in ["directories", "other"] {
+            catalog
+                .register_collection(name, CollectionKind::Polymorphic)
+                .unwrap();
+        }
+        for id in ["test:first", "test:second", "test:third"] {
+            catalog
+                .upsert_relationship(RelationType {
+                    id: id.to_string(),
+                    name: id.to_string(),
+                    source_collection: "directories".to_string(),
+                    mode: RelationMode::External,
+                    indexing_mode: semantic_data::schema::RelationIndexingMode::Enabled,
+                    meta: Meta::default(),
+                })
+                .unwrap();
+        }
+        let mut snapshot = catalog.to_storage_snapshot();
+        for relationship in &mut snapshot.relationships {
+            relationship.lid = LocalRelationId(relationship.lid.0 * 3 + 4);
+        }
+        snapshot.relationships.reverse();
+        let expected = snapshot.relationships.clone();
+        let mut restored = Catalog::from_storage_snapshot(snapshot).unwrap();
+        assert_eq!(restored.relationships().count(), expected.len());
+        for saved in &expected {
+            let relationship = restored.relationship_by_id(&saved.relationship.id).unwrap();
+            assert_eq!(relationship.lid, saved.lid);
+            assert_eq!(relationship.relationship, saved.relationship);
+            assert_eq!(
+                restored
+                    .relationships()
+                    .filter(
+                        |(_, relationship)| relationship.relationship.id == saved.relationship.id
+                    )
+                    .map(|(id, _)| id)
+                    .collect::<Vec<_>>(),
+                vec![saved.lid]
+            );
+        }
+
+        let saved = &expected[0];
+        let mut changed = saved.relationship.clone();
+        changed.name = "updated".to_string();
+        changed.source_collection = "other".to_string();
+        assert_eq!(
+            restored.upsert_relationship(changed.clone()).unwrap(),
+            saved.lid
+        );
+        assert_eq!(
+            restored
+                .relationship_by_id(&changed.id)
+                .unwrap()
+                .relationship,
+            changed
+        );
+        assert_eq!(restored.relationships().count(), expected.len());
+        assert!(restored.delete_relationship(&changed.id));
+        assert!(!restored.delete_relationship(&changed.id));
+        assert!(restored.relationship_by_id(&changed.id).is_none());
+        assert!(restored.relationships().all(
+            |(id, relationship)| id != saved.lid && relationship.relationship.id != changed.id
+        ));
+        let recreated = restored.upsert_relationship(changed.clone()).unwrap();
+        assert!(
+            recreated
+                > expected
+                    .iter()
+                    .map(|relationship| relationship.lid)
+                    .max()
+                    .unwrap()
+        );
+        changed.id = "test:new".to_string();
+        assert!(restored.upsert_relationship(changed).unwrap() > recreated);
+        assert_eq!(restored.relationships().count(), expected.len() + 1);
+        let snapshot = restored.to_storage_snapshot();
+        assert_eq!(
+            Catalog::from_storage_snapshot(snapshot.clone())
+                .unwrap()
+                .to_storage_snapshot(),
+            snapshot
+        );
+    }
+
+    #[test]
+    fn restoring_relationships_validates_definitions() {
+        let mut catalog = Catalog::new();
+        catalog
+            .register_collection("directories", CollectionKind::Polymorphic)
+            .unwrap();
+        let relationship = RelationType {
+            id: "test:invalid".to_string(),
+            name: "invalid".to_string(),
+            source_collection: "missing".to_string(),
+            mode: RelationMode::External,
+            indexing_mode: semantic_data::schema::RelationIndexingMode::Enabled,
+            meta: Meta::default(),
+        };
+        let mut snapshot = catalog.to_storage_snapshot();
+        snapshot.relationships.push(StoredRelationship {
+            lid: LocalRelationId(9),
+            relationship,
+        });
+        let error = Catalog::from_storage_snapshot(snapshot.clone()).unwrap_err();
+        assert!(
+            error
+                .to_string()
+                .contains("unknown source collection 'missing'")
+        );
+
+        snapshot.relationships[0].relationship.source_collection = "directories".to_string();
+        snapshot.relationships[0].relationship.mode = RelationMode::Embedded {
+            attribute: "missing".to_string(),
+        };
+        let error = Catalog::from_storage_snapshot(snapshot).unwrap_err();
+        assert!(error.to_string().contains("unknown attribute 'missing'"));
     }
 
     #[test]
