@@ -79,6 +79,7 @@ pub fn package() -> Package {
             media_metadata_migration(),
             uploaded_at_migration(),
             creatable_in_ui_migration(),
+            filekind_index_and_pixel_titles_migration(),
         ],
         version: None,
         meta: Meta::default(),
@@ -203,7 +204,7 @@ pub fn uploaded_at_migration() -> Migration {
             }),
             MigrationOperation::Ddl(MigrationDdlOperation::UpsertClass {
                 class: {
-                    let mut class = file_class();
+                    let mut class = file_class_before_pixel_titles();
                     class.creatable_in_ui = None;
                     class
                 },
@@ -220,9 +221,45 @@ fn creatable_in_ui_migration() -> Migration {
         description: Some("Exclude files from generic entity creators.".to_string()),
         operations: vec![MigrationOperation::Ddl(
             MigrationDdlOperation::UpsertClass {
-                class: file_class(),
+                class: file_class_before_pixel_titles(),
             },
         )],
+        meta: Meta::default(),
+    }
+}
+
+fn filekind_index_and_pixel_titles_migration() -> Migration {
+    Migration {
+        module: MODULE_NAME.to_string(),
+        name: "007_filekind_index_and_pixel_titles".to_string(),
+        description: Some("Index file kind and title media pixel dimensions.".to_string()),
+        operations: vec![
+            MigrationOperation::Ddl(MigrationDdlOperation::UpsertIndex {
+                name: ATTR_FILE_FILEKIND.to_string(),
+                collection: crate::builtin::DEFAULT_COLLECTION.to_string(),
+                field: ATTR_FILE_FILEKIND.to_string(),
+                unique: false,
+            }),
+            MigrationOperation::Ddl(MigrationDdlOperation::UpsertAttribute {
+                attribute: attribute_with_title(
+                    ATTR_FILE_MEDIA_PIXEL_WIDTH,
+                    "media_pixel_width",
+                    uint64_type(),
+                    "Width (pixels)",
+                ),
+            }),
+            MigrationOperation::Ddl(MigrationDdlOperation::UpsertAttribute {
+                attribute: attribute_with_title(
+                    ATTR_FILE_MEDIA_PIXEL_HEIGHT,
+                    "media_pixel_height",
+                    uint64_type(),
+                    "Height (pixels)",
+                ),
+            }),
+            MigrationOperation::Ddl(MigrationDdlOperation::UpsertClass {
+                class: file_class(),
+            }),
+        ],
         meta: Meta::default(),
     }
 }
@@ -252,15 +289,17 @@ pub fn file_attributes() -> Vec<AttributeType> {
             datetime_type(),
             "Uploaded At",
         ),
-        attribute(
+        attribute_with_title(
             ATTR_FILE_MEDIA_PIXEL_WIDTH,
             "media_pixel_width",
             uint64_type(),
+            "Width (pixels)",
         ),
-        attribute(
+        attribute_with_title(
             ATTR_FILE_MEDIA_PIXEL_HEIGHT,
             "media_pixel_height",
             uint64_type(),
+            "Height (pixels)",
         ),
         attribute(ATTR_FILE_MEDIA_DURATION, "media_duration", duration_type()),
         attribute(
@@ -314,6 +353,18 @@ pub fn file_attributes() -> Vec<AttributeType> {
 }
 
 pub fn file_class() -> ClassType {
+    let mut class = file_class_before_pixel_titles();
+    for (name, title) in [
+        ("media_pixel_width", "Width (pixels)"),
+        ("media_pixel_height", "Height (pixels)"),
+    ] {
+        class.attributes.get_mut(name).unwrap().meta.title = Some(title.to_string());
+    }
+    class
+}
+
+// Preserve the class snapshot used by migrations 004 through 006.
+fn file_class_before_pixel_titles() -> ClassType {
     let mut class = file_class_with_attributes(&[
         ("title", ATTR_TITLE, 10, Some("Title")),
         ("description", ATTR_DESCRIPTION, 20, Some("Description")),
@@ -604,7 +655,7 @@ fn filekind_migration_file_class() -> ClassType {
 }
 
 fn media_metadata_migration_file_class() -> ClassType {
-    let mut class = file_class();
+    let mut class = file_class_before_pixel_titles();
     class.creatable_in_ui = None;
     class.attributes.remove("uploaded_at");
     class
@@ -891,7 +942,11 @@ mod tests {
         assert_eq!(package.name, PACKAGE_NAME);
         assert_eq!(package.root.name, MODULE_NAME);
         assert!(package.modules.is_empty());
-        assert_eq!(package.migrations.len(), 6);
+        assert_eq!(package.migrations.len(), 7);
+        assert_eq!(
+            package.migrations[6].name,
+            "007_filekind_index_and_pixel_titles"
+        );
         assert_eq!(package.migrations[0].name, INIT_MIGRATION_NAME);
         assert_eq!(package.migrations[1].name, GENERIC_METADATA_MIGRATION_NAME);
         assert_eq!(package.migrations[2].name, FILEKIND_MIGRATION_NAME);
@@ -927,6 +982,29 @@ mod tests {
                 .contains_key(ATTR_FILE_MEDIA_DURATION)
         );
         assert!(package.root.attributes.contains_key(ATTR_FILE_UPLOADED_AT));
+    }
+
+    #[test]
+    fn filekind_index_migration_updates_current_schema() {
+        let migration = super::filekind_index_and_pixel_titles_migration();
+        assert_eq!(
+            migration.operations[0],
+            MigrationOperation::Ddl(MigrationDdlOperation::UpsertIndex {
+                name: ATTR_FILE_FILEKIND.to_string(),
+                collection: crate::builtin::DEFAULT_COLLECTION.to_string(),
+                field: ATTR_FILE_FILEKIND.to_string(),
+                unique: false,
+            }),
+        );
+        let module = super::root_module();
+        for operation in &migration.operations[1..] {
+            if let MigrationOperation::Ddl(MigrationDdlOperation::UpsertAttribute { attribute }) =
+                operation
+            {
+                assert_eq!(attribute, &module.attributes[&attribute.id]);
+            }
+        }
+        assert_eq!(migration_upsert_class(&migration), &super::file_class());
     }
 
     #[test]
@@ -1123,6 +1201,16 @@ mod tests {
             ),
             ("mime_type", super::ATTR_FILE_MIME_TYPE, "MIME Type"),
             ("uploaded_at", super::ATTR_FILE_UPLOADED_AT, "Uploaded At"),
+            (
+                "media_pixel_width",
+                super::ATTR_FILE_MEDIA_PIXEL_WIDTH,
+                "Width (pixels)",
+            ),
+            (
+                "media_pixel_height",
+                super::ATTR_FILE_MEDIA_PIXEL_HEIGHT,
+                "Height (pixels)",
+            ),
         ];
 
         let attributes = super::file_attributes()
