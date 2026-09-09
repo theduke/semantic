@@ -34,7 +34,12 @@ removed when Firefox restarts; persistent installation requires a signed add-on.
 
 Open the extension settings and enter the public base URL of the Semantic web
 application, such as `http://127.0.0.1:8888`. A deployment below a path prefix is
-also supported. On save, the browser asks for access only to that server's origin.
+also supported. On save, the browser asks for access to that server's scheme and
+hostname. This permission covers all ports because Firefox does not support ports
+in host permission patterns; requests still use the exact configured URL.
+
+After updating from a version that included ports in permission patterns, reload
+the extension and save its settings again to grant the corrected permission.
 
 ## Architecture and current limitations
 

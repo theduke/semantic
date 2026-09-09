@@ -24,6 +24,23 @@ test("normalizes an application URL while preserving a path prefix", () => {
   );
 });
 
+test("omits ports from host permissions while preserving the RPC destination", () => {
+  for (const [input, permission] of [
+    ["http://127.0.0.1:3001", "http://127.0.0.1/*"],
+    ["http://localhost:8888", "http://localhost/*"],
+    ["https://example.test:8443/semantic", "https://example.test/*"],
+    ["http://[::1]:3001", "http://[::1]/*"],
+  ] as const) {
+    const baseUrl = normalizeBaseUrl(input);
+    assert.equal(originPermission(baseUrl), permission);
+    assert.equal(rpcEndpoint({ baseUrl }), `${input}/api/v1/rpc`);
+  }
+  assert.equal(
+    originPermission("http://127.0.0.1:3000"),
+    originPermission("http://127.0.0.1:3001"),
+  );
+});
+
 test("rejects unsafe or ambiguous application URLs", () => {
   for (const value of [
     "file:///tmp/semantic",

@@ -15,6 +15,8 @@ Required permissions are limited to:
 - `activeTab`, to inspect the tab for which you opened the popup.
 - `storage`, to retain the configured Semantic application URL locally.
 
-Network access is optional. Saving settings asks the browser to grant access only
-to the configured server origin. Changing origins removes the previous grant after
-the new configuration is stored. No page content scripts are injected.
+Network access is optional. Saving settings asks the browser to grant access to the
+configured server's scheme and hostname across all ports, because Firefox does not
+support ports in host permission patterns. Requests still use the exact configured
+URL. Changing the scheme or hostname removes the previous grant after the new
+configuration is stored. No page content scripts are injected.

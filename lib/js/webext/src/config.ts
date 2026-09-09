@@ -40,7 +40,10 @@ export function entityUrl(config: ExtensionConfig, id: string): string {
 }
 
 export function originPermission(baseUrl: string): string {
-  return `${new URL(baseUrl).origin}/*`;
+  const url = new URL(baseUrl);
+  // Firefox accepts patterns containing ports but does not match them to URLs.
+  // Host permissions therefore cover all ports; the RPC URL keeps its exact port.
+  return `${url.protocol}//${url.hostname}/*`;
 }
 
 export function parseConfig(value: unknown): ExtensionConfig | null {
