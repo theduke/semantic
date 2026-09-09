@@ -109,7 +109,7 @@ fn make_class(
         inherits: parent.map(|id| ClassRef { id: id.into() }),
         extends: vec![],
         strict_schema: false,
-        creatable_in_ui: None,
+        creatable_in_ui: Some(false),
         attributes: attrs
             .iter()
             .enumerate()
