@@ -450,7 +450,7 @@ pub fn core_catalog_schema_batch() -> DdlBatch {
         inherits: None,
         extends: vec![],
         strict_schema: false,
-        creatable_in_ui: None,
+        creatable_in_ui: Some(false),
         attributes: attrs,
         constraints: vec![],
         meta: Meta::default(),
@@ -463,7 +463,7 @@ pub fn core_catalog_schema_batch() -> DdlBatch {
         }),
         extends: vec![],
         strict_schema: false,
-        creatable_in_ui: None,
+        creatable_in_ui: Some(false),
         attributes: std::collections::BTreeMap::new(),
         constraints: vec![],
         meta: Meta::default(),
@@ -525,7 +525,7 @@ pub fn core_catalog_schema_batch() -> DdlBatch {
         inherits: None,
         extends: vec![],
         strict_schema: false,
-        creatable_in_ui: None,
+        creatable_in_ui: Some(false),
         attributes: relation_attrs,
         constraints: vec![],
         meta: Meta::default(),
@@ -867,7 +867,13 @@ pub fn core_schema_migrations() -> Vec<Migration> {
             operations: core_catalog_schema_batch()
                 .operations
                 .into_iter()
-                .map(|operation| MigrationOperation::Ddl(ddl_to_migration_ddl(operation)))
+                .map(|mut operation| {
+                    // Preserve the original core schema migration snapshot.
+                    if let DdlOperation::UpsertClass { class } = &mut operation {
+                        class.creatable_in_ui = None;
+                    }
+                    MigrationOperation::Ddl(ddl_to_migration_ddl(operation))
+                })
                 .collect(),
             meta: Meta::default(),
         },
@@ -893,17 +899,17 @@ pub fn core_schema_migrations() -> Vec<Migration> {
 }
 
 fn creatable_in_ui_migration() -> Migration {
-    let mut class = core_catalog_schema_batch()
+    let mut classes: Vec<_> = core_catalog_schema_batch()
         .operations
         .into_iter()
-        .find_map(|op| match op {
-            DdlOperation::UpsertClass { class }
-                if class.id == CORE_CATALOG_CLASS_ENTRY_CLASS_ID =>
-            {
-                Some(class)
-            }
+        .filter_map(|op| match op {
+            DdlOperation::UpsertClass { class } => Some(class),
             _ => None,
         })
+        .collect();
+    let class = classes
+        .iter_mut()
+        .find(|class| class.id == CORE_CATALOG_CLASS_ENTRY_CLASS_ID)
         .expect("core schema defines CatalogClass");
     class.attributes.insert(
         semantic_data::attr::ATTR_UI_CREATABLE_IN_UI.to_string(),
@@ -918,16 +924,21 @@ fn creatable_in_ui_migration() -> Migration {
             meta: Meta::default(),
         },
     );
+    let mut operations = vec![MigrationOperation::Ddl(
+        MigrationDdlOperation::UpsertAttribute {
+            attribute: semantic_data::attr::creatable_in_ui_attribute(),
+        },
+    )];
+    operations.extend(
+        classes
+            .into_iter()
+            .map(|class| MigrationOperation::Ddl(MigrationDdlOperation::UpsertClass { class })),
+    );
     Migration {
         module: CORE_SCHEMA_MODULE.to_string(),
         name: "003_creatable_in_ui".to_string(),
-        description: Some("Add optional UI creation metadata for classes.".to_string()),
-        operations: vec![
-            MigrationOperation::Ddl(MigrationDdlOperation::UpsertAttribute {
-                attribute: semantic_data::attr::creatable_in_ui_attribute(),
-            }),
-            MigrationOperation::Ddl(MigrationDdlOperation::UpsertClass { class }),
-        ],
+        description: Some("Add optional UI creation metadata and exclude core classes from generic entity creators.".to_string()),
+        operations,
         meta: Meta::default(),
     }
 }
