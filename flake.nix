@@ -72,8 +72,7 @@
             lockFile = ./Cargo.lock;
             outputHashes = {
               "dioxus-attributes-0.1.0" = "sha256-RLV2EbE0/AoDNLWrt0BMqbnPkSb8jR1PHL/YbFjHFJM=";
-              "logfs-0.1.1" = "sha256-ftHXyiw190VHnypzycpQFCY84aBZ0ezuOYu8x87rbgs=";
-              "objstore-0.1.0-alpha.3" = "sha256-D6rqLojEyRySn8GjqhNiu4Di+mAvZgizhUVDODvwWPg=";
+              "logfs-0.2.0" = "sha256-PFtsk6KJupNudjhhmKjlH4GFi9bH+QuFZLN2dlDQyYk=";
             };
           };
 

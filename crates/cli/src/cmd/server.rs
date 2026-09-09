@@ -7,13 +7,16 @@ pub struct Args {
     /// Database URI: redb:PATH, logfs:PATH, or log:<blob>.
     ///
     /// log:<blob> shares the configured blob store with the log database.
-    /// Defaults to a redb database at <data-dir>/db/default.
+    /// With a logfs blob store, defaults to log:<blob>; otherwise uses redb
+    /// at <data-dir>/db/default.
     #[arg(long, env = "SEMANTIC_DB_URI", value_name = "URI")]
     pub db_uri: Option<String>,
 
     /// Blob-store URI used for uploaded file contents.
     ///
     /// Defaults to a file URI for <data-dir>/blob/default.
+    /// A logfs store prompts for a hidden password; leave it empty to open
+    /// without password protection.
     #[arg(long, env = "SEMANTIC_BLOB_URI", value_name = "URI")]
     pub blob_uri: Option<String>,
 
@@ -55,16 +58,6 @@ pub struct Args {
 pub async fn run(args: Args) -> std::result::Result<(), CliError> {
     let app_config = app_config(&args);
     let server_config = server_config(&args)?;
-    let db_uri = match args.db_uri {
-        Some(uri) => uri,
-        None => {
-            let path = app_config.default_db_path();
-            let path = path.to_str().ok_or_else(|| {
-                CliError::InvalidInput("database URI requires a UTF-8 path".into())
-            })?;
-            format!("redb:{path}")
-        }
-    };
     let blob_uri = match args.blob_uri {
         Some(uri) => uri,
         None => app_config
@@ -72,10 +65,14 @@ pub async fn run(args: Args) -> std::result::Result<(), CliError> {
             .map_err(CliError::DefaultBlobUri)?,
     };
     let bind = args.bind.unwrap_or_else(|| server_config.bind_address());
+    let db_uri = semantic_server::resolve_db_uri(args.db_uri, &blob_uri, &app_config)?;
+    let blob_password = semantic_server::prompt_blob_password(&blob_uri)
+        .map_err(|err| CliError::InvalidInput(format!("read logfs password: {err}")))?;
 
-    let server = semantic_server::SemanticServer::from_uris(db_uri, blob_uri, app_config)
-        .await?
-        .with_config(server_config);
+    let server =
+        semantic_server::SemanticServer::from_uris(db_uri, blob_uri, blob_password, app_config)
+            .await?
+            .with_config(server_config);
     let listener = tokio::net::TcpListener::bind(&bind)
         .await
         .map_err(|source| CliError::Bind {

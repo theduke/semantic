@@ -8,6 +8,33 @@ use semantic_data::schema::DbOpenMode;
 
 use crate::{SemanticServer, ServerError};
 
+/// Resolve startup selectors, preserving an explicit database choice.
+pub fn resolve_db_uri(
+    db_uri: Option<String>,
+    blob_uri: &str,
+    app_config: &AppConfig,
+) -> Result<String, ServerError> {
+    if let Some(uri) = db_uri {
+        return Ok(uri);
+    }
+    if is_logfs_blob_uri(blob_uri) {
+        eprintln!(
+            "No database URI specified; automatically selected 'log:<blob>' because the blob store uses logfs. Database records and blobs will share one open store."
+        );
+        return Ok("log:<blob>".into());
+    }
+    let path = app_config.default_db_path();
+    let path = path
+        .to_str()
+        .ok_or_else(|| AppError::InvalidRequest("database URI requires a UTF-8 path".into()))?;
+    Ok(format!("redb:{path}"))
+}
+
+pub fn is_logfs_blob_uri(uri: &str) -> bool {
+    uri.split_once(':')
+        .is_some_and(|(scheme, _)| scheme.eq_ignore_ascii_case("logfs"))
+}
+
 /// Configuration shared by database backends that open a local file.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct LocalDbConfig {
@@ -60,15 +87,28 @@ impl SemanticServer {
     ///
     /// `log:<blob>` shares one physical object store between the WAL and blobs.
     /// Other database schemes retain the blob store's existing root key layout.
+    /// `blob_password` supplies logfs encryption credentials without embedding
+    /// them in the URI. `None` opens without encryption; this method never prompts.
     pub async fn from_uris(
         db_uri: String,
         blob_uri: String,
+        blob_password: Option<String>,
         app_config: AppConfig,
     ) -> Result<Self, ServerError> {
+        if blob_password.is_some() && !is_logfs_blob_uri(&blob_uri) {
+            return Err(AppError::InvalidRequest(
+                "blob-store passwords are only supported for logfs".into(),
+            )
+            .into());
+        }
+        #[cfg(not(feature = "logfs"))]
+        if blob_password.is_some() {
+            return Err(AppError::InvalidRequest("logfs support is not enabled".into()).into());
+        }
         let mut stores = ObjStoreBuilder::new();
         stores.register_provider(objstore_fs::FsProvider::new());
         #[cfg(feature = "logfs")]
-        stores.register_provider(objstore_logfs::LogFsProvider::new());
+        stores.register_provider(crate::logfs_blob::LogFsBlobProvider::new(blob_password));
 
         let blob_store = tokio::task::spawn_blocking(move || stores.build(&blob_uri))
             .await

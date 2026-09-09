@@ -5,6 +5,34 @@ use semantic_server::{LocalDbConfig, SemanticServer};
 use tower::ServiceExt;
 
 #[test]
+fn database_selection_follows_blob_backend_unless_explicit() {
+    let config = AppConfig::new().with_data_dir("test-data");
+    for uri in ["logfs:///store.log", "LOGFS:///store.log?allow_create=true"] {
+        assert_eq!(
+            semantic_server::resolve_db_uri(None, uri, &config).unwrap(),
+            "log:<blob>"
+        );
+        assert_eq!(
+            semantic_server::resolve_db_uri(Some("redb:explicit.db".into()), uri, &config).unwrap(),
+            "redb:explicit.db"
+        );
+    }
+    assert_eq!(
+        semantic_server::resolve_db_uri(None, "fs:///blobs", &config).unwrap(),
+        "redb:test-data/db/default"
+    );
+    assert_eq!(
+        semantic_server::resolve_db_uri(
+            Some("logfs:separate.log".into()),
+            "logfs:///blobs.log",
+            &config
+        )
+        .unwrap(),
+        "logfs:separate.log"
+    );
+}
+
+#[test]
 fn local_database_uris_preserve_paths() {
     for (uri, path) in [
         ("redb:relative/data", "relative/data"),
@@ -88,9 +116,10 @@ async fn shared_logfs_opens_once_and_replays_database_and_blobs() {
         dir.path().join("shared.log").display()
     );
     let config = AppConfig::new().with_auto_analyze_media(false);
-    let server = SemanticServer::from_uris("log:<blob>".into(), blob_uri.clone(), config.clone())
-        .await
-        .unwrap();
+    let server =
+        SemanticServer::from_uris("log:<blob>".into(), blob_uri.clone(), None, config.clone())
+            .await
+            .unwrap();
     // logfs holds an exclusive file lock: opening the backend independently
     // would fail here, and would also have prevented server startup above.
     let mut stores = ObjStoreBuilder::new();
@@ -111,11 +140,77 @@ async fn shared_logfs_opens_once_and_replays_database_and_blobs() {
         );
     }
 
-    let server = SemanticServer::from_uris("log:<blob>".into(), blob_uri, config)
+    let server = SemanticServer::from_uris("log:<blob>".into(), blob_uri, None, config)
         .await
         .unwrap();
     // Download needs both the replayed database record and the persisted blob.
     download(&server, &id).await;
+}
+
+#[cfg(feature = "logfs")]
+#[tokio::test]
+async fn password_protected_shared_logfs_reopens_and_rejects_wrong_password() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("protected.log");
+    let blob_uri = format!("logfs://{}?allow_create=true", path.display());
+    let config = AppConfig::new().with_auto_analyze_media(false);
+    let db_uri = semantic_server::resolve_db_uri(None, &blob_uri, &config).unwrap();
+    let password = "  test password with spaces  ";
+    let server = SemanticServer::from_uris(
+        db_uri.clone(),
+        blob_uri.clone(),
+        Some(password.into()),
+        config.clone(),
+    )
+    .await
+    .unwrap();
+    let id = upload(&server).await;
+    drop(server);
+
+    assert_eq!(
+        std::fs::read_dir(dir.path()).unwrap().count(),
+        1,
+        "encryption metadata belongs in the logfs file"
+    );
+    let raw_log = std::fs::read(&path).unwrap();
+    assert!(
+        !raw_log
+            .windows(b"persistent contents".len())
+            .any(|bytes| bytes == b"persistent contents")
+    );
+
+    for password in [Some("incorrect password".into()), None] {
+        let result =
+            SemanticServer::from_uris(db_uri.clone(), blob_uri.clone(), password, config.clone())
+                .await;
+        assert!(result.is_err(), "incorrect or absent password must fail");
+        assert!(
+            std::fs::read(&path).unwrap() == raw_log,
+            "failed authentication must not modify the log"
+        );
+    }
+    let server = SemanticServer::from_uris(
+        db_uri.clone(),
+        blob_uri.clone(),
+        Some(password.into()),
+        config.clone(),
+    )
+    .await
+    .unwrap();
+    download(&server, &id).await;
+    drop(server);
+    let moved = dir.path().join("moved.log");
+    std::fs::rename(path, &moved).unwrap();
+    let server = SemanticServer::from_uris(
+        db_uri,
+        format!("logfs://{}", moved.display()),
+        Some(password.into()),
+        config,
+    )
+    .await
+    .unwrap();
+    download(&server, &id).await;
+    assert_eq!(std::fs::read_dir(dir.path()).unwrap().count(), 1);
 }
 
 #[cfg(feature = "redb")]
@@ -127,13 +222,13 @@ async fn redb_uri_creates_parent_and_preserves_blob_root_layout() {
         .with_auto_analyze_media(false);
     let db_uri = format!("redb:{}", dir.path().join("nested/database.redb").display());
     let blob_uri = config.default_blob_uri().unwrap();
-    let server = SemanticServer::from_uris(db_uri.clone(), blob_uri.clone(), config.clone())
+    let server = SemanticServer::from_uris(db_uri.clone(), blob_uri.clone(), None, config.clone())
         .await
         .unwrap();
     let id = upload(&server).await;
     assert!(config.default_blob_path().join(&id).exists());
     drop(server);
-    let server = SemanticServer::from_uris(db_uri, blob_uri, config)
+    let server = SemanticServer::from_uris(db_uri, blob_uri, None, config)
         .await
         .unwrap();
     download(&server, &id).await;
@@ -148,12 +243,12 @@ async fn direct_logfs_uri_round_trip() {
         .with_auto_analyze_media(false);
     let db_uri = format!("logfs:{}", dir.path().join("nested/database.log").display());
     let blob_uri = config.default_blob_uri().unwrap();
-    let server = SemanticServer::from_uris(db_uri.clone(), blob_uri.clone(), config.clone())
+    let server = SemanticServer::from_uris(db_uri.clone(), blob_uri.clone(), None, config.clone())
         .await
         .unwrap();
     let id = upload(&server).await;
     drop(server);
-    let server = SemanticServer::from_uris(db_uri, blob_uri, config)
+    let server = SemanticServer::from_uris(db_uri, blob_uri, None, config)
         .await
         .unwrap();
     download(&server, &id).await;

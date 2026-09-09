@@ -23,10 +23,10 @@ version = "0.0.1"
 # Repo-local
 semantic_data = { path = "crates/data" }
 
-# objstore_logfs is not published; pin all objstore crates to the same release.
-objstore = { git = "https://github.com/theduke/objstore", rev = "061a7fe3dcfd3707d886b0b74f4a99036162aeae" }
-objstore_fs = { git = "https://github.com/theduke/objstore", rev = "061a7fe3dcfd3707d886b0b74f4a99036162aeae" }
-objstore_logfs = { git = "https://github.com/theduke/objstore", rev = "061a7fe3dcfd3707d886b0b74f4a99036162aeae" }
+# Object storage, including the logfs-owned provider.
+objstore = "0.1.0-alpha.3"
+objstore_fs = "0.1.0-alpha.3"
+objstore_logfs = { git = "https://github.com/theduke/logfs" }
 
 
 # crates.io
@@ -43,7 +43,3 @@ anyhow = "1"
 tokio = "1.48.0"
 tracing = "0.1.44"
 dioxus = "0.7.9"
-
-[patch.crates-io]
-# Use the same logfs fixes for direct database and object-store access.
-logfs = { git = "https://github.com/theduke/logfs", rev = "367d386360b4c21d20bf4940a0894eec1edcff50" }

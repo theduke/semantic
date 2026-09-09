@@ -7,6 +7,9 @@ The `semantic_cli` crate provides the `semantic` command-line application.
 With no storage flags, `semantic server` uses redb at `<data-dir>/db/default`
 and filesystem blobs at `<data-dir>/blob/default`. `--data-dir` overrides
 `SEMANTIC_DATA_DIR`; the default is the platform user data directory.
+When the blob URI selects logfs and no database URI is supplied, startup
+automatically selects `log:<blob>` and prints an explanation. An explicit
+database URI, including `SEMANTIC_DB_URI`, takes precedence.
 
 Select the database with `--db-uri` (or `SEMANTIC_DB_URI`):
 
@@ -27,12 +30,25 @@ To put both the database and blobs in one logfs file:
 
 ```sh
 semantic server \
-  --blob-uri 'logfs:///srv/semantic/store.log?allow_create=true' \
-  --db-uri 'log:<blob>'
+  --blob-uri 'logfs:///srv/semantic/store.log?allow_create=true'
 ```
 
 The parent directory must exist. `allow_create=true` allows objstore to create
 the logfs file. Quote `log:<blob>` to prevent shell redirection.
+
+Logfs blob storage prompts for a password at startup. Terminal input is hidden;
+redirected stdin can provide one password line. An empty line opens without
+password protection and prints an explicit message. EOF without a line is an
+error. Passwords are passed to the object-store configuration in memory and are
+never added to the URI or logged. The prompt's value takes precedence over any
+`key` in the URI.
+
+The `objstore_logfs` crate from the logfs repository provides the object store.
+Logfs v3 stores its random encryption salts in the log file; Semantic does not
+create a sidecar settings file. The default Argon2id profile is `standard`;
+`profile=low-memory` may be specified in the blob URI and must also be supplied
+when reopening a file created with that profile. Startup does not automatically
+re-encrypt an existing unencrypted store.
 
 Shared mode opens the physical object store once, then uses `db/default/wal/v1/`
 for database events and `blob/default/` for uploaded contents. Reopening the

@@ -5,8 +5,11 @@ mod file;
 #[cfg(feature = "logfs")]
 mod log;
 mod logfs;
+#[cfg(feature = "logfs")]
+mod logfs_blob;
 mod redb;
 mod router;
+mod startup;
 mod storage;
 #[cfg(feature = "embed-ui")]
 mod ui;
@@ -22,7 +25,8 @@ pub use logfs::LogFsDbProvider;
 #[cfg(feature = "redb")]
 pub use redb::RedbDbProvider;
 pub use router::SemanticServer;
-pub use storage::LocalDbConfig;
+pub use startup::prompt_blob_password;
+pub use storage::{LocalDbConfig, is_logfs_blob_uri, resolve_db_uri};
 
 #[cfg(test)]
 mod tests {
@@ -40,6 +44,7 @@ mod tests {
         Batch, BatchOutcome, DbError, EntityRecord, PackageRegistrationOutcome, QueryResult,
         TextQueryInput,
     };
+
     use semantic_rpc_core::{RpcRequest, RpcResponse, RpcResult};
     use tower::ServiceExt;
 
