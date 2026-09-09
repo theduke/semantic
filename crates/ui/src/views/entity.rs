@@ -6,12 +6,11 @@ use semantic_ui_core::{
     EntityActionPlacement, EntityCard, EntityDisplayRenderer, EntityRenderOptions, EntityTarget,
     components::{EmptyState, ErrorState, LoadingSkeleton, RefreshingIndicator},
     context::{Toast, use_toast_dispatcher},
-    entity_title, use_active_scope_id, use_rpc_client, use_ui_catalog_context,
+    use_active_scope_id, use_rpc_client,
 };
 
 use crate::{
     app::{entity_edit_route, entity_route, use_entity_edit_navigation},
-    components::EntityPageHeader,
     views::Route,
 };
 
@@ -52,7 +51,6 @@ pub fn CollectionEntityPage(collection: String, id: String) -> Element {
 fn EntityPageView(collection: Option<String>, id: String) -> Element {
     let client = use_rpc_client();
     let scope_id = use_active_scope_id();
-    let catalog_signal = use_ui_catalog_context().catalog_signal();
     let toast = use_toast_dispatcher();
     let edit_navigation = use_entity_edit_navigation();
     let target = EntityTarget::new(collection.clone(), id.clone());
@@ -99,23 +97,6 @@ fn EntityPageView(collection: Option<String>, id: String) -> Element {
         && current_response
             .and_then(|response| response.result.as_ref().ok())
             .is_some_and(Option::is_none);
-    let class_name = object.as_ref().and_then(|object| {
-        catalog_signal
-            .read()
-            .as_ref()
-            .and_then(|catalog| catalog.object_class(object.as_ref()))
-            .map(|class| {
-                class
-                    .meta
-                    .title
-                    .clone()
-                    .unwrap_or_else(|| class.name.clone())
-            })
-    });
-    let title = object
-        .as_ref()
-        .map(|object| entity_title(object.as_ref(), Some(&id), class_name.as_deref()))
-        .unwrap_or_else(|| id.clone());
     let target_key = entity_route(&target).to_string();
     let return_route = entity_return_route(&target);
 
@@ -124,14 +105,6 @@ fn EntityPageView(collection: Option<String>, id: String) -> Element {
             key: "{target_key}",
             class: "semantic-page semantic-entity semantic-entity-page",
             aria_busy: loading,
-            EntityPageHeader {
-                target: target.clone(),
-                title: title.clone(),
-                class_name: class_name.clone(),
-                refreshing: loading,
-                editable: false,
-                on_refresh: move |_| resource.restart(),
-            }
 
             if loading && object.is_none() {
                 LoadingSkeleton {

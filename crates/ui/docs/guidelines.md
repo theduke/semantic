@@ -90,7 +90,7 @@ Prefer these before creating route-local equivalents:
 | Global feedback | `ToastProvider`, `ToastDispatcher`, `ToastViewport` |
 | Safe actions | `IconButton`, `ConfirmAction`, `ConfirmDangerDialog`, `CopyableCode` |
 | Entity results | `EntityExplorer`, `DataToolbar`, `EntityResults`, `Pagination` |
-| Entity detail | `EntityPageHeader`, `EntityCard` with detail-mode action hooks |
+| Entity detail | `EntityCard` with detail-mode action hooks |
 | Query input | `QueryEditor` |
 | Form layout | `FormPage`, `FormActions`, `UnsavedChangesPrompt` |
 | Upload/job UI | `DropZone`, `JobProgress` |
