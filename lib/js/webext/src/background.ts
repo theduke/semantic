@@ -7,6 +7,7 @@ import {
   normalizeWebsiteUrl,
   type BookmarkClientFactory,
 } from "./bookmark.js";
+import { searchMetadata } from "./metadata.js";
 import { rpcEndpoint } from "./config.js";
 import { loadStoredConfig } from "./extension-storage.js";
 import {
@@ -42,6 +43,15 @@ async function dispatch(
       normalizeWebsiteUrl(request.url),
     );
     return { ok: true, data: { bookmark } };
+  }
+
+  if (request.type === "metadata.search") {
+    const options = await searchMetadata(
+      createClient(rpcEndpoint(config)),
+      request.kind,
+      request.query,
+    );
+    return { ok: true, data: { options } };
   }
 
   const result = await captureBookmarkSerialized(

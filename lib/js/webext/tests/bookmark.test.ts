@@ -1,7 +1,13 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import type { QueryResult, SemanticObject } from "@semantic/sdk";
+import type {
+  BatchOperation,
+  BatchOutcome,
+  RpcTransport,
+  QueryResult,
+  SemanticObject,
+} from "@semantic/sdk";
 
 import {
   bookmarkLookupSql,
@@ -16,6 +22,21 @@ import {
 const config = { baseUrl: "https://semantic.example/app" };
 
 class FakeClient implements BookmarkClient {
+  calls: Array<{ command: string; payload: unknown }> = [];
+  batches: Array<readonly BatchOperation[]> = [];
+  transport: RpcTransport = {
+    invoke: async (command, payload) => {
+      this.calls.push({ command, payload });
+      return [];
+    },
+  };
+  async batch(operations: readonly BatchOperation[]): Promise<BatchOutcome> {
+    this.batches.push(operations);
+    return {
+      dataset: {},
+      stats: { upserted: operations.length, updated: 0, deleted: 0 },
+    };
+  }
   queries: string[] = [];
   inserts: Array<{ id: string; object: object; collection?: string }> = [];
 
@@ -147,4 +168,110 @@ test("serializes concurrent captures for the same server and URL", async () => {
   assert.deepEqual(left, right);
   assert.equal(client.queries.length, 1);
   assert.equal(client.inserts.length, 1);
+});
+
+test("saves parent metadata and applies deduplicated labels using the label service", async () => {
+  const client = new FakeClient([]);
+  await captureBookmark(
+    client,
+    config,
+    {
+      url: "https://example.test",
+      title: "Example",
+      parentId: "project-1",
+      labelIds: ["read", "read"],
+    },
+    () => "new-1",
+  );
+  assert.equal(
+    (client.inserts[0]?.object as SemanticObject)["semantic:parent"],
+    "project-1",
+  );
+  assert.deepEqual(client.calls, [
+    {
+      command: "semantic.base.labels.replace",
+      payload: { id: "new-1", collection: "entities", label_ids: ["read"] },
+    },
+  ]);
+});
+
+test("creates the bookmark and directory membership in one ordered batch", async () => {
+  const client = new FakeClient([]);
+  client.sql = async <T extends object>(
+    query: string,
+  ): Promise<QueryResult<T>> => {
+    client.queries.push(query);
+    const rows = query.includes("MAX(")
+      ? [{ next_order: 8n }]
+      : query.includes("SELECT id FROM")
+        ? [{ id: "folder-1" }]
+        : [];
+    return { kind: "select", rows: rows as T[] };
+  };
+  await captureBookmark(
+    client,
+    config,
+    { url: "https://example.test", title: "Example", directoryId: "folder-1" },
+    () => "new-1",
+  );
+  assert.equal(client.inserts.length, 0);
+  const batch = client.batches[0]!;
+  assert.equal(batch.length, 2);
+  assert.equal(batch[0]?.kind, "upsert");
+  if (batch[0]?.kind !== "upsert") throw new Error("Expected bookmark upsert");
+  assert.equal(batch[0].id, "new-1");
+  assert.equal(batch[1]?.kind, "upsert");
+  if (batch[1]?.kind !== "upsert")
+    throw new Error("Expected membership upsert");
+  assert.equal(
+    batch[1].object["semantic:base:directory_node:from"],
+    "folder-1",
+  );
+  assert.equal(batch[1].object["semantic:relation:to"], "new-1");
+  assert.equal(batch[1].object["semantic:base:directory_node:order"], 9n);
+});
+
+test("a removed folder prevents capture before any write", async () => {
+  const client = new FakeClient([]);
+  await assert.rejects(
+    captureBookmark(client, config, {
+      url: "https://example.test",
+      title: "Example",
+      directoryId: "missing",
+    }),
+    /no longer exists/,
+  );
+  assert.equal(client.inserts.length + client.batches.length, 0);
+});
+
+test("reports label failure as a partial success with a link to the saved bookmark", async () => {
+  const client = new FakeClient([]);
+  client.transport.invoke = async () => {
+    throw new Error("Offline");
+  };
+  const result = await captureBookmark(
+    client,
+    config,
+    { url: "https://example.test", title: "Example", labelIds: ["read"] },
+    () => "new-1",
+  );
+  assert.equal(result.created, true);
+  assert.match(result.warning!, /labels could not be applied/);
+  assert.equal(result.bookmark.id, "new-1");
+});
+
+test("duplicate capture leaves existing metadata untouched", async () => {
+  const client = new FakeClient([{ id: "saved-1" }]);
+  const result = await captureBookmark(client, config, {
+    url: "https://example.test",
+    title: "Example",
+    parentId: "other",
+    directoryId: "folder",
+    labelIds: ["read"],
+  });
+  assert.equal(result.created, false);
+  assert.equal(
+    client.inserts.length + client.batches.length + client.calls.length,
+    0,
+  );
 });

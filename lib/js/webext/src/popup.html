@@ -9,34 +9,95 @@
   </head>
   <body class="popup-page">
     <main>
-      <header>
-        <p class="eyebrow">Semantic</p>
-        <h1>Save website</h1>
+      <header class="popup-header">
+        <div>
+          <p class="eyebrow">Semantic</p>
+          <h1 id="heading">Save bookmark</h1>
+        </div>
+        <button
+          id="configure"
+          class="settings-button"
+          type="button"
+          aria-label="Open Semantic settings"
+          title="Settings"
+        >
+          <svg
+            viewBox="0 0 24 24"
+            fill="none"
+            stroke="currentColor"
+            stroke-width="1.6"
+            stroke-linecap="round"
+            stroke-linejoin="round"
+            aria-hidden="true"
+          >
+            <path
+              d="m9.5 3-.7 2.2-1.6.9-2.2-.5-2.5 4.3L4 11.5v1l-1.5 1.6L5 18.4l2.2-.5 1.6.9.7 2.2h5l.7-2.2 1.6-.9 2.2.5 2.5-4.3-1.5-1.6v-1l1.5-1.6L19 5.6l-2.2.5-1.6-.9-.7-2.2z"
+            />
+            <circle cx="12" cy="12" r="3" />
+          </svg>
+        </button>
       </header>
-      <form id="bookmark-form">
-        <label for="url">Website URL</label>
-        <input id="url" name="url" type="url" readonly required />
-
-        <label for="title">Title</label>
-        <input id="title" name="title" type="text" maxlength="500" required />
-
-        <label for="description">Description <span>(optional)</span></label>
-        <textarea id="description" name="description" rows="4"></textarea>
-
-        <button id="submit" type="submit">Save bookmark</button>
+      <div id="page-preview" class="page-preview" hidden>
+        <span class="page-icon" aria-hidden="true"
+          ><svg
+            viewBox="0 0 24 24"
+            fill="none"
+            stroke="currentColor"
+            stroke-width="1.6"
+          >
+            <path d="M6 4a1 1 0 0 1 1-1h10a1 1 0 0 1 1 1v17l-6-4-6 4z" /></svg
+        ></span>
+        <div class="page-address">
+          <strong id="page-domain"></strong><span id="page-path"></span>
+        </div>
+      </div>
+      <form id="bookmark-form" hidden>
+        <div class="bookmark-fields">
+          <input id="url" name="url" type="hidden" />
+          <label for="title">Page title</label>
+          <input id="title" name="title" type="text" maxlength="500" required />
+          <details class="note-section">
+            <summary>Add a note <span>optional</span></summary>
+            <label class="sr-only" for="description">Bookmark note</label>
+            <textarea
+              id="description"
+              name="description"
+              rows="3"
+              placeholder="What makes this worth keeping?"
+            ></textarea>
+          </details>
+          <section class="metadata-section" aria-labelledby="metadata-heading">
+            <div class="metadata-heading">
+              <h2 id="metadata-heading">Organize</h2>
+              <span>Optional</span>
+            </div>
+            <div id="directory-picker"></div>
+            <div id="parent-picker"></div>
+            <div id="labels-picker"></div>
+          </section>
+        </div>
+        <button id="submit" class="save-button" type="submit">
+          Save bookmark <span aria-hidden="true">↗</span>
+        </button>
       </form>
-      <p id="status" class="status" role="status" aria-live="polite"></p>
+      <p id="status" class="status" role="status" aria-live="polite">
+        Getting this page ready…
+      </p>
       <a
         id="result"
-        class="result-link"
+        class="saved-bookmark"
         href="#"
         target="_blank"
         rel="noopener noreferrer"
         hidden
-      ></a>
-      <a id="configure" class="secondary-link" href="options.html"
-        >Configure Semantic</a
       >
+        <span class="saved-icon" aria-hidden="true">✓</span>
+        <span class="saved-copy"
+          ><strong id="result-title"></strong
+          ><span>Open in Semantic</span></span
+        >
+        <span class="saved-arrow" aria-hidden="true">↗</span>
+      </a>
     </main>
   </body>
 </html>

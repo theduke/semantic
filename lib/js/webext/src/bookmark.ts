@@ -1,4 +1,10 @@
-import type { QueryResult, SemanticObject } from "@semantic/sdk";
+import type {
+  BatchOperation,
+  BatchOutcome,
+  RpcTransport,
+  QueryResult,
+  SemanticObject,
+} from "@semantic/sdk";
 import type { WebBookmark } from "@semantic/sdk/generated/base";
 
 import { entityUrl, rpcEndpoint, type ExtensionConfig } from "./config.js";
@@ -10,6 +16,9 @@ export interface BookmarkInput {
   url: string;
   title: string;
   description?: string;
+  directoryId?: string;
+  parentId?: string;
+  labelIds?: string[];
 }
 
 export interface BookmarkLink {
@@ -19,6 +28,8 @@ export interface BookmarkLink {
 }
 
 export interface BookmarkClient {
+  transport: RpcTransport;
+  batch(operations: readonly BatchOperation[]): Promise<BatchOutcome>;
   sql<T extends object = SemanticObject>(
     query: string,
   ): Promise<QueryResult<T>>;
@@ -27,6 +38,12 @@ export interface BookmarkClient {
     entity: T,
     options?: { collection?: string },
   ): Promise<void>;
+}
+
+export interface BookmarkCaptureResult {
+  created: boolean;
+  bookmark: BookmarkLink;
+  warning?: string;
 }
 
 export type BookmarkClientFactory = (endpoint: string) => BookmarkClient;
@@ -101,7 +118,7 @@ export async function captureBookmark(
   config: ExtensionConfig,
   input: BookmarkInput,
   createId: () => string = createWebBookmarkId,
-): Promise<{ created: boolean; bookmark: BookmarkLink }> {
+): Promise<BookmarkCaptureResult> {
   const url = normalizeWebsiteUrl(input.url);
   const existing = await findBookmark(client, config, url);
   if (existing) return { created: false, bookmark: existing };
@@ -115,24 +132,81 @@ export async function captureBookmark(
     url,
     title,
     ...(description ? { description } : {}),
+    ...(input.parentId ? { ["semantic:parent"]: input.parentId } : {}),
   };
-  await client.insert(id, entity, { collection: BOOKMARK_COLLECTION });
+  if (input.directoryId) {
+    const directory = escapeSqlString(input.directoryId);
+    const target = await client.sql(
+      `SELECT id FROM entities WHERE id = '${directory}' AND type IN ('semantic:base:directory') LIMIT 1`,
+    );
+    if (target.kind !== "select" || !target.rows.length)
+      throw new Error(
+        "The selected folder no longer exists. Choose another folder.",
+      );
+    const orderResult = await client.sql<{ next_order?: number | bigint }>(
+      `SELECT MAX("semantic:base:directory_node:order") AS next_order FROM entities WHERE "semantic:base:directory_node:from" = '${directory}'`,
+    );
+    const lastOrder =
+      orderResult.kind === "select"
+        ? orderResult.rows[0]?.next_order
+        : undefined;
+    const order =
+      typeof lastOrder === "bigint"
+        ? lastOrder + 1n
+        : typeof lastOrder === "number"
+          ? lastOrder + 1
+          : 0;
+    const hex = (value: string) =>
+      [...new TextEncoder().encode(value)]
+        .map((byte) => byte.toString(16).padStart(2, "0"))
+        .join("");
+    const nodeId = `semantic:directory_node:${hex(input.directoryId)}:${hex(id)}`;
+    await client.batch([
+      { kind: "upsert", collection: BOOKMARK_COLLECTION, id, object: entity },
+      {
+        kind: "upsert",
+        collection: BOOKMARK_COLLECTION,
+        id: nodeId,
+        object: {
+          id: nodeId,
+          type: "semantic:base:directory_node",
+          "semantic:relation:relation": "semantic:base:directory_node",
+          "semantic:base:directory_node:from": input.directoryId,
+          "semantic:relation:to": id,
+          "semantic:base:directory_node:order": order,
+        },
+      },
+    ]);
+  } else {
+    await client.insert(id, entity, { collection: BOOKMARK_COLLECTION });
+  }
+  let warning: string | undefined;
+  if (input.labelIds?.length) {
+    try {
+      await client.transport.invoke("semantic.base.labels.replace", {
+        id,
+        collection: BOOKMARK_COLLECTION,
+        label_ids: [...new Set(input.labelIds)],
+      });
+    } catch {
+      warning =
+        "Bookmark saved, but labels could not be applied. Open the bookmark to add them.";
+    }
+  }
   return {
     created: true,
     bookmark: { id, title, href: entityUrl(config, id) },
+    ...(warning ? { warning } : {}),
   };
 }
 
-const inFlightCaptures = new Map<
-  string,
-  Promise<{ created: boolean; bookmark: BookmarkLink }>
->();
+const inFlightCaptures = new Map<string, Promise<BookmarkCaptureResult>>();
 
 export function captureBookmarkSerialized(
   createClient: BookmarkClientFactory,
   config: ExtensionConfig,
   input: BookmarkInput,
-): Promise<{ created: boolean; bookmark: BookmarkLink }> {
+): Promise<BookmarkCaptureResult> {
   const url = normalizeWebsiteUrl(input.url);
   const key = `${config.baseUrl}\0${url}`;
   const current = inFlightCaptures.get(key);
