@@ -1,7 +1,7 @@
 use std::{collections::BTreeSet, time::Duration};
 
 use dioxus::logger::tracing::{error, info, warn};
-use dioxus::prelude::*;
+use dioxus::{html::input_data::MouseButton, prelude::*};
 use dioxus_icons::lucide::{
     ChevronDown, ChevronRight, ClipboardPaste, Copy, FileText, Folder, FolderPlus, FolderTree,
     Grid2x2, Link, List, PanelLeft, Pencil, Plus, RefreshCw, Scissors, Trash2, Upload, X,
@@ -1673,7 +1673,11 @@ pub fn DirectoryBrowser(props: DirectoryBrowserProps) -> Element {
                 aria_label: "Directory workspace",
                 aria_activedescendant: focused_dom_id,
                 tabindex: "0",
-                onmouseup: move |_| end_drag(commands),
+                onmouseup: move |event: MouseEvent| {
+                    if event.trigger_button() == Some(MouseButton::Primary) {
+                        end_drag(commands);
+                    }
+                },
                 onkeydown: {
                     let visible_ids = visible_ids.clone();
                     move |event: KeyboardEvent| {
@@ -1995,12 +1999,19 @@ fn DirectoryListRow(
             aria_pressed: selected,
             onmousedown: {
                 let item_id = item.id.clone();
-                move |_| begin_drag(item_id.clone(), commands)
+                move |event: MouseEvent| {
+                    if event.trigger_button() == Some(MouseButton::Primary) {
+                        begin_drag(item_id.clone(), commands);
+                    }
+                }
             },
             onmouseup: {
                 let target_id = item.id.clone();
                 let is_directory = item.is_directory;
                 move |event: MouseEvent| {
+                    if event.trigger_button() != Some(MouseButton::Primary) {
+                        return;
+                    }
                     event.stop_propagation();
                     move_dragged_item_to_directory(None, target_id.clone(), is_directory, true, commands);
                 }
@@ -2072,12 +2083,19 @@ fn DirectoryTile(
             aria_pressed: selected,
             onmousedown: {
                 let item_id = item.id.clone();
-                move |_| begin_drag(item_id.clone(), commands)
+                move |event: MouseEvent| {
+                    if event.trigger_button() == Some(MouseButton::Primary) {
+                        begin_drag(item_id.clone(), commands);
+                    }
+                }
             },
             onmouseup: {
                 let target_id = item.id.clone();
                 let is_directory = item.is_directory;
                 move |event: MouseEvent| {
+                    if event.trigger_button() != Some(MouseButton::Primary) {
+                        return;
+                    }
                     event.stop_propagation();
                     move_dragged_item_to_directory(None, target_id.clone(), is_directory, true, commands);
                 }
@@ -2176,11 +2194,18 @@ fn DirectoryTreeRowView(
                         aria_pressed: selected,
                         onmousedown: {
                             let item_id = item.id.clone();
-                            move |_| begin_drag(item_id.clone(), commands)
+                            move |event: MouseEvent| {
+                                if event.trigger_button() == Some(MouseButton::Primary) {
+                                    begin_drag(item_id.clone(), commands);
+                                }
+                            }
                         },
                         onmouseup: {
                             let target_id = item.id.clone();
                             move |event: MouseEvent| {
+                                if event.trigger_button() != Some(MouseButton::Primary) {
+                                    return;
+                                }
                                 event.stop_propagation();
                                 move_dragged_item_to_directory(
                                     None,
