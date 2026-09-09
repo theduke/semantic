@@ -1082,6 +1082,7 @@ mod tests {
                 inherits: None,
                 extends: vec![],
                 strict_schema: false,
+                creatable_in_ui: None,
                 attributes: BTreeMap::new(),
                 constraints: vec![],
                 meta: Meta::default(),
@@ -1205,6 +1206,7 @@ mod tests {
                 inherits: None,
                 extends: vec![],
                 strict_schema: false,
+                creatable_in_ui: None,
                 attributes: BTreeMap::from([(
                     "from".to_string(),
                     semantic_data::schema::ClassAttribute {
@@ -1231,6 +1233,7 @@ mod tests {
                 }),
                 extends: vec![],
                 strict_schema: false,
+                creatable_in_ui: None,
                 attributes: BTreeMap::from([(
                     "from".to_string(),
                     semantic_data::schema::ClassAttribute {

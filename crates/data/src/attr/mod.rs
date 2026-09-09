@@ -34,3 +34,15 @@ pub trait AttrDescriptorConst: AttrDescriptor {
 
 //
 // pub struct AttrFieldFormat;
+
+pub const ATTR_UI_CREATABLE_IN_UI: &str = "semantic:ui:creatable_in_ui";
+
+pub fn creatable_in_ui_attribute() -> AttributeType {
+    AttributeType {
+        id: ATTR_UI_CREATABLE_IN_UI.to_string(),
+        name: "creatable_in_ui".to_string(),
+        ty: crate::schema::Type::new(crate::schema::TypeKind::Bool(crate::schema::BoolType)),
+        constraints: Vec::new(),
+        meta: crate::schema::Meta::default(),
+    }
+}

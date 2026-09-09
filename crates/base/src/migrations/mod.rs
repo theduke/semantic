@@ -56,6 +56,7 @@ pub fn all() -> Vec<Migration> {
     migrations.push(notes_migration());
     migrations.push(web_bookmark_migration());
     migrations.push(web_bookmark_title_migration());
+    migrations.push(creatable_in_ui_migration());
     migrations
 }
 
@@ -93,6 +94,21 @@ pub fn notes_migration() -> Migration {
         name: NOTES_MIGRATION_NAME.to_string(),
         description: Some("Add note schema.".to_string()),
         operations,
+        meta: Meta::default(),
+    }
+}
+
+fn creatable_in_ui_migration() -> Migration {
+    Migration {
+        module: MODULE_NAME.to_string(),
+        name: "008_creatable_in_ui".to_string(),
+        description: Some(
+            "Exclude directories and directory nodes from generic entity creators.".to_string(),
+        ),
+        operations: directory::classes()
+            .into_iter()
+            .map(|class| MigrationOperation::Ddl(MigrationDdlOperation::UpsertClass { class }))
+            .collect(),
         meta: Meta::default(),
     }
 }

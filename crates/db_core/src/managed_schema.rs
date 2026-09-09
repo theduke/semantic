@@ -641,6 +641,7 @@ mod tests {
             inherits: None,
             extends: vec![],
             strict_schema: false,
+            creatable_in_ui: None,
             attributes: BTreeMap::from([(
                 "payload".to_string(),
                 ClassAttribute {

@@ -450,6 +450,7 @@ pub fn core_catalog_schema_batch() -> DdlBatch {
         inherits: None,
         extends: vec![],
         strict_schema: false,
+        creatable_in_ui: None,
         attributes: attrs,
         constraints: vec![],
         meta: Meta::default(),
@@ -462,6 +463,7 @@ pub fn core_catalog_schema_batch() -> DdlBatch {
         }),
         extends: vec![],
         strict_schema: false,
+        creatable_in_ui: None,
         attributes: std::collections::BTreeMap::new(),
         constraints: vec![],
         meta: Meta::default(),
@@ -523,6 +525,7 @@ pub fn core_catalog_schema_batch() -> DdlBatch {
         inherits: None,
         extends: vec![],
         strict_schema: false,
+        creatable_in_ui: None,
         attributes: relation_attrs,
         constraints: vec![],
         meta: Meta::default(),
@@ -885,7 +888,48 @@ pub fn core_schema_migrations() -> Vec<Migration> {
             ],
             meta: Meta::default(),
         },
+        creatable_in_ui_migration(),
     ]
+}
+
+fn creatable_in_ui_migration() -> Migration {
+    let mut class = core_catalog_schema_batch()
+        .operations
+        .into_iter()
+        .find_map(|op| match op {
+            DdlOperation::UpsertClass { class }
+                if class.id == CORE_CATALOG_CLASS_ENTRY_CLASS_ID =>
+            {
+                Some(class)
+            }
+            _ => None,
+        })
+        .expect("core schema defines CatalogClass");
+    class.attributes.insert(
+        semantic_data::attr::ATTR_UI_CREATABLE_IN_UI.to_string(),
+        ClassAttribute {
+            attribute: AttributeRef {
+                id: semantic_data::attr::ATTR_UI_CREATABLE_IN_UI.to_string(),
+            },
+            required: false,
+            ui_order: None,
+            computed: None,
+            constraints: vec![],
+            meta: Meta::default(),
+        },
+    );
+    Migration {
+        module: CORE_SCHEMA_MODULE.to_string(),
+        name: "003_creatable_in_ui".to_string(),
+        description: Some("Add optional UI creation metadata for classes.".to_string()),
+        operations: vec![
+            MigrationOperation::Ddl(MigrationDdlOperation::UpsertAttribute {
+                attribute: semantic_data::attr::creatable_in_ui_attribute(),
+            }),
+            MigrationOperation::Ddl(MigrationDdlOperation::UpsertClass { class }),
+        ],
+        meta: Meta::default(),
+    }
 }
 
 pub fn apply_core_schema_migrations(
@@ -1144,7 +1188,7 @@ mod tests {
     #[test]
     fn core_schema_migrations_are_idempotent() {
         let (catalog, first_run) = apply_core_schema_migrations(&Catalog::new()).unwrap();
-        assert_eq!(first_run.len(), 2);
+        assert_eq!(first_run.len(), 3);
 
         let (_, second_run) = apply_core_schema_migrations(&catalog).unwrap();
         assert!(second_run.is_empty());
@@ -1196,6 +1240,7 @@ mod tests {
             inherits: None,
             extends: vec![],
             strict_schema: false,
+            creatable_in_ui: None,
             attributes: BTreeMap::from([(
                 "payload".to_string(),
                 ClassAttribute {

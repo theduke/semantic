@@ -276,6 +276,31 @@ mod tests {
         );
     }
 
+    #[test]
+    fn creators_exclude_only_explicitly_disabled_classes() {
+        let mut catalog = UiCatalog::from_snapshot(empty_snapshot());
+        for (id, flag) in [
+            ("default", None),
+            ("allowed", Some(true)),
+            ("hidden", Some(false)),
+        ] {
+            let mut class = semantic_data::filestore::file_class();
+            class.id = id.to_string();
+            class.creatable_in_ui = flag;
+            Rc::make_mut(&mut catalog.inner)
+                .classes_by_id
+                .insert(class.id.clone(), class);
+        }
+        assert_eq!(
+            catalog
+                .creatable_classes()
+                .map(|class| class.id.as_str())
+                .collect::<Vec<_>>(),
+            vec!["allowed", "default"]
+        );
+        assert_eq!(catalog.classes().count(), 3);
+    }
+
     fn empty_snapshot() -> CatalogStorageSnapshot {
         CatalogStorageSnapshot {
             attributes: Vec::new(),

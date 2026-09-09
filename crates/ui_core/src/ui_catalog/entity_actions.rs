@@ -80,6 +80,7 @@ mod tests {
             inherits: inherits.map(|id| ClassRef { id: id.to_string() }),
             extends: Vec::new(),
             strict_schema: false,
+            creatable_in_ui: None,
             attributes: BTreeMap::new(),
             constraints: Vec::new(),
             meta: Meta::default(),

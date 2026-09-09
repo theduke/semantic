@@ -78,6 +78,7 @@ pub fn package() -> Package {
             filekind_migration(),
             media_metadata_migration(),
             uploaded_at_migration(),
+            creatable_in_ui_migration(),
         ],
         version: None,
         meta: Meta::default(),
@@ -201,9 +202,27 @@ pub fn uploaded_at_migration() -> Migration {
                 ),
             }),
             MigrationOperation::Ddl(MigrationDdlOperation::UpsertClass {
-                class: file_class(),
+                class: {
+                    let mut class = file_class();
+                    class.creatable_in_ui = None;
+                    class
+                },
             }),
         ],
+        meta: Meta::default(),
+    }
+}
+
+fn creatable_in_ui_migration() -> Migration {
+    Migration {
+        module: MODULE_NAME.to_string(),
+        name: "006_creatable_in_ui".to_string(),
+        description: Some("Exclude files from generic entity creators.".to_string()),
+        operations: vec![MigrationOperation::Ddl(
+            MigrationDdlOperation::UpsertClass {
+                class: file_class(),
+            },
+        )],
         meta: Meta::default(),
     }
 }
@@ -295,7 +314,7 @@ pub fn file_attributes() -> Vec<AttributeType> {
 }
 
 pub fn file_class() -> ClassType {
-    file_class_with_attributes(&[
+    let mut class = file_class_with_attributes(&[
         ("title", ATTR_TITLE, 10, Some("Title")),
         ("description", ATTR_DESCRIPTION, 20, Some("Description")),
         ("parent", ATTR_PARENT, 30, None),
@@ -375,7 +394,9 @@ pub fn file_class() -> ClassType {
             240,
             Some("Uploaded At"),
         ),
-    ])
+    ]);
+    class.creatable_in_ui = Some(false);
+    class
 }
 
 fn init_migration_attributes() -> Vec<AttributeType> {
@@ -584,6 +605,7 @@ fn filekind_migration_file_class() -> ClassType {
 
 fn media_metadata_migration_file_class() -> ClassType {
     let mut class = file_class();
+    class.creatable_in_ui = None;
     class.attributes.remove("uploaded_at");
     class
 }
@@ -611,6 +633,7 @@ fn file_class_with_attributes(attributes: &[(&str, &str, u32, Option<&'static st
         inherits: None,
         extends: Vec::new(),
         strict_schema: false,
+        creatable_in_ui: None,
         attributes,
         constraints: Vec::new(),
         meta: meta_with_title("File"),
@@ -868,7 +891,7 @@ mod tests {
         assert_eq!(package.name, PACKAGE_NAME);
         assert_eq!(package.root.name, MODULE_NAME);
         assert!(package.modules.is_empty());
-        assert_eq!(package.migrations.len(), 5);
+        assert_eq!(package.migrations.len(), 6);
         assert_eq!(package.migrations[0].name, INIT_MIGRATION_NAME);
         assert_eq!(package.migrations[1].name, GENERIC_METADATA_MIGRATION_NAME);
         assert_eq!(package.migrations[2].name, FILEKIND_MIGRATION_NAME);

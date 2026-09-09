@@ -55,7 +55,7 @@ pub fn EntityCreateForm(
         catalog_signal
             .read()
             .as_ref()
-            .map(|catalog| catalog.classes().cloned().collect::<Vec<_>>())
+            .map(|catalog| catalog.creatable_classes().cloned().collect::<Vec<_>>())
             .unwrap_or_default()
     });
     let collections = use_memo(move || {

@@ -42,6 +42,7 @@ pub fn class() -> ClassType {
         inherits: None,
         extends: Vec::new(),
         strict_schema: false,
+        creatable_in_ui: None,
         attributes,
         constraints: Vec::new(),
         meta: helpers::meta_with_title("WebBookmark"),

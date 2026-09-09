@@ -34,6 +34,7 @@ pub fn class() -> ClassType {
         inherits: None,
         extends: Vec::new(),
         strict_schema: false,
+        creatable_in_ui: None,
         attributes: BTreeMap::from([
             ("title".to_string(), class_attribute(ATTR_TITLE, false, 5)),
             (

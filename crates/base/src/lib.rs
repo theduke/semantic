@@ -37,7 +37,7 @@ mod tests {
         assert_eq!(package.name, bundle::PACKAGE_NAME);
         assert_eq!(package.root.name, bundle::MODULE_NAME);
         assert!(package.modules.is_empty());
-        assert_eq!(package.migrations.len(), 5);
+        assert_eq!(package.migrations.len(), 6);
         assert_eq!(package.migrations[0].name, migrations::INIT_MIGRATION_NAME);
         assert_eq!(package.migrations[2].name, migrations::NOTES_MIGRATION_NAME);
 

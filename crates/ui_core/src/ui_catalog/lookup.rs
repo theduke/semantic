@@ -32,6 +32,12 @@ impl UiCatalog {
         self.classes_by_id().values()
     }
 
+    /// Classes offered by entity creators. Only an explicit false opts out.
+    pub fn creatable_classes(&self) -> impl Iterator<Item = &ClassType> {
+        self.classes()
+            .filter(|class| class.creatable_in_ui != Some(false))
+    }
+
     pub fn attributes(&self) -> impl Iterator<Item = &AttributeType> {
         self.attributes_by_id().values()
     }

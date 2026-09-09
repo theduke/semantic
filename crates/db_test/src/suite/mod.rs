@@ -251,6 +251,7 @@ async fn test_strict_class_attributes(db: &Db) {
             inherits: None,
             extends: vec![],
             strict_schema,
+            creatable_in_ui: None,
             attributes: BTreeMap::from([(
                 alias.to_string(),
                 ClassAttribute {
@@ -490,6 +491,7 @@ async fn test_class_collection_alias_query(db: &Db) {
                     inherits: None,
                     extends: vec![],
                     strict_schema: false,
+                    creatable_in_ui: None,
                     attributes: BTreeMap::from([(
                         "from".to_string(),
                         ClassAttribute {
@@ -516,6 +518,7 @@ async fn test_class_collection_alias_query(db: &Db) {
                     }),
                     extends: vec![],
                     strict_schema: false,
+                    creatable_in_ui: None,
                     attributes: BTreeMap::from([(
                         "from".to_string(),
                         ClassAttribute {
@@ -2827,6 +2830,7 @@ async fn test_relationships_generic_external(db: &Db) {
                     }),
                     extends: vec![],
                     strict_schema: false,
+                    creatable_in_ui: None,
                     attributes: std::collections::BTreeMap::from([(
                         "weight".to_string(),
                         ClassAttribute {
@@ -2957,6 +2961,7 @@ async fn test_relationships_generic_external(db: &Db) {
                     inherits: None,
                     extends: vec![],
                     strict_schema: false,
+                    creatable_in_ui: None,
                     attributes: BTreeMap::new(),
                     constraints: vec![],
                     meta: Meta::default(),
@@ -2971,6 +2976,7 @@ async fn test_relationships_generic_external(db: &Db) {
                     }),
                     extends: vec![],
                     strict_schema: false,
+                    creatable_in_ui: None,
                     attributes: BTreeMap::from([
                         (
                             "from".to_string(),
@@ -3246,6 +3252,7 @@ fn blog_post_class(include_body: bool) -> ClassType {
         inherits: None,
         extends: vec![],
         strict_schema: false,
+        creatable_in_ui: None,
         attributes,
         constraints: vec![],
         meta: Meta::default(),
