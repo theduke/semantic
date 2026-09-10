@@ -2,6 +2,7 @@ pub mod value;
 pub use value::*;
 
 pub mod filestore;
+pub mod jobs;
 
 pub mod builtin;
 

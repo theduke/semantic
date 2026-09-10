@@ -3,6 +3,7 @@ mod catalog;
 mod delete;
 mod file;
 mod get;
+mod jobs;
 mod package;
 mod query;
 mod upload;
@@ -19,6 +20,8 @@ pub struct Args {
 
 #[derive(Debug, Subcommand)]
 pub enum SubCmd {
+    /// Inspect, cancel, and clear scope jobs.
+    Jobs(jobs::Args),
     /// Execute a SQL or PRQL query and print the API result as JSON.
     Query(query::Args),
 
@@ -53,6 +56,7 @@ pub enum SubCmd {
 
 pub async fn run(args: Args) -> std::result::Result<(), CliError> {
     match args.command {
+        SubCmd::Jobs(args) => jobs::run(args).await,
         SubCmd::Query(args) => query::run(args).await,
         SubCmd::Get(args) => get::run(args).await,
         SubCmd::Delete(args) => delete::run(args).await,

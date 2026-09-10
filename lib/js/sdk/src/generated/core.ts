@@ -39,6 +39,40 @@ export type BatchOutcome = {
   stats: BatchStats;
 };
 
+export type JobRecord = {
+  id: string;
+  kind: string;
+  status: JobStatus;
+  progress: JobProgress;
+  error: JobError | null;
+  created_at: DateTime;
+  started_at: DateTime | null;
+  updated_at: DateTime;
+  finished_at: DateTime | null;
+  snapshot_seq: number | bigint;
+};
+
+export type JobListQuery = {
+  statuses: Array<JobStatus>;
+  kind: string | null;
+  oldest_first: boolean;
+  cursor: JobListCursor | null;
+  limit: number;
+};
+
+export type JobListPage = {
+  records: Array<jobs_JobRecord>;
+  next_cursor: JobListCursor | null;
+};
+
+export type JobKindDescriptor = {
+  id: string;
+  title: string;
+  description: string | null;
+};
+
+export type ClearCompletedResult = { deleted: number | bigint };
+
 /**  A module groups constants, types, interfaces, and contracts. */
 export type Module = {
   name: string;
@@ -142,6 +176,41 @@ export type BatchStats = {
   updated: number | bigint;
 };
 
+export type JobStatus =
+  | "queued"
+  | "running"
+  | "cancelling"
+  | "succeeded"
+  | "failed"
+  | "cancelled"
+  | "interrupted";
+
+export type JobProgress = {
+  completed: number | bigint;
+  total: number | bigint | null;
+  unit: string | null;
+  phase: string | null;
+};
+
+export type JobError = { code: string; message: string };
+
+export type DateTime = number | bigint;
+
+export type JobListCursor = { created_at: DateTime; id: string };
+
+export type jobs_JobRecord = {
+  id: string;
+  kind: string;
+  status: JobStatus;
+  progress: JobProgress;
+  error: JobError | null;
+  created_at: DateTime;
+  started_at: DateTime | null;
+  updated_at: DateTime;
+  finished_at: DateTime | null;
+  snapshot_seq: number | bigint;
+};
+
 export type ContractConstant = {
   name: string;
   ty: Type;
@@ -172,6 +241,7 @@ export type ClassType = {
   inherits: ClassRef | null;
   extends: Array<ClassRef>;
   "semantic:class:strict_schema": boolean;
+  "semantic:ui:creatable_in_ui": boolean | null;
   attributes: Record<string, ClassAttribute>;
   constraints: Array<ClassConstraint>;
   meta: Meta;
@@ -1126,3 +1196,28 @@ export type JoinExpr = {
 };
 
 export type JoinKind = "inner" | "left" | "right" | "full" | "cross";
+
+/** Jobs commands accept decoded SemanticValue payloads and return decoded values. */
+export type JobScopeParams = { scope_id?: string | null };
+/** Encode cursor timestamps with value.dateTimeNanos(next_cursor.created_at). */
+export type JobListCursorInput = Omit<JobListCursor, "created_at"> & {
+  created_at: Date | import("../types.js").EncodedTaggedValue;
+};
+export type JobListParams = JobScopeParams &
+  Partial<Omit<JobListQuery, "cursor">> & {
+    cursor?: JobListCursorInput | null;
+  };
+export type JobIdParams = JobScopeParams & { id: string };
+export type JobsCommands = {
+  "semantic.jobs.list": { params: JobListParams; result: JobListPage };
+  "semantic.jobs.get": { params: JobIdParams; result: JobRecord | null };
+  "semantic.jobs.cancel": { params: JobIdParams; result: JobRecord };
+  "semantic.jobs.clear_completed": {
+    params: JobScopeParams;
+    result: ClearCompletedResult;
+  };
+  "semantic.jobs.kinds": {
+    params: JobScopeParams;
+    result: Array<JobKindDescriptor>;
+  };
+};

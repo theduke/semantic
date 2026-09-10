@@ -18,6 +18,13 @@ pub trait SemanticDb: Send + Sync + 'static {
 
     async fn query(&self, query: TextQueryInput) -> std::result::Result<QueryResult, DbError>;
 
+    /// Execute the portable query AST without converting typed literals to text.
+    async fn query_data(&self, _query: public_query::QueryInput) -> Result<QueryResult, DbError> {
+        Err(DbError::InvalidQuery(
+            "structured queries are not exposed by this app Db adapter".into(),
+        ))
+    }
+
     async fn get(
         &self,
         collection: String,
@@ -48,6 +55,9 @@ pub trait SemanticDb: Send + Sync + 'static {
 
 #[async_trait]
 impl SemanticDb for Db {
+    async fn query_data(&self, query: public_query::QueryInput) -> Result<QueryResult, DbError> {
+        self.query(query).await
+    }
     async fn catalog(&self) -> std::result::Result<Arc<Catalog>, DbError> {
         self.catalog().await
     }

@@ -7,8 +7,10 @@ mod data;
 mod entity;
 mod form;
 mod home;
+mod jobs;
 mod play;
 mod query;
+pub use jobs::JobsPage;
 mod record;
 mod tree;
 mod upload;
@@ -35,6 +37,8 @@ pub enum Route {
     #[layout(AppShell)]
     #[route("/")]
     HomePage,
+    #[route("/jobs")]
+    JobsPage,
     #[route("/labels")]
     LabelsPage,
     #[route("/data")]

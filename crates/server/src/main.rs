@@ -33,7 +33,12 @@ fn main() {
             .await
             .expect("bind semantic server");
         eprintln!("semantic server listening on http://{bind}");
-        server.serve(listener).await.expect("serve semantic server");
+        server
+            .serve_with_shutdown(listener, async {
+                let _ = tokio::signal::ctrl_c().await;
+            })
+            .await
+            .expect("serve semantic server");
     });
 }
 

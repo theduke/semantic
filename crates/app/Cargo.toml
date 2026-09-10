@@ -26,6 +26,7 @@ objstore = { workspace = true }
 objstore_fs = { workspace = true }
 ordered-float = { workspace = true }
 semantic_data = { workspace = true }
+semantic_jobs = { path = "../jobs" }
 semantic_base = { path = "../base", optional = true }
 semantic_db_core = { path = "../db_core" }
 semantic_media = { path = "../media" }
@@ -40,4 +41,7 @@ url = "2.5.7"
 uuid = { workspace = true, features = ["v4"] }
 
 [dev-dependencies]
+semantic_db_postgres = { path = "../db_postgres" }
+semantic_db_redb = { path = "../db_redb" }
+tempfile = "3.26.0"
 tokio = { workspace = true, features = ["macros", "rt"] }

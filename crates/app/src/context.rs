@@ -14,6 +14,13 @@ pub struct AppRequestContext {
 }
 
 impl AppRequestContext {
+    pub async fn jobs(
+        &self,
+        scope_id: Option<DbScopeId>,
+    ) -> Result<semantic_jobs::ScopeJobs, AppError> {
+        let scope_id = self.resolve_scope_id(scope_id).await?;
+        self.app.jobs(&self.principal, scope_id).await
+    }
     pub async fn effective_scope_hint(&self) -> Option<DbScopeId> {
         if self.request_scope.is_some() {
             return self.request_scope.clone();

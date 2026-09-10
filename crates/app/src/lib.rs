@@ -5,6 +5,7 @@ mod context;
 mod db;
 mod error;
 mod file;
+pub mod jobs;
 #[cfg(feature = "base")]
 mod labels;
 mod media;

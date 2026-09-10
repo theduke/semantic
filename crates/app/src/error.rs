@@ -1,5 +1,7 @@
 #[derive(Debug, thiserror::Error)]
 pub enum AppError {
+    #[error(transparent)]
+    Jobs(#[from] semantic_jobs::JobsError),
     #[error("authentication required")]
     AuthenticationRequired,
     #[error("database scope required")]
@@ -41,6 +43,7 @@ pub enum AppError {
 impl From<AppError> for semantic_rpc_core::RpcError {
     fn from(value: AppError) -> Self {
         match value {
+            AppError::Jobs(_) => semantic_rpc_core::RpcError::new("jobs_error", value.to_string()),
             AppError::AuthenticationRequired => {
                 semantic_rpc_core::RpcError::new("authentication_required", value.to_string())
             }

@@ -80,7 +80,11 @@ pub async fn run(args: Args) -> std::result::Result<(), CliError> {
             source,
         })?;
     eprintln!("semantic server listening on http://{bind}");
-    server.serve(listener).await?;
+    server
+        .serve_with_shutdown(listener, async {
+            let _ = tokio::signal::ctrl_c().await;
+        })
+        .await?;
     Ok(())
 }
 

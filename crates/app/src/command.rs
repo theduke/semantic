@@ -32,6 +32,8 @@ pub struct SemanticAppInner {
     scopes: ScopeManager,
     object_stores: ObjectStoreManager,
     file_service: FileService,
+    jobs_registry: semantic_jobs::JobsRegistry,
+    jobs_config: semantic_jobs::JobsConfig,
 }
 
 enum DefaultScope {
@@ -52,6 +54,8 @@ pub struct SemanticAppBuilder {
     default_object_store: Option<DefaultObjectStore>,
     idle_ttl: Duration,
     media_analysis_config: MediaAnalysisConfig,
+    jobs_registry: semantic_jobs::JobsRegistry,
+    jobs_config: semantic_jobs::JobsConfig,
 }
 
 impl SemanticApp {
@@ -64,6 +68,8 @@ impl SemanticApp {
             default_object_store: None,
             idle_ttl: Duration::from_secs(15 * 60),
             media_analysis_config: MediaAnalysisConfig::default(),
+            jobs_registry: semantic_jobs::JobsRegistry::default(),
+            jobs_config: semantic_jobs::JobsConfig::default(),
         }
     }
 
@@ -73,6 +79,26 @@ impl SemanticApp {
 
     pub fn scopes(&self) -> &ScopeManager {
         &self.inner.scopes
+    }
+
+    pub async fn jobs(
+        &self,
+        principal: &crate::Principal,
+        scope_id: DbScopeId,
+    ) -> Result<semantic_jobs::ScopeJobs, AppError> {
+        self.inner
+            .scopes
+            .resolve_jobs(
+                principal,
+                scope_id,
+                self.inner.jobs_registry.clone(),
+                self.inner.jobs_config.clone(),
+            )
+            .await
+    }
+
+    pub async fn shutdown(&self) -> Result<(), AppError> {
+        self.inner.scopes.shutdown_jobs().await
     }
 
     pub(crate) fn object_stores(&self) -> &ObjectStoreManager {
@@ -89,6 +115,15 @@ impl SemanticApp {
 }
 
 impl SemanticAppBuilder {
+    pub fn with_jobs(
+        mut self,
+        registry: semantic_jobs::JobsRegistry,
+        config: semantic_jobs::JobsConfig,
+    ) -> Self {
+        self.jobs_registry = registry;
+        self.jobs_config = config;
+        self
+    }
     pub fn with_provider(mut self, provider: impl DbProvider) -> Self {
         let scheme = provider.scheme().to_string();
         self.providers.insert(scheme, Arc::new(provider));
@@ -138,6 +173,7 @@ impl SemanticAppBuilder {
     }
 
     pub fn with_config(mut self, config: AppConfig) -> Self {
+        self.jobs_config = config.jobs.clone();
         self.media_analysis_config = MediaAnalysisConfig::from(&config);
         self
     }
@@ -190,6 +226,7 @@ impl SemanticAppBuilder {
         self.registry.register(DbDeleteCommand)?;
         self.registry.register(DbBatchCommand)?;
         self.registry.register(FileAnalyzeCommand)?;
+        crate::jobs::register_commands(&mut self.registry)?;
         Ok(self)
     }
 
@@ -227,6 +264,8 @@ impl SemanticAppBuilder {
                 scopes,
                 object_stores,
                 file_service: FileService::new(self.media_analysis_config),
+                jobs_registry: self.jobs_registry,
+                jobs_config: self.jobs_config,
             }),
         })
     }

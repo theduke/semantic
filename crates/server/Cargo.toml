@@ -40,7 +40,7 @@ semantic_media = { path = "../media", default-features = false }
 semantic_rpc = { path = "../rpc", features = ["server-axum-ws"] }
 serde_json = { workspace = true }
 thiserror = "2.0.17"
-tokio = { workspace = true, features = ["net", "rt-multi-thread", "sync"] }
+tokio = { workspace = true, features = ["net", "rt-multi-thread", "sync", "signal"] }
 tracing = { workspace = true }
 
 [dev-dependencies]

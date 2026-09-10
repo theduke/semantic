@@ -2,6 +2,7 @@ use std::path::{Path, PathBuf};
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct AppConfig {
+    pub jobs: semantic_jobs::JobsConfig,
     pub data_dir: Option<PathBuf>,
     pub temp_dir: Option<PathBuf>,
     pub auto_analyze_media: bool,
@@ -10,6 +11,7 @@ pub struct AppConfig {
 impl Default for AppConfig {
     fn default() -> Self {
         Self {
+            jobs: semantic_jobs::JobsConfig::default(),
             data_dir: default_data_dir(),
             temp_dir: None,
             auto_analyze_media: true,
@@ -38,6 +40,19 @@ impl AppConfig {
     }
 
     pub fn from_env() -> Self {
+        let mut jobs = semantic_jobs::JobsConfig::default();
+        if let Some(value) = std::env::var("SEMANTIC_JOBS_CONCURRENCY")
+            .ok()
+            .and_then(|v| v.parse().ok())
+        {
+            jobs.max_concurrent_jobs = value;
+        }
+        if let Some(value) = std::env::var("SEMANTIC_JOBS_HISTORY_THRESHOLD")
+            .ok()
+            .and_then(|v| v.parse().ok())
+        {
+            jobs.history_threshold = value;
+        }
         let data_dir = std::env::var_os("SEMANTIC_DATA_DIR")
             .map(PathBuf::from)
             .or_else(default_data_dir);
@@ -47,6 +62,7 @@ impl AppConfig {
             .and_then(|value| parse_bool(&value))
             .unwrap_or_else(|| Self::default().auto_analyze_media);
         Self {
+            jobs,
             data_dir,
             temp_dir,
             auto_analyze_media,

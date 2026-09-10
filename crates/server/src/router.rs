@@ -72,7 +72,23 @@ impl SemanticServer {
     }
 
     pub async fn serve(self, listener: TcpListener) -> std::result::Result<(), ServerError> {
-        axum::serve(listener, self.router()).await?;
+        let result = axum::serve(listener, self.router()).await;
+        self.app.shutdown().await?;
+        result?;
+        Ok(())
+    }
+
+    /// Drain HTTP requests and await cooperative job cleanup before returning.
+    pub async fn serve_with_shutdown(
+        self,
+        listener: TcpListener,
+        signal: impl std::future::Future<Output = ()> + Send + 'static,
+    ) -> Result<(), ServerError> {
+        let result = axum::serve(listener, self.router())
+            .with_graceful_shutdown(signal)
+            .await;
+        self.app.shutdown().await?;
+        result?;
         Ok(())
     }
 }

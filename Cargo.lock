@@ -8593,11 +8593,15 @@ dependencies = [
  "semantic_base",
  "semantic_data",
  "semantic_db_core",
+ "semantic_db_postgres",
+ "semantic_db_redb",
+ "semantic_jobs",
  "semantic_media",
  "semantic_rpc",
  "semantic_rpc_core",
  "serde",
  "sha2 0.10.9",
+ "tempfile",
  "thiserror 2.0.18",
  "time",
  "tokio",
@@ -8798,6 +8802,20 @@ dependencies = [
  "thiserror 2.0.18",
  "tokio",
  "tracing",
+]
+
+[[package]]
+name = "semantic_jobs"
+version = "0.0.1"
+dependencies = [
+ "async-trait",
+ "futures-util",
+ "semantic_data",
+ "thiserror 2.0.18",
+ "tokio",
+ "tokio-util",
+ "tracing",
+ "uuid",
 ]
 
 [[package]]

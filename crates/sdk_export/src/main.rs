@@ -15,12 +15,16 @@ fn main() -> std::result::Result<(), Box<dyn std::error::Error>> {
     match target.as_str() {
         "base" => write_package(&mut writer, &semantic_base::package())?,
         "filestore" => write_package(&mut writer, &semantic_data::filestore::package())?,
+        "jobs" => write_package(&mut writer, &semantic_data::jobs::package())?,
         "core" => writer.write_all(generate_core_types().as_bytes())?,
-        "--help" | "-h" => println!("usage: semantic_sdk_export [core|base|filestore] [output]"),
+        "--help" | "-h" => {
+            println!("usage: semantic_sdk_export [core|base|filestore|jobs] [output]")
+        }
         other => {
-            return Err(
-                format!("unknown target '{other}' (expected core, base or filestore)").into(),
-            );
+            return Err(format!(
+                "unknown target '{other}' (expected core, base, filestore or jobs)"
+            )
+            .into());
         }
     }
     Ok(())
@@ -44,8 +48,15 @@ fn generate_core_types() -> String {
         <semantic_db_core::Entity as Facet>::SHAPE,
         <semantic_db_core::BatchOperation as Facet>::SHAPE,
         <semantic_db_core::BatchOutcome as Facet>::SHAPE,
+        <semantic_data::jobs::JobRecord as Facet>::SHAPE,
+        <semantic_data::jobs::JobListQuery as Facet>::SHAPE,
+        <semantic_data::jobs::JobListPage as Facet>::SHAPE,
+        <semantic_data::jobs::JobKindDescriptor as Facet>::SHAPE,
+        <semantic_data::jobs::ClearCompletedResult as Facet>::SHAPE,
     ];
-    TypeScriptGenerator::new().render(&roots)
+    let mut output = TypeScriptGenerator::new().render(&roots);
+    output.push_str(include_str!("jobs_commands.ts"));
+    output
 }
 
 struct TypeScriptGenerator {
@@ -146,6 +157,14 @@ impl TypeScriptGenerator {
     }
 
     fn inline(&mut self, shape: &'static Shape) -> String {
+        if shape.type_identifier == "DateTime"
+            && shape
+                .module_path
+                .is_some_and(|path| path.contains("semantic_data::value"))
+        {
+            // The SDK decodes tagged date_time values to epoch nanoseconds.
+            return "number | bigint".to_string();
+        }
         if self.is_semantic_value(shape) {
             return "SemanticValue".to_string();
         }
@@ -331,5 +350,21 @@ mod tests {
         assert!(output.contains("export type QueryField ="));
         assert!(output.contains("wildcard"));
         assert!(output.contains("export type Package ="));
+    }
+
+    #[test]
+    fn jobs_types_match_decoded_rpc_values() {
+        let output = generate_core_types();
+        assert!(output.contains("export type DateTime = number | bigint;"));
+        assert!(output.contains("\"total\": number | bigint | null"));
+        assert!(output.contains("\"error\": JobError | null"));
+        assert!(output.contains("\"description\": string | null"));
+        assert!(
+            output.contains(
+                "\"semantic.jobs.get\": { params: JobIdParams; result: JobRecord | null }"
+            )
+        );
+        assert!(output.contains("cursor?: JobListCursorInput | null"));
+        assert!(!output.contains("semantic:jobs:job:"));
     }
 }
