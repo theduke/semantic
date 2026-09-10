@@ -2,6 +2,7 @@ mod catalog;
 mod error;
 mod id_map;
 mod ids;
+mod interface;
 mod names;
 mod schema;
 mod shared;
@@ -19,6 +20,7 @@ pub use ids::{
     LocalAttrId, LocalClassId, LocalCollectionId, LocalFieldId, LocalIndexId, LocalPackageId,
     LocalRecordTypeId, LocalRelationId, LocalTypeDefId,
 };
+pub use interface::ResolvedInterface;
 pub use names::{
     IMPLICIT_ROOT_PACKAGE, SEMANTIC_PACKAGE, is_special_builtin_field, nameset_for_identifier,
     nameset_for_qualified,

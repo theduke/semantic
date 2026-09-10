@@ -5,6 +5,8 @@ use thiserror::Error;
 #[derive(Debug, Error)]
 pub enum CliError {
     #[error(transparent)]
+    Interface(#[from] semantic_rpc_core::interface::InvocationError),
+    #[error(transparent)]
     Rpc(#[from] semantic_rpc_core::RpcClientError),
 
     #[error("failed to {action} {path}: {source}")]

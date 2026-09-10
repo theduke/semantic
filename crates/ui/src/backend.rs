@@ -88,6 +88,27 @@ impl EmbeddedRpcClient {
 }
 
 impl RpcClientDyn for EmbeddedRpcClient {
+    fn invoke_interface(
+        &self,
+        call: semantic_rpc::interface::ValidatedInvocation,
+    ) -> semantic_rpc::client::RpcClientFuture<
+        Result<
+            semantic_rpc::interface::InvocationOutput,
+            semantic_rpc_core::interface::InvocationError,
+        >,
+    > {
+        let context = AppRequestContext {
+            app: self.app.clone(),
+            principal: self.principal.clone(),
+            session: Some(self.session.clone()),
+            request_scope: Some(self.scope_id.clone()),
+        };
+        Box::pin(async move {
+            semantic_app::interface::implementation(context)?
+                .invoke(call, semantic_rpc::interface::InvocationContext::default())
+                .await
+        })
+    }
     fn invoke_value(
         &self,
         command: String,

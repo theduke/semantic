@@ -62,6 +62,19 @@ impl Eq for RpcClient {}
 
 #[cfg(feature = "client")]
 pub trait RpcClientDyn: RpcClientThreadBounds + 'static {
+    fn invoke_interface(
+        &self,
+        _call: crate::interface::ValidatedInvocation,
+    ) -> RpcClientFuture<
+        Result<crate::interface::InvocationOutput, crate::interface::InvocationError>,
+    > {
+        Box::pin(async {
+            Err(crate::interface::InvocationError::new(
+                "provider_unavailable",
+                "interface streaming is unavailable on this client",
+            ))
+        })
+    }
     fn invoke_value(
         &self,
         command: String,
@@ -115,6 +128,12 @@ pub trait RpcClientDyn: RpcClientThreadBounds + 'static {
 
 #[cfg(feature = "client")]
 impl RpcClient {
+    pub async fn invoke_interface(
+        &self,
+        call: crate::interface::ValidatedInvocation,
+    ) -> Result<crate::interface::InvocationOutput, crate::interface::InvocationError> {
+        self.inner.invoke_interface(call).await
+    }
     pub fn new(client: impl RpcClientDyn) -> Self {
         Self {
             #[cfg(target_arch = "wasm32")]

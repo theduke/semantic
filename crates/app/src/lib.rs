@@ -5,11 +5,15 @@ mod context;
 mod db;
 mod error;
 mod file;
+mod import_commands;
+pub mod imports;
+pub mod interface;
 pub mod jobs;
 #[cfg(feature = "base")]
 mod labels;
 mod media;
 mod object_store;
+pub mod plugins;
 mod scope;
 mod session;
 
@@ -116,7 +120,7 @@ mod tests {
             assert_eq!(response.result, RpcResult::Ok(Value::U8(42)));
         }
         #[cfg(feature = "base")]
-        assert_eq!(db.package_count.load(Ordering::Relaxed), 3);
+        assert_eq!(db.package_count.load(Ordering::Relaxed), 4);
     }
 
     #[test]
@@ -399,7 +403,7 @@ mod tests {
 
         assert_eq!(select_db_name(response), "default");
         #[cfg(feature = "base")]
-        assert_eq!(package_count.load(Ordering::Relaxed), 2);
+        assert_eq!(package_count.load(Ordering::Relaxed), 3);
     }
 
     #[cfg(feature = "base")]
@@ -480,7 +484,7 @@ mod tests {
             .await;
 
         assert_eq!(select_db_name(response), "mock://default");
-        assert_eq!(package_count.load(Ordering::Relaxed), 2);
+        assert_eq!(package_count.load(Ordering::Relaxed), 3);
     }
 
     #[tokio::test]

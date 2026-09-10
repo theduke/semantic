@@ -1,0 +1,32 @@
+[package]
+name = "semantic_import"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+semantic_data.workspace = true
+semantic_jobs = { path = "../jobs" }
+semantic_plugin = { path = "../plugin" }
+semantic_rpc = { path = "../rpc" }
+semantic_rpc_core = { path = "../rpc_core" }
+async-trait = "0.1"
+async-stream = "0.3"
+futures-util = "0.3"
+bytes.workspace = true
+sha2.workspace = true
+uuid.workspace = true
+tokio = { workspace = true, features = ["sync", "rt", "macros"] }
+reqwest = { version = "0.12", default-features = false, features = ["stream", "rustls-tls", "gzip", "brotli", "deflate"] }
+url = "2"
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["rt-multi-thread", "net", "io-util"] }
+semantic_rpc = { path = "../rpc", features = ["plugin-stdio", "plugin-ws"] }
+semantic_plugin = { path = "../plugin", features = ["stdio", "websocket"] }
+tokio-tungstenite = "0.28"
+serde_json.workspace = true
+
+[[example]]
+name = "url_provider_fixture"
+path = "examples/url_provider_fixture.rs"

@@ -12,8 +12,10 @@ categories.workspace = true
 version.workspace = true
 
 [features]
-default = ["base"]
+default = ["base", "plugin-stdio", "plugin-websocket"]
 base = ["dep:semantic_base"]
+plugin-stdio = ["semantic_plugin/stdio"]
+plugin-websocket = ["semantic_plugin/websocket"]
 
 [dependencies]
 semantic_rpc_core = { path = "../rpc_core" }
@@ -27,6 +29,8 @@ objstore_fs = { workspace = true }
 ordered-float = { workspace = true }
 semantic_data = { workspace = true }
 semantic_jobs = { path = "../jobs" }
+semantic_plugin = { path = "../plugin" }
+semantic_import = { path = "../import" }
 semantic_base = { path = "../base", optional = true }
 semantic_db_core = { path = "../db_core" }
 semantic_media = { path = "../media" }
@@ -41,6 +45,8 @@ url = "2.5.7"
 uuid = { workspace = true, features = ["v4"] }
 
 [dev-dependencies]
+serde_json.workspace = true
+tokio-tungstenite = "0.28"
 semantic_db_postgres = { path = "../db_postgres" }
 semantic_db_redb = { path = "../db_redb" }
 tempfile = "3.26.0"

@@ -2,6 +2,7 @@ mod auth;
 mod config;
 mod error;
 mod file;
+mod interface;
 #[cfg(feature = "logfs")]
 mod log;
 mod logfs;
@@ -53,14 +54,13 @@ mod tests {
     struct MockDb {
         name: String,
         records: Mutex<BTreeMap<(String, String), Object>>,
+        catalog: Mutex<Catalog>,
     }
 
     #[async_trait]
     impl SemanticDb for MockDb {
         async fn catalog(&self) -> std::result::Result<Arc<Catalog>, DbError> {
-            Err(DbError::InvalidQuery(
-                "catalog not used in tests".to_string(),
-            ))
+            Ok(Arc::new(self.catalog.lock().unwrap().clone()))
         }
 
         async fn query(&self, _query: TextQueryInput) -> std::result::Result<QueryResult, DbError> {
@@ -126,7 +126,13 @@ mod tests {
             assert!(
                 package.name == "semantic.base"
                     || package.name == semantic_data::filestore::PACKAGE_NAME
+                    || package.name == semantic_data::import::PACKAGE_NAME
+                    || package.name == semantic_data::plugin::PACKAGE_NAME
             );
+            self.catalog
+                .lock()
+                .unwrap()
+                .upsert_package(semantic_db_core::normalize_package_definition(&package).unwrap());
             Ok(PackageRegistrationOutcome {
                 executed_migrations: vec![],
             })
@@ -137,6 +143,7 @@ mod tests {
         Arc::new(MockDb {
             name: name.to_string(),
             records: Mutex::new(BTreeMap::new()),
+            catalog: Mutex::new(Catalog::new()),
         })
     }
 
@@ -163,6 +170,47 @@ mod tests {
             .add_default_scope(DbScopeId::new("query"), query_db)
             .unwrap();
         app
+    }
+
+    #[tokio::test]
+    async fn interface_client_negotiates_application_schema_over_websocket() {
+        assert_interface_client_path("/api/v1/rpc").await;
+    }
+
+    #[tokio::test]
+    async fn interface_client_uses_configured_rpc_path() {
+        for path in ["/custom/rpc", "/custom/commands", "/custom/commands/"] {
+            assert_interface_client_path(path).await;
+        }
+    }
+
+    async fn assert_interface_client_path(rpc_path: &str) {
+        let app = test_app();
+        let server = SemanticServer::new(app.clone()).with_config(ServerConfig {
+            rpc_path: rpc_path.into(),
+            ..Default::default()
+        });
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let task = tokio::spawn(async move {
+            axum::serve(listener, server.router()).await.unwrap();
+        });
+        let client: semantic_rpc::client::RpcClient =
+            semantic_rpc::transport::http_client::HttpRpcClient::new(format!(
+                "http://{address}{rpc_path}?scope=query"
+            ))
+            .into();
+        let result = client
+            .invoke_interface(semantic_rpc::interface::ValidatedInvocation {
+                export: "application".into(),
+                method: "unknown".into(),
+                arguments: vec![],
+            })
+            .await;
+        assert!(matches!(result, Err(error) if error.code == "invalid_argument"));
+        drop(client);
+        task.abort();
+        app.shutdown().await.unwrap();
     }
 
     fn value_object(fields: impl IntoIterator<Item = (&'static str, Value)>) -> Value {

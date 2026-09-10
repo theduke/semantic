@@ -55,6 +55,10 @@ impl SemanticServer {
         let router = Router::new()
             .route(&self.config.rpc_path, post(rpc_http_handler))
             .route(
+                &semantic_rpc_core::interface_protocol::interface_ws_path(&self.config.rpc_path),
+                get(crate::interface::handler),
+            )
+            .route(
                 &self.config.file_api_prefix,
                 post(crate::file::upload_handler),
             )

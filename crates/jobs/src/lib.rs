@@ -135,12 +135,14 @@ pub trait JobHandler: Send + Sync + 'static {
 
 pub struct RegisteredJob<H: JobHandler> {
     registry_id: uuid::Uuid,
+    registration_id: uuid::Uuid,
     handler: Arc<H>,
 }
 impl<H: JobHandler> Clone for RegisteredJob<H> {
     fn clone(&self) -> Self {
         Self {
             registry_id: self.registry_id,
+            registration_id: self.registration_id,
             handler: self.handler.clone(),
         }
     }
@@ -149,12 +151,14 @@ impl<H: JobHandler> Clone for RegisteredJob<H> {
 pub struct JobsBuilder {
     id: uuid::Uuid,
     kinds: BTreeMap<JobKindId, JobKindDescriptor>,
+    registrations: BTreeMap<JobKindId, uuid::Uuid>,
 }
 impl Default for JobsBuilder {
     fn default() -> Self {
         Self {
             id: uuid::Uuid::new_v4(),
             kinds: BTreeMap::new(),
+            registrations: BTreeMap::new(),
         }
     }
 }
@@ -167,9 +171,12 @@ impl JobsBuilder {
         if kind.id.0.is_empty() || self.kinds.contains_key(&kind.id) {
             return Err(JobsError::InvalidKind(kind.id.0));
         }
+        let registration_id = uuid::Uuid::new_v4();
+        self.registrations.insert(kind.id.clone(), registration_id);
         self.kinds.insert(kind.id.clone(), kind);
         Ok(RegisteredJob {
             registry_id: self.id,
+            registration_id,
             handler: Arc::new(handler),
         })
     }
@@ -177,6 +184,7 @@ impl JobsBuilder {
         JobsRegistry {
             id: self.id,
             kinds: Arc::new(self.kinds),
+            registrations: Arc::new(self.registrations),
         }
     }
 }
@@ -185,6 +193,7 @@ impl JobsBuilder {
 pub struct JobsRegistry {
     id: uuid::Uuid,
     kinds: Arc<BTreeMap<JobKindId, JobKindDescriptor>>,
+    registrations: Arc<BTreeMap<JobKindId, uuid::Uuid>>,
 }
 impl Default for JobsRegistry {
     fn default() -> Self {
@@ -192,6 +201,22 @@ impl Default for JobsRegistry {
     }
 }
 impl JobsRegistry {
+    /// Extend a registry during application construction, retaining existing typed
+    /// registration identities. Open coordinators retain their existing snapshot.
+    pub fn register<H: JobHandler>(&mut self, handler: H) -> Result<RegisteredJob<H>, JobsError> {
+        let kind = handler.kind().clone();
+        if kind.id.0.is_empty() || self.kinds.contains_key(&kind.id) {
+            return Err(JobsError::InvalidKind(kind.id.0));
+        }
+        let registration_id = uuid::Uuid::new_v4();
+        Arc::make_mut(&mut self.registrations).insert(kind.id.clone(), registration_id);
+        Arc::make_mut(&mut self.kinds).insert(kind.id.clone(), kind);
+        Ok(RegisteredJob {
+            registry_id: self.id,
+            registration_id,
+            handler: Arc::new(handler),
+        })
+    }
     pub fn kinds(&self) -> Vec<JobKindDescriptor> {
         self.kinds.values().cloned().collect()
     }

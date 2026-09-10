@@ -69,6 +69,7 @@ fn AppFrameHeader() -> Element {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum NavItem {
     Jobs,
+    Import,
     Home,
     Browse,
     Tree,
@@ -182,6 +183,12 @@ pub fn PrimaryNav() -> Element {
             }
             NavGroup { label: "Data tools",
                 PrimaryNavLink {
+                    to: Route::ImportPage,
+                    label: "Import URL",
+                    active: nav_item_is_active(&route, NavItem::Import),
+                    on_navigate: move |_| menu_open.set(false),
+                }
+                PrimaryNavLink {
                     to: Route::JobsPage,
                     label: "Jobs",
                     active: nav_item_is_active(&route, NavItem::Jobs),
@@ -238,6 +245,7 @@ fn nav_item_is_active(route: &Route, item: NavItem) -> bool {
         (route, item),
         (Route::HomePage, NavItem::Home)
             | (Route::JobsPage, NavItem::Jobs)
+            | (Route::ImportPage, NavItem::Import)
             | (Route::CollectionPage { .. }, NavItem::Browse)
             | (Route::DefaultEntityPage { .. }, NavItem::Browse)
             | (Route::CollectionEntityPage { .. }, NavItem::Browse)

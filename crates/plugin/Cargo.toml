@@ -1,0 +1,24 @@
+[package]
+name = "semantic_plugin"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[features]
+default = []
+stdio = ["semantic_rpc/plugin-stdio"]
+websocket = ["semantic_rpc/plugin-ws"]
+
+[dependencies]
+semantic_data.workspace = true
+semantic_rpc = { path = "../rpc" }
+semantic_rpc_core = { path = "../rpc_core" }
+semantic_jobs = { path = "../jobs" }
+futures-util = "0.3.31"
+tokio = { workspace = true, features = ["sync"] }
+thiserror = "2.0.17"
+
+[dev-dependencies]
+async-trait = "0.1"
+tokio = { workspace = true, features = ["macros", "rt"] }

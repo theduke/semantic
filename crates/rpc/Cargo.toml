@@ -13,28 +13,31 @@ version.workspace = true
 
 [features]
 default = []
+interface-session = ["dep:tokio", "tokio/macros"]
+plugin-stdio = ["interface-session", "tokio/process", "tokio/io-util", "tokio/io-std", "dep:tracing"]
+plugin-ws = ["interface-session", "dep:tokio-tungstenite"]
 server-axum = ["dep:axum", "dep:http", "dep:tower"]
 server-axum-ws = ["server-axum", "axum/ws", "dep:futures-util", "dep:tokio"]
-client = ["dep:bytes", "dep:futures"]
-client-http-native = ["client", "dep:reqwest"]
+client = ["dep:bytes"]
+client-http-native = ["client", "dep:reqwest", "plugin-ws"]
 client-http-web = [
+  "interface-session",
   "client",
   "dep:gloo-net",
   "dep:js-sys",
   "dep:wasm-bindgen",
   "dep:wasm-bindgen-futures",
   "dep:web-sys",
+  "dep:url",
 ]
 client-ws-native = [
   "client",
-  "dep:futures",
   "dep:futures-util",
   "dep:tokio",
   "dep:tokio-tungstenite",
 ]
 client-ws-web = [
   "client",
-  "dep:futures",
   "dep:futures-util",
   "dep:gloo-net",
   "dep:wasm-bindgen-futures",
@@ -47,17 +50,21 @@ semantic_rpc_core = { path = "../rpc_core" }
 semantic_data = { workspace = true }
 
 bytes = { workspace = true, optional = true }
-futures = { version = "0.3.31", optional = true }
+futures = { version = "0.3.31" }
+tokio-util = { version = "0.7", features = ["rt"] }
+tokio = { workspace = true, optional = true, features = ["rt", "sync"] }
+tracing = { workspace = true, optional = true }
 futures-util = { version = "0.3.31", optional = true }
 http = { version = "1.3.1", optional = true }
 serde_json = { workspace = true }
+regex = "1.11.1"
+url = { version = "2", optional = true }
 tower = { version = "0.5.2", optional = true }
 
 axum = { version = "0.8.7", optional = true, default-features = true, features = ["json"] }
 
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 reqwest = { version = "0.12.24", optional = true, default-features = false, features = ["json", "stream"] }
-tokio = { workspace = true, optional = true, features = ["rt", "sync"] }
 tokio-tungstenite = { version = "0.28.0", optional = true }
 
 [target.'cfg(target_arch = "wasm32")'.dependencies]
@@ -71,7 +78,14 @@ web-sys = { version = "0.3.82", optional = true, features = [
   "ProgressEvent",
   "XmlHttpRequest",
   "XmlHttpRequestUpload",
+  "Window",
+  "Location",
 ] }
 
 [dev-dependencies]
-tokio = { workspace = true, features = ["macros", "rt"] }
+tokio = { workspace = true, features = ["macros", "rt", "time"] }
+url = "2"
+
+[[example]]
+name = "interface_fixture"
+required-features = ["plugin-stdio"]

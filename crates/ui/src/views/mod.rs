@@ -7,9 +7,11 @@ mod data;
 mod entity;
 mod form;
 mod home;
+mod import;
 mod jobs;
 mod play;
 mod query;
+pub use import::ImportPage;
 pub use jobs::JobsPage;
 mod record;
 mod tree;
@@ -39,6 +41,8 @@ pub enum Route {
     HomePage,
     #[route("/jobs")]
     JobsPage,
+    #[route("/import")]
+    ImportPage,
     #[route("/labels")]
     LabelsPage,
     #[route("/data")]

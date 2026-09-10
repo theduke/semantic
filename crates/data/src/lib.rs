@@ -2,7 +2,9 @@ pub mod value;
 pub use value::*;
 
 pub mod filestore;
+pub mod import;
 pub mod jobs;
+pub mod plugin;
 
 pub mod builtin;
 

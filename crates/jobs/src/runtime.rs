@@ -140,7 +140,13 @@ impl ScopeJobs {
         input: H::Input,
         options: SubmitOptions,
     ) -> Result<JobTicket<H::Output>, SubmitError> {
-        if registration.registry_id != self.registry.id {
+        if registration.registry_id != self.registry.id
+            || self
+                .registry
+                .registrations
+                .get(&registration.handler.kind().id)
+                != Some(&registration.registration_id)
+        {
             return Err(SubmitError {
                 id: None,
                 source: JobsError::ForeignRegistration,

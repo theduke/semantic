@@ -1,6 +1,9 @@
 pub mod client;
 #[cfg(feature = "client")]
 pub mod file;
+pub mod interface;
+#[cfg(feature = "interface-session")]
+pub mod plugin;
 pub mod registry;
 
 #[cfg(feature = "client")]

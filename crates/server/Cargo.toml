@@ -37,12 +37,13 @@ semantic_db_core = { path = "../db_core" }
 semantic_db_log = { path = "../db_log", optional = true }
 semantic_db_redb = { path = "../db_redb", optional = true }
 semantic_media = { path = "../media", default-features = false }
-semantic_rpc = { path = "../rpc", features = ["server-axum-ws"] }
+semantic_rpc = { path = "../rpc", features = ["server-axum-ws", "plugin-ws"] }
 serde_json = { workspace = true }
 thiserror = "2.0.17"
 tokio = { workspace = true, features = ["net", "rt-multi-thread", "sync", "signal"] }
 tracing = { workspace = true }
 
 [dev-dependencies]
+semantic_rpc = { path = "../rpc", features = ["client-http-native"] }
 tempfile = "3.20.0"
 tower = { version = "0.5.2", features = ["util"] }

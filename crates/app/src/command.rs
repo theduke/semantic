@@ -34,6 +34,8 @@ pub struct SemanticAppInner {
     file_service: FileService,
     jobs_registry: semantic_jobs::JobsRegistry,
     jobs_config: semantic_jobs::JobsConfig,
+    plugins: semantic_plugin::PluginRegistry,
+    pub(crate) import_job: semantic_jobs::RegisteredJob<semantic_import::ImportJobHandler>,
 }
 
 enum DefaultScope {
@@ -56,9 +58,40 @@ pub struct SemanticAppBuilder {
     media_analysis_config: MediaAnalysisConfig,
     jobs_registry: semantic_jobs::JobsRegistry,
     jobs_config: semantic_jobs::JobsConfig,
+    plugins: semantic_plugin::PluginRegistry,
 }
 
 impl SemanticApp {
+    pub async fn plugins(
+        &self,
+        principal: &crate::Principal,
+        scope_id: DbScopeId,
+    ) -> Result<Arc<crate::plugins::AppScopePlugins>, AppError> {
+        let app = self.clone();
+        let principal = principal.clone();
+        // The task owns startup and the scope lifecycle lock through publication.
+        // Dropping an RPC caller cannot drop partially started providers or let a
+        // second caller create another runtime for the same scope.
+        tokio::spawn(async move {
+            app.inner
+                .scopes
+                .resolve_plugins(
+                    &principal,
+                    scope_id,
+                    app.inner.plugins.clone(),
+                    app.inner.jobs_registry.clone(),
+                    app.inner.jobs_config.clone(),
+                )
+                .await
+        })
+        .await
+        .map_err(crate::plugins::error)?
+    }
+    pub(crate) fn import_registration(
+        &self,
+    ) -> &semantic_jobs::RegisteredJob<semantic_import::ImportJobHandler> {
+        &self.inner.import_job
+    }
     pub fn builder() -> SemanticAppBuilder {
         SemanticAppBuilder {
             providers: BTreeMap::new(),
@@ -70,6 +103,7 @@ impl SemanticApp {
             media_analysis_config: MediaAnalysisConfig::default(),
             jobs_registry: semantic_jobs::JobsRegistry::default(),
             jobs_config: semantic_jobs::JobsConfig::default(),
+            plugins: semantic_plugin::PluginRegistry::new().with_host_providers(),
         }
     }
 
@@ -115,6 +149,15 @@ impl SemanticApp {
 }
 
 impl SemanticAppBuilder {
+    pub fn register_plugin(
+        mut self,
+        plugin: impl semantic_plugin::Plugin,
+    ) -> Result<Self, AppError> {
+        self.plugins
+            .register(plugin)
+            .map_err(crate::plugins::error)?;
+        Ok(self)
+    }
     pub fn with_jobs(
         mut self,
         registry: semantic_jobs::JobsRegistry,
@@ -227,16 +270,46 @@ impl SemanticAppBuilder {
         self.registry.register(DbBatchCommand)?;
         self.registry.register(FileAnalyzeCommand)?;
         crate::jobs::register_commands(&mut self.registry)?;
+        crate::import_commands::register(&mut self.registry)?;
         Ok(self)
     }
 
     pub fn build(mut self) -> std::result::Result<SemanticApp, AppError> {
+        let import_package = semantic_data::import::package();
+        let mut catalog = semantic_db_core::catalog::Catalog::new();
+        catalog.upsert_package(import_package.clone());
+        let exports = ["Source", "Fetcher", "Importer"]
+            .into_iter()
+            .map(|name| {
+                let resolved = catalog
+                    .resolve_interface(semantic_data::import::PACKAGE_NAME, "v1", None, name)
+                    .map_err(crate::plugins::error)?;
+                Ok(semantic_rpc_core::interface::ImplementationDescriptor {
+                    export: name.to_lowercase(),
+                    interface: semantic_rpc_core::interface::InterfaceRef {
+                        package: semantic_data::import::PACKAGE_NAME.into(),
+                        module: "v1".into(),
+                        contract: None,
+                        name: name.into(),
+                    },
+                    package_version: "1.0.0".into(),
+                    fingerprint: resolved.fingerprint,
+                })
+            })
+            .collect::<Result<Vec<_>, AppError>>()?;
+        self.plugins
+            .register(semantic_import::GenericUrlPlugin::new(exports))
+            .map_err(crate::plugins::error)?;
+        let import_job = self
+            .jobs_registry
+            .register(semantic_import::ImportJobHandler::default())?;
         let packages = std::mem::take(&mut self.packages);
         #[cfg(feature = "base")]
         {
             self = self.register_package(semantic_base::BasePackage)?;
         }
         self.packages.push(semantic_data::filestore::package());
+        self.packages.push(import_package);
         self.packages.extend(packages);
         let scopes = ScopeManager::with_packages(self.providers, self.idle_ttl, self.packages);
         let object_stores = ObjectStoreManager::new(Vec::new());
@@ -266,6 +339,8 @@ impl SemanticAppBuilder {
                 file_service: FileService::new(self.media_analysis_config),
                 jobs_registry: self.jobs_registry,
                 jobs_config: self.jobs_config,
+                plugins: self.plugins,
+                import_job,
             }),
         })
     }
@@ -495,8 +570,12 @@ impl RpcCommand<AppRequestContext> for DbPackageUpsertCommand {
             }
             let package = facet_json::from_str::<Package>(&required_string(&object, "package")?)
                 .map_err(|err| AppError::InvalidRequest(format!("invalid package: {err}")))?;
-            let db = ctx.resolve_db(scope_id).await?;
-            let outcome = db.upsert_package(package).await?;
+            let scope_id = ctx.resolve_scope_id(scope_id).await?;
+            let outcome = ctx
+                .app
+                .scopes()
+                .update_package(&ctx.principal, &scope_id, package)
+                .await?;
             let outcome = facet_json::to_string(&outcome)
                 .map_err(|err| AppError::InvalidRequest(err.to_string()))?;
             let mut out = Object::new();

@@ -18,12 +18,14 @@ use semantic_rpc_core::protocol::RpcResponse;
 pub struct HttpRpcClient {
     endpoint: String,
     file_api_prefix: String,
+    interface: crate::interface::client::InterfaceClient,
 }
 
 impl HttpRpcClient {
     pub fn new(endpoint: impl Into<String>) -> Self {
         let endpoint = endpoint.into();
         Self {
+            interface: crate::interface::client::InterfaceClient::new(&endpoint),
             file_api_prefix: derive_file_api_prefix(&endpoint),
             endpoint,
         }
@@ -84,6 +86,15 @@ impl HttpRpcClient {
 }
 
 impl RpcClientDyn for HttpRpcClient {
+    fn invoke_interface(
+        &self,
+        call: crate::interface::ValidatedInvocation,
+    ) -> crate::client::RpcClientFuture<
+        Result<crate::interface::InvocationOutput, crate::interface::InvocationError>,
+    > {
+        let client = self.interface.clone();
+        Box::pin(async move { client.invoke(call).await })
+    }
     fn invoke_value(
         &self,
         command: String,

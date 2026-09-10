@@ -231,6 +231,37 @@ fn normalize_module(module: &mut Module) -> Result<(), CoreError> {
     normalize_module_type_defs(module)?;
     normalize_module_attributes(module);
     normalize_module_classes(module);
+    for interface in module.interfaces.values_mut() {
+        normalize_interface(interface, &module.name)?;
+    }
+    for contract in module.contracts.values_mut() {
+        for function in contract.functions.values_mut() {
+            function.signature = normalize_function_type(function.signature.clone(), &module.name);
+        }
+        for interface in contract.interfaces.values_mut() {
+            normalize_interface(&mut interface.interface, &module.name)?;
+        }
+        for definition in contract.types.values_mut() {
+            *definition = normalize_type_def(definition.clone(), &module.name);
+        }
+    }
+    Ok(())
+}
+
+fn normalize_interface(
+    interface: &mut semantic_data::schema::InterfaceType,
+    module: &str,
+) -> Result<(), CoreError> {
+    let mut names = std::collections::BTreeSet::new();
+    for method in &mut interface.methods {
+        if !names.insert(method.name.clone()) {
+            return Err(CoreError::new(format!(
+                "duplicate interface method '{}'",
+                method.name
+            )));
+        }
+        method.signature = normalize_function_type(method.signature.clone(), module);
+    }
     Ok(())
 }
 

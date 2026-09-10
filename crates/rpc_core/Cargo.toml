@@ -15,3 +15,6 @@ version.workspace = true
 semantic_data = { workspace = true }
 serde = { workspace = true, features = ["derive"] }
 thiserror = "2.0.17"
+
+[dev-dependencies]
+serde_json = { workspace = true }

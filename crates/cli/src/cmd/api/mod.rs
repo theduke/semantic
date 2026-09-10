@@ -3,8 +3,10 @@ mod catalog;
 mod delete;
 mod file;
 mod get;
+mod import;
 mod jobs;
 mod package;
+mod plugin;
 mod query;
 mod upload;
 
@@ -20,6 +22,10 @@ pub struct Args {
 
 #[derive(Debug, Subcommand)]
 pub enum SubCmd {
+    /// Discover URL importers and start imports.
+    Import(import::Args),
+    /// Inspect and configure scope plugins.
+    Plugin(plugin::Args),
     /// Inspect, cancel, and clear scope jobs.
     Jobs(jobs::Args),
     /// Execute a SQL or PRQL query and print the API result as JSON.
@@ -56,6 +62,8 @@ pub enum SubCmd {
 
 pub async fn run(args: Args) -> std::result::Result<(), CliError> {
     match args.command {
+        SubCmd::Import(args) => import::run(args).await,
+        SubCmd::Plugin(args) => plugin::run(args).await,
         SubCmd::Jobs(args) => jobs::run(args).await,
         SubCmd::Query(args) => query::run(args).await,
         SubCmd::Get(args) => get::run(args).await,

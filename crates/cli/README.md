@@ -2,6 +2,45 @@
 
 The `semantic_cli` crate provides the `semantic` command-line application.
 
+## URL imports and plugins
+
+Discover importers, start an import, then inspect its returned job ID:
+
+```sh
+semantic api import candidates 'https://example.com/report.pdf'
+semantic api import fetch 'https://example.com/report.pdf'
+semantic api import start 'https://example.com/report.pdf'
+semantic api jobs get JOB_ID
+semantic api jobs cancel JOB_ID
+```
+
+Candidates are ordered by priority. To choose one explicitly, pass the returned
+`plugin_id`, `export`, and optionally `generation` to `start` as `--plugin`,
+`--export`, and `--generation`. A changed generation rejects that selection;
+an importer failure does not silently fall back to another importer. The web
+application offers the same chooser under **Import URL**.
+
+`fetch` saves nothing in Semantic and prints content events as incremental JSON,
+followed by `{"end":{"items":...,"bytes":...}}`. The UI's **Fetch preview** reads
+only the first item's metadata and closes the stream. Starting an import fetches
+the source again; the preview is not a retained snapshot.
+
+Import submissions return promptly. Jobs persist status and progress, while
+imported data remains ordinary entities and files. Reimporting a source replaces
+its existing data; items completed before a later failure remain visible.
+
+```sh
+semantic api plugin list
+semantic api plugin configure activation.json
+semantic api plugin uninstall PLUGIN_ID
+```
+
+`configure` accepts an activation descriptor with `id`, `revision`, `provider`,
+`enabled`, `generation`, `configuration`, `priority`, and `exports`. Inspect
+`plugin list` for the current descriptors and live states. Uninstalling retains
+imported data. All commands accept `--scope` and `--rpc-url` before their
+subcommand, or the existing `SEMANTIC_SCOPE` and `SEMANTIC_RPC_URL` variables.
+
 ## Server storage
 
 With no storage flags, `semantic server` uses redb at `<data-dir>/db/default`

@@ -186,6 +186,80 @@ async fn setup(limit: usize) -> (Arc<Store>, ScopeJobs, RegisteredJob<Handler>) 
 }
 
 #[tokio::test]
+async fn registry_extensions_preserve_existing_handles_but_reject_later_registrations() {
+    let mut builder = JobsBuilder::new();
+    let original = builder.register(Handler::new()).unwrap();
+    let mut registry = builder.build();
+    let old = ScopeJobs::open(
+        Arc::new(Store::default()),
+        registry.clone(),
+        Default::default(),
+    )
+    .await
+    .unwrap();
+    let mut later_handler = Handler::new();
+    later_handler.0.id = JobKindId("test.later".into());
+    let later = registry.register(later_handler).unwrap();
+    let new = ScopeJobs::open(Arc::new(Store::default()), registry, Default::default())
+        .await
+        .unwrap();
+    let (started, _) = mpsc::unbounded_channel();
+    let (payload, _) = input(0, &started, false);
+    assert!(matches!(
+        old.submit(&later, payload, Default::default())
+            .await
+            .err()
+            .unwrap()
+            .source,
+        JobsError::ForeignRegistration
+    ));
+    // A cloned typed handle remains valid in either snapshot containing it.
+    for (jobs, registration) in [(&old, original.clone()), (&new, original), (&new, later)] {
+        let (started, mut starts) = mpsc::unbounded_channel();
+        let (payload, finish) = input(7, &started, false);
+        let ticket = jobs
+            .submit(&registration, payload, Default::default())
+            .await
+            .unwrap();
+        assert_eq!(starts.recv().await, Some(7));
+        finish.send(()).unwrap();
+        assert_eq!(ticket.wait().await.unwrap(), 7);
+    }
+    old.shutdown().await.unwrap();
+    new.shutdown().await.unwrap();
+}
+
+#[tokio::test]
+async fn divergent_registry_clones_do_not_share_new_registration_handles() {
+    let mut left = JobsRegistry::default();
+    let mut right = left.clone();
+    let left_handle = left.register(Handler::new()).unwrap();
+    let mut different = Handler::new();
+    different.0.title = "Different handler".into();
+    let right_handle = right.register(different).unwrap();
+    let left = ScopeJobs::open(Arc::new(Store::default()), left, Default::default())
+        .await
+        .unwrap();
+    let right = ScopeJobs::open(Arc::new(Store::default()), right, Default::default())
+        .await
+        .unwrap();
+    let (started, _) = mpsc::unbounded_channel();
+    for (jobs, foreign) in [(&left, &right_handle), (&right, &left_handle)] {
+        let (payload, _) = input(0, &started, false);
+        assert!(matches!(
+            jobs.submit(foreign, payload, Default::default())
+                .await
+                .err()
+                .unwrap()
+                .source,
+            JobsError::ForeignRegistration
+        ));
+    }
+    left.shutdown().await.unwrap();
+    right.shutdown().await.unwrap();
+}
+
+#[tokio::test]
 async fn fifo_limit_native_payload_and_coalesced_progress() {
     let (store, jobs, handler) = setup(1).await;
     let (started, mut starts) = mpsc::unbounded_channel();

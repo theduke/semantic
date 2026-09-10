@@ -2,6 +2,8 @@
 pub mod command;
 pub mod convert;
 pub mod error;
+pub mod interface;
+pub mod interface_protocol;
 pub mod package;
 pub mod protocol;
 

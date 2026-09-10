@@ -72,6 +72,7 @@ struct ScopeEntry {
     retireable: bool,
     last_used: Instant,
     jobs_close: Arc<tokio::sync::Mutex<()>>,
+    plugin_cancellation: semantic_jobs::CancellationToken,
 }
 
 #[derive(Default)]
@@ -79,6 +80,7 @@ struct ScopeState {
     entries: BTreeMap<ScopeKey, ScopeEntry>,
     default_scope: Option<DbScopeId>,
     jobs: BTreeMap<ScopeKey, Option<semantic_jobs::ScopeJobs>>,
+    plugins: BTreeMap<ScopeKey, Arc<crate::plugins::AppScopePlugins>>,
     jobs_closing: bool,
     closing_scopes: BTreeSet<ScopeKey>,
 }
@@ -92,6 +94,113 @@ pub struct ScopeManager {
 }
 
 impl ScopeManager {
+    pub(crate) async fn update_package(
+        &self,
+        principal: &Principal,
+        scope: &DbScopeId,
+        package: semantic_data::schema::Package,
+    ) -> Result<semantic_db_core::PackageRegistrationOutcome, AppError> {
+        let key = self
+            .lookup_key(principal, scope)?
+            .ok_or_else(|| AppError::UnknownScope(scope.to_string()))?;
+        let close = self
+            .read_state()?
+            .entries
+            .get(&key)
+            .ok_or_else(|| AppError::UnknownScope(scope.to_string()))?
+            .jobs_close
+            .clone();
+        // Startup publishes its catalog snapshot and runtime while holding this
+        // same lock. Never bypass reconciliation while that publication is pending.
+        let _guard = close.lock().await;
+        let plugins = {
+            let state = self.read_state()?;
+            if state.jobs_closing || state.closing_scopes.contains(&key) {
+                return Err(semantic_jobs::JobsError::Closed.into());
+            }
+            if !state
+                .entries
+                .get(&key)
+                .is_some_and(|entry| Arc::ptr_eq(&entry.jobs_close, &close))
+            {
+                return Err(AppError::UnknownScope(scope.to_string()));
+            }
+            state.plugins.get(&key).cloned()
+        };
+        match plugins {
+            Some(plugins) => plugins.update_package(package).await,
+            None => self
+                .resolve_scope_key(principal, &key)
+                .await?
+                .upsert_package(package)
+                .await
+                .map_err(AppError::from),
+        }
+    }
+    pub(crate) async fn resolve_plugins(
+        &self,
+        principal: &Principal,
+        scope_id: DbScopeId,
+        registry: semantic_plugin::PluginRegistry,
+        jobs_registry: semantic_jobs::JobsRegistry,
+        jobs_config: semantic_jobs::JobsConfig,
+    ) -> Result<Arc<crate::plugins::AppScopePlugins>, AppError> {
+        let key = self
+            .lookup_key(principal, &scope_id)?
+            .ok_or_else(|| AppError::UnknownScope(scope_id.to_string()))?;
+        {
+            let state = self.read_state()?;
+            if state.jobs_closing || state.closing_scopes.contains(&key) {
+                return Err(semantic_jobs::JobsError::Closed.into());
+            }
+        }
+        let close = self
+            .read_state()?
+            .entries
+            .get(&key)
+            .ok_or_else(|| AppError::UnknownScope(scope_id.to_string()))?
+            .jobs_close
+            .clone();
+        let _close_guard = close.lock().await;
+        let jobs = self
+            .resolve_jobs_key(principal, key.clone(), jobs_registry, jobs_config)
+            .await?;
+        let _guard = self.jobs_lifecycle.lock().await;
+        {
+            let state = self.read_state()?;
+            if state.jobs_closing || state.closing_scopes.contains(&key) {
+                return Err(semantic_jobs::JobsError::Closed.into());
+            }
+            if let Some(plugins) = state.plugins.get(&key) {
+                return Ok(plugins.clone());
+            }
+        }
+        drop(_guard);
+        let cancellation = self
+            .read_state()?
+            .entries
+            .get(&key)
+            .ok_or_else(|| AppError::UnknownScope(scope_id.to_string()))?
+            .plugin_cancellation
+            .clone();
+        let db = self.resolve_scope_key(principal, &key).await?;
+        let plugins = Arc::new(
+            crate::plugins::AppScopePlugins::open_with_cancellation(
+                scope_id.to_string(),
+                registry,
+                jobs,
+                db,
+                cancellation,
+            )
+            .await?,
+        );
+        let mut state = self.write_state()?;
+        state.plugins.insert(key.clone(), plugins.clone());
+        if state.jobs_closing || state.closing_scopes.contains(&key) {
+            return Err(semantic_jobs::JobsError::Closed.into());
+        }
+        Ok(plugins)
+    }
     pub fn new(providers: BTreeMap<String, Arc<dyn DbProvider>>, idle_ttl: Duration) -> Self {
         Self::with_packages(providers, idle_ttl, default_packages())
     }
@@ -139,6 +248,7 @@ impl ScopeManager {
                 retireable: false,
                 last_used: Instant::now(),
                 jobs_close: Arc::default(),
+                plugin_cancellation: semantic_jobs::CancellationToken::new(),
             },
         );
         Ok(())
@@ -170,6 +280,7 @@ impl ScopeManager {
                 retireable: false,
                 last_used: Instant::now(),
                 jobs_close: Arc::default(),
+                plugin_cancellation: semantic_jobs::CancellationToken::new(),
             },
         );
         Ok(())
@@ -245,6 +356,7 @@ impl ScopeManager {
                         retireable: true,
                         last_used: Instant::now(),
                         jobs_close: Arc::default(),
+                        plugin_cancellation: semantic_jobs::CancellationToken::new(),
                     });
                 }
             }
@@ -414,6 +526,18 @@ impl ScopeManager {
         let key = self
             .lookup_key(principal, &scope_id)?
             .ok_or_else(|| AppError::UnknownScope(scope_id.to_string()))?;
+        self.resolve_jobs_key(principal, key, registry, config)
+            .await
+    }
+
+    async fn resolve_jobs_key(
+        &self,
+        principal: &Principal,
+        key: ScopeKey,
+        registry: semantic_jobs::JobsRegistry,
+        config: semantic_jobs::JobsConfig,
+    ) -> Result<semantic_jobs::ScopeJobs, AppError> {
+        let scope_id = key.scope_id.clone();
         // Common control calls do not wait for another scope's initialization or
         // cooperative shutdown. Closing scopes cannot create replacement owners.
         {
@@ -453,8 +577,8 @@ impl ScopeManager {
         let mut state = self.write_state()?;
         match result {
             Ok(jobs) => {
-                state.jobs.insert(key, Some(jobs.clone()));
-                if state.jobs_closing {
+                state.jobs.insert(key.clone(), Some(jobs.clone()));
+                if state.jobs_closing || state.closing_scopes.contains(&key) {
                     // The shutdown snapshot waits for this initialization lock.
                     Err(semantic_jobs::JobsError::Closed.into())
                 } else {
@@ -483,7 +607,50 @@ impl ScopeManager {
             .ok_or_else(|| AppError::UnknownScope(scope_id.to_string()))?
             .jobs_close
             .clone();
-        let _close_guard = close.lock().await;
+        // Publish closure and signal startup before the initialization/cleanup
+        // lock. A Plugin::create may itself be waiting for this cancellation.
+        let initial_jobs = {
+            let mut state = self.write_state()?;
+            let entry = state
+                .entries
+                .get(&key)
+                .ok_or_else(|| AppError::UnknownScope(scope_id.to_string()))?;
+            if !Arc::ptr_eq(&entry.jobs_close, &close) {
+                return Err(AppError::UnknownScope(scope_id.to_string()));
+            }
+            entry.plugin_cancellation.cancel();
+            state.closing_scopes.insert(key.clone());
+            state.jobs.get(&key).cloned().flatten()
+        };
+        let had_jobs = initial_jobs.is_some();
+        let (jobs_result, close_result) = futures_util::future::join(
+            async {
+                match initial_jobs {
+                    Some(jobs) => jobs.shutdown().await.map_err(AppError::from),
+                    None => Ok(()),
+                }
+            },
+            self.finish_scope_close(key.clone(), scope_id, close, had_jobs),
+        )
+        .await;
+        let _close_guard = close_result?;
+        jobs_result?;
+        let mut state = self.write_state()?;
+        state.jobs.remove(&key);
+        state.plugins.remove(&key);
+        state.entries.remove(&key);
+        state.closing_scopes.remove(&key);
+        Ok(())
+    }
+
+    async fn finish_scope_close(
+        &self,
+        key: ScopeKey,
+        scope_id: &DbScopeId,
+        close: Arc<tokio::sync::Mutex<()>>,
+        had_jobs: bool,
+    ) -> Result<tokio::sync::OwnedMutexGuard<()>, AppError> {
+        let close_guard = close.clone().lock_owned().await;
         let _guard = self.jobs_lifecycle.lock().await;
         // Another close may have finished while this call waited. Never remove
         // a replacement entry installed under the same owner/key in the meantime.
@@ -495,34 +662,99 @@ impl ScopeManager {
         {
             return Err(AppError::UnknownScope(scope_id.to_string()));
         }
-        let jobs = self.read_state()?.jobs.get(&key).cloned().flatten();
+        let jobs = if had_jobs {
+            None
+        } else {
+            self.read_state()?.jobs.get(&key).cloned().flatten()
+        };
+        let plugins = self.read_state()?.plugins.get(&key).cloned();
         self.write_state()?.closing_scopes.insert(key.clone());
         drop(_guard);
-        if let Some(jobs) = jobs {
-            jobs.shutdown().await?;
-        }
-        let mut state = self.write_state()?;
-        state.jobs.remove(&key);
-        state.entries.remove(&key);
-        state.closing_scopes.remove(&key);
-        Ok(())
+        let (plugin_result, jobs_result) = futures_util::future::join(
+            async {
+                match plugins {
+                    Some(plugins) => plugins
+                        .runtime
+                        .shutdown()
+                        .await
+                        .map_err(crate::plugins::error),
+                    None => Ok(()),
+                }
+            },
+            async {
+                match jobs {
+                    Some(jobs) => jobs.shutdown().await.map_err(AppError::from),
+                    None => Ok(()),
+                }
+            },
+        )
+        .await;
+        plugin_result?;
+        jobs_result?;
+        Ok(close_guard)
     }
 
     pub async fn shutdown_jobs(&self) -> Result<(), AppError> {
         // Publish before waiting for initialization, so concurrent and future
         // lookups cannot admit a new coordinator after the shutdown snapshot.
-        self.write_state()?.jobs_closing = true;
+        let initial_jobs = {
+            let mut state = self.write_state()?;
+            state.jobs_closing = true;
+            for entry in state.entries.values() {
+                entry.plugin_cancellation.cancel();
+            }
+            state
+                .jobs
+                .iter()
+                .filter_map(|(key, jobs)| jobs.clone().map(|jobs| (key.clone(), jobs)))
+                .collect::<BTreeMap<_, _>>()
+        };
+        let (initial_results, remaining_result) = futures_util::future::join(
+            futures_util::future::join_all(initial_jobs.values().map(|jobs| jobs.shutdown())),
+            self.finish_jobs_shutdown(&initial_jobs),
+        )
+        .await;
+        remaining_result?;
+        for result in initial_results {
+            result?;
+        }
+        Ok(())
+    }
+
+    async fn finish_jobs_shutdown(
+        &self,
+        initial_jobs: &BTreeMap<ScopeKey, semantic_jobs::ScopeJobs>,
+    ) -> Result<(), AppError> {
         let _guard = self.jobs_lifecycle.lock().await;
         let jobs: Vec<_> = self
             .read_state()?
             .jobs
+            .iter()
+            .filter(|(key, _)| !initial_jobs.contains_key(*key))
+            .filter_map(|(_, jobs)| jobs.clone())
+            .collect();
+        let plugin_initializations: Vec<_> = self
+            .read_state()?
+            .entries
             .values()
-            .flatten()
-            .cloned()
+            .map(|entry| entry.jobs_close.clone())
             .collect();
         drop(_guard);
-        // Request cancellation in every scope before waiting for any one handler.
-        let results = futures_util::future::join_all(jobs.iter().map(|jobs| jobs.shutdown())).await;
+        let _plugin_guards =
+            futures_util::future::join_all(plugin_initializations.iter().map(|lock| lock.lock()))
+                .await;
+        let plugins: Vec<_> = self.read_state()?.plugins.values().cloned().collect();
+        // Poll every plugin and coordinator stop before waiting for any cleanup.
+        let (plugin_results, results) = futures_util::future::join(
+            futures_util::future::join_all(
+                plugins.iter().map(|plugins| plugins.runtime.shutdown()),
+            ),
+            futures_util::future::join_all(jobs.iter().map(|jobs| jobs.shutdown())),
+        )
+        .await;
+        for result in plugin_results {
+            result.map_err(crate::plugins::error)?;
+        }
         for result in results {
             result?;
         }
@@ -658,6 +890,7 @@ mod jobs_lifecycle_tests {
                 retireable: false,
                 last_used: Instant::now(),
                 jobs_close: Arc::default(),
+                plugin_cancellation: semantic_jobs::CancellationToken::new(),
             },
         );
         drop(guard);

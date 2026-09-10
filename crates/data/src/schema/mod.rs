@@ -120,3 +120,5 @@ pub use variant::variant_case::VariantCase;
 pub use variant::variant_payload::VariantPayload;
 pub use variant::variant_tag::VariantTag;
 pub use variant::variant_type::VariantType;
+mod interface_fingerprint;
+pub use interface_fingerprint::interface_fingerprint;

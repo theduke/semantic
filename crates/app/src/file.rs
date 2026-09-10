@@ -102,6 +102,40 @@ impl FileReader {
 }
 
 impl FileService {
+    /// Prepare imported bytes under a content-addressed locator. The caller owns
+    /// the separate entity publication, so a failed replacement preserves old bytes.
+    /// Optional media analysis is deliberately left to the ordinary analysis action.
+    pub(crate) async fn prepare_import(
+        &self,
+        store: &dyn objstore::ObjStore,
+        id: String,
+        filename: Option<String>,
+        mime_type: String,
+        mut object: Object,
+        content: FileSizedStream,
+    ) -> Result<Object, AppError> {
+        let persisted = persist_content(
+            store,
+            None,
+            None,
+            Some(mime_type.clone()),
+            FileContent::Stream(content),
+        )
+        .await?;
+        object.insert(ATTR_ID, id);
+        object.insert(ATTR_TYPE, FILE_CLASS_ID.to_string());
+        object.insert("uploaded_at", Value::DateTime(DateTime::now_utc()));
+        object.insert("filestore_locator", persisted.filestore_locator);
+        object.insert("byte_size", persisted.byte_size);
+        object.insert("mime_type", mime_type.clone());
+        object.insert("filekind", filekind_from_mime_type(&mime_type).to_string());
+        object.insert("content_hash_sha256", persisted.content_hash_sha256);
+        if let Some(filename) = filename {
+            object.insert("filename", filename);
+        }
+        Ok(object)
+    }
+
     pub fn new(media_analysis_config: MediaAnalysisConfig) -> Self {
         Self {
             media_analysis: MediaAnalysisService::new(media_analysis_config),
