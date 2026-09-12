@@ -680,13 +680,16 @@ impl Catalog {
                         relationship.id, attribute
                     ))
                 })?;
-                if !matches!(attr.attribute.ty.kind, TypeKind::Ref(_)) {
+                if !is_embedded_reference_type(
+                    &attr.attribute.ty,
+                    has_foreign_key(&attr.attribute.constraints),
+                ) {
                     return Err(CatalogError::InvalidSchema(format!(
-                        "relationship '{}' requires embedded attribute '{}' to have type 'ref'",
+                        "relationship '{}' requires embedded attribute '{}' to have a scalar reference type",
                         relationship.id, attribute
                     )));
                 }
-                let canonical = source_collection.canonical_field_name(attribute);
+                let canonical = source_collection.canonical_field_name(&attr.attribute.id);
                 if source_collection.is_closed_field_set()
                     && !source_collection.knows_field(canonical)
                 {
@@ -2419,6 +2422,31 @@ fn validate_class_attribute_resolution(
     Ok(())
 }
 
+fn has_foreign_key(constraints: &[semantic_data::schema::Constraint]) -> bool {
+    constraints
+        .iter()
+        .any(|constraint| matches!(constraint, semantic_data::schema::Constraint::ForeignKey(_)))
+}
+
+/// Embedded edges extract one string identity. Nullability and a choice of target
+/// classes do not change that representation; lists and unconstrained strings do.
+fn is_embedded_reference_type(ty: &Type, inherited_foreign_key: bool) -> bool {
+    let foreign_key = inherited_foreign_key || has_foreign_key(&ty.constraints);
+    match &ty.kind {
+        TypeKind::Ref(_) => true,
+        TypeKind::String(_) => foreign_key,
+        TypeKind::Optional(optional) => is_embedded_reference_type(&optional.inner, foreign_key),
+        TypeKind::Union(union) => {
+            !union.variants.is_empty()
+                && union
+                    .variants
+                    .iter()
+                    .all(|variant| is_embedded_reference_type(variant, foreign_key))
+        }
+        _ => false,
+    }
+}
+
 fn validate_class_graph_invariants<'a>(
     classes: impl IntoIterator<Item = &'a ClassType>,
 ) -> Result<(), CatalogError> {
@@ -3139,6 +3167,100 @@ mod tests {
     };
 
     use super::*;
+
+    #[test]
+    fn embedded_relationships_accept_nullable_and_constrained_scalar_references() {
+        use semantic_data::schema::{ForeignKeyRef, OptionalType, RelationIndexingMode};
+
+        let foreign_key = Constraint::ForeignKey(ForeignKeyRef {
+            to: TypeRef {
+                name: "test:Person".into(),
+                args: vec![],
+            },
+            fields: vec!["id".into()],
+        });
+        let mut constrained = attribute("test:target").ty;
+        constrained.constraints.push(foreign_key.clone());
+        let optional = Type::new(TypeKind::Optional(OptionalType {
+            inner: Box::new(constrained.clone()),
+        }));
+        let union = Type::new(TypeKind::Union(UnionType {
+            variants: vec![constrained.clone(), ref_type("test:Person")],
+        }));
+        for (ty, constraints) in [
+            (ref_type("test:Person"), vec![]),
+            (constrained, vec![]),
+            (optional, vec![]),
+            (union, vec![]),
+            (attribute("test:target").ty, vec![foreign_key]),
+        ] {
+            let mut catalog = Catalog::new();
+            catalog.upsert_attribute(AttributeType {
+                ty,
+                constraints,
+                ..attribute("test:target")
+            });
+            catalog
+                .upsert_collection(
+                    "entities",
+                    CollectionKind::Polymorphic,
+                    IntegrityMode::StrictRegisteredSchema,
+                )
+                .unwrap();
+            catalog
+                .upsert_relationship(RelationType {
+                    id: "test:link".into(),
+                    name: "link".into(),
+                    source_collection: "entities".into(),
+                    mode: RelationMode::Embedded {
+                        attribute: "test:target".into(),
+                    },
+                    indexing_mode: RelationIndexingMode::Enabled,
+                    meta: Meta::default(),
+                })
+                .unwrap();
+            let restored = Catalog::from_storage_snapshot(catalog.to_storage_snapshot()).unwrap();
+            assert!(restored.relationship_by_id("test:link").is_some());
+        }
+    }
+
+    #[test]
+    fn embedded_relationships_reject_lists_and_unconstrained_union_branches() {
+        use semantic_data::schema::RelationIndexingMode;
+
+        for ty in [
+            attribute("test:target").ty,
+            Type::new(TypeKind::List(ListType {
+                items: Box::new(ref_type("test:Person")),
+            })),
+            Type::new(TypeKind::Union(UnionType {
+                variants: vec![ref_type("test:Person"), attribute("test:target").ty],
+            })),
+            Type::new(TypeKind::Union(UnionType { variants: vec![] })),
+        ] {
+            let mut catalog = Catalog::new();
+            catalog.upsert_attribute(AttributeType {
+                ty,
+                ..attribute("test:target")
+            });
+            catalog
+                .register_collection("entities", CollectionKind::Polymorphic)
+                .unwrap();
+            let error = catalog
+                .upsert_relationship(RelationType {
+                    id: "test:invalid".into(),
+                    name: "invalid".into(),
+                    source_collection: "entities".into(),
+                    mode: RelationMode::Embedded {
+                        attribute: "test:target".into(),
+                    },
+                    indexing_mode: RelationIndexingMode::Enabled,
+                    meta: Meta::default(),
+                })
+                .unwrap_err();
+            assert!(error.to_string().contains("scalar reference type"));
+        }
+    }
 
     #[test]
     fn restoring_indexes_preserves_sparse_ids_in_any_row_order() {

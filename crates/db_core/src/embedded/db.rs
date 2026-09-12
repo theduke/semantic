@@ -12,7 +12,7 @@ use crate::{
     canonicalize_select_query, canonicalize_update_query, evaluate_mutation_limit,
     execute_batch_with_prepare, is_all_collection_alias, normalize_object_for_collection,
     normalize_package_definition, prepare_object_for_write, ref_target_class_ids,
-    resolved_field_types_for_object, touched_collections, validate_package_migrations,
+    resolved_field_types_for_object, touched_collections, validate_package_migrations_with_catalog,
 };
 use crate::{CoreError, DbConfig, DbError, DefaultExpressionContext, MigrationMismatchPolicy};
 use futures::{StreamExt, stream};
@@ -363,13 +363,13 @@ impl<S: EntityStorage> EmbeddedDb<S> {
         &mut self,
         package: Package,
     ) -> std::result::Result<PackageRegistrationOutcome, DbError> {
-        validate_package_migrations(&package)
-            .map_err(|err| DbError::InvalidQuery(err.to_string()))?;
         let package = normalize_package_definition(&package)
             .map_err(|err| DbError::InvalidQuery(err.to_string()))?;
 
         let txn_result = run_with_transaction_retries(TransactionOptions::default(), |_| {
             let catalog_snapshot = self.catalog.snapshot();
+            validate_package_migrations_with_catalog(&package, catalog_snapshot.catalog.as_ref())
+                .map_err(|err| DbError::InvalidQuery(err.to_string()))?;
             let read_revision = self.storage.current_revision()?;
             let (next_catalog, before, after, executed_migrations) = self.apply_package_update(
                 catalog_snapshot.catalog.as_ref(),

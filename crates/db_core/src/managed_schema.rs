@@ -45,9 +45,58 @@ pub fn normalize_package_definition(package: &Package) -> Result<Package, CoreEr
 }
 
 pub fn validate_package_migrations(package: &Package) -> Result<(), CoreError> {
+    validate_package_migrations_with_catalog(package, &fresh_catalog_with_core_schema()?)
+}
+
+/// Replay an isolated package with installed foreign class identities available.
+/// Dependency class fields are intentionally excluded: their complete definitions
+/// are validated when migrations run against the transactional live catalog.
+pub fn validate_package_migrations_with_catalog(
+    package: &Package,
+    dependencies: &Catalog,
+) -> Result<(), CoreError> {
     let package = normalize_package_definition(package)?;
     let modules = package_modules(&package);
     let mut catalog = fresh_catalog_with_core_schema()?;
+    let declared = modules
+        .values()
+        .flat_map(|module| {
+            module
+                .types
+                .keys()
+                .chain(module.attributes.keys())
+                .chain(module.classes.keys())
+        })
+        .collect::<std::collections::BTreeSet<_>>();
+    for (_, dependency) in dependencies.classes() {
+        let id = &dependency.class.id;
+        if declared.contains(id) || catalog.class_id(id).is_some() {
+            continue;
+        }
+        // Only establish that the foreign target is an installed class. Pulling
+        // its full schema into replay would also pull in consumers of this
+        // package and make historical migrations depend on their current fields.
+        let mut class = dependency.class.clone();
+        class.attributes.clear();
+        class.constraints.clear();
+        class.inherits = None;
+        class.extends.clear();
+        catalog
+            .upsert_class(class)
+            .map_err(|error| CoreError::new(error.to_string()))?;
+    }
+    for (_, dependency) in dependencies.type_defs() {
+        let definition = &dependency.type_def;
+        if !declared.contains(&definition.name)
+            && catalog.type_def_by_name(&definition.name).is_none()
+            && matches!(definition.ty.kind, TypeKind::Ref(_))
+        {
+            let mut alias = definition.clone();
+            alias.module = None;
+            alias.ty.constraints.clear();
+            catalog.upsert_type_def(alias);
+        }
+    }
 
     for migration in &package.migrations {
         if !modules.contains_key(migration.module.as_str()) {
@@ -620,6 +669,102 @@ mod tests {
     #[test]
     fn validate_package_migrations_accepts_filestore_package() {
         validate_package_migrations(&semantic_data::filestore::package()).unwrap();
+    }
+
+    #[test]
+    fn package_validation_resolves_installed_foreign_keys_without_reusing_owned_schema() {
+        use semantic_data::schema::{AttributeType, Constraint, ForeignKeyRef};
+
+        let mut catalog = fresh_catalog_with_core_schema().unwrap();
+        let files = semantic_data::filestore::package();
+        for migration in &files.migrations {
+            apply_migration_ddl_batch(
+                &mut catalog,
+                &migration.module,
+                migration
+                    .operations
+                    .iter()
+                    .filter_map(|operation| match operation {
+                        MigrationOperation::Ddl(ddl) => Some(ddl),
+                        _ => None,
+                    }),
+            )
+            .unwrap();
+        }
+        // Reopening an installed package must retain the same core baseline as
+        // its original isolated validation, including shared metadata fields.
+        validate_package_migrations_with_catalog(&files, &catalog).unwrap();
+        let mut ty = Type::new(TypeKind::Ref(TypeRef::new(
+            semantic_data::filestore::FILE_CLASS_ID,
+        )));
+        ty.constraints.push(Constraint::ForeignKey(ForeignKeyRef {
+            to: TypeRef::new(semantic_data::filestore::FILE_CLASS_ID),
+            fields: vec!["id".into()],
+        }));
+        let attribute = AttributeType {
+            id: "consumer:file".into(),
+            name: "file".into(),
+            ty,
+            constraints: vec![],
+            meta: Meta::default(),
+        };
+        let mut package = Package {
+            name: "consumer".into(),
+            root: Module {
+                name: "consumer".into(),
+                constants: BTreeMap::new(),
+                types: BTreeMap::new(),
+                attributes: BTreeMap::from([(attribute.id.clone(), attribute.clone())]),
+                classes: BTreeMap::new(),
+                interfaces: BTreeMap::new(),
+                contracts: BTreeMap::new(),
+                meta: Meta::default(),
+            },
+            modules: BTreeMap::new(),
+            migrations: vec![Migration {
+                module: "consumer".into(),
+                name: "001".into(),
+                description: None,
+                operations: vec![MigrationOperation::Ddl(
+                    MigrationDdlOperation::UpsertAttribute {
+                        attribute: attribute.clone(),
+                    },
+                )],
+                meta: Meta::default(),
+            }],
+            version: None,
+            meta: Meta::default(),
+        };
+        assert!(validate_package_migrations(&package).is_err());
+        assert!(
+            catalog
+                .class_id(semantic_data::filestore::FILE_CLASS_ID)
+                .is_some()
+        );
+        assert!(matches!(
+            catalog
+                .type_def_by_name(semantic_data::filestore::FILE_CLASS_ID)
+                .map(|def| &def.type_def.ty.kind),
+            Some(TypeKind::Class(_))
+        ));
+        validate_package_migrations_with_catalog(&package, &catalog).unwrap();
+        catalog.upsert_attribute_with_module(attribute, Some("consumer".into()));
+        validate_package_migrations_with_catalog(&package, &catalog).unwrap();
+
+        // The already installed attribute must not conceal its missing migration.
+        package.migrations[0].operations.clear();
+        let error = validate_package_migrations_with_catalog(&package, &catalog).unwrap_err();
+        assert!(
+            error
+                .to_string()
+                .contains("attributes do not match migration result")
+        );
+        assert!(catalog.attribute_by_id("consumer:file").is_some());
+        assert!(
+            catalog
+                .class_id(semantic_data::filestore::FILE_CLASS_ID)
+                .is_some()
+        );
     }
 
     #[test]
