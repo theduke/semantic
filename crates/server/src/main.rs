@@ -10,25 +10,32 @@ fn main() {
     };
     let db_uri = arg_value(&args, "--db-uri").or_else(|| std::env::var("SEMANTIC_DB_URI").ok());
     let blob_uri =
-        match arg_value(&args, "--blob-uri").or_else(|| std::env::var("SEMANTIC_BLOB_URI").ok()) {
-            Some(uri) => uri,
-            None => app_config
-                .default_blob_uri()
-                .expect("build default semantic blob store uri"),
-        };
+        arg_value(&args, "--blob-uri").or_else(|| std::env::var("SEMANTIC_BLOB_URI").ok());
     let bind = arg_value(&args, "--bind").unwrap_or_else(|| server_config.bind_address());
-    let db_uri = semantic_server::resolve_db_uri(db_uri, &blob_uri, &app_config)
-        .expect("resolve database URI");
+    let storage = semantic_app::storage::resolve_storage(
+        &app_config,
+        semantic_app::storage::StorageConfig {
+            db_uri,
+            blob_uri,
+            ..Default::default()
+        },
+    )
+    .expect("resolve storage configuration");
+    if storage.db_uri_selection() == semantic_app::storage::DbUriSelection::SharedBlob {
+        eprintln!(
+            "No database URI specified; automatically selected 'log:<blob>' because the blob store uses logfs. Database records and blobs will share one open store."
+        );
+    }
     let blob_password =
-        semantic_server::prompt_blob_password(&blob_uri).expect("read logfs password");
+        semantic_server::prompt_blob_password(storage.blob_uri()).expect("read logfs password");
 
     let runtime = tokio::runtime::Runtime::new().expect("tokio runtime");
     runtime.block_on(async move {
-        let server =
-            semantic_server::SemanticServer::from_uris(db_uri, blob_uri, blob_password, app_config)
+        let app =
+            semantic_app::storage::open_app(app_config, storage.with_blob_password(blob_password))
                 .await
-                .expect("open semantic server storage")
-                .with_config(server_config);
+                .expect("open semantic server storage");
+        let server = semantic_server::SemanticServer::new(app).with_config(server_config);
         let listener = tokio::net::TcpListener::bind(&bind)
             .await
             .expect("bind semantic server");

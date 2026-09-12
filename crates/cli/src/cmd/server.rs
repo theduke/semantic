@@ -58,21 +58,28 @@ pub struct Args {
 pub async fn run(args: Args) -> std::result::Result<(), CliError> {
     let app_config = app_config(&args);
     let server_config = server_config(&args)?;
-    let blob_uri = match args.blob_uri {
-        Some(uri) => uri,
-        None => app_config
-            .default_blob_uri()
-            .map_err(CliError::DefaultBlobUri)?,
-    };
     let bind = args.bind.unwrap_or_else(|| server_config.bind_address());
-    let db_uri = semantic_server::resolve_db_uri(args.db_uri, &blob_uri, &app_config)?;
-    let blob_password = semantic_server::prompt_blob_password(&blob_uri)
+    let storage = semantic_app::storage::resolve_storage(
+        &app_config,
+        semantic_app::storage::StorageConfig {
+            db_uri: args.db_uri,
+            blob_uri: args.blob_uri,
+            ..Default::default()
+        },
+    )
+    .map_err(semantic_server::ServerError::from)?;
+    if storage.db_uri_selection() == semantic_app::storage::DbUriSelection::SharedBlob {
+        eprintln!(
+            "No database URI specified; automatically selected 'log:<blob>' because the blob store uses logfs. Database records and blobs will share one open store."
+        );
+    }
+    let blob_password = semantic_server::prompt_blob_password(storage.blob_uri())
         .map_err(|err| CliError::InvalidInput(format!("read logfs password: {err}")))?;
-
-    let server =
-        semantic_server::SemanticServer::from_uris(db_uri, blob_uri, blob_password, app_config)
-            .await?
-            .with_config(server_config);
+    let app =
+        semantic_app::storage::open_app(app_config, storage.with_blob_password(blob_password))
+            .await
+            .map_err(semantic_server::ServerError::from)?;
+    let server = semantic_server::SemanticServer::new(app).with_config(server_config);
     let listener = tokio::net::TcpListener::bind(&bind)
         .await
         .map_err(|source| CliError::Bind {

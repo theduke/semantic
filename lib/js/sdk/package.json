@@ -24,6 +24,10 @@
     "./core": {
       "types": "./dist/generated/core.d.ts",
       "import": "./dist/generated/core.js"
+    },
+    "./rpc-wire": {
+      "types": "./dist/rpc-wire.d.ts",
+      "import": "./dist/rpc-wire.js"
     }
   },
   "files": [

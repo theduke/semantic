@@ -3,12 +3,6 @@ mod config;
 mod error;
 mod file;
 mod interface;
-#[cfg(feature = "logfs")]
-mod log;
-mod logfs;
-#[cfg(feature = "logfs")]
-mod logfs_blob;
-mod redb;
 mod router;
 mod startup;
 mod storage;
@@ -19,15 +13,14 @@ mod ws;
 pub use auth::{HeaderPrincipalResolver, NoAuthPrincipalResolver, PrincipalResolver};
 pub use config::ServerConfig;
 pub use error::ServerError;
-#[cfg(feature = "logfs")]
-pub use log::{LogDbConfig, LogDbProvider};
-#[cfg(feature = "logfs")]
-pub use logfs::LogFsDbProvider;
-#[cfg(feature = "redb")]
-pub use redb::RedbDbProvider;
 pub use router::SemanticServer;
+#[cfg(feature = "redb")]
+pub use semantic_app::storage::RedbDbProvider;
+pub use semantic_app::storage::{LocalDbConfig, is_logfs_blob_uri};
+#[cfg(feature = "logfs")]
+pub use semantic_app::storage::{LogDbConfig, LogDbProvider, LogFsDbProvider};
 pub use startup::prompt_blob_password;
-pub use storage::{LocalDbConfig, is_logfs_blob_uri, resolve_db_uri};
+pub use storage::resolve_db_uri;
 
 #[cfg(test)]
 mod tests {

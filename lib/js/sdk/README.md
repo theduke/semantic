@@ -39,6 +39,10 @@ are Node-only.
 npm install @semantic/sdk
 ```
 
+Node.js applications that want to run the Rust application and storage in-process
+can instead add `@semantic/embedded`. It returns this package's `SemanticClient`
+without starting an HTTP server; the SDK itself remains native-free and portable.
+
 The package is ESM-only and includes its TypeScript declarations. There is no
 default export.
 

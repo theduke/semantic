@@ -16,6 +16,8 @@ default = ["base", "plugin-stdio", "plugin-websocket"]
 base = ["dep:semantic_base"]
 plugin-stdio = ["semantic_plugin/stdio"]
 plugin-websocket = ["semantic_plugin/websocket"]
+storage-redb = ["dep:semantic_db_redb"]
+storage-logfs = ["dep:semantic_db_log", "dep:objstore_logfs"]
 
 [dependencies]
 semantic_rpc_core = { path = "../rpc_core" }
@@ -33,6 +35,9 @@ semantic_plugin = { path = "../plugin" }
 semantic_import = { path = "../import" }
 semantic_base = { path = "../base", optional = true }
 semantic_db_core = { path = "../db_core" }
+semantic_db_redb = { path = "../db_redb", optional = true }
+semantic_db_log = { path = "../db_log", optional = true }
+objstore_logfs = { workspace = true, optional = true }
 semantic_media = { path = "../media" }
 semantic_rpc = { path = "../rpc" }
 facet-json = "0.43.2"
@@ -41,7 +46,7 @@ serde_json.workspace = true
 sha2 = { workspace = true }
 thiserror = "2.0.17"
 time = { workspace = true }
-tokio = { workspace = true, features = ["sync", "time"] }
+tokio = { workspace = true, features = ["rt", "sync", "time"] }
 url = "2.5.7"
 uuid = { workspace = true, features = ["v4"] }
 

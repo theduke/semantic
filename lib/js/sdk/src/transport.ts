@@ -1,7 +1,8 @@
 import { ProtocolError, RpcError, TransportError } from "./errors.js";
 import { parseJson, stringifyJson } from "./json.js";
-import type { SemanticValue, TaggedValue } from "./types.js";
-import { decodeTagged, encodeTagged } from "./values.js";
+import { RpcRequestEncoder, resolveRpcResponse } from "./rpc-wire.js";
+import type { RpcResponseEnvelope } from "./rpc-wire.js";
+import type { SemanticValue } from "./types.js";
 
 import {
   abortable,
@@ -21,43 +22,11 @@ export interface RpcTransport {
   ): Promise<SemanticValue | undefined>;
   close?(): void;
 }
-interface RpcEnvelope {
-  id: number | bigint;
-  command: string;
-  payload: TaggedValue;
-}
-interface RpcResponse {
-  id: number | bigint;
-  result:
-    | { ok: TaggedValue }
-    | { err: { code: string; message: string; data?: TaggedValue } };
-}
-let nextId = 1n;
-const request = (command: string, payload: SemanticValue): RpcEnvelope => ({
-  id: nextId++,
-  command,
-  payload: encodeTagged(payload),
-});
+const requestEncoder = new RpcRequestEncoder();
 const errorDescription = (error: unknown): string => {
   if (error instanceof Error) return `${error.name}: ${error.message}`;
   return String(error);
 };
-function resolve(raw: unknown): SemanticValue | undefined {
-  const response = raw as RpcResponse;
-  if (!response || typeof response !== "object" || !("result" in response))
-    throw new ProtocolError("invalid RPC response envelope");
-  if ("err" in response.result) {
-    const e = response.result.err;
-    throw new RpcError(
-      e.code,
-      e.message,
-      e.data === undefined ? undefined : decodeTagged(e.data),
-    );
-  }
-  if (!("ok" in response.result))
-    throw new ProtocolError("RPC response has neither ok nor err result");
-  return decodeTagged(response.result.ok);
-}
 
 export interface HttpTransportOptions extends HttpOptions {}
 export class HttpTransport implements RpcTransport {
@@ -90,7 +59,7 @@ export class HttpTransport implements RpcTransport {
       const init: RequestInit = {
         method: "POST",
         headers,
-        body: stringifyJson(request(command, payload)),
+        body: stringifyJson(requestEncoder.request(command, payload)),
       };
       init.signal = signal;
       if (this.options.credentials) init.credentials = this.options.credentials;
@@ -119,7 +88,9 @@ export class HttpTransport implements RpcTransport {
           response.status,
         );
       try {
-        return resolve(parseJson(await abortable(response.text(), signal)));
+        return resolveRpcResponse(
+          parseJson(await abortable(response.text(), signal)),
+        );
       } catch (cause) {
         if (
           signal.aborted ||
@@ -228,7 +199,7 @@ export class WebSocketTransport implements RpcTransport {
     if (signal?.aborted) throw abortError(signal);
     if (this.state !== "open" || this.socket.readyState !== 1)
       throw new TransportError("WebSocket is not open");
-    const envelope = request(command, payload);
+    const envelope = requestEncoder.request(command, payload);
     const id = String(envelope.id);
     return new Promise<SemanticValue | undefined>(
       (resolvePromise, rejectPromise) => {
@@ -272,12 +243,12 @@ export class WebSocketTransport implements RpcTransport {
   }
   private onMessage(text: string): void {
     try {
-      const raw = parseJson(text) as RpcResponse;
+      const raw = parseJson(text) as RpcResponseEnvelope;
       const pending = this.pending.get(String(raw.id));
       if (!pending) return;
       this.pending.delete(String(raw.id));
       try {
-        pending.resolve(resolve(raw));
+        pending.resolve(resolveRpcResponse(raw));
       } catch (e) {
         pending.reject(e);
       }

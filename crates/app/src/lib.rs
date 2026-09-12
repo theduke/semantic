@@ -17,6 +17,7 @@ mod object_store;
 pub mod plugins;
 mod scope;
 mod session;
+pub mod storage;
 
 pub use auth::{Principal, PrincipalId, PrincipalKind};
 pub use command::{SemanticApp, SemanticAppBuilder, SemanticAppInner};

@@ -1,0 +1,47 @@
+{
+  "name": "@semantic/embedded",
+  "version": "0.0.1",
+  "description": "Embedded Semantic client for Node.js",
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    }
+  },
+  "files": [
+    "dist",
+    "native",
+    "README.md"
+  ],
+  "scripts": {
+    "build:js": "tsc -p tsconfig.json",
+    "build:native": "napi build --platform --esm --manifest-path ../../../crates/js_embed/Cargo.toml --package-json-path package.json --output-dir native",
+    "build:native:release": "npm run build:native -- --release",
+    "build": "npm run build:native && npm run build:js",
+    "test:js": "npm run build:js && node --test dist/test/*.test.js",
+    "test": "npm run build && node --test dist/test/*.test.js"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "dependencies": {
+    "@semantic/sdk": "file:../sdk"
+  },
+  "devDependencies": {
+    "@napi-rs/cli": "3.4.1",
+    "@types/node": "^22.10.0",
+    "typescript": "^5.7.0"
+  },
+  "napi": {
+    "binaryName": "semantic_js_embed",
+    "targets": [
+      "x86_64-unknown-linux-gnu",
+      "aarch64-unknown-linux-gnu",
+      "x86_64-apple-darwin",
+      "aarch64-apple-darwin"
+    ]
+  }
+}

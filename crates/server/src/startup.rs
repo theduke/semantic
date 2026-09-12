@@ -2,7 +2,7 @@ use std::io::{self, BufRead, IsTerminal, Write};
 
 /// Read a logfs password at CLI startup. Library construction never prompts.
 pub fn prompt_blob_password(blob_uri: &str) -> io::Result<Option<String>> {
-    if !crate::is_logfs_blob_uri(blob_uri) {
+    if !semantic_app::storage::is_logfs_blob_uri(blob_uri) {
         return Ok(None);
     }
     eprint!("Logfs blob-store password (leave empty for no password protection): ");

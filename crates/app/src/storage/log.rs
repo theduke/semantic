@@ -1,8 +1,8 @@
 use std::sync::{Arc, Mutex};
 
+use crate::{AppError, DbBackend, Principal, SemanticDb};
 use async_trait::async_trait;
 use objstore::DynObjStore;
-use semantic_app::{AppError, DbBackend, Principal, SemanticDb};
 use semantic_data::schema::DbOpenMode;
 use semantic_db_core::{Db, DbError};
 use semantic_db_log::{EventId, LogStore, ObjStoreLogStore};

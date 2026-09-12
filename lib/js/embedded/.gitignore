@@ -1,0 +1,6 @@
+dist/
+native/*.node
+native/*.js
+native/*.d.ts
+npm/
+node_modules/

@@ -1,30 +1,30 @@
-#[cfg(feature = "redb")]
+#[cfg(feature = "storage-logfs")]
 use std::sync::Arc;
 
-#[cfg(feature = "redb")]
+#[cfg(feature = "storage-logfs")]
+use crate::{AppError, DbBackend, Principal, SemanticDb};
+#[cfg(feature = "storage-logfs")]
 use async_trait::async_trait;
-#[cfg(feature = "redb")]
-use semantic_app::{AppError, DbBackend, Principal, SemanticDb};
-#[cfg(feature = "redb")]
+#[cfg(feature = "storage-logfs")]
 use semantic_data::schema::DbOpenMode;
-#[cfg(feature = "redb")]
+#[cfg(feature = "storage-logfs")]
 use semantic_db_core::Db;
 
-#[cfg(feature = "redb")]
+#[cfg(feature = "storage-logfs")]
 #[derive(Debug)]
-pub struct RedbDbProvider;
+pub struct LogFsDbProvider;
 
-#[cfg(feature = "redb")]
+#[cfg(feature = "storage-logfs")]
 #[async_trait]
-impl DbBackend for RedbDbProvider {
-    type Config = crate::LocalDbConfig;
+impl DbBackend for LogFsDbProvider {
+    type Config = super::LocalDbConfig;
 
     fn scheme(&self) -> &str {
-        "redb"
+        "logfs"
     }
 
     fn parse_uri(&self, uri: &str) -> Result<Self::Config, AppError> {
-        crate::LocalDbConfig::from_uri("redb", uri)
+        super::LocalDbConfig::from_uri("logfs", uri)
     }
 
     async fn open_config(
@@ -35,12 +35,12 @@ impl DbBackend for RedbDbProvider {
     ) -> Result<Arc<dyn SemanticDb>, AppError> {
         let backend = tokio::task::spawn_blocking(move || {
             config.ensure_parent(mode)?;
-            semantic_db_redb::open_backend(config.path, mode).map_err(AppError::from)
+            semantic_db_log::open_backend(config.path, mode).map_err(AppError::from)
         })
         .await
         .map_err(|err| {
             AppError::Db(semantic_db_core::DbError::Storage(format!(
-                "redb database open task failed: {err}"
+                "logfs database open task failed: {err}"
             )))
         })??;
         Ok(Arc::new(Db::new(backend)))
