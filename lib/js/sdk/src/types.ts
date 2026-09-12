@@ -81,6 +81,8 @@ export type TaggedValue =
 
 export type PathSegment = { field: string } | { index: number };
 export type FieldPath = PathSegment[];
+export type ValidationError = import("./generated/core.js").ValidationError;
+export type ValidationViolation = import("./generated/core.js").ValidationViolation;
 export type BinaryOp =
   | "add"
   | "sub"
@@ -662,8 +664,41 @@ export interface BatchOutcome {
   dataset: Record<string, Record<string, SemanticObject>>;
   stats: BatchStats;
 }
+export type BatchReturn =
+  | "dataset"
+  | "stats"
+  | "changes"
+  | { projection: { fields: string[] } };
+export interface EntityChange {
+  collection: string;
+  id: string;
+  kind: "upsert" | "delete";
+}
+export interface BatchStatsReply {
+  stats: BatchStats;
+}
+export interface BatchChangesReply extends BatchStatsReply {
+  changes: EntityChange[];
+}
+export interface BatchProjectionReply<T extends object = SemanticObject>
+  extends BatchChangesReply {
+  rows: EntityRecord<T>[];
+}
+export type BatchReply =
+  | BatchOutcome
+  | BatchStatsReply
+  | BatchChangesReply
+  | BatchProjectionReply;
+export type BatchReturnResult<R extends BatchReturn> = R extends "dataset"
+  ? BatchOutcome
+  : R extends "stats"
+    ? BatchStatsReply
+    : R extends "changes"
+      ? BatchChangesReply
+      : BatchProjectionReply;
 /** Batch operations currently accepted by the application RPC command. */
 export type BatchOperation =
+  | { kind: "create"; collection: string; id: string; object: SemanticObject }
   | { kind: "upsert"; collection: string; id: string; object: SemanticObject }
   | { kind: "delete_by_id"; collection: string; id: string }
   | { kind: "delete_by_ids"; collection: string; ids: string[] };

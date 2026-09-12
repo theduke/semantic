@@ -298,6 +298,25 @@ impl PostgresBackend {
 
 #[async_trait]
 impl Backend for PostgresBackend {
+    async fn validation_preflight(
+        &self,
+    ) -> Result<Vec<semantic_db_core::ValidationViolation>, DbError> {
+        if self.uses_managed_engine() {
+            return self
+                .with_semantic_db(false, |db| db.validation_preflight())
+                .await;
+        }
+        Err(DbError::InvalidQuery(Self::WRITE_ERROR.into()))
+    }
+
+    async fn activate_validation(&self) -> Result<(), DbError> {
+        if self.uses_managed_engine() {
+            return self
+                .with_semantic_db(true, |db| db.activate_validation())
+                .await;
+        }
+        Err(DbError::InvalidQuery(Self::WRITE_ERROR.into()))
+    }
     async fn catalog(&self) -> Result<Arc<Catalog>, DbError> {
         if self.uses_managed_engine() {
             return self.with_semantic_db(false, |db| Ok(db.catalog())).await;
@@ -392,7 +411,14 @@ impl Backend for PostgresBackend {
     async fn query(&self, input: TextQueryInput) -> Result<QueryResult, DbError> {
         let query = match input {
             TextQueryInput::Ast(q) => q,
-            TextQueryInput::Text { format, query } => self.parse_text_query(format, &query).await?,
+            TextQueryInput::Text {
+                format,
+                query,
+                params,
+            } => {
+                self.parse_text_query_with_params(format, &query, &params)
+                    .await?
+            }
         };
 
         if self.uses_managed_engine() {
@@ -432,7 +458,14 @@ impl Backend for PostgresBackend {
     async fn explain(&self, query: TextQueryInput) -> Result<QueryExplain, DbError> {
         let query = match query {
             TextQueryInput::Ast(query) => query,
-            TextQueryInput::Text { format, query } => self.parse_text_query(format, &query).await?,
+            TextQueryInput::Text {
+                format,
+                query,
+                params,
+            } => {
+                self.parse_text_query_with_params(format, &query, &params)
+                    .await?
+            }
         };
         if self.uses_managed_engine() {
             return self
@@ -457,7 +490,14 @@ impl Backend for PostgresBackend {
     async fn plan(&self, query: TextQueryInput) -> Result<QueryPlan, DbError> {
         let query = match query {
             TextQueryInput::Ast(query) => query,
-            TextQueryInput::Text { format, query } => self.parse_text_query(format, &query).await?,
+            TextQueryInput::Text {
+                format,
+                query,
+                params,
+            } => {
+                self.parse_text_query_with_params(format, &query, &params)
+                    .await?
+            }
         };
         if self.uses_managed_engine() {
             return self
@@ -480,6 +520,21 @@ impl Backend for PostgresBackend {
         if self.uses_managed_engine() {
             return self
                 .with_semantic_db(true, move |db| db.execute_batch(batch.clone()))
+                .await;
+        }
+        Err(DbError::InvalidQuery(Self::WRITE_ERROR.into()))
+    }
+
+    async fn execute_batch_returning(
+        &self,
+        batch: Batch,
+        returning: semantic_db_core::BatchReturn,
+    ) -> Result<semantic_db_core::BatchReply, DbError> {
+        if self.uses_managed_engine() {
+            return self
+                .with_semantic_db(true, move |db| {
+                    db.execute_batch_returning(batch.clone(), returning.clone())
+                })
                 .await;
         }
         Err(DbError::InvalidQuery(Self::WRITE_ERROR.into()))

@@ -339,6 +339,15 @@ pub(crate) async fn save(
     let (_, storage) = db.into_parts();
     let engine = storage.into_inner();
     let schema = quote_ident(schema_name);
+    let previous_snapshot: serde_json::Value = transaction
+        .query_one(
+            &format!("SELECT snapshot FROM {schema}.catalog_state WHERE singleton = true"),
+            &[],
+        )
+        .await
+        .map_err(storage_error)?
+        .get(0);
+    let schema_changed = previous_snapshot != snapshot;
     let kv_put = transaction
         .prepare(&format!(
             "INSERT INTO {schema}.kv_entries (key_hash, key, value) VALUES ($1, $2, $3)
@@ -426,7 +435,15 @@ pub(crate) async fn save(
     }
     rebuild_relation_edges(transaction, &schema, &catalog, &engine).await?;
     if layout == "relational" {
-        sync_relational_projection(transaction, &schema, schema_name, &catalog, &engine).await?;
+        sync_relational_projection(
+            transaction,
+            &schema,
+            schema_name,
+            &catalog,
+            &engine,
+            schema_changed,
+        )
+        .await?;
     }
     sync_mapping_metadata(transaction, &schema, schema_name, &catalog, layout).await?;
     let revision = row_revision;
@@ -827,6 +844,7 @@ async fn sync_relational_projection(
     schema_name: &str,
     catalog: &Catalog,
     engine: &PostgresSnapshotEngine,
+    schema_changed: bool,
 ) -> Result<(), DbError> {
     let specs = relational_collection_specs(catalog)?;
     let specs_by_lid = specs
@@ -1034,11 +1052,34 @@ async fn sync_relational_projection(
                 .await
                 .map_err(storage_error)?;
         }
-        transaction
-            .execute(&format!("DELETE FROM {schema}.{table}"), &[])
-            .await
-            .map_err(storage_error)?;
+        let changed_ids: BTreeSet<_> = engine
+            .changes()
+            .keys()
+            .filter_map(|key| parse_entity_key(key))
+            .filter(|(collection, _)| *collection == spec.collection_lid)
+            .map(|(_, id)| id)
+            .collect();
+        if schema_changed {
+            transaction
+                .execute(&format!("DELETE FROM {schema}.{table}"), &[])
+                .await
+                .map_err(storage_error)?;
+        } else {
+            // Delete all replaced rows before inserting any, allowing unique-key swaps.
+            for id in &changed_ids {
+                transaction
+                    .execute(
+                        &format!("DELETE FROM {schema}.{table} WHERE _semantic_id = $1"),
+                        &[id],
+                    )
+                    .await
+                    .map_err(storage_error)?;
+            }
+        }
         for entity in entities.get(&spec.collection_lid.0).into_iter().flatten() {
+            if !schema_changed && !changed_ids.contains(entity.id.as_str()) {
+                continue;
+            }
             let object_type = entity
                 .object
                 .get(semantic_db_core::catalog::OBJECT_TYPE_FIELD)
@@ -1617,10 +1658,29 @@ async fn rebuild_relation_edges(
     catalog: &semantic_db_core::catalog::Catalog,
     engine: &PostgresSnapshotEngine,
 ) -> Result<(), DbError> {
-    transaction
-        .execute(&format!("DELETE FROM {schema}.relation_edges"), &[])
+    let mut previous = BTreeMap::new();
+    for row in transaction
+        .query(
+            &format!(
+                "SELECT relation_lid, source_collection_lid, source_id,
+        target_collection_lid, target_id, depth FROM {schema}.relation_edges"
+            ),
+            &[],
+        )
         .await
-        .map_err(storage_error)?;
+        .map_err(storage_error)?
+    {
+        previous.insert(
+            (
+                row.get::<_, i64>(0),
+                row.get::<_, i64>(1),
+                row.get::<_, String>(2),
+                row.get::<_, i64>(3),
+                row.get::<_, String>(4),
+            ),
+            row.get::<_, i64>(5),
+        );
+    }
     let Some(edge_collection) = catalog.collection_by_name("__semantic.relationship_edges") else {
         return Ok(());
     };
@@ -1629,7 +1689,9 @@ async fn rebuild_relation_edges(
             "INSERT INTO {schema}.relation_edges
              (relation_lid, source_collection_lid, source_id,
               target_collection_lid, target_id, depth, edge_collection_lid, edge_entity_id)
-             VALUES ($1, $2, $3, $4, $5, $6, NULL, NULL)"
+                 VALUES ($1, $2, $3, $4, $5, $6, NULL, NULL)
+                 ON CONFLICT (relation_lid, source_collection_lid, source_id, target_collection_lid, target_id)
+                 DO UPDATE SET depth = EXCLUDED.depth"
         ))
         .await
         .map_err(storage_error)?;
@@ -1683,6 +1745,16 @@ async fn rebuild_relation_edges(
             .map_err(|_| DbError::Serialization("collection lid exceeds bigint".to_string()))?;
         let target_lid = i64::try_from(target_collection.lid.0)
             .map_err(|_| DbError::Serialization("collection lid exceeds bigint".to_string()))?;
+        if previous.remove(&(
+            relation_lid,
+            source_lid,
+            source_id.to_string(),
+            target_lid,
+            target_id.to_string(),
+        )) == Some(depth)
+        {
+            continue;
+        }
         transaction
             .execute(
                 &insert,
@@ -1693,6 +1765,25 @@ async fn rebuild_relation_edges(
                     &target_lid,
                     &target_id,
                     &depth,
+                ],
+            )
+            .await
+            .map_err(storage_error)?;
+    }
+    for ((relation, source_collection, source, target_collection, target), _) in previous {
+        transaction
+            .execute(
+                &format!(
+                    "DELETE FROM {schema}.relation_edges
+            WHERE relation_lid = $1 AND source_collection_lid = $2 AND source_id = $3
+              AND target_collection_lid = $4 AND target_id = $5"
+                ),
+                &[
+                    &relation,
+                    &source_collection,
+                    &source,
+                    &target_collection,
+                    &target,
                 ],
             )
             .await

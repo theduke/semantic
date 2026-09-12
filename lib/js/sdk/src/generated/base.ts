@@ -9,6 +9,10 @@ export const packageName = "semantic.base" as const;
 
 export type from = string;
 export type order = number | bigint;
+export type entity_collection = string;
+export type label_color = string;
+export type label_name = string;
+export type selection_mode = "multiple" | "exclusive";
 export type note_content = string;
 export type note_format = "text" | "markdown";
 export type alternate_names = Array<string>;
@@ -38,6 +42,29 @@ export type DirectoryNode = {
   order?: order;
   relation: SemanticValue;
   to: SemanticValue;
+} & SemanticObject;
+export type EntityLabel = {
+  entity_collection: entity_collection;
+  from: SemanticValue;
+  relation: SemanticValue;
+  to: SemanticValue;
+} & SemanticObject;
+export type Label = {
+  color?: label_color;
+  created_at?: created_at;
+  description?: base_description_2;
+  name: label_name;
+  parent?: parent;
+  updated_at?: updated_at;
+} & SemanticObject;
+export type LabelGroup = {
+  color?: label_color;
+  created_at?: created_at;
+  description?: base_description_2;
+  name: label_name;
+  parent?: parent;
+  selection_mode?: selection_mode;
+  updated_at?: updated_at;
 } & SemanticObject;
 export type Note = {
   created_at?: created_at;

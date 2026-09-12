@@ -258,8 +258,13 @@ impl FederatedBackend {
         async move {
             match input {
                 TextQueryInput::Ast(query) => Ok(query),
-                TextQueryInput::Text { format, query } => {
-                    self.parse_text_query(format, &query).await
+                TextQueryInput::Text {
+                    format,
+                    query,
+                    params,
+                } => {
+                    self.parse_text_query_with_params(format, &query, &params)
+                        .await
                 }
             }
         }
@@ -599,6 +604,7 @@ impl Backend for FederatedBackend {
         for operation in &batch.operations {
             let collection = match operation {
                 BatchOperation::Upsert { collection, .. }
+                | BatchOperation::Create { collection, .. }
                 | BatchOperation::DeleteById { collection, .. }
                 | BatchOperation::DeleteByIds { collection, .. }
                 | BatchOperation::Update { collection, .. }

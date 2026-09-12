@@ -70,6 +70,8 @@
 /// - Literal / value mapping:
 ///   - Many non-scalar SQL literal forms.
 ///   - Many non-scalar `semantic_data::Value` variants in SQL printer output.
+use std::collections::{BTreeMap, BTreeSet};
+
 use semantic_data::query::{
     AggregateOp, BinaryOp, FieldFormat, JoinType, PatternMatchKind, SortDirection, UnaryOp,
 };
@@ -87,6 +89,7 @@ use sqlparser::ast::{
 };
 use sqlparser::dialect::{Dialect, GenericDialect, MySqlDialect, PostgreSqlDialect, SQLiteDialect};
 use sqlparser::parser::Parser;
+use sqlparser::tokenizer::{Token, Tokenizer};
 use thiserror::Error;
 
 use crate::{
@@ -117,13 +120,130 @@ pub enum SqlQueryError {
     Unsupported(String),
     #[error("invalid sql query: {0}")]
     Invalid(String),
+    #[error("query parameter error: {reason} ({name:?})")]
+    Parameter {
+        reason: String,
+        name: Option<String>,
+    },
+}
+
+struct Bindings<'a> {
+    values: &'a BTreeMap<String, Value>,
+    used_names: BTreeSet<String>,
+    placeholder_names: BTreeSet<String>,
+}
+
+fn parameter_error(reason: &str, name: Option<String>) -> SqlQueryError {
+    SqlQueryError::Parameter {
+        reason: reason.to_string(),
+        name,
+    }
+}
+
+fn valid_parameter_name(name: &str) -> bool {
+    let mut chars = name.chars();
+    chars
+        .next()
+        .is_some_and(|c| c.is_ascii_alphabetic() || c == '_')
+        && chars.all(|c| c.is_ascii_alphanumeric() || c == '_')
+}
+
+impl<'a> Bindings<'a> {
+    fn new(
+        sql: &str,
+        dialect: &dyn Dialect,
+        values: &'a BTreeMap<String, Value>,
+    ) -> Result<Self, SqlQueryError> {
+        for name in values.keys() {
+            if !valid_parameter_name(name) {
+                return Err(parameter_error("invalid_name", Some(name.clone())));
+            }
+        }
+        let tokens = Tokenizer::new(dialect, sql)
+            .tokenize_with_location()
+            .map_err(|error| SqlQueryError::Parse(error.to_string()))?;
+        let mut placeholder_names = BTreeSet::new();
+        for (index, token) in tokens.iter().enumerate() {
+            match &token.token {
+                Token::Colon => {
+                    let Some(next) = tokens.get(index + 1) else {
+                        return Err(parameter_error("invalid_name", None));
+                    };
+                    let Token::Word(word) = &next.token else {
+                        return Err(parameter_error(
+                            "invalid_name",
+                            Some(next.token.to_string()),
+                        ));
+                    };
+                    if word.quote_style.is_some()
+                        || !valid_parameter_name(&word.value)
+                        || token.span.end != next.span.start
+                    {
+                        return Err(parameter_error("invalid_name", Some(word.value.clone())));
+                    }
+                    placeholder_names.insert(word.value.clone());
+                }
+                Token::Placeholder(name) => {
+                    return Err(parameter_error("invalid_name", Some(name.clone())));
+                }
+                _ => {}
+            }
+        }
+        Ok(Self {
+            values,
+            used_names: BTreeSet::new(),
+            placeholder_names,
+        })
+    }
+
+    fn resolve(&mut self, placeholder: &str) -> Result<Value, SqlQueryError> {
+        let Some(name) = placeholder
+            .strip_prefix(':')
+            .filter(|name| valid_parameter_name(name))
+        else {
+            return Err(parameter_error(
+                "invalid_name",
+                Some(placeholder.to_string()),
+            ));
+        };
+        let value = self
+            .values
+            .get(name)
+            .ok_or_else(|| parameter_error("missing", Some(name.to_string())))?;
+        self.used_names.insert(name.to_string());
+        Ok(value.clone())
+    }
+
+    fn finish(&self) -> Result<(), SqlQueryError> {
+        if let Some(name) = self.placeholder_names.difference(&self.used_names).next() {
+            return Err(parameter_error("invalid_position", Some(name.clone())));
+        }
+        if let Some(name) = self
+            .values
+            .keys()
+            .find(|name| !self.used_names.contains(*name))
+        {
+            return Err(parameter_error("unused", Some(name.clone())));
+        }
+        Ok(())
+    }
 }
 
 pub fn parse_sql_query(
     sql: &str,
     dialect: SqlDialectKind,
 ) -> Result<ParsedSqlQuery, SqlQueryError> {
-    let parsed = parse_sql_query_raw(sql, dialect)?;
+    parse_sql_query_with_params(sql, dialect, &BTreeMap::new())
+}
+
+pub fn parse_sql_query_with_params(
+    sql: &str,
+    dialect: SqlDialectKind,
+    params: &BTreeMap<String, Value>,
+) -> Result<ParsedSqlQuery, SqlQueryError> {
+    let mut bindings = Bindings::new(sql, dialect_impl(dialect).as_ref(), params)?;
+    let parsed = parse_sql_query_raw_with_bindings(sql, dialect, &mut bindings)?;
+    bindings.finish()?;
     if matches!(&parsed.query, Query::Select(select) if select.collection.is_none()) {
         return Err(SqlQueryError::Invalid(
             "SELECT requires a FROM source outside collection-scoped parsing".to_string(),
@@ -136,13 +256,29 @@ fn parse_sql_query_raw(
     sql: &str,
     dialect: SqlDialectKind,
 ) -> Result<ParsedSqlQuery, SqlQueryError> {
+    let params = BTreeMap::new();
+    let mut bindings = Bindings::new(sql, dialect_impl(dialect).as_ref(), &params)?;
+    let parsed = parse_sql_query_raw_with_bindings(sql, dialect, &mut bindings)?;
+    bindings.finish()?;
+    Ok(parsed)
+}
+
+fn parse_sql_query_raw_with_bindings(
+    sql: &str,
+    dialect: SqlDialectKind,
+    bindings: &mut Bindings<'_>,
+) -> Result<ParsedSqlQuery, SqlQueryError> {
     if let Some(parsed) = parse_create_attribute_sql(sql)? {
         return Ok(parsed);
     }
 
     let dialect = dialect_impl(dialect);
-    let statements = Parser::parse_sql(dialect.as_ref(), sql)
-        .map_err(|err| SqlQueryError::Parse(err.to_string()))?;
+    let statements = Parser::parse_sql(dialect.as_ref(), sql).map_err(|err| {
+        match bindings.placeholder_names.first() {
+            Some(name) => parameter_error("invalid_position", Some(name.clone())),
+            None => SqlQueryError::Parse(err.to_string()),
+        }
+    })?;
 
     if statements.len() != 1 {
         return Err(SqlQueryError::Invalid(
@@ -150,7 +286,10 @@ fn parse_sql_query_raw(
         ));
     }
 
-    parse_statement(statements.into_iter().next().expect("checked len"))
+    parse_statement(
+        bindings,
+        statements.into_iter().next().expect("checked len"),
+    )
 }
 
 pub fn parse_sql_query_for_collection(
@@ -200,12 +339,15 @@ pub fn query_to_sql(query: &Query) -> Result<String, SqlQueryError> {
     }
 }
 
-fn parse_statement(stmt: Statement) -> Result<ParsedSqlQuery, SqlQueryError> {
+fn parse_statement(
+    bindings: &mut Bindings<'_>,
+    stmt: Statement,
+) -> Result<ParsedSqlQuery, SqlQueryError> {
     match stmt {
-        Statement::Query(query) => parse_select_stmt(*query),
-        Statement::Insert(insert) => parse_insert_stmt(insert),
-        Statement::Update(update) => parse_update_stmt(update),
-        Statement::Delete(delete) => parse_delete_stmt(delete),
+        Statement::Query(query) => parse_select_stmt(bindings, *query),
+        Statement::Insert(insert) => parse_insert_stmt(bindings, insert),
+        Statement::Update(update) => parse_update_stmt(bindings, update),
+        Statement::Delete(delete) => parse_delete_stmt(bindings, delete),
         other => Err(SqlQueryError::Unsupported(format!(
             "statement type '{}' is not supported",
             other
@@ -367,7 +509,10 @@ fn parse_sql_attribute_type(value: &str) -> Result<Type, SqlQueryError> {
     })
 }
 
-fn parse_select_stmt(query: SqlQuery) -> Result<ParsedSqlQuery, SqlQueryError> {
+fn parse_select_stmt(
+    bindings: &mut Bindings<'_>,
+    query: SqlQuery,
+) -> Result<ParsedSqlQuery, SqlQueryError> {
     if query.with.is_some() {
         return Err(SqlQueryError::Unsupported(
             "WITH queries are not supported".to_string(),
@@ -400,11 +545,20 @@ fn parse_select_stmt(query: SqlQuery) -> Result<ParsedSqlQuery, SqlQueryError> {
             "only SELECT query bodies are supported".to_string(),
         ));
     };
-    parse_select(query.order_by, query.limit_clause, *select, field_format)
+    parse_select(
+        bindings,
+        query.order_by,
+        query.limit_clause,
+        *select,
+        field_format,
+    )
 }
 
-fn parse_select_subquery(query: SqlQuery) -> Result<SelectQuery, SqlQueryError> {
-    let parsed = parse_select_stmt(query)?;
+fn parse_select_subquery(
+    bindings: &mut Bindings<'_>,
+    query: SqlQuery,
+) -> Result<SelectQuery, SqlQueryError> {
+    let parsed = parse_select_stmt(bindings, query)?;
     match parsed.query {
         Query::Select(select) => {
             validate_subquery_scope(&select)?;
@@ -591,6 +745,7 @@ fn expr_has_scope_path(expr: &Expr, path_matches: &impl Fn(&FieldPath) -> bool) 
 }
 
 fn parse_select(
+    bindings: &mut Bindings<'_>,
     order_by: Option<sqlparser::ast::OrderBy>,
     limit_clause: Option<LimitClause>,
     select: Select,
@@ -634,14 +789,20 @@ fn parse_select(
         (None, None, Vec::new())
     } else {
         let base = select.from.into_iter().next().expect("checked len");
-        let (collection, source_alias, joins) = parse_from_clause(base)?;
+        let (collection, source_alias, joins) = parse_from_clause(bindings, base)?;
         (Some(collection), source_alias, joins)
     };
-    let projection = parse_projection(select.projection, true)?;
-    let predicate = select.selection.map(parse_expr).transpose()?;
-    let group_by = parse_group_by(select.group_by, &projection)?;
-    let having = select.having.map(parse_expr).transpose()?;
-    let (limit, offset) = parse_limit_clause(limit_clause)?;
+    let projection = parse_projection(bindings, select.projection, true)?;
+    let predicate = select
+        .selection
+        .map(|value| parse_expr(bindings, value))
+        .transpose()?;
+    let group_by = parse_group_by(bindings, select.group_by, &projection)?;
+    let having = select
+        .having
+        .map(|value| parse_expr(bindings, value))
+        .transpose()?;
+    let (limit, offset) = parse_limit_clause(bindings, limit_clause)?;
     let group_bindings = base_group_bindings(
         collection.as_deref(),
         source_alias.as_deref(),
@@ -656,7 +817,7 @@ fn parse_select(
         limit.as_ref(),
         &offset,
         &group_bindings,
-        parse_order_by(order_by)?,
+        parse_order_by(bindings, order_by)?,
     )?;
 
     Ok(ParsedSqlQuery {
@@ -692,13 +853,14 @@ fn parse_select_distinct(
 }
 
 fn parse_group_by(
+    bindings: &mut Bindings<'_>,
     group_by: sqlparser::ast::GroupByExpr,
     projection: &[QueryField],
 ) -> Result<Vec<Expr>, SqlQueryError> {
     match group_by {
         sqlparser::ast::GroupByExpr::Expressions(exprs, modifiers) if modifiers.is_empty() => exprs
             .into_iter()
-            .map(parse_expr)
+            .map(|value| parse_expr(bindings, value))
             .map(|expr| expr.and_then(|expr| resolve_group_by_expr(expr, projection)))
             .collect(),
         other => Err(SqlQueryError::Unsupported(format!(
@@ -751,7 +913,10 @@ fn resolve_group_by_expr(expr: Expr, projection: &[QueryField]) -> Result<Expr, 
     Ok((*target.expr).clone())
 }
 
-fn parse_insert_stmt(insert: SqlInsert) -> Result<ParsedSqlQuery, SqlQueryError> {
+fn parse_insert_stmt(
+    bindings: &mut Bindings<'_>,
+    insert: SqlInsert,
+) -> Result<ParsedSqlQuery, SqlQueryError> {
     if insert.optimizer_hint.is_some()
         || insert.or.is_some()
         || insert.ignore
@@ -781,14 +946,14 @@ fn parse_insert_stmt(insert: SqlInsert) -> Result<ParsedSqlQuery, SqlQueryError>
         .collect::<Vec<_>>();
     let returning = insert
         .returning
-        .map(|items| parse_projection(items, false))
+        .map(|items| parse_projection(bindings, items, false))
         .transpose()?
         .unwrap_or_default();
     validate_dml_projection(&returning)?;
     let source_query = insert.source.ok_or_else(|| {
         SqlQueryError::Unsupported("INSERT DEFAULT VALUES is not supported".to_string())
     })?;
-    let source = parse_insert_source(*source_query)?;
+    let source = parse_insert_source(bindings, *source_query)?;
 
     Ok(ParsedSqlQuery {
         query: Query::Insert(InsertQuery {
@@ -801,7 +966,10 @@ fn parse_insert_stmt(insert: SqlInsert) -> Result<ParsedSqlQuery, SqlQueryError>
     })
 }
 
-fn parse_insert_source(source: SqlQuery) -> Result<InsertSource, SqlQueryError> {
+fn parse_insert_source(
+    bindings: &mut Bindings<'_>,
+    source: SqlQuery,
+) -> Result<InsertSource, SqlQueryError> {
     let SqlQuery {
         with,
         body,
@@ -835,10 +1003,16 @@ fn parse_insert_source(source: SqlQuery) -> Result<InsertSource, SqlQueryError> 
                     "ORDER BY / LIMIT are not supported for VALUES insert sources".to_string(),
                 ));
             }
-            parse_insert_values(values)
+            parse_insert_values(bindings, values)
         }
         SetExpr::Select(select) => {
-            let parsed = parse_select(order_by, limit_clause, *select, FieldFormat::Plain)?;
+            let parsed = parse_select(
+                bindings,
+                order_by,
+                limit_clause,
+                *select,
+                FieldFormat::Plain,
+            )?;
             let Query::Select(select_query) = parsed.query else {
                 return Err(SqlQueryError::Invalid(
                     "failed to parse INSERT SELECT source".to_string(),
@@ -858,20 +1032,26 @@ fn parse_insert_source(source: SqlQuery) -> Result<InsertSource, SqlQueryError> 
     }
 }
 
-fn parse_insert_values(values: Values) -> Result<InsertSource, SqlQueryError> {
+fn parse_insert_values(
+    bindings: &mut Bindings<'_>,
+    values: Values,
+) -> Result<InsertSource, SqlQueryError> {
     let rows = values
         .rows
         .into_iter()
         .map(|row| {
             row.into_iter()
-                .map(parse_dml_expr)
+                .map(|value| parse_dml_expr(bindings, value))
                 .collect::<Result<Vec<_>, _>>()
         })
         .collect::<Result<Vec<_>, _>>()?;
     Ok(InsertSource::Values(rows))
 }
 
-fn parse_update_stmt(update: sqlparser::ast::Update) -> Result<ParsedSqlQuery, SqlQueryError> {
+fn parse_update_stmt(
+    bindings: &mut Bindings<'_>,
+    update: sqlparser::ast::Update,
+) -> Result<ParsedSqlQuery, SqlQueryError> {
     if update.optimizer_hint.is_some() {
         return Err(SqlQueryError::Unsupported(
             "UPDATE optimizer hints are not supported".to_string(),
@@ -901,16 +1081,19 @@ fn parse_update_stmt(update: sqlparser::ast::Update) -> Result<ParsedSqlQuery, S
     let assignments = update
         .assignments
         .into_iter()
-        .map(parse_assignment)
+        .map(|value| parse_assignment(bindings, value))
         .collect::<Result<Vec<_>, _>>()?;
-    let predicate = update.selection.map(parse_dml_expr).transpose()?;
+    let predicate = update
+        .selection
+        .map(|value| parse_dml_expr(bindings, value))
+        .transpose()?;
     let returning = update
         .returning
-        .map(|items| parse_projection(items, false))
+        .map(|items| parse_projection(bindings, items, false))
         .transpose()?
         .unwrap_or_default();
     validate_dml_projection(&returning)?;
-    let limit = parse_dml_limit(update.limit)?;
+    let limit = parse_dml_limit(bindings, update.limit)?;
 
     Ok(ParsedSqlQuery {
         query: Query::Update(UpdateQuery {
@@ -924,7 +1107,10 @@ fn parse_update_stmt(update: sqlparser::ast::Update) -> Result<ParsedSqlQuery, S
     })
 }
 
-fn parse_delete_stmt(delete: sqlparser::ast::Delete) -> Result<ParsedSqlQuery, SqlQueryError> {
+fn parse_delete_stmt(
+    bindings: &mut Bindings<'_>,
+    delete: sqlparser::ast::Delete,
+) -> Result<ParsedSqlQuery, SqlQueryError> {
     if delete.optimizer_hint.is_some() {
         return Err(SqlQueryError::Unsupported(
             "DELETE optimizer hints are not supported".to_string(),
@@ -966,14 +1152,17 @@ fn parse_delete_stmt(delete: sqlparser::ast::Delete) -> Result<ParsedSqlQuery, S
         ));
     }
     let collection = parse_base_table_name(&table.relation)?;
-    let predicate = delete.selection.map(parse_dml_expr).transpose()?;
+    let predicate = delete
+        .selection
+        .map(|value| parse_dml_expr(bindings, value))
+        .transpose()?;
     let returning = delete
         .returning
-        .map(|items| parse_projection(items, false))
+        .map(|items| parse_projection(bindings, items, false))
         .transpose()?
         .unwrap_or_default();
     validate_dml_projection(&returning)?;
-    let limit = parse_dml_limit(delete.limit)?;
+    let limit = parse_dml_limit(bindings, delete.limit)?;
 
     Ok(ParsedSqlQuery {
         query: Query::Delete(DeleteQuery {
@@ -987,6 +1176,7 @@ fn parse_delete_stmt(delete: sqlparser::ast::Delete) -> Result<ParsedSqlQuery, S
 }
 
 fn parse_from_clause(
+    bindings: &mut Bindings<'_>,
     base: TableWithJoins,
 ) -> Result<(String, Option<String>, Vec<JoinQuery>), SqlQueryError> {
     let collection = parse_base_table_name(&base.relation)?;
@@ -994,12 +1184,12 @@ fn parse_from_clause(
     let joins = base
         .joins
         .into_iter()
-        .map(parse_join)
+        .map(|value| parse_join(bindings, value))
         .collect::<Result<Vec<_>, _>>()?;
     Ok((collection, source_alias, joins))
 }
 
-fn parse_join(join: Join) -> Result<JoinQuery, SqlQueryError> {
+fn parse_join(bindings: &mut Bindings<'_>, join: Join) -> Result<JoinQuery, SqlQueryError> {
     if join.global {
         return Err(SqlQueryError::Unsupported(
             "GLOBAL JOIN is not supported".to_string(),
@@ -1029,7 +1219,7 @@ fn parse_join(join: Join) -> Result<JoinQuery, SqlQueryError> {
     };
 
     let condition = match constraint {
-        JoinConstraint::On(expr) => JoinCondition::OnExpr(parse_expr(expr)?),
+        JoinConstraint::On(expr) => JoinCondition::OnExpr(parse_expr(bindings, expr)?),
         JoinConstraint::Using(_) => {
             return Err(SqlQueryError::Unsupported(
                 "JOIN USING is not supported because coalesced output semantics are not represented"
@@ -1088,6 +1278,7 @@ fn parse_join_source(factor: &TableFactor) -> Result<JoinSource, SqlQueryError> 
 }
 
 fn parse_projection(
+    bindings: &mut Bindings<'_>,
     items: Vec<SelectItem>,
     collapse_single_unqualified_wildcard: bool,
 ) -> Result<Vec<QueryField>, SqlQueryError> {
@@ -1103,12 +1294,12 @@ fn parse_projection(
         .into_iter()
         .map(|item| match item {
             SelectItem::UnnamedExpr(expr) => Ok(QueryField {
-                expr: Box::new(parse_expr(expr)?),
+                expr: Box::new(parse_expr(bindings, expr)?),
                 alias: None,
                 wildcard: None,
             }),
             SelectItem::ExprWithAlias { expr, alias } => Ok(QueryField {
-                expr: Box::new(parse_expr(expr)?),
+                expr: Box::new(parse_expr(bindings, expr)?),
                 alias: Some(alias.value),
                 wildcard: None,
             }),
@@ -1158,6 +1349,7 @@ fn validate_wildcard_options(
 }
 
 fn parse_order_by(
+    bindings: &mut Bindings<'_>,
     order_by: Option<sqlparser::ast::OrderBy>,
 ) -> Result<Vec<DbOrderBy>, SqlQueryError> {
     let Some(order_by) = order_by else {
@@ -1173,10 +1365,16 @@ fn parse_order_by(
             "non-expression ORDER BY forms are not supported".to_string(),
         ));
     };
-    items.into_iter().map(parse_order_item).collect()
+    items
+        .into_iter()
+        .map(|value| parse_order_item(bindings, value))
+        .collect()
 }
 
-fn parse_order_item(item: OrderByExpr) -> Result<DbOrderBy, SqlQueryError> {
+fn parse_order_item(
+    bindings: &mut Bindings<'_>,
+    item: OrderByExpr,
+) -> Result<DbOrderBy, SqlQueryError> {
     if item.options.nulls_first.is_some() {
         return Err(SqlQueryError::Unsupported(
             "ORDER BY NULLS FIRST/LAST is not supported".to_string(),
@@ -1192,7 +1390,7 @@ fn parse_order_item(item: OrderByExpr) -> Result<DbOrderBy, SqlQueryError> {
         _ => SortDirection::Asc,
     };
     Ok(DbOrderBy {
-        expr: parse_expr(item.expr)?,
+        expr: parse_expr(bindings, item.expr)?,
         direction,
     })
 }
@@ -1746,6 +1944,7 @@ fn validate_grouped_expr(
 }
 
 fn parse_limit_clause(
+    bindings: &mut Bindings<'_>,
     limit_clause: Option<LimitClause>,
 ) -> Result<(Option<Expr>, Expr), SqlQueryError> {
     let Some(limit_clause) = limit_clause else {
@@ -1762,26 +1961,32 @@ fn parse_limit_clause(
                     "LIMIT BY is not supported".to_string(),
                 ));
             }
-            let limit = limit.map(parse_expr).transpose()?;
+            let limit = limit.map(|value| parse_expr(bindings, value)).transpose()?;
             let offset = offset
-                .map(parse_offset)
+                .map(|value| parse_offset(bindings, value))
                 .transpose()?
                 .unwrap_or_else(|| Expr::from(0usize));
             Ok((limit, offset))
         }
-        LimitClause::OffsetCommaLimit { offset, limit } => {
-            Ok((Some(parse_expr(limit)?), parse_expr(offset)?))
-        }
+        LimitClause::OffsetCommaLimit { offset, limit } => Ok((
+            Some(parse_expr(bindings, limit)?),
+            parse_expr(bindings, offset)?,
+        )),
     }
 }
 
-fn parse_offset(offset: Offset) -> Result<Expr, SqlQueryError> {
+fn parse_offset(bindings: &mut Bindings<'_>, offset: Offset) -> Result<Expr, SqlQueryError> {
     let _ = offset.rows;
-    parse_expr(offset.value)
+    parse_expr(bindings, offset.value)
 }
 
-fn parse_dml_limit(limit: Option<SqlExpr>) -> Result<Option<Expr>, SqlQueryError> {
-    let limit = limit.map(parse_dml_expr).transpose()?;
+fn parse_dml_limit(
+    bindings: &mut Bindings<'_>,
+    limit: Option<SqlExpr>,
+) -> Result<Option<Expr>, SqlQueryError> {
+    let limit = limit
+        .map(|value| parse_dml_expr(bindings, value))
+        .transpose()?;
     if limit
         .as_ref()
         .is_some_and(|expr| evaluate_usize_expr(expr).is_none())
@@ -1793,8 +1998,8 @@ fn parse_dml_limit(limit: Option<SqlExpr>) -> Result<Option<Expr>, SqlQueryError
     Ok(limit)
 }
 
-fn parse_dml_expr(expr: SqlExpr) -> Result<Expr, SqlQueryError> {
-    let expr = parse_expr(expr)?;
+fn parse_dml_expr(bindings: &mut Bindings<'_>, expr: SqlExpr) -> Result<Expr, SqlQueryError> {
+    let expr = parse_expr(bindings, expr)?;
     if expr_contains_subquery(&expr) {
         return Err(SqlQueryError::Unsupported(
             "subqueries are not supported in DML expressions".to_string(),
@@ -1942,7 +2147,10 @@ fn expr_contains_aggregate(expr: &Expr) -> bool {
     }
 }
 
-fn parse_assignment(assign: Assignment) -> Result<crate::Assignment, SqlQueryError> {
+fn parse_assignment(
+    bindings: &mut Bindings<'_>,
+    assign: Assignment,
+) -> Result<crate::Assignment, SqlQueryError> {
     let path = match assign.target {
         AssignmentTarget::ColumnName(name) => object_name_to_path(&name)?,
         AssignmentTarget::Tuple(_) => {
@@ -1953,11 +2161,11 @@ fn parse_assignment(assign: Assignment) -> Result<crate::Assignment, SqlQueryErr
     };
     Ok(crate::Assignment {
         path,
-        value: parse_dml_expr(assign.value)?,
+        value: parse_dml_expr(bindings, assign.value)?,
     })
 }
 
-fn parse_expr(expr: SqlExpr) -> Result<Expr, SqlQueryError> {
+fn parse_expr(bindings: &mut Bindings<'_>, expr: SqlExpr) -> Result<Expr, SqlQueryError> {
     match expr {
         SqlExpr::Identifier(ident) => Ok(Expr::Operand(Operand::Field(FieldPath::from_fields([
             ident.value,
@@ -1965,8 +2173,10 @@ fn parse_expr(expr: SqlExpr) -> Result<Expr, SqlQueryError> {
         SqlExpr::CompoundIdentifier(idents) => {
             Ok(Expr::Operand(Operand::Field(idents_to_path(&idents)?)))
         }
-        SqlExpr::Value(value) => Ok(Expr::Operand(Operand::Literal(parse_literal(value)?))),
-        SqlExpr::Nested(expr) => parse_expr(*expr),
+        SqlExpr::Value(value) => Ok(Expr::Operand(Operand::Literal(parse_literal(
+            bindings, value,
+        )?))),
+        SqlExpr::Nested(expr) => parse_expr(bindings, *expr),
         SqlExpr::UnaryOp { op, expr } => Ok(Expr::Unary {
             op: match op {
                 UnaryOperator::Not => UnaryOp::Not,
@@ -1977,11 +2187,11 @@ fn parse_expr(expr: SqlExpr) -> Result<Expr, SqlQueryError> {
                     )));
                 }
             },
-            expr: Box::new(parse_expr(*expr)?),
+            expr: Box::new(parse_expr(bindings, *expr)?),
         }),
         SqlExpr::BinaryOp { left, op, right } => {
-            let left_expr = parse_expr(*left)?;
-            let right_expr = parse_expr(*right)?;
+            let left_expr = parse_expr(bindings, *left)?;
+            let right_expr = parse_expr(bindings, *right)?;
             match op {
                 BinaryOperator::PGRegexMatch => Ok(Expr::RegexMatch {
                     expr: Box::new(left_expr),
@@ -2019,10 +2229,10 @@ fn parse_expr(expr: SqlExpr) -> Result<Expr, SqlQueryError> {
             list,
             negated,
         } => Ok(Expr::InList {
-            expr: Box::new(parse_expr(*expr)?),
+            expr: Box::new(parse_expr(bindings, *expr)?),
             list: list
                 .into_iter()
-                .map(parse_expr)
+                .map(|value| parse_expr(bindings, value))
                 .collect::<Result<Vec<_>, _>>()?,
             negated,
         }),
@@ -2033,8 +2243,10 @@ fn parse_expr(expr: SqlExpr) -> Result<Expr, SqlQueryError> {
         } => {
             let in_expr = Expr::Binary {
                 op: BinaryOp::In,
-                left: Box::new(parse_expr(*expr)?),
-                right: Box::new(Expr::Subquery(Box::new(parse_select_subquery(*subquery)?))),
+                left: Box::new(parse_expr(bindings, *expr)?),
+                right: Box::new(Expr::Subquery(Box::new(parse_select_subquery(
+                    bindings, *subquery,
+                )?))),
             };
             if negated {
                 Ok(Expr::Unary {
@@ -2045,18 +2257,18 @@ fn parse_expr(expr: SqlExpr) -> Result<Expr, SqlQueryError> {
                 Ok(in_expr)
             }
         }
-        SqlExpr::Subquery(subquery) => {
-            Ok(Expr::Subquery(Box::new(parse_select_subquery(*subquery)?)))
-        }
+        SqlExpr::Subquery(subquery) => Ok(Expr::Subquery(Box::new(parse_select_subquery(
+            bindings, *subquery,
+        )?))),
         SqlExpr::Between {
             expr,
             negated,
             low,
             high,
         } => Ok(Expr::Between {
-            expr: Box::new(parse_expr(*expr)?),
-            low: Box::new(parse_expr(*low)?),
-            high: Box::new(parse_expr(*high)?),
+            expr: Box::new(parse_expr(bindings, *expr)?),
+            low: Box::new(parse_expr(bindings, *low)?),
+            high: Box::new(parse_expr(bindings, *high)?),
             negated,
         }),
         SqlExpr::Like {
@@ -2078,8 +2290,8 @@ fn parse_expr(expr: SqlExpr) -> Result<Expr, SqlQueryError> {
             }
             Ok(Expr::PatternMatch {
                 kind: PatternMatchKind::Like,
-                expr: Box::new(parse_expr(*expr)?),
-                pattern: Box::new(parse_expr(*pattern)?),
+                expr: Box::new(parse_expr(bindings, *expr)?),
+                pattern: Box::new(parse_expr(bindings, *pattern)?),
                 case_insensitive: false,
                 negated,
             })
@@ -2103,8 +2315,8 @@ fn parse_expr(expr: SqlExpr) -> Result<Expr, SqlQueryError> {
             }
             Ok(Expr::PatternMatch {
                 kind: PatternMatchKind::Like,
-                expr: Box::new(parse_expr(*expr)?),
-                pattern: Box::new(parse_expr(*pattern)?),
+                expr: Box::new(parse_expr(bindings, *expr)?),
+                pattern: Box::new(parse_expr(bindings, *pattern)?),
                 case_insensitive: true,
                 negated,
             })
@@ -2113,18 +2325,18 @@ fn parse_expr(expr: SqlExpr) -> Result<Expr, SqlQueryError> {
             "SIMILAR TO is not supported because its SQL semantics are not implemented".to_string(),
         )),
         SqlExpr::IsNull(expr) => Ok(Expr::IsNull {
-            expr: Box::new(parse_expr(*expr)?),
+            expr: Box::new(parse_expr(bindings, *expr)?),
             negated: false,
         }),
         SqlExpr::IsNotNull(expr) => Ok(Expr::IsNull {
-            expr: Box::new(parse_expr(*expr)?),
+            expr: Box::new(parse_expr(bindings, *expr)?),
             negated: true,
         }),
         SqlExpr::Exists { subquery, negated } => Ok(Expr::Exists {
-            query: Box::new(parse_select_subquery(*subquery)?),
+            query: Box::new(parse_select_subquery(bindings, *subquery)?),
             negated,
         }),
-        SqlExpr::Function(function) => parse_function_expr(function),
+        SqlExpr::Function(function) => parse_function_expr(bindings, function),
         SqlExpr::Case {
             operand,
             conditions,
@@ -2136,13 +2348,15 @@ fn parse_expr(expr: SqlExpr) -> Result<Expr, SqlQueryError> {
                     "CASE requires at least one WHEN branch".to_string(),
                 ));
             }
-            let operand = operand.map(|operand| parse_expr(*operand)).transpose()?;
+            let operand = operand
+                .map(|operand| parse_expr(bindings, *operand))
+                .transpose()?;
             let mut lowered = else_result
-                .map(|expr| parse_expr(*expr))
+                .map(|expr| parse_expr(bindings, *expr))
                 .transpose()?
                 .unwrap_or_else(|| Expr::Operand(Operand::Literal(Value::Null)));
             for when in conditions.into_iter().rev() {
-                let condition = parse_expr(when.condition)?;
+                let condition = parse_expr(bindings, when.condition)?;
                 let condition = if let Some(operand) = &operand {
                     Expr::Binary {
                         op: BinaryOp::Eq,
@@ -2154,7 +2368,7 @@ fn parse_expr(expr: SqlExpr) -> Result<Expr, SqlQueryError> {
                 };
                 lowered = Expr::IfElse {
                     cond: Box::new(condition),
-                    then_expr: Box::new(parse_expr(when.result)?),
+                    then_expr: Box::new(parse_expr(bindings, when.result)?),
                     else_expr: Box::new(lowered),
                 };
             }
@@ -2166,7 +2380,10 @@ fn parse_expr(expr: SqlExpr) -> Result<Expr, SqlQueryError> {
     }
 }
 
-fn parse_function_expr(function: sqlparser::ast::Function) -> Result<Expr, SqlQueryError> {
+fn parse_function_expr(
+    bindings: &mut Bindings<'_>,
+    function: sqlparser::ast::Function,
+) -> Result<Expr, SqlQueryError> {
     if function.uses_odbc_syntax
         || !matches!(function.parameters, FunctionArguments::None)
         || function.null_treatment.is_some()
@@ -2202,7 +2419,7 @@ fn parse_function_expr(function: sqlparser::ast::Function) -> Result<Expr, SqlQu
     for arg in argument_list.args {
         match arg {
             sqlparser::ast::FunctionArg::Unnamed(sqlparser::ast::FunctionArgExpr::Expr(expr)) => {
-                args.push(FunctionArg::Expr(parse_expr(expr)?));
+                args.push(FunctionArg::Expr(parse_expr(bindings, expr)?));
             }
             sqlparser::ast::FunctionArg::Unnamed(sqlparser::ast::FunctionArgExpr::Wildcard) => {
                 args.push(FunctionArg::Wildcard);
@@ -2381,9 +2598,13 @@ fn parse_field_format_clause(clause: &str) -> Result<FieldFormat, SqlQueryError>
     }
 }
 
-fn parse_literal(value: ValueWithSpan) -> Result<Value, SqlQueryError> {
+fn parse_literal(
+    bindings: &mut Bindings<'_>,
+    value: ValueWithSpan,
+) -> Result<Value, SqlQueryError> {
     use sqlparser::ast::Value as SqlValue;
     match value.value {
+        SqlValue::Placeholder(name) => bindings.resolve(&name),
         SqlValue::Null => Ok(Value::Null),
         SqlValue::Boolean(v) => Ok(Value::Bool(v)),
         SqlValue::Number(num, _) => {
@@ -3119,6 +3340,118 @@ fn dialect_impl(dialect: SqlDialectKind) -> Box<dyn Dialect> {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn named_parameters_reach_mutations_joins_and_nested_queries() {
+        let params = BTreeMap::from([("value".into(), Value::I64(3))]);
+        for sql in [
+            "INSERT INTO items (id) VALUES (:value)",
+            "UPDATE items SET id = :value WHERE id = :value LIMIT :value",
+            "DELETE FROM items WHERE id = :value LIMIT :value",
+            "SELECT i.id FROM items AS i JOIN others AS o ON i.id = :value WHERE o.id = :value LIMIT :value OFFSET :value",
+            "SELECT i.id FROM items AS i WHERE i.id IN (SELECT o.id FROM others AS o WHERE o.id = :value)",
+        ] {
+            parse_sql_query_with_params(sql, SqlDialectKind::Generic, &params).unwrap();
+        }
+    }
+
+    #[test]
+    fn named_parameters_preserve_values_and_share_repeated_names() {
+        use semantic_data::value::Object;
+        let values = vec![
+            Value::Null,
+            Value::Bool(true),
+            Value::U64(u64::MAX),
+            Value::I128(i128::MAX),
+            Value::String("'; DROP TABLE items; --".to_string()),
+            Value::Bytes(vec![0, 255].into()),
+            Value::List(vec![Value::I64(3)]),
+            Value::Object(Object::new()),
+            Value::Uuid(semantic_data::value::Uuid::NIL),
+        ];
+        for value in values {
+            let params = BTreeMap::from([("value".to_string(), value.clone())]);
+            let parsed = parse_sql_query_with_params(
+                "SELECT :value AS a, :value AS b FROM items",
+                SqlDialectKind::Generic,
+                &params,
+            )
+            .unwrap();
+            let Query::Select(select) = parsed.query else {
+                panic!("select")
+            };
+            for field in select.projection {
+                assert_eq!(*field.expr, Expr::Operand(Operand::Literal(value.clone())));
+            }
+        }
+    }
+
+    #[test]
+    fn named_parameters_validate_names_positions_and_usage() {
+        for (sql, params, reason) in [
+            ("SELECT :missing FROM items", BTreeMap::new(), "missing"),
+            (
+                "SELECT id FROM items",
+                BTreeMap::from([("extra".into(), Value::Null)]),
+                "unused",
+            ),
+            (
+                "SELECT :Name FROM items",
+                BTreeMap::from([("name".into(), Value::Null)]),
+                "missing",
+            ),
+            ("SELECT :1 FROM items", BTreeMap::new(), "invalid_name"),
+            (
+                "SELECT :\"name\" FROM items",
+                BTreeMap::new(),
+                "invalid_name",
+            ),
+            ("SELECT :'name' FROM items", BTreeMap::new(), "invalid_name"),
+            ("SELECT : name FROM items", BTreeMap::new(), "invalid_name"),
+            ("SELECT :naïve FROM items", BTreeMap::new(), "invalid_name"),
+            (
+                "SELECT id FROM items",
+                BTreeMap::from([(":name".into(), Value::Null)]),
+                "invalid_name",
+            ),
+            (
+                "SELECT id FROM :table",
+                BTreeMap::from([("table".into(), Value::Null)]),
+                "invalid_position",
+            ),
+            (
+                "SELECT id AS :alias FROM items",
+                BTreeMap::from([("alias".into(), Value::Null)]),
+                "invalid_position",
+            ),
+        ] {
+            assert!(
+                matches!(parse_sql_query_with_params(sql, SqlDialectKind::Generic, &params),
+                Err(SqlQueryError::Parameter { reason: actual, .. }) if actual == reason),
+                "{sql}"
+            );
+        }
+    }
+
+    #[test]
+    fn named_parameters_ignore_quoted_text_comments_and_cast_colons() {
+        let params = BTreeMap::from([("name".into(), Value::String("ok".into()))]);
+        parse_sql_query_with_params(
+            "SELECT ':ignored' AS text, :name AS value FROM items /* :block */ -- :line\n",
+            SqlDialectKind::PostgreSql,
+            &params,
+        )
+        .unwrap();
+        // Cast lowering remains unsupported; the cast's :: must not become a binding.
+        assert!(matches!(
+            parse_sql_query_with_params(
+                "SELECT :name::text FROM items",
+                SqlDialectKind::PostgreSql,
+                &params
+            ),
+            Err(SqlQueryError::Unsupported(_))
+        ));
+    }
+
     use super::*;
 
     #[test]

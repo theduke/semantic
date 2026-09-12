@@ -26,6 +26,19 @@ pub enum SqlQueryError {
     Unsupported(String),
     #[error("invalid sql query: {0}")]
     Invalid(String),
+    #[error("query parameter error: {reason} ({name:?})")]
+    Parameter {
+        reason: String,
+        name: Option<String>,
+    },
+}
+
+pub fn parse_sql_query_with_params(
+    sql: &str,
+    dialect: SqlDialectKind,
+    _params: &std::collections::BTreeMap<String, semantic_data::value::Value>,
+) -> Result<ParsedSqlQuery, SqlQueryError> {
+    parse_sql_query(sql, dialect)
 }
 
 pub fn parse_sql_query(

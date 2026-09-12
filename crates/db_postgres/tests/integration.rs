@@ -481,6 +481,28 @@ async fn test_semantic_managed_backend_suite() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
+async fn test_semantic_managed_validation_parity() {
+    let Some(pool) = get_pool() else { return };
+    let nonce = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_nanos();
+    let schema = format!("semantic_validation_{}_{}", std::process::id(), nonce);
+    let options = PostgresBackendOptions::semantic_managed().with_metadata_schema(&schema);
+    let backend = PostgresBackend::new_with_options(pool.clone(), options)
+        .await
+        .unwrap();
+    let db = Db::new(backend);
+    semantic_db_test::suite::test_validation(&db).await;
+    drop(db);
+    let client = pool.get().await.unwrap();
+    client
+        .batch_execute(&format!("DROP SCHEMA {} CASCADE", quote_ident(&schema)))
+        .await
+        .unwrap();
+}
+
+#[tokio::test(flavor = "multi_thread")]
 async fn test_relational_managed_strict_projection_and_reopen() {
     let Some(pool) = get_pool() else { return };
     let nonce = std::time::SystemTime::now()

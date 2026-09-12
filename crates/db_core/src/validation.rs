@@ -13,6 +13,11 @@ use crate::catalog::{
     is_special_builtin_field,
 };
 
+mod stored;
+pub(crate) use stored::stored_references;
+pub(crate) use stored::validate_enforcement_support;
+pub use stored::{ResolvedReference, ValidationError, ValidationViolation, validate_stored_object};
+
 #[derive(Debug, Error, Clone, PartialEq, Eq)]
 pub enum ObjectNormalizationError {
     #[error(
@@ -67,7 +72,7 @@ pub fn normalize_object_for_collection(
     collection: &CollectionSchema,
     object: &mut Object,
 ) -> ObjectNormalizationResult<()> {
-    normalize_object_for_collection_inner(catalog, collection, object, None)
+    normalize_object_for_collection_inner(catalog, collection, object, None, false)
 }
 
 pub fn prepare_object_for_write(
@@ -76,7 +81,16 @@ pub fn prepare_object_for_write(
     object: &mut Object,
     default_context: &crate::DefaultExpressionContext,
 ) -> ObjectNormalizationResult<()> {
-    normalize_object_for_collection_inner(catalog, collection, object, Some(default_context))
+    normalize_object_for_collection_inner(catalog, collection, object, Some(default_context), false)
+}
+
+pub(crate) fn normalize_for_recursive_validation(
+    catalog: &Catalog,
+    collection: &CollectionSchema,
+    object: &mut Object,
+    context: Option<&crate::DefaultExpressionContext>,
+) -> Result<(), ObjectNormalizationError> {
+    normalize_object_for_collection_inner(catalog, collection, object, context, true)
 }
 
 fn normalize_object_for_collection_inner(
@@ -84,6 +98,7 @@ fn normalize_object_for_collection_inner(
     collection: &CollectionSchema,
     object: &mut Object,
     default_context: Option<&crate::DefaultExpressionContext>,
+    recursive_validation: bool,
 ) -> ObjectNormalizationResult<()> {
     let concrete_class_lid = object
         .get(OBJECT_TYPE_FIELD)
@@ -140,6 +155,7 @@ fn normalize_object_for_collection_inner(
             &registered_field_types,
             reject_unknown_fields,
             restrict_to_class_attributes,
+            recursive_validation,
         );
     }
 
@@ -254,12 +270,17 @@ fn normalize_object_for_collection_inner(
         &registered_field_required,
     );
 
+    if recursive_validation {
+        stored::normalize_nested_values(catalog, collection, object, default_context.is_some());
+    }
+
     validate_object_fields(
         collection,
         object,
         &registered_field_types,
         reject_unknown_fields,
         restrict_to_class_attributes,
+        recursive_validation,
     )
 }
 
@@ -320,10 +341,24 @@ pub fn ref_target_class_ids(catalog: &Catalog, ty: &Type) -> Vec<String> {
 }
 
 fn collect_ref_target_class_ids(catalog: &Catalog, ty: &Type, out: &mut BTreeSet<String>) {
+    collect_ref_target_class_ids_inner(catalog, ty, out, &mut BTreeSet::new());
+}
+
+fn collect_ref_target_class_ids_inner(
+    catalog: &Catalog,
+    ty: &Type,
+    out: &mut BTreeSet<String>,
+    seen: &mut BTreeSet<String>,
+) {
     match &ty.kind {
         TypeKind::Ref(type_ref) => {
             let class_ids = catalog.class_ids(&type_ref.name);
             if class_ids.len() != 1 {
+                if seen.insert(type_ref.name.clone())
+                    && let Some(def) = catalog.type_def_by_name(&type_ref.name)
+                {
+                    collect_ref_target_class_ids_inner(catalog, &def.type_def.ty, out, seen);
+                }
                 return;
             }
             let target_lid = class_ids[0];
@@ -340,11 +375,11 @@ fn collect_ref_target_class_ids(catalog: &Catalog, ty: &Type, out: &mut BTreeSet
         }
         TypeKind::Union(union) => {
             for variant in &union.variants {
-                collect_ref_target_class_ids(catalog, variant, out);
+                collect_ref_target_class_ids_inner(catalog, variant, out, seen);
             }
         }
         TypeKind::Optional(optional) => {
-            collect_ref_target_class_ids(catalog, &optional.inner, out);
+            collect_ref_target_class_ids_inner(catalog, &optional.inner, out, seen);
         }
         _ => {}
     }
@@ -614,6 +649,7 @@ fn validate_object_fields(
     registered_field_types: &FnvHashMap<String, Type>,
     reject_unknown_fields: bool,
     restrict_to_class_attributes: bool,
+    recursive_validation: bool,
 ) -> ObjectNormalizationResult<()> {
     if reject_unknown_fields {
         for key in object.keys() {
@@ -629,7 +665,7 @@ fn validate_object_fields(
         }
     }
 
-    for (key, value) in object.iter() {
+    for (key, value) in object.iter().filter(|_| !recursive_validation) {
         let ty = collection
             .field_type(key)
             .or_else(|| registered_field_types.get(key));

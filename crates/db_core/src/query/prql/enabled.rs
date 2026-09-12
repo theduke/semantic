@@ -108,6 +108,7 @@ fn map_sql_error(error: sql::SqlQueryError) -> PrqlQueryError {
         }
         sql::SqlQueryError::Unsupported(message) => PrqlQueryError::Unsupported(message),
         sql::SqlQueryError::Invalid(message) => PrqlQueryError::Invalid(message),
+        other @ sql::SqlQueryError::Parameter { .. } => PrqlQueryError::Invalid(other.to_string()),
     }
 }
 

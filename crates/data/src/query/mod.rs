@@ -545,14 +545,25 @@ pub enum QueryInput {
     Text {
         format: TextQueryFormat,
         query: String,
+        #[facet(default)]
+        params: BTreeMap<String, Value>,
     },
 }
 
 impl QueryInput {
+    pub fn sql_with_params(query: impl Into<String>, params: BTreeMap<String, Value>) -> Self {
+        Self::Text {
+            format: TextQueryFormat::Sql,
+            query: query.into(),
+            params,
+        }
+    }
+
     pub fn sql(query: impl Into<String>) -> Self {
         Self::Text {
             format: TextQueryFormat::Sql,
             query: query.into(),
+            params: BTreeMap::new(),
         }
     }
 
@@ -560,6 +571,7 @@ impl QueryInput {
         Self::Text {
             format: TextQueryFormat::Prql,
             query: query.into(),
+            params: BTreeMap::new(),
         }
     }
 }
@@ -606,6 +618,28 @@ impl From<&str> for QueryInput {
     }
 }
 
+#[cfg(test)]
+mod text_query_tests {
+    use super::*;
+
+    #[test]
+    fn text_query_defaults_missing_params_and_preserves_typed_bindings() {
+        let old: QueryInput =
+            facet_json::from_str(r#"{"text":{"format":"sql","query":"SELECT id FROM items"}}"#)
+                .unwrap();
+        assert_eq!(old, QueryInput::sql("SELECT id FROM items"));
+        let bound = QueryInput::sql_with_params(
+            "SELECT :n FROM items",
+            BTreeMap::from([("n".into(), Value::U64(u64::MAX))]),
+        );
+        let serialized = facet_json::to_string(&bound).unwrap();
+        assert_eq!(
+            facet_json::from_str::<QueryInput>(&serialized).unwrap(),
+            bound
+        );
+    }
+}
+
 #[derive(facet::Facet, Debug, Clone, PartialEq, Eq)]
 pub struct BatchStats {
     pub upserted: usize,
@@ -617,6 +651,11 @@ pub struct BatchStats {
 #[repr(C)]
 #[facet(rename_all = "snake_case")]
 pub enum BatchOperation {
+    Create {
+        collection: String,
+        id: String,
+        object: Object,
+    },
     Upsert {
         collection: String,
         id: String,

@@ -48,11 +48,17 @@ fn generate_core_types() -> String {
         <semantic_db_core::Entity as Facet>::SHAPE,
         <semantic_db_core::BatchOperation as Facet>::SHAPE,
         <semantic_db_core::BatchOutcome as Facet>::SHAPE,
+        <semantic_db_core::BatchReturn as Facet>::SHAPE,
+        <semantic_db_core::BatchReply as Facet>::SHAPE,
+        <semantic_db_core::BatchReturnErrorReason as Facet>::SHAPE,
+        <semantic_db_core::ValidationError as Facet>::SHAPE,
+        <semantic_db_core::ValidationViolation as Facet>::SHAPE,
         <semantic_data::jobs::JobRecord as Facet>::SHAPE,
         <semantic_data::jobs::JobListQuery as Facet>::SHAPE,
         <semantic_data::jobs::JobListPage as Facet>::SHAPE,
         <semantic_data::jobs::JobKindDescriptor as Facet>::SHAPE,
         <semantic_data::jobs::ClearCompletedResult as Facet>::SHAPE,
+        <semantic_data::query::QueryInput as Facet>::SHAPE,
     ];
     let mut output = TypeScriptGenerator::new().render(&roots);
     output.push_str(include_str!("jobs_commands.ts"));

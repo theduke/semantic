@@ -106,6 +106,45 @@ async fn download(server: &SemanticServer, id: &str) {
 }
 
 #[cfg(feature = "logfs")]
+async fn persisted_file_locator(server: &SemanticServer, id: &str) -> String {
+    use semantic_data::{Object, Value, filestore::ATTR_FILE_FILESTORE_LOCATOR};
+    use semantic_rpc_core::{RpcRequest, RpcResponse, RpcResult};
+
+    let mut payload = Object::new();
+    payload.insert("id", id.to_owned());
+    let request = RpcRequest {
+        id: 1,
+        command: "semantic.db.get".into(),
+        payload: Value::Object(payload),
+    };
+    let response = server
+        .router()
+        .oneshot(
+            Request::post("/api/v1/rpc")
+                .header("content-type", "application/json")
+                .body(Body::from(serde_json::to_vec(&request).unwrap()))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let reply: RpcResponse =
+        serde_json::from_slice(&to_bytes(response.into_body(), usize::MAX).await.unwrap()).unwrap();
+    let RpcResult::Ok(Value::Object(record)) = reply.result else {
+        panic!("expected persisted file record: {:?}", reply.result);
+    };
+    assert_eq!(record.get("id").and_then(Value::as_str), Some(id));
+    let Some(Value::Object(object)) = record.get("object") else {
+        panic!("expected file object");
+    };
+    object
+        .get(ATTR_FILE_FILESTORE_LOCATOR)
+        .and_then(Value::as_str)
+        .unwrap()
+        .to_owned()
+}
+
+#[cfg(feature = "logfs")]
 #[tokio::test]
 async fn shared_logfs_opens_once_and_replays_database_and_blobs() {
     use objstore::{ObjStore, ObjStoreBuilder};
@@ -126,6 +165,8 @@ async fn shared_logfs_opens_once_and_replays_database_and_blobs() {
     stores.register_provider(objstore_logfs::LogFsProvider::new());
     assert!(stores.build(&blob_uri).is_err());
     let id = upload(&server).await;
+    let locator = persisted_file_locator(&server, &id).await;
+    assert!(locator.starts_with(&format!("{id}/")));
     download(&server, &id).await;
     drop(server);
 
@@ -133,7 +174,12 @@ async fn shared_logfs_opens_once_and_replays_database_and_blobs() {
         let store = stores.build(&blob_uri).unwrap();
         let keys = store.list_all_keys("").await.unwrap();
         assert!(keys.iter().any(|key| key.starts_with("db/default/wal/v1/")));
-        assert!(keys.iter().any(|key| key == &format!("blob/default/{id}")));
+        let blob_key = format!("blob/default/{locator}");
+        assert!(keys.contains(&blob_key));
+        assert_eq!(
+            store.get(&blob_key).await.unwrap().unwrap().as_ref(),
+            b"persistent contents"
+        );
         assert!(
             keys.iter()
                 .all(|key| key.starts_with("db/default/") || key.starts_with("blob/default/"))
@@ -144,6 +190,7 @@ async fn shared_logfs_opens_once_and_replays_database_and_blobs() {
         .await
         .unwrap();
     // Download needs both the replayed database record and the persisted blob.
+    assert_eq!(persisted_file_locator(&server, &id).await, locator);
     download(&server, &id).await;
 }
 

@@ -51,11 +51,16 @@ const REL_EDGE_TARGET_KEY_FIELD: &str = "relation_target";
 const REL_EDGE_SOURCE_INDEX_NAME: &str = "__rel_source_idx";
 const REL_EDGE_TARGET_INDEX_NAME: &str = "__rel_target_idx";
 
+pub(crate) mod compact;
+mod incremental;
+mod validation;
+
 #[derive(Debug)]
 pub struct EmbeddedDb<S: EntityStorage> {
     catalog: SharedCatalog,
     storage: S,
     config: DbConfig,
+    execution_counts: compact::ExecutionCounts,
 }
 
 #[cfg(test)]
@@ -116,6 +121,7 @@ impl<S: EntityStorage> EmbeddedDb<S> {
             catalog: SharedCatalog::new(catalog),
             storage,
             config,
+            execution_counts: compact::ExecutionCounts::default(),
         };
         if db
             .catalog()
@@ -167,6 +173,8 @@ impl<S: EntityStorage> EmbeddedDb<S> {
         if !index_ops.is_empty() {
             db.storage.apply_batch(&index_ops)?;
         }
+        db.initialize_relationship_contributors()?;
+        db.initialize_reverse_references()?;
         Ok(db)
     }
 
@@ -377,6 +385,10 @@ impl<S: EntityStorage> EmbeddedDb<S> {
                 &mut extra_ops,
             )?;
             extra_ops.extend(catalog_write_ops(&self.storage, &next_catalog)?);
+            self.rebuild_reverse_references(&next_catalog, &after, &mut extra_ops)?;
+            if self.validation_enabled()? {
+                self.validate_catalog_rows(&next_catalog, &after)?;
+            }
 
             match self.persist_dataset_delta(
                 &next_catalog,
@@ -885,16 +897,26 @@ impl<S: EntityStorage> EmbeddedDb<S> {
                     })
                     .collect::<Vec<_>>();
                 let default_context = DefaultExpressionContext::now();
+                let recursive_validation = self.validation_enabled()?;
                 result = crate::apply_update_with_returning_and_prepare(
                     &query,
                     &mut entities,
                     |_, object| {
-                        prepare_object_for_write(
-                            catalog_snapshot.catalog.as_ref(),
-                            &collection_schema,
-                            object,
-                            &default_context,
-                        )
+                        (if recursive_validation {
+                            crate::validation::normalize_for_recursive_validation(
+                                catalog_snapshot.catalog.as_ref(),
+                                &collection_schema,
+                                object,
+                                Some(&default_context),
+                            )
+                        } else {
+                            prepare_object_for_write(
+                                catalog_snapshot.catalog.as_ref(),
+                                &collection_schema,
+                                object,
+                                &default_context,
+                            )
+                        })
                         .map_err(|err| CoreError::new(err.to_string()))
                     },
                 )
@@ -1033,6 +1055,28 @@ impl<S: EntityStorage> EmbeddedDb<S> {
         batch: Batch,
         options: TransactionOptions,
     ) -> std::result::Result<BatchOutcome, DbError> {
+        let crate::BatchReply::Dataset(outcome) =
+            self.transact_returning(batch, options, crate::BatchReturn::Dataset)?
+        else {
+            unreachable!("dataset returning requested")
+        };
+        Ok(outcome)
+    }
+
+    pub fn execute_batch_returning(
+        &mut self,
+        batch: Batch,
+        returning: crate::BatchReturn,
+    ) -> Result<crate::BatchReply, DbError> {
+        self.transact_returning(batch, TransactionOptions::default(), returning)
+    }
+
+    fn transact_returning(
+        &mut self,
+        batch: Batch,
+        options: TransactionOptions,
+        returning: crate::BatchReturn,
+    ) -> Result<crate::BatchReply, DbError> {
         validate_batch_mutation_limits(&batch)?;
         let caps = self.storage.tx_capabilities();
         if options.concurrency == TransactionConcurrency::Mvcc && !caps.mvcc {
@@ -1050,6 +1094,17 @@ impl<S: EntityStorage> EmbeddedDb<S> {
             let catalog_snapshot = self.catalog.snapshot();
             let batch = self.canonicalize_batch(&batch, catalog_snapshot.catalog.as_ref())?;
             let read_revision = self.storage.current_revision()?;
+            if returning != crate::BatchReturn::Dataset
+                && let Some(reply) = self.try_compact_batch(
+                    catalog_snapshot.catalog.as_ref(),
+                    &batch,
+                    read_revision,
+                    &returning,
+                    catalog_snapshot.version,
+                )?
+            {
+                return Ok(reply);
+            }
             let dataset = self.load_dataset_for_batch(
                 catalog_snapshot.catalog.as_ref(),
                 &batch,
@@ -1059,6 +1114,24 @@ impl<S: EntityStorage> EmbeddedDb<S> {
                 catalog_snapshot.catalog.as_ref(),
                 &dataset,
                 &batch,
+                self.validation_enabled()?,
+            )?;
+
+            if returning != crate::BatchReturn::Dataset {
+                self.execution_counts.visited_rows +=
+                    dataset.values().map(BTreeMap::len).sum::<usize>();
+                tracing::debug!(
+                    fallback_scans = self.execution_counts.fallback_scans,
+                    visited_rows = self.execution_counts.visited_rows,
+                    "compact batch fallback loaded"
+                );
+            }
+
+            let reply = crate::batch_return::compact_reply(
+                catalog_snapshot.catalog.as_ref(),
+                &dataset,
+                &out,
+                &returning,
             )?;
 
             if self.catalog.snapshot().version != catalog_snapshot.version {
@@ -1074,7 +1147,9 @@ impl<S: EntityStorage> EmbeddedDb<S> {
                 read_revision,
                 &[],
             )? {
-                StorageCommitOutcome::Committed { .. } => Ok(out),
+                StorageCommitOutcome::Committed { .. } => {
+                    Ok(reply.unwrap_or(crate::BatchReply::Dataset(out)))
+                }
                 StorageCommitOutcome::Conflict {
                     expected_revision,
                     actual_revision,
@@ -1118,6 +1193,9 @@ impl<S: EntityStorage> EmbeddedDb<S> {
             )?;
             extra_ops.extend(catalog_write_ops(&self.storage, &next_catalog)?);
             self.rebuild_relationship_edges(&next_catalog, &BTreeMap::new(), &mut extra_ops)?;
+            if self.validation_enabled()? {
+                self.validate_catalog_rows(&next_catalog, &BTreeMap::new())?;
+            }
 
             let dataset = BTreeMap::new();
             match self.persist_dataset_delta(
@@ -1352,7 +1430,12 @@ impl<S: EntityStorage> EmbeddedDb<S> {
                 )
             })
             .collect::<BTreeMap<_, _>>();
-        let out = Self::execute_batch_with_write_defaults(current_catalog, &dataset, &batch)?;
+        let out = Self::execute_batch_with_write_defaults(
+            current_catalog,
+            &dataset,
+            &batch,
+            self.validation_enabled()?,
+        )?;
         for (collection_name, rows) in out.dataset {
             after.insert(collection_name, rows);
         }
@@ -1363,16 +1446,29 @@ impl<S: EntityStorage> EmbeddedDb<S> {
         catalog: &Catalog,
         dataset: &BTreeMap<String, BTreeMap<String, Object>>,
         batch: &Batch,
+        recursive_validation: bool,
     ) -> std::result::Result<BatchOutcome, DbError> {
         let default_context = DefaultExpressionContext::now();
         execute_batch_with_prepare(dataset, batch, |collection, _, object| {
             let collection_schema = catalog
                 .collection_by_name(collection)
                 .ok_or_else(|| CoreError::new(format!("collection '{collection}' not found")))?;
-            prepare_object_for_write(catalog, collection_schema, object, &default_context)
-                .map_err(|err| CoreError::new(err.to_string()))
+            (if recursive_validation {
+                crate::validation::normalize_for_recursive_validation(
+                    catalog,
+                    collection_schema,
+                    object,
+                    Some(&default_context),
+                )
+            } else {
+                prepare_object_for_write(catalog, collection_schema, object, &default_context)
+            })
+            .map_err(|err| CoreError::new(err.to_string()))
         })
-        .map_err(|err| DbError::InvalidQuery(err.to_string()))
+        .map_err(|err| match err.entity_exists {
+            Some((collection, id)) => DbError::EntityExists { collection, id },
+            None => DbError::InvalidQuery(err.message),
+        })
     }
 
     fn load_collection_dataset(
@@ -1408,6 +1504,23 @@ impl<S: EntityStorage> EmbeddedDb<S> {
         let mut canonical_ops = Vec::with_capacity(batch.operations.len());
         for op in batch.operations.iter().cloned() {
             match op {
+                BatchOperation::Create {
+                    collection,
+                    id,
+                    object,
+                } => {
+                    let schema = catalog.collection_by_name(&collection).ok_or_else(|| {
+                        DbError::UnknownCollectionByName {
+                            name: collection.clone(),
+                        }
+                    })?;
+                    ensure_collection_mutable(schema)?;
+                    canonical_ops.push(BatchOperation::Create {
+                        collection,
+                        id,
+                        object,
+                    });
+                }
                 BatchOperation::Upsert {
                     collection,
                     id,
@@ -1570,6 +1683,9 @@ impl<S: EntityStorage> EmbeddedDb<S> {
         expected_revision: Option<u64>,
         prelude_ops: &[StorageWriteOp],
     ) -> std::result::Result<StorageCommitOutcome, DbError> {
+        if self.validation_enabled()? {
+            crate::validation::validate_enforcement_support(catalog)?;
+        }
         // Apply DDL cleanup, index backfills, and catalog persistence first. A
         // package migration can both create an index and rewrite its collection;
         // the post-migration dataset below must be the final source of index rows.
@@ -1587,7 +1703,16 @@ impl<S: EntityStorage> EmbeddedDb<S> {
             let mut normalized_rows = BTreeMap::<String, Object>::new();
             for (id, object) in new_rows {
                 let mut object = object.clone();
-                normalize_object_for_collection(catalog, &collection_schema, &mut object)?;
+                if self.validation_enabled()? {
+                    crate::validation::normalize_for_recursive_validation(
+                        catalog,
+                        &collection_schema,
+                        &mut object,
+                        None,
+                    )?;
+                } else {
+                    normalize_object_for_collection(catalog, &collection_schema, &mut object)?;
+                }
                 self.validate_primary_id(&collection_schema, id, &object)?;
                 normalized_rows.insert(id.clone(), object);
             }
@@ -1623,31 +1748,23 @@ impl<S: EntityStorage> EmbeddedDb<S> {
                 continue;
             }
 
-            ops.push(StorageWriteOp::ClearCollection(collection_schema.lid));
-
-            let indexes: Vec<_> = catalog
-                .indexes_for_collection(collection_schema.lid)
-                .cloned()
-                .collect();
-            for index in &indexes {
-                ops.push(StorageWriteOp::ResetIndex(index.lid));
-            }
-
-            for (id, object) in normalized_rows {
-                let entity = StoredEntity {
-                    id: id.clone(),
-                    collection: collection_schema.lid.0,
-                    kind: infer_entity_kind(catalog, object),
-                    object: object.clone(),
-                };
-                self.push_entity_ops(&mut ops, &entity)?;
-                for index in &indexes {
-                    self.push_index_ops(&mut ops, index, id, object)?;
-                }
-            }
+            self.push_row_delta(
+                catalog,
+                collection_schema.lid,
+                old_rows.unwrap_or(&BTreeMap::new()),
+                normalized_rows,
+                &mut ops,
+            )?;
         }
 
-        self.rebuild_relationship_edges(catalog, &normalized_after, &mut ops)?;
+        if !before.is_empty() || !normalized_after.is_empty() {
+            self.update_relationship_edges(catalog, before, &normalized_after, &mut ops)?;
+            self.update_reverse_references(
+                catalog,
+                &crate::batch_return::changes(before, &normalized_after),
+                &mut ops,
+            )?;
+        }
 
         if self.storage.tx_capabilities().conflict_detection {
             self.storage
@@ -1728,6 +1845,22 @@ impl<S: EntityStorage> EmbeddedDb<S> {
                     name: collection.name.clone(),
                 })?;
 
+        if self.validation_enabled()? {
+            for (id, object) in rows {
+                crate::validate_stored_object(
+                    catalog,
+                    &(collection.name.clone(), id.clone()),
+                    object,
+                    |key| {
+                        Ok(all_after
+                            .get(&key.0)
+                            .and_then(|rows| rows.get(&key.1))
+                            .cloned())
+                    },
+                )?;
+            }
+            return Ok(());
+        }
         for object in rows.values() {
             let field_types = resolved_field_types_for_object(catalog, collection, object);
             for (field, ty) in field_types {
@@ -1824,7 +1957,7 @@ impl<S: EntityStorage> EmbeddedDb<S> {
             ops.push(StorageWriteOp::ResetIndex(index.lid));
         }
 
-        let rows = self.compute_relationship_edges(catalog, after)?;
+        let rows = self.compute_relationship_edges(catalog, after, None)?;
         for (id, object) in rows {
             let entity = StoredEntity {
                 id: id.clone(),
@@ -1837,6 +1970,8 @@ impl<S: EntityStorage> EmbeddedDb<S> {
                 self.push_index_ops(ops, index, &id, &entity.object)?;
             }
         }
+        self.rebuild_relationship_contributors(catalog, after, ops)?;
+        self.rebuild_reverse_references(catalog, after, ops)?;
         Ok(())
     }
 
@@ -1844,10 +1979,14 @@ impl<S: EntityStorage> EmbeddedDb<S> {
         &self,
         catalog: &Catalog,
         after: &BTreeMap<String, BTreeMap<String, Object>>,
+        affected: Option<&BTreeSet<String>>,
     ) -> std::result::Result<Vec<(String, Object)>, DbError> {
         let mut out = Vec::new();
         for (_, rel_schema) in catalog.relationships() {
             let relationship = &rel_schema.relationship;
+            if affected.is_some_and(|ids| !ids.contains(&relationship.id)) {
+                continue;
+            }
             if relationship.source_collection == RELATION_EDGES_COLLECTION {
                 continue;
             }
@@ -1870,77 +2009,12 @@ impl<S: EntityStorage> EmbeddedDb<S> {
                     .map(|row| (row.id, row.object))
                     .collect::<Vec<_>>()
             };
-            let mut direct = Vec::<(String, String)>::new();
-            match &relationship.mode {
-                RelationMode::Embedded { attribute } => {
-                    let canonical_field = catalog
-                        .attribute_by_id(attribute)
-                        .map(|attr| attr.attribute.id.clone())
-                        .unwrap_or_else(|| {
-                            source_collection
-                                .canonical_field_name(attribute)
-                                .to_string()
-                        });
-                    for (source_id, object) in &source_rows {
-                        let Some(target_id) = object
-                            .get(&canonical_field)
-                            .and_then(Value::as_str)
-                            .map(ToString::to_string)
-                        else {
-                            continue;
-                        };
-                        if target_id.is_empty() {
-                            continue;
-                        }
-                        direct.push((source_id.clone(), target_id));
-                    }
-                }
-                RelationMode::External => {
-                    for (_, object) in &source_rows {
-                        let discriminator = Self::external_relation_field_name(
-                            catalog,
-                            source_collection,
-                            object,
-                            "relation",
-                            ATTR_RELATION_RELATION,
-                        );
-                        // Legacy relation collections omit the discriminator. Explicit
-                        // discriminators isolate relations sharing a collection.
-                        if object
-                            .get(&discriminator)
-                            .is_some_and(|value| value.as_str() != Some(relationship.id.as_str()))
-                        {
-                            continue;
-                        }
-                        let Some(source_id) = Self::external_relation_field_value(
-                            catalog,
-                            source_collection,
-                            object,
-                            "from",
-                            ATTR_RELATION_FROM,
-                        ) else {
-                            continue;
-                        };
-                        let Some(target_id) = object
-                            .get(&Self::external_relation_field_name(
-                                catalog,
-                                source_collection,
-                                object,
-                                "to",
-                                ATTR_RELATION_TO,
-                            ))
-                            .and_then(Value::as_str)
-                            .map(ToString::to_string)
-                        else {
-                            continue;
-                        };
-                        if source_id.is_empty() || target_id.is_empty() {
-                            continue;
-                        }
-                        direct.push((source_id, target_id));
-                    }
-                }
-            }
+            let direct: Vec<_> = source_rows
+                .iter()
+                .filter_map(|(id, object)| {
+                    Self::contribution(catalog, relationship, source_collection, id, object)
+                })
+                .collect();
             let mut shortest = BTreeMap::<(String, String), usize>::new();
             if relationship.indexing_mode == RelationIndexingMode::Enabled {
                 let mut adjacency = BTreeMap::<String, Vec<String>>::new();
@@ -1989,31 +2063,12 @@ impl<S: EntityStorage> EmbeddedDb<S> {
                 }
             }
             for ((source, target), depth) in shortest {
-                let id = format!("{}|{}|{}", relationship.id, source, target);
-                let mut object = Object::new();
-                object.insert("id", Value::String(id.clone()));
-                object.insert(
-                    REL_EDGE_RELATION_FIELD.to_string(),
-                    Value::String(relationship.id.clone()),
-                );
-                object.insert(
-                    REL_EDGE_SOURCE_FIELD.to_string(),
-                    Value::String(source.clone()),
-                );
-                object.insert(
-                    REL_EDGE_TARGET_FIELD.to_string(),
-                    Value::String(target.clone()),
-                );
-                object.insert(REL_EDGE_DEPTH_FIELD.to_string(), Value::U64(depth as u64));
-                object.insert(
-                    REL_EDGE_SOURCE_KEY_FIELD.to_string(),
-                    Value::String(format!("{}|{}", relationship.id, source)),
-                );
-                object.insert(
-                    REL_EDGE_TARGET_KEY_FIELD.to_string(),
-                    Value::String(format!("{}|{}", relationship.id, target)),
-                );
-                out.push((id, object));
+                out.push(Self::relationship_edge(
+                    &relationship.id,
+                    &source,
+                    &target,
+                    depth,
+                ));
             }
         }
         Ok(out)
@@ -3168,10 +3223,11 @@ fn validate_one_ref(
         )));
     }
     let Some(target) = target_rows.get(target_id) else {
-        return Err(DbError::InvalidQuery(format!(
-            "ref field '{}' in collection '{}' points to missing target id '{}'",
-            field, collection.name, target_id
-        )));
+        return Err(DbError::ReferenceTargetNotFound {
+            collection: collection.name.clone(),
+            field: field.into(),
+            id: target_id.clone(),
+        });
     };
 
     let allowed_class_ids = ref_target_class_ids(catalog, ty);
@@ -4277,7 +4333,10 @@ mod tests {
             )
             .expect_err("missing ref target should be rejected");
 
-        assert!(matches!(err, crate::DbError::InvalidQuery(_)));
+        assert!(matches!(
+            err,
+            crate::DbError::ReferenceTargetNotFound { .. }
+        ));
         assert!(
             err.to_string().contains("missing target id 'person-99'"),
             "{err}"
@@ -5527,7 +5586,7 @@ mod tests {
         }
     }
 
-    fn register_ref_schema(
+    pub(super) fn register_ref_schema(
         db: &mut EmbeddedDb<crate::embedded::storage::MemoryEntityStorage>,
         author_ty: Type,
     ) {
@@ -5651,7 +5710,7 @@ mod tests {
         object
     }
 
-    fn ref_ty(class_id: &str) -> Type {
+    pub(super) fn ref_ty(class_id: &str) -> Type {
         ty(TypeKind::Ref(TypeRef::new(class_id)))
     }
 

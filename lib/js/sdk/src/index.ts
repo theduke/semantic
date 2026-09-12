@@ -9,4 +9,5 @@ export * from "./transport.js";
 export * from "./client.js";
 export * from "./builder.js";
 export * from "./files.js";
+export * from "./http.js";
 export { commands } from "./generated/commands.js";

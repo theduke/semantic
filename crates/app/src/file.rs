@@ -12,7 +12,7 @@ use semantic_data::filestore::{
     ATTR_FILE_FILESTORE_LOCATOR, ATTR_FILE_MIME_TYPE, FILE_CLASS_ID,
 };
 use semantic_data::value::{DateTime, Object, Value};
-use semantic_db_core::{DEFAULT_COLLECTION, EntityRecord};
+use semantic_db_core::{Batch, BatchOperation, DEFAULT_COLLECTION, DbError, EntityRecord};
 use sha2::{Digest as _, Sha256};
 
 use crate::{
@@ -114,14 +114,8 @@ impl FileService {
         mut object: Object,
         content: FileSizedStream,
     ) -> Result<Object, AppError> {
-        let persisted = persist_content(
-            store,
-            None,
-            None,
-            Some(mime_type.clone()),
-            FileContent::Stream(content),
-        )
-        .await?;
+        let persisted =
+            persist_content(store, Some(mime_type.clone()), FileContent::Stream(content)).await?;
         object.insert(ATTR_ID, id);
         object.insert(ATTR_TYPE, FILE_CLASS_ID.to_string());
         object.insert("uploaded_at", Value::DateTime(DateTime::now_utc()));
@@ -158,6 +152,21 @@ impl FileService {
         let requested_id = request
             .id
             .or_else(|| object_string(&request.entity, ATTR_ID));
+        // Identity is checked again by Create inside the committing transaction.
+        // This early check only avoids unnecessary uploads for known duplicates.
+        if let Some(id) = &requested_id
+            && db
+                .get(DEFAULT_COLLECTION.into(), id.clone())
+                .await?
+                .is_some()
+        {
+            return Err(AppError::FileAlreadyExists { id: id.clone() });
+        }
+        if request.filestore_locator.is_some() {
+            return Err(AppError::InvalidFileMetadata(
+                "custom locators cannot be published by ordinary upload; existing locators remain readable".into(),
+            ));
+        }
         let filename = request.filename.clone();
         let PersistedContent {
             meta,
@@ -165,14 +174,7 @@ impl FileService {
             content_hash_sha256,
             byte_size: streamed_byte_size,
             bytes,
-        } = persist_content(
-            store.as_ref(),
-            request.filestore_locator,
-            requested_id.as_deref(),
-            request.mime_type.clone(),
-            request.content,
-        )
-        .await?;
+        } = persist_content(store.as_ref(), request.mime_type.clone(), request.content).await?;
         let id = requested_id.unwrap_or_else(|| format!("file-sha256-{content_hash_sha256}"));
         let byte_size = meta.size.or(Some(streamed_byte_size));
         let mime_type = request.mime_type.or(meta.mime_type);
@@ -232,8 +234,16 @@ impl FileService {
             }
         }
 
-        db.insert(DEFAULT_COLLECTION.to_string(), id.clone(), object.clone())
-            .await?;
+        db.execute_batch(Batch::new().with_op(BatchOperation::Create {
+            collection: DEFAULT_COLLECTION.to_string(),
+            id: id.clone(),
+            object: object.clone(),
+        }))
+        .await
+        .map_err(|error| match error {
+            DbError::EntityExists { id, .. } => AppError::FileAlreadyExists { id },
+            other => AppError::Db(other),
+        })?;
 
         Ok(FileRecord {
             id,
@@ -249,6 +259,67 @@ impl FileService {
         id: String,
     ) -> std::result::Result<FileReadResult, AppError> {
         self.open(ctx, scope_id, id).await?.read(None).await
+    }
+
+    /// Remove native file metadata explicitly and durably record cleanup intent.
+    /// Bytes are retained until exclusive store ownership and retention are configured.
+    /// Removing a domain reference never invokes this operation.
+    pub async fn delete(
+        &self,
+        ctx: &AppRequestContext,
+        scope: Option<DbScopeId>,
+        id: String,
+    ) -> Result<(), AppError> {
+        let scope = ctx.resolve_scope_id(scope).await?;
+        let db = ctx.resolve_db(Some(scope.clone())).await?;
+        let Some(record) = db.get(DEFAULT_COLLECTION.into(), id.clone()).await? else {
+            return Ok(());
+        };
+        validate_file_record(&record)?;
+        let locator = required_file_string(&record, "filestore_locator")?;
+        // A scope-local alias is not a physical store identity: different Apps
+        // commonly name different stores "default".
+        let store = ctx.default_file_store(Some(scope)).await?;
+        let cleanup_id = format!("file-cleanup-{}", uuid::Uuid::new_v4());
+        let mut cleanup = Object::new();
+        cleanup.insert(ATTR_ID, cleanup_id.clone());
+        cleanup.insert(
+            ATTR_TYPE,
+            semantic_data::filestore::CLEANUP_CLASS_ID.to_owned(),
+        );
+        cleanup.insert(
+            "semantic:filestore:cleanup:store",
+            store.safe_uri().to_string(),
+        );
+        cleanup.insert("semantic:filestore:cleanup:locator", locator);
+        cleanup.insert(
+            "semantic:filestore:cleanup:not_before",
+            Value::DateTime(DateTime::now_utc()),
+        );
+        cleanup.insert("semantic:filestore:cleanup:attempts", 0_u64);
+        db.execute_batch(
+            Batch::new()
+                .with_op(BatchOperation::DeleteById {
+                    collection: DEFAULT_COLLECTION.into(),
+                    id: id.clone(),
+                })
+                .with_op(BatchOperation::Create {
+                    collection: DEFAULT_COLLECTION.into(),
+                    id: cleanup_id,
+                    object: cleanup,
+                }),
+        )
+        .await
+        .map_err(|error| match error {
+            DbError::ReferenceTargetNotFound { id: target, .. } if target == id => {
+                AppError::FileReferenced { id }
+            }
+            DbError::Validation(error) if error.rule == "reference" && error.actual == id => {
+                AppError::FileReferenced { id }
+            }
+            other => AppError::Db(other),
+        })?;
+        Ok(())
     }
 
     pub async fn open(
@@ -312,8 +383,6 @@ enum StreamInputError {
 
 async fn persist_content(
     store: &dyn objstore::ObjStore,
-    requested_filestore_locator: Option<String>,
-    requested_id: Option<&str>,
     mime_type: Option<String>,
     content: FileContent,
 ) -> std::result::Result<PersistedContent, AppError> {
@@ -321,11 +390,11 @@ async fn persist_content(
         FileContent::Bytes(bytes) => {
             let content_hash_sha256 = sha256_hex(&bytes);
             let byte_size = bytes.len() as u64;
-            let filestore_locator = requested_filestore_locator.unwrap_or_else(|| {
-                requested_id
-                    .map(ToOwned::to_owned)
-                    .unwrap_or_else(|| format!("file-sha256-{content_hash_sha256}"))
-            });
+            // Some stores ignore conditional writes. A fresh locator prevents a
+            // losing publication (including another App process) from replacing
+            // live bytes, even when callers choose the same identity or content.
+            let filestore_locator =
+                format!("file-sha256-{content_hash_sha256}/{}", uuid::Uuid::new_v4());
             let mut put = Put::new(&filestore_locator, DataSource::Data(bytes.clone()));
             put.mime_type = mime_type;
             let meta = store.send_put(put).await?;
@@ -407,11 +476,8 @@ async fn persist_content(
                     "stream size declared {expected_size}, received {byte_size} bytes"
                 )));
             }
-            let filestore_locator = requested_filestore_locator.unwrap_or_else(|| {
-                requested_id
-                    .map(ToOwned::to_owned)
-                    .unwrap_or_else(|| format!("file-sha256-{content_hash_sha256}"))
-            });
+            let filestore_locator =
+                format!("file-sha256-{content_hash_sha256}/{}", uuid::Uuid::new_v4());
             let persist_result = async {
                 let meta = store
                     .send_copy(Copy::new(&temporary_locator, &filestore_locator))

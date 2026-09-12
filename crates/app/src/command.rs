@@ -268,6 +268,8 @@ impl SemanticAppBuilder {
         self.registry.register(DbInsertCommand)?;
         self.registry.register(DbDeleteCommand)?;
         self.registry.register(DbBatchCommand)?;
+        self.registry.register(DbValidationPreflightCommand)?;
+        self.registry.register(DbValidationActivateCommand)?;
         self.registry.register(FileAnalyzeCommand)?;
         crate::jobs::register_commands(&mut self.registry)?;
         crate::import_commands::register(&mut self.registry)?;
@@ -357,6 +359,8 @@ struct DbGetCommand;
 struct DbInsertCommand;
 struct DbDeleteCommand;
 struct DbBatchCommand;
+struct DbValidationPreflightCommand;
+struct DbValidationActivateCommand;
 struct FileAnalyzeCommand;
 
 macro_rules! command_spec {
@@ -391,6 +395,14 @@ command_spec!(DbGetCommand, "semantic.db.get");
 command_spec!(DbInsertCommand, "semantic.db.insert");
 command_spec!(DbDeleteCommand, "semantic.db.delete");
 command_spec!(DbBatchCommand, "semantic.db.batch");
+command_spec!(
+    DbValidationPreflightCommand,
+    "semantic.db.validation.preflight"
+);
+command_spec!(
+    DbValidationActivateCommand,
+    "semantic.db.validation.activate"
+);
 command_spec!(FileAnalyzeCommand, "semantic.file.analyze");
 
 impl RpcCommand<AppRequestContext> for ScopeOpenCommand {
@@ -606,7 +618,22 @@ impl RpcCommand<AppRequestContext> for DbQueryCommand {
                 }
             };
             let db = ctx.resolve_db(scope_id).await?;
-            let result = db.query(TextQueryInput::Text { format, query }).await?;
+            let params = match object.get("params") {
+                None => BTreeMap::new(),
+                Some(Value::Object(params)) => params.clone().into_iter().collect(),
+                Some(_) => {
+                    return Err(AppError::InvalidRequest(
+                        "field 'params' must be an object".to_string(),
+                    ));
+                }
+            };
+            let result = db
+                .query(TextQueryInput::Text {
+                    format,
+                    query,
+                    params,
+                })
+                .await?;
             Ok(query_result_to_value(result))
         })
     }
@@ -696,9 +723,58 @@ impl RpcCommand<AppRequestContext> for DbBatchCommand {
             let object = expect_object(payload)?;
             let scope_id = optional_string(&object, "scope_id")?.map(DbScopeId::new);
             let batch = batch_from_payload(&object)?;
+            let returning = batch_return_from_payload(&object)?;
             let db = ctx.resolve_db(scope_id).await?;
-            let outcome = db.execute_batch(batch).await?;
-            Ok(batch_outcome_to_value(outcome))
+            let reply = db.execute_batch_returning(batch, returning).await?;
+            Ok(batch_reply_to_value(reply))
+        })
+    }
+}
+
+impl RpcCommand<AppRequestContext> for DbValidationPreflightCommand {
+    fn call<'a>(
+        &'a self,
+        ctx: &'a AppRequestContext,
+        payload: Value,
+    ) -> Pin<Box<dyn Future<Output = Result<Value, AppError>> + Send + 'a>> {
+        Box::pin(async move {
+            let object = expect_object(payload)?;
+            let db = ctx
+                .resolve_db(optional_string(&object, "scope_id")?.map(DbScopeId::new))
+                .await?;
+            let violations = db.validation_preflight().await?;
+            Ok(Value::List(
+                violations
+                    .into_iter()
+                    .map(|violation| {
+                        let mut row = Object::new();
+                        row.insert("collection", violation.collection);
+                        row.insert("id", violation.id);
+                        row.insert(
+                            "error",
+                            crate::error::validation_error_data(violation.error),
+                        );
+                        Value::Object(row)
+                    })
+                    .collect(),
+            ))
+        })
+    }
+}
+
+impl RpcCommand<AppRequestContext> for DbValidationActivateCommand {
+    fn call<'a>(
+        &'a self,
+        ctx: &'a AppRequestContext,
+        payload: Value,
+    ) -> Pin<Box<dyn Future<Output = Result<Value, AppError>> + Send + 'a>> {
+        Box::pin(async move {
+            let object = expect_object(payload)?;
+            let db = ctx
+                .resolve_db(optional_string(&object, "scope_id")?.map(DbScopeId::new))
+                .await?;
+            db.activate_validation().await?;
+            Ok(Value::Void)
         })
     }
 }
@@ -743,6 +819,102 @@ fn expect_object(value: Value) -> std::result::Result<Object, AppError> {
     }
 }
 
+fn batch_return_from_payload(object: &Object) -> Result<semantic_db_core::BatchReturn, AppError> {
+    use semantic_db_core::{BatchReturn, BatchReturnErrorReason, DbError};
+    let invalid = || {
+        AppError::Db(DbError::BatchReturn {
+            reason: BatchReturnErrorReason::UnknownMode,
+            field: None,
+        })
+    };
+    match object.get("returning") {
+        None => Ok(BatchReturn::Dataset),
+        Some(Value::String(mode)) => match mode.as_str() {
+            "dataset" => Ok(BatchReturn::Dataset),
+            "stats" => Ok(BatchReturn::Stats),
+            "changes" => Ok(BatchReturn::Changes),
+            _ => Err(invalid()),
+        },
+        Some(Value::Object(mode)) if mode.len() == 1 => {
+            let Some(Value::Object(projection)) = mode.get("projection") else {
+                return Err(invalid());
+            };
+            if projection.len() != 1 {
+                return Err(invalid());
+            }
+            let Some(Value::List(fields)) = projection.get("fields") else {
+                return Err(invalid());
+            };
+            let fields = fields
+                .iter()
+                .map(|field| match field {
+                    Value::String(field) => Ok(field.clone()),
+                    _ => Err(invalid()),
+                })
+                .collect::<Result<Vec<_>, _>>()?;
+            Ok(BatchReturn::Projection { fields })
+        }
+        _ => Err(invalid()),
+    }
+}
+
+fn batch_reply_to_value(reply: semantic_db_core::BatchReply) -> Value {
+    use semantic_db_core::{BatchReply, EntityChangeKind};
+    let (stats, changes, rows) = match reply {
+        BatchReply::Dataset(outcome) => return batch_outcome_to_value(outcome),
+        BatchReply::Stats { stats } => (stats, None, None),
+        BatchReply::Changes { stats, changes } => (stats, Some(changes), None),
+        BatchReply::Projection {
+            stats,
+            changes,
+            rows,
+        } => (stats, Some(changes), Some(rows)),
+    };
+    let mut object = Object::new();
+    insert_batch_stats(&mut object, stats);
+    if let Some(changes) = changes {
+        object.insert(
+            "changes",
+            Value::List(
+                changes
+                    .into_iter()
+                    .map(|change| {
+                        let mut value = Object::new();
+                        value.insert("collection", change.collection);
+                        value.insert("id", change.id);
+                        value.insert(
+                            "kind",
+                            match change.kind {
+                                EntityChangeKind::Upsert => "upsert",
+                                EntityChangeKind::Delete => "delete",
+                            }
+                            .to_string(),
+                        );
+                        Value::Object(value)
+                    })
+                    .collect(),
+            ),
+        );
+    }
+    if let Some(rows) = rows {
+        object.insert(
+            "rows",
+            Value::List(
+                rows.into_iter()
+                    .map(|row| {
+                        let mut value = Object::new();
+                        value.insert("collection", row.collection);
+                        value.insert("id", row.id);
+                        value.insert("object", Value::Object(row.object));
+                        Value::Object(value)
+                    })
+                    .collect(),
+            ),
+        );
+    }
+    Value::Object(object)
+}
+
 fn batch_from_payload(object: &Object) -> std::result::Result<Batch, AppError> {
     let operations = match object.get("operations") {
         Some(Value::List(operations)) => operations,
@@ -768,6 +940,17 @@ fn batch_operation_from_value(value: &Value) -> std::result::Result<BatchOperati
     };
     let kind = required_string(object, "kind")?;
     match kind.as_str() {
+        "create" => {
+            let collection =
+                optional_string(object, "collection")?.unwrap_or_else(|| DEFAULT_COLLECTION.into());
+            let id = required_string(object, "id")?;
+            let object = required_object(object, "object")?;
+            Ok(BatchOperation::Create {
+                collection,
+                id,
+                object,
+            })
+        }
         "upsert" => {
             let collection =
                 optional_string(object, "collection")?.unwrap_or_else(|| DEFAULT_COLLECTION.into());

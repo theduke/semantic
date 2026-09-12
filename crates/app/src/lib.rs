@@ -5,6 +5,7 @@ mod context;
 mod db;
 mod error;
 mod file;
+pub mod file_maintenance;
 mod import_commands;
 pub mod imports;
 pub mod interface;
@@ -198,13 +199,7 @@ mod tests {
                     object,
                 }));
             }
-            let mut object = Object::new();
-            object.insert("db", Value::String(self.name.clone()));
-            Ok(Some(EntityRecord {
-                collection,
-                id,
-                object,
-            }))
+            Ok(None)
         }
 
         async fn insert(
@@ -238,6 +233,17 @@ mod tests {
             let mut records = self.records.lock().unwrap();
             for operation in batch.operations {
                 match operation {
+                    BatchOperation::Create {
+                        collection,
+                        id,
+                        object,
+                    } => {
+                        if records.contains_key(&(collection.clone(), id.clone())) {
+                            return Err(DbError::EntityExists { collection, id });
+                        }
+                        records.insert((collection, id), object);
+                        stats.upserted += 1;
+                    }
                     BatchOperation::Upsert {
                         collection,
                         id,
@@ -550,7 +556,7 @@ mod tests {
                 FileCreateRequest {
                     scope_id: None,
                     id: None,
-                    filestore_locator: Some("uploads/hello.txt".to_string()),
+                    filestore_locator: None,
                     filename: Some("hello.txt".to_string()),
                     mime_type: Some("text/plain".to_string()),
                     entity,
@@ -569,12 +575,13 @@ mod tests {
             record.object.get("type").and_then(Value::as_str),
             Some(semantic_data::filestore::FILE_CLASS_ID)
         );
-        assert_eq!(
+        assert!(
             record
                 .object
                 .get("filestore_locator")
-                .and_then(Value::as_str),
-            Some("uploads/hello.txt")
+                .and_then(Value::as_str)
+                .unwrap()
+                .starts_with("file-sha256-")
         );
         assert_eq!(record.object.get("byte_size"), Some(&Value::U64(5)));
         assert_eq!(

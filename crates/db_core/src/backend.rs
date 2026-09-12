@@ -126,6 +126,17 @@ pub struct QueryExplain {
 
 #[async_trait]
 pub trait Backend: Send + Sync {
+    async fn validation_preflight(&self) -> Result<Vec<crate::ValidationViolation>, DbError> {
+        Err(DbError::InvalidQuery(
+            "validation preflight requires a managed backend".into(),
+        ))
+    }
+
+    async fn activate_validation(&self) -> Result<(), DbError> {
+        Err(DbError::InvalidQuery(
+            "validation activation requires a managed backend".into(),
+        ))
+    }
     async fn catalog(&self) -> std::result::Result<Arc<Catalog>, DbError>;
 
     async fn create_collection(
@@ -182,8 +193,7 @@ pub trait Backend: Send + Sync {
         &self,
         sql_query: &str,
     ) -> std::result::Result<sql::ParsedSqlQuery, DbError> {
-        sql::parse_sql_query(sql_query, self.sql_dialect())
-            .map_err(|err| DbError::InvalidQuery(err.to_string()))
+        sql::parse_sql_query(sql_query, self.sql_dialect()).map_err(DbError::from)
     }
 
     async fn parse_prql_query(
@@ -206,6 +216,26 @@ pub trait Backend: Send + Sync {
     }
 
     async fn explain(&self, query: TextQueryInput) -> std::result::Result<QueryExplain, DbError>;
+
+    async fn parse_text_query_with_params(
+        &self,
+        format: TextQueryFormat,
+        query: &str,
+        params: &std::collections::BTreeMap<String, Value>,
+    ) -> Result<Query, DbError> {
+        if params.is_empty() {
+            return self.parse_text_query(format, query).await;
+        }
+        if format != TextQueryFormat::Sql {
+            return Err(DbError::QueryParameter {
+                reason: "unsupported_format".to_string(),
+                name: None,
+            });
+        }
+        sql::parse_sql_query_with_params(query, self.sql_dialect(), params)
+            .map(|parsed| parsed.query)
+            .map_err(DbError::from)
+    }
 
     async fn plan(&self, query: TextQueryInput) -> std::result::Result<QueryPlan, DbError>;
 
@@ -241,6 +271,22 @@ pub trait Backend: Send + Sync {
     }
 
     async fn execute_batch(&self, batch: Batch) -> std::result::Result<BatchOutcome, DbError>;
+
+    async fn execute_batch_returning(
+        &self,
+        batch: Batch,
+        returning: crate::BatchReturn,
+    ) -> Result<crate::BatchReply, DbError> {
+        match returning {
+            crate::BatchReturn::Dataset => self
+                .execute_batch(batch)
+                .await
+                .map(crate::BatchReply::Dataset),
+            _ => Err(DbError::InvalidQuery(
+                "backend does not support compact batch returning".into(),
+            )),
+        }
+    }
 }
 
 pub struct Db {
@@ -248,6 +294,13 @@ pub struct Db {
 }
 
 impl Db {
+    pub async fn validation_preflight(&self) -> Result<Vec<crate::ValidationViolation>, DbError> {
+        self.backend.validation_preflight().await
+    }
+
+    pub async fn activate_validation(&self) -> Result<(), DbError> {
+        self.backend.activate_validation().await
+    }
     pub fn new(backend: impl Backend + 'static) -> Self {
         Self {
             backend: Box::new(backend),
@@ -407,5 +460,15 @@ impl Db {
         batch: PublicBatch,
     ) -> std::result::Result<BatchOutcome, DbError> {
         self.backend.execute_batch(batch.into()).await
+    }
+
+    pub async fn execute_batch_returning(
+        &self,
+        batch: PublicBatch,
+        returning: crate::BatchReturn,
+    ) -> Result<crate::BatchReply, DbError> {
+        self.backend
+            .execute_batch_returning(batch.into(), returning)
+            .await
     }
 }

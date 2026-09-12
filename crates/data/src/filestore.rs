@@ -16,6 +16,9 @@ pub const MEDIA_METADATA_MIGRATION_NAME: &str = "004_media_metadata";
 pub const UPLOADED_AT_MIGRATION_NAME: &str = "005_uploaded_at";
 
 pub const FILE_CLASS_ID: &str = "semantic:filestore:file";
+pub const CLEANUP_CLASS_ID: &str = "semantic:filestore:cleanup";
+
+mod cleanup;
 
 pub const ATTR_DESCRIPTION: &str = "semantic:description";
 pub const ATTR_PARENT: &str = "semantic:parent";
@@ -80,6 +83,7 @@ pub fn package() -> Package {
             uploaded_at_migration(),
             creatable_in_ui_migration(),
             filekind_index_and_pixel_titles_migration(),
+            cleanup::migration(),
         ],
         version: None,
         meta: Meta::default(),
@@ -89,6 +93,7 @@ pub fn package() -> Package {
 pub fn root_module() -> Module {
     let attributes = file_attributes()
         .into_iter()
+        .chain(cleanup::attributes())
         .map(|attribute| (attribute.id.clone(), attribute))
         .collect();
     let file = file_class();
@@ -98,7 +103,10 @@ pub fn root_module() -> Module {
         constants: BTreeMap::new(),
         types: BTreeMap::new(),
         attributes,
-        classes: BTreeMap::from([(file.id.clone(), file)]),
+        classes: BTreeMap::from([
+            (file.id.clone(), file),
+            (CLEANUP_CLASS_ID.into(), cleanup::class()),
+        ]),
         interfaces: BTreeMap::new(),
         contracts: BTreeMap::new(),
         meta: Meta::default(),
@@ -942,7 +950,8 @@ mod tests {
         assert_eq!(package.name, PACKAGE_NAME);
         assert_eq!(package.root.name, MODULE_NAME);
         assert!(package.modules.is_empty());
-        assert_eq!(package.migrations.len(), 7);
+        assert_eq!(package.migrations.len(), 8);
+        assert_eq!(package.migrations[7].name, "008_cleanup_intent");
         assert_eq!(
             package.migrations[6].name,
             "007_filekind_index_and_pixel_titles"

@@ -102,8 +102,9 @@ HTTP or WebSocket transport, or provide your own implementation.
 ### HTTP
 
 HTTP is the simplest choice for ordinary request/response use. Headers and an
-abort signal are configured on the transport and apply to every invocation made
-through it.
+abort signal can be configured on the transport and apply to every invocation.
+Each operation also accepts `signal`; either signal can cancel that operation.
+The SDK imposes no timeout policy.
 
 ```ts
 import { HttpTransport, SemanticClient } from "@semantic/sdk";
@@ -202,6 +203,20 @@ RPC envelopes and tagged-value encoding themselves.
 
 ## Queries and mutations
 
+SQL accepts named expression parameters. Names are case-sensitive ASCII identifiers;
+map keys omit the colon. Repeated names reuse the same typed value.
+
+```ts
+await client.sql("SELECT id FROM default WHERE name = :name", {
+  params: { name: userInput },
+});
+```
+
+Parameters use the tagged value codec, including UUIDs, bytes and wide integers.
+Bindings cannot replace identifiers. Missing, unused, invalid and non-SQL bindings
+return `RpcError` with code `query_parameter_error` and `data.reason` (plus `data.name`
+when applicable). Quoted SQL text and comments do not introduce parameters.
+
 ### SQL and PRQL
 
 `sql()` and `prql()` are conveniences around `query()`. All accept an optional
@@ -280,8 +295,31 @@ const outcome = await client.batch(operations, { scopeId: "workspace-1" });
 console.log(outcome.stats.upserted, outcome.stats.deleted);
 ```
 
+By default the result contains `{ dataset, stats }`. Select a compact response
+with `returning`; its literal value determines the TypeScript result type:
+
+```ts
+const { stats } = await client.batch(operations, { returning: "stats" });
+const { changes } = await client.batch(operations, { returning: "changes" });
+const { rows } = await client.batch(operations, {
+  returning: { projection: { fields: ["title"] } },
+});
+```
+
+`changes` contains `{ collection, id, kind: "upsert" | "delete" }`, sorted by
+collection and ID. It describes net committed changes, so unchanged rows and
+create-then-delete sequences are absent. Stats retain operation counts. Projection
+also includes changes and returns `{ collection, id, object }` for surviving changed
+rows, with only selected canonical attribute keys; absent values are omitted.
+An empty field list returns identities with empty objects. Unknown/ambiguous fields,
+duplicate fields (including aliases), and invalid modes fail before commit with
+`batch_return_error` and `data.reason` (`unknown_field`, `duplicate_field`, or
+`unknown_mode`). Explicit `"dataset"` retains the default shape.
+`commands.batch` keeps its dataset-only contract; `commands.batchReturning` accepts
+all modes and returns the reply union.
+
 The remotely callable `BatchOperation` deliberately includes only the operations
-accepted by the current application RPC command: upsert, delete by ID, and delete
+accepted by the current application RPC command: create, upsert, delete by ID, and delete
 by multiple IDs. The reflected core schema also describes query-based update and
 delete variants, but `SemanticClient.batch()` does not expose them as supported
 remote operations.
@@ -323,14 +361,31 @@ Which scope URI schemes and visibility modes are usable depends on the server.
 
 ## Files
 
-File transfer uses a separate HTTP endpoint and `FileClient`. It does not inherit
-the RPC transport's endpoint, headers, fetch implementation, or abort signal.
+Uploads are create-only: an existing explicit or automatic hash identity returns
+`RpcError` with code `file_already_exists`. Native bytes use immutable generated
+hash locators; custom upload locators are rejected, while existing locators remain
+readable. The separate importer publication operation retains upsert behavior.
+
+Use `await files.delete(id, { scopeId, signal })` for explicit native deletion.
+It succeeds if already absent and returns `file_referenced` when an enforced
+reference survives. Removing a domain file link does not delete the native file.
+Deletion atomically records cleanup intent with metadata removal. Bytes are
+currently retained: destructive cleanup is disabled until physical store
+ownership across scopes and a retention policy can be guaranteed.
+
+File transfer uses a separate HTTP endpoint and `FileClient`. Use
+`createHttpClient` to share Fetch, base headers, credentials, and a connection
+abort signal across RPC, upload, and download. Protocol headers for each operation
+override base headers. Set `fileEndpoint` if the file endpoint cannot be derived.
 
 ```ts
-import { FileClient, deriveFileEndpoint } from "@semantic/sdk";
+import { createHttpClient } from "@semantic/sdk";
 
 const rpcEndpoint = "https://semantic.example/api/v1/rpc";
-const files = new FileClient(deriveFileEndpoint(rpcEndpoint));
+const { client, files } = createHttpClient(rpcEndpoint, {
+  headers: { authorization: `Bearer ${accessToken}` },
+  credentials: "include",
+});
 
 const uploaded = await files.upload({
   content: new Blob(["Hello from Semantic\n"], { type: "text/plain" }),
@@ -350,6 +405,17 @@ const firstKilobyte = await files.read(uploaded.id, {
   size: 1024,
 });
 const downloadUrl = files.url(uploaded.id, "workspace-1");
+
+// Bounded-memory consumption; cancellation also releases the response body.
+const controller = new AbortController();
+const { stream, contentLength, totalSize } = await files.readStream(
+  uploaded.id,
+  {
+    scopeId: "workspace-1",
+    signal: controller.signal,
+  },
+);
+await stream.pipeTo(destination);
 ```
 
 `content` accepts any Fetch `BodyInit`, including `Blob`, `Uint8Array`, and
@@ -357,11 +423,17 @@ const downloadUrl = files.url(uploaded.id, "workspace-1");
 Node's native Fetch implementation and accepted by supporting browsers.
 
 `onProgress` currently reports upload lifecycle boundaries (start and completion),
-not incremental network byte progress. A zero-sized read returns an empty
-`Uint8Array` without a request. Ranged reads require the server to return a valid
-`206` response and `Content-Range` header.
+not incremental network byte progress. `read` buffers the entire response;
+`readStream` returns a `ReadableStream<Uint8Array>` with status and optional
+content type, content length, content range, and total size. A zero-sized read
+returns empty content without a request (synthetic stream status `200`); `416`
+also returns empty content. Ranged reads require a valid `206` response and
+`Content-Range`. Headers are validated before exposing bytes and declared byte
+counts are checked at EOF; malformed or truncated responses raise `TransportError`.
+Cancel the stream, its reader, or an associated signal when abandoning a download.
+Signal cancellation rejects with `AbortError`.
 
-To add authentication to file requests, inject a Fetch-compatible wrapper:
+Existing standalone constructors and Fetch wrappers remain supported:
 
 ```ts
 const authenticatedFetch: typeof fetch = (input, init) => {
@@ -678,13 +750,9 @@ try {
 
 - The high-level query client sends SQL or PRQL text. Query AST types are available
   for package/schema authors, but there is no high-level AST query method yet.
-- Remote batches support upsert and ID-based deletion only.
+- Remote batches support create, upsert, and ID-based deletion only.
 - Types and generated command descriptors are compile-time contracts; the SDK does
   not perform runtime schema validation.
-- HTTP cancellation is transport-wide. WebSocket invocations and file operations do
-  not have first-class per-request abort options.
-- `FileClient` is independent of `SemanticClient`; authentication and custom Fetch
-  behavior must be supplied separately.
 - The SDK is ESM-only and does not bundle a WebSocket implementation for Node.
 
 ## Package exports

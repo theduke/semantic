@@ -96,6 +96,7 @@ impl ObjectStoreManager {
         store: DynObjStore,
         set_default: bool,
     ) -> Result<(), AppError> {
+        crate::file_maintenance::validate_store_access(store.as_ref())?;
         let mut state = self.write_state()?;
         let scope = state.scopes.entry(scope_id).or_default();
         if set_default {
@@ -151,6 +152,7 @@ impl ObjectStoreManager {
             ObjectStoreEntry::Opened(store) => return Ok(Arc::clone(store)),
             ObjectStoreEntry::Request(request) => self.builder.build(&request.uri)?,
         };
+        crate::file_maintenance::validate_store_access(store.as_ref())?;
         *entry = ObjectStoreEntry::Opened(Arc::clone(&store));
         Ok(store)
     }

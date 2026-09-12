@@ -5,6 +5,23 @@ use crate::{ObjectNormalizationError, QueryCanonicalizationError};
 
 #[derive(Debug, Error)]
 pub enum DbError {
+    #[error(transparent)]
+    Validation(#[from] crate::ValidationError),
+    #[error("unsupported constraint '{kind}'")]
+    UnsupportedConstraint { kind: String },
+    #[error("batch returning error: {reason:?} ({field:?})")]
+    BatchReturn {
+        reason: crate::BatchReturnErrorReason,
+        field: Option<String>,
+    },
+    #[error("entity '{id}' already exists in collection '{collection}'")]
+    EntityExists { collection: String, id: String },
+    #[error("ref field '{field}' in collection '{collection}' points to missing target id '{id}'")]
+    ReferenceTargetNotFound {
+        collection: String,
+        field: String,
+        id: String,
+    },
     #[error("collection '{name}' already exists")]
     CollectionAlreadyExists { name: String },
 
@@ -28,6 +45,12 @@ pub enum DbError {
 
     #[error("invalid query: {0}")]
     InvalidQuery(String),
+
+    #[error("query parameter error: {reason} ({name:?})")]
+    QueryParameter {
+        reason: String,
+        name: Option<String>,
+    },
 
     #[error(transparent)]
     QueryCanonicalization(#[from] QueryCanonicalizationError),
@@ -73,5 +96,16 @@ impl crate::TransactionError for DbError {
 
     fn is_retryable(&self) -> bool {
         matches!(self, Self::TransactionConflict(_))
+    }
+}
+
+impl From<crate::sql::SqlQueryError> for DbError {
+    fn from(error: crate::sql::SqlQueryError) -> Self {
+        match error {
+            crate::sql::SqlQueryError::Parameter { reason, name } => {
+                Self::QueryParameter { reason, name }
+            }
+            other => Self::InvalidQuery(other.to_string()),
+        }
     }
 }

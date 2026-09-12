@@ -62,7 +62,10 @@ impl SemanticServer {
                 &self.config.file_api_prefix,
                 post(crate::file::upload_handler),
             )
-            .route(&file_get_path, get(crate::file::download_handler))
+            .route(
+                &file_get_path,
+                get(crate::file::download_handler).delete(crate::file::delete_handler),
+            )
             .route(
                 &self.config.ws_path,
                 axum::routing::get(crate::ws::rpc_ws_handler),

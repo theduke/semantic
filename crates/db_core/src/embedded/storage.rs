@@ -23,6 +23,10 @@ pub struct StoredEntity {
 #[derive(Debug, Clone)]
 pub enum StorageWriteOp {
     PutEntity(StoredEntity),
+    DeleteEntity {
+        collection: LocalCollectionId,
+        entity_id: String,
+    },
     ClearCollection(LocalCollectionId),
     /// Remove all entries and the initialization marker for an index.
     ///
@@ -40,6 +44,12 @@ pub enum StorageWriteOp {
     /// idempotent. Callers rebuilding an index must issue [`Self::ResetIndex`]
     /// first.
     IndexEntity {
+        index: IndexSchema,
+        entity_id: String,
+        object: Object,
+    },
+    /// Remove entries derived from the old object, preserving the index marker.
+    UnindexEntity {
         index: IndexSchema,
         entity_id: String,
         object: Object,
@@ -84,6 +94,44 @@ pub type EntityIdScanItem = std::result::Result<String, DbError>;
 pub type BoxEntityIdScan = Box<dyn Iterator<Item = EntityIdScanItem> + Send>;
 
 pub trait EntityStorage: std::fmt::Debug + Send + Sync + 'static {
+    /// A point read bound to the transaction revision. Backends without a native
+    /// historical point lookup can use revision fencing: a concurrent commit
+    /// causes a retry instead of mixing snapshots.
+    fn get_entity_at_revision(
+        &self,
+        collection: LocalCollectionId,
+        id: &str,
+        revision: Option<u64>,
+    ) -> Result<Option<StoredEntity>, DbError> {
+        self.ensure_revision(revision)?;
+        let row = self.get_entity(collection, id)?;
+        self.ensure_revision(revision)?;
+        Ok(row)
+    }
+
+    fn scan_index_value_at_revision(
+        &self,
+        index: LocalIndexId,
+        path: Option<&FieldPath>,
+        value: &Value,
+        revision: Option<u64>,
+    ) -> Result<Vec<String>, DbError> {
+        self.ensure_revision(revision)?;
+        let ids = self.scan_index_value(index, path, value)?;
+        self.ensure_revision(revision)?;
+        Ok(ids)
+    }
+
+    fn ensure_revision(&self, expected: Option<u64>) -> Result<(), DbError> {
+        let actual = self.current_revision()?;
+        if actual != expected {
+            return Err(DbError::TransactionConflict(format!(
+                "read revision changed: expected {expected:?}, found {actual:?}"
+            )));
+        }
+        Ok(())
+    }
+
     fn get_entity(
         &self,
         collection: LocalCollectionId,
@@ -197,6 +245,23 @@ impl MemoryEntityStorage {
                 StorageWriteOp::PutEntity(entity) => {
                     self.entities
                         .insert((entity.collection, entity.id.clone()), entity.clone());
+                }
+                StorageWriteOp::DeleteEntity {
+                    collection,
+                    entity_id,
+                } => {
+                    self.entities.remove(&(collection.0, entity_id.clone()));
+                }
+                StorageWriteOp::UnindexEntity {
+                    index,
+                    entity_id,
+                    object,
+                } => {
+                    self.indexes.retain(|entry| {
+                        entry.index.lid != index.lid
+                            || entry.entity_id != *entity_id
+                            || entry.object != *object
+                    });
                 }
                 StorageWriteOp::ClearCollection(collection) => {
                     self.entities

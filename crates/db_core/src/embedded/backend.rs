@@ -46,6 +46,25 @@ fn lock_poisoned_error() -> DbError {
 
 #[async_trait]
 impl<S: EntityStorage> Backend for EmbeddedBackend<S> {
+    async fn validation_preflight(&self) -> Result<Vec<crate::ValidationViolation>, DbError> {
+        let db = Arc::clone(&self.db);
+        spawn_blocking_on(self.runtime.as_ref(), move || {
+            db.read()
+                .map_err(|_| lock_poisoned_error())?
+                .validation_preflight()
+        })
+        .await
+    }
+
+    async fn activate_validation(&self) -> Result<(), DbError> {
+        let db = Arc::clone(&self.db);
+        spawn_blocking_on(self.runtime.as_ref(), move || {
+            db.write()
+                .map_err(|_| lock_poisoned_error())?
+                .activate_validation()
+        })
+        .await
+    }
     async fn catalog(&self) -> std::result::Result<Arc<Catalog>, DbError> {
         let db = Arc::clone(&self.db);
         spawn_blocking_on(self.runtime.as_ref(), move || {
@@ -149,7 +168,14 @@ impl<S: EntityStorage> Backend for EmbeddedBackend<S> {
     async fn query(&self, query: TextQueryInput) -> std::result::Result<QueryResult, DbError> {
         let query = match query {
             TextQueryInput::Ast(query) => query,
-            TextQueryInput::Text { format, query } => self.parse_text_query(format, &query).await?,
+            TextQueryInput::Text {
+                format,
+                query,
+                params,
+            } => {
+                self.parse_text_query_with_params(format, &query, &params)
+                    .await?
+            }
         };
         let db = Arc::clone(&self.db);
         spawn_blocking_on(self.runtime.as_ref(), move || match query {
@@ -168,7 +194,14 @@ impl<S: EntityStorage> Backend for EmbeddedBackend<S> {
     async fn explain(&self, query: TextQueryInput) -> std::result::Result<QueryExplain, DbError> {
         let query = match query {
             TextQueryInput::Ast(query) => query,
-            TextQueryInput::Text { format, query } => self.parse_text_query(format, &query).await?,
+            TextQueryInput::Text {
+                format,
+                query,
+                params,
+            } => {
+                self.parse_text_query_with_params(format, &query, &params)
+                    .await?
+            }
         };
         let db = Arc::clone(&self.db);
         spawn_blocking_on(self.runtime.as_ref(), move || {
@@ -181,7 +214,14 @@ impl<S: EntityStorage> Backend for EmbeddedBackend<S> {
     async fn plan(&self, query: TextQueryInput) -> std::result::Result<QueryPlan, DbError> {
         let query = match query {
             TextQueryInput::Ast(query) => query,
-            TextQueryInput::Text { format, query } => self.parse_text_query(format, &query).await?,
+            TextQueryInput::Text {
+                format,
+                query,
+                params,
+            } => {
+                self.parse_text_query_with_params(format, &query, &params)
+                    .await?
+            }
         };
         let db = Arc::clone(&self.db);
         spawn_blocking_on(self.runtime.as_ref(), move || {
@@ -217,6 +257,20 @@ impl<S: EntityStorage> Backend for EmbeddedBackend<S> {
         spawn_blocking_on(self.runtime.as_ref(), move || {
             let mut db = db.write().map_err(|_| lock_poisoned_error())?;
             db.execute_batch(batch)
+        })
+        .await
+    }
+
+    async fn execute_batch_returning(
+        &self,
+        batch: Batch,
+        returning: crate::BatchReturn,
+    ) -> Result<crate::BatchReply, DbError> {
+        let db = Arc::clone(&self.db);
+        spawn_blocking_on(self.runtime.as_ref(), move || {
+            db.write()
+                .map_err(|_| lock_poisoned_error())?
+                .execute_batch_returning(batch, returning)
         })
         .await
     }

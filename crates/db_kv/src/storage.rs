@@ -15,6 +15,9 @@ use serde::{Deserialize, Serialize};
 pub mod memory;
 pub use memory::MemoryKvEngine;
 
+#[cfg(test)]
+mod incremental_tests;
+
 const ENTITY_FORMAT_VERSION_PREFIX_LEN: usize = std::mem::size_of::<u16>();
 const ENTITY_FORMAT_VERSION_V1_MSGPACK: u16 = 1;
 // Version 2 forces legacy indexes to be rebuilt. Some databases could retain a
@@ -451,6 +454,14 @@ impl<E: KvEngine> EntityStore<E> {
                     key: entity_key(LocalCollectionId(entity.collection), &entity.id),
                     value: encode_entity(entity)?,
                 }),
+                StorageWriteOp::DeleteEntity {
+                    collection,
+                    entity_id,
+                } => {
+                    lowered.push(KvWriteOp::Delete {
+                        key: entity_key(*collection, entity_id),
+                    });
+                }
                 StorageWriteOp::ClearCollection(collection) => {
                     push_prefix_deletes(
                         &mut lowered,
@@ -480,29 +491,72 @@ impl<E: KvEngine> EntityStore<E> {
                     index,
                     entity_id,
                     object,
-                } => match index.schema.kind {
-                    IndexKind::Equality => {
-                        if let Some(value) = object.get(&index.canonical_field) {
-                            lowered.push(KvWriteOp::Put {
-                                key: index_key(index.lid, None, value, entity_id)?,
-                                value: Vec::new(),
-                            });
-                        }
+                } => {
+                    for key in index_keys(index, entity_id, object)? {
+                        lowered.push(KvWriteOp::Put {
+                            key,
+                            value: Vec::new(),
+                        });
                     }
-                    IndexKind::PathEquality => {
-                        for (path, value) in collect_index_entries(object) {
-                            lowered.push(KvWriteOp::Put {
-                                key: index_key(index.lid, Some(&path), &value, entity_id)?,
-                                value: Vec::new(),
-                            });
-                        }
+                }
+                StorageWriteOp::UnindexEntity {
+                    index,
+                    entity_id,
+                    object,
+                } => {
+                    for key in index_keys(index, entity_id, object)? {
+                        lowered.push(KvWriteOp::Delete { key });
                     }
-                    IndexKind::Range | IndexKind::FullText => {}
-                },
+                }
             }
         }
-        Ok(lowered)
+        // Compare final key states after lowering, so old/new index intersections
+        // produce no physical writes, including when a DDL reset precedes them.
+        let mut final_values = BTreeMap::new();
+        for operation in lowered {
+            match operation {
+                KvWriteOp::Put { key, value } => {
+                    final_values.insert(key, Some(value));
+                }
+                KvWriteOp::Delete { key } => {
+                    final_values.insert(key, None);
+                }
+            }
+        }
+        let mut delta = Vec::new();
+        for (key, value) in final_values {
+            if self.engine.get(&key)? == value {
+                continue;
+            }
+            delta.push(match value {
+                Some(value) => KvWriteOp::Put { key, value },
+                None => KvWriteOp::Delete { key },
+            });
+        }
+        Ok(delta)
     }
+}
+
+fn index_keys(
+    index: &semantic_db_core::catalog::IndexSchema,
+    entity_id: &str,
+    object: &Object,
+) -> Result<BTreeSet<Vec<u8>>, DbError> {
+    let mut keys = BTreeSet::new();
+    match index.schema.kind {
+        IndexKind::Equality => {
+            if let Some(value) = object.get(&index.canonical_field) {
+                keys.insert(index_key(index.lid, None, value, entity_id)?);
+            }
+        }
+        IndexKind::PathEquality => {
+            for (path, value) in collect_index_entries(object) {
+                keys.insert(index_key(index.lid, Some(&path), &value, entity_id)?);
+            }
+        }
+        IndexKind::Range | IndexKind::FullText => {}
+    }
+    Ok(keys)
 }
 
 fn push_prefix_deletes(

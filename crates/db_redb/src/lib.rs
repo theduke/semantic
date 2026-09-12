@@ -383,4 +383,18 @@ mod tests {
 
         semantic_db_test::suite::test_db(&db).await;
     }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn recursive_validation_backend_parity_and_reopen() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("validation");
+        let db = Db::new(open_backend(&path, DbOpenMode::AutoCreate).unwrap());
+        semantic_db_test::suite::test_validation(&db).await;
+        drop(db);
+        let db = Db::new(open_backend(&path, DbOpenMode::AutoCreate).unwrap());
+        assert!(matches!(
+            db.delete(None::<&str>, "target").await.unwrap_err(),
+            semantic_db_core::DbError::Validation(_)
+        ));
+    }
 }

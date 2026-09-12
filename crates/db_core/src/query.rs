@@ -26,14 +26,24 @@ pub enum TextQueryInput {
     Text {
         format: TextQueryFormat,
         query: String,
+        params: BTreeMap<String, Value>,
     },
 }
 
 impl TextQueryInput {
+    pub fn sql_with_params(query: impl Into<String>, params: BTreeMap<String, Value>) -> Self {
+        Self::Text {
+            format: TextQueryFormat::Sql,
+            query: query.into(),
+            params,
+        }
+    }
+
     pub fn sql(query: impl Into<String>) -> Self {
         Self::Text {
             format: TextQueryFormat::Sql,
             query: query.into(),
+            params: BTreeMap::new(),
         }
     }
 
@@ -41,6 +51,7 @@ impl TextQueryInput {
         Self::Text {
             format: TextQueryFormat::Prql,
             query: query.into(),
+            params: BTreeMap::new(),
         }
     }
 }
@@ -115,9 +126,14 @@ impl From<public_query::QueryInput> for TextQueryInput {
     fn from(value: public_query::QueryInput) -> Self {
         match value {
             public_query::QueryInput::Ast(query) => Self::Ast(query.into()),
-            public_query::QueryInput::Text { format, query } => Self::Text {
+            public_query::QueryInput::Text {
+                format,
+                query,
+                params,
+            } => Self::Text {
                 format: format.into(),
                 query,
+                params,
             },
         }
     }
@@ -680,6 +696,15 @@ impl From<public_query::BatchOperation> for BatchOperation {
                 id,
                 object,
             },
+            public_query::BatchOperation::Create {
+                collection,
+                id,
+                object,
+            } => Self::Create {
+                collection,
+                id,
+                object,
+            },
             public_query::BatchOperation::DeleteById { collection, id } => {
                 Self::DeleteById { collection, id }
             }
@@ -1174,6 +1199,11 @@ pub type Dataset = BTreeMap<String, BTreeMap<String, Object>>;
 #[repr(C)]
 #[facet(rename_all = "snake_case")]
 pub enum BatchOperation {
+    Create {
+        collection: String,
+        id: String,
+        object: Object,
+    },
     Upsert {
         collection: String,
         id: String,
@@ -1230,12 +1260,14 @@ pub struct BatchOutcome {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CoreError {
     pub message: String,
+    pub entity_exists: Option<(String, String)>,
 }
 
 impl CoreError {
     pub fn new(message: impl Into<String>) -> Self {
         Self {
             message: message.into(),
+            entity_exists: None,
         }
     }
 }
@@ -1292,6 +1324,25 @@ where
                 object,
             } => {
                 let coll = dataset.entry(collection.clone()).or_default();
+                let mut object = object.clone();
+                prepare(collection, id, &mut object)?;
+                coll.insert(id.clone(), object);
+                stats.upserted += 1;
+            }
+            BatchOperation::Create {
+                collection,
+                id,
+                object,
+            } => {
+                let coll = dataset.entry(collection.clone()).or_default();
+                if coll.contains_key(id) {
+                    return Err(CoreError {
+                        message: format!(
+                            "entity '{id}' already exists in collection '{collection}'"
+                        ),
+                        entity_exists: Some((collection.clone(), id.clone())),
+                    });
+                }
                 let mut object = object.clone();
                 prepare(collection, id, &mut object)?;
                 coll.insert(id.clone(), object);
@@ -2290,6 +2341,7 @@ pub fn touched_collections(batch: &Batch) -> BTreeSet<String> {
     for op in &batch.operations {
         match op {
             BatchOperation::Upsert { collection, .. }
+            | BatchOperation::Create { collection, .. }
             | BatchOperation::DeleteById { collection, .. }
             | BatchOperation::DeleteByIds { collection, .. }
             | BatchOperation::Update { collection, .. }

@@ -9,6 +9,11 @@ export const packageName = "semantic.filestore" as const;
 
 export type description = string;
 export type uploaded_at = number | bigint | Date;
+export type attempts = number;
+export type last_error = string;
+export type locator = string;
+export type not_before = number | bigint | Date;
+export type store = string;
 export type byte_size = number | bigint;
 export type content_hash_sha256 = string;
 export type filekind =
@@ -38,6 +43,13 @@ export type media_video_frames_per_second = number;
 export type mime_type = string;
 export type parent = string;
 export type title = string;
+export type Cleanup = {
+  attempts: attempts;
+  last_error?: last_error;
+  locator: locator;
+  not_before: not_before;
+  store: store;
+};
 export type File = {
   byte_size?: byte_size;
   content_hash_sha256?: content_hash_sha256;

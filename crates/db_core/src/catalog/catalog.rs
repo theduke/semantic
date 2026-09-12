@@ -1040,6 +1040,25 @@ impl Catalog {
         }
 
         if catalog.type_defs().next().is_some() {
+            // Older catalog persistence used the same entity identity for a
+            // typedef and its class/record projection. The projection was
+            // written last, so recover missing typedefs from those saved rows.
+            // Existing typedefs remain authoritative (including their metadata).
+            for item in &classes {
+                if catalog.type_def_by_name(&item.class.id).is_none() {
+                    catalog.upsert_type_def_raw(type_def_from_class(item.class.clone(), None));
+                }
+            }
+            for item in &record_types {
+                if catalog.type_def_by_name(&item.id).is_none() {
+                    catalog.upsert_type_def_raw(type_def_from_record_type(
+                        item.id.clone(),
+                        item.name.clone(),
+                        item.record.clone(),
+                        None,
+                    ));
+                }
+            }
             let projected_attrs = catalog
                 .type_defs()
                 .filter_map(|(_, type_def)| match &type_def.type_def.ty.kind {
@@ -1700,6 +1719,22 @@ impl Catalog {
             );
         }
 
+        for (_, type_def) in self.type_defs() {
+            validate_foreign_keys(self, &type_def.type_def.ty, 0)?;
+        }
+        for (lid, class) in self.classes() {
+            for constraint in &class.class.constraints {
+                if let semantic_data::schema::ClassConstraint::Field { attribute, .. } = constraint
+                {
+                    if self.class_field_for_alias(lid, &attribute.id).is_none() {
+                        return invalid_schema(format!(
+                            "class '{}' field constraint references unknown attribute '{}'",
+                            class.class.id, attribute.id
+                        ));
+                    }
+                }
+            }
+        }
         Ok(())
     }
 
@@ -1838,11 +1873,25 @@ fn normalize_class_type(mut class: ClassType, module: Option<&str>) -> ClassType
     for class_attr in class.attributes.values_mut() {
         class_attr.attribute.id =
             nameset_for_identifier(&class_attr.attribute.id, module).qualified_name;
+        normalize_constraints(&mut class_attr.constraints, module);
+    }
+    for constraint in &mut class.constraints {
+        if let semantic_data::schema::ClassConstraint::Field {
+            attribute,
+            constraint,
+        } = constraint
+        {
+            if let Some(field) = class.attributes.get(&attribute.id) {
+                attribute.id = field.attribute.id.clone();
+            }
+            normalize_constraints(std::slice::from_mut(constraint), module);
+        }
     }
     class
 }
 
 fn normalize_type(mut ty: Type, module: Option<&str>) -> Type {
+    normalize_constraints(&mut ty.constraints, module);
     ty.kind = match ty.kind {
         TypeKind::Optional(mut optional) => {
             optional.inner = Box::new(normalize_type(*optional.inner, module));
@@ -1886,6 +1935,7 @@ fn normalize_type(mut ty: Type, module: Option<&str>) -> Type {
             TypeKind::Record(record)
         }
         TypeKind::Attribute(mut attribute) => {
+            normalize_constraints(&mut attribute.constraints, module);
             attribute.ty = normalize_type(attribute.ty.clone(), module);
             TypeKind::Attribute(attribute)
         }
@@ -1939,6 +1989,102 @@ fn normalize_type(mut ty: Type, module: Option<&str>) -> Type {
         kind => kind,
     };
     ty
+}
+
+fn normalize_constraints(
+    constraints: &mut [semantic_data::schema::Constraint],
+    module: Option<&str>,
+) {
+    for constraint in constraints {
+        if let semantic_data::schema::Constraint::ForeignKey(fk) = constraint {
+            fk.to = normalize_type_ref(fk.to.clone(), module);
+        }
+    }
+}
+
+fn validate_foreign_keys(catalog: &Catalog, ty: &Type, depth: usize) -> Result<(), CatalogError> {
+    use semantic_data::schema::{ClassConstraint, Constraint};
+    if depth > 128 {
+        return invalid_schema("foreign key type recursion exceeds 128 levels".into());
+    }
+    let check = |constraints: &[Constraint]| -> Result<(), CatalogError> {
+        for constraint in constraints {
+            if let Constraint::ForeignKey(fk) = constraint {
+                if fk.fields.len() != 1
+                    || !matches!(fk.fields[0].as_str(), "id" | "semantic:id")
+                    || !fk.to.args.is_empty()
+                {
+                    return invalid_schema("scalar ForeignKey requires the target primary ID field [id] and no type arguments".into());
+                }
+                if !foreign_key_resolves_class(catalog, &fk.to.name, &mut BTreeSet::new()) {
+                    return invalid_schema(format!(
+                        "ForeignKey target '{}' does not resolve to a class",
+                        fk.to.name
+                    ));
+                }
+            }
+        }
+        Ok(())
+    };
+    check(&ty.constraints)?;
+    let mut nested = Vec::new();
+    match &ty.kind {
+        TypeKind::Optional(t) => nested.push(t.inner.as_ref()),
+        TypeKind::Array(t) => nested.push(t.items.as_ref()),
+        TypeKind::List(t) => nested.push(t.items.as_ref()),
+        TypeKind::Set(t) => nested.push(t.items.as_ref()),
+        TypeKind::Tuple(t) => {
+            nested.extend(t.items.iter());
+            nested.extend(t.rest.as_deref());
+        }
+        TypeKind::Map(t) => {
+            nested.push(t.keys.as_ref());
+            nested.push(t.values.as_ref());
+        }
+        TypeKind::Record(t) => {
+            nested.extend(t.fields.values().map(|f| &f.ty));
+            nested.extend(t.additional.as_deref());
+        }
+        TypeKind::Attribute(t) => {
+            check(&t.constraints)?;
+            nested.push(&t.ty);
+        }
+        TypeKind::Class(t) => {
+            for attr in t.attributes.values() {
+                check(&attr.constraints)?;
+            }
+            for constraint in &t.constraints {
+                if let ClassConstraint::Field { constraint, .. } = constraint {
+                    check(std::slice::from_ref(constraint))?;
+                }
+            }
+        }
+        TypeKind::Union(t) => nested.extend(t.variants.iter()),
+        TypeKind::Intersection(t) => nested.extend(t.variants.iter()),
+        _ => {}
+    }
+    for ty in nested {
+        validate_foreign_keys(catalog, ty, depth + 1)?;
+    }
+    Ok(())
+}
+
+fn foreign_key_resolves_class(catalog: &Catalog, name: &str, seen: &mut BTreeSet<String>) -> bool {
+    if !seen.insert(name.to_string()) {
+        return false;
+    }
+    if catalog.class_ids(name).len() == 1 {
+        return true;
+    }
+    match catalog
+        .type_def_by_name(name)
+        .map(|def| &def.type_def.ty.kind)
+    {
+        Some(TypeKind::Ref(reference)) if reference.args.is_empty() => {
+            foreign_key_resolves_class(catalog, &reference.name, seen)
+        }
+        _ => false,
+    }
 }
 
 fn normalize_type_param(mut param: TypeParam, module: Option<&str>) -> TypeParam {
@@ -2210,7 +2356,7 @@ fn validate_class_constraints(
                         .attributes
                         .values()
                         .any(|class_attr| class_attr.attribute.id == attribute.id);
-                if !attribute_exists {
+                if !attribute_exists && class.inherits.is_none() && class.extends.is_empty() {
                     return invalid_schema(format!(
                         "{context} class field constraint references unknown attribute '{}'",
                         attribute.id
@@ -2567,13 +2713,24 @@ fn validate_constraints(
                 ensure_db_constraint_target(target, context, "PrimaryKey")?;
             }
             Constraint::ForeignKey(foreign_key) => {
-                ensure_db_constraint_target(target, context, "ForeignKey")?;
+                if let Some(ty) = target_value_type(target) {
+                    if !matches!(
+                        ty.kind,
+                        TypeKind::String(_)
+                            | TypeKind::Ref(_)
+                            | TypeKind::Optional(_)
+                            | TypeKind::Union(_)
+                    ) {
+                        return invalid_schema(format!(
+                            "{context} ForeignKey requires a scalar string ID attribute"
+                        ));
+                    }
+                }
                 if foreign_key.fields.is_empty() {
                     return invalid_schema(format!(
                         "{context} foreign key constraint has no fields"
                     ));
                 }
-                validate_field_refs(&foreign_key.fields, target, context, "ForeignKey")?;
             }
             Constraint::Index { fields, .. } => {
                 ensure_db_constraint_target(target, context, "Index")?;
@@ -3180,6 +3337,76 @@ mod tests {
         };
         let error = Catalog::from_storage_snapshot(snapshot).unwrap_err();
         assert!(error.to_string().contains("unknown attribute 'missing'"));
+    }
+
+    #[test]
+    fn restores_class_and_record_typedefs_overwritten_by_legacy_projection_rows() {
+        let mut catalog = Catalog::new();
+        catalog.upsert_attribute(attribute("label"));
+        let class_id = catalog
+            .upsert_class(ClassType {
+                id: "test:Person".into(),
+                name: "Person".into(),
+                inherits: None,
+                extends: vec![],
+                strict_schema: false,
+                creatable_in_ui: None,
+                attributes: BTreeMap::new(),
+                constraints: vec![],
+                meta: Meta::default(),
+            })
+            .unwrap();
+        let record_id = catalog.upsert_record_type(
+            "test:Record",
+            "Record",
+            RecordType {
+                fields: BTreeMap::new(),
+                open: true,
+                additional: None,
+                required_order: None,
+            },
+        );
+        let mut snapshot = catalog.to_storage_snapshot();
+        snapshot.type_defs.retain(|row| {
+            !matches!(
+                row.type_def.ty.kind,
+                TypeKind::Class(_) | TypeKind::Record(_)
+            )
+        });
+        let restored = Catalog::from_storage_snapshot(snapshot).unwrap();
+        assert_eq!(
+            restored.class_by_lid(class_id).unwrap().class.id,
+            "test:Person"
+        );
+        assert_eq!(
+            restored.record_type_by_lid(record_id).unwrap().id,
+            "test:Record"
+        );
+        assert!(matches!(
+            restored
+                .type_def_by_name("test:Person")
+                .unwrap()
+                .type_def
+                .ty
+                .kind,
+            TypeKind::Class(_)
+        ));
+        assert!(matches!(
+            restored
+                .type_def_by_name("test:Record")
+                .unwrap()
+                .type_def
+                .ty
+                .kind,
+            TypeKind::Record(_)
+        ));
+        let snapshot = restored.to_storage_snapshot();
+        assert_eq!(
+            Catalog::from_storage_snapshot(snapshot.clone())
+                .unwrap()
+                .to_storage_snapshot(),
+            snapshot
+        );
     }
 
     #[test]

@@ -115,8 +115,30 @@ mod tests {
             Ok(())
         }
 
-        async fn execute_batch(&self, _batch: Batch) -> std::result::Result<BatchOutcome, DbError> {
-            Err(DbError::InvalidQuery("batch not used in tests".to_string()))
+        async fn execute_batch(&self, batch: Batch) -> std::result::Result<BatchOutcome, DbError> {
+            let mut records = self.records.lock().unwrap();
+            let mut dataset = semantic_db_core::Dataset::new();
+            for ((collection, id), object) in records.iter() {
+                dataset
+                    .entry(collection.clone())
+                    .or_default()
+                    .insert(id.clone(), object.clone());
+            }
+            let outcome = semantic_db_core::execute_batch(&dataset, &batch).map_err(|error| {
+                match error.entity_exists {
+                    Some((collection, id)) => DbError::EntityExists { collection, id },
+                    None => DbError::InvalidQuery(error.message),
+                }
+            })?;
+            *records = outcome
+                .dataset
+                .iter()
+                .flat_map(|(collection, rows)| {
+                    rows.iter()
+                        .map(move |(id, object)| ((collection.clone(), id.clone()), object.clone()))
+                })
+                .collect();
+            Ok(outcome)
         }
 
         async fn upsert_package(
@@ -368,9 +390,20 @@ mod tests {
         let Some(Value::Object(object)) = upload.get("object") else {
             panic!("expected file object");
         };
+        let locator = object
+            .get("filestore_locator")
+            .and_then(Value::as_str)
+            .unwrap();
+        let (hash_id, publication_id) = locator.split_once('/').unwrap();
+        assert_eq!(hash_id, id);
         assert_eq!(
-            object.get("filestore_locator").and_then(Value::as_str),
-            Some(id.as_str())
+            publication_id.split('-').map(str::len).collect::<Vec<_>>(),
+            [8, 4, 4, 4, 12]
+        );
+        assert!(
+            publication_id
+                .bytes()
+                .all(|byte| byte == b'-' || byte.is_ascii_hexdigit())
         );
         assert_eq!(
             object.get("semantic:title").and_then(Value::as_str),

@@ -74,6 +74,7 @@ pub(crate) async fn execute_text_or_explain(
                 .query(QueryInput::Text {
                     format: query_format,
                     query,
+                    params: Default::default(),
                 })
                 .await?;
             format_query_result(&result, output_format)?
@@ -83,6 +84,7 @@ pub(crate) async fn execute_text_or_explain(
                 .plan(QueryInput::Text {
                     format: query_format,
                     query,
+                    params: Default::default(),
                 })
                 .await?;
             format_plan(&plan, output_format)?

@@ -37,6 +37,7 @@ semantic_media = { path = "../media" }
 semantic_rpc = { path = "../rpc" }
 facet-json = "0.43.2"
 serde = { workspace = true, features = ["derive"] }
+serde_json.workspace = true
 sha2 = { workspace = true }
 thiserror = "2.0.17"
 time = { workspace = true }

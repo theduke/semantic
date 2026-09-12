@@ -3,10 +3,21 @@ import { parseJson, stringifyJson } from "./json.js";
 import type { SemanticValue, TaggedValue } from "./types.js";
 import { decodeTagged, encodeTagged } from "./values.js";
 
+import {
+  abortable,
+  abortError,
+  fetchResponse,
+  requestSignal,
+  type HttpOptions,
+  type InvokeOptions,
+} from "./http-options.js";
+export type { InvokeOptions } from "./http-options.js";
+
 export interface RpcTransport {
   invoke(
     command: string,
     payload: SemanticValue,
+    options?: InvokeOptions,
   ): Promise<SemanticValue | undefined>;
   close?(): void;
 }
@@ -48,11 +59,7 @@ function resolve(raw: unknown): SemanticValue | undefined {
   return decodeTagged(response.result.ok);
 }
 
-export interface HttpTransportOptions {
-  fetch?: typeof fetch;
-  headers?: HeadersInit;
-  signal?: AbortSignal;
-}
+export interface HttpTransportOptions extends HttpOptions {}
 export class HttpTransport implements RpcTransport {
   readonly endpoint: string;
   private readonly fetcher: typeof fetch;
@@ -71,38 +78,62 @@ export class HttpTransport implements RpcTransport {
   async invoke(
     command: string,
     payload: SemanticValue,
+    options: InvokeOptions = {},
   ): Promise<SemanticValue | undefined> {
-    let response: Response;
-    const headers = new Headers(this.options.headers);
-    headers.set("content-type", "application/json");
-    const init: RequestInit = {
-      method: "POST",
-      headers,
-      body: stringifyJson(request(command, payload)),
-    };
-    if (this.options.signal) init.signal = this.options.signal;
+    const cancellation = requestSignal(this.options.signal, options.signal);
+    const signal = cancellation.signal;
     try {
-      response = await this.fetcher(this.endpoint, init);
-    } catch (cause) {
-      throw new TransportError(
-        `HTTP RPC request to ${this.endpoint} failed: ${errorDescription(cause)}`,
-        undefined,
-        { cause },
-      );
-    }
-    if (!response.ok)
-      throw new TransportError(
-        `HTTP RPC request to ${this.endpoint} failed: ${response.status}${response.statusText ? ` ${response.statusText}` : ""}`,
-        response.status,
-      );
-    try {
-      return resolve(parseJson(await response.text()));
-    } catch (cause) {
-      if (cause instanceof RpcError) throw cause;
-      throw new ProtocolError(
-        `Invalid HTTP RPC response from ${this.endpoint}: ${errorDescription(cause)}`,
-        { cause },
-      );
+      if (signal.aborted) throw abortError(signal);
+      let response: Response;
+      const headers = new Headers(this.options.headers);
+      headers.set("content-type", "application/json");
+      const init: RequestInit = {
+        method: "POST",
+        headers,
+        body: stringifyJson(request(command, payload)),
+      };
+      init.signal = signal;
+      if (this.options.credentials) init.credentials = this.options.credentials;
+      try {
+        response = await fetchResponse(
+          this.fetcher,
+          this.endpoint,
+          init,
+          signal,
+        );
+      } catch (cause) {
+        if (
+          signal.aborted ||
+          (cause instanceof Error && cause.name === "AbortError")
+        )
+          throw abortError(signal);
+        throw new TransportError(
+          `HTTP RPC request to ${this.endpoint} failed: ${errorDescription(cause)}`,
+          undefined,
+          { cause },
+        );
+      }
+      if (!response.ok)
+        throw new TransportError(
+          `HTTP RPC request to ${this.endpoint} failed: ${response.status}${response.statusText ? ` ${response.statusText}` : ""}`,
+          response.status,
+        );
+      try {
+        return resolve(parseJson(await abortable(response.text(), signal)));
+      } catch (cause) {
+        if (
+          signal.aborted ||
+          (cause instanceof Error && cause.name === "AbortError")
+        )
+          throw abortError(signal);
+        if (cause instanceof RpcError) throw cause;
+        throw new ProtocolError(
+          `Invalid HTTP RPC response from ${this.endpoint}: ${errorDescription(cause)}`,
+          { cause },
+        );
+      }
+    } finally {
+      cancellation.dispose();
     }
   }
 }
@@ -187,25 +218,49 @@ export class WebSocketTransport implements RpcTransport {
   async invoke(
     command: string,
     payload: SemanticValue,
+    options: InvokeOptions = {},
   ): Promise<SemanticValue | undefined> {
+    const signal = options.signal;
+    if (signal?.aborted) throw abortError(signal);
     if (this.state === "closed")
       throw new TransportError("WebSocket is closed");
-    await this.ready;
+    await abortable(this.ready, signal);
+    if (signal?.aborted) throw abortError(signal);
     if (this.state !== "open" || this.socket.readyState !== 1)
       throw new TransportError("WebSocket is not open");
     const envelope = request(command, payload);
     const id = String(envelope.id);
-    const promise = new Promise<SemanticValue | undefined>(
-      (resolvePromise, reject) =>
-        this.pending.set(id, { resolve: resolvePromise, reject }),
+    return new Promise<SemanticValue | undefined>(
+      (resolvePromise, rejectPromise) => {
+        const cleanup = () => {
+          this.pending.delete(id);
+          signal?.removeEventListener("abort", abort);
+        };
+        const abort = () => {
+          cleanup();
+          rejectPromise(abortError(signal));
+        };
+        this.pending.set(id, {
+          resolve: (value) => {
+            cleanup();
+            resolvePromise(value);
+          },
+          reject: (error) => {
+            cleanup();
+            rejectPromise(error);
+          },
+        });
+        signal?.addEventListener("abort", abort, { once: true });
+        try {
+          this.socket.send(stringifyJson(envelope));
+        } catch (cause) {
+          cleanup();
+          rejectPromise(
+            new TransportError("WebSocket send failed", undefined, { cause }),
+          );
+        }
+      },
     );
-    try {
-      this.socket.send(stringifyJson(envelope));
-    } catch (cause) {
-      this.pending.delete(id);
-      throw new TransportError("WebSocket send failed", undefined, { cause });
-    }
-    return promise;
   }
   close(): void {
     if (this.state === "closed") return;

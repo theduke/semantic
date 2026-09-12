@@ -159,6 +159,22 @@ pub async fn download_handler(
         .expect("file response should be buildable")
 }
 
+pub async fn delete_handler(
+    State(state): State<ServerState>,
+    headers: HeaderMap,
+    Query(query): Query<BTreeMap<String, String>>,
+    Path(id): Path<String>,
+) -> Response {
+    let ctx = match request_context(&state, &headers, &query).await {
+        Ok(ctx) => ctx,
+        Err(err) => return server_error_response(err),
+    };
+    match state.app.files().delete(&ctx, None, id).await {
+        Ok(()) => StatusCode::NO_CONTENT.into_response(),
+        Err(err) => app_error_response(err),
+    }
+}
+
 async fn request_context(
     state: &ServerState,
     headers: &HeaderMap,
@@ -328,23 +344,20 @@ fn server_error_response(err: ServerError) -> Response {
 }
 
 fn app_error_response(err: semantic_app::AppError) -> Response {
-    match err {
-        semantic_app::AppError::FileNotFound(_) => {
-            (StatusCode::NOT_FOUND, err.to_string()).into_response()
-        }
-        semantic_app::AppError::InvalidRange(_) => {
-            (StatusCode::RANGE_NOT_SATISFIABLE, err.to_string()).into_response()
-        }
-        semantic_app::AppError::FileUploadTooLarge { .. } => {
-            (StatusCode::PAYLOAD_TOO_LARGE, err.to_string()).into_response()
-        }
+    let status = match &err {
+        semantic_app::AppError::FileAlreadyExists { .. }
+        | semantic_app::AppError::FileReferenced { .. } => StatusCode::CONFLICT,
+        semantic_app::AppError::AuthenticationRequired => StatusCode::UNAUTHORIZED,
+        semantic_app::AppError::FileNotFound(_) => StatusCode::NOT_FOUND,
+        semantic_app::AppError::InvalidRange(_) => StatusCode::RANGE_NOT_SATISFIABLE,
+        semantic_app::AppError::FileUploadTooLarge { .. } => StatusCode::PAYLOAD_TOO_LARGE,
         semantic_app::AppError::InvalidFileEntity(_)
         | semantic_app::AppError::InvalidFileMetadata(_)
-        | semantic_app::AppError::InvalidRequest(_) => {
-            (StatusCode::BAD_REQUEST, err.to_string()).into_response()
-        }
-        _ => (StatusCode::INTERNAL_SERVER_ERROR, err.to_string()).into_response(),
-    }
+        | semantic_app::AppError::InvalidRequest(_) => StatusCode::BAD_REQUEST,
+        _ => StatusCode::INTERNAL_SERVER_ERROR,
+    };
+    let error: semantic_rpc_core::RpcError = err.into();
+    (status, Json(error)).into_response()
 }
 
 fn header_value(value: &str) -> HeaderValue {

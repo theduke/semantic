@@ -14,6 +14,18 @@ use crate::{AppError, Principal};
 
 #[async_trait]
 pub trait SemanticDb: Send + Sync + 'static {
+    async fn validation_preflight(
+        &self,
+    ) -> Result<Vec<semantic_db_core::ValidationViolation>, DbError> {
+        Err(DbError::InvalidQuery(
+            "validation preflight is unsupported".into(),
+        ))
+    }
+    async fn activate_validation(&self) -> Result<(), DbError> {
+        Err(DbError::InvalidQuery(
+            "validation activation is unsupported".into(),
+        ))
+    }
     async fn catalog(&self) -> std::result::Result<Arc<Catalog>, DbError>;
 
     async fn query(&self, query: TextQueryInput) -> std::result::Result<QueryResult, DbError>;
@@ -42,6 +54,22 @@ pub trait SemanticDb: Send + Sync + 'static {
 
     async fn execute_batch(&self, batch: Batch) -> std::result::Result<BatchOutcome, DbError>;
 
+    async fn execute_batch_returning(
+        &self,
+        batch: Batch,
+        returning: semantic_db_core::BatchReturn,
+    ) -> Result<semantic_db_core::BatchReply, DbError> {
+        match returning {
+            semantic_db_core::BatchReturn::Dataset => self
+                .execute_batch(batch)
+                .await
+                .map(semantic_db_core::BatchReply::Dataset),
+            _ => Err(DbError::InvalidQuery(
+                "database does not support compact batch returning".into(),
+            )),
+        }
+    }
+
     async fn upsert_package(
         &self,
         package: Package,
@@ -55,6 +83,14 @@ pub trait SemanticDb: Send + Sync + 'static {
 
 #[async_trait]
 impl SemanticDb for Db {
+    async fn validation_preflight(
+        &self,
+    ) -> Result<Vec<semantic_db_core::ValidationViolation>, DbError> {
+        Db::validation_preflight(self).await
+    }
+    async fn activate_validation(&self) -> Result<(), DbError> {
+        Db::activate_validation(self).await
+    }
     async fn query_data(&self, query: public_query::QueryInput) -> Result<QueryResult, DbError> {
         self.query(query).await
     }
@@ -64,7 +100,11 @@ impl SemanticDb for Db {
 
     async fn query(&self, query: TextQueryInput) -> std::result::Result<QueryResult, DbError> {
         match query {
-            TextQueryInput::Text { format, query } => {
+            TextQueryInput::Text {
+                format,
+                query,
+                params,
+            } => {
                 let format = match format {
                     semantic_db_core::TextQueryFormat::Sql => {
                         semantic_data::query::TextQueryFormat::Sql
@@ -73,8 +113,12 @@ impl SemanticDb for Db {
                         semantic_data::query::TextQueryFormat::Prql
                     }
                 };
-                self.query(semantic_data::query::QueryInput::Text { format, query })
-                    .await
+                self.query(semantic_data::query::QueryInput::Text {
+                    format,
+                    query,
+                    params,
+                })
+                .await
             }
             TextQueryInput::Ast(_) => Err(DbError::InvalidQuery(
                 "core AST query execution is not exposed by the app Db adapter yet".to_string(),
@@ -107,6 +151,15 @@ impl SemanticDb for Db {
         self.execute_batch(public_batch_from_core(batch)?).await
     }
 
+    async fn execute_batch_returning(
+        &self,
+        batch: Batch,
+        returning: semantic_db_core::BatchReturn,
+    ) -> Result<semantic_db_core::BatchReply, DbError> {
+        self.execute_batch_returning(public_batch_from_core(batch)?, returning)
+            .await
+    }
+
     async fn upsert_package(
         &self,
         package: Package,
@@ -119,6 +172,15 @@ fn public_batch_from_core(batch: Batch) -> std::result::Result<public_query::Bat
     let mut operations = Vec::with_capacity(batch.operations.len());
     for operation in batch.operations {
         let operation = match operation {
+            BatchOperation::Create {
+                collection,
+                id,
+                object,
+            } => public_query::BatchOperation::Create {
+                collection,
+                id,
+                object,
+            },
             BatchOperation::Upsert {
                 collection,
                 id,

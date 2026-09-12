@@ -1,4 +1,5 @@
 mod backend;
+mod batch_return;
 mod canonical;
 pub mod catalog;
 mod config;
@@ -17,6 +18,7 @@ mod transaction;
 mod validation;
 
 pub use backend::*;
+pub use batch_return::*;
 pub use canonical::*;
 pub use config::*;
 pub use context::*;

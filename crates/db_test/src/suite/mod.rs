@@ -2,6 +2,12 @@ use std::collections::BTreeMap;
 use std::future::Future;
 use std::pin::Pin;
 
+mod batch_returning;
+mod compact;
+mod incremental;
+mod validation;
+pub use validation::test_validation;
+
 use semantic_data::query::{
     AggregateOp, Batch, BatchOperation, BinaryOp, DeleteQuery, Expr, FunctionArg, JoinCondition,
     JoinQuery, JoinSource, JoinType, Operand, OrderBy, PatternMatchKind, QueryField, QueryInput,
@@ -36,11 +42,21 @@ impl DbTextQueryExt for Db {
         query: impl Into<String>,
     ) -> Pin<Box<dyn Future<Output = std::result::Result<QueryResult, DbError>> + 'a>> {
         let query = query.into();
-        Box::pin(async move { self.query(QueryInput::Text { format, query }).await })
+        Box::pin(async move {
+            self.query(QueryInput::Text {
+                format,
+                query,
+                params: Default::default(),
+            })
+            .await
+        })
     }
 }
 
 pub async fn test_db(db: &Db) {
+    batch_returning::test_batch_returning(db).await;
+    compact::test_compact_id_execution(db).await;
+    incremental::test_incremental_writes(db).await;
     test_schema_registration(db).await;
     test_package_migrations(db).await;
     test_select_query(db).await;
