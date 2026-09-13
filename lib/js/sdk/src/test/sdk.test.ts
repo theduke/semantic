@@ -601,6 +601,13 @@ test("package generator uses lexical scopes and includes every declaration owner
     constraints: [],
     meta: emptyMeta(),
   };
+  module.attributes.title = {
+    id: "semantic:title",
+    name: "title",
+    ty: stringNode,
+    constraints: [],
+    meta: emptyMeta(),
+  };
   module.classes.Base = {
     id: "b:base",
     name: "Base",
@@ -621,6 +628,14 @@ test("package generator uses lexical scopes and includes every declaration owner
       slug: {
         attribute: { id: "b:slug" },
         required: true,
+        ui_order: null,
+        computed: null,
+        constraints: [],
+        meta: emptyMeta(),
+      },
+      title: {
+        attribute: { id: "semantic:title" },
+        required: false,
         ui_order: null,
         computed: null,
         constraints: [],
@@ -680,8 +695,13 @@ test("package generator uses lexical scopes and includes every declaration owner
   assert.match(output, /export type token = string/);
   assert.match(output, /export type Control = \{/);
   assert.match(output, /export const ATTR_B_SLUG = "b:slug" as const/);
+  assert.match(output, /import \{ ATTR_TITLE \} from "@semantic\/sdk\/core"/);
+  assert.doesNotMatch(output, /export const ATTR_TITLE/);
   assert.match(output, /export const B_CHILD_CLASS_ID = "b:child" as const/);
-  assert.match(output, /export type Child = .*\[ATTR_B_SLUG\].* & \(Base\)/);
+  assert.match(
+    output,
+    /export type Child = .*\[ATTR_B_SLUG\].*\[ATTR_TITLE\].* & \(Base\)/,
+  );
   assert.match(output, /export type ContractEntity = .* & \(Base\)/);
   assert.match(output, /export type EntityLink = string/);
   assert.match(output, /export const lookup = command<\{  \}, b_Thing>/);

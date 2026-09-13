@@ -4,10 +4,10 @@ import {
   type SemanticObject,
   type SemanticValue,
 } from "@semantic/sdk";
+import { ATTR_DESCRIPTION, ATTR_PARENT, ATTR_TITLE } from "@semantic/sdk/core";
 
 export const packageName = "semantic.filestore" as const;
 
-export const ATTR_DESCRIPTION = "semantic:description" as const;
 export const ATTR_FILE_UPLOADED_AT = "semantic:file:uploaded_at" as const;
 export const ATTR_CLEANUP_ATTEMPTS =
   "semantic:filestore:cleanup:attempts" as const;
@@ -54,8 +54,6 @@ export const ATTR_FILE_MEDIA_VIDEO_FRAME_COUNT =
 export const ATTR_FILE_MEDIA_VIDEO_FRAMES_PER_SECOND =
   "semantic:filestore:file:media_video_frames_per_second" as const;
 export const ATTR_FILE_MIME_TYPE = "semantic:filestore:file:mime_type" as const;
-export const ATTR_PARENT = "semantic:parent" as const;
-export const ATTR_TITLE = "semantic:title" as const;
 export const CLEANUP_CLASS_ID = "semantic:filestore:cleanup" as const;
 export const FILE_CLASS_ID = "semantic:filestore:file" as const;
 

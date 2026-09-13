@@ -4,6 +4,17 @@ import {
   type SemanticObject,
   type SemanticValue,
 } from "@semantic/sdk";
+import {
+  ATTR_CREATED_AT,
+  ATTR_DESCRIPTION,
+  ATTR_PARENT,
+  ATTR_RELATION_FROM,
+  ATTR_RELATION_RELATION,
+  ATTR_RELATION_TO,
+  ATTR_TITLE,
+  ATTR_UPDATED_AT,
+  ATTR_URL,
+} from "@semantic/sdk/core";
 
 export const packageName = "semantic.base" as const;
 
@@ -41,23 +52,14 @@ export const ATTR_PERSON_HONORIFIC_SUFFIX =
 export const ATTR_PERSON_MIDDLE_NAME =
   "semantic:base:person:middle_name" as const;
 export const ATTR_PERSON_NICKNAME = "semantic:base:person:nickname" as const;
-export const ATTR_CREATED_AT = "semantic:created_at" as const;
-export const ATTR_DESCRIPTION = "semantic:description" as const;
-export const ATTR_PARENT = "semantic:parent" as const;
-export const ATTR_TITLE = "semantic:title" as const;
-export const ATTR_UPDATED_AT = "semantic:updated_at" as const;
 export const DIRECTORY_CLASS_ID = "semantic:base:directory" as const;
 export const DIRECTORY_NODE_CLASS_ID = "semantic:base:directory_node" as const;
-export const ATTR_RELATION_RELATION = "semantic:relation:relation" as const;
-export const ATTR_RELATION_TO = "semantic:relation:to" as const;
 export const ENTITY_LABEL_CLASS_ID = "semantic:base:entity_label" as const;
-export const ATTR_RELATION_FROM = "semantic:relation:from" as const;
 export const LABEL_CLASS_ID = "semantic:base:label" as const;
 export const LABEL_GROUP_CLASS_ID = "semantic:base:label_group" as const;
 export const NOTE_CLASS_ID = "semantic:base:note" as const;
 export const PERSON_CLASS_ID = "semantic:base:person" as const;
 export const WEB_BOOKMARK_CLASS_ID = "semantic:base:web_bookmark" as const;
-export const ATTR_URL = "semantic:url" as const;
 
 export type from = string;
 export type order = number | bigint;

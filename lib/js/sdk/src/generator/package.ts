@@ -11,6 +11,7 @@ import type {
   PackageModel,
   TypeModel,
 } from "./model.js";
+import * as coreSchema from "../generated/core.js";
 import { identifier } from "./identifier.js";
 const literal = (value: string | number): string =>
   typeof value === "string" ? JSON.stringify(value) : String(value);
@@ -43,6 +44,15 @@ const schemaConstantStem = (id: string, packageName: string): string => {
       : segments;
   return identifier(local.join("_") || id).toUpperCase();
 };
+
+const coreAttributeConstants = new Map<string, string>();
+for (const [name, value] of Object.entries(coreSchema))
+  if (
+    name.startsWith("ATTR_") &&
+    typeof value === "string" &&
+    !coreAttributeConstants.has(value)
+  )
+    coreAttributeConstants.set(value, name);
 
 type CompoundContext = "union" | "intersection";
 
@@ -320,7 +330,8 @@ export function packageModel(pkg: Package): PackageModel {
   const constants: ConstantModel[] = [];
   const attributeConstants = new Map<string, string>();
   const classConstants = new Map<string, string>();
-  const constantNames = new Set<string>();
+  const importedCoreAttributes = new Set<string>();
+  const constantNames = new Set<string>(coreAttributeConstants.values());
   const constantName = (id: string, suffix: string): string => {
     const localName = schemaConstantStem(id, pkg.name);
     const base =
@@ -335,6 +346,12 @@ export function packageModel(pkg: Package): PackageModel {
   const attributeConstant = (id: string): string => {
     const existing = attributeConstants.get(id);
     if (existing) return existing;
+    const coreConstant = coreAttributeConstants.get(id);
+    if (coreConstant) {
+      importedCoreAttributes.add(coreConstant);
+      attributeConstants.set(id, coreConstant);
+      return coreConstant;
+    }
     const name = constantName(id, "ATTR");
     constants.push({ name, value: id });
     attributeConstants.set(id, name);
@@ -624,5 +641,13 @@ export function packageModel(pkg: Package): PackageModel {
     commandSymbols.add(symbol);
     return { ...command, symbol };
   });
-  return { name: pkg.name, constants, types, commands };
+  const imports = importedCoreAttributes.size
+    ? [
+        {
+          from: "@semantic/sdk/core",
+          symbols: [...importedCoreAttributes].sort(),
+        },
+      ]
+    : [];
+  return { name: pkg.name, imports, constants, types, commands };
 }

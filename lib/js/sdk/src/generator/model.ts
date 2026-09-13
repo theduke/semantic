@@ -18,9 +18,15 @@ export interface CommandModel {
 }
 export interface PackageModel {
   name: string;
+  imports?: ImportModel[];
   constants: ConstantModel[];
   types: TypeModel[];
   commands: CommandModel[];
+}
+
+export interface ImportModel {
+  from: string;
+  symbols: string[];
 }
 export interface ConstantModel {
   name: string;
