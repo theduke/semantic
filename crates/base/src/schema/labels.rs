@@ -1,11 +1,16 @@
 //! Label definitions and entity-to-label membership relations.
 use std::collections::BTreeMap;
 
-use semantic_data::{builtin::DEFAULT_COLLECTION, schema::*};
+use semantic_data::{
+    attr::{
+        ATTR_CREATED_AT, ATTR_DESCRIPTION, ATTR_PARENT, ATTR_RELATION_FROM, ATTR_RELATION_RELATION,
+        ATTR_RELATION_TO, ATTR_UPDATED_AT, RELATION_CLASS_ID,
+    },
+    builtin::DEFAULT_COLLECTION,
+    schema::*,
+};
 
 use super::common::helpers;
-pub use super::common::person::ATTR_PARENT;
-pub use semantic_data::bundles::directory::{ATTR_CREATED_AT, ATTR_DESCRIPTION, ATTR_UPDATED_AT};
 
 pub const CLASS_ID: &str = "semantic:base:label";
 pub const GROUP_CLASS_ID: &str = "semantic:base:label_group";
@@ -17,9 +22,6 @@ pub const MODE_MULTIPLE: &str = "multiple";
 pub const MODE_EXCLUSIVE: &str = "exclusive";
 pub const RELATION_ID: &str = "semantic:base:entity_label";
 pub const ATTR_ENTITY_COLLECTION: &str = "semantic:base:entity_label:collection";
-pub const ATTR_RELATION: &str = "semantic:relation:relation";
-pub const ATTR_FROM: &str = "semantic:relation:from";
-pub const ATTR_TO: &str = "semantic:relation:to";
 
 pub fn attributes() -> Vec<AttributeType> {
     vec![
@@ -86,11 +88,11 @@ fn legacy_classes() -> Vec<ClassType> {
         make_class(
             RELATION_ID,
             "EntityLabel",
-            Some("semantic:relation"),
+            Some(RELATION_CLASS_ID),
             &[
-                ("relation", ATTR_RELATION, true),
-                ("from", ATTR_FROM, true),
-                ("to", ATTR_TO, true),
+                ("relation", ATTR_RELATION_RELATION, true),
+                ("from", ATTR_RELATION_FROM, true),
+                ("to", ATTR_RELATION_TO, true),
                 ("entity_collection", ATTR_ENTITY_COLLECTION, true),
             ],
         ),
@@ -312,9 +314,9 @@ mod tests {
                 object(&[
                     ("id", "assignment"),
                     ("type", RELATION_ID),
-                    (ATTR_RELATION, RELATION_ID),
-                    (ATTR_FROM, "subject"),
-                    (ATTR_TO, "status"),
+                    (ATTR_RELATION_RELATION, RELATION_ID),
+                    (ATTR_RELATION_FROM, "subject"),
+                    (ATTR_RELATION_TO, "status"),
                     (ATTR_ENTITY_COLLECTION, DEFAULT_COLLECTION),
                 ]),
             ),
@@ -354,7 +356,7 @@ mod tests {
             .unwrap()
             .object;
         assert_eq!(
-            membership.get(ATTR_TO).and_then(Value::as_str),
+            membership.get(ATTR_RELATION_TO).and_then(Value::as_str),
             Some("status")
         );
         // Reopening/re-registering never changes the original migration or repeats data loss.

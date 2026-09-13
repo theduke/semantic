@@ -6,11 +6,11 @@ use std::path::{Path, PathBuf};
 use dialoguer::{FuzzySelect, theme::ColorfulTheme};
 use futures::StreamExt as _;
 use semantic_base::directory_query::{
-    ATTR_RELATION_RELATION, ATTR_RELATION_TO, DirectoryChildFilter, DirectoryQueryPage,
-    DirectorySort, directories_query, directory_by_id_query, directory_children_query,
-    directory_links_query, root_directories_named_query,
+    DirectoryChildFilter, DirectoryQueryPage, DirectorySort, directories_query,
+    directory_by_id_query, directory_children_query, directory_links_query,
+    root_directories_named_query,
 };
-use semantic_data::attr::ATTR_TITLE;
+use semantic_data::attr::{ATTR_RELATION_RELATION, ATTR_RELATION_TO, ATTR_TITLE};
 use semantic_data::builtin::{ATTR_ID, ATTR_TYPE, DEFAULT_COLLECTION};
 use semantic_data::bundles::directory::{
     ATTR_DIRECTORY_NODE_FROM, ATTR_DIRECTORY_NODE_ORDER, DIRECTORY_CLASS_ID,

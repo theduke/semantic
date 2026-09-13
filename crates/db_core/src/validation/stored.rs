@@ -2,6 +2,7 @@
 use super::*;
 use crate::{DbError, batch_return::EntityKey};
 use semantic_data::{
+    attr::{ATTR_RELATION_FROM, ATTR_RELATION_TO},
     schema::{ClassConstraint, Constraint, EnumRepr, LengthSpec, NumberBound},
     value::{FieldPath, PathSegment},
 };
@@ -464,8 +465,7 @@ impl<F: FnMut(&EntityKey) -> Result<Option<Object>, DbError>> Validator<'_, F> {
             }
             let path = child(path, PathSegment::Field(name.clone()));
             if let Some(value) = object.get(&name) {
-                let endpoint = name == crate::catalog::ATTR_RELATION_FROM
-                    || name == crate::catalog::ATTR_RELATION_TO;
+                let endpoint = name == ATTR_RELATION_FROM || name == ATTR_RELATION_TO;
                 self.value(value, &field.ty, &path, depth, endpoint)?;
             } else if field.required {
                 return self.fail(&path, "required", "stored value", "missing");
@@ -1151,8 +1151,7 @@ pub(crate) fn stored_references(
     for (name, field) in object_fields(catalog, collection, object) {
         if !field.computed {
             if let Some(value) = object.get(&name) {
-                let skip_ref = name == crate::catalog::ATTR_RELATION_FROM
-                    || name == crate::catalog::ATTR_RELATION_TO;
+                let skip_ref = name == ATTR_RELATION_FROM || name == ATTR_RELATION_TO;
                 visit(
                     catalog,
                     owner,

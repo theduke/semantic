@@ -1,6 +1,9 @@
 use std::collections::BTreeMap;
 
-use crate::attr::ATTR_TITLE;
+use crate::attr::{
+    ATTR_CREATED_AT, ATTR_DESCRIPTION, ATTR_RELATION_RELATION, ATTR_RELATION_TO, ATTR_TITLE,
+    ATTR_UPDATED_AT, RELATION_CLASS_ID,
+};
 use crate::builtin::DEFAULT_COLLECTION;
 use crate::schema::{
     AttributeRef, AttributeType, ClassAttribute, ClassRef, ClassType, Constraint, Meta, Migration,
@@ -17,15 +20,8 @@ pub const DIRECTORY_CLASS_ID: &str = "semantic:base:directory";
 pub const DIRECTORY_NODE_CLASS_ID: &str = "semantic:base:directory_node";
 pub const DIRECTORY_NODE_RELATION_ID: &str = "semantic:base:directory_node";
 
-pub const ATTR_DESCRIPTION: &str = "semantic:description";
-pub const ATTR_CREATED_AT: &str = "semantic:created_at";
-pub const ATTR_UPDATED_AT: &str = "semantic:updated_at";
 pub const ATTR_DIRECTORY_NODE_FROM: &str = "semantic:base:directory_node:from";
 pub const ATTR_DIRECTORY_NODE_ORDER: &str = "semantic:base:directory_node:order";
-
-const RELATION_CLASS_ID: &str = "semantic:relation";
-const ATTR_RELATION_RELATION: &str = "semantic:relation:relation";
-const ATTR_RELATION_TO: &str = "semantic:relation:to";
 
 pub fn attributes() -> Vec<AttributeType> {
     vec![
@@ -153,19 +149,19 @@ pub fn directory_node_class() -> ClassType {
 }
 
 pub fn title_attribute() -> AttributeType {
-    attribute(ATTR_TITLE, "title", string_type())
+    crate::attr::title_attribute()
 }
 
 pub fn description_attribute() -> AttributeType {
-    attribute(ATTR_DESCRIPTION, "description", string_type())
+    crate::attr::description_attribute()
 }
 
 pub fn created_at_attribute() -> AttributeType {
-    attribute(ATTR_CREATED_AT, "created_at", datetime_type())
+    crate::attr::created_at_attribute()
 }
 
 pub fn updated_at_attribute() -> AttributeType {
-    attribute(ATTR_UPDATED_AT, "updated_at", datetime_type())
+    crate::attr::updated_at_attribute()
 }
 
 pub fn directory_node_from_attribute() -> AttributeType {
@@ -380,17 +376,6 @@ fn class_attribute(attribute_id: &str, required: bool, ui_order: Option<u32>) ->
         constraints: Vec::new(),
         meta: meta_with_title(title_from_attribute_id(attribute_id)),
     }
-}
-
-fn string_type() -> Type {
-    Type::new(TypeKind::String(StringType {
-        format: None,
-        normalization: None,
-    }))
-}
-
-fn datetime_type() -> Type {
-    Type::new(TypeKind::Temporal(TemporalType::DateTime))
 }
 
 fn uint64_type() -> Type {

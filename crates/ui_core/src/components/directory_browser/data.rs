@@ -1,20 +1,21 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use dioxus::logger::tracing::info;
-use semantic_data::attr::ATTR_TITLE;
+use semantic_data::attr::{
+    ATTR_CREATED_AT, ATTR_RELATION_RELATION, ATTR_RELATION_TO, ATTR_TITLE, ATTR_UPDATED_AT,
+};
 use semantic_data::bundles::directory::{
-    ATTR_CREATED_AT, ATTR_DIRECTORY_NODE_FROM, ATTR_DIRECTORY_NODE_ORDER, ATTR_UPDATED_AT,
-    DIRECTORY_CLASS_ID, DIRECTORY_NODE_CLASS_ID, DIRECTORY_NODE_RELATION_ID,
+    ATTR_DIRECTORY_NODE_FROM, ATTR_DIRECTORY_NODE_ORDER, DIRECTORY_CLASS_ID,
+    DIRECTORY_NODE_CLASS_ID, DIRECTORY_NODE_RELATION_ID,
 };
 use semantic_data::value::{DateTime, Object, Value};
 
 use super::{
     queries::{
-        ATTR_RELATION_RELATION, ATTR_RELATION_TO, ENTITIES_COLLECTION, addable_entities_query,
-        child_directories_query, child_ids_query, child_links_query, child_query,
-        directory_nodes_query, directory_outgoing_links_query, file_tree_items_query,
-        max_child_order_query, parent_count_query, parent_links_query, parent_query, root_query,
-        semantic_children_query, semantic_navigable_children_query,
+        ENTITIES_COLLECTION, addable_entities_query, child_directories_query, child_ids_query,
+        child_links_query, child_query, directory_nodes_query, directory_outgoing_links_query,
+        file_tree_items_query, max_child_order_query, parent_count_query, parent_links_query,
+        parent_query, root_query, semantic_children_query, semantic_navigable_children_query,
         semantic_parent_ids_for_candidates_query, semantic_parent_query,
         semantic_parent_roots_query,
     },

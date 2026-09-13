@@ -4,6 +4,7 @@ use bytes::Bytes;
 use futures::StreamExt as _;
 use futures::channel::mpsc;
 use semantic_data::{
+    attr::{ATTR_RELATION_RELATION, ATTR_RELATION_TO},
     builtin::DEFAULT_COLLECTION,
     bundles::directory::{
         ATTR_DIRECTORY_NODE_FROM, ATTR_DIRECTORY_NODE_ORDER, DIRECTORY_NODE_CLASS_ID,
@@ -19,9 +20,6 @@ use semantic_rpc_core::RpcClientError;
 use tokio::runtime::Handle;
 
 use crate::layout::MountConfig;
-
-const ATTR_RELATION_RELATION: &str = "semantic:relation:relation";
-const ATTR_RELATION_TO: &str = "semantic:relation:to";
 
 pub(crate) enum Event {
     UploadFinished {

@@ -1,6 +1,6 @@
 use std::collections::BTreeMap;
 
-use crate::attr::ATTR_TITLE;
+use crate::attr::{ATTR_DESCRIPTION, ATTR_PARENT, ATTR_TITLE};
 use crate::schema::{
     AttributeRef, AttributeType, BoolType, ClassAttribute, ClassType, Constraint, EnumRepr,
     EnumType, EnumVariant, FloatWidth, Meta, Migration, MigrationDdlOperation, MigrationOperation,
@@ -20,8 +20,6 @@ pub const CLEANUP_CLASS_ID: &str = "semantic:filestore:cleanup";
 
 mod cleanup;
 
-pub const ATTR_DESCRIPTION: &str = "semantic:description";
-pub const ATTR_PARENT: &str = "semantic:parent";
 pub const ATTR_FILE_FILESTORE_LOCATOR: &str = "semantic:filestore:file:filestore_locator";
 pub const ATTR_FILE_FILENAME: &str = "semantic:filestore:file:filename";
 pub const ATTR_FILE_BYTE_SIZE: &str = "semantic:filestore:file:byte_size";
@@ -47,7 +45,6 @@ pub const ATTR_FILE_MEDIA_AUDIO_SAMPLE_RATE: &str =
     "semantic:filestore:file:media_audio_sample_rate";
 pub const ATTR_FILE_MEDIA_CONTAINER_FORMAT: &str = "semantic:filestore:file:media_container_format";
 
-pub const DESCRIPTION_ATTRIBUTE_ID: &str = ATTR_DESCRIPTION;
 pub const FILE_FILESTORE_LOCATOR_ATTRIBUTE_ID: &str = ATTR_FILE_FILESTORE_LOCATOR;
 pub const FILE_FILENAME_ATTRIBUTE_ID: &str = ATTR_FILE_FILENAME;
 pub const FILE_BYTE_SIZE_ATTRIBUTE_ID: &str = ATTR_FILE_BYTE_SIZE;
@@ -765,16 +762,11 @@ fn migration_enum_variant(name: &str) -> EnumVariant {
 }
 
 fn title_attribute() -> AttributeType {
-    attribute_with_title(ATTR_TITLE, "title", string_type(), "Title")
+    crate::attr::title_attribute()
 }
 
 fn description_attribute() -> AttributeType {
-    attribute_with_title(
-        ATTR_DESCRIPTION,
-        "description",
-        string_type(),
-        "Description",
-    )
+    crate::attr::description_attribute()
 }
 
 fn parent_attribute() -> AttributeType {

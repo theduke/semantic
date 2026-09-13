@@ -1,6 +1,7 @@
 use super::*;
 use crate::schema::labels::*;
 use semantic_data::{
+    attr::{ATTR_DESCRIPTION, ATTR_RELATION_FROM, ATTR_RELATION_RELATION, ATTR_RELATION_TO},
     query::Batch,
     value::{Object, Value},
 };
@@ -405,9 +406,9 @@ async fn migrated_group_assignments_remain_visible_and_removable() {
         for (key, value) in [
             ("id", link_id),
             ("type", RELATION_ID),
-            (ATTR_RELATION, RELATION_ID),
-            (ATTR_FROM, "entity"),
-            (ATTR_TO, target),
+            (ATTR_RELATION_RELATION, RELATION_ID),
+            (ATTR_RELATION_FROM, "entity"),
+            (ATTR_RELATION_TO, target),
             (ATTR_ENTITY_COLLECTION, "entities"),
         ] {
             link.insert(key, Value::String(value.into()));

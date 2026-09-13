@@ -1,27 +1,30 @@
-use semantic_data::schema::{
-    ClassRef, Migration, MigrationCollectionKind, MigrationDdlOperation, MigrationIntegrityMode,
-    MigrationOperation,
-    attribute::attribute_ref::AttributeRef,
-    attribute::attribute_type::AttributeType,
-    class::class_attribute::ClassAttribute,
-    class::class_type::ClassType,
-    core::{
-        meta::Meta, type_def::TypeDef, type_kind::TypeKind, type_node::Type, type_ref::TypeRef,
+use semantic_data::{
+    attr::{
+        ATTR_PARENT, ATTR_RELATION_FROM, ATTR_RELATION_RELATION, ATTR_RELATION_TO,
+        RELATION_CLASS_ID,
     },
-    primitives::{
-        any_type::AnyType, bool_type::BoolType, number_type::NumberType, string_type::StringType,
-        uint_width::UIntWidth,
+    schema::{
+        ClassRef, Migration, MigrationCollectionKind, MigrationDdlOperation,
+        MigrationIntegrityMode, MigrationOperation,
+        attribute::attribute_ref::AttributeRef,
+        attribute::attribute_type::AttributeType,
+        class::class_attribute::ClassAttribute,
+        class::class_type::ClassType,
+        core::{
+            meta::Meta, type_def::TypeDef, type_kind::TypeKind, type_node::Type, type_ref::TypeRef,
+        },
+        primitives::{
+            any_type::AnyType, bool_type::BoolType, number_type::NumberType,
+            string_type::StringType, uint_width::UIntWidth,
+        },
+        record::record_type::RecordType,
+        relation::relation_type::RelationType,
     },
-    record::record_type::RecordType,
-    relation::relation_type::RelationType,
 };
 
 use crate::{
     AppliedMigration, CoreError, apply_migration_ddl_batch,
-    catalog::{
-        ATTR_PARENT_RELATION, ATTR_RELATION_FROM, ATTR_RELATION_RELATION, ATTR_RELATION_TO,
-        Catalog, CatalogBatchOperation, CollectionKind, IntegrityMode, RELATION_CLASS_ID,
-    },
+    catalog::{Catalog, CatalogBatchOperation, CollectionKind, IntegrityMode},
 };
 
 #[derive(facet::Facet, Debug, Clone, PartialEq)]
@@ -770,7 +773,7 @@ pub fn core_catalog_schema_batch() -> DdlBatch {
         })
         .with_op(DdlOperation::UpsertAttribute {
             attribute: AttributeType {
-                id: ATTR_PARENT_RELATION.to_string(),
+                id: ATTR_PARENT.to_string(),
                 name: "parent".to_string(),
                 ty: Type {
                     kind: TypeKind::Ref(TypeRef {
@@ -895,6 +898,7 @@ pub fn core_schema_migrations() -> Vec<Migration> {
             meta: Meta::default(),
         },
         creatable_in_ui_migration(),
+        shared_attributes_migration(),
     ]
 }
 
@@ -939,6 +943,27 @@ fn creatable_in_ui_migration() -> Migration {
         name: "003_creatable_in_ui".to_string(),
         description: Some("Add optional UI creation metadata and exclude core classes from generic entity creators.".to_string()),
         operations,
+        meta: Meta::default(),
+    }
+}
+
+fn shared_attributes_migration() -> Migration {
+    let attributes = [
+        semantic_data::attr::title_attribute(),
+        semantic_data::attr::description_attribute(),
+        semantic_data::attr::created_at_attribute(),
+        semantic_data::attr::updated_at_attribute(),
+    ];
+    Migration {
+        module: CORE_SCHEMA_MODULE.to_string(),
+        name: "004_shared_attributes".to_string(),
+        description: Some("Register shared entity attributes in the core schema.".to_string()),
+        operations: attributes
+            .into_iter()
+            .map(|attribute| {
+                MigrationOperation::Ddl(MigrationDdlOperation::UpsertAttribute { attribute })
+            })
+            .collect(),
         meta: Meta::default(),
     }
 }
@@ -1199,7 +1224,7 @@ mod tests {
     #[test]
     fn core_schema_migrations_are_idempotent() {
         let (catalog, first_run) = apply_core_schema_migrations(&Catalog::new()).unwrap();
-        assert_eq!(first_run.len(), 3);
+        assert_eq!(first_run.len(), 4);
 
         let (_, second_run) = apply_core_schema_migrations(&catalog).unwrap();
         assert!(second_run.is_empty());
@@ -1212,6 +1237,76 @@ mod tests {
             catalog.applied_migrations().next().is_some(),
             "fresh catalog should include applied core migrations"
         );
+    }
+
+    #[test]
+    fn fresh_catalog_registers_shared_attributes() {
+        use semantic_data::attr::{ATTR_CREATED_AT, ATTR_DESCRIPTION, ATTR_TITLE, ATTR_UPDATED_AT};
+
+        let catalog = fresh_catalog_with_core_schema().unwrap();
+        for (id, expected) in [
+            (ATTR_TITLE, semantic_data::attr::title_attribute()),
+            (
+                ATTR_DESCRIPTION,
+                semantic_data::attr::description_attribute(),
+            ),
+            (ATTR_CREATED_AT, semantic_data::attr::created_at_attribute()),
+            (ATTR_UPDATED_AT, semantic_data::attr::updated_at_attribute()),
+        ] {
+            assert_eq!(catalog.attribute_by_id(id).unwrap().attribute, expected);
+        }
+    }
+
+    #[test]
+    fn shared_attribute_upgrade_preserves_existing_local_ids() {
+        let mut catalog = Catalog::new();
+        let attributes = [
+            semantic_data::attr::title_attribute(),
+            semantic_data::attr::description_attribute(),
+            semantic_data::attr::created_at_attribute(),
+            semantic_data::attr::updated_at_attribute(),
+        ];
+        let existing = attributes
+            .iter()
+            .map(|attribute| {
+                (
+                    attribute.id.clone(),
+                    catalog.upsert_attribute(attribute.clone()),
+                )
+            })
+            .collect::<Vec<_>>();
+        catalog
+            .upsert_collection(
+                semantic_data::builtin::DEFAULT_COLLECTION,
+                CollectionKind::Polymorphic,
+                IntegrityMode::StrictRegisteredSchema,
+            )
+            .unwrap();
+        let existing_fields = existing
+            .iter()
+            .map(|(id, _)| {
+                (
+                    id.clone(),
+                    catalog
+                        .collection_by_name(semantic_data::builtin::DEFAULT_COLLECTION)
+                        .unwrap()
+                        .field_id(id)
+                        .unwrap(),
+                )
+            })
+            .collect::<Vec<_>>();
+
+        let (catalog, _) = apply_core_schema_migrations(&catalog).unwrap();
+
+        for (id, local_id) in existing {
+            assert_eq!(catalog.attribute_id(&id), Some(local_id));
+        }
+        let collection = catalog
+            .collection_by_name(semantic_data::builtin::DEFAULT_COLLECTION)
+            .unwrap();
+        for (id, field_id) in existing_fields {
+            assert_eq!(collection.field_id(&id), Some(field_id));
+        }
     }
 
     #[test]

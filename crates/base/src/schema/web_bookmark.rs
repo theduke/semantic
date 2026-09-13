@@ -1,8 +1,7 @@
 use std::collections::BTreeMap;
 
 use semantic_data::{
-    attr::{ATTR_TITLE, ATTR_URL},
-    bundles::directory::{ATTR_CREATED_AT, ATTR_DESCRIPTION, ATTR_UPDATED_AT},
+    attr::{ATTR_CREATED_AT, ATTR_DESCRIPTION, ATTR_TITLE, ATTR_UPDATED_AT, ATTR_URL},
     expr::{CallExpr, Callee, Expr},
     schema::{ClassType, Constraint},
 };

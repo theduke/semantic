@@ -5,19 +5,13 @@
 //! rows can be consumed consistently across native and web clients.
 
 use semantic_data::{
-    attr::ATTR_TITLE,
+    attr::{ATTR_RELATION_RELATION, ATTR_RELATION_TO, ATTR_TITLE},
     builtin::DEFAULT_COLLECTION,
     bundles::directory::{
         ATTR_DIRECTORY_NODE_FROM, ATTR_DIRECTORY_NODE_ORDER, DIRECTORY_CLASS_ID,
         DIRECTORY_NODE_CLASS_ID, DIRECTORY_NODE_RELATION_ID,
     },
 };
-
-/// Canonical relationship discriminator field used by directory-node entities.
-pub const ATTR_RELATION_RELATION: &str = "semantic:relation:relation";
-
-/// Canonical relationship target field used by directory-node entities.
-pub const ATTR_RELATION_TO: &str = "semantic:relation:to";
 
 /// Controls whether a query returns every matching row or one bounded page.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

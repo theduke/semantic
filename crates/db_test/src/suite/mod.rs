@@ -8,6 +8,7 @@ mod incremental;
 mod validation;
 pub use validation::test_validation;
 
+use semantic_data::attr::{ATTR_TITLE, RELATION_CLASS_ID};
 use semantic_data::query::{
     AggregateOp, Batch, BatchOperation, BinaryOp, DeleteQuery, Expr, FunctionArg, JoinCondition,
     JoinQuery, JoinSource, JoinType, Operand, OrderBy, PatternMatchKind, QueryField, QueryInput,
@@ -24,7 +25,7 @@ use semantic_data::schema::{
 use semantic_data::value::{FieldPath, Object, Value};
 use semantic_db_core::{
     Db, DbError, DdlBatch, DdlCollectionKind, DdlOperation, QueryResult,
-    catalog::{CollectionKind, IntegrityMode, RELATION_CLASS_ID},
+    catalog::{CollectionKind, IntegrityMode},
 };
 
 trait DbTextQueryExt {
@@ -451,7 +452,7 @@ async fn test_builtin_type_filter_query(db: &Db) {
     let mut directory = Object::new();
     directory.insert("id", Value::String("type-dir".to_string()));
     directory.insert("type", Value::String("shared.suite.directory".to_string()));
-    directory.insert("title", Value::String("Directory".to_string()));
+    directory.insert(ATTR_TITLE, Value::String("Directory".to_string()));
     db.insert("shared_suite_type_filter", "type-dir", directory)
         .await
         .expect("typed row insert should succeed");
@@ -1746,7 +1747,7 @@ async fn test_nested_ref_field_access(db: &Db) {
     let mut grand = Object::new();
     grand.insert("id", Value::String("ref-grand".to_string()));
     grand.insert("kind", Value::String("top".to_string()));
-    grand.insert("title", Value::String("root".to_string()));
+    grand.insert("shared:blog:title", Value::String("root".to_string()));
     db.insert("shared_suite_ref_paths", "ref-grand", grand)
         .await
         .expect("grand row insert should succeed");
@@ -1754,7 +1755,7 @@ async fn test_nested_ref_field_access(db: &Db) {
     let mut parent = Object::new();
     parent.insert("id", Value::String("ref-parent".to_string()));
     parent.insert("kind", Value::String("blah".to_string()));
-    parent.insert("title", Value::String("abc".to_string()));
+    parent.insert("shared:blog:title", Value::String("abc".to_string()));
     parent.insert("parent", Value::String("ref-grand".to_string()));
     db.insert("shared_suite_ref_paths", "ref-parent", parent)
         .await
@@ -1773,7 +1774,7 @@ async fn test_nested_ref_field_access(db: &Db) {
     let via_parent_query = SelectQuery::new()
         .with_collection("shared_suite_ref_paths")
         .with_predicate(eq_predicate(
-            FieldPath::from_fields(["parent", "title"]),
+            FieldPath::from_fields(["parent", "shared:blog:title"]),
             Value::String("abc".to_string()),
         ))
         .with_projection(vec![QueryField {
@@ -1819,7 +1820,7 @@ async fn test_nested_ref_field_access(db: &Db) {
                     left: Box::new(Expr::Function {
                         name: "LOWER".to_string(),
                         args: vec![FunctionArg::Expr(Expr::Operand(Operand::Field(
-                            FieldPath::from_fields(["manager", "title"]),
+                            FieldPath::from_fields(["manager", "shared:blog:title"]),
                         )))],
                     }),
                     right: Box::new(Expr::Operand(Operand::Literal(Value::String(

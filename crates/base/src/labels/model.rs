@@ -1,5 +1,8 @@
 use crate::schema::labels::*;
-use semantic_data::value::{DateTime, Object, Value};
+use semantic_data::{
+    attr::{ATTR_CREATED_AT, ATTR_DESCRIPTION, ATTR_PARENT, ATTR_UPDATED_AT},
+    value::{DateTime, Object, Value},
+};
 use semantic_rpc_core::RpcError;
 use std::collections::{BTreeMap, BTreeSet};
 

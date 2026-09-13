@@ -8,7 +8,7 @@ use futures::{
     lock::Mutex,
 };
 use semantic_data::attr::ATTR_TITLE;
-use semantic_data::filestore::{ATTR_DESCRIPTION, ATTR_PARENT};
+use semantic_data::attr::{ATTR_DESCRIPTION, ATTR_PARENT};
 use semantic_data::value::{Object, Value};
 use semantic_rpc::file::{
     FileUploadContent, FileUploadPhase, FileUploadProgress, FileUploadRequest, FileUploadResponse,

@@ -3,8 +3,8 @@ use std::collections::BTreeMap;
 use std::rc::Rc;
 
 use dioxus::prelude::*;
-use semantic_data::builtin::DEFAULT_COLLECTION;
 use semantic_data::value::{Object, Value};
+use semantic_data::{attr::RELATION_CLASS_ID, builtin::DEFAULT_COLLECTION};
 use semantic_ui_core::{
     EntityDisplayMode, EntityDisplayRenderer,
     components::{EmptyState, InlineNotice, LoadingSkeleton, NoticeVariant, RefreshingIndicator},
@@ -25,8 +25,6 @@ const DEFAULT_PAGE_SIZE: usize = 50;
 const MAX_PAGE: usize = 1_000_000;
 const MAX_PORTABLE_SQL_BYTES: usize = 1_500;
 const INLINE_SQL_PREFIX: &str = "inline:";
-const RELATION_CLASS_ID: &str = "semantic:relation";
-
 #[derive(Clone, Debug, PartialEq, Eq)]
 struct BrowseQueryKey {
     scope_id: Option<String>,

@@ -5,7 +5,7 @@ use semantic_data::schema::{
     EnumVariant, Type, TypeKind,
 };
 use semantic_data::{
-    attr::ATTR_TITLE,
+    attr::{ATTR_CREATED_AT, ATTR_TITLE, ATTR_UPDATED_AT},
     expr::{CallExpr, Callee, Expr},
 };
 
@@ -14,8 +14,6 @@ use super::common::helpers;
 pub const CLASS_ID: &str = "semantic:base:note";
 pub const ATTR_NOTE_FORMAT: &str = "semantic:base:note:note_format";
 pub const ATTR_NOTE_CONTENT: &str = "semantic:base:note:note_content";
-pub const ATTR_CREATED_AT: &str = semantic_data::bundles::directory::ATTR_CREATED_AT;
-pub const ATTR_UPDATED_AT: &str = semantic_data::bundles::directory::ATTR_UPDATED_AT;
 
 pub const FORMAT_TEXT: &str = "text";
 pub const FORMAT_MARKDOWN: &str = "markdown";

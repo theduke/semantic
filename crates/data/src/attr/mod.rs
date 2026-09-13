@@ -1,8 +1,66 @@
 use crate::schema::AttributeType;
 
 pub const ATTR_TITLE: &str = "semantic:title";
+pub const ATTR_DESCRIPTION: &str = "semantic:description";
+pub const ATTR_CREATED_AT: &str = "semantic:created_at";
+pub const ATTR_UPDATED_AT: &str = "semantic:updated_at";
 
 pub const ATTR_URL: &str = "semantic:url";
+pub const ATTR_PARENT: &str = "semantic:parent";
+
+pub const RELATION_CLASS_ID: &str = "semantic:relation";
+pub const ATTR_RELATION_RELATION: &str = "semantic:relation:relation";
+pub const ATTR_RELATION_FROM: &str = "semantic:relation:from";
+pub const ATTR_RELATION_TO: &str = "semantic:relation:to";
+
+pub fn title_attribute() -> AttributeType {
+    string_attribute(ATTR_TITLE, "title", "Title")
+}
+
+pub fn description_attribute() -> AttributeType {
+    string_attribute(ATTR_DESCRIPTION, "description", "Description")
+}
+
+pub fn created_at_attribute() -> AttributeType {
+    temporal_attribute(ATTR_CREATED_AT, "created_at", "Created At")
+}
+
+pub fn updated_at_attribute() -> AttributeType {
+    temporal_attribute(ATTR_UPDATED_AT, "updated_at", "Updated At")
+}
+
+fn string_attribute(id: &str, name: &str, title: &str) -> AttributeType {
+    use crate::schema::{Meta, StringType, Type, TypeKind};
+
+    AttributeType {
+        id: id.to_string(),
+        name: name.to_string(),
+        ty: Type::new(TypeKind::String(StringType {
+            format: None,
+            normalization: None,
+        })),
+        constraints: Vec::new(),
+        meta: Meta {
+            title: Some(title.to_string()),
+            ..Meta::default()
+        },
+    }
+}
+
+fn temporal_attribute(id: &str, name: &str, title: &str) -> AttributeType {
+    use crate::schema::{Meta, TemporalType, Type, TypeKind};
+
+    AttributeType {
+        id: id.to_string(),
+        name: name.to_string(),
+        ty: Type::new(TypeKind::Temporal(TemporalType::DateTime)),
+        constraints: Vec::new(),
+        meta: Meta {
+            title: Some(title.to_string()),
+            ..Meta::default()
+        },
+    }
+}
 
 /// Shared URL attribute installed by the core schema package.
 pub fn url_attribute() -> AttributeType {

@@ -16,6 +16,7 @@ use crate::{
 };
 use crate::{CoreError, DbConfig, DbError, DefaultExpressionContext, MigrationMismatchPolicy};
 use futures::{StreamExt, stream};
+use semantic_data::attr::{ATTR_RELATION_FROM, ATTR_RELATION_RELATION, ATTR_RELATION_TO};
 use semantic_data::query::FieldFormat;
 use semantic_data::schema::{IndexKind, core::type_kind::TypeKind, core::type_node::Type};
 use semantic_data::schema::{
@@ -24,9 +25,8 @@ use semantic_data::schema::{
 use semantic_data::value::{FieldPath, Object, PathSegment, Value, ValueRef};
 
 use crate::catalog::{
-    ATTR_RELATION_FROM, ATTR_RELATION_RELATION, ATTR_RELATION_TO, Catalog, CollectionKind,
-    CollectionSchema, IntegrityMode, LocalAttrId, LocalCollectionId, LocalFieldId,
-    OBJECT_TYPE_FIELD, SharedCatalog,
+    Catalog, CollectionKind, CollectionSchema, IntegrityMode, LocalAttrId, LocalCollectionId,
+    LocalFieldId, OBJECT_TYPE_FIELD, SharedCatalog,
 };
 use crate::embedded::{
     schema_store::{catalog_write_ops, load_catalog},
@@ -3857,7 +3857,9 @@ mod tests {
 
     #[test]
     fn external_relation_indexes_respect_discriminators_in_shared_collections() {
-        use crate::catalog::{ATTR_RELATION_FROM, ATTR_RELATION_RELATION, ATTR_RELATION_TO};
+        use semantic_data::attr::{
+            ATTR_RELATION_FROM, ATTR_RELATION_RELATION, ATTR_RELATION_TO, RELATION_CLASS_ID,
+        };
         use semantic_data::schema::{RelationIndexingMode, RelationMode, RelationType};
 
         let mut db = EmbeddedDb::in_memory();
@@ -3882,10 +3884,7 @@ mod tests {
             let mut object = Object::new();
             object.insert("id", Value::String(id.into()));
             if typed {
-                object.insert(
-                    "type",
-                    Value::String(crate::catalog::RELATION_CLASS_ID.into()),
-                );
+                object.insert("type", Value::String(RELATION_CLASS_ID.into()));
             }
             object.insert(
                 if typed { "from" } else { ATTR_RELATION_FROM },
@@ -4679,7 +4678,7 @@ mod tests {
                         Value::String(id.to_string()),
                     ))
                     .set(
-                        FieldPath::from_fields(["title"]),
+                        FieldPath::from_fields(["test:title"]),
                         Expr::Operand(Operand::Literal(Value::String(title.to_string()))),
                     ),
             )

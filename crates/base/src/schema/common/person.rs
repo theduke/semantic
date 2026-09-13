@@ -1,7 +1,7 @@
 use std::collections::BTreeMap;
 
 use semantic_data::{
-    attr::ATTR_TITLE,
+    attr::{ATTR_PARENT, ATTR_TITLE},
     schema::{AttributeType, ClassType},
 };
 
@@ -20,7 +20,6 @@ pub const ATTR_ALTERNATE_NAMES: &str = "semantic:base:person:alternate_names";
 pub const ATTR_DESCRIPTION: &str = "semantic:base:person:description";
 pub const ATTR_BIRTH_DATE: &str = "semantic:base:person:birth_date";
 pub const ATTR_DEATH_DATE: &str = "semantic:base:person:death_date";
-pub const ATTR_PARENT: &str = "semantic:parent";
 
 pub fn attributes() -> Vec<AttributeType> {
     vec![

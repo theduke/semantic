@@ -1,5 +1,6 @@
 use std::collections::BTreeMap;
 
+use crate::attr::{ATTR_CREATED_AT, ATTR_DESCRIPTION, ATTR_UPDATED_AT};
 use crate::schema::{
     AttributeRef, AttributeType, ClassAttribute, ClassType, Constraint, Meta,
     MigrationCollectionKind, MigrationIntegrityMode, StringFormat, StringType, Type, TypeKind,
@@ -13,10 +14,6 @@ pub const AUTH_COLLECTION: &str = "_semantic.auth";
 
 pub const ATTR_USERNAME: &str = "semantic:auth:user:username";
 pub const ATTR_PRIMARY_EMAIL: &str = "semantic:auth:user:primary_email";
-
-pub const ATTR_DESCRIPTION: &str = "semantic:description";
-pub const ATTR_CREATED_AT: &str = "semantic:created_at";
-pub const ATTR_UPDATED_AT: &str = "semantic:updated_at";
 
 pub fn attributes() -> Vec<AttributeType> {
     vec![username_attribute(), primary_email_attribute()]

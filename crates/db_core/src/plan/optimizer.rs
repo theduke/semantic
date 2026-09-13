@@ -2365,7 +2365,10 @@ mod tests {
         let Expr::Operand(Operand::Field(path)) = left.as_ref() else {
             panic!("expected field operand");
         };
-        assert_eq!(path, &FieldPath::from_fields(["__ref_0", "title"]));
+        assert_eq!(
+            path,
+            &FieldPath::from_fields(["__ref_0", semantic_data::attr::ATTR_TITLE])
+        );
     }
 
     #[test]

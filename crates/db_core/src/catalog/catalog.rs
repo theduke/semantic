@@ -1,19 +1,22 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use fnv::FnvHashMap;
-use semantic_data::schema::{
-    IndexKind, Package, VariantPayload,
-    attribute::attribute_type::AttributeType,
-    class::class_type::ClassType,
-    collections::key_path::KeyPath,
-    core::{
-        meta::Meta, type_def::TypeDef, type_kind::TypeKind, type_node::Type, type_param::TypeParam,
-        type_ref::TypeRef, visibility::Visibility,
+use semantic_data::{
+    attr::{ATTR_PARENT, ATTR_RELATION_FROM, ATTR_RELATION_TO},
+    schema::{
+        IndexKind, Package, VariantPayload,
+        attribute::attribute_type::AttributeType,
+        class::class_type::ClassType,
+        collections::key_path::KeyPath,
+        core::{
+            meta::Meta, type_def::TypeDef, type_kind::TypeKind, type_node::Type,
+            type_param::TypeParam, type_ref::TypeRef, visibility::Visibility,
+        },
+        primitives::string_type::StringType,
+        record::record_type::RecordType,
+        relation::relation_mode::RelationMode,
+        relation::relation_type::RelationType,
     },
-    primitives::string_type::StringType,
-    record::record_type::RecordType,
-    relation::relation_mode::RelationMode,
-    relation::relation_type::RelationType,
 };
 
 use crate::AppliedMigration;
@@ -46,14 +49,9 @@ pub struct Catalog {
 pub const PRIMARY_ID_FIELD: &str = semantic_data::builtin::ATTR_ID;
 pub const OBJECT_TYPE_FIELD: &str = semantic_data::builtin::ATTR_TYPE;
 pub const PARENT_RELATION_FIELD: &str = "parent";
-pub const ATTR_PARENT_RELATION: &str = "semantic:parent";
 pub const PRIMARY_ID_INDEX_NAME: &str = "__builtin_pk_id";
 pub const OBJECT_TYPE_INDEX_NAME: &str = "__builtin_type";
 pub const BUILTIN_PARENT_RELATION_ID: &str = "__builtin.parent";
-pub const RELATION_CLASS_ID: &str = "semantic:relation";
-pub const ATTR_RELATION_RELATION: &str = "semantic:relation:relation";
-pub const ATTR_RELATION_FROM: &str = "semantic:relation:from";
-pub const ATTR_RELATION_TO: &str = "semantic:relation:to";
 pub const AUTO_PATH_INDEX_NAME: &str = "__auto_index_all_paths";
 pub const AUTO_PATH_INDEX_FIELD: &str = "__path__";
 
@@ -1351,7 +1349,7 @@ impl Catalog {
         &mut self,
         collection: LocalCollectionId,
     ) -> Result<(), CatalogError> {
-        if self.attribute_by_id(ATTR_PARENT_RELATION).is_none() {
+        if self.attribute_by_id(ATTR_PARENT).is_none() {
             return Ok(());
         }
         let collection_name = self
@@ -1364,7 +1362,7 @@ impl Catalog {
             name: "parent".to_string(),
             source_collection: collection_name,
             mode: RelationMode::Embedded {
-                attribute: ATTR_PARENT_RELATION.to_string(),
+                attribute: ATTR_PARENT.to_string(),
             },
             indexing_mode: semantic_data::schema::RelationIndexingMode::Enabled,
             meta: Meta::default(),

@@ -357,7 +357,7 @@ fn builtin_endpoints_use_inherited_field_constraints_and_keep_unconstrained_beha
     let mut db = db(string());
     let mut relation = class("v:Link");
     relation.inherits = Some(ClassRef {
-        id: crate::catalog::RELATION_CLASS_ID.into(),
+        id: semantic_data::attr::RELATION_CLASS_ID.into(),
     });
     relation.constraints = vec![
         ClassConstraint::Field {
@@ -390,7 +390,7 @@ fn builtin_endpoints_use_inherited_field_constraints_and_keep_unconstrained_beha
     db.execute_batch_returning(
         Batch::new().with_op(relation(
             "unconstrained",
-            crate::catalog::RELATION_CLASS_ID,
+            semantic_data::attr::RELATION_CLASS_ID,
             "missing",
             "also_missing",
         )),

@@ -5,6 +5,9 @@ use crate::{
 };
 use futures::lock::Mutex;
 use semantic_data::{
+    attr::{
+        ATTR_DESCRIPTION, ATTR_PARENT, ATTR_RELATION_FROM, ATTR_RELATION_RELATION, ATTR_RELATION_TO,
+    },
     builtin::DEFAULT_COLLECTION,
     query::{Batch, BatchOperation},
     value::{DateTime, Object, Value},
@@ -58,7 +61,7 @@ async fn links(
     let mut sql = format!(
         "SELECT * FROM {} WHERE {} = {}",
         sql_ident(DEFAULT_COLLECTION),
-        sql_ident(ATTR_RELATION),
+        sql_ident(ATTR_RELATION_RELATION),
         sql_string(RELATION_ID)
     );
     if let Some((collection, id)) = entity {
@@ -66,7 +69,7 @@ async fn links(
             " AND {} = {} AND {} = {}",
             sql_ident(ATTR_ENTITY_COLLECTION),
             sql_string(collection),
-            sql_ident(ATTR_FROM),
+            sql_ident(ATTR_RELATION_FROM),
             sql_string(id)
         ));
     }
@@ -106,7 +109,7 @@ pub async fn labels_for_entity(
 fn link_targets(links: &[Object]) -> Result<BTreeSet<String>, RpcError> {
     links
         .iter()
-        .map(|link| required_string(link, ATTR_TO))
+        .map(|link| required_string(link, ATTR_RELATION_TO))
         .collect()
 }
 
@@ -180,7 +183,7 @@ async fn change_labels(
     // Preserve existing memberships and normalize any historical duplicate links.
     let mut retained = BTreeSet::new();
     for link in existing {
-        let target = required_string(&link, ATTR_TO)?;
+        let target = required_string(&link, ATTR_RELATION_TO)?;
         if !selected.contains(&target) || !retained.insert(target) {
             batch
                 .operations
@@ -199,9 +202,9 @@ async fn change_labels(
         for (key, value) in [
             ("id", link_id.as_str()),
             ("type", RELATION_ID),
-            (ATTR_RELATION, RELATION_ID),
-            (ATTR_FROM, id),
-            (ATTR_TO, label_id),
+            (ATTR_RELATION_RELATION, RELATION_ID),
+            (ATTR_RELATION_FROM, id),
+            (ATTR_RELATION_TO, label_id),
             (ATTR_ENTITY_COLLECTION, collection),
         ] {
             object.insert(key, Value::String(value.into()));
@@ -264,7 +267,7 @@ pub async fn save_label(store: &impl LabelStore, mut label: Label) -> Result<Lab
         let mut assignments =
             std::collections::BTreeMap::<(String, String), BTreeSet<String>>::new();
         for link in links(store, None).await? {
-            let target = required_string(&link, ATTR_TO)?;
+            let target = required_string(&link, ATTR_RELATION_TO)?;
             if becoming_group && target == label.id {
                 return Err(RpcError::new(
                     "label_has_assignments",
@@ -279,7 +282,7 @@ pub async fn save_label(store: &impl LabelStore, mut label: Label) -> Result<Lab
             assignments
                 .entry((
                     required_string(&link, ATTR_ENTITY_COLLECTION)?,
-                    required_string(&link, ATTR_FROM)?,
+                    required_string(&link, ATTR_RELATION_FROM)?,
                 ))
                 .or_default()
                 .insert(target);
@@ -324,8 +327,8 @@ pub async fn delete_label(store: &impl LabelStore, id: &str) -> Result<(), RpcEr
     }
     let mut batch = Batch::new();
     for link in links(store, None).await? {
-        if required_string(&link, ATTR_TO)? == id
-            || (required_string(&link, ATTR_FROM)? == id
+        if required_string(&link, ATTR_RELATION_TO)? == id
+            || (required_string(&link, ATTR_RELATION_FROM)? == id
                 && required_string(&link, ATTR_ENTITY_COLLECTION)? == DEFAULT_COLLECTION)
         {
             batch

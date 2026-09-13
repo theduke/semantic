@@ -1,6 +1,7 @@
 use std::{collections::BTreeMap, fmt, str::FromStr};
 
 use semantic_data::{
+    attr::ATTR_RELATION_TO,
     builtin::DEFAULT_COLLECTION,
     bundles::directory::{ATTR_DIRECTORY_NODE_FROM, DIRECTORY_CLASS_ID, DIRECTORY_NODE_CLASS_ID},
     filestore::{
@@ -12,8 +13,6 @@ use semantic_rpc::RpcClient;
 use sha2::{Digest as _, Sha256};
 
 const PAGE_SIZE: usize = 1_000;
-const ATTR_RELATION_TO: &str = "semantic:relation:to";
-
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub enum EntityFormat {
     #[default]

@@ -61,9 +61,9 @@ mod tests {
             package
                 .root
                 .attributes
-                .contains_key(common::person::ATTR_PARENT)
+                .contains_key(semantic_data::attr::ATTR_PARENT)
         );
-        assert_eq!(common::person::ATTR_PARENT, "semantic:parent");
+        assert_eq!(semantic_data::attr::ATTR_PARENT, "semantic:parent");
 
         for attribute in common::person::attributes() {
             assert!(package.root.attributes.contains_key(&attribute.id));
