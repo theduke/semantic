@@ -1,8 +1,8 @@
 use std::rc::Rc;
 
 use dioxus::prelude::*;
-use semantic_data::attr::ATTR_TITLE;
-use semantic_data::filestore::ATTR_FILE_FILENAME;
+use semantic_data::attr::{ATTR_TITLE, ATTR_URL};
+use semantic_data::filestore::{ATTR_FILE_FILENAME, ATTR_FILE_MIME_TYPE};
 use semantic_data::value::{Object, Value};
 
 use crate::ui_catalog::{
@@ -18,12 +18,14 @@ pub fn MediaView(object: Object, options: MediaRenderOptions) -> Element {
         return (renderer.renderer)(object, options);
     }
     let src = object
-        .get("url")
+        .get(ATTR_URL)
+        .or_else(|| object.get("url"))
         .or_else(|| object.get("path"))
         .and_then(Value::as_str)
         .map(str::to_string);
     let content_type = object
-        .get("mime")
+        .get(ATTR_FILE_MIME_TYPE)
+        .or_else(|| object.get("mime"))
         .or_else(|| object.get("content_type"))
         .and_then(Value::as_str)
         .unwrap_or("application/octet-stream")
@@ -350,7 +352,11 @@ fn emit_playback(options: &MediaPlaybackRenderOptions, kind: MediaPlaybackEventK
 }
 
 fn media_source(object: &Object, file_api_prefix: &str) -> Option<String> {
-    if let Some(url) = object.get("url").and_then(Value::as_str) {
+    if let Some(url) = object
+        .get(ATTR_URL)
+        .or_else(|| object.get("url"))
+        .and_then(Value::as_str)
+    {
         if url.starts_with("https://") || url.starts_with("http://") {
             return Some(url.to_string());
         }
@@ -378,4 +384,25 @@ fn media_title(object: &Object) -> String {
             .and_then(Value::as_str)
             .unwrap_or("unknown")
     )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn media_source_accepts_qualified_and_plain_urls() {
+        for key in [ATTR_URL, "url"] {
+            let mut object = Object::new();
+            object.insert("id", Value::String("file-1".to_string()));
+            object.insert(
+                key,
+                Value::String("https://example.com/video.mp4".to_string()),
+            );
+            assert_eq!(
+                media_source(&object, "/api/files"),
+                Some("https://example.com/video.mp4".to_string())
+            );
+        }
+    }
 }

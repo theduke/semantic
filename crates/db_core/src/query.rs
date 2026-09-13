@@ -745,7 +745,7 @@ impl SelectQuery {
             order_by: Vec::new(),
             offset: Expr::from(0usize),
             limit: None,
-            field_format: FieldFormat::Plain,
+            field_format: FieldFormat::default(),
         }
     }
 
@@ -963,7 +963,7 @@ impl InsertQuery {
             columns: Vec::new(),
             source: InsertSource::Objects(Vec::new()),
             returning: Vec::new(),
-            field_format: FieldFormat::Plain,
+            field_format: FieldFormat::default(),
         }
     }
 
@@ -1023,7 +1023,7 @@ impl UpdateQuery {
             assignments: Vec::new(),
             limit: None,
             returning: Vec::new(),
-            field_format: FieldFormat::Plain,
+            field_format: FieldFormat::default(),
         }
     }
 
@@ -1086,7 +1086,7 @@ impl DeleteQuery {
             predicate: None,
             limit: None,
             returning: Vec::new(),
-            field_format: FieldFormat::Plain,
+            field_format: FieldFormat::default(),
         }
     }
 

@@ -497,7 +497,7 @@ impl Backend for FederatedBackend {
             columns: Vec::new(),
             source: InsertSource::Objects(vec![object]),
             returning: Vec::new(),
-            field_format: semantic_data::query::FieldFormat::Plain,
+            field_format: semantic_data::query::FieldFormat::default(),
         })
         .await
         .map(|_| ())
@@ -1708,7 +1708,7 @@ impl FederatedSource for BackendFederatedSource {
             order_by: request.order_by,
             offset: request.offset,
             limit: request.limit,
-            field_format: semantic_data::query::FieldFormat::Plain,
+            field_format: semantic_data::query::FieldFormat::default(),
         };
         match self
             .backend

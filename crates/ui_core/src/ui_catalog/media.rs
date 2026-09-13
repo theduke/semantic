@@ -214,7 +214,8 @@ pub fn media_kind_for_object(object: &Object) -> MediaKind {
         MediaKind::Audio
     } else if content_type.starts_with("video/") {
         MediaKind::Video
-    } else if object.contains_key("url")
+    } else if object.contains_key(semantic_data::attr::ATTR_URL)
+        || object.contains_key("url")
         || object.contains_key("path")
         || object
             .get("type")
@@ -260,6 +261,16 @@ mod tests {
             Some("base")
         );
         assert!(catalog.media_renderer_for_class("missing").is_none());
+    }
+
+    #[test]
+    fn media_kind_recognizes_qualified_url() {
+        let mut object = semantic_data::Object::new();
+        object.insert(
+            semantic_data::attr::ATTR_URL,
+            semantic_data::Value::String("https://example.com/file".to_string()),
+        );
+        assert_eq!(media_kind_for_object(&object), MediaKind::File);
     }
 
     #[test]

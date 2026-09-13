@@ -226,7 +226,7 @@ impl SelectQuery {
             order_by: Vec::new(),
             offset: Expr::from(0usize),
             limit: None,
-            field_format: FieldFormat::Plain,
+            field_format: FieldFormat::default(),
         }
     }
 
@@ -328,7 +328,7 @@ impl InsertQuery {
             columns: Vec::new(),
             source: InsertSource::Objects(Vec::new()),
             returning: Vec::new(),
-            field_format: FieldFormat::Plain,
+            field_format: FieldFormat::default(),
         }
     }
 
@@ -382,7 +382,7 @@ impl UpdateQuery {
             assignments: Vec::new(),
             limit: None,
             returning: Vec::new(),
-            field_format: FieldFormat::Plain,
+            field_format: FieldFormat::default(),
         }
     }
 
@@ -439,7 +439,7 @@ impl DeleteQuery {
             predicate: None,
             limit: None,
             returning: Vec::new(),
-            field_format: FieldFormat::Plain,
+            field_format: FieldFormat::default(),
         }
     }
 
@@ -528,10 +528,11 @@ pub enum TextQueryFormat {
     Prql,
 }
 
-#[derive(facet::Facet, Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(facet::Facet, Debug, Default, Clone, Copy, PartialEq, Eq)]
 #[repr(C)]
 #[facet(rename_all = "snake_case")]
 pub enum FieldFormat {
+    #[default]
     Qualified,
     Underscore,
     Plain,

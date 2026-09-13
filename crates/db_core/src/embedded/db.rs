@@ -5052,7 +5052,10 @@ mod tests {
         ));
         let rows = db.select(q.with_collection("people")).unwrap();
         assert_eq!(rows.len(), 1);
-        assert_eq!(rows[0].get("name"), Some(&Value::String("A".to_string())));
+        assert_eq!(
+            rows[0].get("semantic:name"),
+            Some(&Value::String("A".to_string()))
+        );
 
         let mut p3 = Object::new();
         p3.insert("id", Value::String("p3".to_string()));
@@ -5649,6 +5652,15 @@ mod tests {
         row.insert("id", Value::String("i1".to_string()));
         row.insert("semantic:title", Value::String("hello".to_string()));
         db.insert("items", "i1", row).unwrap();
+
+        let qualified = db
+            .select(SelectQuery::new().with_collection("items"))
+            .unwrap();
+        assert_eq!(
+            qualified[0].get("semantic:title"),
+            Some(&Value::String("hello".to_string()))
+        );
+        assert!(!qualified[0].contains_key("title"));
 
         let plain = db
             .select(

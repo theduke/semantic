@@ -538,7 +538,7 @@ fn parse_select_stmt(
         .as_ref()
         .map(|format_clause| parse_field_format_clause(&format!("{format_clause}")))
         .transpose()?
-        .unwrap_or(FieldFormat::Plain);
+        .unwrap_or_default();
 
     let SetExpr::Select(select) = *query.body else {
         return Err(SqlQueryError::Unsupported(
@@ -961,7 +961,7 @@ fn parse_insert_stmt(
             columns,
             source,
             returning,
-            field_format: FieldFormat::Plain,
+            field_format: FieldFormat::default(),
         }),
     })
 }
@@ -1011,7 +1011,7 @@ fn parse_insert_source(
                 order_by,
                 limit_clause,
                 *select,
-                FieldFormat::Plain,
+                FieldFormat::default(),
             )?;
             let Query::Select(select_query) = parsed.query else {
                 return Err(SqlQueryError::Invalid(
@@ -1102,7 +1102,7 @@ fn parse_update_stmt(
             assignments,
             limit,
             returning,
-            field_format: FieldFormat::Plain,
+            field_format: FieldFormat::default(),
         }),
     })
 }
@@ -1170,7 +1170,7 @@ fn parse_delete_stmt(
             predicate,
             limit,
             returning,
-            field_format: FieldFormat::Plain,
+            field_format: FieldFormat::default(),
         }),
     })
 }
@@ -2900,7 +2900,7 @@ fn select_to_sql(query: &SelectQuery, collection: &str) -> Result<String, SqlQue
         sql.push_str(" OFFSET ");
         sql.push_str(&expr_to_sql(&query.offset)?);
     }
-    if query.field_format != FieldFormat::Plain {
+    if query.field_format != FieldFormat::default() {
         let format_name = match query.field_format {
             FieldFormat::Qualified => "qualified",
             FieldFormat::Underscore => "underscore",
@@ -3453,6 +3453,48 @@ mod tests {
     }
 
     use super::*;
+
+    #[test]
+    fn field_format_defaults_and_explicit_formats_roundtrip() {
+        for (suffix, expected) in [
+            ("", FieldFormat::Qualified),
+            (" FORMAT qualified", FieldFormat::Qualified),
+            (" FORMAT plain", FieldFormat::Plain),
+            (" FORMAT underscore", FieldFormat::Underscore),
+        ] {
+            let parsed = parse_sql_query(
+                &format!("SELECT * FROM items{suffix}"),
+                SqlDialectKind::Generic,
+            )
+            .unwrap();
+            let Query::Select(select) = &parsed.query else {
+                panic!("expected select");
+            };
+            assert_eq!(select.field_format, expected);
+            let sql = query_to_sql(&parsed.query).unwrap();
+            assert_eq!(
+                parse_sql_query(&sql, SqlDialectKind::Generic)
+                    .unwrap()
+                    .query,
+                parsed.query
+            );
+        }
+
+        for sql in [
+            "INSERT INTO items (title) VALUES ('hello') RETURNING *",
+            "UPDATE items SET title = 'hello' RETURNING *",
+            "DELETE FROM items RETURNING *",
+        ] {
+            let query = parse_sql_query(sql, SqlDialectKind::Generic).unwrap().query;
+            let format = match query {
+                Query::Insert(query) => query.field_format,
+                Query::Update(query) => query.field_format,
+                Query::Delete(query) => query.field_format,
+                _ => panic!("expected mutation"),
+            };
+            assert_eq!(format, FieldFormat::Qualified);
+        }
+    }
 
     #[test]
     fn parse_simple_select() {
