@@ -3,14 +3,14 @@ use std::io::{BufRead as _, Read as _};
 use std::path::Path;
 
 use futures_util::StreamExt as _;
+use semantic_data::attr::{
+    ATTR_RELATION_FROM, ATTR_RELATION_RELATION, ATTR_RELATION_TO, RELATION_CLASS_ID,
+};
 use semantic_data::builtin::{ATTR_ID, ATTR_TYPE};
 use semantic_data::schema::RelationMode;
 use semantic_data::value::Value;
 use semantic_data::value::serde::typed::{TypedRef, TypedValue};
-use semantic_db_core::catalog::{
-    ATTR_RELATION_FROM, ATTR_RELATION_RELATION, ATTR_RELATION_TO, Catalog, LocalClassId,
-    RELATION_CLASS_ID,
-};
+use semantic_db_core::catalog::{Catalog, LocalClassId};
 use semantic_db_core::{Batch, BatchOperation, BatchReply, BatchReturn, EntityRecord};
 use serde::{Deserialize, Serialize};
 use tokio::io::{AsyncBufRead, AsyncBufReadExt as _, AsyncWrite, AsyncWriteExt as _};
@@ -400,8 +400,8 @@ mod tests {
 
     #[test]
     fn relation_classification_includes_inheritance_and_extensions() {
+        use semantic_data::attr::RELATION_CLASS_ID;
         use semantic_data::schema::ClassRef;
-        use semantic_db_core::catalog::RELATION_CLASS_ID;
 
         let mut catalog = semantic_db_core::catalog::Catalog::new();
         let base = semantic_data::schema::ClassType {
