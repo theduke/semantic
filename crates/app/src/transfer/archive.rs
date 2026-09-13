@@ -36,8 +36,10 @@ pub(crate) async fn export_tar<W: AsyncWrite + Unpin>(
     let index = BlobIndex::create(&index_path)?;
 
     let mut jsonl_file = tokio::fs::File::create(&jsonl_path).await?;
-    let mut stats =
-        jsonl::export_jsonl(db, &mut jsonl_file, |record| index.add_entity(record)).await?;
+    let mut stats = jsonl::export_jsonl(db, &mut jsonl_file, Some(temp.path()), |record| {
+        index.add_entity(record)
+    })
+    .await?;
     jsonl_file.flush().await?;
     drop(jsonl_file);
 
@@ -446,6 +448,86 @@ mod tests {
             session: None,
             request_scope: None,
         }
+    }
+
+    #[tokio::test]
+    async fn both_export_formats_place_relations_after_regular_entities() {
+        use semantic_db_core::catalog::{ATTR_RELATION_FROM, ATTR_RELATION_TO, RELATION_CLASS_ID};
+
+        let temp = tempfile::tempdir().unwrap();
+        let source = context(&temp.path().join("source")).await;
+        let db = source.resolve_db(None).await.unwrap();
+        let mut batch = Batch::new();
+        for id in ["a-relation", "b-regular", "c-relation", "d-regular"] {
+            let mut object = Object::new();
+            object.insert("id", Value::String(id.into()));
+            if id.ends_with("relation") {
+                object.insert("type", Value::String(RELATION_CLASS_ID.into()));
+                object.insert(
+                    "semantic:relation:relation",
+                    Value::String("test:link".into()),
+                );
+                object.insert(ATTR_RELATION_FROM, Value::String("b-regular".into()));
+                object.insert(ATTR_RELATION_TO, Value::String("d-regular".into()));
+            }
+            batch = batch.with_op(BatchOperation::Upsert {
+                collection: "entities".into(),
+                id: id.into(),
+                object,
+            });
+        }
+        db.execute_batch(batch).await.unwrap();
+        for format in [TransferFormat::Jsonl, TransferFormat::Tar] {
+            let mut output = Vec::new();
+            let stats = crate::transfer::export(
+                db.as_ref(),
+                Some(source.default_file_store(None).await.unwrap()),
+                &mut output,
+                &ExportOptions {
+                    format,
+                    temp_dir: Some(temp.path().join("staging")),
+                },
+            )
+            .await
+            .unwrap();
+            assert_eq!(stats.entities, 4);
+            let jsonl = if format == TransferFormat::Tar {
+                let mut archive = tar::Archive::new(output.as_slice());
+                let mut entries = archive.entries().unwrap();
+                let mut entry = entries.next().unwrap().unwrap();
+                assert_eq!(
+                    entry.path().unwrap().as_ref(),
+                    std::path::Path::new("entities.jsonl")
+                );
+                let mut bytes = Vec::new();
+                std::io::Read::read_to_end(&mut entry, &mut bytes).unwrap();
+                bytes
+            } else {
+                output
+            };
+            let records = jsonl
+                .split(|byte| *byte == b'\n')
+                .filter(|line| !line.is_empty())
+                .enumerate()
+                .map(|(line, bytes)| {
+                    super::jsonl::decode_line("test", line as u64 + 1, bytes).unwrap()
+                })
+                .collect::<Vec<_>>();
+            assert_eq!(
+                records
+                    .iter()
+                    .map(|record| record.id.as_str())
+                    .collect::<Vec<_>>(),
+                ["b-regular", "d-regular", "a-relation", "c-relation"]
+            );
+            assert_eq!(
+                std::fs::read_dir(temp.path().join("staging"))
+                    .unwrap()
+                    .count(),
+                0
+            );
+        }
+        source.app.shutdown().await.unwrap();
     }
 
     #[tokio::test]

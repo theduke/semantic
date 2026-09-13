@@ -175,7 +175,9 @@ where
     W: AsyncWrite + Unpin,
 {
     match options.format {
-        TransferFormat::Jsonl => jsonl::export_jsonl(db, writer, |_| Ok(())).await,
+        TransferFormat::Jsonl => {
+            jsonl::export_jsonl(db, writer, options.temp_dir.as_deref(), |_| Ok(())).await
+        }
         TransferFormat::Tar => {
             let store = blob_store.ok_or(TransferError::BlobStoreRequired)?;
             archive::export_tar(db, store, writer, options.temp_dir.as_deref()).await

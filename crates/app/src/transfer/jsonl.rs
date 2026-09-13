@@ -1,9 +1,16 @@
+use std::collections::BTreeSet;
 use std::io::{BufRead as _, Read as _};
+use std::path::Path;
 
 use futures_util::StreamExt as _;
-use semantic_data::builtin::ATTR_ID;
+use semantic_data::builtin::{ATTR_ID, ATTR_TYPE};
+use semantic_data::schema::RelationMode;
 use semantic_data::value::Value;
 use semantic_data::value::serde::typed::{TypedRef, TypedValue};
+use semantic_db_core::catalog::{
+    ATTR_RELATION_FROM, ATTR_RELATION_RELATION, ATTR_RELATION_TO, Catalog, LocalClassId,
+    RELATION_CLASS_ID,
+};
 use semantic_db_core::{Batch, BatchOperation, BatchReply, BatchReturn, EntityRecord};
 use serde::{Deserialize, Serialize};
 use tokio::io::{AsyncBufRead, AsyncBufReadExt as _, AsyncWrite, AsyncWriteExt as _};
@@ -97,24 +104,105 @@ pub(crate) fn decode_line(
 pub(crate) async fn export_jsonl<W, F>(
     db: &dyn crate::SemanticDb,
     writer: &mut W,
+    temp_dir: Option<&Path>,
     mut observe: F,
 ) -> Result<TransferStats, TransferError>
 where
     W: AsyncWrite + Unpin,
     F: FnMut(&EntityRecord) -> Result<(), TransferError>,
 {
+    let catalog = db.catalog().await?;
+    let relation_classes = relation_classes(&catalog);
+    let temp = super::make_temp_dir(temp_dir)?;
+    let relations_path = temp.path().join("relations.jsonl");
+    let mut relations = tokio::io::BufWriter::new(tokio::fs::File::create(&relations_path).await?);
     let mut stream = db.scan_entities().await?;
     let mut stats = TransferStats::default();
     while let Some(record) = stream.next().await {
         let record = record?;
         observe(&record)?;
         let line = encode_record(&record)?;
-        writer.write_all(&line).await?;
-        writer.write_all(b"\n").await?;
+        if is_relation(&catalog, &relation_classes, &record) {
+            relations.write_all(&line).await?;
+            relations.write_all(b"\n").await?;
+        } else {
+            writer.write_all(&line).await?;
+            writer.write_all(b"\n").await?;
+        }
         stats.entities += 1;
     }
+    // Keep one database scan/snapshot and defer relations on disk, never in a
+    // dataset-sized in-memory buffer. Preserve scan order within each group.
+    relations.flush().await?;
+    drop(relations);
+    let mut relations = tokio::fs::File::open(&relations_path).await?;
+    tokio::io::copy(&mut relations, writer).await?;
     writer.flush().await?;
     Ok(stats)
+}
+
+fn relation_classes(catalog: &Catalog) -> BTreeSet<LocalClassId> {
+    let mut classes = BTreeSet::new();
+    loop {
+        let previous_len = classes.len();
+        for (lid, schema) in catalog.classes() {
+            let class = &schema.class;
+            if class.id == RELATION_CLASS_ID
+                || class.inherits.iter().chain(&class.extends).any(|base| {
+                    catalog
+                        .class_id(&base.id)
+                        .is_some_and(|lid| classes.contains(&lid))
+                })
+            {
+                classes.insert(lid);
+            }
+        }
+        if classes.len() == previous_len {
+            return classes;
+        }
+    }
+}
+
+fn is_relation(catalog: &Catalog, classes: &BTreeSet<LocalClassId>, record: &EntityRecord) -> bool {
+    let class_ids = record
+        .object
+        .get(ATTR_TYPE)
+        .and_then(Value::as_str)
+        .map(|name| catalog.class_ids(name))
+        .unwrap_or_default();
+    if class_ids.iter().any(|lid| classes.contains(lid)) {
+        return true;
+    }
+    // External relationships can also use untyped rows or independent classes.
+    // Embedded relationships remain part of their regular owner entity.
+    let Some(collection) = catalog.collection_by_name(&record.collection) else {
+        return false;
+    };
+    let field_value = |alias: &str, fallback: &str| {
+        let field = if class_ids.len() == 1 {
+            catalog.class_field_for_alias(class_ids[0], alias)
+        } else {
+            None
+        };
+        record.object.get(
+            field
+                .as_deref()
+                .unwrap_or_else(|| collection.canonical_field_name(fallback)),
+        )
+    };
+    catalog.relationships().any(|(_, schema)| {
+        schema.relationship.source_collection == record.collection
+            && matches!(schema.relationship.mode, RelationMode::External)
+            && field_value("relation", ATTR_RELATION_RELATION)
+                .is_none_or(|value| value.as_str() == Some(schema.relationship.id.as_str()))
+            && [("from", ATTR_RELATION_FROM), ("to", ATTR_RELATION_TO)]
+                .into_iter()
+                .all(|(alias, fallback)| {
+                    field_value(alias, fallback)
+                        .and_then(Value::as_str)
+                        .is_some_and(|value| !value.is_empty())
+                })
+    })
 }
 
 pub(crate) async fn import_jsonl<R>(
@@ -309,6 +397,52 @@ mod tests {
     use semantic_data::value::{Object, Value, VariantValue};
 
     use super::{decode_line, encode_record};
+
+    #[test]
+    fn relation_classification_includes_inheritance_and_extensions() {
+        use semantic_data::schema::ClassRef;
+        use semantic_db_core::catalog::RELATION_CLASS_ID;
+
+        let mut catalog = semantic_db_core::catalog::Catalog::new();
+        let base = semantic_data::schema::ClassType {
+            id: RELATION_CLASS_ID.into(),
+            name: "Relation".into(),
+            inherits: None,
+            extends: Vec::new(),
+            strict_schema: false,
+            creatable_in_ui: None,
+            attributes: Default::default(),
+            constraints: Vec::new(),
+            meta: Default::default(),
+        };
+        catalog.upsert_class(base.clone()).unwrap();
+        let mut child = base.clone();
+        child.id = "test:child".into();
+        child.name = "Child".into();
+        child.inherits = Some(ClassRef {
+            id: RELATION_CLASS_ID.into(),
+        });
+        catalog.upsert_class(child).unwrap();
+        let mut extension = base;
+        extension.id = "test:extension".into();
+        extension.name = "Extension".into();
+        extension.inherits = None;
+        extension.extends = vec![ClassRef {
+            id: "test:child".into(),
+        }];
+        catalog.upsert_class(extension).unwrap();
+        let classes = super::relation_classes(&catalog);
+        for name in [RELATION_CLASS_ID, "test:child", "test:extension"] {
+            let mut object = Object::new();
+            object.insert("type", Value::String(name.into()));
+            let record = semantic_db_core::EntityRecord {
+                collection: "entities".into(),
+                id: name.into(),
+                object,
+            };
+            assert!(super::is_relation(&catalog, &classes, &record), "{name}");
+        }
+    }
 
     #[test]
     fn typed_entity_round_trips_without_flattening_values() {
