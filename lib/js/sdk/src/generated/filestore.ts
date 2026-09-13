@@ -93,14 +93,14 @@ export type media_video_frames_per_second = number;
 export type mime_type = string;
 export type parent = string;
 export type title = string;
-export type Cleanup = {
+export interface Cleanup {
   [ATTR_CLEANUP_ATTEMPTS]: attempts;
   [ATTR_CLEANUP_LAST_ERROR]?: last_error;
   [ATTR_CLEANUP_LOCATOR]: locator;
   [ATTR_CLEANUP_NOT_BEFORE]: not_before;
   [ATTR_CLEANUP_STORE]: store;
-};
-export type File = {
+}
+export interface File extends SemanticObject {
   [ATTR_FILE_BYTE_SIZE]?: byte_size;
   [ATTR_FILE_CONTENT_HASH_SHA256]?: content_hash_sha256;
   [ATTR_DESCRIPTION]?: description;
@@ -125,4 +125,4 @@ export type File = {
   [ATTR_PARENT]?: parent;
   [ATTR_TITLE]?: title;
   [ATTR_FILE_UPLOADED_AT]?: uploaded_at;
-} & SemanticObject;
+}

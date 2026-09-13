@@ -609,9 +609,9 @@ export function packageModel(pkg: Package): PackageModel {
       inherited.push("SemanticObject");
     types.push({
       name: generated,
-      type: [`{ ${fields.join("; ")} }`, ...inherited]
-        .map((item) => `(${item})`)
-        .join(" & "),
+      type: `{ ${fields.join("; ")} }`,
+      declaration: "interface",
+      extends: inherited,
       ...(value.meta.description ? { docs: value.meta.description } : {}),
     });
   }

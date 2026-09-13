@@ -700,9 +700,9 @@ test("package generator uses lexical scopes and includes every declaration owner
   assert.match(output, /export const B_CHILD_CLASS_ID = "b:child" as const/);
   assert.match(
     output,
-    /export type Child = .*\[ATTR_B_SLUG\].*\[ATTR_TITLE\].* & \(Base\)/,
+    /export interface Child extends Base \{.*\[ATTR_B_SLUG\].*\[ATTR_TITLE\].*\}/,
   );
-  assert.match(output, /export type ContractEntity = .* & \(Base\)/);
+  assert.match(output, /export interface ContractEntity extends Base \{/);
   assert.match(output, /export type EntityLink = string/);
   assert.match(output, /export const lookup = command<\{  \}, b_Thing>/);
 

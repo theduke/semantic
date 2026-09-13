@@ -85,33 +85,33 @@ export type base_description_2 = string;
 export type parent = string;
 export type title = string;
 export type updated_at = number | bigint | Date;
-export type Directory = {
+export interface Directory extends SemanticObject {
   [ATTR_CREATED_AT]?: created_at;
   [ATTR_DESCRIPTION]?: base_description_2;
   [ATTR_TITLE]: title;
   [ATTR_UPDATED_AT]?: updated_at;
-} & SemanticObject;
-export type DirectoryNode = {
+}
+export interface DirectoryNode extends SemanticObject {
   [ATTR_DIRECTORY_NODE_FROM]: from;
   [ATTR_DIRECTORY_NODE_ORDER]?: order;
   [ATTR_RELATION_RELATION]: SemanticValue;
   [ATTR_RELATION_TO]: SemanticValue;
-} & SemanticObject;
-export type EntityLabel = {
+}
+export interface EntityLabel extends SemanticObject {
   [ATTR_ENTITY_LABEL_COLLECTION]: entity_collection;
   [ATTR_RELATION_FROM]: SemanticValue;
   [ATTR_RELATION_RELATION]: SemanticValue;
   [ATTR_RELATION_TO]: SemanticValue;
-} & SemanticObject;
-export type Label = {
+}
+export interface Label extends SemanticObject {
   [ATTR_LABEL_COLOR]?: label_color;
   [ATTR_CREATED_AT]?: created_at;
   [ATTR_DESCRIPTION]?: base_description_2;
   [ATTR_LABEL_NAME]: label_name;
   [ATTR_PARENT]?: parent;
   [ATTR_UPDATED_AT]?: updated_at;
-} & SemanticObject;
-export type LabelGroup = {
+}
+export interface LabelGroup extends SemanticObject {
   [ATTR_LABEL_COLOR]?: label_color;
   [ATTR_CREATED_AT]?: created_at;
   [ATTR_DESCRIPTION]?: base_description_2;
@@ -119,15 +119,15 @@ export type LabelGroup = {
   [ATTR_PARENT]?: parent;
   [ATTR_LABEL_SELECTION_MODE]?: selection_mode;
   [ATTR_UPDATED_AT]?: updated_at;
-} & SemanticObject;
-export type Note = {
+}
+export interface Note extends SemanticObject {
   [ATTR_CREATED_AT]?: created_at;
   [ATTR_NOTE_NOTE_CONTENT]: note_content;
   [ATTR_NOTE_NOTE_FORMAT]: note_format;
   [ATTR_TITLE]?: title;
   [ATTR_UPDATED_AT]?: updated_at;
-} & SemanticObject;
-export type Person = {
+}
+export interface Person extends SemanticObject {
   [ATTR_PERSON_ALTERNATE_NAMES]?: alternate_names;
   [ATTR_PERSON_BIRTH_DATE]?: birth_date;
   [ATTR_PERSON_DEATH_DATE]?: death_date;
@@ -141,11 +141,11 @@ export type Person = {
   [ATTR_PERSON_NICKNAME]?: nickname;
   [ATTR_PARENT]?: parent;
   [ATTR_TITLE]?: title;
-} & SemanticObject;
-export type WebBookmark = {
+}
+export interface WebBookmark extends SemanticObject {
   [ATTR_CREATED_AT]?: created_at;
   [ATTR_DESCRIPTION]?: base_description_2;
   [ATTR_TITLE]?: title;
   [ATTR_UPDATED_AT]?: updated_at;
   [ATTR_URL]: SemanticValue;
-} & SemanticObject;
+}

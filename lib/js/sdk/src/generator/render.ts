@@ -26,9 +26,19 @@ export function renderPackage(model: PackageModel): string {
       throw new Error(`generated TypeScript symbol collision: ${symbol}`);
     symbols.add(symbol);
     if (type.docs) lines.push(`/** ${type.docs.replaceAll("*/", "*\\/")} */`);
-    lines.push(
-      `export type ${symbol}${type.params?.length ? `<${type.params.map((param) => `${identifier(param.name)}${param.default === undefined ? "" : ` = ${param.default}`}`).join(", ")}>` : ""} = ${type.type};`,
-    );
+    const parameters = type.params?.length
+      ? `<${type.params.map((param) => `${identifier(param.name)}${param.default === undefined ? "" : ` = ${param.default}`}`).join(", ")}>`
+      : "";
+    if (type.declaration === "interface") {
+      const inherited = type.extends?.length
+        ? ` extends ${type.extends.join(", ")}`
+        : "";
+      lines.push(
+        `export interface ${symbol}${parameters}${inherited} ${type.type}`,
+      );
+    } else {
+      lines.push(`export type ${symbol}${parameters} = ${type.type};`);
+    }
   }
   if (model.types.length) lines.push("");
   for (const cmd of model.commands) {

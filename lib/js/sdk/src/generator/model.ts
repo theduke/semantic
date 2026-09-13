@@ -1,6 +1,8 @@
 export interface TypeModel {
   name: string;
   type: string;
+  declaration?: "type" | "interface";
+  extends?: string[];
   params?: TypeParameterModel[];
   optional?: boolean;
   docs?: string;
