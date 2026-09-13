@@ -45,11 +45,18 @@ pub enum CliError {
 
     #[error(transparent)]
     Server(#[from] semantic_server::ServerError),
+
+    #[error(transparent)]
+    App(#[from] semantic_app::AppError),
+
+    #[error(transparent)]
+    Transfer(#[from] semantic_app::transfer::TransferError),
 }
 
 pub async fn run(args: cmd::Args) -> std::result::Result<(), CliError> {
     match args.command {
         cmd::SubCmd::Api(args) => cmd::api::run(args).await,
+        cmd::SubCmd::Db(args) => cmd::db::run(args).await,
         cmd::SubCmd::Fuse(args) => cmd::fuse::run(args).await,
         cmd::SubCmd::Server(args) => cmd::server::run(args).await,
     }

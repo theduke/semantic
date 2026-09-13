@@ -7,6 +7,7 @@ use crate::{
     QueryResult, TextQueryInput, UpdateQuery, spawn_blocking_on,
 };
 use async_trait::async_trait;
+use futures::{SinkExt as _, StreamExt as _};
 use semantic_data::schema::{Package, RelationType};
 use semantic_data::value::Object;
 
@@ -72,6 +73,29 @@ impl<S: EntityStorage> Backend for EmbeddedBackend<S> {
             Ok(db.catalog())
         })
         .await
+    }
+
+    async fn scan_entities(&self) -> Result<crate::EntityStream, DbError> {
+        const CHANNEL_CAPACITY: usize = 16;
+        let db = Arc::clone(&self.db);
+        let (mut sender, receiver) = futures::channel::mpsc::channel(CHANNEL_CAPACITY);
+        std::thread::Builder::new()
+            .name("semantic-entity-export".into())
+            .spawn(move || {
+                let db = match db.read() {
+                    Ok(db) => db,
+                    Err(_) => {
+                        let _ =
+                            futures::executor::block_on(sender.send(Err(lock_poisoned_error())));
+                        return;
+                    }
+                };
+                db.scan_entities_with(|item| {
+                    futures::executor::block_on(sender.send(item)).is_ok()
+                });
+            })
+            .map_err(|error| DbError::Storage(format!("spawn entity export thread: {error}")))?;
+        Ok(receiver.boxed())
     }
 
     async fn create_collection(
@@ -261,6 +285,20 @@ impl<S: EntityStorage> Backend for EmbeddedBackend<S> {
         .await
     }
 
+    async fn execute_batch_with_settings(
+        &self,
+        batch: Batch,
+        settings: crate::WriteSettings,
+    ) -> Result<BatchOutcome, DbError> {
+        let db = Arc::clone(&self.db);
+        spawn_blocking_on(self.runtime.as_ref(), move || {
+            db.write()
+                .map_err(|_| lock_poisoned_error())?
+                .execute_batch_with_settings(batch, settings)
+        })
+        .await
+    }
+
     async fn execute_batch_returning(
         &self,
         batch: Batch,
@@ -274,20 +312,156 @@ impl<S: EntityStorage> Backend for EmbeddedBackend<S> {
         })
         .await
     }
+
+    async fn execute_batch_returning_with_settings(
+        &self,
+        batch: Batch,
+        returning: crate::BatchReturn,
+        settings: crate::WriteSettings,
+    ) -> Result<crate::BatchReply, DbError> {
+        let db = Arc::clone(&self.db);
+        spawn_blocking_on(self.runtime.as_ref(), move || {
+            db.write()
+                .map_err(|_| lock_poisoned_error())?
+                .execute_batch_returning_with_settings(batch, returning, settings)
+        })
+        .await
+    }
+
+    async fn execute_batch_returning_bounded_with_settings(
+        &self,
+        batch: Batch,
+        returning: crate::BatchReturn,
+        settings: crate::WriteSettings,
+    ) -> Result<crate::BatchReply, DbError> {
+        let db = Arc::clone(&self.db);
+        spawn_blocking_on(self.runtime.as_ref(), move || {
+            db.write()
+                .map_err(|_| lock_poisoned_error())?
+                .execute_batch_returning_bounded_with_settings(batch, returning, settings)
+        })
+        .await
+    }
 }
 
 #[cfg(test)]
 mod tests {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    use futures::StreamExt as _;
+    use semantic_data::value::{FieldPath, Object, Value};
+
     use crate::Backend;
 
     use super::*;
-    use crate::embedded::MemoryEntityStorage;
+    use crate::catalog::{LocalCollectionId, LocalIndexId};
+    use crate::embedded::{
+        BoxEntityIdScan, BoxEntityScan, MemoryEntityStorage, StorageCommitOutcome,
+        StorageTransactionCapabilities, StorageWriteOp, StoredEntity,
+    };
+
+    #[derive(Debug)]
+    struct CountingStorage {
+        inner: MemoryEntityStorage,
+        yielded: Arc<AtomicUsize>,
+    }
+
+    impl EntityStorage for CountingStorage {
+        fn get_entity(
+            &self,
+            collection: LocalCollectionId,
+            id: &str,
+        ) -> Result<Option<StoredEntity>, DbError> {
+            self.inner.get_entity(collection, id)
+        }
+
+        fn scan_collection_stream(
+            &self,
+            collection: LocalCollectionId,
+        ) -> Result<BoxEntityScan, DbError> {
+            let yielded = Arc::clone(&self.yielded);
+            let scan = self.inner.scan_collection_stream(collection)?;
+            Ok(Box::new(scan.map(move |item| {
+                yielded.fetch_add(1, Ordering::Relaxed);
+                item
+            })))
+        }
+
+        fn scan_collection_at_revision_stream(
+            &self,
+            collection: LocalCollectionId,
+            revision: u64,
+        ) -> Result<BoxEntityScan, DbError> {
+            self.inner
+                .scan_collection_at_revision_stream(collection, revision)
+        }
+
+        fn scan_index_value_stream(
+            &self,
+            index: LocalIndexId,
+            path: Option<&FieldPath>,
+            value: &Value,
+        ) -> Result<BoxEntityIdScan, DbError> {
+            self.inner.scan_index_value_stream(index, path, value)
+        }
+
+        fn index_needs_rebuild(&self, index: LocalIndexId) -> Result<bool, DbError> {
+            self.inner.index_needs_rebuild(index)
+        }
+
+        fn tx_capabilities(&self) -> StorageTransactionCapabilities {
+            self.inner.tx_capabilities()
+        }
+
+        fn current_revision(&self) -> Result<Option<u64>, DbError> {
+            self.inner.current_revision()
+        }
+
+        fn apply_batch(&mut self, ops: &[StorageWriteOp]) -> Result<(), DbError> {
+            self.inner.apply_batch(ops)
+        }
+
+        fn apply_batch_conditional(
+            &mut self,
+            ops: &[StorageWriteOp],
+            expected_revision: Option<u64>,
+        ) -> Result<StorageCommitOutcome, DbError> {
+            self.inner.apply_batch_conditional(ops, expected_revision)
+        }
+    }
 
     fn assert_backend_impl<T: Backend>() {}
 
     #[test]
     fn kv_backend_blanket_impl_compiles() {
         assert_backend_impl::<EmbeddedBackend<MemoryEntityStorage>>();
+    }
+
+    #[test]
+    fn entity_scan_is_lazy_bounded_and_cancellable() {
+        let yielded = Arc::new(AtomicUsize::new(0));
+        let storage = CountingStorage {
+            inner: MemoryEntityStorage::new(),
+            yielded: Arc::clone(&yielded),
+        };
+        let mut db = EmbeddedDb::new(storage);
+        for index in 0..100 {
+            let id = format!("entity-{index:03}");
+            let mut object = Object::new();
+            object.insert("id", Value::String(id.clone()));
+            db.insert("entities", id, object).unwrap();
+        }
+        yielded.store(0, Ordering::Relaxed);
+        let backend = EmbeddedBackend::new(db);
+        futures::executor::block_on(async {
+            let mut stream = backend.scan_entities().await.unwrap();
+            std::thread::sleep(std::time::Duration::from_millis(20));
+            assert!(yielded.load(Ordering::Relaxed) < 100);
+            assert!(stream.next().await.unwrap().is_ok());
+            drop(stream);
+        });
+        std::thread::sleep(std::time::Duration::from_millis(20));
+        assert!(yielded.load(Ordering::Relaxed) < 100);
     }
 
     #[cfg(feature = "tokio")]

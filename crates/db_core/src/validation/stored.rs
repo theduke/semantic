@@ -163,6 +163,7 @@ struct Validator<'a, F> {
     class: String,
     lookup: F,
     references: Vec<ResolvedReference>,
+    validate_foreign_keys: bool,
 }
 
 impl<F: FnMut(&EntityKey) -> Result<Option<Object>, DbError>> Validator<'_, F> {
@@ -201,6 +202,14 @@ impl<F: FnMut(&EntityKey) -> Result<Option<Object>, DbError>> Validator<'_, F> {
             );
         };
         let target_key = (self.owner.0.clone(), id.to_string());
+        self.references.push(ResolvedReference {
+            owner: self.owner.clone(),
+            path: path.clone(),
+            target: target_key.clone(),
+        });
+        if !self.validate_foreign_keys {
+            return Ok(());
+        }
         let Some(target) = (self.lookup)(&target_key)? else {
             return self.fail(path, "reference", "existing target", id);
         };
@@ -218,11 +227,6 @@ impl<F: FnMut(&EntityKey) -> Result<Option<Object>, DbError>> Validator<'_, F> {
         if !allowed.is_empty() && !allowed.iter().any(|name| name == canonical) {
             return self.fail(path, "reference_type", allowed.join(" | "), actual);
         }
-        self.references.push(ResolvedReference {
-            owner: self.owner.clone(),
-            path: path.clone(),
-            target: target_key,
-        });
         Ok(())
     }
 
@@ -571,6 +575,24 @@ pub fn validate_stored_object<F: FnMut(&EntityKey) -> Result<Option<Object>, DbE
     object: &Object,
     lookup: F,
 ) -> Result<Vec<ResolvedReference>, DbError> {
+    validate_stored_object_with_settings(
+        catalog,
+        owner,
+        object,
+        lookup,
+        crate::WriteSettings::default(),
+    )
+}
+
+pub fn validate_stored_object_with_settings<
+    F: FnMut(&EntityKey) -> Result<Option<Object>, DbError>,
+>(
+    catalog: &Catalog,
+    owner: &EntityKey,
+    object: &Object,
+    lookup: F,
+    settings: crate::WriteSettings,
+) -> Result<Vec<ResolvedReference>, DbError> {
     let collection =
         catalog
             .collection_by_name(&owner.0)
@@ -587,6 +609,7 @@ pub fn validate_stored_object<F: FnMut(&EntityKey) -> Result<Option<Object>, DbE
             .to_string(),
         lookup,
         references: Vec::new(),
+        validate_foreign_keys: settings.validate_foreign_keys,
     };
     validator.fields(
         object,

@@ -1055,8 +1055,13 @@ impl<S: EntityStorage> EmbeddedDb<S> {
         batch: Batch,
         options: TransactionOptions,
     ) -> std::result::Result<BatchOutcome, DbError> {
-        let crate::BatchReply::Dataset(outcome) =
-            self.transact_returning(batch, options, crate::BatchReturn::Dataset)?
+        let crate::BatchReply::Dataset(outcome) = self.transact_returning(
+            batch,
+            options,
+            crate::BatchReturn::Dataset,
+            crate::WriteSettings::default(),
+            false,
+        )?
         else {
             unreachable!("dataset returning requested")
         };
@@ -1068,7 +1073,46 @@ impl<S: EntityStorage> EmbeddedDb<S> {
         batch: Batch,
         returning: crate::BatchReturn,
     ) -> Result<crate::BatchReply, DbError> {
-        self.transact_returning(batch, TransactionOptions::default(), returning)
+        self.execute_batch_returning_with_settings(
+            batch,
+            returning,
+            crate::WriteSettings::default(),
+        )
+    }
+
+    pub fn execute_batch_returning_with_settings(
+        &mut self,
+        batch: Batch,
+        returning: crate::BatchReturn,
+        settings: crate::WriteSettings,
+    ) -> Result<crate::BatchReply, DbError> {
+        self.transact_returning(
+            batch,
+            TransactionOptions::default(),
+            returning,
+            settings,
+            false,
+        )
+    }
+
+    pub fn execute_batch_returning_bounded_with_settings(
+        &mut self,
+        batch: Batch,
+        returning: crate::BatchReturn,
+        settings: crate::WriteSettings,
+    ) -> Result<crate::BatchReply, DbError> {
+        if returning == crate::BatchReturn::Dataset {
+            return Err(DbError::InvalidQuery(
+                "bounded batch execution requires compact returning".into(),
+            ));
+        }
+        self.transact_returning(
+            batch,
+            TransactionOptions::default(),
+            returning,
+            settings,
+            true,
+        )
     }
 
     fn transact_returning(
@@ -1076,6 +1120,8 @@ impl<S: EntityStorage> EmbeddedDb<S> {
         batch: Batch,
         options: TransactionOptions,
         returning: crate::BatchReturn,
+        settings: crate::WriteSettings,
+        require_bounded: bool,
     ) -> Result<crate::BatchReply, DbError> {
         validate_batch_mutation_limits(&batch)?;
         let caps = self.storage.tx_capabilities();
@@ -1094,16 +1140,23 @@ impl<S: EntityStorage> EmbeddedDb<S> {
             let catalog_snapshot = self.catalog.snapshot();
             let batch = self.canonicalize_batch(&batch, catalog_snapshot.catalog.as_ref())?;
             let read_revision = self.storage.current_revision()?;
-            if returning != crate::BatchReturn::Dataset
-                && let Some(reply) = self.try_compact_batch(
+            if returning != crate::BatchReturn::Dataset {
+                if let Some(reply) = self.try_compact_batch(
                     catalog_snapshot.catalog.as_ref(),
                     &batch,
                     read_revision,
                     &returning,
                     catalog_snapshot.version,
-                )?
-            {
-                return Ok(reply);
+                    settings,
+                    require_bounded,
+                )? {
+                    return Ok(reply);
+                }
+                if require_bounded {
+                    return Err(DbError::InvalidQuery(
+                        "batch cannot be executed without collection materialization".into(),
+                    ));
+                }
             }
             let dataset = self.load_dataset_for_batch(
                 catalog_snapshot.catalog.as_ref(),
@@ -1140,12 +1193,13 @@ impl<S: EntityStorage> EmbeddedDb<S> {
                 ));
             }
 
-            match self.persist_dataset_delta(
+            match self.persist_dataset_delta_with_settings(
                 catalog_snapshot.catalog.as_ref(),
                 &dataset,
                 &out.dataset,
                 read_revision,
                 &[],
+                settings,
             )? {
                 StorageCommitOutcome::Committed { .. } => {
                     Ok(reply.unwrap_or(crate::BatchReply::Dataset(out)))
@@ -1164,6 +1218,24 @@ impl<S: EntityStorage> EmbeddedDb<S> {
 
     pub fn execute_batch(&mut self, batch: Batch) -> std::result::Result<BatchOutcome, DbError> {
         self.transact_with_options(batch, TransactionOptions::default())
+    }
+
+    pub fn execute_batch_with_settings(
+        &mut self,
+        batch: Batch,
+        settings: crate::WriteSettings,
+    ) -> Result<BatchOutcome, DbError> {
+        let crate::BatchReply::Dataset(outcome) = self.transact_returning(
+            batch,
+            TransactionOptions::default(),
+            crate::BatchReturn::Dataset,
+            settings,
+            false,
+        )?
+        else {
+            unreachable!("dataset returning requested")
+        };
+        Ok(outcome)
     }
 
     pub fn transact_ddl_with_options(
@@ -1637,6 +1709,38 @@ impl<S: EntityStorage> EmbeddedDb<S> {
             .collect()
     }
 
+    /// Visit every entity in non-internal collections while retaining the
+    /// caller's read lock. Returning `false` from `visit` cancels the scan.
+    pub(crate) fn scan_entities_with(
+        &self,
+        mut visit: impl FnMut(Result<EntityRecord, DbError>) -> bool,
+    ) {
+        let catalog = self.catalog();
+        for (_, collection) in catalog.collections() {
+            if collection.internal {
+                continue;
+            }
+            let name = collection.name.clone();
+            let scan = match self.storage.scan_collection_stream(collection.lid) {
+                Ok(scan) => scan,
+                Err(error) => {
+                    visit(Err(error));
+                    return;
+                }
+            };
+            for item in scan {
+                let record = item.map(|stored| EntityRecord {
+                    id: stored.id,
+                    collection: name.clone(),
+                    object: stored.object,
+                });
+                if !visit(record) {
+                    return;
+                }
+            }
+        }
+    }
+
     pub fn tx_capabilities(&self) -> StorageTransactionCapabilities {
         self.storage.tx_capabilities()
     }
@@ -1682,6 +1786,25 @@ impl<S: EntityStorage> EmbeddedDb<S> {
         after: &BTreeMap<String, BTreeMap<String, Object>>,
         expected_revision: Option<u64>,
         prelude_ops: &[StorageWriteOp],
+    ) -> std::result::Result<StorageCommitOutcome, DbError> {
+        self.persist_dataset_delta_with_settings(
+            catalog,
+            before,
+            after,
+            expected_revision,
+            prelude_ops,
+            crate::WriteSettings::default(),
+        )
+    }
+
+    fn persist_dataset_delta_with_settings(
+        &mut self,
+        catalog: &Catalog,
+        before: &BTreeMap<String, BTreeMap<String, Object>>,
+        after: &BTreeMap<String, BTreeMap<String, Object>>,
+        expected_revision: Option<u64>,
+        prelude_ops: &[StorageWriteOp],
+        settings: crate::WriteSettings,
     ) -> std::result::Result<StorageCommitOutcome, DbError> {
         if self.validation_enabled()? {
             crate::validation::validate_enforcement_support(catalog)?;
@@ -1732,6 +1855,7 @@ impl<S: EntityStorage> EmbeddedDb<S> {
                 collection_schema,
                 normalized_rows,
                 &normalized_after,
+                settings,
             )?;
         }
 
@@ -1837,6 +1961,7 @@ impl<S: EntityStorage> EmbeddedDb<S> {
         collection: &CollectionSchema,
         rows: &BTreeMap<String, Object>,
         all_after: &BTreeMap<String, BTreeMap<String, Object>>,
+        settings: crate::WriteSettings,
     ) -> std::result::Result<(), DbError> {
         let target_rows =
             all_after
@@ -1847,7 +1972,7 @@ impl<S: EntityStorage> EmbeddedDb<S> {
 
         if self.validation_enabled()? {
             for (id, object) in rows {
-                crate::validate_stored_object(
+                crate::validate_stored_object_with_settings(
                     catalog,
                     &(collection.name.clone(), id.clone()),
                     object,
@@ -1857,6 +1982,7 @@ impl<S: EntityStorage> EmbeddedDb<S> {
                             .and_then(|rows| rows.get(&key.1))
                             .cloned())
                     },
+                    settings,
                 )?;
             }
             return Ok(());
@@ -1870,7 +1996,15 @@ impl<S: EntityStorage> EmbeddedDb<S> {
                 let Some(value) = object.get(&field) else {
                     continue;
                 };
-                validate_ref_value(catalog, collection, target_rows, &field, &ty, value)?;
+                validate_ref_value(
+                    catalog,
+                    collection,
+                    target_rows,
+                    &field,
+                    &ty,
+                    value,
+                    settings.validate_foreign_keys,
+                )?;
             }
         }
 
@@ -3147,9 +3281,18 @@ fn validate_ref_value(
     field: &str,
     ty: &Type,
     value: &Value,
+    validate_foreign_keys: bool,
 ) -> std::result::Result<(), DbError> {
     match &ty.kind {
-        TypeKind::Ref(_) => validate_one_ref(catalog, collection, target_rows, field, ty, value),
+        TypeKind::Ref(_) => validate_one_ref(
+            catalog,
+            collection,
+            target_rows,
+            field,
+            ty,
+            value,
+            validate_foreign_keys,
+        ),
         TypeKind::Optional(optional) => {
             if value.is_nullish() {
                 Ok(())
@@ -3161,6 +3304,7 @@ fn validate_ref_value(
                     field,
                     &optional.inner,
                     value,
+                    validate_foreign_keys,
                 )
             }
         }
@@ -3177,6 +3321,7 @@ fn validate_ref_value(
                         field,
                         variant,
                         value,
+                        validate_foreign_keys,
                     );
                 }
             }
@@ -3190,7 +3335,15 @@ fn validate_ref_value(
                 )));
             };
             for item in items {
-                validate_ref_value(catalog, collection, target_rows, field, &list.items, item)?;
+                validate_ref_value(
+                    catalog,
+                    collection,
+                    target_rows,
+                    field,
+                    &list.items,
+                    item,
+                    validate_foreign_keys,
+                )?;
             }
             Ok(())
         }
@@ -3205,6 +3358,7 @@ fn validate_one_ref(
     field: &str,
     ty: &Type,
     value: &Value,
+    validate_foreign_keys: bool,
 ) -> std::result::Result<(), DbError> {
     if value.is_nullish() {
         return Ok(());
@@ -3221,6 +3375,9 @@ fn validate_one_ref(
             "ref field '{}' in collection '{}' must be a non-empty string id",
             field, collection.name
         )));
+    }
+    if !validate_foreign_keys {
+        return Ok(());
     }
     let Some(target) = target_rows.get(target_id) else {
         return Err(DbError::ReferenceTargetNotFound {

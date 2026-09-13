@@ -7,7 +7,8 @@ use semantic_data::value::Object;
 use semantic_db_core::PackageRegistrationOutcome;
 use semantic_db_core::catalog::Catalog;
 use semantic_db_core::{
-    Batch, BatchOperation, BatchOutcome, Db, DbError, EntityRecord, QueryResult, TextQueryInput,
+    Batch, BatchOperation, BatchOutcome, Db, DbError, EntityRecord, EntityStream, QueryResult,
+    TextQueryInput, WriteSettings,
 };
 
 use crate::{AppError, Principal};
@@ -27,6 +28,11 @@ pub trait SemanticDb: Send + Sync + 'static {
         ))
     }
     async fn catalog(&self) -> std::result::Result<Arc<Catalog>, DbError>;
+    async fn scan_entities(&self) -> Result<EntityStream, DbError> {
+        Err(DbError::InvalidQuery(
+            "database provider does not support streaming entity scans".into(),
+        ))
+    }
 
     async fn query(&self, query: TextQueryInput) -> std::result::Result<QueryResult, DbError>;
 
@@ -53,6 +59,18 @@ pub trait SemanticDb: Send + Sync + 'static {
     async fn delete(&self, collection: String, id: String) -> std::result::Result<(), DbError>;
 
     async fn execute_batch(&self, batch: Batch) -> std::result::Result<BatchOutcome, DbError>;
+    async fn execute_batch_with_settings(
+        &self,
+        batch: Batch,
+        settings: WriteSettings,
+    ) -> Result<BatchOutcome, DbError> {
+        if settings != WriteSettings::default() {
+            return Err(DbError::InvalidQuery(
+                "database provider does not support non-default write settings".into(),
+            ));
+        }
+        self.execute_batch(batch).await
+    }
 
     async fn execute_batch_returning(
         &self,
@@ -68,6 +86,29 @@ pub trait SemanticDb: Send + Sync + 'static {
                 "database does not support compact batch returning".into(),
             )),
         }
+    }
+    async fn execute_batch_returning_with_settings(
+        &self,
+        batch: Batch,
+        returning: semantic_db_core::BatchReturn,
+        settings: WriteSettings,
+    ) -> Result<semantic_db_core::BatchReply, DbError> {
+        if settings != WriteSettings::default() {
+            return Err(DbError::InvalidQuery(
+                "database provider does not support non-default write settings".into(),
+            ));
+        }
+        self.execute_batch_returning(batch, returning).await
+    }
+    async fn execute_batch_returning_bounded_with_settings(
+        &self,
+        _batch: Batch,
+        _returning: semantic_db_core::BatchReturn,
+        _settings: WriteSettings,
+    ) -> Result<semantic_db_core::BatchReply, DbError> {
+        Err(DbError::InvalidQuery(
+            "database provider does not support bounded batch execution".into(),
+        ))
     }
 
     async fn upsert_package(
@@ -96,6 +137,9 @@ impl SemanticDb for Db {
     }
     async fn catalog(&self) -> std::result::Result<Arc<Catalog>, DbError> {
         self.catalog().await
+    }
+    async fn scan_entities(&self) -> Result<EntityStream, DbError> {
+        self.scan_entities().await
     }
 
     async fn query(&self, query: TextQueryInput) -> std::result::Result<QueryResult, DbError> {
@@ -150,6 +194,14 @@ impl SemanticDb for Db {
     async fn execute_batch(&self, batch: Batch) -> std::result::Result<BatchOutcome, DbError> {
         self.execute_batch(public_batch_from_core(batch)?).await
     }
+    async fn execute_batch_with_settings(
+        &self,
+        batch: Batch,
+        settings: WriteSettings,
+    ) -> Result<BatchOutcome, DbError> {
+        self.execute_batch_with_settings(public_batch_from_core(batch)?, settings)
+            .await
+    }
 
     async fn execute_batch_returning(
         &self,
@@ -158,6 +210,32 @@ impl SemanticDb for Db {
     ) -> Result<semantic_db_core::BatchReply, DbError> {
         self.execute_batch_returning(public_batch_from_core(batch)?, returning)
             .await
+    }
+    async fn execute_batch_returning_with_settings(
+        &self,
+        batch: Batch,
+        returning: semantic_db_core::BatchReturn,
+        settings: WriteSettings,
+    ) -> Result<semantic_db_core::BatchReply, DbError> {
+        self.execute_batch_returning_with_settings(
+            public_batch_from_core(batch)?,
+            returning,
+            settings,
+        )
+        .await
+    }
+    async fn execute_batch_returning_bounded_with_settings(
+        &self,
+        batch: Batch,
+        returning: semantic_db_core::BatchReturn,
+        settings: WriteSettings,
+    ) -> Result<semantic_db_core::BatchReply, DbError> {
+        self.execute_batch_returning_bounded_with_settings(
+            public_batch_from_core(batch)?,
+            returning,
+            settings,
+        )
+        .await
     }
 
     async fn upsert_package(

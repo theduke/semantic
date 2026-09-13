@@ -20,3 +20,21 @@ impl Default for DbConfig {
         }
     }
 }
+
+/// Per-call controls for database writes.
+///
+/// These settings are deliberately not stored on the database: a relaxed import
+/// must never weaken validation for later, unrelated writes.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct WriteSettings {
+    /// Validate that references point at an existing entity of an allowed class.
+    pub validate_foreign_keys: bool,
+}
+
+impl Default for WriteSettings {
+    fn default() -> Self {
+        Self {
+            validate_foreign_keys: true,
+        }
+    }
+}

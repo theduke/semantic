@@ -1,5 +1,11 @@
 # Semantic CLI
 
+Local database backups and restores are available under `semantic db`. They open
+the configured database in-process and support streaming typed JSONL as well as
+an uncompressed tar format containing the JSONL plus referenced blobs. See
+[`docs/import-export.md`](../../docs/import-export.md) for the format, validation
+behavior, and examples.
+
 The `semantic_cli` crate provides the `semantic` command-line application.
 
 ## URL imports and plugins

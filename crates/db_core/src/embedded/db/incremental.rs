@@ -300,6 +300,7 @@ impl<S: EntityStorage> EmbeddedDb<S> {
             }
         }
         let mut affected = BTreeSet::new();
+        let mut updated_counts = BTreeMap::<(String, String, String), u64>::new();
         for ((relation, source, target), delta) in deltas {
             if delta == 0 {
                 continue;
@@ -316,6 +317,7 @@ impl<S: EntityStorage> EmbeddedDb<S> {
             let new = old.checked_add_signed(delta).ok_or_else(|| {
                 DbError::Storage(format!("invalid relationship contributor count for {id}"))
             })?;
+            updated_counts.insert((relation.clone(), source.clone(), target.clone()), new);
             if (old == 0) != (new == 0) {
                 let relationship = &catalog.relationship_by_id(&relation).unwrap().relationship;
                 if relationship.indexing_mode == RelationIndexingMode::Enabled {
@@ -364,10 +366,122 @@ impl<S: EntityStorage> EmbeddedDb<S> {
             })
             .map(|row| (row.id, row.object))
             .collect();
-        let new_edges = self
-            .compute_relationship_edges(catalog, after, Some(&affected))?
-            .into_iter()
-            .collect();
+        let new_edges = self.compute_indexed_edges_from_counts(
+            catalog,
+            counts.lid,
+            &affected,
+            &updated_counts,
+        )?;
         self.push_row_delta(catalog, edges.lid, &old_edges, &new_edges, ops)
     }
+
+    fn compute_indexed_edges_from_counts(
+        &self,
+        catalog: &Catalog,
+        counts: LocalCollectionId,
+        affected: &BTreeSet<String>,
+        updated: &BTreeMap<(String, String, String), u64>,
+    ) -> Result<BTreeMap<String, Object>, DbError> {
+        let mut direct = BTreeMap::<String, BTreeSet<(String, String)>>::new();
+        for row in self.storage.scan_collection_stream(counts)? {
+            let row = row?;
+            if row.id == COMPLETION_MARKER {
+                continue;
+            }
+            let Some(parts) = parse_key(&row.id, 3) else {
+                continue;
+            };
+            let key = (parts[0].clone(), parts[1].clone(), parts[2].clone());
+            if !affected.contains(&key.0) || updated.contains_key(&key) {
+                continue;
+            }
+            let count = row.object.get("count").and_then(|value| match value {
+                Value::U64(value) => Some(*value),
+                _ => None,
+            });
+            if count.is_some_and(|count| count > 0) {
+                direct.entry(key.0).or_default().insert((key.1, key.2));
+            }
+        }
+        for ((relation, source, target), count) in updated {
+            if !affected.contains(relation) {
+                continue;
+            }
+            let edges = direct.entry(relation.clone()).or_default();
+            if *count == 0 {
+                edges.remove(&(source.clone(), target.clone()));
+            } else {
+                edges.insert((source.clone(), target.clone()));
+            }
+        }
+
+        let mut out = BTreeMap::new();
+        for (relation, direct) in direct {
+            let mut adjacency = BTreeMap::<String, Vec<String>>::new();
+            for (source, target) in &direct {
+                adjacency
+                    .entry(source.clone())
+                    .or_default()
+                    .push(target.clone());
+                let (id, object) = Self::relationship_edge(&relation, source, target, 1);
+                out.insert(id, object);
+            }
+            for source in adjacency.keys() {
+                let mut queue = std::collections::VecDeque::from([(source.clone(), 0usize)]);
+                let mut seen = BTreeMap::from([(source.clone(), 0usize)]);
+                while let Some((node, depth)) = queue.pop_front() {
+                    let Some(targets) = adjacency.get(&node) else {
+                        continue;
+                    };
+                    for target in targets {
+                        let next_depth = depth.saturating_add(1);
+                        if seen
+                            .get(target)
+                            .is_none_or(|existing| next_depth < *existing)
+                        {
+                            seen.insert(target.clone(), next_depth);
+                            queue.push_back((target.clone(), next_depth));
+                            let (id, object) =
+                                Self::relationship_edge(&relation, source, target, next_depth);
+                            match out
+                                .get(&id)
+                                .and_then(|object: &Object| object.get(REL_EDGE_DEPTH_FIELD))
+                            {
+                                Some(Value::U64(existing)) if *existing <= next_depth as u64 => {}
+                                _ => {
+                                    out.insert(id, object);
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        // Ensure affected relationship definitions still exist. This also makes
+        // malformed contributor state fail close to its source.
+        for relation in affected {
+            if catalog.relationship_by_id(relation).is_none() {
+                return Err(DbError::Storage(format!(
+                    "relationship contributor references unknown relationship '{relation}'"
+                )));
+            }
+        }
+        Ok(out)
+    }
+}
+
+fn parse_key(value: &str, expected: usize) -> Option<Vec<String>> {
+    let bytes = value.as_bytes();
+    let mut offset = 0usize;
+    let mut out = Vec::with_capacity(expected);
+    while offset < bytes.len() && out.len() < expected {
+        let colon = bytes[offset..].iter().position(|byte| *byte == b':')? + offset;
+        let length = value[offset..colon].parse::<usize>().ok()?;
+        let start = colon + 1;
+        let end = start.checked_add(length)?;
+        let part = value.get(start..end)?;
+        out.push(part.to_string());
+        offset = end;
+    }
+    (offset == bytes.len() && out.len() == expected).then_some(out)
 }

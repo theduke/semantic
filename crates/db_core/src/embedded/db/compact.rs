@@ -250,6 +250,7 @@ pub(crate) fn validate_row<S: EntityStorage>(
     view: &mut TxView<'_, S>,
     key: &EntityKey,
     object: &Object,
+    settings: crate::WriteSettings,
 ) -> Result<(), DbError> {
     let enabled = if view
         .catalog
@@ -265,7 +266,13 @@ pub(crate) fn validate_row<S: EntityStorage>(
         false
     };
     if enabled {
-        crate::validate_stored_object(view.catalog, key, object, |target| view.get(target))?;
+        crate::validate_stored_object_with_settings(
+            view.catalog,
+            key,
+            object,
+            |target| view.get(target),
+            settings,
+        )?;
         return Ok(());
     }
     let collection = view.catalog.collection_by_name(&key.0).ok_or_else(|| {
@@ -274,9 +281,11 @@ pub(crate) fn validate_row<S: EntityStorage>(
         }
     })?;
     let mut targets = BTreeMap::new();
-    for reference in resolved_references(view.catalog, key, object) {
-        if let Some(target) = view.get(&reference.target)? {
-            targets.insert(reference.target.1, target);
+    if settings.validate_foreign_keys {
+        for reference in resolved_references(view.catalog, key, object) {
+            if let Some(target) = view.get(&reference.target)? {
+                targets.insert(reference.target.1, target);
+            }
         }
     }
     for (field, ty) in resolved_field_types_for_object(view.catalog, collection, object) {
@@ -284,7 +293,15 @@ pub(crate) fn validate_row<S: EntityStorage>(
             continue;
         }
         if let Some(value) = object.get(&field) {
-            validate_ref_value(view.catalog, collection, &targets, &field, &ty, value)?;
+            validate_ref_value(
+                view.catalog,
+                collection,
+                &targets,
+                &field,
+                &ty,
+                value,
+                settings.validate_foreign_keys,
+            )?;
         }
     }
     Ok(())
@@ -412,6 +429,8 @@ impl<S: EntityStorage> EmbeddedDb<S> {
         revision: Option<u64>,
         returning: &crate::BatchReturn,
         catalog_version: u64,
+        settings: crate::WriteSettings,
+        require_bounded: bool,
     ) -> Result<Option<crate::BatchReply>, DbError> {
         self.execution_counts = ExecutionCounts::default();
         let fallback = if !self.storage.tx_capabilities().conflict_detection || revision.is_none() {
@@ -513,22 +532,26 @@ impl<S: EntityStorage> EmbeddedDb<S> {
             }
         }
         let changes = view.changes();
-        for (key, change) in &changes {
-            let collection = catalog.collection_by_name(&key.0).unwrap();
-            for (_, relation) in catalog.relationships() {
-                let relation = &relation.relationship;
-                if relation.source_collection == key.0
-                    && relation.indexing_mode == RelationIndexingMode::Enabled
-                {
+        if require_bounded {
+            for (key, change) in &changes {
+                let collection = catalog.collection_by_name(&key.0).unwrap();
+                for (_, schema) in catalog.relationships() {
+                    let relationship = &schema.relationship;
+                    if relationship.source_collection != key.0
+                        || relationship.indexing_mode != RelationIndexingMode::Enabled
+                    {
+                        continue;
+                    }
                     let contribution = |row: &Object| {
-                        Self::contribution(catalog, relation, collection, &key.1, row)
+                        Self::contribution(catalog, relationship, collection, &key.1, row)
                     };
                     if change.before.as_ref().and_then(contribution)
                         != change.after.as_ref().and_then(contribution)
                     {
-                        self.execution_counts = view.counts;
-                        self.record_compact_fallback("transitive_relationship_change");
-                        return Ok(None);
+                        return Err(DbError::InvalidQuery(format!(
+                            "bounded batch execution cannot update indexed relationship '{}'",
+                            relationship.id
+                        )));
                     }
                 }
             }
@@ -554,7 +577,8 @@ impl<S: EntityStorage> EmbeddedDb<S> {
                 }
                 validate.insert(key.clone());
             }
-            if change.before.is_some()
+            if settings.validate_foreign_keys
+                && change.before.is_some()
                 && (change.after.is_none()
                     || change
                         .before
@@ -572,7 +596,7 @@ impl<S: EntityStorage> EmbeddedDb<S> {
         }
         for key in validate {
             if let Some(object) = view.get(&key)? {
-                validate_row(&mut view, &key, &object)?;
+                validate_row(&mut view, &key, &object, settings)?;
             }
         }
         let (before, after) = change_datasets(&changes);
@@ -928,6 +952,237 @@ mod tests {
         .unwrap();
         assert_eq!(db.execution_counts.point_reads, 2);
         assert_eq!(db.execution_counts.fallback_scans, 0);
+    }
+
+    #[test]
+    fn write_settings_disable_only_foreign_key_checks_for_one_batch() {
+        let mut db = ref_db();
+        let relaxed = crate::WriteSettings {
+            validate_foreign_keys: false,
+        };
+        db.execute_batch_returning_with_settings(
+            Batch::new().with_op(typed("article", "article", Some("target"))),
+            BatchReturn::Stats,
+            relaxed,
+        )
+        .unwrap();
+        assert_eq!(db.execution_counts.fallback_scans, 0);
+
+        assert!(
+            db.execute_batch_returning(
+                Batch::new().with_op(typed("other", "article", Some("still-missing"))),
+                BatchReturn::Stats,
+            )
+            .is_err(),
+            "default writes must resume foreign-key validation"
+        );
+
+        db.execute_batch_returning(
+            Batch::new().with_op(typed("target", "person", None)),
+            BatchReturn::Stats,
+        )
+        .unwrap();
+        assert!(
+            db.execute_batch_returning(
+                Batch::new().with_op(delete_typed("target")),
+                BatchReturn::Stats,
+            )
+            .is_err(),
+            "reverse-reference bookkeeping must survive relaxed writes"
+        );
+
+        let mut db = ref_db();
+        db.execute_batch_returning(
+            Batch::new()
+                .with_op(typed("target", "person", None))
+                .with_op(typed("article", "article", Some("target"))),
+            BatchReturn::Stats,
+        )
+        .unwrap();
+        db.execute_batch_returning_with_settings(
+            Batch::new().with_op(typed("target", "organization", None)),
+            BatchReturn::Stats,
+            relaxed,
+        )
+        .unwrap();
+        assert_eq!(
+            db.execution_counts.index_reads, 1,
+            "relaxed target type changes must only read the primary uniqueness index"
+        );
+        assert_eq!(
+            db.execution_counts.visited_rows, 1,
+            "relaxed target type changes must not materialize incoming owners"
+        );
+        assert!(
+            db.execute_batch_returning(
+                Batch::new().with_op(delete_typed("target")),
+                BatchReturn::Stats,
+            )
+            .is_err(),
+            "relaxed type changes must preserve reverse-reference bookkeeping"
+        );
+    }
+
+    #[test]
+    fn indexed_relationship_changes_stay_on_point_batch_path() {
+        let mut db = db();
+        db.upsert_relationship(RelationType {
+            id: "test.chain".into(),
+            name: "chain".into(),
+            source_collection: DEFAULT_COLLECTION.into(),
+            mode: RelationMode::External,
+            indexing_mode: RelationIndexingMode::Enabled,
+            meta: semantic_data::schema::Meta::default(),
+        })
+        .unwrap();
+        db.upsert_relationship(RelationType {
+            id: "test.direct".into(),
+            name: "direct".into(),
+            source_collection: DEFAULT_COLLECTION.into(),
+            mode: RelationMode::External,
+            indexing_mode: RelationIndexingMode::Disabled,
+            meta: semantic_data::schema::Meta::default(),
+        })
+        .unwrap();
+        let relation = |relation: &str, id: &str, source: &str, target: &str| {
+            let mut object = Object::new();
+            object.insert("id", Value::String(id.into()));
+            object.insert(ATTR_RELATION_RELATION, Value::String(relation.into()));
+            object.insert(ATTR_RELATION_FROM, Value::String(source.into()));
+            object.insert(ATTR_RELATION_TO, Value::String(target.into()));
+            BatchOperation::Upsert {
+                collection: DEFAULT_COLLECTION.into(),
+                id: id.into(),
+                object,
+            }
+        };
+        let error = db
+            .execute_batch_returning_bounded_with_settings(
+                Batch::new().with_op(relation("test.chain", "bounded", "x", "y")),
+                BatchReturn::Stats,
+                crate::WriteSettings::default(),
+            )
+            .unwrap_err();
+        assert!(
+            error
+                .to_string()
+                .contains("cannot update indexed relationship")
+        );
+        let default_collection = db
+            .catalog()
+            .collection_by_name(DEFAULT_COLLECTION)
+            .unwrap()
+            .lid;
+        assert!(
+            db.storage
+                .get_entity(default_collection, "bounded")
+                .unwrap()
+                .is_none(),
+            "bounded rejection must happen before commit"
+        );
+        db.execute_batch_returning(
+            Batch::new()
+                .with_op(relation("test.chain", "ab", "a", "b"))
+                .with_op(relation("test.chain", "bc", "b", "c"))
+                .with_op(relation("test.chain", "aa", "a", "a"))
+                .with_op(relation("test.direct", "xy", "x", "y"))
+                .with_op(relation("test.direct", "yz", "y", "z")),
+            BatchReturn::Stats,
+        )
+        .unwrap();
+        assert_eq!(db.execution_counts.fallback_scans, 0);
+        let edges = db
+            .storage
+            .scan_collection(
+                db.catalog()
+                    .collection_by_name(RELATION_EDGES_COLLECTION)
+                    .unwrap()
+                    .lid,
+            )
+            .unwrap();
+        assert!(edges.iter().any(|edge| {
+            edge.object
+                .get(REL_EDGE_SOURCE_FIELD)
+                .and_then(Value::as_str)
+                == Some("a")
+                && edge
+                    .object
+                    .get(REL_EDGE_TARGET_FIELD)
+                    .and_then(Value::as_str)
+                    == Some("c")
+                && edge.object.get(REL_EDGE_DEPTH_FIELD) == Some(&Value::U64(2))
+        }));
+        assert!(edges.iter().any(|edge| {
+            edge.object
+                .get(REL_EDGE_RELATION_FIELD)
+                .and_then(Value::as_str)
+                == Some("test.chain")
+                && edge
+                    .object
+                    .get(REL_EDGE_SOURCE_FIELD)
+                    .and_then(Value::as_str)
+                    == Some("a")
+                && edge
+                    .object
+                    .get(REL_EDGE_TARGET_FIELD)
+                    .and_then(Value::as_str)
+                    == Some("a")
+                && edge.object.get(REL_EDGE_DEPTH_FIELD) == Some(&Value::U64(1))
+        }));
+        assert!(!edges.iter().any(|edge| {
+            edge.object
+                .get(REL_EDGE_RELATION_FIELD)
+                .and_then(Value::as_str)
+                == Some("test.direct")
+                && edge
+                    .object
+                    .get(REL_EDGE_SOURCE_FIELD)
+                    .and_then(Value::as_str)
+                    == Some("x")
+                && edge
+                    .object
+                    .get(REL_EDGE_TARGET_FIELD)
+                    .and_then(Value::as_str)
+                    == Some("z")
+        }));
+
+        db.execute_batch_returning(
+            Batch::new().with_op(relation("test.chain", "bc", "b", "d")),
+            BatchReturn::Stats,
+        )
+        .unwrap();
+        assert_eq!(db.execution_counts.fallback_scans, 0);
+        let edges = db
+            .storage
+            .scan_collection(
+                db.catalog()
+                    .collection_by_name(RELATION_EDGES_COLLECTION)
+                    .unwrap()
+                    .lid,
+            )
+            .unwrap();
+        assert!(edges.iter().any(|edge| {
+            edge.object
+                .get(REL_EDGE_SOURCE_FIELD)
+                .and_then(Value::as_str)
+                == Some("a")
+                && edge
+                    .object
+                    .get(REL_EDGE_TARGET_FIELD)
+                    .and_then(Value::as_str)
+                    == Some("d")
+        }));
+        assert!(!edges.iter().any(|edge| {
+            edge.object
+                .get(REL_EDGE_SOURCE_FIELD)
+                .and_then(Value::as_str)
+                == Some("a")
+                && edge
+                    .object
+                    .get(REL_EDGE_TARGET_FIELD)
+                    .and_then(Value::as_str)
+                    == Some("c")
+        }));
     }
 
     #[test]

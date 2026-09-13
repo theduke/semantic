@@ -16,7 +16,10 @@ use crate::catalog::{
 mod stored;
 pub(crate) use stored::stored_references;
 pub(crate) use stored::validate_enforcement_support;
-pub use stored::{ResolvedReference, ValidationError, ValidationViolation, validate_stored_object};
+pub use stored::{
+    ResolvedReference, ValidationError, ValidationViolation, validate_stored_object,
+    validate_stored_object_with_settings,
+};
 
 #[derive(Debug, Error, Clone, PartialEq, Eq)]
 pub enum ObjectNormalizationError {

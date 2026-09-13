@@ -1,4 +1,5 @@
 pub mod api;
+pub mod db;
 pub mod fuse;
 pub mod server;
 pub mod shared;
@@ -16,6 +17,9 @@ pub struct Args {
 pub enum SubCmd {
     /// Invoke the Semantic HTTP API.
     Api(api::Args),
+
+    /// Import or export a local database without using the server API.
+    Db(db::Args),
 
     /// Mount a semantic database as a filesystem.
     Fuse(fuse::Args),
@@ -273,5 +277,58 @@ mod tests {
         assert!(help.contains("--auto-analyze-media"));
         assert!(help.contains("--interface"));
         assert!(help.contains("--port"));
+    }
+
+    #[test]
+    fn parses_local_db_transfer_commands_and_rejects_zero_batch_size() {
+        let args = Args::try_parse_from([
+            "semantic",
+            "db",
+            "--db-uri",
+            "redb:/tmp/source.redb",
+            "--blob-uri",
+            "file:///tmp/blobs",
+            "export",
+            "--full",
+            "backup.tar",
+        ])
+        .unwrap();
+        let SubCmd::Db(args) = args.command else {
+            panic!("expected db command");
+        };
+        assert_eq!(args.db_uri.as_deref(), Some("redb:/tmp/source.redb"));
+        assert!(matches!(args.command, super::db::SubCmd::Export(_)));
+
+        let args = Args::try_parse_from([
+            "semantic",
+            "db",
+            "import",
+            "-",
+            "--format",
+            "tar",
+            "--batch-size",
+            "17",
+            "--validate-foreign-keys",
+        ])
+        .unwrap();
+        let SubCmd::Db(args) = args.command else {
+            panic!("expected db command");
+        };
+        let super::db::SubCmd::Import(args) = args.command else {
+            panic!("expected import command");
+        };
+        assert_eq!(args.batch_size, 17);
+        assert!(args.validate_foreign_keys);
+
+        let error = Args::try_parse_from([
+            "semantic",
+            "db",
+            "import",
+            "input.jsonl",
+            "--batch-size",
+            "0",
+        ])
+        .unwrap_err();
+        assert_eq!(error.kind(), clap::error::ErrorKind::ValueValidation);
     }
 }

@@ -1,3 +1,4 @@
+use std::pin::Pin;
 use std::sync::Arc;
 
 use async_trait::async_trait;
@@ -15,6 +16,7 @@ use crate::{
     PackageRegistrationOutcome, PhysicalPlan, Query, QueryResult, SqlDialectKind, TextQueryFormat,
     TextQueryInput, UpdateQuery, prql, sql,
 };
+use futures::Stream;
 
 pub use semantic_data::builtin::DEFAULT_COLLECTION;
 pub const ALL_COLLECTION_ALIAS: &str = "all";
@@ -92,6 +94,8 @@ pub struct EntityRecord {
     pub object: Object,
 }
 
+pub type EntityStream = Pin<Box<dyn Stream<Item = Result<EntityRecord, DbError>> + Send>>;
+
 #[derive(facet::Facet, Debug, Clone, PartialEq, Eq)]
 #[repr(C)]
 #[facet(rename_all = "snake_case")]
@@ -138,6 +142,13 @@ pub trait Backend: Send + Sync {
         ))
     }
     async fn catalog(&self) -> std::result::Result<Arc<Catalog>, DbError>;
+
+    /// Scan all portable (non-internal) entities without collecting them.
+    async fn scan_entities(&self) -> Result<EntityStream, DbError> {
+        Err(DbError::InvalidQuery(
+            "backend does not support streaming entity scans".into(),
+        ))
+    }
 
     async fn create_collection(
         &self,
@@ -272,6 +283,19 @@ pub trait Backend: Send + Sync {
 
     async fn execute_batch(&self, batch: Batch) -> std::result::Result<BatchOutcome, DbError>;
 
+    async fn execute_batch_with_settings(
+        &self,
+        batch: Batch,
+        settings: crate::WriteSettings,
+    ) -> Result<BatchOutcome, DbError> {
+        if settings != crate::WriteSettings::default() {
+            return Err(DbError::InvalidQuery(
+                "backend does not support non-default write settings".into(),
+            ));
+        }
+        self.execute_batch(batch).await
+    }
+
     async fn execute_batch_returning(
         &self,
         batch: Batch,
@@ -286,6 +310,32 @@ pub trait Backend: Send + Sync {
                 "backend does not support compact batch returning".into(),
             )),
         }
+    }
+
+    async fn execute_batch_returning_with_settings(
+        &self,
+        batch: Batch,
+        returning: crate::BatchReturn,
+        settings: crate::WriteSettings,
+    ) -> Result<crate::BatchReply, DbError> {
+        if settings != crate::WriteSettings::default() {
+            return Err(DbError::InvalidQuery(
+                "backend does not support non-default write settings".into(),
+            ));
+        }
+        self.execute_batch_returning(batch, returning).await
+    }
+
+    /// Execute a compact batch without falling back to collection materialization.
+    async fn execute_batch_returning_bounded_with_settings(
+        &self,
+        _batch: Batch,
+        _returning: crate::BatchReturn,
+        _settings: crate::WriteSettings,
+    ) -> Result<crate::BatchReply, DbError> {
+        Err(DbError::InvalidQuery(
+            "backend does not support bounded batch execution".into(),
+        ))
     }
 }
 
@@ -309,6 +359,10 @@ impl Db {
 
     pub async fn catalog(&self) -> std::result::Result<Arc<Catalog>, DbError> {
         self.backend.catalog().await
+    }
+
+    pub async fn scan_entities(&self) -> Result<EntityStream, DbError> {
+        self.backend.scan_entities().await
     }
 
     pub async fn create_collection(
@@ -462,6 +516,16 @@ impl Db {
         self.backend.execute_batch(batch.into()).await
     }
 
+    pub async fn execute_batch_with_settings(
+        &self,
+        batch: PublicBatch,
+        settings: crate::WriteSettings,
+    ) -> Result<BatchOutcome, DbError> {
+        self.backend
+            .execute_batch_with_settings(batch.into(), settings)
+            .await
+    }
+
     pub async fn execute_batch_returning(
         &self,
         batch: PublicBatch,
@@ -469,6 +533,28 @@ impl Db {
     ) -> Result<crate::BatchReply, DbError> {
         self.backend
             .execute_batch_returning(batch.into(), returning)
+            .await
+    }
+
+    pub async fn execute_batch_returning_with_settings(
+        &self,
+        batch: PublicBatch,
+        returning: crate::BatchReturn,
+        settings: crate::WriteSettings,
+    ) -> Result<crate::BatchReply, DbError> {
+        self.backend
+            .execute_batch_returning_with_settings(batch.into(), returning, settings)
+            .await
+    }
+
+    pub async fn execute_batch_returning_bounded_with_settings(
+        &self,
+        batch: PublicBatch,
+        returning: crate::BatchReturn,
+        settings: crate::WriteSettings,
+    ) -> Result<crate::BatchReply, DbError> {
+        self.backend
+            .execute_batch_returning_bounded_with_settings(batch.into(), returning, settings)
             .await
     }
 }

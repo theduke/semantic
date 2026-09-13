@@ -29,6 +29,7 @@ hex = { workspace = true }
 objstore = { workspace = true }
 objstore_fs = { workspace = true }
 ordered-float = { workspace = true }
+redb = "2.6.3"
 semantic_data = { workspace = true }
 semantic_jobs = { path = "../jobs" }
 semantic_plugin = { path = "../plugin" }
@@ -44,9 +45,12 @@ facet-json = "0.43.2"
 serde = { workspace = true, features = ["derive"] }
 serde_json.workspace = true
 sha2 = { workspace = true }
+tar = "0.4.44"
+tempfile = "3.26.0"
 thiserror = "2.0.17"
 time = { workspace = true }
-tokio = { workspace = true, features = ["rt", "sync", "time"] }
+tokio = { workspace = true, features = ["fs", "io-util", "rt", "sync", "time"] }
+tokio-util = { version = "0.7.17", features = ["io"] }
 url = "2.5.7"
 uuid = { workspace = true, features = ["v4"] }
 
@@ -55,5 +59,4 @@ serde_json.workspace = true
 tokio-tungstenite = "0.28"
 semantic_db_postgres = { path = "../db_postgres" }
 semantic_db_redb = { path = "../db_redb" }
-tempfile = "3.26.0"
 tokio = { workspace = true, features = ["macros", "rt"] }

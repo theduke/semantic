@@ -73,7 +73,7 @@ impl AppRequestContext {
         }
     }
 
-    pub(crate) async fn default_file_store(
+    pub async fn default_file_store(
         &self,
         scope_id: Option<DbScopeId>,
     ) -> std::result::Result<DynObjStore, AppError> {
