@@ -7,6 +7,58 @@ import {
 
 export const packageName = "semantic.base" as const;
 
+export const ATTR_DIRECTORY_NODE_FROM =
+  "semantic:base:directory_node:from" as const;
+export const ATTR_DIRECTORY_NODE_ORDER =
+  "semantic:base:directory_node:order" as const;
+export const ATTR_ENTITY_LABEL_COLLECTION =
+  "semantic:base:entity_label:collection" as const;
+export const ATTR_LABEL_COLOR = "semantic:base:label:color" as const;
+export const ATTR_LABEL_NAME = "semantic:base:label:name" as const;
+export const ATTR_LABEL_SELECTION_MODE =
+  "semantic:base:label:selection_mode" as const;
+export const ATTR_NOTE_NOTE_CONTENT =
+  "semantic:base:note:note_content" as const;
+export const ATTR_NOTE_NOTE_FORMAT = "semantic:base:note:note_format" as const;
+export const ATTR_PERSON_ALTERNATE_NAMES =
+  "semantic:base:person:alternate_names" as const;
+export const ATTR_PERSON_BIRTH_DATE =
+  "semantic:base:person:birth_date" as const;
+export const ATTR_PERSON_DEATH_DATE =
+  "semantic:base:person:death_date" as const;
+export const ATTR_PERSON_DESCRIPTION =
+  "semantic:base:person:description" as const;
+export const ATTR_PERSON_DISPLAY_NAME =
+  "semantic:base:person:display_name" as const;
+export const ATTR_PERSON_FAMILY_NAME =
+  "semantic:base:person:family_name" as const;
+export const ATTR_PERSON_GIVEN_NAME =
+  "semantic:base:person:given_name" as const;
+export const ATTR_PERSON_HONORIFIC_PREFIX =
+  "semantic:base:person:honorific_prefix" as const;
+export const ATTR_PERSON_HONORIFIC_SUFFIX =
+  "semantic:base:person:honorific_suffix" as const;
+export const ATTR_PERSON_MIDDLE_NAME =
+  "semantic:base:person:middle_name" as const;
+export const ATTR_PERSON_NICKNAME = "semantic:base:person:nickname" as const;
+export const ATTR_CREATED_AT = "semantic:created_at" as const;
+export const ATTR_DESCRIPTION = "semantic:description" as const;
+export const ATTR_PARENT = "semantic:parent" as const;
+export const ATTR_TITLE = "semantic:title" as const;
+export const ATTR_UPDATED_AT = "semantic:updated_at" as const;
+export const DIRECTORY_CLASS_ID = "semantic:base:directory" as const;
+export const DIRECTORY_NODE_CLASS_ID = "semantic:base:directory_node" as const;
+export const ATTR_RELATION_RELATION = "semantic:relation:relation" as const;
+export const ATTR_RELATION_TO = "semantic:relation:to" as const;
+export const ENTITY_LABEL_CLASS_ID = "semantic:base:entity_label" as const;
+export const ATTR_RELATION_FROM = "semantic:relation:from" as const;
+export const LABEL_CLASS_ID = "semantic:base:label" as const;
+export const LABEL_GROUP_CLASS_ID = "semantic:base:label_group" as const;
+export const NOTE_CLASS_ID = "semantic:base:note" as const;
+export const PERSON_CLASS_ID = "semantic:base:person" as const;
+export const WEB_BOOKMARK_CLASS_ID = "semantic:base:web_bookmark" as const;
+export const ATTR_URL = "semantic:url" as const;
+
 export type from = string;
 export type order = number | bigint;
 export type entity_collection = string;
@@ -32,66 +84,66 @@ export type parent = string;
 export type title = string;
 export type updated_at = number | bigint | Date;
 export type Directory = {
-  created_at?: created_at;
-  description?: base_description_2;
-  title: title;
-  updated_at?: updated_at;
+  [ATTR_CREATED_AT]?: created_at;
+  [ATTR_DESCRIPTION]?: base_description_2;
+  [ATTR_TITLE]: title;
+  [ATTR_UPDATED_AT]?: updated_at;
 } & SemanticObject;
 export type DirectoryNode = {
-  from: from;
-  order?: order;
-  relation: SemanticValue;
-  to: SemanticValue;
+  [ATTR_DIRECTORY_NODE_FROM]: from;
+  [ATTR_DIRECTORY_NODE_ORDER]?: order;
+  [ATTR_RELATION_RELATION]: SemanticValue;
+  [ATTR_RELATION_TO]: SemanticValue;
 } & SemanticObject;
 export type EntityLabel = {
-  entity_collection: entity_collection;
-  from: SemanticValue;
-  relation: SemanticValue;
-  to: SemanticValue;
+  [ATTR_ENTITY_LABEL_COLLECTION]: entity_collection;
+  [ATTR_RELATION_FROM]: SemanticValue;
+  [ATTR_RELATION_RELATION]: SemanticValue;
+  [ATTR_RELATION_TO]: SemanticValue;
 } & SemanticObject;
 export type Label = {
-  color?: label_color;
-  created_at?: created_at;
-  description?: base_description_2;
-  name: label_name;
-  parent?: parent;
-  updated_at?: updated_at;
+  [ATTR_LABEL_COLOR]?: label_color;
+  [ATTR_CREATED_AT]?: created_at;
+  [ATTR_DESCRIPTION]?: base_description_2;
+  [ATTR_LABEL_NAME]: label_name;
+  [ATTR_PARENT]?: parent;
+  [ATTR_UPDATED_AT]?: updated_at;
 } & SemanticObject;
 export type LabelGroup = {
-  color?: label_color;
-  created_at?: created_at;
-  description?: base_description_2;
-  name: label_name;
-  parent?: parent;
-  selection_mode?: selection_mode;
-  updated_at?: updated_at;
+  [ATTR_LABEL_COLOR]?: label_color;
+  [ATTR_CREATED_AT]?: created_at;
+  [ATTR_DESCRIPTION]?: base_description_2;
+  [ATTR_LABEL_NAME]: label_name;
+  [ATTR_PARENT]?: parent;
+  [ATTR_LABEL_SELECTION_MODE]?: selection_mode;
+  [ATTR_UPDATED_AT]?: updated_at;
 } & SemanticObject;
 export type Note = {
-  created_at?: created_at;
-  note_content: note_content;
-  note_format: note_format;
-  title?: title;
-  updated_at?: updated_at;
+  [ATTR_CREATED_AT]?: created_at;
+  [ATTR_NOTE_NOTE_CONTENT]: note_content;
+  [ATTR_NOTE_NOTE_FORMAT]: note_format;
+  [ATTR_TITLE]?: title;
+  [ATTR_UPDATED_AT]?: updated_at;
 } & SemanticObject;
 export type Person = {
-  alternate_names?: alternate_names;
-  birth_date?: birth_date;
-  death_date?: death_date;
-  description?: base_description;
-  display_name?: display_name;
-  family_name?: family_name;
-  given_name?: given_name;
-  honorific_prefix?: honorific_prefix;
-  honorific_suffix?: honorific_suffix;
-  middle_name?: middle_name;
-  nickname?: nickname;
-  parent?: parent;
-  title?: title;
+  [ATTR_PERSON_ALTERNATE_NAMES]?: alternate_names;
+  [ATTR_PERSON_BIRTH_DATE]?: birth_date;
+  [ATTR_PERSON_DEATH_DATE]?: death_date;
+  [ATTR_PERSON_DESCRIPTION]?: base_description;
+  [ATTR_PERSON_DISPLAY_NAME]?: display_name;
+  [ATTR_PERSON_FAMILY_NAME]?: family_name;
+  [ATTR_PERSON_GIVEN_NAME]?: given_name;
+  [ATTR_PERSON_HONORIFIC_PREFIX]?: honorific_prefix;
+  [ATTR_PERSON_HONORIFIC_SUFFIX]?: honorific_suffix;
+  [ATTR_PERSON_MIDDLE_NAME]?: middle_name;
+  [ATTR_PERSON_NICKNAME]?: nickname;
+  [ATTR_PARENT]?: parent;
+  [ATTR_TITLE]?: title;
 } & SemanticObject;
 export type WebBookmark = {
-  created_at?: created_at;
-  description?: base_description_2;
-  title?: title;
-  updated_at?: updated_at;
-  url: SemanticValue;
+  [ATTR_CREATED_AT]?: created_at;
+  [ATTR_DESCRIPTION]?: base_description_2;
+  [ATTR_TITLE]?: title;
+  [ATTR_UPDATED_AT]?: updated_at;
+  [ATTR_URL]: SemanticValue;
 } & SemanticObject;

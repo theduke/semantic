@@ -5,7 +5,12 @@ import type {
   Package,
   TypeNode,
 } from "../types.js";
-import type { CommandModel, PackageModel, TypeModel } from "./model.js";
+import type {
+  CommandModel,
+  ConstantModel,
+  PackageModel,
+  TypeModel,
+} from "./model.js";
 import { identifier } from "./identifier.js";
 const literal = (value: string | number): string =>
   typeof value === "string" ? JSON.stringify(value) : String(value);
@@ -24,6 +29,20 @@ const isOptional = (node: TypeNode): boolean =>
   typeof node.kind === "object" &&
   node.kind !== null &&
   "optional" in node.kind;
+
+const schemaConstantStem = (id: string, packageName: string): string => {
+  const segments = id.split(/[^A-Za-z0-9]+/).filter(Boolean);
+  const packageSegments = packageName.split(/[^A-Za-z0-9]+/).filter(Boolean);
+  const hasPackagePrefix = packageSegments.every(
+    (segment, index) => segments[index] === segment,
+  );
+  const local = hasPackagePrefix
+    ? segments.slice(packageSegments.length)
+    : segments[0] === "semantic"
+      ? segments.slice(1)
+      : segments;
+  return identifier(local.join("_") || id).toUpperCase();
+};
 
 type CompoundContext = "union" | "intersection";
 
@@ -298,6 +317,37 @@ export function packageModel(pkg: Package): PackageModel {
     }>;
     docs?: string;
   }> = [];
+  const constants: ConstantModel[] = [];
+  const attributeConstants = new Map<string, string>();
+  const classConstants = new Map<string, string>();
+  const constantNames = new Set<string>();
+  const constantName = (id: string, suffix: string): string => {
+    const localName = schemaConstantStem(id, pkg.name);
+    const base =
+      suffix === "CLASS_ID"
+        ? `${localName}_${suffix}`
+        : `${suffix}_${localName}`;
+    let name = base;
+    for (let n = 2; constantNames.has(name); n++) name = `${base}_${n}`;
+    constantNames.add(name);
+    return name;
+  };
+  const attributeConstant = (id: string): string => {
+    const existing = attributeConstants.get(id);
+    if (existing) return existing;
+    const name = constantName(id, "ATTR");
+    constants.push({ name, value: id });
+    attributeConstants.set(id, name);
+    return name;
+  };
+  const classConstant = (id: string): string => {
+    const existing = classConstants.get(id);
+    if (existing) return existing;
+    const name = constantName(id, "CLASS_ID");
+    constants.push({ name, value: id });
+    classConstants.set(id, name);
+    return name;
+  };
   const addDeclarations = (
     scope: string,
     owner: {
@@ -322,7 +372,8 @@ export function packageModel(pkg: Package): PackageModel {
           ? { docs: definition.meta.description }
           : {}),
       });
-    for (const [key, attribute] of Object.entries(owner.attributes))
+    for (const [key, attribute] of Object.entries(owner.attributes)) {
+      attributeConstant(attribute.id);
       candidates.push({
         rawName: attribute.name,
         aliases: [key, attribute.id, attribute.name],
@@ -332,6 +383,7 @@ export function packageModel(pkg: Package): PackageModel {
           ? { docs: attribute.meta.description }
           : {}),
       });
+    }
     for (const [key, interfaceType] of Object.entries(owner.interfaces)) {
       const contractInterface = interfaceType as unknown as Record<string, any>;
       const wrapped = "interface" in contractInterface;
@@ -521,9 +573,10 @@ export function packageModel(pkg: Package): PackageModel {
     };
   });
   for (const { value, generated, scope } of classPlans) {
+    classConstant(value.id);
     const fields = Object.entries(value.attributes).map(
-      ([fieldName, field]) =>
-        `${JSON.stringify(fieldName)}${field.required ? "" : "?"}: ${resolveRef(field.attribute.id, scope)}`,
+      ([, field]) =>
+        `[${attributeConstant(field.attribute.id)}]${field.required ? "" : "?"}: ${resolveRef(field.attribute.id, scope)}`,
     );
     const inherited = [
       ...new Set(
@@ -571,5 +624,5 @@ export function packageModel(pkg: Package): PackageModel {
     commandSymbols.add(symbol);
     return { ...command, symbol };
   });
-  return { name: pkg.name, types, commands };
+  return { name: pkg.name, constants, types, commands };
 }

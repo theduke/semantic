@@ -61,7 +61,74 @@ fn generate_core_types() -> String {
         <semantic_data::query::QueryInput as Facet>::SHAPE,
     ];
     let mut output = TypeScriptGenerator::new().render(&roots);
+    output.push_str(&generate_core_schema_constants());
     output.push_str(include_str!("jobs_commands.ts"));
+    output
+}
+
+fn generate_core_schema_constants() -> String {
+    macro_rules! schema_constants {
+        ($($constant:path),+ $(,)?) => {
+            [$(
+                (
+                    stringify!($constant)
+                        .rsplit("::")
+                        .next()
+                        .expect("constant path has a final segment"),
+                    $constant,
+                )
+            ),+]
+        };
+    }
+
+    let constants = schema_constants![
+        semantic_data::builtin::ATTR_ID,
+        semantic_data::builtin::ATTR_TYPE,
+        semantic_data::attr::ATTR_TITLE,
+        semantic_data::attr::ATTR_DESCRIPTION,
+        semantic_data::attr::ATTR_CREATED_AT,
+        semantic_data::attr::ATTR_UPDATED_AT,
+        semantic_data::attr::ATTR_URL,
+        semantic_data::attr::ATTR_PARENT,
+        semantic_data::attr::ATTR_UI_CREATABLE_IN_UI,
+        semantic_data::attr::RELATION_CLASS_ID,
+        semantic_data::attr::ATTR_RELATION_RELATION,
+        semantic_data::attr::ATTR_RELATION_FROM,
+        semantic_data::attr::ATTR_RELATION_TO,
+        semantic_db_core::CORE_CATALOG_ENTRY_CLASS_ID,
+        semantic_db_core::CORE_CATALOG_ATTRIBUTE_ENTRY_CLASS_ID,
+        semantic_db_core::CORE_CATALOG_TYPE_DEF_ENTRY_CLASS_ID,
+        semantic_db_core::CORE_CATALOG_RECORD_TYPE_ENTRY_CLASS_ID,
+        semantic_db_core::CORE_CATALOG_CLASS_ENTRY_CLASS_ID,
+        semantic_db_core::CORE_CATALOG_COLLECTION_ENTRY_CLASS_ID,
+        semantic_db_core::CORE_CATALOG_INDEX_ENTRY_CLASS_ID,
+        semantic_db_core::CORE_CATALOG_META_ENTRY_CLASS_ID,
+        semantic_db_core::ATTR_CORE_CATALOG_ID,
+        semantic_db_core::ATTR_CORE_CATALOG_LID,
+        semantic_db_core::ATTR_CORE_CATALOG_ATTRIBUTE,
+        semantic_db_core::ATTR_CORE_CATALOG_TYPE_DEF,
+        semantic_db_core::ATTR_CORE_CATALOG_RECORD,
+        semantic_db_core::ATTR_CORE_CATALOG_CLASS,
+        semantic_db_core::ATTR_CORE_CATALOG_NAME,
+        semantic_db_core::ATTR_CORE_CATALOG_INTEGRITY_MODE,
+        semantic_db_core::ATTR_CORE_CATALOG_FIELD_IDS,
+        semantic_db_core::ATTR_CORE_CATALOG_COLLECTION,
+        semantic_db_core::ATTR_CORE_CATALOG_FIELD,
+        semantic_db_core::ATTR_CORE_CATALOG_INDEX_KIND,
+        semantic_db_core::ATTR_CORE_CATALOG_UNIQUE,
+        semantic_db_core::ATTR_CORE_CATALOG_NEXT_FIELD_ID,
+        semantic_db_core::ATTR_CORE_CATALOG_AUTO_INDEX_ENABLED,
+        semantic_db_core::ATTR_CORE_CATALOG_PACKAGES,
+        semantic_db_core::ATTR_CORE_CATALOG_APPLIED_MIGRATIONS,
+    ];
+    let mut output = String::new();
+    for (name, value) in constants {
+        output.push_str(&format!(
+            "export const {name} = {} as const;\n",
+            json_string(value)
+        ));
+    }
+    output.push('\n');
     output
 }
 
@@ -356,6 +423,19 @@ mod tests {
         assert!(output.contains("export type QueryField ="));
         assert!(output.contains("wildcard"));
         assert!(output.contains("export type Package ="));
+    }
+
+    #[test]
+    fn exports_core_schema_ids_as_runtime_constants() {
+        let output = generate_core_types();
+        assert!(output.contains("export const ATTR_TITLE = \"semantic:title\" as const;"));
+        assert!(
+            output
+                .contains("export const ATTR_RELATION_FROM = \"semantic:relation:from\" as const;")
+        );
+        assert!(output.contains(
+            "export const CORE_CATALOG_CLASS_ENTRY_CLASS_ID = \"semantic:entry:class\" as const;"
+        ));
     }
 
     #[test]

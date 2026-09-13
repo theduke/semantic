@@ -1320,6 +1320,54 @@ export type JoinExpr = {
 };
 
 export type JoinKind = "inner" | "left" | "right" | "full" | "cross";
+export const ATTR_ID = "id" as const;
+export const ATTR_TYPE = "type" as const;
+export const ATTR_TITLE = "semantic:title" as const;
+export const ATTR_DESCRIPTION = "semantic:description" as const;
+export const ATTR_CREATED_AT = "semantic:created_at" as const;
+export const ATTR_UPDATED_AT = "semantic:updated_at" as const;
+export const ATTR_URL = "semantic:url" as const;
+export const ATTR_PARENT = "semantic:parent" as const;
+export const ATTR_UI_CREATABLE_IN_UI = "semantic:ui:creatable_in_ui" as const;
+export const RELATION_CLASS_ID = "semantic:relation" as const;
+export const ATTR_RELATION_RELATION = "semantic:relation:relation" as const;
+export const ATTR_RELATION_FROM = "semantic:relation:from" as const;
+export const ATTR_RELATION_TO = "semantic:relation:to" as const;
+export const CORE_CATALOG_ENTRY_CLASS_ID = "semantic:catalog:entry" as const;
+export const CORE_CATALOG_ATTRIBUTE_ENTRY_CLASS_ID =
+  "semantic:entry:attribute" as const;
+export const CORE_CATALOG_TYPE_DEF_ENTRY_CLASS_ID =
+  "semantic:entry:type_def" as const;
+export const CORE_CATALOG_RECORD_TYPE_ENTRY_CLASS_ID =
+  "semantic:entry:record_type" as const;
+export const CORE_CATALOG_CLASS_ENTRY_CLASS_ID =
+  "semantic:entry:class" as const;
+export const CORE_CATALOG_COLLECTION_ENTRY_CLASS_ID =
+  "semantic:entry:collection" as const;
+export const CORE_CATALOG_INDEX_ENTRY_CLASS_ID =
+  "semantic:entry:index" as const;
+export const CORE_CATALOG_META_ENTRY_CLASS_ID = "semantic:entry:meta" as const;
+export const ATTR_CORE_CATALOG_ID = "id" as const;
+export const ATTR_CORE_CATALOG_LID = "semantic:lid" as const;
+export const ATTR_CORE_CATALOG_ATTRIBUTE = "semantic:attribute" as const;
+export const ATTR_CORE_CATALOG_TYPE_DEF = "semantic:type_def" as const;
+export const ATTR_CORE_CATALOG_RECORD = "semantic:record" as const;
+export const ATTR_CORE_CATALOG_CLASS = "semantic:class" as const;
+export const ATTR_CORE_CATALOG_NAME = "semantic:name" as const;
+export const ATTR_CORE_CATALOG_INTEGRITY_MODE =
+  "semantic:db:integrity_mode" as const;
+export const ATTR_CORE_CATALOG_FIELD_IDS = "semantic:db:field_ids" as const;
+export const ATTR_CORE_CATALOG_COLLECTION = "semantic:db:collection" as const;
+export const ATTR_CORE_CATALOG_FIELD = "semantic:db:field" as const;
+export const ATTR_CORE_CATALOG_INDEX_KIND = "semantic:db:index_kind" as const;
+export const ATTR_CORE_CATALOG_UNIQUE = "semantic:db:unique" as const;
+export const ATTR_CORE_CATALOG_NEXT_FIELD_ID =
+  "semantic:db:next_field_id" as const;
+export const ATTR_CORE_CATALOG_AUTO_INDEX_ENABLED =
+  "semantic:db:auto_index_enabled" as const;
+export const ATTR_CORE_CATALOG_PACKAGES = "semantic:db:packages" as const;
+export const ATTR_CORE_CATALOG_APPLIED_MIGRATIONS =
+  "semantic:db:applied_migrations" as const;
 
 /** Jobs commands accept decoded SemanticValue payloads and return decoded values. */
 export type JobScopeParams = { scope_id?: string | null };

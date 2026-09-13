@@ -664,8 +664,12 @@ losslessly and formats the generated TypeScript with Prettier.
 A generated module exports:
 
 - `packageName`, a string literal containing the package name.
+- Runtime constants for attribute and class IDs.
 - Type aliases for package declarations and classes.
 - Typed command descriptors ready for `client.invoke()`.
+
+Generated class fields use their canonical attribute IDs through those constants,
+so the declared object shape matches database records exactly.
 
 Names that are not valid TypeScript identifiers are sanitized. If two declarations
 would share a name, the generator qualifies or suffixes them; use the symbols in
@@ -692,30 +696,46 @@ Canonical definitions generated from the Rust source of truth are checked in wit
 the SDK.
 
 ```ts
-import type { Person, Note } from "@semantic/sdk/generated/base";
-import type { File as SemanticFile } from "@semantic/sdk/generated/filestore";
+import {
+  ATTR_PERSON_DISPLAY_NAME,
+  ATTR_NOTE_NOTE_CONTENT,
+  ATTR_NOTE_NOTE_FORMAT,
+  type Person,
+  type Note,
+} from "@semantic/sdk/generated/base";
+import {
+  ATTR_FILE_FILENAME,
+  ATTR_FILE_MIME_TYPE,
+  type File as SemanticFile,
+} from "@semantic/sdk/generated/filestore";
 
-const person: Person = { display_name: "Ada Lovelace" };
+const person: Person = { [ATTR_PERSON_DISPLAY_NAME]: "Ada Lovelace" };
 const note: Note = {
-  note_content: "Generated types are ordinary TypeScript types.",
-  note_format: "text",
+  [ATTR_NOTE_NOTE_CONTENT]: "Generated types are ordinary TypeScript types.",
+  [ATTR_NOTE_NOTE_FORMAT]: "text",
 };
-const file: SemanticFile = { filename: "notes.txt", mime_type: "text/plain" };
+const file: SemanticFile = {
+  [ATTR_FILE_FILENAME]: "notes.txt",
+  [ATTR_FILE_MIME_TYPE]: "text/plain",
+};
 ```
 
 The main entry point also exposes the exact Rust-reflected core wire schema under a
 namespace, while the `core` subpath provides direct imports:
 
 ```ts
-import type { CoreSchema } from "@semantic/sdk";
-import type {
-  Package as ExactPackage,
-  expression_Expr,
+import { CoreSchema } from "@semantic/sdk";
+import {
+  ATTR_TITLE,
+  type Package as ExactPackage,
+  type expression_Expr,
 } from "@semantic/sdk/core";
 
 declare const reflected: CoreSchema.Package;
 const exact: ExactPackage = reflected;
 declare const expression: expression_Expr;
+const titleAttribute = ATTR_TITLE;
+const sameTitleAttribute = CoreSchema.ATTR_TITLE;
 ```
 
 Use the main entry point's ergonomic types for normal client/package authoring and

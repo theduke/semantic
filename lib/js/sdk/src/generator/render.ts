@@ -10,6 +10,11 @@ export function renderPackage(model: PackageModel): string {
     `export const packageName = ${JSON.stringify(model.name)} as const;`,
     "",
   );
+  for (const constant of model.constants)
+    lines.push(
+      `export const ${constant.name} = ${JSON.stringify(constant.value)} as const;`,
+    );
+  if (model.constants.length) lines.push("");
   const symbols = new Set<string>();
   for (const type of model.types) {
     const symbol = identifier(type.name);

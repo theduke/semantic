@@ -7,6 +7,58 @@ import {
 
 export const packageName = "semantic.filestore" as const;
 
+export const ATTR_DESCRIPTION = "semantic:description" as const;
+export const ATTR_FILE_UPLOADED_AT = "semantic:file:uploaded_at" as const;
+export const ATTR_CLEANUP_ATTEMPTS =
+  "semantic:filestore:cleanup:attempts" as const;
+export const ATTR_CLEANUP_LAST_ERROR =
+  "semantic:filestore:cleanup:last_error" as const;
+export const ATTR_CLEANUP_LOCATOR =
+  "semantic:filestore:cleanup:locator" as const;
+export const ATTR_CLEANUP_NOT_BEFORE =
+  "semantic:filestore:cleanup:not_before" as const;
+export const ATTR_CLEANUP_STORE = "semantic:filestore:cleanup:store" as const;
+export const ATTR_FILE_BYTE_SIZE = "semantic:filestore:file:byte_size" as const;
+export const ATTR_FILE_CONTENT_HASH_SHA256 =
+  "semantic:filestore:file:content_hash_sha256" as const;
+export const ATTR_FILE_FILEKIND = "semantic:filestore:file:filekind" as const;
+export const ATTR_FILE_FILENAME = "semantic:filestore:file:filename" as const;
+export const ATTR_FILE_FILESTORE_LOCATOR =
+  "semantic:filestore:file:filestore_locator" as const;
+export const ATTR_FILE_MEDIA_AUDIO_BITRATE =
+  "semantic:filestore:file:media_audio_bitrate" as const;
+export const ATTR_FILE_MEDIA_AUDIO_CHANNELS =
+  "semantic:filestore:file:media_audio_channels" as const;
+export const ATTR_FILE_MEDIA_AUDIO_CODEC =
+  "semantic:filestore:file:media_audio_codec" as const;
+export const ATTR_FILE_MEDIA_AUDIO_SAMPLE_RATE =
+  "semantic:filestore:file:media_audio_sample_rate" as const;
+export const ATTR_FILE_MEDIA_BITRATE =
+  "semantic:filestore:file:media_bitrate" as const;
+export const ATTR_FILE_MEDIA_CONTAINER_FORMAT =
+  "semantic:filestore:file:media_container_format" as const;
+export const ATTR_FILE_MEDIA_DURATION =
+  "semantic:filestore:file:media_duration" as const;
+export const ATTR_FILE_MEDIA_HAS_AUDIO =
+  "semantic:filestore:file:media_has_audio" as const;
+export const ATTR_FILE_MEDIA_PIXEL_HEIGHT =
+  "semantic:filestore:file:media_pixel_height" as const;
+export const ATTR_FILE_MEDIA_PIXEL_WIDTH =
+  "semantic:filestore:file:media_pixel_width" as const;
+export const ATTR_FILE_MEDIA_VIDEO_BITRATE =
+  "semantic:filestore:file:media_video_bitrate" as const;
+export const ATTR_FILE_MEDIA_VIDEO_CODEC =
+  "semantic:filestore:file:media_video_codec" as const;
+export const ATTR_FILE_MEDIA_VIDEO_FRAME_COUNT =
+  "semantic:filestore:file:media_video_frame_count" as const;
+export const ATTR_FILE_MEDIA_VIDEO_FRAMES_PER_SECOND =
+  "semantic:filestore:file:media_video_frames_per_second" as const;
+export const ATTR_FILE_MIME_TYPE = "semantic:filestore:file:mime_type" as const;
+export const ATTR_PARENT = "semantic:parent" as const;
+export const ATTR_TITLE = "semantic:title" as const;
+export const CLEANUP_CLASS_ID = "semantic:filestore:cleanup" as const;
+export const FILE_CLASS_ID = "semantic:filestore:file" as const;
+
 export type description = string;
 export type uploaded_at = number | bigint | Date;
 export type attempts = number;
@@ -44,35 +96,35 @@ export type mime_type = string;
 export type parent = string;
 export type title = string;
 export type Cleanup = {
-  attempts: attempts;
-  last_error?: last_error;
-  locator: locator;
-  not_before: not_before;
-  store: store;
+  [ATTR_CLEANUP_ATTEMPTS]: attempts;
+  [ATTR_CLEANUP_LAST_ERROR]?: last_error;
+  [ATTR_CLEANUP_LOCATOR]: locator;
+  [ATTR_CLEANUP_NOT_BEFORE]: not_before;
+  [ATTR_CLEANUP_STORE]: store;
 };
 export type File = {
-  byte_size?: byte_size;
-  content_hash_sha256?: content_hash_sha256;
-  description?: description;
-  filekind?: filekind;
-  filename?: filename;
-  filestore_locator?: filestore_locator;
-  media_audio_bitrate?: media_audio_bitrate;
-  media_audio_channels?: media_audio_channels;
-  media_audio_codec?: media_audio_codec;
-  media_audio_sample_rate?: media_audio_sample_rate;
-  media_bitrate?: media_bitrate;
-  media_container_format?: media_container_format;
-  media_duration?: media_duration;
-  media_has_audio?: media_has_audio;
-  media_pixel_height?: media_pixel_height;
-  media_pixel_width?: media_pixel_width;
-  media_video_bitrate?: media_video_bitrate;
-  media_video_codec?: media_video_codec;
-  media_video_frame_count?: media_video_frame_count;
-  media_video_frames_per_second?: media_video_frames_per_second;
-  mime_type?: mime_type;
-  parent?: parent;
-  title?: title;
-  uploaded_at?: uploaded_at;
+  [ATTR_FILE_BYTE_SIZE]?: byte_size;
+  [ATTR_FILE_CONTENT_HASH_SHA256]?: content_hash_sha256;
+  [ATTR_DESCRIPTION]?: description;
+  [ATTR_FILE_FILEKIND]?: filekind;
+  [ATTR_FILE_FILENAME]?: filename;
+  [ATTR_FILE_FILESTORE_LOCATOR]?: filestore_locator;
+  [ATTR_FILE_MEDIA_AUDIO_BITRATE]?: media_audio_bitrate;
+  [ATTR_FILE_MEDIA_AUDIO_CHANNELS]?: media_audio_channels;
+  [ATTR_FILE_MEDIA_AUDIO_CODEC]?: media_audio_codec;
+  [ATTR_FILE_MEDIA_AUDIO_SAMPLE_RATE]?: media_audio_sample_rate;
+  [ATTR_FILE_MEDIA_BITRATE]?: media_bitrate;
+  [ATTR_FILE_MEDIA_CONTAINER_FORMAT]?: media_container_format;
+  [ATTR_FILE_MEDIA_DURATION]?: media_duration;
+  [ATTR_FILE_MEDIA_HAS_AUDIO]?: media_has_audio;
+  [ATTR_FILE_MEDIA_PIXEL_HEIGHT]?: media_pixel_height;
+  [ATTR_FILE_MEDIA_PIXEL_WIDTH]?: media_pixel_width;
+  [ATTR_FILE_MEDIA_VIDEO_BITRATE]?: media_video_bitrate;
+  [ATTR_FILE_MEDIA_VIDEO_CODEC]?: media_video_codec;
+  [ATTR_FILE_MEDIA_VIDEO_FRAME_COUNT]?: media_video_frame_count;
+  [ATTR_FILE_MEDIA_VIDEO_FRAMES_PER_SECOND]?: media_video_frames_per_second;
+  [ATTR_FILE_MIME_TYPE]?: mime_type;
+  [ATTR_PARENT]?: parent;
+  [ATTR_TITLE]?: title;
+  [ATTR_FILE_UPLOADED_AT]?: uploaded_at;
 } & SemanticObject;

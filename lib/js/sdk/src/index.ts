@@ -1,6 +1,6 @@
 export type * from "./types.js";
-/** Complete Rust-reflected wire schema, namespaced to avoid core type collisions. */
-export type * as CoreSchema from "./generated/core.js";
+/** Complete Rust-reflected wire schema and core IDs, namespaced to avoid collisions. */
+export * as CoreSchema from "./generated/core.js";
 export * from "./values.js";
 export * from "./json.js";
 export * from "./errors.js";

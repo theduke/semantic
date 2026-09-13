@@ -679,7 +679,9 @@ test("package generator uses lexical scopes and includes every declaration owner
   assert.match(output, /export type ContractThing = b_Thing/);
   assert.match(output, /export type token = string/);
   assert.match(output, /export type Control = \{/);
-  assert.match(output, /export type Child = .*slug.* & \(Base\)/);
+  assert.match(output, /export const ATTR_B_SLUG = "b:slug" as const/);
+  assert.match(output, /export const B_CHILD_CLASS_ID = "b:child" as const/);
+  assert.match(output, /export type Child = .*\[ATTR_B_SLUG\].* & \(Base\)/);
   assert.match(output, /export type ContractEntity = .* & \(Base\)/);
   assert.match(output, /export type EntityLink = string/);
   assert.match(output, /export const lookup = command<\{  \}, b_Thing>/);
@@ -854,7 +856,7 @@ test("generated declarations and public core schema compile for browsers", async
     const config = join(directory, "tsconfig.json");
     await writeFile(
       generated,
-      `${renderPackage(packageModel(generatorFixture()))}\nimport type { CoreSchema } from "@semantic/sdk";\nimport type { Package as ExactPackage } from "@semantic/sdk/core";\ndeclare const corePackage: CoreSchema.Package;\nconst exactPackage: ExactPackage = corePackage;\nvoid exactPackage;\n`,
+      `${renderPackage(packageModel(generatorFixture()))}\nimport { CoreSchema } from "@semantic/sdk";\nimport type { Package as ExactPackage } from "@semantic/sdk/core";\ndeclare const corePackage: CoreSchema.Package;\nconst exactPackage: ExactPackage = corePackage;\nconst titleAttribute = CoreSchema.ATTR_TITLE;\nvoid [exactPackage, titleAttribute];\n`,
     );
     await writeFile(
       edgeGenerated,
