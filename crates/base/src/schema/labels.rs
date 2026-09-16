@@ -56,11 +56,20 @@ pub fn classes() -> Vec<ClassType> {
     // Selection mode belongs to virtual groups. Retain the original Label definition
     // in migration 006 so databases that have already applied it can still upgrade.
     classes[0].attributes.remove("selection_mode");
-    classes.push(group_class());
+    classes.push(legacy_group_class());
+    for class in &mut classes {
+        class.creatable_in_ui = Some(false);
+    }
     classes
 }
 
 pub fn group_class() -> ClassType {
+    let mut class = legacy_group_class();
+    class.creatable_in_ui = Some(false);
+    class
+}
+
+fn legacy_group_class() -> ClassType {
     let mut class = legacy_classes().remove(0);
     class.id = GROUP_CLASS_ID.into();
     class.name = "LabelGroup".into();
@@ -111,7 +120,7 @@ fn make_class(
         inherits: parent.map(|id| ClassRef { id: id.into() }),
         extends: vec![],
         strict_schema: false,
-        creatable_in_ui: Some(false),
+        creatable_in_ui: None,
         attributes: attrs
             .iter()
             .enumerate()
@@ -189,13 +198,17 @@ pub fn group_migration() -> Migration {
             FieldPath::from_fields(["type"]),
             Expr::Operand(Operand::Literal(Value::String(GROUP_CLASS_ID.into()))),
         );
+    // Keep the definitions recorded by migration 007 immutable. The UI creation
+    // flags are applied separately by migration 009.
+    let mut label_class = legacy_classes().remove(0);
+    label_class.attributes.remove("selection_mode");
     Migration {
         module: crate::MODULE_NAME.into(),
         name: "007_label_groups".into(),
         description: Some("Add nonselectable label groups and convert exclusive parents while preserving their memberships.".into()),
         operations: vec![
-            MigrationOperation::Ddl(MigrationDdlOperation::UpsertClass { class: classes().remove(0) }),
-            MigrationOperation::Ddl(MigrationDdlOperation::UpsertClass { class: group_class() }),
+            MigrationOperation::Ddl(MigrationDdlOperation::UpsertClass { class: label_class }),
+            MigrationOperation::Ddl(MigrationDdlOperation::UpsertClass { class: legacy_group_class() }),
             MigrationOperation::Update { query },
         ],
         meta: Meta::default(),
@@ -208,7 +221,7 @@ mod tests {
     use semantic_data::value::{Object, Value};
 
     #[test]
-    fn group_schema_keeps_metadata_optional_and_old_migration_unchanged() {
+    fn group_schema_keeps_metadata_optional_and_old_migrations_unchanged() {
         let original = migration();
         let original_classes: Vec<_> = original
             .operations
@@ -224,6 +237,11 @@ mod tests {
         assert_eq!(original_classes.len(), 2);
         assert_eq!(original_classes[0].id, CLASS_ID);
         assert_eq!(original_classes[1].id, RELATION_ID);
+        assert!(
+            original_classes
+                .iter()
+                .all(|class| class.creatable_in_ui.is_none())
+        );
         assert!(
             original_classes[0]
                 .attributes
@@ -246,7 +264,54 @@ mod tests {
             assert!(!class.attributes["color"].required);
         }
         assert!(group_class().attributes.contains_key("selection_mode"));
-        assert_eq!(group_migration().name, "007_label_groups");
+        assert!(
+            classes()
+                .iter()
+                .all(|class| class.creatable_in_ui == Some(false))
+        );
+
+        let group_migration = group_migration();
+        assert_eq!(group_migration.name, "007_label_groups");
+        assert!(
+            group_migration
+                .operations
+                .iter()
+                .filter_map(|operation| match operation {
+                    MigrationOperation::Ddl(MigrationDdlOperation::UpsertClass { class }) => {
+                        Some(class)
+                    }
+                    _ => None,
+                })
+                .all(|class| class.creatable_in_ui.is_none())
+        );
+    }
+
+    #[tokio::test]
+    async fn package_with_applied_label_group_migration_upgrades() {
+        let db = semantic_db_core::Db::new(semantic_db_core::embedded::EmbeddedBackend::new(
+            semantic_db_kv::open_memory().unwrap(),
+        ));
+        let mut old_package = crate::package();
+        let label_ui_index = old_package
+            .migrations
+            .iter()
+            .position(|migration| migration.name == "009_label_creatable_in_ui")
+            .unwrap();
+        old_package.migrations.truncate(label_ui_index);
+        old_package.root.classes = old_package
+            .migrations
+            .iter()
+            .flat_map(|migration| &migration.operations)
+            .filter_map(|operation| match operation {
+                MigrationOperation::Ddl(MigrationDdlOperation::UpsertClass { class }) => {
+                    Some((class.id.clone(), class.clone()))
+                }
+                _ => None,
+            })
+            .collect();
+
+        db.upsert_package(old_package).await.unwrap();
+        db.upsert_package(crate::package()).await.unwrap();
     }
 
     #[tokio::test]

@@ -59,6 +59,7 @@ pub fn all() -> Vec<Migration> {
     migrations.push(crate::schema::labels::migration());
     migrations.push(crate::schema::labels::group_migration());
     migrations.push(creatable_in_ui_migration());
+    migrations.push(label_creatable_in_ui_migration());
     migrations
 }
 
@@ -108,6 +109,19 @@ fn creatable_in_ui_migration() -> Migration {
             "Exclude directories and directory nodes from generic entity creators.".to_string(),
         ),
         operations: directory::classes()
+            .into_iter()
+            .map(|class| MigrationOperation::Ddl(MigrationDdlOperation::UpsertClass { class }))
+            .collect(),
+        meta: Meta::default(),
+    }
+}
+
+fn label_creatable_in_ui_migration() -> Migration {
+    Migration {
+        module: MODULE_NAME.to_string(),
+        name: "009_label_creatable_in_ui".to_string(),
+        description: Some("Exclude labels from generic entity creators.".to_string()),
+        operations: crate::schema::labels::classes()
             .into_iter()
             .map(|class| MigrationOperation::Ddl(MigrationDdlOperation::UpsertClass { class }))
             .collect(),

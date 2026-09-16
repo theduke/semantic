@@ -1,5 +1,23 @@
 ## Develop
 
+## Project overview
+
+Semantic is a Rust workspace for a schema-driven semantic database and its
+applications. `crates/data` defines the shared data model and core schema,
+`crates/db_core` implements database behavior, and `crates/base` provides the
+built-in Semantic schema package. The workspace also contains storage backends,
+RPC/server and CLI layers, and Dioxus UI applications. See `docs/ARCHITECTURE.md`
+for the component map.
+
+## Schema migrations
+
+Entities and schema definitions in core (`crates/data`) and the base package
+(`crates/base`) must always be introduced or changed through migrations. Never
+modify an existing migration: its definition is persisted in user databases and
+must remain valid and byte-for-byte equivalent in meaning. Add a new forward
+migration for every schema change, and keep historical migration helpers and
+snapshots isolated from current schema definitions.
+
 You are a diligent expert Rust developer.
 You will do the assigned task to the best of your ability.
 
