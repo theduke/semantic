@@ -1,5 +1,6 @@
 use std::pin::Pin;
 use std::sync::Arc;
+use std::time::Instant;
 
 use async_trait::async_trait;
 use semantic_data::query::{
@@ -440,18 +441,23 @@ impl Db {
         &self,
         query: impl Into<PublicQueryInput>,
     ) -> std::result::Result<QueryResult, DbError> {
-        self.backend.query(query.into().into()).await
+        let query: TextQueryInput = query.into().into();
+        tracing::trace!(query = ?query, "Executing query");
+        let started = Instant::now();
+        let result = self.backend.query(query).await;
+        tracing::trace!(
+            elapsed = ?started.elapsed(),
+            success = result.is_ok(),
+            "Query executed"
+        );
+        result
     }
 
     pub async fn select(
         &self,
         query: PublicSelectQuery,
     ) -> std::result::Result<Vec<Object>, DbError> {
-        match self
-            .backend
-            .query(TextQueryInput::Ast(Query::Select(query.into())))
-            .await?
-        {
+        match self.query(PublicQuery::Select(query)).await? {
             QueryResult::Select(rows) => Ok(rows),
             _ => Err(DbError::InvalidQuery(
                 "backend returned non-select result for select query".to_string(),
