@@ -222,6 +222,7 @@ pub const ATTR_CORE_CATALOG_PACKAGES: &str = "semantic:db:packages";
 pub const ATTR_CORE_CATALOG_APPLIED_MIGRATIONS: &str = "semantic:db:applied_migrations";
 const CORE_SCHEMA_PACKAGE: &str = "semantic";
 const CORE_SCHEMA_MODULE: &str = "core";
+pub(crate) const CATALOG_ENTRY_IDS_MIGRATION: &str = "005_catalog_entry_ids";
 
 pub fn core_catalog_schema_batch() -> DdlBatch {
     let mut attrs = std::collections::BTreeMap::new();
@@ -899,6 +900,18 @@ pub fn core_schema_migrations() -> Vec<Migration> {
         },
         creatable_in_ui_migration(),
         shared_attributes_migration(),
+        Migration {
+            module: CORE_SCHEMA_MODULE.to_string(),
+            name: CATALOG_ENTRY_IDS_MIGRATION.to_string(),
+            description: Some(
+                "Namespace catalog row IDs by entry type to preserve complete typedefs."
+                    .to_string(),
+            ),
+            // EmbeddedDb rewrites the catalog atomically when a core migration
+            // is applied. The marker selects the new catalog storage encoding.
+            operations: Vec::new(),
+            meta: Meta::default(),
+        },
     ]
 }
 
@@ -1224,7 +1237,7 @@ mod tests {
     #[test]
     fn core_schema_migrations_are_idempotent() {
         let (catalog, first_run) = apply_core_schema_migrations(&Catalog::new()).unwrap();
-        assert_eq!(first_run.len(), 4);
+        assert_eq!(first_run.len(), 5);
 
         let (_, second_run) = apply_core_schema_migrations(&catalog).unwrap();
         assert!(second_run.is_empty());

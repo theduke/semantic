@@ -131,6 +131,52 @@ fn error(error: DbError) -> crate::ValidationError {
 }
 
 #[test]
+fn record_typedef_constraints_survive_reopen_without_package_registration() {
+    let mut db = EmbeddedDb::new(MemoryEntityStorage::new());
+    let mut ty = Type::new(TypeKind::Record(RecordType {
+        fields: BTreeMap::new(),
+        open: true,
+        additional: None,
+        required_order: None,
+    }));
+    ty.constraints.push(Constraint::MinProperties(1));
+    let mut ddl = schema(reference("v:Payload"));
+    ddl.operations.insert(
+        0,
+        DdlOperation::UpsertTypeDef {
+            type_def: TypeDef {
+                name: "v:Payload".into(),
+                module: None,
+                params: vec![],
+                ty,
+                visibility: Visibility::Public,
+                meta: Meta::default(),
+            },
+        },
+    );
+    db.transact_ddl(ddl).unwrap();
+    db.activate_validation().unwrap();
+    let expected =
+        crate::catalog::Catalog::from_storage_snapshot(db.catalog().to_storage_snapshot())
+            .unwrap()
+            .to_storage_snapshot();
+    let (_, storage) = db.into_parts();
+    let mut reopened = EmbeddedDb::open(storage).unwrap();
+    assert_eq!(reopened.catalog().to_storage_snapshot(), expected);
+    let err = reopened
+        .execute_batch_returning(
+            Batch::new().with_op(upsert(
+                "bad",
+                "v:Holder",
+                Some(Value::Object(Object::new())),
+            )),
+            BatchReturn::Stats,
+        )
+        .unwrap_err();
+    assert_eq!(error(err).rule, "min_properties");
+}
+
+#[test]
 fn activation_preflight_is_non_mutating_and_persists_with_reverse_refs() {
     let mut scalar = string();
     scalar.constraints.push(fk());

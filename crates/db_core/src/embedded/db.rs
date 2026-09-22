@@ -376,6 +376,19 @@ impl<S: EntityStorage> EmbeddedDb<S> {
                 read_revision,
                 &package,
             )?;
+            // Reconcile applied migrations before checking for a no-op: older
+            // catalogs may need repairs, including behavioral typedef constraints.
+            if executed_migrations.is_empty()
+                && before.is_empty()
+                && after.is_empty()
+                && next_catalog.to_storage_snapshot()
+                    == catalog_snapshot.catalog.to_storage_snapshot()
+            {
+                self.storage.ensure_revision(read_revision)?;
+                return Ok(PackageRegistrationOutcome {
+                    executed_migrations,
+                });
+            }
             let mut extra_ops =
                 self.ddl_cleanup_ops(catalog_snapshot.catalog.as_ref(), &next_catalog)?;
             self.backfill_new_indexes(
@@ -4336,6 +4349,48 @@ mod tests {
     fn initialization_enables_auto_indexing() {
         let db = EmbeddedDb::in_memory();
         assert!(db.auto_index_enabled());
+    }
+
+    #[test]
+    fn package_metadata_changes_are_persisted_without_new_migrations() {
+        let mut db = EmbeddedDb::in_memory();
+        let mut package = simple_schema_package("Original migration.");
+        db.upsert_package(package.clone()).unwrap();
+        package.meta.description = Some("Updated package metadata.".into());
+        assert!(
+            db.upsert_package(package.clone())
+                .unwrap()
+                .executed_migrations
+                .is_empty()
+        );
+
+        let (_, storage) = db.into_parts();
+        let reopened = EmbeddedDb::open(storage).unwrap();
+        assert_eq!(
+            reopened
+                .catalog()
+                .package_by_name(&package.name)
+                .unwrap()
+                .meta
+                .description,
+            package.meta.description,
+        );
+    }
+
+    #[test]
+    fn unchanged_package_still_reconciles_missing_schema() {
+        let mut db = EmbeddedDb::in_memory();
+        let package = simple_schema_package("Original migration.");
+        db.upsert_package(package.clone()).unwrap();
+        db.transact_ddl(DdlBatch::new().with_op(DdlOperation::DeleteClass {
+            id: "shared.test.note".into(),
+        }))
+        .unwrap();
+        assert!(db.catalog().class_id("shared.test.note").is_none());
+
+        let outcome = db.upsert_package(package).unwrap();
+        assert!(outcome.executed_migrations.is_empty());
+        assert!(db.catalog().class_id("shared.test.note").is_some());
     }
 
     #[test]

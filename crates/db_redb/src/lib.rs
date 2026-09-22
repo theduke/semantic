@@ -41,9 +41,16 @@ impl RedbKvEngine {
             }
         };
         {
-            let write_txn = db.begin_write().map_err(storage_err)?;
-            let _ = write_txn.open_table(KV_TABLE).map_err(storage_err)?;
-            write_txn.commit().map_err(storage_err)?;
+            let read_txn = db.begin_read().map_err(storage_err)?;
+            match read_txn.open_table(KV_TABLE) {
+                Ok(_) => {}
+                Err(redb::TableError::TableDoesNotExist(_)) => {
+                    let write_txn = db.begin_write().map_err(storage_err)?;
+                    let _ = write_txn.open_table(KV_TABLE).map_err(storage_err)?;
+                    write_txn.commit().map_err(storage_err)?;
+                }
+                Err(err) => return Err(storage_err(err)),
+            }
         }
         Ok(Self { db: Arc::new(db) })
     }
@@ -268,6 +275,48 @@ mod tests {
     use semantic_db_core::{Db, Expr, Operand, SelectQuery};
 
     use super::{DbOpenMode, RedbDatabase, RedbKvEngine, open_backend};
+
+    #[test]
+    fn redb_reopen_and_unchanged_package_preserve_revision() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("db");
+        let package = semantic_data::filestore::package();
+        let revision;
+        let expected_catalog;
+        {
+            let engine = RedbKvEngine::open(&path, DbOpenMode::AutoCreate).unwrap();
+            let mut db = RedbDatabase::open(semantic_db_kv::EntityStore::new(engine)).unwrap();
+            db.upsert_package(package.clone()).unwrap();
+            expected_catalog = semantic_db_core::catalog::Catalog::from_storage_snapshot(
+                db.catalog().to_storage_snapshot(),
+            )
+            .unwrap()
+            .to_storage_snapshot();
+            let (_, storage) = db.into_parts();
+            revision = storage.current_revision().unwrap();
+        }
+        let engine = RedbKvEngine::open(&path, DbOpenMode::OpenExisting).unwrap();
+        let mut db = RedbDatabase::open(semantic_db_kv::EntityStore::new(engine)).unwrap();
+        assert_eq!(db.catalog().to_storage_snapshot(), expected_catalog);
+        assert!(
+            db.upsert_package(package)
+                .unwrap()
+                .executed_migrations
+                .is_empty()
+        );
+        // Typedef metadata is persisted independently of its class projection.
+        assert_eq!(
+            db.catalog()
+                .type_def_by_name("semantic:filestore:file")
+                .unwrap()
+                .type_def
+                .module
+                .as_deref(),
+            Some("filestore")
+        );
+        let (_, storage) = db.into_parts();
+        assert_eq!(storage.current_revision().unwrap(), revision);
+    }
 
     #[test]
     fn redb_backend_roundtrip() {

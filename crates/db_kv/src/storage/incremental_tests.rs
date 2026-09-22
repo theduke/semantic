@@ -90,6 +90,59 @@ fn setup() -> (EmbeddedDb<EntityStore<ObservedEngine>>, Arc<Mutex<Probe>>) {
 }
 
 #[test]
+fn startup_reopens_with_one_schema_scan_and_skips_unchanged_packages() {
+    for size in [10, 1_000] {
+        let (mut db, probe) = setup();
+        let package = semantic_data::filestore::package();
+        db.upsert_package(package.clone()).unwrap();
+        db.execute_batch_returning(
+            Batch {
+                operations: (0..size)
+                    .map(|i| BatchOperation::Create {
+                        collection: "items".into(),
+                        id: i.to_string(),
+                        object: object(&i.to_string(), &i.to_string()),
+                    })
+                    .collect(),
+            },
+            semantic_db_core::BatchReturn::Stats,
+        )
+        .unwrap();
+        let schema = db
+            .catalog()
+            .collection_by_name(semantic_db_core::CORE_CATALOG_SCHEMA_COLLECTION)
+            .unwrap()
+            .lid;
+        let (_, storage) = db.into_parts();
+        let revision = storage.current_revision().unwrap();
+        *probe.lock().unwrap() = Probe::default();
+        let mut db = EmbeddedDb::open(storage).unwrap();
+        {
+            let probe = probe.lock().unwrap();
+            assert_eq!(probe.scans, vec![entity_prefix(schema)]);
+            assert!(probe.writes.is_empty());
+        }
+        *probe.lock().unwrap() = Probe::default();
+        assert!(
+            db.upsert_package(package)
+                .unwrap()
+                .executed_migrations
+                .is_empty()
+        );
+        {
+            let probe = probe.lock().unwrap();
+            assert!(
+                probe.scans.is_empty(),
+                "unchanged packages must not scan rows"
+            );
+            assert!(probe.writes.is_empty(), "unchanged packages must not write");
+        }
+        let (_, storage) = db.into_parts();
+        assert_eq!(storage.current_revision().unwrap(), revision);
+    }
+}
+
+#[test]
 fn compact_kv_append_has_constant_point_index_reads_and_writes() {
     use semantic_db_core::BatchReturn;
     let mut measurements = Vec::new();

@@ -61,6 +61,10 @@ const ENTRY_TYPE_COLLECTION: &str = CORE_CATALOG_COLLECTION_ENTRY_CLASS_ID;
 const ENTRY_TYPE_INDEX: &str = CORE_CATALOG_INDEX_ENTRY_CLASS_ID;
 const ENTRY_TYPE_META: &str = CORE_CATALOG_META_ENTRY_CLASS_ID;
 
+fn catalog_entry_id(entry_type: &str, id: &str) -> String {
+    format!("{entry_type}/{id}")
+}
+
 fn encode_entity_base(
     collection: crate::catalog::LocalCollectionId,
     entry_type: &str,
@@ -88,25 +92,28 @@ pub fn load_catalog<S: EntityStorage>(
     bootstrap_catalog: &Catalog,
 ) -> std::result::Result<Option<Catalog>, DbError> {
     let core = core_collection_ids(bootstrap_catalog)?;
-    let attributes_rows =
-        load_rows_by_entry_type(store, bootstrap_catalog, core.schema, ENTRY_TYPE_ATTRIBUTE)?;
-    let type_defs_rows =
-        load_rows_by_entry_type(store, bootstrap_catalog, core.schema, ENTRY_TYPE_TYPE_DEF)?;
-    let record_types_rows = load_rows_by_entry_type(
-        store,
-        bootstrap_catalog,
-        core.schema,
-        ENTRY_TYPE_RECORD_TYPE,
-    )?;
-    let classes_rows =
-        load_rows_by_entry_type(store, bootstrap_catalog, core.schema, ENTRY_TYPE_CLASS)?;
-    let collections_rows =
-        load_rows_by_entry_type(store, bootstrap_catalog, core.schema, ENTRY_TYPE_COLLECTION)?;
-    let indexes_rows =
-        load_rows_by_entry_type(store, bootstrap_catalog, core.schema, ENTRY_TYPE_INDEX)?;
-    let meta_rows =
-        load_rows_by_entry_type(store, bootstrap_catalog, core.schema, ENTRY_TYPE_META)?;
-
+    // Decode the schema collection once; all catalog entry types share it.
+    let mut rows_by_type = std::collections::BTreeMap::<String, Vec<StoredEntity>>::new();
+    for row in store.scan_collection_stream(core.schema)? {
+        let row = row?;
+        if let Some(entry_type) = row.object.get(OBJECT_TYPE_FIELD).and_then(Value::as_str) {
+            rows_by_type
+                .entry(entry_type.to_string())
+                .or_default()
+                .push(row);
+        }
+    }
+    let mut take_rows = |entry_type: &str| rows_by_type.remove(entry_type).unwrap_or_default();
+    let attributes_rows = take_rows(ENTRY_TYPE_ATTRIBUTE);
+    let type_defs_rows = take_rows(ENTRY_TYPE_TYPE_DEF);
+    let record_types_rows = take_rows(ENTRY_TYPE_RECORD_TYPE);
+    let classes_rows = take_rows(ENTRY_TYPE_CLASS);
+    let collections_rows = take_rows(ENTRY_TYPE_COLLECTION);
+    let indexes_rows = take_rows(ENTRY_TYPE_INDEX);
+    let meta_rows = take_rows(ENTRY_TYPE_META);
+    let namespaced_ids = meta_rows
+        .iter()
+        .any(|row| row.id == catalog_entry_id(ENTRY_TYPE_META, META_ROW_ID));
     if attributes_rows.is_empty()
         && type_defs_rows.is_empty()
         && record_types_rows.is_empty()
@@ -136,6 +143,13 @@ pub fn load_catalog<S: EntityStorage>(
     for row in &record_types_rows {
         let lid = object_lid(&row.object)?;
         let id = object_string_field(&row.object, ID_FIELD)?;
+        let id = if namespaced_ids {
+            id.strip_prefix(&format!("{ENTRY_TYPE_RECORD_TYPE}/"))
+                .ok_or_else(|| DbError::Deserialization("invalid catalog record row ID".into()))?
+                .to_string()
+        } else {
+            id
+        };
         let name = object_string_field(&row.object, "name")?;
         let record: semantic_data::schema::RecordType =
             object_json_field(&row.object, RECORD_FIELD)?;
@@ -202,7 +216,7 @@ pub fn load_catalog<S: EntityStorage>(
     let mut packages = Vec::<StoredPackage>::new();
     let mut applied_migrations = Vec::<StoredAppliedMigration>::new();
     for row in &meta_rows {
-        if row.id == META_ROW_ID {
+        if row.id == META_ROW_ID || row.id == catalog_entry_id(ENTRY_TYPE_META, META_ROW_ID) {
             next_field_id = object_usize_field(&row.object, NEXT_FIELD_ID_FIELD)?;
             auto_index_enabled =
                 object_bool_field_default(&row.object, AUTO_INDEX_ENABLED_FIELD, false);
@@ -513,26 +527,22 @@ where
     facet_json::from_str::<T>(value).map_err(|err| DbError::Deserialization(err.to_string()))
 }
 
-fn load_rows_by_entry_type<S: EntityStorage>(
-    store: &S,
-    _catalog: &Catalog,
-    collection: crate::catalog::LocalCollectionId,
-    entry_type: &str,
-) -> std::result::Result<Vec<StoredEntity>, DbError> {
-    Ok(store
-        .scan_collection(collection)?
-        .into_iter()
-        .filter(|entity| {
-            entity.object.get(OBJECT_TYPE_FIELD).and_then(Value::as_str) == Some(entry_type)
-        })
-        .collect())
-}
-
 fn push_entity_with_indexes(
     catalog: &Catalog,
     entity: &StoredEntity,
     ops: &mut Vec<StorageWriteOp>,
 ) -> std::result::Result<(), DbError> {
+    let mut entity = entity.clone();
+    if catalog
+        .applied_migration("semantic", "core", crate::ddl::CATALOG_ENTRY_IDS_MIGRATION)
+        .is_some()
+    {
+        let entry_type = object_string_field(&entity.object, OBJECT_TYPE_FIELD)?;
+        entity.id = catalog_entry_id(&entry_type, &entity.id);
+        entity
+            .object
+            .insert(ID_FIELD, Value::String(entity.id.clone()));
+    }
     let collection = crate::catalog::LocalCollectionId(entity.collection);
     ops.push(StorageWriteOp::PutEntity(entity.clone()));
     for index in catalog.indexes_for_collection(collection) {
@@ -543,4 +553,91 @@ fn push_entity_with_indexes(
         });
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::embedded::{EmbeddedDb, MemoryEntityStorage};
+    use semantic_data::schema::{
+        Constraint, Meta, RecordType, Type, TypeDef, TypeKind, Visibility,
+    };
+
+    #[test]
+    fn catalog_roundtrip_preserves_complete_typedefs_and_colliding_names() {
+        let mut catalog = crate::ddl::fresh_catalog_with_core_schema().unwrap();
+        let mut ty = Type::new(TypeKind::Record(RecordType {
+            fields: Default::default(),
+            open: true,
+            additional: None,
+            required_order: None,
+        }));
+        ty.constraints.push(Constraint::MinProperties(1));
+        catalog.upsert_type_def(TypeDef {
+            name: "example.Record".into(),
+            module: Some("example".into()),
+            params: Vec::new(),
+            ty,
+            visibility: Visibility::Public,
+            meta: Meta {
+                description: Some("Metadata outside the record projection.".into()),
+                ..Meta::default()
+            },
+        });
+        catalog
+            .upsert_collection(
+                "example.Record",
+                crate::catalog::CollectionKind::Polymorphic,
+                IntegrityMode::Permissive,
+            )
+            .unwrap();
+        let mut storage = MemoryEntityStorage::new();
+        let ops = catalog_write_ops(&storage, &catalog).unwrap();
+        let ids = ops
+            .iter()
+            .filter_map(|op| match op {
+                StorageWriteOp::PutEntity(entity) => Some(&entity.id),
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(
+            ids.len(),
+            ids.iter().collect::<std::collections::BTreeSet<_>>().len()
+        );
+        storage.apply_batch(&ops).unwrap();
+        let restored = load_catalog(&storage, &catalog).unwrap().unwrap();
+        assert_eq!(
+            restored.to_storage_snapshot(),
+            Catalog::from_storage_snapshot(catalog.to_storage_snapshot())
+                .unwrap()
+                .to_storage_snapshot()
+        );
+    }
+
+    #[test]
+    fn legacy_catalog_is_rewritten_once_with_namespaced_ids() {
+        let db = EmbeddedDb::new(MemoryEntityStorage::new());
+        let mut snapshot = db.catalog().to_storage_snapshot();
+        snapshot.applied_migrations.retain(|entry| {
+            entry.applied.migration.name != crate::ddl::CATALOG_ENTRY_IDS_MIGRATION
+        });
+        let legacy = Catalog::from_storage_snapshot(snapshot).unwrap();
+        let mut storage = MemoryEntityStorage::new();
+        storage
+            .apply_batch(&catalog_write_ops(&storage, &legacy).unwrap())
+            .unwrap();
+        let db = EmbeddedDb::open(storage).unwrap();
+        assert!(
+            db.catalog()
+                .applied_migration("semantic", "core", crate::ddl::CATALOG_ENTRY_IDS_MIGRATION)
+                .is_some()
+        );
+        let expected = db.catalog().to_storage_snapshot();
+        let (_, storage) = db.into_parts();
+        let revision = storage.current_revision().unwrap();
+        let reopened = EmbeddedDb::open(storage).unwrap();
+        assert_eq!(reopened.catalog().to_storage_snapshot(), expected);
+        let (_, storage) = reopened.into_parts();
+        assert_eq!(storage.current_revision().unwrap(), revision);
+    }
 }
