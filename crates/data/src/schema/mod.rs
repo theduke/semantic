@@ -10,6 +10,7 @@ pub mod r#enum;
 pub mod handle;
 pub mod index;
 pub mod intersection;
+pub mod lowered;
 pub mod migration;
 pub mod module;
 pub mod package;

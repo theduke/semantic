@@ -85,6 +85,9 @@ impl From<CatalogError> for DbError {
             CatalogError::UnknownClass(id) => Self::UnknownClass(id),
             CatalogError::UnknownAttribute { id } => Self::UnknownAttribute { id },
             CatalogError::InvalidSchema(msg) => Self::InvalidQuery(msg),
+            CatalogError::UnstorableType { definition, error } => {
+                Self::InvalidQuery(error.in_context(&definition))
+            }
         }
     }
 }

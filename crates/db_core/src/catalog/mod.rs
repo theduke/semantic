@@ -3,6 +3,8 @@ mod error;
 mod id_map;
 mod ids;
 mod interface;
+#[cfg(test)]
+mod lowering_tests;
 mod names;
 mod schema;
 mod shared;
@@ -25,7 +27,7 @@ pub use names::{
 };
 pub use schema::{
     AttributeSchema, ClassSchema, CollectionKind, CollectionSchema, IndexSchema, IntegrityMode,
-    NameSet, RecordTypeSchema, RelationshipSchema, TypeDefSchema,
+    NameSet, RecordTypeSchema, RelationshipSchema, TypeDefData, TypeDefSchema,
 };
 pub use shared::{CatalogSnapshot, CatalogVersionMismatch, SharedCatalog};
 pub use snapshot::{

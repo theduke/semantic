@@ -140,6 +140,55 @@ pub struct TypeDef {
 
 `TypeName` is currently a type alias for `String`.
 
+### Surface types vs. lowered data types
+
+`TypeKind` is the *surface* type language. Every kind can be persisted as a
+definition (contracts, interfaces and function signatures need all of them),
+but only a subset can be inhabited by stored `Value`s. That subset is
+`semantic_data::schema::lowered::DataType`: a derived, never-persisted form
+produced by `lower_type` / `lower_type_def`. Lowering resolves `Named` types
+through a `TypeResolver`, inlines them (recursive definitions become a
+`Recursive(name)` back-reference once a list, map, tuple, record field or
+variant payload separates the cycle), and fails with a typed `LowerError`
+naming the offending kind and its path, e.g.
+`attribute 'x' list item: function types cannot be stored`.
+
+| Surface kind | Lowered disposition |
+|---|---|
+| `Any`, `Null`, `Bool`, `Char`, `String`, `Bytes`, `Uuid`, `IpAddr`, `Json` | Same kind |
+| `Number` `Int`/`UInt` up to 128 bits, `Float` `F16`/`F32`/`F64`, `Unspecified` | `Number` |
+| `Number` `I256`/`U256`, `F80`/`F128`, `Decimal*` floats, `BigInt`, `BigUInt`, `Decimal`, `Rational`, `Complex` | Error |
+| `Temporal` `Date`/`Time`/`DateTime`/`Duration` | `Temporal` |
+| `Temporal` `Timestamp` | `Temporal(DateTime)` (documented exception: backends store timestamps as date-times) |
+| `Temporal` `Period`/`Instant` | Error |
+| `Optional`, `List`, `Tuple`, `Map`, `Record`, `Union`, `Enum`, `Variant`, `Ref` | Same kind, children lowered |
+| `Array` / `Set` | `List` carrying `length` / `distinct` |
+| `Result` | Externally tagged `Variant` with `ok` / `err` cases |
+| `Intersection` | Merged `Record` if every part lowers to a record, else error |
+| `Named` | Resolved and inlined; reference-site constraints are appended. Unresolved names, generic arguments and generic definitions are errors, as are alias cycles without an intervening data constructor |
+| `Attribute` (inline) | The attribute's value type with its constraints appended |
+| `Class` (inline) | `Record` keyed by canonical attribute ID including inherited attributes; strict classes are closed, others open. Unresolved attributes are skipped (same as stored-value validation) |
+| `Extension` | Kept as an opaque `Extension` (values are not interpreted) |
+| `Function`, `Interface`, `Handle`, `Stream`, `Never`, `Unknown`, `Opaque` | Error |
+
+**Enforcement.** The catalog tags every `TypeDefSchema` with its lowered
+form (`TypeDefData::Storable(DataType)`) or the lowering error
+(`TypeDefData::Unstorable`, e.g. interface-only definitions). Tags are
+recomputed after every schema change. `Catalog::apply_batch` — the path used by
+DDL batches and package migrations — lowers against the post-batch catalog, so
+definitions may reference types registered later in the same batch, and
+rejects any attribute or record type that does not lower with
+`CatalogError::UnstorableType`. This includes attributes whose `Named` type
+points at an interface-only definition, and batches that redefine a referenced
+type as interface-only. Classes are covered through their attributes and other
+type definitions are only tagged.
+
+Existing databases are never rejected: loading a catalog
+(`from_storage_snapshot` / `from_stored_rows`) only tags definitions, and a
+batch tolerates a data definition that already failed to lower before the
+batch as long as it is left unchanged. The direct `Catalog::upsert_*`
+registration helpers remain unvalidated (as before) but keep the tags current.
+
 ---
 
 ## Attributes and Classes

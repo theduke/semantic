@@ -615,6 +615,62 @@ mod tests {
     }
 
     #[test]
+    fn persisted_unstorable_attribute_types_do_not_block_open() {
+        let attribute = |id: &str, kind: TypeKind| semantic_data::schema::AttributeType {
+            id: id.into(),
+            name: id.into(),
+            ty: Type::new(kind),
+            constraints: Vec::new(),
+            meta: Meta::default(),
+        };
+        let function = || {
+            TypeKind::Function(semantic_data::schema::FunctionType {
+                params: Vec::new(),
+                results: Vec::new(),
+                throws: None,
+                async_fn: false,
+            })
+        };
+        // Direct catalog registration is unvalidated and stands in for a
+        // database written before lowering was enforced.
+        let db = EmbeddedDb::new(MemoryEntityStorage::new());
+        let mut legacy =
+            Catalog::from_storage_snapshot(db.catalog().to_storage_snapshot()).unwrap();
+        let _ = legacy.upsert_attribute(attribute("example:callback", function()));
+        let mut storage = MemoryEntityStorage::new();
+        storage
+            .apply_batch(&catalog_write_ops(&storage, &legacy).unwrap())
+            .unwrap();
+
+        let mut db = EmbeddedDb::open(storage).unwrap();
+        assert!(matches!(
+            db.catalog()
+                .type_def_by_name("example:callback")
+                .unwrap()
+                .data,
+            crate::catalog::TypeDefData::Unstorable(_)
+        ));
+        db.transact_ddl(
+            crate::DdlBatch::new().with_op(crate::DdlOperation::UpsertAttribute {
+                attribute: attribute("example:title", TypeKind::Json),
+            }),
+        )
+        .unwrap();
+        let err = db
+            .transact_ddl(
+                crate::DdlBatch::new().with_op(crate::DdlOperation::UpsertAttribute {
+                    attribute: attribute("example:other", function()),
+                }),
+            )
+            .unwrap_err();
+        assert!(
+            err.to_string()
+                .contains("attribute 'example:other': function types cannot be stored"),
+            "{err}"
+        );
+    }
+
+    #[test]
     fn legacy_catalog_is_rewritten_once_with_namespaced_ids() {
         let db = EmbeddedDb::new(MemoryEntityStorage::new());
         let mut snapshot = db.catalog().to_storage_snapshot();

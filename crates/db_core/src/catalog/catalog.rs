@@ -12,6 +12,7 @@ use semantic_data::{
             meta::Meta, type_def::TypeDef, type_kind::TypeKind, type_node::Type,
             type_param::TypeParam, type_ref::TypeRef, visibility::Visibility,
         },
+        lowered::{TypeResolver, lower_type_def},
         primitives::string_type::StringType,
         record::record_type::RecordType,
         relation::relation_mode::RelationMode,
@@ -26,8 +27,8 @@ use crate::catalog::{
     LocalClassId, LocalCollectionId, LocalFieldId, LocalIndexId, LocalPackageId, LocalRecordTypeId,
     LocalRelationId, LocalTypeDefId, NameSet, RecordTypeSchema, RelationshipSchema,
     StoredAppliedMigration, StoredAttribute, StoredClass, StoredCollection, StoredFieldId,
-    StoredIndex, StoredPackage, StoredRecordType, StoredRelationship, StoredTypeDef, TypeDefSchema,
-    is_special_builtin_field, nameset_for_identifier, nameset_for_qualified,
+    StoredIndex, StoredPackage, StoredRecordType, StoredRelationship, StoredTypeDef, TypeDefData,
+    TypeDefSchema, is_special_builtin_field, nameset_for_identifier, nameset_for_qualified,
 };
 
 #[derive(Debug, Clone)]
@@ -202,6 +203,7 @@ impl Catalog {
         &mut self,
         operations: &[CatalogBatchOperation],
     ) -> Result<(), CatalogError> {
+        let tolerated = self.unstorable_data_definitions();
         let mut pending_type_ops = Vec::<&CatalogBatchOperation>::new();
         for operation in operations {
             if Self::is_type_operation(operation) {
@@ -272,7 +274,15 @@ impl Catalog {
             }
         }
 
-        self.flush_pending_type_operations(&mut pending_type_ops)
+        self.flush_pending_type_operations(&mut pending_type_ops)?;
+
+        // Lower against the post-batch catalog so definitions may reference
+        // types registered later in the same batch.
+        if operations.iter().any(Self::is_type_operation) {
+            self.refresh_type_def_data();
+            self.ensure_storable_data_definitions(&tolerated)?;
+        }
+        Ok(())
     }
 
     pub fn register_attribute(&mut self, attr: AttributeType) -> LocalAttrId {
@@ -379,12 +389,16 @@ impl Catalog {
                 let _ = self.classes.remove_key(&key);
             }
         }
-        self.type_defs
+        let lid = self
+            .type_defs
             .insert(key_names.clone(), |lid| TypeDefSchema {
                 lid,
                 names: key_names.clone(),
                 type_def,
-            })
+                data: TypeDefData::Pending,
+            });
+        self.refresh_type_def_data();
+        lid
     }
 
     pub fn delete_type_def(&mut self, name: &str) -> bool {
@@ -392,6 +406,9 @@ impl Catalog {
         let _ = self.attributes.remove_key(name);
         let _ = self.record_types.remove_key(name);
         let _ = self.classes.remove_key(name);
+        if removed {
+            self.refresh_type_def_data();
+        }
         removed
     }
 
@@ -1023,6 +1040,7 @@ impl Catalog {
                     lid: item.lid,
                     names,
                     type_def: item.type_def,
+                    data: TypeDefData::Pending,
                 },
             );
         }
@@ -1236,6 +1254,7 @@ impl Catalog {
                         lid,
                         names: nameset_for_qualified(&key),
                         type_def,
+                        data: TypeDefData::Pending,
                     });
             }
         }
@@ -1329,6 +1348,9 @@ impl Catalog {
         catalog.next_field_id = catalog.next_field_id.max(next_field_id);
         catalog.auto_index_enabled = auto_index_enabled;
         let _ = catalog.sync_auto_path_indexes()?;
+        // Persisted definitions are tagged but never rejected here: catalogs
+        // written before lowering was enforced must keep opening.
+        catalog.refresh_type_def_data();
         Ok(catalog)
     }
 
@@ -1590,7 +1612,63 @@ impl Catalog {
                 lid,
                 names: nameset_for_qualified(&key),
                 type_def,
+                data: TypeDefData::Pending,
             })
+    }
+
+    /// Re-lowers every type definition against the current catalog.
+    fn refresh_type_def_data(&mut self) {
+        let lowered = self
+            .type_defs()
+            .map(|(lid, schema)| {
+                let data = match lower_type_def(&schema.type_def, self) {
+                    Ok(data_type) => TypeDefData::Storable(data_type),
+                    Err(error) => TypeDefData::Unstorable(error),
+                };
+                (lid, data)
+            })
+            .collect::<Vec<_>>();
+        for (lid, data) in lowered {
+            if let Some(schema) = self.type_defs.get_mut(lid) {
+                schema.data = data;
+            }
+        }
+    }
+
+    /// Data definitions (attributes and record types) that currently do not
+    /// lower, keyed by name.
+    fn unstorable_data_definitions(&self) -> BTreeMap<String, TypeDef> {
+        self.type_defs()
+            .filter(|(_, schema)| {
+                data_definition_label(&schema.type_def).is_some()
+                    && matches!(schema.data, TypeDefData::Unstorable(_))
+            })
+            .map(|(_, schema)| (schema.type_def.name.clone(), schema.type_def.clone()))
+            .collect()
+    }
+
+    /// Rejects data definitions that do not lower, unless the identical
+    /// definition already failed to lower before the batch (legacy catalogs).
+    fn ensure_storable_data_definitions(
+        &self,
+        tolerated: &BTreeMap<String, TypeDef>,
+    ) -> Result<(), CatalogError> {
+        for (_, schema) in self.type_defs() {
+            let TypeDefData::Unstorable(error) = &schema.data else {
+                continue;
+            };
+            let Some(label) = data_definition_label(&schema.type_def) else {
+                continue;
+            };
+            if tolerated.get(&schema.type_def.name) == Some(&schema.type_def) {
+                continue;
+            }
+            return Err(CatalogError::UnstorableType {
+                definition: format!("{label} '{}'", schema.type_def.name),
+                error: error.clone(),
+            });
+        }
+        Ok(())
     }
 
     fn delete_type_def_raw(&mut self, name: &str) -> bool {
@@ -1776,6 +1854,35 @@ impl Catalog {
 impl Default for Catalog {
     fn default() -> Self {
         Self::new()
+    }
+}
+
+/// Resolves names exactly like stored-value validation does.
+impl TypeResolver for Catalog {
+    fn resolve_type_def(&self, name: &str) -> Option<&TypeDef> {
+        self.type_def_by_name(name).map(|schema| &schema.type_def)
+    }
+
+    fn resolve_attribute(&self, id: &str) -> Option<&AttributeType> {
+        self.attribute_by_id(id).map(|schema| &schema.attribute)
+    }
+
+    fn resolve_class(&self, id: &str) -> Option<&ClassType> {
+        self.class_id(id)
+            .and_then(|lid| self.class_by_lid(lid))
+            .map(|schema| &schema.class)
+    }
+}
+
+/// Definitions that declare the type of stored values and must lower.
+///
+/// Classes are containers of attributes and are covered by their attributes;
+/// other type definitions may be interface-only and are merely tagged.
+fn data_definition_label(type_def: &TypeDef) -> Option<&'static str> {
+    match &type_def.ty.kind {
+        TypeKind::Attribute(_) => Some("attribute"),
+        TypeKind::Record(_) => Some("record type"),
+        _ => None,
     }
 }
 

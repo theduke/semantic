@@ -2,8 +2,12 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use fnv::FnvHashMap;
 use semantic_data::schema::{
-    IndexSchema as DataIndexSchema, attribute::attribute_type::AttributeType,
-    class::class_type::ClassType, core::type_def::TypeDef, core::type_node::Type,
+    IndexSchema as DataIndexSchema,
+    attribute::attribute_type::AttributeType,
+    class::class_type::ClassType,
+    core::type_def::TypeDef,
+    core::type_node::Type,
+    lowered::{DataType, LowerError},
     record::record_type::RecordType,
 };
 
@@ -40,6 +44,41 @@ pub struct TypeDefSchema {
     pub lid: LocalTypeDefId,
     pub names: NameSet,
     pub type_def: TypeDef,
+    /// Storage disposition derived by lowering `type_def` against the catalog.
+    pub data: TypeDefData,
+}
+
+/// Whether a catalog type definition can be inhabited by stored values.
+///
+/// Derived (never persisted): the catalog re-lowers every definition after
+/// each schema change, so the tag always reflects the current catalog.
+#[derive(Debug, Clone, PartialEq)]
+pub enum TypeDefData {
+    /// Not lowered yet. Only observable transiently while a DDL batch is
+    /// being applied.
+    Pending,
+    /// The definition lowers to a storable data type.
+    Storable(DataType),
+    /// The definition cannot hold stored values: interface-only definitions
+    /// (functions, interfaces, streams, ...) and legacy data definitions that
+    /// were persisted before lowering was enforced.
+    Unstorable(LowerError),
+}
+
+impl TypeDefData {
+    pub fn data_type(&self) -> Option<&DataType> {
+        match self {
+            Self::Storable(data_type) => Some(data_type),
+            Self::Pending | Self::Unstorable(_) => None,
+        }
+    }
+
+    pub fn error(&self) -> Option<&LowerError> {
+        match self {
+            Self::Unstorable(error) => Some(error),
+            Self::Pending | Self::Storable(_) => None,
+        }
+    }
 }
 
 #[derive(Debug, Clone)]
