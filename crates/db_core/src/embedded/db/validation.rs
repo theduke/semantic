@@ -83,12 +83,27 @@ impl<S: EntityStorage> EmbeddedDb<S> {
             id: ACTIVE.into(),
             object: Object::new(),
         }));
+        let before = self
+            .storage
+            .get_entity(collection.lid, ACTIVE)?
+            .map(|row| row.object);
+        let mut changes = crate::batch_return::ChangeSet::new();
+        if before.is_none() {
+            changes.insert(
+                (STATE.into(), ACTIVE.into()),
+                crate::batch_return::RowChange {
+                    before,
+                    after: Some(Object::new()),
+                },
+            );
+        }
         if self.catalog.snapshot().version != catalog.version {
             return Err(DbError::TransactionConflict(
                 "catalog changed during validation activation".into(),
             ));
         }
-        match self.storage.apply_batch_conditional(&ops, revision)? {
+        let intent = CommitIntent::data(crate::ChangeSource::Maintenance);
+        match self.commit_write(&ops, revision, intent, changes)? {
             StorageCommitOutcome::Committed { .. } => Ok(()),
             StorageCommitOutcome::Conflict { .. } => Err(DbError::TransactionConflict(
                 "database changed during validation activation".into(),

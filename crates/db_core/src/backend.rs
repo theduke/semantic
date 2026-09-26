@@ -216,6 +216,20 @@ pub trait Backend: Send + Sync {
         ))
     }
 
+    /// Subscribe to the changes committed from now on (see
+    /// [`crate::ChangeFeed`]). The default reports that the backend has no
+    /// change feed.
+    fn subscribe_changes(
+        &self,
+        options: crate::ChangeSubscriptionOptions,
+    ) -> Result<crate::ChangeStream, DbError> {
+        let _ = options;
+        Err(DbError::storage(
+            StorageErrorKind::Unsupported,
+            "backend does not support change feeds",
+        ))
+    }
+
     async fn validation_preflight(&self) -> Result<Vec<crate::ValidationViolation>, DbError> {
         Err(DbError::InvalidQuery(
             "validation preflight requires a managed backend".into(),
@@ -453,6 +467,14 @@ impl Db {
         options: TransactionOptions,
     ) -> Result<Box<dyn TransactionHandle>, DbError> {
         self.backend.begin_transaction(options).await
+    }
+
+    /// Subscribe to committed changes (see [`Backend::subscribe_changes`]).
+    pub fn subscribe_changes(
+        &self,
+        options: crate::ChangeSubscriptionOptions,
+    ) -> Result<crate::ChangeStream, DbError> {
+        self.backend.subscribe_changes(options)
     }
 
     pub async fn scan_entities(&self) -> Result<EntityStream, DbError> {

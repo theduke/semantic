@@ -542,10 +542,16 @@ impl<S: EntityStorage> EmbeddedDb<S> {
         );
         drop(reader);
         self.execution_counts = state.counts;
-        let CompactReply::Ready((ops, ())) = prepared? else {
+        let CompactReply::Ready(prepared) = prepared? else {
             unreachable!("interactive commits never fall back")
         };
-        let revision = self.commit_compact_ops(revision, catalog.version, &ops)?;
+        let revision = self.commit_compact_ops(
+            revision,
+            catalog.version,
+            &prepared.ops,
+            crate::ChangeSource::Transaction,
+            prepared.changes,
+        )?;
         Ok(TransactionCommit { revision, stats })
     }
 

@@ -8950,6 +8950,7 @@ dependencies = [
 name = "semantic_db_test"
 version = "0.0.1"
 dependencies = [
+ "futures",
  "semantic_data",
  "semantic_db_core",
 ]

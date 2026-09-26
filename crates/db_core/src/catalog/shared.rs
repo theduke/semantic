@@ -57,6 +57,15 @@ impl SharedCatalog {
         expected_version: u64,
         catalog: Catalog,
     ) -> Result<u64, CatalogVersionMismatch> {
+        self.compare_and_swap_arc(expected_version, Arc::new(catalog))
+    }
+
+    /// [`Self::compare_and_swap`] with a shared catalog.
+    pub fn compare_and_swap_arc(
+        &self,
+        expected_version: u64,
+        catalog: Arc<Catalog>,
+    ) -> Result<u64, CatalogVersionMismatch> {
         let mut guard = self.inner.write().expect("catalog lock poisoned");
         if guard.version != expected_version {
             return Err(CatalogVersionMismatch {
@@ -65,7 +74,7 @@ impl SharedCatalog {
             });
         }
         guard.version = guard.version.saturating_add(1);
-        guard.catalog = Arc::new(catalog);
+        guard.catalog = catalog;
         Ok(guard.version)
     }
 }

@@ -12,5 +12,6 @@ categories.workspace = true
 version.workspace = true
 
 [dependencies]
+futures = "0.3.31"
 semantic_data = { workspace = true }
 semantic_db_core = { path = "../db_core" }

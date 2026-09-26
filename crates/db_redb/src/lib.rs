@@ -532,6 +532,8 @@ pub fn open_backend_with_options(
 }
 
 #[cfg(test)]
+mod change_feed_tests;
+#[cfg(test)]
 mod concurrency_tests;
 #[cfg(test)]
 mod engine_tests;

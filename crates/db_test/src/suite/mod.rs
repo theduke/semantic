@@ -3,11 +3,13 @@ use std::future::Future;
 use std::pin::Pin;
 
 mod batch_returning;
+mod change_feed;
 mod compact;
 mod incremental;
 mod index_access;
 mod transactions;
 mod validation;
+pub use change_feed::test_change_feed;
 pub use index_access::test_index_access;
 pub use transactions::test_transactions;
 pub use validation::test_validation;
@@ -87,6 +89,7 @@ pub async fn test_db(db: &Db) {
     test_strict_registered_schema_typeless_insert(db).await;
     test_strict_class_attributes(db).await;
     test_transactions(db).await;
+    test_change_feed(db).await;
 }
 
 async fn test_schema_registration(db: &Db) {

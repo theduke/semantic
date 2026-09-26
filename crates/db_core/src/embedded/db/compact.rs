@@ -898,15 +898,21 @@ impl<S: EntityStorage> EmbeddedDb<S> {
         })();
         drop(reader);
         self.execution_counts = state.counts;
-        let (ops, reply) = match prepared? {
+        let prepared = match prepared? {
             CompactReply::Ready(prepared) => prepared,
             CompactReply::Fallback(reason) => {
                 self.record_compact_fallback(reason);
                 return Ok(None);
             }
         };
-        self.commit_compact_ops(revision, catalog_version, &ops)?;
-        Ok(Some(reply))
+        self.commit_compact_ops(
+            revision,
+            catalog_version,
+            &prepared.ops,
+            crate::ChangeSource::Batch,
+            prepared.changes,
+        )?;
+        Ok(Some(prepared.reply))
     }
 
     /// Why the point path cannot run at `revision` under `catalog`, or
@@ -953,7 +959,7 @@ impl<S: EntityStorage> EmbeddedDb<S> {
             &ChangeSet,
             &crate::BatchStats,
         ) -> Result<CompactReply<R>, DbError>,
-    ) -> Result<CompactReply<(Vec<StorageWriteOp>, R)>, DbError> {
+    ) -> Result<CompactReply<PreparedCommit<R>>, DbError> {
         let catalog = view.catalog;
         expand_cascade_deletes(view, stats)?;
         let changes = view.changes();
@@ -1040,17 +1046,23 @@ impl<S: EntityStorage> EmbeddedDb<S> {
         }
         self.update_reverse_references(catalog, &changes, &mut ops)?;
         self.update_relationship_edges(catalog, &before, &after, &mut ops)?;
-        Ok(CompactReply::Ready((ops, reply)))
+        Ok(CompactReply::Ready(PreparedCommit {
+            ops,
+            changes,
+            reply,
+        }))
     }
 
     /// Commit `ops` if the storage is still at `revision` and the catalog at
     /// `catalog_version`; otherwise fail with a transaction conflict.
-    /// Returns the committed revision.
+    /// Publishes `changes` and returns the committed revision.
     pub(super) fn commit_compact_ops(
         &mut self,
         revision: Option<u64>,
         catalog_version: u64,
         ops: &[StorageWriteOp],
+        source: crate::ChangeSource,
+        changes: ChangeSet,
     ) -> Result<Option<u64>, DbError> {
         self.storage.ensure_revision(revision)?;
         if self.catalog.snapshot().version != catalog_version {
@@ -1058,7 +1070,7 @@ impl<S: EntityStorage> EmbeddedDb<S> {
                 "catalog changed during transaction".into(),
             ));
         }
-        match self.storage.apply_batch_conditional(ops, revision)? {
+        match self.commit_write(ops, revision, CommitIntent::data(source), changes)? {
             StorageCommitOutcome::Committed { revision } => {
                 tracing::debug!(
                     point_reads = self.execution_counts.point_reads,
@@ -1087,6 +1099,14 @@ impl<S: EntityStorage> EmbeddedDb<S> {
             "compact batch scan fallback"
         );
     }
+}
+
+/// Validated staged changes of a transaction, ready to commit.
+pub(super) struct PreparedCommit<R> {
+    pub ops: Vec<StorageWriteOp>,
+    /// Net row changes, published once committed.
+    pub changes: ChangeSet,
+    pub reply: R,
 }
 
 /// Apply one batch operation to the transaction overlay.

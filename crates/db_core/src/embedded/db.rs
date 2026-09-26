@@ -49,6 +49,9 @@ const REL_EDGE_TARGET_KEY_FIELD: &str = "relation_target";
 const REL_EDGE_SOURCE_INDEX_NAME: &str = "__rel_source_idx";
 const REL_EDGE_TARGET_INDEX_NAME: &str = "__rel_target_idx";
 
+#[cfg(test)]
+mod change_feed_tests;
+mod commit;
 pub(crate) mod compact;
 mod incremental;
 mod index_scan;
@@ -68,6 +71,7 @@ pub use reader::DbReader;
 use reader::QueryReader;
 
 use crate::embedded::storage::{RevisionReader, snapshot_isolation_unsupported};
+use commit::CommitIntent;
 use compact::CompactReply;
 use local_refs::{
     LocalRefResolver, RowLocalRefs, resolve_path_with_local_refs,
@@ -80,6 +84,7 @@ pub struct EmbeddedDb<S: EntityStorage> {
     storage: S,
     config: DbConfig,
     execution_counts: compact::ExecutionCounts,
+    change_feed: crate::ChangeFeed,
 }
 
 #[cfg(test)]
@@ -142,6 +147,7 @@ impl<S: EntityStorage> EmbeddedDb<S> {
             storage,
             config,
             execution_counts: compact::ExecutionCounts::default(),
+            change_feed: crate::ChangeFeed::default(),
         };
         if db
             .catalog()
@@ -205,14 +211,24 @@ impl<S: EntityStorage> EmbeddedDb<S> {
     }
 
     fn mark_collection_internal(&mut self, name: &str) -> std::result::Result<(), DbError> {
-        let mut catalog = self.catalog().as_ref().clone();
+        let snapshot = self.catalog.snapshot();
+        let mut catalog = snapshot.catalog.as_ref().clone();
         if !mark_collection_internal(&mut catalog, name)? {
             return Ok(());
         }
         let ops = catalog_write_ops(&self.storage, &catalog)?;
-        self.storage.apply_batch(&ops)?;
-        self.catalog.replace(catalog);
-        Ok(())
+        let revision = self.storage.current_revision()?;
+        let intent = CommitIntent::with_catalog(
+            crate::ChangeSource::Ddl,
+            snapshot.version,
+            Arc::new(catalog),
+        );
+        match self.commit_write(&ops, revision, intent, Default::default())? {
+            StorageCommitOutcome::Committed { .. } => Ok(()),
+            StorageCommitOutcome::Conflict { .. } => Err(DbError::TransactionConflict(
+                "database changed while marking a collection internal".into(),
+            )),
+        }
     }
 
     fn backfill_missing_index_storage(
@@ -467,6 +483,7 @@ impl<S: EntityStorage> EmbeddedDb<S> {
                 read_revision,
                 &package,
             )?;
+            let next_catalog = Arc::new(next_catalog);
             // Reconcile applied migrations before checking for a no-op: older
             // catalogs may need repairs, including behavioral typedef constraints.
             if executed_migrations.is_empty()
@@ -500,20 +517,15 @@ impl<S: EntityStorage> EmbeddedDb<S> {
                 &after,
                 read_revision,
                 &extra_ops,
+                CommitIntent::with_catalog(
+                    crate::ChangeSource::Migration,
+                    catalog_snapshot.version,
+                    Arc::clone(&next_catalog),
+                ),
             )? {
-                StorageCommitOutcome::Committed { .. } => {
-                    self.catalog
-                        .compare_and_swap(catalog_snapshot.version, next_catalog)
-                        .map_err(|mismatch| {
-                            DbError::TransactionConflict(format!(
-                                "catalog version changed: expected {}, actual {}",
-                                mismatch.expected, mismatch.actual
-                            ))
-                        })?;
-                    Ok(PackageRegistrationOutcome {
-                        executed_migrations,
-                    })
-                }
+                StorageCommitOutcome::Committed { .. } => Ok(PackageRegistrationOutcome {
+                    executed_migrations,
+                }),
                 StorageCommitOutcome::Conflict {
                     expected_revision,
                     actual_revision,
@@ -534,6 +546,34 @@ impl<S: EntityStorage> EmbeddedDb<S> {
     /// The underlying entity storage.
     pub fn storage(&self) -> &S {
         &self.storage
+    }
+
+    /// The storage revision of the latest commit. Every change event carries
+    /// the revision its commit created, so a client that read state at this
+    /// revision applies only events with a higher one.
+    pub fn current_revision(&self) -> std::result::Result<Option<u64>, DbError> {
+        self.storage.current_revision()
+    }
+
+    /// The feed publishing one event per committed write (see
+    /// [`crate::ChangeFeed`]).
+    pub fn change_feed(&self) -> &crate::ChangeFeed {
+        &self.change_feed
+    }
+
+    /// Subscribe to changes committed from now on.
+    pub fn subscribe_changes(
+        &self,
+        options: crate::ChangeSubscriptionOptions,
+    ) -> crate::ChangeSubscription {
+        self.change_feed.subscribe(options)
+    }
+
+    /// Replace the change feed by one retaining `capacity` undelivered
+    /// events per subscriber. Existing subscriptions end.
+    pub fn with_change_feed_capacity(mut self, capacity: usize) -> Self {
+        self.change_feed = crate::ChangeFeed::new(capacity);
+        self
     }
 
     pub fn into_parts(self) -> (SharedCatalog, S) {
@@ -906,6 +946,7 @@ impl<S: EntityStorage> EmbeddedDb<S> {
                 &[],
                 crate::WriteSettings::default(),
                 DatasetWrite::Data,
+                CommitIntent::data(crate::ChangeSource::Batch),
             )? {
                 StorageCommitOutcome::Committed { .. } => Ok(result),
                 StorageCommitOutcome::Conflict {
@@ -1010,6 +1051,7 @@ impl<S: EntityStorage> EmbeddedDb<S> {
                 &[],
                 crate::WriteSettings::default(),
                 DatasetWrite::Data,
+                CommitIntent::data(crate::ChangeSource::Batch),
             )? {
                 StorageCommitOutcome::Committed { .. } => Ok(result),
                 StorageCommitOutcome::Conflict {
@@ -1209,6 +1251,7 @@ impl<S: EntityStorage> EmbeddedDb<S> {
                 &[],
                 settings,
                 DatasetWrite::Data,
+                CommitIntent::data(crate::ChangeSource::Batch),
             )? {
                 StorageCommitOutcome::Committed { .. } => {
                     Ok(reply.unwrap_or(crate::BatchReply::Dataset(out)))
@@ -1264,6 +1307,7 @@ impl<S: EntityStorage> EmbeddedDb<S> {
             let (next_catalog, ddl_outcome) =
                 apply_ddl_batch(catalog_snapshot.catalog.as_ref(), &ddl)
                     .map_err(|err| DbError::InvalidQuery(err.to_string()))?;
+            let next_catalog = Arc::new(next_catalog);
             let mut extra_ops =
                 self.ddl_cleanup_ops(catalog_snapshot.catalog.as_ref(), &next_catalog)?;
             self.backfill_new_indexes(
@@ -1285,18 +1329,13 @@ impl<S: EntityStorage> EmbeddedDb<S> {
                 &dataset,
                 read_revision,
                 &extra_ops,
+                CommitIntent::with_catalog(
+                    crate::ChangeSource::Ddl,
+                    catalog_snapshot.version,
+                    Arc::clone(&next_catalog),
+                ),
             )? {
-                StorageCommitOutcome::Committed { .. } => {
-                    self.catalog
-                        .compare_and_swap(catalog_snapshot.version, next_catalog)
-                        .map_err(|mismatch| {
-                            DbError::TransactionConflict(format!(
-                                "catalog version changed: expected {}, actual {}",
-                                mismatch.expected, mismatch.actual
-                            ))
-                        })?;
-                    Ok(ddl_outcome)
-                }
+                StorageCommitOutcome::Committed { .. } => Ok(ddl_outcome),
                 StorageCommitOutcome::Conflict {
                     expected_revision,
                     actual_revision,
@@ -1678,6 +1717,7 @@ impl<S: EntityStorage> EmbeddedDb<S> {
         after: &BTreeMap<String, BTreeMap<String, Object>>,
         expected_revision: Option<u64>,
         prelude_ops: &[StorageWriteOp],
+        intent: CommitIntent,
     ) -> std::result::Result<StorageCommitOutcome, DbError> {
         self.persist_dataset_delta_with_settings(
             TxScope::new(catalog, expected_revision, IsolationLevel::ReadCommitted),
@@ -1686,6 +1726,7 @@ impl<S: EntityStorage> EmbeddedDb<S> {
             prelude_ops,
             crate::WriteSettings::default(),
             DatasetWrite::Migration,
+            intent,
         )
     }
 
@@ -1697,6 +1738,7 @@ impl<S: EntityStorage> EmbeddedDb<S> {
         prelude_ops: &[StorageWriteOp],
         settings: crate::WriteSettings,
         write: DatasetWrite,
+        intent: CommitIntent,
     ) -> std::result::Result<StorageCommitOutcome, DbError> {
         let TxScope {
             catalog,
@@ -1835,24 +1877,13 @@ impl<S: EntityStorage> EmbeddedDb<S> {
             )?;
         }
 
+        let changes = crate::batch_return::changes(before, &normalized_after);
         if !before.is_empty() || !normalized_after.is_empty() {
             self.update_relationship_edges(catalog, before, &normalized_after, &mut ops)?;
-            self.update_reverse_references(
-                catalog,
-                &crate::batch_return::changes(before, &normalized_after),
-                &mut ops,
-            )?;
+            self.update_reverse_references(catalog, &changes, &mut ops)?;
         }
 
-        if self.storage.tx_capabilities().conflict_detection {
-            self.storage
-                .apply_batch_conditional(&ops, expected_revision)
-        } else {
-            self.storage.apply_batch(&ops)?;
-            Ok(StorageCommitOutcome::Committed {
-                revision: self.storage.current_revision()?,
-            })
-        }
+        self.commit_write(&ops, expected_revision, intent, changes)
     }
 
     fn push_entity_ops(

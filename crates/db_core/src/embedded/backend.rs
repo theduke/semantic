@@ -32,6 +32,8 @@ use crate::embedded::{
 pub struct EmbeddedBackend<S: EntityStorage> {
     db: Arc<RwLock<EmbeddedDb<S>>>,
     catalog: SharedCatalog,
+    /// Shared with the database, so subscribing never takes the lock.
+    change_feed: crate::ChangeFeed,
     runtime: Arc<dyn AsyncRuntime>,
 }
 
@@ -43,9 +45,15 @@ impl<S: EntityStorage> EmbeddedBackend<S> {
     pub fn with_runtime(db: EmbeddedDb<S>, runtime: Arc<dyn AsyncRuntime>) -> Self {
         Self {
             catalog: db.shared_catalog().clone(),
+            change_feed: db.change_feed().clone(),
             db: Arc::new(RwLock::new(db)),
             runtime,
         }
+    }
+
+    /// The database's change feed.
+    pub fn change_feed(&self) -> &crate::ChangeFeed {
+        &self.change_feed
     }
 
     /// Run `op` on a reader over the current committed state.
@@ -291,6 +299,13 @@ fn lock_poisoned_error() -> DbError {
 
 #[async_trait]
 impl<S: EntityStorage> Backend for EmbeddedBackend<S> {
+    fn subscribe_changes(
+        &self,
+        options: crate::ChangeSubscriptionOptions,
+    ) -> Result<crate::ChangeStream, DbError> {
+        Ok(Box::pin(self.change_feed.subscribe(options)))
+    }
+
     async fn begin_transaction(
         &self,
         options: TransactionOptions,
