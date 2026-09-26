@@ -53,7 +53,11 @@ pub(crate) mod compact;
 mod incremental;
 mod local_refs;
 mod mutation;
+mod reader;
 mod validation;
+
+pub use reader::DbReader;
+use reader::QueryReader;
 
 use crate::embedded::storage::RevisionReader;
 use compact::CompactReply;
@@ -293,6 +297,34 @@ impl<S: EntityStorage> EmbeddedDb<S> {
         &self.catalog
     }
 
+    /// A reader over the current committed state.
+    ///
+    /// The reader owns its storage snapshot when the storage supports owned
+    /// snapshots (see [`Self::owned_reader`]); otherwise it borrows the
+    /// storage and keeps `self` borrowed while it is used.
+    pub fn reader(&self) -> std::result::Result<DbReader<'_>, DbError> {
+        Ok(match self.owned_reader()? {
+            Some(reader) => reader,
+            None => DbReader::new(
+                self.catalog.snapshot(),
+                QueryReader::Borrowed(self.storage.snapshot()?),
+            ),
+        })
+    }
+
+    /// A `'static` reader over the current committed state, or `None` when
+    /// the storage has no owned snapshots ([`EntityStorage::owned_snapshot`]).
+    ///
+    /// The reader does not borrow the database: it can be moved to another
+    /// thread and keeps reading the state it was created at while writers
+    /// commit newer states.
+    pub fn owned_reader(&self) -> std::result::Result<Option<DbReader<'static>>, DbError> {
+        Ok(self
+            .storage
+            .owned_snapshot()?
+            .map(|snapshot| DbReader::new(self.catalog.snapshot(), QueryReader::Shared(snapshot))))
+    }
+
     /// Replace the in-memory catalog with an authoritative durable snapshot.
     /// Storage adapters use this when their catalog snapshot is committed
     /// atomically outside the entity storage implementation.
@@ -477,26 +509,7 @@ impl<S: EntityStorage> EmbeddedDb<S> {
         collection: &str,
         id: &str,
     ) -> std::result::Result<Option<EntityRecord>, DbError> {
-        let catalog = self.catalog();
-        let collection_schema = catalog.collection_by_name(collection).ok_or_else(|| {
-            DbError::UnknownCollectionByName {
-                name: collection.to_string(),
-            }
-        })?;
-
-        let Some(entity) = self
-            .storage
-            .snapshot()?
-            .get_entity(collection_schema.lid, id)?
-        else {
-            return Ok(None);
-        };
-
-        Ok(Some(EntityRecord {
-            id: entity.id,
-            collection: collection_schema.name.clone(),
-            object: entity.object,
-        }))
+        self.reader()?.get(collection, id)
     }
 
     pub fn delete(&mut self, collection: &str, id: &str) -> std::result::Result<(), DbError> {
@@ -518,159 +531,15 @@ impl<S: EntityStorage> EmbeddedDb<S> {
     }
 
     pub fn select(&self, query: SelectQuery) -> std::result::Result<Vec<Object>, DbError> {
-        // Statistics and execution observe one storage state.
-        let reader = self.query_reader()?;
-        let collection_name = query.collection_or_default().to_string();
-        let (query, stats, source) = if is_all_collection_alias(&collection_name) {
-            (query, None, ALL_COLLECTION_ALIAS.to_string())
-        } else {
-            let catalog = self.catalog();
-            let collection = catalog
-                .collection_by_name(&collection_name)
-                .ok_or_else(|| DbError::UnknownCollectionByName {
-                    name: collection_name.clone(),
-                })?;
-            let query = canonicalize_select_query(&query, catalog.as_ref(), collection)?;
-            let stats = self.stats_for_query(&*reader, &query, collection)?;
-            (query, Some(stats), collection.name.clone())
-        };
-        let optimizer = crate::Optimizer::core();
-        let context = self.query_context();
-        let stats_provider = stats
-            .as_ref()
-            .map(|value| value as &dyn crate::StatsProvider);
-        let mut physical = optimizer
-            .optimize_query(&query, Some(source.clone()), stats_provider, &context)
-            .physical;
-        self.rewrite_count_fast_path(&*reader, &mut physical)?;
-        let mut rows =
-            self.execute_physical_plan_with_reader(reader, &physical, Some(source.as_str()))?;
-        let catalog = self.catalog();
-        // Inject computed attributes.
-        for row in &mut rows {
-            let _ = crate::inject_computed_attributes(catalog.as_ref(), row);
-        }
-        Ok(self.format_output_rows(catalog.as_ref(), rows, query.field_format))
+        self.reader()?.select(query)
     }
 
     pub fn plan_query(&self, query: Query) -> std::result::Result<QueryPlan, DbError> {
-        if matches!(query, Query::Ddl(_)) {
-            return Err(DbError::InvalidQuery(
-                "query planning/explain is not supported for DDL".to_string(),
-            ));
-        }
-        let collection = query.collection_or_default().to_string();
-        let explain = self.explain_query(query)?;
-        match explain.access_path {
-            AccessPath::FullScan => Ok(QueryPlan::FullScan { collection }),
-            AccessPath::IndexLookup {
-                index_name,
-                field,
-                value,
-            } => Ok(QueryPlan::IndexLookup {
-                collection,
-                index_name,
-                field,
-                value,
-            }),
-        }
+        self.reader()?.plan_query(query)
     }
 
     pub fn explain_query(&self, query: Query) -> std::result::Result<QueryExplain, DbError> {
-        if matches!(query, Query::Ddl(_)) {
-            return Err(DbError::InvalidQuery(
-                "query planning/explain is not supported for DDL".to_string(),
-            ));
-        }
-        let collection_name = query.collection_or_default().to_string();
-        let (select, stats, source, collection_for_access_path) =
-            if is_all_collection_alias(&collection_name) {
-                let Query::Select(select) = query else {
-                    return Err(DbError::InvalidQuery(format!(
-                        "collection alias '{ALL_COLLECTION_ALIAS}' is only supported for SELECT"
-                    )));
-                };
-                (select, None, ALL_COLLECTION_ALIAS.to_string(), None)
-            } else {
-                let catalog = self.catalog();
-                let collection = catalog
-                    .collection_by_name(&collection_name)
-                    .ok_or_else(|| DbError::UnknownCollectionByName {
-                        name: collection_name.clone(),
-                    })?;
-
-                let select = match canonicalize_query(&query, catalog.as_ref(), collection)? {
-                    Query::Select(query) => query,
-                    Query::Insert(_) => {
-                        return Err(DbError::InvalidQuery(
-                            "query planning/explain is not supported for INSERT".to_string(),
-                        ));
-                    }
-                    Query::Update(query) => SelectQuery {
-                        collection: query.collection,
-                        source_alias: None,
-                        joins: Vec::new(),
-                        predicate: query.predicate,
-                        projection: query.returning,
-                        distinct: false,
-                        group_by: Vec::new(),
-                        having: None,
-                        order_by: Vec::new(),
-                        offset: crate::Expr::from(0usize),
-                        limit: query.limit,
-                        field_format: query.field_format,
-                    },
-                    Query::Delete(query) => SelectQuery {
-                        collection: query.collection,
-                        source_alias: None,
-                        joins: Vec::new(),
-                        predicate: query.predicate,
-                        projection: query.returning,
-                        distinct: false,
-                        group_by: Vec::new(),
-                        having: None,
-                        order_by: Vec::new(),
-                        offset: crate::Expr::from(0usize),
-                        limit: query.limit,
-                        field_format: query.field_format,
-                    },
-                    Query::Ddl(_) => {
-                        return Err(DbError::InvalidQuery(
-                            "query planning/explain is not supported for DDL".to_string(),
-                        ));
-                    }
-                };
-                let stats =
-                    self.stats_for_query(self.storage.snapshot()?.as_ref(), &select, collection)?;
-                (
-                    select,
-                    Some(stats),
-                    collection.name.clone(),
-                    Some(collection.lid),
-                )
-            };
-
-        let optimizer = crate::Optimizer::core();
-        let context = self.query_context();
-        let stats_provider = stats
-            .as_ref()
-            .map(|value| value as &dyn crate::StatsProvider);
-        let pair = optimizer.optimize_query(&select, Some(source), stats_provider, &context);
-        let access_path = if let Some(collection_lid) = collection_for_access_path {
-            if let Some(collection) = self.catalog().collection_by_lid(collection_lid) {
-                self.access_path_from_physical(collection, &pair.physical)
-            } else {
-                AccessPath::FullScan
-            }
-        } else {
-            AccessPath::FullScan
-        };
-
-        Ok(QueryExplain {
-            logical: pair.logical,
-            physical: pair.physical,
-            access_path,
-        })
+        self.reader()?.explain_query(query)
     }
 
     pub fn insert_query(
@@ -859,40 +728,13 @@ impl<S: EntityStorage> EmbeddedDb<S> {
         Ok(out)
     }
 
-    /// One read snapshot for a query: owned when the storage supports it,
-    /// so row views can read referenced rows on demand.
-    fn query_reader(&self) -> std::result::Result<QueryReader<'_>, DbError> {
-        Ok(match self.storage.owned_snapshot()? {
-            Some(snapshot) => QueryReader::Shared(snapshot),
-            None => QueryReader::Borrowed(self.storage.snapshot()?),
-        })
-    }
-
     pub fn execute_physical_plan(
         &self,
         plan: &crate::PhysicalPlan,
         default_collection: Option<&str>,
     ) -> std::result::Result<Vec<Object>, DbError> {
-        self.execute_physical_plan_with_reader(self.query_reader()?, plan, default_collection)
-    }
-
-    /// Execute a plan with all reads served by `reader`.
-    fn execute_physical_plan_with_reader(
-        &self,
-        reader: QueryReader<'_>,
-        plan: &crate::PhysicalPlan,
-        default_collection: Option<&str>,
-    ) -> std::result::Result<Vec<Object>, DbError> {
-        let context = self.query_context();
-        let local_refs = LocalRefResolver::for_plan(plan, reader.shared());
-        let source = EmbeddedPhysicalDataSource {
-            reader,
-            catalog: self.catalog(),
-            default_collection: default_collection.map(ToOwned::to_owned),
-            local_refs,
-        };
-        crate::execute_physical_plan_with_source(plan, &source, &context)
-            .map_err(|err| DbError::InvalidQuery(err.to_string()))
+        self.reader()?
+            .execute_physical_plan(plan, default_collection)
     }
 
     pub fn update_where(
@@ -1779,54 +1621,7 @@ impl<S: EntityStorage> EmbeddedDb<S> {
         &self,
         collection: LocalCollectionId,
     ) -> std::result::Result<Vec<EntityRecord>, DbError> {
-        let catalog = self.catalog();
-        let collection_schema = catalog
-            .collection_by_lid(collection)
-            .ok_or(DbError::UnknownCollection(collection))?;
-
-        self.storage
-            .scan_collection(collection)?
-            .into_iter()
-            .map(|item| {
-                Ok(EntityRecord {
-                    id: item.id,
-                    collection: collection_schema.name.clone(),
-                    object: item.object,
-                })
-            })
-            .collect()
-    }
-
-    /// Visit every entity in non-internal collections while retaining the
-    /// caller's read lock. Returning `false` from `visit` cancels the scan.
-    pub(crate) fn scan_entities_with(
-        &self,
-        mut visit: impl FnMut(Result<EntityRecord, DbError>) -> bool,
-    ) {
-        let catalog = self.catalog();
-        for (_, collection) in catalog.collections() {
-            if collection.internal {
-                continue;
-            }
-            let name = collection.name.clone();
-            let scan = match self.storage.scan_collection_stream(collection.lid) {
-                Ok(scan) => scan,
-                Err(error) => {
-                    visit(Err(error));
-                    return;
-                }
-            };
-            for item in scan {
-                let record = item.map(|stored| EntityRecord {
-                    id: stored.id,
-                    collection: name.clone(),
-                    object: stored.object,
-                });
-                if !visit(record) {
-                    return;
-                }
-            }
-        }
+        self.reader()?.collection_rows(collection)
     }
 
     pub fn tx_capabilities(&self) -> StorageTransactionCapabilities {
@@ -2379,203 +2174,6 @@ impl<S: EntityStorage> EmbeddedDb<S> {
             .and_then(Value::as_str)
             .map(ToString::to_string)
     }
-
-    fn stats_for_query(
-        &self,
-        reader: &dyn EntityReadSnapshot,
-        query: &SelectQuery,
-        base_collection: &CollectionSchema,
-    ) -> std::result::Result<QueryStatsSnapshot, DbError> {
-        let catalog = self.catalog();
-        let mut collection_ids = BTreeSet::from([base_collection.lid]);
-        for join in &query.joins {
-            let collection = match join.source.collection.as_deref() {
-                Some(name) => catalog.collection_by_name(name).ok_or_else(|| {
-                    DbError::UnknownCollectionByName {
-                        name: name.to_string(),
-                    }
-                })?,
-                None => base_collection,
-            };
-            collection_ids.insert(collection.lid);
-        }
-        let mut collections = Vec::with_capacity(collection_ids.len());
-        for collection_id in collection_ids {
-            let collection = catalog
-                .collection_by_lid(collection_id)
-                .ok_or(DbError::UnknownCollection(collection_id))?;
-            collections.push(self.stats_for_collection(reader, collection)?);
-        }
-        Ok(QueryStatsSnapshot { collections })
-    }
-
-    fn stats_for_collection(
-        &self,
-        reader: &dyn EntityReadSnapshot,
-        collection: &CollectionSchema,
-    ) -> std::result::Result<CollectionStatsEntry, DbError> {
-        let row_count = collection_row_count(reader, collection.lid)? as f64;
-        let mut index_entries = Vec::new();
-        let mut indexed_fields = BTreeSet::new();
-        let mut unique_fields = BTreeSet::new();
-        let mut indexed_field_ids = BTreeSet::new();
-        let mut unique_field_ids = BTreeSet::new();
-        let mut indexed_attr_ids = BTreeSet::new();
-        let mut unique_attr_ids = BTreeSet::new();
-
-        let catalog = self.catalog();
-        for index in catalog.indexes_for_collection(collection.lid) {
-            if index.schema.kind == IndexKind::Equality
-                && let Some(entries) = reader.index_entry_count(index.lid)?
-            {
-                index_entries.push(IndexEntryStats {
-                    canonical_field: index.canonical_field.clone(),
-                    field_id: index.field_id,
-                    attr_id: index.attr_id,
-                    entries: entries as f64,
-                });
-            }
-            indexed_fields.insert(index.canonical_field.clone());
-            if index.schema.unique {
-                unique_fields.insert(index.canonical_field.clone());
-            }
-            if let Some(field_id) = index.field_id {
-                indexed_field_ids.insert(field_id);
-                if index.schema.unique {
-                    unique_field_ids.insert(field_id);
-                }
-            }
-            if let Some(attr_id) = index.attr_id {
-                indexed_attr_ids.insert(attr_id);
-                if index.schema.unique {
-                    unique_attr_ids.insert(attr_id);
-                }
-            }
-        }
-
-        Ok(CollectionStatsEntry {
-            source: collection.name.clone(),
-            row_count,
-            indexed_fields,
-            unique_fields,
-            indexed_field_ids,
-            unique_field_ids,
-            indexed_attr_ids,
-            unique_attr_ids,
-            collection_id: collection.lid,
-            has_path_equality_index: catalog.find_path_equality_index(collection.lid).is_some(),
-            index_entries,
-        })
-    }
-
-    /// Answer `SELECT count(*) FROM collection` shapes from the maintained
-    /// row count instead of scanning.
-    ///
-    /// Rewrites an ungrouped aggregate without `HAVING` whose projection is
-    /// only `count(*)` over an unfiltered scan of one user collection (also
-    /// below single-input operators such as `LIMIT`) into a constant row.
-    /// Internal collections and the `all` alias keep scanning.
-    fn rewrite_count_fast_path(
-        &self,
-        reader: &dyn EntityReadSnapshot,
-        plan: &mut crate::PhysicalPlan,
-    ) -> std::result::Result<bool, DbError> {
-        use crate::PhysicalPlan as P;
-
-        match plan {
-            P::Aggregate {
-                input,
-                group_by,
-                projection,
-                having,
-            } => {
-                let P::Source(crate::PhysicalSource::Scan { source }) = input.as_ref() else {
-                    return Ok(false);
-                };
-                let count_only = !projection.is_empty()
-                    && projection.iter().all(|field| {
-                        field.wildcard.is_none()
-                            && matches!(
-                                &field.expr,
-                                crate::Expr::Aggregate {
-                                    op: semantic_data::query::AggregateOp::Count,
-                                    distinct: false,
-                                    arg,
-                                } if matches!(arg.as_ref(), crate::FunctionArg::Wildcard)
-                            )
-                    });
-                if !group_by.is_empty() || having.is_some() || !count_only {
-                    return Ok(false);
-                }
-                let catalog = self.catalog();
-                let collection = match (&source.collection_id, source.source_name.as_deref()) {
-                    (Some(lid), _) => catalog.collection_by_lid(*lid),
-                    (None, Some(name)) if !is_all_collection_alias(name) => {
-                        catalog.collection_by_name(name)
-                    }
-                    _ => None,
-                };
-                let Some(collection) = collection.filter(|collection| !collection.internal) else {
-                    return Ok(false);
-                };
-                let count = Value::I64(collection_row_count(reader, collection.lid)? as i64);
-                let row = projection
-                    .iter()
-                    .map(|field| (crate::aggregate_output_key(field), count.clone()))
-                    .collect::<Object>();
-                *plan = P::Values { values: vec![row] };
-                Ok(true)
-            }
-            P::Limit { input, .. }
-            | P::Sort { input, .. }
-            | P::Project { input, .. }
-            | P::Distinct { input }
-            | P::Materialize { input }
-            | P::Exchange { input, .. } => self.rewrite_count_fast_path(reader, input),
-            _ => Ok(false),
-        }
-    }
-
-    fn access_path_from_physical(
-        &self,
-        collection: &CollectionSchema,
-        physical: &crate::PhysicalPlan,
-    ) -> AccessPath {
-        let Some((field_ref, value)) = find_index_lookup(physical) else {
-            return AccessPath::FullScan;
-        };
-        let Some(field_path) = lookup_field_path(collection, field_ref) else {
-            return AccessPath::FullScan;
-        };
-
-        let catalog = self.catalog();
-        let top_level = field_path
-            .segments()
-            .first()
-            .and_then(|segment| match segment {
-                PathSegment::Field(field) => Some(field.as_str()),
-                _ => None,
-            })
-            .unwrap_or_default();
-        if !top_level.is_empty()
-            && field_path.segments().len() == 1
-            && let Some(index) = catalog.find_equality_index(collection.lid, top_level)
-        {
-            return AccessPath::IndexLookup {
-                index_name: index.schema.name.clone(),
-                field: format_field_path(&field_path),
-                value: value.clone(),
-            };
-        }
-        if let Some(index) = catalog.find_path_equality_index(collection.lid) {
-            return AccessPath::IndexLookup {
-                index_name: index.schema.name.clone(),
-                field: format_field_path(&field_path),
-                value: value.clone(),
-            };
-        }
-        AccessPath::FullScan
-    }
 }
 
 /// Row count of `collection`: the maintained count when the storage keeps
@@ -2717,34 +2315,6 @@ fn equality_expr(path: FieldPath, value: Value) -> crate::Expr {
         op: semantic_data::query::BinaryOp::Eq,
         left: Box::new(crate::Expr::Operand(crate::Operand::Field(path))),
         right: Box::new(crate::Expr::Operand(crate::Operand::Literal(value))),
-    }
-}
-
-/// The read snapshot of one query.
-enum QueryReader<'a> {
-    /// Owned snapshot that row views may keep for on-demand reads.
-    Shared(Arc<dyn EntityReadSnapshot>),
-    /// Snapshot borrowing the storage.
-    Borrowed(Box<dyn EntityReadSnapshot + 'a>),
-}
-
-impl QueryReader<'_> {
-    fn shared(&self) -> Option<Arc<dyn EntityReadSnapshot>> {
-        match self {
-            Self::Shared(snapshot) => Some(snapshot.clone()),
-            Self::Borrowed(_) => None,
-        }
-    }
-}
-
-impl<'a> std::ops::Deref for QueryReader<'a> {
-    type Target = dyn EntityReadSnapshot + 'a;
-
-    fn deref(&self) -> &Self::Target {
-        match self {
-            Self::Shared(snapshot) => snapshot.as_ref(),
-            Self::Borrowed(snapshot) => snapshot.as_ref(),
-        }
     }
 }
 

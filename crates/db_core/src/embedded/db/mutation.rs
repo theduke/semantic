@@ -138,7 +138,7 @@ impl<S: EntityStorage> EmbeddedDb<S> {
         let select = SelectQuery::new()
             .with_collection(collection.name.clone())
             .with_predicate(predicate.clone());
-        let stats = self.stats_for_query(reader, &select, collection)?;
+        let stats = super::reader::stats_for_query(catalog, reader, &select, collection)?;
         let physical = crate::Optimizer::core()
             .optimize_query(
                 &select,

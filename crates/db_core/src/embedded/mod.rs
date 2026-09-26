@@ -4,7 +4,7 @@ mod schema_store;
 pub mod storage;
 
 pub use backend::EmbeddedBackend;
-pub use db::EmbeddedDb;
+pub use db::{DbReader, EmbeddedDb};
 #[cfg(test)]
 pub(crate) use storage::MemoryEntityStorage;
 pub use storage::{

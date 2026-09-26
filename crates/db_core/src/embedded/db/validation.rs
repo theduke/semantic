@@ -59,45 +59,7 @@ impl<S: EntityStorage> EmbeddedDb<S> {
     /// Inspect legacy data without normalizing, repairing, or writing anything.
     /// Reports the first violation per row; unsupported constraints are explicit errors.
     pub fn validation_preflight(&self) -> Result<Vec<crate::ValidationViolation>, DbError> {
-        let catalog = self.catalog.snapshot();
-        let revision = self.storage.current_revision()?;
-        crate::validation::validate_enforcement_support(&catalog.catalog)?;
-        let mut violations = Vec::new();
-        for (_, collection) in catalog.catalog.collections().filter(|(_, c)| !c.internal) {
-            for row in self.storage.scan_collection(collection.lid)? {
-                let key = (collection.name.clone(), row.id.clone());
-                match crate::validate_stored_object(&catalog.catalog, &key, &row.object, |key| {
-                    let collection =
-                        catalog.catalog.collection_by_name(&key.0).ok_or_else(|| {
-                            DbError::UnknownCollectionByName {
-                                name: key.0.clone(),
-                            }
-                        })?;
-                    Ok(self
-                        .storage
-                        .get_entity(collection.lid, &key.1)?
-                        .map(|row| row.object))
-                }) {
-                    Ok(_) => {}
-                    Err(DbError::Validation(error)) => {
-                        violations.push(crate::ValidationViolation {
-                            collection: key.0,
-                            id: key.1,
-                            error,
-                        })
-                    }
-                    Err(error) => return Err(error),
-                }
-            }
-        }
-        if self.storage.current_revision()? != revision
-            || self.catalog.snapshot().version != catalog.version
-        {
-            return Err(DbError::TransactionConflict(
-                "database changed during validation preflight".into(),
-            ));
-        }
-        Ok(violations)
+        self.reader()?.validation_preflight()
     }
 
     /// Activate only against a clean, unchanged preflight snapshot. The marker and

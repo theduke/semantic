@@ -20,5 +20,8 @@ semantic_data = { workspace = true }
 tokio = { version = "1.48.0", features = ["rt-multi-thread", "macros"] }
 
 [dev-dependencies]
+futures = "0.3.31"
+semantic_db_core = { path = "../db_core", features = ["tokio"] }
 semantic_db_test = { path = "../db_test" }
 tempfile = "3.26.0"
+tokio = { version = "1.48.0", features = ["time"] }

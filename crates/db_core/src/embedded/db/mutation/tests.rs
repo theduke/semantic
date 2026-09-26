@@ -49,8 +49,16 @@ fn item_id(index: usize) -> String {
 
 /// Every 250th row is `rare`, every 333rd is flagged.
 fn item(index: usize) -> Object {
-    let kind = if index.is_multiple_of(250) { "rare" } else { "common" };
-    let flag = if index.is_multiple_of(333) { "yes" } else { "no" };
+    let kind = if index.is_multiple_of(250) {
+        "rare"
+    } else {
+        "common"
+    };
+    let flag = if index.is_multiple_of(333) {
+        "yes"
+    } else {
+        "no"
+    };
     Object::from_iter(
         [
             ("id", item_id(index)),

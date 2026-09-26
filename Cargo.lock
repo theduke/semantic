@@ -8936,6 +8936,7 @@ name = "semantic_db_redb"
 version = "0.0.1"
 dependencies = [
  "async-trait",
+ "futures",
  "redb",
  "semantic_data",
  "semantic_db_core",
