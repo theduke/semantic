@@ -2,12 +2,14 @@ use std::rc::Rc;
 
 use dioxus::prelude::*;
 use dioxus_icons::lucide::Pencil;
+use semantic_data::filestore::FILE_CLASS_ID;
 use semantic_data::schema::ClassType;
 use semantic_data::value::{Object, Value};
 
 use crate::components::ClassView;
 use crate::ui_catalog::{
-    EntityActionContext, EntityActionPlacement, EntityTarget, RenderMode, use_ui_catalog,
+    EntityActionContext, EntityActionPlacement, EntityTarget, MediaKind, RenderMode,
+    media_kind_for_object, use_ui_catalog,
 };
 
 /// Object fields considered, in priority order, when deriving an entity title.
@@ -51,6 +53,7 @@ pub fn EntityCard(
     #[props(default)] on_delete: Option<EventHandler<EntityTarget>>,
     #[props(default = EntityActionPlacement::Card)] action_placement: EntityActionPlacement,
     #[props(default)] excluded_action_ids: Vec<String>,
+    #[props(default)] compact_preview: bool,
 ) -> Element {
     let catalog = use_ui_catalog();
     let class = catalog.object_class(&object).cloned();
@@ -63,7 +66,15 @@ pub fn EntityCard(
             .unwrap_or_else(|| class.name.clone())
     });
     let title = entity_title(&object, id.as_deref(), class_name.as_deref());
-    let show_id = id.as_deref().is_some_and(|id| id != title);
+    let title = if compact_preview && id.as_deref() == Some(title.as_str()) {
+        format!(
+            "Untitled {}",
+            class_name.as_deref().unwrap_or("entity").to_lowercase()
+        )
+    } else {
+        title
+    };
+    let show_id = !compact_preview && id.as_deref().is_some_and(|id| id != title);
     let target = id
         .clone()
         .map(|id| EntityTarget::new(options.collection.clone(), id));
@@ -74,7 +85,7 @@ pub fn EntityCard(
     };
 
     rsx! {
-        article { class: "semantic-entity-card",
+        article { class: if compact_preview { "semantic-entity-card semantic-entity-card--summary" } else { "semantic-entity-card" },
             dxcomp::Card {
                 dxcomp::CardHeader {
                     div { class: "semantic-entity-card__header-row",
@@ -117,19 +128,78 @@ pub fn EntityCard(
                 }
                 dxcomp::CardContent {
                     div { class: "semantic-entity-card__body",
-                        EntityRenderBody {
-                            object: Rc::new(object.clone()),
-                            class: class.clone(),
-                            collection: options.collection.clone(),
-                            id: id.clone(),
-                            renderer: options.renderer,
-                            mode,
+                        if compact_preview && options.renderer == EntityDisplayRenderer::Custom {
+                            EntitySummary { object: object.clone(), id: id.clone(), title: title.clone() }
+                        } else {
+                            EntityRenderBody {
+                                object: Rc::new(object.clone()),
+                                class: class.clone(),
+                                collection: options.collection.clone(),
+                                id: id.clone(),
+                                renderer: options.renderer,
+                                mode,
+                            }
                         }
                     }
                 }
             }
         }
     }
+}
+
+#[component]
+fn EntitySummary(object: Object, id: Option<String>, title: String) -> Element {
+    let catalog = use_ui_catalog();
+    let is_image = object.get("type").and_then(Value::as_str) == Some(FILE_CLASS_ID)
+        && media_kind_for_object(&object) == MediaKind::Image;
+    let image_source = is_image
+        .then(|| {
+            id.as_deref().map(|id| {
+                format!(
+                    "{}/{}",
+                    catalog
+                        .render_settings()
+                        .file_api_prefix
+                        .trim_end_matches('/'),
+                    id
+                )
+            })
+        })
+        .flatten();
+    let excerpt = entity_excerpt(&object, &title);
+
+    rsx! {
+        div { class: "semantic-entity-card__summary",
+            if let Some(source) = image_source {
+                img { class: "semantic-entity-card__thumbnail", src: source, alt: "", loading: "lazy" }
+            }
+            if let Some(excerpt) = excerpt {
+                p { class: "semantic-entity-card__excerpt", "{excerpt}" }
+            }
+        }
+    }
+}
+
+fn entity_excerpt(object: &Object, title: &str) -> Option<String> {
+    const DESCRIPTION_FIELDS: [&str; 8] = [
+        "semantic:base:note:note_content",
+        "note_content",
+        "semantic:description",
+        "description",
+        "summary",
+        "excerpt",
+        "content",
+        "body",
+    ];
+    DESCRIPTION_FIELDS.iter().find_map(|field| {
+        let value = object.get(*field).and_then(Value::as_str)?.trim();
+        let text = value
+            .lines()
+            .map(|line| line.trim().trim_start_matches(['#', '*', '-', ' ']))
+            .find(|line| !line.is_empty() && *line != title)?;
+        let excerpt: String = text.chars().take(180).collect();
+        (!excerpt.is_empty()).then_some(excerpt)
+    })
 }
 
 #[component]
@@ -190,14 +260,6 @@ pub fn EntityTableRow(object: Object, collection: Option<String>) -> Element {
     });
     rsx! {
         tr {
-            td { class: "semantic-entity-list__id-cell",
-                if let Some(id) = id.clone() {
-                    EntityLink {
-                        target: EntityTarget::new(collection.clone(), id.clone()),
-                        text: id
-                    }
-                }
-            }
             td { class: "semantic-entity-list__title-cell",
                 if let Some(id) = id.clone() {
                     EntityLink {
@@ -209,6 +271,14 @@ pub fn EntityTableRow(object: Object, collection: Option<String>) -> Element {
                 }
             }
             td { class: "semantic-entity-list__type-cell", "{type_label}" }
+            td { class: "semantic-entity-list__id-cell",
+                if let Some(id) = id.clone() {
+                    EntityLink {
+                        target: EntityTarget::new(collection.clone(), id.clone()),
+                        text: id
+                    }
+                }
+            }
             td { class: "semantic-entity-list__actions-cell",
                 if let Some(id) = id.clone() {
                     EntityActions {
@@ -250,9 +320,9 @@ pub fn EntityList(
             table { class: "semantic-entity-list semantic-entity-list--table",
                 thead {
                     tr {
-                        th { "id" }
                         th { "title" }
                         th { "type" }
+                        th { "id" }
                         th { "actions" }
                     }
                 }
@@ -423,7 +493,7 @@ fn value_preview(value: &Value) -> String {
 mod tests {
     use semantic_data::value::{Object, Value};
 
-    use super::entity_title;
+    use super::{entity_excerpt, entity_title};
 
     #[test]
     fn entity_title_prefers_semantic_identity_fields_and_falls_back_to_id() {
@@ -440,5 +510,20 @@ mod tests {
             entity_title(&Object::new(), Some("entity-1"), None),
             "entity-1"
         );
+    }
+
+    #[test]
+    fn summary_uses_document_content_without_repeating_title() {
+        let mut object = Object::new();
+        object.insert(
+            "note_content",
+            Value::String("# Roadmap\n\nFirst draft of the plan".to_string()),
+        );
+        assert_eq!(
+            entity_excerpt(&object, "Roadmap"),
+            Some("First draft of the plan".to_string())
+        );
+        object.insert("note_content", Value::Null);
+        assert_eq!(entity_excerpt(&object, "Roadmap"), None);
     }
 }

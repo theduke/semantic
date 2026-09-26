@@ -42,6 +42,7 @@ enum PendingSelection {
 #[component]
 pub fn EntityCreateForm(
     #[props(default)] fixed_collection: Option<String>,
+    #[props(default)] initial_class: Option<String>,
     submit: SemanticFormSubmit,
     on_created: EventHandler<EntityCreateOutcome>,
     #[props(default)] on_dirty_change: Option<EventHandler<bool>>,
@@ -72,7 +73,9 @@ pub fn EntityCreateForm(
             })
             .unwrap_or_default()
     });
-    let initial_class = classes.read().first().map(|class| class.id.clone());
+    let initial_class = initial_class
+        .filter(|initial| classes.read().iter().any(|class| &class.id == initial))
+        .or_else(|| classes.read().first().map(|class| class.id.clone()));
     let initial_collection = fixed_collection
         .clone()
         .or_else(|| collections.read().first().cloned());
@@ -140,6 +143,10 @@ pub fn EntityCreateForm(
             }
         };
     }
+
+    let creating_note = selected_class
+        .as_ref()
+        .is_some_and(|class| class.id == NOTE_CLASS_ID);
 
     rsx! {
         div { class: "semantic-create-entity__context semantic-create-entity__context--embedded",
@@ -217,7 +224,7 @@ pub fn EntityCreateForm(
                 role: "status",
                 aria_live: "polite",
                 if submitting() {
-                    "Creating entity…"
+                    if creating_note { "Creating note…" } else { "Creating entity…" }
                 } else if dirty() {
                     "Unsaved changes"
                 } else {
@@ -236,6 +243,11 @@ pub fn EntityCreateForm(
                 object.insert(primary_id_field.clone(), Value::String(draft_id()));
                 let outcome_collection = collection.clone();
                 let outcome_primary_id_field = primary_id_field.clone();
+                let action_labels = if class.id == NOTE_CLASS_ID {
+                    SemanticFormActionLabels::new("Create note", "Discard changes")
+                } else {
+                    SemanticFormActionLabels::create_entity()
+                };
                 rsx! {
                     div {
                         class: "semantic-create-entity__form semantic-create-entity__form--embedded",
@@ -248,7 +260,7 @@ pub fn EntityCreateForm(
                             id: None,
                             scope_id,
                             submit: Some(submit),
-                            action_labels: SemanticFormActionLabels::create_entity(),
+                            action_labels,
                             on_dirty_change: move |next_dirty| {
                                 dirty.set(next_dirty);
                                 if let Some(on_dirty_change) = on_dirty_change {

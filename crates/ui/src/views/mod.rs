@@ -22,7 +22,7 @@ pub use catalog::CatalogPage;
 pub use collection::CollectionPage;
 pub use data::DataPage;
 pub use entity::{CollectionEntityPage, DefaultEntityPage};
-pub use form::{CollectionEditEntityPage, CreateEntityPage, DefaultEditEntityPage};
+pub use form::{CollectionEditEntityPage, CreateEntityPage, CreateNotePage, DefaultEditEntityPage};
 pub use home::HomePage;
 pub use play::PlayPage;
 pub use query::QueryPage;
@@ -53,6 +53,8 @@ pub enum Route {
     CollectionPage { collection: String },
     #[route("/entities/create")]
     CreateEntityPage,
+    #[route("/notes/create")]
+    CreateNotePage,
     #[route("/entities/:id")]
     DefaultEntityPage { id: String },
     #[route("/collections/:collection/:id")]

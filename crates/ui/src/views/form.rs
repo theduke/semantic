@@ -48,7 +48,8 @@ enum EditSubmitFeedback {
 }
 
 #[component]
-pub fn CreateEntityPage() -> Element {
+pub fn CreateEntityPage(#[props(default)] initial_class: Option<String>) -> Element {
+    let creating_note = initial_class.as_deref() == Some("semantic:base:note");
     let client = use_rpc_client();
     let scope_id = use_active_scope_id();
     let catalog = use_ui_catalog();
@@ -93,13 +94,13 @@ pub fn CreateEntityPage() -> Element {
 
     rsx! {
         FormPage {
-            title: "Create entity",
-            description: "Choose a catalog class and collection, then complete the schema-driven fields.",
+            title: if creating_note { "New note" } else { "New entity" },
+            description: if creating_note { "Write a document and choose where to save it." } else { "Choose a type and add its details." },
             busy: submitting(),
             breadcrumbs: rsx! {
                 Link { to: Route::HomePage, "Workspace" }
                 span { aria_hidden: "true", "/" }
-                span { "Create entity" }
+                span { if creating_note { "New note" } else { "New entity" } }
             },
             header_actions: rsx! {
                 dxcomp::Button {
@@ -118,6 +119,7 @@ pub fn CreateEntityPage() -> Element {
             },
             EntityCreateForm {
                 submit,
+                initial_class,
                 on_collection_change: move |collection| selected_collection.set(collection),
                 on_dirty_change: move |next| dirty.set(next),
                 on_submitting_change: move |next| submitting.set(next),
@@ -142,6 +144,11 @@ pub fn CreateEntityPage() -> Element {
             },
         }
     }
+}
+
+#[component]
+pub fn CreateNotePage() -> Element {
+    rsx! { CreateEntityPage { initial_class: Some("semantic:base:note".to_string()) } }
 }
 
 #[component]

@@ -106,64 +106,6 @@ pub fn DataToolbar(
                 }
             }
 
-            if display_mode == EntityDisplayMode::Card {
-                label { class: "semantic-data-toolbar__field",
-                    span { "Cards per row" }
-                    select {
-                        value: "{grid_columns}",
-                        onchange: move |event: FormEvent| {
-                            let columns = event.value().parse::<usize>().unwrap_or(1).clamp(1, 3);
-                            on_grid_columns_change.call(columns);
-                        },
-                        option { value: "1", "1" }
-                        option { value: "2", "2" }
-                        option { value: "3", "3" }
-                    }
-                }
-                label { class: "semantic-data-toolbar__field",
-                    span { "Content" }
-                    select {
-                        value: if renderer == EntityDisplayRenderer::Custom { "rich" } else { "fields" },
-                        onchange: move |event: FormEvent| {
-                            let renderer = if event.value() == "fields" {
-                                EntityDisplayRenderer::Table
-                            } else {
-                                EntityDisplayRenderer::Custom
-                            };
-                            on_renderer_change.call(renderer);
-                        },
-                        option { value: "rich", "Rich preview" }
-                        option { value: "fields", "Fields" }
-                    }
-                }
-            }
-
-            label { class: "semantic-data-toolbar__field",
-                span { "Density" }
-                select {
-                    value: density.class(),
-                    onchange: move |event: FormEvent| {
-                        let density = if event.value() == "compact" {
-                            ResultDensity::Compact
-                        } else {
-                            ResultDensity::Comfortable
-                        };
-                        on_density_change.call(density);
-                    },
-                    option { value: "comfortable", "Comfortable" }
-                    option { value: "compact", "Compact" }
-                }
-            }
-
-            if show_advanced {
-                dxcomp::Button {
-                    size: dxcomp::ButtonSize::Sm,
-                    variant: if advanced_open || custom_query { dxcomp::ButtonVariant::Primary } else { dxcomp::ButtonVariant::Outline },
-                    aria_pressed: advanced_open,
-                    onclick: move |_| on_advanced_open_change.call(!advanced_open),
-                    if custom_query { "Advanced SQL active" } else { "Advanced SQL" }
-                }
-            }
             if show_filters {
                 dxcomp::Button {
                     size: dxcomp::ButtonSize::Sm,
@@ -175,6 +117,68 @@ pub fn DataToolbar(
                         }
                     },
                     if active_filter_count > 0 { "Filters ({active_filter_count})" } else { "Filters" }
+                }
+            }
+
+            details { class: "semantic-data-toolbar__more",
+                summary { if custom_query { "Options · SQL active" } else { "Options" } }
+                div { class: "semantic-data-toolbar__more-content",
+                    if display_mode == EntityDisplayMode::Card {
+                        label { class: "semantic-data-toolbar__field",
+                            span { "Cards per row" }
+                            select {
+                                value: "{grid_columns}",
+                                onchange: move |event: FormEvent| {
+                                    let columns = event.value().parse::<usize>().unwrap_or(1).clamp(1, 3);
+                                    on_grid_columns_change.call(columns);
+                                },
+                                option { value: "1", "1" }
+                                option { value: "2", "2" }
+                                option { value: "3", "3" }
+                            }
+                        }
+                        label { class: "semantic-data-toolbar__field",
+                            span { "Content" }
+                            select {
+                                value: if renderer == EntityDisplayRenderer::Custom { "rich" } else { "fields" },
+                                onchange: move |event: FormEvent| {
+                                    let renderer = if event.value() == "fields" {
+                                        EntityDisplayRenderer::Table
+                                    } else {
+                                        EntityDisplayRenderer::Custom
+                                    };
+                                    on_renderer_change.call(renderer);
+                                },
+                                option { value: "rich", "Summary" }
+                                option { value: "fields", "All fields" }
+                            }
+                        }
+                    }
+                    label { class: "semantic-data-toolbar__field",
+                        span { "Density" }
+                        select {
+                            value: density.class(),
+                            onchange: move |event: FormEvent| {
+                                let density = if event.value() == "compact" {
+                                    ResultDensity::Compact
+                                } else {
+                                    ResultDensity::Comfortable
+                                };
+                                on_density_change.call(density);
+                            },
+                            option { value: "comfortable", "Comfortable" }
+                            option { value: "compact", "Compact" }
+                        }
+                    }
+                    if show_advanced {
+                        dxcomp::Button {
+                            size: dxcomp::ButtonSize::Sm,
+                            variant: if advanced_open || custom_query { dxcomp::ButtonVariant::Primary } else { dxcomp::ButtonVariant::Outline },
+                            aria_pressed: advanced_open,
+                            onclick: move |_| on_advanced_open_change.call(!advanced_open),
+                            if custom_query { "Edit SQL query" } else { "Advanced SQL" }
+                        }
+                    }
                 }
             }
         }
@@ -210,6 +214,7 @@ pub fn EntityResults(
                             preview: true,
                             actions: true,
                         },
+                        compact_preview: true,
                         on_delete,
                     }
                 }
@@ -221,9 +226,9 @@ pub fn EntityResults(
                     caption { class: "semantic-visually-hidden", "Entity query results" }
                     thead {
                         tr {
-                            th { scope: "col", "ID" }
                             th { scope: "col", "Title" }
                             th { scope: "col", "Type" }
+                            th { scope: "col", "ID" }
                             th { scope: "col", "Actions" }
                         }
                     }

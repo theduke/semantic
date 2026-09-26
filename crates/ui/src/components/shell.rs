@@ -4,7 +4,7 @@ use super::GlobalSearch;
 use crate::views::Route;
 
 const MAIN_CONTENT_ID: &str = "semantic-main-content";
-const PRIMARY_NAV_ID: &str = "semantic-primary-navigation";
+const MOBILE_NAV_ID: &str = "semantic-mobile-navigation";
 
 /// Controls the layout constraints applied by [`AppFrame`].
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -28,7 +28,16 @@ pub fn AppFrame(#[props(default)] variant: AppFrameVariant, children: Element) -
         div { class: frame_class,
             a { class: "semantic-skip-link", href: "#{MAIN_CONTENT_ID}", "Skip to main content" }
             AppFrameHeader {}
-            main { id: MAIN_CONTENT_ID, class: main_class, tabindex: "-1", {children} }
+            if variant == AppFrameVariant::Standard {
+                div { class: "semantic-ui__layout",
+                    aside { class: "semantic-ui__sidebar", aria_label: "Workspace",
+                        PrimaryNav { mobile: false }
+                    }
+                    main { id: MAIN_CONTENT_ID, class: main_class, tabindex: "-1", {children} }
+                }
+            } else {
+                main { id: MAIN_CONTENT_ID, class: main_class, tabindex: "-1", {children} }
+            }
         }
     }
 }
@@ -61,7 +70,10 @@ fn AppFrameHeader() -> Element {
                 }
                 GlobalSearch {}
             }
-            PrimaryNav {}
+            div { class: "semantic-ui__header-actions",
+                NewMenu {}
+                PrimaryNav { mobile: true }
+            }
         }
     }
 }
@@ -81,57 +93,55 @@ enum NavItem {
     Data,
 }
 
-/// The application's grouped primary navigation.
+/// Primary navigation is always visible in the desktop sidebar and opens as a
+/// drawer from the header on narrow screens and immersive pages.
 ///
 /// Its only mutable state is whether the mobile menu is open. Route matching is
 /// derived directly from the router, keeping the render path pure and ensuring
 /// browser back/forward navigation updates the active item.
 #[component]
-pub fn PrimaryNav() -> Element {
+pub fn PrimaryNav(#[props(default)] mobile: bool) -> Element {
     let route = use_route::<Route>();
     let mut menu_open = use_signal(|| false);
-    let menu_state = if menu_open() { "open" } else { "closed" };
 
     rsx! {
-        button {
-            r#type: "button",
-            class: "semantic-primary-nav__toggle",
-            aria_controls: PRIMARY_NAV_ID,
-            aria_expanded: menu_open(),
-            onclick: move |_| menu_open.toggle(),
-            onkeydown: move |event| {
-                if event.key() == Key::Escape {
-                    menu_open.set(false);
-                }
-            },
-            span { aria_hidden: "true", "☰" }
-            span { "Menu" }
-        }
-        nav {
-            id: PRIMARY_NAV_ID,
-            class: "semantic-primary-nav",
-            aria_label: "Primary navigation",
-            "data-state": menu_state,
-            onkeydown: move |event| {
-                if event.key() == Key::Escape {
-                    menu_open.set(false);
-                }
-            },
-
-            NavGroup { label: "Workspace",
-                PrimaryNavLink {
-                    to: Route::HomePage,
-                    label: "Home",
-                    active: nav_item_is_active(&route, NavItem::Home),
-                    on_navigate: move |_| menu_open.set(false),
+        if mobile {
+            button {
+                r#type: "button",
+                class: "semantic-primary-nav__toggle",
+                aria_controls: MOBILE_NAV_ID,
+                aria_expanded: menu_open(),
+                aria_label: if menu_open() { "Close navigation" } else { "Open navigation" },
+                onclick: move |_| menu_open.toggle(),
+                span { aria_hidden: "true", if menu_open() { "×" } else { "☰" } }
+                span { "Menu" }
+            }
+            if menu_open() {
+                button {
+                    class: "semantic-primary-nav__scrim",
+                    r#type: "button",
+                    aria_label: "Close navigation",
+                    onclick: move |_| menu_open.set(false),
                 }
             }
-            NavGroup { label: "Explore",
-                PrimaryNavLink {
-                    to: Route::LabelsPage, label: "Labels",
-                    active: nav_item_is_active(&route, NavItem::Labels),
-                    on_navigate: move |_| menu_open.set(false),
-                }
+        }
+        if !mobile || menu_open() {
+            nav {
+                id: if mobile { MOBILE_NAV_ID } else { "semantic-sidebar-navigation" },
+                class: if mobile { "semantic-primary-nav semantic-primary-nav--drawer" } else { "semantic-primary-nav semantic-primary-nav--sidebar" },
+                aria_label: "Primary navigation",
+                onkeydown: move |event| {
+                    if event.key() == Key::Escape {
+                        menu_open.set(false);
+                    }
+                },
+                NavGroup { label: "Workspace",
+                    PrimaryNavLink {
+                        to: Route::HomePage,
+                        label: "Home",
+                        active: nav_item_is_active(&route, NavItem::Home),
+                        on_navigate: move |_| menu_open.set(false),
+                    }
                 PrimaryNavLink {
                     to: Route::BrowsePage {
                         collection: None,
@@ -152,40 +162,18 @@ pub fn PrimaryNav() -> Element {
                     active: nav_item_is_active(&route, NavItem::Tree),
                     on_navigate: move |_| menu_open.set(false),
                 }
-            }
-            NavGroup { label: "Create",
                 PrimaryNavLink {
-                    to: Route::CreateEntityPage,
-                    label: "New entity",
-                    active: nav_item_is_active(&route, NavItem::CreateEntity),
+                    to: Route::LabelsPage,
+                    label: "Labels",
+                    active: nav_item_is_active(&route, NavItem::Labels),
                     on_navigate: move |_| menu_open.set(false),
                 }
-                PrimaryNavLink {
-                    to: Route::UploadPage,
-                    label: "Upload",
-                    active: nav_item_is_active(&route, NavItem::Upload),
-                    on_navigate: move |_| menu_open.set(false),
                 }
-                PrimaryNavLink {
-                    to: Route::RecordPage,
-                    label: "Record",
-                    active: nav_item_is_active(&route, NavItem::Record),
-                    on_navigate: move |_| menu_open.set(false),
-                }
-            }
-            NavGroup { label: "Tools",
+                NavGroup { label: "Tools",
                 PrimaryNavLink {
                     to: Route::PlayPage,
                     label: "Player",
                     active: nav_item_is_active(&route, NavItem::Player),
-                    on_navigate: move |_| menu_open.set(false),
-                }
-            }
-            NavGroup { label: "Data tools",
-                PrimaryNavLink {
-                    to: Route::ImportPage,
-                    label: "Import URL",
-                    active: nav_item_is_active(&route, NavItem::Import),
                     on_navigate: move |_| menu_open.set(false),
                 }
                 PrimaryNavLink {
@@ -199,6 +187,57 @@ pub fn PrimaryNav() -> Element {
                     label: "Data",
                     active: nav_item_is_active(&route, NavItem::Data),
                     on_navigate: move |_| menu_open.set(false),
+                }
+                }
+            }
+        }
+    }
+}
+
+#[component]
+fn NewMenu() -> Element {
+    let route = use_route::<Route>();
+    let mut open = use_signal(|| false);
+    let active = [
+        NavItem::CreateEntity,
+        NavItem::Upload,
+        NavItem::Record,
+        NavItem::Import,
+    ]
+    .into_iter()
+    .any(|item| nav_item_is_active(&route, item));
+
+    rsx! {
+        div { class: "semantic-new-menu",
+            button {
+                class: "semantic-new-menu__trigger",
+                r#type: "button",
+                aria_controls: "semantic-new-menu-options",
+                aria_expanded: open(),
+                "data-active": active,
+                onclick: move |_| open.toggle(),
+                span { aria_hidden: "true", "+" }
+                "New"
+            }
+            if open() {
+                button {
+                    class: "semantic-new-menu__scrim",
+                    r#type: "button",
+                    aria_label: "Close New menu",
+                    onclick: move |_| open.set(false),
+                }
+                nav {
+                    id: "semantic-new-menu-options",
+                    class: "semantic-new-menu__options",
+                    aria_label: "Create",
+                    onkeydown: move |event| {
+                        if event.key() == Key::Escape { open.set(false); }
+                    },
+                    Link { to: Route::CreateNotePage, onclick: move |_| open.set(false), "Note" }
+                    Link { to: Route::CreateEntityPage, onclick: move |_| open.set(false), "Entity" }
+                    Link { to: Route::UploadPage, onclick: move |_| open.set(false), "Upload files" }
+                    Link { to: Route::RecordPage, onclick: move |_| open.set(false), "Record media" }
+                    Link { to: Route::ImportPage, onclick: move |_| open.set(false), "Import URL" }
                 }
             }
         }
@@ -255,6 +294,7 @@ fn nav_item_is_active(route: &Route, item: NavItem) -> bool {
             | (Route::TreePage { .. }, NavItem::Tree)
             | (Route::LabelsPage, NavItem::Labels)
             | (Route::CreateEntityPage, NavItem::CreateEntity)
+            | (Route::CreateNotePage, NavItem::CreateEntity)
             | (Route::UploadPage, NavItem::Upload)
             | (Route::RecordPage, NavItem::Record)
             | (Route::PlayPage, NavItem::Player)
@@ -319,6 +359,11 @@ mod tests {
         assert!(nav_item_is_active(&Route::CatalogPage, NavItem::Data));
         assert!(nav_item_is_active(&Route::QueryPage, NavItem::Data));
         assert!(nav_item_is_active(&Route::RecordPage, NavItem::Record));
+        assert!(nav_item_is_active(
+            &Route::CreateNotePage,
+            NavItem::CreateEntity
+        ));
+        assert_eq!(Route::CreateNotePage.to_string(), "/notes/create");
         assert_eq!(Route::RecordPage.to_string(), "/create/record");
     }
 }

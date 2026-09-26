@@ -6522,3 +6522,336 @@ html:has(.semantic-note-form) {
 .semantic-label-swatch { min-height: 24px; padding: 0; box-shadow: none; }
 
 .semantic-label-editor .semantic-label-chip { min-height: 32px; box-shadow: none; }
+
+
+/* Workspace navigation and content-first browsing. */
+.semantic-ui__layout {
+  display: grid;
+  grid-template-columns: var(--semantic-sidebar-width) minmax(0, 1fr);
+  align-items: start;
+  min-width: 0;
+}
+
+.semantic-ui__sidebar {
+  position: sticky;
+  top: calc(var(--semantic-header-height) + var(--semantic-safe-top));
+  height: calc(100dvh - var(--semantic-header-height) - var(--semantic-safe-top));
+  overflow-y: auto;
+  padding: var(--semantic-space-5) var(--semantic-space-3);
+  border-right: 1px solid var(--semantic-border-soft);
+  background: var(--semantic-surface);
+}
+
+.semantic-ui__sidebar .semantic-primary-nav,
+.semantic-ui__sidebar .semantic-primary-nav__items {
+  display: grid;
+  align-items: stretch;
+}
+
+.semantic-ui__sidebar .semantic-primary-nav {
+  gap: var(--semantic-space-6);
+}
+
+.semantic-ui__sidebar .semantic-primary-nav__link {
+  width: 100%;
+  min-height: 42px;
+}
+
+.semantic-ui__sidebar .semantic-primary-nav__link[aria-current="page"],
+.semantic-primary-nav--drawer .semantic-primary-nav__link[aria-current="page"] {
+  background: var(--semantic-color-selected);
+  color: var(--semantic-accent);
+  box-shadow: inset 3px 0 0 var(--semantic-accent);
+}
+
+.semantic-ui__header-actions {
+  display: flex;
+  align-items: center;
+  gap: var(--semantic-space-3);
+  margin-left: auto;
+}
+
+.semantic-ui__header .semantic-primary-nav--drawer,
+.semantic-ui__header .semantic-primary-nav__toggle {
+  display: none;
+}
+
+.semantic-new-menu {
+  position: relative;
+}
+
+.semantic-new-menu__trigger {
+  display: inline-flex;
+  min-height: 38px;
+  align-items: center;
+  gap: 7px;
+  padding: 0 14px;
+  border: 1px solid var(--semantic-accent);
+  border-radius: var(--semantic-radius-md);
+  background: var(--semantic-accent);
+  color: white;
+  font: inherit;
+  font-weight: 650;
+  cursor: pointer;
+}
+
+.semantic-new-menu__trigger:hover,
+.semantic-new-menu__trigger[data-active="true"] {
+  background: var(--semantic-color-primary-hover);
+}
+
+.semantic-new-menu__trigger:focus-visible,
+.semantic-primary-nav__toggle:focus-visible,
+.semantic-data-toolbar__more summary:focus-visible {
+  outline: 2px solid var(--semantic-color-focus);
+  outline-offset: 3px;
+}
+
+.semantic-new-menu__trigger span {
+  font-size: 1.3em;
+  line-height: 1;
+}
+
+.semantic-new-menu__scrim,
+.semantic-primary-nav__scrim {
+  position: fixed;
+  inset: calc(var(--semantic-header-height) + var(--semantic-safe-top)) 0 0;
+  z-index: 40;
+  width: 100vw;
+  height: 100dvh;
+  border: 0;
+  background: transparent;
+  cursor: default;
+}
+
+.semantic-new-menu__options {
+  position: absolute;
+  z-index: 41;
+  top: calc(100% + 9px);
+  right: 0;
+  display: grid !important;
+  width: min(240px, calc(100vw - 32px));
+  padding: 6px;
+  border: 1px solid var(--semantic-border);
+  border-radius: var(--semantic-radius-lg);
+  background: var(--semantic-surface);
+  box-shadow: var(--semantic-shadow-2);
+}
+
+.semantic-new-menu__options a {
+  display: block;
+  padding: 10px 12px;
+  border-radius: var(--semantic-radius-md);
+  color: var(--semantic-text);
+  text-decoration: none;
+  white-space: nowrap;
+}
+
+.semantic-new-menu__options a:hover,
+.semantic-new-menu__options a:focus-visible {
+  background: var(--semantic-color-selected);
+  color: var(--semantic-accent);
+}
+
+.semantic-entity-card--summary .dx-card {
+  gap: 0;
+}
+
+.semantic-entity-card--summary .semantic-entity-card__type {
+  display: inline-block;
+  padding: 3px 8px;
+  border-radius: var(--semantic-radius-pill);
+  background: var(--semantic-color-surface-2);
+  color: var(--semantic-text-muted);
+  font-size: 11px;
+  font-weight: 600;
+}
+
+.semantic-entity-card--summary .semantic-entity-card__summary:empty {
+  display: none;
+}
+
+.semantic-entity-card__excerpt {
+  display: -webkit-box;
+  overflow: hidden;
+  margin: 0;
+  color: var(--semantic-text-muted);
+  font-size: var(--semantic-font-size-label);
+  line-height: 1.5;
+  overflow-wrap: anywhere;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 3;
+}
+
+.semantic-entity-card__thumbnail {
+  display: block;
+  width: 100%;
+  max-height: 180px;
+  margin-bottom: var(--semantic-space-3);
+  border-radius: var(--semantic-radius-md);
+  object-fit: cover;
+}
+
+.semantic-entity-page .semantic-entity-card__body :is(
+  .semantic-class > header,
+  .semantic-note__header,
+  .semantic-file-detail__header
+) {
+  display: none;
+}
+
+.semantic-data-toolbar {
+  position: relative;
+  align-items: center;
+  padding: var(--semantic-space-3);
+  box-shadow: none;
+}
+
+.semantic-data-toolbar__more {
+  position: relative;
+  margin-left: auto;
+}
+
+.semantic-data-toolbar__more summary {
+  display: inline-flex;
+  min-height: 36px;
+  align-items: center;
+  padding: 0 11px;
+  border: 1px solid var(--semantic-border);
+  border-radius: var(--semantic-radius-md);
+  color: var(--semantic-text);
+  font-size: var(--semantic-font-size-label);
+  font-weight: 600;
+  cursor: pointer;
+  list-style: none;
+}
+
+.semantic-data-toolbar__more summary::-webkit-details-marker {
+  display: none;
+}
+
+.semantic-data-toolbar__more summary::after {
+  content: "⌄";
+  margin-left: 9px;
+  color: var(--semantic-text-muted);
+}
+
+.semantic-data-toolbar__more[open] summary,
+.semantic-data-toolbar__more summary:hover {
+  background: var(--semantic-color-hover);
+}
+
+.semantic-data-toolbar__more-content {
+  position: absolute;
+  z-index: 10;
+  top: calc(100% + 8px);
+  right: 0;
+  display: grid;
+  width: min(280px, calc(100vw - 40px));
+  gap: var(--semantic-space-3);
+  padding: var(--semantic-space-4);
+  border: 1px solid var(--semantic-border);
+  border-radius: var(--semantic-radius-lg);
+  background: var(--semantic-surface);
+  box-shadow: var(--semantic-shadow-2);
+}
+
+.semantic-data-toolbar__more-content .semantic-data-toolbar__field,
+.semantic-data-toolbar__more-content select {
+  width: 100%;
+}
+
+@media (max-width: 860px) {
+  .semantic-ui__layout {
+    display: block;
+  }
+
+  .semantic-ui__sidebar {
+    display: none;
+  }
+
+  .semantic-ui__header .semantic-primary-nav__toggle {
+    display: inline-flex;
+    min-height: 38px;
+    align-items: center;
+    gap: 7px;
+    padding: 0 10px;
+    border: 1px solid var(--semantic-border);
+    border-radius: var(--semantic-radius-md);
+    background: var(--semantic-surface);
+    color: var(--semantic-text);
+    font: inherit;
+    font-size: var(--semantic-font-size-label);
+    font-weight: 600;
+  }
+
+  .semantic-ui__header .semantic-primary-nav--drawer {
+    position: fixed;
+    z-index: 41;
+    top: calc(var(--semantic-header-height) + var(--semantic-safe-top));
+    bottom: 0;
+    left: 0;
+    display: grid;
+    width: min(310px, calc(100vw - 48px));
+    max-height: none;
+    align-content: start;
+    gap: var(--semantic-space-5);
+    overflow-y: auto;
+    padding: var(--semantic-space-5);
+    border-right: 1px solid var(--semantic-border);
+    background: var(--semantic-surface);
+    box-shadow: var(--semantic-shadow-2);
+  }
+
+  .semantic-primary-nav--drawer .semantic-primary-nav__items {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr);
+    gap: var(--semantic-space-1);
+  }
+
+  .semantic-primary-nav--drawer .semantic-primary-nav__link {
+    width: 100%;
+    min-height: 42px;
+  }
+}
+
+@media (max-width: 640px) {
+  .semantic-data-toolbar {
+    flex-direction: row;
+    align-items: center;
+    gap: var(--semantic-space-2);
+  }
+
+  .semantic-data-toolbar__collection {
+    flex-basis: 100%;
+    width: 100%;
+  }
+
+  .semantic-data-toolbar__group {
+    width: auto;
+  }
+
+  .semantic-data-toolbar__more {
+    margin-left: 0;
+  }
+}
+
+@media (min-width: 861px) {
+  .semantic-player-shell .semantic-ui__header .semantic-primary-nav__toggle {
+    display: inline-flex;
+  }
+
+  .semantic-player-shell .semantic-ui__header .semantic-primary-nav--drawer {
+    display: grid;
+    position: absolute;
+    z-index: 41;
+    top: 100%;
+    right: 0;
+    width: 280px;
+    padding: var(--semantic-space-4);
+    border: 1px solid var(--semantic-border);
+    border-radius: var(--semantic-radius-lg);
+    background: var(--semantic-surface);
+    box-shadow: var(--semantic-shadow-2);
+  }
+}

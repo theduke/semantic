@@ -116,7 +116,7 @@ pub fn BrowsePage(
     let mut filters_open = use_signal(|| filters.is_some() && !custom_sql);
     let mut filter_draft = use_signal(|| applied_filters.clone());
     let mut filter_error = use_signal(|| route_filter_error.clone());
-    let mut grid_columns = use_signal(|| 1_usize);
+    let mut grid_columns = use_signal(|| 2_usize);
     let mut density = use_signal(ResultDensity::default);
 
     use_effect(use_reactive(
@@ -218,16 +218,15 @@ pub fn BrowsePage(
     rsx! {
         div { class: "semantic-page semantic-browse",
             PageHeader {
-                title: "Browse entities",
-                description: "Explore a catalog collection with a predictable paged view, or switch intentionally to read-only SQL.",
+                title: "Browse",
+                description: "Find and explore your content.",
                 breadcrumbs: rsx! {
                     Link { to: Route::HomePage, "Workspace" }
                     span { aria_hidden: "true", "/" }
                     span { "Browse" }
                 },
                 actions: rsx! {
-                    Link { class: "semantic-button-link", to: Route::CreateEntityPage, "Create entity" }
-                    Link { class: "semantic-button-link semantic-button-link--secondary", to: Route::UploadPage, "Upload files" }
+                    Link { class: "semantic-button-link", to: Route::CreateEntityPage, "New entity" }
                 }
             }
 
