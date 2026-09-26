@@ -1,18 +1,23 @@
-use std::sync::{Arc, RwLock};
+use std::sync::{Arc, Mutex, RwLock};
 
-use crate::catalog::{Catalog, CollectionKind, LocalCollectionId, SharedCatalog};
+use crate::catalog::{Catalog, CollectionKind, LocalCollectionId, LocalIndexId, SharedCatalog};
 use crate::{
-    AsyncRuntime, Backend, Batch, BatchOutcome, DbError, DdlBatch, DdlOutcome, DeleteQuery,
-    EntityRecord, MutationStats, PackageRegistrationOutcome, Query, QueryExplain, QueryPlan,
-    QueryResult, StorageErrorKind, TextQueryInput, UpdateQuery, spawn_blocking_on,
+    AsyncRuntime, Backend, Batch, BatchOutcome, BatchStats, DbError, DdlBatch, DdlOutcome,
+    DeleteQuery, DeleteResult, EntityRecord, MutationStats, PackageRegistrationOutcome, Query,
+    QueryExplain, QueryPlan, QueryResult, SavepointId, SelectQuery, StorageErrorKind,
+    TextQueryInput, TransactionCommit, TransactionHandle, TransactionOptions, UpdateQuery,
+    UpdateResult, spawn_blocking_on,
 };
 use async_trait::async_trait;
 use futures::future::BoxFuture;
 use futures::{SinkExt as _, StreamExt as _};
 use semantic_data::schema::{Package, RelationType};
-use semantic_data::value::Object;
+use semantic_data::value::{FieldPath, Object, Value};
 
-use crate::embedded::{DbReader, EmbeddedDb, EntityStorage};
+use crate::embedded::{
+    BoxEntityIdScan, BoxEntityScan, BoxIndexEntryScan, DbReader, EmbeddedDb, EmbeddedTransaction,
+    EntityReadSnapshot, EntityStorage, StoredEntity,
+};
 
 /// [`Backend`] over an [`EmbeddedDb`] that runs blocking work on an
 /// [`AsyncRuntime`].
@@ -101,6 +106,182 @@ fn default_runtime() -> Arc<dyn AsyncRuntime> {
     Arc::new(crate::InlineAsyncRuntime)
 }
 
+/// [`TransactionHandle`] of an [`EmbeddedBackend`].
+///
+/// Statements run on the transaction's own snapshot without the database
+/// lock; only the commit takes the write side.
+struct EmbeddedTransactionHandle<S: EntityStorage> {
+    db: Arc<RwLock<EmbeddedDb<S>>>,
+    runtime: Arc<dyn AsyncRuntime>,
+    options: TransactionOptions,
+    /// `None` once the transaction was committed.
+    tx: Arc<Mutex<Option<EmbeddedTransaction>>>,
+}
+
+impl<S: EntityStorage> EmbeddedTransactionHandle<S> {
+    /// Run `op` on the transaction.
+    fn run<R, F>(&self, op: F) -> BoxFuture<'static, Result<R, DbError>>
+    where
+        R: Send + 'static,
+        F: FnOnce(&mut EmbeddedTransaction) -> Result<R, DbError> + Send + 'static,
+    {
+        let tx = Arc::clone(&self.tx);
+        spawn_blocking_on(self.runtime.as_ref(), move || {
+            let mut tx = tx.lock().map_err(|_| lock_poisoned_error())?;
+            op(tx.as_mut().ok_or_else(transaction_finished_error)?)
+        })
+    }
+}
+
+#[async_trait]
+impl<S: EntityStorage> TransactionHandle for EmbeddedTransactionHandle<S> {
+    fn options(&self) -> TransactionOptions {
+        self.options
+    }
+
+    async fn get(&self, collection: String, id: String) -> Result<Option<EntityRecord>, DbError> {
+        self.run(move |tx| tx.get(&collection, &id)).await
+    }
+
+    async fn select(&self, query: SelectQuery) -> Result<Vec<Object>, DbError> {
+        self.run(move |tx| tx.select(query)).await
+    }
+
+    async fn upsert(&self, collection: String, id: String, object: Object) -> Result<(), DbError> {
+        self.run(move |tx| tx.upsert(&collection, id, object)).await
+    }
+
+    async fn create(&self, collection: String, id: String, object: Object) -> Result<(), DbError> {
+        self.run(move |tx| tx.create(&collection, id, object)).await
+    }
+
+    async fn delete(&self, collection: String, id: String) -> Result<bool, DbError> {
+        self.run(move |tx| tx.delete(&collection, &id)).await
+    }
+
+    async fn update_where(&self, query: UpdateQuery) -> Result<UpdateResult, DbError> {
+        self.run(move |tx| tx.update_where(query)).await
+    }
+
+    async fn delete_where(&self, query: DeleteQuery) -> Result<DeleteResult, DbError> {
+        self.run(move |tx| tx.delete_where(query)).await
+    }
+
+    async fn execute_batch(&self, batch: Batch) -> Result<BatchStats, DbError> {
+        self.run(move |tx| tx.execute_batch(batch)).await
+    }
+
+    async fn savepoint(&self) -> Result<SavepointId, DbError> {
+        self.run(|tx| Ok(tx.savepoint())).await
+    }
+
+    async fn rollback_to(&self, savepoint: SavepointId) -> Result<(), DbError> {
+        self.run(move |tx| tx.rollback_to(savepoint)).await
+    }
+
+    async fn commit(self: Box<Self>) -> Result<TransactionCommit, DbError> {
+        let tx = Arc::clone(&self.tx);
+        let db = Arc::clone(&self.db);
+        spawn_blocking_on(self.runtime.as_ref(), move || {
+            let tx = tx
+                .lock()
+                .map_err(|_| lock_poisoned_error())?
+                .take()
+                .ok_or_else(transaction_finished_error)?;
+            let mut db = db.write().map_err(|_| lock_poisoned_error())?;
+            db.commit_transaction(tx)
+        })
+        .await
+    }
+
+    async fn rollback(self: Box<Self>) -> Result<(), DbError> {
+        Ok(())
+    }
+}
+
+fn transaction_finished_error() -> DbError {
+    DbError::InvalidQuery("transaction already finished".into())
+}
+
+/// Reads of an interactive transaction on a storage without owned
+/// snapshots: every read takes the read side of the database lock and reads
+/// the latest committed state.
+///
+/// Not consistent, so the transaction fences each read by revision and a
+/// concurrent commit surfaces as a transaction conflict. Scans are collected
+/// while the lock is held.
+struct LockedStorageReads<S: EntityStorage> {
+    db: Arc<RwLock<EmbeddedDb<S>>>,
+}
+
+impl<S: EntityStorage> LockedStorageReads<S> {
+    fn read<T>(&self, read: impl FnOnce(&S) -> Result<T, DbError>) -> Result<T, DbError> {
+        let db = self.db.read().map_err(|_| lock_poisoned_error())?;
+        read(db.storage())
+    }
+}
+
+impl<S: EntityStorage> EntityReadSnapshot for LockedStorageReads<S> {
+    fn revision(&self) -> Result<Option<u64>, DbError> {
+        self.read(|storage| storage.current_revision())
+    }
+
+    fn is_consistent(&self) -> bool {
+        false
+    }
+
+    fn get_entity(
+        &self,
+        collection: LocalCollectionId,
+        id: &str,
+    ) -> Result<Option<StoredEntity>, DbError> {
+        self.read(|storage| storage.get_entity(collection, id))
+    }
+
+    fn scan_collection_stream(
+        &self,
+        collection: LocalCollectionId,
+    ) -> Result<BoxEntityScan, DbError> {
+        let rows = self.read(|storage| storage.scan_collection(collection))?;
+        Ok(Box::new(rows.into_iter().map(Ok)))
+    }
+
+    fn collection_row_count(&self, collection: LocalCollectionId) -> Result<Option<u64>, DbError> {
+        self.read(|storage| storage.collection_row_count(collection))
+    }
+
+    fn index_entry_count(&self, index: LocalIndexId) -> Result<Option<u64>, DbError> {
+        self.read(|storage| storage.index_entry_count(index))
+    }
+
+    fn scan_index_value_stream(
+        &self,
+        index: LocalIndexId,
+        path: Option<&FieldPath>,
+        value: &Value,
+    ) -> Result<BoxEntityIdScan, DbError> {
+        let ids = self.read(|storage| storage.scan_index_value(index, path, value))?;
+        Ok(Box::new(ids.into_iter().map(Ok)))
+    }
+
+    fn scan_index_entries(
+        &self,
+        index: LocalIndexId,
+        scan: &crate::IndexScan,
+    ) -> Result<BoxIndexEntryScan, DbError> {
+        let entries = self.read(|storage| {
+            storage
+                .scan_index_entries(index, scan)?
+                .collect::<Result<Vec<_>, _>>()
+        })?;
+        Ok(Box::new(entries.into_iter().map(Ok)))
+    }
+
+    fn index_needs_rebuild(&self, index: LocalIndexId) -> Result<bool, DbError> {
+        self.read(|storage| storage.index_needs_rebuild(index))
+    }
+}
+
 fn lock_poisoned_error() -> DbError {
     DbError::storage(
         StorageErrorKind::InvalidState,
@@ -110,6 +291,34 @@ fn lock_poisoned_error() -> DbError {
 
 #[async_trait]
 impl<S: EntityStorage> Backend for EmbeddedBackend<S> {
+    async fn begin_transaction(
+        &self,
+        options: TransactionOptions,
+    ) -> Result<Box<dyn TransactionHandle>, DbError> {
+        let db = Arc::clone(&self.db);
+        let tx = spawn_blocking_on(self.runtime.as_ref(), move || {
+            let guard = db.read().map_err(|_| lock_poisoned_error())?;
+            match guard.storage().owned_snapshot()? {
+                Some(snapshot) => guard.begin_with_snapshot(options, snapshot),
+                // Without owned snapshots, statements read the latest state
+                // under the lock, fenced by the transaction's revision.
+                None => guard.begin_with_snapshot(
+                    options,
+                    Arc::new(LockedStorageReads {
+                        db: Arc::clone(&db),
+                    }),
+                ),
+            }
+        })
+        .await?;
+        Ok(Box::new(EmbeddedTransactionHandle {
+            db: Arc::clone(&self.db),
+            runtime: Arc::clone(&self.runtime),
+            options,
+            tx: Arc::new(Mutex::new(Some(tx))),
+        }))
+    }
+
     async fn validation_preflight(&self) -> Result<Vec<crate::ValidationViolation>, DbError> {
         self.read(|reader| reader.validation_preflight()).await
     }
@@ -448,6 +657,177 @@ mod tests {
                 .len(),
             1
         );
+    }
+
+    type BlockingOutput = Box<dyn std::any::Any + Send>;
+
+    /// Runs blocking work on a fresh thread, so queries (which block on
+    /// their own executor) can run under `block_on`.
+    struct ThreadRuntime;
+
+    impl AsyncRuntime for ThreadRuntime {
+        fn spawn_blocking_erased(
+            &self,
+            op: Box<dyn FnOnce() -> Result<BlockingOutput, DbError> + Send>,
+        ) -> BoxFuture<'static, Result<BlockingOutput, DbError>> {
+            let (sender, receiver) = futures::channel::oneshot::channel();
+            std::thread::spawn(move || {
+                let _ = sender.send(op());
+            });
+            Box::pin(async move {
+                receiver
+                    .await
+                    .map_err(|_| DbError::Storage("blocking task dropped".to_string().into()))?
+            })
+        }
+    }
+
+    fn thread_backend<S: EntityStorage>(db: EmbeddedDb<S>) -> EmbeddedBackend<S> {
+        EmbeddedBackend::with_runtime(db, Arc::new(ThreadRuntime))
+    }
+
+    fn by_id(id: &str) -> crate::SelectQuery {
+        crate::SelectQuery::new()
+            .with_collection("entities")
+            .with_predicate(crate::Expr::Binary {
+                op: semantic_data::query::BinaryOp::Eq,
+                left: Box::new(crate::Expr::Operand(crate::Operand::Field(
+                    FieldPath::from_fields(["id"]),
+                ))),
+                right: Box::new(crate::Expr::Operand(crate::Operand::Literal(
+                    Value::String(id.to_string()),
+                ))),
+            })
+    }
+
+    #[test]
+    fn transaction_handles_are_isolated_until_commit() {
+        fn assert_handle_send_sync<T: Send + Sync + ?Sized>() {}
+        assert_handle_send_sync::<dyn TransactionHandle>();
+
+        let mut db = EmbeddedDb::new(MemoryEntityStorage::new());
+        db.insert("entities", "a", entity("a")).unwrap();
+        let db = crate::Db::new(thread_backend(db));
+        futures::executor::block_on(async {
+            let tx = db
+                .begin_transaction(TransactionOptions::default())
+                .await
+                .unwrap();
+            tx.upsert("entities".into(), "b".into(), entity("b"))
+                .await
+                .unwrap();
+            assert!(tx.delete("entities".into(), "a".into()).await.unwrap());
+            assert!(
+                tx.get("entities".into(), "b".into())
+                    .await
+                    .unwrap()
+                    .is_some()
+            );
+            assert_eq!(tx.select(by_id("b")).await.unwrap().len(), 1);
+            assert!(tx.select(by_id("a")).await.unwrap().is_empty());
+            // Plain reads and writes proceed while the transaction is open.
+            assert!(db.get("entities", "b").await.unwrap().is_none());
+            assert!(db.get("entities", "a").await.unwrap().is_some());
+            let commit = tx.commit().await.unwrap();
+            assert_eq!(commit.stats.upserted, 1);
+            assert_eq!(commit.stats.deleted, 1);
+            assert!(db.get("entities", "b").await.unwrap().is_some());
+            assert!(db.get("entities", "a").await.unwrap().is_none());
+
+            // Dropped handles leave no trace.
+            let tx = db
+                .begin_transaction(TransactionOptions::default())
+                .await
+                .unwrap();
+            tx.upsert("entities".into(), "dropped".into(), entity("dropped"))
+                .await
+                .unwrap();
+            drop(tx);
+            assert!(db.get("entities", "dropped").await.unwrap().is_none());
+
+            // The first of two overlapping transactions wins.
+            let first = db
+                .begin_transaction(TransactionOptions::default())
+                .await
+                .unwrap();
+            let second = db
+                .begin_transaction(TransactionOptions::default())
+                .await
+                .unwrap();
+            first
+                .upsert("entities".into(), "c".into(), entity("c"))
+                .await
+                .unwrap();
+            second
+                .upsert("entities".into(), "d".into(), entity("d"))
+                .await
+                .unwrap();
+            first.commit().await.unwrap();
+            assert!(matches!(
+                second.commit().await,
+                Err(DbError::TransactionConflict(_))
+            ));
+            assert!(db.get("entities", "d").await.unwrap().is_none());
+        });
+    }
+
+    #[test]
+    fn transactions_without_owned_snapshots_fence_reads() {
+        let storage = CountingStorage {
+            inner: MemoryEntityStorage::new(),
+            yielded: Arc::new(AtomicUsize::new(0)),
+        };
+        let mut db = EmbeddedDb::new(storage);
+        db.insert("entities", "a", entity("a")).unwrap();
+        assert!(matches!(
+            db.begin(TransactionOptions::default()),
+            Err(error) if error.storage_kind() == Some(StorageErrorKind::Unsupported)
+        ));
+        let db = crate::Db::new(thread_backend(db));
+        futures::executor::block_on(async {
+            let snapshot = TransactionOptions {
+                isolation: crate::IsolationLevel::Snapshot,
+                ..TransactionOptions::default()
+            };
+            assert!(db.begin_transaction(snapshot).await.is_err());
+
+            let tx = db
+                .begin_transaction(TransactionOptions::default())
+                .await
+                .unwrap();
+            tx.upsert("entities".into(), "b".into(), entity("b"))
+                .await
+                .unwrap();
+            assert_eq!(tx.select(by_id("b")).await.unwrap().len(), 1);
+            assert!(
+                tx.get("entities".into(), "a".into())
+                    .await
+                    .unwrap()
+                    .is_some()
+            );
+            tx.commit().await.unwrap();
+            assert!(db.get("entities", "b").await.unwrap().is_some());
+
+            // A commit after `begin` fails the transaction's later reads
+            // and its commit.
+            let tx = db
+                .begin_transaction(TransactionOptions::default())
+                .await
+                .unwrap();
+            tx.upsert("entities".into(), "d".into(), entity("d"))
+                .await
+                .unwrap();
+            db.insert("entities", "c", entity("c")).await.unwrap();
+            assert!(matches!(
+                tx.get("entities".into(), "a".into()).await,
+                Err(DbError::TransactionConflict(_))
+            ));
+            assert!(matches!(
+                tx.commit().await,
+                Err(DbError::TransactionConflict(_))
+            ));
+            assert!(db.get("entities", "d").await.unwrap().is_none());
+        });
     }
 
     #[cfg(feature = "tokio")]

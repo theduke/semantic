@@ -443,7 +443,14 @@ fn stale_snapshot_conflicts_on_predicate_reads() {
             crate::WriteSettings::default(),
             false,
             |db, view, _| {
-                db.compact_update(view, ITEMS, &query, &DefaultExpressionContext::now(), false)
+                tx_update(
+                    view,
+                    &db.query_context(),
+                    ITEMS,
+                    &query,
+                    &DefaultExpressionContext::now(),
+                    false,
+                )
             },
             |_, _, _, result| Ok(CompactReply::Ready(result)),
         );
@@ -467,8 +474,14 @@ fn mutation_access_uses_primary_keys_indexes_and_scans() {
     let collection = catalog.collection_by_name(ITEMS).unwrap();
     let snapshot = db.storage.snapshot().unwrap();
     let access = |predicate: Expr| {
-        db.mutation_access(&catalog, &*snapshot, collection, Some(&predicate))
-            .unwrap()
+        mutation_access(
+            &catalog,
+            &db.query_context(),
+            &*snapshot,
+            collection,
+            Some(&predicate),
+        )
+        .unwrap()
     };
     let both = |left, right| Expr::Binary {
         op: BinaryOp::And,

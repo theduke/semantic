@@ -133,3 +133,18 @@ where
         }
     }
 }
+
+/// A savepoint of an interactive transaction (see
+/// `EmbeddedTransaction::savepoint`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, facet::Facet)]
+pub struct SavepointId(pub u64);
+
+/// Result of committing an interactive transaction.
+#[derive(Debug, Clone, PartialEq, Eq, facet::Facet)]
+pub struct TransactionCommit {
+    /// Storage revision created by the commit; the transaction's read
+    /// revision when it wrote nothing.
+    pub revision: Option<u64>,
+    /// Rows written by the transaction, including cascade deletes.
+    pub stats: crate::BatchStats,
+}

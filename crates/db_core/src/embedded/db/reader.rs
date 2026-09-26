@@ -438,7 +438,7 @@ impl<'a> DbReader<'a> {
 }
 
 /// The storage snapshot of one reader or query.
-pub(super) enum QueryReader<'a> {
+pub(crate) enum QueryReader<'a> {
     /// Owned snapshot that row views may keep for on-demand reads.
     Shared(Arc<dyn EntityReadSnapshot>),
     /// Snapshot borrowing the storage.

@@ -13,9 +13,10 @@ use semantic_data::value::{Object, Value};
 
 use crate::catalog::{Catalog, CollectionKind, LocalCollectionId};
 use crate::{
-    Batch, BatchOutcome, DbError, DdlBatch, DdlOutcome, DeleteQuery, LogicalPlan, MutationStats,
-    PackageRegistrationOutcome, PhysicalPlan, Query, QueryResult, SqlDialectKind, TextQueryFormat,
-    TextQueryInput, UpdateQuery, prql, sql,
+    Batch, BatchOutcome, BatchStats, DbError, DdlBatch, DdlOutcome, DeleteQuery, DeleteResult,
+    LogicalPlan, MutationStats, PackageRegistrationOutcome, PhysicalPlan, Query, QueryResult,
+    SavepointId, SelectQuery, SqlDialectKind, StorageErrorKind, TextQueryFormat, TextQueryInput,
+    TransactionCommit, TransactionOptions, UpdateQuery, UpdateResult, prql, sql,
 };
 use futures::Stream;
 
@@ -154,8 +155,67 @@ pub struct QueryExplain {
     pub access_path: AccessPath,
 }
 
+/// An interactive transaction of a [`Backend`] (see
+/// [`Backend::begin_transaction`]).
+///
+/// Statements run one at a time against a snapshot of the committed state
+/// taken when the transaction began, and observe the transaction's own
+/// writes. Nothing is visible to others before [`Self::commit`]; a handle
+/// dropped without committing is rolled back. Each statement is atomic: a
+/// failing statement leaves the transaction as it was.
+#[async_trait]
+pub trait TransactionHandle: Send + Sync {
+    fn options(&self) -> TransactionOptions;
+
+    async fn get(&self, collection: String, id: String) -> Result<Option<EntityRecord>, DbError>;
+
+    async fn select(&self, query: SelectQuery) -> Result<Vec<Object>, DbError>;
+
+    async fn upsert(&self, collection: String, id: String, object: Object) -> Result<(), DbError>;
+
+    /// Insert a row; fails with [`DbError::EntityExists`] when it exists.
+    async fn create(&self, collection: String, id: String, object: Object) -> Result<(), DbError>;
+
+    /// Delete a row (and its cascading dependents); returns whether it
+    /// existed.
+    async fn delete(&self, collection: String, id: String) -> Result<bool, DbError>;
+
+    async fn update_where(&self, query: UpdateQuery) -> Result<UpdateResult, DbError>;
+
+    async fn delete_where(&self, query: DeleteQuery) -> Result<DeleteResult, DbError>;
+
+    /// Apply a batch as one statement; returns the rows it wrote.
+    async fn execute_batch(&self, batch: Batch) -> Result<BatchStats, DbError>;
+
+    async fn savepoint(&self) -> Result<SavepointId, DbError>;
+
+    /// Undo the writes made after `savepoint`.
+    async fn rollback_to(&self, savepoint: SavepointId) -> Result<(), DbError>;
+
+    /// Validate and commit the transaction. Fails with
+    /// [`DbError::TransactionConflict`] when another write committed since
+    /// the transaction began; the caller may retry the whole transaction.
+    async fn commit(self: Box<Self>) -> Result<TransactionCommit, DbError>;
+
+    /// End the transaction without writing anything.
+    async fn rollback(self: Box<Self>) -> Result<(), DbError>;
+}
+
 #[async_trait]
 pub trait Backend: Send + Sync {
+    /// Begin an interactive transaction. The default reports that the
+    /// backend does not support interactive transactions.
+    async fn begin_transaction(
+        &self,
+        options: TransactionOptions,
+    ) -> Result<Box<dyn TransactionHandle>, DbError> {
+        let _ = options;
+        Err(DbError::storage(
+            StorageErrorKind::Unsupported,
+            "backend does not support interactive transactions",
+        ))
+    }
+
     async fn validation_preflight(&self) -> Result<Vec<crate::ValidationViolation>, DbError> {
         Err(DbError::InvalidQuery(
             "validation preflight requires a managed backend".into(),
@@ -385,6 +445,14 @@ impl Db {
 
     pub async fn catalog(&self) -> std::result::Result<Arc<Catalog>, DbError> {
         self.backend.catalog().await
+    }
+
+    /// Begin an interactive transaction (see [`TransactionHandle`]).
+    pub async fn begin_transaction(
+        &self,
+        options: TransactionOptions,
+    ) -> Result<Box<dyn TransactionHandle>, DbError> {
+        self.backend.begin_transaction(options).await
     }
 
     pub async fn scan_entities(&self) -> Result<EntityStream, DbError> {

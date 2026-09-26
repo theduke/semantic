@@ -545,6 +545,11 @@ impl<'a, S: EntityStorage> RevisionReader<'a, S> {
         self.snapshot.as_deref()
     }
 
+    /// The storage read when there is no consistent snapshot.
+    pub(crate) fn storage(&self) -> &'a S {
+        self.storage
+    }
+
     pub(crate) fn index_needs_rebuild(&self, index: LocalIndexId) -> Result<bool, DbError> {
         match &self.snapshot {
             Some(snapshot) => snapshot.index_needs_rebuild(index),
@@ -1192,6 +1197,9 @@ pub(crate) struct StorageReadCounts {
     /// Report maintained row counts as unknown, forcing the key-count
     /// fallback.
     pub(crate) hide_row_counts: std::sync::atomic::AtomicBool,
+    /// Number of upcoming conditional commits to fail with a conflict, as
+    /// if another writer committed first.
+    pub(crate) inject_conflicts: std::sync::atomic::AtomicUsize,
     /// Entities put or deleted by committed batches, as (collection, id).
     pub(crate) entity_writes: std::sync::Mutex<Vec<(usize, String)>>,
 }
@@ -1407,6 +1415,21 @@ impl EntityStorage for CountingEntityStorage {
         ops: &[StorageWriteOp],
         expected_revision: Option<u64>,
     ) -> Result<StorageCommitOutcome, DbError> {
+        if self
+            .counts
+            .inject_conflicts
+            .fetch_update(
+                std::sync::atomic::Ordering::Relaxed,
+                std::sync::atomic::Ordering::Relaxed,
+                |pending| pending.checked_sub(1),
+            )
+            .is_ok()
+        {
+            return Ok(StorageCommitOutcome::Conflict {
+                expected_revision,
+                actual_revision: expected_revision.map(|revision| revision + 1),
+            });
+        }
         let outcome = self.inner.apply_batch_conditional(ops, expected_revision)?;
         if matches!(outcome, StorageCommitOutcome::Committed { .. }) {
             self.record_writes(ops);

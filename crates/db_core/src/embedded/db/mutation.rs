@@ -38,152 +38,149 @@ enum MutationAccess {
     Scan,
 }
 
-impl<S: EntityStorage> EmbeddedDb<S> {
-    /// Apply a canonical `UPDATE` to the transaction overlay.
-    pub(super) fn compact_update(
-        &self,
-        view: &mut TxView<'_, S>,
-        collection: &str,
-        query: &UpdateQuery,
-        context: &DefaultExpressionContext,
-        recursive_validation: bool,
-    ) -> Result<crate::UpdateResult, DbError> {
-        let schema = mutation_collection(view.catalog, collection)?;
-        let mut entities = self.mutation_candidates(view, schema, query.predicate.as_ref())?;
-        let original = entities
-            .iter()
-            .map(|entity| entity.object.clone())
-            .collect::<Vec<_>>();
-        let catalog = view.catalog;
-        let result =
-            crate::apply_update_with_returning_and_prepare(query, &mut entities, |_, object| {
-                prepare_row_for_write(catalog, schema, object, context, recursive_validation)
-                    .map_err(|err| CoreError::new(err.to_string()))
-            })
-            .map_err(|err| DbError::InvalidQuery(err.message))?;
-        for (entity, original) in entities.into_iter().zip(original) {
-            if entity.object != original {
-                view.put((collection.to_string(), entity.id), entity.object)?;
-            }
+/// Apply a canonical `UPDATE` to the transaction overlay.
+pub(crate) fn tx_update(
+    view: &mut TxView<'_>,
+    query_context: &QueryContext,
+    collection: &str,
+    query: &UpdateQuery,
+    context: &DefaultExpressionContext,
+    recursive_validation: bool,
+) -> Result<crate::UpdateResult, DbError> {
+    let schema = mutation_collection(view.catalog, collection)?;
+    let mut entities = mutation_candidates(view, query_context, schema, query.predicate.as_ref())?;
+    let original = entities
+        .iter()
+        .map(|entity| entity.object.clone())
+        .collect::<Vec<_>>();
+    let catalog = view.catalog;
+    let result =
+        crate::apply_update_with_returning_and_prepare(query, &mut entities, |_, object| {
+            prepare_row_for_write(catalog, schema, object, context, recursive_validation)
+                .map_err(|err| CoreError::new(err.to_string()))
+        })
+        .map_err(|err| DbError::InvalidQuery(err.message))?;
+    for (entity, original) in entities.into_iter().zip(original) {
+        if entity.object != original {
+            view.put((collection.to_string(), entity.id), entity.object)?;
         }
-        Ok(result)
     }
+    Ok(result)
+}
 
-    /// Apply a canonical `DELETE` to the transaction overlay.
-    pub(super) fn compact_delete(
-        &self,
-        view: &mut TxView<'_, S>,
-        collection: &str,
-        query: &DeleteQuery,
-    ) -> Result<crate::DeleteResult, DbError> {
-        let schema = mutation_collection(view.catalog, collection)?;
-        let entities = self.mutation_candidates(view, schema, query.predicate.as_ref())?;
-        let mut deleted = entities
-            .iter()
-            .map(|entity| entity.id.clone())
-            .collect::<BTreeSet<_>>();
-        let (remaining, result) = crate::apply_delete_with_remaining(query, entities);
-        for entity in &remaining {
-            deleted.remove(&entity.id);
-        }
-        for id in deleted {
-            view.delete((collection.to_string(), id))?;
-        }
-        Ok(result)
+/// Apply a canonical `DELETE` to the transaction overlay.
+pub(crate) fn tx_delete(
+    view: &mut TxView<'_>,
+    query_context: &QueryContext,
+    collection: &str,
+    query: &DeleteQuery,
+) -> Result<crate::DeleteResult, DbError> {
+    let schema = mutation_collection(view.catalog, collection)?;
+    let entities = mutation_candidates(view, query_context, schema, query.predicate.as_ref())?;
+    let mut deleted = entities
+        .iter()
+        .map(|entity| entity.id.clone())
+        .collect::<BTreeSet<_>>();
+    let (remaining, result) = crate::apply_delete_with_remaining(query, entities);
+    for entity in &remaining {
+        deleted.remove(&entity.id);
     }
-
-    /// Rows of `collection` that may match `predicate`, ordered by id.
-    fn mutation_candidates(
-        &self,
-        view: &mut TxView<'_, S>,
-        collection: &CollectionSchema,
-        predicate: Option<&crate::Expr>,
-    ) -> Result<Vec<crate::Entity>, DbError> {
-        let access = match view.reader().snapshot() {
-            Some(snapshot) => {
-                self.mutation_access(view.catalog, snapshot, collection, predicate)?
-            }
-            None => self.mutation_access(
-                view.catalog,
-                &*self.storage.snapshot()?,
-                collection,
-                predicate,
-            )?,
-        };
-        let rows = match access {
-            MutationAccess::Ids(ids) => view.rows_by_ids(&collection.name, ids)?,
-            MutationAccess::Index { index, path, value } => {
-                let ids = view.index_ids(index, path.as_ref(), &value)?;
-                view.rows_by_ids(&collection.name, ids)?
-            }
-            MutationAccess::IndexRanges { index, ranges } => {
-                let ids = view.index_range_ids(index, &ranges)?;
-                view.rows_by_ids(&collection.name, ids)?
-            }
-            MutationAccess::Scan => view.scan_matching(collection, predicate)?,
-        };
-        Ok(rows
-            .into_iter()
-            .map(|(id, object)| crate::Entity {
-                id,
-                collection: collection.name.clone(),
-                object,
-            })
-            .collect())
+    for id in deleted {
+        view.delete((collection.to_string(), id))?;
     }
+    Ok(result)
+}
 
-    /// Choose how to locate the rows `predicate` can match.
-    fn mutation_access(
-        &self,
-        catalog: &Catalog,
-        reader: &dyn EntityReadSnapshot,
-        collection: &CollectionSchema,
-        predicate: Option<&crate::Expr>,
-    ) -> Result<MutationAccess, DbError> {
-        let Some(predicate) = predicate else {
-            return Ok(MutationAccess::Scan);
-        };
-        if let Some(ids) = primary_key_ids(collection, predicate) {
-            return Ok(MutationAccess::Ids(ids));
+/// Rows of `collection` that may match `predicate`, ordered by id.
+fn mutation_candidates(
+    view: &mut TxView<'_>,
+    query_context: &QueryContext,
+    collection: &CollectionSchema,
+    predicate: Option<&crate::Expr>,
+) -> Result<Vec<crate::Entity>, DbError> {
+    let access = {
+        let snapshot = view.reader().planning_snapshot()?;
+        mutation_access(
+            view.catalog,
+            query_context,
+            &*snapshot,
+            collection,
+            predicate,
+        )?
+    };
+    let rows = match access {
+        MutationAccess::Ids(ids) => view.rows_by_ids(&collection.name, ids)?,
+        MutationAccess::Index { index, path, value } => {
+            let ids = view.index_ids(index, path.as_ref(), &value)?;
+            view.rows_by_ids(&collection.name, ids)?
         }
-        let select = SelectQuery::new()
-            .with_collection(collection.name.clone())
-            .with_predicate(predicate.clone());
-        let stats = super::reader::stats_for_query(catalog, reader, &select, collection)?;
-        let physical = crate::Optimizer::core()
-            .optimize_query(
-                &select,
-                Some(collection.name.clone()),
-                Some(&stats),
-                &self.query_context(),
-            )
-            .physical;
-        if let Some(scan) = find_index_range(&physical) {
-            return Ok(MutationAccess::IndexRanges {
-                index: scan.index,
-                ranges: scan.ranges.clone(),
-            });
+        MutationAccess::IndexRanges { index, ranges } => {
+            let ids = view.index_range_ids(index, &ranges)?;
+            view.rows_by_ids(&collection.name, ids)?
         }
-        let Some((field, value)) = find_index_lookup(&physical) else {
-            return Ok(MutationAccess::Scan);
-        };
-        let Some(field_path) = lookup_field_path(collection, field) else {
-            return Ok(MutationAccess::Scan);
-        };
-        if !matches!(field_path.segments().first(), Some(PathSegment::Field(_))) {
-            return Ok(MutationAccess::Scan);
-        }
-        Ok(
-            match equality_lookup_index(catalog, collection.lid, &field_path) {
-                Some((index, path)) => MutationAccess::Index {
-                    index: index.lid,
-                    path,
-                    value: value.clone(),
-                },
-                None => MutationAccess::Scan,
-            },
+        MutationAccess::Scan => view.scan_matching(collection, predicate)?,
+    };
+    Ok(rows
+        .into_iter()
+        .map(|(id, object)| crate::Entity {
+            id,
+            collection: collection.name.clone(),
+            object,
+        })
+        .collect())
+}
+
+/// Choose how to locate the rows `predicate` can match.
+fn mutation_access(
+    catalog: &Catalog,
+    query_context: &QueryContext,
+    reader: &dyn EntityReadSnapshot,
+    collection: &CollectionSchema,
+    predicate: Option<&crate::Expr>,
+) -> Result<MutationAccess, DbError> {
+    let Some(predicate) = predicate else {
+        return Ok(MutationAccess::Scan);
+    };
+    if let Some(ids) = primary_key_ids(collection, predicate) {
+        return Ok(MutationAccess::Ids(ids));
+    }
+    let select = SelectQuery::new()
+        .with_collection(collection.name.clone())
+        .with_predicate(predicate.clone());
+    let stats = super::reader::stats_for_query(catalog, reader, &select, collection)?;
+    let physical = crate::Optimizer::core()
+        .optimize_query(
+            &select,
+            Some(collection.name.clone()),
+            Some(&stats),
+            query_context,
         )
+        .physical;
+    if let Some(scan) = find_index_range(&physical) {
+        return Ok(MutationAccess::IndexRanges {
+            index: scan.index,
+            ranges: scan.ranges.clone(),
+        });
     }
+    let Some((field, value)) = find_index_lookup(&physical) else {
+        return Ok(MutationAccess::Scan);
+    };
+    let Some(field_path) = lookup_field_path(collection, field) else {
+        return Ok(MutationAccess::Scan);
+    };
+    if !matches!(field_path.segments().first(), Some(PathSegment::Field(_))) {
+        return Ok(MutationAccess::Scan);
+    }
+    Ok(
+        match equality_lookup_index(catalog, collection.lid, &field_path) {
+            Some((index, path)) => MutationAccess::Index {
+                index: index.lid,
+                path,
+                value: value.clone(),
+            },
+            None => MutationAccess::Scan,
+        },
+    )
 }
 
 fn mutation_collection<'c>(

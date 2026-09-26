@@ -52,13 +52,18 @@ const REL_EDGE_TARGET_INDEX_NAME: &str = "__rel_target_idx";
 pub(crate) mod compact;
 mod incremental;
 mod index_scan;
+mod interactive;
+#[cfg(test)]
+mod interactive_tests;
 #[cfg(test)]
 mod isolation_tests;
 mod local_refs;
 mod mutation;
+mod overlay;
 mod reader;
 mod validation;
 
+pub use interactive::EmbeddedTransaction;
 pub use reader::DbReader;
 use reader::QueryReader;
 
@@ -832,8 +837,9 @@ impl<S: EntityStorage> EmbeddedDb<S> {
                 |db, view, _| {
                     let context = DefaultExpressionContext::now();
                     let recursive_validation = db.validation_enabled()?;
-                    db.compact_update(
+                    mutation::tx_update(
                         view,
+                        &db.query_context(),
                         &collection_name,
                         &query,
                         &context,
@@ -958,7 +964,9 @@ impl<S: EntityStorage> EmbeddedDb<S> {
                 catalog_snapshot.version,
                 crate::WriteSettings::default(),
                 false,
-                |db, view, _| db.compact_delete(view, &collection_name, &query),
+                |db, view, _| {
+                    mutation::tx_delete(view, &db.query_context(), &collection_name, &query)
+                },
                 |_, _, _, result| Ok(CompactReply::Ready(result)),
             )? {
                 return Ok(result);
@@ -1134,7 +1142,7 @@ impl<S: EntityStorage> EmbeddedDb<S> {
 
         let txn_result = run_with_transaction_retries(options, |_| {
             let catalog_snapshot = self.catalog.snapshot();
-            let batch = self.canonicalize_batch(&batch, catalog_snapshot.catalog.as_ref())?;
+            let batch = canonicalize_batch(&batch, catalog_snapshot.catalog.as_ref())?;
             let read_revision = self.storage.current_revision()?;
             let scope = TxScope::new(
                 catalog_snapshot.catalog.as_ref(),
@@ -1483,7 +1491,7 @@ impl<S: EntityStorage> EmbeddedDb<S> {
         before: &mut BTreeMap<String, BTreeMap<String, Object>>,
         after: &mut BTreeMap<String, BTreeMap<String, Object>>,
     ) -> std::result::Result<(), DbError> {
-        let batch = self.canonicalize_batch(&batch, current_catalog)?;
+        let batch = canonicalize_batch(&batch, current_catalog)?;
         let touched = touched_collections(&batch);
         for collection_name in &touched {
             if !before.contains_key(collection_name) {
@@ -1564,94 +1572,6 @@ impl<S: EntityStorage> EmbeddedDb<S> {
             .into_iter()
             .map(|row| (row.id, row.object))
             .collect::<BTreeMap<_, _>>())
-    }
-
-    fn canonicalize_batch(
-        &self,
-        batch: &Batch,
-        catalog: &Catalog,
-    ) -> std::result::Result<Batch, DbError> {
-        let mut canonical_ops = Vec::with_capacity(batch.operations.len());
-        for op in batch.operations.iter().cloned() {
-            match op {
-                BatchOperation::Create {
-                    collection,
-                    id,
-                    object,
-                } => {
-                    let schema = catalog.collection_by_name(&collection).ok_or_else(|| {
-                        DbError::UnknownCollectionByName {
-                            name: collection.clone(),
-                        }
-                    })?;
-                    ensure_collection_mutable(schema)?;
-                    canonical_ops.push(BatchOperation::Create {
-                        collection,
-                        id,
-                        object,
-                    });
-                }
-                BatchOperation::Upsert {
-                    collection,
-                    id,
-                    object,
-                } => {
-                    let schema = catalog.collection_by_name(&collection).ok_or_else(|| {
-                        DbError::UnknownCollectionByName {
-                            name: collection.clone(),
-                        }
-                    })?;
-                    ensure_collection_mutable(schema)?;
-                    canonical_ops.push(BatchOperation::Upsert {
-                        collection,
-                        id,
-                        object,
-                    });
-                }
-                BatchOperation::DeleteById { collection, id } => {
-                    let schema = catalog.collection_by_name(&collection).ok_or_else(|| {
-                        DbError::UnknownCollectionByName {
-                            name: collection.clone(),
-                        }
-                    })?;
-                    ensure_collection_mutable(schema)?;
-                    canonical_ops.push(BatchOperation::DeleteById { collection, id });
-                }
-                BatchOperation::DeleteByIds { collection, ids } => {
-                    let schema = catalog.collection_by_name(&collection).ok_or_else(|| {
-                        DbError::UnknownCollectionByName {
-                            name: collection.clone(),
-                        }
-                    })?;
-                    ensure_collection_mutable(schema)?;
-                    canonical_ops.push(BatchOperation::DeleteByIds { collection, ids });
-                }
-                BatchOperation::Update { collection, query } => {
-                    let schema = catalog.collection_by_name(&collection).ok_or_else(|| {
-                        DbError::UnknownCollectionByName {
-                            name: collection.clone(),
-                        }
-                    })?;
-                    ensure_collection_mutable(schema)?;
-                    let query = canonicalize_update_query(&query, catalog, schema)?;
-                    canonical_ops.push(BatchOperation::Update { collection, query });
-                }
-                BatchOperation::Delete { collection, query } => {
-                    let schema = catalog.collection_by_name(&collection).ok_or_else(|| {
-                        DbError::UnknownCollectionByName {
-                            name: collection.clone(),
-                        }
-                    })?;
-                    ensure_collection_mutable(schema)?;
-                    let query = canonicalize_delete_query(&query, catalog, schema)?;
-                    canonical_ops.push(BatchOperation::Delete { collection, query });
-                }
-            }
-        }
-
-        Ok(Batch {
-            operations: canonical_ops,
-        })
     }
 
     fn format_output_rows(
@@ -3138,6 +3058,95 @@ fn mark_collection_internal(
         .set_collection_internal(name, true)
         .map_err(|err| DbError::InvalidQuery(err.to_string()))?;
     Ok(true)
+}
+
+/// Check that every operation of `batch` targets a known, mutable collection
+/// and canonicalize its predicate mutations.
+pub(super) fn canonicalize_batch(
+    batch: &Batch,
+    catalog: &Catalog,
+) -> std::result::Result<Batch, DbError> {
+    let mut canonical_ops = Vec::with_capacity(batch.operations.len());
+    for op in batch.operations.iter().cloned() {
+        match op {
+            BatchOperation::Create {
+                collection,
+                id,
+                object,
+            } => {
+                let schema = catalog.collection_by_name(&collection).ok_or_else(|| {
+                    DbError::UnknownCollectionByName {
+                        name: collection.clone(),
+                    }
+                })?;
+                ensure_collection_mutable(schema)?;
+                canonical_ops.push(BatchOperation::Create {
+                    collection,
+                    id,
+                    object,
+                });
+            }
+            BatchOperation::Upsert {
+                collection,
+                id,
+                object,
+            } => {
+                let schema = catalog.collection_by_name(&collection).ok_or_else(|| {
+                    DbError::UnknownCollectionByName {
+                        name: collection.clone(),
+                    }
+                })?;
+                ensure_collection_mutable(schema)?;
+                canonical_ops.push(BatchOperation::Upsert {
+                    collection,
+                    id,
+                    object,
+                });
+            }
+            BatchOperation::DeleteById { collection, id } => {
+                let schema = catalog.collection_by_name(&collection).ok_or_else(|| {
+                    DbError::UnknownCollectionByName {
+                        name: collection.clone(),
+                    }
+                })?;
+                ensure_collection_mutable(schema)?;
+                canonical_ops.push(BatchOperation::DeleteById { collection, id });
+            }
+            BatchOperation::DeleteByIds { collection, ids } => {
+                let schema = catalog.collection_by_name(&collection).ok_or_else(|| {
+                    DbError::UnknownCollectionByName {
+                        name: collection.clone(),
+                    }
+                })?;
+                ensure_collection_mutable(schema)?;
+                canonical_ops.push(BatchOperation::DeleteByIds { collection, ids });
+            }
+            BatchOperation::Update { collection, query } => {
+                let schema = catalog.collection_by_name(&collection).ok_or_else(|| {
+                    DbError::UnknownCollectionByName {
+                        name: collection.clone(),
+                    }
+                })?;
+                ensure_collection_mutable(schema)?;
+                let query = canonicalize_update_query(&query, catalog, schema)?;
+                canonical_ops.push(BatchOperation::Update { collection, query });
+            }
+            BatchOperation::Delete { collection, query } => {
+                let schema = catalog.collection_by_name(&collection).ok_or_else(|| {
+                    DbError::UnknownCollectionByName {
+                        name: collection.clone(),
+                    }
+                })?;
+                ensure_collection_mutable(schema)?;
+                let query = canonicalize_delete_query(&query, catalog, schema)?;
+                canonical_ops.push(BatchOperation::Delete { collection, query });
+            }
+        }
+    }
+
+    Ok(Batch {
+        operations: canonical_ops,
+    })
 }
 
 fn ensure_collection_mutable(collection: &CollectionSchema) -> std::result::Result<(), DbError> {

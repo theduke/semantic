@@ -6,8 +6,10 @@ mod batch_returning;
 mod compact;
 mod incremental;
 mod index_access;
+mod transactions;
 mod validation;
 pub use index_access::test_index_access;
+pub use transactions::test_transactions;
 pub use validation::test_validation;
 
 use semantic_data::attr::{ATTR_TITLE, RELATION_CLASS_ID};
@@ -84,6 +86,7 @@ pub async fn test_db(db: &Db) {
     test_class_collection_alias_query(db).await;
     test_strict_registered_schema_typeless_insert(db).await;
     test_strict_class_attributes(db).await;
+    test_transactions(db).await;
 }
 
 async fn test_schema_registration(db: &Db) {
