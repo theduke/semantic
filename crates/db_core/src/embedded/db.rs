@@ -31,8 +31,8 @@ use crate::catalog::{
 use crate::embedded::{
     schema_store::{catalog_write_ops, load_catalog},
     storage::{
-        EntityStorage, StorageCommitOutcome, StorageTransactionCapabilities, StorageWriteOp,
-        StoredEntity, StoredEntityKind,
+        EntityReadSnapshot, EntityStorage, StorageCommitOutcome, StorageTransactionCapabilities,
+        StorageWriteOp, StoredEntity, StoredEntityKind,
     },
 };
 use crate::{
@@ -471,7 +471,11 @@ impl<S: EntityStorage> EmbeddedDb<S> {
             }
         })?;
 
-        let Some(entity) = self.storage.get_entity(collection_schema.lid, id)? else {
+        let Some(entity) = self
+            .storage
+            .snapshot()?
+            .get_entity(collection_schema.lid, id)?
+        else {
             return Ok(None);
         };
 
@@ -501,6 +505,8 @@ impl<S: EntityStorage> EmbeddedDb<S> {
     }
 
     pub fn select(&self, query: SelectQuery) -> std::result::Result<Vec<Object>, DbError> {
+        // Statistics and execution observe one storage state.
+        let reader = self.storage.snapshot()?;
         let collection_name = query.collection_or_default().to_string();
         let (query, stats, source) = if is_all_collection_alias(&collection_name) {
             (query, None, ALL_COLLECTION_ALIAS.to_string())
@@ -512,7 +518,7 @@ impl<S: EntityStorage> EmbeddedDb<S> {
                     name: collection_name.clone(),
                 })?;
             let query = canonicalize_select_query(&query, catalog.as_ref(), collection)?;
-            let stats = self.stats_for_query(&query, collection)?;
+            let stats = self.stats_for_query(reader.as_ref(), &query, collection)?;
             (query, Some(stats), collection.name.clone())
         };
         let optimizer = crate::Optimizer::core();
@@ -521,7 +527,8 @@ impl<S: EntityStorage> EmbeddedDb<S> {
             .as_ref()
             .map(|value| value as &dyn crate::StatsProvider);
         let pair = optimizer.optimize_query(&query, Some(source.clone()), stats_provider, &context);
-        let mut rows = self.execute_physical_plan(&pair.physical, Some(source.as_str()))?;
+        let mut rows =
+            self.execute_physical_plan_with_reader(reader, &pair.physical, Some(source.as_str()))?;
         let catalog = self.catalog();
         // Inject computed attributes.
         for row in &mut rows {
@@ -617,7 +624,8 @@ impl<S: EntityStorage> EmbeddedDb<S> {
                         ));
                     }
                 };
-                let stats = self.stats_for_query(&select, collection)?;
+                let stats =
+                    self.stats_for_query(self.storage.snapshot()?.as_ref(), &select, collection)?;
                 (
                     select,
                     Some(stats),
@@ -840,9 +848,19 @@ impl<S: EntityStorage> EmbeddedDb<S> {
         plan: &crate::PhysicalPlan,
         default_collection: Option<&str>,
     ) -> std::result::Result<Vec<Object>, DbError> {
+        self.execute_physical_plan_with_reader(self.storage.snapshot()?, plan, default_collection)
+    }
+
+    /// Execute a plan with all reads served by `reader`.
+    fn execute_physical_plan_with_reader(
+        &self,
+        reader: Box<dyn EntityReadSnapshot + '_>,
+        plan: &crate::PhysicalPlan,
+        default_collection: Option<&str>,
+    ) -> std::result::Result<Vec<Object>, DbError> {
         let context = self.query_context();
         let source = EmbeddedPhysicalDataSource {
-            db: self,
+            reader,
             catalog: self.catalog(),
             default_collection: default_collection.map(ToOwned::to_owned),
             local_ref_lookups: Mutex::new(BTreeMap::new()),
@@ -2268,6 +2286,7 @@ impl<S: EntityStorage> EmbeddedDb<S> {
 
     fn stats_for_query(
         &self,
+        reader: &dyn EntityReadSnapshot,
         query: &SelectQuery,
         base_collection: &CollectionSchema,
     ) -> std::result::Result<QueryStatsSnapshot, DbError> {
@@ -2289,16 +2308,19 @@ impl<S: EntityStorage> EmbeddedDb<S> {
             let collection = catalog
                 .collection_by_lid(collection_id)
                 .ok_or(DbError::UnknownCollection(collection_id))?;
-            collections.push(self.stats_for_collection(collection)?);
+            collections.push(self.stats_for_collection(reader, collection)?);
         }
         Ok(QueryStatsSnapshot { collections })
     }
 
     fn stats_for_collection(
         &self,
+        reader: &dyn EntityReadSnapshot,
         collection: &CollectionSchema,
     ) -> std::result::Result<CollectionStatsEntry, DbError> {
-        let row_count = self.storage.scan_collection(collection.lid)?.len() as f64;
+        let row_count = reader
+            .scan_collection_stream(collection.lid)?
+            .try_fold(0usize, |count, row| row.map(|_| count + 1))? as f64;
         let mut indexed_fields = BTreeSet::new();
         let mut unique_fields = BTreeSet::new();
         let mut indexed_field_ids = BTreeSet::new();
@@ -2460,8 +2482,9 @@ fn equality_expr(path: FieldPath, value: Value) -> crate::Expr {
     }
 }
 
-struct EmbeddedPhysicalDataSource<'a, S: EntityStorage> {
-    db: &'a EmbeddedDb<S>,
+/// Physical query source reading every row through one storage snapshot.
+struct EmbeddedPhysicalDataSource<'a> {
+    reader: Box<dyn EntityReadSnapshot + 'a>,
     catalog: std::sync::Arc<Catalog>,
     default_collection: Option<String>,
     local_ref_lookups: Mutex<BTreeMap<LocalCollectionId, Arc<BTreeMap<String, Object>>>>,
@@ -2477,7 +2500,7 @@ struct EmbeddedCollectionScan {
     local_ref_lookup: Arc<BTreeMap<String, Object>>,
 }
 
-impl<S: EntityStorage> EmbeddedPhysicalDataSource<'_, S> {
+impl EmbeddedPhysicalDataSource<'_> {
     fn local_ref_lookup(
         &self,
         collection: &CollectionSchema,
@@ -2490,8 +2513,7 @@ impl<S: EntityStorage> EmbeddedPhysicalDataSource<'_, S> {
             return Ok(lookup.clone());
         }
         let rows = self
-            .db
-            .storage
+            .reader
             .scan_collection_stream(collection.lid)
             .map_err(|err| crate::CoreError::new(err.to_string()))?;
         let lookup = build_local_ref_lookup(self.catalog.as_ref(), collection, rows)?;
@@ -2600,13 +2622,11 @@ impl<S: EntityStorage> EmbeddedPhysicalDataSource<'_, S> {
         max_depth: Option<usize>,
     ) -> crate::CoreResult<Vec<String>> {
         let ids = if let Some(index) = self.catalog.find_equality_index(rel_collection, key_field) {
-            self.db
-                .storage
+            self.reader
                 .scan_index_value(index.lid, None, &Value::String(key_value))
                 .map_err(|err| crate::CoreError::new(err.to_string()))?
         } else {
-            self.db
-                .storage
+            self.reader
                 .scan_collection(rel_collection)
                 .map_err(|err| crate::CoreError::new(err.to_string()))?
                 .into_iter()
@@ -2616,8 +2636,7 @@ impl<S: EntityStorage> EmbeddedPhysicalDataSource<'_, S> {
         let mut out = BTreeSet::new();
         for id in ids {
             let Some(edge) = self
-                .db
-                .storage
+                .reader
                 .get_entity(rel_collection, &id)
                 .map_err(|err| crate::CoreError::new(err.to_string()))?
             else {
@@ -2698,8 +2717,7 @@ impl<S: EntityStorage> EmbeddedPhysicalDataSource<'_, S> {
         let local_ref_lookup = self.local_ref_lookup(collection)?;
         let (field_names, attr_names) = collection_field_maps(collection);
         let rows = self
-            .db
-            .storage
+            .reader
             .scan_collection_stream(collection.lid)
             .map_err(|err| crate::CoreError::new(err.to_string()))?;
         Ok(EmbeddedCollectionScan {
@@ -2820,8 +2838,7 @@ impl<S: EntityStorage> EmbeddedPhysicalDataSource<'_, S> {
             let mut scans = Vec::new();
             for (_, collection) in self.catalog.collections() {
                 let rows = self
-                    .db
-                    .storage
+                    .reader
                     .scan_collection(collection.lid)
                     .map_err(|err| crate::CoreError::new(err.to_string()))?;
                 scans.push(
@@ -2834,8 +2851,7 @@ impl<S: EntityStorage> EmbeddedPhysicalDataSource<'_, S> {
             .resolve_collection(source)
             .map_err(|err| crate::CoreError::new(err.to_string()))?;
         let rows = self
-            .db
-            .storage
+            .reader
             .scan_collection(collection.lid)
             .map_err(|err| crate::CoreError::new(err.to_string()))?;
         Ok((
@@ -2853,8 +2869,7 @@ impl<S: EntityStorage> EmbeddedPhysicalDataSource<'_, S> {
         let mut rows = Vec::with_capacity(ids.len());
         for id in ids {
             if let Some(entity) = self
-                .db
-                .storage
+                .reader
                 .get_entity(collection.lid, &id)
                 .map_err(|err| crate::CoreError::new(err.to_string()))?
             {
@@ -2961,13 +2976,11 @@ impl<S: EntityStorage> EmbeddedPhysicalDataSource<'_, S> {
             .catalog
             .find_equality_index(rel_collection.lid, REL_EDGE_SOURCE_KEY_FIELD)
         {
-            self.db
-                .storage
+            self.reader
                 .scan_index_value(index.lid, None, &source_key)
                 .map_err(|err| crate::CoreError::new(err.to_string()))?
         } else {
-            self.db
-                .storage
+            self.reader
                 .scan_collection(rel_collection.lid)
                 .map_err(|err| crate::CoreError::new(err.to_string()))?
                 .into_iter()
@@ -2976,8 +2989,7 @@ impl<S: EntityStorage> EmbeddedPhysicalDataSource<'_, S> {
         };
         for candidate_id in candidate_ids {
             let Some(edge) = self
-                .db
-                .storage
+                .reader
                 .get_entity(rel_collection.lid, &candidate_id)
                 .map_err(|err| crate::CoreError::new(err.to_string()))?
             else {
@@ -3527,7 +3539,7 @@ fn type_allows_nullish(ty: &Type) -> bool {
     }
 }
 
-impl<S: EntityStorage> crate::AsyncPhysicalDataSource for EmbeddedPhysicalDataSource<'_, S> {
+impl crate::AsyncPhysicalDataSource for EmbeddedPhysicalDataSource<'_> {
     fn scan_stream(&self, source: crate::SourceRef) -> crate::SendableRecordBatchStream {
         match self.scan_collections(&source) {
             Ok(scans) => Self::scans_to_stream(scans, None),
@@ -3653,8 +3665,7 @@ impl<S: EntityStorage> crate::AsyncPhysicalDataSource for EmbeddedPhysicalDataSo
             let mut ids = BTreeSet::new();
             for value in &values {
                 ids.extend(
-                    self.db
-                        .storage
+                    self.reader
                         .scan_index_value(index_id, index_path.as_ref(), value)
                         .map_err(|err| crate::CoreError::new(err.to_string()))?,
                 );
@@ -3693,7 +3704,7 @@ impl<S: EntityStorage> crate::AsyncPhysicalDataSource for EmbeddedPhysicalDataSo
     }
 }
 
-impl<S: EntityStorage> EmbeddedPhysicalDataSource<'_, S> {
+impl EmbeddedPhysicalDataSource<'_> {
     fn field_path_for_lookup(
         &self,
         collection: &CollectionSchema,
@@ -3739,13 +3750,11 @@ impl<S: EntityStorage> EmbeddedPhysicalDataSource<'_, S> {
         let ids = if let Some(top_level) = top_level {
             if field_path.segments().len() == 1 {
                 if let Some(index) = self.catalog.find_equality_index(collection.lid, top_level) {
-                    self.db
-                        .storage
+                    self.reader
                         .scan_index_value(index.lid, None, value)
                         .map_err(|err| crate::CoreError::new(err.to_string()))?
                 } else if let Some(index) = self.catalog.find_path_equality_index(collection.lid) {
-                    self.db
-                        .storage
+                    self.reader
                         .scan_index_value(index.lid, Some(&field_path), value)
                         .map_err(|err| crate::CoreError::new(err.to_string()))?
                 } else {
@@ -3758,8 +3767,7 @@ impl<S: EntityStorage> EmbeddedPhysicalDataSource<'_, S> {
                     .iter()
                     .any(|segment| matches!(segment, PathSegment::Index(_)));
                 if has_index_segment {
-                    self.db
-                        .storage
+                    self.reader
                         .scan_index_value(index.lid, Some(&field_path), value)
                         .map_err(|err| crate::CoreError::new(err.to_string()))?
                 } else {
@@ -3993,11 +4001,9 @@ mod tests {
     use super::{EmbeddedDb, EmbeddedPhysicalDataSource, QueryPlan, RELATION_EDGES_COLLECTION};
     use crate::embedded::storage::{EntityStorage, MemoryEntityStorage};
 
-    fn physical_source(
-        db: &EmbeddedDb<MemoryEntityStorage>,
-    ) -> EmbeddedPhysicalDataSource<'_, MemoryEntityStorage> {
+    fn physical_source(db: &EmbeddedDb<MemoryEntityStorage>) -> EmbeddedPhysicalDataSource<'_> {
         EmbeddedPhysicalDataSource {
-            db,
+            reader: db.storage.snapshot().unwrap(),
             catalog: db.catalog(),
             default_collection: None,
             local_ref_lookups: Mutex::new(BTreeMap::new()),

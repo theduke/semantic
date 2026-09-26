@@ -1,8 +1,9 @@
 pub mod storage;
 
 pub use storage::{
-    BoxKvPrefixScan, EntityScan, EntityStore, IndexEntityIdScan, KvEngine, KvKeyScan, KvScanItem,
-    KvWriteOp, MemoryKvEngine, decode_entity, encode_entity, parse_entity_key,
+    BoxKvPrefixScan, EntityScan, EntityStore, IndexEntityIdScan, KvEngine, KvEntitySnapshot,
+    KvKeyScan, KvReadTxn, KvScanItem, KvWriteOp, KvWriteTxn, MemoryKvEngine, decode_entity,
+    encode_entity, parse_entity_key, prefix_range_end,
 };
 
 use semantic_db_core::embedded::{EmbeddedBackend, EmbeddedDb};

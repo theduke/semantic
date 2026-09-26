@@ -2,6 +2,7 @@
 //! adjusted for the transaction overlay before final-state validation.
 use super::*;
 use crate::batch_return::{ChangeSet, EntityKey, RowChange};
+use crate::embedded::storage::RevisionReader;
 
 const REFERENCES: &str = "__semantic.reverse_references";
 const TARGET_INDEX: &str = "__reverse_reference_target_idx";
@@ -19,23 +20,37 @@ pub(crate) use crate::ResolvedReference;
 
 pub(crate) struct TxView<'a, S: EntityStorage> {
     pub catalog: &'a Catalog,
-    storage: &'a S,
-    revision: Option<u64>,
+    reader: RevisionReader<'a, S>,
     snapshot: BTreeMap<EntityKey, Option<Object>>,
     overlay: BTreeMap<EntityKey, Option<Object>>,
     pub counts: ExecutionCounts,
 }
 
 impl<'a, S: EntityStorage> TxView<'a, S> {
-    pub(crate) fn new(catalog: &'a Catalog, storage: &'a S, revision: Option<u64>) -> Self {
-        Self {
+    /// Open a view whose reads observe `revision`, served from one storage
+    /// snapshot when the backend provides it.
+    pub(crate) fn new(
+        catalog: &'a Catalog,
+        storage: &'a S,
+        revision: Option<u64>,
+    ) -> Result<Self, DbError> {
+        Ok(Self {
             catalog,
-            storage,
-            revision,
+            reader: RevisionReader::new(storage, revision)?,
             snapshot: BTreeMap::new(),
             overlay: BTreeMap::new(),
             counts: ExecutionCounts::default(),
-        }
+        })
+    }
+
+    /// Finish the read phase, releasing the storage snapshot.
+    pub(crate) fn into_counts(self) -> ExecutionCounts {
+        self.counts
+    }
+
+    /// Revision-bound reads without the transaction overlay.
+    pub(crate) fn reader(&self) -> &RevisionReader<'a, S> {
+        &self.reader
     }
 
     pub(crate) fn get(&mut self, key: &EntityKey) -> Result<Option<Object>, DbError> {
@@ -48,8 +63,8 @@ impl<'a, S: EntityStorage> TxView<'a, S> {
             }
         })?;
         let row = self
-            .storage
-            .get_entity_at_revision(collection.lid, &key.1, self.revision)?
+            .reader
+            .get_entity(collection.lid, &key.1)?
             .map(|row| row.object);
         self.counts.point_reads += 1;
         self.counts.visited_rows += usize::from(row.is_some());
@@ -80,8 +95,8 @@ impl<'a, S: EntityStorage> TxView<'a, S> {
             .ok_or_else(|| DbError::Storage("index collection missing".into()))?;
         self.counts.index_reads += 1;
         let mut ids: BTreeSet<String> = self
-            .storage
-            .scan_index_value_at_revision(index.lid, None, value, self.revision)?
+            .reader
+            .scan_index_value(index.lid, None, value)?
             .into_iter()
             .collect();
         for ((name, id), object) in &self.overlay {
@@ -116,17 +131,14 @@ impl<'a, S: EntityStorage> TxView<'a, S> {
             .find_equality_index(collection.lid, "target")
             .ok_or_else(|| DbError::Storage("reverse reference index missing".into()))?;
         self.counts.index_reads += 1;
-        let ids = self.storage.scan_index_value_at_revision(
-            index.lid,
-            None,
-            &Value::String(entity_key(target)),
-            self.revision,
-        )?;
+        let ids =
+            self.reader
+                .scan_index_value(index.lid, None, &Value::String(entity_key(target)))?;
         let mut refs = BTreeSet::new();
         for id in ids {
             let row = self
-                .storage
-                .get_entity_at_revision(collection.lid, &id, self.revision)?
+                .reader
+                .get_entity(collection.lid, &id)?
                 .ok_or_else(|| {
                     DbError::Storage("reverse reference index points to missing entry".into())
                 })?;
@@ -496,16 +508,14 @@ impl<S: EntityStorage> EmbeddedDb<S> {
         let index = catalog
             .find_equality_index(references.lid, "target")
             .unwrap();
-        if self
-            .storage
-            .get_entity_at_revision(references.lid, MARKER, revision)?
-            .is_none()
-            || self.storage.index_needs_rebuild(index.lid)?
+        let mut view = TxView::new(catalog, &self.storage, revision)?;
+        if view.reader().get_entity(references.lid, MARKER)?.is_none()
+            || view.reader().index_needs_rebuild(index.lid)?
         {
+            drop(view);
             self.record_compact_fallback("reverse_reference_backfill_incomplete");
             return Ok(None);
         }
-        let mut view = TxView::new(catalog, &self.storage, revision);
         let mut stats = crate::BatchStats {
             upserted: 0,
             updated: 0,
@@ -665,7 +675,7 @@ impl<S: EntityStorage> EmbeddedDb<S> {
                 // Permissive collections can discover a dynamic field on an
                 // untouched row. Preserve dataset projection resolution when
                 // the addressed rows and catalog cannot establish its name.
-                self.execution_counts = view.counts;
+                self.execution_counts = view.into_counts();
                 self.record_compact_fallback("projection_field_requires_schema_scan");
                 return Ok(None);
             }
@@ -683,7 +693,7 @@ impl<S: EntityStorage> EmbeddedDb<S> {
         }
         self.update_reverse_references(catalog, &changes, &mut ops)?;
         self.update_relationship_edges(catalog, &before, &after, &mut ops)?;
-        self.execution_counts = view.counts;
+        self.execution_counts = view.into_counts();
         self.storage.ensure_revision(revision)?;
         if self.catalog.snapshot().version != catalog_version {
             return Err(DbError::TransactionConflict(
@@ -952,6 +962,11 @@ mod tests {
             &catalog,
             &db.storage,
             db.storage.current_revision().unwrap(),
+        )
+        .unwrap();
+        assert!(
+            view.reader().is_snapshot(),
+            "current revisions use one snapshot"
         );
         assert!(
             view.incoming(&(DEFAULT_COLLECTION.into(), "person".into()))
@@ -1280,7 +1295,11 @@ mod tests {
         db.execute_batch(Batch::new().with_op(upsert("one", "one")))
             .unwrap();
         let catalog = db.catalog();
-        let mut view = TxView::new(&catalog, &db.storage, revision);
+        let mut view = TxView::new(&catalog, &db.storage, revision).unwrap();
+        assert!(
+            !view.reader().is_snapshot(),
+            "stale revisions must be fenced"
+        );
         assert!(matches!(
             view.get(&("items".into(), "one".into())),
             Err(DbError::TransactionConflict(_))

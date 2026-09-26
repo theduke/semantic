@@ -4,7 +4,9 @@ use semantic_db_core::embedded::{
     EmbeddedBackend, EmbeddedDb, StorageCommitOutcome, StorageTransactionCapabilities,
 };
 use semantic_db_core::{DbConfig, DbError};
-use semantic_db_kv::{BoxKvPrefixScan, EntityStore, KvEngine, KvWriteOp};
+use semantic_db_kv::{
+    BoxKvPrefixScan, EntityStore, KvEngine, KvReadTxn, KvWriteOp, KvWriteTxn, prefix_range_end,
+};
 use std::path::Path;
 use std::sync::Arc;
 
@@ -56,68 +58,161 @@ impl RedbKvEngine {
     }
 }
 
+impl RedbKvEngine {
+    /// Open a read handle backed by one redb read transaction.
+    ///
+    /// The handle observes the committed state at the time it was opened,
+    /// independent of later commits.
+    pub fn read_txn(&self) -> Result<RedbReadTxn, DbError> {
+        let read_txn = self.db.begin_read().map_err(storage_err)?;
+        let table = read_txn.open_table(KV_TABLE).map_err(storage_err)?;
+        let revision = read_revision_table(&table)?;
+        Ok(RedbReadTxn { table, revision })
+    }
+}
+
+/// Snapshot read handle over one redb read transaction.
+pub struct RedbReadTxn {
+    table: redb::ReadOnlyTable<&'static [u8], &'static [u8]>,
+    revision: Option<u64>,
+}
+
+impl std::fmt::Debug for RedbReadTxn {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("RedbReadTxn")
+            .field("revision", &self.revision)
+            .finish_non_exhaustive()
+    }
+}
+
+impl KvReadTxn for RedbReadTxn {
+    fn revision(&self) -> Option<u64> {
+        self.revision
+    }
+
+    fn is_snapshot(&self) -> bool {
+        true
+    }
+
+    fn get(&self, key: &[u8]) -> Result<Option<Vec<u8>>, DbError> {
+        Ok(self
+            .table
+            .get(key)
+            .map_err(storage_err)?
+            .map(|value| value.value().to_vec()))
+    }
+
+    fn scan_range_stream(
+        &self,
+        start: Vec<u8>,
+        end: Option<Vec<u8>>,
+    ) -> Result<BoxKvPrefixScan, DbError> {
+        let iter = match &end {
+            Some(end) if end.as_slice() <= start.as_slice() => {
+                return Ok(Box::new(std::iter::empty()));
+            }
+            Some(end) => self
+                .table
+                .range::<&[u8]>(start.as_slice()..end.as_slice())
+                .map_err(storage_err)?,
+            None => self
+                .table
+                .range::<&[u8]>(start.as_slice()..)
+                .map_err(storage_err)?,
+        };
+        Ok(Box::new(iter.map(|item| {
+            let (key, value) = item.map_err(storage_err)?;
+            Ok((key.value().to_vec(), value.value().to_vec()))
+        })))
+    }
+}
+
+/// Mutable access to one redb write transaction's table.
+struct RedbWriteTxn<'a, 'txn> {
+    table: &'a mut redb::Table<'txn, &'static [u8], &'static [u8]>,
+    changed: bool,
+}
+
+impl KvWriteTxn for RedbWriteTxn<'_, '_> {
+    fn get(&self, key: &[u8]) -> Result<Option<Vec<u8>>, DbError> {
+        Ok(self
+            .table
+            .get(key)
+            .map_err(storage_err)?
+            .map(|value| value.value().to_vec()))
+    }
+
+    fn scan_prefix(&self, prefix: &[u8]) -> Result<Vec<(Vec<u8>, Vec<u8>)>, DbError> {
+        let iter = match prefix_range_end(prefix) {
+            Some(end) => self
+                .table
+                .range::<&[u8]>(prefix..end.as_slice())
+                .map_err(storage_err)?,
+            None => self.table.range::<&[u8]>(prefix..).map_err(storage_err)?,
+        };
+        iter.map(|item| {
+            let (key, value) = item.map_err(storage_err)?;
+            Ok((key.value().to_vec(), value.value().to_vec()))
+        })
+        .collect()
+    }
+
+    fn put(&mut self, key: &[u8], value: &[u8]) -> Result<(), DbError> {
+        self.table.insert(key, value).map_err(storage_err)?;
+        self.changed = true;
+        Ok(())
+    }
+
+    fn delete(&mut self, key: &[u8]) -> Result<(), DbError> {
+        if self.table.remove(key).map_err(storage_err)?.is_some() {
+            self.changed = true;
+        }
+        Ok(())
+    }
+}
+
+fn apply_ops(txn: &mut dyn KvWriteTxn, ops: &[KvWriteOp]) -> Result<(), DbError> {
+    for op in ops {
+        match op {
+            KvWriteOp::Put { key, value } => txn.put(key, value)?,
+            KvWriteOp::Delete { key } => txn.delete(key)?,
+        }
+    }
+    Ok(())
+}
+
 impl KvEngine for RedbKvEngine {
     type PrefixScan = BoxKvPrefixScan;
 
     fn get(&self, key: &[u8]) -> std::result::Result<Option<Vec<u8>>, DbError> {
-        let read_txn = self.db.begin_read().map_err(storage_err)?;
-        let table = read_txn.open_table(KV_TABLE).map_err(storage_err)?;
-        // TODO: prevent cloning?
-        let value = table
-            .get(key)
-            .map_err(storage_err)?
-            .map(|v| v.value().to_vec());
-        Ok(value)
+        self.read_txn()?.get(key)
     }
 
     fn put(&mut self, key: Vec<u8>, value: Vec<u8>) -> std::result::Result<(), DbError> {
-        let write_txn = self.db.begin_write().map_err(storage_err)?;
-        {
-            let mut table = write_txn.open_table(KV_TABLE).map_err(storage_err)?;
-            table
-                .insert(key.as_slice(), value.as_slice())
-                .map_err(storage_err)?;
-        }
-        write_txn.commit().map_err(storage_err)?;
-        Ok(())
+        self.write_batch(&[KvWriteOp::Put { key, value }])
     }
 
     fn delete(&mut self, key: &[u8]) -> std::result::Result<(), DbError> {
-        let write_txn = self.db.begin_write().map_err(storage_err)?;
-        {
-            let mut table = write_txn.open_table(KV_TABLE).map_err(storage_err)?;
-            let _ = table.remove(key).map_err(storage_err)?;
-        }
-        write_txn.commit().map_err(storage_err)?;
-        Ok(())
+        self.write_batch(&[KvWriteOp::Delete { key: key.to_vec() }])
     }
 
     fn scan_prefix_stream(
         &self,
         prefix: Vec<u8>,
     ) -> std::result::Result<Self::PrefixScan, DbError> {
-        let read_txn = self.db.begin_read().map_err(storage_err)?;
-        let table = read_txn.open_table(KV_TABLE).map_err(storage_err)?;
-        let iter = if let Some(end) = prefix_range_end(&prefix) {
-            table
-                .range::<&[u8]>(prefix.as_slice()..end.as_slice())
-                .map_err(storage_err)?
-        } else {
-            table
-                .range::<&[u8]>(prefix.as_slice()..)
-                .map_err(storage_err)?
-        };
+        self.read_txn()?.scan_prefix_stream(prefix)
+    }
 
-        Ok(Box::new(iter.map(move |item| {
-            let (key_guard, value_guard) = item.map_err(storage_err)?;
-            let key = key_guard.value();
-            if !key.starts_with(&prefix) {
-                return Err(DbError::Storage(
-                    "redb prefix scan returned key outside requested range".to_string(),
-                ));
-            }
-            Ok((key.to_vec(), value_guard.value().to_vec()))
-        })))
+    fn scan_range_stream(
+        &self,
+        start: Vec<u8>,
+        end: Option<Vec<u8>>,
+    ) -> Result<BoxKvPrefixScan, DbError> {
+        self.read_txn()?.scan_range_stream(start, end)
+    }
+
+    fn begin_read(&self) -> Result<Box<dyn KvReadTxn + '_>, DbError> {
+        Ok(Box::new(self.read_txn()?))
     }
 
     fn scan_prefix(&self, prefix: &[u8]) -> std::result::Result<Vec<(Vec<u8>, Vec<u8>)>, DbError> {
@@ -132,29 +227,59 @@ impl KvEngine for RedbKvEngine {
         self.scan_prefix(prefix)
     }
 
-    fn write_batch(&mut self, ops: &[KvWriteOp]) -> std::result::Result<(), DbError> {
+    fn write_with<F>(
+        &mut self,
+        expected_revision: Option<u64>,
+        f: F,
+    ) -> Result<StorageCommitOutcome, DbError>
+    where
+        F: FnOnce(&mut dyn KvWriteTxn) -> Result<(), DbError>,
+    {
         let write_txn = self.db.begin_write().map_err(storage_err)?;
-        {
+        let (actual, next) = {
             let mut table = write_txn.open_table(KV_TABLE).map_err(storage_err)?;
-            for op in ops {
-                match op {
-                    KvWriteOp::Put { key, value } => {
-                        table
-                            .insert(key.as_slice(), value.as_slice())
-                            .map_err(storage_err)?;
-                    }
-                    KvWriteOp::Delete { key } => {
-                        let _ = table.remove(key.as_slice()).map_err(storage_err)?;
-                    }
-                }
+            let actual = read_revision_table(&table)?;
+            if let Some(expected) = expected_revision
+                && actual != Some(expected)
+            {
+                return Ok(StorageCommitOutcome::Conflict {
+                    expected_revision: Some(expected),
+                    actual_revision: actual,
+                });
             }
-            let revision = read_revision_table(&table)?.unwrap_or(0).saturating_add(1);
-            table
-                .insert(META_REV_KEY, revision.to_be_bytes().as_slice())
-                .map_err(storage_err)?;
+            let mut txn = RedbWriteTxn {
+                table: &mut table,
+                changed: false,
+            };
+            // Dropping the uncommitted transaction on error aborts it.
+            f(&mut txn)?;
+            let next = if txn.changed {
+                let revision = actual.unwrap_or(0).saturating_add(1);
+                table
+                    .insert(META_REV_KEY, revision.to_be_bytes().as_slice())
+                    .map_err(storage_err)?;
+                Some(revision)
+            } else {
+                None
+            };
+            (actual, next)
+        };
+        match next {
+            Some(revision) => {
+                write_txn.commit().map_err(storage_err)?;
+                Ok(StorageCommitOutcome::Committed {
+                    revision: Some(revision),
+                })
+            }
+            None => {
+                write_txn.abort().map_err(storage_err)?;
+                Ok(StorageCommitOutcome::Committed { revision: actual })
+            }
         }
-        write_txn.commit().map_err(storage_err)?;
-        Ok(())
+    }
+
+    fn write_batch(&mut self, ops: &[KvWriteOp]) -> std::result::Result<(), DbError> {
+        self.write_with(None, |txn| apply_ops(txn, ops)).map(|_| ())
     }
 
     fn tx_capabilities(&self) -> StorageTransactionCapabilities {
@@ -176,54 +301,8 @@ impl KvEngine for RedbKvEngine {
         ops: &[KvWriteOp],
         expected_revision: Option<u64>,
     ) -> std::result::Result<StorageCommitOutcome, DbError> {
-        let write_txn = self.db.begin_write().map_err(storage_err)?;
-        let next_revision;
-        {
-            let mut table = write_txn.open_table(KV_TABLE).map_err(storage_err)?;
-            let actual = read_revision_table(&table)?;
-            if let Some(expected) = expected_revision {
-                if actual != Some(expected) {
-                    return Ok(StorageCommitOutcome::Conflict {
-                        expected_revision: Some(expected),
-                        actual_revision: actual,
-                    });
-                }
-            }
-            for op in ops {
-                match op {
-                    KvWriteOp::Put { key, value } => {
-                        table
-                            .insert(key.as_slice(), value.as_slice())
-                            .map_err(storage_err)?;
-                    }
-                    KvWriteOp::Delete { key } => {
-                        let _ = table.remove(key.as_slice()).map_err(storage_err)?;
-                    }
-                }
-            }
-            let revision = actual.unwrap_or(0).saturating_add(1);
-            table
-                .insert(META_REV_KEY, revision.to_be_bytes().as_slice())
-                .map_err(storage_err)?;
-            next_revision = Some(revision);
-        }
-        write_txn.commit().map_err(storage_err)?;
-        Ok(StorageCommitOutcome::Committed {
-            revision: next_revision,
-        })
+        self.write_with(expected_revision, |txn| apply_ops(txn, ops))
     }
-}
-
-fn prefix_range_end(prefix: &[u8]) -> Option<Vec<u8>> {
-    let mut end = prefix.to_vec();
-    for idx in (0..end.len()).rev() {
-        if end[idx] != u8::MAX {
-            end[idx] += 1;
-            end.truncate(idx + 1);
-            return Some(end);
-        }
-    }
-    None
 }
 
 fn storage_err(err: impl std::fmt::Display) -> DbError {
@@ -274,7 +353,188 @@ mod tests {
     use semantic_db_core::catalog::CollectionKind;
     use semantic_db_core::{Db, Expr, Operand, SelectQuery};
 
+    use semantic_db_core::DbError;
+    use semantic_db_core::catalog::LocalCollectionId;
+    use semantic_db_core::embedded::{
+        EntityStorage, StorageCommitOutcome, StorageWriteOp, StoredEntity, StoredEntityKind,
+    };
+    use semantic_db_kv::{BoxKvPrefixScan, KvEngine, KvReadTxn, KvWriteOp};
+
     use super::{DbOpenMode, RedbDatabase, RedbKvEngine, open_backend};
+
+    fn put(key: &[u8], value: &[u8]) -> KvWriteOp {
+        KvWriteOp::Put {
+            key: key.to_vec(),
+            value: value.to_vec(),
+        }
+    }
+
+    fn keys(scan: BoxKvPrefixScan) -> Vec<Vec<u8>> {
+        scan.map(|item| item.unwrap().0).collect()
+    }
+
+    fn seeded_engine(dir: &tempfile::TempDir) -> RedbKvEngine {
+        let mut engine = RedbKvEngine::open(dir.path().join("kv"), DbOpenMode::AutoCreate).unwrap();
+        engine
+            .write_batch(&[
+                put(b"a", b"1"),
+                put(b"b", b"2"),
+                put(b"b/1", b"3"),
+                put(b"c", b"4"),
+            ])
+            .unwrap();
+        engine
+    }
+
+    #[test]
+    fn redb_read_txn_is_isolated_from_later_writes() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut engine = seeded_engine(&dir);
+        let revision = engine.current_revision().unwrap();
+        let read = engine.read_txn().unwrap();
+        engine
+            .write_batch(&[put(b"a", b"changed"), put(b"b/2", b"new")])
+            .unwrap();
+        engine.delete(b"c").unwrap();
+
+        assert!(read.is_snapshot());
+        assert_eq!(read.revision(), revision);
+        assert_eq!(read.get(b"a").unwrap(), Some(b"1".to_vec()));
+        assert_eq!(read.get(b"c").unwrap(), Some(b"4".to_vec()));
+        assert_eq!(
+            keys(read.scan_prefix_stream(b"b".to_vec()).unwrap()),
+            vec![b"b".to_vec(), b"b/1".to_vec()]
+        );
+
+        let fresh = engine.begin_read().unwrap();
+        assert_eq!(fresh.get(b"a").unwrap(), Some(b"changed".to_vec()));
+        assert_eq!(fresh.get(b"c").unwrap(), None);
+        assert_eq!(fresh.revision(), engine.current_revision().unwrap());
+        assert_ne!(fresh.revision(), revision);
+    }
+
+    #[test]
+    fn redb_range_scans_respect_bounds() {
+        let dir = tempfile::tempdir().unwrap();
+        let engine = seeded_engine(&dir);
+        let read = engine.begin_read().unwrap();
+        assert_eq!(
+            keys(
+                read.scan_range_stream(b"b".to_vec(), Some(b"c".to_vec()))
+                    .unwrap()
+            ),
+            vec![b"b".to_vec(), b"b/1".to_vec()]
+        );
+        assert_eq!(
+            keys(
+                read.scan_range_stream(b"b/".to_vec(), Some(b"c/".to_vec()))
+                    .unwrap()
+            ),
+            vec![b"b/1".to_vec(), b"c".to_vec()]
+        );
+        assert!(
+            keys(
+                read.scan_range_stream(b"c".to_vec(), Some(b"b".to_vec()))
+                    .unwrap()
+            )
+            .is_empty()
+        );
+        assert_eq!(
+            keys(
+                engine
+                    .scan_range_stream(b"a/".to_vec(), Some(b"d".to_vec()))
+                    .unwrap()
+            ),
+            vec![b"b".to_vec(), b"b/1".to_vec(), b"c".to_vec()]
+        );
+    }
+
+    #[test]
+    fn redb_write_txn_skips_no_ops_and_rolls_back() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut engine = seeded_engine(&dir);
+        let revision = engine.current_revision().unwrap();
+
+        let outcome = engine
+            .write_with(revision, |txn| {
+                assert_eq!(txn.get(b"a")?, Some(b"1".to_vec()));
+                txn.delete(b"missing")
+            })
+            .unwrap();
+        assert_eq!(outcome, StorageCommitOutcome::Committed { revision });
+        engine.write_batch(&[]).unwrap();
+        assert_eq!(engine.current_revision().unwrap(), revision);
+
+        assert!(
+            engine
+                .write_with(revision, |txn| {
+                    txn.put(b"a", b"lost")?;
+                    Err(DbError::Storage("abort".into()))
+                })
+                .is_err()
+        );
+        assert_eq!(engine.get(b"a").unwrap(), Some(b"1".to_vec()));
+        assert_eq!(engine.current_revision().unwrap(), revision);
+
+        let outcome = engine
+            .write_with(revision, |txn| {
+                txn.put(b"b/2", b"x")?;
+                assert_eq!(
+                    txn.scan_prefix(b"b/")?,
+                    vec![
+                        (b"b/1".to_vec(), b"3".to_vec()),
+                        (b"b/2".to_vec(), b"x".to_vec())
+                    ]
+                );
+                Ok(())
+            })
+            .unwrap();
+        let next = revision.map(|revision| revision + 1);
+        assert_eq!(outcome, StorageCommitOutcome::Committed { revision: next });
+        assert_eq!(
+            engine.write_with(revision, |_| Ok(())).unwrap(),
+            StorageCommitOutcome::Conflict {
+                expected_revision: revision,
+                actual_revision: next,
+            }
+        );
+    }
+
+    #[test]
+    fn redb_unchanged_entity_batch_preserves_revision() {
+        let dir = tempfile::tempdir().unwrap();
+        let engine = RedbKvEngine::open(dir.path().join("kv"), DbOpenMode::AutoCreate).unwrap();
+        let mut store = semantic_db_kv::EntityStore::new(engine);
+        let mut object = Object::new();
+        object.insert("id", Value::String("one".into()));
+        let ops = [StorageWriteOp::PutEntity(StoredEntity {
+            collection: 1,
+            kind: StoredEntityKind::Untyped,
+            id: "one".into(),
+            object,
+        })];
+        let revision = store.current_revision().unwrap();
+        let StorageCommitOutcome::Committed { revision: written } =
+            store.apply_batch_conditional(&ops, revision).unwrap()
+        else {
+            panic!("unexpected conflict");
+        };
+        assert_ne!(written, revision);
+        assert_eq!(
+            store.apply_batch_conditional(&ops, written).unwrap(),
+            StorageCommitOutcome::Committed { revision: written }
+        );
+        assert_eq!(store.current_revision().unwrap(), written);
+        let snapshot = store.snapshot().unwrap();
+        assert!(snapshot.is_consistent());
+        assert_eq!(snapshot.revision().unwrap(), written);
+        assert!(
+            snapshot
+                .get_entity(LocalCollectionId(1), "one")
+                .unwrap()
+                .is_some()
+        );
+    }
 
     #[test]
     fn redb_reopen_and_unchanged_package_preserve_revision() {

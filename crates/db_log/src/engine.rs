@@ -1,6 +1,6 @@
 use semantic_db_core::DbError;
 use semantic_db_core::embedded::{StorageCommitOutcome, StorageTransactionCapabilities};
-use semantic_db_kv::{BoxKvPrefixScan, KvEngine, KvWriteOp, MemoryKvEngine};
+use semantic_db_kv::{BoxKvPrefixScan, KvEngine, KvReadTxn, KvWriteOp, MemoryKvEngine};
 
 use crate::event;
 use crate::{EventId, LogStore};
@@ -124,6 +124,21 @@ impl<S: LogStore> KvEngine for LogEngine<S> {
     ) -> std::result::Result<Self::PrefixScan, DbError> {
         self.ensure_healthy()?;
         self.memory.scan_prefix_stream(prefix)
+    }
+
+    fn scan_range_stream(
+        &self,
+        start: Vec<u8>,
+        end: Option<Vec<u8>>,
+    ) -> std::result::Result<BoxKvPrefixScan, DbError> {
+        self.ensure_healthy()?;
+        self.memory.scan_range_stream(start, end)
+    }
+
+    /// Snapshot of the replayed in-memory state.
+    fn begin_read(&self) -> std::result::Result<Box<dyn KvReadTxn + '_>, DbError> {
+        self.ensure_healthy()?;
+        self.memory.begin_read()
     }
 
     fn tx_capabilities(&self) -> StorageTransactionCapabilities {

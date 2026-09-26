@@ -93,6 +93,173 @@ pub type BoxEntityScan = Box<dyn Iterator<Item = EntityScanItem> + Send>;
 pub type EntityIdScanItem = std::result::Result<String, DbError>;
 pub type BoxEntityIdScan = Box<dyn Iterator<Item = EntityIdScanItem> + Send>;
 
+/// A read handle over entity storage.
+///
+/// Handles returned by [`EntityStorage::snapshot`] let one logical operation
+/// (a query, a point read, or the read phase of a transaction attempt) perform
+/// all of its reads through a single storage transaction. When
+/// [`Self::is_consistent`] is true, every read observes the state at
+/// [`Self::revision`], independent of concurrent commits.
+pub trait EntityReadSnapshot: Send + Sync {
+    /// Revision of the state observed by this handle.
+    fn revision(&self) -> Result<Option<u64>, DbError>;
+
+    /// Whether all reads through this handle observe one storage state.
+    ///
+    /// Fallback handles that forward each read to the storage return `false`;
+    /// callers requiring a stable view must then fence reads by revision.
+    fn is_consistent(&self) -> bool;
+
+    fn get_entity(
+        &self,
+        collection: LocalCollectionId,
+        id: &str,
+    ) -> Result<Option<StoredEntity>, DbError>;
+
+    fn scan_collection_stream(
+        &self,
+        collection: LocalCollectionId,
+    ) -> Result<BoxEntityScan, DbError>;
+
+    fn scan_collection(&self, collection: LocalCollectionId) -> Result<Vec<StoredEntity>, DbError> {
+        self.scan_collection_stream(collection)?.collect()
+    }
+
+    fn scan_index_value_stream(
+        &self,
+        index: LocalIndexId,
+        path: Option<&FieldPath>,
+        value: &Value,
+    ) -> Result<BoxEntityIdScan, DbError>;
+
+    fn scan_index_value(
+        &self,
+        index: LocalIndexId,
+        path: Option<&FieldPath>,
+        value: &Value,
+    ) -> Result<Vec<String>, DbError> {
+        self.scan_index_value_stream(index, path, value)?.collect()
+    }
+
+    fn index_needs_rebuild(&self, index: LocalIndexId) -> Result<bool, DbError>;
+}
+
+/// Snapshot fallback for storages without native read transactions.
+///
+/// Every read is forwarded to the storage, so the handle is not consistent.
+#[derive(Debug)]
+pub struct ForwardingReadSnapshot<'a, S: ?Sized> {
+    storage: &'a S,
+}
+
+impl<'a, S: EntityStorage + ?Sized> ForwardingReadSnapshot<'a, S> {
+    pub fn new(storage: &'a S) -> Self {
+        Self { storage }
+    }
+}
+
+impl<S: EntityStorage + ?Sized> EntityReadSnapshot for ForwardingReadSnapshot<'_, S> {
+    fn revision(&self) -> Result<Option<u64>, DbError> {
+        self.storage.current_revision()
+    }
+
+    fn is_consistent(&self) -> bool {
+        false
+    }
+
+    fn get_entity(
+        &self,
+        collection: LocalCollectionId,
+        id: &str,
+    ) -> Result<Option<StoredEntity>, DbError> {
+        self.storage.get_entity(collection, id)
+    }
+
+    fn scan_collection_stream(
+        &self,
+        collection: LocalCollectionId,
+    ) -> Result<BoxEntityScan, DbError> {
+        self.storage.scan_collection_stream(collection)
+    }
+
+    fn scan_index_value_stream(
+        &self,
+        index: LocalIndexId,
+        path: Option<&FieldPath>,
+        value: &Value,
+    ) -> Result<BoxEntityIdScan, DbError> {
+        self.storage.scan_index_value_stream(index, path, value)
+    }
+
+    fn index_needs_rebuild(&self, index: LocalIndexId) -> Result<bool, DbError> {
+        self.storage.index_needs_rebuild(index)
+    }
+}
+
+/// Reads bound to the revision of one transaction attempt.
+///
+/// Uses a single consistent snapshot when the storage provides one at the
+/// requested revision. Otherwise falls back to revision fencing, so a
+/// concurrent commit causes a conflict instead of mixing states.
+pub(crate) struct RevisionReader<'a, S: EntityStorage> {
+    storage: &'a S,
+    revision: Option<u64>,
+    snapshot: Option<Box<dyn EntityReadSnapshot + 'a>>,
+}
+
+impl<'a, S: EntityStorage> RevisionReader<'a, S> {
+    pub(crate) fn new(storage: &'a S, revision: Option<u64>) -> Result<Self, DbError> {
+        let snapshot = storage.snapshot()?;
+        let snapshot =
+            (snapshot.is_consistent() && snapshot.revision()? == revision).then_some(snapshot);
+        Ok(Self {
+            storage,
+            revision,
+            snapshot,
+        })
+    }
+
+    /// Whether reads are served from one consistent snapshot.
+    #[cfg(test)]
+    pub(crate) fn is_snapshot(&self) -> bool {
+        self.snapshot.is_some()
+    }
+
+    pub(crate) fn get_entity(
+        &self,
+        collection: LocalCollectionId,
+        id: &str,
+    ) -> Result<Option<StoredEntity>, DbError> {
+        match &self.snapshot {
+            Some(snapshot) => snapshot.get_entity(collection, id),
+            None => self
+                .storage
+                .get_entity_at_revision(collection, id, self.revision),
+        }
+    }
+
+    pub(crate) fn scan_index_value(
+        &self,
+        index: LocalIndexId,
+        path: Option<&FieldPath>,
+        value: &Value,
+    ) -> Result<Vec<String>, DbError> {
+        match &self.snapshot {
+            Some(snapshot) => snapshot.scan_index_value(index, path, value),
+            None => self
+                .storage
+                .scan_index_value_at_revision(index, path, value, self.revision),
+        }
+    }
+
+    pub(crate) fn index_needs_rebuild(&self, index: LocalIndexId) -> Result<bool, DbError> {
+        match &self.snapshot {
+            Some(snapshot) => snapshot.index_needs_rebuild(index),
+            None => self.storage.index_needs_rebuild(index),
+        }
+    }
+}
+
 pub trait EntityStorage: std::fmt::Debug + Send + Sync + 'static {
     /// A point read bound to the transaction revision. Backends without a native
     /// historical point lookup can use revision fencing: a concurrent commit
@@ -182,6 +349,15 @@ pub trait EntityStorage: std::fmt::Debug + Send + Sync + 'static {
     }
 
     fn index_needs_rebuild(&self, index: LocalIndexId) -> std::result::Result<bool, DbError>;
+
+    /// Open a read handle for one logical operation.
+    ///
+    /// The default forwards every read to this storage and is not consistent;
+    /// backends with read transactions should return a handle that serves all
+    /// reads from one transaction.
+    fn snapshot(&self) -> Result<Box<dyn EntityReadSnapshot + '_>, DbError> {
+        Ok(Box::new(ForwardingReadSnapshot::new(self)))
+    }
 
     fn tx_capabilities(&self) -> StorageTransactionCapabilities;
     fn current_revision(&self) -> std::result::Result<Option<u64>, DbError>;
@@ -392,6 +568,10 @@ impl EntityStorage for MemoryEntityStorage {
         Ok(!self.initialized_indexes.contains(&index))
     }
 
+    fn snapshot(&self) -> Result<Box<dyn EntityReadSnapshot + '_>, DbError> {
+        Ok(Box::new(MemoryEntityReadSnapshot { storage: self }))
+    }
+
     fn tx_capabilities(&self) -> StorageTransactionCapabilities {
         StorageTransactionCapabilities {
             conflict_detection: true,
@@ -426,6 +606,54 @@ impl EntityStorage for MemoryEntityStorage {
         Ok(StorageCommitOutcome::Committed {
             revision: Some(self.revision),
         })
+    }
+}
+
+/// Borrowed view of [`MemoryEntityStorage`].
+///
+/// Writes require exclusive access, so the borrowed state cannot change while
+/// the handle is alive.
+#[cfg(test)]
+struct MemoryEntityReadSnapshot<'a> {
+    storage: &'a MemoryEntityStorage,
+}
+
+#[cfg(test)]
+impl EntityReadSnapshot for MemoryEntityReadSnapshot<'_> {
+    fn revision(&self) -> Result<Option<u64>, DbError> {
+        Ok(Some(self.storage.revision))
+    }
+
+    fn is_consistent(&self) -> bool {
+        true
+    }
+
+    fn get_entity(
+        &self,
+        collection: LocalCollectionId,
+        id: &str,
+    ) -> Result<Option<StoredEntity>, DbError> {
+        EntityStorage::get_entity(self.storage, collection, id)
+    }
+
+    fn scan_collection_stream(
+        &self,
+        collection: LocalCollectionId,
+    ) -> Result<BoxEntityScan, DbError> {
+        EntityStorage::scan_collection_stream(self.storage, collection)
+    }
+
+    fn scan_index_value_stream(
+        &self,
+        index: LocalIndexId,
+        path: Option<&FieldPath>,
+        value: &Value,
+    ) -> Result<BoxEntityIdScan, DbError> {
+        EntityStorage::scan_index_value_stream(self.storage, index, path, value)
+    }
+
+    fn index_needs_rebuild(&self, index: LocalIndexId) -> Result<bool, DbError> {
+        EntityStorage::index_needs_rebuild(self.storage, index)
     }
 }
 

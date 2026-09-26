@@ -7,7 +7,7 @@ use semantic_data::value::{FieldPath, Object, PathSegment, Value};
 use semantic_db_core::DbError;
 use semantic_db_core::catalog::{LocalCollectionId, LocalIndexId};
 use semantic_db_core::embedded::{
-    BoxEntityIdScan, BoxEntityScan, EntityStorage, StorageCommitOutcome,
+    BoxEntityIdScan, BoxEntityScan, EntityReadSnapshot, EntityStorage, StorageCommitOutcome,
     StorageTransactionCapabilities, StorageWriteOp, StoredEntity, StoredEntityKind,
 };
 use serde::{Deserialize, Serialize};
@@ -17,6 +17,8 @@ pub use memory::MemoryKvEngine;
 
 #[cfg(test)]
 mod incremental_tests;
+#[cfg(test)]
+mod txn_tests;
 
 const ENTITY_FORMAT_VERSION_PREFIX_LEN: usize = std::mem::size_of::<u16>();
 const ENTITY_FORMAT_VERSION_V1_MSGPACK: u16 = 1;
@@ -36,8 +38,239 @@ pub enum KvWriteOp {
 pub type KvScanItem = std::result::Result<(Vec<u8>, Vec<u8>), DbError>;
 pub type BoxKvPrefixScan = Box<dyn Iterator<Item = KvScanItem> + Send>;
 
+/// A read handle over a key-value engine.
+///
+/// Native implementations serve every read from one engine transaction, so
+/// all reads observe the state at [`Self::revision`] (see
+/// [`Self::is_snapshot`]). Scans are returned as owned iterators.
+pub trait KvReadTxn: Send + Sync {
+    /// Revision of the state observed by this handle.
+    fn revision(&self) -> Option<u64>;
+
+    /// Whether all reads observe one engine state, independent of later
+    /// commits.
+    fn is_snapshot(&self) -> bool;
+
+    fn get(&self, key: &[u8]) -> Result<Option<Vec<u8>>, DbError>;
+
+    /// Scan keys in `start..end` (or `start..` when `end` is `None`) in key
+    /// order.
+    fn scan_range_stream(
+        &self,
+        start: Vec<u8>,
+        end: Option<Vec<u8>>,
+    ) -> Result<BoxKvPrefixScan, DbError>;
+
+    fn scan_prefix_stream(&self, prefix: Vec<u8>) -> Result<BoxKvPrefixScan, DbError> {
+        let end = prefix_range_end(&prefix);
+        self.scan_range_stream(prefix, end)
+    }
+}
+
+/// Mutable access to one engine write transaction.
+///
+/// Reads observe the committed state plus the writes already made through
+/// this handle.
+pub trait KvWriteTxn {
+    fn get(&self, key: &[u8]) -> Result<Option<Vec<u8>>, DbError>;
+    fn scan_prefix(&self, prefix: &[u8]) -> Result<Vec<(Vec<u8>, Vec<u8>)>, DbError>;
+    fn put(&mut self, key: &[u8], value: &[u8]) -> Result<(), DbError>;
+    fn delete(&mut self, key: &[u8]) -> Result<(), DbError>;
+}
+
+/// Read handle for engines without native read transactions: every read is
+/// forwarded to the engine.
+struct ForwardingReadTxn<'a, E: ?Sized> {
+    engine: &'a E,
+    revision: Option<u64>,
+}
+
+impl<E: KvEngine + ?Sized> KvReadTxn for ForwardingReadTxn<'_, E> {
+    fn revision(&self) -> Option<u64> {
+        self.revision
+    }
+
+    fn is_snapshot(&self) -> bool {
+        false
+    }
+
+    fn get(&self, key: &[u8]) -> Result<Option<Vec<u8>>, DbError> {
+        self.engine.get(key)
+    }
+
+    fn scan_range_stream(
+        &self,
+        start: Vec<u8>,
+        end: Option<Vec<u8>>,
+    ) -> Result<BoxKvPrefixScan, DbError> {
+        self.engine.scan_range_stream(start, end)
+    }
+
+    fn scan_prefix_stream(&self, prefix: Vec<u8>) -> Result<BoxKvPrefixScan, DbError> {
+        Ok(Box::new(self.engine.scan_prefix_stream(prefix)?))
+    }
+}
+
+/// Write handle for engines without native write transactions.
+///
+/// Buffers writes and commits them as one conditional batch.
+struct BufferedWriteTxn<'a, E: ?Sized> {
+    engine: &'a E,
+    writes: BTreeMap<Vec<u8>, Option<Vec<u8>>>,
+}
+
+impl<E: KvEngine + ?Sized> BufferedWriteTxn<'_, E> {
+    fn into_ops(self) -> Vec<KvWriteOp> {
+        self.writes
+            .into_iter()
+            .map(|(key, value)| match value {
+                Some(value) => KvWriteOp::Put { key, value },
+                None => KvWriteOp::Delete { key },
+            })
+            .collect()
+    }
+}
+
+impl<E: KvEngine + ?Sized> KvWriteTxn for BufferedWriteTxn<'_, E> {
+    fn get(&self, key: &[u8]) -> Result<Option<Vec<u8>>, DbError> {
+        match self.writes.get(key) {
+            Some(value) => Ok(value.clone()),
+            None => self.engine.get(key),
+        }
+    }
+
+    fn scan_prefix(&self, prefix: &[u8]) -> Result<Vec<(Vec<u8>, Vec<u8>)>, DbError> {
+        let mut rows = self
+            .engine
+            .scan_prefix(prefix)?
+            .into_iter()
+            .collect::<BTreeMap<_, _>>();
+        for (key, value) in self
+            .writes
+            .range::<[u8], _>((
+                std::ops::Bound::Included(prefix),
+                std::ops::Bound::Unbounded,
+            ))
+            .take_while(|(key, _)| key.starts_with(prefix))
+        {
+            match value {
+                Some(value) => rows.insert(key.clone(), value.clone()),
+                None => rows.remove(key),
+            };
+        }
+        Ok(rows.into_iter().collect())
+    }
+
+    fn put(&mut self, key: &[u8], value: &[u8]) -> Result<(), DbError> {
+        self.writes.insert(key.to_vec(), Some(value.to_vec()));
+        Ok(())
+    }
+
+    fn delete(&mut self, key: &[u8]) -> Result<(), DbError> {
+        // Deleting an absent key is not a change.
+        if self.get(key)?.is_some() {
+            self.writes.insert(key.to_vec(), None);
+        }
+        Ok(())
+    }
+}
+
+/// Exclusive upper bound of all keys starting with `prefix`, or `None` when
+/// the prefix has no finite upper bound.
+pub fn prefix_range_end(prefix: &[u8]) -> Option<Vec<u8>> {
+    let mut end = prefix.to_vec();
+    while let Some(last) = end.pop() {
+        if last != u8::MAX {
+            end.push(last + 1);
+            return Some(end);
+        }
+    }
+    None
+}
+
 pub trait KvEngine: std::fmt::Debug + Send + Sync + 'static {
     type PrefixScan: Iterator<Item = KvScanItem> + Send + 'static;
+
+    /// Open a read handle for one logical operation.
+    ///
+    /// The default forwards every read to the engine and is not a snapshot.
+    fn begin_read(&self) -> Result<Box<dyn KvReadTxn + '_>, DbError> {
+        Ok(Box::new(ForwardingReadTxn {
+            engine: self,
+            revision: self.current_revision()?,
+        }))
+    }
+
+    /// Run `f` in one write transaction and commit its writes.
+    ///
+    /// Returns a conflict without running `f` when `expected_revision` is set
+    /// and differs from the current revision. A transaction that writes
+    /// nothing must leave the revision unchanged. When `f` fails, nothing is
+    /// committed. The default buffers writes and commits them with
+    /// [`Self::write_batch_conditional`] (or [`Self::write_batch`] without an
+    /// expected revision), relying on the engine to ignore empty batches.
+    fn write_with<F>(
+        &mut self,
+        expected_revision: Option<u64>,
+        f: F,
+    ) -> Result<StorageCommitOutcome, DbError>
+    where
+        F: FnOnce(&mut dyn KvWriteTxn) -> Result<(), DbError>,
+        Self: Sized,
+    {
+        if let Some(expected) = expected_revision {
+            let actual = self.current_revision()?;
+            if actual != Some(expected) {
+                return Ok(StorageCommitOutcome::Conflict {
+                    expected_revision: Some(expected),
+                    actual_revision: actual,
+                });
+            }
+        }
+        let mut txn = BufferedWriteTxn {
+            engine: &*self,
+            writes: BTreeMap::new(),
+        };
+        f(&mut txn)?;
+        let ops = txn.into_ops();
+        if expected_revision.is_some() {
+            return self.write_batch_conditional(&ops, expected_revision);
+        }
+        self.write_batch(&ops)?;
+        Ok(StorageCommitOutcome::Committed {
+            revision: self.current_revision()?,
+        })
+    }
+
+    /// Scan keys in `start..end` (or `start..` when `end` is `None`).
+    ///
+    /// The default scans the longest common prefix of the bounds and filters
+    /// it; engines with ordered storage should override it.
+    fn scan_range_stream(
+        &self,
+        start: Vec<u8>,
+        end: Option<Vec<u8>>,
+    ) -> Result<BoxKvPrefixScan, DbError> {
+        let prefix_len = end.as_ref().map_or(0, |end| {
+            start
+                .iter()
+                .zip(end.iter())
+                .take_while(|(a, b)| a == b)
+                .count()
+        });
+        let scan = self.scan_prefix_stream(start[..prefix_len].to_vec())?;
+        Ok(Box::new(scan.filter(move |item| {
+            match item {
+                Ok((key, _)) => {
+                    key.as_slice() >= start.as_slice()
+                        && end
+                            .as_ref()
+                            .is_none_or(|end| key.as_slice() < end.as_slice())
+                }
+                Err(_) => true,
+            }
+        })))
+    }
 
     fn get(&self, key: &[u8]) -> std::result::Result<Option<Vec<u8>>, DbError>;
     fn put(&mut self, key: Vec<u8>, value: Vec<u8>) -> std::result::Result<(), DbError>;
@@ -426,9 +659,17 @@ impl<E: KvEngine> EntityStorage for EntityStore<E> {
         self.engine.current_revision()
     }
 
+    fn snapshot(&self) -> Result<Box<dyn EntityReadSnapshot + '_>, DbError> {
+        Ok(Box::new(KvEntitySnapshot::new(self.engine.begin_read()?)))
+    }
+
     fn apply_batch(&mut self, ops: &[StorageWriteOp]) -> std::result::Result<(), DbError> {
-        let lowered = self.lower_write_ops(ops)?;
-        self.engine.write_batch(&lowered)
+        match self.commit_ops(ops, None)? {
+            StorageCommitOutcome::Committed { .. } => Ok(()),
+            StorageCommitOutcome::Conflict { .. } => Err(DbError::Storage(
+                "unexpected conflict for unconditional batch".to_string(),
+            )),
+        }
     }
 
     fn apply_batch_conditional(
@@ -436,104 +677,167 @@ impl<E: KvEngine> EntityStorage for EntityStore<E> {
         ops: &[StorageWriteOp],
         expected_revision: Option<u64>,
     ) -> std::result::Result<StorageCommitOutcome, DbError> {
-        let lowered = self.lower_write_ops(ops)?;
-        self.engine
-            .write_batch_conditional(&lowered, expected_revision)
+        self.commit_ops(ops, expected_revision)
     }
 }
 
 impl<E: KvEngine> EntityStore<E> {
-    fn lower_write_ops(
-        &self,
+    /// Commit storage operations in one engine write transaction.
+    ///
+    /// Final key states are compared against the write transaction's own
+    /// view, so unchanged keys are skipped without separate read
+    /// transactions, and a batch without effective changes writes nothing.
+    fn commit_ops(
+        &mut self,
         operations: &[StorageWriteOp],
-    ) -> std::result::Result<Vec<KvWriteOp>, DbError> {
-        let mut lowered = Vec::new();
-        for operation in operations {
-            match operation {
-                StorageWriteOp::PutEntity(entity) => lowered.push(KvWriteOp::Put {
-                    key: entity_key(LocalCollectionId(entity.collection), &entity.id),
-                    value: encode_entity(entity)?,
-                }),
-                StorageWriteOp::DeleteEntity {
-                    collection,
-                    entity_id,
-                } => {
-                    lowered.push(KvWriteOp::Delete {
-                        key: entity_key(*collection, entity_id),
-                    });
+        expected_revision: Option<u64>,
+    ) -> Result<StorageCommitOutcome, DbError> {
+        self.engine.write_with(expected_revision, |txn| {
+            for (key, value) in lower_final_values(operations, &*txn)? {
+                if txn.get(&key)? == value {
+                    continue;
                 }
-                StorageWriteOp::ClearCollection(collection) => {
-                    push_prefix_deletes(
-                        &mut lowered,
-                        self.engine.scan_prefix(&entity_prefix(*collection))?,
-                        &entity_prefix(*collection),
-                    );
+                match value {
+                    Some(value) => txn.put(&key, &value)?,
+                    None => txn.delete(&key)?,
                 }
-                StorageWriteOp::ClearIndex(index) => {
-                    push_prefix_deletes(
-                        &mut lowered,
-                        self.engine.scan_prefix(&index_prefix(*index))?,
-                        &index_prefix(*index),
-                    );
-                }
-                StorageWriteOp::ResetIndex(index) => {
-                    push_prefix_deletes(
-                        &mut lowered,
-                        self.engine.scan_prefix(&index_prefix(*index))?,
-                        &index_prefix(*index),
-                    );
+            }
+            Ok(())
+        })
+    }
+}
+
+/// Lower storage operations to the final value of every touched key.
+///
+/// Comparing final states lets old/new index intersections produce no
+/// physical writes, including when a DDL reset precedes them.
+fn lower_final_values(
+    operations: &[StorageWriteOp],
+    txn: &dyn KvWriteTxn,
+) -> Result<BTreeMap<Vec<u8>, Option<Vec<u8>>>, DbError> {
+    let mut lowered = Vec::new();
+    for operation in operations {
+        match operation {
+            StorageWriteOp::PutEntity(entity) => lowered.push(KvWriteOp::Put {
+                key: entity_key(LocalCollectionId(entity.collection), &entity.id),
+                value: encode_entity(entity)?,
+            }),
+            StorageWriteOp::DeleteEntity {
+                collection,
+                entity_id,
+            } => {
+                lowered.push(KvWriteOp::Delete {
+                    key: entity_key(*collection, entity_id),
+                });
+            }
+            StorageWriteOp::ClearCollection(collection) => {
+                let prefix = entity_prefix(*collection);
+                push_prefix_deletes(&mut lowered, txn.scan_prefix(&prefix)?, &prefix);
+            }
+            StorageWriteOp::ClearIndex(index) => {
+                let prefix = index_prefix(*index);
+                push_prefix_deletes(&mut lowered, txn.scan_prefix(&prefix)?, &prefix);
+            }
+            StorageWriteOp::ResetIndex(index) => {
+                let prefix = index_prefix(*index);
+                push_prefix_deletes(&mut lowered, txn.scan_prefix(&prefix)?, &prefix);
+                lowered.push(KvWriteOp::Put {
+                    key: index_format_key(*index),
+                    value: index_format_value(),
+                });
+            }
+            StorageWriteOp::IndexEntity {
+                index,
+                entity_id,
+                object,
+            } => {
+                for key in index_keys(index, entity_id, object)? {
                     lowered.push(KvWriteOp::Put {
-                        key: index_format_key(*index),
-                        value: index_format_value(),
+                        key,
+                        value: Vec::new(),
                     });
                 }
-                StorageWriteOp::IndexEntity {
-                    index,
-                    entity_id,
-                    object,
-                } => {
-                    for key in index_keys(index, entity_id, object)? {
-                        lowered.push(KvWriteOp::Put {
-                            key,
-                            value: Vec::new(),
-                        });
-                    }
-                }
-                StorageWriteOp::UnindexEntity {
-                    index,
-                    entity_id,
-                    object,
-                } => {
-                    for key in index_keys(index, entity_id, object)? {
-                        lowered.push(KvWriteOp::Delete { key });
-                    }
+            }
+            StorageWriteOp::UnindexEntity {
+                index,
+                entity_id,
+                object,
+            } => {
+                for key in index_keys(index, entity_id, object)? {
+                    lowered.push(KvWriteOp::Delete { key });
                 }
             }
         }
-        // Compare final key states after lowering, so old/new index intersections
-        // produce no physical writes, including when a DDL reset precedes them.
-        let mut final_values = BTreeMap::new();
-        for operation in lowered {
-            match operation {
-                KvWriteOp::Put { key, value } => {
-                    final_values.insert(key, Some(value));
-                }
-                KvWriteOp::Delete { key } => {
-                    final_values.insert(key, None);
-                }
+    }
+    let mut final_values = BTreeMap::new();
+    for operation in lowered {
+        match operation {
+            KvWriteOp::Put { key, value } => {
+                final_values.insert(key, Some(value));
+            }
+            KvWriteOp::Delete { key } => {
+                final_values.insert(key, None);
             }
         }
-        let mut delta = Vec::new();
-        for (key, value) in final_values {
-            if self.engine.get(&key)? == value {
-                continue;
-            }
-            delta.push(match value {
-                Some(value) => KvWriteOp::Put { key, value },
-                None => KvWriteOp::Delete { key },
-            });
-        }
-        Ok(delta)
+    }
+    Ok(final_values)
+}
+
+/// Entity reads served by one engine read handle.
+pub struct KvEntitySnapshot<'a> {
+    txn: Box<dyn KvReadTxn + 'a>,
+}
+
+impl<'a> KvEntitySnapshot<'a> {
+    pub fn new(txn: Box<dyn KvReadTxn + 'a>) -> Self {
+        Self { txn }
+    }
+}
+
+impl EntityReadSnapshot for KvEntitySnapshot<'_> {
+    fn revision(&self) -> Result<Option<u64>, DbError> {
+        Ok(self.txn.revision())
+    }
+
+    fn is_consistent(&self) -> bool {
+        self.txn.is_snapshot()
+    }
+
+    fn get_entity(
+        &self,
+        collection: LocalCollectionId,
+        id: &str,
+    ) -> Result<Option<StoredEntity>, DbError> {
+        self.txn
+            .get(&entity_key(collection, id))?
+            .map(|payload| decode_entity(&payload))
+            .transpose()
+    }
+
+    fn scan_collection_stream(
+        &self,
+        collection: LocalCollectionId,
+    ) -> Result<BoxEntityScan, DbError> {
+        Ok(Box::new(EntityScan::new(
+            self.txn.scan_prefix_stream(entity_prefix(collection))?,
+        )))
+    }
+
+    fn scan_index_value_stream(
+        &self,
+        index: LocalIndexId,
+        path: Option<&FieldPath>,
+        value: &Value,
+    ) -> Result<BoxEntityIdScan, DbError> {
+        let prefix = index_value_prefix(index, path, value)?;
+        Ok(Box::new(IndexEntityIdScan::new(
+            self.txn.scan_prefix_stream(prefix)?,
+        )))
+    }
+
+    fn index_needs_rebuild(&self, index: LocalIndexId) -> Result<bool, DbError> {
+        Ok(self.txn.get(&index_format_key(index))?.as_deref()
+            != Some(index_format_value().as_slice()))
     }
 }
 
