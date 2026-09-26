@@ -13,7 +13,7 @@ use semantic_db_core::embedded::{
 };
 use semantic_db_core::{DEFAULT_COLLECTION, DbConfig, DbError};
 use semantic_db_kv::{
-    BoxKvPrefixScan, EntityStore, KvEngine, KvWriteOp, decode_entity, encode_entity,
+    BoxKvPrefixScan, EntityStore, KvEngine, KvMaintenance, KvWriteOp, decode_entity, encode_entity,
     parse_entity_key,
 };
 use sha2::{Digest, Sha256};
@@ -52,6 +52,8 @@ impl PostgresSnapshotEngine {
         self.revision = self.revision.saturating_add(1);
     }
 }
+
+impl KvMaintenance for PostgresSnapshotEngine {}
 
 impl KvEngine for PostgresSnapshotEngine {
     type PrefixScan = BoxKvPrefixScan;

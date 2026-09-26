@@ -36,6 +36,8 @@ fn seeded_memory() -> MemoryKvEngine {
 #[derive(Debug, Default)]
 struct MinimalEngine(MemoryKvEngine);
 
+impl KvMaintenance for MinimalEngine {}
+
 impl KvEngine for MinimalEngine {
     type PrefixScan = BoxKvPrefixScan;
     fn get(&self, key: &[u8]) -> Result<Option<Vec<u8>>, DbError> {
@@ -227,6 +229,8 @@ impl CountingEngine {
         update(&mut self.counts.lock().unwrap());
     }
 }
+
+impl KvMaintenance for CountingEngine {}
 
 impl KvEngine for CountingEngine {
     type PrefixScan = BoxKvPrefixScan;

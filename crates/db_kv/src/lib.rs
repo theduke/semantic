@@ -4,9 +4,9 @@ pub mod storage;
 pub use keys::entity_key;
 pub use storage::layout::{LAYOUT_VERSION_CURRENT, LAYOUT_VERSION_LEGACY, LayoutMigration};
 pub use storage::{
-    BoxKvPrefixScan, EntityScan, EntityStore, IndexEntityIdScan, KvEngine, KvEntitySnapshot,
-    KvKeyScan, KvReadTxn, KvScanItem, KvWriteOp, KvWriteTxn, MemoryKvEngine, decode_entity,
-    encode_entity, parse_entity_key, prefix_range_end,
+    BoxKvPrefixScan, EntityScan, EntityStore, IndexEntityIdScan, KvEngine, KvEngineStats,
+    KvEntitySnapshot, KvKeyScan, KvMaintenance, KvReadTxn, KvScanItem, KvWriteOp, KvWriteTxn,
+    MemoryKvEngine, decode_entity, encode_entity, parse_entity_key, prefix_range_end,
 };
 
 use semantic_db_core::embedded::{EmbeddedBackend, EmbeddedDb};

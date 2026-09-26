@@ -181,6 +181,37 @@ pub fn unsupported_ordered_index_scan() -> DbError {
     DbError::Storage("ordered index scans are not supported by this storage".to_string())
 }
 
+/// Error returned by storages without the maintenance `operation`.
+pub fn unsupported_storage_maintenance(operation: &str) -> DbError {
+    DbError::Storage(format!("{operation} is not supported by this storage"))
+}
+
+/// Physical storage statistics for observability.
+///
+/// Values a storage cannot report are `None` (or empty).
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct StorageStats {
+    /// Size of the database file in bytes.
+    pub file_size_bytes: Option<u64>,
+    /// Number of stored key-value entries across all tables.
+    pub entries: Option<u64>,
+    /// Entry counts of the physical tables.
+    pub tables: Vec<StorageTableStats>,
+    /// Bytes allocated by the storage engine.
+    pub allocated_bytes: Option<u64>,
+    /// Bytes of stored keys and values.
+    pub stored_bytes: Option<u64>,
+    /// Allocated bytes not holding live data (reclaimable by compaction).
+    pub fragmented_bytes: Option<u64>,
+}
+
+/// Statistics of one physical table.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct StorageTableStats {
+    pub name: String,
+    pub entries: u64,
+}
+
 /// Snapshot fallback for storages without native read transactions.
 ///
 /// Every read is forwarded to the storage, so the handle is not consistent.
@@ -454,6 +485,28 @@ pub trait EntityStorage: std::fmt::Debug + Send + Sync + 'static {
     /// reads from one transaction.
     fn snapshot(&self) -> Result<Box<dyn EntityReadSnapshot + '_>, DbError> {
         Ok(Box::new(ForwardingReadSnapshot::new(self)))
+    }
+
+    /// Compact the physical storage, reclaiming unused space.
+    ///
+    /// Returns whether any compaction was performed. The default reports the
+    /// operation as unsupported.
+    fn compact_storage(&mut self) -> Result<bool, DbError> {
+        Err(unsupported_storage_maintenance("compaction"))
+    }
+
+    /// Verify the integrity of the physical storage, repairing it if possible.
+    ///
+    /// Returns `true` when the storage was intact and `false` when it was
+    /// repaired; unrecoverable corruption is an error. The default reports
+    /// the operation as unsupported.
+    fn check_storage_integrity(&mut self) -> Result<bool, DbError> {
+        Err(unsupported_storage_maintenance("integrity checks"))
+    }
+
+    /// Physical storage statistics. The default reports nothing.
+    fn storage_stats(&self) -> Result<StorageStats, DbError> {
+        Ok(StorageStats::default())
     }
 
     fn tx_capabilities(&self) -> StorageTransactionCapabilities;

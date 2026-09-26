@@ -8,7 +8,8 @@ use semantic_db_core::DbError;
 use semantic_db_core::catalog::{LocalCollectionId, LocalIndexId};
 use semantic_db_core::embedded::{
     BoxEntityIdScan, BoxEntityScan, EntityReadSnapshot, EntityStorage, StorageCommitOutcome,
-    StorageTransactionCapabilities, StorageWriteOp, StoredEntity, StoredEntityKind,
+    StorageStats, StorageTransactionCapabilities, StorageWriteOp, StoredEntity, StoredEntityKind,
+    unsupported_storage_maintenance,
 };
 use serde::{Deserialize, Serialize};
 
@@ -199,7 +200,37 @@ pub fn prefix_range_end(prefix: &[u8]) -> Option<Vec<u8>> {
     None
 }
 
-pub trait KvEngine: std::fmt::Debug + Send + Sync + 'static {
+/// Statistics reported by [`KvMaintenance::stats`].
+pub type KvEngineStats = StorageStats;
+
+/// Physical maintenance operations of a key-value engine.
+///
+/// Every method has a default for engines without the operation, so
+/// implementing the trait only requires overriding what the engine supports.
+/// [`EntityStore`] forwards these to the `EntityStorage` maintenance methods.
+pub trait KvMaintenance {
+    /// Compact the engine's storage, reclaiming unused space.
+    ///
+    /// Returns whether any compaction was performed.
+    fn compact(&mut self) -> Result<bool, DbError> {
+        Err(unsupported_storage_maintenance("compaction"))
+    }
+
+    /// Verify the integrity of the engine's storage, repairing it if possible.
+    ///
+    /// Returns `true` when the storage was intact and `false` when it was
+    /// repaired.
+    fn check_integrity(&mut self) -> Result<bool, DbError> {
+        Err(unsupported_storage_maintenance("integrity checks"))
+    }
+
+    /// Physical storage statistics; unknown values are `None`.
+    fn stats(&self) -> Result<KvEngineStats, DbError> {
+        Ok(KvEngineStats::default())
+    }
+}
+
+pub trait KvEngine: KvMaintenance + std::fmt::Debug + Send + Sync + 'static {
     type PrefixScan: Iterator<Item = KvScanItem> + Send + 'static;
 
     /// Open a read handle for one logical operation.
@@ -758,6 +789,18 @@ impl<E: KvEngine> EntityStorage for EntityStore<E> {
 
     fn prepare_open(&mut self) -> Result<(), DbError> {
         self.migrate_layout().map(|_| ())
+    }
+
+    fn compact_storage(&mut self) -> Result<bool, DbError> {
+        self.engine.compact()
+    }
+
+    fn check_storage_integrity(&mut self) -> Result<bool, DbError> {
+        self.engine.check_integrity()
+    }
+
+    fn storage_stats(&self) -> Result<StorageStats, DbError> {
+        self.engine.stats()
     }
 
     fn tx_capabilities(&self) -> StorageTransactionCapabilities {

@@ -5,7 +5,9 @@ use std::sync::Arc;
 use semantic_db_core::DbError;
 use semantic_db_core::embedded::{StorageCommitOutcome, StorageTransactionCapabilities};
 
-use super::{BoxKvPrefixScan, KvEngine, KvReadTxn, KvWriteOp, KvWriteTxn, prefix_range_end};
+use super::{
+    BoxKvPrefixScan, KvEngine, KvMaintenance, KvReadTxn, KvWriteOp, KvWriteTxn, prefix_range_end,
+};
 
 type KvMap = BTreeMap<Vec<u8>, Vec<u8>>;
 
@@ -197,6 +199,8 @@ impl KvWriteTxn for MemoryWriteTxn<'_> {
         Ok(())
     }
 }
+
+impl KvMaintenance for MemoryKvEngine {}
 
 impl KvEngine for MemoryKvEngine {
     type PrefixScan = BoxKvPrefixScan;

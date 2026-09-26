@@ -1,6 +1,8 @@
 use semantic_db_core::DbError;
 use semantic_db_core::embedded::{StorageCommitOutcome, StorageTransactionCapabilities};
-use semantic_db_kv::{BoxKvPrefixScan, KvEngine, KvReadTxn, KvWriteOp, MemoryKvEngine};
+use semantic_db_kv::{
+    BoxKvPrefixScan, KvEngine, KvMaintenance, KvReadTxn, KvWriteOp, MemoryKvEngine,
+};
 
 use crate::event;
 use crate::{EventId, LogStore};
@@ -101,6 +103,8 @@ impl<S: LogStore> LogEngine<S> {
         })
     }
 }
+
+impl<S: LogStore> KvMaintenance for LogEngine<S> {}
 
 impl<S: LogStore> KvEngine for LogEngine<S> {
     type PrefixScan = BoxKvPrefixScan;

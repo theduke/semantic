@@ -1,80 +1,154 @@
-use redb::{ReadableTable, TableDefinition};
+//! redb storage engine for the embedded Semantic database.
+//!
+//! [`RedbKvEngine`] implements [`KvEngine`] on a redb database file. The
+//! flat logical key space is stored in one redb table per key space; see
+//! [`tables`] for the layout and the migration of the legacy single-table
+//! layout. [`RedbOptions`] configures the page cache and commit durability.
+
+use redb::{ReadableTable, ReadableTableMetadata};
 use semantic_data::schema::DbOpenMode;
 use semantic_db_core::embedded::{
-    EmbeddedBackend, EmbeddedDb, StorageCommitOutcome, StorageTransactionCapabilities,
+    EmbeddedBackend, EmbeddedDb, StorageCommitOutcome, StorageTableStats,
+    StorageTransactionCapabilities,
 };
 use semantic_db_core::{DbConfig, DbError};
 use semantic_db_kv::{
-    BoxKvPrefixScan, EntityStore, KvEngine, KvReadTxn, KvWriteOp, KvWriteTxn, prefix_range_end,
+    BoxKvPrefixScan, EntityStore, KvEngine, KvEngineStats, KvMaintenance, KvReadTxn, KvWriteOp,
+    KvWriteTxn, prefix_range_end,
 };
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
-const KV_TABLE: TableDefinition<&[u8], &[u8]> = TableDefinition::new("kv");
-const META_REV_KEY: &[u8] = b"__semantic/revision";
+mod options;
+pub mod tables;
+
+pub use options::{DEFAULT_CACHE_SIZE, RedbDurability, RedbOptions};
+pub use tables::RedbTable;
+
+use tables::{ReadTables, WriteTables, read_revision, split_range, write_revision};
 
 pub struct RedbKvEngine {
-    db: Arc<redb::Database>,
+    db: redb::Database,
+    path: PathBuf,
+    options: RedbOptions,
+    /// Whether commits since the last durable commit may not be persisted.
+    unpersisted: bool,
+    /// Held by every read handle and scan, so maintenance can refuse to run
+    /// while redb read transactions are alive.
+    readers: Arc<()>,
 }
 
 impl std::fmt::Debug for RedbKvEngine {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("RedbKvEngine").finish_non_exhaustive()
+        f.debug_struct("RedbKvEngine")
+            .field("path", &self.path)
+            .field("options", &self.options)
+            .finish_non_exhaustive()
     }
 }
 
 impl RedbKvEngine {
-    pub fn open(path: impl AsRef<Path>, mode: DbOpenMode) -> std::result::Result<Self, DbError> {
+    /// Open the database at `path` with the default [`RedbOptions`].
+    pub fn open(path: impl AsRef<Path>, mode: DbOpenMode) -> Result<Self, DbError> {
+        Self::open_with_options(path, mode, RedbOptions::default())
+    }
+
+    /// Open the database at `path`.
+    ///
+    /// Creates missing engine tables and migrates the legacy single-table
+    /// layout (see [`tables`]) before returning.
+    pub fn open_with_options(
+        path: impl AsRef<Path>,
+        mode: DbOpenMode,
+        options: RedbOptions,
+    ) -> Result<Self, DbError> {
         let path = path.as_ref();
+        let builder = options.builder();
         let db = match mode {
-            DbOpenMode::OpenExisting => redb::Database::open(path).map_err(storage_err)?,
+            DbOpenMode::OpenExisting => builder.open(path).map_err(storage_err)?,
             DbOpenMode::AutoCreate => {
-                if let Some(parent) = path.parent() {
-                    if !parent.as_os_str().is_empty() {
-                        std::fs::create_dir_all(parent).map_err(storage_err)?;
-                    }
+                if let Some(parent) = path.parent()
+                    && !parent.as_os_str().is_empty()
+                {
+                    std::fs::create_dir_all(parent).map_err(storage_err)?;
                 }
 
                 if path.exists() {
-                    redb::Database::open(path).map_err(storage_err)?
+                    builder.open(path).map_err(storage_err)?
                 } else {
-                    redb::Database::create(path).map_err(storage_err)?
+                    builder.create(path).map_err(storage_err)?
                 }
             }
         };
-        {
-            let read_txn = db.begin_read().map_err(storage_err)?;
-            match read_txn.open_table(KV_TABLE) {
-                Ok(_) => {}
-                Err(redb::TableError::TableDoesNotExist(_)) => {
-                    let write_txn = db.begin_write().map_err(storage_err)?;
-                    let _ = write_txn.open_table(KV_TABLE).map_err(storage_err)?;
-                    write_txn.commit().map_err(storage_err)?;
-                }
-                Err(err) => return Err(storage_err(err)),
-            }
-        }
-        Ok(Self { db: Arc::new(db) })
+        tables::prepare_tables(&db)?;
+        Ok(Self {
+            db,
+            path: path.to_path_buf(),
+            options,
+            unpersisted: false,
+            readers: Arc::new(()),
+        })
     }
-}
 
-impl RedbKvEngine {
+    pub fn path(&self) -> &Path {
+        &self.path
+    }
+
+    pub fn options(&self) -> &RedbOptions {
+        &self.options
+    }
+
     /// Open a read handle backed by one redb read transaction.
     ///
     /// The handle observes the committed state at the time it was opened,
     /// independent of later commits.
     pub fn read_txn(&self) -> Result<RedbReadTxn, DbError> {
-        let read_txn = self.db.begin_read().map_err(storage_err)?;
-        let table = read_txn.open_table(KV_TABLE).map_err(storage_err)?;
-        let revision = read_revision_table(&table)?;
-        Ok(RedbReadTxn { table, revision })
+        let tables = ReadTables::new(self.db.begin_read().map_err(storage_err)?);
+        let revision = read_revision(tables.table(RedbTable::Meta)?)?;
+        Ok(RedbReadTxn {
+            tables,
+            revision,
+            reader: Arc::clone(&self.readers),
+        })
+    }
+
+    /// Persist all commits made with a durability below
+    /// [`RedbDurability::Immediate`]. Also runs when the engine is dropped.
+    pub fn flush(&mut self) -> Result<(), DbError> {
+        if !self.unpersisted {
+            return Ok(());
+        }
+        let mut txn = self.db.begin_write().map_err(storage_err)?;
+        txn.set_durability(redb::Durability::Immediate);
+        txn.commit().map_err(storage_err)?;
+        self.unpersisted = false;
+        Ok(())
+    }
+
+    fn ensure_no_readers(&self, operation: &str) -> Result<(), DbError> {
+        if Arc::strong_count(&self.readers) > 1 {
+            return Err(DbError::Storage(format!(
+                "cannot run {operation} while read transactions are open"
+            )));
+        }
+        Ok(())
+    }
+}
+
+impl Drop for RedbKvEngine {
+    fn drop(&mut self) {
+        // redb also commits durably on drop; flushing here keeps the
+        // guarantee independent of that implementation detail.
+        let _ = self.flush();
     }
 }
 
 /// Snapshot read handle over one redb read transaction.
 pub struct RedbReadTxn {
-    table: redb::ReadOnlyTable<&'static [u8], &'static [u8]>,
-    revision: Option<u64>,
+    tables: ReadTables,
+    revision: u64,
+    /// Registers the handle with the engine's live-reader count.
+    reader: Arc<()>,
 }
 
 impl std::fmt::Debug for RedbReadTxn {
@@ -87,7 +161,7 @@ impl std::fmt::Debug for RedbReadTxn {
 
 impl KvReadTxn for RedbReadTxn {
     fn revision(&self) -> Option<u64> {
-        self.revision
+        Some(self.revision)
     }
 
     fn is_snapshot(&self) -> bool {
@@ -96,75 +170,90 @@ impl KvReadTxn for RedbReadTxn {
 
     fn get(&self, key: &[u8]) -> Result<Option<Vec<u8>>, DbError> {
         Ok(self
-            .table
+            .tables
+            .table(RedbTable::for_key(key))?
             .get(key)
             .map_err(storage_err)?
             .map(|value| value.value().to_vec()))
     }
 
+    /// Scans spanning several tables concatenate the per-table scans in key
+    /// order (see [`tables::split_range`]).
     fn scan_range_stream(
         &self,
         start: Vec<u8>,
         end: Option<Vec<u8>>,
     ) -> Result<BoxKvPrefixScan, DbError> {
-        let iter = match &end {
-            Some(end) if end.as_slice() <= start.as_slice() => {
-                return Ok(Box::new(std::iter::empty()));
-            }
-            Some(end) => self
-                .table
-                .range::<&[u8]>(start.as_slice()..end.as_slice())
-                .map_err(storage_err)?,
-            None => self
-                .table
-                .range::<&[u8]>(start.as_slice()..)
-                .map_err(storage_err)?,
-        };
-        Ok(Box::new(iter.map(|item| {
+        let mut ranges = Vec::new();
+        for (table, start, end) in split_range(&start, end.as_deref()) {
+            let table = self.tables.table(table)?;
+            let range = match &end {
+                Some(end) => table.range::<&[u8]>(start.as_slice()..end.as_slice()),
+                None => table.range::<&[u8]>(start.as_slice()..),
+            };
+            ranges.push(range.map_err(storage_err)?);
+        }
+        // The scan outlives this handle; it keeps the reader registration
+        // alive until it is dropped.
+        let reader = Arc::clone(&self.reader);
+        Ok(Box::new(ranges.into_iter().flatten().map(move |item| {
+            let _registered = &reader;
             let (key, value) = item.map_err(storage_err)?;
             Ok((key.value().to_vec(), value.value().to_vec()))
         })))
     }
 }
 
-/// Mutable access to one redb write transaction's table.
+/// Mutable access to the tables of one redb write transaction.
 struct RedbWriteTxn<'a, 'txn> {
-    table: &'a mut redb::Table<'txn, &'static [u8], &'static [u8]>,
+    tables: &'a mut WriteTables<'txn>,
     changed: bool,
 }
 
 impl KvWriteTxn for RedbWriteTxn<'_, '_> {
     fn get(&self, key: &[u8]) -> Result<Option<Vec<u8>>, DbError> {
         Ok(self
-            .table
+            .tables
+            .table(RedbTable::for_key(key))
             .get(key)
             .map_err(storage_err)?
             .map(|value| value.value().to_vec()))
     }
 
     fn scan_prefix(&self, prefix: &[u8]) -> Result<Vec<(Vec<u8>, Vec<u8>)>, DbError> {
-        let iter = match prefix_range_end(prefix) {
-            Some(end) => self
-                .table
-                .range::<&[u8]>(prefix..end.as_slice())
-                .map_err(storage_err)?,
-            None => self.table.range::<&[u8]>(prefix..).map_err(storage_err)?,
-        };
-        iter.map(|item| {
-            let (key, value) = item.map_err(storage_err)?;
-            Ok((key.value().to_vec(), value.value().to_vec()))
-        })
-        .collect()
+        let end = prefix_range_end(prefix);
+        let mut entries = Vec::new();
+        for (table, start, end) in split_range(prefix, end.as_deref()) {
+            let table = self.tables.table(table);
+            let range = match &end {
+                Some(end) => table.range::<&[u8]>(start.as_slice()..end.as_slice()),
+                None => table.range::<&[u8]>(start.as_slice()..),
+            };
+            for item in range.map_err(storage_err)? {
+                let (key, value) = item.map_err(storage_err)?;
+                entries.push((key.value().to_vec(), value.value().to_vec()));
+            }
+        }
+        Ok(entries)
     }
 
     fn put(&mut self, key: &[u8], value: &[u8]) -> Result<(), DbError> {
-        self.table.insert(key, value).map_err(storage_err)?;
+        self.tables
+            .table_mut(RedbTable::for_key(key))
+            .insert(key, value)
+            .map_err(storage_err)?;
         self.changed = true;
         Ok(())
     }
 
     fn delete(&mut self, key: &[u8]) -> Result<(), DbError> {
-        if self.table.remove(key).map_err(storage_err)?.is_some() {
+        if self
+            .tables
+            .table_mut(RedbTable::for_key(key))
+            .remove(key)
+            .map_err(storage_err)?
+            .is_some()
+        {
             self.changed = true;
         }
         Ok(())
@@ -184,22 +273,19 @@ fn apply_ops(txn: &mut dyn KvWriteTxn, ops: &[KvWriteOp]) -> Result<(), DbError>
 impl KvEngine for RedbKvEngine {
     type PrefixScan = BoxKvPrefixScan;
 
-    fn get(&self, key: &[u8]) -> std::result::Result<Option<Vec<u8>>, DbError> {
+    fn get(&self, key: &[u8]) -> Result<Option<Vec<u8>>, DbError> {
         self.read_txn()?.get(key)
     }
 
-    fn put(&mut self, key: Vec<u8>, value: Vec<u8>) -> std::result::Result<(), DbError> {
+    fn put(&mut self, key: Vec<u8>, value: Vec<u8>) -> Result<(), DbError> {
         self.write_batch(&[KvWriteOp::Put { key, value }])
     }
 
-    fn delete(&mut self, key: &[u8]) -> std::result::Result<(), DbError> {
+    fn delete(&mut self, key: &[u8]) -> Result<(), DbError> {
         self.write_batch(&[KvWriteOp::Delete { key: key.to_vec() }])
     }
 
-    fn scan_prefix_stream(
-        &self,
-        prefix: Vec<u8>,
-    ) -> std::result::Result<Self::PrefixScan, DbError> {
+    fn scan_prefix_stream(&self, prefix: Vec<u8>) -> Result<Self::PrefixScan, DbError> {
         self.read_txn()?.scan_prefix_stream(prefix)
     }
 
@@ -215,7 +301,7 @@ impl KvEngine for RedbKvEngine {
         Ok(Box::new(self.read_txn()?))
     }
 
-    fn scan_prefix(&self, prefix: &[u8]) -> std::result::Result<Vec<(Vec<u8>, Vec<u8>)>, DbError> {
+    fn scan_prefix(&self, prefix: &[u8]) -> Result<Vec<(Vec<u8>, Vec<u8>)>, DbError> {
         self.scan_prefix_stream(prefix.to_vec())?.collect()
     }
 
@@ -223,7 +309,7 @@ impl KvEngine for RedbKvEngine {
         &self,
         prefix: &[u8],
         _revision: u64,
-    ) -> std::result::Result<Vec<(Vec<u8>, Vec<u8>)>, DbError> {
+    ) -> Result<Vec<(Vec<u8>, Vec<u8>)>, DbError> {
         self.scan_prefix(prefix)
     }
 
@@ -235,29 +321,29 @@ impl KvEngine for RedbKvEngine {
     where
         F: FnOnce(&mut dyn KvWriteTxn) -> Result<(), DbError>,
     {
-        let write_txn = self.db.begin_write().map_err(storage_err)?;
+        let mut write_txn = self.db.begin_write().map_err(storage_err)?;
+        write_txn.set_durability(self.options.durability.into());
+        write_txn.set_quick_repair(self.options.quick_repair);
         let (actual, next) = {
-            let mut table = write_txn.open_table(KV_TABLE).map_err(storage_err)?;
-            let actual = read_revision_table(&table)?;
+            let mut tables = WriteTables::open(&write_txn)?;
+            let actual = read_revision(tables.table(RedbTable::Meta))?;
             if let Some(expected) = expected_revision
-                && actual != Some(expected)
+                && actual != expected
             {
                 return Ok(StorageCommitOutcome::Conflict {
                     expected_revision: Some(expected),
-                    actual_revision: actual,
+                    actual_revision: Some(actual),
                 });
             }
             let mut txn = RedbWriteTxn {
-                table: &mut table,
+                tables: &mut tables,
                 changed: false,
             };
             // Dropping the uncommitted transaction on error aborts it.
             f(&mut txn)?;
             let next = if txn.changed {
-                let revision = actual.unwrap_or(0).saturating_add(1);
-                table
-                    .insert(META_REV_KEY, revision.to_be_bytes().as_slice())
-                    .map_err(storage_err)?;
+                let revision = actual.saturating_add(1);
+                write_revision(tables.table_mut(RedbTable::Meta), revision)?;
                 Some(revision)
             } else {
                 None
@@ -267,18 +353,23 @@ impl KvEngine for RedbKvEngine {
         match next {
             Some(revision) => {
                 write_txn.commit().map_err(storage_err)?;
+                if self.options.durability != RedbDurability::Immediate {
+                    self.unpersisted = true;
+                }
                 Ok(StorageCommitOutcome::Committed {
                     revision: Some(revision),
                 })
             }
             None => {
                 write_txn.abort().map_err(storage_err)?;
-                Ok(StorageCommitOutcome::Committed { revision: actual })
+                Ok(StorageCommitOutcome::Committed {
+                    revision: Some(actual),
+                })
             }
         }
     }
 
-    fn write_batch(&mut self, ops: &[KvWriteOp]) -> std::result::Result<(), DbError> {
+    fn write_batch(&mut self, ops: &[KvWriteOp]) -> Result<(), DbError> {
         self.write_with(None, |txn| apply_ops(txn, ops)).map(|_| ())
     }
 
@@ -290,49 +381,79 @@ impl KvEngine for RedbKvEngine {
         }
     }
 
-    fn current_revision(&self) -> std::result::Result<Option<u64>, DbError> {
-        let read_txn = self.db.begin_read().map_err(storage_err)?;
-        let table = read_txn.open_table(KV_TABLE).map_err(storage_err)?;
-        read_revision_table(&table)
+    fn current_revision(&self) -> Result<Option<u64>, DbError> {
+        Ok(self.read_txn()?.revision())
     }
 
     fn write_batch_conditional(
         &mut self,
         ops: &[KvWriteOp],
         expected_revision: Option<u64>,
-    ) -> std::result::Result<StorageCommitOutcome, DbError> {
+    ) -> Result<StorageCommitOutcome, DbError> {
         self.write_with(expected_revision, |txn| apply_ops(txn, ops))
     }
 }
 
-fn storage_err(err: impl std::fmt::Display) -> DbError {
-    DbError::Storage(err.to_string())
+impl KvMaintenance for RedbKvEngine {
+    /// Compact the database file (see [`redb::Database::compact`]).
+    ///
+    /// Fails while read transactions or scans are open.
+    fn compact(&mut self) -> Result<bool, DbError> {
+        self.ensure_no_readers("compaction")?;
+        self.flush()?;
+        self.db.compact().map_err(storage_err)
+    }
+
+    /// Check and repair the database file (see
+    /// [`redb::Database::check_integrity`]).
+    ///
+    /// Fails while read transactions or scans are open.
+    fn check_integrity(&mut self) -> Result<bool, DbError> {
+        self.ensure_no_readers("integrity checks")?;
+        self.flush()?;
+        self.db.check_integrity().map_err(storage_err)
+    }
+
+    /// Entry counts of the engine tables (physical entries, including the
+    /// revision counter in `meta`), redb page statistics, and the file size.
+    ///
+    /// Reading the page statistics briefly opens a write transaction.
+    fn stats(&self) -> Result<KvEngineStats, DbError> {
+        let read = ReadTables::new(self.db.begin_read().map_err(storage_err)?);
+        let mut tables = Vec::with_capacity(RedbTable::ALL.len());
+        for table in RedbTable::ALL {
+            tables.push(StorageTableStats {
+                name: table.name().to_string(),
+                entries: read.table(table)?.len().map_err(storage_err)?,
+            });
+        }
+        drop(read);
+        let db_stats = {
+            let txn = self.db.begin_write().map_err(storage_err)?;
+            let stats = txn.stats().map_err(storage_err)?;
+            txn.abort().map_err(storage_err)?;
+            stats
+        };
+        let file_size = std::fs::metadata(&self.path).map_err(storage_err)?.len();
+        Ok(KvEngineStats {
+            file_size_bytes: Some(file_size),
+            entries: Some(tables.iter().map(|table| table.entries).sum()),
+            tables,
+            allocated_bytes: Some(db_stats.allocated_pages() * db_stats.page_size() as u64),
+            stored_bytes: Some(db_stats.stored_bytes()),
+            fragmented_bytes: Some(db_stats.fragmented_bytes()),
+        })
+    }
 }
 
-fn read_revision_table(
-    table: &impl ReadableTable<&'static [u8], &'static [u8]>,
-) -> std::result::Result<Option<u64>, DbError> {
-    let Some(value) = table.get(META_REV_KEY).map_err(storage_err)? else {
-        return Ok(Some(0));
-    };
-    let bytes = value.value();
-    if bytes.len() != 8 {
-        return Err(DbError::Storage(
-            "invalid revision payload in redb metadata".to_string(),
-        ));
-    }
-    let mut buf = [0u8; 8];
-    buf.copy_from_slice(bytes);
-    Ok(Some(u64::from_be_bytes(buf)))
+pub(crate) fn storage_err(err: impl std::fmt::Display) -> DbError {
+    DbError::Storage(err.to_string())
 }
 
 pub type RedbDatabase = EmbeddedDb<EntityStore<RedbKvEngine>>;
 pub type RedbBackend = EmbeddedBackend<EntityStore<RedbKvEngine>>;
 
-pub fn open_backend(
-    path: impl AsRef<Path>,
-    mode: DbOpenMode,
-) -> std::result::Result<RedbBackend, DbError> {
+pub fn open_backend(path: impl AsRef<Path>, mode: DbOpenMode) -> Result<RedbBackend, DbError> {
     open_backend_with_config(path, mode, DbConfig::default())
 }
 
@@ -340,11 +461,23 @@ pub fn open_backend_with_config(
     path: impl AsRef<Path>,
     mode: DbOpenMode,
     config: DbConfig,
-) -> std::result::Result<RedbBackend, DbError> {
-    let engine = RedbKvEngine::open(path, mode)?;
+) -> Result<RedbBackend, DbError> {
+    open_backend_with_options(path, mode, RedbOptions::default(), config)
+}
+
+pub fn open_backend_with_options(
+    path: impl AsRef<Path>,
+    mode: DbOpenMode,
+    options: RedbOptions,
+    config: DbConfig,
+) -> Result<RedbBackend, DbError> {
+    let engine = RedbKvEngine::open_with_options(path, mode, options)?;
     let db = RedbDatabase::open_with_config(EntityStore::new(engine), config)?;
     Ok(RedbBackend::new(db))
 }
+
+#[cfg(test)]
+mod engine_tests;
 
 #[cfg(test)]
 mod tests {
@@ -578,42 +711,13 @@ mod tests {
         assert_eq!(storage.current_revision().unwrap(), revision);
     }
 
-    /// Entries of an indexed database re-encoded in the legacy textual layout.
-    fn legacy_layout_entries() -> Vec<(Vec<u8>, Vec<u8>)> {
-        let mut db = semantic_db_kv::open_memory().unwrap();
-        let items = db
-            .create_collection("items", CollectionKind::Untyped)
-            .unwrap();
-        db.create_index("by_kind", items, "kind", false).unwrap();
-        for (id, kind) in [("one", "music"), ("two", "video"), ("three", "music")] {
-            let mut object = Object::new();
-            object.insert("id", Value::String(id.into()));
-            object.insert("kind", Value::String(kind.into()));
-            db.insert("items", id, object).unwrap();
-        }
-        let path_indexes = db
-            .catalog()
-            .indexes()
-            .filter(|(_, index)| {
-                index.schema.kind == semantic_data::schema::IndexKind::PathEquality
-            })
-            .map(|(lid, _)| lid)
-            .collect();
-        let (_, store) = db.into_parts();
-        semantic_db_kv::keys::legacy::downgrade_entries(
-            store.scan_raw_prefix(&[]).unwrap(),
-            &path_indexes,
-        )
-        .unwrap()
-    }
-
     #[test]
     fn redb_legacy_layout_is_migrated_once_on_open() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("db");
         let legacy_revision = {
             let mut engine = RedbKvEngine::open(&path, DbOpenMode::AutoCreate).unwrap();
-            let ops = legacy_layout_entries()
+            let ops = crate::engine_tests::legacy_layout_entries()
                 .into_iter()
                 .map(|(key, value)| KvWriteOp::Put { key, value })
                 .collect::<Vec<_>>();
