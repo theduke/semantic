@@ -56,6 +56,36 @@ pub enum StorageWriteOp {
         entity_id: String,
         object: Object,
     },
+    /// Replace the entries derived from `old` with those derived from `new`.
+    ///
+    /// `old` must be the object the index currently holds entries for (the
+    /// stored row at the revision the batch is conditioned on), or `None`
+    /// when the entity has no entries yet; `new` is `None` when the entity
+    /// is removed. Only the difference of the two entry sets is written:
+    /// entries derived from both objects are left untouched. Storage may
+    /// rely on `old` to know the previous state of the affected entries
+    /// without reading them when the batch is committed conditionally on
+    /// that revision.
+    ReindexEntity {
+        index: IndexSchema,
+        entity_id: String,
+        old: Option<Object>,
+        new: Option<Object>,
+    },
+}
+
+/// Whether `old` and `new` certainly derive the same entries of `index`.
+///
+/// A cheap check on the indexed value(s) that lets writers skip deriving
+/// index keys for unchanged values. `false` means the entries may differ.
+pub(crate) fn index_entries_unchanged(index: &IndexSchema, old: &Object, new: &Object) -> bool {
+    if index.schema.kind.is_value_index() {
+        // Covers single-column, composite and partial indexes: the derived
+        // key value (or its absence) fully determines the entries.
+        index.key_value(old) == index.key_value(new)
+    } else {
+        old == new
+    }
 }
 
 #[derive(facet::Facet, Debug, Clone, Copy, PartialEq, Eq)]
@@ -805,68 +835,92 @@ impl MemoryEntityStorage {
 
     fn apply(&mut self, operations: &[StorageWriteOp]) {
         for operation in operations {
-            match operation {
-                StorageWriteOp::PutEntity(entity) => {
-                    self.entities
-                        .insert((entity.collection, entity.id.clone()), entity.clone());
-                }
-                StorageWriteOp::DeleteEntity {
-                    collection,
-                    entity_id,
-                } => {
-                    self.entities.remove(&(collection.0, entity_id.clone()));
-                }
-                StorageWriteOp::UnindexEntity {
-                    index,
-                    entity_id,
-                    object,
-                } => {
-                    self.indexes.retain(|entry| {
-                        entry.index.lid != index.lid
-                            || entry.entity_id != *entity_id
-                            || entry.object != *object
-                    });
-                }
-                StorageWriteOp::ClearCollection(collection) => {
-                    self.entities
-                        .retain(|(stored_collection, _), _| *stored_collection != collection.0);
-                }
-                StorageWriteOp::ClearIndex(index) => {
-                    self.indexes.retain(|entry| entry.index.lid != *index);
-                    self.initialized_indexes.remove(index);
-                }
-                StorageWriteOp::ResetIndex(index) => {
-                    self.indexes.retain(|entry| entry.index.lid != *index);
-                    self.initialized_indexes.insert(*index);
-                }
-                StorageWriteOp::IndexEntity {
-                    index,
-                    entity_id,
-                    object,
-                } => {
-                    // Rows without a key (missing column, outside a
-                    // partial index) have no entry.
-                    if index.schema.kind.is_value_index() && index.key_value(object).is_none() {
-                        continue;
-                    }
-                    let entry = IndexedEntity {
-                        index: index.clone(),
-                        entity_id: entity_id.clone(),
-                        object: object.clone(),
-                    };
-                    if !self.indexes.iter().any(|indexed| {
-                        indexed.index.lid == entry.index.lid
-                            && indexed.entity_id == entry.entity_id
-                            && indexed.object == entry.object
-                    }) {
-                        self.indexes.push(entry);
-                    }
-                }
-            }
+            self.apply_operation(operation);
         }
         if !operations.is_empty() {
             self.revision = self.revision.saturating_add(1);
             self.capture_snapshot();
+        }
+    }
+
+    fn unindex(&mut self, index: LocalIndexId, entity_id: &str, object: &Object) {
+        self.indexes.retain(|entry| {
+            entry.index.lid != index || entry.entity_id != entity_id || entry.object != *object
+        });
+    }
+
+    fn index(&mut self, index: &IndexSchema, entity_id: &str, object: &Object) {
+        // Rows without a key (missing column, outside a partial index) have
+        // no entry.
+        if index.schema.kind.is_value_index() && index.key_value(object).is_none() {
+            return;
+        }
+        if !self.indexes.iter().any(|indexed| {
+            indexed.index.lid == index.lid
+                && indexed.entity_id == entity_id
+                && indexed.object == *object
+        }) {
+            self.indexes.push(IndexedEntity {
+                index: index.clone(),
+                entity_id: entity_id.to_string(),
+                object: object.clone(),
+            });
+        }
+    }
+
+    fn apply_operation(&mut self, operation: &StorageWriteOp) {
+        match operation {
+            StorageWriteOp::PutEntity(entity) => {
+                self.entities
+                    .insert((entity.collection, entity.id.clone()), entity.clone());
+            }
+            StorageWriteOp::DeleteEntity {
+                collection,
+                entity_id,
+            } => {
+                self.entities.remove(&(collection.0, entity_id.clone()));
+            }
+            StorageWriteOp::UnindexEntity {
+                index,
+                entity_id,
+                object,
+            } => self.unindex(index.lid, entity_id, object),
+            StorageWriteOp::ReindexEntity {
+                index,
+                entity_id,
+                old,
+                new,
+            } => {
+                if let Some(old) = old {
+                    // Entries of skipped reindexes hold an earlier object
+                    // with the same indexed values.
+                    self.indexes.retain(|entry| {
+                        entry.index.lid != index.lid
+                            || entry.entity_id != *entity_id
+                            || !index_entries_unchanged(index, &entry.object, old)
+                    });
+                }
+                if let Some(new) = new {
+                    self.index(index, entity_id, new);
+                }
+            }
+            StorageWriteOp::ClearCollection(collection) => {
+                self.entities
+                    .retain(|(stored_collection, _), _| *stored_collection != collection.0);
+            }
+            StorageWriteOp::ClearIndex(index) => {
+                self.indexes.retain(|entry| entry.index.lid != *index);
+                self.initialized_indexes.remove(index);
+            }
+            StorageWriteOp::ResetIndex(index) => {
+                self.indexes.retain(|entry| entry.index.lid != *index);
+                self.initialized_indexes.insert(*index);
+            }
+            StorageWriteOp::IndexEntity {
+                index,
+                entity_id,
+                object,
+            } => self.index(index, entity_id, object),
         }
     }
 

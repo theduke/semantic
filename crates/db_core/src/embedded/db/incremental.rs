@@ -5,6 +5,7 @@ const COUNTS: &str = "__semantic.relationship_counts";
 const COMPLETION_MARKER: &str = "backfill:v1";
 
 use crate::batch_return::changes;
+use crate::embedded::storage::index_entries_unchanged;
 
 // Length-prefix components because IDs and relation names may contain delimiters.
 fn key(parts: &[&str]) -> String {
@@ -45,6 +46,13 @@ impl<S: EntityStorage> EmbeddedDb<S> {
         );
         (id, object)
     }
+    /// Append the storage operations turning the rows `before` of
+    /// `collection` into `after`.
+    ///
+    /// Unchanged rows produce no operations. Index maintenance is diff-aware:
+    /// indexes whose indexed values did not change are skipped, the others
+    /// get one [`StorageWriteOp::ReindexEntity`] so storage writes only the
+    /// entries that differ.
     pub(super) fn push_row_delta(
         &self,
         catalog: &Catalog,
@@ -59,29 +67,29 @@ impl<S: EntityStorage> EmbeddedDb<S> {
             if old == new {
                 continue;
             }
-            if let Some(object) = old {
-                for index in catalog.indexes_for_collection(collection) {
-                    ops.push(StorageWriteOp::UnindexEntity {
-                        index: index.clone(),
-                        entity_id: id.clone(),
-                        object: object.clone(),
-                    });
-                }
-            }
-            if let Some(object) = new {
-                ops.push(StorageWriteOp::PutEntity(StoredEntity {
+            match new {
+                Some(object) => ops.push(StorageWriteOp::PutEntity(StoredEntity {
                     id: id.clone(),
                     collection: collection.0,
                     kind: infer_entity_kind(catalog, object),
                     object: object.clone(),
-                }));
-                for index in catalog.indexes_for_collection(collection) {
-                    self.push_index_ops(ops, index, id, object)?;
-                }
-            } else {
-                ops.push(StorageWriteOp::DeleteEntity {
+                })),
+                None => ops.push(StorageWriteOp::DeleteEntity {
                     collection,
                     entity_id: id.clone(),
+                }),
+            }
+            for index in catalog.indexes_for_collection(collection) {
+                if let (Some(old), Some(new)) = (old, new)
+                    && index_entries_unchanged(index, old, new)
+                {
+                    continue;
+                }
+                ops.push(StorageWriteOp::ReindexEntity {
+                    index: index.clone(),
+                    entity_id: id.clone(),
+                    old: old.cloned(),
+                    new: new.cloned(),
                 });
             }
         }

@@ -10,7 +10,10 @@
 //! with its current state, so the created and removed entity and index keys
 //! are known exactly (including those removed by `ClearCollection`,
 //! `ClearIndex` and `ResetIndex`), and their net deltas are applied to the
-//! counters before the transaction commits.
+//! counters before the transaction commits. Index entries written by
+//! `ReindexEntity` in a revision-conditioned batch take their previous state
+//! from the operation's old object instead of a read (see
+//! `lower_final_values`).
 //!
 //! Databases written before counters existed have data but no counters.
 //! The meta entry `0x01 "stats"` ([`keys::stats_version_key`]) therefore

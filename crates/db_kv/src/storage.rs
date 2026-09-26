@@ -44,6 +44,8 @@ mod layout_tests;
 mod stats_tests;
 #[cfg(test)]
 mod txn_tests;
+#[cfg(test)]
+mod write_amplification_tests;
 
 // Version 2 forces legacy indexes to be rebuilt. Some databases could retain a
 // format marker without complete index entries, which made indexed equality
@@ -944,9 +946,13 @@ impl<E: KvEngine> EntityStore<E> {
         let format = self.payload_format;
         let mut staging = DictStaging::new(&self.dictionaries);
         let outcome = self.engine.write_with(expected_revision, |txn| {
-            let values = lower_final_values(operations, &*txn, &mut staging, format)?;
+            // A conditional commit runs against the revision the caller read
+            // the old objects of `ReindexEntity` at, so the previous states
+            // of their entries are known.
+            let known_base = expected_revision.is_some();
+            let values = lower_final_values(operations, &*txn, &mut staging, format, known_base)?;
             staging.write_additions(txn)?;
-            write_final_values(txn, values)
+            write_final_states(txn, values)
         })?;
         if matches!(outcome, StorageCommitOutcome::Committed { .. }) {
             staging.publish();
@@ -965,19 +971,71 @@ impl<E: KvEngine> EntityStore<E> {
     }
 }
 
+/// Final state of one key written by a batch.
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct FinalState {
+    value: Option<Vec<u8>>,
+    /// Whether the key exists before the batch, when the operation that
+    /// wrote it knows; `None` makes the write compare against a read.
+    existed: Option<bool>,
+}
+
+impl FinalState {
+    fn unknown(value: Option<Vec<u8>>) -> Self {
+        Self {
+            value,
+            existed: None,
+        }
+    }
+}
+
 /// Write the final state of every key, skipping unchanged keys, and update
 /// the stats counters by the created and removed entity and index keys.
 fn write_final_values(
     txn: &mut dyn KvWriteTxn,
     values: impl IntoIterator<Item = (Vec<u8>, Option<Vec<u8>>)>,
 ) -> Result<(), DbError> {
+    write_final_states(
+        txn,
+        values
+            .into_iter()
+            .map(|(key, value)| (key, FinalState::unknown(value))),
+    )
+}
+
+/// [`write_final_values`] for states that may know their previous
+/// existence.
+///
+/// Keys whose previous existence is known skip the comparison read. Only
+/// index entries (empty values) carry that knowledge, so existence is their
+/// whole previous state: a key known to exist with a final value, or known
+/// to be absent without one, is unchanged.
+fn write_final_states(
+    txn: &mut dyn KvWriteTxn,
+    values: impl IntoIterator<Item = (Vec<u8>, FinalState)>,
+) -> Result<(), DbError> {
     let mut deltas = CounterDeltas::default();
-    for (key, value) in values {
-        let current = txn.get(&key)?;
-        if current == value {
-            continue;
-        }
-        deltas.record(&key, current.is_some(), value.is_some());
+    for (key, FinalState { value, existed }) in values {
+        let existed = match existed {
+            Some(existed) => {
+                debug_assert!(
+                    value.as_ref().is_none_or(Vec::is_empty),
+                    "known previous states are limited to index entries"
+                );
+                if existed == value.is_some() {
+                    continue;
+                }
+                existed
+            }
+            None => {
+                let current = txn.get(&key)?;
+                if current == value {
+                    continue;
+                }
+                current.is_some()
+            }
+        };
+        deltas.record(&key, existed, value.is_some());
         match value {
             Some(value) => txn.put(&key, &value)?,
             None => txn.delete(&key)?,
@@ -986,17 +1044,33 @@ fn write_final_values(
     deltas.apply(txn)
 }
 
-/// Lower storage operations to the final value of every touched key.
+/// Lower storage operations to the final state of every touched key.
 ///
 /// Comparing final states lets old/new index intersections produce no
 /// physical writes, including when a DDL reset precedes them.
+///
+/// With `known_base`, the batch commits against the revision the old
+/// objects of [`StorageWriteOp::ReindexEntity`] were read at, so the entries
+/// it adds are known to be absent and those it removes known to exist; such
+/// keys skip the comparison read. That knowledge is dropped for keys another
+/// operation of the batch also writes and for indexes the batch clears or
+/// resets.
 fn lower_final_values(
     operations: &[StorageWriteOp],
     txn: &dyn KvWriteTxn,
     dictionaries: &mut DictStaging<'_>,
     format: EntityPayloadFormat,
-) -> Result<BTreeMap<Vec<u8>, Option<Vec<u8>>>, DbError> {
+    known_base: bool,
+) -> Result<BTreeMap<Vec<u8>, FinalState>, DbError> {
+    let reset_indexes = operations
+        .iter()
+        .filter_map(|operation| match operation {
+            StorageWriteOp::ClearIndex(index) | StorageWriteOp::ResetIndex(index) => Some(*index),
+            _ => None,
+        })
+        .collect::<BTreeSet<_>>();
     let mut lowered = Vec::new();
+    let mut known = BTreeMap::<Vec<u8>, bool>::new();
     for operation in operations {
         match operation {
             StorageWriteOp::PutEntity(entity) => lowered.push(KvWriteOp::Put {
@@ -1051,16 +1125,51 @@ fn lower_final_values(
                     lowered.push(KvWriteOp::Delete { key });
                 }
             }
+            StorageWriteOp::ReindexEntity {
+                index,
+                entity_id,
+                old,
+                new,
+            } => {
+                let keys = |object: &Option<Object>| match object {
+                    Some(object) => index_keys(index, entity_id, object),
+                    None => Ok(BTreeSet::new()),
+                };
+                let (old_keys, new_keys) = (keys(old)?, keys(new)?);
+                let known_keys = known_base && !reset_indexes.contains(&index.lid);
+                for key in old_keys.difference(&new_keys) {
+                    if known_keys {
+                        known.insert(key.clone(), true);
+                    }
+                    lowered.push(KvWriteOp::Delete { key: key.clone() });
+                }
+                for key in new_keys.difference(&old_keys) {
+                    if known_keys {
+                        known.insert(key.clone(), false);
+                    }
+                    lowered.push(KvWriteOp::Put {
+                        key: key.clone(),
+                        value: Vec::new(),
+                    });
+                }
+            }
         }
     }
-    let mut final_values = BTreeMap::new();
+    let mut final_values = BTreeMap::<Vec<u8>, FinalState>::new();
     for operation in lowered {
-        match operation {
-            KvWriteOp::Put { key, value } => {
-                final_values.insert(key, Some(value));
+        let (key, value) = match operation {
+            KvWriteOp::Put { key, value } => (key, Some(value)),
+            KvWriteOp::Delete { key } => (key, None),
+        };
+        match final_values.entry(key) {
+            std::collections::btree_map::Entry::Vacant(entry) => {
+                let existed = known.get(entry.key()).copied();
+                entry.insert(FinalState { value, existed });
             }
-            KvWriteOp::Delete { key } => {
-                final_values.insert(key, None);
+            // No single operation vouches for the previous state of a key
+            // written more than once.
+            std::collections::btree_map::Entry::Occupied(mut entry) => {
+                *entry.get_mut() = FinalState::unknown(value);
             }
         }
     }
