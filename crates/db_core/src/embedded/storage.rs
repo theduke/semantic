@@ -135,6 +135,21 @@ pub trait EntityReadSnapshot: Send + Sync {
         count_entity_scan(self.scan_collection_stream(collection)?)
     }
 
+    /// Maintained number of entities in `collection`, or `None` when the
+    /// storage does not maintain row counts (callers then fall back to
+    /// [`Self::count_collection_entities`]).
+    fn collection_row_count(&self, collection: LocalCollectionId) -> Result<Option<u64>, DbError> {
+        let _ = collection;
+        Ok(None)
+    }
+
+    /// Maintained number of entries of `index`, or `None` when the storage
+    /// does not maintain index entry counts.
+    fn index_entry_count(&self, index: LocalIndexId) -> Result<Option<u64>, DbError> {
+        let _ = index;
+        Ok(None)
+    }
+
     fn scan_index_value_stream(
         &self,
         index: LocalIndexId,
@@ -265,6 +280,14 @@ impl<S: EntityStorage + ?Sized> EntityReadSnapshot for ForwardingReadSnapshot<'_
 
     fn count_collection_entities(&self, collection: LocalCollectionId) -> Result<u64, DbError> {
         self.storage.count_collection_entities(collection)
+    }
+
+    fn collection_row_count(&self, collection: LocalCollectionId) -> Result<Option<u64>, DbError> {
+        self.storage.collection_row_count(collection)
+    }
+
+    fn index_entry_count(&self, index: LocalIndexId) -> Result<Option<u64>, DbError> {
+        self.storage.index_entry_count(index)
     }
 
     fn scan_index_value_stream(
@@ -428,6 +451,21 @@ pub trait EntityStorage: std::fmt::Debug + Send + Sync + 'static {
     /// keys without decoding entity payloads.
     fn count_collection_entities(&self, collection: LocalCollectionId) -> Result<u64, DbError> {
         count_entity_scan(self.scan_collection_stream(collection)?)
+    }
+
+    /// Maintained number of entities in `collection`, or `None` when the
+    /// storage does not maintain row counts (callers then fall back to
+    /// [`Self::count_collection_entities`]).
+    fn collection_row_count(&self, collection: LocalCollectionId) -> Result<Option<u64>, DbError> {
+        let _ = collection;
+        Ok(None)
+    }
+
+    /// Maintained number of entries of `index`, or `None` when the storage
+    /// does not maintain index entry counts.
+    fn index_entry_count(&self, index: LocalIndexId) -> Result<Option<u64>, DbError> {
+        let _ = index;
+        Ok(None)
     }
 
     fn scan_collection_at_revision_stream(
@@ -743,6 +781,19 @@ impl EntityStorage for MemoryEntityStorage {
             .count() as u64)
     }
 
+    fn collection_row_count(&self, collection: LocalCollectionId) -> Result<Option<u64>, DbError> {
+        self.count_collection_entities(collection).map(Some)
+    }
+
+    fn index_entry_count(&self, index: LocalIndexId) -> Result<Option<u64>, DbError> {
+        Ok(Some(
+            self.indexes
+                .iter()
+                .filter(|entry| entry.index.lid == index)
+                .count() as u64,
+        ))
+    }
+
     fn scan_collection_at_revision_stream(
         &self,
         collection: LocalCollectionId,
@@ -863,6 +914,9 @@ pub(crate) struct StorageReadCounts {
     pub(crate) collection_scans: std::sync::atomic::AtomicUsize,
     pub(crate) entity_gets: std::sync::atomic::AtomicUsize,
     pub(crate) collection_counts: std::sync::atomic::AtomicUsize,
+    /// Report maintained row counts as unknown, forcing the key-count
+    /// fallback.
+    pub(crate) hide_row_counts: std::sync::atomic::AtomicBool,
 }
 
 #[cfg(test)]
@@ -934,6 +988,21 @@ impl EntityStorage for CountingEntityStorage {
     fn count_collection_entities(&self, collection: LocalCollectionId) -> Result<u64, DbError> {
         Self::count(&self.counts.collection_counts);
         self.inner.count_collection_entities(collection)
+    }
+
+    fn collection_row_count(&self, collection: LocalCollectionId) -> Result<Option<u64>, DbError> {
+        if self
+            .counts
+            .hide_row_counts
+            .load(std::sync::atomic::Ordering::Relaxed)
+        {
+            return Ok(None);
+        }
+        self.inner.collection_row_count(collection)
+    }
+
+    fn index_entry_count(&self, index: LocalIndexId) -> Result<Option<u64>, DbError> {
+        self.inner.index_entry_count(index)
     }
 
     fn scan_collection_at_revision_stream(
@@ -1036,6 +1105,14 @@ impl EntityReadSnapshot for MemoryEntityReadSnapshot<'_> {
 
     fn count_collection_entities(&self, collection: LocalCollectionId) -> Result<u64, DbError> {
         EntityStorage::count_collection_entities(self.storage, collection)
+    }
+
+    fn collection_row_count(&self, collection: LocalCollectionId) -> Result<Option<u64>, DbError> {
+        EntityStorage::collection_row_count(self.storage, collection)
+    }
+
+    fn index_entry_count(&self, index: LocalIndexId) -> Result<Option<u64>, DbError> {
+        EntityStorage::index_entry_count(self.storage, index)
     }
 
     fn scan_index_value_stream(

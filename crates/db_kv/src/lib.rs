@@ -3,6 +3,7 @@ pub mod storage;
 
 pub use keys::entity_key;
 pub use storage::layout::{LAYOUT_VERSION_CURRENT, LAYOUT_VERSION_LEGACY, LayoutMigration};
+pub use storage::stats::{STATS_VERSION, StatsBackfill};
 pub use storage::{
     BoxKvPrefixScan, EntityScan, EntityStore, IndexEntityIdScan, KvEngine, KvEngineStats,
     KvEntitySnapshot, KvKeyScan, KvMaintenance, KvReadTxn, KvScanItem, KvWriteOp, KvWriteTxn,

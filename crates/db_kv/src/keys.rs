@@ -10,7 +10,7 @@
 //! | `0x02` | entity         | `0x02 lid(collection) id`                               | encoded entity payload     |
 //! | `0x03` | index entry    | `0x03 lid(index) [path token] value token id`           | empty                      |
 //! | `0x04` | index marker   | `0x04 lid(index)`                                       | index format version       |
-//! | `0x05` | stats          | reserved                                                |                            |
+//! | `0x05` | stats          | `0x05 0x01 lid(collection)` / `0x05 0x02 lid(index)`    | row / entry count (u64 BE) |
 //!
 //! Tags `0x06..=0x1F` are reserved for future binary key spaces. Leading
 //! bytes `0x20..` belong to the legacy textual layout (see [`legacy`]) and
@@ -31,7 +31,9 @@
 //! after the value token.
 //!
 //! The layout version is stored under the meta key `0x01 "format"` as a
-//! big-endian `u32`; see [`crate::storage::layout`].
+//! big-endian `u32`; see [`crate::storage::layout`]. The meta key
+//! `0x01 "stats"` marks the stats counters as maintained; see
+//! [`crate::storage::stats`].
 
 use semantic_data::value::{FieldPath, PathSegment, Value};
 use semantic_db_core::catalog::{LocalCollectionId, LocalIndexId};
@@ -50,7 +52,7 @@ pub const TAG_ENTITY: u8 = 0x02;
 pub const TAG_INDEX: u8 = 0x03;
 /// Per-index format markers (present once an index has been built).
 pub const TAG_INDEX_MARKER: u8 = 0x04;
-/// Reserved for index/collection statistics.
+/// Maintained collection and index statistics.
 pub const TAG_STATS: u8 = 0x05;
 const _: () = assert!(TAG_STATS < TAG_RESERVED_END);
 /// Tags below this value are reserved for binary key spaces.
@@ -58,6 +60,13 @@ pub const TAG_RESERVED_END: u8 = 0x20;
 
 /// Name of the meta entry holding the layout version.
 pub const META_FORMAT: &[u8] = b"format";
+/// Name of the meta entry marking the stats counters as maintained.
+pub const META_STATS: &[u8] = b"stats";
+
+/// Stats kind of per-collection row counts.
+pub const STATS_COLLECTION_ROWS: u8 = 0x01;
+/// Stats kind of per-index entry counts.
+pub const STATS_INDEX_ENTRIES: u8 = 0x02;
 
 /// Append the order-preserving variable-length encoding of `value`.
 pub fn encode_lid(out: &mut Vec<u8>, value: u64) {
@@ -101,6 +110,44 @@ pub fn meta_key(name: &[u8]) -> Vec<u8> {
 /// Key holding the database layout version.
 pub fn layout_version_key() -> Vec<u8> {
     meta_key(META_FORMAT)
+}
+
+/// Key holding the stats format version; present once counters are
+/// maintained.
+pub fn stats_version_key() -> Vec<u8> {
+    meta_key(META_STATS)
+}
+
+fn stats_key(kind: u8, lid: usize) -> Vec<u8> {
+    let mut key = Vec::with_capacity(11);
+    key.push(TAG_STATS);
+    key.push(kind);
+    encode_lid(&mut key, lid as u64);
+    key
+}
+
+/// Key of the row count of `collection`.
+pub fn collection_rows_key(collection: LocalCollectionId) -> Vec<u8> {
+    stats_key(STATS_COLLECTION_ROWS, collection.0)
+}
+
+/// Key of the entry count of `index`.
+pub fn index_entries_key(index: LocalIndexId) -> Vec<u8> {
+    stats_key(STATS_INDEX_ENTRIES, index.0)
+}
+
+/// Key of the counter that the existence of `key` contributes to: the row
+/// count of an entity's collection or the entry count of an index entry's
+/// index. Other keys are not counted.
+pub fn counter_key_for(key: &[u8]) -> Option<Vec<u8>> {
+    let (&tag, rest) = key.split_first()?;
+    let kind = match tag {
+        TAG_ENTITY => STATS_COLLECTION_ROWS,
+        TAG_INDEX => STATS_INDEX_ENTRIES,
+        _ => return None,
+    };
+    let (lid, _) = decode_lid(rest)?;
+    Some(stats_key(kind, usize::try_from(lid).ok()?))
 }
 
 /// Prefix of all entity keys of `collection`.

@@ -323,7 +323,12 @@ fn legacy_single_table_databases_are_split_on_open() {
         {
             let db = redb::Database::open(&path).unwrap();
             assert!(!legacy_table_exists(&db));
-            assert!(physical_keys(&db)["other"].is_empty());
+            // Only the maintained stats counters live in the `other` table.
+            assert!(
+                physical_keys(&db)["other"]
+                    .iter()
+                    .all(|key| key.first() == Some(&TAG_STATS))
+            );
             assert_eq!(prepare_tables(&db).unwrap(), TableSetup::UpToDate);
         }
         assert_eq!(open_and_verify(&path), Some(revision));

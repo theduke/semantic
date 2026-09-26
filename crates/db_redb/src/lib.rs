@@ -888,6 +888,57 @@ mod tests {
         }
     }
 
+    #[test]
+    fn maintained_counts_survive_reopen() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("counts");
+        let open = || {
+            let engine = RedbKvEngine::open(&path, DbOpenMode::AutoCreate).unwrap();
+            RedbDatabase::open(semantic_db_kv::EntityStore::new(engine)).unwrap()
+        };
+
+        let mut db = open();
+        let items = db
+            .create_collection("items", CollectionKind::Untyped)
+            .unwrap();
+        db.create_index("by_kind", items, "kind", false).unwrap();
+        let index = db
+            .catalog()
+            .indexes()
+            .find(|(_, index)| index.schema.name == "by_kind")
+            .map(|(lid, _)| lid)
+            .unwrap();
+        for (id, kind) in [("one", "music"), ("two", "video"), ("three", "music")] {
+            let mut object = Object::new();
+            object.insert("id", Value::String(id.to_string()));
+            object.insert("kind", Value::String(kind.to_string()));
+            db.insert("items", id, object).unwrap();
+        }
+        db.delete("items", "two").unwrap();
+        drop(db);
+
+        let db = open();
+        let store = db.storage();
+        assert_eq!(store.collection_row_count(items).unwrap(), Some(2));
+        assert_eq!(store.index_entry_count(index).unwrap(), Some(2));
+        let rows = db
+            .select(
+                SelectQuery::new()
+                    .with_collection("items")
+                    .with_projection(vec![semantic_db_core::QueryField {
+                        expr: Box::new(Expr::Aggregate {
+                            op: semantic_data::query::AggregateOp::Count,
+                            distinct: false,
+                            arg: Box::new(semantic_db_core::FunctionArg::Wildcard),
+                        }),
+                        alias: Some("n".to_string()),
+                        wildcard: None,
+                    }]),
+            )
+            .unwrap();
+        assert_eq!(rows[0].get("n"), Some(&Value::I64(2)));
+    }
+
     #[tokio::test(flavor = "multi_thread")]
     async fn test_redb_backend_testsuite() {
         let dir = tempfile::tempdir().unwrap();

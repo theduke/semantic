@@ -445,6 +445,11 @@ impl<S: EntityStorage> EmbeddedDb<S> {
         self.catalog().auto_index_enabled()
     }
 
+    /// The underlying entity storage.
+    pub fn storage(&self) -> &S {
+        &self.storage
+    }
+
     pub fn into_parts(self) -> (SharedCatalog, S) {
         (self.catalog, self.storage)
     }
@@ -531,9 +536,12 @@ impl<S: EntityStorage> EmbeddedDb<S> {
         let stats_provider = stats
             .as_ref()
             .map(|value| value as &dyn crate::StatsProvider);
-        let pair = optimizer.optimize_query(&query, Some(source.clone()), stats_provider, &context);
+        let mut physical = optimizer
+            .optimize_query(&query, Some(source.clone()), stats_provider, &context)
+            .physical;
+        self.rewrite_count_fast_path(reader.as_ref(), &mut physical)?;
         let mut rows =
-            self.execute_physical_plan_with_reader(reader, &pair.physical, Some(source.as_str()))?;
+            self.execute_physical_plan_with_reader(reader, &physical, Some(source.as_str()))?;
         let catalog = self.catalog();
         // Inject computed attributes.
         for row in &mut rows {
@@ -2321,7 +2329,8 @@ impl<S: EntityStorage> EmbeddedDb<S> {
         reader: &dyn EntityReadSnapshot,
         collection: &CollectionSchema,
     ) -> std::result::Result<CollectionStatsEntry, DbError> {
-        let row_count = reader.count_collection_entities(collection.lid)? as f64;
+        let row_count = collection_row_count(reader, collection.lid)? as f64;
+        let mut index_entries = Vec::new();
         let mut indexed_fields = BTreeSet::new();
         let mut unique_fields = BTreeSet::new();
         let mut indexed_field_ids = BTreeSet::new();
@@ -2331,6 +2340,16 @@ impl<S: EntityStorage> EmbeddedDb<S> {
 
         let catalog = self.catalog();
         for index in catalog.indexes_for_collection(collection.lid) {
+            if index.schema.kind == IndexKind::Equality
+                && let Some(entries) = reader.index_entry_count(index.lid)?
+            {
+                index_entries.push(IndexEntryStats {
+                    canonical_field: index.canonical_field.clone(),
+                    field_id: index.field_id,
+                    attr_id: index.attr_id,
+                    entries: entries as f64,
+                });
+            }
             indexed_fields.insert(index.canonical_field.clone());
             if index.schema.unique {
                 unique_fields.insert(index.canonical_field.clone());
@@ -2360,7 +2379,76 @@ impl<S: EntityStorage> EmbeddedDb<S> {
             unique_attr_ids,
             collection_id: collection.lid,
             has_path_equality_index: catalog.find_path_equality_index(collection.lid).is_some(),
+            index_entries,
         })
+    }
+
+    /// Answer `SELECT count(*) FROM collection` shapes from the maintained
+    /// row count instead of scanning.
+    ///
+    /// Rewrites an ungrouped aggregate without `HAVING` whose projection is
+    /// only `count(*)` over an unfiltered scan of one user collection (also
+    /// below single-input operators such as `LIMIT`) into a constant row.
+    /// Internal collections and the `all` alias keep scanning.
+    fn rewrite_count_fast_path(
+        &self,
+        reader: &dyn EntityReadSnapshot,
+        plan: &mut crate::PhysicalPlan,
+    ) -> std::result::Result<bool, DbError> {
+        use crate::PhysicalPlan as P;
+
+        match plan {
+            P::Aggregate {
+                input,
+                group_by,
+                projection,
+                having,
+            } => {
+                let P::Source(crate::PhysicalSource::Scan { source }) = input.as_ref() else {
+                    return Ok(false);
+                };
+                let count_only = !projection.is_empty()
+                    && projection.iter().all(|field| {
+                        field.wildcard.is_none()
+                            && matches!(
+                                &field.expr,
+                                crate::Expr::Aggregate {
+                                    op: semantic_data::query::AggregateOp::Count,
+                                    distinct: false,
+                                    arg,
+                                } if matches!(arg.as_ref(), crate::FunctionArg::Wildcard)
+                            )
+                    });
+                if !group_by.is_empty() || having.is_some() || !count_only {
+                    return Ok(false);
+                }
+                let catalog = self.catalog();
+                let collection = match (&source.collection_id, source.source_name.as_deref()) {
+                    (Some(lid), _) => catalog.collection_by_lid(*lid),
+                    (None, Some(name)) if !is_all_collection_alias(name) => {
+                        catalog.collection_by_name(name)
+                    }
+                    _ => None,
+                };
+                let Some(collection) = collection.filter(|collection| !collection.internal) else {
+                    return Ok(false);
+                };
+                let count = Value::I64(collection_row_count(reader, collection.lid)? as i64);
+                let row = projection
+                    .iter()
+                    .map(|field| (crate::aggregate_output_key(field), count.clone()))
+                    .collect::<Object>();
+                *plan = P::Values { values: vec![row] };
+                Ok(true)
+            }
+            P::Limit { input, .. }
+            | P::Sort { input, .. }
+            | P::Project { input, .. }
+            | P::Distinct { input }
+            | P::Materialize { input }
+            | P::Exchange { input, .. } => self.rewrite_count_fast_path(reader, input),
+            _ => Ok(false),
+        }
     }
 
     fn access_path_from_physical(
@@ -2447,6 +2535,18 @@ impl<S: EntityStorage> EmbeddedDb<S> {
             };
         }
         AccessPath::FullScan
+    }
+}
+
+/// Row count of `collection`: the maintained count when the storage keeps
+/// one, otherwise counted from storage keys.
+fn collection_row_count(
+    reader: &dyn EntityReadSnapshot,
+    collection: LocalCollectionId,
+) -> std::result::Result<u64, DbError> {
+    match reader.collection_row_count(collection)? {
+        Some(count) => Ok(count),
+        None => reader.count_collection_entities(collection),
     }
 }
 
@@ -3714,6 +3814,40 @@ struct CollectionStatsEntry {
     indexed_attr_ids: BTreeSet<LocalAttrId>,
     unique_attr_ids: BTreeSet<LocalAttrId>,
     has_path_equality_index: bool,
+    /// Maintained entry counts of equality indexes.
+    index_entries: Vec<IndexEntryStats>,
+}
+
+/// Entry count of an equality index: the number of rows storing its field.
+struct IndexEntryStats {
+    canonical_field: String,
+    field_id: Option<LocalFieldId>,
+    attr_id: Option<LocalAttrId>,
+    entries: f64,
+}
+
+impl CollectionStatsEntry {
+    /// Rows storing `field`, from its equality index entry count when known.
+    fn rows_with_field(&self, field: &crate::FieldRef) -> f64 {
+        let entries = self.index_entries.iter().find(|index| match field {
+            crate::FieldRef::CanonicalName(name) => &index.canonical_field == name,
+            crate::FieldRef::FieldId(field_id) => index.field_id == Some(*field_id),
+            crate::FieldRef::AttrId(attr_id) => index.attr_id == Some(*attr_id),
+            crate::FieldRef::Path(path) => matches!(
+                path.segments(),
+                [PathSegment::Field(name)] if &index.canonical_field == name
+            ),
+        });
+        entries.map_or(self.row_count, |index| index.entries.min(self.row_count))
+    }
+
+    fn null_fraction(&self, rows_with_field: f64) -> f64 {
+        if self.row_count > 0.0 {
+            1.0 - rows_with_field / self.row_count
+        } else {
+            0.0
+        }
+    }
 }
 
 impl QueryStatsSnapshot {
@@ -3753,10 +3887,11 @@ impl crate::StatsProvider for QueryStatsSnapshot {
                 })
                 .is_some_and(|name| collection.unique_fields.contains(name)),
         };
+        let rows_with_field = collection.rows_with_field(field);
         if unique {
             return Some(crate::FieldStats {
-                distinct_count: Some(collection.row_count.max(1.0)),
-                null_fraction: Some(0.0),
+                distinct_count: Some(rows_with_field.max(1.0)),
+                null_fraction: Some(collection.null_fraction(rows_with_field)),
             });
         }
 
@@ -3783,9 +3918,10 @@ impl crate::StatsProvider for QueryStatsSnapshot {
             }
         };
         if indexed {
+            // Without distinct-value statistics, assume eight rows per value.
             return Some(crate::FieldStats {
-                distinct_count: Some((collection.row_count / 8.0).max(1.0)),
-                null_fraction: Some(0.0),
+                distinct_count: Some((rows_with_field / 8.0).max(1.0)),
+                null_fraction: Some(collection.null_fraction(rows_with_field)),
             });
         }
 
@@ -4024,8 +4160,8 @@ mod tests {
         assert_eq!(rows.len(), 4);
         assert_eq!(counts.collection_scans(), 0);
         assert_eq!(counts.entity_gets(), 4);
-        // Planner statistics count keys instead of scanning rows.
-        assert_eq!(counts.collection_counts(), 1);
+        // Planner statistics read maintained row counts.
+        assert_eq!(counts.collection_counts(), 0);
 
         // Following a local reference adds one point read per match.
         counts.reset();
@@ -4063,6 +4199,84 @@ mod tests {
             .unwrap();
         assert_eq!(rows.len(), 4);
         assert_eq!(counts.collection_scans(), 1);
+    }
+
+    fn count_star_query(alias: Option<&str>) -> SelectQuery {
+        SelectQuery::new()
+            .with_collection("counted_items")
+            .with_projection(vec![QueryField {
+                expr: Box::new(Expr::Aggregate {
+                    op: semantic_data::query::AggregateOp::Count,
+                    distinct: false,
+                    arg: Box::new(crate::FunctionArg::Wildcard),
+                }),
+                alias: alias.map(ToString::to_string),
+                wildcard: None,
+            }])
+    }
+
+    #[test]
+    fn count_star_is_answered_without_scanning() {
+        let (storage, counts) = CountingEntityStorage::new();
+        let mut db = EmbeddedDb::new(storage);
+        db.create_collection("counted_items", CollectionKind::Polymorphic)
+            .unwrap();
+        let mut batch = Batch::new();
+        for index in 0..300 {
+            let id = format!("item-{index:03}");
+            let kind = if index % 3 == 0 { "third" } else { "other" };
+            batch = batch.with_op(BatchOperation::Upsert {
+                collection: "counted_items".to_string(),
+                object: string_object(&[("id", &id), ("kind", kind)]),
+                id,
+            });
+        }
+        db.transact(batch).unwrap();
+
+        counts.reset();
+        let rows = db.select(count_star_query(Some("n"))).unwrap();
+        assert_eq!(
+            rows,
+            vec![Object::from_iter([("n".to_string(), Value::I64(300))])]
+        );
+        assert_eq!(counts.collection_scans(), 0);
+        assert_eq!(
+            counts.collection_counts(),
+            0,
+            "maintained counts need no key counting"
+        );
+
+        // The unaliased output column matches the regular aggregate.
+        let explain = db
+            .explain_query(Query::Select(count_star_query(None)))
+            .unwrap();
+        let expected = db
+            .execute_physical_plan(&explain.physical, Some("counted_items"))
+            .unwrap();
+        counts.reset();
+        assert_eq!(db.select(count_star_query(None)).unwrap(), expected);
+        assert_eq!(counts.collection_scans(), 0);
+
+        // Without maintained counts the storage keys are counted instead.
+        counts
+            .hide_row_counts
+            .store(true, std::sync::atomic::Ordering::Relaxed);
+        counts.reset();
+        let rows = db.select(count_star_query(Some("n"))).unwrap();
+        assert_eq!(rows[0].get("n"), Some(&Value::I64(300)));
+        assert_eq!(counts.collection_scans(), 0);
+        assert!(counts.collection_counts() > 0);
+
+        // Filtered counts still read rows.
+        counts.reset();
+        let rows = db
+            .select(count_star_query(Some("n")).with_predicate(eq_predicate(
+                FieldPath::from_fields(["kind"]),
+                Value::String("third".to_string()),
+            )))
+            .unwrap();
+        assert_eq!(rows[0].get("n"), Some(&Value::I64(100)));
+        assert!(counts.collection_scans() + counts.entity_gets() > 0);
     }
 
     #[test]

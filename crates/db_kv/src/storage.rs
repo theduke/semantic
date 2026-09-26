@@ -15,13 +15,16 @@ use serde::{Deserialize, Serialize};
 
 pub use crate::keys::parse_entity_key;
 use crate::keys::{
-    entity_key, entity_prefix, index_entry_id, index_key, index_marker_key, index_path_prefix,
-    index_prefix, index_range, index_string_prefix, index_value_prefix,
+    collection_rows_key, entity_key, entity_prefix, index_entries_key, index_entry_id, index_key,
+    index_marker_key, index_path_prefix, index_prefix, index_range, index_string_prefix,
+    index_value_prefix,
 };
 
 pub mod layout;
 pub mod memory;
+pub mod stats;
 pub use memory::MemoryKvEngine;
+use stats::CounterDeltas;
 
 #[cfg(test)]
 mod incremental_tests;
@@ -29,6 +32,8 @@ mod incremental_tests;
 mod index_range_tests;
 #[cfg(test)]
 mod layout_tests;
+#[cfg(test)]
+mod stats_tests;
 #[cfg(test)]
 mod txn_tests;
 
@@ -537,6 +542,8 @@ impl<E: KvEngine> EntityStore<E> {
         self.engine.scan_prefix_stream(prefix.to_vec())
     }
 
+    /// Write one key directly through the engine, bypassing the maintained
+    /// stats counters.
     pub fn put_raw(&mut self, key: Vec<u8>, value: Vec<u8>) -> std::result::Result<(), DbError> {
         self.engine.put(key, value)
     }
@@ -544,7 +551,7 @@ impl<E: KvEngine> EntityStore<E> {
     pub fn put_entity(&mut self, entity: &StoredEntity) -> std::result::Result<(), DbError> {
         let key = entity_key(LocalCollectionId(entity.collection), &entity.id);
         let payload = encode_entity(entity)?;
-        self.engine.put(key, payload)
+        self.write_keys([(key, Some(payload))])
     }
 
     pub fn get_entity(
@@ -565,7 +572,7 @@ impl<E: KvEngine> EntityStore<E> {
         id: &str,
     ) -> std::result::Result<(), DbError> {
         let key = entity_key(collection, id);
-        self.engine.delete(&key)
+        self.write_keys([(key, None)])
     }
 
     pub fn scan_collection(
@@ -611,7 +618,7 @@ impl<E: KvEngine> EntityStore<E> {
         entity_id: &str,
     ) -> std::result::Result<(), DbError> {
         let key = index_key(index, None, value, entity_id);
-        self.engine.put(key, Vec::new())
+        self.write_keys([(key, Some(Vec::new()))])
     }
 
     pub fn delete_index_entry(
@@ -621,7 +628,7 @@ impl<E: KvEngine> EntityStore<E> {
         entity_id: &str,
     ) -> std::result::Result<(), DbError> {
         let key = index_key(index, None, value, entity_id);
-        self.engine.delete(&key)
+        self.write_keys([(key, None)])
     }
 
     pub fn scan_index_value(
@@ -742,6 +749,20 @@ impl<E: KvEngine> EntityStorage for EntityStore<E> {
         count_keys(self.engine.scan_prefix_stream(entity_prefix(collection))?)
     }
 
+    fn collection_row_count(&self, collection: LocalCollectionId) -> Result<Option<u64>, DbError> {
+        stats::read_counter(
+            self.engine.begin_read()?.as_ref(),
+            &collection_rows_key(collection),
+        )
+    }
+
+    fn index_entry_count(&self, index: LocalIndexId) -> Result<Option<u64>, DbError> {
+        stats::read_counter(
+            self.engine.begin_read()?.as_ref(),
+            &index_entries_key(index),
+        )
+    }
+
     fn scan_collection_at_revision_stream(
         &self,
         collection: LocalCollectionId,
@@ -792,7 +813,9 @@ impl<E: KvEngine> EntityStorage for EntityStore<E> {
     }
 
     fn prepare_open(&mut self) -> Result<(), DbError> {
-        self.migrate_layout().map(|_| ())
+        self.migrate_layout()?;
+        self.ensure_stats()?;
+        Ok(())
     }
 
     fn compact_storage(&mut self) -> Result<bool, DbError> {
@@ -849,18 +872,41 @@ impl<E: KvEngine> EntityStore<E> {
         expected_revision: Option<u64>,
     ) -> Result<StorageCommitOutcome, DbError> {
         self.engine.write_with(expected_revision, |txn| {
-            for (key, value) in lower_final_values(operations, &*txn)? {
-                if txn.get(&key)? == value {
-                    continue;
-                }
-                match value {
-                    Some(value) => txn.put(&key, &value)?,
-                    None => txn.delete(&key)?,
-                }
-            }
-            Ok(())
+            let values = lower_final_values(operations, &*txn)?;
+            write_final_values(txn, values)
         })
     }
+
+    /// Write final key states in one unconditional write transaction.
+    fn write_keys(
+        &mut self,
+        values: impl IntoIterator<Item = (Vec<u8>, Option<Vec<u8>>)>,
+    ) -> Result<(), DbError> {
+        self.engine
+            .write_with(None, |txn| write_final_values(txn, values))
+            .map(|_| ())
+    }
+}
+
+/// Write the final state of every key, skipping unchanged keys, and update
+/// the stats counters by the created and removed entity and index keys.
+fn write_final_values(
+    txn: &mut dyn KvWriteTxn,
+    values: impl IntoIterator<Item = (Vec<u8>, Option<Vec<u8>>)>,
+) -> Result<(), DbError> {
+    let mut deltas = CounterDeltas::default();
+    for (key, value) in values {
+        let current = txn.get(&key)?;
+        if current == value {
+            continue;
+        }
+        deltas.record(&key, current.is_some(), value.is_some());
+        match value {
+            Some(value) => txn.put(&key, &value)?,
+            None => txn.delete(&key)?,
+        }
+    }
+    deltas.apply(txn)
 }
 
 /// Lower storage operations to the final value of every touched key.
@@ -984,6 +1030,14 @@ impl EntityReadSnapshot for KvEntitySnapshot<'_> {
 
     fn count_collection_entities(&self, collection: LocalCollectionId) -> Result<u64, DbError> {
         count_keys(self.txn.scan_prefix_stream(entity_prefix(collection))?)
+    }
+
+    fn collection_row_count(&self, collection: LocalCollectionId) -> Result<Option<u64>, DbError> {
+        stats::read_counter(self.txn.as_ref(), &collection_rows_key(collection))
+    }
+
+    fn index_entry_count(&self, index: LocalIndexId) -> Result<Option<u64>, DbError> {
+        stats::read_counter(self.txn.as_ref(), &index_entries_key(index))
     }
 
     fn scan_index_value_stream(

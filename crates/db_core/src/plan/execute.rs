@@ -2200,18 +2200,22 @@ fn execute_aggregate(
             let Some(value) = value else {
                 continue;
             };
-            let key = field.alias.clone().unwrap_or_else(|| {
-                field
-                    .source_path
-                    .as_ref()
-                    .map(infer_project_key)
-                    .unwrap_or_else(|| infer_expr_key(&field.expr))
-            });
-            projected.insert(key, value);
+            projected.insert(aggregate_output_key(field), value);
         }
         out.push(Box::new(projected) as DynObject);
     }
     Ok(out)
+}
+
+/// Output column name of an aggregate projection field.
+pub(crate) fn aggregate_output_key(field: &PhysicalProjectionField) -> String {
+    field.alias.clone().unwrap_or_else(|| {
+        field
+            .source_path
+            .as_ref()
+            .map(infer_project_key)
+            .unwrap_or_else(|| infer_expr_key(&field.expr))
+    })
 }
 
 fn evaluate_group_predicate(rows: &[Object], predicate: &Expr) -> bool {
