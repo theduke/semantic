@@ -4,7 +4,7 @@ use crate::catalog::{Catalog, CollectionKind, LocalCollectionId, LocalIndexId, S
 use crate::{
     AsyncRuntime, Backend, Batch, BatchOutcome, BatchStats, DbError, DdlBatch, DdlOutcome,
     DeleteQuery, DeleteResult, EntityRecord, MutationStats, PackageRegistrationOutcome, Query,
-    QueryExplain, QueryPlan, QueryResult, SavepointId, SelectQuery, StorageErrorKind,
+    QueryExplain, QueryMetrics, QueryPlan, QueryResult, SavepointId, SelectQuery, StorageErrorKind,
     TextQueryInput, TransactionCommit, TransactionHandle, TransactionOptions, UpdateQuery,
     UpdateResult, spawn_blocking_on,
 };
@@ -35,6 +35,8 @@ pub struct EmbeddedBackend<S: EntityStorage> {
     /// Shared with the database, so subscribing never takes the lock.
     change_feed: crate::ChangeFeed,
     runtime: Arc<dyn AsyncRuntime>,
+    /// See [`crate::DbConfig::slow_query_threshold`].
+    slow_query_threshold: Option<std::time::Duration>,
 }
 
 impl<S: EntityStorage> EmbeddedBackend<S> {
@@ -46,6 +48,7 @@ impl<S: EntityStorage> EmbeddedBackend<S> {
         Self {
             catalog: db.shared_catalog().clone(),
             change_feed: db.change_feed().clone(),
+            slow_query_threshold: db.config().slow_query_threshold,
             db: Arc::new(RwLock::new(db)),
             runtime,
         }
@@ -553,6 +556,13 @@ impl<S: EntityStorage> Backend for EmbeddedBackend<S> {
     }
 
     async fn query(&self, query: TextQueryInput) -> Result<QueryResult, DbError> {
+        if self.slow_query_threshold.is_some() {
+            // The slow query log reports metrics, so collect them.
+            return self
+                .query_with_metrics(query)
+                .await
+                .map(|(result, _)| result);
+        }
         match self.resolve_query(query).await? {
             Query::Select(query) => {
                 self.read(move |reader| reader.select(query).map(QueryResult::Select))
@@ -562,9 +572,48 @@ impl<S: EntityStorage> Backend for EmbeddedBackend<S> {
         }
     }
 
+    async fn query_with_metrics(
+        &self,
+        query: TextQueryInput,
+    ) -> Result<(QueryResult, QueryMetrics), DbError> {
+        let started = std::time::Instant::now();
+        let (result, mut metrics, physical) = match self.resolve_query(query).await? {
+            Query::Select(query) => {
+                let (rows, explain) = self
+                    .read(move |reader| reader.select_analyzed(query, false))
+                    .await?;
+                let metrics = explain
+                    .analyze
+                    .map(|analysis| analysis.metrics)
+                    .unwrap_or_default();
+                (QueryResult::Select(rows), metrics, Some(explain.physical))
+            }
+            query => (
+                self.write(move |db| db.query(query)).await?,
+                QueryMetrics::default(),
+                None,
+            ),
+        };
+        metrics.elapsed = started.elapsed();
+        crate::metrics::log_slow_query(self.slow_query_threshold, &metrics, physical.as_ref());
+        Ok((result, metrics))
+    }
+
     async fn explain(&self, query: TextQueryInput) -> Result<QueryExplain, DbError> {
         let query = self.resolve_query(query).await?;
         self.read(move |reader| reader.explain_query(query)).await
+    }
+
+    async fn explain_analyze(&self, query: TextQueryInput) -> Result<QueryExplain, DbError> {
+        let started = std::time::Instant::now();
+        let query = self.resolve_query(query).await?;
+        let mut explain = self
+            .read(move |reader| reader.explain_analyze_query(query))
+            .await?;
+        if let Some(analysis) = &mut explain.analyze {
+            analysis.metrics.elapsed = started.elapsed();
+        }
+        Ok(explain)
     }
 
     async fn plan(&self, query: TextQueryInput) -> Result<QueryPlan, DbError> {

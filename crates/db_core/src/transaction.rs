@@ -147,4 +147,8 @@ pub struct TransactionCommit {
     pub revision: Option<u64>,
     /// Rows written by the transaction, including cascade deletes.
     pub stats: crate::BatchStats,
+    /// Execution counters of the commit (empty for backends that do not
+    /// collect them).
+    #[facet(default)]
+    pub metrics: crate::WriteMetrics,
 }

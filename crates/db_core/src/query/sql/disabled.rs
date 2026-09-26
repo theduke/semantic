@@ -18,6 +18,13 @@ pub struct ParsedSqlQuery {
     pub query: Query,
 }
 
+/// A parsed `EXPLAIN [ANALYZE] <query>` statement.
+#[derive(Debug, Clone, PartialEq)]
+pub struct ParsedSqlExplain {
+    pub analyze: bool,
+    pub query: Query,
+}
+
 #[derive(Debug, Error, Clone, PartialEq, Eq)]
 pub enum SqlQueryError {
     #[error("sql parse error: {0}")]
@@ -39,6 +46,14 @@ pub fn parse_sql_query_with_params(
     _params: &std::collections::BTreeMap<String, semantic_data::value::Value>,
 ) -> Result<ParsedSqlQuery, SqlQueryError> {
     parse_sql_query(sql, dialect)
+}
+
+pub fn parse_sql_explain_with_params(
+    _sql: &str,
+    _dialect: SqlDialectKind,
+    _params: &std::collections::BTreeMap<String, semantic_data::value::Value>,
+) -> Result<Option<ParsedSqlExplain>, SqlQueryError> {
+    Ok(None)
 }
 
 pub fn parse_sql_query(

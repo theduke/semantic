@@ -341,6 +341,11 @@ impl GroupedAggregation {
         }
     }
 
+    /// Number of groups built so far.
+    pub(super) fn group_count(&self) -> usize {
+        self.groups.len()
+    }
+
     /// Evaluate `HAVING` and the projection of every group.
     pub(super) fn finish(self) -> Vec<DynObject> {
         let Self {

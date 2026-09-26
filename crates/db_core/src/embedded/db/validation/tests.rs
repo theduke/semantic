@@ -448,7 +448,7 @@ fn builtin_endpoints_are_references_and_cascade_relation_rows() {
             BatchReturn::Stats,
         )
         .unwrap();
-    assert!(matches!(reply, BatchReply::Stats { stats } if stats.deleted == 2));
+    assert!(matches!(reply, BatchReply::Stats { stats, .. } if stats.deleted == 2));
     assert!(
         db.get(DEFAULT_COLLECTION, "link-dataset")
             .unwrap()

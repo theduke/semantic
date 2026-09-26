@@ -863,12 +863,13 @@ fn batch_reply_to_value(reply: semantic_db_core::BatchReply) -> Value {
     use semantic_db_core::{BatchReply, EntityChangeKind};
     let (stats, changes, rows) = match reply {
         BatchReply::Dataset(outcome) => return batch_outcome_to_value(outcome),
-        BatchReply::Stats { stats } => (stats, None, None),
-        BatchReply::Changes { stats, changes } => (stats, Some(changes), None),
+        BatchReply::Stats { stats, .. } => (stats, None, None),
+        BatchReply::Changes { stats, changes, .. } => (stats, Some(changes), None),
         BatchReply::Projection {
             stats,
             changes,
             rows,
+            ..
         } => (stats, Some(changes), Some(rows)),
     };
     let mut object = Object::new();

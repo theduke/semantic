@@ -484,6 +484,7 @@ impl Backend for PostgresBackend {
             logical: pair.logical,
             physical: pair.physical,
             access_path: AccessPath::FullScan,
+            analyze: None,
         })
     }
 

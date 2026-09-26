@@ -39,6 +39,7 @@ pub(super) async fn test_batch_returning(db: &Db) {
         rows,
         changes,
         stats,
+        ..
     } = result
     else {
         panic!("projection reply")

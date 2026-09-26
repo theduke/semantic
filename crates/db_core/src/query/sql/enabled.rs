@@ -117,6 +117,15 @@ pub struct ParsedSqlQuery {
     pub query: Query,
 }
 
+/// A parsed `EXPLAIN [ANALYZE] <query>` statement.
+#[derive(Debug, Clone, PartialEq)]
+pub struct ParsedSqlExplain {
+    /// Whether `ANALYZE` was given: the query is executed and measured.
+    pub analyze: bool,
+    /// The explained query.
+    pub query: Query,
+}
+
 #[derive(Debug, Error, Clone, PartialEq, Eq)]
 pub enum SqlQueryError {
     #[error("sql parse error: {0}")]
@@ -232,6 +241,37 @@ impl<'a> Bindings<'a> {
         }
         Ok(())
     }
+}
+
+/// Parse `EXPLAIN [ANALYZE] <query>`; returns `None` when `sql` is not an
+/// `EXPLAIN` statement.
+///
+/// `EXPLAIN` is not a [`Query`]: explains are run through
+/// `Db::explain` / `Db::explain_analyze`, which accept this syntax.
+pub fn parse_sql_explain_with_params(
+    sql: &str,
+    dialect: SqlDialectKind,
+    params: &BTreeMap<String, Value>,
+) -> Result<Option<ParsedSqlExplain>, SqlQueryError> {
+    let Some(rest) = strip_keyword(sql, "explain") else {
+        return Ok(None);
+    };
+    let (analyze, rest) = match strip_keyword(rest, "analyze") {
+        Some(rest) => (true, rest),
+        None => (false, rest),
+    };
+    if rest.trim().is_empty() {
+        return Err(SqlQueryError::Invalid(
+            "EXPLAIN requires a query to explain".to_string(),
+        ));
+    }
+    let query = parse_sql_query_with_params(rest, dialect, params)?.query;
+    if matches!(query, Query::Ddl(_)) {
+        return Err(SqlQueryError::Unsupported(
+            "EXPLAIN is not supported for DDL statements".to_string(),
+        ));
+    }
+    Ok(Some(ParsedSqlExplain { analyze, query }))
 }
 
 pub fn parse_sql_query(
@@ -353,6 +393,9 @@ fn parse_statement(
         Statement::Insert(insert) => parse_insert_stmt(bindings, insert),
         Statement::Update(update) => parse_update_stmt(bindings, update),
         Statement::Delete(delete) => parse_delete_stmt(bindings, delete),
+        Statement::Explain { .. } => Err(SqlQueryError::Unsupported(
+            "EXPLAIN is not a query; run it through Db::explain or Db::explain_analyze".to_string(),
+        )),
         other => Err(SqlQueryError::Unsupported(format!(
             "statement type '{}' is not supported",
             other
@@ -2929,7 +2972,7 @@ fn strip_keyword<'a>(input: &'a str, keyword: &str) -> Option<&'a str> {
 
 fn starts_with_keyword(input: &str, keyword: &str) -> bool {
     let input = input.trim_start();
-    if input.len() < keyword.len() {
+    if input.len() < keyword.len() || !input.is_char_boundary(keyword.len()) {
         return false;
     }
     let (head, tail) = input.split_at(keyword.len());

@@ -345,6 +345,11 @@ impl<S: EntityStorage> EmbeddedDb<S> {
         &self.catalog
     }
 
+    /// The configuration the database was opened with.
+    pub fn config(&self) -> DbConfig {
+        self.config
+    }
+
     /// A reader over the current committed state.
     ///
     /// The reader owns its storage snapshot when the storage supports owned
@@ -1198,6 +1203,7 @@ impl<S: EntityStorage> EmbeddedDb<S> {
         self.ensure_isolation_supported(options.isolation)?;
 
         let txn_result = run_with_transaction_retries(options, |_| {
+            self.execution_counts = compact::ExecutionCounts::default();
             let catalog_snapshot = self.catalog.snapshot();
             let batch = canonicalize_batch(&batch, catalog_snapshot.catalog.as_ref())?;
             let read_revision = self.storage.current_revision()?;
@@ -1236,9 +1242,9 @@ impl<S: EntityStorage> EmbeddedDb<S> {
                 &mut out.dataset,
             );
 
+            self.execution_counts.visited_rows +=
+                dataset.values().map(BTreeMap::len).sum::<usize>();
             if returning != crate::BatchReturn::Dataset {
-                self.execution_counts.visited_rows +=
-                    dataset.values().map(BTreeMap::len).sum::<usize>();
                 tracing::debug!(
                     fallback_scans = self.execution_counts.fallback_scans,
                     visited_rows = self.execution_counts.visited_rows,
@@ -1280,7 +1286,9 @@ impl<S: EntityStorage> EmbeddedDb<S> {
                 ))),
             }
         })?;
-        Ok(txn_result.value)
+        Ok(txn_result
+            .value
+            .with_metrics((&self.execution_counts).into()))
     }
 
     pub fn execute_batch(&mut self, batch: Batch) -> std::result::Result<BatchOutcome, DbError> {
@@ -5061,6 +5069,7 @@ mod tests {
     fn applied_migration_mismatch_can_be_logged() {
         let mut db = EmbeddedDb::in_memory_with_config(DbConfig {
             migration_mismatch_policy: MigrationMismatchPolicy::Log,
+            ..DbConfig::default()
         });
         let package = simple_schema_package("Original migration.");
         db.upsert_package(package.clone()).unwrap();

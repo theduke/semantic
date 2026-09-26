@@ -267,6 +267,7 @@ mod tests {
             Ok(BatchOutcome {
                 dataset: Default::default(),
                 stats,
+                metrics: Default::default(),
             })
         }
 

@@ -13,7 +13,7 @@ use futures::{
 use semantic_data::query::JoinType;
 use semantic_data::value::{FieldPath, Object, PathSegment, Value, ValueRef};
 
-use crate::QueryContext;
+use crate::metrics::{OperatorSlot, ProfiledStream};
 use crate::plan::{
     FieldRef, Optimizer, PhysicalIndexScan, PhysicalJoinAlgorithm, PhysicalJoinCondition,
     PhysicalJoinKey, PhysicalJoinPlan, PhysicalOrderField, PhysicalPlan, PhysicalProjectionField,
@@ -23,6 +23,7 @@ use crate::query::{
     CoreError, CoreResult, Expr, FunctionArg, ObjectAccess as QueryObjectAccess, Operand,
     evaluate_expr, evaluate_filter_expr, evaluate_usize_expr,
 };
+use crate::{AccessPathKind, MetricsCollector, QueryContext};
 use aggregate::GroupedAggregation;
 #[cfg(test)]
 pub(crate) use sort::take_top_n_peak_rows;
@@ -237,12 +238,119 @@ pub fn execute_physical_plan_stream(
     context: QueryContext,
     options: ExecutionOptions,
 ) -> SendableRecordBatchStream {
-    normalize_record_batch_stream(execute_physical_dyn_stream(
-        plan,
-        source,
-        context,
-        normalize_options(options),
-    ))
+    execute_root_stream(plan, source, context, normalize_options(options))
+}
+
+/// Execute the root of a plan, counting the rows it emits.
+fn execute_root_stream(
+    plan: PhysicalPlan,
+    source: Arc<dyn AsyncPhysicalDataSource + '_>,
+    context: QueryContext,
+    options: ExecutionOptions,
+) -> RecordBatchStream<'_> {
+    let metrics = context.metrics().cloned();
+    let stream =
+        normalize_record_batch_stream(execute_physical_dyn_stream(plan, source, context, options));
+    match metrics {
+        None => stream,
+        Some(metrics) => stream
+            .inspect_ok(move |batch| metrics.add_emitted(batch.len() as u64))
+            .boxed(),
+    }
+}
+
+/// Metrics hooks of one executing operator: the query-wide collector and,
+/// when operators are profiled, the operator's statistics slot.
+#[derive(Clone, Default)]
+struct OperatorMetrics {
+    collector: Option<Arc<MetricsCollector>>,
+    slot: Option<Arc<OperatorSlot>>,
+}
+
+impl OperatorMetrics {
+    fn for_plan(plan: &PhysicalPlan, context: &QueryContext) -> Self {
+        let Some(collector) = context.metrics() else {
+            return Self::default();
+        };
+        let slot = context
+            .operator_path()
+            .and_then(|path| collector.operator_slot(path, || plan.node_label()));
+        Self {
+            collector: Some(collector.clone()),
+            slot,
+        }
+    }
+
+    fn set_extra(&self, key: &str, value: impl FnOnce() -> Value) {
+        if let Some(slot) = &self.slot {
+            slot.set_extra(key, value());
+        }
+    }
+
+    fn add_extra(&self, key: &str, value: usize) {
+        if let Some(slot) = &self.slot {
+            slot.add_extra(key, value as u64);
+        }
+    }
+
+    fn record_sort_retained(&self, rows: usize) {
+        if let Some(collector) = &self.collector {
+            collector.add_sort_rows_retained(rows as u64);
+        }
+        self.add_extra("retained_rows", rows);
+    }
+
+    fn record_hash_groups(&self, groups: usize) {
+        if let Some(collector) = &self.collector {
+            collector.add_hash_groups(groups as u64);
+        }
+        self.add_extra("groups", groups);
+    }
+
+    fn record_join_build(&self, rows: usize) {
+        if let Some(collector) = &self.collector {
+            collector.add_join_build_rows(rows as u64);
+        }
+        self.add_extra("build_rows", rows);
+    }
+
+    fn record_join_probe(&self, rows: usize) {
+        if let Some(collector) = &self.collector {
+            collector.add_join_probe_rows(rows as u64);
+        }
+        self.add_extra("probe_rows", rows);
+    }
+
+    /// Count the rows `stream` produces as an access of `source`.
+    fn record_access<'a>(
+        &self,
+        source: &SourceRef,
+        kind: AccessPathKind,
+        index: Option<&str>,
+        stream: RecordBatchStream<'a>,
+    ) -> RecordBatchStream<'a> {
+        let Some(collector) = &self.collector else {
+            return stream;
+        };
+        self.set_extra("access", || Value::String(kind.as_str().to_string()));
+        if let Some(index) = index {
+            self.set_extra("index", || Value::String(index.to_string()));
+        }
+        let rows = collector.register_access_path(&source.label(), kind, index);
+        stream
+            .inspect_ok(move |batch| {
+                rows.fetch_add(batch.len() as u64, std::sync::atomic::Ordering::Relaxed);
+            })
+            .boxed()
+    }
+
+    /// Record the rows and time of the operator's output stream.
+    fn profile<'a>(&self, stream: RecordBatchStream<'a>) -> RecordBatchStream<'a> {
+        match &self.slot {
+            Some(slot) => ProfiledStream::new(stream, slot.clone()).boxed(),
+            None => stream,
+        }
+    }
 }
 
 pub async fn execute_physical_plan_collect(
@@ -273,38 +381,304 @@ fn execute_physical_dyn_stream(
     context: QueryContext,
     options: ExecutionOptions,
 ) -> RecordBatchStream<'_> {
+    let metrics = OperatorMetrics::for_plan(&plan, &context);
     let stream = match plan {
-        PhysicalPlan::Source(PhysicalSource::Scan { source: source_ref }) => {
-            source.scan_stream(source_ref)
+        PhysicalPlan::Source(physical_source) => {
+            execute_source_stream(physical_source, source, context, options, &metrics)
         }
-        PhysicalPlan::Source(PhysicalSource::FilteredScan {
-            source: source_ref,
-            predicate,
-        }) => {
-            if !expr_contains_subquery(&predicate) {
-                return source.scan_filtered_stream(source_ref, predicate);
-            }
+        PhysicalPlan::Values { values } => rows_to_batches(
+            values
+                .into_iter()
+                .map(|item| Box::new(item) as DynObject)
+                .collect(),
+            options.batch_size,
+        ),
+        PhysicalPlan::Filter { input, predicate } => stream::once(async move {
+            let predicate =
+                resolve_expr_subqueries_async(&predicate, source.clone(), &context, options)
+                    .await?;
+            Ok(filter_batch_stream(
+                execute_physical_dyn_stream(*input, source, context.child(0), options),
+                predicate,
+            ))
+        })
+        .try_flatten()
+        .boxed(),
+        PhysicalPlan::Sort { input, order_by } => {
+            let metrics = metrics.clone();
             stream::once(async move {
-                let predicate =
-                    resolve_expr_subqueries_async(&predicate, source.clone(), &context, options)
+                let order_by =
+                    resolve_order_by_subqueries_async(&order_by, source.clone(), &context, options)
                         .await?;
-                Ok(rows_to_batches(
-                    filter_dyn_rows(
-                        collect_dyn_stream(source.scan_stream(source_ref)).await?,
-                        &predicate,
-                    ),
-                    options.batch_size,
-                ))
+                let rows = sort_rows(
+                    execute_physical_dyn_stream(*input, source, context.child(0), options),
+                    &order_by,
+                )
+                .await?;
+                metrics.record_sort_retained(rows.len());
+                Ok(rows_to_batches(rows, options.batch_size))
             })
             .try_flatten()
             .boxed()
         }
-        PhysicalPlan::Source(PhysicalSource::IndexLookup {
+        PhysicalPlan::TopN {
+            input,
+            order_by,
+            offset,
+            limit,
+        } => {
+            let metrics = metrics.clone();
+            stream::once(async move {
+                let (offset, limit) =
+                    resolve_limit_bounds(&offset, Some(&limit), source.clone(), &context, options)
+                        .await?;
+                let limit = limit.expect("TopN always has a limit");
+                let order_by =
+                    resolve_order_by_subqueries_async(&order_by, source.clone(), &context, options)
+                        .await?;
+                let mut top_n = TopN::new(order_by, offset.saturating_add(limit));
+                if limit > 0 {
+                    top_n
+                        .extend(execute_physical_dyn_stream(
+                            *input,
+                            source,
+                            context.child(0),
+                            options,
+                        ))
+                        .await?;
+                }
+                metrics.record_sort_retained(top_n.retained());
+                Ok(rows_to_batches(top_n.finish(offset), options.batch_size))
+            })
+            .try_flatten()
+            .boxed()
+        }
+        PhysicalPlan::Project { input, projection } => stream::once(async move {
+            let projection =
+                resolve_projection_subqueries_async(&projection, source.clone(), &context, options)
+                    .await?;
+            Ok(project_batch_stream(
+                execute_physical_dyn_stream(*input, source, context.child(0), options),
+                projection,
+            ))
+        })
+        .try_flatten()
+        .boxed(),
+        PhysicalPlan::Aggregate {
+            input,
+            group_by,
+            projection,
+            having,
+        } => {
+            let metrics = metrics.clone();
+            stream::once(async move {
+                let group_by = resolve_expr_list_subqueries_async(
+                    &group_by,
+                    source.clone(),
+                    &context,
+                    options,
+                )
+                .await?;
+                let projection = resolve_projection_subqueries_async(
+                    &projection,
+                    source.clone(),
+                    &context,
+                    options,
+                )
+                .await?;
+                let having = match having {
+                    Some(expr) => Some(
+                        resolve_expr_subqueries_async(&expr, source.clone(), &context, options)
+                            .await?,
+                    ),
+                    None => None,
+                };
+                let mut aggregation = GroupedAggregation::new(group_by, projection, having);
+                let mut input =
+                    execute_physical_dyn_stream(*input, source, context.child(0), options);
+                while let Some(batch) = input.try_next().await? {
+                    for row in &batch {
+                        aggregation.push(row.as_ref());
+                    }
+                }
+                metrics.record_hash_groups(aggregation.group_count());
+                CoreResult::Ok(aggregation.finish())
+            })
+            .map_ok(move |rows| rows_to_batches(rows, options.batch_size))
+            .try_flatten()
+            .boxed()
+        }
+        PhysicalPlan::Limit {
+            input,
+            offset,
+            limit,
+        } => stream::once(async move {
+            let (offset, limit) =
+                resolve_limit_bounds(&offset, limit.as_ref(), source.clone(), &context, options)
+                    .await?;
+            Ok(limit_batch_stream(
+                execute_physical_dyn_stream(*input, source, context.child(0), options),
+                offset,
+                limit,
+            ))
+        })
+        .try_flatten()
+        .boxed(),
+        PhysicalPlan::Distinct { input } => distinct_batch_stream(execute_physical_dyn_stream(
+            *input,
+            source,
+            context.child(0),
+            options,
+        )),
+        PhysicalPlan::Union { inputs, all } => {
+            if options.parallel_union_branches {
+                let streams = inputs
+                    .into_iter()
+                    .enumerate()
+                    .map(|(index, input)| {
+                        execute_physical_dyn_stream(
+                            input,
+                            source.clone(),
+                            context.child(index as u32),
+                            options,
+                        )
+                    })
+                    .collect::<Vec<_>>();
+                let merged = stream::select_all(streams).boxed();
+                if all {
+                    merged.boxed()
+                } else {
+                    distinct_batch_stream(merged)
+                }
+            } else {
+                let streams =
+                    stream::iter(inputs.into_iter().enumerate().map(move |(index, input)| {
+                        execute_physical_dyn_stream(
+                            input,
+                            source.clone(),
+                            context.child(index as u32),
+                            options,
+                        )
+                    }))
+                    .flatten()
+                    .boxed();
+                if all {
+                    streams.boxed()
+                } else {
+                    distinct_batch_stream(streams)
+                }
+            }
+        }
+        PhysicalPlan::Join(join) => {
+            metrics.set_extra("algorithm", || {
+                Value::String(format!("{:?}", join.algorithm).to_lowercase())
+            });
+            execute_join_stream(join, source, context, options, metrics.clone())
+        }
+        PhysicalPlan::ApplyExists {
+            input,
+            subquery,
+            negated,
+        } => stream::once(async move {
+            let subquery_any = !collect_dyn_stream(execute_physical_dyn_stream(
+                *subquery,
+                source.clone(),
+                context.child(1),
+                options,
+            ))
+            .await?
+            .is_empty();
+            Ok(filter_bool_batch_stream(
+                execute_physical_dyn_stream(*input, source, context.child(0), options),
+                if negated { !subquery_any } else { subquery_any },
+            ))
+        })
+        .try_flatten()
+        .boxed(),
+        PhysicalPlan::ApplyInSubquery {
+            input,
+            left,
+            subquery,
+            negated,
+        } => stream::once(async move {
+            let shape = physical_subquery_single_column_shape(&subquery)?;
+            let sub_values: BTreeSet<Value> = collect_dyn_stream(execute_physical_dyn_stream(
+                *subquery,
+                source.clone(),
+                context.child(1),
+                options,
+            ))
+            .await?
+            .into_iter()
+            .map(|row| single_column_subquery_value(row.to_object(), shape))
+            .collect::<CoreResult<_>>()?;
+            let left =
+                resolve_expr_subqueries_async(&left, source.clone(), &context, options).await?;
+            Ok(filter_in_subquery_batch_stream(
+                execute_physical_dyn_stream(*input, source, context.child(0), options),
+                left,
+                sub_values,
+                negated,
+            ))
+        })
+        .try_flatten()
+        .boxed(),
+        PhysicalPlan::Exchange { input, .. }
+        | PhysicalPlan::RepartitionHash { input, .. }
+        | PhysicalPlan::Materialize { input } => {
+            execute_physical_dyn_stream(*input, source, context.child(0), options)
+        }
+    };
+
+    metrics.profile(normalize_record_batch_stream(stream))
+}
+
+/// Read a collection through `physical_source`, recording the access.
+fn execute_source_stream<'a>(
+    physical_source: PhysicalSource,
+    source: Arc<dyn AsyncPhysicalDataSource + 'a>,
+    context: QueryContext,
+    options: ExecutionOptions,
+    metrics: &OperatorMetrics,
+) -> RecordBatchStream<'a> {
+    let source_ref = physical_source.source().clone();
+    let kind = physical_source.access_kind();
+    let index = physical_source.index_name().map(ToOwned::to_owned);
+    let stream = match physical_source {
+        PhysicalSource::Scan { source: source_ref } => source.scan_stream(source_ref),
+        PhysicalSource::FilteredScan {
+            source: source_ref,
+            predicate,
+        } => {
+            if !expr_contains_subquery(&predicate) {
+                source.scan_filtered_stream(source_ref, predicate)
+            } else {
+                stream::once(async move {
+                    let predicate = resolve_expr_subqueries_async(
+                        &predicate,
+                        source.clone(),
+                        &context,
+                        options,
+                    )
+                    .await?;
+                    Ok(rows_to_batches(
+                        filter_dyn_rows(
+                            collect_dyn_stream(source.scan_stream(source_ref)).await?,
+                            &predicate,
+                        ),
+                        options.batch_size,
+                    ))
+                })
+                .try_flatten()
+                .boxed()
+            }
+        }
+        PhysicalSource::IndexLookup {
             source: source_ref,
             field,
             value,
             residual_predicate,
-        }) => {
+        } => {
             if residual_predicate
                 .as_ref()
                 .is_some_and(expr_contains_subquery)
@@ -327,210 +701,10 @@ fn execute_physical_dyn_stream(
                 source.index_lookup_filtered_stream(source_ref, field, value, residual_predicate)
             }
         }
-        PhysicalPlan::Source(PhysicalSource::IndexRange(scan)) => source.index_range_stream(scan),
-        PhysicalPlan::Source(PhysicalSource::TextSearch(search)) => {
-            source.text_search_stream(search)
-        }
-        PhysicalPlan::Values { values } => rows_to_batches(
-            values
-                .into_iter()
-                .map(|item| Box::new(item) as DynObject)
-                .collect(),
-            options.batch_size,
-        ),
-        PhysicalPlan::Filter { input, predicate } => stream::once(async move {
-            let predicate =
-                resolve_expr_subqueries_async(&predicate, source.clone(), &context, options)
-                    .await?;
-            Ok(filter_batch_stream(
-                execute_physical_dyn_stream(*input, source, context, options),
-                predicate,
-            ))
-        })
-        .try_flatten()
-        .boxed(),
-        PhysicalPlan::Sort { input, order_by } => stream::once(async move {
-            let order_by =
-                resolve_order_by_subqueries_async(&order_by, source.clone(), &context, options)
-                    .await?;
-            let rows = sort_rows(
-                execute_physical_dyn_stream(*input, source, context, options),
-                &order_by,
-            )
-            .await?;
-            Ok(rows_to_batches(rows, options.batch_size))
-        })
-        .try_flatten()
-        .boxed(),
-        PhysicalPlan::TopN {
-            input,
-            order_by,
-            offset,
-            limit,
-        } => stream::once(async move {
-            let (offset, limit) =
-                resolve_limit_bounds(&offset, Some(&limit), source.clone(), &context, options)
-                    .await?;
-            let limit = limit.expect("TopN always has a limit");
-            let order_by =
-                resolve_order_by_subqueries_async(&order_by, source.clone(), &context, options)
-                    .await?;
-            let mut top_n = TopN::new(order_by, offset.saturating_add(limit));
-            if limit > 0 {
-                top_n
-                    .extend(execute_physical_dyn_stream(
-                        *input, source, context, options,
-                    ))
-                    .await?;
-            }
-            Ok(rows_to_batches(top_n.finish(offset), options.batch_size))
-        })
-        .try_flatten()
-        .boxed(),
-        PhysicalPlan::Project { input, projection } => stream::once(async move {
-            let projection =
-                resolve_projection_subqueries_async(&projection, source.clone(), &context, options)
-                    .await?;
-            Ok(project_batch_stream(
-                execute_physical_dyn_stream(*input, source, context, options),
-                projection,
-            ))
-        })
-        .try_flatten()
-        .boxed(),
-        PhysicalPlan::Aggregate {
-            input,
-            group_by,
-            projection,
-            having,
-        } => stream::once(async move {
-            let group_by =
-                resolve_expr_list_subqueries_async(&group_by, source.clone(), &context, options)
-                    .await?;
-            let projection =
-                resolve_projection_subqueries_async(&projection, source.clone(), &context, options)
-                    .await?;
-            let having = match having {
-                Some(expr) => Some(
-                    resolve_expr_subqueries_async(&expr, source.clone(), &context, options).await?,
-                ),
-                None => None,
-            };
-            let mut aggregation = GroupedAggregation::new(group_by, projection, having);
-            let mut input = execute_physical_dyn_stream(*input, source, context, options);
-            while let Some(batch) = input.try_next().await? {
-                for row in &batch {
-                    aggregation.push(row.as_ref());
-                }
-            }
-            CoreResult::Ok(aggregation.finish())
-        })
-        .map_ok(move |rows| rows_to_batches(rows, options.batch_size))
-        .try_flatten()
-        .boxed(),
-        PhysicalPlan::Limit {
-            input,
-            offset,
-            limit,
-        } => stream::once(async move {
-            let (offset, limit) =
-                resolve_limit_bounds(&offset, limit.as_ref(), source.clone(), &context, options)
-                    .await?;
-            Ok(limit_batch_stream(
-                execute_physical_dyn_stream(*input, source, context, options),
-                offset,
-                limit,
-            ))
-        })
-        .try_flatten()
-        .boxed(),
-        PhysicalPlan::Distinct { input } => distinct_batch_stream(execute_physical_dyn_stream(
-            *input, source, context, options,
-        )),
-        PhysicalPlan::Union { inputs, all } => {
-            if options.parallel_union_branches {
-                let streams = inputs
-                    .into_iter()
-                    .map(|input| {
-                        execute_physical_dyn_stream(input, source.clone(), context.clone(), options)
-                    })
-                    .collect::<Vec<_>>();
-                let merged = stream::select_all(streams).boxed();
-                if all {
-                    merged.boxed()
-                } else {
-                    distinct_batch_stream(merged)
-                }
-            } else {
-                let streams = stream::iter(inputs.into_iter().map(move |input| {
-                    execute_physical_dyn_stream(input, source.clone(), context.clone(), options)
-                }))
-                .flatten()
-                .boxed();
-                if all {
-                    streams.boxed()
-                } else {
-                    distinct_batch_stream(streams)
-                }
-            }
-        }
-        PhysicalPlan::Join(join) => execute_join_stream(join, source, context, options),
-        PhysicalPlan::ApplyExists {
-            input,
-            subquery,
-            negated,
-        } => stream::once(async move {
-            let subquery_any = !collect_dyn_stream(execute_physical_dyn_stream(
-                *subquery,
-                source.clone(),
-                context.clone(),
-                options,
-            ))
-            .await?
-            .is_empty();
-            Ok(filter_bool_batch_stream(
-                execute_physical_dyn_stream(*input, source, context, options),
-                if negated { !subquery_any } else { subquery_any },
-            ))
-        })
-        .try_flatten()
-        .boxed(),
-        PhysicalPlan::ApplyInSubquery {
-            input,
-            left,
-            subquery,
-            negated,
-        } => stream::once(async move {
-            let shape = physical_subquery_single_column_shape(&subquery)?;
-            let sub_values: BTreeSet<Value> = collect_dyn_stream(execute_physical_dyn_stream(
-                *subquery,
-                source.clone(),
-                context.clone(),
-                options,
-            ))
-            .await?
-            .into_iter()
-            .map(|row| single_column_subquery_value(row.to_object(), shape))
-            .collect::<CoreResult<_>>()?;
-            let left =
-                resolve_expr_subqueries_async(&left, source.clone(), &context, options).await?;
-            Ok(filter_in_subquery_batch_stream(
-                execute_physical_dyn_stream(*input, source, context, options),
-                left,
-                sub_values,
-                negated,
-            ))
-        })
-        .try_flatten()
-        .boxed(),
-        PhysicalPlan::Exchange { input, .. }
-        | PhysicalPlan::RepartitionHash { input, .. }
-        | PhysicalPlan::Materialize { input } => {
-            execute_physical_dyn_stream(*input, source, context, options)
-        }
+        PhysicalSource::IndexRange(scan) => source.index_range_stream(scan),
+        PhysicalSource::TextSearch(search) => source.text_search_stream(search),
     };
-
-    normalize_record_batch_stream(stream)
+    metrics.record_access(&source_ref, kind, index.as_deref(), stream)
 }
 
 fn rows_to_batches(rows: Vec<DynObject>, batch_size: usize) -> SendableRecordBatchStream {
@@ -725,6 +899,7 @@ fn execute_join_stream(
     source: Arc<dyn AsyncPhysicalDataSource + '_>,
     context: QueryContext,
     options: ExecutionOptions,
+    metrics: OperatorMetrics,
 ) -> RecordBatchStream<'_> {
     stream::once(async move {
         match &join.condition {
@@ -761,7 +936,7 @@ fn execute_join_stream(
             PhysicalJoinAlgorithm::Hash
                 if matches!(join.condition, PhysicalJoinCondition::Eq { .. }) =>
             {
-                execute_hash_join_stream(join, source.clone(), context.clone(), options)
+                execute_hash_join_stream(join, source.clone(), context.clone(), options, metrics)
             }
             PhysicalJoinAlgorithm::IndexNestedLoop
                 if join.index_probe.is_some()
@@ -772,14 +947,19 @@ fn execute_join_stream(
                     source.clone(),
                     context.clone(),
                     options,
+                    metrics,
                 )
             }
             PhysicalJoinAlgorithm::Hash
             | PhysicalJoinAlgorithm::IndexNestedLoop
             | PhysicalJoinAlgorithm::NestedLoop
-            | PhysicalJoinAlgorithm::Merge => {
-                execute_nested_loop_join_stream(join, source.clone(), context.clone(), options)
-            }
+            | PhysicalJoinAlgorithm::Merge => execute_nested_loop_join_stream(
+                join,
+                source.clone(),
+                context.clone(),
+                options,
+                metrics,
+            ),
         };
         Ok(out)
     })
@@ -792,15 +972,17 @@ fn execute_index_nested_loop_join_stream(
     source: Arc<dyn AsyncPhysicalDataSource + '_>,
     context: QueryContext,
     options: ExecutionOptions,
+    metrics: OperatorMetrics,
 ) -> RecordBatchStream<'_> {
     stream::once(async move {
         let left_rows = collect_dyn_stream(execute_physical_dyn_stream(
             *join.left.clone(),
             source.clone(),
-            context,
+            context.child(0),
             options,
         ))
         .await?;
+        metrics.record_join_probe(left_rows.len());
         let probe = join
             .index_probe
             .clone()
@@ -817,14 +999,21 @@ fn execute_index_nested_loop_join_stream(
         let right_rows = if values.is_empty() {
             Vec::new()
         } else {
-            collect_dyn_stream(source.index_lookup_many_stream(
-                probe.source,
-                probe.field,
-                values,
-                probe.residual_predicate,
+            let probe_source = probe.source.clone();
+            collect_dyn_stream(metrics.record_access(
+                &probe_source,
+                AccessPathKind::IndexProbe,
+                None,
+                source.index_lookup_many_stream(
+                    probe.source,
+                    probe.field,
+                    values,
+                    probe.residual_predicate,
+                ),
             ))
             .await?
         };
+        metrics.record_join_build(right_rows.len());
         execute_hash_join(&join, left_rows, right_rows)
     })
     .map_ok(move |rows| rows_to_batches(rows, options.batch_size))
@@ -837,18 +1026,19 @@ fn execute_hash_join_stream(
     source: Arc<dyn AsyncPhysicalDataSource + '_>,
     context: QueryContext,
     options: ExecutionOptions,
+    metrics: OperatorMetrics,
 ) -> RecordBatchStream<'_> {
     stream::once(async move {
         let left_stream = execute_physical_dyn_stream(
             *join.left.clone(),
             source.clone(),
-            context.clone(),
+            context.child(0),
             options,
         );
         let right_stream = execute_physical_dyn_stream(
             *join.right.clone(),
             source.clone(),
-            context.clone(),
+            context.child(1),
             options,
         );
         let (left_rows, right_rows) = if options.parallel_join_inputs {
@@ -861,6 +1051,13 @@ fn execute_hash_join_stream(
             let right_rows = collect_dyn_stream(right_stream).await?;
             (left_rows, right_rows)
         };
+        let (build, probe) = if hash_join_builds_left(&join, left_rows.len(), right_rows.len()) {
+            (left_rows.len(), right_rows.len())
+        } else {
+            (right_rows.len(), left_rows.len())
+        };
+        metrics.record_join_build(build);
+        metrics.record_join_probe(probe);
         execute_hash_join(&join, left_rows, right_rows)
     })
     .map_ok(move |rows| rows_to_batches(rows, options.batch_size))
@@ -873,16 +1070,21 @@ fn execute_nested_loop_join_stream(
     source: Arc<dyn AsyncPhysicalDataSource + '_>,
     context: QueryContext,
     options: ExecutionOptions,
+    metrics: OperatorMetrics,
 ) -> RecordBatchStream<'_> {
     stream::once(async move {
         let right_rows = collect_dyn_stream(execute_physical_dyn_stream(
             *join.right.clone(),
             source.clone(),
-            context.clone(),
+            context.child(1),
             options,
         ))
         .await?;
-        let left_stream = execute_physical_dyn_stream(*join.left.clone(), source, context, options);
+        metrics.record_join_build(right_rows.len());
+        let left_stream =
+            execute_physical_dyn_stream(*join.left.clone(), source, context.child(0), options)
+                .inspect_ok(move |batch| metrics.record_join_probe(batch.len()))
+                .boxed();
         Ok(nested_loop_join_left_stream(
             join,
             left_stream,
@@ -1102,7 +1304,7 @@ pub async fn execute_physical_plan_with_source_async(
     context: &QueryContext,
 ) -> CoreResult<Vec<Object>> {
     let source = Arc::new(BorrowedAsyncPhysicalDataSource { inner: source });
-    Ok(collect_dyn_stream(execute_physical_dyn_stream(
+    Ok(collect_dyn_stream(execute_root_stream(
         plan.clone(),
         source,
         context.clone(),
@@ -1647,7 +1849,7 @@ async fn execute_select_subquery_async(
     Ok(collect_dyn_stream(execute_physical_dyn_stream(
         physical,
         source,
-        context.clone(),
+        context.detached(),
         options,
     ))
     .await?
@@ -1809,13 +2011,19 @@ fn execute_hash_join(
         return execute_nested_loop_join(join, left_rows, right_rows);
     };
 
-    // Building the smaller side is semantics-preserving for inner joins. Outer joins keep the
-    // existing right-build path so unmatched-row handling and ordering stay unchanged.
-    if matches!(join.join_type, JoinType::Inner) && left_rows.len() < right_rows.len() {
+    if hash_join_builds_left(join, left_rows.len(), right_rows.len()) {
         return execute_hash_join_build_left(join, left_rows, right_rows);
     }
 
     execute_hash_join_build_right(join, left_rows, right_rows)
+}
+
+/// Whether a hash join builds its table from the left input.
+///
+/// Building the smaller side is semantics-preserving for inner joins. Outer joins keep the
+/// existing right-build path so unmatched-row handling and ordering stay unchanged.
+fn hash_join_builds_left(join: &PhysicalJoinPlan, left_rows: usize, right_rows: usize) -> bool {
+    matches!(join.join_type, JoinType::Inner) && left_rows < right_rows
 }
 
 fn execute_hash_join_build_right(

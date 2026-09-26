@@ -120,6 +120,6 @@ pub(super) async fn test_compact_id_execution(db: &Db) {
         .await
         .unwrap();
     assert!(
-        matches!(reply, BatchReply::Changes { stats, changes } if stats.deleted == 2 && changes.len() == 2)
+        matches!(reply, BatchReply::Changes { stats, changes, .. } if stats.deleted == 2 && changes.len() == 2)
     );
 }

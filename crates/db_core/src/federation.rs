@@ -585,6 +585,7 @@ impl Backend for FederatedBackend {
             logical: pair.logical,
             physical: pair.physical,
             access_path: AccessPath::FullScan,
+            analyze: None,
         })
     }
 
@@ -604,6 +605,7 @@ impl Backend for FederatedBackend {
                     updated: 0,
                 },
                 dataset: BTreeMap::new(),
+                metrics: Default::default(),
             });
         }
 

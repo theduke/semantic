@@ -62,6 +62,7 @@ impl<S: EntityStorage> EmbeddedDb<S> {
         let StorageCommitOutcome::Committed { revision } = outcome else {
             return Ok(outcome);
         };
+        self.execution_counts.storage_writes += ops.len();
         let catalog_changed = intent.catalog.is_some();
         if let Some((expected_version, catalog)) = intent.catalog {
             self.catalog

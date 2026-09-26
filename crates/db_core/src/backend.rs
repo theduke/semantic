@@ -14,9 +14,10 @@ use semantic_data::value::{Object, Value};
 use crate::catalog::{Catalog, CollectionKind, LocalCollectionId};
 use crate::{
     Batch, BatchOutcome, BatchStats, DbError, DdlBatch, DdlOutcome, DeleteQuery, DeleteResult,
-    LogicalPlan, MutationStats, PackageRegistrationOutcome, PhysicalPlan, Query, QueryResult,
-    SavepointId, SelectQuery, SqlDialectKind, StorageErrorKind, TextQueryFormat, TextQueryInput,
-    TransactionCommit, TransactionOptions, UpdateQuery, UpdateResult, prql, sql,
+    LogicalPlan, MutationStats, PackageRegistrationOutcome, PhysicalPlan, Query, QueryAnalysis,
+    QueryMetrics, QueryResult, SavepointId, SelectQuery, SqlDialectKind, StorageErrorKind,
+    TextQueryFormat, TextQueryInput, TransactionCommit, TransactionOptions, UpdateQuery,
+    UpdateResult, WriteMetrics, prql, sql,
 };
 use futures::Stream;
 
@@ -170,6 +171,74 @@ pub struct QueryExplain {
     pub logical: LogicalPlan,
     pub physical: PhysicalPlan,
     pub access_path: AccessPath,
+    /// Measured execution (`EXPLAIN ANALYZE`), absent for plain explains.
+    pub analyze: Option<QueryAnalysis>,
+}
+
+impl QueryExplain {
+    /// One-line summary of the physical plan (see
+    /// [`PhysicalPlan::summary`]).
+    pub fn summary(&self) -> String {
+        self.physical.summary()
+    }
+}
+
+impl std::fmt::Display for QueryExplain {
+    /// The plan as an indented operator tree; with an analysis, each
+    /// operator is annotated with its rows and time, followed by the query
+    /// metrics.
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let operators = self
+            .analyze
+            .iter()
+            .flat_map(|analysis| &analysis.operator_stats)
+            .map(|stats| (stats.path.as_str(), stats))
+            .collect::<std::collections::BTreeMap<_, _>>();
+        let mut lines = Vec::new();
+        self.physical.walk(&mut |path, plan| {
+            let mut line = format!("{}{}", "  ".repeat(path.len()), plan.node_label());
+            if let Some(stats) = operators.get(crate::metrics::operator_path_string(path).as_str())
+            {
+                line.push_str(&format!(
+                    "  (rows={} time={:?}",
+                    stats.rows_out, stats.elapsed
+                ));
+                for (key, value) in &stats.extra {
+                    match value {
+                        Value::String(value) => line.push_str(&format!(" {key}={value}")),
+                        Value::U64(value) => line.push_str(&format!(" {key}={value}")),
+                        other => line.push_str(&format!(" {key}={other:?}")),
+                    }
+                }
+                line.push(')');
+            }
+            lines.push(line);
+        });
+        f.write_str(&lines.join("\n"))?;
+        if let Some(analysis) = &self.analyze {
+            let metrics = &analysis.metrics;
+            write!(
+                f,
+                "\nrows_emitted={} rows_scanned={} rows_decoded={} point_reads={} \
+                 index_probes={} index_entries_read={} sort_rows_retained={} hash_groups={} \
+                 join_build_rows={} join_probe_rows={}\nplanning={:?} execution={:?} total={:?}",
+                metrics.rows_emitted,
+                metrics.rows_scanned,
+                metrics.rows_decoded,
+                metrics.point_reads,
+                metrics.index_probes,
+                metrics.index_entries_read,
+                metrics.sort_rows_retained,
+                metrics.hash_groups,
+                metrics.joins.build_rows,
+                metrics.joins.probe_rows,
+                metrics.plan_elapsed,
+                metrics.exec_elapsed,
+                metrics.elapsed,
+            )?;
+        }
+        Ok(())
+    }
 }
 
 /// An interactive transaction of a [`Backend`] (see
@@ -354,6 +423,23 @@ pub trait Backend: Send + Sync {
 
     async fn query(&self, query: TextQueryInput) -> std::result::Result<QueryResult, DbError>;
 
+    /// Run `query` and report its execution metrics.
+    ///
+    /// The default runs [`Self::query`] and reports only the elapsed time;
+    /// backends that collect metrics override it.
+    async fn query_with_metrics(
+        &self,
+        query: TextQueryInput,
+    ) -> Result<(QueryResult, QueryMetrics), DbError> {
+        let started = Instant::now();
+        let result = self.query(query).await?;
+        let metrics = QueryMetrics {
+            elapsed: started.elapsed(),
+            ..QueryMetrics::default()
+        };
+        Ok((result, metrics))
+    }
+
     fn sql_dialect(&self) -> SqlDialectKind {
         SqlDialectKind::Generic
     }
@@ -394,6 +480,38 @@ pub trait Backend: Send + Sync {
     }
 
     async fn explain(&self, query: TextQueryInput) -> std::result::Result<QueryExplain, DbError>;
+
+    /// `EXPLAIN ANALYZE`: execute a SELECT and return its explain with the
+    /// measured execution in [`QueryExplain::analyze`].
+    ///
+    /// The default explains the query and then runs it through
+    /// [`Self::query_with_metrics`], so its analysis has no per-operator
+    /// statistics; backends that instrument operators override it.
+    async fn explain_analyze(&self, query: TextQueryInput) -> Result<QueryExplain, DbError> {
+        let query = match query {
+            TextQueryInput::Ast(query) => query,
+            TextQueryInput::Text {
+                format,
+                query,
+                params,
+            } => {
+                self.parse_text_query_with_params(format, &query, &params)
+                    .await?
+            }
+        };
+        if !matches!(query, Query::Select(_)) {
+            return Err(DbError::InvalidQuery(
+                "EXPLAIN ANALYZE is only supported for SELECT".to_string(),
+            ));
+        }
+        let mut explain = self.explain(TextQueryInput::Ast(query.clone())).await?;
+        let (_, metrics) = self.query_with_metrics(TextQueryInput::Ast(query)).await?;
+        explain.analyze = Some(QueryAnalysis {
+            metrics,
+            operator_stats: Vec::new(),
+        });
+        Ok(explain)
+    }
 
     async fn parse_text_query_with_params(
         &self,
@@ -680,6 +798,13 @@ impl Db {
     ) -> std::result::Result<QueryResult, DbError> {
         let query: TextQueryInput = query.into().into();
         tracing::trace!(query = ?query, "Executing query");
+        if tracing::enabled!(tracing::Level::DEBUG) {
+            // Collect metrics only when they are logged.
+            return self
+                .query_with_metrics_logged(query)
+                .await
+                .map(|(result, _)| result);
+        }
         let started = Instant::now();
         let result = self.backend.query(query).await;
         tracing::trace!(
@@ -687,6 +812,41 @@ impl Db {
             success = result.is_ok(),
             "Query executed"
         );
+        result
+    }
+
+    /// Run `query` and return its execution metrics (all counters zero
+    /// for backends that do not collect them).
+    pub async fn query_with_metrics(
+        &self,
+        query: impl Into<PublicQueryInput>,
+    ) -> Result<(QueryResult, QueryMetrics), DbError> {
+        let query: TextQueryInput = query.into().into();
+        tracing::trace!(query = ?query, "Executing query");
+        self.query_with_metrics_logged(query).await
+    }
+
+    async fn query_with_metrics_logged(
+        &self,
+        query: TextQueryInput,
+    ) -> Result<(QueryResult, QueryMetrics), DbError> {
+        let started = Instant::now();
+        let result = self.backend.query_with_metrics(query).await;
+        match &result {
+            Ok((_, metrics)) => tracing::debug!(
+                elapsed = ?started.elapsed(),
+                rows_emitted = metrics.rows_emitted,
+                rows_scanned = metrics.rows_scanned,
+                point_reads = metrics.point_reads,
+                index_probes = metrics.index_probes,
+                "Query executed"
+            ),
+            Err(error) => tracing::debug!(
+                elapsed = ?started.elapsed(),
+                error = %error,
+                "Query failed"
+            ),
+        }
         result
     }
 
@@ -702,11 +862,49 @@ impl Db {
         }
     }
 
+    /// Explain a query.
+    ///
+    /// SQL text may be prefixed with `EXPLAIN` or `EXPLAIN ANALYZE`; the
+    /// latter runs [`Self::explain_analyze`].
     pub async fn explain(
         &self,
         query: impl Into<PublicQueryInput>,
     ) -> std::result::Result<QueryExplain, DbError> {
-        self.backend.explain(query.into().into()).await
+        let (analyze, query) = self.strip_sql_explain(query.into().into())?;
+        if analyze {
+            return self.backend.explain_analyze(query).await;
+        }
+        self.backend.explain(query).await
+    }
+
+    /// `EXPLAIN ANALYZE`: execute a SELECT and explain it with its measured
+    /// execution metrics and per-operator statistics (when the backend
+    /// instruments operators). SQL text may be prefixed with `EXPLAIN
+    /// [ANALYZE]`.
+    pub async fn explain_analyze(
+        &self,
+        query: impl Into<PublicQueryInput>,
+    ) -> Result<QueryExplain, DbError> {
+        let (_, query) = self.strip_sql_explain(query.into().into())?;
+        self.backend.explain_analyze(query).await
+    }
+
+    /// Resolve SQL text of the form `EXPLAIN [ANALYZE] <query>` into the
+    /// explained query and whether `ANALYZE` was given. Other input is
+    /// returned unchanged.
+    fn strip_sql_explain(&self, query: TextQueryInput) -> Result<(bool, TextQueryInput), DbError> {
+        let TextQueryInput::Text {
+            format: TextQueryFormat::Sql,
+            query: text,
+            params,
+        } = &query
+        else {
+            return Ok((false, query));
+        };
+        match sql::parse_sql_explain_with_params(text, self.backend.sql_dialect(), params)? {
+            Some(explain) => Ok((explain.analyze, TextQueryInput::Ast(explain.query))),
+            None => Ok((false, query)),
+        }
     }
 
     pub async fn plan(
@@ -756,7 +954,10 @@ impl Db {
         &self,
         batch: PublicBatch,
     ) -> std::result::Result<BatchOutcome, DbError> {
-        self.backend.execute_batch(batch.into()).await
+        let started = Instant::now();
+        let result = self.backend.execute_batch(batch.into()).await;
+        log_batch(started, result.as_ref().map(|outcome| &outcome.metrics));
+        result
     }
 
     pub async fn execute_batch_with_settings(
@@ -764,9 +965,13 @@ impl Db {
         batch: PublicBatch,
         settings: crate::WriteSettings,
     ) -> Result<BatchOutcome, DbError> {
-        self.backend
+        let started = Instant::now();
+        let result = self
+            .backend
             .execute_batch_with_settings(batch.into(), settings)
-            .await
+            .await;
+        log_batch(started, result.as_ref().map(|outcome| &outcome.metrics));
+        result
     }
 
     pub async fn execute_batch_returning(
@@ -774,9 +979,13 @@ impl Db {
         batch: PublicBatch,
         returning: crate::BatchReturn,
     ) -> Result<crate::BatchReply, DbError> {
-        self.backend
+        let started = Instant::now();
+        let result = self
+            .backend
             .execute_batch_returning(batch.into(), returning)
-            .await
+            .await;
+        log_batch(started, result.as_ref().map(crate::BatchReply::metrics));
+        result
     }
 
     pub async fn execute_batch_returning_with_settings(
@@ -785,9 +994,13 @@ impl Db {
         returning: crate::BatchReturn,
         settings: crate::WriteSettings,
     ) -> Result<crate::BatchReply, DbError> {
-        self.backend
+        let started = Instant::now();
+        let result = self
+            .backend
             .execute_batch_returning_with_settings(batch.into(), returning, settings)
-            .await
+            .await;
+        log_batch(started, result.as_ref().map(crate::BatchReply::metrics));
+        result
     }
 
     pub async fn execute_batch_returning_bounded_with_settings(
@@ -796,8 +1009,33 @@ impl Db {
         returning: crate::BatchReturn,
         settings: crate::WriteSettings,
     ) -> Result<crate::BatchReply, DbError> {
-        self.backend
+        let started = Instant::now();
+        let result = self
+            .backend
             .execute_batch_returning_bounded_with_settings(batch.into(), returning, settings)
-            .await
+            .await;
+        log_batch(started, result.as_ref().map(crate::BatchReply::metrics));
+        result
+    }
+}
+
+/// Log the outcome of a batch with its write metrics at debug level.
+fn log_batch(started: Instant, result: Result<&WriteMetrics, &DbError>) {
+    match result {
+        Ok(metrics) => tracing::debug!(
+            elapsed = ?started.elapsed(),
+            point_reads = metrics.point_reads,
+            index_reads = metrics.index_reads,
+            collection_scans = metrics.collection_scans,
+            fallback_scans = metrics.fallback_scans,
+            visited_rows = metrics.visited_rows,
+            storage_writes = metrics.storage_writes,
+            "Batch executed"
+        ),
+        Err(error) => tracing::debug!(
+            elapsed = ?started.elapsed(),
+            error = %error,
+            "Batch failed"
+        ),
     }
 }

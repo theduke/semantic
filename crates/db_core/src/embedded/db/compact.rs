@@ -17,6 +17,21 @@ pub(crate) struct ExecutionCounts {
     pub collection_scans: usize,
     pub fallback_scans: usize,
     pub visited_rows: usize,
+    /// Storage write operations committed.
+    pub storage_writes: usize,
+}
+
+impl From<&ExecutionCounts> for crate::WriteMetrics {
+    fn from(counts: &ExecutionCounts) -> Self {
+        Self {
+            point_reads: counts.point_reads as u64,
+            index_reads: counts.index_reads as u64,
+            collection_scans: counts.collection_scans as u64,
+            fallback_scans: counts.fallback_scans as u64,
+            visited_rows: counts.visited_rows as u64,
+            storage_writes: counts.storage_writes as u64,
+        }
+    }
 }
 
 pub(crate) use crate::ResolvedReference;
@@ -1318,7 +1333,8 @@ mod tests {
                     )
                     .unwrap()
                     .unwrap();
-                    assert_eq!(reply, expected);
+                    // The paths do different work; compare results only.
+                    assert_eq!(reply.with_metrics(Default::default()), expected);
                 }
                 (Err(slow), Err(fast)) => assert_eq!(slow.to_string(), fast.to_string()),
                 (slow, fast) => panic!("executor mismatch: {slow:?} vs {fast:?}"),
@@ -1738,7 +1754,7 @@ mod tests {
                 BatchReturn::Stats,
             )
             .unwrap();
-        assert!(matches!(reply, BatchReply::Stats { stats } if stats.deleted == 2));
+        assert!(matches!(reply, BatchReply::Stats { stats, .. } if stats.deleted == 2));
         // Reopening rebuilt the reverse references, so the predicate delete
         // runs on the point path with one scan of the collection.
         assert_eq!(db.execution_counts.fallback_scans, 0);

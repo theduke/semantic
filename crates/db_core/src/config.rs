@@ -11,12 +11,17 @@ pub enum MigrationMismatchPolicy {
 #[facet(rename_all = "snake_case")]
 pub struct DbConfig {
     pub migration_mismatch_policy: MigrationMismatchPolicy,
+    /// Queries running longer than this are logged at `warn` level with
+    /// their plan summary and execution metrics. `None` disables the log
+    /// (and the metrics collection it needs).
+    pub slow_query_threshold: Option<std::time::Duration>,
 }
 
 impl Default for DbConfig {
     fn default() -> Self {
         Self {
             migration_mismatch_policy: MigrationMismatchPolicy::Fail,
+            slow_query_threshold: None,
         }
     }
 }

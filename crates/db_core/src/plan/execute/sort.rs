@@ -165,6 +165,11 @@ impl TopN {
         Ok(())
     }
 
+    /// Number of rows currently retained (at most the capacity).
+    pub(super) fn retained(&self) -> usize {
+        self.heap.len()
+    }
+
     /// The retained rows in order, without the first `offset`.
     pub(super) fn finish(self, offset: usize) -> Vec<DynObject> {
         self.heap

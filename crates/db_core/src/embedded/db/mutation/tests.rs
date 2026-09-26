@@ -199,7 +199,7 @@ fn batch_predicate_operations_see_earlier_operations() {
         )
         .unwrap();
     assert_eq!(db.execution_counts.fallback_scans, 0);
-    let BatchReply::Stats { stats } = reply else {
+    let BatchReply::Stats { stats, .. } = reply else {
         panic!("stats reply expected");
     };
     // item-0000 is the only stored rare row; the upserted row is rare too.
@@ -388,7 +388,7 @@ fn predicate_delete_cascades_on_both_paths() {
         .execute_batch_returning(Batch::new().with_op(delete()), BatchReturn::Stats)
         .unwrap();
     assert_eq!(point.execution_counts.fallback_scans, 0);
-    assert!(matches!(reply, BatchReply::Stats { stats } if stats.deleted == 3));
+    assert!(matches!(reply, BatchReply::Stats { stats, .. } if stats.deleted == 3));
     assert_eq!(remaining_ids(&point), ["a3", "p2"]);
 
     // The dataset path expands cascades once, before building its reply.

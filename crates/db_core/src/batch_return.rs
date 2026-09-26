@@ -2,7 +2,9 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use semantic_data::value::Object;
 
-use crate::{BatchOutcome, BatchStats, Dataset, DbError, EntityRecord, catalog::Catalog};
+use crate::{
+    BatchOutcome, BatchStats, Dataset, DbError, EntityRecord, WriteMetrics, catalog::Catalog,
+};
 
 /// Select the result of a committed batch. Dataset preserves the original API.
 #[derive(facet::Facet, Debug, Clone, PartialEq, Eq, Default)]
@@ -41,16 +43,46 @@ pub enum BatchReply {
     Dataset(BatchOutcome),
     Stats {
         stats: BatchStats,
+        #[facet(default)]
+        metrics: WriteMetrics,
     },
     Changes {
         stats: BatchStats,
         changes: Vec<EntityChange>,
+        #[facet(default)]
+        metrics: WriteMetrics,
     },
     Projection {
         stats: BatchStats,
         changes: Vec<EntityChange>,
         rows: Vec<EntityRecord>,
+        #[facet(default)]
+        metrics: WriteMetrics,
     },
+}
+
+impl BatchReply {
+    /// Execution counters of the write (empty for backends that do not
+    /// collect them).
+    pub fn metrics(&self) -> &WriteMetrics {
+        match self {
+            Self::Dataset(outcome) => &outcome.metrics,
+            Self::Stats { metrics, .. }
+            | Self::Changes { metrics, .. }
+            | Self::Projection { metrics, .. } => metrics,
+        }
+    }
+
+    /// Replace the execution counters of the reply.
+    pub fn with_metrics(mut self, value: WriteMetrics) -> Self {
+        match &mut self {
+            Self::Dataset(outcome) => outcome.metrics = value,
+            Self::Stats { metrics, .. }
+            | Self::Changes { metrics, .. }
+            | Self::Projection { metrics, .. } => *metrics = value,
+        }
+        self
+    }
 }
 
 #[derive(facet::Facet, Debug, Clone, Copy, PartialEq, Eq)]
@@ -233,7 +265,7 @@ mod tests {
                 BatchReturn::Changes,
             )
             .unwrap();
-        let BatchReply::Changes { stats, changes } = result else {
+        let BatchReply::Changes { stats, changes, .. } = result else {
             panic!("changes reply")
         };
         assert_eq!(stats.upserted, 4);
@@ -337,7 +369,11 @@ mod tests {
         else {
             panic!("dataset")
         };
-        assert_eq!(original, reply);
+        // Write metrics differ: the repeated upsert writes nothing.
+        assert_eq!(original.dataset, reply.dataset);
+        assert_eq!(original.stats, reply.stats);
+        assert!(original.metrics.storage_writes > 0);
+        assert_eq!(reply.metrics.storage_writes, 0);
         let stats = db
             .execute_batch_returning(
                 Batch::new().with_op(upsert("one", "second")),
@@ -347,7 +383,8 @@ mod tests {
         assert!(matches!(
             stats,
             BatchReply::Stats {
-                stats: BatchStats { upserted: 1, .. }
+                stats: BatchStats { upserted: 1, .. },
+                ..
             }
         ));
         assert!(
@@ -426,6 +463,7 @@ mod tests {
                 updated: 0,
                 deleted: 0,
             },
+            metrics: Default::default(),
         };
         let Some(BatchReply::Projection { rows, .. }) = compact_reply(
             &catalog,
@@ -493,6 +531,7 @@ pub(crate) fn compact_reply_from_changes(
         BatchReturn::Stats => {
             return Ok(Some(BatchReply::Stats {
                 stats: stats.clone(),
+                metrics: WriteMetrics::default(),
             }));
         }
         BatchReturn::Changes => None,
@@ -533,8 +572,13 @@ pub(crate) fn compact_reply_from_changes(
             stats,
             changes,
             rows,
+            metrics: WriteMetrics::default(),
         }
     } else {
-        BatchReply::Changes { stats, changes }
+        BatchReply::Changes {
+            stats,
+            changes,
+            metrics: WriteMetrics::default(),
+        }
     }))
 }

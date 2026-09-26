@@ -2,6 +2,7 @@
 
 use super::*;
 use crate::catalog::CatalogSnapshot;
+use crate::embedded::storage::{BoxEntityIdScan, BoxEntityScan, BoxIndexEntryScan};
 
 /// Read-only view of the database at one committed state.
 ///
@@ -86,10 +87,74 @@ impl<'a> DbReader<'a> {
     }
 
     pub fn select(&self, query: SelectQuery) -> std::result::Result<Vec<Object>, DbError> {
+        let prepared = self.prepare_select(query)?;
+        self.run_select(&prepared, None)
+    }
+
+    /// Run a SELECT while collecting execution metrics.
+    ///
+    /// Returns the rows and the explain of the executed plan, whose
+    /// [`QueryExplain::analyze`] holds the metrics (and per-operator
+    /// statistics with `operator_stats`). The physical plan is the one
+    /// executed, including rewrites applied after optimization.
+    pub fn select_analyzed(
+        &self,
+        query: SelectQuery,
+        operator_stats: bool,
+    ) -> std::result::Result<(Vec<Object>, QueryExplain), DbError> {
+        let started = std::time::Instant::now();
+        let prepared = self.prepare_select(query)?;
+        let plan_elapsed = started.elapsed();
+        let collector = Arc::new(if operator_stats {
+            crate::MetricsCollector::with_operator_stats()
+        } else {
+            crate::MetricsCollector::new()
+        });
+        let exec_started = std::time::Instant::now();
+        let rows = self.run_select(&prepared, Some(&collector))?;
+        let mut metrics = collector.snapshot();
+        metrics.exec_elapsed = exec_started.elapsed();
+        metrics.plan_elapsed = plan_elapsed;
+        metrics.elapsed = started.elapsed();
+        let catalog = self.catalog();
+        let access_path = prepared
+            .collection
+            .and_then(|lid| catalog.collection_by_lid(lid))
+            .map_or(AccessPath::FullScan, |collection| {
+                access_path_from_physical(catalog, collection, &prepared.physical)
+            });
+        let explain = QueryExplain {
+            logical: prepared.logical,
+            physical: prepared.physical,
+            access_path,
+            analyze: Some(crate::QueryAnalysis {
+                metrics,
+                operator_stats: collector.operator_stats(),
+            }),
+        };
+        Ok((rows, explain))
+    }
+
+    /// `EXPLAIN ANALYZE`: execute a SELECT with per-operator statistics and
+    /// return its explain (see [`Self::select_analyzed`]).
+    pub fn explain_analyze_query(
+        &self,
+        query: Query,
+    ) -> std::result::Result<QueryExplain, DbError> {
+        let Query::Select(query) = query else {
+            return Err(DbError::InvalidQuery(
+                "EXPLAIN ANALYZE is only supported for SELECT".to_string(),
+            ));
+        };
+        Ok(self.select_analyzed(query, true)?.1)
+    }
+
+    /// Canonicalize and plan a SELECT.
+    fn prepare_select(&self, query: SelectQuery) -> std::result::Result<PreparedSelect, DbError> {
         let catalog = self.catalog().clone();
         let collection_name = query.collection_or_default().to_string();
-        let (query, stats, source) = if is_all_collection_alias(&collection_name) {
-            (query, None, ALL_COLLECTION_ALIAS.to_string())
+        let (query, stats, source, collection) = if is_all_collection_alias(&collection_name) {
+            (query, None, ALL_COLLECTION_ALIAS.to_string(), None)
         } else {
             let collection = catalog
                 .collection_by_name(&collection_name)
@@ -98,18 +163,42 @@ impl<'a> DbReader<'a> {
                 })?;
             let query = canonicalize_select_query(&query, catalog.as_ref(), collection)?;
             let stats = stats_for_query(&catalog, &*self.snapshot, &query, collection)?;
-            (query, Some(stats), collection.name.clone())
+            (
+                query,
+                Some(stats),
+                collection.name.clone(),
+                Some(collection.lid),
+            )
         };
         let optimizer = crate::Optimizer::core();
         let context = self.query_context();
         let stats_provider = stats
             .as_ref()
             .map(|value| value as &dyn crate::StatsProvider);
-        let mut physical = optimizer
-            .optimize_query(&query, Some(source.clone()), stats_provider, &context)
-            .physical;
+        let pair = optimizer.optimize_query(&query, Some(source.clone()), stats_provider, &context);
+        let mut physical = pair.physical;
         self.rewrite_count_fast_path(&mut physical)?;
-        let mut rows = self.execute_physical_plan(&physical, Some(source.as_str()))?;
+        Ok(PreparedSelect {
+            field_format: query.field_format,
+            logical: pair.logical,
+            physical,
+            source,
+            collection,
+        })
+    }
+
+    /// Execute a prepared SELECT and format its rows.
+    fn run_select(
+        &self,
+        prepared: &PreparedSelect,
+        metrics: Option<&Arc<crate::MetricsCollector>>,
+    ) -> std::result::Result<Vec<Object>, DbError> {
+        let catalog = self.catalog();
+        let mut rows = self.execute_physical_plan_with_metrics(
+            &prepared.physical,
+            Some(prepared.source.as_str()),
+            metrics,
+        )?;
         // Inject computed attributes.
         for row in &mut rows {
             let _ = crate::inject_computed_attributes(catalog.as_ref(), row);
@@ -117,7 +206,7 @@ impl<'a> DbReader<'a> {
         Ok(crate::format_output_rows(
             catalog.as_ref(),
             rows,
-            query.field_format,
+            prepared.field_format,
         ))
     }
 
@@ -261,6 +350,7 @@ impl<'a> DbReader<'a> {
             logical: pair.logical,
             physical: pair.physical,
             access_path,
+            analyze: None,
         })
     }
 
@@ -270,7 +360,24 @@ impl<'a> DbReader<'a> {
         plan: &crate::PhysicalPlan,
         default_collection: Option<&str>,
     ) -> std::result::Result<Vec<Object>, DbError> {
-        let reader = self.snapshot.borrowed();
+        self.execute_physical_plan_with_metrics(plan, default_collection, None)
+    }
+
+    /// Execute a plan, collecting metrics into `metrics` when given: reads
+    /// then go through a [`MeteredReadSnapshot`].
+    fn execute_physical_plan_with_metrics(
+        &self,
+        plan: &crate::PhysicalPlan,
+        default_collection: Option<&str>,
+        metrics: Option<&Arc<crate::MetricsCollector>>,
+    ) -> std::result::Result<Vec<Object>, DbError> {
+        let (reader, context) = match metrics {
+            None => (self.snapshot.borrowed(), self.query_context()),
+            Some(metrics) => (
+                self.snapshot.metered(metrics.clone()),
+                self.query_context().with_metrics(metrics.clone()),
+            ),
+        };
         let local_refs = LocalRefResolver::for_plan(plan, reader.shared());
         let source = EmbeddedPhysicalDataSource {
             reader,
@@ -278,7 +385,7 @@ impl<'a> DbReader<'a> {
             default_collection: default_collection.map(ToOwned::to_owned),
             local_refs,
         };
-        crate::execute_physical_plan_with_source(plan, &source, &self.query_context())
+        crate::execute_physical_plan_with_source(plan, &source, &context)
             .map_err(|err| DbError::InvalidQuery(err.to_string()))
     }
 
@@ -454,6 +561,17 @@ impl<'a> DbReader<'a> {
     }
 }
 
+/// A planned SELECT, ready to execute.
+struct PreparedSelect {
+    field_format: FieldFormat,
+    logical: crate::LogicalPlan,
+    physical: crate::PhysicalPlan,
+    /// Name of the queried source.
+    source: String,
+    /// The queried collection (`None` for the `all` alias).
+    collection: Option<LocalCollectionId>,
+}
+
 /// The storage snapshot of one reader or query.
 pub(crate) enum QueryReader<'a> {
     /// Owned snapshot that row views may keep for on-demand reads.
@@ -479,6 +597,180 @@ impl QueryReader<'_> {
             Self::Borrowed(snapshot) => QueryReader::Ref(snapshot.as_ref()),
             Self::Ref(snapshot) => QueryReader::Ref(*snapshot),
         }
+    }
+
+    /// A reader over the same snapshot for one query that counts its reads
+    /// into `metrics`.
+    fn metered(&self, metrics: Arc<crate::MetricsCollector>) -> QueryReader<'_> {
+        match self {
+            Self::Shared(snapshot) => QueryReader::Shared(Arc::new(MeteredReadSnapshot::new(
+                snapshot.clone(),
+                metrics,
+            ))),
+            Self::Borrowed(snapshot) => QueryReader::Borrowed(Box::new(MeteredReadSnapshot::new(
+                snapshot.as_ref(),
+                metrics,
+            ))),
+            Self::Ref(snapshot) => {
+                QueryReader::Borrowed(Box::new(MeteredReadSnapshot::new(*snapshot, metrics)))
+            }
+        }
+    }
+}
+
+/// Read snapshot that counts rows scanned and decoded, point reads, index
+/// probes and index entries into a [`crate::MetricsCollector`].
+struct MeteredReadSnapshot<S> {
+    inner: S,
+    metrics: Arc<crate::MetricsCollector>,
+}
+
+impl<S> MeteredReadSnapshot<S> {
+    fn new(inner: S, metrics: Arc<crate::MetricsCollector>) -> Self {
+        Self { inner, metrics }
+    }
+
+    fn count_index_scan(&self, scan: BoxEntityIdScan) -> BoxEntityIdScan {
+        self.metrics.add_index_probes(1);
+        let metrics = self.metrics.clone();
+        Box::new(scan.inspect(move |_| metrics.add_index_entries_read(1)))
+    }
+}
+
+impl<S> EntityReadSnapshot for MeteredReadSnapshot<S>
+where
+    S: std::ops::Deref + Send + Sync,
+    S::Target: EntityReadSnapshot,
+{
+    fn revision(&self) -> std::result::Result<Option<u64>, DbError> {
+        self.inner.revision()
+    }
+
+    fn is_consistent(&self) -> bool {
+        self.inner.is_consistent()
+    }
+
+    fn get_entity(
+        &self,
+        collection: LocalCollectionId,
+        id: &str,
+    ) -> std::result::Result<Option<StoredEntity>, DbError> {
+        self.metrics.add_point_reads(1);
+        let entity = self.inner.get_entity(collection, id)?;
+        if entity.is_some() {
+            self.metrics.add_rows_decoded(1);
+        }
+        Ok(entity)
+    }
+
+    fn scan_collection_stream(
+        &self,
+        collection: LocalCollectionId,
+    ) -> std::result::Result<BoxEntityScan, DbError> {
+        let metrics = self.metrics.clone();
+        let scan = self.inner.scan_collection_stream(collection)?;
+        Ok(Box::new(scan.inspect(move |row| {
+            if row.is_ok() {
+                metrics.add_rows_scanned(1);
+                metrics.add_rows_decoded(1);
+            }
+        })))
+    }
+
+    fn scan_collection(
+        &self,
+        collection: LocalCollectionId,
+    ) -> std::result::Result<Vec<StoredEntity>, DbError> {
+        let rows = self.inner.scan_collection(collection)?;
+        self.metrics.add_rows_scanned(rows.len() as u64);
+        self.metrics.add_rows_decoded(rows.len() as u64);
+        Ok(rows)
+    }
+
+    fn count_collection_entities(
+        &self,
+        collection: LocalCollectionId,
+    ) -> std::result::Result<u64, DbError> {
+        self.inner.count_collection_entities(collection)
+    }
+
+    fn collection_row_count(
+        &self,
+        collection: LocalCollectionId,
+    ) -> std::result::Result<Option<u64>, DbError> {
+        self.inner.collection_row_count(collection)
+    }
+
+    fn index_entry_count(
+        &self,
+        index: crate::catalog::LocalIndexId,
+    ) -> std::result::Result<Option<u64>, DbError> {
+        self.inner.index_entry_count(index)
+    }
+
+    fn scan_index_value_stream(
+        &self,
+        index: crate::catalog::LocalIndexId,
+        path: Option<&FieldPath>,
+        value: &Value,
+    ) -> std::result::Result<BoxEntityIdScan, DbError> {
+        let scan = self.inner.scan_index_value_stream(index, path, value)?;
+        Ok(self.count_index_scan(scan))
+    }
+
+    fn scan_index_value(
+        &self,
+        index: crate::catalog::LocalIndexId,
+        path: Option<&FieldPath>,
+        value: &Value,
+    ) -> std::result::Result<Vec<String>, DbError> {
+        let ids = self.inner.scan_index_value(index, path, value)?;
+        self.metrics.add_index_probes(1);
+        self.metrics.add_index_entries_read(ids.len() as u64);
+        Ok(ids)
+    }
+
+    fn scan_index_range_stream(
+        &self,
+        index: crate::catalog::LocalIndexId,
+        path: Option<&FieldPath>,
+        lower: std::ops::Bound<&Value>,
+        upper: std::ops::Bound<&Value>,
+    ) -> std::result::Result<BoxEntityIdScan, DbError> {
+        let scan = self
+            .inner
+            .scan_index_range_stream(index, path, lower, upper)?;
+        Ok(self.count_index_scan(scan))
+    }
+
+    fn scan_index_prefix_stream(
+        &self,
+        index: crate::catalog::LocalIndexId,
+        path: Option<&FieldPath>,
+        prefix: &str,
+    ) -> std::result::Result<BoxEntityIdScan, DbError> {
+        let scan = self.inner.scan_index_prefix_stream(index, path, prefix)?;
+        Ok(self.count_index_scan(scan))
+    }
+
+    fn scan_index_entries(
+        &self,
+        index: crate::catalog::LocalIndexId,
+        scan: &crate::IndexScan,
+    ) -> std::result::Result<BoxIndexEntryScan, DbError> {
+        let entries = self.inner.scan_index_entries(index, scan)?;
+        self.metrics.add_index_probes(1);
+        let metrics = self.metrics.clone();
+        Ok(Box::new(
+            entries.inspect(move |_| metrics.add_index_entries_read(1)),
+        ))
+    }
+
+    fn index_needs_rebuild(
+        &self,
+        index: crate::catalog::LocalIndexId,
+    ) -> std::result::Result<bool, DbError> {
+        self.inner.index_needs_rebuild(index)
     }
 }
 
@@ -674,3 +966,6 @@ fn access_path_from_physical(
     }
     AccessPath::FullScan
 }
+
+#[cfg(all(test, feature = "sql"))]
+mod tests;

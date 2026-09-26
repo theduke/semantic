@@ -524,7 +524,11 @@ impl<S: EntityStorage> EmbeddedDb<S> {
         let revision = reader.revision;
         drop(reader);
         if state.overlay().is_empty() {
-            return Ok(TransactionCommit { revision, stats });
+            return Ok(TransactionCommit {
+                revision,
+                stats,
+                metrics: crate::WriteMetrics::default(),
+            });
         }
         self.execution_counts = compact::ExecutionCounts::default();
         if self.catalog.snapshot().version != catalog.version {
@@ -552,7 +556,11 @@ impl<S: EntityStorage> EmbeddedDb<S> {
             crate::ChangeSource::Transaction,
             prepared.changes,
         )?;
-        Ok(TransactionCommit { revision, stats })
+        Ok(TransactionCommit {
+            revision,
+            stats,
+            metrics: (&self.execution_counts).into(),
+        })
     }
 
     /// Run `body` in an interactive transaction and commit it, re-running

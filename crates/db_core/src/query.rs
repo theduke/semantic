@@ -1274,6 +1274,10 @@ impl Default for Batch {
 pub struct BatchOutcome {
     pub dataset: Dataset,
     pub stats: BatchStats,
+    /// Execution counters of the write (empty for backends that do not
+    /// collect them).
+    #[facet(default)]
+    pub metrics: crate::WriteMetrics,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -1430,7 +1434,11 @@ where
         }
     }
 
-    Ok(BatchOutcome { dataset, stats })
+    Ok(BatchOutcome {
+        dataset,
+        stats,
+        metrics: crate::WriteMetrics::default(),
+    })
 }
 
 pub fn apply_update(query: &UpdateQuery, entities: &mut [Entity]) -> CoreResult<MutationStats> {

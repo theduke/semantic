@@ -43,6 +43,9 @@ pub struct QueryArgs {
 enum QueryAction {
     Execute(String),
     Explain(String),
+    /// `EXPLAIN ANALYZE`: execute the query and report its plan with
+    /// measured rows, timings and metrics.
+    ExplainAnalyze(String),
 }
 
 fn parse_query_action(query: String) -> std::result::Result<QueryAction, CliError> {
@@ -55,6 +58,19 @@ fn parse_query_action(query: String) -> std::result::Result<QueryAction, CliErro
             return Err(CliError::Message(
                 "EXPLAIN requires a query to explain".to_string(),
             ));
+        }
+        let mut parts = explain_query.splitn(2, char::is_whitespace);
+        if parts
+            .next()
+            .is_some_and(|word| word.eq_ignore_ascii_case("ANALYZE"))
+        {
+            let analyze_query = parts.next().unwrap_or_default().trim();
+            if analyze_query.is_empty() {
+                return Err(CliError::Message(
+                    "EXPLAIN ANALYZE requires a query to explain".to_string(),
+                ));
+            }
+            return Ok(QueryAction::ExplainAnalyze(analyze_query.to_string()));
         }
         return Ok(QueryAction::Explain(explain_query.to_string()));
     }
@@ -89,6 +105,14 @@ pub(crate) async fn execute_text_or_explain(
                 .await?;
             format_plan(&plan, output_format)?
         }
+        QueryAction::ExplainAnalyze(query) => db
+            .explain_analyze(QueryInput::Text {
+                format: query_format,
+                query,
+                params: Default::default(),
+            })
+            .await?
+            .to_string(),
     };
 
     Ok(output)
@@ -158,5 +182,27 @@ impl Serialize for UntypedObjectRef<'_> {
             map.serialize_entry(field, &FlatValueRef(ValueRef::Ref(value)))?;
         }
         map.end()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn explain_prefixes_select_the_action() {
+        assert!(matches!(
+            parse_query_action("EXPLAIN ANALYZE SELECT * FROM items".into()).unwrap(),
+            QueryAction::ExplainAnalyze(query) if query == "SELECT * FROM items"
+        ));
+        assert!(matches!(
+            parse_query_action("explain SELECT * FROM items".into()).unwrap(),
+            QueryAction::Explain(query) if query == "SELECT * FROM items"
+        ));
+        assert!(matches!(
+            parse_query_action("SELECT * FROM items".into()).unwrap(),
+            QueryAction::Execute(_)
+        ));
+        assert!(parse_query_action("EXPLAIN ANALYZE ".into()).is_err());
     }
 }
