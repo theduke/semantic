@@ -1,9 +1,9 @@
 use std::collections::{BTreeMap, BTreeSet};
+use std::ops::Bound;
 
-use base64::{Engine, engine::general_purpose::URL_SAFE_NO_PAD};
 use semantic_data::schema::IndexKind;
-use semantic_data::value::serde::typed::{TypedRef, TypedValue};
-use semantic_data::value::{FieldPath, Object, PathSegment, Value};
+use semantic_data::value::serde::typed::TypedValue;
+use semantic_data::value::{FieldPath, Object, Value};
 use semantic_db_core::DbError;
 use semantic_db_core::catalog::{LocalCollectionId, LocalIndexId};
 use semantic_db_core::embedded::{
@@ -12,11 +12,22 @@ use semantic_db_core::embedded::{
 };
 use serde::{Deserialize, Serialize};
 
+pub use crate::keys::parse_entity_key;
+use crate::keys::{
+    entity_key, entity_prefix, index_entry_id, index_key, index_marker_key, index_path_prefix,
+    index_prefix, index_range, index_string_prefix, index_value_prefix,
+};
+
+pub mod layout;
 pub mod memory;
 pub use memory::MemoryKvEngine;
 
 #[cfg(test)]
 mod incremental_tests;
+#[cfg(test)]
+mod index_range_tests;
+#[cfg(test)]
+mod layout_tests;
 #[cfg(test)]
 mod txn_tests;
 
@@ -352,16 +363,48 @@ where
     }
 }
 
+/// Entity ids of index entries, in key order and without duplicates.
 pub struct IndexEntityIdScan<I> {
     inner: I,
+    id_position: IndexIdPosition,
     seen: BTreeSet<String>,
 }
 
+/// Where the entity id starts in the index keys of a scan.
+#[derive(Debug, Clone, Copy)]
+enum IndexIdPosition {
+    /// All keys share the value token; the id starts at this offset.
+    At(usize),
+    /// Keys have different value tokens starting at this offset; the id
+    /// follows the value token.
+    AfterValueAt(usize),
+}
+
 impl<I> IndexEntityIdScan<I> {
-    fn new(inner: I) -> Self {
+    /// Scan of entries sharing one value prefix of `value_prefix_len` bytes.
+    fn for_value(inner: I, value_prefix_len: usize) -> Self {
+        Self::new(inner, IndexIdPosition::At(value_prefix_len))
+    }
+
+    /// Scan of entries with values starting after `path_prefix_len` bytes.
+    fn for_values(inner: I, path_prefix_len: usize) -> Self {
+        Self::new(inner, IndexIdPosition::AfterValueAt(path_prefix_len))
+    }
+
+    fn new(inner: I, id_position: IndexIdPosition) -> Self {
         Self {
             inner,
+            id_position,
             seen: BTreeSet::new(),
+        }
+    }
+}
+
+impl IndexIdPosition {
+    fn entity_id(self, key: &[u8]) -> Option<&str> {
+        match self {
+            Self::At(offset) => std::str::from_utf8(key.get(offset..)?).ok(),
+            Self::AfterValueAt(offset) => index_entry_id(key, offset),
         }
     }
 }
@@ -376,10 +419,14 @@ where
         for item in self.inner.by_ref() {
             match item {
                 Ok((key, _)) => {
-                    let Some(id) = extract_index_entity_id(&key) else {
-                        continue;
+                    let Some(id) = self.id_position.entity_id(&key) else {
+                        return Some(Err(DbError::Deserialization(
+                            "malformed index entry key".to_string(),
+                        )));
                     };
-                    if self.seen.insert(id.clone()) {
+                    if !self.seen.contains(id) {
+                        let id = id.to_string();
+                        self.seen.insert(id.clone());
                         return Some(Ok(id));
                     }
                 }
@@ -532,7 +579,7 @@ impl<E: KvEngine> EntityStore<E> {
         value: &Value,
         entity_id: &str,
     ) -> std::result::Result<(), DbError> {
-        let key = index_key(index, None, value, entity_id)?;
+        let key = index_key(index, None, value, entity_id);
         self.engine.put(key, Vec::new())
     }
 
@@ -542,7 +589,7 @@ impl<E: KvEngine> EntityStore<E> {
         value: &Value,
         entity_id: &str,
     ) -> std::result::Result<(), DbError> {
-        let key = index_key(index, None, value, entity_id)?;
+        let key = index_key(index, None, value, entity_id);
         self.engine.delete(&key)
     }
 
@@ -561,9 +608,44 @@ impl<E: KvEngine> EntityStore<E> {
         path: Option<&FieldPath>,
         value: &Value,
     ) -> std::result::Result<IndexEntityIdScan<E::PrefixScan>, DbError> {
-        let prefix = index_value_prefix(index, path, value)?;
-        Ok(IndexEntityIdScan::new(
+        let prefix = index_value_prefix(index, path, value);
+        let len = prefix.len();
+        Ok(IndexEntityIdScan::for_value(
             self.engine.scan_prefix_stream(prefix)?,
+            len,
+        ))
+    }
+
+    /// Ids of the entries of `index` (at `path`) whose value lies within
+    /// `lower..upper`, ordered by value and then id.
+    pub fn scan_index_range_stream(
+        &self,
+        index: LocalIndexId,
+        path: Option<&FieldPath>,
+        lower: Bound<&Value>,
+        upper: Bound<&Value>,
+    ) -> Result<IndexEntityIdScan<BoxKvPrefixScan>, DbError> {
+        let path_prefix_len = index_path_prefix(index, path).len();
+        let scan = match index_range(index, path, lower, upper) {
+            Some((start, end)) => self.engine.scan_range_stream(start, Some(end))?,
+            None => Box::new(std::iter::empty()),
+        };
+        Ok(IndexEntityIdScan::for_values(scan, path_prefix_len))
+    }
+
+    /// Ids of the entries of `index` (at `path`) whose value is a string
+    /// starting with `prefix`, ordered by value and then id.
+    pub fn scan_index_prefix_stream(
+        &self,
+        index: LocalIndexId,
+        path: Option<&FieldPath>,
+        prefix: &str,
+    ) -> Result<IndexEntityIdScan<E::PrefixScan>, DbError> {
+        let path_prefix_len = index_path_prefix(index, path).len();
+        Ok(IndexEntityIdScan::for_values(
+            self.engine
+                .scan_prefix_stream(index_string_prefix(index, path, prefix))?,
+            path_prefix_len,
         ))
     }
 
@@ -646,9 +728,36 @@ impl<E: KvEngine> EntityStorage for EntityStore<E> {
         )?))
     }
 
+    fn scan_index_range_stream(
+        &self,
+        index: LocalIndexId,
+        path: Option<&FieldPath>,
+        lower: Bound<&Value>,
+        upper: Bound<&Value>,
+    ) -> Result<BoxEntityIdScan, DbError> {
+        Ok(Box::new(EntityStore::scan_index_range_stream(
+            self, index, path, lower, upper,
+        )?))
+    }
+
+    fn scan_index_prefix_stream(
+        &self,
+        index: LocalIndexId,
+        path: Option<&FieldPath>,
+        prefix: &str,
+    ) -> Result<BoxEntityIdScan, DbError> {
+        Ok(Box::new(EntityStore::scan_index_prefix_stream(
+            self, index, path, prefix,
+        )?))
+    }
+
     fn index_needs_rebuild(&self, index: LocalIndexId) -> std::result::Result<bool, DbError> {
-        Ok(self.engine.get(&index_format_key(index))?.as_deref()
+        Ok(self.engine.get(&index_marker_key(index))?.as_deref()
             != Some(index_format_value().as_slice()))
+    }
+
+    fn prepare_open(&mut self) -> Result<(), DbError> {
+        self.migrate_layout().map(|_| ())
     }
 
     fn tx_capabilities(&self) -> StorageTransactionCapabilities {
@@ -737,12 +846,15 @@ fn lower_final_values(
             StorageWriteOp::ClearIndex(index) => {
                 let prefix = index_prefix(*index);
                 push_prefix_deletes(&mut lowered, txn.scan_prefix(&prefix)?, &prefix);
+                lowered.push(KvWriteOp::Delete {
+                    key: index_marker_key(*index),
+                });
             }
             StorageWriteOp::ResetIndex(index) => {
                 let prefix = index_prefix(*index);
                 push_prefix_deletes(&mut lowered, txn.scan_prefix(&prefix)?, &prefix);
                 lowered.push(KvWriteOp::Put {
-                    key: index_format_key(*index),
+                    key: index_marker_key(*index),
                     value: index_format_value(),
                 });
             }
@@ -829,14 +941,48 @@ impl EntityReadSnapshot for KvEntitySnapshot<'_> {
         path: Option<&FieldPath>,
         value: &Value,
     ) -> Result<BoxEntityIdScan, DbError> {
-        let prefix = index_value_prefix(index, path, value)?;
-        Ok(Box::new(IndexEntityIdScan::new(
+        let prefix = index_value_prefix(index, path, value);
+        let len = prefix.len();
+        Ok(Box::new(IndexEntityIdScan::for_value(
             self.txn.scan_prefix_stream(prefix)?,
+            len,
+        )))
+    }
+
+    fn scan_index_range_stream(
+        &self,
+        index: LocalIndexId,
+        path: Option<&FieldPath>,
+        lower: Bound<&Value>,
+        upper: Bound<&Value>,
+    ) -> Result<BoxEntityIdScan, DbError> {
+        let path_prefix_len = index_path_prefix(index, path).len();
+        let scan = match index_range(index, path, lower, upper) {
+            Some((start, end)) => self.txn.scan_range_stream(start, Some(end))?,
+            None => Box::new(std::iter::empty()),
+        };
+        Ok(Box::new(IndexEntityIdScan::for_values(
+            scan,
+            path_prefix_len,
+        )))
+    }
+
+    fn scan_index_prefix_stream(
+        &self,
+        index: LocalIndexId,
+        path: Option<&FieldPath>,
+        prefix: &str,
+    ) -> Result<BoxEntityIdScan, DbError> {
+        let path_prefix_len = index_path_prefix(index, path).len();
+        Ok(Box::new(IndexEntityIdScan::for_values(
+            self.txn
+                .scan_prefix_stream(index_string_prefix(index, path, prefix))?,
+            path_prefix_len,
         )))
     }
 
     fn index_needs_rebuild(&self, index: LocalIndexId) -> Result<bool, DbError> {
-        Ok(self.txn.get(&index_format_key(index))?.as_deref()
+        Ok(self.txn.get(&index_marker_key(index))?.as_deref()
             != Some(index_format_value().as_slice()))
     }
 }
@@ -850,12 +996,12 @@ fn index_keys(
     match index.schema.kind {
         IndexKind::Equality => {
             if let Some(value) = object.get(&index.canonical_field) {
-                keys.insert(index_key(index.lid, None, value, entity_id)?);
+                keys.insert(index_key(index.lid, None, value, entity_id));
             }
         }
         IndexKind::PathEquality => {
             for (path, value) in collect_index_entries(object) {
-                keys.insert(index_key(index.lid, Some(&path), &value, entity_id)?);
+                keys.insert(index_key(index.lid, Some(&path), &value, entity_id));
             }
         }
         IndexKind::Range | IndexKind::FullText => {}
@@ -911,98 +1057,8 @@ pub fn encode_entity(entity: &StoredEntity) -> std::result::Result<Vec<u8>, DbEr
     Ok(out)
 }
 
-fn entity_prefix(collection: LocalCollectionId) -> Vec<u8> {
-    format!("c/{}/e/", collection.0).into_bytes()
-}
-
-pub(crate) fn entity_key(collection: LocalCollectionId, id: &str) -> Vec<u8> {
-    format!("c/{}/e/{}", collection.0, id).into_bytes()
-}
-
-/// Decode an entity key into its collection and entity identifier.
-pub fn parse_entity_key(key: &[u8]) -> Option<(LocalCollectionId, &str)> {
-    let key = std::str::from_utf8(key).ok()?;
-    let key = key.strip_prefix("c/")?;
-    let (collection, id) = key.split_once("/e/")?;
-    Some((LocalCollectionId(collection.parse().ok()?), id))
-}
-
-fn index_value_prefix(
-    index: LocalIndexId,
-    path: Option<&FieldPath>,
-    value: &Value,
-) -> std::result::Result<Vec<u8>, DbError> {
-    let mut key = index_path_prefix(index, path)?;
-    key.extend_from_slice(b"v/");
-    key.extend_from_slice(encode_index_value_token(value)?.as_bytes());
-    key.extend_from_slice(b"/e/");
-    Ok(key)
-}
-
-pub(crate) fn index_key(
-    index: LocalIndexId,
-    path: Option<&FieldPath>,
-    value: &Value,
-    entity_id: &str,
-) -> std::result::Result<Vec<u8>, DbError> {
-    let mut key = index_value_prefix(index, path, value)?;
-    key.extend_from_slice(entity_id.as_bytes());
-    Ok(key)
-}
-
-pub(crate) fn index_prefix(index: LocalIndexId) -> Vec<u8> {
-    format!("i/{}/", index.0).into_bytes()
-}
-
-fn index_path_prefix(
-    index: LocalIndexId,
-    path: Option<&FieldPath>,
-) -> std::result::Result<Vec<u8>, DbError> {
-    if let Some(path) = path {
-        let path_value = field_path_to_value(path);
-        let path_token = encode_index_value_token(&path_value)?;
-        Ok(format!("i/{}/p/{}/", index.0, path_token).into_bytes())
-    } else {
-        Ok(format!("i/{}/", index.0).into_bytes())
-    }
-}
-
-pub(crate) fn index_format_key(index: LocalIndexId) -> Vec<u8> {
-    format!("i/{}/fmt", index.0).into_bytes()
-}
-
 pub(crate) fn index_format_value() -> Vec<u8> {
     INDEX_FORMAT_VERSION_V2_MSGPACK.to_le_bytes().to_vec()
-}
-
-fn encode_index_value_token(value: &Value) -> std::result::Result<String, DbError> {
-    let value_bytes = rmp_serde::to_vec(&TypedRef(value))
-        .map_err(|err| DbError::Serialization(err.to_string()))?;
-    Ok(URL_SAFE_NO_PAD.encode(value_bytes))
-}
-
-fn field_path_to_value(path: &FieldPath) -> Value {
-    let mut segments = Vec::with_capacity(path.segments().len());
-    for segment in path.segments() {
-        match segment {
-            PathSegment::Field(field) => segments.push(Value::List(vec![
-                Value::String("f".to_string()),
-                Value::String(field.clone()),
-            ])),
-            PathSegment::Index(index) => segments.push(Value::List(vec![
-                Value::String("i".to_string()),
-                Value::U64(*index as u64),
-            ])),
-        }
-    }
-    Value::List(segments)
-}
-
-fn extract_index_entity_id(key: &[u8]) -> Option<String> {
-    let marker = b"/e/";
-    let pos = key.windows(marker.len()).position(|w| w == marker)?;
-    let id = &key[(pos + marker.len())..];
-    std::str::from_utf8(id).ok().map(|s| s.to_string())
 }
 
 pub(crate) fn collect_index_entries(object: &Object) -> Vec<(FieldPath, Value)> {
@@ -1113,16 +1169,6 @@ mod tests {
     #[derive(Serialize)]
     enum LegacyStoredEntityKind {
         Untyped,
-    }
-
-    #[test]
-    fn parses_entity_key_with_delimiters_in_id() {
-        let key = entity_key(LocalCollectionId(12), "path/with/e/delimiters");
-        assert_eq!(
-            parse_entity_key(&key),
-            Some((LocalCollectionId(12), "path/with/e/delimiters"))
-        );
-        assert_eq!(parse_entity_key(b"i/12/v/token/e/id"), None);
     }
 
     #[test]

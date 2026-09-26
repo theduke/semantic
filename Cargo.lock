@@ -8872,13 +8872,16 @@ name = "semantic_db_kv"
 version = "0.0.1"
 dependencies = [
  "base64",
+ "bytes",
  "facet",
  "rmp-serde",
  "semantic_data",
  "semantic_db_core",
  "semantic_db_test",
  "serde",
+ "time",
  "tokio",
+ "uuid",
 ]
 
 [[package]]

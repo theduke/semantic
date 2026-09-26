@@ -179,7 +179,10 @@ fn compact_kv_append_has_constant_point_index_reads_and_writes() {
         .unwrap();
         let probe = probe.lock().unwrap();
         assert!(
-            !probe.scans.iter().any(|prefix| prefix.starts_with(b"c/")),
+            !probe
+                .scans
+                .iter()
+                .any(|prefix| prefix.first() == Some(&crate::keys::TAG_ENTITY)),
             "compact execution must not scan entity collections: {:?}",
             probe.scans
         );

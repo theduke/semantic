@@ -1,3 +1,5 @@
+use std::ops::Bound;
+
 use semantic_data::value::{FieldPath, Object, Value};
 
 use crate::DbError;
@@ -141,7 +143,42 @@ pub trait EntityReadSnapshot: Send + Sync {
         self.scan_index_value_stream(index, path, value)?.collect()
     }
 
+    /// Ids of the entries of `index` (at `path` for path-equality indexes)
+    /// whose value lies within `lower..upper` by `Value` order, ordered by
+    /// value and then id.
+    ///
+    /// The default reports that ordered index scans are unsupported.
+    fn scan_index_range_stream(
+        &self,
+        index: LocalIndexId,
+        path: Option<&FieldPath>,
+        lower: Bound<&Value>,
+        upper: Bound<&Value>,
+    ) -> Result<BoxEntityIdScan, DbError> {
+        let _ = (index, path, lower, upper);
+        Err(unsupported_ordered_index_scan())
+    }
+
+    /// Ids of the entries of `index` (at `path`) whose value is a string
+    /// starting with `prefix`, ordered by value and then id.
+    ///
+    /// The default reports that ordered index scans are unsupported.
+    fn scan_index_prefix_stream(
+        &self,
+        index: LocalIndexId,
+        path: Option<&FieldPath>,
+        prefix: &str,
+    ) -> Result<BoxEntityIdScan, DbError> {
+        let _ = (index, path, prefix);
+        Err(unsupported_ordered_index_scan())
+    }
+
     fn index_needs_rebuild(&self, index: LocalIndexId) -> Result<bool, DbError>;
+}
+
+/// Error returned by storages without ordered index scans.
+pub fn unsupported_ordered_index_scan() -> DbError {
+    DbError::Storage("ordered index scans are not supported by this storage".to_string())
 }
 
 /// Snapshot fallback for storages without native read transactions.
@@ -189,6 +226,26 @@ impl<S: EntityStorage + ?Sized> EntityReadSnapshot for ForwardingReadSnapshot<'_
         value: &Value,
     ) -> Result<BoxEntityIdScan, DbError> {
         self.storage.scan_index_value_stream(index, path, value)
+    }
+
+    fn scan_index_range_stream(
+        &self,
+        index: LocalIndexId,
+        path: Option<&FieldPath>,
+        lower: Bound<&Value>,
+        upper: Bound<&Value>,
+    ) -> Result<BoxEntityIdScan, DbError> {
+        self.storage
+            .scan_index_range_stream(index, path, lower, upper)
+    }
+
+    fn scan_index_prefix_stream(
+        &self,
+        index: LocalIndexId,
+        path: Option<&FieldPath>,
+        prefix: &str,
+    ) -> Result<BoxEntityIdScan, DbError> {
+        self.storage.scan_index_prefix_stream(index, path, prefix)
     }
 
     fn index_needs_rebuild(&self, index: LocalIndexId) -> Result<bool, DbError> {
@@ -348,7 +405,47 @@ pub trait EntityStorage: std::fmt::Debug + Send + Sync + 'static {
         self.scan_index_value_stream(index, path, value)?.collect()
     }
 
+    /// Ids of the entries of `index` (at `path` for path-equality indexes)
+    /// whose value lies within `lower..upper` by `Value` order, ordered by
+    /// value and then id.
+    ///
+    /// The default reports that ordered index scans are unsupported.
+    fn scan_index_range_stream(
+        &self,
+        index: LocalIndexId,
+        path: Option<&FieldPath>,
+        lower: Bound<&Value>,
+        upper: Bound<&Value>,
+    ) -> Result<BoxEntityIdScan, DbError> {
+        let _ = (index, path, lower, upper);
+        Err(unsupported_ordered_index_scan())
+    }
+
+    /// Ids of the entries of `index` (at `path`) whose value is a string
+    /// starting with `prefix`, ordered by value and then id.
+    ///
+    /// The default reports that ordered index scans are unsupported.
+    fn scan_index_prefix_stream(
+        &self,
+        index: LocalIndexId,
+        path: Option<&FieldPath>,
+        prefix: &str,
+    ) -> Result<BoxEntityIdScan, DbError> {
+        let _ = (index, path, prefix);
+        Err(unsupported_ordered_index_scan())
+    }
+
     fn index_needs_rebuild(&self, index: LocalIndexId) -> std::result::Result<bool, DbError>;
+
+    /// Prepare the storage before the database loads its catalog.
+    ///
+    /// Called once by `EmbeddedDb::open`. Backends use it to verify or
+    /// upgrade their physical layout (for example, to migrate a legacy key
+    /// layout). It must be idempotent and should not write when nothing
+    /// needs to change.
+    fn prepare_open(&mut self) -> Result<(), DbError> {
+        Ok(())
+    }
 
     /// Open a read handle for one logical operation.
     ///
@@ -501,6 +598,39 @@ impl MemoryEntityStorage {
             .map(|entry| entry.entity_id.clone())
             .collect()
     }
+
+    /// Ids of the entries whose indexed value matches `filter`, ordered by
+    /// value and then id.
+    fn scan_index_ordered(
+        indexes: &[IndexedEntity],
+        index: LocalIndexId,
+        path: Option<&FieldPath>,
+        filter: impl Fn(&Value) -> bool,
+    ) -> BoxEntityIdScan {
+        use semantic_data::schema::IndexKind;
+        use semantic_data::value::ObjectAccess as _;
+
+        let entries = indexes
+            .iter()
+            .filter(|entry| entry.index.lid == index)
+            .filter_map(|entry| {
+                let value = match entry.index.schema.kind {
+                    IndexKind::Equality => entry.object.get(&entry.index.canonical_field),
+                    IndexKind::PathEquality => {
+                        path.and_then(|path| entry.object.value_at_path(path))
+                    }
+                    IndexKind::Range | IndexKind::FullText => None,
+                }?;
+                filter(value).then(|| (value.clone(), entry.entity_id.clone()))
+            })
+            .collect::<std::collections::BTreeSet<_>>();
+        let mut seen = std::collections::BTreeSet::new();
+        let ids = entries
+            .into_iter()
+            .filter_map(|(_, id)| seen.insert(id.clone()).then_some(Ok(id)))
+            .collect::<Vec<_>>();
+        Box::new(ids.into_iter())
+    }
 }
 
 #[cfg(test)]
@@ -561,6 +691,37 @@ impl EntityStorage for MemoryEntityStorage {
             Self::scan_index(&self.indexes, index, path, value)
                 .into_iter()
                 .map(Ok),
+        ))
+    }
+
+    fn scan_index_range_stream(
+        &self,
+        index: LocalIndexId,
+        path: Option<&FieldPath>,
+        lower: Bound<&Value>,
+        upper: Bound<&Value>,
+    ) -> Result<BoxEntityIdScan, DbError> {
+        use std::ops::RangeBounds as _;
+
+        Ok(Self::scan_index_ordered(
+            &self.indexes,
+            index,
+            path,
+            |value| (lower, upper).contains(value),
+        ))
+    }
+
+    fn scan_index_prefix_stream(
+        &self,
+        index: LocalIndexId,
+        path: Option<&FieldPath>,
+        prefix: &str,
+    ) -> Result<BoxEntityIdScan, DbError> {
+        Ok(Self::scan_index_ordered(
+            &self.indexes,
+            index,
+            path,
+            |value| matches!(value, Value::String(value) if value.starts_with(prefix)),
         ))
     }
 
@@ -652,6 +813,25 @@ impl EntityReadSnapshot for MemoryEntityReadSnapshot<'_> {
         EntityStorage::scan_index_value_stream(self.storage, index, path, value)
     }
 
+    fn scan_index_range_stream(
+        &self,
+        index: LocalIndexId,
+        path: Option<&FieldPath>,
+        lower: Bound<&Value>,
+        upper: Bound<&Value>,
+    ) -> Result<BoxEntityIdScan, DbError> {
+        EntityStorage::scan_index_range_stream(self.storage, index, path, lower, upper)
+    }
+
+    fn scan_index_prefix_stream(
+        &self,
+        index: LocalIndexId,
+        path: Option<&FieldPath>,
+        prefix: &str,
+    ) -> Result<BoxEntityIdScan, DbError> {
+        EntityStorage::scan_index_prefix_stream(self.storage, index, path, prefix)
+    }
+
     fn index_needs_rebuild(&self, index: LocalIndexId) -> Result<bool, DbError> {
         EntityStorage::index_needs_rebuild(self.storage, index)
     }
@@ -687,6 +867,39 @@ mod tests {
         let mut object = Object::new();
         object.insert("kind", Value::String(kind.to_string()));
         object
+    }
+
+    #[test]
+    fn memory_ordered_index_scans_follow_value_then_id_order() {
+        let index = test_index();
+        let mut storage = MemoryEntityStorage::new();
+        let mut ops = vec![StorageWriteOp::ResetIndex(index.lid)];
+        for (id, kind) in [("d", "b"), ("a", "c"), ("c", "ab"), ("b", "ab"), ("e", "a")] {
+            ops.push(StorageWriteOp::IndexEntity {
+                index: index.clone(),
+                entity_id: id.to_string(),
+                object: object(kind),
+            });
+        }
+        storage.apply_batch(&ops).unwrap();
+        let ids = |scan: BoxEntityIdScan| scan.collect::<Result<Vec<_>, _>>().unwrap();
+
+        let ab = Value::String("ab".to_string());
+        let c = Value::String("c".to_string());
+        let range = storage
+            .scan_index_range_stream(index.lid, None, Bound::Included(&ab), Bound::Excluded(&c))
+            .unwrap();
+        assert_eq!(ids(range), ["b", "c", "d"]);
+        let range = storage
+            .snapshot()
+            .unwrap()
+            .scan_index_range_stream(index.lid, None, Bound::Excluded(&ab), Bound::Unbounded)
+            .unwrap();
+        assert_eq!(ids(range), ["d", "a"]);
+        let prefix = storage
+            .scan_index_prefix_stream(index.lid, None, "a")
+            .unwrap();
+        assert_eq!(ids(prefix), ["e", "b", "c"]);
     }
 
     #[test]

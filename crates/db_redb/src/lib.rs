@@ -578,6 +578,98 @@ mod tests {
         assert_eq!(storage.current_revision().unwrap(), revision);
     }
 
+    /// Entries of an indexed database re-encoded in the legacy textual layout.
+    fn legacy_layout_entries() -> Vec<(Vec<u8>, Vec<u8>)> {
+        let mut db = semantic_db_kv::open_memory().unwrap();
+        let items = db
+            .create_collection("items", CollectionKind::Untyped)
+            .unwrap();
+        db.create_index("by_kind", items, "kind", false).unwrap();
+        for (id, kind) in [("one", "music"), ("two", "video"), ("three", "music")] {
+            let mut object = Object::new();
+            object.insert("id", Value::String(id.into()));
+            object.insert("kind", Value::String(kind.into()));
+            db.insert("items", id, object).unwrap();
+        }
+        let path_indexes = db
+            .catalog()
+            .indexes()
+            .filter(|(_, index)| {
+                index.schema.kind == semantic_data::schema::IndexKind::PathEquality
+            })
+            .map(|(lid, _)| lid)
+            .collect();
+        let (_, store) = db.into_parts();
+        semantic_db_kv::keys::legacy::downgrade_entries(
+            store.scan_raw_prefix(&[]).unwrap(),
+            &path_indexes,
+        )
+        .unwrap()
+    }
+
+    #[test]
+    fn redb_legacy_layout_is_migrated_once_on_open() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("db");
+        let legacy_revision = {
+            let mut engine = RedbKvEngine::open(&path, DbOpenMode::AutoCreate).unwrap();
+            let ops = legacy_layout_entries()
+                .into_iter()
+                .map(|(key, value)| KvWriteOp::Put { key, value })
+                .collect::<Vec<_>>();
+            engine.write_batch(&ops).unwrap();
+            engine.current_revision().unwrap()
+        };
+
+        let mut revisions = Vec::new();
+        for _ in 0..3 {
+            let engine = RedbKvEngine::open(&path, DbOpenMode::OpenExisting).unwrap();
+            let db = RedbDatabase::open(semantic_db_kv::EntityStore::new(engine)).unwrap();
+            assert_eq!(
+                db.get("items", "two").unwrap().unwrap().object.get("kind"),
+                Some(&Value::String("video".into()))
+            );
+            let rows = db
+                .select(
+                    SelectQuery::new()
+                        .with_collection("items")
+                        .with_predicate(eq_predicate("kind", "music")),
+                )
+                .unwrap();
+            let mut ids = rows
+                .iter()
+                .map(|row| row.get("id").cloned().unwrap())
+                .collect::<Vec<_>>();
+            ids.sort();
+            assert_eq!(
+                ids,
+                [Value::String("one".into()), Value::String("three".into())]
+            );
+            let catalog = db.catalog();
+            let items = catalog.collection_by_name("items").unwrap().lid;
+            let by_kind = catalog.find_equality_index(items, "kind").unwrap().lid;
+            let (_, store) = db.into_parts();
+            assert_eq!(
+                store.layout_version().unwrap(),
+                Some(semantic_db_kv::LAYOUT_VERSION_CURRENT)
+            );
+            assert!(store.scan_raw_prefix(b"c/").unwrap().is_empty());
+            assert!(store.scan_raw_prefix(b"i/").unwrap().is_empty());
+            assert!(!store.index_needs_rebuild(by_kind).unwrap());
+            assert_eq!(
+                store
+                    .scan_index_value(by_kind, None, &Value::String("music".into()))
+                    .unwrap(),
+                ["one", "three"]
+            );
+            revisions.push(store.current_revision().unwrap());
+        }
+        // The first open migrates; later opens do not write.
+        assert_ne!(revisions[0], legacy_revision);
+        assert_eq!(revisions[1], revisions[0]);
+        assert_eq!(revisions[2], revisions[0]);
+    }
+
     #[test]
     fn redb_backend_roundtrip() {
         let dir = tempfile::tempdir().unwrap();

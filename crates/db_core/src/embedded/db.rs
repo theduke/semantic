@@ -93,6 +93,7 @@ impl<S: EntityStorage> EmbeddedDb<S> {
 
     pub fn open_with_config(engine: S, config: DbConfig) -> std::result::Result<Self, DbError> {
         let mut storage = engine;
+        storage.prepare_open()?;
         let bootstrap_catalog = fresh_catalog_with_core_schema()
             .map_err(|err| DbError::InvalidQuery(err.to_string()))?;
         let loaded_catalog = if let Some(catalog) = load_catalog(&storage, &bootstrap_catalog)? {

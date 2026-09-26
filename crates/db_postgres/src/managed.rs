@@ -291,15 +291,12 @@ pub(crate) async fn lock_and_load(
         let collection: i64 = row.get(0);
         let id: String = row.get(1);
         let document: serde_json::Value = row.get(2);
-        let entity = decode_stored_document(
-            usize::try_from(collection).map_err(|_| {
-                DbError::Deserialization(format!("invalid collection lid {collection}"))
-            })?,
-            id.clone(),
-            &document,
-        )?;
+        let collection = usize::try_from(collection).map_err(|_| {
+            DbError::Deserialization(format!("invalid collection lid {collection}"))
+        })?;
+        let entity = decode_stored_document(collection, id.clone(), &document)?;
         entries.insert(
-            format!("c/{collection}/e/{id}").into_bytes(),
+            semantic_db_kv::entity_key(LocalCollectionId(collection), &id),
             encode_entity(&entity)?,
         );
     }

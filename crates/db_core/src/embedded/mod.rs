@@ -10,5 +10,5 @@ pub(crate) use storage::MemoryEntityStorage;
 pub use storage::{
     BoxEntityIdScan, BoxEntityScan, EntityReadSnapshot, EntityStorage, ForwardingReadSnapshot,
     StorageCommitOutcome, StorageTransactionCapabilities, StorageWriteOp, StoredEntity,
-    StoredEntityKind,
+    StoredEntityKind, unsupported_ordered_index_scan,
 };
