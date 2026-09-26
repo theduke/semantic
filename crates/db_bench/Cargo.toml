@@ -1,0 +1,31 @@
+[package]
+name = "semantic_db_bench"
+description = "Criterion benchmarks for the embedded Semantic database."
+publish = false
+authors.workspace = true
+keywords.workspace = true
+repository.workspace = true
+homepage.workspace = true
+license.workspace = true
+readme.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+categories.workspace = true
+version.workspace = true
+
+[dependencies]
+anyhow = { workspace = true }
+semantic_data = { workspace = true }
+semantic_db_core = { path = "../db_core", features = ["tokio"] }
+semantic_db_kv = { path = "../db_kv" }
+semantic_db_redb = { path = "../db_redb" }
+tempfile = "3.26.0"
+time = { workspace = true }
+tokio = { workspace = true, features = ["rt-multi-thread", "sync", "time"] }
+
+[dev-dependencies]
+criterion = { version = "0.8.2", default-features = false, features = ["cargo_bench_support"] }
+
+[[bench]]
+name = "db"
+harness = false
