@@ -21,6 +21,9 @@ use semantic_db_core::DbError;
 use semantic_db_core::catalog::{LocalCollectionId, LocalIndexId};
 
 use super::{TAG_ENTITY, TAG_INDEX, TAG_INDEX_MARKER, decode_lid, memcmp};
+use crate::storage::encode_entity;
+use crate::storage::entity_codec::decode_stored;
+use crate::storage::field_dict::FieldDict;
 
 /// Prefix shared by all legacy entity keys.
 pub const ENTITY_SPACE: &[u8] = b"c/";
@@ -72,8 +75,9 @@ fn value_token(value: &Value) -> Result<String, DbError> {
 
 /// Re-encode entries of the current layout in the legacy layout.
 ///
-/// Meta entries are dropped (the legacy layout has none) and keys outside the
-/// binary key spaces are kept. `path_indexes` lists the path-equality
+/// Meta entries are dropped (the legacy layout has none), entity payloads
+/// are re-encoded as self-contained (version 1) payloads like those of
+/// legacy databases, and keys outside the binary key spaces are kept. `path_indexes` lists the path-equality
 /// indexes, whose entries carry a path token. Intended for building legacy
 /// fixtures in tests.
 #[doc(hidden)]
@@ -82,6 +86,8 @@ pub fn downgrade_entries(
     path_indexes: &BTreeSet<LocalIndexId>,
 ) -> Result<Vec<(Vec<u8>, Vec<u8>)>, DbError> {
     let invalid = || DbError::Deserialization("invalid current-layout key".to_string());
+    let entries = entries.into_iter().collect::<Vec<_>>();
+    let dictionaries = FieldDict::load_all(&entries)?;
     let mut out = Vec::new();
     for (key, value) in entries {
         let Some((&tag, rest)) = key.split_first() else {
@@ -90,7 +96,10 @@ pub fn downgrade_entries(
         match tag {
             TAG_ENTITY => {
                 let (collection, id) = super::parse_entity_key(&key).ok_or_else(invalid)?;
-                out.push((entity_key(collection, id), value));
+                let dictionary = dictionaries.get(&collection).cloned().unwrap_or_default();
+                let entity =
+                    decode_stored(collection, id, &value, &mut |_| Ok(dictionary.clone()))?;
+                out.push((entity_key(collection, id), encode_entity(&entity)?));
             }
             TAG_INDEX => {
                 let (lid, len) = decode_lid(rest).ok_or_else(invalid)?;

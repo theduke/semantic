@@ -484,6 +484,8 @@ pub fn open_backend_with_options(
 mod concurrency_tests;
 #[cfg(test)]
 mod engine_tests;
+#[cfg(test)]
+mod entity_format_tests;
 
 #[cfg(test)]
 mod tests {

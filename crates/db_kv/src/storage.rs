@@ -3,13 +3,12 @@ use std::ops::Bound;
 use std::sync::Arc;
 
 use semantic_data::schema::IndexKind;
-use semantic_data::value::serde::typed::TypedValue;
 use semantic_data::value::{FieldPath, Object, Value};
 use semantic_db_core::DbError;
 use semantic_db_core::catalog::{LocalCollectionId, LocalIndexId};
 use semantic_db_core::embedded::{
     BoxEntityIdScan, BoxEntityScan, EntityReadSnapshot, EntityStorage, StorageCommitOutcome,
-    StorageStats, StorageTransactionCapabilities, StorageWriteOp, StoredEntity, StoredEntityKind,
+    StorageStats, StorageTransactionCapabilities, StorageWriteOp, StoredEntity,
     unsupported_storage_maintenance,
 };
 use serde::{Deserialize, Serialize};
@@ -21,12 +20,19 @@ use crate::keys::{
     index_value_prefix,
 };
 
+pub mod entity_codec;
+pub(crate) mod field_dict;
 pub mod layout;
 pub mod memory;
 pub mod stats;
+mod value_codec;
+pub use entity_codec::{EntityPayloadFormat, decode_entity, encode_entity};
+use field_dict::{DictStaging, FieldDictCache, HandleDicts, ScanDecoder};
 pub use memory::MemoryKvEngine;
 use stats::CounterDeltas;
 
+#[cfg(test)]
+mod entity_format_tests;
 #[cfg(test)]
 mod incremental_tests;
 #[cfg(test)]
@@ -38,8 +44,6 @@ mod stats_tests;
 #[cfg(test)]
 mod txn_tests;
 
-const ENTITY_FORMAT_VERSION_PREFIX_LEN: usize = std::mem::size_of::<u16>();
-const ENTITY_FORMAT_VERSION_V1_MSGPACK: u16 = 1;
 // Version 2 forces legacy indexes to be rebuilt. Some databases could retain a
 // format marker without complete index entries, which made indexed equality
 // queries return false empty results.
@@ -388,11 +392,12 @@ pub trait KvEngine: KvMaintenance + std::fmt::Debug + Send + Sync + 'static {
 
 pub struct EntityScan<I> {
     inner: I,
+    decoder: ScanDecoder,
 }
 
 impl<I> EntityScan<I> {
-    fn new(inner: I) -> Self {
-        Self { inner }
+    fn new(inner: I, decoder: ScanDecoder) -> Self {
+        Self { inner, decoder }
     }
 }
 
@@ -405,7 +410,7 @@ where
     fn next(&mut self) -> Option<Self::Item> {
         self.inner
             .next()
-            .map(|item| item.and_then(|(_, payload)| decode_entity(&payload)))
+            .map(|item| item.and_then(|(key, payload)| self.decoder.decode(&key, &payload)))
     }
 }
 
@@ -507,11 +512,31 @@ where
 #[derive(Debug)]
 pub struct EntityStore<E: KvEngine> {
     engine: E,
+    payload_format: EntityPayloadFormat,
+    /// Committed field-name dictionaries, shared with read handles.
+    dictionaries: Arc<FieldDictCache>,
 }
 
 impl<E: KvEngine> EntityStore<E> {
     pub fn new(engine: E) -> Self {
-        Self { engine }
+        Self::with_payload_format(engine, EntityPayloadFormat::default())
+    }
+
+    /// Create a store writing entity payloads in `payload_format`.
+    ///
+    /// Payloads of every format are always readable; use
+    /// [`EntityPayloadFormat::SelfContained`] when payloads are decoded
+    /// outside the store with [`decode_entity`].
+    pub fn with_payload_format(engine: E, payload_format: EntityPayloadFormat) -> Self {
+        Self {
+            engine,
+            payload_format,
+            dictionaries: Arc::default(),
+        }
+    }
+
+    pub fn payload_format(&self) -> EntityPayloadFormat {
+        self.payload_format
     }
 
     pub fn engine(&self) -> &E {
@@ -559,9 +584,8 @@ impl<E: KvEngine> EntityStore<E> {
     }
 
     pub fn put_entity(&mut self, entity: &StoredEntity) -> std::result::Result<(), DbError> {
-        let key = entity_key(LocalCollectionId(entity.collection), &entity.id);
-        let payload = encode_entity(entity)?;
-        self.write_keys([(key, Some(payload))])
+        self.commit_ops(&[StorageWriteOp::PutEntity(entity.clone())], None)
+            .map(|_| ())
     }
 
     pub fn get_entity(
@@ -573,7 +597,7 @@ impl<E: KvEngine> EntityStore<E> {
         let Some(payload) = self.engine.get(&key)? else {
             return Ok(None);
         };
-        decode_entity(&payload).map(Some)
+        self.decode_entity_at(collection, id, &payload).map(Some)
     }
 
     pub fn delete_entity(
@@ -597,7 +621,8 @@ impl<E: KvEngine> EntityStore<E> {
         collection: LocalCollectionId,
     ) -> std::result::Result<EntityScan<E::PrefixScan>, DbError> {
         let prefix = entity_prefix(collection);
-        Ok(EntityScan::new(self.engine.scan_prefix_stream(prefix)?))
+        let scan = self.engine.scan_prefix_stream(prefix)?;
+        Ok(EntityScan::new(scan, self.scan_decoder(collection)?))
     }
 
     pub fn scan_collection_at_revision(
@@ -615,10 +640,10 @@ impl<E: KvEngine> EntityStore<E> {
         revision: u64,
     ) -> std::result::Result<EntityScan<E::PrefixScan>, DbError> {
         let prefix = entity_prefix(collection);
-        Ok(EntityScan::new(
-            self.engine
-                .scan_prefix_at_revision_stream(prefix, revision)?,
-        ))
+        let scan = self
+            .engine
+            .scan_prefix_at_revision_stream(prefix, revision)?;
+        Ok(EntityScan::new(scan, self.scan_decoder(collection)?))
     }
 
     pub fn put_index_entry(
@@ -849,14 +874,19 @@ impl<E: KvEngine> EntityStorage for EntityStore<E> {
     }
 
     fn snapshot(&self) -> Result<Box<dyn EntityReadSnapshot + '_>, DbError> {
-        Ok(Box::new(KvEntitySnapshot::new(self.engine.begin_read()?)))
+        Ok(Box::new(KvEntitySnapshot::with_dictionaries(
+            self.engine.begin_read()?,
+            self.dictionaries.clone(),
+        )))
     }
 
     fn owned_snapshot(&self) -> Result<Option<Arc<dyn EntityReadSnapshot>>, DbError> {
-        Ok(self
-            .engine
-            .begin_read_owned()?
-            .map(|txn| Arc::new(KvEntitySnapshot::new(txn)) as Arc<dyn EntityReadSnapshot>))
+        Ok(self.engine.begin_read_owned()?.map(|txn| {
+            Arc::new(KvEntitySnapshot::with_dictionaries(
+                txn,
+                self.dictionaries.clone(),
+            )) as Arc<dyn EntityReadSnapshot>
+        }))
     }
 
     fn apply_batch(&mut self, ops: &[StorageWriteOp]) -> std::result::Result<(), DbError> {
@@ -888,10 +918,17 @@ impl<E: KvEngine> EntityStore<E> {
         operations: &[StorageWriteOp],
         expected_revision: Option<u64>,
     ) -> Result<StorageCommitOutcome, DbError> {
-        self.engine.write_with(expected_revision, |txn| {
-            let values = lower_final_values(operations, &*txn)?;
+        let format = self.payload_format;
+        let mut staging = DictStaging::new(&self.dictionaries);
+        let outcome = self.engine.write_with(expected_revision, |txn| {
+            let values = lower_final_values(operations, &*txn, &mut staging, format)?;
+            staging.write_additions(txn)?;
             write_final_values(txn, values)
-        })
+        })?;
+        if matches!(outcome, StorageCommitOutcome::Committed { .. }) {
+            staging.publish();
+        }
+        Ok(outcome)
     }
 
     /// Write final key states in one unconditional write transaction.
@@ -933,13 +970,15 @@ fn write_final_values(
 fn lower_final_values(
     operations: &[StorageWriteOp],
     txn: &dyn KvWriteTxn,
+    dictionaries: &mut DictStaging<'_>,
+    format: EntityPayloadFormat,
 ) -> Result<BTreeMap<Vec<u8>, Option<Vec<u8>>>, DbError> {
     let mut lowered = Vec::new();
     for operation in operations {
         match operation {
             StorageWriteOp::PutEntity(entity) => lowered.push(KvWriteOp::Put {
                 key: entity_key(LocalCollectionId(entity.collection), &entity.id),
-                value: encode_entity(entity)?,
+                value: dictionaries.encode(txn, entity, format)?,
             }),
             StorageWriteOp::DeleteEntity {
                 collection,
@@ -1008,11 +1047,23 @@ fn lower_final_values(
 /// Entity reads served by one engine read handle.
 pub struct KvEntitySnapshot<'a> {
     txn: Box<dyn KvReadTxn + 'a>,
+    /// The store's committed field-name dictionaries.
+    dictionaries: Arc<FieldDictCache>,
+    /// Field-name dictionaries loaded through `txn`.
+    loaded: HandleDicts,
 }
 
 impl<'a> KvEntitySnapshot<'a> {
     pub fn new(txn: Box<dyn KvReadTxn + 'a>) -> Self {
-        Self { txn }
+        Self::with_dictionaries(txn, Arc::default())
+    }
+
+    fn with_dictionaries(txn: Box<dyn KvReadTxn + 'a>, dictionaries: Arc<FieldDictCache>) -> Self {
+        Self {
+            txn,
+            dictionaries,
+            loaded: HandleDicts::default(),
+        }
     }
 }
 
@@ -1032,7 +1083,7 @@ impl EntityReadSnapshot for KvEntitySnapshot<'_> {
     ) -> Result<Option<StoredEntity>, DbError> {
         self.txn
             .get(&entity_key(collection, id))?
-            .map(|payload| decode_entity(&payload))
+            .map(|payload| self.decode_entity_at(collection, id, &payload))
             .transpose()
     }
 
@@ -1040,8 +1091,10 @@ impl EntityReadSnapshot for KvEntitySnapshot<'_> {
         &self,
         collection: LocalCollectionId,
     ) -> Result<BoxEntityScan, DbError> {
+        let scan = self.txn.scan_prefix_stream(entity_prefix(collection))?;
         Ok(Box::new(EntityScan::new(
-            self.txn.scan_prefix_stream(entity_prefix(collection))?,
+            scan,
+            self.scan_decoder(collection)?,
         )))
     }
 
@@ -1152,38 +1205,6 @@ fn push_prefix_deletes(
     operations.extend(keys.into_iter().map(|key| KvWriteOp::Delete { key }));
 }
 
-pub fn decode_entity(payload: &[u8]) -> std::result::Result<StoredEntity, DbError> {
-    let Some((version, body)) = split_entity_payload_prefix(payload) else {
-        return Err(DbError::Deserialization(
-            "entity payload missing format version prefix".to_string(),
-        ));
-    };
-    match version {
-        ENTITY_FORMAT_VERSION_V1_MSGPACK => decode_msgpack_entity_v1(body),
-        _ => Err(DbError::Deserialization(format!(
-            "unsupported entity payload format version: {version}"
-        ))),
-    }
-}
-
-pub fn encode_entity(entity: &StoredEntity) -> std::result::Result<Vec<u8>, DbError> {
-    let wire = StoredEntityWire {
-        id: entity.id.clone(),
-        collection: entity.collection,
-        kind: (&entity.kind).into(),
-        object: entity
-            .object
-            .iter()
-            .map(|(k, v)| (k.clone(), TypedValue(v.clone())))
-            .collect(),
-    };
-    let body = rmp_serde::to_vec(&wire).map_err(|err| DbError::Serialization(err.to_string()))?;
-    let mut out = Vec::with_capacity(ENTITY_FORMAT_VERSION_PREFIX_LEN + body.len());
-    out.extend_from_slice(&ENTITY_FORMAT_VERSION_V1_MSGPACK.to_le_bytes());
-    out.extend_from_slice(&body);
-    Ok(out)
-}
-
 pub(crate) fn index_format_value() -> Vec<u8> {
     INDEX_FORMAT_VERSION_V2_MSGPACK.to_le_bytes().to_vec()
 }
@@ -1219,71 +1240,14 @@ fn collect_value_entries(value: &Value, path: &mut FieldPath, out: &mut Vec<(Fie
     }
 }
 
-#[derive(Serialize, Deserialize)]
-struct StoredEntityWire {
-    id: String,
-    collection: usize,
-    kind: StoredEntityKindWire,
-    object: BTreeMap<String, TypedValue>,
-}
-
-#[derive(Serialize, Deserialize)]
-enum StoredEntityKindWire {
-    Untyped,
-    Record,
-    Class,
-}
-
-impl From<&StoredEntityKind> for StoredEntityKindWire {
-    fn from(value: &StoredEntityKind) -> Self {
-        match value {
-            StoredEntityKind::Untyped => Self::Untyped,
-            StoredEntityKind::Record => Self::Record,
-            StoredEntityKind::Class => Self::Class,
-        }
-    }
-}
-
-impl From<StoredEntityKindWire> for StoredEntityKind {
-    fn from(value: StoredEntityKindWire) -> Self {
-        match value {
-            StoredEntityKindWire::Untyped => Self::Untyped,
-            StoredEntityKindWire::Record => Self::Record,
-            StoredEntityKindWire::Class => Self::Class,
-        }
-    }
-}
-
-fn decode_msgpack_entity_v1(payload: &[u8]) -> std::result::Result<StoredEntity, DbError> {
-    let wire: StoredEntityWire =
-        rmp_serde::from_slice(payload).map_err(|err| DbError::Deserialization(err.to_string()))?;
-    let mut object = Object::new();
-    for (field, value) in wire.object {
-        object.insert(field, value.0);
-    }
-    Ok(StoredEntity {
-        id: wire.id,
-        collection: wire.collection,
-        kind: wire.kind.into(),
-        object,
-    })
-}
-
-fn split_entity_payload_prefix(payload: &[u8]) -> Option<(u16, &[u8])> {
-    if payload.len() < ENTITY_FORMAT_VERSION_PREFIX_LEN {
-        return None;
-    }
-    let mut prefix = [0u8; ENTITY_FORMAT_VERSION_PREFIX_LEN];
-    prefix.copy_from_slice(&payload[..ENTITY_FORMAT_VERSION_PREFIX_LEN]);
-    let version = u16::from_le_bytes(prefix);
-    Some((version, &payload[ENTITY_FORMAT_VERSION_PREFIX_LEN..]))
-}
-
 #[cfg(test)]
 mod tests {
+    use super::entity_codec::ENTITY_FORMAT_VERSION_V1_MSGPACK;
     use super::*;
     use semantic_data::schema::{IndexSchema as DataIndexSchema, KeyPath};
+    use semantic_data::value::serde::typed::TypedValue;
     use semantic_db_core::catalog::IndexSchema;
+    use semantic_db_core::embedded::StoredEntityKind;
 
     #[derive(Serialize)]
     struct LegacyStoredEntityWire {

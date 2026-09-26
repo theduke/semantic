@@ -1,13 +1,18 @@
 pub mod keys;
 pub mod storage;
+#[cfg(test)]
+mod test_values;
 
 pub use keys::entity_key;
+pub use storage::entity_codec::{
+    ENTITY_FORMAT_VERSION_V1_MSGPACK, ENTITY_FORMAT_VERSION_V2_COMPACT,
+};
 pub use storage::layout::{LAYOUT_VERSION_CURRENT, LAYOUT_VERSION_LEGACY, LayoutMigration};
 pub use storage::stats::{STATS_VERSION, StatsBackfill};
 pub use storage::{
-    BoxKvPrefixScan, EntityScan, EntityStore, IndexEntityIdScan, KvEngine, KvEngineStats,
-    KvEntitySnapshot, KvKeyScan, KvMaintenance, KvReadTxn, KvScanItem, KvWriteOp, KvWriteTxn,
-    MemoryKvEngine, decode_entity, encode_entity, parse_entity_key, prefix_range_end,
+    BoxKvPrefixScan, EntityPayloadFormat, EntityScan, EntityStore, IndexEntityIdScan, KvEngine,
+    KvEngineStats, KvEntitySnapshot, KvKeyScan, KvMaintenance, KvReadTxn, KvScanItem, KvWriteOp,
+    KvWriteTxn, MemoryKvEngine, decode_entity, encode_entity, parse_entity_key, prefix_range_end,
 };
 
 use semantic_db_core::embedded::{EmbeddedBackend, EmbeddedDb};

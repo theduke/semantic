@@ -13,8 +13,8 @@ use semantic_db_core::embedded::{
 };
 use semantic_db_core::{DEFAULT_COLLECTION, DbConfig, DbError};
 use semantic_db_kv::{
-    BoxKvPrefixScan, EntityStore, KvEngine, KvMaintenance, KvWriteOp, decode_entity, encode_entity,
-    parse_entity_key,
+    BoxKvPrefixScan, EntityPayloadFormat, EntityStore, KvEngine, KvMaintenance, KvWriteOp,
+    decode_entity, encode_entity, parse_entity_key,
 };
 use sha2::{Digest, Sha256};
 use tokio_postgres::Transaction;
@@ -303,10 +303,12 @@ pub(crate) async fn lock_and_load(
         );
     }
     let mut db = EmbeddedDb::open_with_config(
-        EntityStore::new(PostgresSnapshotEngine::from_entries(
-            entries,
-            revision.max(0) as u64,
-        )),
+        // Payloads are decoded outside the store (`decode_entity`) when
+        // changes are written back, so they must be self-contained.
+        EntityStore::with_payload_format(
+            PostgresSnapshotEngine::from_entries(entries, revision.max(0) as u64),
+            EntityPayloadFormat::SelfContained,
+        ),
         config,
     )?;
     if snapshot

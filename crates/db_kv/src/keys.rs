@@ -34,6 +34,11 @@
 //! big-endian `u32`; see [`crate::storage::layout`]. The meta key
 //! `0x01 "stats"` marks the stats counters as maintained; see
 //! [`crate::storage::stats`].
+//!
+//! Per-collection field-name dictionaries of the compact entity payload
+//! format live under `0x01 "fdict" lid(collection) id` (`id` a big-endian
+//! `u32`), holding the UTF-8 field name; see
+//! [`crate::storage::entity_codec`] and the `storage::field_dict` module.
 
 use semantic_data::value::{FieldPath, PathSegment, Value};
 use semantic_db_core::catalog::{LocalCollectionId, LocalIndexId};
@@ -62,6 +67,8 @@ pub const TAG_RESERVED_END: u8 = 0x20;
 pub const META_FORMAT: &[u8] = b"format";
 /// Name of the meta entry marking the stats counters as maintained.
 pub const META_STATS: &[u8] = b"stats";
+/// Name prefix of the meta entries holding field-name dictionaries.
+pub const META_FIELD_DICT: &[u8] = b"fdict";
 
 /// Stats kind of per-collection row counts.
 pub const STATS_COLLECTION_ROWS: u8 = 0x01;
@@ -116,6 +123,30 @@ pub fn layout_version_key() -> Vec<u8> {
 /// maintained.
 pub fn stats_version_key() -> Vec<u8> {
     meta_key(META_STATS)
+}
+
+/// Prefix of the field-name dictionary entries of `collection`.
+pub fn field_dict_prefix(collection: LocalCollectionId) -> Vec<u8> {
+    let mut key = meta_key(META_FIELD_DICT);
+    encode_lid(&mut key, collection.0 as u64);
+    key
+}
+
+/// Key of the field name with dictionary id `id` in `collection`.
+pub fn field_dict_key(collection: LocalCollectionId, id: u32) -> Vec<u8> {
+    let mut key = field_dict_prefix(collection);
+    key.extend_from_slice(&id.to_be_bytes());
+    key
+}
+
+/// Decode a field-name dictionary key into its collection and field id.
+pub fn parse_field_dict_key(key: &[u8]) -> Option<(LocalCollectionId, u32)> {
+    let rest = key
+        .strip_prefix(&[TAG_META])?
+        .strip_prefix(META_FIELD_DICT)?;
+    let (collection, len) = decode_lid(rest)?;
+    let id = u32::from_be_bytes(rest.get(len..)?.try_into().ok()?);
+    Some((LocalCollectionId(usize::try_from(collection).ok()?), id))
 }
 
 fn stats_key(kind: u8, lid: usize) -> Vec<u8> {
