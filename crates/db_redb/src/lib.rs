@@ -543,6 +543,10 @@ mod change_feed_tests;
 #[cfg(test)]
 mod concurrency_tests;
 #[cfg(test)]
+mod crash_tests;
+#[cfg(test)]
+mod differential_tests;
+#[cfg(test)]
 mod engine_tests;
 #[cfg(test)]
 mod entity_format_tests;

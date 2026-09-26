@@ -1,4 +1,6 @@
 pub mod keys;
+#[cfg(test)]
+mod property_tests;
 pub mod storage;
 #[cfg(test)]
 mod test_values;

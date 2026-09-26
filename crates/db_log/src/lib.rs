@@ -71,6 +71,9 @@ pub fn open_backend_from_store_with_config<S: LogStore>(
 }
 
 #[cfg(test)]
+mod differential_tests;
+
+#[cfg(test)]
 mod tests {
     use std::sync::Arc;
 
