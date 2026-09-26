@@ -160,6 +160,7 @@
             pname = "semantic";
             inherit version cargoDeps;
             src = source;
+            SEMANTIC_GIT_COMMIT = inputs.self.shortRev or inputs.self.dirtyShortRev or "unknown";
 
             nativeBuildInputs = with pkgs; [
               binaryen

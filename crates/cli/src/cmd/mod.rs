@@ -4,11 +4,28 @@ pub mod fuse;
 pub mod server;
 pub mod shared;
 
-use clap::{Parser, Subcommand};
+use clap::{ArgAction, Parser, Subcommand};
+
+/// Version string including the git commit, e.g. `0.1.0 (abc123def456)`.
+pub const VERSION: &str = concat!(
+    env!("CARGO_PKG_VERSION"),
+    " (",
+    env!("SEMANTIC_GIT_COMMIT"),
+    ")"
+);
 
 #[derive(Debug, Parser)]
-#[command(name = "semantic", about = "Semantic command-line interface")]
+#[command(
+    name = "semantic",
+    about = "Semantic command-line interface",
+    version = VERSION,
+    disable_version_flag = true
+)]
 pub struct Args {
+    /// Print version information.
+    #[arg(short = 'V', visible_short_alias = 'v', long, action = ArgAction::Version)]
+    version: Option<bool>,
+
     #[command(subcommand)]
     pub command: SubCmd,
 }
@@ -36,6 +53,23 @@ mod tests {
     use semantic_fuse::EntityFormat;
 
     use super::{Args, SubCmd, api};
+
+    #[test]
+    fn version_flags_exit_successfully_without_a_subcommand() {
+        for flag in ["--version", "-V", "-v"] {
+            let error = Args::try_parse_from(["semantic", flag]).unwrap_err();
+            assert_eq!(error.kind(), clap::error::ErrorKind::DisplayVersion);
+            assert_eq!(error.exit_code(), 0);
+            assert_eq!(
+                error.to_string(),
+                format!(
+                    "semantic {} ({})\n",
+                    env!("CARGO_PKG_VERSION"),
+                    env!("SEMANTIC_GIT_COMMIT")
+                )
+            );
+        }
+    }
 
     #[test]
     fn parses_api_command_namespace() {

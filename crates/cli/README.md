@@ -8,6 +8,17 @@ behavior, and examples.
 
 The `semantic_cli` crate provides the `semantic` command-line application.
 
+## Version
+
+`semantic --version` (also `-V` or `-v`) prints the crate version and the build's
+Git commit, for example `semantic 0.0.1 (abc123def456)`.
+
+Cargo builds discover the commit from Git at build time. Builds without Git
+metadata can set `SEMANTIC_GIT_COMMIT`; Nix packages supply the flake revision
+automatically. If neither is available, the commit is reported as `unknown`.
+The commit identifies the base revision and does not describe uncommitted edits
+in local Cargo builds.
+
 ## URL imports and plugins
 
 Discover importers, start an import, then inspect its returned job ID:
