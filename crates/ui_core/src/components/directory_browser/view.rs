@@ -3,8 +3,9 @@ use std::{collections::BTreeSet, time::Duration};
 use dioxus::logger::tracing::{error, info, warn};
 use dioxus::{html::input_data::MouseButton, prelude::*};
 use dioxus_icons::lucide::{
-    ChevronDown, ChevronRight, ClipboardPaste, Copy, FileText, Folder, FolderPlus, FolderTree,
-    Grid2x2, Link, List, PanelLeft, Pencil, Plus, RefreshCw, Scissors, Trash2, Upload, X,
+    ChevronDown, ChevronRight, ClipboardPaste, Copy, Ellipsis, FileText, Folder, FolderPlus,
+    FolderTree, Grid2x2, Link, List, PanelLeft, Pencil, Plus, RefreshCw, Scissors, Trash2, Upload,
+    X,
 };
 use futures::StreamExt;
 
@@ -22,8 +23,9 @@ use super::{
     },
     picker::{FileTreePicker, FileTreeSelection},
     types::{
-        BrowseViewMode, DirectoryActionTarget, DirectoryBrowseItem, DirectoryBrowserProps,
-        DirectoryLocationKind, DirectoryPage, DirectorySort, DirectoryTreeRow,
+        BrowseViewMode, DirectoryActionTarget, DirectoryBreadcrumb, DirectoryBrowseItem,
+        DirectoryBrowserProps, DirectoryLocationKind, DirectoryPage, DirectorySort,
+        DirectoryTreeRow,
     },
 };
 
@@ -123,6 +125,7 @@ enum DirectoryBrowserCommand {
     PreviousPage,
     NextPage,
     ToggleTreeExpansion(String),
+    RevealPath(Vec<String>),
     BeginDrag(String),
     EndDrag,
     DropOnDirectory {
@@ -150,6 +153,7 @@ enum DirectoryBrowserCommand {
     ClearSelection,
     CutSelected,
     CopySelected,
+    MoveOne(String),
     PasteInto(DirectoryMembershipTarget),
     RemoveSelected,
     ConfirmRemove {
@@ -447,6 +451,23 @@ fn use_directory_browser_coroutine(
                         reload_current_tree(active_client.clone(), active_scope_id.clone(), state)
                             .await;
                     }
+                    DirectoryBrowserCommand::RevealPath(path) => {
+                        let mut expanded = (state.expanded_tree)();
+                        let previous_len = expanded.len();
+                        expanded.extend(path);
+                        let changed = expanded.len() > previous_len;
+                        if changed {
+                            state.expanded_tree.set(expanded);
+                        }
+                        if changed && (state.tree_open)() {
+                            reload_current_tree(
+                                active_client.clone(),
+                                active_scope_id.clone(),
+                                state,
+                            )
+                            .await;
+                        }
+                    }
                     DirectoryBrowserCommand::BeginDrag(item_id) => {
                         if !can_mutate_directory_membership(state) {
                             continue;
@@ -723,6 +744,12 @@ fn use_directory_browser_coroutine(
                                 source_directory_id: (state.current_root)(),
                             }));
                         }
+                    }
+                    DirectoryBrowserCommand::MoveOne(item_id) => {
+                        state.pending_dialog.set(Some(DirectoryDialog::MoveTo {
+                            source: (state.current_root)(),
+                            item_ids: vec![item_id],
+                        }));
                     }
                     DirectoryBrowserCommand::PasteInto(target) => {
                         if !target.is_supported() {
@@ -1302,6 +1329,38 @@ pub fn DirectoryBrowser(props: DirectoryBrowserProps) -> Element {
         .filter(|id| visible_ids.iter().any(|visible_id| visible_id == id))
         .map(|id| directory_item_dom_id(&id));
 
+    use_effect(move || {
+        if let LoadState::Ready(page_data) = &*content_state.read() {
+            let path = ancestor_expansion_keys(&page_data.breadcrumbs);
+            if path.iter().any(|key| !expanded_tree.read().contains(key)) {
+                commands.send(DirectoryBrowserCommand::RevealPath(path));
+            }
+        }
+    });
+    use_effect(use_reactive((&focused_dom_id,), move |(id,)| {
+        if let Some(id) = id {
+            spawn(async move {
+                let _ = document::eval(&format!(
+                    "const row = document.getElementById('{id}'); row?.focus(); row?.scrollIntoView({{block: 'nearest'}});"
+                ))
+                .await;
+            });
+        }
+    }));
+    use_effect(move || {
+        if tree_open() && matches!(&*tree_state.read(), LoadState::Ready(_)) {
+            spawn(async {
+                let _ = document::eval(
+                    "const tree = document.getElementById('semantic-directory-tree'); \
+                     const active = tree?.querySelector('.semantic-directory-browser__tree-row[data-active=true]'); \
+                     if (tree && active) tree.scrollTop += active.getBoundingClientRect().top \
+                     - tree.getBoundingClientRect().top - tree.clientHeight / 2;",
+                )
+                .await;
+            });
+        }
+    });
+
     use_effect(use_reactive(
         (
             &root,
@@ -1344,7 +1403,10 @@ pub fn DirectoryBrowser(props: DirectoryBrowserProps) -> Element {
     }));
 
     rsx! {
-        section { class: "semantic-directory-browser", aria_label: "Directory browser",
+        section {
+            class: "semantic-directory-browser",
+            "data-selection-active": selected_count > 0 || move_error().is_some(),
+            aria_label: "Directory browser",
             div { class: "semantic-directory-browser__toolbar",
                 nav { class: "semantic-directory-browser__breadcrumbs", aria_label: "Current directory",
                     match &*content_state.read() {
@@ -1429,7 +1491,7 @@ pub fn DirectoryBrowser(props: DirectoryBrowserProps) -> Element {
                             }
                         }
                     }
-                    label { class: "semantic-directory-browser__control",
+                    label { class: "semantic-directory-browser__control semantic-directory-browser__control--page",
                         span { "Page" }
                         select {
                             value: "{page_size()}",
@@ -1586,7 +1648,7 @@ pub fn DirectoryBrowser(props: DirectoryBrowserProps) -> Element {
                 disabled: selected_count == 0 || current_root().is_none() || !directory_membership_capable || busy.contains(&DirectoryOperation::Remove),
                     onclick: move |_| commands.send(DirectoryBrowserCommand::RemoveSelected),
                     X { size: "1rem" }
-                    "Remove"
+                    "Remove from folder"
                 }
                 dxcomp::Button {
                     variant: dxcomp::ButtonVariant::Outline,
@@ -1602,7 +1664,7 @@ pub fn DirectoryBrowser(props: DirectoryBrowserProps) -> Element {
                     disabled: selected_count == 0,
                     onclick: move |_| commands.send(DirectoryBrowserCommand::CopySelected),
                     Copy { size: "1rem" }
-                    "Copy"
+                    "Copy link"
                 }
                 dxcomp::Button {
                     variant: dxcomp::ButtonVariant::Outline,
@@ -1623,7 +1685,11 @@ pub fn DirectoryBrowser(props: DirectoryBrowserProps) -> Element {
                         }
                     },
                     ClipboardPaste { size: "1rem" }
-                    "Paste"
+                    if clipboard().as_ref().is_some_and(|clipboard| clipboard.mode == DirectoryClipboardMode::Copy) {
+                        "Add link here"
+                    } else {
+                        "Move here"
+                    }
                 }
                 dxcomp::Button {
                     variant: dxcomp::ButtonVariant::Outline,
@@ -1653,7 +1719,7 @@ pub fn DirectoryBrowser(props: DirectoryBrowserProps) -> Element {
                         }
                     },
                     Trash2 { size: "1rem" }
-                    "Delete"
+                    "Delete everywhere"
                 }
                 dxcomp::Button {
                     variant: dxcomp::ButtonVariant::Ghost,
@@ -1671,7 +1737,6 @@ pub fn DirectoryBrowser(props: DirectoryBrowserProps) -> Element {
                 "data-tree-open": tree_open(),
                 role: "region",
                 aria_label: "Directory workspace",
-                aria_activedescendant: focused_dom_id,
                 tabindex: "0",
                 onmouseup: move |event: MouseEvent| {
                     if event.trigger_button() == Some(MouseButton::Primary) {
@@ -1834,11 +1899,13 @@ pub fn DirectoryBrowser(props: DirectoryBrowserProps) -> Element {
                                             }
                                         }
                                     },
-                                    DirectoryPagination {
-                                        page: page(),
-                                        has_next: page_data.has_next,
-                                        on_previous: move |_| commands.send(DirectoryBrowserCommand::PreviousPage),
-                                        on_next: move |_| commands.send(DirectoryBrowserCommand::NextPage),
+                                    if page() > 0 || page_data.has_next {
+                                        DirectoryPagination {
+                                            page: page(),
+                                            has_next: page_data.has_next,
+                                            on_previous: move |_| commands.send(DirectoryBrowserCommand::PreviousPage),
+                                            on_next: move |_| commands.send(DirectoryBrowserCommand::NextPage),
+                                        }
                                     }
                                 },
                                 LoadState::Error(err) => rsx! {
@@ -1874,6 +1941,11 @@ pub fn DirectoryBrowser(props: DirectoryBrowserProps) -> Element {
             }
             DirectoryOperationDialog {
                 dialog: pending_dialog(),
+                visible_items: current_items,
+                breadcrumb_ids: match &*content_state.read() {
+                    LoadState::Ready(page_data) => page_data.breadcrumbs.iter().map(|crumb| crumb.id.clone()).collect(),
+                    _ => Vec::new(),
+                },
                 scope_id: scope_id.clone(),
                 error: dialog_error(),
                 busy_operations: busy,
@@ -1970,11 +2042,7 @@ fn DirectoryListRow(
     dragged_item: Option<String>,
     commands: Coroutine<DirectoryBrowserCommand>,
 ) -> Element {
-    let type_label = item.type_id.clone().unwrap_or_else(|| "entity".to_string());
-    let order = item
-        .order
-        .map(|value| value.to_string())
-        .unwrap_or_default();
+    let type_label = directory_item_type_label(&item);
     let updated = item
         .updated_at
         .clone()
@@ -1984,6 +2052,21 @@ fn DirectoryListRow(
     rsx! {
         dxcomp::ContextMenu {
             dxcomp::ContextMenuTrigger {
+        div { class: "semantic-directory-browser__row-shell",
+            button {
+                class: "semantic-directory-browser__select",
+                title: if selected { "Deselect item" } else { "Select item" },
+                aria_label: if selected { format!("Deselect {}", item.title) } else { format!("Select {}", item.title) },
+                aria_pressed: selected,
+                onclick: {
+                    let item = item.clone();
+                    move |event: MouseEvent| {
+                        event.stop_propagation();
+                        commands.send(DirectoryBrowserCommand::ToggleSelection(item.clone()));
+                    }
+                },
+                if selected { "✓" } else { "" }
+            }
         button {
             id: directory_item_dom_id(&item.id),
             class: "semantic-directory-browser__row",
@@ -1995,6 +2078,7 @@ fn DirectoryListRow(
             "data-drop-target": dragged_item.is_some() && item.is_directory && dragged_item.as_deref() != Some(item.id.as_str()),
             "data-draggable": true,
             aria_pressed: selected,
+            title: "{item.title}",
             onmousedown: {
                 let item_id = item.id.clone();
                 move |event: MouseEvent| {
@@ -2034,15 +2118,10 @@ fn DirectoryListRow(
                 FileText { size: "1.2rem" }
             }
             span { class: "semantic-directory-browser__item-title", "{item.title}" }
-            span { class: "semantic-directory-browser__parent-cell",
-                if item.has_semantic_children {
-                    span { class: "semantic-directory-browser__virtual-label", "Parent" }
-                }
-            }
             span { class: "semantic-directory-browser__item-type", "{type_label}" }
-            code { class: "semantic-directory-browser__item-id", "{item.id}" }
-            span { class: "semantic-directory-browser__item-order", "{order}" }
             span { class: "semantic-directory-browser__item-date", "{updated}" }
+        }
+        DirectoryInlineActions { item: item.clone(), commands }
         }
             }
             DirectoryItemContextMenuContent {
@@ -2063,11 +2142,26 @@ fn DirectoryTile(
     dragged_item: Option<String>,
     commands: Coroutine<DirectoryBrowserCommand>,
 ) -> Element {
-    let type_label = item.type_id.clone().unwrap_or_else(|| "entity".to_string());
+    let type_label = directory_item_type_label(&item);
     let click_item = item.clone();
     rsx! {
         dxcomp::ContextMenu {
             dxcomp::ContextMenuTrigger {
+        div { class: "semantic-directory-browser__tile-shell",
+            button {
+                class: "semantic-directory-browser__select",
+                title: if selected { "Deselect item" } else { "Select item" },
+                aria_label: if selected { format!("Deselect {}", item.title) } else { format!("Select {}", item.title) },
+                aria_pressed: selected,
+                onclick: {
+                    let item = item.clone();
+                    move |event: MouseEvent| {
+                        event.stop_propagation();
+                        commands.send(DirectoryBrowserCommand::ToggleSelection(item.clone()));
+                    }
+                },
+                if selected { "✓" } else { "" }
+            }
         button {
             id: directory_item_dom_id(&item.id),
             class: "semantic-directory-browser__tile",
@@ -2079,6 +2173,7 @@ fn DirectoryTile(
             "data-drop-target": dragged_item.is_some() && item.is_directory && dragged_item.as_deref() != Some(item.id.as_str()),
             "data-draggable": true,
             aria_pressed: selected,
+            title: "{item.title}",
             onmousedown: {
                 let item_id = item.id.clone();
                 move |event: MouseEvent| {
@@ -2118,17 +2213,102 @@ fn DirectoryTile(
                 FileText { size: "2rem" }
             }
             span { class: "semantic-directory-browser__item-title", "{item.title}" }
-            if item.has_semantic_children {
-                span { class: "semantic-directory-browser__virtual-label", "Parent" }
-            }
             span { class: "semantic-directory-browser__item-type", "{type_label}" }
-            code { class: "semantic-directory-browser__item-id", "{item.id}" }
+        }
+        DirectoryInlineActions { item: item.clone(), commands }
         }
             }
             DirectoryItemContextMenuContent {
                 item,
                 represented_location_kind: DirectoryLocationKind::Directory,
                 commands,
+            }
+        }
+    }
+}
+
+fn directory_item_type_label(item: &DirectoryBrowseItem) -> String {
+    if item.is_directory {
+        return "Folder".to_string();
+    }
+    let label = item
+        .type_id
+        .as_deref()
+        .unwrap_or("Entity")
+        .rsplit([':', '/'])
+        .next()
+        .unwrap_or("Entity");
+    let mut chars = label.chars();
+    match chars.next() {
+        Some(first) => format!("{}{}", first.to_uppercase(), chars.as_str()),
+        None => "Entity".to_string(),
+    }
+}
+
+#[component]
+fn DirectoryInlineActions(
+    item: DirectoryBrowseItem,
+    commands: Coroutine<DirectoryBrowserCommand>,
+) -> Element {
+    let item_id = item.id.clone();
+    let item_title = item.title.clone();
+    rsx! {
+        dxcomp::DropdownMenu {
+            dxcomp::DropdownMenuTrigger {
+                class: "semantic-directory-browser__actions-trigger",
+                aria_label: "Actions for {item.title}",
+                title: "Actions for {item.title}",
+                Ellipsis { size: "1rem" }
+            }
+            dxcomp::DropdownMenuContent {
+                dxcomp::DropdownMenuItem::<String> {
+                    value: "rename".to_string(), index: 0usize,
+                    on_select: {
+                        let item_id = item_id.clone();
+                        let item_title = item_title.clone();
+                        move |_| commands.send(DirectoryBrowserCommand::OpenDialog(DirectoryDialog::Rename {
+                            item_id: item_id.clone(), title: item_title.clone(),
+                        }))
+                    },
+                    "Rename"
+                }
+                dxcomp::DropdownMenuItem::<String> {
+                    value: "move".to_string(), index: 1usize,
+                    on_select: {
+                        let item_id = item_id.clone();
+                        move |_| commands.send(DirectoryBrowserCommand::MoveOne(item_id.clone()))
+                    },
+                    "Move to…"
+                }
+                dxcomp::DropdownMenuItem::<String> {
+                    value: "copy-link".to_string(), index: 2usize,
+                    on_select: {
+                        let item_id = item_id.clone();
+                        move |_| {
+                            commands.send(DirectoryBrowserCommand::SelectVisible(vec![item_id.clone()]));
+                            commands.send(DirectoryBrowserCommand::CopySelected);
+                        }
+                    },
+                    "Copy link to folder"
+                }
+                dxcomp::DropdownMenuItem::<String> {
+                    value: "remove".to_string(), index: 3usize,
+                    on_select: {
+                        let item_id = item_id.clone();
+                        move |_| {
+                            commands.send(DirectoryBrowserCommand::SelectVisible(vec![item_id.clone()]));
+                            commands.send(DirectoryBrowserCommand::RemoveSelected);
+                        }
+                    },
+                    "Remove from this folder"
+                }
+                dxcomp::DropdownMenuItem::<String> {
+                    value: "delete".to_string(), index: 4usize,
+                    on_select: move |_| commands.send(DirectoryBrowserCommand::OpenDialog(DirectoryDialog::ConfirmDelete {
+                        item_ids: vec![item_id.clone()],
+                    })),
+                    "Delete everywhere"
+                }
             }
         }
     }
@@ -2234,7 +2414,7 @@ fn DirectoryTreeRowView(
                         } else {
                             Folder { size: "1rem" }
                         }
-                        span { "{item.title}" }
+                        span { title: "{item.title}", "{item.title}" }
                         if row_kind == DirectoryLocationKind::SemanticParent {
                             span { class: "semantic-directory-browser__virtual-label", "Parent" }
                         }
@@ -2324,7 +2504,7 @@ fn DirectoryItemContextMenuContent(
                         commands.send(DirectoryBrowserCommand::CopySelected);
                     }
                 },
-                "Copy"
+                "Copy link"
             }
             if is_directory_destination {
                 dxcomp::ContextMenuItem {
@@ -2353,7 +2533,7 @@ fn DirectoryItemContextMenuContent(
                             },
                         ))
                     },
-                    "Paste Into Directory"
+                    "Paste into directory"
                 }
                 dxcomp::ContextMenuItem {
                     value: "add-existing".to_string(),
@@ -2380,7 +2560,7 @@ fn DirectoryItemContextMenuContent(
                         commands.send(DirectoryBrowserCommand::RemoveSelected);
                     }
                 },
-                "Remove"
+                "Remove from folder"
             }
             dxcomp::ContextMenuItem {
                 value: "delete".to_string(),
@@ -2391,7 +2571,7 @@ fn DirectoryItemContextMenuContent(
                         item_ids: vec![item_id.clone()],
                     }))
                 },
-                "Delete"
+                "Delete everywhere"
             }
             dxcomp::ContextMenuItem {
                 value: "refresh".to_string(),
@@ -2621,6 +2801,8 @@ fn EntityDetailDialog(
 #[component]
 fn DirectoryOperationDialog(
     dialog: Option<DirectoryDialog>,
+    visible_items: Vec<DirectoryBrowseItem>,
+    breadcrumb_ids: Vec<String>,
     scope_id: Option<String>,
     error: Option<String>,
     busy_operations: BTreeSet<DirectoryOperation>,
@@ -2665,6 +2847,25 @@ fn DirectoryOperationDialog(
         .cloned()
         .unwrap_or_default();
     let open = dialog.is_some();
+    let visible_titles = |item_ids: &[String]| {
+        let names = item_ids
+            .iter()
+            .filter_map(|id| visible_items.iter().find(|item| &item.id == id))
+            .map(|item| item.title.as_str())
+            .take(3)
+            .collect::<Vec<_>>();
+        if names.is_empty() {
+            format!("{} selected item(s)", item_ids.len())
+        } else if item_ids.len() > names.len() {
+            format!(
+                "{} and {} more",
+                names.join(", "),
+                item_ids.len() - names.len()
+            )
+        } else {
+            names.join(", ")
+        }
+    };
     if let Some(DirectoryDialog::NewDirectory { parent }) = dialog.as_ref() {
         let parent = parent.clone();
         let create_busy = busy_operations.contains(&DirectoryOperation::Create);
@@ -2725,6 +2926,7 @@ fn DirectoryOperationDialog(
     }
     rsx! {
         dxcomp::Dialog {
+            class: "semantic-directory-browser__dialog",
             open,
             on_open_change: move |open: bool| {
                 if !open {
@@ -2738,29 +2940,50 @@ fn DirectoryOperationDialog(
                 Some(DirectoryDialog::NewDirectory { .. }) => rsx! {},
                 Some(DirectoryDialog::AddExisting { target }) => rsx! {
                     dxcomp::DialogTitle { "Add Existing Item" }
-                    dxcomp::Combobox::<String> {
-                        default_value: add_selected(),
-                        on_value_change: move |value| add_selected.set(value),
-                        on_query_change: move |value| add_query.set(value),
-                        placeholder: "Search entities",
-                        aria_label: "Existing entity",
-                        list_aria_label: "Existing entities",
-                        dxcomp::ComboboxEmpty {
-                            if options_state.is_none() {
-                                "Searching…"
-                            } else if options_state.as_ref().is_some_and(|result| result.is_err()) {
-                                "Unable to load entities."
-                            } else {
-                                "No entity found."
-                            }
+                    dxcomp::DialogDescription { "Link an existing item to this folder. Its name and content stay shared across folders." }
+                    div {
+                        class: "semantic-directory-browser__add-picker",
+                        input {
+                            class: "semantic-directory-browser__search-input",
+                            aria_label: "Search existing items",
+                            placeholder: "Search by name or ID",
+                            value: "{add_query()}",
+                            oninput: move |event| {
+                                add_selected.set(None);
+                                add_query.set(event.value());
+                            },
+                            onkeydown: move |event: KeyboardEvent| {
+                                if event.key() == Key::Escape {
+                                    event.prevent_default();
+                                    commands.send(DirectoryBrowserCommand::CloseDialog);
+                                }
+                            },
                         }
-                        for (index, option) in options.iter().enumerate() {
-                            dxcomp::ComboboxOption::<String> {
-                                index,
-                                value: option.id.clone(),
-                                text_value: format!("{} {}", option.title, option.id),
+                        div { class: "semantic-directory-browser__search-results", role: "listbox", aria_label: "Existing items",
+                            if options_state.is_none() {
+                                span { class: "semantic-directory-browser__search-empty", "Searching…" }
+                            } else if options_state.as_ref().is_some_and(|result| result.is_err()) {
+                                span { class: "semantic-directory-browser__search-empty", "Unable to load items." }
+                            } else if options.is_empty() {
+                                span { class: "semantic-directory-browser__search-empty", "No matching items" }
+                            }
+                            for option in options.iter() {
+                                button {
+                                key: "{option.id}",
+                                class: "semantic-directory-browser__search-option",
+                                role: "option",
+                                aria_selected: add_selected().as_deref() == Some(option.id.as_str()),
+                                disabled: breadcrumb_ids.contains(&option.id),
+                                onclick: {
+                                    let id = option.id.clone();
+                                    move |_| add_selected.set(Some(id.clone()))
+                                },
                                 span { "{option.title}" }
-                                code { " {option.id}" }
+                                span { class: "semantic-directory-browser__option-type", "{directory_item_type_label(option)}" }
+                                if breadcrumb_ids.contains(&option.id) {
+                                    span { class: "semantic-directory-browser__option-reason", "Ancestor folder" }
+                                }
+                            }
                             }
                         }
                     }
@@ -2788,6 +3011,8 @@ fn DirectoryOperationDialog(
                     }
                 },
                 Some(DirectoryDialog::Rename { item_id, title: _ }) => {
+                    let rename_on_enter_id = item_id.clone();
+                    let rename_busy = busy_operations.contains(&DirectoryOperation::Rename);
                     rsx! {
                         dxcomp::DialogTitle { "Rename" }
                         label { class: "semantic-directory-browser__dialog-field",
@@ -2795,6 +3020,16 @@ fn DirectoryOperationDialog(
                             input {
                                 value: "{title()}",
                                 oninput: move |event| title.set(event.value()),
+                                onkeydown: move |event: KeyboardEvent| {
+                                        if event.key() == Key::Enter {
+                                            event.prevent_default();
+                                            if !title().trim().is_empty() && !rename_busy {
+                                                commands.send(DirectoryBrowserCommand::RenameItem {
+                                                    item_id: rename_on_enter_id.clone(), title: title(),
+                                                });
+                                            }
+                                        }
+                                },
                             }
                         }
                         div { class: "semantic-directory-browser__dialog-actions",
@@ -2815,9 +3050,9 @@ fn DirectoryOperationDialog(
                     }
                 },
                 Some(DirectoryDialog::ConfirmRemove { parent, item_ids, orphaned_directory_ids }) => rsx! {
-                    dxcomp::DialogTitle { "Remove Items" }
+                    dxcomp::DialogTitle { "Remove from this folder?" }
                     dxcomp::DialogDescription {
-                        "Removing this selection will unlink it from the current directory. {orphaned_directory_ids.len()} directory item(s) have no other parent and will be deleted, but descendant entities are not recursively deleted."
+                        "{visible_titles(&item_ids)} will be unlinked from this folder. {orphaned_directory_ids.len()} folder(s) have no other parent and will be deleted. Their contents will not be deleted."
                     }
                     div { class: "semantic-directory-browser__dialog-actions",
                         dxcomp::Button {
@@ -2832,14 +3067,14 @@ fn DirectoryOperationDialog(
                                 parent: parent.clone(),
                                 item_ids: item_ids.clone(),
                             }),
-                            if busy_operations.contains(&DirectoryOperation::Remove) { "Removing…" } else { "Remove" }
+                            if busy_operations.contains(&DirectoryOperation::Remove) { "Removing…" } else { "Remove from folder" }
                         }
                     }
                 },
                 Some(DirectoryDialog::ConfirmDelete { item_ids }) => rsx! {
-                    dxcomp::DialogTitle { "Delete Items" }
+                    dxcomp::DialogTitle { "Delete everywhere?" }
                     dxcomp::DialogDescription {
-                        "This deletes the selected entities. Directory child entities are not recursively deleted, but directory links owned by deleted directories are removed."
+                        "{visible_titles(&item_ids)} will be deleted from the database, including every folder where linked. Items inside a deleted folder are not deleted."
                     }
                     div { class: "semantic-directory-browser__dialog-actions",
                         dxcomp::Button {
@@ -2851,14 +3086,14 @@ fn DirectoryOperationDialog(
                             variant: dxcomp::ButtonVariant::Destructive,
                             disabled: busy_operations.contains(&DirectoryOperation::Delete),
                             onclick: move |_| commands.send(DirectoryBrowserCommand::ConfirmDelete(item_ids.clone())),
-                            if busy_operations.contains(&DirectoryOperation::Delete) { "Deleting…" } else { "Delete" }
+                            if busy_operations.contains(&DirectoryOperation::Delete) { "Deleting…" } else { "Delete everywhere" }
                         }
                     }
                 },
                 Some(DirectoryDialog::MoveTo { source, item_ids }) => rsx! {
                     dxcomp::DialogTitle { "Move Items" }
                     dxcomp::DialogDescription {
-                        "Choose a destination directory. This is the keyboard and touch alternative to drag and drop."
+                        "Choose the folder where these items should appear."
                     }
                     FileTreePicker {
                         selected: move_target(),
@@ -3243,6 +3478,14 @@ fn expanded_for_open(
     expanded
 }
 
+fn ancestor_expansion_keys(breadcrumbs: &[DirectoryBreadcrumb]) -> Vec<String> {
+    breadcrumbs
+        .iter()
+        .take(breadcrumbs.len().saturating_sub(1))
+        .map(|crumb| location_expansion_key(crumb.kind, &crumb.id))
+        .collect()
+}
+
 fn location_expansion_key(kind: DirectoryLocationKind, item_id: &str) -> String {
     let prefix = match kind {
         DirectoryLocationKind::Directory => "directory",
@@ -3258,8 +3501,9 @@ mod listing_tests;
 #[cfg(test)]
 mod tests {
     use super::{
-        DirectoryMembershipTarget, expanded_for_open, location_supports_directory_membership,
-        tree_location_url,
+        DirectoryBreadcrumb, DirectoryBrowseItem, DirectoryMembershipTarget,
+        ancestor_expansion_keys, directory_item_type_label, expanded_for_open,
+        location_supports_directory_membership, tree_location_url,
     };
     use crate::components::directory_browser::types::DirectoryLocationKind;
     use std::collections::BTreeSet;
@@ -3279,6 +3523,47 @@ mod tests {
                 "directory-1"
             ),
             expanded
+        );
+    }
+
+    #[test]
+    fn nested_location_reveals_only_its_ancestors() {
+        let breadcrumbs = ["alpha", "child", "grandchild"]
+            .into_iter()
+            .map(|id| DirectoryBreadcrumb {
+                id: id.to_string(),
+                title: id.to_string(),
+                kind: DirectoryLocationKind::Directory,
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(
+            ancestor_expansion_keys(&breadcrumbs),
+            vec!["directory:alpha", "directory:child"]
+        );
+        assert!(ancestor_expansion_keys(&breadcrumbs[..1]).is_empty());
+    }
+
+    #[test]
+    fn list_type_labels_hide_schema_namespace() {
+        let item = DirectoryBrowseItem {
+            id: "note-1".to_string(),
+            collection: "entities".to_string(),
+            object: Default::default(),
+            title: "A note".to_string(),
+            type_id: Some("semantic:base:note".to_string()),
+            is_directory: false,
+            has_semantic_children: false,
+            order: None,
+            created_at: None,
+            updated_at: None,
+        };
+        assert_eq!(directory_item_type_label(&item), "Note");
+        assert_eq!(
+            directory_item_type_label(&DirectoryBrowseItem {
+                is_directory: true,
+                ..item
+            }),
+            "Folder"
         );
     }
 
