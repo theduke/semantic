@@ -88,6 +88,9 @@ pub fn decode_entity(payload: &[u8]) -> Result<StoredEntity, DbError> {
 }
 
 /// Encode a self-contained (version 1) entity payload.
+///
+/// Fails for values nested deeper than
+/// [`MAX_VALUE_DEPTH`](semantic_data::value::MAX_VALUE_DEPTH).
 pub fn encode_entity(entity: &StoredEntity) -> Result<Vec<u8>, DbError> {
     let wire = StoredEntityWire {
         id: entity.id.clone(),
@@ -265,9 +268,21 @@ impl From<StoredEntityKindWire> for StoredEntityKind {
     }
 }
 
+/// MessagePack nesting allowed in self-contained payloads: the entity
+/// struct and its object, plus up to two levels per value level (a map is
+/// a list of `[key, value]` pairs).
+///
+/// Typed value deserialization enforces
+/// [`MAX_VALUE_DEPTH`](semantic_data::value::MAX_VALUE_DEPTH) itself; this
+/// also bounds the recursion of anything else in a corrupt payload, such as
+/// ignored unknown struct fields.
+const V1_MAX_MSGPACK_DEPTH: usize = 2 * semantic_data::value::MAX_VALUE_DEPTH + 4;
+
 fn decode_v1(body: &[u8]) -> Result<StoredEntity, DbError> {
-    let wire: StoredEntityWire =
-        rmp_serde::from_slice(body).map_err(|err| DbError::Deserialization(err.to_string()))?;
+    let mut deserializer = rmp_serde::Deserializer::from_read_ref(body);
+    deserializer.set_max_depth(V1_MAX_MSGPACK_DEPTH);
+    let wire = StoredEntityWire::deserialize(&mut deserializer)
+        .map_err(|err| DbError::Deserialization(err.to_string()))?;
     let object = wire
         .object
         .into_iter()

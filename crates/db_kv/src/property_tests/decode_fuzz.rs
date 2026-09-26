@@ -357,77 +357,98 @@ fn nested(encode: &dyn Fn(&Value) -> Vec<u8>, depth: usize) -> Vec<u8> {
     out
 }
 
-const DEEP_CHILD_ENV: &str = "SEMANTIC_FUZZ_DEEP_NESTING_CHILD";
+/// A codec whose decoder recurses per nesting level.
+#[derive(Debug, Clone, Copy)]
+enum DeepCodec {
+    /// Compact (version 2) payload with the value in field `a`.
+    Compact,
+    /// Memcomparable key encoding of the value.
+    Memcmp,
+    /// Self-contained (version 1) payload with the value in field `a`.
+    SelfContained,
+}
 
-/// Child half of [`deeply_nested_input_is_rejected_without_overflowing`]:
-/// decodes deeply nested payloads on a regular test thread. A stack
-/// overflow aborts the process, so it must run in its own process.
-#[test]
-fn deeply_nested_input_child() {
-    let Ok(target) = std::env::var(DEEP_CHILD_ENV) else {
-        return;
-    };
-    let depth = std::env::var("SEMANTIC_FUZZ_DEEP_NESTING_DEPTH")
-        .ok()
-        .and_then(|depth| depth.parse().ok())
-        .unwrap_or(1_000_000);
-    let dict = std::cell::RefCell::new(FieldDict::default());
-    let compact = |value: &Value| {
-        let mut object = Object::new();
-        object.insert("a", value.clone());
-        encode_v2(
-            &StoredEntity {
+impl DeepCodec {
+    /// Deepest container nesting the codec accepts.
+    fn limit(self) -> usize {
+        match self {
+            Self::Compact | Self::SelfContained => semantic_data::value::MAX_VALUE_DEPTH,
+            Self::Memcmp => memcmp::MAX_DEPTH,
+        }
+    }
+
+    /// The encoding of `depth` nested lists around `Null`, spliced
+    /// together from the encodings of `Null` and `[Null]` (the encoders
+    /// themselves reject values beyond the limit).
+    fn nested(self, depth: usize) -> Vec<u8> {
+        let entity = |value: &Value| {
+            let mut object = Object::new();
+            object.insert("a", value.clone());
+            StoredEntity {
                 id: "e".into(),
                 collection: 1,
                 kind: StoredEntityKind::Untyped,
                 object,
-            },
-            &mut dict.borrow_mut(),
-        )
-    };
-    match target.as_str() {
-        "compact" => {
-            let input = nested(&compact, depth);
-            let dict = Arc::new(dict.borrow().clone());
-            // Leak the result: dropping a deeply nested value recurses too.
-            std::mem::forget(decode_v2("e", &input, &dict));
+            }
+        };
+        match self {
+            Self::Compact => nested(
+                &|value| encode_v2(&entity(value), &mut FieldDict::default()),
+                depth,
+            ),
+            Self::Memcmp => nested(&memcmp::encode, depth),
+            Self::SelfContained => nested(&|value| encode_entity(&entity(value)).unwrap(), depth),
         }
-        "memcmp" => {
-            let input = nested(&memcmp::encode, depth);
-            std::mem::forget(memcmp::decode(&input));
-            std::mem::forget(memcmp::encoded_len(&input));
+    }
+
+    /// Decode `input` with every decoder of the codec.
+    fn decode(self, input: &[u8]) -> Result<(), semantic_db_core::DbError> {
+        match self {
+            Self::Compact => {
+                let mut dict = FieldDict::default();
+                dict.push("a").unwrap();
+                decode_v2("e", input, &Arc::new(dict)).map(drop)
+            }
+            Self::Memcmp => {
+                memcmp::encoded_len(input)?;
+                memcmp::decode(input).map(drop)
+            }
+            Self::SelfContained => decode_entity(input).map(drop),
         }
-        "self_contained" => {
-            let encode = |value: &Value| {
-                let mut object = Object::new();
-                object.insert("a", value.clone());
-                encode_entity(&StoredEntity {
-                    id: "e".into(),
-                    collection: 1,
-                    kind: StoredEntityKind::Untyped,
-                    object,
-                })
-                .unwrap()
-            };
-            std::mem::forget(decode_entity(&nested(&encode, depth)));
-        }
-        other => panic!("unknown target {other}"),
     }
 }
 
-fn run_deep_child(target: &str) -> std::process::ExitStatus {
-    std::process::Command::new(std::env::current_exe().unwrap())
-        .args([
-            "--exact",
-            "property_tests::decode_fuzz::deeply_nested_input_child",
-            "--test-threads=1",
-            "--nocapture",
-        ])
-        .env(DEEP_CHILD_ENV, target)
-        .stdout(std::process::Stdio::null())
-        .stderr(std::process::Stdio::null())
-        .status()
-        .unwrap()
+/// Deeply nested (corrupt) input fails with an error on a regular test
+/// thread instead of overflowing the stack; input at the limit decodes.
+fn assert_rejects_deep_nesting(codec: DeepCodec) {
+    let limit = codec.limit();
+    codec
+        .decode(&codec.nested(limit))
+        .unwrap_or_else(|err| panic!("{codec:?} at the limit: {err}"));
+    for depth in [limit + 1, 10_000, 1_000_000] {
+        let err = codec
+            .decode(&codec.nested(depth))
+            .expect_err("deeply nested input decoded");
+        assert!(
+            err.to_string().contains("maximum depth"),
+            "{codec:?} at depth {depth}: {err}"
+        );
+    }
+}
+
+#[test]
+fn deeply_nested_self_contained_payloads_are_rejected() {
+    assert_rejects_deep_nesting(DeepCodec::SelfContained);
+}
+
+#[test]
+fn deeply_nested_compact_payloads_are_rejected() {
+    assert_rejects_deep_nesting(DeepCodec::Compact);
+}
+
+#[test]
+fn deeply_nested_memcmp_keys_are_rejected() {
+    assert_rejects_deep_nesting(DeepCodec::Memcmp);
 }
 
 #[test]
@@ -461,35 +482,4 @@ fn moderately_nested_values_round_trip_in_every_codec() {
         entity.object
     );
     assert_eq!(memcmp::decode(&memcmp::encode(&value)).unwrap(), value);
-}
-
-// The decoders recurse once per nesting level without a depth limit. On a
-// 2 MiB test-thread stack in debug builds the memcomparable decoder
-// overflows at ~100 levels, the compact and self-contained payload decoders
-// at ~500 levels (rmp_serde's recursion limit does not trigger first).
-// Corrupt stored bytes can therefore abort the process instead of failing
-// with an error.
-
-#[test]
-#[ignore = "bug: the self-contained (version 1) payload decoder has no effective nesting \
-            limit; a corrupt payload nested ~500 levels overflows the stack and aborts the \
-            process"]
-fn deeply_nested_self_contained_payloads_are_rejected() {
-    assert!(run_deep_child("self_contained").success());
-}
-
-#[test]
-#[ignore = "bug: the compact (version 2) value decoder recurses per nesting level without a \
-            depth limit; a corrupt payload nested ~500 levels overflows the stack and aborts \
-            the process"]
-fn deeply_nested_compact_payloads_are_rejected() {
-    assert!(run_deep_child("compact").success());
-}
-
-#[test]
-#[ignore = "bug: the memcomparable key decoder recurses per nesting level without a depth \
-            limit; a key nested ~100 levels (debug build, 2 MiB stack) overflows the stack and \
-            aborts the process"]
-fn deeply_nested_memcmp_keys_are_rejected() {
-    assert!(run_deep_child("memcmp").success());
 }

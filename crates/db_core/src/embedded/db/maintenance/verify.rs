@@ -15,6 +15,8 @@
 //!   to the number of distinct pairs, not to the rows), and the expected
 //!   edges are derived from them like the write path does.
 //! - Maintained counters are compared with the counted rows and entries.
+//! - Unique indexes are checked for rows sharing a key value (memory
+//!   proportional to the rows of the collection being checked).
 //!
 //! Besides the report, the verifier produces a [`RepairPlan`] naming what a
 //! repair must rebuild.
@@ -68,6 +70,9 @@ pub(crate) struct Verifier<'r, S> {
     contributors: Option<(LocalCollectionId, Tally)>,
     /// Contributions per relationship and `(source, target)` pair.
     direct: BTreeMap<String, BTreeMap<(String, String), u64>>,
+    /// Key values seen (and the first row holding them) per checked unique
+    /// index of the collection being checked.
+    unique_values: BTreeMap<LocalIndexId, BTreeMap<Value, String>>,
     storage: std::marker::PhantomData<fn() -> S>,
 }
 
@@ -87,6 +92,7 @@ impl<'r, S: EntityStorage> Verifier<'r, S> {
             references: None,
             contributors: None,
             direct: BTreeMap::new(),
+            unique_values: BTreeMap::new(),
             storage: std::marker::PhantomData,
         }
     }
@@ -330,6 +336,7 @@ impl<'r, S: EntityStorage> Verifier<'r, S> {
             return Ok(());
         };
         self.report.checked.rows += rows;
+        self.unique_values.clear();
 
         if self.options.check_stats
             && let Some(counter) = snapshot.collection_row_count(collection.lid)?
@@ -373,8 +380,34 @@ impl<'r, S: EntityStorage> Verifier<'r, S> {
             let tally = self.indexes.get_mut(&index.lid).expect("checked index");
             tally.expected += keys.len() as u64;
             tally.missing += missing;
+            self.check_unique_value(index, entity);
         }
         Ok(())
+    }
+
+    /// Report `entity` when an earlier row holds its key value in the
+    /// unique `index`. Not part of the repair plan: rebuilding the index
+    /// cannot remove duplicate rows.
+    fn check_unique_value(&mut self, index: &IndexSchema, entity: &StoredEntity) {
+        if !index.schema.unique || !index.schema.kind.is_value_index() {
+            return;
+        }
+        let Some(value) = index.key_value(&entity.object) else {
+            return;
+        };
+        let seen = self.unique_values.entry(index.lid).or_default();
+        let Some(existing) = seen.get(&value) else {
+            seen.insert(value, entity.id.clone());
+            return;
+        };
+        let detail = format!("row {existing:?} holds the same value {value:?}");
+        self.problem(
+            Kind::DuplicateUniqueValue,
+            Some(&index.schema.collection),
+            Some(&index.schema.name),
+            Some(&entity.id),
+            detail,
+        );
     }
 
     fn check_row_references(

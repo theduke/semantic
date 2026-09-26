@@ -12,7 +12,7 @@ use semantic_db_core::embedded::{
     EntityReadSnapshot, EntityStorage, StorageWriteOp, StoredEntity, StoredEntityKind,
 };
 
-use super::payloads::{first_difference, to_v1_durations};
+use super::payloads::first_difference;
 use super::{deep_value, rng};
 use crate::storage::EntityPayloadFormat;
 use crate::test_values::Rng;
@@ -47,12 +47,11 @@ impl Names {
             let value = if depth < 2 && rng.below(4) == 0 {
                 Value::Object(self.object(rng, id, depth + 1))
             } else {
-                // Durations at millisecond precision survive both formats.
-                to_v1_durations(if rng.below(8) == 0 {
+                if rng.below(8) == 0 {
                     deep_value(rng, 1)
                 } else {
                     rng.value(1)
-                })
+                }
             };
             object.insert(self.pick(rng), value);
         }

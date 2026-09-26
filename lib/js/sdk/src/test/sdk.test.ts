@@ -50,6 +50,9 @@ test("integer widths validate ranges and typed helpers are not double encoded", 
   );
   assert.throws(() => decodeTagged({ u8: 256 }), /outside the u8 range/);
   assert.throws(() => decodeTagged({ bytes: [256] }), /outside the u8 range/);
+  assert.equal(decodeTagged({ duration: 1500n }), 1500);
+  assert.equal(decodeTagged({ duration: [1n, 500_999_999] }), 1500);
+  assert.equal(decodeTagged({ duration: [-1n, -500_999_999] }), -1500);
   assert.deepEqual(encodeTagged(value.int("u8", 7)), { u8: 7n });
   assert.deepEqual(encodeTagged(decodeTaggedExact({ i16: -4 })), { i16: -4 });
   const tagged = encodeTagged({

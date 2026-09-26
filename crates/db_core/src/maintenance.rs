@@ -181,6 +181,9 @@ pub enum VerifyProblemKind {
     CorruptPayload,
     /// The storage's physical integrity check failed or repaired the storage.
     StorageIntegrity,
+    /// Two rows hold the same value in a unique index. A repair cannot fix
+    /// this; one of the rows must be changed or deleted.
+    DuplicateUniqueValue,
 }
 
 impl VerifyProblemKind {
@@ -201,6 +204,7 @@ impl VerifyProblemKind {
             Self::WrongIndexEntryCount => "wrong_index_entry_count",
             Self::CorruptPayload => "corrupt_payload",
             Self::StorageIntegrity => "storage_integrity",
+            Self::DuplicateUniqueValue => "duplicate_unique_value",
         }
     }
 }

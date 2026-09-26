@@ -4,6 +4,7 @@ use ::serde::{Deserialize, Deserializer, Serialize, Serializer};
 use std::collections::BTreeMap;
 use std::fmt;
 
+use crate::value::serde::support::{DepthGuard, DurationWire, duration_parts};
 use crate::value::{Map, Object, Value, VariantValue};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -43,6 +44,12 @@ pub fn serialize<S>(value: &Value, serializer: S) -> Result<S::Ok, S::Error>
 where
     S: Serializer,
 {
+    let _depth = match value {
+        Value::List(_) | Value::Map(_) | Value::Object(_) | Value::Variant(_) => {
+            Some(DepthGuard::enter_serialize::<S::Error>()?)
+        }
+        _ => None,
+    };
     match value {
         Value::Void => serializer.serialize_unit_variant("Value", 0, "void"),
         Value::Null => serializer.serialize_unit_variant("Value", 1, "null"),
@@ -68,12 +75,7 @@ where
         }
         Value::Duration(v) => {
             let raw: time::Duration = (*v).into();
-            serializer.serialize_newtype_variant(
-                "Value",
-                17,
-                "duration",
-                &(raw.whole_milliseconds() as i64),
-            )
+            serializer.serialize_newtype_variant("Value", 17, "duration", &duration_parts(raw))
         }
         Value::Time(v) => {
             let raw: time::Time = (*v).into();
@@ -196,92 +198,114 @@ impl<'de> Visitor<'de> for TypedValueVisitor {
         A: EnumAccess<'de>,
     {
         let (tag, variant) = data.variant::<VariantTag>()?;
+        // Containers recurse; keeping the recursive frame free of the many
+        // scalar arms keeps deeply nested values from using much stack.
         match tag {
-            VariantTag::Void => {
-                variant.unit_variant()?;
-                Ok(Value::Void)
+            VariantTag::List | VariantTag::Map | VariantTag::Object | VariantTag::Variant => {
+                visit_container(tag, variant)
             }
-            VariantTag::Null => {
-                variant.unit_variant()?;
-                Ok(Value::Null)
-            }
-            VariantTag::Bool => Ok(Value::Bool(variant.newtype_variant()?)),
-            VariantTag::I8 => Ok(Value::I8(variant.newtype_variant()?)),
-            VariantTag::I16 => Ok(Value::I16(variant.newtype_variant()?)),
-            VariantTag::I32 => Ok(Value::I32(variant.newtype_variant()?)),
-            VariantTag::I64 => Ok(Value::I64(variant.newtype_variant()?)),
-            VariantTag::I128 => Ok(Value::I128(variant.newtype_variant()?)),
-            VariantTag::U8 => Ok(Value::U8(variant.newtype_variant()?)),
-            VariantTag::U16 => Ok(Value::U16(variant.newtype_variant()?)),
-            VariantTag::U32 => Ok(Value::U32(variant.newtype_variant()?)),
-            VariantTag::U64 => Ok(Value::U64(variant.newtype_variant()?)),
-            VariantTag::U128 => Ok(Value::U128(variant.newtype_variant()?)),
-            VariantTag::F32 => Ok(Value::F32(variant.newtype_variant::<f32>()?.into())),
-            VariantTag::F64 => Ok(Value::F64(variant.newtype_variant::<f64>()?.into())),
-            VariantTag::Uuid => {
-                let raw = variant.newtype_variant::<String>()?;
-                let parsed = uuid::Uuid::parse_str(&raw).map_err(|err| {
-                    de::Error::custom(format!("invalid uuid value '{raw}': {err}"))
-                })?;
-                Ok(Value::Uuid(parsed.into()))
-            }
-            VariantTag::IpAddr => {
-                let raw = variant.newtype_variant::<String>()?;
-                let parsed = raw.parse::<std::net::IpAddr>().map_err(|err| {
-                    de::Error::custom(format!("invalid ip_addr value '{raw}': {err}"))
-                })?;
-                Ok(Value::IpAddr(parsed))
-            }
-            VariantTag::Duration => {
-                let milliseconds = variant.newtype_variant::<i64>()?;
-                Ok(Value::Duration(
-                    time::Duration::milliseconds(milliseconds).into(),
-                ))
-            }
-            VariantTag::Time => {
-                let nanos = variant.newtype_variant::<i64>()?;
-                let raw = time::Time::MIDNIGHT + time::Duration::nanoseconds(nanos);
-                Ok(Value::Time(raw.into()))
-            }
-            VariantTag::Date => {
-                let julian_day = variant.newtype_variant::<i32>()?;
-                let raw = time::Date::from_julian_day(julian_day).map_err(|err| {
-                    de::Error::custom(format!("invalid date julian day {julian_day}: {err}"))
-                })?;
-                Ok(Value::Date(raw.into()))
-            }
-            VariantTag::DateTime => {
-                let unix_nanos = variant.newtype_variant::<i128>()?;
-                let raw =
-                    time::OffsetDateTime::from_unix_timestamp_nanos(unix_nanos).map_err(|err| {
-                        de::Error::custom(format!(
-                            "invalid datetime unix nanos {unix_nanos}: {err}"
-                        ))
-                    })?;
-                Ok(Value::DateTime(raw.into()))
-            }
-            VariantTag::Bytes => {
-                let bytes = variant.newtype_variant::<Vec<u8>>()?;
-                Ok(Value::Bytes(bytes.into()))
-            }
-            VariantTag::String => Ok(Value::String(variant.newtype_variant()?)),
-            VariantTag::List => {
-                let values = variant.newtype_variant::<TypedList>()?;
-                Ok(Value::List(values.0))
-            }
-            VariantTag::Map => {
-                let entries = variant.newtype_variant::<TypedMap>()?;
-                Ok(Value::Map(entries.0))
-            }
-            VariantTag::Object => {
-                let fields = variant.newtype_variant::<TypedObject>()?;
-                Ok(Value::Object(fields.0))
-            }
-            VariantTag::Variant => {
-                let variant = variant.newtype_variant::<TypedVariant>()?;
-                Ok(Value::Variant(Box::new(variant.0)))
-            }
+            _ => visit_scalar(tag, variant),
         }
+    }
+}
+
+#[inline(never)]
+fn visit_container<'de, A>(tag: VariantTag, variant: A) -> Result<Value, A::Error>
+where
+    A: VariantAccess<'de>,
+{
+    let _depth = DepthGuard::enter::<A::Error>()?;
+    match tag {
+        VariantTag::List => {
+            let values = variant.newtype_variant::<TypedList>()?;
+            Ok(Value::List(values.0))
+        }
+        VariantTag::Map => {
+            let entries = variant.newtype_variant::<TypedMap>()?;
+            Ok(Value::Map(entries.0))
+        }
+        VariantTag::Object => {
+            let fields = variant.newtype_variant::<TypedObject>()?;
+            Ok(Value::Object(fields.0))
+        }
+        VariantTag::Variant => {
+            let variant = variant.newtype_variant::<TypedVariant>()?;
+            Ok(Value::Variant(Box::new(variant.0)))
+        }
+        _ => unreachable!("not a container tag"),
+    }
+}
+
+#[inline(never)]
+fn visit_scalar<'de, A>(tag: VariantTag, variant: A) -> Result<Value, A::Error>
+where
+    A: VariantAccess<'de>,
+{
+    match tag {
+        VariantTag::Void => {
+            variant.unit_variant()?;
+            Ok(Value::Void)
+        }
+        VariantTag::Null => {
+            variant.unit_variant()?;
+            Ok(Value::Null)
+        }
+        VariantTag::Bool => Ok(Value::Bool(variant.newtype_variant()?)),
+        VariantTag::I8 => Ok(Value::I8(variant.newtype_variant()?)),
+        VariantTag::I16 => Ok(Value::I16(variant.newtype_variant()?)),
+        VariantTag::I32 => Ok(Value::I32(variant.newtype_variant()?)),
+        VariantTag::I64 => Ok(Value::I64(variant.newtype_variant()?)),
+        VariantTag::I128 => Ok(Value::I128(variant.newtype_variant()?)),
+        VariantTag::U8 => Ok(Value::U8(variant.newtype_variant()?)),
+        VariantTag::U16 => Ok(Value::U16(variant.newtype_variant()?)),
+        VariantTag::U32 => Ok(Value::U32(variant.newtype_variant()?)),
+        VariantTag::U64 => Ok(Value::U64(variant.newtype_variant()?)),
+        VariantTag::U128 => Ok(Value::U128(variant.newtype_variant()?)),
+        VariantTag::F32 => Ok(Value::F32(variant.newtype_variant::<f32>()?.into())),
+        VariantTag::F64 => Ok(Value::F64(variant.newtype_variant::<f64>()?.into())),
+        VariantTag::Uuid => {
+            let raw = variant.newtype_variant::<String>()?;
+            let parsed = uuid::Uuid::parse_str(&raw)
+                .map_err(|err| de::Error::custom(format!("invalid uuid value '{raw}': {err}")))?;
+            Ok(Value::Uuid(parsed.into()))
+        }
+        VariantTag::IpAddr => {
+            let raw = variant.newtype_variant::<String>()?;
+            let parsed = raw.parse::<std::net::IpAddr>().map_err(|err| {
+                de::Error::custom(format!("invalid ip_addr value '{raw}': {err}"))
+            })?;
+            Ok(Value::IpAddr(parsed))
+        }
+        VariantTag::Duration => {
+            let duration = variant.newtype_variant::<DurationWire>()?;
+            Ok(Value::Duration(duration.0.into()))
+        }
+        VariantTag::Time => {
+            let nanos = variant.newtype_variant::<i64>()?;
+            let raw = time::Time::MIDNIGHT + time::Duration::nanoseconds(nanos);
+            Ok(Value::Time(raw.into()))
+        }
+        VariantTag::Date => {
+            let julian_day = variant.newtype_variant::<i32>()?;
+            let raw = time::Date::from_julian_day(julian_day).map_err(|err| {
+                de::Error::custom(format!("invalid date julian day {julian_day}: {err}"))
+            })?;
+            Ok(Value::Date(raw.into()))
+        }
+        VariantTag::DateTime => {
+            let unix_nanos = variant.newtype_variant::<i128>()?;
+            let raw =
+                time::OffsetDateTime::from_unix_timestamp_nanos(unix_nanos).map_err(|err| {
+                    de::Error::custom(format!("invalid datetime unix nanos {unix_nanos}: {err}"))
+                })?;
+            Ok(Value::DateTime(raw.into()))
+        }
+        VariantTag::Bytes => {
+            let bytes = variant.newtype_variant::<Vec<u8>>()?;
+            Ok(Value::Bytes(bytes.into()))
+        }
+        VariantTag::String => Ok(Value::String(variant.newtype_variant()?)),
+        _ => unreachable!("not a scalar tag"),
     }
 }
 
@@ -493,14 +517,120 @@ mod tests {
     }
 
     #[test]
-    fn typed_duration_roundtrip_preserves_milliseconds() {
-        let value = Value::Duration(time::Duration::milliseconds(1500).into());
+    fn typed_duration_json_shape_is_seconds_and_nanoseconds() {
+        let value = Value::Duration(time::Duration::new(1, 500_000_001).into());
         let encoded =
             ::serde_json::to_string(&TypedValue(value.clone())).expect("serialize duration");
-        assert_eq!(encoded, r#"{"duration":1500}"#);
+        assert_eq!(encoded, r#"{"duration":[1,500000001]}"#);
 
         let decoded: TypedValue = ::serde_json::from_str(&encoded).expect("deserialize duration");
         assert_eq!(decoded.0, value);
+    }
+
+    #[test]
+    fn typed_durations_round_trip_exactly() {
+        for duration in [
+            time::Duration::ZERO,
+            time::Duration::nanoseconds(1),
+            time::Duration::nanoseconds(-1),
+            time::Duration::new(3, 68_338_061),
+            time::Duration::new(-3, -68_338_061),
+            time::Duration::new(i64::MAX / 2, 999_999_999),
+            time::Duration::MAX,
+            time::Duration::MIN,
+        ] {
+            let value = Value::Duration(duration.into());
+            let json = ::serde_json::to_string(&TypedValue(value.clone())).unwrap();
+            let decoded: TypedValue = ::serde_json::from_str(&json).unwrap();
+            assert_eq!(decoded.0, value, "json {json}");
+            let msgpack = rmp_serde::to_vec(&TypedValue(value.clone())).unwrap();
+            let decoded: TypedValue = rmp_serde::from_slice(&msgpack).unwrap();
+            assert_eq!(decoded.0, value);
+        }
+    }
+
+    #[test]
+    fn typed_duration_decodes_legacy_milliseconds() {
+        let decoded: TypedValue =
+            ::serde_json::from_str(r#"{"duration":-1500}"#).expect("legacy json duration");
+        assert_eq!(
+            decoded.0,
+            Value::Duration(time::Duration::milliseconds(-1500).into())
+        );
+
+        // Legacy MessagePack payloads: the duration variant with an `i64`.
+        #[derive(serde::Serialize)]
+        enum Legacy {
+            #[serde(rename = "duration")]
+            Duration(i64),
+        }
+        for millis in [0, 1500, -1500, i64::MAX, i64::MIN] {
+            let bytes = rmp_serde::to_vec(&Legacy::Duration(millis)).unwrap();
+            let decoded: TypedValue = rmp_serde::from_slice(&bytes).unwrap();
+            assert_eq!(
+                decoded.0,
+                Value::Duration(time::Duration::milliseconds(millis).into())
+            );
+        }
+    }
+
+    #[test]
+    fn typed_duration_rejects_invalid_nanoseconds() {
+        for json in [
+            r#"{"duration":[1,1000000000]}"#,
+            r#"{"duration":[1,-5]}"#,
+            r#"{"duration":[1]}"#,
+            r#"{"duration":[1,2,3]}"#,
+            r#"{"duration":18446744073709551615}"#,
+        ] {
+            assert!(
+                ::serde_json::from_str::<TypedValue>(json).is_err(),
+                "{json} was accepted"
+            );
+        }
+    }
+
+    fn nested_list(depth: usize) -> Value {
+        let mut value = Value::Null;
+        for _ in 0..depth {
+            value = Value::List(vec![value]);
+        }
+        value
+    }
+
+    #[test]
+    fn typed_values_up_to_the_depth_limit_round_trip() {
+        let value = nested_list(crate::value::MAX_VALUE_DEPTH);
+        let bytes = rmp_serde::to_vec(&TypedValue(value.clone())).unwrap();
+        let decoded: TypedValue = rmp_serde::from_slice(&bytes).unwrap();
+        assert_eq!(decoded.0, value);
+    }
+
+    #[test]
+    fn typed_values_beyond_the_depth_limit_are_rejected() {
+        let value = nested_list(crate::value::MAX_VALUE_DEPTH + 1);
+        let err = rmp_serde::to_vec(&TypedValue(value)).unwrap_err();
+        assert!(err.to_string().contains("maximum depth"), "{err}");
+
+        // Hand-built input nested far deeper: `{"list": [` per level.
+        let depth = 100_000;
+        let mut bytes = Vec::new();
+        for _ in 0..depth {
+            bytes.extend_from_slice(&[0x81, 0xA4, b'l', b'i', b's', b't', 0x91]);
+        }
+        bytes.extend_from_slice(&[0xA4, b'n', b'u', b'l', b'l']);
+        let mut deserializer = rmp_serde::Deserializer::from_read_ref(&bytes);
+        deserializer.set_max_depth(usize::MAX);
+        let err = <TypedValue as serde::Deserialize>::deserialize(&mut deserializer).unwrap_err();
+        assert!(err.to_string().contains("maximum depth"), "{err}");
+
+        // The counter is released after the failure.
+        let value = nested_list(crate::value::MAX_VALUE_DEPTH);
+        let bytes = rmp_serde::to_vec(&TypedValue(value.clone())).unwrap();
+        assert_eq!(
+            rmp_serde::from_slice::<TypedValue>(&bytes).unwrap().0,
+            value
+        );
     }
 
     #[test]

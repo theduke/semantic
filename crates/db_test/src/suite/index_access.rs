@@ -8,7 +8,7 @@
 
 use super::*;
 use semantic_data::schema::IndexKind;
-use semantic_db_core::QueryPlan;
+use semantic_db_core::{QueryPlan, VerifyOptions};
 
 const INDEXED: &str = "suite_index_access_indexed";
 const PLAIN: &str = "suite_index_access_plain";
@@ -197,6 +197,7 @@ pub async fn test_index_access(db: &Db) {
     test_index_access_plans(db).await;
     test_writes_keep_indexes_consistent(db).await;
     test_package_composite_index(db).await;
+    test_unique_index_over_duplicates(db).await;
     super::test_full_text(db).await;
 }
 
@@ -479,4 +480,150 @@ async fn test_package_composite_index(db: &Db) {
         matches!(&plan, QueryPlan::IndexRange { index_name, .. } if index_name == "by_owner_slot"),
         "{plan:?}"
     );
+}
+
+/// Creating a unique index (by DDL or a package migration) over rows that
+/// already share a key value fails with the first conflicting pair and
+/// changes nothing; composite keys and partial predicates decide what
+/// conflicts.
+async fn test_unique_index_over_duplicates(db: &Db) {
+    let collection = "suite_index_access_unique_dups";
+    let migration = |name: &str, operations: Vec<MigrationDdlOperation>| Migration {
+        module: "unique_dups".to_string(),
+        name: name.to_string(),
+        description: None,
+        operations: operations
+            .into_iter()
+            .map(MigrationOperation::Ddl)
+            .collect(),
+        meta: Meta::default(),
+    };
+    let create = migration(
+        "001_collection",
+        vec![MigrationDdlOperation::UpsertCollection {
+            name: collection.to_string(),
+            kind: MigrationCollectionKind::Polymorphic,
+            integrity_mode: MigrationIntegrityMode::Permissive,
+        }],
+    );
+    let package = |migrations: Vec<Migration>| Package {
+        name: "suite.unique_dups".to_string(),
+        root: Module {
+            name: "unique_dups".to_string(),
+            constants: BTreeMap::new(),
+            types: BTreeMap::new(),
+            attributes: BTreeMap::new(),
+            classes: BTreeMap::new(),
+            interfaces: BTreeMap::new(),
+            contracts: BTreeMap::new(),
+            meta: Meta::default(),
+        },
+        modules: BTreeMap::new(),
+        migrations,
+        version: None,
+        meta: Meta::default(),
+    };
+    db.upsert_package(package(vec![create.clone()]))
+        .await
+        .unwrap();
+    let mut batch = Batch::new();
+    for (id, owner, slot) in [
+        ("a1", "a", 1i64),
+        ("a2", "a", 1),
+        ("b1", "b", 1),
+        ("b2", "b", 2),
+    ] {
+        let mut object = Object::new();
+        object.insert("id", Value::String(id.to_string()));
+        object.insert("owner", Value::String(owner.to_string()));
+        object.insert("slot", Value::I64(slot));
+        batch = batch.with_op(BatchOperation::Upsert {
+            collection: collection.to_string(),
+            id: id.to_string(),
+            object,
+        });
+    }
+    db.execute_batch(batch).await.unwrap();
+
+    let equals = |field: &str, value: &str| {
+        Some(Expr::Binary {
+            op: BinaryOp::Eq,
+            left: Box::new(Expr::Operand(Operand::Field(FieldPath::from_fields([
+                field,
+            ])))),
+            right: Box::new(Expr::Operand(Operand::Literal(Value::String(value.into())))),
+        })
+    };
+    let ddl = |name: &str, extra: &[&str], predicate: Option<Expr>| DdlOperation::UpsertIndex {
+        name: name.to_string(),
+        collection: collection.to_string(),
+        field: "owner".to_string(),
+        unique: true,
+        kind: IndexKind::Equality,
+        extra_fields: extra.iter().map(ToString::to_string).collect(),
+        predicate,
+        analyzer: Default::default(),
+    };
+    let migrate_index = |migration_name: &str, index: &str, predicate: Option<Expr>| {
+        migration(
+            migration_name,
+            vec![MigrationDdlOperation::UpsertIndex {
+                name: index.to_string(),
+                collection: collection.to_string(),
+                field: "owner".to_string(),
+                unique: true,
+                kind: IndexKind::Equality,
+                extra_fields: Vec::new(),
+                predicate,
+                analyzer: Default::default(),
+            }],
+        )
+    };
+    // Fine: only a1 is indexed.
+    let partial = migrate_index("002_partial", "owner_a1_unique", equals("id", "a1"));
+    // Rejected: a1 and a2 share the owner.
+    let full = migrate_index("003_full", "owner_unique", None);
+    let verify = || async {
+        let report = db.verify(VerifyOptions::default()).await.unwrap();
+        assert!(report.is_ok(), "{report}");
+        report.revision
+    };
+    let expect_violation = |result: Result<(), DbError>, pair: (&str, &str)| {
+        let Err(DbError::UniqueViolation {
+            existing_id, id, ..
+        }) = result
+        else {
+            panic!("expected a unique violation, got {result:?}");
+        };
+        assert_eq!((existing_id.as_str(), id.as_str()), pair);
+    };
+
+    let catalog = db.catalog().await.unwrap().to_storage_snapshot();
+    let revision = verify().await;
+    // Plain and composite keys shared by a1 and a2.
+    for extra in [&[][..], &["slot"][..]] {
+        let batch = DdlBatch::new().with_op(ddl("owner_unique", extra, None));
+        expect_violation(db.execute_ddl(batch).await.map(drop), ("a1", "a2"));
+    }
+    expect_violation(
+        db.upsert_package(package(vec![create.clone(), partial.clone(), full]))
+            .await
+            .map(drop),
+        ("a1", "a2"),
+    );
+    // A partial index over the b rows only sees b1 and b2.
+    let batch = DdlBatch::new().with_op(ddl("owner_unique", &[], equals("owner", "b")));
+    expect_violation(db.execute_ddl(batch).await.map(drop), ("b1", "b2"));
+    // Nothing was committed.
+    assert_eq!(db.catalog().await.unwrap().to_storage_snapshot(), catalog);
+    assert_eq!(verify().await, revision);
+
+    // Without duplicates under the key (composite) or the predicate, the
+    // index is built.
+    let batch = DdlBatch::new().with_op(ddl("owner_slot_unique", &["slot"], equals("owner", "b")));
+    db.execute_ddl(batch).await.unwrap();
+    db.upsert_package(package(vec![create, partial]))
+        .await
+        .unwrap();
+    verify().await;
 }

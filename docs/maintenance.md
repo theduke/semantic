@@ -57,6 +57,11 @@ streams every collection once and reports `VerifyProblem`s:
   pairs, not the rows);
 - maintained row and index entry counters against the actual counts;
 - payloads that fail to decode, with their entity id;
+- unique indexes holding the same key value for several rows
+  (`duplicate_unique_value`, memory proportional to the rows of the checked
+  collection). Creating a unique index over duplicates fails, but a rebuild
+  on open (for example after a bug) builds the index anyway, logs a warning
+  and leaves the duplicates for `verify` to report;
 - the storage's physical integrity check (redb). It cannot run while read
   snapshots are open and is then reported under `skipped`; retry later.
 
@@ -68,8 +73,9 @@ listed; `problem_count` counts all of them.
 
 `repair` verifies, rebuilds the indexes with problems, the reverse references
 and/or relationship data when they mismatch, recounts the counters when a
-counter was wrong, and verifies again. Corrupt payloads and physical damage
-cannot be repaired and remain in the final report.
+counter was wrong, and verifies again. Corrupt payloads, duplicate unique
+values and physical damage cannot be repaired and remain in the final
+report.
 
 ## Compaction and statistics
 

@@ -244,3 +244,86 @@ fn path_index_scans_are_scoped_to_the_path() {
         ["d"]
     );
 }
+
+#[test]
+fn writes_fail_for_values_nested_beyond_the_key_and_payload_limits() {
+    use semantic_data::value::MAX_VALUE_DEPTH;
+    use semantic_db_core::embedded::{StoredEntity, StoredEntityKind};
+
+    let nested = |depth: usize| {
+        let mut value = string("leaf");
+        for _ in 0..depth {
+            value = Value::List(vec![value]);
+        }
+        value
+    };
+    let row = |value: Value| Object::from_iter([("kind".to_string(), value)]);
+    let equality = index(1, IndexKind::Equality);
+    let path = index(2, IndexKind::PathEquality);
+    let mut store = EntityStore::new(MemoryKvEngine::new());
+    store
+        .apply_batch(&[
+            StorageWriteOp::ResetIndex(equality.lid),
+            StorageWriteOp::ResetIndex(path.lid),
+        ])
+        .unwrap();
+    let revision = store.current_revision().unwrap();
+
+    let deep = row(nested(MAX_VALUE_DEPTH + 1));
+    let failing = [
+        StorageWriteOp::IndexEntity {
+            index: equality.clone(),
+            entity_id: "a".into(),
+            object: row(nested(crate::keys::memcmp::MAX_DEPTH + 1)),
+        },
+        StorageWriteOp::IndexEntity {
+            index: path.clone(),
+            entity_id: "a".into(),
+            object: deep.clone(),
+        },
+        StorageWriteOp::PutEntity(StoredEntity {
+            id: "a".into(),
+            collection: 7,
+            kind: StoredEntityKind::Untyped,
+            object: deep,
+        }),
+    ];
+    for op in failing {
+        let err = store.apply_batch(std::slice::from_ref(&op)).unwrap_err();
+        assert!(err.to_string().contains("maximum depth"), "{op:?}: {err}");
+    }
+    assert_eq!(store.current_revision().unwrap(), revision);
+
+    // At the limits every write succeeds and reads back.
+    let at_limit = row(nested(MAX_VALUE_DEPTH));
+    store
+        .apply_batch(&[
+            StorageWriteOp::IndexEntity {
+                index: equality.clone(),
+                entity_id: "a".into(),
+                object: at_limit.clone(),
+            },
+            StorageWriteOp::IndexEntity {
+                index: path,
+                entity_id: "a".into(),
+                object: at_limit.clone(),
+            },
+            StorageWriteOp::PutEntity(StoredEntity {
+                id: "a".into(),
+                collection: 7,
+                kind: StoredEntityKind::Untyped,
+                object: at_limit.clone(),
+            }),
+        ])
+        .unwrap();
+    assert_eq!(
+        store
+            .scan_index_value(equality.lid, None, &nested(MAX_VALUE_DEPTH))
+            .unwrap(),
+        ["a"]
+    );
+    let stored = EntityStorage::get_entity(&store, LocalCollectionId(7), "a")
+        .unwrap()
+        .unwrap();
+    assert_eq!(stored.object, at_limit);
+}

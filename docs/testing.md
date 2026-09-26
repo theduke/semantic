@@ -52,8 +52,9 @@ Rerun just that test with the printed value.
   dictionary meta decoders must return errors, never panic, take longer than
   a per-case limit or allocate out of proportion to the input (a tracking
   global allocator of the `db_kv` test binary records the largest
-  allocation). Deep-nesting inputs run in a child process because a stack
-  overflow aborts the process.
+  allocation). Inputs nested far beyond the decoders' depth limits
+  (`MAX_VALUE_DEPTH`, `memcmp::MAX_DEPTH`) must fail with an error on a
+  regular test thread, and input at the limits must decode.
 - `engines`: the differential and concurrency tests below on the memory
   engine with and without MVCC snapshots.
 
@@ -65,8 +66,9 @@ full-text and reference indexes; three classes with validated references)
 and a random sequence of operations: creates, upserts and deletes by id,
 multi-operation batches, predicate updates and deletes, class rows with
 valid and dangling references, interactive transactions with savepoints,
-rollbacks to savepoints and final commits or rollbacks, adding and dropping
-indexes, invalid writes and reopens. Each operation runs on every target
+rollbacks to savepoints and final commits or rollbacks, adding indexes
+(unique ones over existing duplicate values must fail) and dropping them,
+invalid writes and reopens. Each operation runs on every target
 and must produce the same result or the same error kind everywhere, and
 match the prediction of a trivial model (a `BTreeMap` of rows per
 collection, predicates evaluated with `evaluate_filter_expr`). Every
@@ -115,4 +117,5 @@ memory, memory with MVCC, redb and logfs; the ignored
 ## Known bugs
 
 Tests for bugs found by these tests are `#[ignore]`d with a `bug: ...`
-reason; run them with `--ignored` to check whether they are fixed.
+reason; run them with `--ignored` to check whether they are fixed. There
+are currently none.

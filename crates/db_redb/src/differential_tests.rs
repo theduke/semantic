@@ -118,16 +118,40 @@ async fn unique_index_over_duplicates_is_rejected_on(db: &Db) {
         predicate: None,
         analyzer: Default::default(),
     });
-    assert!(
-        db.execute_ddl(unique).await.is_err(),
-        "a unique index was built over duplicate values"
+    let catalog = db.catalog().await.unwrap();
+    let revision = db
+        .verify(semantic_db_core::VerifyOptions::default())
+        .await
+        .unwrap()
+        .revision;
+    let err = db.execute_ddl(unique).await.unwrap_err();
+    let semantic_db_core::DbError::UniqueViolation {
+        index,
+        existing_id,
+        id,
+        value,
+        ..
+    } = err
+    else {
+        panic!("a unique index was built over duplicate values: {err:?}");
+    };
+    assert_eq!(
+        (index.as_str(), existing_id.as_str(), id.as_str()),
+        ("dup_items_nick", "one", "two")
     );
+    assert_eq!(*value, Value::String("same".into()));
+    // Nothing was committed: the catalog and the storage are unchanged.
+    let after = db.catalog().await.unwrap();
+    assert_eq!(after.to_storage_snapshot(), catalog.to_storage_snapshot());
+    let report = db
+        .verify(semantic_db_core::VerifyOptions::default())
+        .await
+        .unwrap();
+    assert!(report.is_ok(), "{report}");
+    assert_eq!(report.revision, revision);
 }
 
 #[tokio::test(flavor = "multi_thread")]
-#[ignore = "bug: DDL builds a unique index over existing duplicate values without an error \
-            (EmbeddedDb::backfill_indexes never checks uniqueness); later writes only probe \
-            changed rows, so the duplicates persist under a `unique` index"]
 async fn unique_index_over_duplicates_is_rejected() {
     unique_index_over_duplicates_is_rejected_on(&memory()).await;
     let dir = tempfile::tempdir().unwrap();

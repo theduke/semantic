@@ -38,10 +38,19 @@
 //! Floats keep their exact bits. `DateTime` values are stored as their UTC
 //! instant, like the msgpack format (version 1), so they decode with a UTC
 //! offset.
+//!
+//! Containers (lists, maps, objects, variants) nest at most
+//! [`MAX_VALUE_DEPTH`] levels below an entity's top-level fields: the
+//! encoder rejects deeper values, so everything written stays readable, and
+//! the decoder, which recurses once per level, rejects deeper (corrupt)
+//! input instead of overflowing the stack. Length prefixes are checked
+//! against the remaining input before anything is allocated.
 
 use std::collections::BTreeMap;
 
-use semantic_data::value::{Map, Object, OrderedF32, OrderedF64, Value, VariantValue};
+use semantic_data::value::{
+    MAX_VALUE_DEPTH, Map, Object, OrderedF32, OrderedF64, Value, VariantValue,
+};
 use semantic_db_core::DbError;
 
 const TAG_VOID: u8 = 0x00;
@@ -130,12 +139,34 @@ fn push_bytes(out: &mut Vec<u8>, bytes: &[u8]) {
     out.extend_from_slice(bytes);
 }
 
+fn depth_exceeded() -> String {
+    format!("value nesting exceeds the maximum depth of {MAX_VALUE_DEPTH}")
+}
+
 /// Append the encoding of `value` to `out`.
+///
+/// Fails when containers nest deeper than [`MAX_VALUE_DEPTH`].
+#[cfg(test)]
 pub(crate) fn encode_value(
     value: &Value,
     out: &mut Vec<u8>,
     fields: &mut FieldIds<'_>,
 ) -> Result<(), DbError> {
+    encode_value_at(value, out, fields, MAX_VALUE_DEPTH)
+}
+
+/// Encode `value`, whose containers may nest `depth` more levels.
+fn encode_value_at(
+    value: &Value,
+    out: &mut Vec<u8>,
+    fields: &mut FieldIds<'_>,
+    depth: usize,
+) -> Result<(), DbError> {
+    let inner = || {
+        depth
+            .checked_sub(1)
+            .ok_or_else(|| DbError::Serialization(depth_exceeded()))
+    };
     match value {
         Value::Void => out.push(TAG_VOID),
         Value::Null => out.push(TAG_NULL),
@@ -203,25 +234,29 @@ pub(crate) fn encode_value(
             push_bytes(out, value.as_bytes());
         }
         Value::List(items) => {
+            let depth = inner()?;
             out.push(TAG_LIST);
             push_varint(out, items.len() as u128);
             for item in items {
-                encode_value(item, out, fields)?;
+                encode_value_at(item, out, fields, depth)?;
             }
         }
         Value::Map(map) => {
+            let depth = inner()?;
             out.push(TAG_MAP);
             push_varint(out, map.len() as u128);
             for (key, value) in map.iter() {
-                encode_value(key, out, fields)?;
-                encode_value(value, out, fields)?;
+                encode_value_at(key, out, fields, depth)?;
+                encode_value_at(value, out, fields, depth)?;
             }
         }
         Value::Object(object) => {
+            let depth = inner()?;
             out.push(TAG_OBJECT);
-            encode_object_body(object.iter(), object.len(), out, fields)?;
+            encode_object_body_at(object.iter(), object.len(), out, fields, depth)?;
         }
         Value::Variant(variant) => {
+            let depth = inner()?;
             out.push(TAG_VARIANT);
             match &variant.r#type {
                 Some(type_name) => {
@@ -231,23 +266,34 @@ pub(crate) fn encode_value(
                 None => push_varint(out, 0),
             }
             push_bytes(out, variant.variant.as_bytes());
-            encode_value(&variant.value, out, fields)?;
+            encode_value_at(&variant.value, out, fields, depth)?;
         }
     }
     Ok(())
 }
 
-/// Append the field count and the `(field id, value)` pairs of an object.
+/// Append the field count and the `(field id, value)` pairs of an entity's
+/// top-level object.
 pub(crate) fn encode_object_body<'v>(
     entries: impl Iterator<Item = (&'v String, &'v Value)>,
     len: usize,
     out: &mut Vec<u8>,
     fields: &mut FieldIds<'_>,
 ) -> Result<(), DbError> {
+    encode_object_body_at(entries, len, out, fields, MAX_VALUE_DEPTH)
+}
+
+fn encode_object_body_at<'v>(
+    entries: impl Iterator<Item = (&'v String, &'v Value)>,
+    len: usize,
+    out: &mut Vec<u8>,
+    fields: &mut FieldIds<'_>,
+    depth: usize,
+) -> Result<(), DbError> {
     push_varint(out, len as u128);
     for (name, value) in entries {
         push_varint(out, u128::from(fields(name)?));
-        encode_value(value, out, fields)?;
+        encode_value_at(value, out, fields, depth)?;
     }
     Ok(())
 }
@@ -348,11 +394,21 @@ impl<'a> Reader<'a> {
             .map_err(malformed)
     }
 
-    /// Decode the field count and fields of an object into `object`.
+    /// Decode the field count and fields of an entity's top-level object
+    /// into `object`.
     pub(crate) fn object_body(
         &mut self,
         names: &dyn FieldNames,
         object: &mut BTreeMap<String, Value>,
+    ) -> Result<(), CodecError> {
+        self.object_body_at(names, object, MAX_VALUE_DEPTH)
+    }
+
+    fn object_body_at(
+        &mut self,
+        names: &dyn FieldNames,
+        object: &mut BTreeMap<String, Value>,
+        depth: usize,
     ) -> Result<(), CodecError> {
         let len = self.read_len()?;
         for _ in 0..len {
@@ -361,14 +417,98 @@ impl<'a> Reader<'a> {
                 .field_name(id)
                 .ok_or(CodecError::UnknownField(id))?
                 .to_string();
-            let value = self.value(names)?;
+            let value = self.value_at(names, depth)?;
             object.insert(name, value);
         }
         Ok(())
     }
 
+    /// Decode one value whose containers may nest [`MAX_VALUE_DEPTH`]
+    /// levels.
+    #[cfg(test)]
     pub(crate) fn value(&mut self, names: &dyn FieldNames) -> Result<Value, CodecError> {
-        Ok(match self.byte()? {
+        self.value_at(names, MAX_VALUE_DEPTH)
+    }
+
+    /// Decode one value whose containers may nest `depth` more levels.
+    ///
+    /// Only containers recurse; scalars are decoded out of line, which keeps
+    /// the stack use per nesting level small.
+    fn value_at(&mut self, names: &dyn FieldNames, depth: usize) -> Result<Value, CodecError> {
+        match self.byte()? {
+            tag @ (TAG_LIST | TAG_MAP | TAG_OBJECT | TAG_VARIANT) => {
+                let depth = depth
+                    .checked_sub(1)
+                    .ok_or_else(|| malformed(depth_exceeded()))?;
+                self.container(tag, names, depth)
+            }
+            tag => self.scalar(tag),
+        }
+    }
+
+    fn container(
+        &mut self,
+        tag: u8,
+        names: &dyn FieldNames,
+        depth: usize,
+    ) -> Result<Value, CodecError> {
+        match tag {
+            TAG_LIST => self.list(names, depth),
+            TAG_MAP => self.map(names, depth),
+            TAG_OBJECT => {
+                let mut object = BTreeMap::new();
+                self.object_body_at(names, &mut object, depth)?;
+                Ok(Value::Object(Object::from(object)))
+            }
+            _ => self.variant(names, depth),
+        }
+    }
+
+    fn list(&mut self, names: &dyn FieldNames, depth: usize) -> Result<Value, CodecError> {
+        let len = self.read_len()?;
+        let mut items = Vec::with_capacity(len);
+        for _ in 0..len {
+            items.push(self.value_at(names, depth)?);
+        }
+        Ok(Value::List(items))
+    }
+
+    fn map(&mut self, names: &dyn FieldNames, depth: usize) -> Result<Value, CodecError> {
+        let len = self.read_len()?;
+        let mut map = Map::new();
+        for _ in 0..len {
+            let key = self.value_at(names, depth)?;
+            let value = self.value_at(names, depth)?;
+            map.insert(key, value);
+        }
+        Ok(Value::Map(map))
+    }
+
+    fn variant(&mut self, names: &dyn FieldNames, depth: usize) -> Result<Value, CodecError> {
+        let (r#type, variant) = self.variant_names()?;
+        let value = self.value_at(names, depth)?;
+        Ok(Value::Variant(Box::new(VariantValue {
+            r#type,
+            variant,
+            value,
+        })))
+    }
+
+    #[inline(never)]
+    fn variant_names(&mut self) -> Result<(Option<String>, String), CodecError> {
+        let r#type = match self.varint_as::<usize>("variant type length")? {
+            0 => None,
+            len => {
+                let bytes = self.take(len - 1)?;
+                Some(std::str::from_utf8(bytes).map_err(malformed)?.to_string())
+            }
+        };
+        Ok((r#type, self.string()?))
+    }
+
+    #[inline(never)]
+    fn scalar(&mut self, tag: u8) -> Result<Value, CodecError> {
+        Ok(match tag {
             TAG_VOID => Value::Void,
             TAG_NULL => Value::Null,
             TAG_FALSE => Value::Bool(false),
@@ -422,45 +562,6 @@ impl<'a> Reader<'a> {
             }
             TAG_BYTES => Value::Bytes(bytes::Bytes::copy_from_slice(self.bytes()?)),
             TAG_STRING => Value::String(self.string()?),
-            TAG_LIST => {
-                let len = self.read_len()?;
-                let mut items = Vec::with_capacity(len);
-                for _ in 0..len {
-                    items.push(self.value(names)?);
-                }
-                Value::List(items)
-            }
-            TAG_MAP => {
-                let len = self.read_len()?;
-                let mut map = Map::new();
-                for _ in 0..len {
-                    let key = self.value(names)?;
-                    let value = self.value(names)?;
-                    map.insert(key, value);
-                }
-                Value::Map(map)
-            }
-            TAG_OBJECT => {
-                let mut object = BTreeMap::new();
-                self.object_body(names, &mut object)?;
-                Value::Object(Object::from(object))
-            }
-            TAG_VARIANT => {
-                let r#type = match self.varint_as::<usize>("variant type length")? {
-                    0 => None,
-                    len => {
-                        let bytes = self.take(len - 1)?;
-                        Some(std::str::from_utf8(bytes).map_err(malformed)?.to_string())
-                    }
-                };
-                let variant = self.string()?;
-                let value = self.value(names)?;
-                Value::Variant(Box::new(VariantValue {
-                    r#type,
-                    variant,
-                    value,
-                }))
-            }
             other => return Err(malformed(format!("unknown value tag {other:#04x}"))),
         })
     }

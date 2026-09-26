@@ -466,3 +466,121 @@ fn legacy_path_indexes_of_system_collections_are_dropped_on_open() {
     let report = db.verify(&VerifyOptions::all()).unwrap();
     assert!(report.is_ok(), "{report}");
 }
+
+#[test]
+fn unique_index_over_duplicates_is_rejected_without_changes() {
+    let Fixture { mut db, events, .. } = fixture();
+    // e1 and e3 are both "music".
+    let version = db.shared_catalog().snapshot().version;
+    let revision = db.storage().current_revision().unwrap();
+    let err = db
+        .create_index("events_kind_unique", events, "kind", true)
+        .unwrap_err();
+    let semantic_db_core::DbError::UniqueViolation {
+        existing_id, id, ..
+    } = &err
+    else {
+        panic!("expected a unique violation, got {err:?}");
+    };
+    assert_eq!((existing_id.as_str(), id.as_str()), ("e1", "e3"));
+    let err = db
+        .create_index_definition(semantic_db_core::catalog::IndexDefinition {
+            name: "events_music_unique".into(),
+            collection: events,
+            fields: vec!["kind".into()],
+            unique: true,
+            kind: semantic_data::schema::IndexKind::Range,
+            predicate: Some(semantic_data::query::Expr::Binary {
+                op: BinaryOp::Eq,
+                left: Box::new(semantic_data::query::Expr::Operand(
+                    semantic_data::query::Operand::Field(FieldPath::from_fields(["kind"])),
+                )),
+                right: Box::new(semantic_data::query::Expr::Operand(
+                    semantic_data::query::Operand::Literal(Value::String("music".into())),
+                )),
+            }),
+            analyzer: Default::default(),
+        })
+        .unwrap_err();
+    assert!(
+        matches!(err, semantic_db_core::DbError::UniqueViolation { .. }),
+        "{err:?}"
+    );
+    assert_eq!(db.shared_catalog().snapshot().version, version);
+    assert_eq!(db.storage().current_revision().unwrap(), revision);
+    assert!(
+        db.catalog()
+            .find_equality_index(events, "kind")
+            .is_some_and(|index| !index.schema.unique)
+    );
+    let report = db.verify(&VerifyOptions::default()).unwrap();
+    assert!(report.is_ok(), "{report}");
+}
+
+#[test]
+fn unique_index_rebuilt_over_duplicates_on_open_is_reported_by_verify() {
+    let Fixture { mut db, events, .. } = fixture();
+    db.create_index("events_tag_unique", events, "tag", true)
+        .unwrap();
+    let unique = db
+        .catalog()
+        .find_equality_index(events, "tag")
+        .unwrap()
+        .clone();
+    let others = db
+        .catalog()
+        .indexes_for_collection(events)
+        .filter(|index| index.lid != unique.lid)
+        .cloned()
+        .collect::<Vec<_>>();
+    // Duplicates written below the database (as a bug could), with the index
+    // left unbuilt so opening rebuilds it.
+    let mut db = tamper(db, |store| {
+        let mut ops = vec![StorageWriteOp::ClearIndex(unique.lid)];
+        for id in ["t1", "t2"] {
+            let mut object = event(id, "tagged");
+            object.insert("tag", Value::String("same".into()));
+            for index in &others {
+                ops.push(StorageWriteOp::IndexEntity {
+                    index: index.clone(),
+                    entity_id: id.into(),
+                    object: object.clone(),
+                });
+            }
+            ops.push(StorageWriteOp::PutEntity(StoredEntity {
+                id: id.into(),
+                collection: events.0,
+                kind: StoredEntityKind::Untyped,
+                object,
+            }));
+        }
+        store.apply_batch(&ops).unwrap();
+    });
+    assert!(!db.storage().index_needs_rebuild(unique.lid).unwrap());
+    let report = db.verify(&VerifyOptions::default()).unwrap();
+    assert_eq!(
+        kinds(&report),
+        BTreeSet::from([Kind::DuplicateUniqueValue]),
+        "{report}"
+    );
+    let problem = &report.problems[0];
+    assert_eq!(problem.index.as_deref(), Some("events_tag_unique"));
+    assert_eq!(problem.entity_id.as_deref(), Some("t2"));
+    // The index itself is complete: lookups find both rows.
+    let tagged = db
+        .select(
+            SelectQuery::new()
+                .with_collection("events")
+                .with_predicate(Expr::Binary {
+                    op: BinaryOp::Eq,
+                    left: Box::new(Expr::Operand(Operand::Field(FieldPath::from_fields([
+                        "tag",
+                    ])))),
+                    right: Box::new(Expr::Operand(Operand::Literal(Value::String(
+                        "same".into(),
+                    )))),
+                }),
+        )
+        .unwrap();
+    assert_eq!(tagged.len(), 2);
+}

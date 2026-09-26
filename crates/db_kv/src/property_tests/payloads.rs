@@ -158,13 +158,7 @@ fn compact_payloads_with_unknown_field_ids_fail_cleanly() {
 fn self_contained_payloads_round_trip_deep_random_entities() {
     let (mut rng, _seed) = rng(0x5E1F);
     for case in 0..300 {
-        let mut entity = random_entity(&mut rng);
-        // Version 1 stores durations as wrapping whole milliseconds (see
-        // `self_contained_payloads_preserve_durations`).
-        entity.object = match to_v1_durations(Value::Object(entity.object)) {
-            Value::Object(object) => object,
-            _ => unreachable!(),
-        };
+        let entity = random_entity(&mut rng);
         let payload = encode_entity(&entity).unwrap();
         let decoded = decode_entity(&payload).unwrap_or_else(|err| panic!("case {case}: {err}"));
         assert_eq!(decoded.id, entity.id);
@@ -235,43 +229,15 @@ pub(super) fn first_difference(expected: &Value, actual: &Value) -> String {
     format!("expected {}\n  actual {}", short(expected), short(actual))
 }
 
-/// `value` with every duration reduced to what version 1 payloads keep.
-pub(super) fn to_v1_durations(value: Value) -> Value {
-    match value {
-        Value::Duration(duration) => {
-            let raw: time::Duration = duration.into();
-            Value::Duration(time::Duration::milliseconds(raw.whole_milliseconds() as i64).into())
-        }
-        Value::List(items) => Value::List(items.into_iter().map(to_v1_durations).collect()),
-        Value::Object(object) => Value::Object(
-            object
-                .into_iter()
-                .map(|(key, value)| (key, to_v1_durations(value)))
-                .collect(),
-        ),
-        Value::Map(map) => {
-            let mut out = semantic_data::value::Map::new();
-            for (key, value) in map.into_btree() {
-                out.insert(to_v1_durations(key), to_v1_durations(value));
-            }
-            Value::Map(out)
-        }
-        Value::Variant(mut variant) => {
-            variant.value = to_v1_durations(variant.value);
-            Value::Variant(variant)
-        }
-        other => other,
-    }
-}
-
 #[test]
-#[ignore = "bug: self-contained (version 1) payloads, still written by the postgres managed \
-            store, keep durations as `whole_milliseconds() as i64`: sub-millisecond precision \
-            is lost and durations beyond ~292 million years wrap around"]
 fn self_contained_payloads_preserve_durations() {
     for duration in [
         time::Duration::new(3, 68_338_061),
+        time::Duration::new(-3, -68_338_061),
+        time::Duration::nanoseconds(1),
         time::Duration::new(i64::MAX / 2, 0),
+        time::Duration::MAX,
+        time::Duration::MIN,
     ] {
         let mut object = Object::new();
         object.insert("d", Value::Duration(duration.into()));

@@ -106,8 +106,45 @@ pub enum Value {
     Variant(Box<VariantValue>),
 }
 
+/// Maximum container nesting depth of values in binary encodings.
+///
+/// Lists, maps, objects and variants each add one level; scalars have depth
+/// zero. Decoders of stored and transported values (entity payloads, typed
+/// value serde) recurse once per level, so they reject deeper input instead
+/// of risking a stack overflow on corrupt or malicious bytes, and encoders
+/// reject deeper values at write time so everything written stays
+/// readable. The limit is far above the nesting of realistic data.
+pub const MAX_VALUE_DEPTH: usize = 128;
+
 // Generic methods.
 impl Value {
+    /// Whether containers nest deeper than `max_depth` levels in this value
+    /// (see [`MAX_VALUE_DEPTH`]).
+    ///
+    /// Recursion stops after `max_depth + 1` levels, so the check itself is
+    /// safe on arbitrarily deep values.
+    pub fn exceeds_depth(&self, max_depth: usize) -> bool {
+        let Some(inner) = max_depth.checked_sub(1) else {
+            return self.is_container();
+        };
+        match self {
+            Self::List(items) => items.iter().any(|item| item.exceeds_depth(inner)),
+            Self::Map(map) => map
+                .iter()
+                .any(|(key, value)| key.exceeds_depth(inner) || value.exceeds_depth(inner)),
+            Self::Object(object) => object.iter().any(|(_, value)| value.exceeds_depth(inner)),
+            Self::Variant(variant) => variant.value.exceeds_depth(inner),
+            _ => false,
+        }
+    }
+
+    fn is_container(&self) -> bool {
+        matches!(
+            self,
+            Self::List(_) | Self::Map(_) | Self::Object(_) | Self::Variant(_)
+        )
+    }
+
     fn variant_rank(&self) -> u8 {
         match self {
             Self::Void => 0,

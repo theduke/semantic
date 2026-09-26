@@ -315,14 +315,6 @@ impl Run {
             Op::AddIndex(index) => {
                 let mut schema = self.schema.clone();
                 schema.active.push(index.clone());
-                if self.model.check_unique(&schema).is_err() {
-                    // Engines build unique indexes over duplicate values
-                    // without complaint (see the ignored
-                    // `unique_index_over_duplicates_is_rejected` tests);
-                    // skip the operation so the run keeps checking the
-                    // rest.
-                    return;
-                }
                 let engines = self
                     .on_all(&what, targets, |db| async {
                         db.execute_ddl(DdlBatch::new().with_op(index.upsert()))
@@ -330,8 +322,13 @@ impl Run {
                             .map(|_| ())
                     })
                     .await;
-                assert!(engines.is_ok(), "step {}: {what}: {engines:?}", self.step);
-                self.schema = schema;
+                // A unique index over existing duplicate values is rejected
+                // and leaves the schema unchanged.
+                let model = self.model.check_unique(&schema);
+                self.expect(&what, &engines, &model, |_| ());
+                if model.is_ok() {
+                    self.schema = schema;
+                }
             }
             Op::DropIndex(index) => {
                 let engines = self

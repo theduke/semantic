@@ -68,7 +68,7 @@ export type TaggedValue =
   | { f64: number }
   | { uuid: string }
   | { ip_addr: string }
-  | { duration: bigint }
+  | { duration: bigint | [bigint, number] }
   | { time: bigint }
   | { date: number }
   | { date_time: bigint }

@@ -5,6 +5,7 @@ use std::borrow::Cow;
 use std::collections::BTreeMap;
 use std::fmt;
 
+use crate::value::serde::support::{DepthGuard, DurationWire, duration_parts};
 use crate::value::serde::typed::{TypedRef, TypedValue};
 use crate::value::{Map, Object, ValueRef};
 
@@ -33,6 +34,12 @@ pub fn serialize<S>(value: &ValueRef<'_>, serializer: S) -> Result<S::Ok, S::Err
 where
     S: Serializer,
 {
+    let _depth = match value {
+        ValueRef::List(_) | ValueRef::Map(_) | ValueRef::Object(_) | ValueRef::Variant(_) => {
+            Some(DepthGuard::enter_serialize::<S::Error>()?)
+        }
+        _ => None,
+    };
     match value {
         ValueRef::Owned(v) => super::typed::serialize(v, serializer),
         ValueRef::Ref(v) => super::typed::serialize(v, serializer),
@@ -64,12 +71,7 @@ where
         }
         ValueRef::Duration(v) => {
             let raw: time::Duration = (*v).into();
-            serializer.serialize_newtype_variant(
-                "Value",
-                17,
-                "duration",
-                &(raw.whole_milliseconds() as i64),
-            )
+            serializer.serialize_newtype_variant("Value", 17, "duration", &duration_parts(raw))
         }
         ValueRef::Time(v) => {
             let raw: time::Time = (*v).into();
@@ -229,10 +231,8 @@ impl<'de> Visitor<'de> for TypedValueRefVisitor {
                 Ok(ValueRef::IpAddr(parsed))
             }
             VariantTag::Duration => {
-                let milliseconds = variant.newtype_variant::<i64>()?;
-                Ok(ValueRef::Duration(
-                    time::Duration::milliseconds(milliseconds).into(),
-                ))
+                let duration = variant.newtype_variant::<DurationWire>()?;
+                Ok(ValueRef::Duration(duration.0.into()))
             }
             VariantTag::Time => {
                 let nanos = variant.newtype_variant::<i64>()?;
@@ -271,18 +271,22 @@ impl<'de> Visitor<'de> for TypedValueRefVisitor {
                 }
             }
             VariantTag::List => {
+                let _depth = DepthGuard::enter::<A::Error>()?;
                 let values = variant.newtype_variant::<TypedListOwned>()?;
                 Ok(ValueRef::Owned(crate::value::Value::List(values.0)))
             }
             VariantTag::Map => {
+                let _depth = DepthGuard::enter::<A::Error>()?;
                 let entries = variant.newtype_variant::<TypedMapOwned>()?;
                 Ok(ValueRef::Owned(crate::value::Value::Map(entries.0)))
             }
             VariantTag::Object => {
+                let _depth = DepthGuard::enter::<A::Error>()?;
                 let fields = variant.newtype_variant::<TypedObjectOwned>()?;
                 Ok(ValueRef::Owned(crate::value::Value::Object(fields.0)))
             }
             VariantTag::Variant => {
+                let _depth = DepthGuard::enter::<A::Error>()?;
                 let typed_variant = variant.newtype_variant::<TypedVariantOwned>()?;
                 Ok(ValueRef::Owned(crate::value::Value::Variant(Box::new(
                     typed_variant.0,
@@ -496,15 +500,25 @@ mod tests {
     }
 
     #[test]
-    fn typed_value_ref_duration_roundtrip_preserves_milliseconds() {
-        let duration = crate::value::Duration::from(time::Duration::milliseconds(1500));
+    fn typed_value_ref_duration_roundtrip_preserves_nanoseconds() {
+        let duration = crate::value::Duration::from(time::Duration::new(-1, -500_000_001));
         let value = TypedValueRef(ValueRef::Duration(duration));
         let encoded = ::serde_json::to_string(&value).expect("serialize duration");
-        assert_eq!(encoded, r#"{"duration":1500}"#);
+        assert_eq!(encoded, r#"{"duration":[-1,-500000001]}"#);
 
         let decoded: TypedValueRef<'_> =
             ::serde_json::from_str(&encoded).expect("deserialize duration");
         assert_eq!(decoded.0.into_owned(), Value::Duration(duration));
+    }
+
+    #[test]
+    fn typed_value_ref_duration_decodes_legacy_milliseconds() {
+        let decoded: TypedValueRef<'_> =
+            ::serde_json::from_str(r#"{"duration":1500}"#).expect("deserialize duration");
+        assert_eq!(
+            decoded.0.into_owned(),
+            Value::Duration(time::Duration::milliseconds(1500).into())
+        );
     }
 
     #[test]

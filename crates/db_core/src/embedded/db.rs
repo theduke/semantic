@@ -260,15 +260,22 @@ impl<S: EntityStorage> EmbeddedDb<S> {
                 indexes.push(index.clone());
             }
         }
-        self.backfill_indexes(catalog.as_ref(), &indexes, None, ops)
+        // Duplicates in a unique index being rebuilt can only exist after a
+        // bug; opening must not fail over them (`verify` reports them).
+        self.backfill_indexes(catalog.as_ref(), &indexes, None, ops, UniqueBackfill::Warn)
     }
 
+    /// Backfill the indexes of `after` that are new or changed relative to
+    /// `before`, failing with [`DbError::UniqueViolation`] when a new or
+    /// changed unique index would hold duplicate values (see
+    /// [`UniqueBackfill::Reject`]).
     fn backfill_new_indexes(
         &self,
         before: &Catalog,
         after: &Catalog,
         read_revision: Option<u64>,
         ops: &mut Vec<StorageWriteOp>,
+        unique: UniqueBackfill<'_>,
     ) -> std::result::Result<(), DbError> {
         let indexes = after
             .indexes()
@@ -285,15 +292,18 @@ impl<S: EntityStorage> EmbeddedDb<S> {
                 changed.then(|| index.clone())
             })
             .collect::<Vec<_>>();
-        self.backfill_indexes(after, &indexes, read_revision, ops)
+        self.backfill_indexes(after, &indexes, read_revision, ops, unique)
     }
 
+    /// Rebuild `indexes` from the stored rows (at `read_revision`), checking
+    /// the unique ones for duplicate values as `unique` says.
     fn backfill_indexes(
         &self,
         catalog: &Catalog,
         indexes: &[crate::catalog::IndexSchema],
         read_revision: Option<u64>,
         ops: &mut Vec<StorageWriteOp>,
+        unique: UniqueBackfill<'_>,
     ) -> std::result::Result<(), DbError> {
         if indexes.is_empty() {
             return Ok(());
@@ -331,7 +341,37 @@ impl<S: EntityStorage> EmbeddedDb<S> {
             } else {
                 self.storage.scan_collection(collection.lid)?
             };
+            let mut unique_checks = collection_indexes
+                .iter()
+                .filter(|index| index.schema.unique && index.schema.kind.is_value_index())
+                .filter(|_| unique.checks(&collection.name))
+                .map(|index| (index, BTreeMap::<Value, String>::new(), false))
+                .collect::<Vec<_>>();
             for row in rows {
+                for (index, seen, reported) in &mut unique_checks {
+                    let Some(value) = index.key_value(&row.object) else {
+                        continue;
+                    };
+                    let Some(existing) = seen.get(&value) else {
+                        seen.insert(value, row.id.clone());
+                        continue;
+                    };
+                    let violation =
+                        compact::unique_violation(collection, index, &value, existing, &row.id);
+                    match unique {
+                        UniqueBackfill::Reject { .. } => return Err(violation),
+                        UniqueBackfill::Warn if !*reported => {
+                            *reported = true;
+                            tracing::warn!(
+                                index = %index.schema.name,
+                                collection = %collection.name,
+                                "rebuilt unique index holds duplicate values ({violation}); \
+                                 `verify` reports them until the rows are fixed"
+                            );
+                        }
+                        UniqueBackfill::Warn => {}
+                    }
+                }
                 for index in &collection_indexes {
                     self.push_index_ops(ops, index, &row.id, &row.object)?;
                 }
@@ -527,6 +567,9 @@ impl<S: EntityStorage> EmbeddedDb<S> {
                 &next_catalog,
                 read_revision,
                 &mut extra_ops,
+                UniqueBackfill::Reject {
+                    rewritten: Some(&after),
+                },
             )?;
             extra_ops.extend(catalog_write_ops(&self.storage, &next_catalog)?);
             self.rebuild_reverse_references(&next_catalog, &after, &mut extra_ops)?;
@@ -989,6 +1032,7 @@ impl<S: EntityStorage> EmbeddedDb<S> {
                 &next_catalog,
                 read_revision,
                 &mut extra_ops,
+                UniqueBackfill::Reject { rewritten: None },
             )?;
             extra_ops.extend(catalog_write_ops(&self.storage, &next_catalog)?);
             self.rebuild_relationship_edges(&next_catalog, &BTreeMap::new(), &mut extra_ops)?;
@@ -3032,6 +3076,36 @@ impl<'c> TxScope<'c> {
         storage: &'a S,
     ) -> Result<RevisionReader<'a, S>, DbError> {
         RevisionReader::for_isolation(storage, self.revision, self.isolation)
+    }
+}
+
+/// How an index backfill treats duplicate values in unique indexes.
+#[derive(Clone, Copy)]
+enum UniqueBackfill<'a> {
+    /// Fail with [`DbError::UniqueViolation`] for the first duplicate pair
+    /// (DDL and package migrations, whose write is then not committed).
+    Reject {
+        /// Collections the same write replaces entirely (package migration
+        /// data), keyed by name. Their final rows are checked against the
+        /// unique indexes when the write is persisted, so duplicates among
+        /// the stored rows, which the write may remove, are not checked.
+        rewritten: Option<&'a BTreeMap<String, BTreeMap<String, Object>>>,
+    },
+    /// Build the index anyway and log a warning (rebuilds on open).
+    /// `verify` reports the duplicates as
+    /// [`crate::VerifyProblemKind::DuplicateUniqueValue`].
+    Warn,
+}
+
+impl UniqueBackfill<'_> {
+    /// Whether duplicates among the stored rows of `collection` are checked.
+    fn checks(self, collection: &str) -> bool {
+        match self {
+            Self::Reject { rewritten } => {
+                rewritten.is_none_or(|rewritten| !rewritten.contains_key(collection))
+            }
+            Self::Warn => true,
+        }
     }
 }
 

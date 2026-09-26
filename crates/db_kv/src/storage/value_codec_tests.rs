@@ -160,3 +160,49 @@ fn rejects_malformed_input() {
         Err(CodecError::Malformed(_))
     ));
 }
+
+/// `depth` levels of alternating containers around a string.
+fn nested(depth: usize) -> Value {
+    let mut value = Value::String("leaf".into());
+    for level in 0..depth {
+        value = match level % 4 {
+            0 => Value::List(vec![value]),
+            1 => Value::Object(Object::from_iter([("f".to_string(), value)])),
+            2 => {
+                let mut map = semantic_data::value::Map::new();
+                map.insert(Value::Null, value);
+                Value::Map(map)
+            }
+            _ => Value::Variant(Box::new(semantic_data::value::VariantValue {
+                r#type: None,
+                variant: "v".into(),
+                value,
+            })),
+        };
+    }
+    value
+}
+
+#[test]
+fn values_nested_up_to_the_depth_limit_round_trip() {
+    let mut names = Names::default();
+    let value = nested(semantic_data::value::MAX_VALUE_DEPTH);
+    let decoded = decode(&encode(&value, &mut names), &names).unwrap();
+    assert_eq!(decoded, value);
+}
+
+#[test]
+fn encoding_rejects_values_nested_beyond_the_depth_limit() {
+    let mut names = Names::default();
+    let mut out = Vec::new();
+    let err = encode_value(
+        &nested(semantic_data::value::MAX_VALUE_DEPTH + 1),
+        &mut out,
+        &mut |name: &str| names.id(name),
+    )
+    .unwrap_err();
+    assert!(
+        matches!(&err, DbError::Serialization(message) if message.contains("maximum depth")),
+        "{err}"
+    );
+}

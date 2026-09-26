@@ -23,7 +23,7 @@ mod variant;
 pub use variant::VariantValue;
 
 mod val;
-pub use val::{OrderedF32, OrderedF64, Value};
+pub use val::{MAX_VALUE_DEPTH, OrderedF32, OrderedF64, Value};
 
 mod valref;
 pub use valref::ValueRef;

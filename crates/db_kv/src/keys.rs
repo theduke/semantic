@@ -48,6 +48,7 @@
 //! [`crate::storage::entity_codec`] and the `storage::field_dict` module.
 
 use semantic_data::value::{FieldPath, PathSegment, Value};
+use semantic_db_core::DbError;
 use semantic_db_core::catalog::{LocalCollectionId, LocalIndexId};
 use std::ops::Bound;
 
@@ -238,6 +239,20 @@ pub fn index_key(
     let mut key = index_value_prefix(index, path, value);
     key.extend_from_slice(entity_id.as_bytes());
     key
+}
+
+/// Like [`index_key`], but fails when `value` nests deeper than
+/// [`memcmp::MAX_DEPTH`], so every stored key decodes.
+pub fn try_index_key(
+    index: LocalIndexId,
+    path: Option<&FieldPath>,
+    value: &Value,
+    entity_id: &str,
+) -> Result<Vec<u8>, DbError> {
+    let mut key = index_path_prefix(index, path);
+    memcmp::try_encode_into(value, &mut key)?;
+    key.extend_from_slice(entity_id.as_bytes());
+    Ok(key)
 }
 
 /// Prefix of the entries of `index` (at `path`) whose value is a string

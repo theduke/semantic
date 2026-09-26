@@ -2,7 +2,9 @@ use std::cmp::Ordering;
 
 use semantic_data::value::Value;
 
-use super::{decode, decode_prefix, encode, encode_string_prefix, encoded_len};
+use super::{
+    MAX_DEPTH, decode, decode_prefix, encode, encode_string_prefix, encoded_len, try_encode_into,
+};
 use crate::test_values::Rng;
 
 fn assert_order_matches(a: &Value, b: &Value) {
@@ -126,4 +128,35 @@ fn rejects_malformed_input() {
     assert!(decode(&[0x26, b'a']).is_err());
     assert!(decode(&[0x11, 0x11]).is_err());
     assert!(encoded_len(&[0x27, 0x11]).is_err());
+}
+
+#[test]
+fn nesting_is_limited_on_checked_encode_and_decode() {
+    let nested = |depth: usize| {
+        let mut value = Value::I64(1);
+        for _ in 0..depth {
+            value = Value::List(vec![value, Value::Null]);
+        }
+        value
+    };
+    let at_limit = nested(MAX_DEPTH);
+    let mut key = Vec::new();
+    try_encode_into(&at_limit, &mut key).unwrap();
+    assert_eq!(key, encode(&at_limit));
+    assert_eq!(decode(&key).unwrap(), at_limit);
+    assert_eq!(encoded_len(&key).unwrap(), key.len());
+
+    let beyond = nested(MAX_DEPTH + 1);
+    let err = try_encode_into(&beyond, &mut Vec::new()).unwrap_err();
+    assert!(err.to_string().contains("maximum depth"), "{err}");
+    // The unchecked encoder still encodes it (for lookups), but the
+    // decoders reject the result.
+    let key = encode(&beyond);
+    for err in [
+        decode(&key).unwrap_err(),
+        decode_prefix(&key).unwrap_err(),
+        encoded_len(&key).unwrap_err(),
+    ] {
+        assert!(err.to_string().contains("maximum depth"), "{err}");
+    }
 }

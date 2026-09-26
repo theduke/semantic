@@ -50,6 +50,18 @@ const one = (value: TaggedValue): [string, unknown] => {
   return entries[0]!;
 };
 
+/** Whole milliseconds (truncated toward zero) of a tagged duration: a
+ * `[seconds, nanoseconds]` pair, or the legacy integer millisecond form. */
+const durationMs = (raw: unknown): number | bigint => {
+  if (!Array.isArray(raw))
+    return safe(checkedInteger("i64", raw as number | bigint));
+  if (raw.length !== 2)
+    throw new TypeError("duration requires a [seconds, nanoseconds] pair");
+  const seconds = checkedInteger("i64", raw[0] as number | bigint);
+  const nanos = checkedInteger("i32", raw[1] as number | bigint);
+  return safe(seconds * 1000n + nanos / 1_000_000n);
+};
+
 export function decodeTagged(value: TaggedValue): SemanticValue | undefined {
   const [tag, raw] = one(value);
   if (tag === "void") return undefined;
@@ -60,7 +72,8 @@ export function decodeTagged(value: TaggedValue): SemanticValue | undefined {
       ? Number(integer)
       : safe(integer);
   }
-  if (tag === "duration" || tag === "time")
+  if (tag === "duration") return durationMs(raw);
+  if (tag === "time")
     return safe(checkedInteger("i64", raw as number | bigint));
   if (tag === "date_time")
     return safe(checkedInteger("i128", raw as number | bigint));

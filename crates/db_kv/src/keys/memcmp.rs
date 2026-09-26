@@ -54,11 +54,26 @@
 //! not distinguish: `-0.0` decodes as `0.0`, NaN payloads are not preserved,
 //! and `DateTime` values decode with a UTC offset (ordering and equality of
 //! `DateTime` only consider the instant).
+//!
+//! # Nesting limit
+//!
+//! The decoder recurses once per container level, so it rejects values
+//! nested deeper than [`MAX_DEPTH`] instead of overflowing the stack on
+//! corrupt keys. [`try_encode_into`], used to derive index keys on writes,
+//! rejects such values too, so every stored key decodes.
 
 use std::collections::BTreeMap;
 
-use semantic_data::value::{Map, Object, OrderedF32, OrderedF64, Value, VariantValue};
+use semantic_data::value::{
+    MAX_VALUE_DEPTH, Map, Object, OrderedF32, OrderedF64, Value, VariantValue,
+};
 use semantic_db_core::DbError;
+
+/// Maximum container nesting of encoded values.
+///
+/// Stored values nest at most [`MAX_VALUE_DEPTH`] levels; composite index
+/// keys wrap them in one more list.
+pub const MAX_DEPTH: usize = MAX_VALUE_DEPTH + 1;
 
 /// Terminates lists, maps and objects. Lower than every type tag.
 pub const SEQUENCE_END: u8 = 0x00;
@@ -110,7 +125,78 @@ pub fn encode(value: &Value) -> Vec<u8> {
 }
 
 /// Append the encoding of `value` to `out`.
+///
+/// Does not limit the nesting; use [`try_encode_into`] for keys that are
+/// stored (and decoded later).
 pub fn encode_into(value: &Value, out: &mut Vec<u8>) {
+    // Without a limit the encoding cannot fail.
+    let _ = encode_at(value, out, usize::MAX);
+}
+
+/// Append the encoding of `value` to `out`, failing (after appending a
+/// partial encoding) when containers nest deeper than [`MAX_DEPTH`].
+pub fn try_encode_into(value: &Value, out: &mut Vec<u8>) -> Result<(), DbError> {
+    encode_at(value, out, MAX_DEPTH).map_err(|DepthExceeded| {
+        DbError::Serialization(format!(
+            "index key value nesting exceeds the maximum depth of {MAX_DEPTH}"
+        ))
+    })
+}
+
+/// A value nests containers deeper than allowed.
+struct DepthExceeded;
+
+/// Encode `value`, whose containers may nest `depth` more levels.
+///
+/// Only containers recurse; scalars are encoded out of line, which keeps
+/// the stack use per nesting level small.
+fn encode_at(value: &Value, out: &mut Vec<u8>, depth: usize) -> Result<(), DepthExceeded> {
+    let inner = || depth.checked_sub(1).ok_or(DepthExceeded);
+    match value {
+        Value::List(items) => {
+            let depth = inner()?;
+            out.push(TAG_LIST);
+            for item in items {
+                encode_at(item, out, depth)?;
+            }
+            out.push(SEQUENCE_END);
+        }
+        Value::Map(map) => {
+            let depth = inner()?;
+            out.push(TAG_MAP);
+            for (key, value) in map.iter() {
+                encode_at(key, out, depth)?;
+                encode_at(value, out, depth)?;
+            }
+            out.push(SEQUENCE_END);
+        }
+        Value::Object(object) => {
+            let depth = inner()?;
+            out.push(TAG_OBJECT);
+            for (key, value) in object.iter() {
+                push_string(out, key);
+                encode_at(value, out, depth)?;
+            }
+            out.push(SEQUENCE_END);
+        }
+        Value::Variant(variant) => {
+            let depth = inner()?;
+            out.push(TAG_VARIANT);
+            match &variant.r#type {
+                Some(type_name) => push_string(out, type_name),
+                None => out.push(VARIANT_NO_TYPE),
+            }
+            push_string(out, &variant.variant);
+            encode_at(&variant.value, out, depth)?;
+        }
+        scalar => encode_scalar(scalar, out),
+    }
+    Ok(())
+}
+
+/// Encode a value that is not a container.
+#[inline(never)]
+fn encode_scalar(value: &Value, out: &mut Vec<u8>) {
     match value {
         Value::Void => out.push(TAG_VOID),
         Value::Null => out.push(TAG_NULL),
@@ -182,37 +268,8 @@ pub fn encode_into(value: &Value, out: &mut Vec<u8>) {
             push_escaped_end(out);
         }
         Value::String(value) => push_string(out, value),
-        Value::List(items) => {
-            out.push(TAG_LIST);
-            for item in items {
-                encode_into(item, out);
-            }
-            out.push(SEQUENCE_END);
-        }
-        Value::Map(map) => {
-            out.push(TAG_MAP);
-            for (key, value) in map.iter() {
-                encode_into(key, out);
-                encode_into(value, out);
-            }
-            out.push(SEQUENCE_END);
-        }
-        Value::Object(object) => {
-            out.push(TAG_OBJECT);
-            for (key, value) in object.iter() {
-                push_string(out, key);
-                encode_into(value, out);
-            }
-            out.push(SEQUENCE_END);
-        }
-        Value::Variant(variant) => {
-            out.push(TAG_VARIANT);
-            match &variant.r#type {
-                Some(type_name) => push_string(out, type_name),
-                None => out.push(VARIANT_NO_TYPE),
-            }
-            push_string(out, &variant.variant);
-            encode_into(&variant.value, out);
+        Value::List(_) | Value::Map(_) | Value::Object(_) | Value::Variant(_) => {
+            unreachable!("containers are encoded by encode_at")
         }
     }
 }
@@ -239,11 +296,13 @@ pub fn encode_list_prefix_into(items: &[Value], out: &mut Vec<u8>) {
 }
 
 /// Decode one value that spans all of `bytes`.
+///
+/// Fails for values nested deeper than [`MAX_DEPTH`].
 pub fn decode(bytes: &[u8]) -> Result<Value, DbError> {
     let mut reader = Reader::new(bytes);
-    let value = reader.value()?;
+    let value = reader.value(MAX_DEPTH)?;
     if reader.pos != bytes.len() {
-        return Err(decode_error("trailing bytes after encoded value"));
+        return Err(decode_error("trailing bytes after encoded value").into());
     }
     Ok(value)
 }
@@ -252,14 +311,14 @@ pub fn decode(bytes: &[u8]) -> Result<Value, DbError> {
 /// bytes it occupies.
 pub fn decode_prefix(bytes: &[u8]) -> Result<(Value, usize), DbError> {
     let mut reader = Reader::new(bytes);
-    let value = reader.value()?;
+    let value = reader.value(MAX_DEPTH)?;
     Ok((value, reader.pos))
 }
 
 /// Length of the encoded value at the start of `bytes`, without decoding it.
 pub fn encoded_len(bytes: &[u8]) -> Result<usize, DbError> {
     let mut reader = Reader::new(bytes);
-    reader.skip()?;
+    reader.skip(MAX_DEPTH)?;
     Ok(reader.pos)
 }
 
@@ -336,8 +395,29 @@ fn f64_from_key(key: u64) -> f64 {
     f64::from_bits(bits)
 }
 
-fn decode_error(message: impl std::fmt::Display) -> DbError {
-    DbError::Deserialization(format!("invalid memcomparable value: {message}"))
+/// Decoding failure inside the reader.
+///
+/// Deliberately small: in unoptimized builds every `?` reserves stack for
+/// its error, and the decoder recurses once per nesting level.
+struct DecodeError(String);
+
+impl From<DecodeError> for DbError {
+    fn from(err: DecodeError) -> Self {
+        DbError::Deserialization(format!("invalid memcomparable value: {}", err.0))
+    }
+}
+
+fn decode_error(message: impl std::fmt::Display) -> DecodeError {
+    DecodeError(message.to_string())
+}
+
+/// The nesting budget inside a container at a level with budget `depth`.
+fn inner_depth(depth: usize) -> Result<usize, DecodeError> {
+    depth.checked_sub(1).ok_or_else(|| {
+        decode_error(format!(
+            "value nesting exceeds the maximum depth of {MAX_DEPTH}"
+        ))
+    })
 }
 
 /// Payload size of fixed-width variants.
@@ -365,20 +445,20 @@ impl<'a> Reader<'a> {
         Self { bytes, pos: 0 }
     }
 
-    fn peek(&self) -> Result<u8, DbError> {
+    fn peek(&self) -> Result<u8, DecodeError> {
         self.bytes
             .get(self.pos)
             .copied()
             .ok_or_else(|| decode_error("unexpected end of input"))
     }
 
-    fn byte(&mut self) -> Result<u8, DbError> {
+    fn byte(&mut self) -> Result<u8, DecodeError> {
         let byte = self.peek()?;
         self.pos += 1;
         Ok(byte)
     }
 
-    fn take(&mut self, len: usize) -> Result<&'a [u8], DbError> {
+    fn take(&mut self, len: usize) -> Result<&'a [u8], DecodeError> {
         let end = self
             .pos
             .checked_add(len)
@@ -389,14 +469,14 @@ impl<'a> Reader<'a> {
         Ok(slice)
     }
 
-    fn array<const N: usize>(&mut self) -> Result<[u8; N], DbError> {
+    fn array<const N: usize>(&mut self) -> Result<[u8; N], DecodeError> {
         let mut out = [0u8; N];
         out.copy_from_slice(self.take(N)?);
         Ok(out)
     }
 
     /// Consume an escaped byte string including its terminator.
-    fn escaped(&mut self, mut sink: Option<&mut Vec<u8>>) -> Result<(), DbError> {
+    fn escaped(&mut self, mut sink: Option<&mut Vec<u8>>) -> Result<(), DecodeError> {
         loop {
             let byte = self.byte()?;
             if byte != ESCAPE {
@@ -417,17 +497,17 @@ impl<'a> Reader<'a> {
         }
     }
 
-    fn escaped_bytes(&mut self) -> Result<Vec<u8>, DbError> {
+    fn escaped_bytes(&mut self) -> Result<Vec<u8>, DecodeError> {
         let mut out = Vec::new();
         self.escaped(Some(&mut out))?;
         Ok(out)
     }
 
-    fn string_payload(&mut self) -> Result<String, DbError> {
+    fn string_payload(&mut self) -> Result<String, DecodeError> {
         String::from_utf8(self.escaped_bytes()?).map_err(decode_error)
     }
 
-    fn string_value(&mut self) -> Result<String, DbError> {
+    fn string_value(&mut self) -> Result<String, DecodeError> {
         match self.byte()? {
             TAG_STRING => self.string_payload(),
             other => Err(decode_error(format!(
@@ -437,7 +517,7 @@ impl<'a> Reader<'a> {
     }
 
     /// Consume a `SEQUENCE_END` byte if it is next.
-    fn sequence_end(&mut self) -> Result<bool, DbError> {
+    fn sequence_end(&mut self) -> Result<bool, DecodeError> {
         if self.peek()? == SEQUENCE_END {
             self.pos += 1;
             return Ok(true);
@@ -445,8 +525,40 @@ impl<'a> Reader<'a> {
         Ok(false)
     }
 
-    fn skip(&mut self) -> Result<(), DbError> {
-        let tag = self.byte()?;
+    /// Skip one value whose containers may nest `depth` more levels.
+    fn skip(&mut self, depth: usize) -> Result<(), DecodeError> {
+        match self.byte()? {
+            TAG_LIST => {
+                let depth = inner_depth(depth)?;
+                while !self.sequence_end()? {
+                    self.skip(depth)?;
+                }
+            }
+            TAG_MAP | TAG_OBJECT => {
+                let depth = inner_depth(depth)?;
+                while !self.sequence_end()? {
+                    self.skip(depth)?;
+                    self.skip(depth)?;
+                }
+            }
+            TAG_VARIANT => {
+                let depth = inner_depth(depth)?;
+                if self.peek()? == VARIANT_NO_TYPE {
+                    self.pos += 1;
+                } else {
+                    self.skip(depth)?;
+                }
+                self.skip(depth)?;
+                self.skip(depth)?;
+            }
+            tag => self.skip_scalar(tag)?,
+        }
+        Ok(())
+    }
+
+    /// Skip the payload of a value that is not a container.
+    #[inline(never)]
+    fn skip_scalar(&mut self, tag: u8) -> Result<(), DecodeError> {
         if let Some(len) = fixed_payload_len(tag) {
             self.take(len)?;
             return Ok(());
@@ -461,33 +573,81 @@ impl<'a> Reader<'a> {
                 self.take(len)?;
             }
             TAG_BYTES | TAG_STRING => self.escaped(None)?,
-            TAG_LIST => {
-                while !self.sequence_end()? {
-                    self.skip()?;
-                }
-            }
-            TAG_MAP | TAG_OBJECT => {
-                while !self.sequence_end()? {
-                    self.skip()?;
-                    self.skip()?;
-                }
-            }
-            TAG_VARIANT => {
-                if self.peek()? == VARIANT_NO_TYPE {
-                    self.pos += 1;
-                } else {
-                    self.skip()?;
-                }
-                self.skip()?;
-                self.skip()?;
-            }
             other => return Err(decode_error(format!("unknown tag {other:#04x}"))),
         }
         Ok(())
     }
 
-    fn value(&mut self) -> Result<Value, DbError> {
-        let tag = self.byte()?;
+    /// Decode one value whose containers may nest `depth` more levels.
+    ///
+    /// Only containers recurse; scalars are decoded out of line, which keeps
+    /// the stack use per nesting level small.
+    fn value(&mut self, depth: usize) -> Result<Value, DecodeError> {
+        match self.byte()? {
+            tag @ (TAG_LIST | TAG_MAP | TAG_OBJECT | TAG_VARIANT) => {
+                let depth = inner_depth(depth)?;
+                match tag {
+                    TAG_LIST => self.list(depth),
+                    TAG_MAP => self.map(depth),
+                    TAG_OBJECT => self.object(depth),
+                    _ => self.variant(depth),
+                }
+            }
+            tag => self.scalar(tag),
+        }
+    }
+
+    fn list(&mut self, depth: usize) -> Result<Value, DecodeError> {
+        let mut items = Vec::new();
+        while !self.sequence_end()? {
+            items.push(self.value(depth)?);
+        }
+        Ok(Value::List(items))
+    }
+
+    fn map(&mut self, depth: usize) -> Result<Value, DecodeError> {
+        let mut map = Map::new();
+        while !self.sequence_end()? {
+            let key = self.value(depth)?;
+            let value = self.value(depth)?;
+            map.insert(key, value);
+        }
+        Ok(Value::Map(map))
+    }
+
+    fn object(&mut self, depth: usize) -> Result<Value, DecodeError> {
+        let mut object = BTreeMap::new();
+        while !self.sequence_end()? {
+            let key = self.string_value()?;
+            let value = self.value(depth)?;
+            object.insert(key, value);
+        }
+        Ok(Value::Object(Object::from(object)))
+    }
+
+    fn variant(&mut self, depth: usize) -> Result<Value, DecodeError> {
+        let (r#type, variant) = self.variant_names()?;
+        let value = self.value(depth)?;
+        Ok(Value::Variant(Box::new(VariantValue {
+            r#type,
+            variant,
+            value,
+        })))
+    }
+
+    #[inline(never)]
+    fn variant_names(&mut self) -> Result<(Option<String>, String), DecodeError> {
+        let r#type = if self.peek()? == VARIANT_NO_TYPE {
+            self.pos += 1;
+            None
+        } else {
+            Some(self.string_value()?)
+        };
+        Ok((r#type, self.string_value()?))
+    }
+
+    #[inline(never)]
+    fn scalar(&mut self, tag: u8) -> Result<Value, DecodeError> {
         Ok(match tag {
             TAG_VOID => Value::Void,
             TAG_NULL => Value::Null,
@@ -552,46 +712,6 @@ impl<'a> Reader<'a> {
             }
             TAG_BYTES => Value::Bytes(bytes::Bytes::from(self.escaped_bytes()?)),
             TAG_STRING => Value::String(self.string_payload()?),
-            TAG_LIST => {
-                let mut items = Vec::new();
-                while !self.sequence_end()? {
-                    items.push(self.value()?);
-                }
-                Value::List(items)
-            }
-            TAG_MAP => {
-                let mut map = Map::new();
-                while !self.sequence_end()? {
-                    let key = self.value()?;
-                    let value = self.value()?;
-                    map.insert(key, value);
-                }
-                Value::Map(map)
-            }
-            TAG_OBJECT => {
-                let mut object = BTreeMap::new();
-                while !self.sequence_end()? {
-                    let key = self.string_value()?;
-                    let value = self.value()?;
-                    object.insert(key, value);
-                }
-                Value::Object(Object::from(object))
-            }
-            TAG_VARIANT => {
-                let r#type = if self.peek()? == VARIANT_NO_TYPE {
-                    self.pos += 1;
-                    None
-                } else {
-                    Some(self.string_value()?)
-                };
-                let variant = self.string_value()?;
-                let value = self.value()?;
-                Value::Variant(Box::new(VariantValue {
-                    r#type,
-                    variant,
-                    value,
-                }))
-            }
             other => return Err(decode_error(format!("unknown tag {other:#04x}"))),
         })
     }

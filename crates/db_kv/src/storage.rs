@@ -18,7 +18,7 @@ pub use crate::keys::parse_entity_key;
 use crate::keys::{
     collection_rows_key, entity_key, entity_prefix, index_entries_key, index_entry_id, index_key,
     index_key_entity_id, index_marker_key, index_path_prefix, index_prefix, index_range,
-    index_string_prefix, index_value_prefix,
+    index_string_prefix, index_value_prefix, try_index_key,
 };
 
 pub mod entity_codec;
@@ -1435,6 +1435,10 @@ fn count_keys(mut scan: impl Iterator<Item = KvScanItem>) -> Result<u64, DbError
     scan.try_fold(0u64, |count, entry| entry.map(|_| count + 1))
 }
 
+/// The index keys `object` derives in `index`.
+///
+/// Fails when a key value nests deeper than the memcomparable encoding
+/// allows ([`crate::keys::memcmp::MAX_DEPTH`]).
 fn index_keys(
     index: &semantic_db_core::catalog::IndexSchema,
     entity_id: &str,
@@ -1444,12 +1448,12 @@ fn index_keys(
     match index.schema.kind {
         IndexKind::Equality | IndexKind::Range => {
             if let Some(value) = index.key_value(object) {
-                keys.insert(index_key(index.lid, None, &value, entity_id));
+                keys.insert(try_index_key(index.lid, None, &value, entity_id)?);
             }
         }
         IndexKind::PathEquality => {
-            for (path, value) in collect_index_entries(object) {
-                keys.insert(index_key(index.lid, Some(&path), &value, entity_id));
+            for (path, value) in collect_index_entries(object)? {
+                keys.insert(try_index_key(index.lid, Some(&path), &value, entity_id)?);
             }
         }
         IndexKind::FullText => {
@@ -1465,35 +1469,61 @@ pub(crate) fn index_format_value() -> Vec<u8> {
     INDEX_FORMAT_VERSION_V2_MSGPACK.to_le_bytes().to_vec()
 }
 
-pub(crate) fn collect_index_entries(object: &Object) -> Vec<(FieldPath, Value)> {
+/// Every `(path, value)` pair of `object`, including the nested values of
+/// objects and lists (path-equality index entries).
+///
+/// Fails for values nested deeper than
+/// [`MAX_VALUE_DEPTH`](semantic_data::value::MAX_VALUE_DEPTH).
+pub(crate) fn collect_index_entries(object: &Object) -> Result<Vec<(FieldPath, Value)>, DbError> {
     let mut out = Vec::new();
     for (field, value) in object {
         let mut path = FieldPath::new();
         path.push_field(field.clone());
-        collect_value_entries(value, &mut path, &mut out);
+        collect_value_entries(
+            value,
+            &mut path,
+            &mut out,
+            semantic_data::value::MAX_VALUE_DEPTH,
+        )?;
     }
-    out
+    Ok(out)
 }
 
-fn collect_value_entries(value: &Value, path: &mut FieldPath, out: &mut Vec<(FieldPath, Value)>) {
+fn collect_value_entries(
+    value: &Value,
+    path: &mut FieldPath,
+    out: &mut Vec<(FieldPath, Value)>,
+    depth: usize,
+) -> Result<(), DbError> {
     out.push((path.clone(), value.clone()));
+    let inner = || {
+        depth.checked_sub(1).ok_or_else(|| {
+            DbError::Serialization(format!(
+                "value nesting exceeds the maximum depth of {}",
+                semantic_data::value::MAX_VALUE_DEPTH
+            ))
+        })
+    };
     match value {
         Value::Object(object) => {
+            let depth = inner()?;
             for (field, nested) in object {
                 path.push_field(field.clone());
-                collect_value_entries(nested, path, out);
+                collect_value_entries(nested, path, out, depth)?;
                 path.0.pop();
             }
         }
         Value::List(items) => {
+            let depth = inner()?;
             for (idx, nested) in items.iter().enumerate() {
                 path.push_index(idx);
-                collect_value_entries(nested, path, out);
+                collect_value_entries(nested, path, out, depth)?;
                 path.0.pop();
             }
         }
         _ => {}
     }
+    Ok(())
 }
 
 #[cfg(test)]
