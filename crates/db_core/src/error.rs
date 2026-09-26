@@ -16,6 +16,19 @@ pub enum DbError {
     },
     #[error("entity '{id}' already exists in collection '{collection}'")]
     EntityExists { collection: String, id: String },
+    /// A write would store two rows with the same value in a unique index.
+    #[error("unique index violation on field '{field}' ({existing_id} vs {id})")]
+    UniqueViolation {
+        collection: String,
+        index: String,
+        field: String,
+        /// Boxed to keep `DbError` small.
+        value: Box<semantic_data::value::Value>,
+        /// The row already holding `value` (the smaller id of the pair).
+        existing_id: String,
+        /// The conflicting row.
+        id: String,
+    },
     #[error("ref field '{field}' in collection '{collection}' points to missing target id '{id}'")]
     ReferenceTargetNotFound {
         collection: String,

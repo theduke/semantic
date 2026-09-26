@@ -12,11 +12,20 @@ const MARKER: &str = "backfill:v1";
 pub(crate) struct ExecutionCounts {
     pub point_reads: usize,
     pub index_reads: usize,
+    /// Collection scans made by predicate mutations without an index.
+    pub collection_scans: usize,
     pub fallback_scans: usize,
     pub visited_rows: usize,
 }
 
 pub(crate) use crate::ResolvedReference;
+
+/// Result of building a point-path reply.
+pub(super) enum CompactReply<R> {
+    Ready(R),
+    /// The dataset path must execute the transaction, for the given reason.
+    Fallback(&'static str),
+}
 
 pub(crate) struct TxView<'a, S: EntityStorage> {
     pub catalog: &'a Catalog,
@@ -164,6 +173,82 @@ impl<'a, S: EntityStorage> TxView<'a, S> {
         Ok(refs.into_iter().collect())
     }
 
+    /// Ids of the snapshot's `index` entries equal to `value`.
+    pub(crate) fn index_ids(
+        &mut self,
+        index: LocalIndexId,
+        path: Option<&FieldPath>,
+        value: &Value,
+    ) -> Result<Vec<String>, DbError> {
+        self.counts.index_reads += 1;
+        self.reader.scan_index_value(index, path, value)
+    }
+
+    /// Current rows of `collection` with the given ids, plus every row of the
+    /// collection the transaction has written, ordered by id.
+    pub(crate) fn rows_by_ids(
+        &mut self,
+        collection: &str,
+        ids: impl IntoIterator<Item = String>,
+    ) -> Result<BTreeMap<String, Object>, DbError> {
+        let mut ids = ids.into_iter().collect::<BTreeSet<_>>();
+        ids.extend(self.overlay_ids(collection));
+        let mut rows = BTreeMap::new();
+        for id in ids {
+            let key = (collection.to_string(), id);
+            if let Some(row) = self.get(&key)? {
+                rows.insert(key.1, row);
+            }
+        }
+        Ok(rows)
+    }
+
+    /// Current rows of `collection` matching `predicate`, ordered by id.
+    ///
+    /// Stored rows come from one streamed collection scan of the snapshot;
+    /// rows that do not match are dropped as they are read. Rows the
+    /// transaction has written are taken from the overlay instead.
+    pub(crate) fn scan_matching(
+        &mut self,
+        collection: &CollectionSchema,
+        predicate: Option<&crate::Expr>,
+    ) -> Result<BTreeMap<String, Object>, DbError> {
+        let written = self.overlay_ids(&collection.name);
+        let mut rows = BTreeMap::new();
+        let mut visited = 0;
+        self.counts.collection_scans += 1;
+        self.reader.scan_collection(collection.lid, |entity| {
+            visited += 1;
+            if !written.contains(&entity.id) && matches_predicate(&entity.object, predicate) {
+                rows.insert(entity.id, entity.object);
+            }
+            Ok(())
+        })?;
+        self.counts.visited_rows += visited;
+        for (id, row) in &rows {
+            self.snapshot
+                .entry((collection.name.clone(), id.clone()))
+                .or_insert_with(|| Some(row.clone()));
+        }
+        for id in written {
+            let key = (collection.name.clone(), id);
+            if let Some(row) = self.get(&key)?
+                && matches_predicate(&row, predicate)
+            {
+                rows.insert(key.1, row);
+            }
+        }
+        Ok(rows)
+    }
+
+    fn overlay_ids(&self, collection: &str) -> BTreeSet<String> {
+        self.overlay
+            .keys()
+            .filter(|(name, _)| name == collection)
+            .map(|(_, id)| id.clone())
+            .collect()
+    }
+
     pub(crate) fn changes(&self) -> ChangeSet {
         self.overlay
             .iter()
@@ -185,6 +270,28 @@ impl<'a, S: EntityStorage> TxView<'a, S> {
 
 fn entity_key(key: &EntityKey) -> String {
     format!("{}:{}{}:{}", key.0.len(), key.0, key.1.len(), key.1)
+}
+
+fn matches_predicate(row: &Object, predicate: Option<&crate::Expr>) -> bool {
+    predicate.is_none_or(|predicate| crate::evaluate_filter_expr(row, predicate))
+}
+
+/// Unique violation between the two smallest ids holding `value` in `index`.
+pub(super) fn unique_violation(
+    collection: &CollectionSchema,
+    index: &crate::catalog::IndexSchema,
+    value: &Value,
+    existing_id: &str,
+    id: &str,
+) -> DbError {
+    DbError::UniqueViolation {
+        collection: collection.name.clone(),
+        index: index.schema.name.clone(),
+        field: index.canonical_field.clone(),
+        value: Box::new(value.clone()),
+        existing_id: existing_id.to_string(),
+        id: id.to_string(),
+    }
 }
 
 fn required_string(object: &Object, field: &str) -> Result<String, DbError> {
@@ -478,16 +585,151 @@ impl<S: EntityStorage> EmbeddedDb<S> {
         settings: crate::WriteSettings,
         require_bounded: bool,
     ) -> Result<Option<crate::BatchReply>, DbError> {
+        self.run_compact(
+            catalog,
+            revision,
+            catalog_version,
+            settings,
+            require_bounded,
+            |db, view, stats| {
+                let context = DefaultExpressionContext::now();
+                let recursive_validation = db.validation_enabled()?;
+                for operation in &batch.operations {
+                    db.apply_compact_operation(
+                        view,
+                        operation,
+                        stats,
+                        &context,
+                        recursive_validation,
+                    )?;
+                }
+                Ok(())
+            },
+            |view, changes, stats, ()| {
+                // Keep addressed no-op rows available for dynamic projection
+                // names, but derive output exclusively from the normalized
+                // committing changes.
+                let mut projection_before = crate::Dataset::new();
+                let mut projection_after = crate::Dataset::new();
+                for (key, row) in &view.overlay {
+                    let old = projection_before.entry(key.0.clone()).or_default();
+                    let new = projection_after.entry(key.0.clone()).or_default();
+                    if let Some(object) = view.snapshot.get(key).and_then(Option::as_ref) {
+                        old.insert(key.1.clone(), object.clone());
+                    }
+                    if let Some(object) = row {
+                        new.insert(key.1.clone(), object.clone());
+                    }
+                }
+                match crate::batch_return::compact_reply_from_changes(
+                    catalog,
+                    &projection_before,
+                    &projection_after,
+                    changes,
+                    stats,
+                    returning,
+                ) {
+                    Ok(reply) => Ok(CompactReply::Ready(reply.expect("compact returning mode"))),
+                    // Permissive collections can discover a dynamic field on
+                    // an untouched row. Preserve dataset projection resolution
+                    // when the addressed rows and catalog cannot establish its
+                    // name.
+                    Err(DbError::BatchReturn {
+                        reason: crate::BatchReturnErrorReason::UnknownField,
+                        ..
+                    }) => Ok(CompactReply::Fallback(
+                        "projection_field_requires_schema_scan",
+                    )),
+                    Err(error) => Err(error),
+                }
+            },
+        )
+    }
+
+    /// Apply one batch operation to the transaction overlay.
+    fn apply_compact_operation(
+        &self,
+        view: &mut TxView<'_, S>,
+        operation: &BatchOperation,
+        stats: &mut crate::BatchStats,
+        context: &DefaultExpressionContext,
+        recursive_validation: bool,
+    ) -> Result<(), DbError> {
+        let catalog = view.catalog;
+        match operation {
+            BatchOperation::Upsert {
+                collection,
+                id,
+                object,
+            }
+            | BatchOperation::Create {
+                collection,
+                id,
+                object,
+            } => {
+                let key = (collection.clone(), id.clone());
+                if matches!(operation, BatchOperation::Create { .. }) && view.get(&key)?.is_some() {
+                    return Err(DbError::EntityExists {
+                        collection: collection.clone(),
+                        id: id.clone(),
+                    });
+                }
+                let schema = catalog.collection_by_name(collection).ok_or_else(|| {
+                    DbError::UnknownCollectionByName {
+                        name: collection.clone(),
+                    }
+                })?;
+                let mut object = object.clone();
+                prepare_row_for_write(catalog, schema, &mut object, context, recursive_validation)
+                    .map_err(|err| DbError::InvalidQuery(err.to_string()))?;
+                view.put(key, object)?;
+                stats.upserted += 1;
+            }
+            BatchOperation::DeleteById { collection, id } => {
+                stats.deleted += usize::from(view.delete((collection.clone(), id.clone()))?);
+            }
+            BatchOperation::DeleteByIds { collection, ids } => {
+                for id in ids {
+                    stats.deleted += usize::from(view.delete((collection.clone(), id.clone()))?);
+                }
+            }
+            BatchOperation::Update { collection, query } => {
+                let result =
+                    self.compact_update(view, collection, query, context, recursive_validation)?;
+                stats.updated += result.stats.affected;
+            }
+            BatchOperation::Delete { collection, query } => {
+                stats.deleted += self.compact_delete(view, collection, query)?.deleted;
+            }
+        }
+        Ok(())
+    }
+
+    /// One point-path transaction attempt.
+    ///
+    /// `apply` stages the mutations in the transaction overlay; cascades,
+    /// final-state validation, index and relationship maintenance and the
+    /// revision-conditional commit are shared by every caller. `reply` builds
+    /// the result from the validated changes. Returns `None` (after recording
+    /// the reason) when the dataset path must execute the transaction instead.
+    pub(super) fn run_compact<T, R>(
+        &mut self,
+        catalog: &Catalog,
+        revision: Option<u64>,
+        catalog_version: u64,
+        settings: crate::WriteSettings,
+        require_bounded: bool,
+        apply: impl FnOnce(&Self, &mut TxView<'_, S>, &mut crate::BatchStats) -> Result<T, DbError>,
+        reply: impl FnOnce(
+            &TxView<'_, S>,
+            &ChangeSet,
+            &crate::BatchStats,
+            T,
+        ) -> Result<CompactReply<R>, DbError>,
+    ) -> Result<Option<R>, DbError> {
         self.execution_counts = ExecutionCounts::default();
         let fallback = if !self.storage.tx_capabilities().conflict_detection || revision.is_none() {
             Some("backend_without_revision_conflicts")
-        } else if batch.operations.iter().any(|op| {
-            matches!(
-                op,
-                BatchOperation::Update { .. } | BatchOperation::Delete { .. }
-            )
-        }) {
-            Some("predicate_mutation")
         } else if catalog
             .collection_by_name(REFERENCES)
             .is_none_or(|collection| {
@@ -521,60 +763,7 @@ impl<S: EntityStorage> EmbeddedDb<S> {
             updated: 0,
             deleted: 0,
         };
-        let context = DefaultExpressionContext::now();
-        for operation in &batch.operations {
-            match operation {
-                BatchOperation::Upsert {
-                    collection,
-                    id,
-                    object,
-                }
-                | BatchOperation::Create {
-                    collection,
-                    id,
-                    object,
-                } => {
-                    let key = (collection.clone(), id.clone());
-                    if matches!(operation, BatchOperation::Create { .. })
-                        && view.get(&key)?.is_some()
-                    {
-                        return Err(DbError::EntityExists {
-                            collection: collection.clone(),
-                            id: id.clone(),
-                        });
-                    }
-                    let schema = catalog.collection_by_name(collection).ok_or_else(|| {
-                        DbError::UnknownCollectionByName {
-                            name: collection.clone(),
-                        }
-                    })?;
-                    let mut object = object.clone();
-                    (if self.validation_enabled()? {
-                        crate::validation::normalize_for_recursive_validation(
-                            catalog,
-                            schema,
-                            &mut object,
-                            Some(&context),
-                        )
-                    } else {
-                        prepare_object_for_write(catalog, schema, &mut object, &context)
-                    })
-                    .map_err(|err| DbError::InvalidQuery(err.to_string()))?;
-                    view.put(key, object)?;
-                    stats.upserted += 1;
-                }
-                BatchOperation::DeleteById { collection, id } => {
-                    stats.deleted += usize::from(view.delete((collection.clone(), id.clone()))?);
-                }
-                BatchOperation::DeleteByIds { collection, ids } => {
-                    for id in ids {
-                        stats.deleted +=
-                            usize::from(view.delete((collection.clone(), id.clone()))?);
-                    }
-                }
-                _ => unreachable!("predicate mutations use fallback"),
-            }
-        }
+        let value = apply(self, &mut view, &mut stats)?;
         expand_cascade_deletes(&mut view, &mut stats)?;
         let changes = view.changes();
         if require_bounded {
@@ -613,10 +802,9 @@ impl<S: EntityStorage> EmbeddedDb<S> {
                     if let Some(value) = object.get(&index.canonical_field) {
                         let ids = view.unique(index, value)?;
                         if ids.len() > 1 {
-                            return Err(DbError::InvalidQuery(format!(
-                                "unique index violation on field '{}' ({} vs {})",
-                                index.canonical_field, ids[0].1, ids[1].1
-                            )));
+                            return Err(unique_violation(
+                                collection, index, value, &ids[0].1, &ids[1].1,
+                            ));
                         }
                     }
                 }
@@ -644,43 +832,15 @@ impl<S: EntityStorage> EmbeddedDb<S> {
                 validate_row(&mut view, &key, &object, settings)?;
             }
         }
-        let (before, after) = change_datasets(&changes);
-        // Keep addressed no-op rows available for dynamic projection names, but
-        // derive output exclusively from the normalized committing changes.
-        let mut projection_before = crate::Dataset::new();
-        let mut projection_after = crate::Dataset::new();
-        for (key, row) in &view.overlay {
-            let old = projection_before.entry(key.0.clone()).or_default();
-            let new = projection_after.entry(key.0.clone()).or_default();
-            if let Some(object) = view.snapshot.get(key).and_then(Option::as_ref) {
-                old.insert(key.1.clone(), object.clone());
-            }
-            if let Some(object) = row {
-                new.insert(key.1.clone(), object.clone());
-            }
-        }
-        let reply = match crate::batch_return::compact_reply_from_changes(
-            catalog,
-            &projection_before,
-            &projection_after,
-            &changes,
-            &stats,
-            returning,
-        ) {
-            Ok(reply) => reply.expect("compact returning mode"),
-            Err(DbError::BatchReturn {
-                reason: crate::BatchReturnErrorReason::UnknownField,
-                ..
-            }) => {
-                // Permissive collections can discover a dynamic field on an
-                // untouched row. Preserve dataset projection resolution when
-                // the addressed rows and catalog cannot establish its name.
+        let reply = match reply(&view, &changes, &stats, value)? {
+            CompactReply::Ready(reply) => reply,
+            CompactReply::Fallback(reason) => {
                 self.execution_counts = view.into_counts();
-                self.record_compact_fallback("projection_field_requires_schema_scan");
+                self.record_compact_fallback(reason);
                 return Ok(None);
             }
-            Err(error) => return Err(error),
         };
+        let (before, after) = change_datasets(&changes);
         let mut ops = Vec::new();
         for (name, rows) in &after {
             self.push_row_delta(
@@ -705,6 +865,7 @@ impl<S: EntityStorage> EmbeddedDb<S> {
                 tracing::debug!(
                     point_reads = self.execution_counts.point_reads,
                     index_reads = self.execution_counts.index_reads,
+                    collection_scans = self.execution_counts.collection_scans,
                     visited_rows = self.execution_counts.visited_rows,
                     writes = ops.len(),
                     "compact batch committed"
@@ -1253,7 +1414,7 @@ mod tests {
     }
 
     #[test]
-    fn compact_reverse_reference_backfill_and_predicate_fallback() {
+    fn compact_reverse_reference_backfill_and_predicate_delete() {
         let mut db = ref_db();
         db.execute_batch(
             Batch::new()
@@ -1284,8 +1445,10 @@ mod tests {
             )
             .unwrap();
         assert!(matches!(reply, BatchReply::Stats { stats } if stats.deleted == 2));
-        assert_eq!(db.execution_counts.fallback_scans, 1);
-        assert_eq!(db.execution_counts.visited_rows, 2);
+        // Reopening rebuilt the reverse references, so the predicate delete
+        // runs on the point path with one scan of the collection.
+        assert_eq!(db.execution_counts.fallback_scans, 0);
+        assert_eq!(db.execution_counts.collection_scans, 1);
     }
 
     #[test]

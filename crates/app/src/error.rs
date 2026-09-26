@@ -101,6 +101,27 @@ impl From<AppError> for semantic_rpc_core::RpcError {
                     semantic_data::value::Value::Object(data),
                 )
             }
+            AppError::Db(semantic_db_core::DbError::UniqueViolation {
+                collection,
+                index,
+                field,
+                value,
+                existing_id,
+                id,
+            }) => {
+                let mut data = semantic_data::value::Object::new();
+                data.insert("collection", collection);
+                data.insert("index", index);
+                data.insert("field", field);
+                data.insert("value", *value);
+                data.insert("existing_id", existing_id);
+                data.insert("id", id);
+                semantic_rpc_core::RpcError::with_data(
+                    "unique_violation",
+                    "unique index violation",
+                    semantic_data::value::Value::Object(data),
+                )
+            }
             AppError::Jobs(_) => semantic_rpc_core::RpcError::new("jobs_error", value.to_string()),
             AppError::AuthenticationRequired => {
                 semantic_rpc_core::RpcError::new("authentication_required", value.to_string())
@@ -200,4 +221,38 @@ pub(crate) fn validation_error_data(
     data.insert("expected", error.expected);
     data.insert("actual", error.actual);
     Value::Object(data)
+}
+
+#[cfg(test)]
+mod tests {
+    use semantic_data::value::{Object, Value};
+
+    use super::AppError;
+
+    #[test]
+    fn unique_violation_maps_to_structured_rpc_error() {
+        let error = semantic_rpc_core::RpcError::from(AppError::Db(
+            semantic_db_core::DbError::UniqueViolation {
+                collection: "items".into(),
+                index: "items_by_name".into(),
+                field: "name".into(),
+                value: Box::new(Value::String("taken".into())),
+                existing_id: "a".into(),
+                id: "b".into(),
+            },
+        ));
+        assert_eq!(error.code, "unique_violation");
+        let expected = Object::from_iter(
+            [
+                ("collection", "items"),
+                ("index", "items_by_name"),
+                ("field", "name"),
+                ("value", "taken"),
+                ("existing_id", "a"),
+                ("id", "b"),
+            ]
+            .map(|(key, value)| (key.to_string(), Value::String(value.into()))),
+        );
+        assert_eq!(error.data, Some(Value::Object(expected)));
+    }
 }

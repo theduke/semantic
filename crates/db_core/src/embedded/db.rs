@@ -24,7 +24,7 @@ use semantic_data::value::{FieldPath, Object, PathSegment, Value, ValueRef};
 
 use crate::catalog::{
     Catalog, CollectionKind, CollectionSchema, IntegrityMode, LocalAttrId, LocalCollectionId,
-    LocalFieldId, OBJECT_TYPE_FIELD, SharedCatalog,
+    LocalFieldId, LocalIndexId, OBJECT_TYPE_FIELD, SharedCatalog,
 };
 use crate::embedded::{
     schema_store::{catalog_write_ops, load_catalog},
@@ -52,8 +52,11 @@ const REL_EDGE_TARGET_INDEX_NAME: &str = "__rel_target_idx";
 pub(crate) mod compact;
 mod incremental;
 mod local_refs;
+mod mutation;
 mod validation;
 
+use crate::embedded::storage::RevisionReader;
+use compact::CompactReply;
 use local_refs::{
     LocalRefResolver, RowLocalRefs, resolve_path_with_local_refs,
     value_from_object_with_alias_fallback,
@@ -925,6 +928,27 @@ impl<S: EntityStorage> EmbeddedDb<S> {
         let txn_result = run_with_transaction_retries(TransactionOptions::default(), |_| {
             let catalog_snapshot = self.catalog.snapshot();
             let read_revision = self.storage.current_revision()?;
+            if let Some(result) = self.run_compact(
+                catalog_snapshot.catalog.as_ref(),
+                read_revision,
+                catalog_snapshot.version,
+                crate::WriteSettings::default(),
+                false,
+                |db, view, _| {
+                    let context = DefaultExpressionContext::now();
+                    let recursive_validation = db.validation_enabled()?;
+                    db.compact_update(
+                        view,
+                        &collection_name,
+                        &query,
+                        &context,
+                        recursive_validation,
+                    )
+                },
+                |_, _, _, result| Ok(CompactReply::Ready(result)),
+            )? {
+                return Ok(result);
+            }
             let before = self.load_dataset_for_batch(
                 catalog_snapshot.catalog.as_ref(),
                 &touched,
@@ -954,21 +978,13 @@ impl<S: EntityStorage> EmbeddedDb<S> {
                     &query,
                     &mut entities,
                     |_, object| {
-                        (if recursive_validation {
-                            crate::validation::normalize_for_recursive_validation(
-                                catalog_snapshot.catalog.as_ref(),
-                                &collection_schema,
-                                object,
-                                Some(&default_context),
-                            )
-                        } else {
-                            prepare_object_for_write(
-                                catalog_snapshot.catalog.as_ref(),
-                                &collection_schema,
-                                object,
-                                &default_context,
-                            )
-                        })
+                        prepare_row_for_write(
+                            catalog_snapshot.catalog.as_ref(),
+                            &collection_schema,
+                            object,
+                            &default_context,
+                            recursive_validation,
+                        )
                         .map_err(|err| CoreError::new(err.to_string()))
                     },
                 )
@@ -985,12 +1001,15 @@ impl<S: EntityStorage> EmbeddedDb<S> {
                 ));
             }
 
-            match self.persist_dataset_delta(
+            expand_dataset_cascade_deletes(catalog_snapshot.catalog.as_ref(), &before, &mut after);
+            match self.persist_dataset_delta_with_settings(
                 catalog_snapshot.catalog.as_ref(),
                 &before,
                 &after,
                 read_revision,
                 &[],
+                crate::WriteSettings::default(),
+                DatasetWrite::Data,
             )? {
                 StorageCommitOutcome::Committed { .. } => Ok(result),
                 StorageCommitOutcome::Conflict {
@@ -1039,6 +1058,17 @@ impl<S: EntityStorage> EmbeddedDb<S> {
         let txn_result = run_with_transaction_retries(TransactionOptions::default(), |_| {
             let catalog_snapshot = self.catalog.snapshot();
             let read_revision = self.storage.current_revision()?;
+            if let Some(result) = self.run_compact(
+                catalog_snapshot.catalog.as_ref(),
+                read_revision,
+                catalog_snapshot.version,
+                crate::WriteSettings::default(),
+                false,
+                |db, view, _| db.compact_delete(view, &collection_name, &query),
+                |_, _, _, result| Ok(CompactReply::Ready(result)),
+            )? {
+                return Ok(result);
+            }
             let before = self.load_dataset_for_batch(
                 catalog_snapshot.catalog.as_ref(),
                 &touched,
@@ -1074,12 +1104,15 @@ impl<S: EntityStorage> EmbeddedDb<S> {
                 ));
             }
 
-            match self.persist_dataset_delta(
+            expand_dataset_cascade_deletes(catalog_snapshot.catalog.as_ref(), &before, &mut after);
+            match self.persist_dataset_delta_with_settings(
                 catalog_snapshot.catalog.as_ref(),
                 &before,
                 &after,
                 read_revision,
                 &[],
+                crate::WriteSettings::default(),
+                DatasetWrite::Data,
             )? {
                 StorageCommitOutcome::Committed { .. } => Ok(result),
                 StorageCommitOutcome::Conflict {
@@ -1257,6 +1290,7 @@ impl<S: EntityStorage> EmbeddedDb<S> {
                 read_revision,
                 &[],
                 settings,
+                DatasetWrite::Data,
             )? {
                 StorageCommitOutcome::Committed { .. } => {
                     Ok(reply.unwrap_or(crate::BatchReply::Dataset(out)))
@@ -1582,16 +1616,13 @@ impl<S: EntityStorage> EmbeddedDb<S> {
             let collection_schema = catalog
                 .collection_by_name(collection)
                 .ok_or_else(|| CoreError::new(format!("collection '{collection}' not found")))?;
-            (if recursive_validation {
-                crate::validation::normalize_for_recursive_validation(
-                    catalog,
-                    collection_schema,
-                    object,
-                    Some(&default_context),
-                )
-            } else {
-                prepare_object_for_write(catalog, collection_schema, object, &default_context)
-            })
+            prepare_row_for_write(
+                catalog,
+                collection_schema,
+                object,
+                &default_context,
+                recursive_validation,
+            )
             .map_err(|err| CoreError::new(err.to_string()))
         })
         .map_err(|err| match err.entity_exists {
@@ -1836,6 +1867,9 @@ impl<S: EntityStorage> EmbeddedDb<S> {
         Ok(dataset)
     }
 
+    /// Persist a package migration or DDL change: every row of `after` is
+    /// re-normalized and re-validated under `catalog`, and cascade deletes
+    /// are expanded.
     fn persist_dataset_delta(
         &mut self,
         catalog: &Catalog,
@@ -1851,6 +1885,7 @@ impl<S: EntityStorage> EmbeddedDb<S> {
             expected_revision,
             prelude_ops,
             crate::WriteSettings::default(),
+            DatasetWrite::Migration,
         )
     }
 
@@ -1862,8 +1897,10 @@ impl<S: EntityStorage> EmbeddedDb<S> {
         expected_revision: Option<u64>,
         prelude_ops: &[StorageWriteOp],
         settings: crate::WriteSettings,
+        write: DatasetWrite,
     ) -> std::result::Result<StorageCommitOutcome, DbError> {
-        if self.validation_enabled()? {
+        let validation_enabled = self.validation_enabled()?;
+        if validation_enabled {
             crate::validation::validate_enforcement_support(catalog)?;
         }
         // Apply DDL cleanup, index backfills, and catalog persistence first. A
@@ -1871,36 +1908,77 @@ impl<S: EntityStorage> EmbeddedDb<S> {
         // the post-migration dataset below must be the final source of index rows.
         let mut ops = prelude_ops.to_vec();
         let mut normalized_after = BTreeMap::<String, BTreeMap<String, Object>>::new();
+        // Rows normalized by this write, per collection.
+        let mut changed_rows = BTreeMap::<String, BTreeSet<String>>::new();
+        let reader = match write {
+            DatasetWrite::Migration => None,
+            DatasetWrite::Data => Some(RevisionReader::new(&self.storage, expected_revision)?),
+        };
 
         for (collection_name, new_rows) in after {
-            let collection_schema = catalog
-                .collection_by_name(collection_name)
-                .ok_or_else(|| DbError::UnknownCollectionByName {
-                    name: collection_name.clone(),
-                })?
-                .clone();
+            let collection_schema =
+                catalog.collection_by_name(collection_name).ok_or_else(|| {
+                    DbError::UnknownCollectionByName {
+                        name: collection_name.clone(),
+                    }
+                })?;
+            let old_rows = before.get(collection_name);
 
             let mut normalized_rows = BTreeMap::<String, Object>::new();
+            let mut changed = BTreeSet::new();
             for (id, object) in new_rows {
+                if write == DatasetWrite::Data
+                    && old_rows.and_then(|rows| rows.get(id)) == Some(object)
+                {
+                    // Stored rows were normalized and validated when written.
+                    normalized_rows.insert(id.clone(), object.clone());
+                    continue;
+                }
                 let mut object = object.clone();
-                if self.validation_enabled()? {
+                if validation_enabled {
                     crate::validation::normalize_for_recursive_validation(
                         catalog,
-                        &collection_schema,
+                        collection_schema,
                         &mut object,
                         None,
                     )?;
                 } else {
-                    normalize_object_for_collection(catalog, &collection_schema, &mut object)?;
+                    normalize_object_for_collection(catalog, collection_schema, &mut object)?;
                 }
-                self.validate_primary_id(&collection_schema, id, &object)?;
+                self.validate_primary_id(collection_schema, id, &object)?;
                 normalized_rows.insert(id.clone(), object);
+                changed.insert(id.clone());
             }
-            self.validate_unique_indexes(catalog, &collection_schema, &normalized_rows)?;
-            normalized_after.insert(collection_name.clone(), normalized_rows.clone());
+            match &reader {
+                None => {
+                    self.validate_unique_indexes(catalog, collection_schema, &normalized_rows)?
+                }
+                Some(reader) => validate_unique_changed_rows(
+                    reader,
+                    catalog,
+                    collection_schema,
+                    &normalized_rows,
+                    &changed,
+                )?,
+            }
+            normalized_after.insert(collection_name.clone(), normalized_rows);
+            changed_rows.insert(collection_name.clone(), changed);
         }
+        drop(reader);
 
-        expand_dataset_cascade_deletes(catalog, before, &mut normalized_after);
+        let validate_rows = match write {
+            DatasetWrite::Migration => {
+                expand_dataset_cascade_deletes(catalog, before, &mut normalized_after);
+                None
+            }
+            DatasetWrite::Data => Some(rows_to_revalidate(
+                catalog,
+                before,
+                &normalized_after,
+                changed_rows,
+                settings,
+            )),
+        };
 
         for (collection_name, normalized_rows) in &normalized_after {
             let collection_schema =
@@ -1909,13 +1987,26 @@ impl<S: EntityStorage> EmbeddedDb<S> {
                         name: collection_name.clone(),
                     }
                 })?;
-            self.validate_ref_fields(
-                catalog,
-                collection_schema,
-                normalized_rows,
-                &normalized_after,
-                settings,
-            )?;
+            match &validate_rows {
+                None => self.validate_ref_fields(
+                    catalog,
+                    collection_schema,
+                    normalized_rows,
+                    &normalized_after,
+                    settings,
+                )?,
+                Some(validate_rows) => self.validate_ref_fields(
+                    catalog,
+                    collection_schema,
+                    validate_rows
+                        .get(collection_name)
+                        .into_iter()
+                        .flatten()
+                        .filter_map(|id| normalized_rows.get_key_value(id)),
+                    &normalized_after,
+                    settings,
+                )?,
+            }
         }
 
         for (collection_name, normalized_rows) in &normalized_after {
@@ -1990,35 +2081,19 @@ impl<S: EntityStorage> EmbeddedDb<S> {
         collection: &CollectionSchema,
         rows: &BTreeMap<String, Object>,
     ) -> std::result::Result<(), DbError> {
-        let indexes: Vec<_> = catalog
-            .indexes_for_collection(collection.lid)
-            .filter(|idx| idx.schema.unique && idx.schema.kind == IndexKind::Equality)
-            .cloned()
-            .collect();
-
-        for index in indexes {
-            let mut seen = BTreeMap::<Value, String>::new();
-            for (id, object) in rows {
-                let Some(value) = object.get(&index.canonical_field) else {
-                    continue;
-                };
-                if let Some(existing) = seen.insert(value.clone(), id.clone()) {
-                    return Err(DbError::InvalidQuery(format!(
-                        "unique index violation on field '{}' ({existing} vs {id})",
-                        index.canonical_field
-                    )));
-                }
-            }
+        for index in unique_indexes(catalog, collection) {
+            check_unique_index_rows(collection, index, rows)?;
         }
-
         Ok(())
     }
 
-    fn validate_ref_fields(
+    /// Validate the references (and, with recursive validation, the stored
+    /// values) of `rows` of `collection` against the final dataset.
+    fn validate_ref_fields<'r>(
         &self,
         catalog: &Catalog,
         collection: &CollectionSchema,
-        rows: &BTreeMap<String, Object>,
+        rows: impl IntoIterator<Item = (&'r String, &'r Object)>,
         all_after: &BTreeMap<String, BTreeMap<String, Object>>,
         settings: crate::WriteSettings,
     ) -> std::result::Result<(), DbError> {
@@ -2046,7 +2121,7 @@ impl<S: EntityStorage> EmbeddedDb<S> {
             }
             return Ok(());
         }
-        for object in rows.values() {
+        for (_, object) in rows {
             let field_types = resolved_field_types_for_object(catalog, collection, object);
             for (field, ty) in field_types {
                 let Some(value) = object.get(&field) else {
@@ -2466,55 +2541,10 @@ impl<S: EntityStorage> EmbeddedDb<S> {
         collection: &CollectionSchema,
         physical: &crate::PhysicalPlan,
     ) -> AccessPath {
-        fn find_lookup(plan: &crate::PhysicalPlan) -> Option<(&crate::FieldRef, &Value)> {
-            match plan {
-                crate::PhysicalPlan::Source(crate::PhysicalSource::IndexLookup {
-                    field,
-                    value,
-                    ..
-                }) => Some((field, value)),
-                crate::PhysicalPlan::Filter { input, .. }
-                | crate::PhysicalPlan::Sort { input, .. }
-                | crate::PhysicalPlan::Project { input, .. }
-                | crate::PhysicalPlan::Aggregate { input, .. }
-                | crate::PhysicalPlan::Limit { input, .. }
-                | crate::PhysicalPlan::Distinct { input, .. }
-                | crate::PhysicalPlan::Materialize { input, .. }
-                | crate::PhysicalPlan::Exchange { input, .. }
-                | crate::PhysicalPlan::RepartitionHash { input, .. } => find_lookup(input),
-                crate::PhysicalPlan::Union { .. }
-                | crate::PhysicalPlan::Values { .. }
-                | crate::PhysicalPlan::Join(..)
-                | crate::PhysicalPlan::ApplyExists { .. }
-                | crate::PhysicalPlan::ApplyInSubquery { .. }
-                | crate::PhysicalPlan::Source(_) => None,
-            }
-        }
-
-        let Some((field_ref, value)) = find_lookup(physical) else {
+        let Some((field_ref, value)) = find_index_lookup(physical) else {
             return AccessPath::FullScan;
         };
-
-        let field_path = match field_ref {
-            crate::FieldRef::CanonicalName(name) => Some(FieldPath::from_fields([name])),
-            crate::FieldRef::FieldId(field_id) => collection
-                .field_name_by_id(*field_id)
-                .map(|name| FieldPath::from_fields([name])),
-            crate::FieldRef::AttrId(attr_id) => {
-                let mut out = None;
-                for (field_id, _) in collection.fields() {
-                    if collection.attr_for_field_id(field_id) == Some(*attr_id) {
-                        out = collection
-                            .field_name_by_id(field_id)
-                            .map(|name| FieldPath::from_fields([name]));
-                        break;
-                    }
-                }
-                out
-            }
-            crate::FieldRef::Path(path) => Some(path.clone()),
-        };
-        let Some(field_path) = field_path else {
+        let Some(field_path) = lookup_field_path(collection, field_ref) else {
             return AccessPath::FullScan;
         };
 
@@ -2557,6 +2587,103 @@ fn collection_row_count(
     match reader.collection_row_count(collection)? {
         Some(count) => Ok(count),
         None => reader.count_collection_entities(collection),
+    }
+}
+
+/// Normalize a row written by a mutation, applying write defaults.
+fn prepare_row_for_write(
+    catalog: &Catalog,
+    collection: &CollectionSchema,
+    object: &mut Object,
+    context: &DefaultExpressionContext,
+    recursive_validation: bool,
+) -> std::result::Result<(), crate::ObjectNormalizationError> {
+    if recursive_validation {
+        crate::validation::normalize_for_recursive_validation(
+            catalog,
+            collection,
+            object,
+            Some(context),
+        )
+    } else {
+        prepare_object_for_write(catalog, collection, object, context)
+    }
+}
+
+/// The index lookup a physical plan reads its rows through, if any.
+fn find_index_lookup(plan: &crate::PhysicalPlan) -> Option<(&crate::FieldRef, &Value)> {
+    match plan {
+        crate::PhysicalPlan::Source(crate::PhysicalSource::IndexLookup {
+            field, value, ..
+        }) => Some((field, value)),
+        crate::PhysicalPlan::Filter { input, .. }
+        | crate::PhysicalPlan::Sort { input, .. }
+        | crate::PhysicalPlan::Project { input, .. }
+        | crate::PhysicalPlan::Aggregate { input, .. }
+        | crate::PhysicalPlan::Limit { input, .. }
+        | crate::PhysicalPlan::Distinct { input, .. }
+        | crate::PhysicalPlan::Materialize { input, .. }
+        | crate::PhysicalPlan::Exchange { input, .. }
+        | crate::PhysicalPlan::RepartitionHash { input, .. } => find_index_lookup(input),
+        crate::PhysicalPlan::Union { .. }
+        | crate::PhysicalPlan::Values { .. }
+        | crate::PhysicalPlan::Join(..)
+        | crate::PhysicalPlan::ApplyExists { .. }
+        | crate::PhysicalPlan::ApplyInSubquery { .. }
+        | crate::PhysicalPlan::Source(_) => None,
+    }
+}
+
+/// Field path of an index lookup field in `collection`.
+fn lookup_field_path(collection: &CollectionSchema, field: &crate::FieldRef) -> Option<FieldPath> {
+    match field {
+        crate::FieldRef::CanonicalName(name) => Some(FieldPath::from_fields([name])),
+        crate::FieldRef::FieldId(field_id) => collection
+            .field_name_by_id(*field_id)
+            .map(|name| FieldPath::from_fields([name])),
+        crate::FieldRef::AttrId(attr_id) => collection.fields().find_map(|(field_id, _)| {
+            (collection.attr_for_field_id(field_id) == Some(*attr_id))
+                .then(|| collection.field_name_by_id(field_id))
+                .flatten()
+                .map(|name| FieldPath::from_fields([name]))
+        }),
+        crate::FieldRef::Path(path) => Some(path.clone()),
+    }
+}
+
+/// Equality index answering a lookup of `field_path` in `collection`, with
+/// the path to probe for path-equality indexes.
+///
+/// A single top-level field uses its equality index, falling back to the
+/// path-equality index; nested paths use the path-equality index only when
+/// they address list elements.
+fn equality_lookup_index<'c>(
+    catalog: &'c Catalog,
+    collection: LocalCollectionId,
+    field_path: &FieldPath,
+) -> Option<(&'c crate::catalog::IndexSchema, Option<FieldPath>)> {
+    let segments = field_path.segments();
+    if segments.len() == 1 {
+        let PathSegment::Field(field) = &segments[0] else {
+            return None;
+        };
+        catalog
+            .find_equality_index(collection, field)
+            .map(|index| (index, None))
+            .or_else(|| {
+                catalog
+                    .find_path_equality_index(collection)
+                    .map(|index| (index, Some(field_path.clone())))
+            })
+    } else if segments
+        .iter()
+        .any(|segment| matches!(segment, PathSegment::Index(_)))
+    {
+        catalog
+            .find_path_equality_index(collection)
+            .map(|index| (index, Some(field_path.clone())))
+    } else {
+        None
     }
 }
 
@@ -3372,6 +3499,9 @@ fn expand_dataset_cascade_deletes(
         }
     }
 
+    if deleted.is_empty() {
+        return 0;
+    }
     let mut count = 0;
     loop {
         let mut cascaded = BTreeSet::new();
@@ -3401,6 +3531,151 @@ fn expand_dataset_cascade_deletes(
         deleted.extend(cascaded);
     }
     count
+}
+
+/// Kind of write persisted by the dataset path.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum DatasetWrite {
+    /// Package migration or DDL: the catalog may have changed, so every row
+    /// of `after` is re-normalized and re-validated, and cascade deletes are
+    /// expanded after normalization.
+    Migration,
+    /// Data mutation under the catalog the rows were stored with: only rows
+    /// that differ from `before` are normalized and validated, plus stored
+    /// rows referencing deleted or retyped rows. The caller has expanded
+    /// cascade deletes.
+    Data,
+}
+
+fn unique_indexes<'c>(
+    catalog: &'c Catalog,
+    collection: &CollectionSchema,
+) -> impl Iterator<Item = &'c crate::catalog::IndexSchema> {
+    catalog
+        .indexes_for_collection(collection.lid)
+        .filter(|index| index.schema.unique && index.schema.kind == IndexKind::Equality)
+}
+
+/// Check `index` over every row of the collection, reporting the first
+/// duplicate in id order.
+fn check_unique_index_rows(
+    collection: &CollectionSchema,
+    index: &crate::catalog::IndexSchema,
+    rows: &BTreeMap<String, Object>,
+) -> std::result::Result<(), DbError> {
+    let mut seen = BTreeMap::<&Value, &String>::new();
+    for (id, object) in rows {
+        let Some(value) = object.get(&index.canonical_field) else {
+            continue;
+        };
+        if let Some(existing) = seen.insert(value, id) {
+            return Err(compact::unique_violation(
+                collection, index, value, existing, id,
+            ));
+        }
+    }
+    Ok(())
+}
+
+/// Check the unique indexes of `collection` for the `changed` rows of its
+/// final state `rows`.
+///
+/// Each value written by a changed row is probed in the index at the read
+/// revision; stored holders count only while their final row still holds
+/// the value. Reports the same violation as [`check_unique_index_rows`]
+/// (the pair whose later id comes first), assuming the stored rows were
+/// unique. Indexes awaiting a rebuild are checked over all rows.
+fn validate_unique_changed_rows<S: EntityStorage>(
+    reader: &RevisionReader<'_, S>,
+    catalog: &Catalog,
+    collection: &CollectionSchema,
+    rows: &BTreeMap<String, Object>,
+    changed: &BTreeSet<String>,
+) -> std::result::Result<(), DbError> {
+    if changed.is_empty() {
+        return Ok(());
+    }
+    for index in unique_indexes(catalog, collection) {
+        if reader.index_needs_rebuild(index.lid)? {
+            check_unique_index_rows(collection, index, rows)?;
+            continue;
+        }
+        let field = &index.canonical_field;
+        let mut holders = BTreeMap::<&Value, BTreeSet<String>>::new();
+        for id in changed {
+            if let Some(value) = rows.get(id).and_then(|row| row.get(field)) {
+                holders.entry(value).or_default().insert(id.clone());
+            }
+        }
+        let mut violation = None::<(&Value, String, String)>;
+        for (value, mut ids) in holders {
+            for id in reader.scan_index_value(index.lid, None, value)? {
+                if rows.get(&id).and_then(|row| row.get(field)) == Some(value) {
+                    ids.insert(id);
+                }
+            }
+            let mut ids = ids.into_iter();
+            if let (Some(existing), Some(id)) = (ids.next(), ids.next())
+                && violation.as_ref().is_none_or(|(_, _, first)| id < *first)
+            {
+                violation = Some((value, existing, id));
+            }
+        }
+        if let Some((value, existing, id)) = violation {
+            return Err(compact::unique_violation(
+                collection, index, value, &existing, &id,
+            ));
+        }
+    }
+    Ok(())
+}
+
+/// Rows of `after` whose references must be re-validated after a data
+/// write: the `changed` rows, plus (with foreign-key validation) every row
+/// referencing a row that was deleted or changed its type, as those are the
+/// only target properties validation reads.
+fn rows_to_revalidate(
+    catalog: &Catalog,
+    before: &BTreeMap<String, BTreeMap<String, Object>>,
+    after: &BTreeMap<String, BTreeMap<String, Object>>,
+    mut changed: BTreeMap<String, BTreeSet<String>>,
+    settings: crate::WriteSettings,
+) -> BTreeMap<String, BTreeSet<String>> {
+    if !settings.validate_foreign_keys {
+        return changed;
+    }
+    let mut affected = BTreeSet::<(String, String)>::new();
+    for (collection, rows) in before {
+        let remaining = after.get(collection);
+        for (id, row) in rows {
+            let retyped = match remaining.and_then(|rows| rows.get(id)) {
+                None => true,
+                Some(current) => current.get(OBJECT_TYPE_FIELD) != row.get(OBJECT_TYPE_FIELD),
+            };
+            if retyped {
+                affected.insert((collection.clone(), id.clone()));
+            }
+        }
+    }
+    if affected.is_empty() {
+        return changed;
+    }
+    for (collection, rows) in after {
+        let validate = changed.entry(collection.clone()).or_default();
+        for (id, row) in rows {
+            if validate.contains(id) {
+                continue;
+            }
+            let owner = (collection.clone(), id.clone());
+            if crate::validation::stored_references(catalog, &owner, row)
+                .iter()
+                .any(|reference| affected.contains(&reference.target))
+            {
+                validate.insert(id.clone());
+            }
+        }
+    }
+    changed
 }
 
 fn validate_ref_value(
@@ -3667,40 +3942,15 @@ impl crate::AsyncPhysicalDataSource for EmbeddedPhysicalDataSource<'_> {
             let collection = self
                 .resolve_collection(&source)
                 .map_err(|err| crate::CoreError::new(err.to_string()))?;
-            let field_path = self.field_path_for_lookup(collection, &field);
-            let Some(field_path) = field_path else {
+            let Some(field_path) = lookup_field_path(collection, &field) else {
                 return Ok(None);
             };
-            let top_level = field_path
-                .segments()
-                .first()
-                .and_then(|segment| match segment {
-                    PathSegment::Field(field) => Some(field.as_str()),
-                    _ => None,
-                });
-            let index = if field_path.segments().len() == 1 {
-                top_level
-                    .and_then(|field| self.catalog.find_equality_index(collection.lid, field))
-                    .map(|index| (index.lid, None))
-                    .or_else(|| {
-                        self.catalog
-                            .find_path_equality_index(collection.lid)
-                            .map(|index| (index.lid, Some(field_path.clone())))
-                    })
-            } else if field_path
-                .segments()
-                .iter()
-                .any(|segment| matches!(segment, PathSegment::Index(_)))
-            {
-                self.catalog
-                    .find_path_equality_index(collection.lid)
-                    .map(|index| (index.lid, Some(field_path.clone())))
-            } else {
-                None
-            };
-            let Some((index_id, index_path)) = index else {
+            let Some((index, index_path)) =
+                equality_lookup_index(&self.catalog, collection.lid, &field_path)
+            else {
                 return Ok(None);
             };
+            let index_id = index.lid;
 
             let mut ids = BTreeSet::new();
             for value in &values {
@@ -3740,26 +3990,6 @@ impl crate::AsyncPhysicalDataSource for EmbeddedPhysicalDataSource<'_> {
 }
 
 impl EmbeddedPhysicalDataSource<'_> {
-    fn field_path_for_lookup(
-        &self,
-        collection: &CollectionSchema,
-        field: &crate::FieldRef,
-    ) -> Option<FieldPath> {
-        match field {
-            crate::FieldRef::CanonicalName(name) => Some(FieldPath::from_fields([name])),
-            crate::FieldRef::FieldId(field_id) => collection
-                .field_name_by_id(*field_id)
-                .map(|name| FieldPath::from_fields([name])),
-            crate::FieldRef::AttrId(attr_id) => collection.fields().find_map(|(field_id, _)| {
-                (collection.attr_for_field_id(field_id) == Some(*attr_id))
-                    .then(|| collection.field_name_by_id(field_id))
-                    .flatten()
-                    .map(|name| FieldPath::from_fields([name]))
-            }),
-            crate::FieldRef::Path(path) => Some(path.clone()),
-        }
-    }
-
     fn index_lookup_collections(
         &self,
         source: &crate::SourceRef,
@@ -3770,53 +4000,22 @@ impl EmbeddedPhysicalDataSource<'_> {
             .resolve_collection(source)
             .map_err(|err| crate::CoreError::new(err.to_string()))?;
 
-        let field_path = self.field_path_for_lookup(collection, field);
-        let Some(field_path) = field_path else {
+        let Some(field_path) = lookup_field_path(collection, field) else {
             return Ok((self.scan_collections(source)?, None));
         };
-
-        let top_level = field_path
-            .segments()
-            .first()
-            .and_then(|segment| match segment {
-                PathSegment::Field(field) => Some(field.as_str()),
-                _ => None,
-            });
-        let ids = if let Some(top_level) = top_level {
-            if field_path.segments().len() == 1 {
-                if let Some(index) = self.catalog.find_equality_index(collection.lid, top_level) {
-                    self.reader
-                        .scan_index_value(index.lid, None, value)
-                        .map_err(|err| crate::CoreError::new(err.to_string()))?
-                } else if let Some(index) = self.catalog.find_path_equality_index(collection.lid) {
-                    self.reader
-                        .scan_index_value(index.lid, Some(&field_path), value)
-                        .map_err(|err| crate::CoreError::new(err.to_string()))?
-                } else {
-                    let predicate = equality_expr(field_path, value.clone());
-                    return Ok((self.scan_collections(source)?, Some(predicate)));
-                }
-            } else if let Some(index) = self.catalog.find_path_equality_index(collection.lid) {
-                let has_index_segment = field_path
-                    .segments()
-                    .iter()
-                    .any(|segment| matches!(segment, PathSegment::Index(_)));
-                if has_index_segment {
-                    self.reader
-                        .scan_index_value(index.lid, Some(&field_path), value)
-                        .map_err(|err| crate::CoreError::new(err.to_string()))?
-                } else {
-                    let predicate = equality_expr(field_path, value.clone());
-                    return Ok((self.scan_collections(source)?, Some(predicate)));
-                }
-            } else {
-                let predicate = equality_expr(field_path, value.clone());
-                return Ok((self.scan_collections(source)?, Some(predicate)));
-            }
-        } else {
+        if !matches!(field_path.segments().first(), Some(PathSegment::Field(_))) {
             return Ok((self.scan_collections(source)?, None));
+        }
+        let Some((index, index_path)) =
+            equality_lookup_index(&self.catalog, collection.lid, &field_path)
+        else {
+            let predicate = equality_expr(field_path, value.clone());
+            return Ok((self.scan_collections(source)?, Some(predicate)));
         };
-
+        let ids = self
+            .reader
+            .scan_index_value(index.lid, index_path.as_ref(), value)
+            .map_err(|err| crate::CoreError::new(err.to_string()))?;
         Ok((vec![self.materialize_ids(collection, ids)?], None))
     }
 }
@@ -5600,6 +5799,134 @@ mod tests {
         p3.insert("name", Value::String("C".to_string()));
         let err = db.insert("people", "p3", p3).unwrap_err();
         assert!(err.to_string().contains("unique index violation"));
+        assert!(matches!(
+            err,
+            DbError::UniqueViolation { ref existing_id, ref id, .. }
+                if existing_id == "p1" && id == "p3"
+        ));
+    }
+
+    #[test]
+    fn dataset_unique_check_probes_the_index_for_changed_rows() {
+        let mut db = EmbeddedDb::in_memory();
+        let people = db
+            .create_collection("people", CollectionKind::Polymorphic)
+            .unwrap();
+        db.create_index("people_email_uq", people, "email", true)
+            .unwrap();
+        let person = |id: &str, email: &str| BatchOperation::Upsert {
+            collection: "people".to_string(),
+            id: id.to_string(),
+            object: string_object(&[("id", id), ("email", email)]),
+        };
+        let violation = |err: DbError| match err {
+            DbError::UniqueViolation {
+                existing_id, id, ..
+            } => (existing_id, id),
+            other => panic!("unique violation expected: {other:?}"),
+        };
+        db.transact(
+            Batch::new()
+                .with_op(person("p1", "a@example.com"))
+                .with_op(person("p2", "b@example.com")),
+        )
+        .unwrap();
+        // Stored holders release a value they no longer hold.
+        db.transact(
+            Batch::new()
+                .with_op(person("p1", "b@example.com"))
+                .with_op(person("p2", "a@example.com")),
+        )
+        .unwrap();
+        let err = db
+            .transact(
+                Batch::new()
+                    .with_op(person("p4", "c@example.com"))
+                    .with_op(person("p3", "c@example.com")),
+            )
+            .unwrap_err();
+        assert_eq!(violation(err), ("p3".to_string(), "p4".to_string()));
+        let err = db
+            .transact(Batch::new().with_op(person("p0", "b@example.com")))
+            .unwrap_err();
+        assert_eq!(violation(err), ("p0".to_string(), "p1".to_string()));
+        db.transact(
+            Batch::new()
+                .with_op(BatchOperation::DeleteById {
+                    collection: "people".to_string(),
+                    id: "p1".to_string(),
+                })
+                .with_op(person("p0", "b@example.com")),
+        )
+        .unwrap();
+    }
+
+    #[test]
+    fn dataset_writes_revalidate_changed_rows_and_their_dependents() {
+        let mut db = EmbeddedDb::in_memory();
+        register_ref_schema(&mut db, ref_ty("person"));
+        let upsert = |id: &str, object: Object| BatchOperation::Upsert {
+            collection: DEFAULT_COLLECTION.to_string(),
+            id: id.to_string(),
+            object,
+        };
+        let delete = |id: &str| BatchOperation::DeleteById {
+            collection: DEFAULT_COLLECTION.to_string(),
+            id: id.to_string(),
+        };
+        let article = |id: &str, author: &str| {
+            upsert(
+                id,
+                entity(id, "article", [("author", Value::String(author.into()))]),
+            )
+        };
+        db.transact(
+            Batch::new()
+                .with_op(upsert("person-1", entity("person-1", "person", [])))
+                .with_op(article("article-1", "person-1")),
+        )
+        .unwrap();
+
+        // Unchanged rows referencing a deleted or retyped row are re-validated.
+        let err = db
+            .transact(Batch::new().with_op(delete("person-1")))
+            .unwrap_err();
+        assert!(
+            matches!(err, DbError::ReferenceTargetNotFound { ref id, .. } if id == "person-1"),
+            "{err}"
+        );
+        let err = db
+            .transact(
+                Batch::new().with_op(upsert("person-1", entity("person-1", "organization", []))),
+            )
+            .unwrap_err();
+        assert!(err.to_string().contains("expected one of:"), "{err}");
+
+        // Rows written without foreign-key checks stay as they are until
+        // they change: other writes validate only the rows they touch.
+        db.execute_batch_with_settings(
+            Batch::new().with_op(article("article-2", "missing")),
+            crate::WriteSettings {
+                validate_foreign_keys: false,
+            },
+        )
+        .unwrap();
+        db.transact(Batch::new().with_op(upsert("person-2", entity("person-2", "person", []))))
+            .unwrap();
+        let err = db
+            .transact(Batch::new().with_op(article("article-2", "still-missing")))
+            .unwrap_err();
+        assert!(
+            matches!(err, DbError::ReferenceTargetNotFound { .. }),
+            "{err}"
+        );
+
+        db.transact(
+            Batch::new()
+                .with_op(delete("article-1"))
+                .with_op(delete("person-1")),
+        )
+        .unwrap();
     }
 
     #[test]

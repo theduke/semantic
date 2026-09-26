@@ -380,6 +380,36 @@ impl<'a, S: EntityStorage> RevisionReader<'a, S> {
         }
     }
 
+    /// Stream every entity of `collection` into `visit`, one row at a time.
+    ///
+    /// Without a consistent snapshot the scan is fenced by the revision
+    /// before and after, so a concurrent commit surfaces as a conflict.
+    pub(crate) fn scan_collection(
+        &self,
+        collection: LocalCollectionId,
+        mut visit: impl FnMut(StoredEntity) -> Result<(), DbError>,
+    ) -> Result<(), DbError> {
+        let scan = match &self.snapshot {
+            Some(snapshot) => snapshot.scan_collection_stream(collection)?,
+            None => {
+                self.storage.ensure_revision(self.revision)?;
+                self.storage.scan_collection_stream(collection)?
+            }
+        };
+        for entity in scan {
+            visit(entity?)?;
+        }
+        if self.snapshot.is_none() {
+            self.storage.ensure_revision(self.revision)?;
+        }
+        Ok(())
+    }
+
+    /// The consistent snapshot serving reads, when there is one.
+    pub(crate) fn snapshot(&self) -> Option<&(dyn EntityReadSnapshot + 'a)> {
+        self.snapshot.as_deref()
+    }
+
     pub(crate) fn index_needs_rebuild(&self, index: LocalIndexId) -> Result<bool, DbError> {
         match &self.snapshot {
             Some(snapshot) => snapshot.index_needs_rebuild(index),
@@ -946,6 +976,8 @@ pub(crate) struct StorageReadCounts {
     /// Report maintained row counts as unknown, forcing the key-count
     /// fallback.
     pub(crate) hide_row_counts: std::sync::atomic::AtomicBool,
+    /// Entities put or deleted by committed batches, as (collection, id).
+    pub(crate) entity_writes: std::sync::Mutex<Vec<(usize, String)>>,
 }
 
 #[cfg(test)]
@@ -957,6 +989,18 @@ impl StorageReadCounts {
         self.entity_gets.store(0, Ordering::Relaxed);
         self.collection_counts.store(0, Ordering::Relaxed);
         self.rows_yielded.store(0, Ordering::Relaxed);
+        self.entity_writes.lock().unwrap().clear();
+    }
+
+    /// Ids of the entities of `collection` written since the last reset.
+    pub(crate) fn written_ids(&self, collection: LocalCollectionId) -> Vec<String> {
+        self.entity_writes
+            .lock()
+            .unwrap()
+            .iter()
+            .filter(|(written, _)| *written == collection.0)
+            .map(|(_, id)| id.clone())
+            .collect()
     }
 
     pub(crate) fn rows_yielded(&self) -> usize {
@@ -997,6 +1041,22 @@ impl CountingEntityStorage {
 
     fn count(counter: &std::sync::atomic::AtomicUsize) {
         counter.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    }
+
+    fn record_writes(&self, ops: &[StorageWriteOp]) {
+        let mut writes = self.counts.entity_writes.lock().unwrap();
+        for op in ops {
+            match op {
+                StorageWriteOp::PutEntity(entity) => {
+                    writes.push((entity.collection, entity.id.clone()));
+                }
+                StorageWriteOp::DeleteEntity {
+                    collection,
+                    entity_id,
+                } => writes.push((collection.0, entity_id.clone())),
+                _ => {}
+            }
+        }
     }
 }
 
@@ -1106,7 +1166,9 @@ impl EntityStorage for CountingEntityStorage {
     }
 
     fn apply_batch(&mut self, ops: &[StorageWriteOp]) -> Result<(), DbError> {
-        self.inner.apply_batch(ops)
+        self.inner.apply_batch(ops)?;
+        self.record_writes(ops);
+        Ok(())
     }
 
     fn apply_batch_conditional(
@@ -1114,7 +1176,11 @@ impl EntityStorage for CountingEntityStorage {
         ops: &[StorageWriteOp],
         expected_revision: Option<u64>,
     ) -> Result<StorageCommitOutcome, DbError> {
-        self.inner.apply_batch_conditional(ops, expected_revision)
+        let outcome = self.inner.apply_batch_conditional(ops, expected_revision)?;
+        if matches!(outcome, StorageCommitOutcome::Committed { .. }) {
+            self.record_writes(ops);
+        }
+        Ok(outcome)
     }
 }
 
