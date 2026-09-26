@@ -411,6 +411,7 @@ impl<'a> DbReader<'a> {
             }
             P::Limit { input, .. }
             | P::Sort { input, .. }
+            | P::TopN { input, .. }
             | P::Project { input, .. }
             | P::Distinct { input }
             | P::Materialize { input }

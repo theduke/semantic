@@ -1802,6 +1802,9 @@ fn compare_rows(a: &Object, b: &Object, order_by: &[OrderBy]) -> Ordering {
     compare_objects(a, b, order_by)
 }
 
+/// Row comparison of the physical `Sort`, kept as the ordering oracle of the
+/// executor's precomputed sort keys.
+#[cfg(test)]
 pub(crate) fn compare_objects_for_plan(
     a: &dyn ObjectAccess,
     b: &dyn ObjectAccess,

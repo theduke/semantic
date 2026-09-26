@@ -1,4 +1,6 @@
-use std::cmp::Ordering;
+mod aggregate;
+mod sort;
+
 use std::collections::{BTreeSet, HashMap, VecDeque};
 use std::hash::Hash;
 use std::sync::Arc;
@@ -8,7 +10,7 @@ use futures::{
     future::BoxFuture,
     stream::{self, BoxStream},
 };
-use semantic_data::query::{AggregateOp, JoinType};
+use semantic_data::query::JoinType;
 use semantic_data::value::{FieldPath, Object, PathSegment, Value, ValueRef};
 
 use crate::QueryContext;
@@ -19,8 +21,12 @@ use crate::plan::{
 };
 use crate::query::{
     CoreError, CoreResult, Expr, FunctionArg, ObjectAccess as QueryObjectAccess, Operand,
-    compare_objects_for_plan, evaluate_expr, evaluate_filter_expr, evaluate_usize_expr,
+    evaluate_expr, evaluate_filter_expr, evaluate_usize_expr,
 };
+use aggregate::GroupedAggregation;
+#[cfg(test)]
+pub(crate) use sort::take_top_n_peak_rows;
+use sort::{TopN, sort_rows};
 
 pub type DynObject = Box<dyn QueryObjectAccess>;
 pub type RowBatch = Vec<DynObject>;
@@ -295,17 +301,40 @@ fn execute_physical_dyn_stream(
         .try_flatten()
         .boxed(),
         PhysicalPlan::Sort { input, order_by } => stream::once(async move {
-            let mut out = collect_dyn_stream(execute_physical_dyn_stream(
-                *input,
-                source.clone(),
-                context.clone(),
-                options,
-            ))
-            .await?;
             let order_by =
-                resolve_order_by_subqueries_async(&order_by, source, &context, options).await?;
-            out.sort_by(|a, b| compare_dyn_objects(a.as_ref(), b.as_ref(), &order_by));
-            Ok(rows_to_batches(out, options.batch_size))
+                resolve_order_by_subqueries_async(&order_by, source.clone(), &context, options)
+                    .await?;
+            let rows = sort_rows(
+                execute_physical_dyn_stream(*input, source, context, options),
+                &order_by,
+            )
+            .await?;
+            Ok(rows_to_batches(rows, options.batch_size))
+        })
+        .try_flatten()
+        .boxed(),
+        PhysicalPlan::TopN {
+            input,
+            order_by,
+            offset,
+            limit,
+        } => stream::once(async move {
+            let (offset, limit) =
+                resolve_limit_bounds(&offset, Some(&limit), source.clone(), &context, options)
+                    .await?;
+            let limit = limit.expect("TopN always has a limit");
+            let order_by =
+                resolve_order_by_subqueries_async(&order_by, source.clone(), &context, options)
+                    .await?;
+            let mut top_n = TopN::new(order_by, offset.saturating_add(limit));
+            if limit > 0 {
+                top_n
+                    .extend(execute_physical_dyn_stream(
+                        *input, source, context, options,
+                    ))
+                    .await?;
+            }
+            Ok(rows_to_batches(top_n.finish(offset), options.batch_size))
         })
         .try_flatten()
         .boxed(),
@@ -338,11 +367,14 @@ fn execute_physical_dyn_stream(
                 ),
                 None => None,
             };
-            let rows = collect_dyn_stream(execute_physical_dyn_stream(
-                *input, source, context, options,
-            ))
-            .await?;
-            execute_aggregate(rows, &group_by, &projection, &having)
+            let mut aggregation = GroupedAggregation::new(group_by, projection, having);
+            let mut input = execute_physical_dyn_stream(*input, source, context, options);
+            while let Some(batch) = input.try_next().await? {
+                for row in &batch {
+                    aggregation.push(row.as_ref());
+                }
+            }
+            CoreResult::Ok(aggregation.finish())
         })
         .map_ok(move |rows| rows_to_batches(rows, options.batch_size))
         .try_flatten()
@@ -352,23 +384,9 @@ fn execute_physical_dyn_stream(
             offset,
             limit,
         } => stream::once(async move {
-            let offset =
-                resolve_expr_subqueries_async(&offset, source.clone(), &context, options).await?;
-            let limit = match limit {
-                Some(expr) => Some(
-                    resolve_expr_subqueries_async(&expr, source.clone(), &context, options).await?,
-                ),
-                None => None,
-            };
-            let offset = evaluate_usize_expr(&offset)
-                .ok_or_else(|| CoreError::new("failed to evaluate OFFSET expression"))?;
-            let limit = limit
-                .as_ref()
-                .map(|expr| {
-                    evaluate_usize_expr(expr)
-                        .ok_or_else(|| CoreError::new("failed to evaluate LIMIT expression"))
-                })
-                .transpose()?;
+            let (offset, limit) =
+                resolve_limit_bounds(&offset, limit.as_ref(), source.clone(), &context, options)
+                    .await?;
             Ok(limit_batch_stream(
                 execute_physical_dyn_stream(*input, source, context, options),
                 offset,
@@ -565,6 +583,34 @@ fn project_batch_stream(
         .boxed()
 }
 
+/// Evaluate the `OFFSET` and `LIMIT` expressions of a limit operator.
+async fn resolve_limit_bounds<'a>(
+    offset: &'a Expr,
+    limit: Option<&'a Expr>,
+    source: Arc<dyn AsyncPhysicalDataSource + 'a>,
+    context: &'a QueryContext,
+    options: ExecutionOptions,
+) -> CoreResult<(usize, Option<usize>)> {
+    let offset = resolve_expr_subqueries_async(offset, source.clone(), context, options).await?;
+    let offset = evaluate_usize_expr(&offset)
+        .ok_or_else(|| CoreError::new("failed to evaluate OFFSET expression"))?;
+    let limit = match limit {
+        Some(expr) => {
+            let expr = resolve_expr_subqueries_async(expr, source, context, options).await?;
+            Some(
+                evaluate_usize_expr(&expr)
+                    .ok_or_else(|| CoreError::new("failed to evaluate LIMIT expression"))?,
+            )
+        }
+        None => None,
+    };
+    Ok((offset, limit))
+}
+
+/// Skip `offset` rows of `input`, then pass through at most `limit` rows.
+///
+/// Stops pulling from `input` as soon as the limit is reached, so an input
+/// scan never produces more batches than needed.
 fn limit_batch_stream(
     input: RecordBatchStream<'_>,
     offset: usize,
@@ -573,7 +619,7 @@ fn limit_batch_stream(
     stream::unfold(
         (input, offset, limit, false),
         |(mut input, mut offset, mut remaining, done)| async move {
-            if done {
+            if done || remaining == Some(0) {
                 return None;
             }
             loop {
@@ -591,18 +637,8 @@ fn limit_batch_stream(
                     offset = 0;
                 }
                 if let Some(left) = remaining {
-                    if left == 0 {
-                        return None;
-                    }
-                    if batch.len() > left {
-                        batch.truncate(left);
-                        remaining = Some(0);
-                        return Some((Ok(batch), (input, offset, remaining, true)));
-                    }
+                    batch.truncate(left);
                     remaining = Some(left - batch.len());
-                }
-                if batch.is_empty() {
-                    continue;
                 }
                 return Some((Ok(batch), (input, offset, remaining, false)));
             }
@@ -1632,6 +1668,7 @@ fn physical_subquery_single_column_shape(plan: &PhysicalPlan) -> CoreResult<Sing
             Ok(SingleColumnShape::Exact)
         }
         PhysicalPlan::Sort { input, .. }
+        | PhysicalPlan::TopN { input, .. }
         | PhysicalPlan::Filter { input, .. }
         | PhysicalPlan::Limit { input, .. }
         | PhysicalPlan::Distinct { input }
@@ -2088,21 +2125,6 @@ fn bind_join_result_obj(
     out
 }
 
-fn compare_dyn_objects(
-    a: &dyn QueryObjectAccess,
-    b: &dyn QueryObjectAccess,
-    order_by: &[PhysicalOrderField],
-) -> Ordering {
-    let legacy: Vec<_> = order_by
-        .iter()
-        .map(|item| crate::query::OrderBy {
-            expr: item.expr.clone(),
-            direction: item.direction,
-        })
-        .collect();
-    compare_objects_for_plan(a, b, &legacy)
-}
-
 fn project_dyn_object(
     value: &dyn QueryObjectAccess,
     projection: &[PhysicalProjectionField],
@@ -2164,47 +2186,20 @@ fn value_ref_for_join_key<'a>(
     (!is_nullish).then_some(value)
 }
 
+/// Aggregate `input_rows` in one call, as the streaming operator does.
+#[cfg(test)]
 fn execute_aggregate(
     input_rows: Vec<DynObject>,
     group_by: &[crate::query::Expr],
     projection: &[PhysicalProjectionField],
     having: &Option<Expr>,
 ) -> CoreResult<Vec<DynObject>> {
-    let owned_rows = input_rows
-        .into_iter()
-        .map(|row| row.to_object())
-        .collect::<Vec<_>>();
-    let mut groups = std::collections::BTreeMap::<Vec<Value>, Vec<Object>>::new();
-    if group_by.is_empty() {
-        groups.insert(Vec::new(), owned_rows);
-    } else {
-        for row in owned_rows {
-            let key = group_by
-                .iter()
-                .map(|expr| evaluate_expr(&row, expr).unwrap_or(Value::Null))
-                .collect::<Vec<_>>();
-            groups.entry(key).or_default().push(row);
-        }
+    let mut aggregation =
+        GroupedAggregation::new(group_by.to_vec(), projection.to_vec(), having.clone());
+    for row in &input_rows {
+        aggregation.push(row.as_ref());
     }
-
-    let mut out = Vec::<DynObject>::new();
-    for (_key, rows) in groups {
-        if let Some(having) = having
-            && !evaluate_group_predicate(&rows, having)
-        {
-            continue;
-        }
-        let mut projected = Object::new();
-        for field in projection {
-            let value = evaluate_group_expr(&rows, &field.expr);
-            let Some(value) = value else {
-                continue;
-            };
-            projected.insert(aggregate_output_key(field), value);
-        }
-        out.push(Box::new(projected) as DynObject);
-    }
-    Ok(out)
+    Ok(aggregation.finish())
 }
 
 /// Output column name of an aggregate projection field.
@@ -2216,339 +2211,6 @@ pub(crate) fn aggregate_output_key(field: &PhysicalProjectionField) -> String {
             .map(infer_project_key)
             .unwrap_or_else(|| infer_expr_key(&field.expr))
     })
-}
-
-fn evaluate_group_predicate(rows: &[Object], predicate: &Expr) -> bool {
-    evaluate_group_expr(rows, predicate)
-        .as_ref()
-        .is_some_and(|value| match value {
-            Value::Bool(v) => *v,
-            Value::Null | Value::Void => false,
-            _ => true,
-        })
-}
-
-fn evaluate_group_expr(rows: &[Object], expr: &Expr) -> Option<Value> {
-    match expr {
-        Expr::Aggregate { op, distinct, arg } => evaluate_aggregate_expr(rows, *op, *distinct, arg),
-        Expr::Unary { op, expr } => {
-            let value = evaluate_group_expr(rows, expr)?;
-            if value.is_nullish() {
-                return Some(Value::Null);
-            }
-            let empty = Object::new();
-            let one = rows.first().unwrap_or(&empty);
-            evaluate_expr(
-                one,
-                &Expr::Unary {
-                    op: *op,
-                    expr: Box::new(Expr::Operand(Operand::Literal(value))),
-                },
-            )
-        }
-        Expr::Binary { op, left, right } => {
-            let left = evaluate_group_expr(rows, left)?;
-            let right = evaluate_group_expr(rows, right)?;
-            if left.is_nullish() || right.is_nullish() {
-                return match op {
-                    semantic_data::query::BinaryOp::And
-                        if matches!(left, Value::Bool(false))
-                            || matches!(right, Value::Bool(false)) =>
-                    {
-                        Some(Value::Bool(false))
-                    }
-                    semantic_data::query::BinaryOp::Or
-                        if matches!(left, Value::Bool(true))
-                            || matches!(right, Value::Bool(true)) =>
-                    {
-                        Some(Value::Bool(true))
-                    }
-                    _ => Some(Value::Null),
-                };
-            }
-            let empty = Object::new();
-            let one = rows.first().unwrap_or(&empty);
-            evaluate_expr(
-                one,
-                &Expr::Binary {
-                    op: *op,
-                    left: Box::new(Expr::Operand(Operand::Literal(left))),
-                    right: Box::new(Expr::Operand(Operand::Literal(right))),
-                },
-            )
-        }
-        Expr::IfElse {
-            cond,
-            then_expr,
-            else_expr,
-        } => {
-            let condition = evaluate_group_expr(rows, cond)?;
-            if matches!(condition, Value::Bool(true)) {
-                evaluate_group_expr(rows, then_expr)
-            } else {
-                evaluate_group_expr(rows, else_expr)
-            }
-        }
-        Expr::Coalesce(items) => {
-            for item in items {
-                let Some(value) = evaluate_group_expr(rows, item) else {
-                    continue;
-                };
-                if !value.is_nullish() {
-                    return Some(value);
-                }
-            }
-            Some(Value::Null)
-        }
-        Expr::Function { name, args } => {
-            let mut rewritten = Vec::with_capacity(args.len());
-            let mut contains_null = false;
-            for arg in args {
-                rewritten.push(match arg {
-                    FunctionArg::Expr(expr) => {
-                        let value = evaluate_group_expr(rows, expr)?;
-                        contains_null |= value.is_nullish();
-                        FunctionArg::Expr(Expr::Operand(Operand::Literal(value)))
-                    }
-                    FunctionArg::Wildcard => FunctionArg::Wildcard,
-                });
-            }
-            let empty = Object::new();
-            let one = rows.first().unwrap_or(&empty);
-            evaluate_expr(
-                one,
-                &Expr::Function {
-                    name: name.clone(),
-                    args: rewritten,
-                },
-            )
-            .or_else(|| contains_null.then_some(Value::Null))
-        }
-        Expr::InList {
-            expr,
-            list,
-            negated,
-        } => {
-            let target = evaluate_group_expr(rows, expr)?;
-            if list.is_empty() {
-                return Some(Value::Bool(*negated));
-            }
-            if target.is_nullish() {
-                return Some(Value::Null);
-            }
-            let mut contains_null = false;
-            for item in list {
-                let Some(candidate) = evaluate_group_expr(rows, item) else {
-                    contains_null = true;
-                    continue;
-                };
-                if candidate.is_nullish() {
-                    contains_null = true;
-                } else if candidate == target {
-                    return Some(Value::Bool(!*negated));
-                }
-            }
-            if contains_null {
-                Some(Value::Null)
-            } else {
-                Some(Value::Bool(*negated))
-            }
-        }
-        Expr::Between {
-            expr,
-            low,
-            high,
-            negated,
-        } => {
-            let value = evaluate_group_expr(rows, expr)?;
-            let low = evaluate_group_expr(rows, low)?;
-            let high = evaluate_group_expr(rows, high)?;
-            if value.is_nullish() || low.is_nullish() || high.is_nullish() {
-                return Some(Value::Null);
-            }
-            Some(Value::Bool(if *negated {
-                value < low || value > high
-            } else {
-                value >= low && value <= high
-            }))
-        }
-        Expr::PatternMatch {
-            kind,
-            expr,
-            pattern,
-            case_insensitive,
-            negated,
-        } => {
-            let value = evaluate_group_expr(rows, expr)?;
-            let pattern = evaluate_group_expr(rows, pattern)?;
-            if value.is_nullish() || pattern.is_nullish() {
-                return Some(Value::Null);
-            }
-            evaluate_group_scalar_expr(
-                rows,
-                Expr::PatternMatch {
-                    kind: *kind,
-                    expr: Box::new(Expr::Operand(Operand::Literal(value))),
-                    pattern: Box::new(Expr::Operand(Operand::Literal(pattern))),
-                    case_insensitive: *case_insensitive,
-                    negated: *negated,
-                },
-            )
-        }
-        Expr::RegexMatch {
-            expr,
-            pattern,
-            case_insensitive,
-            negated,
-        } => {
-            let value = evaluate_group_expr(rows, expr)?;
-            let pattern = evaluate_group_expr(rows, pattern)?;
-            if value.is_nullish() || pattern.is_nullish() {
-                return Some(Value::Null);
-            }
-            evaluate_group_scalar_expr(
-                rows,
-                Expr::RegexMatch {
-                    expr: Box::new(Expr::Operand(Operand::Literal(value))),
-                    pattern: Box::new(Expr::Operand(Operand::Literal(pattern))),
-                    case_insensitive: *case_insensitive,
-                    negated: *negated,
-                },
-            )
-        }
-        Expr::IsNull { expr, negated } => {
-            let is_null = evaluate_group_expr(rows, expr).is_none_or(|value| value.is_nullish());
-            Some(Value::Bool(if *negated { !is_null } else { is_null }))
-        }
-        Expr::Operand(Operand::Literal(value)) => Some(value.clone()),
-        Expr::Operand(Operand::Field(_))
-        | Expr::Subquery(_)
-        | Expr::Exists { .. }
-        | Expr::RelationExists { .. } => rows.first().and_then(|row| evaluate_expr(row, expr)),
-    }
-}
-
-fn evaluate_group_scalar_expr(rows: &[Object], expr: Expr) -> Option<Value> {
-    let empty = Object::new();
-    evaluate_expr(rows.first().unwrap_or(&empty), &expr)
-}
-
-fn evaluate_aggregate_expr(
-    rows: &[Object],
-    op: AggregateOp,
-    distinct: bool,
-    arg: &FunctionArg,
-) -> Option<Value> {
-    match op {
-        AggregateOp::Count => {
-            if matches!(arg, FunctionArg::Wildcard) {
-                return Some(Value::I64(rows.len() as i64));
-            }
-            let FunctionArg::Expr(expr) = arg else {
-                return Some(Value::I64(0));
-            };
-            let mut seen = BTreeSet::new();
-            let mut count = 0i64;
-            for row in rows {
-                let Some(value) = evaluate_expr(row, expr) else {
-                    continue;
-                };
-                if value.is_nullish() {
-                    continue;
-                }
-                if distinct && !seen.insert(value.clone()) {
-                    continue;
-                }
-                count += 1;
-            }
-            Some(Value::I64(count))
-        }
-        AggregateOp::Sum => {
-            let FunctionArg::Expr(expr) = arg else {
-                return None;
-            };
-            let mut seen = BTreeSet::new();
-            let mut sum = 0.0f64;
-            let mut found = false;
-            for row in rows {
-                let Some(value) = evaluate_expr(row, expr) else {
-                    continue;
-                };
-                if value.is_nullish() {
-                    continue;
-                }
-                if distinct && !seen.insert(value.clone()) {
-                    continue;
-                }
-                let number = value.as_f64()?;
-                sum += number;
-                found = true;
-            }
-            if found {
-                Some(Value::F64(sum.into()))
-            } else {
-                Some(Value::Null)
-            }
-        }
-        AggregateOp::Avg => {
-            let FunctionArg::Expr(expr) = arg else {
-                return None;
-            };
-            let mut seen = BTreeSet::new();
-            let mut sum = 0.0f64;
-            let mut count = 0usize;
-            for row in rows {
-                let Some(value) = evaluate_expr(row, expr) else {
-                    continue;
-                };
-                if value.is_nullish() {
-                    continue;
-                }
-                if distinct && !seen.insert(value.clone()) {
-                    continue;
-                }
-                sum += value.as_f64()?;
-                count += 1;
-            }
-            if count == 0 {
-                Some(Value::Null)
-            } else {
-                Some(Value::F64((sum / count as f64).into()))
-            }
-        }
-        AggregateOp::Min | AggregateOp::Max => {
-            let FunctionArg::Expr(expr) = arg else {
-                return None;
-            };
-            let mut seen = BTreeSet::new();
-            let mut best: Option<Value> = None;
-            for row in rows {
-                let Some(value) = evaluate_expr(row, expr) else {
-                    continue;
-                };
-                if value.is_nullish() {
-                    continue;
-                }
-                if distinct && !seen.insert(value.clone()) {
-                    continue;
-                }
-                match &best {
-                    None => best = Some(value),
-                    Some(current) => {
-                        let replace = match op {
-                            AggregateOp::Min => value < *current,
-                            AggregateOp::Max => value > *current,
-                            _ => false,
-                        };
-                        if replace {
-                            best = Some(value);
-                        }
-                    }
-                }
-            }
-            Some(best.unwrap_or(Value::Null))
-        }
-    }
 }
 
 fn infer_expr_key(expr: &Expr) -> String {
@@ -2807,6 +2469,7 @@ pub fn inject_computed_attributes(
 mod tests {
     use super::*;
     use crate::query::{Expr, Operand, QueryField, SelectQuery};
+    use semantic_data::query::AggregateOp;
     use std::sync::atomic::{AtomicUsize, Ordering as AtomicOrdering};
 
     fn run_async<T>(future: impl std::future::Future<Output = T>) -> T {
@@ -4245,5 +3908,217 @@ mod tests {
         )
         .unwrap_err();
         assert!(err.to_string().contains("expected exactly one"));
+    }
+
+    /// Source producing `batches` batches of `batch_size` rows and counting
+    /// how many batches were pulled.
+    struct PullCountingSource {
+        batches: usize,
+        batch_size: usize,
+        pulled: Arc<AtomicUsize>,
+    }
+
+    impl PullCountingSource {
+        fn new(batches: usize, batch_size: usize) -> Self {
+            Self {
+                batches,
+                batch_size,
+                pulled: Arc::new(AtomicUsize::new(0)),
+            }
+        }
+
+        fn pulled(&self) -> usize {
+            self.pulled.load(AtomicOrdering::Relaxed)
+        }
+    }
+
+    impl AsyncPhysicalDataSource for PullCountingSource {
+        fn scan_stream(&self, _source: SourceRef) -> SendableRecordBatchStream {
+            let (batches, batch_size, pulled) =
+                (self.batches, self.batch_size, self.pulled.clone());
+            stream::unfold(0usize, move |batch| {
+                let pulled = pulled.clone();
+                async move {
+                    if batch == batches {
+                        return None;
+                    }
+                    pulled.fetch_add(1, AtomicOrdering::Relaxed);
+                    let rows = (0..batch_size)
+                        .map(|row| {
+                            Box::new(obj_i64("id", (batch * batch_size + row) as i64)) as DynObject
+                        })
+                        .collect();
+                    Some((Ok(rows), batch + 1))
+                }
+            })
+            .boxed()
+        }
+    }
+
+    fn unnamed_scan() -> PhysicalPlan {
+        PhysicalPlan::Source(PhysicalSource::Scan {
+            source: SourceRef::unnamed(),
+        })
+    }
+
+    fn id_order(direction: semantic_data::query::SortDirection) -> Vec<PhysicalOrderField> {
+        vec![PhysicalOrderField {
+            expr: Expr::Operand(Operand::Field(FieldPath::from_fields(["id"]))),
+            direction,
+        }]
+    }
+
+    #[test]
+    fn limit_stops_pulling_once_the_limit_is_reached() {
+        for (offset, limit, expected_pulls) in [(0, 4, 2), (0, 3, 2), (2, 2, 2), (1, 1, 1)] {
+            let source = Arc::new(PullCountingSource::new(10, 2));
+            let plan = PhysicalPlan::Limit {
+                input: Box::new(unnamed_scan()),
+                offset: Expr::from(offset),
+                limit: Some(Expr::from(limit)),
+            };
+            let rows = run_async(execute_physical_plan_collect(
+                plan,
+                source.clone(),
+                QueryContext::default(),
+                ExecutionOptions::default(),
+            ))
+            .unwrap();
+            let ids = rows
+                .iter()
+                .map(|row| row.get("id").cloned().unwrap())
+                .collect::<Vec<_>>();
+            let expected = (offset..offset + limit)
+                .map(|id| Value::I64(id as i64))
+                .collect::<Vec<_>>();
+            assert_eq!(ids, expected);
+            assert_eq!(
+                source.pulled(),
+                expected_pulls,
+                "offset {offset}, limit {limit}"
+            );
+        }
+    }
+
+    #[test]
+    fn zero_limit_does_not_pull_input() {
+        let source = Arc::new(PullCountingSource::new(10, 2));
+        for plan in [
+            PhysicalPlan::Limit {
+                input: Box::new(unnamed_scan()),
+                offset: Expr::from(0usize),
+                limit: Some(Expr::from(0usize)),
+            },
+            PhysicalPlan::TopN {
+                input: Box::new(unnamed_scan()),
+                order_by: id_order(semantic_data::query::SortDirection::Asc),
+                offset: Expr::from(3usize),
+                limit: Expr::from(0usize),
+            },
+        ] {
+            let rows = run_async(execute_physical_plan_collect(
+                plan,
+                source.clone(),
+                QueryContext::default(),
+                ExecutionOptions::default(),
+            ))
+            .unwrap();
+            assert!(rows.is_empty());
+        }
+        assert_eq!(source.pulled(), 0);
+    }
+
+    #[test]
+    fn dropping_a_result_stream_stops_the_scan() {
+        let source = Arc::new(PullCountingSource::new(10, 2));
+        let plan = PhysicalPlan::Project {
+            input: Box::new(PhysicalPlan::Filter {
+                input: Box::new(unnamed_scan()),
+                predicate: Expr::Operand(Operand::Literal(Value::Bool(true))),
+            }),
+            projection: vec![PhysicalProjectionField {
+                expr: Expr::Operand(Operand::Field(FieldPath::from_fields(["id"]))),
+                field: None,
+                source_path: None,
+                alias: None,
+                wildcard: None,
+            }],
+        };
+        let mut stream = execute_physical_plan_stream(
+            plan,
+            source.clone(),
+            QueryContext::default(),
+            ExecutionOptions::default(),
+        );
+        let first = run_async(stream.next()).unwrap().unwrap();
+        assert_eq!(first.len(), 2);
+        drop(stream);
+        assert_eq!(source.pulled(), 1);
+    }
+
+    #[test]
+    fn distinct_emits_batches_without_draining_its_input() {
+        let source = Arc::new(PullCountingSource::new(10, 2));
+        let mut stream = execute_physical_plan_stream(
+            PhysicalPlan::Distinct {
+                input: Box::new(unnamed_scan()),
+            },
+            source.clone(),
+            QueryContext::default(),
+            ExecutionOptions::default(),
+        );
+        let first = run_async(stream.next()).unwrap().unwrap();
+        assert_eq!(first.len(), 2);
+        assert_eq!(source.pulled(), 1);
+    }
+
+    #[test]
+    fn top_n_matches_sort_then_limit_and_retains_only_the_bound() {
+        use semantic_data::query::SortDirection::{Asc, Desc};
+
+        for direction in [Asc, Desc] {
+            for (offset, limit) in [(0usize, 5usize), (3, 4), (18, 5), (25, 3)] {
+                let rows = (0..20)
+                    .map(|index| {
+                        let mut row = obj_i64("id", index % 7);
+                        row.insert("position", Value::I64(index));
+                        row
+                    })
+                    .collect::<Vec<_>>();
+                let sort = PhysicalPlan::Sort {
+                    input: Box::new(PhysicalPlan::Values {
+                        values: rows.clone(),
+                    }),
+                    order_by: id_order(direction),
+                };
+                let reference = PhysicalPlan::Limit {
+                    input: Box::new(sort),
+                    offset: Expr::from(offset),
+                    limit: Some(Expr::from(limit)),
+                };
+                let top_n = PhysicalPlan::TopN {
+                    input: Box::new(PhysicalPlan::Values { values: rows }),
+                    order_by: id_order(direction),
+                    offset: Expr::from(offset),
+                    limit: Expr::from(limit),
+                };
+                let execute = |plan| {
+                    run_async(execute_physical_plan_collect(
+                        plan,
+                        Arc::new(AsyncInlineSource::new(Vec::new())),
+                        QueryContext::default(),
+                        ExecutionOptions {
+                            batch_size: 3,
+                            ..ExecutionOptions::default()
+                        },
+                    ))
+                    .unwrap()
+                };
+                let expected = execute(reference);
+                take_top_n_peak_rows();
+                assert_eq!(execute(top_n), expected, "offset {offset}, limit {limit}");
+                assert!(take_top_n_peak_rows() <= offset + limit);
+            }
+        }
     }
 }

@@ -1166,13 +1166,7 @@ impl PhysicalLoweringPass for CoreLoweringPass {
                 order_by,
             } => PhysicalPlan::Sort {
                 input: Box::new(input(inner)),
-                order_by: order_by
-                    .iter()
-                    .map(|item| PhysicalOrderField {
-                        expr: item.expr.clone(),
-                        direction: item.direction,
-                    })
-                    .collect(),
+                order_by: lower_order_by(order_by),
             },
             LogicalPlan::Project {
                 input: inner,
@@ -1202,11 +1196,14 @@ impl PhysicalLoweringPass for CoreLoweringPass {
                 input: inner,
                 offset,
                 limit,
-            } => PhysicalPlan::Limit {
-                input: Box::new(input(inner)),
-                offset: offset.clone(),
-                limit: limit.clone(),
-            },
+            } => limit
+                .as_ref()
+                .and_then(|limit| lower_top_n(inner, offset, limit, context, input))
+                .unwrap_or_else(|| PhysicalPlan::Limit {
+                    input: Box::new(input(inner)),
+                    offset: offset.clone(),
+                    limit: limit.clone(),
+                }),
             LogicalPlan::Distinct { input: inner } => PhysicalPlan::Distinct {
                 input: Box::new(input(inner)),
             },
@@ -1277,6 +1274,56 @@ impl PhysicalLoweringPass for CoreLoweringPass {
             },
         };
         Some(lowered)
+    }
+}
+
+fn lower_order_by(order_by: &[crate::query::OrderBy]) -> Vec<PhysicalOrderField> {
+    order_by
+        .iter()
+        .map(|item| PhysicalOrderField {
+            expr: item.expr.clone(),
+            direction: item.direction,
+        })
+        .collect()
+}
+
+/// Fuse a bounded `Limit` with the `Sort` directly below it into a
+/// [`PhysicalPlan::TopN`].
+///
+/// A `Project` between the two is kept above the fused operator: projection
+/// maps rows one to one, so limiting before projecting yields the same rows.
+fn lower_top_n(
+    limited: &LogicalPlan,
+    offset: &Expr,
+    limit: &Expr,
+    context: &QueryContext,
+    input: &dyn Fn(&LogicalPlan) -> PhysicalPlan,
+) -> Option<PhysicalPlan> {
+    let top_n = |sorted: &LogicalPlan| match sorted {
+        LogicalPlan::Sort {
+            input: inner,
+            order_by,
+        } => Some(PhysicalPlan::TopN {
+            input: Box::new(input(inner)),
+            order_by: lower_order_by(order_by),
+            offset: offset.clone(),
+            limit: limit.clone(),
+        }),
+        _ => None,
+    };
+    match limited {
+        LogicalPlan::Sort { .. } => top_n(limited),
+        LogicalPlan::Project {
+            input: sorted,
+            projection,
+        } => Some(PhysicalPlan::Project {
+            input: Box::new(top_n(sorted)?),
+            projection: projection
+                .iter()
+                .map(|item| to_projection_field(item, context))
+                .collect(),
+        }),
+        _ => None,
     }
 }
 
@@ -2404,5 +2451,113 @@ mod tests {
             .expect("events collection")
             .canonical_field_name("id");
         assert_eq!(path, &FieldPath::from_fields(["__ref_1", canonical_id]));
+    }
+
+    fn lower_select(query: SelectQuery) -> PhysicalPlan {
+        Optimizer::core()
+            .optimize_query(&query, None, None, &QueryContext::default())
+            .physical
+    }
+
+    fn order_by_field(name: &'static str) -> Vec<crate::query::OrderBy> {
+        vec![crate::query::OrderBy {
+            expr: field([name]),
+            direction: semantic_data::query::SortDirection::Asc,
+        }]
+    }
+
+    #[test]
+    fn limit_over_sort_lowers_to_top_n() {
+        let plan = lower_select(
+            SelectQuery::new()
+                .with_order_by(order_by_field("rank"))
+                .with_offset(2usize)
+                .with_limit(10usize),
+        );
+        let PhysicalPlan::TopN {
+            input,
+            order_by,
+            offset,
+            limit,
+        } = plan
+        else {
+            panic!("expected TopN, got {plan:?}");
+        };
+        assert!(matches!(*input, PhysicalPlan::Source(_)));
+        assert_eq!(order_by.len(), 1);
+        assert_eq!(offset, Expr::from(2usize));
+        assert_eq!(limit, Expr::from(10usize));
+    }
+
+    #[test]
+    fn limit_over_projected_sort_lowers_to_projected_top_n() {
+        let plan = lower_select(
+            SelectQuery::new()
+                .with_projection(vec![QueryField {
+                    expr: Box::new(field(["name"])),
+                    alias: None,
+                    wildcard: None,
+                }])
+                .with_order_by(order_by_field("rank"))
+                .with_limit(10usize),
+        );
+        let PhysicalPlan::Project { input, .. } = plan else {
+            panic!("expected Project, got {plan:?}");
+        };
+        assert!(matches!(*input, PhysicalPlan::TopN { .. }), "{input:?}");
+    }
+
+    #[test]
+    fn limit_without_bound_or_sort_is_not_fused() {
+        let offset_only = lower_select(
+            SelectQuery::new()
+                .with_order_by(order_by_field("rank"))
+                .with_offset(3usize),
+        );
+        let PhysicalPlan::Limit { input, .. } = offset_only else {
+            panic!("expected Limit, got {offset_only:?}");
+        };
+        assert!(matches!(*input, PhysicalPlan::Sort { .. }));
+
+        let unsorted = lower_select(SelectQuery::new().with_limit(10usize));
+        assert!(
+            matches!(unsorted, PhysicalPlan::Limit { .. }),
+            "{unsorted:?}"
+        );
+
+        let distinct = lower_select(
+            SelectQuery::new()
+                .with_projection(vec![QueryField {
+                    expr: Box::new(field(["name"])),
+                    alias: None,
+                    wildcard: None,
+                }])
+                .with_distinct(true)
+                .with_order_by(order_by_field("rank"))
+                .with_limit(10usize),
+        );
+        let PhysicalPlan::Limit { input, .. } = distinct else {
+            panic!("expected Limit, got {distinct:?}");
+        };
+        assert!(matches!(*input, PhysicalPlan::Distinct { .. }));
+    }
+
+    #[test]
+    fn limit_over_sorted_aggregate_lowers_to_top_n() {
+        let plan = lower_select(
+            SelectQuery::new()
+                .with_group_by(vec![field(["kind"])])
+                .with_projection(vec![QueryField {
+                    expr: Box::new(field(["kind"])),
+                    alias: None,
+                    wildcard: None,
+                }])
+                .with_order_by(order_by_field("kind"))
+                .with_limit(3usize),
+        );
+        let PhysicalPlan::TopN { input, .. } = plan else {
+            panic!("expected TopN, got {plan:?}");
+        };
+        assert!(matches!(*input, PhysicalPlan::Aggregate { .. }));
     }
 }

@@ -352,6 +352,19 @@ fn collect_plan_paths(plan: &crate::PhysicalPlan, paths: &mut BTreeSet<FieldPath
                 collect_expr_paths(&field.expr, paths);
             }
         }
+        P::TopN {
+            input,
+            order_by,
+            offset,
+            limit,
+        } => {
+            collect_plan_paths(input, paths);
+            for field in order_by {
+                collect_expr_paths(&field.expr, paths);
+            }
+            collect_expr_paths(offset, paths);
+            collect_expr_paths(limit, paths);
+        }
         P::Project { input, projection } => {
             collect_plan_paths(input, paths);
             collect_projection_paths(projection, paths);

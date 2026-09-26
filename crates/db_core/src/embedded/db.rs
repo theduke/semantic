@@ -2216,6 +2216,7 @@ fn find_index_lookup(plan: &crate::PhysicalPlan) -> Option<(&crate::FieldRef, &V
         }) => Some((field, value)),
         crate::PhysicalPlan::Filter { input, .. }
         | crate::PhysicalPlan::Sort { input, .. }
+        | crate::PhysicalPlan::TopN { input, .. }
         | crate::PhysicalPlan::Project { input, .. }
         | crate::PhysicalPlan::Aggregate { input, .. }
         | crate::PhysicalPlan::Limit { input, .. }
@@ -4000,6 +4001,78 @@ mod tests {
             "the scan must stop early, yielded {}",
             counts.rows_yielded()
         );
+    }
+
+    #[test]
+    fn limit_reads_one_batch_and_top_n_retains_only_the_bound() {
+        let (storage, counts) = CountingEntityStorage::new();
+        let mut db = EmbeddedDb::new(storage);
+        db.create_collection("people", CollectionKind::Polymorphic)
+            .unwrap();
+        let total = 5_000;
+        let mut batch = Batch::new();
+        for index in 0..total {
+            let id = format!("person-{index:05}");
+            let mut object = string_object(&[("id", &id)]);
+            // A permutation of 0..total, so the scan order is not the rank order.
+            object.insert("rank", Value::I64((index * 7_919 % total) as i64));
+            batch = batch.with_op(BatchOperation::Upsert {
+                collection: "people".to_string(),
+                id,
+                object,
+            });
+        }
+        db.transact(batch).unwrap();
+        let rank = || vec![field_projection(&["rank"], "rank")];
+
+        counts.reset();
+        let rows = db
+            .select(
+                SelectQuery::new()
+                    .with_collection("people")
+                    .with_projection(rank())
+                    .with_limit(10usize),
+            )
+            .unwrap();
+        assert_eq!(rows.len(), 10);
+        assert_eq!(counts.collection_scans(), 1);
+        assert!(
+            counts.rows_yielded() <= crate::DEFAULT_EXECUTION_BATCH_SIZE,
+            "LIMIT without ORDER BY must read at most one batch, read {}",
+            counts.rows_yielded()
+        );
+
+        let sorted = SelectQuery::new()
+            .with_collection("people")
+            .with_projection(rank())
+            .with_order_by(vec![OrderBy {
+                expr: Expr::Operand(Operand::Field(FieldPath::from_fields(["rank"]))),
+                direction: SortDirection::Asc,
+            }])
+            .with_offset(5usize)
+            .with_limit(10usize);
+        let explain = db.explain_query(Query::Select(sorted.clone())).unwrap();
+        let crate::PhysicalPlan::Project { input, .. } = &explain.physical else {
+            panic!("expected a projected TopN, got {:?}", explain.physical);
+        };
+        assert!(
+            matches!(input.as_ref(), crate::PhysicalPlan::TopN { .. }),
+            "{:?}",
+            explain.physical
+        );
+
+        counts.reset();
+        crate::take_top_n_peak_rows();
+        let rows = db.select(sorted).unwrap();
+        assert_eq!(
+            rows.iter()
+                .map(|row| row.get("rank").cloned().unwrap())
+                .collect::<Vec<_>>(),
+            (5..15).map(Value::I64).collect::<Vec<_>>()
+        );
+        assert_eq!(counts.rows_yielded(), total);
+        let peak = crate::take_top_n_peak_rows();
+        assert_eq!(peak, 15, "TopN must retain exactly offset + limit rows");
     }
 
     #[test]

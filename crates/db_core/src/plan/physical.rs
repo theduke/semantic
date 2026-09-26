@@ -123,6 +123,16 @@ pub enum PhysicalPlan {
         input: Box<PhysicalPlan>,
         order_by: Vec<PhysicalOrderField>,
     },
+    /// `Sort` fused with the `Limit` above it: keeps only the first
+    /// `offset + limit` rows of the ordering in a bounded heap and emits the
+    /// `limit` rows after `offset`. Ties keep input order, exactly like a
+    /// stable sort followed by the limit.
+    TopN {
+        input: Box<PhysicalPlan>,
+        order_by: Vec<PhysicalOrderField>,
+        offset: crate::query::Expr,
+        limit: crate::query::Expr,
+    },
     Project {
         input: Box<PhysicalPlan>,
         projection: Vec<PhysicalProjectionField>,
