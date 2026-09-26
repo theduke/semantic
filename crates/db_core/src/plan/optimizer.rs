@@ -626,7 +626,7 @@ fn top_level_conjuncts(expr: Expr) -> Vec<Expr> {
     out
 }
 
-fn combine_conjuncts(items: impl IntoIterator<Item = Expr>) -> Option<Expr> {
+pub(super) fn combine_conjuncts(items: impl IntoIterator<Item = Expr>) -> Option<Expr> {
     let mut items = items.into_iter();
     let first = items.next()?;
     Some(items.fold(first, |left, right| Expr::Binary {
@@ -1183,20 +1183,16 @@ impl PhysicalLoweringPass for CoreLoweringPass {
             LogicalPlan::Sort {
                 input: inner,
                 order_by,
-            } => PhysicalPlan::Sort {
-                input: Box::new(input(inner)),
-                order_by: lower_order_by(order_by),
-            },
+            } => lower_ordered_source(inner, order_by, None, stats, context).unwrap_or_else(|| {
+                PhysicalPlan::Sort {
+                    input: Box::new(input(inner)),
+                    order_by: lower_order_by(order_by),
+                }
+            }),
             LogicalPlan::Project {
                 input: inner,
                 projection,
-            } => PhysicalPlan::Project {
-                input: Box::new(input(inner)),
-                projection: projection
-                    .iter()
-                    .map(|item| to_projection_field(item, context))
-                    .collect(),
-            },
+            } => lower_projection(input(inner), projection, context),
             LogicalPlan::Aggregate {
                 input: inner,
                 group_by,
@@ -1217,7 +1213,10 @@ impl PhysicalLoweringPass for CoreLoweringPass {
                 limit,
             } => limit
                 .as_ref()
-                .and_then(|limit| lower_top_n(inner, offset, limit, context, input))
+                .and_then(|limit| {
+                    lower_ordered_limit(inner, offset, limit, stats, context)
+                        .or_else(|| lower_top_n(inner, offset, limit, context, input))
+                })
                 .unwrap_or_else(|| PhysicalPlan::Limit {
                     input: Box::new(input(inner)),
                     offset: offset.clone(),
@@ -1335,15 +1334,86 @@ fn lower_top_n(
         LogicalPlan::Project {
             input: sorted,
             projection,
-        } => Some(PhysicalPlan::Project {
-            input: Box::new(top_n(sorted)?),
-            projection: projection
-                .iter()
-                .map(|item| to_projection_field(item, context))
-                .collect(),
-        }),
+        } => Some(lower_projection(top_n(sorted)?, projection, context)),
         _ => None,
     }
+}
+
+/// Project `input`, serving the projection from index keys when the input
+/// is an index scan covering every field it reads.
+fn lower_projection(
+    mut input: PhysicalPlan,
+    projection: &[QueryField],
+    context: &QueryContext,
+) -> PhysicalPlan {
+    super::index_access::mark_index_only(&mut input, projection, context);
+    PhysicalPlan::Project {
+        input: Box::new(input),
+        projection: projection
+            .iter()
+            .map(|item| to_projection_field(item, context))
+            .collect(),
+    }
+}
+
+/// Replace `Sort(Source)` by an index scan in key order, see
+/// [`super::index_access::plan_ordered_index_scan`].
+fn lower_ordered_source(
+    sorted: &LogicalPlan,
+    order_by: &[crate::query::OrderBy],
+    limit_hint: Option<usize>,
+    stats: Option<&dyn StatsProvider>,
+    context: &QueryContext,
+) -> Option<PhysicalPlan> {
+    let LogicalPlan::Source {
+        source,
+        pushed_predicate,
+    } = sorted
+    else {
+        return None;
+    };
+    let scan = super::index_access::plan_ordered_index_scan(
+        source,
+        pushed_predicate.as_ref(),
+        order_by,
+        limit_hint,
+        stats,
+        context,
+    )?;
+    Some(PhysicalPlan::Source(PhysicalSource::IndexRange(scan)))
+}
+
+/// Lower `Limit(Sort(Source))` and `Limit(Project(Sort(Source)))` with
+/// constant bounds to a limited index scan in key order, which stops
+/// reading once the limit is reached.
+fn lower_ordered_limit(
+    limited: &LogicalPlan,
+    offset: &Expr,
+    limit: &Expr,
+    stats: Option<&dyn StatsProvider>,
+    context: &QueryContext,
+) -> Option<PhysicalPlan> {
+    let hint = evaluate_usize_expr(offset)?.checked_add(evaluate_usize_expr(limit)?)?;
+    let ordered = |sorted: &LogicalPlan| match sorted {
+        LogicalPlan::Sort {
+            input: inner,
+            order_by,
+        } => lower_ordered_source(inner, order_by, Some(hint), stats, context),
+        _ => None,
+    };
+    let input = match limited {
+        LogicalPlan::Sort { .. } => ordered(limited)?,
+        LogicalPlan::Project {
+            input: sorted,
+            projection,
+        } => lower_projection(ordered(sorted)?, projection, context),
+        _ => return None,
+    };
+    Some(PhysicalPlan::Limit {
+        input: Box::new(input),
+        offset: offset.clone(),
+        limit: Some(limit.clone()),
+    })
 }
 
 fn choose_index_join_probe(
@@ -1593,30 +1663,61 @@ fn choose_scan_source(
     stats: Option<&dyn StatsProvider>,
     context: &QueryContext,
 ) -> PhysicalPlan {
-    let Some((field_path, value)) = extract_equality_lookup(&predicate) else {
-        return PhysicalPlan::Source(PhysicalSource::FilteredScan { source, predicate });
-    };
+    let lookup = choose_index_lookup(&source, &predicate, stats, context);
+    // Index scans (ranges, prefixes, `IN` probes, composite and partial
+    // indexes) replace the lookup or the scan when estimated cheaper.
+    let baseline = lookup.as_ref().map(|(_, cost)| *cost);
+    if let Some(scan) =
+        super::index_access::plan_index_scan(&source, &predicate, stats, context, baseline)
+    {
+        return PhysicalPlan::Source(PhysicalSource::IndexRange(scan));
+    }
+    match lookup {
+        Some((lookup, _)) => PhysicalPlan::Source(lookup),
+        None => PhysicalPlan::Source(PhysicalSource::FilteredScan { source, predicate }),
+    }
+}
 
-    let field_ref = resolve_field_ref_for_source(context, &source, &field_path);
+/// The equality lookup answering `predicate`, with its cost on the scale of
+/// index scan estimates (matched rows plus a logarithmic seek).
+fn choose_index_lookup(
+    source: &SourceRef,
+    predicate: &Expr,
+    stats: Option<&dyn StatsProvider>,
+    context: &QueryContext,
+) -> Option<(PhysicalSource, f64)> {
+    let (field_path, value) = extract_equality_lookup(predicate)?;
+
+    let field_ref = resolve_field_ref_for_source(context, source, &field_path);
 
     let use_index = stats
-        .and_then(|s| s.has_equality_index(&source, &field_ref))
+        .and_then(|s| s.has_equality_index(source, &field_ref))
         .unwrap_or(false);
 
-    let filtered_scan_cost = estimate_filtered_scan_cost(stats, &source, &field_ref);
-    let index_cost = estimate_index_lookup_cost(stats, &source, &field_ref);
+    let filtered_scan_cost = estimate_filtered_scan_cost(stats, source, &field_ref);
+    let index_cost = estimate_index_lookup_cost(stats, source, &field_ref);
 
-    if use_index && (index_cost < filtered_scan_cost || filtered_scan_cost <= 5.0) {
-        let residual = remove_single_lookup_predicate(predicate.clone(), &field_path, &value);
-        return PhysicalPlan::Source(PhysicalSource::IndexLookup {
-            source,
+    if !(use_index && (index_cost < filtered_scan_cost || filtered_scan_cost <= 5.0)) {
+        return None;
+    }
+    let rows = stats
+        .and_then(|stats| stats.relation_stats(source))
+        .map_or(10_000.0, |stats| stats.row_count)
+        .max(0.0);
+    let selectivity = stats.map_or(0.1, |stats| {
+        estimate_equality_selectivity(stats, source, &field_ref)
+    });
+    let comparable_cost = rows * selectivity + (rows + 1.0).log2();
+    let residual = remove_single_lookup_predicate(predicate.clone(), &field_path, &value);
+    Some((
+        PhysicalSource::IndexLookup {
+            source: source.clone(),
             field: field_ref,
             value,
             residual_predicate: residual,
-        });
-    }
-
-    PhysicalPlan::Source(PhysicalSource::FilteredScan { source, predicate })
+        },
+        comparable_cost,
+    ))
 }
 
 fn estimate_filtered_scan_cost(
@@ -1675,7 +1776,7 @@ fn estimate_equality_selectivity(
     0.1
 }
 
-fn resolve_collection_schema<'a>(
+pub(super) fn resolve_collection_schema<'a>(
     context: &'a QueryContext,
     source: &SourceRef,
 ) -> Option<&'a CollectionSchema> {
@@ -1716,7 +1817,10 @@ fn resolve_field_ref_for_path(context: &QueryContext, path: &FieldPath) -> Field
     resolve_field_ref_for_schema(collection, &relative)
 }
 
-fn resolve_field_ref_for_schema(schema: &CollectionSchema, path: &FieldPath) -> FieldRef {
+pub(super) fn resolve_field_ref_for_schema(
+    schema: &CollectionSchema,
+    path: &FieldPath,
+) -> FieldRef {
     let Some(PathSegment::Field(first)) = path.segments().first() else {
         return FieldRef::Path(path.clone());
     };
@@ -1823,7 +1927,7 @@ fn rewrite_plan(plan: LogicalPlan, f: &dyn Fn(LogicalPlan) -> LogicalPlan) -> Lo
     f(rewritten_children)
 }
 
-fn flatten_boolean_expr(expr: Expr) -> Expr {
+pub(super) fn flatten_boolean_expr(expr: Expr) -> Expr {
     match expr {
         Expr::Binary { op, left, right } if op == BinaryOp::And || op == BinaryOp::Or => {
             let mut items = Vec::new();
@@ -1930,7 +2034,7 @@ fn remove_single_lookup_predicate(
     }
 }
 
-fn collect_binary_terms(expr: Expr, target_op: BinaryOp, out: &mut Vec<Expr>) {
+pub(super) fn collect_binary_terms(expr: Expr, target_op: BinaryOp, out: &mut Vec<Expr>) {
     match expr {
         Expr::Binary { op, left, right } if op == target_op => {
             collect_binary_terms(*left, target_op, out);

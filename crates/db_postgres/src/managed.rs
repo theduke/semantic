@@ -1123,6 +1123,20 @@ async fn sync_relational_projection(
         }
 
         for index in catalog.indexes_for_collection(spec.collection_lid) {
+            if !index.is_simple() {
+                // Composite and partial indexes have no relational mapping
+                // yet. Non-unique ones only accelerate reads and are
+                // skipped; unique ones cannot be enforced, so they are
+                // rejected.
+                if index.schema.unique {
+                    return Err(relational_invariant(format!(
+                        "unique composite or partial index '{}' is not supported by the \
+                         PostgreSQL backend",
+                        index.schema.id
+                    )));
+                }
+                continue;
+            }
             let column = match index.canonical_field.as_str() {
                 semantic_db_core::catalog::PRIMARY_ID_FIELD => "_semantic_id".to_string(),
                 semantic_db_core::catalog::OBJECT_TYPE_FIELD => "_semantic_type".to_string(),

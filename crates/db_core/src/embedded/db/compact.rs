@@ -127,7 +127,8 @@ impl<'a, S: EntityStorage> TxView<'a, S> {
             ids.remove(id);
             if object
                 .as_ref()
-                .and_then(|object| object.get(&index.canonical_field))
+                .and_then(|object| index.key_value(object))
+                .as_ref()
                 == Some(value)
             {
                 ids.insert(id.clone());
@@ -201,6 +202,20 @@ impl<'a, S: EntityStorage> TxView<'a, S> {
     ) -> Result<Vec<String>, DbError> {
         self.counts.index_reads += 1;
         self.reader.scan_index_value(index, path, value)
+    }
+
+    /// Ids of the snapshot's `index` entries within `ranges`.
+    pub(crate) fn index_range_ids(
+        &mut self,
+        index: LocalIndexId,
+        ranges: &[crate::IndexScanRange],
+    ) -> Result<Vec<String>, DbError> {
+        let mut ids = Vec::new();
+        for range in ranges {
+            self.counts.index_reads += 1;
+            ids.extend(self.reader.scan_index_range_ids(index, range)?);
+        }
+        Ok(ids)
     }
 
     /// Current rows of `collection` with the given ids, plus every row of the
@@ -306,7 +321,7 @@ pub(super) fn unique_violation(
     DbError::UniqueViolation {
         collection: collection.name.clone(),
         index: index.schema.name.clone(),
-        field: index.canonical_field.clone(),
+        field: index.columns().collect::<Vec<_>>().join(", "),
         value: Box::new(value.clone()),
         existing_id: existing_id.to_string(),
         id: id.to_string(),
@@ -819,13 +834,13 @@ impl<S: EntityStorage> EmbeddedDb<S> {
                 self.validate_primary_id(collection, &key.1, object)?;
                 for index in catalog
                     .indexes_for_collection(collection.lid)
-                    .filter(|index| index.schema.unique && index.schema.kind == IndexKind::Equality)
+                    .filter(|index| index.schema.unique && index.schema.kind.is_value_index())
                 {
-                    if let Some(value) = object.get(&index.canonical_field) {
-                        let ids = view.unique(index, value)?;
+                    if let Some(value) = index.key_value(object) {
+                        let ids = view.unique(index, &value)?;
                         if ids.len() > 1 {
                             return Err(unique_violation(
-                                collection, index, value, &ids[0].1, &ids[1].1,
+                                collection, index, &value, &ids[0].1, &ids[1].1,
                             ));
                         }
                     }

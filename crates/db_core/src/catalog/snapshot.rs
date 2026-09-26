@@ -74,6 +74,12 @@ pub struct StoredIndex {
     pub field: String,
     pub unique: bool,
     pub kind: semantic_data::schema::IndexKind,
+    /// Canonical key columns after `field` of a composite index.
+    #[facet(default)]
+    pub extra_fields: Vec<String>,
+    /// Canonical predicate of a partial index.
+    #[facet(default)]
+    pub predicate: Option<semantic_data::query::Expr>,
 }
 
 #[derive(facet::Facet, Debug, Clone, PartialEq)]
@@ -90,4 +96,30 @@ pub struct StoredPackage {
 #[derive(facet::Facet, Debug, Clone, PartialEq)]
 pub struct StoredAppliedMigration {
     pub applied: AppliedMigration,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn stored_indexes_without_composite_or_partial_fields_load() {
+        let index = StoredIndex {
+            lid: LocalIndexId(3),
+            name: "by_title".to_string(),
+            collection: LocalCollectionId(2),
+            field: "title".to_string(),
+            unique: true,
+            kind: semantic_data::schema::IndexKind::Equality,
+            extra_fields: Vec::new(),
+            predicate: None,
+        };
+        let encoded = facet_json::to_string(&index).unwrap();
+        let legacy = encoded
+            .replace(r#","extra_fields":[]"#, "")
+            .replace(r#","predicate":null"#, "");
+        assert!(!legacy.contains("extra_fields") && !legacy.contains("predicate"));
+        let decoded: StoredIndex = facet_json::from_str(&legacy).unwrap();
+        assert_eq!(decoded, index);
+    }
 }

@@ -182,6 +182,8 @@ fn index_counters_follow_index_build_clear_and_reset() {
                 segments: vec!["kind".to_string()],
             },
             unique: false,
+            extra_key_paths: Vec::new(),
+            predicate: None,
         },
         collection: items,
         canonical_field: "kind".to_string(),

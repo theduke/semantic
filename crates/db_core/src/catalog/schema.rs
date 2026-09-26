@@ -10,6 +10,7 @@ use semantic_data::schema::{
     lowered::{DataType, LowerError},
     record::record_type::RecordType,
 };
+use semantic_data::value::Value;
 
 use crate::catalog::{
     LocalAttrId, LocalClassId, LocalCollectionId, LocalFieldId, LocalIndexId, LocalRecordTypeId,
@@ -202,6 +203,101 @@ pub struct IndexSchema {
     pub canonical_field: String,
     pub field_id: Option<LocalFieldId>,
     pub attr_id: Option<LocalAttrId>,
+}
+
+impl IndexSchema {
+    /// Canonical field names of the key columns after the first one.
+    pub fn extra_columns(&self) -> impl Iterator<Item = &str> {
+        self.schema
+            .extra_key_paths
+            .iter()
+            .filter_map(|path| path.segments.first().map(String::as_str))
+    }
+
+    /// Canonical field names of all key columns, in key order.
+    pub fn columns(&self) -> impl Iterator<Item = &str> {
+        std::iter::once(self.canonical_field.as_str()).chain(self.extra_columns())
+    }
+
+    /// Number of key columns.
+    pub fn column_count(&self) -> usize {
+        1 + self.schema.extra_key_paths.len()
+    }
+
+    pub fn is_composite(&self) -> bool {
+        self.schema.is_composite()
+    }
+
+    pub fn is_partial(&self) -> bool {
+        self.schema.is_partial()
+    }
+
+    /// Single-column index covering every row with the column: its keys are
+    /// the plain column values.
+    pub fn is_simple(&self) -> bool {
+        !self.is_composite() && !self.is_partial()
+    }
+
+    /// The partial index predicate as a query expression.
+    pub fn predicate_expr(&self) -> Option<crate::Expr> {
+        self.schema.predicate.clone().map(crate::Expr::from)
+    }
+
+    /// Whether `object` belongs to the rows this index covers (always true
+    /// for non-partial indexes).
+    pub fn covers(&self, object: &semantic_data::value::Object) -> bool {
+        self.predicate_expr()
+            .is_none_or(|predicate| crate::evaluate_filter_expr(object, &predicate))
+    }
+
+    /// Key value of `object` in an equality or range index, or `None` when
+    /// the row has no entry.
+    ///
+    /// Rows without the first column, and rows outside a partial index's
+    /// predicate, have no entry. A single-column key is the column value; a
+    /// composite key is the list of column values with missing columns as
+    /// `Void`. Its order-preserving encoding (a list token framing the
+    /// concatenated column tokens) makes equality on leading columns plus a
+    /// range on the next column one contiguous key range. The same value
+    /// identifies the key for unique checks.
+    pub fn key_value(&self, object: &semantic_data::value::Object) -> Option<Value> {
+        if !self.schema.kind.is_value_index() {
+            return None;
+        }
+        let first = object.get(&self.canonical_field)?;
+        if !self.covers(object) {
+            return None;
+        }
+        if !self.is_composite() {
+            return Some(first.clone());
+        }
+        let mut values = Vec::with_capacity(self.column_count());
+        values.push(first.clone());
+        values.extend(
+            self.extra_columns()
+                .map(|column| object.get(column).cloned().unwrap_or(Value::Void)),
+        );
+        Some(Value::List(values))
+    }
+
+    /// Column values of a key produced by [`Self::key_value`], with `Void`
+    /// (missing) columns as `None`.
+    pub fn key_columns(&self, key: Value) -> Option<Vec<Option<Value>>> {
+        let values = if self.is_composite() {
+            match key {
+                Value::List(values) if values.len() == self.column_count() => values,
+                _ => return None,
+            }
+        } else {
+            vec![key]
+        };
+        Some(
+            values
+                .into_iter()
+                .map(|value| (!matches!(value, Value::Void)).then_some(value))
+                .collect(),
+        )
+    }
 }
 
 #[derive(Debug, Clone)]

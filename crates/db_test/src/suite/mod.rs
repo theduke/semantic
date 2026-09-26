@@ -5,7 +5,9 @@ use std::pin::Pin;
 mod batch_returning;
 mod compact;
 mod incremental;
+mod index_access;
 mod validation;
+pub use index_access::test_index_access;
 pub use validation::test_validation;
 
 use semantic_data::attr::{ATTR_TITLE, RELATION_CLASS_ID};

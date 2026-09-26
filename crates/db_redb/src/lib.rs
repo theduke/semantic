@@ -203,6 +203,30 @@ impl KvReadTxn for RedbReadTxn {
             Ok((key.value().to_vec(), value.value().to_vec()))
         })))
     }
+
+    /// Descending counterpart of [`Self::scan_range_stream`]: visits the
+    /// tables in reverse key order and iterates each range backwards.
+    fn scan_range_rev_stream(
+        &self,
+        start: Vec<u8>,
+        end: Option<Vec<u8>>,
+    ) -> Result<BoxKvPrefixScan, DbError> {
+        let mut ranges = Vec::new();
+        for (table, start, end) in split_range(&start, end.as_deref()).into_iter().rev() {
+            let table = self.tables.table(table)?;
+            let range = match &end {
+                Some(end) => table.range::<&[u8]>(start.as_slice()..end.as_slice()),
+                None => table.range::<&[u8]>(start.as_slice()..),
+            };
+            ranges.push(range.map_err(storage_err)?.rev());
+        }
+        let reader = Arc::clone(&self.reader);
+        Ok(Box::new(ranges.into_iter().flatten().map(move |item| {
+            let _registered = &reader;
+            let (key, value) = item.map_err(storage_err)?;
+            Ok((key.value().to_vec(), value.value().to_vec()))
+        })))
+    }
 }
 
 /// Mutable access to the tables of one redb write transaction.
@@ -981,6 +1005,17 @@ mod tests {
         let db = Db::new(backend);
 
         semantic_db_test::suite::test_db(&db).await;
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn test_redb_backend_index_access_and_reopen() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("db");
+        let db = Db::new(open_backend(&path, DbOpenMode::AutoCreate).unwrap());
+        semantic_db_test::suite::test_index_access(&db).await;
+        drop(db);
+        let db = Db::new(open_backend(&path, DbOpenMode::AutoCreate).unwrap());
+        semantic_db_test::suite::test_index_access(&db).await;
     }
 
     #[tokio::test(flavor = "multi_thread")]

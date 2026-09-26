@@ -15,9 +15,9 @@ use semantic_data::value::{FieldPath, Object, PathSegment, Value, ValueRef};
 
 use crate::QueryContext;
 use crate::plan::{
-    FieldRef, Optimizer, PhysicalJoinAlgorithm, PhysicalJoinCondition, PhysicalJoinKey,
-    PhysicalJoinPlan, PhysicalOrderField, PhysicalPlan, PhysicalProjectionField, PhysicalSource,
-    SourceRef, source_ref_for_collection,
+    FieldRef, Optimizer, PhysicalIndexScan, PhysicalJoinAlgorithm, PhysicalJoinCondition,
+    PhysicalJoinKey, PhysicalJoinPlan, PhysicalOrderField, PhysicalPlan, PhysicalProjectionField,
+    PhysicalSource, SourceRef, source_ref_for_collection,
 };
 use crate::query::{
     CoreError, CoreResult, Expr, FunctionArg, ObjectAccess as QueryObjectAccess, Operand,
@@ -131,9 +131,40 @@ pub trait AsyncPhysicalDataSource: Send + Sync {
         .boxed()
     }
 
+    /// Rows of an index scan: exactly the rows of `scan.source` matching
+    /// `scan.predicate`, in key order when `scan.ordered`.
+    ///
+    /// The default filters a full scan (see [`index_range_fallback_stream`]).
+    fn index_range_stream(&self, scan: PhysicalIndexScan) -> SendableRecordBatchStream {
+        index_range_fallback_stream(self, scan)
+    }
+
     fn scan(&self, source: SourceRef) -> BoxFuture<'static, CoreResult<Vec<DynObject>>> {
         collect_dyn_stream(self.scan_stream(source)).boxed()
     }
+}
+
+/// Answer an index scan without the index: filter a scan of the source with
+/// the scan's complete predicate and, when the plan relies on key order,
+/// sort by the key columns.
+pub fn index_range_fallback_stream<S: AsyncPhysicalDataSource + ?Sized>(
+    source: &S,
+    scan: PhysicalIndexScan,
+) -> SendableRecordBatchStream {
+    let rows = match scan.predicate.clone() {
+        Some(predicate) => source.scan_filtered_stream(scan.source.clone(), predicate),
+        None => source.scan_stream(scan.source.clone()),
+    };
+    if !scan.ordered {
+        return rows;
+    }
+    let order_by = scan.order_by();
+    stream::once(async move {
+        let rows = sort_rows(rows, &order_by).await?;
+        Ok(rows_to_batches(rows, DEFAULT_EXECUTION_BATCH_SIZE))
+    })
+    .try_flatten()
+    .boxed()
 }
 
 fn expr_contains_relation_exists(expr: &Expr) -> bool {
@@ -282,6 +313,7 @@ fn execute_physical_dyn_stream(
                 source.index_lookup_filtered_stream(source_ref, field, value, residual_predicate)
             }
         }
+        PhysicalPlan::Source(PhysicalSource::IndexRange(scan)) => source.index_range_stream(scan),
         PhysicalPlan::Values { values } => rows_to_batches(
             values
                 .into_iter()
@@ -1162,6 +1194,10 @@ impl AsyncPhysicalDataSource for BorrowedAsyncPhysicalDataSource<'_> {
     ) -> SendableRecordBatchStream {
         self.inner
             .index_lookup_many_stream(source, field, values, residual_predicate)
+    }
+
+    fn index_range_stream(&self, scan: PhysicalIndexScan) -> SendableRecordBatchStream {
+        self.inner.index_range_stream(scan)
     }
 }
 

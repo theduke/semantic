@@ -473,6 +473,11 @@ fn collect_source_paths(source: &crate::PhysicalSource, paths: &mut BTreeSet<Fie
                 collect_expr_paths(expr, paths);
             }
         }
+        crate::PhysicalSource::IndexRange(scan) => {
+            if let Some(expr) = &scan.predicate {
+                collect_expr_paths(expr, paths);
+            }
+        }
     }
 }
 

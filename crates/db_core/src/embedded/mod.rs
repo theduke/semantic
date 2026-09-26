@@ -8,8 +8,8 @@ pub use db::{DbReader, EmbeddedDb};
 #[cfg(test)]
 pub(crate) use storage::MemoryEntityStorage;
 pub use storage::{
-    BoxEntityIdScan, BoxEntityScan, EntityReadSnapshot, EntityStorage, ForwardingReadSnapshot,
-    StorageCommitOutcome, StorageStats, StorageTableStats, StorageTransactionCapabilities,
-    StorageWriteOp, StoredEntity, StoredEntityKind, unsupported_ordered_index_scan,
-    unsupported_storage_maintenance,
+    BoxEntityIdScan, BoxEntityScan, BoxIndexEntryScan, EntityReadSnapshot, EntityStorage,
+    ForwardingReadSnapshot, IndexEntryScanItem, StorageCommitOutcome, StorageStats,
+    StorageTableStats, StorageTransactionCapabilities, StorageWriteOp, StoredEntity,
+    StoredEntityKind, unsupported_ordered_index_scan, unsupported_storage_maintenance,
 };

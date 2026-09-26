@@ -227,6 +227,17 @@ pub fn encode_string_prefix(prefix: &str) -> Vec<u8> {
     out
 }
 
+/// Encode the lists starting with the elements `items`, appending to `out`.
+///
+/// The result is a byte prefix of the encoding of every `Value::List` whose
+/// first elements are `items`, and of no other value.
+pub fn encode_list_prefix_into(items: &[Value], out: &mut Vec<u8>) {
+    out.push(TAG_LIST);
+    for item in items {
+        encode_into(item, out);
+    }
+}
+
 /// Decode one value that spans all of `bytes`.
 pub fn decode(bytes: &[u8]) -> Result<Value, DbError> {
     let mut reader = Reader::new(bytes);

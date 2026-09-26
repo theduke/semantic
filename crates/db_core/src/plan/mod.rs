@@ -1,4 +1,5 @@
 mod execute;
+mod index_access;
 mod logical;
 mod optimizer;
 mod physical;

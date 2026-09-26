@@ -3,7 +3,7 @@ use semantic_data::{
     value::{FieldPath, Value},
 };
 
-use crate::catalog::{LocalAttrId, LocalCollectionId, LocalFieldId};
+use crate::catalog::{LocalAttrId, LocalCollectionId, LocalFieldId, LocalIndexId};
 use crate::query::Expr;
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
@@ -80,6 +80,54 @@ pub enum PhysicalJoinCondition {
     },
 }
 
+/// Read of one collection through ordered scans of an equality or range
+/// index.
+///
+/// Each range is one contiguous run of index entries: equality on leading
+/// key columns and optionally a range (bounds or string prefix) on the next.
+/// Several ranges (`IN` probes) are disjoint and listed in ascending key
+/// order, so the concatenated scan is ordered by the index key.
+#[derive(Debug, Clone, PartialEq)]
+pub struct PhysicalIndexScan {
+    pub source: SourceRef,
+    pub index: LocalIndexId,
+    pub index_name: String,
+    /// Canonical paths of the key columns, in key order.
+    pub columns: Vec<FieldPath>,
+    pub ranges: Vec<crate::IndexScanRange>,
+    /// Ascending or descending key order.
+    pub direction: SortDirection,
+    /// Whether the plan relies on rows arriving in key order: the scan
+    /// replaced a sort by the key columns (ties by entity id).
+    pub ordered: bool,
+    /// Upper bound of the rows the consumer reads (`LIMIT` plus `OFFSET`),
+    /// when the scan serves an ordered, limited query.
+    pub limit_hint: Option<usize>,
+    /// Serve rows from the index keys (key columns and id) without reading
+    /// stored rows. Rows whose key does not decode losslessly are read.
+    pub index_only: bool,
+    /// The complete predicate of the source: the rows produced are exactly
+    /// the rows of the collection matching it. Fallbacks without index
+    /// access filter a scan with it.
+    pub predicate: Option<Expr>,
+    /// The conjuncts of `predicate` the key ranges do not guarantee, checked
+    /// on every row read.
+    pub residual_predicate: Option<Expr>,
+}
+
+impl PhysicalIndexScan {
+    /// The ordering the scan produces, as sort fields over the key columns.
+    pub fn order_by(&self) -> Vec<PhysicalOrderField> {
+        self.columns
+            .iter()
+            .map(|path| PhysicalOrderField {
+                expr: Expr::Operand(crate::query::Operand::Field(path.clone())),
+                direction: self.direction,
+            })
+            .collect()
+    }
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub enum PhysicalSource {
     Scan {
@@ -95,6 +143,9 @@ pub enum PhysicalSource {
         value: Value,
         residual_predicate: Option<Expr>,
     },
+    /// Ordered, range, prefix, multi-probe or index-only read of an
+    /// equality or range index.
+    IndexRange(PhysicalIndexScan),
 }
 
 #[derive(Debug, Clone, PartialEq)]

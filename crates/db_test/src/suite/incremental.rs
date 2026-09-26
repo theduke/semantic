@@ -14,6 +14,9 @@ pub(super) async fn test_incremental_writes(db: &Db) {
                 collection: collection.into(),
                 field: "label".into(),
                 unique: true,
+                kind: Default::default(),
+                extra_fields: Vec::new(),
+                predicate: None,
             })
             .with_op(DdlOperation::UpsertRelationship {
                 relationship: RelationType {

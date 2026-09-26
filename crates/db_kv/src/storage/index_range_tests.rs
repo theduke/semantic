@@ -21,6 +21,8 @@ fn index(lid: usize, kind: IndexKind) -> IndexSchema {
                 segments: vec!["kind".to_string()],
             },
             unique: false,
+            extra_key_paths: Vec::new(),
+            predicate: None,
         },
         collection: LocalCollectionId(7),
         canonical_field: "kind".to_string(),

@@ -30,6 +30,13 @@
 //! string prefix) is one contiguous key range, and the id is the remainder
 //! after the value token.
 //!
+//! Equality and range indexes share one key derivation
+//! ([`IndexSchema::key_value`](semantic_db_core::catalog::IndexSchema::key_value)):
+//! a single-column key is the column value; a composite key is the list of
+//! column values (missing columns as `Void`), whose list token frames the
+//! concatenated column tokens. Equality on leading columns plus a range on
+//! the next is therefore one contiguous key range ([`index_scan_range`]).
+//!
 //! The layout version is stored under the meta key `0x01 "format"` as a
 //! big-endian `u32`; see [`crate::storage::layout`]. The meta key
 //! `0x01 "stats"` marks the stats counters as maintained; see
@@ -251,7 +258,49 @@ pub fn index_range(
     lower: Bound<&Value>,
     upper: Bound<&Value>,
 ) -> Option<(Vec<u8>, Vec<u8>)> {
-    let base = index_path_prefix(index, path);
+    bounded_key_range(index_path_prefix(index, path), lower, upper)
+}
+
+/// Key range `start..end` of the entries of an equality or range index
+/// within `range` (see [`semantic_db_core::IndexScanRange`]).
+///
+/// Composite keys are list tokens, so the fixed leading columns are a byte
+/// prefix (the list tag and their tokens) and the range applies to the next
+/// token. Returns `None` when the range is empty.
+pub fn index_scan_range(
+    index: LocalIndexId,
+    range: &semantic_db_core::IndexScanRange,
+) -> Option<(Vec<u8>, Vec<u8>)> {
+    use semantic_db_core::IndexColumnRange;
+
+    let mut base = index_prefix(index);
+    if range.composite {
+        memcmp::encode_list_prefix_into(&range.prefix, &mut base);
+    } else {
+        debug_assert!(
+            range.prefix.is_empty(),
+            "single-column scans have no prefix"
+        );
+    }
+    match &range.column {
+        IndexColumnRange::Bounds { lower, upper } => {
+            bounded_key_range(base, lower.as_ref(), upper.as_ref())
+        }
+        IndexColumnRange::StringPrefix(prefix) => {
+            base.extend_from_slice(&memcmp::encode_string_prefix(prefix));
+            let end = prefix_range_end(&base)?;
+            Some((base, end))
+        }
+    }
+}
+
+/// Key range of the entries below the key prefix `base` whose next value
+/// token lies within `lower..upper`.
+fn bounded_key_range(
+    base: Vec<u8>,
+    lower: Bound<&Value>,
+    upper: Bound<&Value>,
+) -> Option<(Vec<u8>, Vec<u8>)> {
     let with_value = |value: &Value| {
         let mut key = base.clone();
         memcmp::encode_into(value, &mut key);

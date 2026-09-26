@@ -459,6 +459,16 @@ fn path_is_single_field(path: &FieldPath, value: &str) -> bool {
     matches!(path.segments(), [PathSegment::Field(field)] if field == value)
 }
 
+/// Canonicalize a row filter over `collection` (for example a partial
+/// index predicate) the way query predicates are canonicalized.
+pub(crate) fn canonicalize_filter_expr(
+    expr: &Expr,
+    catalog: &Catalog,
+    collection: &CollectionSchema,
+) -> CanonicalResult<Expr> {
+    canonicalize_expr(expr, catalog, collection, None, "index predicate")
+}
+
 fn canonicalize_expr(
     expr: &Expr,
     catalog: &Catalog,

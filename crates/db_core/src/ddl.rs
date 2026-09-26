@@ -4,7 +4,7 @@ use semantic_data::{
         RELATION_CLASS_ID,
     },
     schema::{
-        ClassRef, Migration, MigrationCollectionKind, MigrationDdlOperation,
+        ClassRef, IndexKind, Migration, MigrationCollectionKind, MigrationDdlOperation,
         MigrationIntegrityMode, MigrationOperation,
         attribute::attribute_ref::AttributeRef,
         attribute::attribute_type::AttributeType,
@@ -105,8 +105,21 @@ pub enum DdlOperation {
     UpsertIndex {
         name: String,
         collection: String,
+        /// The first (for single-column indexes the only) key column.
         field: String,
         unique: bool,
+        /// Index kind: equality (the default) or range.
+        #[facet(default = IndexKind::Equality)]
+        #[facet(skip_serializing_if = IndexKind::is_equality)]
+        kind: IndexKind,
+        /// Key columns after `field` of a composite index, in key order.
+        #[facet(default)]
+        #[facet(skip_serializing_if = Vec::is_empty)]
+        extra_fields: Vec<String>,
+        /// Predicate of a partial index; `None` indexes every row.
+        #[facet(default)]
+        #[facet(skip_serializing_if = Option::is_none)]
+        predicate: Option<semantic_data::query::Expr>,
     },
     DeleteIndex {
         name: String,
@@ -220,6 +233,8 @@ pub const ATTR_CORE_CATALOG_COLLECTION: &str = "semantic:db:collection";
 pub const ATTR_CORE_CATALOG_FIELD: &str = "semantic:db:field";
 pub const ATTR_CORE_CATALOG_INDEX_KIND: &str = "semantic:db:index_kind";
 pub const ATTR_CORE_CATALOG_UNIQUE: &str = "semantic:db:unique";
+pub const ATTR_CORE_CATALOG_INDEX_EXTRA_FIELDS: &str = "semantic:db:index_extra_fields";
+pub const ATTR_CORE_CATALOG_INDEX_PREDICATE: &str = "semantic:db:index_predicate";
 pub const ATTR_CORE_CATALOG_NEXT_FIELD_ID: &str = "semantic:db:next_field_id";
 pub const ATTR_CORE_CATALOG_AUTO_INDEX_ENABLED: &str = "semantic:db:auto_index_enabled";
 pub const ATTR_CORE_CATALOG_PACKAGES: &str = "semantic:db:packages";
@@ -228,6 +243,10 @@ const CORE_SCHEMA_PACKAGE: &str = "semantic";
 const CORE_SCHEMA_MODULE: &str = "core";
 pub(crate) const CATALOG_ENTRY_IDS_MIGRATION: &str = "005_catalog_entry_ids";
 pub(crate) const REFERENCE_LIFECYCLE_MIGRATION: &str = "006_reference_lifecycle";
+/// Adds composite and partial index definitions to catalog index entries.
+/// Opening a database that applies it rebuilds its range indexes, which
+/// earlier versions registered without maintaining entries.
+pub(crate) const INDEX_DEFINITIONS_MIGRATION: &str = "007_index_definitions";
 
 pub fn core_catalog_schema_batch() -> DdlBatch {
     let mut attrs = std::collections::BTreeMap::new();
@@ -899,6 +918,9 @@ pub fn core_schema_migrations() -> Vec<Migration> {
                     collection: semantic_data::builtin::DEFAULT_COLLECTION.to_string(),
                     field: semantic_data::attr::ATTR_URL.to_string(),
                     unique: false,
+                    kind: IndexKind::Equality,
+                    extra_fields: Vec::new(),
+                    predicate: None,
                 }),
             ],
             meta: Meta::default(),
@@ -918,7 +940,77 @@ pub fn core_schema_migrations() -> Vec<Migration> {
             meta: Meta::default(),
         },
         reference_lifecycle_migration(),
+        index_definitions_migration(),
     ]
+}
+
+fn index_definitions_migration() -> Migration {
+    let string_attribute = |id: &str, name: &str| AttributeType {
+        id: id.to_string(),
+        name: name.to_string(),
+        ty: Type {
+            kind: TypeKind::String(StringType {
+                format: None,
+                normalization: None,
+            }),
+            constraints: vec![],
+            annotations: vec![],
+        },
+        constraints: vec![],
+        meta: Meta::default(),
+    };
+    let attributes = [
+        (
+            "index_extra_fields",
+            string_attribute(ATTR_CORE_CATALOG_INDEX_EXTRA_FIELDS, "index_extra_fields"),
+        ),
+        (
+            "index_predicate",
+            string_attribute(ATTR_CORE_CATALOG_INDEX_PREDICATE, "index_predicate"),
+        ),
+    ];
+    let mut entry_class = core_catalog_schema_batch()
+        .operations
+        .into_iter()
+        .find_map(|op| match op {
+            DdlOperation::UpsertClass { class } if class.id == CORE_CATALOG_ENTRY_CLASS_ID => {
+                Some(class)
+            }
+            _ => None,
+        })
+        .expect("core schema defines CatalogEntry");
+    let mut operations = Vec::new();
+    for (field, attribute) in attributes {
+        entry_class.attributes.insert(
+            field.to_string(),
+            ClassAttribute {
+                attribute: AttributeRef {
+                    id: attribute.id.clone(),
+                },
+                required: false,
+                ui_order: None,
+                computed: None,
+                constraints: vec![],
+                meta: Meta::default(),
+            },
+        );
+        operations.push(MigrationOperation::Ddl(
+            MigrationDdlOperation::UpsertAttribute { attribute },
+        ));
+    }
+    operations.push(MigrationOperation::Ddl(
+        MigrationDdlOperation::UpsertClass { class: entry_class },
+    ));
+    Migration {
+        module: CORE_SCHEMA_MODULE.to_string(),
+        name: INDEX_DEFINITIONS_MIGRATION.to_string(),
+        description: Some(
+            "Record composite index columns and partial index predicates on catalog index entries."
+                .to_string(),
+        ),
+        operations,
+        meta: Meta::default(),
+    }
 }
 
 fn reference_lifecycle_migration() -> Migration {
@@ -1128,11 +1220,17 @@ fn ddl_to_migration_ddl(operation: DdlOperation) -> MigrationDdlOperation {
             collection,
             field,
             unique,
+            kind,
+            extra_fields,
+            predicate,
         } => MigrationDdlOperation::UpsertIndex {
             name,
             collection,
             field,
             unique,
+            kind,
+            extra_fields,
+            predicate,
         },
         DdlOperation::DeleteIndex { name, collection } => {
             MigrationDdlOperation::DeleteIndex { name, collection }
@@ -1209,11 +1307,17 @@ fn catalog_batch_operation(
             collection,
             field,
             unique,
+            kind,
+            extra_fields,
+            predicate,
         } => Ok(CatalogBatchOperation::UpsertIndex {
             name: name.clone(),
             collection: collection.clone(),
             field: field.clone(),
             unique: *unique,
+            kind: *kind,
+            extra_fields: extra_fields.clone(),
+            predicate: predicate.clone(),
         }),
         DdlOperation::DeleteIndex { name, collection } => Ok(CatalogBatchOperation::DeleteIndex {
             name: name.clone(),
@@ -1273,7 +1377,7 @@ mod tests {
     #[test]
     fn core_schema_migrations_are_idempotent() {
         let (catalog, first_run) = apply_core_schema_migrations(&Catalog::new()).unwrap();
-        assert_eq!(first_run.len(), 6);
+        assert_eq!(first_run.len(), 7);
         for id in [ATTR_RELATION_FROM, ATTR_RELATION_TO] {
             let attribute = catalog.attribute_by_id(id).unwrap();
             let TypeKind::Ref(reference) = &attribute.attribute.ty.kind else {

@@ -11,8 +11,9 @@ mod shared;
 mod snapshot;
 
 pub use catalog::{
-    AUTO_PATH_INDEX_FIELD, AUTO_PATH_INDEX_NAME, Catalog, CatalogBatchOperation, OBJECT_TYPE_FIELD,
-    OBJECT_TYPE_INDEX_NAME, PARENT_RELATION_FIELD, PRIMARY_ID_FIELD, PRIMARY_ID_INDEX_NAME,
+    AUTO_PATH_INDEX_FIELD, AUTO_PATH_INDEX_NAME, Catalog, CatalogBatchOperation, IndexDefinition,
+    OBJECT_TYPE_FIELD, OBJECT_TYPE_INDEX_NAME, PARENT_RELATION_FIELD, PRIMARY_ID_FIELD,
+    PRIMARY_ID_INDEX_NAME,
 };
 pub use error::CatalogError;
 pub use id_map::IdMap;

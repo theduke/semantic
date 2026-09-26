@@ -136,6 +136,22 @@ impl<'a> DbReader<'a> {
                 field,
                 value,
             }),
+            AccessPath::IndexRange {
+                index_name,
+                fields,
+                ranges,
+                ordered,
+                descending,
+                index_only,
+            } => Ok(QueryPlan::IndexRange {
+                collection,
+                index_name,
+                fields,
+                ranges,
+                ordered,
+                descending,
+                index_only,
+            }),
         }
     }
 
@@ -504,10 +520,22 @@ fn stats_for_collection(
     let mut indexed_attr_ids = BTreeSet::new();
     let mut unique_attr_ids = BTreeSet::new();
 
+    let mut index_entry_counts = BTreeMap::new();
     for index in catalog.indexes_for_collection(collection.lid) {
-        if index.schema.kind == IndexKind::Equality
-            && let Some(entries) = reader.index_entry_count(index.lid)?
-        {
+        let entries = if index.schema.kind.is_value_index() {
+            reader.index_entry_count(index.lid)?
+        } else {
+            None
+        };
+        if let Some(entries) = entries {
+            index_entry_counts.insert(index.lid, entries as f64);
+        }
+        // Composite and partial indexes neither answer lookups of their
+        // first column nor bound its distinct values.
+        if !index.is_simple() {
+            continue;
+        }
+        if let Some(entries) = entries {
             index_entries.push(IndexEntryStats {
                 canonical_field: index.canonical_field.clone(),
                 field_id: index.field_id,
@@ -545,6 +573,7 @@ fn stats_for_collection(
         collection_id: collection.lid,
         has_path_equality_index: catalog.find_path_equality_index(collection.lid).is_some(),
         index_entries,
+        index_entry_counts,
     })
 }
 
@@ -553,6 +582,16 @@ fn access_path_from_physical(
     collection: &CollectionSchema,
     physical: &crate::PhysicalPlan,
 ) -> AccessPath {
+    if let Some(scan) = find_index_range(physical) {
+        return AccessPath::IndexRange {
+            index_name: scan.index_name.clone(),
+            fields: scan.columns.iter().map(format_field_path).collect(),
+            ranges: scan.ranges.len(),
+            ordered: scan.ordered,
+            descending: scan.direction == semantic_data::query::SortDirection::Desc,
+            index_only: scan.index_only,
+        };
+    }
     let Some((field_ref, value)) = find_index_lookup(physical) else {
         return AccessPath::FullScan;
     };
@@ -570,7 +609,7 @@ fn access_path_from_physical(
         .unwrap_or_default();
     if !top_level.is_empty()
         && field_path.segments().len() == 1
-        && let Some(index) = catalog.find_equality_index(collection.lid, top_level)
+        && let Some(index) = catalog.find_lookup_index(collection.lid, top_level)
     {
         return AccessPath::IndexLookup {
             index_name: index.schema.name.clone(),

@@ -22,6 +22,7 @@ use crate::keys::{
 
 pub mod entity_codec;
 pub(crate) mod field_dict;
+mod index_scan;
 pub mod layout;
 pub mod memory;
 pub mod stats;
@@ -86,6 +87,22 @@ pub trait KvReadTxn: Send + Sync {
     fn scan_prefix_stream(&self, prefix: Vec<u8>) -> Result<BoxKvPrefixScan, DbError> {
         let end = prefix_range_end(&prefix);
         self.scan_range_stream(prefix, end)
+    }
+
+    /// Scan keys in `start..end` (or `start..`) in descending key order.
+    ///
+    /// The default buffers the ascending scan; ordered engines should
+    /// iterate backwards lazily.
+    fn scan_range_rev_stream(
+        &self,
+        start: Vec<u8>,
+        end: Option<Vec<u8>>,
+    ) -> Result<BoxKvPrefixScan, DbError> {
+        let mut items = self
+            .scan_range_stream(start, end)?
+            .collect::<Result<Vec<_>, _>>()?;
+        items.reverse();
+        Ok(Box::new(items.into_iter().map(Ok)))
     }
 }
 
@@ -839,6 +856,14 @@ impl<E: KvEngine> EntityStorage for EntityStore<E> {
         )?))
     }
 
+    fn scan_index_entries(
+        &self,
+        index: LocalIndexId,
+        scan: &semantic_db_core::IndexScan,
+    ) -> Result<semantic_db_core::embedded::BoxIndexEntryScan, DbError> {
+        index_scan::scan_index_entries(&*self.engine.begin_read()?, index, scan)
+    }
+
     fn index_needs_rebuild(&self, index: LocalIndexId) -> std::result::Result<bool, DbError> {
         Ok(self.engine.get(&index_marker_key(index))?.as_deref()
             != Some(index_format_value().as_slice()))
@@ -1154,6 +1179,14 @@ impl EntityReadSnapshot for KvEntitySnapshot<'_> {
         )))
     }
 
+    fn scan_index_entries(
+        &self,
+        index: LocalIndexId,
+        scan: &semantic_db_core::IndexScan,
+    ) -> Result<semantic_db_core::embedded::BoxIndexEntryScan, DbError> {
+        index_scan::scan_index_entries(&*self.txn, index, scan)
+    }
+
     fn index_needs_rebuild(&self, index: LocalIndexId) -> Result<bool, DbError> {
         Ok(self.txn.get(&index_marker_key(index))?.as_deref()
             != Some(index_format_value().as_slice()))
@@ -1172,9 +1205,9 @@ fn index_keys(
 ) -> Result<BTreeSet<Vec<u8>>, DbError> {
     let mut keys = BTreeSet::new();
     match index.schema.kind {
-        IndexKind::Equality => {
-            if let Some(value) = object.get(&index.canonical_field) {
-                keys.insert(index_key(index.lid, None, value, entity_id));
+        IndexKind::Equality | IndexKind::Range => {
+            if let Some(value) = index.key_value(object) {
+                keys.insert(index_key(index.lid, None, &value, entity_id));
             }
         }
         IndexKind::PathEquality => {
@@ -1182,7 +1215,7 @@ fn index_keys(
                 keys.insert(index_key(index.lid, Some(&path), &value, entity_id));
             }
         }
-        IndexKind::Range | IndexKind::FullText => {}
+        IndexKind::FullText => {}
     }
     Ok(keys)
 }
@@ -1359,6 +1392,8 @@ mod tests {
                     segments: vec!["kind".to_string()],
                 },
                 unique: false,
+                extra_key_paths: Vec::new(),
+                predicate: None,
             },
             collection: LocalCollectionId(7),
             canonical_field: "kind".to_string(),
@@ -1421,6 +1456,8 @@ mod tests {
                     segments: vec!["kind".to_string()],
                 },
                 unique: false,
+                extra_key_paths: Vec::new(),
+                predicate: None,
             },
             collection: LocalCollectionId(7),
             canonical_field: "kind".to_string(),

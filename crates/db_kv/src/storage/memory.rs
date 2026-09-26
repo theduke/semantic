@@ -104,6 +104,50 @@ impl KvReadTxn for MemoryKvSnapshot {
     ) -> Result<BoxKvPrefixScan, DbError> {
         Ok(Box::new(RangeScan::new(self.map.clone(), start, end)))
     }
+
+    fn scan_range_rev_stream(
+        &self,
+        start: Vec<u8>,
+        end: Option<Vec<u8>>,
+    ) -> Result<BoxKvPrefixScan, DbError> {
+        Ok(Box::new(RevRangeScan::new(self.map.clone(), start, end)))
+    }
+}
+
+/// Lazy descending scan over a shared map; the mirror of [`RangeScan`].
+struct RevRangeScan {
+    map: Arc<KvMap>,
+    start: Vec<u8>,
+    upper: Bound<Vec<u8>>,
+}
+
+impl RevRangeScan {
+    fn new(map: Arc<KvMap>, start: Vec<u8>, end: Option<Vec<u8>>) -> Self {
+        Self {
+            map,
+            start,
+            upper: end.map_or(Bound::Unbounded, Bound::Excluded),
+        }
+    }
+}
+
+impl Iterator for RevRangeScan {
+    type Item = super::KvScanItem;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        let upper = match &self.upper {
+            Bound::Included(key) => Bound::Included(key.as_slice()),
+            Bound::Excluded(key) => Bound::Excluded(key.as_slice()),
+            Bound::Unbounded => Bound::Unbounded,
+        };
+        let (key, value) = self
+            .map
+            .range::<[u8], _>((Bound::Included(self.start.as_slice()), upper))
+            .next_back()?;
+        let item = (key.clone(), value.clone());
+        self.upper = Bound::Excluded(key.clone());
+        Some(Ok(item))
+    }
 }
 
 /// Lazy ordered scan over a shared map.

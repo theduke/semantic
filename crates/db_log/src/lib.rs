@@ -191,4 +191,15 @@ mod tests {
             open_backend(dir.path().join("database.log"), DbOpenMode::AutoCreate).unwrap();
         semantic_db_test::suite::test_db(&Db::new(backend)).await;
     }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn logfs_backend_index_access_and_reopen() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("database.log");
+        let db = Db::new(open_backend(&path, DbOpenMode::AutoCreate).unwrap());
+        semantic_db_test::suite::test_index_access(&db).await;
+        drop(db);
+        let db = Db::new(open_backend(&path, DbOpenMode::AutoCreate).unwrap());
+        semantic_db_test::suite::test_index_access(&db).await;
+    }
 }

@@ -110,6 +110,22 @@ pub enum QueryPlan {
         field: String,
         value: Value,
     },
+    /// Ordered scans of an equality or range index: ranges, prefixes, `IN`
+    /// probes, composite and partial indexes.
+    IndexRange {
+        collection: String,
+        index_name: String,
+        /// Key columns of the index, in key order.
+        fields: Vec<String>,
+        /// Number of key ranges (`IN` probes) scanned.
+        ranges: usize,
+        /// Whether the scan serves the query's ordering (descending when
+        /// `descending`).
+        ordered: bool,
+        descending: bool,
+        /// Whether rows are served from index keys without row reads.
+        index_only: bool,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -119,6 +135,15 @@ pub enum AccessPath {
         index_name: String,
         field: String,
         value: Value,
+    },
+    /// See [`QueryPlan::IndexRange`].
+    IndexRange {
+        index_name: String,
+        fields: Vec<String>,
+        ranges: usize,
+        ordered: bool,
+        descending: bool,
+        index_only: bool,
     },
 }
 

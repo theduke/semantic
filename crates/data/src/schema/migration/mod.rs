@@ -68,8 +68,22 @@ pub enum MigrationDdlOperation {
     UpsertIndex {
         name: String,
         collection: String,
+        /// The first (for single-column indexes the only) key column.
         field: String,
         unique: bool,
+        /// Index kind; migrations written before kinds were configurable
+        /// create equality indexes.
+        #[facet(default = crate::schema::IndexKind::Equality)]
+        #[facet(skip_serializing_if = crate::schema::IndexKind::is_equality)]
+        kind: crate::schema::IndexKind,
+        /// Key columns after `field` of a composite index, in key order.
+        #[facet(default)]
+        #[facet(skip_serializing_if = Vec::is_empty)]
+        extra_fields: Vec<String>,
+        /// Predicate of a partial index; `None` indexes every row.
+        #[facet(default)]
+        #[facet(skip_serializing_if = Option::is_none)]
+        predicate: Option<crate::query::Expr>,
     },
     DeleteIndex {
         name: String,
@@ -102,4 +116,57 @@ pub enum MigrationOperation {
     Delete {
         query: DeleteQuery,
     },
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::query::{BinaryOp, Expr, Operand};
+    use crate::schema::IndexKind;
+    use crate::value::{FieldPath, Value};
+
+    fn single_column_index() -> MigrationDdlOperation {
+        MigrationDdlOperation::UpsertIndex {
+            name: "by_title".to_string(),
+            collection: "items".to_string(),
+            field: "title".to_string(),
+            unique: false,
+            kind: IndexKind::Equality,
+            extra_fields: Vec::new(),
+            predicate: None,
+        }
+    }
+
+    #[test]
+    fn single_column_index_ops_keep_their_serialized_form() {
+        // Persisted migrations written before composite/partial indexes.
+        let legacy = r#"{"upsert_index":{"name":"by_title","collection":"items","field":"title","unique":false}}"#;
+        let decoded: MigrationDdlOperation = facet_json::from_str(legacy).unwrap();
+        assert_eq!(decoded, single_column_index());
+        assert_eq!(facet_json::to_string(&decoded).unwrap(), legacy);
+    }
+
+    #[test]
+    fn composite_partial_index_ops_round_trip() {
+        let op = MigrationDdlOperation::UpsertIndex {
+            name: "open_by_owner".to_string(),
+            collection: "items".to_string(),
+            field: "owner".to_string(),
+            unique: true,
+            kind: IndexKind::Range,
+            extra_fields: vec!["due".to_string()],
+            predicate: Some(Expr::Binary {
+                op: BinaryOp::Eq,
+                left: Box::new(Expr::Operand(Operand::Field(FieldPath::from_fields([
+                    "status",
+                ])))),
+                right: Box::new(Expr::Operand(Operand::Literal(Value::String(
+                    "open".to_string(),
+                )))),
+            }),
+        };
+        let encoded = facet_json::to_string(&op).unwrap();
+        let decoded: MigrationDdlOperation = facet_json::from_str(&encoded).unwrap();
+        assert_eq!(decoded, op);
+    }
 }

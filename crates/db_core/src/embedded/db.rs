@@ -51,6 +51,7 @@ const REL_EDGE_TARGET_INDEX_NAME: &str = "__rel_target_idx";
 
 pub(crate) mod compact;
 mod incremental;
+mod index_scan;
 #[cfg(test)]
 mod isolation_tests;
 mod local_refs;
@@ -183,7 +184,13 @@ impl<S: EntityStorage> EmbeddedDb<S> {
             }
         }
         let mut index_ops = Vec::new();
-        db.backfill_missing_index_storage(&mut index_ops)?;
+        // Range indexes registered before they were maintained have no
+        // entries; rebuild them once, when the index definitions migration
+        // is applied.
+        let rebuild_range_indexes = executed_core_migrations
+            .iter()
+            .any(|applied| applied.migration.name == crate::ddl::INDEX_DEFINITIONS_MIGRATION);
+        db.backfill_missing_index_storage(rebuild_range_indexes, &mut index_ops)?;
         if !index_ops.is_empty() {
             db.storage.apply_batch(&index_ops)?;
         }
@@ -205,12 +212,15 @@ impl<S: EntityStorage> EmbeddedDb<S> {
 
     fn backfill_missing_index_storage(
         &self,
+        rebuild_range_indexes: bool,
         ops: &mut Vec<StorageWriteOp>,
     ) -> std::result::Result<(), DbError> {
         let catalog = self.catalog();
         let mut indexes = Vec::new();
         for (index_id, index) in catalog.indexes() {
-            if self.storage.index_needs_rebuild(index_id)? {
+            if (rebuild_range_indexes && index.schema.kind == IndexKind::Range)
+                || self.storage.index_needs_rebuild(index_id)?
+            {
                 indexes.push(index.clone());
             }
         }
@@ -232,6 +242,8 @@ impl<S: EntityStorage> EmbeddedDb<S> {
                         || before_index.canonical_field != index.canonical_field
                         || before_index.schema.kind != index.schema.kind
                         || before_index.schema.unique != index.schema.unique
+                        || before_index.schema.extra_key_paths != index.schema.extra_key_paths
+                        || before_index.schema.predicate != index.schema.predicate
                 });
                 changed.then(|| index.clone())
             })
@@ -375,6 +387,38 @@ impl<S: EntityStorage> EmbeddedDb<S> {
             collection: collection_name,
             field: field.into(),
             unique,
+            kind: IndexKind::Equality,
+            extra_fields: Vec::new(),
+            predicate: None,
+        });
+        self.transact_ddl(ddl)?;
+        Ok(())
+    }
+
+    /// Create or replace an equality or range index, including composite
+    /// and partial indexes, and backfill it.
+    pub fn create_index_definition(
+        &mut self,
+        definition: crate::catalog::IndexDefinition,
+    ) -> std::result::Result<(), DbError> {
+        let collection_name = self
+            .catalog()
+            .collection_by_lid(definition.collection)
+            .ok_or(DbError::UnknownCollection(definition.collection))?
+            .name
+            .clone();
+        let mut fields = definition.fields.into_iter();
+        let field = fields.next().ok_or_else(|| {
+            DbError::InvalidQuery(format!("index '{}' has no key column", definition.name))
+        })?;
+        let ddl = DdlBatch::new().with_op(DdlOperation::UpsertIndex {
+            name: definition.name,
+            collection: collection_name,
+            field,
+            unique: definition.unique,
+            kind: definition.kind,
+            extra_fields: fields.collect(),
+            predicate: definition.predicate,
         });
         self.transact_ddl(ddl)?;
         Ok(())
@@ -2253,6 +2297,24 @@ fn prepare_row_for_write(
     }
 }
 
+/// The index scan a physical plan reads its rows through, if any.
+fn find_index_range(plan: &crate::PhysicalPlan) -> Option<&crate::PhysicalIndexScan> {
+    match plan {
+        crate::PhysicalPlan::Source(crate::PhysicalSource::IndexRange(scan)) => Some(scan),
+        crate::PhysicalPlan::Filter { input, .. }
+        | crate::PhysicalPlan::Sort { input, .. }
+        | crate::PhysicalPlan::TopN { input, .. }
+        | crate::PhysicalPlan::Project { input, .. }
+        | crate::PhysicalPlan::Aggregate { input, .. }
+        | crate::PhysicalPlan::Limit { input, .. }
+        | crate::PhysicalPlan::Distinct { input, .. }
+        | crate::PhysicalPlan::Materialize { input, .. }
+        | crate::PhysicalPlan::Exchange { input, .. }
+        | crate::PhysicalPlan::RepartitionHash { input, .. } => find_index_range(input),
+        _ => None,
+    }
+}
+
 /// The index lookup a physical plan reads its rows through, if any.
 fn find_index_lookup(plan: &crate::PhysicalPlan) -> Option<(&crate::FieldRef, &Value)> {
     match plan {
@@ -2312,7 +2374,7 @@ fn equality_lookup_index<'c>(
             return None;
         };
         catalog
-            .find_equality_index(collection, field)
+            .find_lookup_index(collection, field)
             .map(|index| (index, None))
             .or_else(|| {
                 catalog
@@ -3198,7 +3260,7 @@ fn unique_indexes<'c>(
 ) -> impl Iterator<Item = &'c crate::catalog::IndexSchema> {
     catalog
         .indexes_for_collection(collection.lid)
-        .filter(|index| index.schema.unique && index.schema.kind == IndexKind::Equality)
+        .filter(|index| index.schema.unique && index.schema.kind.is_value_index())
 }
 
 /// Check `index` over every row of the collection, reporting the first
@@ -3208,16 +3270,17 @@ fn check_unique_index_rows(
     index: &crate::catalog::IndexSchema,
     rows: &BTreeMap<String, Object>,
 ) -> std::result::Result<(), DbError> {
-    let mut seen = BTreeMap::<&Value, &String>::new();
+    let mut seen = BTreeMap::<Value, &String>::new();
     for (id, object) in rows {
-        let Some(value) = object.get(&index.canonical_field) else {
+        let Some(value) = index.key_value(object) else {
             continue;
         };
-        if let Some(existing) = seen.insert(value, id) {
+        if let Some(existing) = seen.get(&value) {
             return Err(compact::unique_violation(
-                collection, index, value, existing, id,
+                collection, index, &value, existing, id,
             ));
         }
+        seen.insert(value, id);
     }
     Ok(())
 }
@@ -3245,17 +3308,16 @@ fn validate_unique_changed_rows<S: EntityStorage>(
             check_unique_index_rows(collection, index, rows)?;
             continue;
         }
-        let field = &index.canonical_field;
-        let mut holders = BTreeMap::<&Value, BTreeSet<String>>::new();
+        let mut holders = BTreeMap::<Value, BTreeSet<String>>::new();
         for id in changed {
-            if let Some(value) = rows.get(id).and_then(|row| row.get(field)) {
+            if let Some(value) = rows.get(id).and_then(|row| index.key_value(row)) {
                 holders.entry(value).or_default().insert(id.clone());
             }
         }
-        let mut violation = None::<(&Value, String, String)>;
+        let mut violation = None::<(Value, String, String)>;
         for (value, mut ids) in holders {
-            for id in reader.scan_index_value(index.lid, None, value)? {
-                if rows.get(&id).and_then(|row| row.get(field)) == Some(value) {
+            for id in reader.scan_index_value(index.lid, None, &value)? {
+                if rows.get(&id).and_then(|row| index.key_value(row)).as_ref() == Some(&value) {
                     ids.insert(id);
                 }
             }
@@ -3268,7 +3330,7 @@ fn validate_unique_changed_rows<S: EntityStorage>(
         }
         if let Some((value, existing, id)) = violation {
             return Err(compact::unique_violation(
-                collection, index, value, &existing, &id,
+                collection, index, &value, &existing, &id,
             ));
         }
     }
@@ -3514,6 +3576,17 @@ fn type_allows_nullish(ty: &Type) -> bool {
 }
 
 impl crate::AsyncPhysicalDataSource for EmbeddedPhysicalDataSource<'_> {
+    fn index_range_stream(
+        &self,
+        scan: crate::PhysicalIndexScan,
+    ) -> crate::SendableRecordBatchStream {
+        match self.index_range_scan(&scan) {
+            Ok(Some(rows)) => Self::scans_to_stream(vec![rows], scan.residual_predicate),
+            Ok(None) => crate::index_range_fallback_stream(self, scan),
+            Err(err) => stream::once(async move { Err(err) }).boxed(),
+        }
+    }
+
     fn scan_stream(&self, source: crate::SourceRef) -> crate::SendableRecordBatchStream {
         match self.scan_collections(&source) {
             Ok(scans) => Self::scans_to_stream(scans, None),
@@ -3706,8 +3779,10 @@ struct CollectionStatsEntry {
     indexed_attr_ids: BTreeSet<LocalAttrId>,
     unique_attr_ids: BTreeSet<LocalAttrId>,
     has_path_equality_index: bool,
-    /// Maintained entry counts of equality indexes.
+    /// Maintained entry counts of simple equality and range indexes.
     index_entries: Vec<IndexEntryStats>,
+    /// Maintained entry counts of all equality and range indexes.
+    index_entry_counts: BTreeMap<crate::catalog::LocalIndexId, f64>,
 }
 
 /// Entry count of an equality index: the number of rows storing its field.
@@ -3752,6 +3827,17 @@ impl QueryStatsSnapshot {
 }
 
 impl crate::StatsProvider for QueryStatsSnapshot {
+    fn index_entry_count(
+        &self,
+        source: &crate::SourceRef,
+        index: crate::catalog::LocalIndexId,
+    ) -> Option<f64> {
+        self.collection(source)?
+            .index_entry_counts
+            .get(&index)
+            .copied()
+    }
+
     fn relation_stats(&self, source: &crate::SourceRef) -> Option<crate::RelationStats> {
         let collection = self.collection(source)?;
         Some(crate::RelationStats {

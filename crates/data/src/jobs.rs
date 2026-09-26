@@ -913,6 +913,9 @@ pub fn package() -> Package {
                 collection: COLLECTION.into(),
                 field: format!("{PREFIX}{field}"),
                 unique: false,
+                kind: Default::default(),
+                extra_fields: Vec::new(),
+                predicate: None,
             },
         ));
     }

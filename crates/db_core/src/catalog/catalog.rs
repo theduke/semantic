@@ -54,6 +54,80 @@ pub const PRIMARY_ID_INDEX_NAME: &str = "__builtin_pk_id";
 pub const OBJECT_TYPE_INDEX_NAME: &str = "__builtin_type";
 pub const BUILTIN_PARENT_RELATION_ID: &str = "__builtin.parent";
 pub const AUTO_PATH_INDEX_NAME: &str = "__auto_index_all_paths";
+/// Definition of an equality, range or path index, see
+/// [`Catalog::upsert_index_definition`].
+#[derive(Debug, Clone, PartialEq)]
+pub struct IndexDefinition {
+    pub name: String,
+    pub collection: LocalCollectionId,
+    /// Key columns in key order; more than one makes a composite index.
+    pub fields: Vec<String>,
+    pub unique: bool,
+    pub kind: IndexKind,
+    /// Predicate of a partial index: only matching rows are indexed.
+    pub predicate: Option<semantic_data::query::Expr>,
+}
+
+/// Rewrite the field paths of a partial index predicate to canonical field
+/// names, rejecting expressions that cannot be evaluated on a single row.
+fn canonicalize_index_predicate(
+    collection: &CollectionSchema,
+    index_name: &str,
+    mut predicate: semantic_data::query::Expr,
+) -> Result<semantic_data::query::Expr, CatalogError> {
+    use semantic_data::query::{Expr, FunctionArg, Operand};
+    use semantic_data::value::PathSegment;
+
+    fn visit(expr: &mut Expr, collection: &CollectionSchema) -> Result<(), &'static str> {
+        let mut children: Vec<&mut Expr> = Vec::new();
+        match expr {
+            Expr::Operand(Operand::Field(path)) => {
+                if let Some(PathSegment::Field(first)) = path.0.first_mut() {
+                    *first = collection.canonical_field_name(first).to_string();
+                }
+            }
+            Expr::Operand(Operand::Literal(_)) => {}
+            Expr::Unary { expr, .. } | Expr::IsNull { expr, .. } => children.push(expr),
+            Expr::Binary { left, right, .. } => children.extend([&mut **left, &mut **right]),
+            Expr::IfElse {
+                cond,
+                then_expr,
+                else_expr,
+            } => children.extend([&mut **cond, &mut **then_expr, &mut **else_expr]),
+            Expr::Coalesce(items) => children.extend(items.iter_mut()),
+            Expr::Function { args, .. } => {
+                children.extend(args.iter_mut().filter_map(|arg| match arg {
+                    FunctionArg::Expr(expr) => Some(expr),
+                    FunctionArg::Wildcard => None,
+                }))
+            }
+            Expr::InList { expr, list, .. } => {
+                children.push(expr);
+                children.extend(list.iter_mut());
+            }
+            Expr::Between {
+                expr, low, high, ..
+            } => children.extend([&mut **expr, &mut **low, &mut **high]),
+            Expr::PatternMatch { expr, pattern, .. } | Expr::RegexMatch { expr, pattern, .. } => {
+                children.extend([&mut **expr, &mut **pattern])
+            }
+            Expr::Aggregate { .. } => return Err("aggregates"),
+            Expr::Subquery(_) | Expr::Exists { .. } => return Err("subqueries"),
+            Expr::RelationExists { .. } => return Err("relationship predicates"),
+        }
+        children
+            .into_iter()
+            .try_for_each(|child| visit(child, collection))
+    }
+
+    visit(&mut predicate, collection).map_err(|what| {
+        CatalogError::InvalidSchema(format!(
+            "partial index '{index_name}' predicate cannot contain {what}"
+        ))
+    })?;
+    Ok(predicate)
+}
+
 pub const AUTO_PATH_INDEX_FIELD: &str = "__path__";
 
 #[derive(Debug, Clone, PartialEq)]
@@ -100,6 +174,11 @@ pub enum CatalogBatchOperation {
         collection: String,
         field: String,
         unique: bool,
+        kind: IndexKind,
+        /// Key columns after `field` of a composite index.
+        extra_fields: Vec<String>,
+        /// Predicate of a partial index.
+        predicate: Option<semantic_data::query::Expr>,
     },
     DeleteIndex {
         name: String,
@@ -229,6 +308,9 @@ impl Catalog {
                     collection,
                     field,
                     unique,
+                    kind,
+                    extra_fields,
+                    predicate,
                 } => {
                     let collection_schema =
                         self.collection_by_name(collection).ok_or_else(|| {
@@ -236,12 +318,16 @@ impl Catalog {
                                 "collection '{collection}' not found"
                             ))
                         })?;
-                    let _ = self.upsert_index(
-                        name.clone(),
-                        collection_schema.lid,
-                        field.clone(),
-                        *unique,
-                    )?;
+                    let _ = self.upsert_index_definition(IndexDefinition {
+                        name: name.clone(),
+                        collection: collection_schema.lid,
+                        fields: std::iter::once(field.clone())
+                            .chain(extra_fields.iter().cloned())
+                            .collect(),
+                        unique: *unique,
+                        kind: *kind,
+                        predicate: predicate.clone(),
+                    })?;
                 }
                 CatalogBatchOperation::DeleteIndex { name, collection } => {
                     let collection_schema =
@@ -776,18 +862,33 @@ impl Catalog {
         unique: bool,
         kind: IndexKind,
     ) -> Result<LocalIndexId, CatalogError> {
-        let name = name.into();
+        self.upsert_index_definition(IndexDefinition {
+            name: name.into(),
+            collection,
+            fields: vec![field.into()],
+            unique,
+            kind,
+            predicate: None,
+        })
+    }
+
+    /// Create or replace an index, including composite (several `fields`)
+    /// and partial (`predicate`) equality and range indexes.
+    pub fn upsert_index_definition(
+        &mut self,
+        definition: IndexDefinition,
+    ) -> Result<LocalIndexId, CatalogError> {
+        let collection = definition.collection;
         let collection_schema = self
             .collections
             .get(collection)
             .ok_or(CatalogError::UnknownCollection(collection))?;
-        let key = Self::index_key(&collection_schema.name, &name);
+        let key = Self::index_key(&collection_schema.name, &definition.name);
         let lid = self
             .indexes
             .get_key_id(&key)
             .unwrap_or_else(|| self.indexes.next_id());
-        let index =
-            self.build_index_schema_for_lid(lid, name, collection, field.into(), unique, kind)?;
+        let index = self.build_index_schema_for_lid(lid, definition)?;
 
         self.indexes
             .insert_fixed(lid, verbatim_nameset(&key), index);
@@ -801,26 +902,55 @@ impl Catalog {
     fn build_index_schema_for_lid(
         &self,
         lid: LocalIndexId,
-        name: String,
-        collection: LocalCollectionId,
-        field: String,
-        unique: bool,
-        kind: IndexKind,
+        definition: IndexDefinition,
     ) -> Result<IndexSchema, CatalogError> {
+        let IndexDefinition {
+            name,
+            collection,
+            fields,
+            unique,
+            kind,
+            predicate,
+        } = definition;
         let collection_schema = self
             .collections
             .get(collection)
             .ok_or(CatalogError::UnknownCollection(collection))?;
-        let canonical_field = collection_schema.canonical_field_name(&field).to_string();
-        if kind == IndexKind::Equality
-            && collection_schema.is_closed_field_set()
-            && !collection_schema.knows_field(&canonical_field)
-        {
+        let Some(field) = fields.first().cloned() else {
             return Err(CatalogError::InvalidSchema(format!(
-                "cannot create index on unknown field '{canonical_field}' in collection '{}'",
+                "index '{name}' in collection '{}' has no key column",
                 collection_schema.name
             )));
+        };
+        if (fields.len() > 1 || predicate.is_some()) && !kind.is_value_index() {
+            return Err(CatalogError::InvalidSchema(format!(
+                "index '{name}': only equality and range indexes can be composite or partial"
+            )));
         }
+        let columns = fields
+            .iter()
+            .map(|field| collection_schema.canonical_field_name(field).to_string())
+            .collect::<Vec<_>>();
+        for (position, column) in columns.iter().enumerate() {
+            if columns[..position].contains(column) {
+                return Err(CatalogError::InvalidSchema(format!(
+                    "index '{name}' lists column '{column}' more than once"
+                )));
+            }
+            if kind.is_value_index()
+                && collection_schema.is_closed_field_set()
+                && !collection_schema.knows_field(column)
+            {
+                return Err(CatalogError::InvalidSchema(format!(
+                    "cannot create index on unknown field '{column}' in collection '{}'",
+                    collection_schema.name
+                )));
+            }
+        }
+        let canonical_field = columns[0].clone();
+        let predicate = predicate
+            .map(|predicate| canonicalize_index_predicate(collection_schema, &name, predicate))
+            .transpose()?;
 
         Ok(IndexSchema {
             lid,
@@ -837,6 +967,13 @@ impl Catalog {
                     },
                 },
                 unique,
+                extra_key_paths: columns[1..]
+                    .iter()
+                    .map(|column| KeyPath {
+                        segments: vec![column.clone()],
+                    })
+                    .collect(),
+                predicate,
             },
             collection,
             canonical_field,
@@ -884,14 +1021,35 @@ impl Catalog {
             .filter_map(|id| self.indexes.get(*id))
     }
 
+    /// The single-column, non-partial equality index on `canonical_field`.
     pub fn find_equality_index(
         &self,
         collection: LocalCollectionId,
         canonical_field: &str,
     ) -> Option<&IndexSchema> {
         self.indexes_for_collection(collection).find(|index| {
-            index.schema.kind == IndexKind::Equality && index.canonical_field == canonical_field
+            index.schema.kind == IndexKind::Equality
+                && index.is_simple()
+                && index.canonical_field == canonical_field
         })
+    }
+
+    /// Index answering point lookups of one value of `canonical_field`: the
+    /// single-column, non-partial equality index, else such a range index
+    /// (both store the plain value as key).
+    pub fn find_lookup_index(
+        &self,
+        collection: LocalCollectionId,
+        canonical_field: &str,
+    ) -> Option<&IndexSchema> {
+        self.find_equality_index(collection, canonical_field)
+            .or_else(|| {
+                self.indexes_for_collection(collection).find(|index| {
+                    index.schema.kind == IndexKind::Range
+                        && index.is_simple()
+                        && index.canonical_field == canonical_field
+                })
+            })
     }
 
     pub fn find_path_equality_index(&self, collection: LocalCollectionId) -> Option<&IndexSchema> {
@@ -970,6 +1128,8 @@ impl Catalog {
                     field: index.canonical_field.clone(),
                     unique: index.schema.unique,
                     kind: index.schema.kind,
+                    extra_fields: index.extra_columns().map(ToString::to_string).collect(),
+                    predicate: index.schema.predicate.clone(),
                 })
                 .collect(),
             relationships: self
@@ -1339,11 +1499,16 @@ impl Catalog {
             // Index storage is keyed by the saved ID; restoring must not allocate another one.
             let index = catalog.build_index_schema_for_lid(
                 item.lid,
-                item.name,
-                item.collection,
-                item.field,
-                item.unique,
-                item.kind,
+                IndexDefinition {
+                    name: item.name,
+                    collection: item.collection,
+                    fields: std::iter::once(item.field)
+                        .chain(item.extra_fields)
+                        .collect(),
+                    unique: item.unique,
+                    kind: item.kind,
+                    predicate: item.predicate,
+                },
             )?;
             catalog
                 .indexes

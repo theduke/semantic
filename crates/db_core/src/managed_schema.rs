@@ -250,11 +250,17 @@ fn migration_catalog_batch_operation(
             collection,
             field,
             unique,
+            kind,
+            extra_fields,
+            predicate,
         } => Ok(CatalogBatchOperation::UpsertIndex {
             name: name.clone(),
             collection: collection.clone(),
             field: field.clone(),
             unique: *unique,
+            kind: *kind,
+            extra_fields: extra_fields.clone(),
+            predicate: predicate.clone(),
         }),
         MigrationDdlOperation::DeleteIndex { name, collection } => {
             Ok(CatalogBatchOperation::DeleteIndex {

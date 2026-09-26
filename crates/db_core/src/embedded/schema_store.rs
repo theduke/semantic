@@ -29,6 +29,8 @@ const COLLECTION_FIELD: &str = "collection";
 const FIELD_FIELD: &str = "field";
 const INDEX_KIND_FIELD: &str = "index_kind";
 const UNIQUE_FIELD: &str = "unique";
+const INDEX_EXTRA_FIELDS_FIELD: &str = "index_extra_fields";
+const INDEX_PREDICATE_FIELD: &str = "index_predicate";
 const NEXT_FIELD_ID_FIELD: &str = "next_field_id";
 const AUTO_INDEX_ENABLED_FIELD: &str = "auto_index_enabled";
 const RELATIONSHIPS_FIELD: &str = "relationships";
@@ -200,6 +202,10 @@ pub fn load_catalog<S: EntityStorage>(
             semantic_data::schema::IndexKind::Equality,
         )?;
         let unique = object_bool_field(&row.object, UNIQUE_FIELD)?;
+        let extra_fields: Vec<String> =
+            object_json_field_default(&row.object, INDEX_EXTRA_FIELDS_FIELD, Vec::new())?;
+        let predicate: Option<semantic_data::query::Expr> =
+            object_json_field_default(&row.object, INDEX_PREDICATE_FIELD, None)?;
         indexes.push(StoredIndex {
             lid,
             name,
@@ -207,6 +213,8 @@ pub fn load_catalog<S: EntityStorage>(
             field,
             unique,
             kind,
+            extra_fields,
+            predicate,
         });
     }
 
@@ -384,6 +392,30 @@ pub fn catalog_write_ops<S: EntityStorage>(
         entity
             .object
             .insert(UNIQUE_FIELD.to_string(), Value::Bool(item.schema.unique));
+        // Written only for composite and partial indexes, so rows of other
+        // indexes keep their original shape.
+        let extra_fields = item
+            .extra_columns()
+            .map(ToString::to_string)
+            .collect::<Vec<_>>();
+        if !extra_fields.is_empty() {
+            entity.object.insert(
+                INDEX_EXTRA_FIELDS_FIELD.to_string(),
+                Value::String(
+                    facet_json::to_string(&extra_fields)
+                        .map_err(|err| DbError::Serialization(err.to_string()))?,
+                ),
+            );
+        }
+        if let Some(predicate) = &item.schema.predicate {
+            entity.object.insert(
+                INDEX_PREDICATE_FIELD.to_string(),
+                Value::String(
+                    facet_json::to_string(predicate)
+                        .map_err(|err| DbError::Serialization(err.to_string()))?,
+                ),
+            );
+        }
         push_entity_with_indexes(catalog, &entity, &mut ops)?;
     }
 

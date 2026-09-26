@@ -2,8 +2,9 @@
 //!
 //! The rows a predicate can match are located without materializing the
 //! collection: through a primary-key equality, through the equality index
-//! the query optimizer picks for the equivalent `SELECT` (planned with the
-//! statistics of the transaction's snapshot), or else through one streamed
+//! or the equality/range index scan the query optimizer picks for the
+//! equivalent `SELECT` (planned with the statistics of the transaction's
+//! snapshot), or else through one streamed
 //! scan of the snapshot that keeps only matching rows. Candidates are merged
 //! with the rows the transaction has already written.
 //!
@@ -26,6 +27,12 @@ enum MutationAccess {
         index: LocalIndexId,
         path: Option<FieldPath>,
         value: Value,
+    },
+    /// The optimizer reads matches through ranges of an equality or range
+    /// index (a superset of the stored rows matching the predicate).
+    IndexRanges {
+        index: LocalIndexId,
+        ranges: Vec<crate::IndexScanRange>,
     },
     /// One scan of the collection.
     Scan,
@@ -109,6 +116,10 @@ impl<S: EntityStorage> EmbeddedDb<S> {
                 let ids = view.index_ids(index, path.as_ref(), &value)?;
                 view.rows_by_ids(&collection.name, ids)?
             }
+            MutationAccess::IndexRanges { index, ranges } => {
+                let ids = view.index_range_ids(index, &ranges)?;
+                view.rows_by_ids(&collection.name, ids)?
+            }
             MutationAccess::Scan => view.scan_matching(collection, predicate)?,
         };
         Ok(rows
@@ -147,6 +158,12 @@ impl<S: EntityStorage> EmbeddedDb<S> {
                 &self.query_context(),
             )
             .physical;
+        if let Some(scan) = find_index_range(&physical) {
+            return Ok(MutationAccess::IndexRanges {
+                index: scan.index,
+                ranges: scan.ranges.clone(),
+            });
+        }
         let Some((field, value)) = find_index_lookup(&physical) else {
             return Ok(MutationAccess::Scan);
         };

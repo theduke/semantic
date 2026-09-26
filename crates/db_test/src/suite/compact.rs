@@ -15,6 +15,9 @@ pub(super) async fn test_compact_id_execution(db: &Db) {
                 collection: collection.into(),
                 field: "compact_label".into(),
                 unique: true,
+                kind: Default::default(),
+                extra_fields: Vec::new(),
+                predicate: None,
             })
             .with_op(DdlOperation::UpsertAttribute {
                 attribute: AttributeType {

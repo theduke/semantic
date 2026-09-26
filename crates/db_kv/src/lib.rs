@@ -56,6 +56,15 @@ mod tests {
         semantic_db_test::suite::test_db(&Db::new(backend)).await;
     }
 
+    #[tokio::test(flavor = "multi_thread")]
+    async fn memory_backend_index_access() {
+        use semantic_db_core::Db;
+
+        let backend =
+            semantic_db_core::embedded::EmbeddedBackend::new(super::open_memory().unwrap());
+        semantic_db_test::suite::test_index_access(&Db::new(backend)).await;
+    }
+
     #[test]
     fn package_migration_indexes_post_migration_rows() {
         let mut seed = Object::new();
@@ -89,6 +98,9 @@ mod tests {
                         collection: "migration_items".to_string(),
                         field: "kind".to_string(),
                         unique: false,
+                        kind: Default::default(),
+                        extra_fields: Vec::new(),
+                        predicate: None,
                     }),
                     MigrationOperation::Insert {
                         collection: "migration_items".to_string(),

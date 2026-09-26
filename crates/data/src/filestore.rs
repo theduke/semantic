@@ -246,6 +246,9 @@ fn filekind_index_and_pixel_titles_migration() -> Migration {
                 collection: crate::builtin::DEFAULT_COLLECTION.to_string(),
                 field: ATTR_FILE_FILEKIND.to_string(),
                 unique: false,
+                kind: Default::default(),
+                extra_fields: Vec::new(),
+                predicate: None,
             }),
             MigrationOperation::Ddl(MigrationDdlOperation::UpsertAttribute {
                 attribute: attribute_with_title(
@@ -1006,6 +1009,9 @@ mod tests {
                 collection: crate::builtin::DEFAULT_COLLECTION.to_string(),
                 field: ATTR_FILE_FILEKIND.to_string(),
                 unique: false,
+                kind: Default::default(),
+                extra_fields: Vec::new(),
+                predicate: None,
             }),
         );
         let module = super::root_module();

@@ -94,6 +94,8 @@ pub type EntityScanItem = std::result::Result<StoredEntity, DbError>;
 pub type BoxEntityScan = Box<dyn Iterator<Item = EntityScanItem> + Send>;
 pub type EntityIdScanItem = std::result::Result<String, DbError>;
 pub type BoxEntityIdScan = Box<dyn Iterator<Item = EntityIdScanItem> + Send>;
+pub type IndexEntryScanItem = std::result::Result<crate::IndexEntry, DbError>;
+pub type BoxIndexEntryScan = Box<dyn Iterator<Item = IndexEntryScanItem> + Send>;
 
 /// A read handle over entity storage.
 ///
@@ -193,6 +195,19 @@ pub trait EntityReadSnapshot: Send + Sync {
         prefix: &str,
     ) -> Result<BoxEntityIdScan, DbError> {
         let _ = (index, path, prefix);
+        Err(unsupported_ordered_index_scan())
+    }
+
+    /// Entries of the equality or range index `index` within `scan.range`,
+    /// ordered by key value and then id (descending with `scan.reverse`).
+    ///
+    /// The default reports that ordered index scans are unsupported.
+    fn scan_index_entries(
+        &self,
+        index: LocalIndexId,
+        scan: &crate::IndexScan,
+    ) -> Result<BoxIndexEntryScan, DbError> {
+        let _ = (index, scan);
         Err(unsupported_ordered_index_scan())
     }
 
@@ -337,6 +352,14 @@ impl<S: EntityStorage + ?Sized> EntityReadSnapshot for ForwardingReadSnapshot<'_
         self.storage.scan_index_prefix_stream(index, path, prefix)
     }
 
+    fn scan_index_entries(
+        &self,
+        index: LocalIndexId,
+        scan: &crate::IndexScan,
+    ) -> Result<BoxIndexEntryScan, DbError> {
+        self.storage.scan_index_entries(index, scan)
+    }
+
     fn index_needs_rebuild(&self, index: LocalIndexId) -> Result<bool, DbError> {
         self.storage.index_needs_rebuild(index)
     }
@@ -427,6 +450,39 @@ impl<'a, S: EntityStorage> RevisionReader<'a, S> {
                 .storage
                 .scan_index_value_at_revision(index, path, value, self.revision),
         }
+    }
+
+    /// Ids of the entries of `index` within `range`, in key order.
+    ///
+    /// Without a consistent snapshot the scan is fenced by the revision
+    /// before and after, so a concurrent commit surfaces as a conflict.
+    pub(crate) fn scan_index_range_ids(
+        &self,
+        index: LocalIndexId,
+        range: &crate::IndexScanRange,
+    ) -> Result<Vec<String>, DbError> {
+        let scan = crate::IndexScan {
+            range: range.clone(),
+            reverse: false,
+            with_keys: false,
+        };
+        let ids = match &self.snapshot {
+            Some(snapshot) => snapshot
+                .scan_index_entries(index, &scan)?
+                .map(|entry| entry.map(|entry| entry.id))
+                .collect::<Result<Vec<_>, _>>()?,
+            None => {
+                self.storage.ensure_revision(self.revision)?;
+                let ids = self
+                    .storage
+                    .scan_index_entries(index, &scan)?
+                    .map(|entry| entry.map(|entry| entry.id))
+                    .collect::<Result<Vec<_>, _>>()?;
+                self.storage.ensure_revision(self.revision)?;
+                ids
+            }
+        };
+        Ok(ids)
     }
 
     /// Stream every entity of `collection` into `visit`, one row at a time.
@@ -608,6 +664,19 @@ pub trait EntityStorage: std::fmt::Debug + Send + Sync + 'static {
         Err(unsupported_ordered_index_scan())
     }
 
+    /// Entries of the equality or range index `index` within `scan.range`,
+    /// ordered by key value and then id (descending with `scan.reverse`).
+    ///
+    /// The default reports that ordered index scans are unsupported.
+    fn scan_index_entries(
+        &self,
+        index: LocalIndexId,
+        scan: &crate::IndexScan,
+    ) -> Result<BoxIndexEntryScan, DbError> {
+        let _ = (index, scan);
+        Err(unsupported_ordered_index_scan())
+    }
+
     fn index_needs_rebuild(&self, index: LocalIndexId) -> std::result::Result<bool, DbError>;
 
     /// Prepare the storage before the database loads its catalog.
@@ -712,6 +781,12 @@ impl MemoryEntityStorage {
         }
     }
 
+    /// Remove the entries of `index` but keep it marked as built, like
+    /// range indexes registered before they were maintained.
+    pub(crate) fn drop_index_entries(&mut self, index: LocalIndexId) {
+        self.indexes.retain(|entry| entry.index.lid != index);
+    }
+
     pub(crate) fn corrupt_index(&mut self, index: LocalIndexId) {
         self.indexes.retain(|entry| entry.index.lid != index);
         self.initialized_indexes.remove(&index);
@@ -769,6 +844,11 @@ impl MemoryEntityStorage {
                     entity_id,
                     object,
                 } => {
+                    // Rows without a key (missing column, outside a
+                    // partial index) have no entry.
+                    if index.schema.kind.is_value_index() && index.key_value(object).is_none() {
+                        continue;
+                    }
                     let entry = IndexedEntity {
                         index: index.clone(),
                         entity_id: entity_id.clone(),
@@ -803,13 +883,13 @@ impl MemoryEntityStorage {
             .iter()
             .filter(|entry| entry.index.lid == index)
             .filter(|entry| match entry.index.schema.kind {
-                IndexKind::Equality => {
-                    entry.object.get(&entry.index.canonical_field) == Some(value)
+                IndexKind::Equality | IndexKind::Range => {
+                    entry.index.key_value(&entry.object).as_ref() == Some(value)
                 }
                 IndexKind::PathEquality => {
                     path.and_then(|path| entry.object.value_at_path(path)) == Some(value)
                 }
-                IndexKind::Range | IndexKind::FullText => false,
+                IndexKind::FullText => false,
             })
             .map(|entry| entry.entity_id.clone())
             .collect()
@@ -831,13 +911,13 @@ impl MemoryEntityStorage {
             .filter(|entry| entry.index.lid == index)
             .filter_map(|entry| {
                 let value = match entry.index.schema.kind {
-                    IndexKind::Equality => entry.object.get(&entry.index.canonical_field),
-                    IndexKind::PathEquality => {
-                        path.and_then(|path| entry.object.value_at_path(path))
-                    }
-                    IndexKind::Range | IndexKind::FullText => None,
+                    IndexKind::Equality | IndexKind::Range => entry.index.key_value(&entry.object),
+                    IndexKind::PathEquality => path
+                        .and_then(|path| entry.object.value_at_path(path))
+                        .cloned(),
+                    IndexKind::FullText => None,
                 }?;
-                filter(value).then(|| (value.clone(), entry.entity_id.clone()))
+                filter(&value).then(|| (value, entry.entity_id.clone()))
             })
             .collect::<std::collections::BTreeSet<_>>();
         let mut seen = std::collections::BTreeSet::new();
@@ -962,6 +1042,37 @@ impl EntityStorage for MemoryEntityStorage {
         ))
     }
 
+    fn scan_index_entries(
+        &self,
+        index: LocalIndexId,
+        scan: &crate::IndexScan,
+    ) -> Result<BoxIndexEntryScan, DbError> {
+        let entries = self
+            .indexes
+            .iter()
+            .filter(|entry| entry.index.lid == index)
+            .filter_map(|entry| {
+                let key = entry.index.key_value(&entry.object)?;
+                scan.range
+                    .contains(&key)
+                    .then(|| (key, entry.entity_id.clone()))
+            })
+            .collect::<std::collections::BTreeSet<_>>();
+        let mut entries = entries
+            .into_iter()
+            .map(|(key, id)| {
+                Ok(crate::IndexEntry {
+                    id,
+                    key: scan.with_keys.then_some(key),
+                })
+            })
+            .collect::<Vec<_>>();
+        if scan.reverse {
+            entries.reverse();
+        }
+        Ok(Box::new(entries.into_iter()))
+    }
+
     fn index_needs_rebuild(&self, index: LocalIndexId) -> std::result::Result<bool, DbError> {
         Ok(!self.initialized_indexes.contains(&index))
     }
@@ -1020,6 +1131,8 @@ pub(crate) struct StorageReadCounts {
     pub(crate) collection_scans: std::sync::atomic::AtomicUsize,
     pub(crate) entity_gets: std::sync::atomic::AtomicUsize,
     pub(crate) collection_counts: std::sync::atomic::AtomicUsize,
+    /// Ordered index scans (`scan_index_entries`).
+    pub(crate) index_entry_scans: std::sync::atomic::AtomicUsize,
     /// Entities yielded by collection scans.
     pub(crate) rows_yielded: std::sync::atomic::AtomicUsize,
     /// Report maintained row counts as unknown, forcing the key-count
@@ -1037,6 +1150,7 @@ impl StorageReadCounts {
         self.collection_scans.store(0, Ordering::Relaxed);
         self.entity_gets.store(0, Ordering::Relaxed);
         self.collection_counts.store(0, Ordering::Relaxed);
+        self.index_entry_scans.store(0, Ordering::Relaxed);
         self.rows_yielded.store(0, Ordering::Relaxed);
         self.entity_writes.lock().unwrap().clear();
     }
@@ -1063,6 +1177,11 @@ impl StorageReadCounts {
 
     pub(crate) fn entity_gets(&self) -> usize {
         self.entity_gets.load(std::sync::atomic::Ordering::Relaxed)
+    }
+
+    pub(crate) fn index_entry_scans(&self) -> usize {
+        self.index_entry_scans
+            .load(std::sync::atomic::Ordering::Relaxed)
     }
 
     pub(crate) fn collection_counts(&self) -> usize {
@@ -1202,6 +1321,15 @@ impl EntityStorage for CountingEntityStorage {
         self.inner.scan_index_prefix_stream(index, path, prefix)
     }
 
+    fn scan_index_entries(
+        &self,
+        index: LocalIndexId,
+        scan: &crate::IndexScan,
+    ) -> Result<BoxIndexEntryScan, DbError> {
+        Self::count(&self.counts.index_entry_scans);
+        self.inner.scan_index_entries(index, scan)
+    }
+
     fn index_needs_rebuild(&self, index: LocalIndexId) -> Result<bool, DbError> {
         self.inner.index_needs_rebuild(index)
     }
@@ -1302,6 +1430,14 @@ impl<S: EntityStorage> EntityReadSnapshot for OwnedStorageSnapshot<S> {
         self.0.scan_index_prefix_stream(index, path, prefix)
     }
 
+    fn scan_index_entries(
+        &self,
+        index: LocalIndexId,
+        scan: &crate::IndexScan,
+    ) -> Result<BoxIndexEntryScan, DbError> {
+        self.0.scan_index_entries(index, scan)
+    }
+
     fn index_needs_rebuild(&self, index: LocalIndexId) -> Result<bool, DbError> {
         self.0.index_needs_rebuild(index)
     }
@@ -1381,6 +1517,14 @@ impl EntityReadSnapshot for MemoryEntityReadSnapshot<'_> {
         EntityStorage::scan_index_prefix_stream(self.storage, index, path, prefix)
     }
 
+    fn scan_index_entries(
+        &self,
+        index: LocalIndexId,
+        scan: &crate::IndexScan,
+    ) -> Result<BoxIndexEntryScan, DbError> {
+        EntityStorage::scan_index_entries(self.storage, index, scan)
+    }
+
     fn index_needs_rebuild(&self, index: LocalIndexId) -> Result<bool, DbError> {
         EntityStorage::index_needs_rebuild(self.storage, index)
     }
@@ -1404,6 +1548,8 @@ mod tests {
                     segments: vec!["kind".to_string()],
                 },
                 unique: false,
+                extra_key_paths: Vec::new(),
+                predicate: None,
             },
             collection: LocalCollectionId(7),
             canonical_field: "kind".to_string(),
