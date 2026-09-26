@@ -124,6 +124,36 @@ test('anchors table edge controls and one action handle to every visible row', a
   }).toBe(true)
 })
 
+test('keeps table and block actions reachable in a narrow document', async ({ page }) => {
+  await page.setViewportSize({ width: 390, height: 844 })
+  await page.addStyleTag({ content: `
+    .dxeditor { width: calc(100vw - 32px); margin: 16px; }
+    [data-dxeditor-host] { padding: 16px 48px; }
+    .ProseMirror .tableWrapper { max-width: 100%; overflow-x: auto; }
+    .ProseMirror table { min-width: 340px; }
+  ` })
+  await page.evaluate(document => {
+    const session = (window as unknown as { editorSession: { replaceDocument: (document: unknown) => void } }).editorSession
+    session.replaceDocument(document)
+  }, tableDocument())
+
+  const table = page.locator('.ProseMirror table')
+  await table.hover()
+  const addColumn = page.getByRole('toolbar', { name: 'Table actions' })
+    .getByRole('button', { name: 'Add column at right' })
+  await expect(addColumn).toBeVisible()
+  const columnBox = await addColumn.boundingBox()
+  expect(columnBox).not.toBeNull()
+  expect(columnBox!.x + columnBox!.width).toBeLessThanOrEqual(390)
+
+  await table.locator('th').first().click()
+  const blockActions = page.getByRole('toolbar', { name: 'Current block' })
+  await expect(blockActions).toBeVisible()
+  const blockBox = await blockActions.boundingBox()
+  expect(blockBox).not.toBeNull()
+  expect(blockBox!.x).toBeGreaterThanOrEqual(0)
+})
+
 test('keeps row menu actions and drag reordering bound to explicit rows', async ({ page }) => {
   const editor = page.locator('.ProseMirror')
   await page.evaluate(document => {

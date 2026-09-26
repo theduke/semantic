@@ -1893,7 +1893,7 @@ export const mount = (host: HTMLElement, options: MountOptions): EditorSession =
     blockControls.hidden = false
     const bounds = wrapper.getBoundingClientRect()
     const tableRowGutter = editor.state.doc.child(range.index).type.name === 'table' ? 34 : 0
-    blockControls.style.left = `${rect.left - bounds.left - blockControls.offsetWidth - 6 - tableRowGutter}px`
+    blockControls.style.left = `${Math.max(4, rect.left - bounds.left - blockControls.offsetWidth - 6 - tableRowGutter)}px`
     blockControls.style.top = `${rect.top - bounds.top}px`
     blockControls.dataset.blockId = range.target.semanticId ?? ''
   }
@@ -1988,7 +1988,7 @@ export const mount = (host: HTMLElement, options: MountOptions): EditorSession =
     addBottomRowButton.style.left = `${rect.left - bounds.left}px`
     addBottomRowButton.style.top = `${rect.bottom - bounds.top + 4}px`
     addBottomRowButton.style.width = `${rect.width}px`
-    addRightColumnButton.style.left = `${rect.right - bounds.left + 4}px`
+    addRightColumnButton.style.left = `${Math.max(4, Math.min(rect.right - bounds.left + 4, bounds.width - (addRightColumnButton.offsetWidth || 24) - 4))}px`
     addRightColumnButton.style.top = `${rect.top - bounds.top}px`
     addRightColumnButton.style.height = `${rect.height}px`
 

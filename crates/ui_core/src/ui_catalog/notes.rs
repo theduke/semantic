@@ -1,8 +1,5 @@
 use std::rc::Rc;
 
-#[cfg(feature = "markdown")]
-use std::time::Duration;
-
 use dioxus::prelude::*;
 use semantic_data::value::{Object, Value};
 
@@ -146,6 +143,7 @@ fn render_note_class_form(ctx: ClassFormRenderContext) -> Element {
                 aria_label: "Note content",
                 if let Some(content_field) = content_field {
                     div { class: "semantic-table-wrap semantic-note-form__content-table-wrap",
+                        key: "{format}",
                         table { class: "semantic-field-table semantic-note-form__content-table",
                             tbody {
                                 {render_class_form_field_row(&ctx, content_field)}
@@ -214,35 +212,6 @@ fn render_markdown_note_content_form(ctx: AttributeFormRenderContext) -> Element
     let entity_links = crate::editor_entity_links::use_semantic_entity_links();
     let field = ctx.field.clone();
     let value = value_string(&field.value());
-    let initial_value = value.clone();
-    let mut last_prop_value = use_signal(move || initial_value);
-    let mut last_emitted_value = use_signal(|| None::<String>);
-    let mut pending_value = use_signal(|| None::<String>);
-    let mut debounce_revision = use_signal(|| 0_u64);
-
-    let incoming_value = value.clone();
-    use_effect(move || {
-        if *last_prop_value.peek() == incoming_value {
-            return;
-        }
-
-        last_prop_value.set(incoming_value.clone());
-        if last_emitted_value.peek().as_ref() == Some(&incoming_value) {
-            last_emitted_value.set(None);
-            return;
-        }
-
-        debounce_revision += 1;
-        pending_value.set(None);
-    });
-
-    let drop_field = field.clone();
-    use_drop(move || {
-        if let Some(value) = pending_value.take() {
-            drop_field.set_value(Value::String(value));
-        }
-    });
-
     let change_field = field.clone();
     let blur_field = field.clone();
     let focus_field = field;
@@ -250,28 +219,8 @@ fn render_markdown_note_content_form(ctx: AttributeFormRenderContext) -> Element
         dxeditor::MarkdownEditor {
             value,
             entity_links: Some(entity_links),
-            on_change: move |value: String| {
-                pending_value.set(Some(value));
-                debounce_revision += 1;
-                let scheduled_revision = debounce_revision();
-                let field = change_field.clone();
-                spawn(async move {
-                    dioxus_sdk_time::sleep(Duration::from_millis(500)).await;
-                    if debounce_revision() != scheduled_revision {
-                        return;
-                    }
-                    if let Some(value) = pending_value.take() {
-                        last_emitted_value.set(Some(value.clone()));
-                        field.set_value(Value::String(value));
-                    }
-                });
-            },
+            on_change: move |value: String| change_field.set_value(Value::String(value)),
             onblur: move |_event: FocusEvent| {
-                debounce_revision += 1;
-                if let Some(value) = pending_value.take() {
-                    last_emitted_value.set(Some(value.clone()));
-                    blur_field.set_value(Value::String(value));
-                }
                 blur_field.set_focused(false);
             },
             onfocus: move |_event: FocusEvent| focus_field.set_focused(true),

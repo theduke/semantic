@@ -31,6 +31,8 @@ const DXEDITOR_STYLE: &str = r#"
 .dxeditor {
   display: grid;
   width: min(100%, 980px);
+  min-width: 0;
+  max-width: 100%;
   overflow: hidden;
   border: 1px solid #cfd8e3;
   border-radius: 8px;
@@ -91,6 +93,7 @@ const DXEDITOR_STYLE: &str = r#"
 
 .dxeditor__document {
   display: grid;
+  min-width: 0;
   gap: 2px;
   min-height: 260px;
   padding: 22px 28px;
@@ -216,6 +219,8 @@ const DXEDITOR_STYLE: &str = r#"
 }
 
 .dxeditor-engine__content {
+  min-width: 0;
+  max-width: 100%;
   min-height: 216px;
   outline: none;
   line-height: 1.62;
@@ -311,6 +316,8 @@ const DXEDITOR_STYLE: &str = r#"
 }
 
 .dxeditor-engine__content .tableWrapper {
+  min-width: 0;
+  max-width: 100%;
   overflow-x: auto;
 }
 
@@ -780,7 +787,7 @@ pub fn Editor(
             }
             last_emitted.set(None);
             dirty.set(false);
-            status.set("Saved".to_string());
+            status.set("Editing".to_string());
             return;
         }
 
@@ -934,7 +941,7 @@ pub fn Editor(
                                 dirty.set(true);
                                 match encode_editor_payload(&output_catalog, &document, &output_format_for_event) {
                                     Ok(payload) => {
-                                        status.set(format!("Unsaved revision {revision}"));
+                                        status.set("Editing".to_string());
                                         last_emitted.set(Some((payload.clone(), revision)));
                                         on_change.call(payload);
                                     }
@@ -957,7 +964,7 @@ pub fn Editor(
                                 // Document changes are emitted synchronously. Blur is only a
                                 // durability/focus boundary and must not duplicate `on_change`.
                                 last_local_revision.set(revision);
-                                status.set(if dirty() { format!("Unsaved revision {revision}") } else { "Saved".to_string() });
+                                status.set(if dirty() { "Editing" } else { "Editor up to date" }.to_string());
                             }
                             EngineEvent::MentionQuery { session, request_id, query }
                                 if session_matches(

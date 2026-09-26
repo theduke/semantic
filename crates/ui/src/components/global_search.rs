@@ -97,7 +97,7 @@ pub fn GlobalSearch() -> Element {
     rsx! {
         IconButton {
             label: "Search entities".to_string(),
-            tooltip: Some("Search entities (Ctrl+S)".to_string()),
+            tooltip: Some("Search entities (Ctrl+K)".to_string()),
             size: IconButtonSize::Small,
             on_click: move |_| open.set(true),
             Search { width: 18, height: 18 }
@@ -119,7 +119,7 @@ pub fn GlobalSearch() -> Element {
                             "Find an entity in any collection by ID or title."
                         }
                     }
-                    kbd { class: "semantic-global-search__shortcut", "Ctrl S" }
+                    kbd { class: "semantic-global-search__shortcut", "Ctrl K" }
                 }
 
                 div { class: "semantic-global-search__input-wrap",
@@ -275,7 +275,7 @@ fn use_global_search_shortcut(on_trigger: EventHandler<()>) {
                     window.removeEventListener('keydown', window.__semanticGlobalSearchKeyHandler);
                 }
                 window.__semanticGlobalSearchKeyHandler = (event) => {
-                    if (event.repeat || !(event.ctrlKey || event.metaKey) || event.altKey || event.key.toLowerCase() !== 's') return;
+                    if (event.defaultPrevented || event.repeat || event.isComposing || !(event.ctrlKey || event.metaKey) || event.altKey || event.key.toLowerCase() !== 'k') return;
                     event.preventDefault();
                     dioxus.send('open');
                 };

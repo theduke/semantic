@@ -143,10 +143,27 @@ pub fn DynamicValueForm(
         })
     };
 
+    let shortcut_form = form.clone();
     rsx! {
         form {
             class: "semantic-form",
             onsubmit: form.submit_handler(),
+            onkeydown: move |event: KeyboardEvent| {
+                let modifiers = event.modifiers();
+                if (modifiers.ctrl() || modifiers.meta())
+                    && !modifiers.alt()
+                    && event.key().to_string().eq_ignore_ascii_case("s")
+                {
+                    event.prevent_default();
+                    event.stop_propagation();
+                    if !shortcut_form.meta().submitting {
+                        let form = shortcut_form.clone();
+                        spawn(async move {
+                            let _ = form.submit().await;
+                        });
+                    }
+                }
+            },
             SemanticFormObserver {
                 form: form.clone(),
                 on_dirty_change,
