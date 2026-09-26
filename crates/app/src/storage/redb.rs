@@ -39,9 +39,9 @@ impl DbBackend for RedbDbProvider {
         })
         .await
         .map_err(|err| {
-            AppError::Db(semantic_db_core::DbError::Storage(format!(
-                "redb database open task failed: {err}"
-            )))
+            AppError::Db(semantic_db_core::DbError::Storage(
+                format!("redb database open task failed: {err}").into(),
+            ))
         })??;
         Ok(Arc::new(Db::new(backend)))
     }

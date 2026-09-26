@@ -1,6 +1,7 @@
 //! Point/index execution for ID batches. Every lookup is revision-bound and
 //! adjusted for the transaction overlay before final-state validation.
 use super::*;
+use crate::StorageErrorKind;
 use crate::batch_return::{ChangeSet, EntityKey, RowChange};
 use crate::embedded::storage::RevisionReader;
 
@@ -38,18 +39,27 @@ pub(crate) struct TxView<'a, S: EntityStorage> {
 impl<'a, S: EntityStorage> TxView<'a, S> {
     /// Open a view whose reads observe `revision`, served from one storage
     /// snapshot when the backend provides it.
+    #[cfg(test)]
     pub(crate) fn new(
         catalog: &'a Catalog,
         storage: &'a S,
         revision: Option<u64>,
     ) -> Result<Self, DbError> {
-        Ok(Self {
+        Ok(Self::with_reader(
             catalog,
-            reader: RevisionReader::new(storage, revision)?,
+            RevisionReader::new(storage, revision)?,
+        ))
+    }
+
+    /// Open a view reading through `reader`.
+    pub(crate) fn with_reader(catalog: &'a Catalog, reader: RevisionReader<'a, S>) -> Self {
+        Self {
+            catalog,
+            reader,
             snapshot: BTreeMap::new(),
             overlay: BTreeMap::new(),
             counts: ExecutionCounts::default(),
-        })
+        }
     }
 
     /// Finish the read phase, releasing the storage snapshot.
@@ -101,7 +111,9 @@ impl<'a, S: EntityStorage> TxView<'a, S> {
         let collection = self
             .catalog
             .collection_by_lid(index.collection)
-            .ok_or_else(|| DbError::Storage("index collection missing".into()))?;
+            .ok_or_else(|| {
+                DbError::storage(StorageErrorKind::InvalidState, "index collection missing")
+            })?;
         self.counts.index_reads += 1;
         let mut ids: BTreeSet<String> = self
             .reader
@@ -131,14 +143,21 @@ impl<'a, S: EntityStorage> TxView<'a, S> {
         &mut self,
         target: &EntityKey,
     ) -> Result<Vec<(EntityKey, FieldPath)>, DbError> {
-        let collection = self
-            .catalog
-            .collection_by_name(REFERENCES)
-            .ok_or_else(|| DbError::Storage("reverse references are not initialized".into()))?;
+        let collection = self.catalog.collection_by_name(REFERENCES).ok_or_else(|| {
+            DbError::storage(
+                StorageErrorKind::InvalidState,
+                "reverse references are not initialized",
+            )
+        })?;
         let index = self
             .catalog
             .find_equality_index(collection.lid, "target")
-            .ok_or_else(|| DbError::Storage("reverse reference index missing".into()))?;
+            .ok_or_else(|| {
+                DbError::storage(
+                    StorageErrorKind::InvalidState,
+                    "reverse reference index missing",
+                )
+            })?;
         self.counts.index_reads += 1;
         let ids =
             self.reader
@@ -149,7 +168,7 @@ impl<'a, S: EntityStorage> TxView<'a, S> {
                 .reader
                 .get_entity(collection.lid, &id)?
                 .ok_or_else(|| {
-                    DbError::Storage("reverse reference index points to missing entry".into())
+                    corrupt_reference("reverse reference index points to missing entry")
                 })?;
             self.counts.point_reads += 1;
             self.counts.visited_rows += 1;
@@ -299,12 +318,12 @@ fn required_string(object: &Object, field: &str) -> Result<String, DbError> {
         .get(field)
         .and_then(Value::as_str)
         .map(str::to_owned)
-        .ok_or_else(|| DbError::Storage(format!("invalid reverse reference {field}")))
+        .ok_or_else(|| corrupt_reference(format!("invalid reverse reference {field}")))
 }
 
 fn read_path(object: &Object) -> Result<FieldPath, DbError> {
     let Some(Value::List(values)) = object.get("path") else {
-        return Err(DbError::Storage("invalid reverse reference path".into()));
+        return Err(corrupt_reference("invalid reverse reference path"));
     };
     values
         .iter()
@@ -312,13 +331,15 @@ fn read_path(object: &Object) -> Result<FieldPath, DbError> {
             Value::String(field) => Ok(PathSegment::Field(field.clone())),
             Value::U64(index) => usize::try_from(*index)
                 .map(PathSegment::Index)
-                .map_err(|_| DbError::Storage("invalid reverse reference index".into())),
-            _ => Err(DbError::Storage(
-                "invalid reverse reference path segment".into(),
-            )),
+                .map_err(|_| corrupt_reference("invalid reverse reference index")),
+            _ => Err(corrupt_reference("invalid reverse reference path segment")),
         })
         .collect::<Result<Vec<_>, _>>()
         .map(FieldPath)
+}
+
+fn corrupt_reference(message: impl Into<String>) -> DbError {
+    DbError::storage(StorageErrorKind::Corruption, message)
 }
 
 fn reference_rows(references: Vec<ResolvedReference>) -> BTreeMap<String, Object> {
@@ -577,17 +598,16 @@ impl<S: EntityStorage> EmbeddedDb<S> {
 
     pub(super) fn try_compact_batch(
         &mut self,
-        catalog: &Catalog,
+        scope: TxScope<'_>,
         batch: &Batch,
-        revision: Option<u64>,
         returning: &crate::BatchReturn,
         catalog_version: u64,
         settings: crate::WriteSettings,
         require_bounded: bool,
     ) -> Result<Option<crate::BatchReply>, DbError> {
+        let catalog = scope.catalog;
         self.run_compact(
-            catalog,
-            revision,
+            scope,
             catalog_version,
             settings,
             require_bounded,
@@ -714,8 +734,7 @@ impl<S: EntityStorage> EmbeddedDb<S> {
     /// the reason) when the dataset path must execute the transaction instead.
     pub(super) fn run_compact<T, R>(
         &mut self,
-        catalog: &Catalog,
-        revision: Option<u64>,
+        scope: TxScope<'_>,
         catalog_version: u64,
         settings: crate::WriteSettings,
         require_bounded: bool,
@@ -727,6 +746,9 @@ impl<S: EntityStorage> EmbeddedDb<S> {
             T,
         ) -> Result<CompactReply<R>, DbError>,
     ) -> Result<Option<R>, DbError> {
+        let TxScope {
+            catalog, revision, ..
+        } = scope;
         self.execution_counts = ExecutionCounts::default();
         let fallback = if !self.storage.tx_capabilities().conflict_detection || revision.is_none() {
             Some("backend_without_revision_conflicts")
@@ -750,7 +772,7 @@ impl<S: EntityStorage> EmbeddedDb<S> {
         let index = catalog
             .find_equality_index(references.lid, "target")
             .unwrap();
-        let mut view = TxView::new(catalog, &self.storage, revision)?;
+        let mut view = TxView::with_reader(catalog, scope.reader(&self.storage)?);
         if view.reader().get_entity(references.lid, MARKER)?.is_none()
             || view.reader().index_needs_rebuild(index.lid)?
         {

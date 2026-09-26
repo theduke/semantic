@@ -4,7 +4,7 @@ use crate::catalog::{Catalog, CollectionKind, LocalCollectionId, SharedCatalog};
 use crate::{
     AsyncRuntime, Backend, Batch, BatchOutcome, DbError, DdlBatch, DdlOutcome, DeleteQuery,
     EntityRecord, MutationStats, PackageRegistrationOutcome, Query, QueryExplain, QueryPlan,
-    QueryResult, TextQueryInput, UpdateQuery, spawn_blocking_on,
+    QueryResult, StorageErrorKind, TextQueryInput, UpdateQuery, spawn_blocking_on,
 };
 use async_trait::async_trait;
 use futures::future::BoxFuture;
@@ -102,7 +102,10 @@ fn default_runtime() -> Arc<dyn AsyncRuntime> {
 }
 
 fn lock_poisoned_error() -> DbError {
-    DbError::Storage("embedded backend rwlock poisoned".to_string())
+    DbError::storage(
+        StorageErrorKind::InvalidState,
+        "embedded backend rwlock poisoned",
+    )
 }
 
 #[async_trait]
@@ -157,7 +160,9 @@ impl<S: EntityStorage> Backend for EmbeddedBackend<S> {
                     }
                 }
             })
-            .map_err(|error| DbError::Storage(format!("spawn entity export thread: {error}")))?;
+            .map_err(|error| {
+                DbError::Storage(format!("spawn entity export thread: {error}").into())
+            })?;
         // The export observes the state at the time of this call.
         let _ = snapshot_taken.await;
         Ok(receiver.boxed())

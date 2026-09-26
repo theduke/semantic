@@ -315,7 +315,7 @@ impl<S: EntityStorage> EmbeddedDb<S> {
                 })
                 .unwrap_or(0);
             let new = old.checked_add_signed(delta).ok_or_else(|| {
-                DbError::Storage(format!("invalid relationship contributor count for {id}"))
+                DbError::Storage(format!("invalid relationship contributor count for {id}").into())
             })?;
             updated_counts.insert((relation.clone(), source.clone(), target.clone()), new);
             if (old == 0) != (new == 0) {
@@ -461,9 +461,12 @@ impl<S: EntityStorage> EmbeddedDb<S> {
         // malformed contributor state fail close to its source.
         for relation in affected {
             if catalog.relationship_by_id(relation).is_none() {
-                return Err(DbError::Storage(format!(
-                    "relationship contributor references unknown relationship '{relation}'"
-                )));
+                return Err(DbError::Storage(
+                    format!(
+                        "relationship contributor references unknown relationship '{relation}'"
+                    )
+                    .into(),
+                ));
             }
         }
         Ok(out)

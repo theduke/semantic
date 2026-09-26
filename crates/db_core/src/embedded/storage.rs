@@ -2,8 +2,8 @@ use std::ops::Bound;
 
 use semantic_data::value::{FieldPath, Object, Value};
 
-use crate::DbError;
 use crate::catalog::{IndexSchema, LocalCollectionId, LocalIndexId};
+use crate::{DbError, IsolationLevel, StorageErrorKind};
 
 #[derive(facet::Facet, Debug, Clone, PartialEq, Eq)]
 #[repr(C)]
@@ -206,12 +206,30 @@ pub fn count_entity_scan(mut scan: BoxEntityScan) -> Result<u64, DbError> {
 
 /// Error returned by storages without ordered index scans.
 pub fn unsupported_ordered_index_scan() -> DbError {
-    DbError::Storage("ordered index scans are not supported by this storage".to_string())
+    DbError::storage(
+        StorageErrorKind::Unsupported,
+        "ordered index scans are not supported by this storage",
+    )
 }
 
 /// Error returned by storages without the maintenance `operation`.
 pub fn unsupported_storage_maintenance(operation: &str) -> DbError {
-    DbError::Storage(format!("{operation} is not supported by this storage"))
+    DbError::storage(
+        StorageErrorKind::Unsupported,
+        format!("{operation} is not supported by this storage"),
+    )
+}
+
+/// Error returned when `isolation` needs consistent snapshots the storage
+/// cannot provide.
+pub(crate) fn snapshot_isolation_unsupported(isolation: IsolationLevel) -> DbError {
+    DbError::storage(
+        StorageErrorKind::Unsupported,
+        format!(
+            "{isolation:?} isolation requires consistent snapshot reads, which this storage \
+             does not provide"
+        ),
+    )
 }
 
 /// Physical storage statistics for observability.
@@ -344,6 +362,37 @@ impl<'a, S: EntityStorage> RevisionReader<'a, S> {
             storage,
             revision,
             snapshot,
+        })
+    }
+
+    /// Open a reader for a transaction attempt at `isolation`.
+    ///
+    /// [`IsolationLevel::ReadCommitted`] behaves like [`Self::new`]. Every
+    /// other level requires one consistent snapshot at `revision`: storages
+    /// without consistent snapshots fail with an `Unsupported` storage error,
+    /// and a snapshot that moved past `revision` is a transaction conflict.
+    pub(crate) fn for_isolation(
+        storage: &'a S,
+        revision: Option<u64>,
+        isolation: IsolationLevel,
+    ) -> Result<Self, DbError> {
+        if !isolation.requires_snapshot() {
+            return Self::new(storage, revision);
+        }
+        let snapshot = storage.snapshot()?;
+        if !snapshot.is_consistent() {
+            return Err(snapshot_isolation_unsupported(isolation));
+        }
+        let actual = snapshot.revision()?;
+        if actual != revision {
+            return Err(DbError::TransactionConflict(format!(
+                "snapshot revision moved: expected {revision:?}, found {actual:?}"
+            )));
+        }
+        Ok(Self {
+            storage,
+            revision,
+            snapshot: Some(snapshot),
         })
     }
 
@@ -857,7 +906,7 @@ impl EntityStorage for MemoryEntityStorage {
             .snapshots
             .as_ref()
             .and_then(|snapshots| snapshots.get(&revision))
-            .ok_or_else(|| DbError::Storage(format!("snapshot {revision} not available")))?;
+            .ok_or_else(|| DbError::Storage(format!("snapshot {revision} not available").into()))?;
         Ok(Box::new(
             snapshot
                 .entities

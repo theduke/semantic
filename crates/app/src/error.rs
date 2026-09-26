@@ -180,6 +180,12 @@ impl From<AppError> for semantic_rpc_core::RpcError {
                     semantic_data::value::Value::Object(data),
                 )
             }
+            AppError::Db(semantic_db_core::DbError::Storage(ref error)) => {
+                semantic_rpc_core::RpcError::new(
+                    format!("storage_{}", error.kind),
+                    value.to_string(),
+                )
+            }
             AppError::Db(_) => semantic_rpc_core::RpcError::new("db_error", value.to_string()),
             AppError::ObjectStore(_) => {
                 semantic_rpc_core::RpcError::new("object_store_error", value.to_string())
@@ -254,5 +260,16 @@ mod tests {
             .map(|(key, value)| (key.to_string(), Value::String(value.into()))),
         );
         assert_eq!(error.data, Some(Value::Object(expected)));
+    }
+
+    #[test]
+    fn storage_error_code_includes_kind() {
+        let error =
+            semantic_rpc_core::RpcError::from(AppError::Db(semantic_db_core::DbError::storage(
+                semantic_db_core::StorageErrorKind::Corruption,
+                "checksum mismatch",
+            )));
+        assert_eq!(error.code, "storage_corruption");
+        assert_eq!(error.message, "storage error: checksum mismatch");
     }
 }

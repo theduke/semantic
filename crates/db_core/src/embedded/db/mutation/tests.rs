@@ -434,8 +434,11 @@ fn stale_snapshot_conflicts_on_predicate_reads() {
     ] {
         let query = set_label(predicate);
         let result = db.run_compact(
-            &catalog,
-            stale,
+            crate::embedded::db::TxScope::new(
+                &catalog,
+                stale,
+                crate::IsolationLevel::ReadCommitted,
+            ),
             version,
             crate::WriteSettings::default(),
             false,

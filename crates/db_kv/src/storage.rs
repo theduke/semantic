@@ -4,13 +4,13 @@ use std::sync::Arc;
 
 use semantic_data::schema::IndexKind;
 use semantic_data::value::{FieldPath, Object, Value};
-use semantic_db_core::DbError;
 use semantic_db_core::catalog::{LocalCollectionId, LocalIndexId};
 use semantic_db_core::embedded::{
     BoxEntityIdScan, BoxEntityScan, EntityReadSnapshot, EntityStorage, StorageCommitOutcome,
     StorageStats, StorageTransactionCapabilities, StorageWriteOp, StoredEntity,
     unsupported_storage_maintenance,
 };
+use semantic_db_core::{DbError, StorageErrorKind};
 use serde::{Deserialize, Serialize};
 
 pub use crate::keys::parse_entity_key;
@@ -210,37 +210,10 @@ pub fn prefix_range_end(prefix: &[u8]) -> Option<Vec<u8>> {
     None
 }
 
-/// Statistics reported by [`KvMaintenance::stats`].
+/// Statistics reported by [`KvEngine::stats`].
 pub type KvEngineStats = StorageStats;
 
-/// Physical maintenance operations of a key-value engine.
-///
-/// Every method has a default for engines without the operation, so
-/// implementing the trait only requires overriding what the engine supports.
-/// [`EntityStore`] forwards these to the `EntityStorage` maintenance methods.
-pub trait KvMaintenance {
-    /// Compact the engine's storage, reclaiming unused space.
-    ///
-    /// Returns whether any compaction was performed.
-    fn compact(&mut self) -> Result<bool, DbError> {
-        Err(unsupported_storage_maintenance("compaction"))
-    }
-
-    /// Verify the integrity of the engine's storage, repairing it if possible.
-    ///
-    /// Returns `true` when the storage was intact and `false` when it was
-    /// repaired.
-    fn check_integrity(&mut self) -> Result<bool, DbError> {
-        Err(unsupported_storage_maintenance("integrity checks"))
-    }
-
-    /// Physical storage statistics; unknown values are `None`.
-    fn stats(&self) -> Result<KvEngineStats, DbError> {
-        Ok(KvEngineStats::default())
-    }
-}
-
-pub trait KvEngine: KvMaintenance + std::fmt::Debug + Send + Sync + 'static {
+pub trait KvEngine: std::fmt::Debug + Send + Sync + 'static {
     type PrefixScan: Iterator<Item = KvScanItem> + Send + 'static;
 
     /// Open a read handle for one logical operation.
@@ -387,6 +360,30 @@ pub trait KvEngine: KvMaintenance + std::fmt::Debug + Send + Sync + 'static {
             }
         }
         Ok(())
+    }
+
+    // Physical maintenance. The defaults suit engines without the operation;
+    // [`EntityStore`] forwards these to the `EntityStorage` maintenance
+    // methods.
+
+    /// Compact the engine's storage, reclaiming unused space.
+    ///
+    /// Returns whether any compaction was performed.
+    fn compact(&mut self) -> Result<bool, DbError> {
+        Err(unsupported_storage_maintenance("compaction"))
+    }
+
+    /// Verify the integrity of the engine's storage, repairing it if possible.
+    ///
+    /// Returns `true` when the storage was intact and `false` when it was
+    /// repaired.
+    fn check_integrity(&mut self) -> Result<bool, DbError> {
+        Err(unsupported_storage_maintenance("integrity checks"))
+    }
+
+    /// Physical storage statistics; unknown values are `None`.
+    fn stats(&self) -> Result<KvEngineStats, DbError> {
+        Ok(KvEngineStats::default())
     }
 }
 
@@ -892,8 +889,9 @@ impl<E: KvEngine> EntityStorage for EntityStore<E> {
     fn apply_batch(&mut self, ops: &[StorageWriteOp]) -> std::result::Result<(), DbError> {
         match self.commit_ops(ops, None)? {
             StorageCommitOutcome::Committed { .. } => Ok(()),
-            StorageCommitOutcome::Conflict { .. } => Err(DbError::Storage(
-                "unexpected conflict for unconditional batch".to_string(),
+            StorageCommitOutcome::Conflict { .. } => Err(DbError::storage(
+                StorageErrorKind::Conflict,
+                "unexpected conflict for unconditional batch",
             )),
         }
     }

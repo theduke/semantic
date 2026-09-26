@@ -11,10 +11,10 @@ use semantic_db_core::embedded::{
     EmbeddedBackend, EmbeddedDb, StorageCommitOutcome, StorageTableStats,
     StorageTransactionCapabilities,
 };
-use semantic_db_core::{DbConfig, DbError};
+use semantic_db_core::{DbConfig, DbError, StorageErrorKind};
 use semantic_db_kv::{
-    BoxKvPrefixScan, EntityStore, KvEngine, KvEngineStats, KvMaintenance, KvReadTxn, KvWriteOp,
-    KvWriteTxn, prefix_range_end,
+    BoxKvPrefixScan, EntityStore, KvEngine, KvEngineStats, KvReadTxn, KvWriteOp, KvWriteTxn,
+    prefix_range_end,
 };
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -127,9 +127,10 @@ impl RedbKvEngine {
 
     fn ensure_no_readers(&self, operation: &str) -> Result<(), DbError> {
         if Arc::strong_count(&self.readers) > 1 {
-            return Err(DbError::Storage(format!(
-                "cannot run {operation} while read transactions are open"
-            )));
+            return Err(DbError::storage(
+                StorageErrorKind::InvalidState,
+                format!("cannot run {operation} while read transactions are open"),
+            ));
         }
         Ok(())
     }
@@ -396,9 +397,7 @@ impl KvEngine for RedbKvEngine {
     ) -> Result<StorageCommitOutcome, DbError> {
         self.write_with(expected_revision, |txn| apply_ops(txn, ops))
     }
-}
 
-impl KvMaintenance for RedbKvEngine {
     /// Compact the database file (see [`redb::Database::compact`]).
     ///
     /// Fails while read transactions or scans are open.
@@ -450,8 +449,36 @@ impl KvMaintenance for RedbKvEngine {
     }
 }
 
-pub(crate) fn storage_err(err: impl std::fmt::Display) -> DbError {
-    DbError::Storage(err.to_string())
+/// Wrap a redb (or file system) error as the source of a storage error.
+///
+/// Every specific redb error converts into [`redb::Error`], which is
+/// classified by [`redb_error_kind`].
+pub(crate) fn storage_err(err: impl Into<redb::Error>) -> DbError {
+    let err = err.into();
+    let kind = redb_error_kind(&err);
+    let message = err.to_string();
+    match err {
+        // Keeping the error as the source would keep its read transaction
+        // (and the pages it pins) alive for as long as the error lives.
+        redb::Error::ReadTransactionStillInUse(_) => DbError::storage(kind, message),
+        err => DbError::storage_with_source(kind, message, err),
+    }
+}
+
+fn redb_error_kind(err: &redb::Error) -> StorageErrorKind {
+    match err {
+        redb::Error::Io(_) | redb::Error::PreviousIo => StorageErrorKind::Io,
+        redb::Error::Corrupted(_) => StorageErrorKind::Corruption,
+        redb::Error::UpgradeRequired(_) => StorageErrorKind::Unsupported,
+        redb::Error::DatabaseAlreadyOpen
+        | redb::Error::TransactionInProgress
+        | redb::Error::PersistentSavepointExists
+        | redb::Error::EphemeralSavepointExists
+        | redb::Error::TableAlreadyOpen(..)
+        | redb::Error::LockPoisoned(_)
+        | redb::Error::ReadTransactionStillInUse(_) => StorageErrorKind::InvalidState,
+        _ => StorageErrorKind::Backend,
+    }
 }
 
 pub type RedbDatabase = EmbeddedDb<EntityStore<RedbKvEngine>>;

@@ -343,6 +343,30 @@ pub fn ref_target_class_ids(catalog: &Catalog, ty: &Type) -> Vec<String> {
     out.into_iter().collect()
 }
 
+/// Every stored `type` value of a row the ref type `ty` may point to.
+///
+/// These are the canonical ids of [`ref_target_class_ids`] (the target class
+/// and its subclasses) plus each class's plain name when that name resolves
+/// back to the class: writes keep short type names such as `person` as
+/// written (see `should_canonicalize_object_type`), and reference validation
+/// resolves them the same way. Empty when the target is unconstrained.
+pub(crate) fn ref_target_type_values(catalog: &Catalog, ty: &Type) -> Vec<String> {
+    let mut out = BTreeSet::new();
+    for class_id in ref_target_class_ids(catalog, ty) {
+        let plain = crate::catalog::nameset_for_qualified(&class_id).plain_name;
+        let plain_resolves = catalog
+            .class_ids(&plain)
+            .first()
+            .and_then(|lid| catalog.class_by_lid(*lid))
+            .is_some_and(|class| class.class.id == class_id);
+        if plain_resolves {
+            out.insert(plain);
+        }
+        out.insert(class_id);
+    }
+    out.into_iter().collect()
+}
+
 fn collect_ref_target_class_ids(catalog: &Catalog, ty: &Type, out: &mut BTreeSet<String>) {
     collect_ref_target_class_ids_inner(catalog, ty, out, &mut BTreeSet::new());
 }

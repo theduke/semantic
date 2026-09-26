@@ -34,9 +34,9 @@ use crate::embedded::{
     },
 };
 use crate::{
-    DdlBatch, DdlCollectionKind, DdlOperation, DdlOutcome, QueryContext, TransactionConcurrency,
-    TransactionOptions, apply_ddl_batch, fresh_catalog_with_core_schema,
-    run_with_transaction_retries,
+    DdlBatch, DdlCollectionKind, DdlOperation, DdlOutcome, IsolationLevel, QueryContext,
+    StorageErrorKind, TransactionConcurrency, TransactionOptions, apply_ddl_batch,
+    fresh_catalog_with_core_schema, run_with_transaction_retries,
 };
 
 const RELATION_EDGES_COLLECTION: &str = "__semantic.relationship_edges";
@@ -51,6 +51,8 @@ const REL_EDGE_TARGET_INDEX_NAME: &str = "__rel_target_idx";
 
 pub(crate) mod compact;
 mod incremental;
+#[cfg(test)]
+mod isolation_tests;
 mod local_refs;
 mod mutation;
 mod reader;
@@ -59,7 +61,7 @@ mod validation;
 pub use reader::DbReader;
 use reader::QueryReader;
 
-use crate::embedded::storage::RevisionReader;
+use crate::embedded::storage::{RevisionReader, snapshot_isolation_unsupported};
 use compact::CompactReply;
 use local_refs::{
     LocalRefResolver, RowLocalRefs, resolve_path_with_local_refs,
@@ -588,10 +590,13 @@ impl<S: EntityStorage> EmbeddedDb<S> {
             Vec::new()
         } else {
             let stored_rows = outcome.dataset.get(&collection.name).ok_or_else(|| {
-                DbError::Storage(format!(
-                    "inserted collection '{}' missing from batch outcome",
-                    collection.name
-                ))
+                DbError::Storage(
+                    format!(
+                        "inserted collection '{}' missing from batch outcome",
+                        collection.name
+                    )
+                    .into(),
+                )
             })?;
             inserted_ids
                 .iter()
@@ -770,9 +775,13 @@ impl<S: EntityStorage> EmbeddedDb<S> {
         let txn_result = run_with_transaction_retries(TransactionOptions::default(), |_| {
             let catalog_snapshot = self.catalog.snapshot();
             let read_revision = self.storage.current_revision()?;
-            if let Some(result) = self.run_compact(
+            let scope = TxScope::new(
                 catalog_snapshot.catalog.as_ref(),
                 read_revision,
+                IsolationLevel::ReadCommitted,
+            );
+            if let Some(result) = self.run_compact(
+                scope,
                 catalog_snapshot.version,
                 crate::WriteSettings::default(),
                 false,
@@ -791,11 +800,7 @@ impl<S: EntityStorage> EmbeddedDb<S> {
             )? {
                 return Ok(result);
             }
-            let before = self.load_dataset_for_batch(
-                catalog_snapshot.catalog.as_ref(),
-                &touched,
-                read_revision,
-            )?;
+            let before = self.load_dataset_for_batch(scope, &touched)?;
             let mut after = before.clone();
 
             let mut result = crate::UpdateResult {
@@ -845,10 +850,9 @@ impl<S: EntityStorage> EmbeddedDb<S> {
 
             expand_dataset_cascade_deletes(catalog_snapshot.catalog.as_ref(), &before, &mut after);
             match self.persist_dataset_delta_with_settings(
-                catalog_snapshot.catalog.as_ref(),
+                scope,
                 &before,
                 &after,
-                read_revision,
                 &[],
                 crate::WriteSettings::default(),
                 DatasetWrite::Data,
@@ -900,9 +904,13 @@ impl<S: EntityStorage> EmbeddedDb<S> {
         let txn_result = run_with_transaction_retries(TransactionOptions::default(), |_| {
             let catalog_snapshot = self.catalog.snapshot();
             let read_revision = self.storage.current_revision()?;
-            if let Some(result) = self.run_compact(
+            let scope = TxScope::new(
                 catalog_snapshot.catalog.as_ref(),
                 read_revision,
+                IsolationLevel::ReadCommitted,
+            );
+            if let Some(result) = self.run_compact(
+                scope,
                 catalog_snapshot.version,
                 crate::WriteSettings::default(),
                 false,
@@ -911,11 +919,7 @@ impl<S: EntityStorage> EmbeddedDb<S> {
             )? {
                 return Ok(result);
             }
-            let before = self.load_dataset_for_batch(
-                catalog_snapshot.catalog.as_ref(),
-                &touched,
-                read_revision,
-            )?;
+            let before = self.load_dataset_for_batch(scope, &touched)?;
             let mut after = before.clone();
 
             let mut result = crate::DeleteResult {
@@ -948,10 +952,9 @@ impl<S: EntityStorage> EmbeddedDb<S> {
 
             expand_dataset_cascade_deletes(catalog_snapshot.catalog.as_ref(), &before, &mut after);
             match self.persist_dataset_delta_with_settings(
-                catalog_snapshot.catalog.as_ref(),
+                scope,
                 &before,
                 &after,
-                read_revision,
                 &[],
                 crate::WriteSettings::default(),
                 DatasetWrite::Data,
@@ -1042,6 +1045,27 @@ impl<S: EntityStorage> EmbeddedDb<S> {
         )
     }
 
+    /// Reject an isolation level the storage cannot provide, before any
+    /// transaction attempt.
+    fn ensure_isolation_supported(&self, isolation: IsolationLevel) -> Result<(), DbError> {
+        if !isolation.requires_snapshot() {
+            return Ok(());
+        }
+        if !self.storage.snapshot()?.is_consistent() {
+            return Err(snapshot_isolation_unsupported(isolation));
+        }
+        if isolation == IsolationLevel::Serializable
+            && !self.storage.tx_capabilities().conflict_detection
+        {
+            return Err(DbError::storage(
+                StorageErrorKind::Unsupported,
+                "Serializable isolation requires commit-time conflict detection, which this \
+                 storage does not provide",
+            ));
+        }
+        Ok(())
+    }
+
     fn transact_returning(
         &mut self,
         batch: Batch,
@@ -1062,16 +1086,21 @@ impl<S: EntityStorage> EmbeddedDb<S> {
                 "read-only transaction cannot contain mutation operations".to_string(),
             ));
         }
+        self.ensure_isolation_supported(options.isolation)?;
 
         let txn_result = run_with_transaction_retries(options, |_| {
             let catalog_snapshot = self.catalog.snapshot();
             let batch = self.canonicalize_batch(&batch, catalog_snapshot.catalog.as_ref())?;
             let read_revision = self.storage.current_revision()?;
+            let scope = TxScope::new(
+                catalog_snapshot.catalog.as_ref(),
+                read_revision,
+                options.isolation,
+            );
             if returning != crate::BatchReturn::Dataset {
                 if let Some(reply) = self.try_compact_batch(
-                    catalog_snapshot.catalog.as_ref(),
+                    scope,
                     &batch,
-                    read_revision,
                     &returning,
                     catalog_snapshot.version,
                     settings,
@@ -1085,11 +1114,7 @@ impl<S: EntityStorage> EmbeddedDb<S> {
                     ));
                 }
             }
-            let dataset = self.load_dataset_for_batch(
-                catalog_snapshot.catalog.as_ref(),
-                &batch,
-                read_revision,
-            )?;
+            let dataset = self.load_dataset_for_batch(scope, &batch)?;
             let mut out = Self::execute_batch_with_write_defaults(
                 catalog_snapshot.catalog.as_ref(),
                 &dataset,
@@ -1126,10 +1151,9 @@ impl<S: EntityStorage> EmbeddedDb<S> {
             }
 
             match self.persist_dataset_delta_with_settings(
-                catalog_snapshot.catalog.as_ref(),
+                scope,
                 &dataset,
                 &out.dataset,
-                read_revision,
                 &[],
                 settings,
                 DatasetWrite::Data,
@@ -1630,10 +1654,21 @@ impl<S: EntityStorage> EmbeddedDb<S> {
 
     fn load_dataset_for_batch(
         &self,
-        catalog: &Catalog,
+        scope: TxScope<'_>,
         batch: &Batch,
-        read_revision: Option<u64>,
     ) -> std::result::Result<BTreeMap<String, BTreeMap<String, Object>>, DbError> {
+        let TxScope {
+            catalog,
+            revision: read_revision,
+            isolation,
+        } = scope;
+        // Snapshot isolation reads every touched collection from one
+        // snapshot at the read revision.
+        let snapshot_reader = if isolation.requires_snapshot() {
+            Some(scope.reader(&self.storage)?)
+        } else {
+            None
+        };
         let mut dataset = BTreeMap::new();
         for collection_name in touched_collections(batch) {
             let collection = catalog
@@ -1642,7 +1677,14 @@ impl<S: EntityStorage> EmbeddedDb<S> {
                     name: collection_name.clone(),
                 })?;
 
-            let rows = if self.storage.tx_capabilities().snapshot_reads {
+            let rows = if let Some(reader) = &snapshot_reader {
+                let mut rows = Vec::new();
+                reader.scan_collection(collection.lid, |row| {
+                    rows.push(row);
+                    Ok(())
+                })?;
+                rows
+            } else if self.storage.tx_capabilities().snapshot_reads {
                 if let Some(revision) = read_revision {
                     self.storage
                         .scan_collection_at_revision(collection.lid, revision)?
@@ -1674,10 +1716,9 @@ impl<S: EntityStorage> EmbeddedDb<S> {
         prelude_ops: &[StorageWriteOp],
     ) -> std::result::Result<StorageCommitOutcome, DbError> {
         self.persist_dataset_delta_with_settings(
-            catalog,
+            TxScope::new(catalog, expected_revision, IsolationLevel::ReadCommitted),
             before,
             after,
-            expected_revision,
             prelude_ops,
             crate::WriteSettings::default(),
             DatasetWrite::Migration,
@@ -1686,14 +1727,18 @@ impl<S: EntityStorage> EmbeddedDb<S> {
 
     fn persist_dataset_delta_with_settings(
         &mut self,
-        catalog: &Catalog,
+        scope: TxScope<'_>,
         before: &BTreeMap<String, BTreeMap<String, Object>>,
         after: &BTreeMap<String, BTreeMap<String, Object>>,
-        expected_revision: Option<u64>,
         prelude_ops: &[StorageWriteOp],
         settings: crate::WriteSettings,
         write: DatasetWrite,
     ) -> std::result::Result<StorageCommitOutcome, DbError> {
+        let TxScope {
+            catalog,
+            revision: expected_revision,
+            ..
+        } = scope;
         let validation_enabled = self.validation_enabled()?;
         if validation_enabled {
             crate::validation::validate_enforcement_support(catalog)?;
@@ -1707,7 +1752,7 @@ impl<S: EntityStorage> EmbeddedDb<S> {
         let mut changed_rows = BTreeMap::<String, BTreeSet<String>>::new();
         let reader = match write {
             DatasetWrite::Migration => None,
-            DatasetWrite::Data => Some(RevisionReader::new(&self.storage, expected_revision)?),
+            DatasetWrite::Data => Some(scope.reader(&self.storage)?),
         };
 
         for (collection_name, new_rows) in after {
@@ -3104,6 +3149,35 @@ fn expand_dataset_cascade_deletes(
     count
 }
 
+/// What one write-transaction attempt reads against.
+#[derive(Clone, Copy)]
+pub(super) struct TxScope<'c> {
+    /// Catalog snapshot of the attempt.
+    pub catalog: &'c Catalog,
+    /// Storage revision the attempt reads at; its commit is conditional on
+    /// the storage still being at this revision.
+    pub revision: Option<u64>,
+    pub isolation: IsolationLevel,
+}
+
+impl<'c> TxScope<'c> {
+    fn new(catalog: &'c Catalog, revision: Option<u64>, isolation: IsolationLevel) -> Self {
+        Self {
+            catalog,
+            revision,
+            isolation,
+        }
+    }
+
+    /// Reader for the attempt's reads, honouring its isolation level.
+    fn reader<'a, S: EntityStorage>(
+        &self,
+        storage: &'a S,
+    ) -> Result<RevisionReader<'a, S>, DbError> {
+        RevisionReader::for_isolation(storage, self.revision, self.isolation)
+    }
+}
+
 /// Kind of write persisted by the dataset path.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum DatasetWrite {
@@ -4136,6 +4210,86 @@ mod tests {
         assert_eq!(names["article-04"], Value::String("Person 1".to_string()));
         assert_eq!(counts.collection_scans(), 1);
         assert_eq!(counts.entity_gets(), 3);
+    }
+
+    #[test]
+    fn typed_ref_paths_join_targets_stored_with_alias_or_subclass_types() {
+        let mut db = EmbeddedDb::in_memory();
+        register_ref_schema(&mut db, ref_ty("person"));
+        let upsert = |id: &str, object: Object| BatchOperation::Upsert {
+            collection: DEFAULT_COLLECTION.to_string(),
+            id: id.to_string(),
+            object,
+        };
+        let name = |value: &str| ("name", Value::String(value.to_string()));
+        let author = |id: &str| ("author", Value::String(id.to_string()));
+        db.transact(
+            Batch::new()
+                // Short class names are stored as written.
+                .with_op(upsert(
+                    "p-alias",
+                    entity("p-alias", "person", [name("Alias")]),
+                ))
+                .with_op(upsert(
+                    "p-canonical",
+                    entity("p-canonical", "local:person", [name("Canonical")]),
+                ))
+                .with_op(upsert(
+                    "p-employee",
+                    entity("p-employee", "employee", [name("Employee")]),
+                ))
+                .with_op(upsert(
+                    "a-alias",
+                    entity("a-alias", "article", [author("p-alias")]),
+                ))
+                .with_op(upsert(
+                    "a-canonical",
+                    entity("a-canonical", "article", [author("p-canonical")]),
+                ))
+                .with_op(upsert(
+                    "a-employee",
+                    entity("a-employee", "article", [author("p-employee")]),
+                )),
+        )
+        .unwrap();
+        let stored = db.get(DEFAULT_COLLECTION, "p-alias").unwrap().unwrap();
+        assert_eq!(
+            stored.object.get("type"),
+            Some(&Value::String("person".into()))
+        );
+
+        let rows = db
+            .select(
+                SelectQuery::new()
+                    .with_collection(DEFAULT_COLLECTION)
+                    .with_predicate(eq_predicate(
+                        FieldPath::from_fields(["type"]),
+                        Value::String("article".into()),
+                    ))
+                    .with_projection(vec![
+                        field_projection(&["id"], "id"),
+                        field_projection(&["author", "name"], "author_name"),
+                    ]),
+            )
+            .unwrap();
+        let names = rows
+            .iter()
+            .map(|row| {
+                (
+                    row.get("id").and_then(Value::as_str).unwrap().to_string(),
+                    row.get("author_name").cloned(),
+                )
+            })
+            .collect::<BTreeMap<_, _>>();
+        let expected = |name: &str| Some(Value::String(name.to_string()));
+        assert_eq!(
+            names,
+            BTreeMap::from([
+                ("a-alias".to_string(), expected("Alias")),
+                ("a-canonical".to_string(), expected("Canonical")),
+                ("a-employee".to_string(), expected("Employee")),
+            ])
+        );
     }
 
     #[test]

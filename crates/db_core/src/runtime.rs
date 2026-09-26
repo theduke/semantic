@@ -37,7 +37,11 @@ where
     async move {
         let value = erased.await?;
         value.downcast::<R>().map(|value| *value).map_err(|_| {
-            DbError::Storage("blocking runtime returned unexpected result type".to_string())
+            DbError::Storage(
+                "blocking runtime returned unexpected result type"
+                    .to_string()
+                    .into(),
+            )
         })
     }
     .boxed()
@@ -66,9 +70,9 @@ impl AsyncRuntime for TokioAsyncRuntime {
         op: BlockingOp,
     ) -> BoxFuture<'static, std::result::Result<BlockingOutput, DbError>> {
         async move {
-            tokio::task::spawn_blocking(op)
-                .await
-                .map_err(|err| DbError::Storage(format!("tokio spawn_blocking failed: {err}")))?
+            tokio::task::spawn_blocking(op).await.map_err(|err| {
+                DbError::Storage(format!("tokio spawn_blocking failed: {err}").into())
+            })?
         }
         .boxed()
     }

@@ -19,8 +19,6 @@ struct ObservedEngine {
     probe: Arc<Mutex<Probe>>,
 }
 
-impl KvMaintenance for ObservedEngine {}
-
 impl KvEngine for ObservedEngine {
     type PrefixScan = BoxKvPrefixScan;
     fn get(&self, key: &[u8]) -> Result<Option<Vec<u8>>, DbError> {

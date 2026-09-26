@@ -1,5 +1,5 @@
 use rmp_serde::{from_slice, to_vec_named};
-use semantic_db_core::DbError;
+use semantic_db_core::{DbError, StorageErrorKind};
 use semantic_db_kv::KvWriteOp;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
@@ -26,7 +26,7 @@ impl EventId {
         self.0
             .checked_add(1)
             .and_then(Self::new)
-            .ok_or_else(|| DbError::Storage("WAL event id overflow".to_string()))
+            .ok_or_else(|| DbError::Storage("WAL event id overflow".to_string().into()))
     }
 }
 
@@ -61,7 +61,7 @@ pub(crate) fn decode(
 ) -> std::result::Result<Vec<KvWriteOp>, DbError> {
     let header_len = MAGIC.len() + CHECKSUM_LEN;
     if encoded.len() < header_len || &encoded[..MAGIC.len()] != MAGIC {
-        return Err(DbError::Storage(format!(
+        return Err(corrupt_event(format!(
             "WAL event {} has an invalid format header",
             expected_id.get()
         )));
@@ -69,7 +69,7 @@ pub(crate) fn decode(
     let checksum = &encoded[MAGIC.len()..header_len];
     let payload = &encoded[header_len..];
     if Sha256::digest(payload).as_slice() != checksum {
-        return Err(DbError::Storage(format!(
+        return Err(corrupt_event(format!(
             "WAL event {} checksum mismatch",
             expected_id.get()
         )));
@@ -78,26 +78,33 @@ pub(crate) fn decode(
         DbError::Deserialization(format!("decode WAL event {}: {err}", expected_id.get()))
     })?;
     if event.version != VERSION {
-        return Err(DbError::Storage(format!(
-            "unsupported WAL event version {} in event {}",
-            event.version,
-            expected_id.get()
-        )));
+        return Err(DbError::storage(
+            StorageErrorKind::Unsupported,
+            format!(
+                "unsupported WAL event version {} in event {}",
+                event.version,
+                expected_id.get()
+            ),
+        ));
     }
     if event.id != expected_id.get() {
-        return Err(DbError::Storage(format!(
+        return Err(corrupt_event(format!(
             "WAL key/event id mismatch: key {}, payload {}",
             expected_id.get(),
             event.id
         )));
     }
     if event.operations.is_empty() {
-        return Err(DbError::Storage(format!(
+        return Err(corrupt_event(format!(
             "WAL event {} contains an empty batch",
             expected_id.get()
         )));
     }
     Ok(event.operations)
+}
+
+fn corrupt_event(message: String) -> DbError {
+    DbError::storage(StorageErrorKind::Corruption, message)
 }
 
 #[cfg(test)]

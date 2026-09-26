@@ -11,8 +11,8 @@ pub use storage::layout::{LAYOUT_VERSION_CURRENT, LAYOUT_VERSION_LEGACY, LayoutM
 pub use storage::stats::{STATS_VERSION, StatsBackfill};
 pub use storage::{
     BoxKvPrefixScan, EntityPayloadFormat, EntityScan, EntityStore, IndexEntityIdScan, KvEngine,
-    KvEngineStats, KvEntitySnapshot, KvKeyScan, KvMaintenance, KvReadTxn, KvScanItem, KvWriteOp,
-    KvWriteTxn, MemoryKvEngine, decode_entity, encode_entity, parse_entity_key, prefix_range_end,
+    KvEngineStats, KvEntitySnapshot, KvKeyScan, KvReadTxn, KvScanItem, KvWriteOp, KvWriteTxn,
+    MemoryKvEngine, decode_entity, encode_entity, parse_entity_key, prefix_range_end,
 };
 
 use semantic_db_core::embedded::{EmbeddedBackend, EmbeddedDb};

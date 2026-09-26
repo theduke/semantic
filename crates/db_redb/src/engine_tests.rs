@@ -7,10 +7,11 @@ use std::path::Path;
 use redb::{ReadableTable, TableDefinition};
 use semantic_data::schema::{DbOpenMode, IndexKind};
 use semantic_data::value::{Object, Value};
+use semantic_db_core::StorageErrorKind;
 use semantic_db_core::catalog::{CollectionKind, LocalIndexId};
 use semantic_db_core::embedded::EntityStorage;
 use semantic_db_kv::keys::{self, TAG_ENTITY, TAG_INDEX, TAG_INDEX_MARKER, TAG_META, TAG_STATS};
-use semantic_db_kv::{EntityStore, KvEngine, KvMaintenance, KvReadTxn, KvWriteOp};
+use semantic_db_kv::{EntityStore, KvEngine, KvReadTxn, KvWriteOp};
 
 use crate::tables::{REVISION_KEY, TableSetup, prepare_tables};
 use crate::{RedbDatabase, RedbDurability, RedbKvEngine, RedbOptions, RedbTable};
@@ -151,6 +152,26 @@ fn non_durable_commits_survive_reopen() {
 }
 
 #[test]
+fn open_errors_keep_the_redb_error_as_source() {
+    use std::error::Error as _;
+
+    let dir = tempfile::tempdir().unwrap();
+    let err = RedbKvEngine::open(dir.path().join("missing"), DbOpenMode::OpenExisting).unwrap_err();
+    assert_eq!(err.storage_kind(), Some(StorageErrorKind::Io), "{err}");
+    let source = err
+        .source()
+        .and_then(|storage| storage.source())
+        .expect("redb error source");
+    assert!(
+        matches!(
+            source.downcast_ref::<redb::Error>(),
+            Some(redb::Error::Io(io)) if io.kind() == std::io::ErrorKind::NotFound
+        ),
+        "{source:?}"
+    );
+}
+
+#[test]
 fn compaction_and_integrity_check_succeed_after_deletes() {
     let dir = tempfile::tempdir().unwrap();
     let mut engine = RedbKvEngine::open(dir.path().join("db"), DbOpenMode::AutoCreate).unwrap();
@@ -173,7 +194,10 @@ fn compaction_and_integrity_check_succeed_after_deletes() {
         let read = engine.read_txn().unwrap();
         let scan = read.scan_prefix_stream(vec![TAG_ENTITY]).unwrap();
         drop(read);
-        assert!(engine.compact().is_err());
+        assert_eq!(
+            engine.compact().unwrap_err().storage_kind(),
+            Some(StorageErrorKind::InvalidState)
+        );
         assert!(engine.check_integrity().is_err());
         assert_eq!(scan.count(), 1);
     }

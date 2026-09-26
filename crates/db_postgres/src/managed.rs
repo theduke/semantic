@@ -13,8 +13,8 @@ use semantic_db_core::embedded::{
 };
 use semantic_db_core::{DEFAULT_COLLECTION, DbConfig, DbError};
 use semantic_db_kv::{
-    BoxKvPrefixScan, EntityPayloadFormat, EntityStore, KvEngine, KvMaintenance, KvWriteOp,
-    decode_entity, encode_entity, parse_entity_key,
+    BoxKvPrefixScan, EntityPayloadFormat, EntityStore, KvEngine, KvWriteOp, decode_entity,
+    encode_entity, parse_entity_key,
 };
 use sha2::{Digest, Sha256};
 use tokio_postgres::Transaction;
@@ -52,8 +52,6 @@ impl PostgresSnapshotEngine {
         self.revision = self.revision.saturating_add(1);
     }
 }
-
-impl KvMaintenance for PostgresSnapshotEngine {}
 
 impl KvEngine for PostgresSnapshotEngine {
     type PrefixScan = BoxKvPrefixScan;
@@ -1798,10 +1796,10 @@ pub(crate) fn storage_error(error: tokio_postgres::Error) -> DbError {
         return match code.code() {
             "40001" | "40P01" => DbError::TransactionConflict(code.code().to_string()),
             "23505" | "23503" | "23502" | "23514" => DbError::InvalidQuery(error.to_string()),
-            _ => DbError::Storage(error.to_string()),
+            _ => DbError::Storage(error.to_string().into()),
         };
     }
-    DbError::Storage(error.to_string())
+    DbError::Storage(error.to_string().into())
 }
 
 #[cfg(test)]

@@ -730,7 +730,7 @@ struct RefPathJoinLifter<'a> {
     context: &'a QueryContext,
     bindings: std::collections::HashMap<String, BindingInfo>,
     join_aliases: std::collections::HashMap<JoinKey, String>,
-    pending: Vec<(JoinKey, BindingInfo, Option<String>)>,
+    pending: Vec<(JoinKey, BindingInfo, Vec<String>)>,
     base_binding: String,
     alias_counter: usize,
 }
@@ -916,16 +916,19 @@ impl<'a> RefPathJoinLifter<'a> {
         &self,
         source: &BindingInfo,
         field_name: &str,
-    ) -> Option<(String, BindingInfo, Option<String>)> {
+    ) -> Option<(String, BindingInfo, Vec<String>)> {
         let schema = resolve_collection_schema_for_binding(self.context, source)?;
         let canonical = schema.canonical_field_name(field_name).to_string();
         let field_type = schema.field_type(&canonical)?;
-        let TypeKind::Ref(type_ref) = &field_type.kind else {
+        let TypeKind::Ref(_) = &field_type.kind else {
             return None;
         };
 
         let mut target = source.clone();
-        let target_class = type_ref.target_class().map(str::to_owned);
+        // Accept every stored form of the target class and its subclasses,
+        // exactly like reference validation does.
+        let target_types =
+            crate::validation::ref_target_type_values(self.context.catalog(), field_type);
         if target.collection_id.is_none()
             && let Some(name) = &target.source_name
         {
@@ -935,7 +938,7 @@ impl<'a> RefPathJoinLifter<'a> {
                 .collection_by_name(name)
                 .map(|c| c.lid);
         }
-        Some((canonical, target, target_class))
+        Some((canonical, target, target_types))
     }
 
     fn next_alias(&mut self) -> String {
@@ -958,13 +961,7 @@ impl<'a> RefPathJoinLifter<'a> {
                     binding: Some(right_binding.clone()),
                     backend_tag: None,
                 },
-                pushed_predicate: right_class.map(|class_name| Expr::Binary {
-                    op: BinaryOp::Eq,
-                    left: Box::new(Expr::Operand(Operand::Field(FieldPath::from_fields([
-                        "type",
-                    ])))),
-                    right: Box::new(Expr::Operand(Operand::Literal(Value::String(class_name)))),
-                }),
+                pushed_predicate: ref_target_type_predicate(right_class),
             };
 
             let left_path = if join_key.from_binding == self.base_binding {
@@ -986,6 +983,28 @@ impl<'a> RefPathJoinLifter<'a> {
             });
         }
         input
+    }
+}
+
+/// `type = v` or `type IN (...)` over the accepted `type` values of a ref
+/// target; `None` when every row is accepted.
+fn ref_target_type_predicate(mut values: Vec<String>) -> Option<Expr> {
+    let field = Box::new(Expr::Operand(Operand::Field(FieldPath::from_fields([
+        "type",
+    ]))));
+    let literal = |value: String| Expr::Operand(Operand::Literal(Value::String(value)));
+    match values.len() {
+        0 => None,
+        1 => Some(Expr::Binary {
+            op: BinaryOp::Eq,
+            left: field,
+            right: Box::new(literal(values.remove(0))),
+        }),
+        _ => Some(Expr::InList {
+            expr: field,
+            list: values.into_iter().map(literal).collect(),
+            negated: false,
+        }),
     }
 }
 

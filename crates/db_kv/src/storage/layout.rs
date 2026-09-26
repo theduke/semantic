@@ -24,7 +24,7 @@
 //! acceptable for embedded databases. Databases already at the current
 //! version are checked with one read and are not written to.
 
-use semantic_db_core::DbError;
+use semantic_db_core::{DbError, StorageErrorKind};
 
 use super::{EntityStore, KvEngine, KvWriteTxn};
 use crate::keys::{self, legacy};
@@ -69,13 +69,17 @@ fn needs_migration(version: Option<u32>) -> Result<bool, DbError> {
     match version {
         Some(LAYOUT_VERSION_CURRENT) => Ok(false),
         None | Some(LAYOUT_VERSION_LEGACY) => Ok(true),
-        Some(version) if version > LAYOUT_VERSION_CURRENT => Err(DbError::Storage(format!(
-            "database storage layout version {version} is newer than the supported version \
-             {LAYOUT_VERSION_CURRENT}; upgrade the application to open it"
-        ))),
-        Some(version) => Err(DbError::Storage(format!(
-            "unknown database storage layout version {version}"
-        ))),
+        Some(version) if version > LAYOUT_VERSION_CURRENT => Err(DbError::storage(
+            StorageErrorKind::Unsupported,
+            format!(
+                "database storage layout version {version} is newer than the supported version \
+                 {LAYOUT_VERSION_CURRENT}; upgrade the application to open it"
+            ),
+        )),
+        Some(version) => Err(DbError::storage(
+            StorageErrorKind::Corruption,
+            format!("unknown database storage layout version {version}"),
+        )),
     }
 }
 
@@ -128,10 +132,13 @@ fn migrate_in(txn: &mut dyn KvWriteTxn) -> Result<LayoutMigration, DbError> {
     };
     for (key, payload) in legacy_entities {
         let (collection, id) = legacy::parse_entity_key(&key).ok_or_else(|| {
-            DbError::Storage(format!(
-                "cannot migrate unrecognized legacy entity key {:?}",
-                String::from_utf8_lossy(&key)
-            ))
+            DbError::storage(
+                StorageErrorKind::Corruption,
+                format!(
+                    "cannot migrate unrecognized legacy entity key {:?}",
+                    String::from_utf8_lossy(&key)
+                ),
+            )
         })?;
         txn.put(&keys::entity_key(collection, id), &payload)?;
         txn.delete(&key)?;

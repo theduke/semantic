@@ -3,7 +3,7 @@ use std::thread::JoinHandle;
 
 use bytes::Bytes;
 use objstore::{Conditions, ObjStore, Put};
-use semantic_db_core::DbError;
+use semantic_db_core::{DbError, StorageErrorKind};
 
 use super::{DEFAULT_PREFIX, LogStore, event_key, normalize_prefix, parse_event_key};
 use crate::EventId;
@@ -62,18 +62,22 @@ impl ObjStoreLogStore {
         let worker = std::thread::Builder::new()
             .name("semantic-objstore-wal".to_string())
             .spawn(move || run_worker(store, receiver, startup_sender))
-            .map_err(|err| DbError::Storage(format!("start ObjStore WAL worker: {err}")))?;
+            .map_err(|err| {
+                DbError::storage_with_source(
+                    StorageErrorKind::Io,
+                    format!("start ObjStore WAL worker: {err}"),
+                    err,
+                )
+            })?;
         match startup_receiver.recv() {
             Ok(Ok(())) => {}
             Ok(Err(err)) => {
                 let _ = worker.join();
-                return Err(DbError::Storage(err));
+                return Err(DbError::Storage(err.into()));
             }
             Err(_) => {
                 let _ = worker.join();
-                return Err(DbError::Storage(
-                    "ObjStore WAL worker stopped during startup".to_string(),
-                ));
+                return Err(worker_stopped("ObjStore WAL worker stopped during startup"));
             }
         }
         Ok(Self {
@@ -90,12 +94,16 @@ impl ObjStoreLogStore {
         let (sender, receiver) = mpsc::channel();
         self.commands
             .send(build(sender))
-            .map_err(|_| DbError::Storage("ObjStore WAL worker stopped".to_string()))?;
+            .map_err(|_| worker_stopped("ObjStore WAL worker stopped"))?;
         receiver
             .recv()
-            .map_err(|_| DbError::Storage("ObjStore WAL worker dropped response".to_string()))?
-            .map_err(DbError::Storage)
+            .map_err(|_| worker_stopped("ObjStore WAL worker dropped response"))?
+            .map_err(|err| DbError::Storage(err.into()))
     }
+}
+
+fn worker_stopped(message: &str) -> DbError {
+    DbError::storage(StorageErrorKind::InvalidState, message)
 }
 
 impl Drop for ObjStoreLogStore {

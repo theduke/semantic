@@ -29,8 +29,8 @@
 
 use std::collections::BTreeMap;
 
-use semantic_db_core::DbError;
 use semantic_db_core::embedded::storage::StorageCommitOutcome;
+use semantic_db_core::{DbError, StorageErrorKind};
 
 use super::{EntityStore, KvEngine, KvReadTxn, KvWriteTxn};
 use crate::keys;
@@ -168,9 +168,10 @@ fn is_maintained(marker: Option<Vec<u8>>) -> Result<bool, DbError> {
             ))
         })?;
     if version != STATS_VERSION {
-        return Err(DbError::Storage(format!(
-            "unsupported stats version {version}; expected {STATS_VERSION}"
-        )));
+        return Err(DbError::storage(
+            StorageErrorKind::Unsupported,
+            format!("unsupported stats version {version}; expected {STATS_VERSION}"),
+        ));
     }
     Ok(true)
 }

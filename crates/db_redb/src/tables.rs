@@ -35,7 +35,7 @@
 use std::sync::OnceLock;
 
 use redb::{ReadableTable, TableDefinition};
-use semantic_db_core::DbError;
+use semantic_db_core::{DbError, StorageErrorKind};
 use semantic_db_kv::keys::{TAG_ENTITY, TAG_INDEX, TAG_INDEX_MARKER, TAG_META, TAG_STATS};
 
 use crate::storage_err;
@@ -138,9 +138,12 @@ const LEGACY_KV_TABLE: KvTableDefinition = TableDefinition::new("kv");
 const LEGACY_REVISION_KEY: &[u8] = b"__semantic/revision";
 
 fn decode_revision(bytes: &[u8]) -> Result<u64, DbError> {
-    let bytes: [u8; 8] = bytes
-        .try_into()
-        .map_err(|_| DbError::Storage("invalid revision payload in redb metadata".to_string()))?;
+    let bytes: [u8; 8] = bytes.try_into().map_err(|_| {
+        DbError::storage(
+            StorageErrorKind::Corruption,
+            "invalid revision payload in redb metadata",
+        )
+    })?;
     Ok(u64::from_be_bytes(bytes))
 }
 

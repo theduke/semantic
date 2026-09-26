@@ -64,8 +64,9 @@ impl DbBackend for LogDbProvider {
         // caller cannot leave an untracked writer while another open starts.
         tokio::task::spawn_blocking(move || {
             let mut db = db.lock().map_err(|_| {
-                AppError::Db(DbError::Storage(
-                    "shared log database initialization lock poisoned".into(),
+                AppError::Db(DbError::storage(
+                    semantic_db_core::StorageErrorKind::InvalidState,
+                    "shared log database initialization lock poisoned",
                 ))
             })?;
             if let Some(db) = &*db {
@@ -84,9 +85,9 @@ impl DbBackend for LogDbProvider {
         })
         .await
         .map_err(|err| {
-            AppError::Db(DbError::Storage(format!(
-                "log database open task failed: {err}"
-            )))
+            AppError::Db(DbError::Storage(
+                format!("log database open task failed: {err}").into(),
+            ))
         })?
     }
 }

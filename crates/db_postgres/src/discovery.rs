@@ -197,7 +197,7 @@ async fn discover_tables(
             &[&schemas],
         )
         .await
-        .map_err(|e| DbError::Storage(e.to_string()))?;
+        .map_err(|e| DbError::Storage(e.to_string().into()))?;
 
     let mut tables = Vec::with_capacity(table_rows.len());
 
@@ -244,7 +244,7 @@ async fn discover_columns(
             &[&schema, &table],
         )
         .await
-        .map_err(|e| DbError::Storage(e.to_string()))?;
+        .map_err(|e| DbError::Storage(e.to_string().into()))?;
 
     let mut columns = Vec::with_capacity(rows.len());
     for row in &rows {
@@ -288,7 +288,7 @@ async fn discover_pk_columns(
             &[&schema, &table],
         )
         .await
-        .map_err(|e| DbError::Storage(e.to_string()))?;
+        .map_err(|e| DbError::Storage(e.to_string().into()))?;
 
     Ok(rows.iter().map(|r| r.get(0)).collect())
 }
@@ -315,7 +315,7 @@ async fn discover_unique_constraints(
             &[&schema, &table],
         )
         .await
-        .map_err(|e| DbError::Storage(e.to_string()))?;
+        .map_err(|e| DbError::Storage(e.to_string().into()))?;
 
     // Group columns by constraint name.
     let mut grouped: BTreeMap<String, Vec<String>> = BTreeMap::new();
@@ -353,7 +353,7 @@ async fn discover_indexes(
             &[&schema, &table],
         )
         .await
-        .map_err(|error| DbError::Storage(error.to_string()))?;
+        .map_err(|error| DbError::Storage(error.to_string().into()))?;
     let mut grouped = BTreeMap::<String, DiscoveredIndex>::new();
     for row in rows {
         let name: String = row.get(0);
@@ -398,7 +398,7 @@ async fn discover_foreign_keys(
             &[&schema, &table],
         )
         .await
-        .map_err(|error| DbError::Storage(error.to_string()))?;
+        .map_err(|error| DbError::Storage(error.to_string().into()))?;
     let mut grouped = BTreeMap::<String, DiscoveredForeignKey>::new();
     for row in rows {
         let name: String = row.get(0);
@@ -524,7 +524,7 @@ fn register_table(
 
     // PK metadata constraint stored as JSON on the class.
     let pk_json = serde_json::to_string(&table.pk_columns)
-        .map_err(|e| DbError::Storage(format!("serializing PK columns: {e}")))?;
+        .map_err(|e| DbError::Storage(format!("serializing PK columns: {e}").into()))?;
     let pk_constraint = ClassConstraint::MultiFieldExpr {
         expr: Expr::Literal(LiteralExpr {
             value: literal_value_from_json(&pk_json),

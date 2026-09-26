@@ -542,7 +542,7 @@ impl Backend for PostgresBackend {
 }
 
 fn pool_error(error: deadpool_postgres::PoolError) -> DbError {
-    DbError::Storage(format!("connection pool error: {error}"))
+    DbError::Storage(format!("connection pool error: {error}").into())
 }
 
 /// Create a connection pool from a PostgresConfig.
@@ -557,5 +557,5 @@ pub fn create_pool(config: &PostgresConfig) -> Result<Pool, DbError> {
     Ok(Pool::builder(mgr)
         .max_size(max_size)
         .build()
-        .map_err(|e| DbError::Storage(format!("failed to create connection pool: {}", e)))?)
+        .map_err(|e| DbError::Storage(format!("failed to create connection pool: {}", e).into()))?)
 }

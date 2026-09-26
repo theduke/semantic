@@ -45,10 +45,11 @@ impl LocalDbConfig {
             && !parent.as_os_str().is_empty()
         {
             std::fs::create_dir_all(parent).map_err(|err| {
-                AppError::Db(semantic_db_core::DbError::Storage(format!(
-                    "create database parent '{}': {err}",
-                    parent.display()
-                )))
+                AppError::Db(semantic_db_core::DbError::storage_with_source(
+                    semantic_db_core::StorageErrorKind::Io,
+                    format!("create database parent '{}': {err}", parent.display()),
+                    err,
+                ))
             })?;
         }
         Ok(())

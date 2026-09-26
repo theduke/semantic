@@ -15,8 +15,7 @@ use semantic_db_core::{
     Backend, Batch, BatchOperation, DbError, Query, SelectQuery, TextQueryInput, TokioAsyncRuntime,
 };
 use semantic_db_kv::{
-    BoxKvPrefixScan, EntityStore, KvEngine, KvMaintenance, KvReadTxn, KvWriteOp, KvWriteTxn,
-    MemoryKvEngine,
+    BoxKvPrefixScan, EntityStore, KvEngine, KvReadTxn, KvWriteOp, KvWriteTxn, MemoryKvEngine,
 };
 
 use crate::RedbKvEngine;
@@ -94,8 +93,6 @@ impl KvReadTxn for SlowReadTxn {
             .slow_scan(self.inner.scan_prefix_stream(prefix)?))
     }
 }
-
-impl<E: KvEngine> KvMaintenance for SlowScans<E> {}
 
 impl<E: KvEngine> KvEngine for SlowScans<E> {
     type PrefixScan = E::PrefixScan;

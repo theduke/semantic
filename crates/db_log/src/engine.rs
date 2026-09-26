@@ -1,8 +1,6 @@
-use semantic_db_core::DbError;
 use semantic_db_core::embedded::{StorageCommitOutcome, StorageTransactionCapabilities};
-use semantic_db_kv::{
-    BoxKvPrefixScan, KvEngine, KvMaintenance, KvReadTxn, KvWriteOp, MemoryKvEngine,
-};
+use semantic_db_core::{DbError, StorageErrorKind};
+use semantic_db_kv::{BoxKvPrefixScan, KvEngine, KvReadTxn, KvWriteOp, MemoryKvEngine};
 
 use crate::event;
 use crate::{EventId, LogStore};
@@ -25,14 +23,20 @@ impl<S: LogStore> LogEngine<S> {
         let mut last_event = None;
         for id in ids {
             if id != expected {
-                return Err(DbError::Storage(format!(
-                    "WAL event sequence gap: expected {}, found {}",
-                    expected.get(),
-                    id.get()
-                )));
+                return Err(DbError::storage(
+                    StorageErrorKind::Corruption,
+                    format!(
+                        "WAL event sequence gap: expected {}, found {}",
+                        expected.get(),
+                        id.get()
+                    ),
+                ));
             }
             let bytes = store.read_event(id)?.ok_or_else(|| {
-                DbError::Storage(format!("WAL event {} disappeared during replay", id.get()))
+                DbError::storage(
+                    StorageErrorKind::Corruption,
+                    format!("WAL event {} disappeared during replay", id.get()),
+                )
             })?;
             let operations = event::decode(id, &bytes)?;
             memory.write_batch(&operations)?;
@@ -53,8 +57,9 @@ impl<S: LogStore> LogEngine<S> {
 
     fn ensure_healthy(&self) -> std::result::Result<(), DbError> {
         if self.poisoned {
-            Err(DbError::Storage(
-                "WAL engine is poisoned after an uncertain commit; reopen it".to_string(),
+            Err(DbError::storage(
+                StorageErrorKind::InvalidState,
+                "WAL engine is poisoned after an uncertain commit; reopen it",
             ))
         } else {
             Ok(())
@@ -92,10 +97,13 @@ impl<S: LogStore> LogEngine<S> {
         }
         if let Err(err) = self.memory.write_batch(operations) {
             self.poisoned = true;
-            return Err(DbError::Storage(format!(
-                "WAL event {} committed but cache apply failed: {err}",
-                id.get()
-            )));
+            return Err(DbError::Storage(
+                format!(
+                    "WAL event {} committed but cache apply failed: {err}",
+                    id.get()
+                )
+                .into(),
+            ));
         }
         self.last_event = Some(id);
         Ok(StorageCommitOutcome::Committed {
@@ -103,8 +111,6 @@ impl<S: LogStore> LogEngine<S> {
         })
     }
 }
-
-impl<S: LogStore> KvMaintenance for LogEngine<S> {}
 
 impl<S: LogStore> KvEngine for LogEngine<S> {
     type PrefixScan = BoxKvPrefixScan;
@@ -179,8 +185,9 @@ impl<S: LogStore> KvEngine for LogEngine<S> {
     fn write_batch(&mut self, ops: &[KvWriteOp]) -> std::result::Result<(), DbError> {
         match self.commit(ops, None)? {
             StorageCommitOutcome::Committed { .. } => Ok(()),
-            StorageCommitOutcome::Conflict { .. } => Err(DbError::Storage(
-                "unexpected unconditional WAL commit conflict".to_string(),
+            StorageCommitOutcome::Conflict { .. } => Err(DbError::storage(
+                StorageErrorKind::Conflict,
+                "unexpected unconditional WAL commit conflict",
             )),
         }
     }
@@ -230,11 +237,11 @@ mod tests {
                     entry.insert(bytes);
                 }
                 Entry::Occupied(_) => {
-                    return Err(DbError::Storage("duplicate event".to_string()));
+                    return Err(DbError::Storage("duplicate event".to_string().into()));
                 }
             }
             if state.fail_after_append {
-                return Err(DbError::Storage("uncertain append".to_string()));
+                return Err(DbError::Storage("uncertain append".to_string().into()));
             }
             Ok(())
         }

@@ -25,9 +25,9 @@
 use std::collections::{BTreeMap, HashMap};
 use std::sync::{Arc, Mutex, RwLock};
 
-use semantic_db_core::DbError;
 use semantic_db_core::catalog::LocalCollectionId;
 use semantic_db_core::embedded::StoredEntity;
+use semantic_db_core::{DbError, StorageErrorKind};
 
 use super::entity_codec::{self, EntityPayloadFormat};
 use super::value_codec::FieldNames;
@@ -57,8 +57,9 @@ impl FieldDict {
     }
 
     pub(crate) fn push(&mut self, name: &str) -> Result<u32, DbError> {
-        let id = u32::try_from(self.names.len())
-            .map_err(|_| DbError::Storage("field dictionary is full".to_string()))?;
+        let id = u32::try_from(self.names.len()).map_err(|_| {
+            DbError::storage(StorageErrorKind::InvalidState, "field dictionary is full")
+        })?;
         self.names.push(name.to_string());
         self.ids.insert(name.to_string(), id);
         Ok(id)

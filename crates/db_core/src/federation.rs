@@ -13,8 +13,8 @@ use crate::{
     DeleteResult, DynObject, EntityRecord, ExecutionOptions, Expr, FieldRef, InsertQuery,
     InsertResult, InsertSource, JoinSource, LogicalJoinPlan, LogicalPlan, Operand, OrderBy,
     PackageRegistrationOutcome, Query, QueryExplain, QueryField, QueryPlan, QueryResult,
-    SelectQuery, SendableRecordBatchStream, SourceRef, TextQueryInput, UpdateQuery, UpdateResult,
-    evaluate_filter_expr, execute_physical_plan_collect,
+    SelectQuery, SendableRecordBatchStream, SourceRef, StorageErrorKind, TextQueryInput,
+    UpdateQuery, UpdateResult, evaluate_filter_expr, execute_physical_plan_collect,
 };
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -223,7 +223,10 @@ impl FederatedBackend {
         let namespace = registration.namespace.clone();
 
         let mut registry = self.registry.write().map_err(|_| {
-            DbError::Storage("federated source registry rwlock poisoned".to_string())
+            DbError::storage(
+                StorageErrorKind::InvalidState,
+                "federated source registry rwlock poisoned",
+            )
         })?;
         registry.insert_source(registration)?;
         rebuild_catalog(
@@ -247,7 +250,12 @@ impl FederatedBackend {
     pub fn registry_snapshot(&self) -> std::result::Result<SourceRegistry, DbError> {
         self.registry
             .read()
-            .map_err(|_| DbError::Storage("federated source registry rwlock poisoned".to_string()))
+            .map_err(|_| {
+                DbError::storage(
+                    StorageErrorKind::InvalidState,
+                    "federated source registry rwlock poisoned",
+                )
+            })
             .map(|registry| registry.clone())
     }
 

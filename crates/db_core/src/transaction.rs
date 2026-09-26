@@ -1,11 +1,40 @@
+/// Isolation of a write transaction.
+///
+/// Guarantees of the embedded engine (`EmbeddedDb`): every attempt reads at
+/// one storage revision and commits only if the storage is still at that
+/// revision (a revision-conditional commit on storages with conflict
+/// detection), retrying conflicts per [`ConflictPolicy`]. So no level loses
+/// updates, and an attempt that observed a concurrent commit never commits.
+/// The levels differ in how the reads of an attempt are served:
 #[derive(Debug, Clone, Copy, PartialEq, Eq, facet::Facet)]
 #[repr(C)]
 #[facet(rename_all = "snake_case")]
 pub enum IsolationLevel {
+    /// Reads observe committed data only. They use a consistent snapshot
+    /// when the storage offers one and otherwise read the latest state,
+    /// fenced by revision checks where the read path supports it.
     ReadCommitted,
+    /// Like [`Self::Snapshot`].
     RepeatableRead,
+    /// Every read of an attempt is served from a consistent storage snapshot
+    /// at the attempt's read revision, so repeated reads return the same
+    /// rows. Fails with an `Unsupported` storage error when the storage
+    /// cannot provide consistent snapshots.
     Snapshot,
+    /// Snapshot reads plus the revision-conditional commit, validated over
+    /// the whole database: an attempt commits only if no other transaction
+    /// committed since its read revision, so committed transactions are
+    /// equivalent to their serial execution in commit order. Additionally
+    /// requires a storage with commit-time conflict detection.
     Serializable,
+}
+
+impl IsolationLevel {
+    /// Whether all reads of a transaction attempt must come from one
+    /// consistent snapshot.
+    pub fn requires_snapshot(self) -> bool {
+        !matches!(self, Self::ReadCommitted)
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, facet::Facet)]

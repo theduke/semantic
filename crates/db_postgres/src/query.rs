@@ -128,7 +128,7 @@ impl QueryCompiler {
             .pool
             .get()
             .await
-            .map_err(|e| DbError::Storage(format!("connection pool error: {}", e)))?;
+            .map_err(|e| DbError::Storage(format!("connection pool error: {}", e).into()))?;
         let pk_types = discover_pk_types(&client, schema, table_name, &pk_columns).await?;
         let projection = discovery_projection(&client, schema, table_name).await?;
 
@@ -155,7 +155,7 @@ impl QueryCompiler {
         let stmt = client
             .prepare(&sql)
             .await
-            .map_err(|e| DbError::Storage(format!("prepare error: {}", e)))?;
+            .map_err(|e| DbError::Storage(format!("prepare error: {}", e).into()))?;
 
         // Convert PK values to trait references for tokio-postgres.
         let param_refs: Vec<&(dyn tokio_postgres::types::ToSql + Sync)> = pk_values
@@ -166,7 +166,7 @@ impl QueryCompiler {
         let rows = client
             .query(&stmt, &param_refs)
             .await
-            .map_err(|e| DbError::Storage(format!("query error: {}", e)))?;
+            .map_err(|e| DbError::Storage(format!("query error: {}", e).into()))?;
 
         if rows.is_empty() {
             return Ok(None);
@@ -209,7 +209,7 @@ async fn discover_pk_types(
             &[&schema, &table, &pk_columns],
         )
         .await
-        .map_err(|error| DbError::Storage(format!("PK type discovery failed: {error}")))?;
+        .map_err(|error| DbError::Storage(format!("PK type discovery failed: {error}").into()))?;
     let types = rows
         .into_iter()
         .map(|row| (row.get::<_, String>(0), row.get::<_, String>(1)))
@@ -328,7 +328,7 @@ async fn load_collection(
     let client = pool
         .get()
         .await
-        .map_err(|error| DbError::Storage(format!("connection pool error: {error}")))?;
+        .map_err(|error| DbError::Storage(format!("connection pool error: {error}").into()))?;
     let projection = discovery_projection(&client, schema, table).await?;
     let sql = format!(
         "SELECT {projection} FROM {}.{}",
@@ -338,7 +338,7 @@ async fn load_collection(
     let rows = client
         .query(&sql, &[])
         .await
-        .map_err(|error| DbError::Storage(format!("query error: {error}")))?;
+        .map_err(|error| DbError::Storage(format!("query error: {error}").into()))?;
     let class_lid = catalog
         .class_ids(collection_name)
         .first()
@@ -419,7 +419,7 @@ async fn discovery_projection(
         )
         .await
         .map_err(|error| {
-            DbError::Storage(format!("column projection discovery failed: {error}"))
+            DbError::Storage(format!("column projection discovery failed: {error}").into())
         })?;
     let columns = rows
         .into_iter()

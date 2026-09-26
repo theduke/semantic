@@ -26,9 +26,9 @@ const MAX_PREFIX_LEN: usize = 512;
 fn normalize_prefix(prefix: impl Into<String>) -> std::result::Result<String, DbError> {
     let mut prefix = prefix.into();
     if prefix.is_empty() || prefix.len() > MAX_PREFIX_LEN || prefix.contains('\0') {
-        return Err(DbError::Storage(format!(
-            "WAL prefix must contain 1..={MAX_PREFIX_LEN} non-NUL bytes"
-        )));
+        return Err(DbError::Storage(
+            format!("WAL prefix must contain 1..={MAX_PREFIX_LEN} non-NUL bytes").into(),
+        ));
     }
     if !prefix.ends_with('/') {
         prefix.push('/');
@@ -42,15 +42,16 @@ fn event_key(prefix: &str, id: EventId) -> String {
 
 fn parse_event_key(prefix: &str, key: &str) -> std::result::Result<EventId, DbError> {
     let suffix = key.strip_prefix(prefix).ok_or_else(|| {
-        DbError::Storage(format!(
-            "WAL event key '{key}' is outside prefix '{prefix}'"
-        ))
+        DbError::Storage(format!("WAL event key '{key}' is outside prefix '{prefix}'").into())
     })?;
     if suffix.len() != 20 || !suffix.bytes().all(|byte| byte.is_ascii_digit()) {
-        return Err(DbError::Storage(format!("invalid WAL event key '{key}'")));
+        return Err(DbError::Storage(
+            format!("invalid WAL event key '{key}'").into(),
+        ));
     }
     let value = suffix
         .parse::<u64>()
-        .map_err(|err| DbError::Storage(format!("invalid WAL event key '{key}': {err}")))?;
-    EventId::new(value).ok_or_else(|| DbError::Storage(format!("invalid WAL event key '{key}'")))
+        .map_err(|err| DbError::Storage(format!("invalid WAL event key '{key}': {err}").into()))?;
+    EventId::new(value)
+        .ok_or_else(|| DbError::Storage(format!("invalid WAL event key '{key}'").into()))
 }

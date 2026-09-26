@@ -2,12 +2,10 @@ use std::collections::BTreeMap;
 use std::ops::Bound;
 use std::sync::Arc;
 
-use semantic_db_core::DbError;
 use semantic_db_core::embedded::{StorageCommitOutcome, StorageTransactionCapabilities};
+use semantic_db_core::{DbError, StorageErrorKind};
 
-use super::{
-    BoxKvPrefixScan, KvEngine, KvMaintenance, KvReadTxn, KvWriteOp, KvWriteTxn, prefix_range_end,
-};
+use super::{BoxKvPrefixScan, KvEngine, KvReadTxn, KvWriteOp, KvWriteTxn, prefix_range_end};
 
 type KvMap = BTreeMap<Vec<u8>, Vec<u8>>;
 
@@ -200,8 +198,6 @@ impl KvWriteTxn for MemoryWriteTxn<'_> {
     }
 }
 
-impl KvMaintenance for MemoryKvEngine {}
-
 impl KvEngine for MemoryKvEngine {
     type PrefixScan = BoxKvPrefixScan;
 
@@ -308,14 +304,16 @@ impl KvEngine for MemoryKvEngine {
             return self.scan_prefix_stream(prefix);
         }
         let Some(snapshots) = &self.mvcc_snapshots else {
-            return Err(DbError::Storage(
-                "snapshot reads require an mvcc-enabled engine".to_string(),
+            return Err(DbError::storage(
+                StorageErrorKind::Unsupported,
+                "snapshot reads require an mvcc-enabled engine",
             ));
         };
         let Some(snapshot) = snapshots.get(&revision) else {
-            return Err(DbError::Storage(format!(
-                "mvcc snapshot for revision {revision} not available"
-            )));
+            return Err(DbError::storage(
+                StorageErrorKind::InvalidState,
+                format!("mvcc snapshot for revision {revision} not available"),
+            ));
         };
         let end = prefix_range_end(&prefix);
         Ok(Box::new(RangeScan::new(snapshot.clone(), prefix, end)))
