@@ -222,7 +222,7 @@ impl<'a> MarkdownV2Parser<'a> {
                     blocks.push(self.node(COMPONENT_BLOCKQUOTE, content));
                 }
                 Event::Start(Tag::CodeBlock(kind)) => blocks.push(self.parse_code_block(kind)),
-                Event::Start(Tag::List(start)) => blocks.push(self.parse_list(start)),
+                Event::Start(Tag::List(start)) => blocks.extend(self.parse_list(start)),
                 Event::Start(Tag::Table(alignments)) => blocks.push(self.parse_table(alignments)),
                 Event::Start(Tag::HtmlBlock) => blocks.push(self.parse_html_block(range.start)),
                 Event::Rule => blocks.push(self.node(COMPONENT_THEMATIC_BREAK, Vec::new())),
@@ -424,9 +424,8 @@ impl<'a> MarkdownV2Parser<'a> {
         node
     }
 
-    fn parse_list(&mut self, start: Option<u64>) -> ComponentNode {
+    fn parse_list(&mut self, start: Option<u64>) -> Vec<ComponentNode> {
         let mut items = Vec::new();
-        let mut is_task = false;
         loop {
             match self.events.front() {
                 Some((Event::End(TagEnd::List(_)), _)) => {
@@ -438,7 +437,6 @@ impl<'a> MarkdownV2Parser<'a> {
                     self.task_markers.push(None);
                     let content = self.parse_blocks(Some(TagEnd::Item));
                     let checked = self.task_markers.pop().flatten();
-                    is_task |= checked.is_some();
                     let content = if content.is_empty() {
                         vec![self.node(COMPONENT_PARAGRAPH_V2, Vec::new())]
                     } else {
@@ -463,27 +461,28 @@ impl<'a> MarkdownV2Parser<'a> {
                 }
             }
         }
-        if is_task {
-            for item in &mut items {
-                item.kind = COMPONENT_TASK_ITEM.into();
-                item.attrs
-                    .entry("checked".to_string())
-                    .or_insert(json!(false));
+        let mut runs: Vec<ComponentNode> = Vec::new();
+        for (index, item) in items.into_iter().enumerate() {
+            let kind = if item.kind.0 == COMPONENT_TASK_ITEM {
+                COMPONENT_TASK_LIST
+            } else if start.is_some() {
+                COMPONENT_ORDERED_LIST
+            } else {
+                COMPONENT_BULLET_LIST
+            };
+            if runs.last().is_none_or(|run| run.kind.0 != kind) {
+                let mut run = self.node(kind, Vec::new());
+                if kind == COMPONENT_ORDERED_LIST {
+                    run.attrs.insert(
+                        "start".to_string(),
+                        json!(start.unwrap_or(1) + index as u64),
+                    );
+                }
+                runs.push(run);
             }
+            runs.last_mut().unwrap().content.push(item);
         }
-        let kind = if is_task {
-            COMPONENT_TASK_LIST
-        } else if start.is_some() {
-            COMPONENT_ORDERED_LIST
-        } else {
-            COMPONENT_BULLET_LIST
-        };
-        let mut node = self.node(kind, items);
-        if kind == COMPONENT_ORDERED_LIST {
-            node.attrs
-                .insert("start".to_string(), json!(start.unwrap_or(1)));
-        }
-        node
+        runs
     }
 
     fn parse_table(&mut self, alignments: Vec<Alignment>) -> ComponentNode {
@@ -1049,6 +1048,93 @@ mod tests {
         assert_eq!(second, first, "{first}");
         assert!(first.contains("nested"));
         assert!(first.contains("continuation"));
+    }
+
+    #[test]
+    fn mixed_bullet_and_task_runs_round_trip_without_converting_bullets() {
+        for source in [
+            "- ordinary\n- [x] finished\n- [ ] pending\n- ordinary again",
+            "- [ ] pending\n- [x] finished\n- ordinary\n- [ ] another task",
+        ] {
+            let document = decode(source);
+            let kinds = document
+                .root
+                .content
+                .iter()
+                .map(|list| list.kind.0.as_str())
+                .collect::<Vec<_>>();
+            assert_eq!(
+                kinds,
+                if source.starts_with("- ordinary") {
+                    vec![
+                        COMPONENT_BULLET_LIST,
+                        COMPONENT_TASK_LIST,
+                        COMPONENT_BULLET_LIST,
+                    ]
+                } else {
+                    vec![
+                        COMPONENT_TASK_LIST,
+                        COMPONENT_BULLET_LIST,
+                        COMPONENT_TASK_LIST,
+                    ]
+                }
+            );
+            let first = encode(&document);
+            let reopened = decode(&first);
+            assert_eq!(encode(&reopened), first);
+            assert_eq!(
+                reopened
+                    .root
+                    .content
+                    .iter()
+                    .map(|list| list.kind.0.as_str())
+                    .collect::<Vec<_>>(),
+                kinds
+            );
+            for list in &reopened.root.content {
+                for item in &list.content {
+                    if list.kind.0 == COMPONENT_TASK_LIST {
+                        assert_eq!(item.kind.0, COMPONENT_TASK_ITEM);
+                        assert_eq!(
+                            item.attrs.get("checked").and_then(Value::as_bool),
+                            Some(item.text_content().contains("finished"))
+                        );
+                    } else {
+                        assert_eq!(item.kind.0, COMPONENT_LIST_ITEM_V2);
+                        assert!(!item.attrs.contains_key("checked"));
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn nested_mixed_list_runs_round_trip() {
+        let source =
+            "- parent\n  - ordinary child\n  - [x] done child\n  - ordinary again\n- sibling";
+        let first = encode(&decode(source));
+        let reopened = decode(&first);
+        assert_eq!(encode(&reopened), first);
+
+        let parent = &reopened.root.content[0].content[0];
+        assert_eq!(parent.kind.0, COMPONENT_LIST_ITEM_V2);
+        assert_eq!(
+            parent
+                .content
+                .iter()
+                .skip(1)
+                .map(|list| list.kind.0.as_str())
+                .collect::<Vec<_>>(),
+            vec![
+                COMPONENT_BULLET_LIST,
+                COMPONENT_TASK_LIST,
+                COMPONENT_BULLET_LIST
+            ]
+        );
+        assert_eq!(
+            parent.content[2].content[0].attrs.get("checked"),
+            Some(&json!(true))
+        );
     }
 
     #[test]

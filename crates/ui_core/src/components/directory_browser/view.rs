@@ -2812,8 +2812,22 @@ fn DirectoryOperationDialog(
     let mut add_query = use_signal(String::new);
     let mut add_selected = use_signal(|| None::<String>);
     let mut move_target = use_signal(|| None::<String>);
+    let mut was_new_directory_open = use_signal(|| false);
     let reset_dialog = dialog.clone();
     use_effect(use_reactive((&reset_dialog,), move |(dialog,)| {
+        let is_new_directory_open = matches!(dialog, Some(DirectoryDialog::NewDirectory { .. }));
+        if *was_new_directory_open.peek() && !is_new_directory_open {
+            spawn(async {
+                let _ = document::eval(
+                    "const trigger = document.body.__semanticDirectoryDialogTrigger; \
+                     const fallback = document.querySelector('.semantic-directory-browser__current-actions button[aria-label=\"New directory\"]'); \
+                     (trigger?.isConnected ? trigger : fallback)?.focus(); \
+                     document.body.__semanticDirectoryDialogTrigger = null;",
+                )
+                .await;
+            });
+        }
+        was_new_directory_open.set(is_new_directory_open);
         title.set(match dialog {
             Some(DirectoryDialog::Rename { title, .. }) => title,
             _ => String::new(),
@@ -2882,6 +2896,7 @@ fn DirectoryOperationDialog(
                     onkeydown: move |event: KeyboardEvent| {
                         if event.key().to_string() == "Escape" {
                             event.prevent_default();
+                            event.stop_propagation();
                             commands.send(DirectoryBrowserCommand::CloseDialog);
                         }
                     },
@@ -2901,7 +2916,13 @@ fn DirectoryOperationDialog(
                     label { class: "semantic-directory-browser__dialog-field",
                         span { "Title" }
                         input {
-                            autofocus: true,
+                            onmounted: move |event| async move {
+                                let _ = document::eval(
+                                    "document.body.__semanticDirectoryDialogTrigger = document.activeElement;",
+                                )
+                                .await;
+                                let _ = event.set_focus(true).await;
+                            },
                             value: "{title()}",
                             oninput: move |event| title.set(event.value()),
                         }
