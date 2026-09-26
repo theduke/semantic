@@ -249,6 +249,7 @@ fn filekind_index_and_pixel_titles_migration() -> Migration {
                 kind: Default::default(),
                 extra_fields: Vec::new(),
                 predicate: None,
+                analyzer: Default::default(),
             }),
             MigrationOperation::Ddl(MigrationDdlOperation::UpsertAttribute {
                 attribute: attribute_with_title(
@@ -1012,6 +1013,7 @@ mod tests {
                 kind: Default::default(),
                 extra_fields: Vec::new(),
                 predicate: None,
+                analyzer: Default::default(),
             }),
         );
         let module = super::root_module();

@@ -92,6 +92,7 @@ async fn setup(db: &Db) {
         kind: semantic_data::schema::IndexKind::Equality,
         extra_fields: Vec::new(),
         predicate: None,
+        analyzer: Default::default(),
     });
     let mut stream = subscribe(db, ChangeSubscriptionOptions::default());
     db.execute_ddl(ddl).await.unwrap();

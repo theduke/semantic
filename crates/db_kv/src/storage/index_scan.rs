@@ -80,6 +80,7 @@ mod tests {
                 unique: false,
                 extra_key_paths: columns[1..].iter().map(|column| key_path(column)).collect(),
                 predicate,
+                analyzer: Default::default(),
             },
             collection: LocalCollectionId(7),
             canonical_field: columns[0].to_string(),

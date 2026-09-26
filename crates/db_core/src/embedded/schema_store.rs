@@ -31,6 +31,7 @@ const INDEX_KIND_FIELD: &str = "index_kind";
 const UNIQUE_FIELD: &str = "unique";
 const INDEX_EXTRA_FIELDS_FIELD: &str = "index_extra_fields";
 const INDEX_PREDICATE_FIELD: &str = "index_predicate";
+const INDEX_ANALYZER_FIELD: &str = "index_analyzer";
 const NEXT_FIELD_ID_FIELD: &str = "next_field_id";
 const AUTO_INDEX_ENABLED_FIELD: &str = "auto_index_enabled";
 const RELATIONSHIPS_FIELD: &str = "relationships";
@@ -206,6 +207,8 @@ pub fn load_catalog<S: EntityStorage>(
             object_json_field_default(&row.object, INDEX_EXTRA_FIELDS_FIELD, Vec::new())?;
         let predicate: Option<semantic_data::query::Expr> =
             object_json_field_default(&row.object, INDEX_PREDICATE_FIELD, None)?;
+        let analyzer: semantic_data::query::TextAnalyzer =
+            object_json_field_default(&row.object, INDEX_ANALYZER_FIELD, Default::default())?;
         indexes.push(StoredIndex {
             lid,
             name,
@@ -215,6 +218,7 @@ pub fn load_catalog<S: EntityStorage>(
             kind,
             extra_fields,
             predicate,
+            analyzer,
         });
     }
 
@@ -412,6 +416,16 @@ pub fn catalog_write_ops<S: EntityStorage>(
                 INDEX_PREDICATE_FIELD.to_string(),
                 Value::String(
                     facet_json::to_string(predicate)
+                        .map_err(|err| DbError::Serialization(err.to_string()))?,
+                ),
+            );
+        }
+        // Written only for non-default (full-text) analyzers.
+        if !item.schema.analyzer.is_default() {
+            entity.object.insert(
+                INDEX_ANALYZER_FIELD.to_string(),
+                Value::String(
+                    facet_json::to_string(&item.schema.analyzer)
                         .map_err(|err| DbError::Serialization(err.to_string()))?,
                 ),
             );

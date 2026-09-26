@@ -36,7 +36,7 @@ use crate::query::{Expr, Operand, OrderBy, QueryField};
 use crate::{IndexColumnRange, IndexScanRange, QueryContext};
 
 /// Upper bound on the probes an `IN` expansion may produce.
-const MAX_PROBES: usize = 256;
+pub(super) const MAX_PROBES: usize = 256;
 /// Row count assumed without statistics.
 const DEFAULT_ROWS: f64 = 10_000.0;
 /// Selectivity of one equality without field statistics.
@@ -365,6 +365,9 @@ fn contains_unsupported(expr: &Expr) -> bool {
         Expr::PatternMatch { expr, pattern, .. } | Expr::RegexMatch { expr, pattern, .. } => {
             contains_unsupported(expr) || contains_unsupported(pattern)
         }
+        Expr::TextMatch { exprs, query, .. } => {
+            exprs.iter().any(contains_unsupported) || contains_unsupported(query)
+        }
     }
 }
 
@@ -376,18 +379,18 @@ fn conjuncts(predicate: Expr) -> Vec<Expr> {
 }
 
 /// Planning input shared by all candidate indexes of one source.
-struct AccessRequest<'a> {
-    source: &'a SourceRef,
-    collection: &'a CollectionSchema,
-    conjuncts: Vec<Expr>,
+pub(super) struct AccessRequest<'a> {
+    pub(super) source: &'a SourceRef,
+    pub(super) collection: &'a CollectionSchema,
+    pub(super) conjuncts: Vec<Expr>,
     terms: BTreeMap<String, FieldTerms>,
     stats: Option<&'a dyn StatsProvider>,
-    context: &'a QueryContext,
-    rows: f64,
+    pub(super) context: &'a QueryContext,
+    pub(super) rows: f64,
 }
 
 impl<'a> AccessRequest<'a> {
-    fn new(
+    pub(super) fn new(
         source: &'a SourceRef,
         predicate: Option<&Expr>,
         stats: Option<&'a dyn StatsProvider>,
@@ -429,7 +432,7 @@ impl<'a> AccessRequest<'a> {
         })
     }
 
-    fn entries(&self, index: &IndexSchema) -> f64 {
+    pub(super) fn entries(&self, index: &IndexSchema) -> f64 {
         self.stats
             .and_then(|stats| stats.index_entry_count(self.source, index.lid))
             .unwrap_or(self.rows)
@@ -456,7 +459,7 @@ impl<'a> AccessRequest<'a> {
 
     /// Positions of the conjuncts implied by `index`'s partial predicate, or
     /// `None` when the query does not imply it.
-    fn implied_conjuncts(&self, index: &IndexSchema) -> Option<BTreeSet<usize>> {
+    pub(super) fn implied_conjuncts(&self, index: &IndexSchema) -> Option<BTreeSet<usize>> {
         let Some(predicate) = index.predicate_expr() else {
             return Some(BTreeSet::new());
         };
@@ -717,7 +720,8 @@ impl Candidate<'_> {
 }
 
 /// Choose an index scan answering `predicate` over `source` without regard
-/// to ordering, when one is cheaper than `baseline_cost`.
+/// to ordering, when one is cheaper than `baseline_cost`. Returns the scan
+/// and its estimated cost.
 ///
 /// Simple single-equality lookups are left to
 /// [`PhysicalSource::IndexLookup`] (the caller's baseline).
@@ -727,11 +731,16 @@ pub(crate) fn plan_index_scan(
     stats: Option<&dyn StatsProvider>,
     context: &QueryContext,
     baseline_cost: Option<f64>,
-) -> Option<PhysicalIndexScan> {
+) -> Option<(PhysicalIndexScan, f64)> {
     let request = AccessRequest::new(source, Some(predicate), stats, context)?;
     let best = best_unordered(&request)?;
     let baseline = baseline_cost.unwrap_or(request.rows);
-    (best.cost() < baseline).then(|| request.build(&best, SortDirection::Asc, false, None))
+    (best.cost() < baseline).then(|| {
+        (
+            request.build(&best, SortDirection::Asc, false, None),
+            best.cost(),
+        )
+    })
 }
 
 fn best_unordered<'a>(request: &AccessRequest<'a>) -> Option<Candidate<'a>> {
@@ -934,6 +943,10 @@ fn collect_field_paths(expr: &Expr, out: &mut BTreeSet<FieldPath>) {
         Expr::PatternMatch { expr, pattern, .. } | Expr::RegexMatch { expr, pattern, .. } => {
             collect_field_paths(expr, out);
             collect_field_paths(pattern, out);
+        }
+        Expr::TextMatch { exprs, query, .. } => {
+            exprs.iter().for_each(|item| collect_field_paths(item, out));
+            collect_field_paths(query, out);
         }
         // Rejected before coverage is checked.
         Expr::Subquery(_) | Expr::Exists { .. } | Expr::RelationExists { .. } => {}

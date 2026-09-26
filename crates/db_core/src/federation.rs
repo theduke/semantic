@@ -1123,6 +1123,12 @@ fn reject_expr_sources(
             reject_expr_sources(registry, default_source, expr, target_source)?;
             reject_expr_sources(registry, default_source, pattern, target_source)
         }
+        Expr::TextMatch { exprs, query, .. } => {
+            for expr in exprs {
+                reject_expr_sources(registry, default_source, expr, target_source)?;
+            }
+            reject_expr_sources(registry, default_source, query, target_source)
+        }
         Expr::RelationExists {
             relation,
             source,

@@ -68,6 +68,7 @@ fn definition(
         unique: false,
         kind,
         predicate: None,
+        analyzer: Default::default(),
     }
 }
 

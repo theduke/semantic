@@ -86,6 +86,7 @@ fn populate<S: EntityStorage>(db: &mut EmbeddedDb<S>, rows: usize) {
         unique: false,
         kind: IndexKind::Range,
         predicate: None,
+        analyzer: Default::default(),
     })
     .unwrap();
     db.transact(Batch {

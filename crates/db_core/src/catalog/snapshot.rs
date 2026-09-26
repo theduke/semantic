@@ -80,6 +80,9 @@ pub struct StoredIndex {
     /// Canonical predicate of a partial index.
     #[facet(default)]
     pub predicate: Option<semantic_data::query::Expr>,
+    /// Tokenization of a full-text index.
+    #[facet(default)]
+    pub analyzer: semantic_data::query::TextAnalyzer,
 }
 
 #[derive(facet::Facet, Debug, Clone, PartialEq)]
@@ -113,12 +116,18 @@ mod tests {
             kind: semantic_data::schema::IndexKind::Equality,
             extra_fields: Vec::new(),
             predicate: None,
+            analyzer: Default::default(),
         };
         let encoded = facet_json::to_string(&index).unwrap();
         let legacy = encoded
             .replace(r#","extra_fields":[]"#, "")
-            .replace(r#","predicate":null"#, "");
-        assert!(!legacy.contains("extra_fields") && !legacy.contains("predicate"));
+            .replace(r#","predicate":null"#, "")
+            .replace(r#","analyzer":{}"#, "");
+        assert!(
+            !legacy.contains("extra_fields")
+                && !legacy.contains("predicate")
+                && !legacy.contains("analyzer")
+        );
         let decoded: StoredIndex = facet_json::from_str(&legacy).unwrap();
         assert_eq!(decoded, index);
     }

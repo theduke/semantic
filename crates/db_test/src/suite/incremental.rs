@@ -17,6 +17,7 @@ pub(super) async fn test_incremental_writes(db: &Db) {
                 kind: Default::default(),
                 extra_fields: Vec::new(),
                 predicate: None,
+                analyzer: Default::default(),
             })
             .with_op(DdlOperation::UpsertRelationship {
                 relationship: RelationType {

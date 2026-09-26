@@ -92,6 +92,10 @@ impl GroupExprInfo {
                 self.visit(else_expr);
             }
             Expr::Coalesce(items) => items.iter().for_each(|item| self.visit(item)),
+            Expr::TextMatch { exprs, query, .. } => {
+                exprs.iter().for_each(|item| self.visit(item));
+                self.visit(query);
+            }
             Expr::InList { expr, list, .. } => {
                 self.visit(expr);
                 list.iter().for_each(|item| self.visit(item));
@@ -579,6 +583,28 @@ pub(super) fn evaluate_group_expr<G: GroupRows + ?Sized>(group: &G, expr: &Expr)
                     pattern: Box::new(Expr::Operand(Operand::Literal(pattern))),
                     case_insensitive: *case_insensitive,
                     negated: *negated,
+                },
+            )
+        }
+        Expr::TextMatch {
+            exprs,
+            query,
+            mode,
+            analyzer,
+        } => {
+            let literal = |value: Value| Expr::Operand(Operand::Literal(value));
+            let exprs = exprs
+                .iter()
+                .map(|expr| literal(evaluate_group_expr(group, expr).unwrap_or(Value::Null)))
+                .collect();
+            let query = evaluate_group_expr(group, query)?;
+            evaluate_group_scalar_expr(
+                group,
+                Expr::TextMatch {
+                    exprs,
+                    query: Box::new(literal(query)),
+                    mode: *mode,
+                    analyzer: *analyzer,
                 },
             )
         }

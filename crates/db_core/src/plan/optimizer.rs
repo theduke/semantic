@@ -480,6 +480,11 @@ fn expression_binding(
                 pattern: b,
                 ..
             } => merge(recurse(a, left, right), recurse(b, left, right)),
+            Expr::TextMatch { exprs, query, .. } => exprs
+                .iter()
+                .fold(recurse(query, left, right), |binding, item| {
+                    merge(binding, recurse(item, left, right))
+                }),
             Expr::IfElse {
                 cond,
                 then_expr,
@@ -563,6 +568,12 @@ fn strip_direct_binding(expr: &mut Expr, binding: &str) {
         } => {
             strip_direct_binding(left, binding);
             strip_direct_binding(right, binding);
+        }
+        Expr::TextMatch { exprs, query, .. } => {
+            for item in exprs {
+                strip_direct_binding(item, binding);
+            }
+            strip_direct_binding(query, binding);
         }
         Expr::IfElse {
             cond,
@@ -816,6 +827,12 @@ impl<'a> RefPathJoinLifter<'a> {
             Expr::PatternMatch { expr, pattern, .. } | Expr::RegexMatch { expr, pattern, .. } => {
                 self.rewrite_expr(expr);
                 self.rewrite_expr(pattern);
+            }
+            Expr::TextMatch { exprs, query, .. } => {
+                for item in exprs {
+                    self.rewrite_expr(item);
+                }
+                self.rewrite_expr(query);
             }
             Expr::IsNull { expr, .. } => self.rewrite_expr(expr),
             Expr::RelationExists {
@@ -1667,9 +1684,17 @@ fn choose_scan_source(
     // Index scans (ranges, prefixes, `IN` probes, composite and partial
     // indexes) replace the lookup or the scan when estimated cheaper.
     let baseline = lookup.as_ref().map(|(_, cost)| *cost);
-    if let Some(scan) =
-        super::index_access::plan_index_scan(&source, &predicate, stats, context, baseline)
+    let index_scan =
+        super::index_access::plan_index_scan(&source, &predicate, stats, context, baseline);
+    // Full-text probes serve text matches unless the best other index
+    // access is cheaper.
+    let baseline = index_scan.as_ref().map(|(_, cost)| *cost).or(baseline);
+    if let Some(search) =
+        super::text_access::plan_text_search(&source, &predicate, stats, context, baseline)
     {
+        return PhysicalPlan::Source(PhysicalSource::TextSearch(search));
+    }
+    if let Some((scan, _)) = index_scan {
         return PhysicalPlan::Source(PhysicalSource::IndexRange(scan));
     }
     match lookup {

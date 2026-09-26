@@ -120,6 +120,11 @@ pub enum DdlOperation {
         #[facet(default)]
         #[facet(skip_serializing_if = Option::is_none)]
         predicate: Option<semantic_data::query::Expr>,
+        /// Tokenization of a full-text index; must be the default for other
+        /// kinds.
+        #[facet(default)]
+        #[facet(skip_serializing_if = semantic_data::query::TextAnalyzer::is_default)]
+        analyzer: semantic_data::query::TextAnalyzer,
     },
     DeleteIndex {
         name: String,
@@ -235,6 +240,7 @@ pub const ATTR_CORE_CATALOG_INDEX_KIND: &str = "semantic:db:index_kind";
 pub const ATTR_CORE_CATALOG_UNIQUE: &str = "semantic:db:unique";
 pub const ATTR_CORE_CATALOG_INDEX_EXTRA_FIELDS: &str = "semantic:db:index_extra_fields";
 pub const ATTR_CORE_CATALOG_INDEX_PREDICATE: &str = "semantic:db:index_predicate";
+pub const ATTR_CORE_CATALOG_INDEX_ANALYZER: &str = "semantic:db:index_analyzer";
 pub const ATTR_CORE_CATALOG_NEXT_FIELD_ID: &str = "semantic:db:next_field_id";
 pub const ATTR_CORE_CATALOG_AUTO_INDEX_ENABLED: &str = "semantic:db:auto_index_enabled";
 pub const ATTR_CORE_CATALOG_PACKAGES: &str = "semantic:db:packages";
@@ -247,6 +253,10 @@ pub(crate) const REFERENCE_LIFECYCLE_MIGRATION: &str = "006_reference_lifecycle"
 /// Opening a database that applies it rebuilds its range indexes, which
 /// earlier versions registered without maintaining entries.
 pub(crate) const INDEX_DEFINITIONS_MIGRATION: &str = "007_index_definitions";
+/// Adds full-text index analyzers to catalog index entries. Opening a
+/// database that applies it rebuilds its full-text indexes, which earlier
+/// versions registered without maintaining entries.
+pub(crate) const FULL_TEXT_INDEXES_MIGRATION: &str = "008_full_text_indexes";
 
 pub fn core_catalog_schema_batch() -> DdlBatch {
     let mut attrs = std::collections::BTreeMap::new();
@@ -921,6 +931,7 @@ pub fn core_schema_migrations() -> Vec<Migration> {
                     kind: IndexKind::Equality,
                     extra_fields: Vec::new(),
                     predicate: None,
+                    analyzer: Default::default(),
                 }),
             ],
             meta: Meta::default(),
@@ -941,6 +952,7 @@ pub fn core_schema_migrations() -> Vec<Migration> {
         },
         reference_lifecycle_migration(),
         index_definitions_migration(),
+        full_text_indexes_migration(),
     ]
 }
 
@@ -1009,6 +1021,59 @@ fn index_definitions_migration() -> Migration {
                 .to_string(),
         ),
         operations,
+        meta: Meta::default(),
+    }
+}
+
+fn full_text_indexes_migration() -> Migration {
+    let attribute = AttributeType {
+        id: ATTR_CORE_CATALOG_INDEX_ANALYZER.to_string(),
+        name: "index_analyzer".to_string(),
+        ty: Type {
+            kind: TypeKind::String(StringType {
+                format: None,
+                normalization: None,
+            }),
+            constraints: vec![],
+            annotations: vec![],
+        },
+        constraints: vec![],
+        meta: Meta::default(),
+    };
+    // CatalogEntry as defined by the previous migration, plus the analyzer.
+    let mut entry_class = index_definitions_migration()
+        .operations
+        .into_iter()
+        .find_map(|op| match op {
+            MigrationOperation::Ddl(MigrationDdlOperation::UpsertClass { class })
+                if class.id == CORE_CATALOG_ENTRY_CLASS_ID =>
+            {
+                Some(class)
+            }
+            _ => None,
+        })
+        .expect("007_index_definitions defines CatalogEntry");
+    entry_class.attributes.insert(
+        "index_analyzer".to_string(),
+        ClassAttribute {
+            attribute: AttributeRef {
+                id: attribute.id.clone(),
+            },
+            required: false,
+            ui_order: None,
+            computed: None,
+            constraints: vec![],
+            meta: Meta::default(),
+        },
+    );
+    Migration {
+        module: CORE_SCHEMA_MODULE.to_string(),
+        name: FULL_TEXT_INDEXES_MIGRATION.to_string(),
+        description: Some("Record full-text index analyzers on catalog index entries.".to_string()),
+        operations: vec![
+            MigrationOperation::Ddl(MigrationDdlOperation::UpsertAttribute { attribute }),
+            MigrationOperation::Ddl(MigrationDdlOperation::UpsertClass { class: entry_class }),
+        ],
         meta: Meta::default(),
     }
 }
@@ -1223,6 +1288,7 @@ fn ddl_to_migration_ddl(operation: DdlOperation) -> MigrationDdlOperation {
             kind,
             extra_fields,
             predicate,
+            analyzer,
         } => MigrationDdlOperation::UpsertIndex {
             name,
             collection,
@@ -1231,6 +1297,7 @@ fn ddl_to_migration_ddl(operation: DdlOperation) -> MigrationDdlOperation {
             kind,
             extra_fields,
             predicate,
+            analyzer,
         },
         DdlOperation::DeleteIndex { name, collection } => {
             MigrationDdlOperation::DeleteIndex { name, collection }
@@ -1310,6 +1377,7 @@ fn catalog_batch_operation(
             kind,
             extra_fields,
             predicate,
+            analyzer,
         } => Ok(CatalogBatchOperation::UpsertIndex {
             name: name.clone(),
             collection: collection.clone(),
@@ -1318,6 +1386,7 @@ fn catalog_batch_operation(
             kind: *kind,
             extra_fields: extra_fields.clone(),
             predicate: predicate.clone(),
+            analyzer: *analyzer,
         }),
         DdlOperation::DeleteIndex { name, collection } => Ok(CatalogBatchOperation::DeleteIndex {
             name: name.clone(),
@@ -1377,7 +1446,7 @@ mod tests {
     #[test]
     fn core_schema_migrations_are_idempotent() {
         let (catalog, first_run) = apply_core_schema_migrations(&Catalog::new()).unwrap();
-        assert_eq!(first_run.len(), 7);
+        assert_eq!(first_run.len(), 8);
         for id in [ATTR_RELATION_FROM, ATTR_RELATION_TO] {
             let attribute = catalog.attribute_by_id(id).unwrap();
             let TypeKind::Ref(reference) = &attribute.attribute.ty.kind else {

@@ -17,7 +17,7 @@ use crate::QueryContext;
 use crate::plan::{
     FieldRef, Optimizer, PhysicalIndexScan, PhysicalJoinAlgorithm, PhysicalJoinCondition,
     PhysicalJoinKey, PhysicalJoinPlan, PhysicalOrderField, PhysicalPlan, PhysicalProjectionField,
-    PhysicalSource, SourceRef, source_ref_for_collection,
+    PhysicalSource, PhysicalTextSearch, SourceRef, source_ref_for_collection,
 };
 use crate::query::{
     CoreError, CoreResult, Expr, FunctionArg, ObjectAccess as QueryObjectAccess, Operand,
@@ -139,6 +139,17 @@ pub trait AsyncPhysicalDataSource: Send + Sync {
         index_range_fallback_stream(self, scan)
     }
 
+    /// Rows of a full-text search: exactly the rows of `search.source`
+    /// matching `search.predicate`, in no particular order.
+    ///
+    /// The default filters a full scan with the complete predicate.
+    fn text_search_stream(&self, search: PhysicalTextSearch) -> SendableRecordBatchStream {
+        match search.predicate {
+            Some(predicate) => self.scan_filtered_stream(search.source, predicate),
+            None => self.scan_stream(search.source),
+        }
+    }
+
     fn scan(&self, source: SourceRef) -> BoxFuture<'static, CoreResult<Vec<DynObject>>> {
         collect_dyn_stream(self.scan_stream(source)).boxed()
     }
@@ -182,6 +193,9 @@ fn expr_contains_relation_exists(expr: &Expr) -> bool {
             pattern: right,
             ..
         } => expr_contains_relation_exists(left) || expr_contains_relation_exists(right),
+        Expr::TextMatch { exprs, query, .. } => {
+            exprs.iter().any(expr_contains_relation_exists) || expr_contains_relation_exists(query)
+        }
         Expr::IfElse {
             cond,
             then_expr,
@@ -314,6 +328,9 @@ fn execute_physical_dyn_stream(
             }
         }
         PhysicalPlan::Source(PhysicalSource::IndexRange(scan)) => source.index_range_stream(scan),
+        PhysicalPlan::Source(PhysicalSource::TextSearch(search)) => {
+            source.text_search_stream(search)
+        }
         PhysicalPlan::Values { values } => rows_to_batches(
             values
                 .into_iter()
@@ -1199,6 +1216,10 @@ impl AsyncPhysicalDataSource for BorrowedAsyncPhysicalDataSource<'_> {
     fn index_range_stream(&self, scan: PhysicalIndexScan) -> SendableRecordBatchStream {
         self.inner.index_range_stream(scan)
     }
+
+    fn text_search_stream(&self, search: PhysicalTextSearch) -> SendableRecordBatchStream {
+        self.inner.text_search_stream(search)
+    }
 }
 
 fn expr_contains_subquery(expr: &Expr) -> bool {
@@ -1239,6 +1260,9 @@ fn expr_contains_subquery(expr: &Expr) -> bool {
         }
         Expr::PatternMatch { expr, pattern, .. } | Expr::RegexMatch { expr, pattern, .. } => {
             expr_contains_subquery(expr) || expr_contains_subquery(pattern)
+        }
+        Expr::TextMatch { exprs, query, .. } => {
+            exprs.iter().any(expr_contains_subquery) || expr_contains_subquery(query)
         }
         Expr::IsNull { expr, .. } => expr_contains_subquery(expr),
         Expr::RelationExists {
@@ -1478,6 +1502,20 @@ fn resolve_expr_subqueries_async<'a>(
                 ),
                 case_insensitive: *case_insensitive,
                 negated: *negated,
+            }),
+            Expr::TextMatch {
+                exprs,
+                query,
+                mode,
+                analyzer,
+            } => Ok(Expr::TextMatch {
+                exprs: resolve_expr_list_subqueries_async(exprs, source.clone(), context, options)
+                    .await?,
+                query: Box::new(
+                    resolve_expr_subqueries_async(query, source, context, options).await?,
+                ),
+                mode: *mode,
+                analyzer: *analyzer,
             }),
             Expr::IsNull { expr, negated } => Ok(Expr::IsNull {
                 expr: Box::new(

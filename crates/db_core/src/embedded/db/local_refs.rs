@@ -478,6 +478,11 @@ fn collect_source_paths(source: &crate::PhysicalSource, paths: &mut BTreeSet<Fie
                 collect_expr_paths(expr, paths);
             }
         }
+        crate::PhysicalSource::TextSearch(search) => {
+            if let Some(expr) = &search.predicate {
+                collect_expr_paths(expr, paths);
+            }
+        }
     }
 }
 
@@ -594,6 +599,12 @@ fn collect_expr_paths(expr: &crate::Expr, paths: &mut BTreeSet<FieldPath>) {
         E::PatternMatch { expr, pattern, .. } | E::RegexMatch { expr, pattern, .. } => {
             collect_expr_paths(expr, paths);
             collect_expr_paths(pattern, paths);
+        }
+        E::TextMatch { exprs, query, .. } => {
+            for expr in exprs {
+                collect_expr_paths(expr, paths);
+            }
+            collect_expr_paths(query, paths);
         }
         E::RelationExists {
             relation,

@@ -280,6 +280,40 @@ impl IndexSchema {
         Some(Value::List(values))
     }
 
+    /// Distinct tokens of `object` in a full-text index, or `None` for
+    /// other index kinds.
+    ///
+    /// The tokens of all key columns (their string values and the strings
+    /// of list values) are combined; rows outside a partial index's
+    /// predicate have none. Each token is one index entry.
+    pub fn text_tokens(
+        &self,
+        object: &semantic_data::value::Object,
+    ) -> Option<std::collections::BTreeSet<String>> {
+        if !self.schema.kind.is_full_text() {
+            return None;
+        }
+        let mut tokens = std::collections::BTreeSet::new();
+        if self.covers(object) {
+            for value in self.columns().filter_map(|column| object.get(column)) {
+                self.schema.analyzer.value_tokens(value, &mut tokens);
+            }
+        }
+        Some(tokens)
+    }
+
+    /// Whether `old` and `new` agree on every key column and on the partial
+    /// index predicate, so they derive the same entries.
+    pub fn indexed_columns_equal(
+        &self,
+        old: &semantic_data::value::Object,
+        new: &semantic_data::value::Object,
+    ) -> bool {
+        self.columns()
+            .all(|column| old.get(column) == new.get(column))
+            && (!self.is_partial() || self.covers(old) == self.covers(new))
+    }
+
     /// Column values of a key produced by [`Self::key_value`], with `Void`
     /// (missing) columns as `None`.
     pub fn key_columns(&self, key: Value) -> Option<Vec<Option<Value>>> {

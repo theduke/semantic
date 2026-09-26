@@ -97,6 +97,7 @@ fn index_op(name: &str, fields: &[&str], kind: IndexKind, predicate: Option<Expr
         kind,
         extra_fields: fields[1..].iter().map(ToString::to_string).collect(),
         predicate,
+        analyzer: Default::default(),
     }
 }
 
@@ -196,6 +197,7 @@ pub async fn test_index_access(db: &Db) {
     test_index_access_plans(db).await;
     test_writes_keep_indexes_consistent(db).await;
     test_package_composite_index(db).await;
+    super::test_full_text(db).await;
 }
 
 async fn test_differential_unordered(db: &Db) {
@@ -421,6 +423,7 @@ async fn test_package_composite_index(db: &Db) {
                     kind: IndexKind::Range,
                     extra_fields: vec!["slot".to_string()],
                     predicate: None,
+                    analyzer: Default::default(),
                 }),
             ],
             meta: Meta::default(),

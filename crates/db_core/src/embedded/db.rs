@@ -64,6 +64,7 @@ mod local_refs;
 mod mutation;
 mod overlay;
 mod reader;
+mod text_search;
 mod validation;
 
 pub use interactive::EmbeddedTransaction;
@@ -195,13 +196,22 @@ impl<S: EntityStorage> EmbeddedDb<S> {
             }
         }
         let mut index_ops = Vec::new();
-        // Range indexes registered before they were maintained have no
-        // entries; rebuild them once, when the index definitions migration
-        // is applied.
-        let rebuild_range_indexes = executed_core_migrations
-            .iter()
-            .any(|applied| applied.migration.name == crate::ddl::INDEX_DEFINITIONS_MIGRATION);
-        db.backfill_missing_index_storage(rebuild_range_indexes, &mut index_ops)?;
+        // Range and full-text indexes registered before they were maintained
+        // have no entries; rebuild them once, when the migration introducing
+        // their maintenance is applied.
+        let applied = |name: &str| {
+            executed_core_migrations
+                .iter()
+                .any(|applied| applied.migration.name == name)
+        };
+        let rebuild_kinds = [
+            (crate::ddl::INDEX_DEFINITIONS_MIGRATION, IndexKind::Range),
+            (crate::ddl::FULL_TEXT_INDEXES_MIGRATION, IndexKind::FullText),
+        ]
+        .into_iter()
+        .filter_map(|(migration, kind)| applied(migration).then_some(kind))
+        .collect::<Vec<_>>();
+        db.backfill_missing_index_storage(&rebuild_kinds, &mut index_ops)?;
         if !index_ops.is_empty() {
             db.storage.apply_batch(&index_ops)?;
         }
@@ -233,13 +243,13 @@ impl<S: EntityStorage> EmbeddedDb<S> {
 
     fn backfill_missing_index_storage(
         &self,
-        rebuild_range_indexes: bool,
+        rebuild_kinds: &[IndexKind],
         ops: &mut Vec<StorageWriteOp>,
     ) -> std::result::Result<(), DbError> {
         let catalog = self.catalog();
         let mut indexes = Vec::new();
         for (index_id, index) in catalog.indexes() {
-            if (rebuild_range_indexes && index.schema.kind == IndexKind::Range)
+            if rebuild_kinds.contains(&index.schema.kind)
                 || self.storage.index_needs_rebuild(index_id)?
             {
                 indexes.push(index.clone());
@@ -265,6 +275,7 @@ impl<S: EntityStorage> EmbeddedDb<S> {
                         || before_index.schema.unique != index.schema.unique
                         || before_index.schema.extra_key_paths != index.schema.extra_key_paths
                         || before_index.schema.predicate != index.schema.predicate
+                        || before_index.schema.analyzer != index.schema.analyzer
                 });
                 changed.then(|| index.clone())
             })
@@ -411,6 +422,7 @@ impl<S: EntityStorage> EmbeddedDb<S> {
             kind: IndexKind::Equality,
             extra_fields: Vec::new(),
             predicate: None,
+            analyzer: Default::default(),
         });
         self.transact_ddl(ddl)?;
         Ok(())
@@ -440,6 +452,7 @@ impl<S: EntityStorage> EmbeddedDb<S> {
             kind: definition.kind,
             extra_fields: fields.collect(),
             predicate: definition.predicate,
+            analyzer: definition.analyzer,
         });
         self.transact_ddl(ddl)?;
         Ok(())
@@ -3029,6 +3042,9 @@ fn expr_contains_relationship(expr: &crate::Expr) -> bool {
         | crate::Expr::RegexMatch { expr, pattern, .. } => {
             expr_contains_relationship(expr) || expr_contains_relationship(pattern)
         }
+        crate::Expr::TextMatch { exprs, query, .. } => {
+            exprs.iter().any(expr_contains_relationship) || expr_contains_relationship(query)
+        }
         crate::Expr::IsNull { expr, .. } => expr_contains_relationship(expr),
         crate::Expr::Operand(_) | crate::Expr::Subquery(_) | crate::Expr::Exists { .. } => false,
     }
@@ -3623,6 +3639,20 @@ impl crate::AsyncPhysicalDataSource for EmbeddedPhysicalDataSource<'_> {
         match self.index_range_scan(&scan) {
             Ok(Some(rows)) => Self::scans_to_stream(vec![rows], scan.residual_predicate),
             Ok(None) => crate::index_range_fallback_stream(self, scan),
+            Err(err) => stream::once(async move { Err(err) }).boxed(),
+        }
+    }
+
+    fn text_search_stream(
+        &self,
+        search: crate::PhysicalTextSearch,
+    ) -> crate::SendableRecordBatchStream {
+        match self.text_search_scan(&search) {
+            Ok(Some(rows)) => Self::scans_to_stream(vec![rows], search.residual_predicate),
+            Ok(None) => match search.predicate {
+                Some(predicate) => self.scan_filtered_stream(search.source, predicate),
+                None => self.scan_stream(search.source),
+            },
             Err(err) => stream::once(async move { Err(err) }).boxed(),
         }
     }

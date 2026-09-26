@@ -84,6 +84,11 @@ pub enum MigrationDdlOperation {
         #[facet(default)]
         #[facet(skip_serializing_if = Option::is_none)]
         predicate: Option<crate::query::Expr>,
+        /// Tokenization of a full-text index; must be the default for
+        /// other kinds.
+        #[facet(default)]
+        #[facet(skip_serializing_if = crate::query::TextAnalyzer::is_default)]
+        analyzer: crate::query::TextAnalyzer,
     },
     DeleteIndex {
         name: String,
@@ -134,6 +139,7 @@ mod tests {
             kind: IndexKind::Equality,
             extra_fields: Vec::new(),
             predicate: None,
+            analyzer: Default::default(),
         }
     }
 
@@ -164,9 +170,41 @@ mod tests {
                     "open".to_string(),
                 )))),
             }),
+            analyzer: Default::default(),
         };
         let encoded = facet_json::to_string(&op).unwrap();
         let decoded: MigrationDdlOperation = facet_json::from_str(&encoded).unwrap();
         assert_eq!(decoded, op);
+    }
+
+    #[test]
+    fn full_text_index_ops_round_trip() {
+        let index = |extra_fields: Vec<String>, analyzer| MigrationDdlOperation::UpsertIndex {
+            name: "search".to_string(),
+            collection: "items".to_string(),
+            field: "title".to_string(),
+            unique: false,
+            kind: IndexKind::FullText,
+            extra_fields,
+            predicate: None,
+            analyzer,
+        };
+        let op = index(
+            vec!["tags".to_string()],
+            crate::query::TextAnalyzer {
+                stemming: true,
+                min_token_len: 2,
+            },
+        );
+        let encoded = facet_json::to_string(&op).unwrap();
+        assert!(encoded.contains(r#""analyzer":{"stemming":true,"min_token_len":2}"#));
+        let decoded: MigrationDdlOperation = facet_json::from_str(&encoded).unwrap();
+        assert_eq!(decoded, op);
+
+        // Default analyzers are omitted.
+        assert_eq!(
+            facet_json::to_string(&index(Vec::new(), Default::default())).unwrap(),
+            r#"{"upsert_index":{"name":"search","collection":"items","field":"title","unique":false,"kind":"full_text"}}"#
+        );
     }
 }

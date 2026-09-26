@@ -83,6 +83,8 @@ pub(crate) fn index_entries_unchanged(index: &IndexSchema, old: &Object, new: &O
         // Covers single-column, composite and partial indexes: the derived
         // key value (or its absence) fully determines the entries.
         index.key_value(old) == index.key_value(new)
+    } else if index.schema.kind.is_full_text() {
+        index.indexed_columns_equal(old, new)
     } else {
         old == new
     }
@@ -860,6 +862,12 @@ impl MemoryEntityStorage {
         if index.schema.kind.is_value_index() && index.key_value(object).is_none() {
             return;
         }
+        if index
+            .text_tokens(object)
+            .is_some_and(|tokens| tokens.is_empty())
+        {
+            return;
+        }
         if !self.indexes.iter().any(|indexed| {
             indexed.index.lid == index.lid
                 && indexed.entity_id == entity_id
@@ -948,7 +956,13 @@ impl MemoryEntityStorage {
                 IndexKind::PathEquality => {
                     path.and_then(|path| entry.object.value_at_path(path)) == Some(value)
                 }
-                IndexKind::FullText => false,
+                IndexKind::FullText => match value {
+                    Value::String(token) => entry
+                        .index
+                        .text_tokens(&entry.object)
+                        .is_some_and(|tokens| tokens.contains(token)),
+                    _ => false,
+                },
             })
             .map(|entry| entry.entity_id.clone())
             .collect()
@@ -1627,6 +1641,7 @@ mod tests {
                 unique: false,
                 extra_key_paths: Vec::new(),
                 predicate: None,
+                analyzer: Default::default(),
             },
             collection: LocalCollectionId(7),
             canonical_field: "kind".to_string(),

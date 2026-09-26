@@ -253,6 +253,7 @@ fn migration_catalog_batch_operation(
             kind,
             extra_fields,
             predicate,
+            analyzer,
         } => Ok(CatalogBatchOperation::UpsertIndex {
             name: name.clone(),
             collection: collection.clone(),
@@ -261,6 +262,7 @@ fn migration_catalog_batch_operation(
             kind: *kind,
             extra_fields: extra_fields.clone(),
             predicate: predicate.clone(),
+            analyzer: *analyzer,
         }),
         MigrationDdlOperation::DeleteIndex { name, collection } => {
             Ok(CatalogBatchOperation::DeleteIndex {

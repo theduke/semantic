@@ -18,6 +18,7 @@ pub(super) async fn test_compact_id_execution(db: &Db) {
                 kind: Default::default(),
                 extra_fields: Vec::new(),
                 predicate: None,
+                analyzer: Default::default(),
             })
             .with_op(DdlOperation::UpsertAttribute {
                 attribute: AttributeType {

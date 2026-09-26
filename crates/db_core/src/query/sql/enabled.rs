@@ -41,8 +41,12 @@
 ///   - Note: `FROM <table>` is optional only in collection-scoped parsing APIs.
 ///
 /// - Expressions and functions:
-///   - Functions other than the executable aggregate, casing, coalescing, and
-///     relationship functions recognized below.
+///   - Functions other than the executable aggregate, casing, coalescing,
+///     relationship and text match (`text_match`, `text_match_any`,
+///     `MATCH ... AGAINST`) functions recognized below.
+///   - Text matches with a non-default analyzer (stemming, minimum token
+///     length); they are only expressible in the AST.
+///   - `MATCH ... AGAINST` in boolean mode or with query expansion.
 ///   - `SIMILAR TO` (SQL regex semantics are not implemented).
 ///   - `LIKE ANY` / `ILIKE ANY`.
 ///   - Source-less and correlated subqueries. Fields inside subqueries must be
@@ -73,7 +77,8 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use semantic_data::query::{
-    AggregateOp, BinaryOp, FieldFormat, JoinType, PatternMatchKind, SortDirection, UnaryOp,
+    AggregateOp, BinaryOp, FieldFormat, JoinType, PatternMatchKind, SortDirection, TextAnalyzer,
+    TextMatchMode, UnaryOp,
 };
 use semantic_data::schema::{
     AnyType, AttributeType, BoolType, BytesType, FloatWidth, IntWidth, Meta, NumberType,
@@ -694,6 +699,12 @@ fn expr_has_scope_path(expr: &Expr, path_matches: &impl Fn(&FieldPath) -> bool) 
             pattern: right,
             ..
         } => expr_has_scope_path(left, path_matches) || expr_has_scope_path(right, path_matches),
+        Expr::TextMatch { exprs, query, .. } => {
+            exprs
+                .iter()
+                .any(|expr| expr_has_scope_path(expr, path_matches))
+                || expr_has_scope_path(query, path_matches)
+        }
         Expr::IfElse {
             cond,
             then_expr,
@@ -1681,6 +1692,10 @@ fn expr_contains_nested_aggregate(expr: &Expr) -> bool {
             pattern: right,
             ..
         } => expr_contains_nested_aggregate(left) || expr_contains_nested_aggregate(right),
+        Expr::TextMatch { exprs, query, .. } => {
+            exprs.iter().any(expr_contains_nested_aggregate)
+                || expr_contains_nested_aggregate(query)
+        }
         Expr::IfElse {
             cond,
             then_expr,
@@ -1755,6 +1770,17 @@ fn normalize_group_expr(expr: &Expr, bindings: &[String]) -> Expr {
             else_expr: Box::new(normalize(else_expr)),
         },
         Expr::Coalesce(items) => Expr::Coalesce(items.iter().map(normalize).collect()),
+        Expr::TextMatch {
+            exprs,
+            query,
+            mode,
+            analyzer,
+        } => Expr::TextMatch {
+            exprs: exprs.iter().map(normalize).collect(),
+            query: Box::new(normalize(query)),
+            mode: *mode,
+            analyzer: *analyzer,
+        },
         Expr::Function { name, args } => Expr::Function {
             name: name.clone(),
             args: args
@@ -1894,6 +1920,12 @@ fn validate_grouped_expr(
         } => {
             validate_grouped_expr(left, group_by, group_bindings, clause)?;
             validate_grouped_expr(right, group_by, group_bindings, clause)
+        }
+        Expr::TextMatch { exprs, query, .. } => {
+            for expr in exprs {
+                validate_grouped_expr(expr, group_by, group_bindings, clause)?;
+            }
+            validate_grouped_expr(query, group_by, group_bindings, clause)
         }
         Expr::IfElse {
             cond,
@@ -2049,6 +2081,9 @@ fn expr_contains_subquery(expr: &Expr) -> bool {
             pattern: right,
             ..
         } => expr_contains_subquery(left) || expr_contains_subquery(right),
+        Expr::TextMatch { exprs, query, .. } => {
+            exprs.iter().any(expr_contains_subquery) || expr_contains_subquery(query)
+        }
         Expr::IfElse {
             cond,
             then_expr,
@@ -2108,6 +2143,9 @@ fn expr_contains_aggregate(expr: &Expr) -> bool {
             pattern: right,
             ..
         } => expr_contains_aggregate(left) || expr_contains_aggregate(right),
+        Expr::TextMatch { exprs, query, .. } => {
+            exprs.iter().any(expr_contains_aggregate) || expr_contains_aggregate(query)
+        }
         Expr::IfElse {
             cond,
             then_expr,
@@ -2337,6 +2375,11 @@ fn parse_expr(bindings: &mut Bindings<'_>, expr: SqlExpr) -> Result<Expr, SqlQue
             negated,
         }),
         SqlExpr::Function(function) => parse_function_expr(bindings, function),
+        SqlExpr::MatchAgainst {
+            columns,
+            match_value,
+            opt_search_modifier,
+        } => parse_match_against(bindings, columns, match_value, opt_search_modifier),
         SqlExpr::Case {
             operand,
             conditions,
@@ -2496,6 +2539,10 @@ fn parse_function_expr(
             name: function_name,
             args,
         })
+    } else if function_name.eq_ignore_ascii_case(TEXT_MATCH_FUNCTION) {
+        text_match_expr(&function_name, args, TextMatchMode::All)
+    } else if function_name.eq_ignore_ascii_case(TEXT_MATCH_ANY_FUNCTION) {
+        text_match_expr(&function_name, args, TextMatchMode::Any)
     } else if function_name.eq_ignore_ascii_case("has_relation") {
         parse_relation_function_expr(args, false)
     } else if function_name.eq_ignore_ascii_case("has_relation_path") {
@@ -2506,6 +2553,89 @@ fn parse_function_expr(
             function.name
         )))
     }
+}
+
+/// `text_match(expr, ..., query)`: every token of `query` occurs in the
+/// text of the expressions (see [`Expr::TextMatch`]).
+const TEXT_MATCH_FUNCTION: &str = "text_match";
+/// `text_match_any(expr, ..., query)`: some token of `query` occurs.
+const TEXT_MATCH_ANY_FUNCTION: &str = "text_match_any";
+
+/// A text match with the default analyzer from function arguments: the
+/// searched expressions followed by the query.
+fn text_match_expr(
+    function_name: &str,
+    args: Vec<FunctionArg>,
+    mode: TextMatchMode,
+) -> Result<Expr, SqlQueryError> {
+    let mut exprs = args
+        .into_iter()
+        .map(|arg| match arg {
+            FunctionArg::Expr(expr) => Ok(expr),
+            FunctionArg::Wildcard => Err(SqlQueryError::Unsupported(format!(
+                "function '{function_name}' does not support wildcard args"
+            ))),
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+    if exprs.len() < 2 {
+        return Err(SqlQueryError::Unsupported(format!(
+            "function '{function_name}' expects the searched expressions followed by the query"
+        )));
+    }
+    let query = exprs.pop().expect("checked len");
+    Ok(Expr::TextMatch {
+        exprs,
+        query: Box::new(query),
+        mode,
+        analyzer: TextAnalyzer::default(),
+    })
+}
+
+/// `MATCH (col, ...) AGAINST ('query' [IN NATURAL LANGUAGE MODE])`.
+///
+/// Unlike MySQL's relevance ranking, the plain form requires every query
+/// token (like `text_match`); natural language mode requires any token
+/// (like `text_match_any`).
+fn parse_match_against(
+    bindings: &mut Bindings<'_>,
+    columns: Vec<ObjectName>,
+    match_value: sqlparser::ast::Value,
+    modifier: Option<sqlparser::ast::SearchModifier>,
+) -> Result<Expr, SqlQueryError> {
+    use sqlparser::ast::SearchModifier;
+
+    let mode = match modifier {
+        None => TextMatchMode::All,
+        Some(SearchModifier::InNaturalLanguageMode) => TextMatchMode::Any,
+        Some(modifier) => {
+            return Err(SqlQueryError::Unsupported(format!(
+                "MATCH ... AGAINST modifier '{modifier}' is not supported"
+            )));
+        }
+    };
+    let mut exprs = Vec::with_capacity(columns.len());
+    for column in columns {
+        let idents = column
+            .0
+            .iter()
+            .map(|part| part.as_ident().cloned())
+            .collect::<Option<Vec<_>>>()
+            .ok_or_else(|| {
+                SqlQueryError::Unsupported(format!("MATCH column '{column}' is not supported"))
+            })?;
+        let expr = match <[_; 1]>::try_from(idents) {
+            Ok([ident]) => SqlExpr::Identifier(ident),
+            Err(idents) => SqlExpr::CompoundIdentifier(idents),
+        };
+        exprs.push(parse_expr(bindings, expr)?);
+    }
+    let query = parse_expr(bindings, SqlExpr::Value(match_value.with_empty_span()))?;
+    Ok(Expr::TextMatch {
+        exprs,
+        query: Box::new(query),
+        mode,
+        analyzer: TextAnalyzer::default(),
+    })
 }
 
 fn parse_relation_function_expr(
@@ -3209,6 +3339,28 @@ fn expr_to_sql(expr: &Expr) -> Result<String, SqlQueryError> {
                 expr_to_sql(pattern)?
             ))
         }
+        Expr::TextMatch {
+            exprs,
+            query,
+            mode,
+            analyzer,
+        } => {
+            if !analyzer.is_default() {
+                return Err(SqlQueryError::Unsupported(
+                    "text matches with a non-default analyzer have no SQL form".to_string(),
+                ));
+            }
+            let mut args = exprs
+                .iter()
+                .map(expr_to_sql)
+                .collect::<Result<Vec<_>, _>>()?;
+            args.push(expr_to_sql(query)?);
+            let function = match mode {
+                TextMatchMode::All => TEXT_MATCH_FUNCTION,
+                TextMatchMode::Any => TEXT_MATCH_ANY_FUNCTION,
+            };
+            Ok(format!("{function}({})", args.join(", ")))
+        }
         Expr::IsNull { expr, negated } => Ok(format!(
             "{} IS {}NULL",
             expr_to_sql(expr)?,
@@ -3669,6 +3821,58 @@ mod tests {
                 Err(SqlQueryError::Invalid(message))
                     if message.contains("must reference a projected expression, alias, or ordinal")
             ));
+        }
+    }
+
+    #[test]
+    fn text_matches_parse_and_round_trip() {
+        let predicate = |sql: &str| {
+            let parsed = super::parse_sql_query(sql, SqlDialectKind::Generic).unwrap();
+            let Query::Select(select) = &parsed.query else {
+                panic!("not a select");
+            };
+            let printed = super::query_to_sql(&parsed.query).unwrap();
+            let reparsed = super::parse_sql_query(&printed, SqlDialectKind::PostgreSql).unwrap();
+            assert_eq!(reparsed.query, parsed.query, "{printed}");
+            select.predicate.clone().unwrap()
+        };
+        let field = |name: &str| Expr::Operand(Operand::Field(FieldPath::from_fields([name])));
+        let expected = |mode| Expr::TextMatch {
+            exprs: vec![field("title"), field("body")],
+            query: Box::new(Expr::Operand(Operand::Literal(Value::String(
+                "red fox".into(),
+            )))),
+            mode,
+            analyzer: TextAnalyzer::default(),
+        };
+        for (sql, mode) in [
+            (
+                "SELECT id FROM items WHERE text_match(title, body, 'red fox')",
+                TextMatchMode::All,
+            ),
+            (
+                "SELECT id FROM items WHERE TEXT_MATCH_ANY(title, body, 'red fox')",
+                TextMatchMode::Any,
+            ),
+            (
+                "SELECT id FROM items WHERE MATCH (title, body) AGAINST ('red fox')",
+                TextMatchMode::All,
+            ),
+            (
+                "SELECT id FROM items WHERE MATCH (title, body) AGAINST ('red fox' IN NATURAL LANGUAGE MODE)",
+                TextMatchMode::Any,
+            ),
+        ] {
+            assert_eq!(predicate(sql), expected(mode), "{sql}");
+        }
+        for sql in [
+            "SELECT id FROM items WHERE text_match('red fox')",
+            "SELECT id FROM items WHERE MATCH (title) AGAINST ('red' IN BOOLEAN MODE)",
+        ] {
+            assert!(
+                super::parse_sql_query(sql, SqlDialectKind::Generic).is_err(),
+                "{sql}"
+            );
         }
     }
 

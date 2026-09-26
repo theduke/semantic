@@ -1,5 +1,5 @@
 use semantic_data::{
-    query::{JoinType, SortDirection},
+    query::{JoinType, SortDirection, TextMatchMode},
     value::{FieldPath, Value},
 };
 
@@ -128,6 +128,30 @@ impl PhysicalIndexScan {
     }
 }
 
+/// Read of one collection through the token entries of a full-text index.
+///
+/// Each token is one equality probe of the index. The ids of the probes are
+/// intersected (`All`) or united (`Any`), and the rows read by id in id
+/// order.
+#[derive(Debug, Clone, PartialEq)]
+pub struct PhysicalTextSearch {
+    pub source: SourceRef,
+    pub index: LocalIndexId,
+    pub index_name: String,
+    /// Canonical paths of the indexed columns.
+    pub columns: Vec<FieldPath>,
+    /// The distinct query tokens, in ascending order.
+    pub tokens: Vec<String>,
+    pub mode: TextMatchMode,
+    /// The complete predicate of the source: the rows produced are exactly
+    /// the rows of the collection matching it. Fallbacks without index
+    /// access filter a scan with it.
+    pub predicate: Option<Expr>,
+    /// The conjuncts of `predicate` the probes do not guarantee, checked on
+    /// every row read.
+    pub residual_predicate: Option<Expr>,
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub enum PhysicalSource {
     Scan {
@@ -146,6 +170,8 @@ pub enum PhysicalSource {
     /// Ordered, range, prefix, multi-probe or index-only read of an
     /// equality or range index.
     IndexRange(PhysicalIndexScan),
+    /// Token probes of a full-text index.
+    TextSearch(PhysicalTextSearch),
 }
 
 #[derive(Debug, Clone, PartialEq)]

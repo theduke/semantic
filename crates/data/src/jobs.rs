@@ -916,6 +916,7 @@ pub fn package() -> Package {
                 kind: Default::default(),
                 extra_fields: Vec::new(),
                 predicate: None,
+                analyzer: Default::default(),
             },
         ));
     }

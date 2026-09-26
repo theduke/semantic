@@ -152,6 +152,18 @@ impl<'a> DbReader<'a> {
                 descending,
                 index_only,
             }),
+            AccessPath::TextSearch {
+                index_name,
+                fields,
+                tokens,
+                mode,
+            } => Ok(QueryPlan::TextSearch {
+                collection,
+                index_name,
+                fields,
+                tokens,
+                mode,
+            }),
         }
     }
 
@@ -522,13 +534,18 @@ fn stats_for_collection(
 
     let mut index_entry_counts = BTreeMap::new();
     for index in catalog.indexes_for_collection(collection.lid) {
-        let entries = if index.schema.kind.is_value_index() {
+        let entries = if index.schema.kind.is_value_index() || index.schema.kind.is_full_text() {
             reader.index_entry_count(index.lid)?
         } else {
             None
         };
         if let Some(entries) = entries {
             index_entry_counts.insert(index.lid, entries as f64);
+        }
+        // Full-text entries are tokens: they neither answer value lookups
+        // nor bound the column's distinct values.
+        if index.schema.kind.is_full_text() {
+            continue;
         }
         // Composite and partial indexes neither answer lookups of their
         // first column nor bound its distinct values.
@@ -577,11 +594,37 @@ fn stats_for_collection(
     })
 }
 
+/// The full-text search a physical plan reads its rows through, if any.
+fn find_text_search(plan: &crate::PhysicalPlan) -> Option<&crate::PhysicalTextSearch> {
+    match plan {
+        crate::PhysicalPlan::Source(crate::PhysicalSource::TextSearch(search)) => Some(search),
+        crate::PhysicalPlan::Filter { input, .. }
+        | crate::PhysicalPlan::Sort { input, .. }
+        | crate::PhysicalPlan::TopN { input, .. }
+        | crate::PhysicalPlan::Project { input, .. }
+        | crate::PhysicalPlan::Aggregate { input, .. }
+        | crate::PhysicalPlan::Limit { input, .. }
+        | crate::PhysicalPlan::Distinct { input, .. }
+        | crate::PhysicalPlan::Materialize { input, .. }
+        | crate::PhysicalPlan::Exchange { input, .. }
+        | crate::PhysicalPlan::RepartitionHash { input, .. } => find_text_search(input),
+        _ => None,
+    }
+}
+
 fn access_path_from_physical(
     catalog: &Catalog,
     collection: &CollectionSchema,
     physical: &crate::PhysicalPlan,
 ) -> AccessPath {
+    if let Some(search) = find_text_search(physical) {
+        return AccessPath::TextSearch {
+            index_name: search.index_name.clone(),
+            fields: search.columns.iter().map(format_field_path).collect(),
+            tokens: search.tokens.clone(),
+            mode: search.mode,
+        };
+    }
     if let Some(scan) = find_index_range(physical) {
         return AccessPath::IndexRange {
             index_name: scan.index_name.clone(),

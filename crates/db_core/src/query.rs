@@ -152,7 +152,8 @@ use std::{
 use regex::RegexBuilder;
 use semantic_data::query as public_query;
 use semantic_data::query::{
-    AggregateOp, BinaryOp, FieldFormat, JoinType, PatternMatchKind, SortDirection, UnaryOp,
+    AggregateOp, BinaryOp, FieldFormat, JoinType, PatternMatchKind, SortDirection, TextAnalyzer,
+    TextMatchMode, UnaryOp,
 };
 use semantic_data::value::{FieldPath, Object, PathSegment, Value, ValueRef};
 
@@ -280,6 +281,13 @@ pub enum Expr {
         pattern: Box<Expr>,
         case_insensitive: bool,
         negated: bool,
+    },
+    /// See [`semantic_data::query::Expr::TextMatch`].
+    TextMatch {
+        exprs: Vec<Expr>,
+        query: Box<Expr>,
+        mode: TextMatchMode,
+        analyzer: TextAnalyzer,
     },
     IsNull {
         expr: Box<Expr>,
@@ -523,6 +531,17 @@ impl From<public_query::Expr> for Expr {
                 pattern: Box::new((*pattern).into()),
                 case_insensitive,
                 negated,
+            },
+            public_query::Expr::TextMatch {
+                exprs,
+                query,
+                mode,
+                analyzer,
+            } => Self::TextMatch {
+                exprs: exprs.into_iter().map(Into::into).collect(),
+                query: Box::new((*query).into()),
+                mode,
+                analyzer,
             },
             public_query::Expr::IsNull { expr, negated } => Self::IsNull {
                 expr: Box::new((*expr).into()),
@@ -1653,11 +1672,44 @@ pub fn evaluate_expr<T: ObjectAccess + ?Sized>(value: &T, expr: &Expr) -> Option
                 });
             Some(Value::Bool(if *negated { !matched } else { matched }))
         }
+        Expr::TextMatch {
+            exprs,
+            query,
+            mode,
+            analyzer,
+        } => Some(Value::Bool(evaluate_text_match(
+            value, exprs, query, *mode, analyzer,
+        ))),
         Expr::IsNull { expr, negated } => {
             let is_null = evaluate_expr(value, expr).is_none_or(|v| v.is_nullish());
             Some(Value::Bool(if *negated { !is_null } else { is_null }))
         }
     }
+}
+
+/// Whether the text of `exprs` on `row` matches the string `query`, see
+/// [`semantic_data::query::text`]. Non-string queries match nothing.
+fn evaluate_text_match<T: ObjectAccess + ?Sized>(
+    row: &T,
+    exprs: &[Expr],
+    query: &Expr,
+    mode: TextMatchMode,
+    analyzer: &TextAnalyzer,
+) -> bool {
+    let Some(Value::String(query)) = evaluate_expr(row, query) else {
+        return false;
+    };
+    let query = analyzer.query_tokens(&query);
+    if query.is_empty() {
+        return false;
+    }
+    let mut text = BTreeSet::new();
+    for expr in exprs {
+        if let Some(value) = evaluate_expr(row, expr) {
+            analyzer.value_tokens(&value, &mut text);
+        }
+    }
+    semantic_data::query::text::text_tokens_match(mode, &text, &query)
 }
 
 pub fn project_object<T: ObjectAccess + ?Sized>(value: &T, projection: &[QueryField]) -> Object {

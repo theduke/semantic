@@ -101,6 +101,7 @@ mod tests {
                         kind: Default::default(),
                         extra_fields: Vec::new(),
                         predicate: None,
+                        analyzer: Default::default(),
                     }),
                     MigrationOperation::Insert {
                         collection: "migration_items".to_string(),

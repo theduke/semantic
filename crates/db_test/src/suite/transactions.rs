@@ -57,6 +57,7 @@ async fn setup(db: &Db) {
                 kind: IndexKind::Equality,
                 extra_fields: Vec::new(),
                 predicate: None,
+                analyzer: Default::default(),
             })
             .with_op(DdlOperation::UpsertIndex {
                 name: "suite_tx_n".into(),
@@ -66,6 +67,7 @@ async fn setup(db: &Db) {
                 kind: IndexKind::Range,
                 extra_fields: Vec::new(),
                 predicate: None,
+                analyzer: Default::default(),
             }),
     )
     .await

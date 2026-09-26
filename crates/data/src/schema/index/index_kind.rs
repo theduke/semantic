@@ -8,6 +8,8 @@ pub enum IndexKind {
     PathEquality,
     /// Ordered index: equality plus range, prefix and ordered scans.
     Range,
+    /// Inverted index of the tokens of the key columns' text, answering
+    /// text matches (see [`crate::query::text`]).
     FullText,
 }
 
@@ -20,5 +22,9 @@ impl IndexKind {
     /// and range indexes share one key derivation).
     pub fn is_value_index(&self) -> bool {
         matches!(self, Self::Equality | Self::Range)
+    }
+
+    pub fn is_full_text(&self) -> bool {
+        *self == Self::FullText
     }
 }

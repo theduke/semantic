@@ -127,6 +127,16 @@ pub enum QueryPlan {
         /// Whether rows are served from index keys without row reads.
         index_only: bool,
     },
+    /// Token probes of a full-text index answering a text match.
+    TextSearch {
+        collection: String,
+        index_name: String,
+        /// Indexed columns.
+        fields: Vec<String>,
+        /// Distinct query tokens, one index probe each.
+        tokens: Vec<String>,
+        mode: semantic_data::query::TextMatchMode,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -145,6 +155,13 @@ pub enum AccessPath {
         ordered: bool,
         descending: bool,
         index_only: bool,
+    },
+    /// See [`QueryPlan::TextSearch`].
+    TextSearch {
+        index_name: String,
+        fields: Vec<String>,
+        tokens: Vec<String>,
+        mode: semantic_data::query::TextMatchMode,
     },
 }
 

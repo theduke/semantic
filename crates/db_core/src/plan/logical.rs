@@ -314,6 +314,9 @@ fn expr_has_aggregate(expr: &Expr) -> bool {
         Expr::PatternMatch { expr, pattern, .. } | Expr::RegexMatch { expr, pattern, .. } => {
             expr_has_aggregate(expr) || expr_has_aggregate(pattern)
         }
+        Expr::TextMatch { exprs, query, .. } => {
+            exprs.iter().any(expr_has_aggregate) || expr_has_aggregate(query)
+        }
         Expr::IsNull { expr, .. } => expr_has_aggregate(expr),
         Expr::RelationExists {
             relation,

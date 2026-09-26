@@ -268,6 +268,7 @@ fn failed_and_conflicted_commits_emit_nothing() {
         kind: IndexKind::Equality,
         extra_fields: Vec::new(),
         predicate: None,
+        analyzer: Default::default(),
     }))
     .unwrap();
     db.execute_batch(Batch::new().with_op(upsert(NOTES, "a", "x")))

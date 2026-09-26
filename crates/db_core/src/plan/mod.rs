@@ -4,6 +4,7 @@ mod logical;
 mod optimizer;
 mod physical;
 mod stats;
+mod text_access;
 
 pub use execute::*;
 pub use logical::*;

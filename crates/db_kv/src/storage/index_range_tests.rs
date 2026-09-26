@@ -23,6 +23,7 @@ fn index(lid: usize, kind: IndexKind) -> IndexSchema {
             unique: false,
             extra_key_paths: Vec::new(),
             predicate: None,
+            analyzer: Default::default(),
         },
         collection: LocalCollectionId(7),
         canonical_field: "kind".to_string(),

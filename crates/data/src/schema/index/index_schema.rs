@@ -20,6 +20,10 @@ pub struct IndexSchema {
     #[facet(default)]
     #[facet(skip_serializing_if = Option::is_none)]
     pub predicate: Option<crate::query::Expr>,
+    /// Tokenization of a full-text index (default for other kinds).
+    #[facet(default)]
+    #[facet(skip_serializing_if = crate::query::TextAnalyzer::is_default)]
+    pub analyzer: crate::query::TextAnalyzer,
 }
 
 impl IndexSchema {

@@ -76,6 +76,9 @@ use std::collections::BTreeMap;
 
 use crate::value::{FieldPath, Object, Value};
 
+pub mod text;
+pub use text::{TextAnalyzer, TextMatchMode};
+
 #[derive(facet::Facet, Debug, Clone, PartialEq)]
 #[repr(C)]
 #[facet(rename_all = "snake_case")]
@@ -137,6 +140,21 @@ pub enum Expr {
         pattern: Box<Expr>,
         case_insensitive: bool,
         negated: bool,
+    },
+    /// Full-text match: whether the text of `exprs` (their string values
+    /// and the strings of list values) contains the tokens of `query` (a
+    /// string), both tokenized by `analyzer`; see [`text`]. Answered by a
+    /// full-text index over exactly these fields with an equivalent
+    /// analyzer.
+    TextMatch {
+        exprs: Vec<Expr>,
+        query: Box<Expr>,
+        #[facet(default)]
+        #[facet(skip_serializing_if = TextMatchMode::is_all)]
+        mode: TextMatchMode,
+        #[facet(default)]
+        #[facet(skip_serializing_if = TextAnalyzer::is_default)]
+        analyzer: TextAnalyzer,
     },
     IsNull {
         expr: Box<Expr>,

@@ -35,6 +35,8 @@ use stats::CounterDeltas;
 #[cfg(test)]
 mod entity_format_tests;
 #[cfg(test)]
+mod full_text_tests;
+#[cfg(test)]
 mod incremental_tests;
 #[cfg(test)]
 mod index_range_tests;
@@ -1324,7 +1326,11 @@ fn index_keys(
                 keys.insert(index_key(index.lid, Some(&path), &value, entity_id));
             }
         }
-        IndexKind::FullText => {}
+        IndexKind::FullText => {
+            for token in index.text_tokens(object).unwrap_or_default() {
+                keys.insert(index_key(index.lid, None, &Value::String(token), entity_id));
+            }
+        }
     }
     Ok(keys)
 }
@@ -1503,6 +1509,7 @@ mod tests {
                 unique: false,
                 extra_key_paths: Vec::new(),
                 predicate: None,
+                analyzer: Default::default(),
             },
             collection: LocalCollectionId(7),
             canonical_field: "kind".to_string(),
@@ -1567,6 +1574,7 @@ mod tests {
                 unique: false,
                 extra_key_paths: Vec::new(),
                 predicate: None,
+                analyzer: Default::default(),
             },
             collection: LocalCollectionId(7),
             canonical_field: "kind".to_string(),

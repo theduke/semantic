@@ -66,6 +66,8 @@ pub struct IndexDefinition {
     pub kind: IndexKind,
     /// Predicate of a partial index: only matching rows are indexed.
     pub predicate: Option<semantic_data::query::Expr>,
+    /// Tokenization of a full-text index (default for other kinds).
+    pub analyzer: semantic_data::query::TextAnalyzer,
 }
 
 /// Rewrite the field paths of a partial index predicate to canonical field
@@ -110,6 +112,10 @@ fn canonicalize_index_predicate(
             } => children.extend([&mut **expr, &mut **low, &mut **high]),
             Expr::PatternMatch { expr, pattern, .. } | Expr::RegexMatch { expr, pattern, .. } => {
                 children.extend([&mut **expr, &mut **pattern])
+            }
+            Expr::TextMatch { exprs, query, .. } => {
+                children.extend(exprs.iter_mut());
+                children.push(query);
             }
             Expr::Aggregate { .. } => return Err("aggregates"),
             Expr::Subquery(_) | Expr::Exists { .. } => return Err("subqueries"),
@@ -179,6 +185,8 @@ pub enum CatalogBatchOperation {
         extra_fields: Vec<String>,
         /// Predicate of a partial index.
         predicate: Option<semantic_data::query::Expr>,
+        /// Tokenization of a full-text index.
+        analyzer: semantic_data::query::TextAnalyzer,
     },
     DeleteIndex {
         name: String,
@@ -311,6 +319,7 @@ impl Catalog {
                     kind,
                     extra_fields,
                     predicate,
+                    analyzer,
                 } => {
                     let collection_schema =
                         self.collection_by_name(collection).ok_or_else(|| {
@@ -327,6 +336,7 @@ impl Catalog {
                         unique: *unique,
                         kind: *kind,
                         predicate: predicate.clone(),
+                        analyzer: *analyzer,
                     })?;
                 }
                 CatalogBatchOperation::DeleteIndex { name, collection } => {
@@ -869,6 +879,7 @@ impl Catalog {
             unique,
             kind,
             predicate: None,
+            analyzer: Default::default(),
         })
     }
 
@@ -911,6 +922,7 @@ impl Catalog {
             unique,
             kind,
             predicate,
+            analyzer,
         } = definition;
         let collection_schema = self
             .collections
@@ -922,9 +934,19 @@ impl Catalog {
                 collection_schema.name
             )));
         };
-        if (fields.len() > 1 || predicate.is_some()) && !kind.is_value_index() {
+        if (fields.len() > 1 || predicate.is_some()) && kind == IndexKind::PathEquality {
             return Err(CatalogError::InvalidSchema(format!(
-                "index '{name}': only equality and range indexes can be composite or partial"
+                "index '{name}': path indexes cannot be composite or partial"
+            )));
+        }
+        if kind == IndexKind::FullText && unique {
+            return Err(CatalogError::InvalidSchema(format!(
+                "index '{name}': full-text indexes cannot be unique"
+            )));
+        }
+        if kind != IndexKind::FullText && !analyzer.is_default() {
+            return Err(CatalogError::InvalidSchema(format!(
+                "index '{name}': only full-text indexes have a text analyzer"
             )));
         }
         let columns = fields
@@ -937,7 +959,7 @@ impl Catalog {
                     "index '{name}' lists column '{column}' more than once"
                 )));
             }
-            if kind.is_value_index()
+            if kind != IndexKind::PathEquality
                 && collection_schema.is_closed_field_set()
                 && !collection_schema.knows_field(column)
             {
@@ -974,6 +996,7 @@ impl Catalog {
                     })
                     .collect(),
                 predicate,
+                analyzer,
             },
             collection,
             canonical_field,
@@ -1130,6 +1153,7 @@ impl Catalog {
                     kind: index.schema.kind,
                     extra_fields: index.extra_columns().map(ToString::to_string).collect(),
                     predicate: index.schema.predicate.clone(),
+                    analyzer: index.schema.analyzer,
                 })
                 .collect(),
             relationships: self
@@ -1508,6 +1532,7 @@ impl Catalog {
                     unique: item.unique,
                     kind: item.kind,
                     predicate: item.predicate,
+                    analyzer: item.analyzer,
                 },
             )?;
             catalog

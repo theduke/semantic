@@ -696,6 +696,36 @@ fn canonicalize_expr_with_join_bindings(
             case_insensitive: *case_insensitive,
             negated: *negated,
         }),
+        Expr::TextMatch {
+            exprs,
+            query,
+            mode,
+            analyzer,
+        } => Ok(Expr::TextMatch {
+            exprs: exprs
+                .iter()
+                .map(|item| {
+                    canonicalize_expr_with_join_bindings(
+                        item,
+                        catalog,
+                        collection,
+                        base_binding,
+                        join_bindings,
+                        context,
+                    )
+                })
+                .collect::<CanonicalResult<Vec<_>>>()?,
+            query: Box::new(canonicalize_expr_with_join_bindings(
+                query,
+                catalog,
+                collection,
+                base_binding,
+                join_bindings,
+                context,
+            )?),
+            mode: *mode,
+            analyzer: *analyzer,
+        }),
         Expr::RegexMatch {
             expr,
             pattern,

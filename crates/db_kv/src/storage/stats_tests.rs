@@ -184,6 +184,7 @@ fn index_counters_follow_index_build_clear_and_reset() {
             unique: false,
             extra_key_paths: Vec::new(),
             predicate: None,
+            analyzer: Default::default(),
         },
         collection: items,
         canonical_field: "kind".to_string(),

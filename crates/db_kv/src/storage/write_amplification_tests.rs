@@ -218,6 +218,7 @@ fn setup_with_path_index(path_index: bool) -> (Db, Arc<Mutex<Vec<TxnAccess>>>) {
             kind: IndexKind::Equality,
             extra_fields: Vec::new(),
             predicate: None,
+            analyzer: Default::default(),
         });
     }
     ddl = ddl
@@ -503,6 +504,7 @@ fn kind_index() -> IndexSchema {
             unique: false,
             extra_key_paths: Vec::new(),
             predicate: None,
+            analyzer: Default::default(),
         },
         collection: LocalCollectionId(7),
         canonical_field: "kind".to_string(),
@@ -606,4 +608,118 @@ fn reindex_previous_states_are_not_trusted_after_resets_or_repeated_keys() {
     let mut store = kind_store();
     store.apply_batch(&[reindex(Some("a"), Some("b"))]).unwrap();
     assert_kind_entries(&store, 1);
+}
+
+/// [`setup`] plus a full-text index over `body` and `tags`, with `post`
+/// holding `body`.
+fn setup_full_text(body: &str) -> (Db, Arc<Mutex<Vec<TxnAccess>>>, LocalIndexId) {
+    let (mut db, txns) = setup();
+    db.transact_ddl(DdlBatch::new().with_op(DdlOperation::UpsertIndex {
+        name: "search".into(),
+        collection: COLLECTION.into(),
+        field: "body".into(),
+        unique: false,
+        kind: IndexKind::FullText,
+        extra_fields: vec!["tags".into()],
+        predicate: None,
+        analyzer: Default::default(),
+    }))
+    .unwrap();
+    let mut object = article("post", Some(("alice", "bob")));
+    object.insert("body", body.to_string());
+    upsert(&mut db, object);
+    txns.lock().unwrap().clear();
+    let collection = db.catalog().collection_by_name(COLLECTION).unwrap().lid;
+    let index = db
+        .catalog()
+        .indexes_for_collection(collection)
+        .find(|index| index.schema.name == "search")
+        .unwrap()
+        .lid;
+    (db, txns, index)
+}
+
+/// Tokens of the keys of `index` for the `post` row among `keys`, sorted.
+fn index_tokens(keys: &[Vec<u8>], index: LocalIndexId) -> Vec<String> {
+    let prefix = keys::index_prefix(index);
+    let mut tokens = keys
+        .iter()
+        .filter(|key| key.starts_with(&prefix))
+        .filter_map(|key| {
+            let (value, len) = keys::memcmp::decode_prefix(&key[prefix.len()..]).unwrap();
+            (&key[prefix.len() + len..] == b"post").then(|| value.as_str().unwrap().to_string())
+        })
+        .collect::<Vec<_>>();
+    tokens.sort();
+    tokens
+}
+
+#[test]
+fn changing_text_writes_exactly_the_token_delta() {
+    let (mut db, txns, index) = setup_full_text("alpha beta gamma beta");
+    assert_eq!(
+        index_tokens(&db.storage().index_keys(index).unwrap(), index),
+        ["alpha", "beta", "gamma"]
+    );
+
+    let mut object = article("post", Some(("alice", "bob")));
+    object.insert("body", "Gamma BETA delta".to_string());
+    object.insert(
+        "tags",
+        Value::List(vec![
+            Value::String("beta".into()),
+            Value::String("epsilon".into()),
+        ]),
+    );
+    let access = measure(&mut db, &txns, object);
+
+    assert_eq!(index_tokens(&access.puts, index), ["delta", "epsilon"]);
+    assert_eq!(index_tokens(&access.deletes, index), ["alpha"]);
+    assert_eq!(
+        index_tokens(&db.storage().index_keys(index).unwrap(), index),
+        ["beta", "delta", "epsilon", "gamma"]
+    );
+    assert_counters_match_keys(&db);
+}
+
+#[test]
+fn unchanged_text_writes_no_token_keys() {
+    let (mut db, txns, index) = setup_full_text("alpha beta");
+
+    let mut object = article("post", Some(("alice", "bob")));
+    object.insert("body", "alpha beta".to_string());
+    object.insert("status", "published".to_string());
+    let access = measure(&mut db, &txns, object);
+    assert!(index_tokens(&access.puts, index).is_empty(), "{access:?}");
+    assert!(
+        index_tokens(&access.deletes, index).is_empty(),
+        "{access:?}"
+    );
+
+    // Different text with the same tokens changes no keys either.
+    let mut object = article("post", Some(("alice", "bob")));
+    object.insert("body", "Beta, ALPHA!".to_string());
+    object.insert("status", "published".to_string());
+    let access = measure(&mut db, &txns, object);
+    assert!(index_tokens(&access.puts, index).is_empty(), "{access:?}");
+    assert!(
+        index_tokens(&access.deletes, index).is_empty(),
+        "{access:?}"
+    );
+    assert_counters_match_keys(&db);
+}
+
+#[test]
+fn deleting_a_row_removes_its_tokens() {
+    let (mut db, _txns, index) = setup_full_text("alpha beta");
+    db.execute_batch_returning(
+        Batch::new().with_op(BatchOperation::DeleteById {
+            collection: COLLECTION.into(),
+            id: "post".into(),
+        }),
+        BatchReturn::Stats,
+    )
+    .unwrap();
+    assert!(index_tokens(&db.storage().index_keys(index).unwrap(), index).is_empty());
+    assert_counters_match_keys(&db);
 }
