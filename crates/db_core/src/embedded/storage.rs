@@ -127,6 +127,14 @@ pub trait EntityReadSnapshot: Send + Sync {
         self.scan_collection_stream(collection)?.collect()
     }
 
+    /// Number of entities in `collection`.
+    ///
+    /// The default counts a collection scan; backends should count stored
+    /// keys without decoding entity payloads.
+    fn count_collection_entities(&self, collection: LocalCollectionId) -> Result<u64, DbError> {
+        count_entity_scan(self.scan_collection_stream(collection)?)
+    }
+
     fn scan_index_value_stream(
         &self,
         index: LocalIndexId,
@@ -174,6 +182,11 @@ pub trait EntityReadSnapshot: Send + Sync {
     }
 
     fn index_needs_rebuild(&self, index: LocalIndexId) -> Result<bool, DbError>;
+}
+
+/// Count the entities of a scan, stopping at the first error.
+pub fn count_entity_scan(mut scan: BoxEntityScan) -> Result<u64, DbError> {
+    scan.try_fold(0u64, |count, entity| entity.map(|_| count + 1))
 }
 
 /// Error returned by storages without ordered index scans.
@@ -248,6 +261,10 @@ impl<S: EntityStorage + ?Sized> EntityReadSnapshot for ForwardingReadSnapshot<'_
         collection: LocalCollectionId,
     ) -> Result<BoxEntityScan, DbError> {
         self.storage.scan_collection_stream(collection)
+    }
+
+    fn count_collection_entities(&self, collection: LocalCollectionId) -> Result<u64, DbError> {
+        self.storage.count_collection_entities(collection)
     }
 
     fn scan_index_value_stream(
@@ -403,6 +420,14 @@ pub trait EntityStorage: std::fmt::Debug + Send + Sync + 'static {
         collection: LocalCollectionId,
     ) -> std::result::Result<Vec<StoredEntity>, DbError> {
         self.scan_collection_stream(collection)?.collect()
+    }
+
+    /// Number of entities in `collection`.
+    ///
+    /// The default counts a collection scan; backends should count stored
+    /// keys without decoding entity payloads.
+    fn count_collection_entities(&self, collection: LocalCollectionId) -> Result<u64, DbError> {
+        count_entity_scan(self.scan_collection_stream(collection)?)
     }
 
     fn scan_collection_at_revision_stream(
@@ -710,6 +735,14 @@ impl EntityStorage for MemoryEntityStorage {
         ))
     }
 
+    fn count_collection_entities(&self, collection: LocalCollectionId) -> Result<u64, DbError> {
+        Ok(self
+            .entities
+            .keys()
+            .filter(|(stored_collection, _)| *stored_collection == collection.0)
+            .count() as u64)
+    }
+
     fn scan_collection_at_revision_stream(
         &self,
         collection: LocalCollectionId,
@@ -823,6 +856,150 @@ impl EntityStorage for MemoryEntityStorage {
     }
 }
 
+/// Read call counters of a [`CountingEntityStorage`].
+#[cfg(test)]
+#[derive(Debug, Default)]
+pub(crate) struct StorageReadCounts {
+    pub(crate) collection_scans: std::sync::atomic::AtomicUsize,
+    pub(crate) entity_gets: std::sync::atomic::AtomicUsize,
+    pub(crate) collection_counts: std::sync::atomic::AtomicUsize,
+}
+
+#[cfg(test)]
+impl StorageReadCounts {
+    pub(crate) fn reset(&self) {
+        use std::sync::atomic::Ordering;
+
+        self.collection_scans.store(0, Ordering::Relaxed);
+        self.entity_gets.store(0, Ordering::Relaxed);
+        self.collection_counts.store(0, Ordering::Relaxed);
+    }
+
+    pub(crate) fn collection_scans(&self) -> usize {
+        self.collection_scans
+            .load(std::sync::atomic::Ordering::Relaxed)
+    }
+
+    pub(crate) fn entity_gets(&self) -> usize {
+        self.entity_gets.load(std::sync::atomic::Ordering::Relaxed)
+    }
+
+    pub(crate) fn collection_counts(&self) -> usize {
+        self.collection_counts
+            .load(std::sync::atomic::Ordering::Relaxed)
+    }
+}
+
+/// [`MemoryEntityStorage`] wrapper counting collection scans, point reads
+/// and collection counts, including those made through snapshots.
+#[cfg(test)]
+#[derive(Debug, Default)]
+pub(crate) struct CountingEntityStorage {
+    inner: MemoryEntityStorage,
+    counts: std::sync::Arc<StorageReadCounts>,
+}
+
+#[cfg(test)]
+impl CountingEntityStorage {
+    pub(crate) fn new() -> (Self, std::sync::Arc<StorageReadCounts>) {
+        let storage = Self::default();
+        let counts = storage.counts.clone();
+        (storage, counts)
+    }
+
+    fn count(counter: &std::sync::atomic::AtomicUsize) {
+        counter.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    }
+}
+
+#[cfg(test)]
+impl EntityStorage for CountingEntityStorage {
+    fn get_entity(
+        &self,
+        collection: LocalCollectionId,
+        id: &str,
+    ) -> Result<Option<StoredEntity>, DbError> {
+        Self::count(&self.counts.entity_gets);
+        self.inner.get_entity(collection, id)
+    }
+
+    fn scan_collection_stream(
+        &self,
+        collection: LocalCollectionId,
+    ) -> Result<BoxEntityScan, DbError> {
+        Self::count(&self.counts.collection_scans);
+        self.inner.scan_collection_stream(collection)
+    }
+
+    fn count_collection_entities(&self, collection: LocalCollectionId) -> Result<u64, DbError> {
+        Self::count(&self.counts.collection_counts);
+        self.inner.count_collection_entities(collection)
+    }
+
+    fn scan_collection_at_revision_stream(
+        &self,
+        collection: LocalCollectionId,
+        revision: u64,
+    ) -> Result<BoxEntityScan, DbError> {
+        Self::count(&self.counts.collection_scans);
+        self.inner
+            .scan_collection_at_revision_stream(collection, revision)
+    }
+
+    fn scan_index_value_stream(
+        &self,
+        index: LocalIndexId,
+        path: Option<&FieldPath>,
+        value: &Value,
+    ) -> Result<BoxEntityIdScan, DbError> {
+        self.inner.scan_index_value_stream(index, path, value)
+    }
+
+    fn scan_index_range_stream(
+        &self,
+        index: LocalIndexId,
+        path: Option<&FieldPath>,
+        lower: Bound<&Value>,
+        upper: Bound<&Value>,
+    ) -> Result<BoxEntityIdScan, DbError> {
+        self.inner
+            .scan_index_range_stream(index, path, lower, upper)
+    }
+
+    fn scan_index_prefix_stream(
+        &self,
+        index: LocalIndexId,
+        path: Option<&FieldPath>,
+        prefix: &str,
+    ) -> Result<BoxEntityIdScan, DbError> {
+        self.inner.scan_index_prefix_stream(index, path, prefix)
+    }
+
+    fn index_needs_rebuild(&self, index: LocalIndexId) -> Result<bool, DbError> {
+        self.inner.index_needs_rebuild(index)
+    }
+
+    fn tx_capabilities(&self) -> StorageTransactionCapabilities {
+        self.inner.tx_capabilities()
+    }
+
+    fn current_revision(&self) -> Result<Option<u64>, DbError> {
+        self.inner.current_revision()
+    }
+
+    fn apply_batch(&mut self, ops: &[StorageWriteOp]) -> Result<(), DbError> {
+        self.inner.apply_batch(ops)
+    }
+
+    fn apply_batch_conditional(
+        &mut self,
+        ops: &[StorageWriteOp],
+        expected_revision: Option<u64>,
+    ) -> Result<StorageCommitOutcome, DbError> {
+        self.inner.apply_batch_conditional(ops, expected_revision)
+    }
+}
+
 /// Borrowed view of [`MemoryEntityStorage`].
 ///
 /// Writes require exclusive access, so the borrowed state cannot change while
@@ -855,6 +1032,10 @@ impl EntityReadSnapshot for MemoryEntityReadSnapshot<'_> {
         collection: LocalCollectionId,
     ) -> Result<BoxEntityScan, DbError> {
         EntityStorage::scan_collection_stream(self.storage, collection)
+    }
+
+    fn count_collection_entities(&self, collection: LocalCollectionId) -> Result<u64, DbError> {
+        EntityStorage::count_collection_entities(self.storage, collection)
     }
 
     fn scan_index_value_stream(

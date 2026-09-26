@@ -1,7 +1,5 @@
 use std::collections::{BTreeMap, BTreeSet};
-#[cfg(test)]
-use std::sync::atomic::{AtomicUsize, Ordering as AtomicOrdering};
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 
 use crate::{
     ALL_COLLECTION_ALIAS, AccessPath, AppliedMigration, Batch, BatchOperation, BatchOutcome,
@@ -53,7 +51,13 @@ const REL_EDGE_TARGET_INDEX_NAME: &str = "__rel_target_idx";
 
 pub(crate) mod compact;
 mod incremental;
+mod local_refs;
 mod validation;
+
+use local_refs::{
+    LocalRefResolver, LocalRefTargets, resolve_path_with_local_refs,
+    value_from_object_with_alias_fallback,
+};
 
 #[derive(Debug)]
 pub struct EmbeddedDb<S: EntityStorage> {
@@ -864,9 +868,7 @@ impl<S: EntityStorage> EmbeddedDb<S> {
             reader,
             catalog: self.catalog(),
             default_collection: default_collection.map(ToOwned::to_owned),
-            local_ref_lookups: Mutex::new(BTreeMap::new()),
-            #[cfg(test)]
-            local_ref_lookup_builds: AtomicUsize::new(0),
+            local_refs: LocalRefResolver::for_plan(plan),
         };
         crate::execute_physical_plan_with_source(plan, &source, &context)
             .map_err(|err| DbError::InvalidQuery(err.to_string()))
@@ -2319,9 +2321,7 @@ impl<S: EntityStorage> EmbeddedDb<S> {
         reader: &dyn EntityReadSnapshot,
         collection: &CollectionSchema,
     ) -> std::result::Result<CollectionStatsEntry, DbError> {
-        let row_count = reader
-            .scan_collection_stream(collection.lid)?
-            .try_fold(0usize, |count, row| row.map(|_| count + 1))? as f64;
+        let row_count = reader.count_collection_entities(collection.lid)? as f64;
         let mut indexed_fields = BTreeSet::new();
         let mut unique_fields = BTreeSet::new();
         let mut indexed_field_ids = BTreeSet::new();
@@ -2488,41 +2488,64 @@ struct EmbeddedPhysicalDataSource<'a> {
     reader: Box<dyn EntityReadSnapshot + 'a>,
     catalog: std::sync::Arc<Catalog>,
     default_collection: Option<String>,
-    local_ref_lookups: Mutex<BTreeMap<LocalCollectionId, Arc<BTreeMap<String, Object>>>>,
-    #[cfg(test)]
-    local_ref_lookup_builds: AtomicUsize,
+    /// Present only when the plan evaluates paths that can follow a string
+    /// id to a same-collection row.
+    local_refs: Option<LocalRefResolver>,
 }
 
+/// Row views of one collection.
 struct EmbeddedCollectionScan {
     collection_id: LocalCollectionId,
-    rows: Box<dyn Iterator<Item = crate::CoreResult<StoredEntity>> + Send>,
-    field_names: BTreeMap<LocalFieldId, String>,
-    attr_names: BTreeMap<LocalAttrId, String>,
-    local_ref_lookup: Arc<BTreeMap<String, Object>>,
+    rows: Box<dyn Iterator<Item = crate::CoreResult<KvObjectView>> + Send>,
 }
 
 impl EmbeddedPhysicalDataSource<'_> {
-    fn local_ref_lookup(
+    /// Wrap stored rows of `collection` into row views.
+    ///
+    /// Without a local reference resolver the rows stay lazy. With one, the
+    /// rows are read eagerly so that their references can be fetched from
+    /// the query snapshot, which the `'static` row views cannot reach.
+    fn row_views(
         &self,
         collection: &CollectionSchema,
-    ) -> crate::CoreResult<Arc<BTreeMap<String, Object>>> {
-        let mut lookups = self
-            .local_ref_lookups
-            .lock()
-            .map_err(|_| crate::CoreError::new("local reference lookup cache lock was poisoned"))?;
-        if let Some(lookup) = lookups.get(&collection.lid) {
-            return Ok(lookup.clone());
-        }
-        let rows = self
-            .reader
-            .scan_collection_stream(collection.lid)
-            .map_err(|err| crate::CoreError::new(err.to_string()))?;
-        let lookup = build_local_ref_lookup(self.catalog.as_ref(), collection, rows)?;
-        #[cfg(test)]
-        self.local_ref_lookup_builds
-            .fetch_add(1, AtomicOrdering::Relaxed);
-        lookups.insert(collection.lid, lookup.clone());
-        Ok(lookup)
+        rows: impl Iterator<Item = crate::CoreResult<StoredEntity>> + Send + 'static,
+    ) -> crate::CoreResult<EmbeddedCollectionScan> {
+        let collection_id = collection.lid;
+        let fields = Arc::new(CollectionFieldMaps::new(collection));
+        let rows: Box<dyn Iterator<Item = crate::CoreResult<KvObjectView>> + Send> =
+            match &self.local_refs {
+                None => Box::new(rows.map(move |row| {
+                    row.map(|row| KvObjectView {
+                        object: row.object,
+                        collection_id,
+                        fields: fields.clone(),
+                        local_refs: None,
+                    })
+                })),
+                Some(resolver) => {
+                    let views = rows
+                        .map(|row| {
+                            let row = row?;
+                            let local_refs = resolver.targets_for_row(
+                                self.reader.as_ref(),
+                                collection_id,
+                                &row.object,
+                            )?;
+                            Ok(KvObjectView {
+                                object: row.object,
+                                collection_id,
+                                fields: fields.clone(),
+                                local_refs,
+                            })
+                        })
+                        .collect::<crate::CoreResult<Vec<_>>>()?;
+                    Box::new(views.into_iter().map(Ok))
+                }
+            };
+        Ok(EmbeddedCollectionScan {
+            collection_id,
+            rows,
+        })
     }
 
     fn try_relation_lookup_ids(
@@ -2715,21 +2738,14 @@ impl EmbeddedPhysicalDataSource<'_> {
         &self,
         collection: &CollectionSchema,
     ) -> crate::CoreResult<EmbeddedCollectionScan> {
-        let local_ref_lookup = self.local_ref_lookup(collection)?;
-        let (field_names, attr_names) = collection_field_maps(collection);
         let rows = self
             .reader
             .scan_collection_stream(collection.lid)
             .map_err(|err| crate::CoreError::new(err.to_string()))?;
-        Ok(EmbeddedCollectionScan {
-            collection_id: collection.lid,
-            rows: Box::new(
-                rows.map(|row| row.map_err(|err| crate::CoreError::new(err.to_string()))),
-            ),
-            field_names,
-            attr_names,
-            local_ref_lookup,
-        })
+        self.row_views(
+            collection,
+            rows.map(|row| row.map_err(|err| crate::CoreError::new(err.to_string()))),
+        )
     }
 
     fn scans_to_stream(
@@ -2752,16 +2768,9 @@ impl EmbeddedPhysicalDataSource<'_> {
                         current = None;
                         continue;
                     };
-                    let row = match row {
-                        Ok(row) => row,
+                    let view = match row {
+                        Ok(view) => view,
                         Err(err) => return Some((Err(err), (scans, current, predicate))),
-                    };
-                    let view = KvObjectView {
-                        object: row.object,
-                        collection_id: scan.collection_id,
-                        field_names: scan.field_names.clone(),
-                        attr_names: scan.attr_names.clone(),
-                        local_ref_lookup: Some(scan.local_ref_lookup.clone()),
                     };
                     if predicate
                         .as_ref()
@@ -2780,33 +2789,22 @@ impl EmbeddedPhysicalDataSource<'_> {
         .boxed()
     }
 
-    fn collection_scan_filtered_with_relationships(
+    /// Filter `scan` by a predicate that may contain relationship checks.
+    fn filter_scan_with_relationships(
         &self,
-        collection: &CollectionSchema,
-        rows: Vec<StoredEntity>,
+        scan: EmbeddedCollectionScan,
         predicate: &crate::Expr,
     ) -> crate::CoreResult<EmbeddedCollectionScan> {
-        let local_ref_lookup = self.local_ref_lookup(collection)?;
-        let (field_names, attr_names) = collection_field_maps(collection);
         let mut filtered = Vec::new();
-        for row in rows {
-            let view = KvObjectView {
-                object: row.object.clone(),
-                collection_id: collection.lid,
-                field_names: field_names.clone(),
-                attr_names: attr_names.clone(),
-                local_ref_lookup: Some(local_ref_lookup.clone()),
-            };
+        for view in scan.rows {
+            let view = view?;
             if self.evaluate_predicate_with_relationships(&view, predicate)? {
-                filtered.push(row);
+                filtered.push(view);
             }
         }
         Ok(EmbeddedCollectionScan {
-            collection_id: collection.lid,
+            collection_id: scan.collection_id,
             rows: Box::new(filtered.into_iter().map(Ok)),
-            field_names,
-            attr_names,
-            local_ref_lookup,
         })
     }
 
@@ -2820,13 +2818,8 @@ impl EmbeddedPhysicalDataSource<'_> {
         {
             let scan = self.materialize_ids(collection, ids)?;
             if let Some(residual) = residual {
-                let rows = scan
-                    .rows
-                    .collect::<std::result::Result<Vec<_>, crate::CoreError>>()?;
                 return Ok((
-                    vec![self.collection_scan_filtered_with_relationships(
-                        collection, rows, &residual,
-                    )?],
+                    vec![self.filter_scan_with_relationships(scan, &residual)?],
                     true,
                 ));
             }
@@ -2835,30 +2828,12 @@ impl EmbeddedPhysicalDataSource<'_> {
         if !expr_contains_relationship(predicate) {
             return Ok((self.scan_collections(source)?, false));
         }
-        if self.is_all_alias_source(source) {
-            let mut scans = Vec::new();
-            for (_, collection) in self.catalog.collections() {
-                let rows = self
-                    .reader
-                    .scan_collection(collection.lid)
-                    .map_err(|err| crate::CoreError::new(err.to_string()))?;
-                scans.push(
-                    self.collection_scan_filtered_with_relationships(collection, rows, predicate)?,
-                );
-            }
-            return Ok((scans, true));
-        }
-        let collection = self
-            .resolve_collection(source)
-            .map_err(|err| crate::CoreError::new(err.to_string()))?;
-        let rows = self
-            .reader
-            .scan_collection(collection.lid)
-            .map_err(|err| crate::CoreError::new(err.to_string()))?;
-        Ok((
-            vec![self.collection_scan_filtered_with_relationships(collection, rows, predicate)?],
-            true,
-        ))
+        let scans = self
+            .scan_collections(source)?
+            .into_iter()
+            .map(|scan| self.filter_scan_with_relationships(scan, predicate))
+            .collect::<crate::CoreResult<Vec<_>>>()?;
+        Ok((scans, true))
     }
 
     fn materialize_ids(
@@ -2866,7 +2841,6 @@ impl EmbeddedPhysicalDataSource<'_> {
         collection: &CollectionSchema,
         ids: Vec<String>,
     ) -> crate::CoreResult<EmbeddedCollectionScan> {
-        let local_ref_lookup = self.local_ref_lookup(collection)?;
         let mut rows = Vec::with_capacity(ids.len());
         for id in ids {
             if let Some(entity) = self
@@ -2877,14 +2851,7 @@ impl EmbeddedPhysicalDataSource<'_> {
                 rows.push(entity);
             }
         }
-        let (field_names, attr_names) = collection_field_maps(collection);
-        Ok(EmbeddedCollectionScan {
-            collection_id: collection.lid,
-            rows: Box::new(rows.into_iter().map(Ok)),
-            field_names,
-            attr_names,
-            local_ref_lookup,
-        })
+        self.row_views(collection, rows.into_iter().map(Ok))
     }
 
     fn is_all_alias_source(&self, source: &crate::SourceRef) -> bool {
@@ -3044,13 +3011,38 @@ impl EmbeddedPhysicalDataSource<'_> {
         Ok(false)
     }
 }
+/// Field and attribute id to name maps of one collection, shared by every row
+/// view of a scan.
+struct CollectionFieldMaps {
+    field_names: BTreeMap<LocalFieldId, String>,
+    attr_names: BTreeMap<LocalAttrId, String>,
+}
+
+impl CollectionFieldMaps {
+    fn new(collection: &CollectionSchema) -> Self {
+        let mut field_names = BTreeMap::new();
+        let mut attr_names = BTreeMap::new();
+        for (field_id, name) in collection.fields() {
+            field_names.insert(field_id, name.to_string());
+            if let Some(attr_id) = collection.attr_for_field_id(field_id) {
+                attr_names.insert(attr_id, name.to_string());
+            }
+        }
+        Self {
+            field_names,
+            attr_names,
+        }
+    }
+}
+
 #[derive(Clone)]
 struct KvObjectView {
     object: Object,
     collection_id: LocalCollectionId,
-    field_names: BTreeMap<LocalFieldId, String>,
-    attr_names: BTreeMap<LocalAttrId, String>,
-    local_ref_lookup: Option<Arc<BTreeMap<String, Object>>>,
+    fields: Arc<CollectionFieldMaps>,
+    /// Same-collection rows referenced through string ids by the plan's
+    /// paths, fetched when the view was created.
+    local_refs: Option<Arc<LocalRefTargets>>,
 }
 
 impl crate::ObjectAccess for KvObjectView {
@@ -3066,18 +3058,21 @@ impl crate::ObjectAccess for KvObjectView {
         if path.segments().len() < 2 {
             return None;
         }
-        resolve_path_with_local_refs(&self.object, path, self.local_ref_lookup.as_deref())
-            .map(ValueRef::Owned)
+        let targets = self.local_refs.as_deref();
+        resolve_path_with_local_refs(&self.object, path, &mut |id| {
+            targets.and_then(|targets| targets.get(id)).cloned()
+        })
+        .map(ValueRef::Owned)
     }
 
     fn value_at_attr_ref<'a>(&'a self, attr: LocalAttrId) -> Option<ValueRef<'a>> {
-        let name = self.attr_names.get(&attr)?;
+        let name = self.fields.attr_names.get(&attr)?;
         let path = FieldPath::from_fields([name.as_str()]);
         crate::ObjectAccess::value_at_path_ref(&self.object, &path)
     }
 
     fn value_at_field_ref<'a>(&'a self, field: LocalFieldId) -> Option<ValueRef<'a>> {
-        let name = self.field_names.get(&field)?;
+        let name = self.fields.field_names.get(&field)?;
         let path = FieldPath::from_fields([name.as_str()]);
         crate::ObjectAccess::value_at_path_ref(&self.object, &path)
     }
@@ -3089,96 +3084,6 @@ impl crate::ObjectAccess for KvObjectView {
     fn to_object(&self) -> Object {
         self.object.clone()
     }
-}
-
-fn build_local_ref_lookup(
-    catalog: &Catalog,
-    collection: &CollectionSchema,
-    rows: impl IntoIterator<Item = std::result::Result<StoredEntity, DbError>>,
-) -> crate::CoreResult<Arc<BTreeMap<String, Object>>> {
-    let mut lookup = BTreeMap::new();
-    let mut id_keys = vec![
-        collection.canonical_field_name("id").to_string(),
-        "id".to_string(),
-    ];
-    for attr_id in catalog.attribute_ids("id") {
-        if let Some(attr) = catalog.attribute_by_lid(attr_id) {
-            let candidate = attr.attribute.id.clone();
-            if !id_keys.contains(&candidate) {
-                id_keys.push(candidate);
-            }
-        }
-    }
-    for row in rows {
-        let row = row.map_err(|err| crate::CoreError::new(err.to_string()))?;
-        let id = id_keys
-            .iter()
-            .find_map(|key| row.object.get(key).and_then(Value::as_str));
-        if let Some(id) = id {
-            lookup.insert(id.to_string(), row.object.clone());
-        }
-    }
-    Ok(Arc::new(lookup))
-}
-
-fn resolve_path_with_local_refs(
-    object: &Object,
-    path: &FieldPath,
-    lookup: Option<&BTreeMap<String, Object>>,
-) -> Option<Value> {
-    let mut current = match path.segments().first()? {
-        PathSegment::Field(field) => value_from_object_with_alias_fallback(object, field)?,
-        PathSegment::Index(_) => return None,
-    };
-    for segment in path.segments().iter().skip(1) {
-        current = match (&current, segment) {
-            (Value::Object(map), PathSegment::Field(field)) => {
-                value_from_object_with_alias_fallback(map, field)?
-            }
-            (Value::List(items), PathSegment::Index(index)) => items.get(*index)?.clone(),
-            // Fallback: treat string ids as same-collection refs.
-            (Value::String(id), PathSegment::Field(field)) => {
-                let target = lookup?.get(id)?;
-                value_from_object_with_alias_fallback(target, field)?
-            }
-            _ => return None,
-        };
-    }
-    Some(current)
-}
-
-fn value_from_object_with_alias_fallback(object: &Object, field: &str) -> Option<Value> {
-    if let Some(value) = object.get(field) {
-        return Some(value.clone());
-    }
-    let wanted_plain = field.rsplit(':').next().unwrap_or(field);
-    let mut matching = object.iter().filter(|(key, _)| {
-        key.rsplit(':')
-            .next()
-            .is_some_and(|plain| plain == wanted_plain)
-    });
-    let (_, value) = matching.next()?;
-    if matching.next().is_some() {
-        return None;
-    }
-    Some(value.clone())
-}
-
-fn collection_field_maps(
-    collection: &CollectionSchema,
-) -> (
-    BTreeMap<LocalFieldId, String>,
-    BTreeMap<LocalAttrId, String>,
-) {
-    let mut field_names = BTreeMap::new();
-    let mut attr_names = BTreeMap::new();
-    for (field_id, name) in collection.fields() {
-        field_names.insert(field_id, name.to_string());
-        if let Some(attr_id) = collection.attr_for_field_id(field_id) {
-            attr_names.insert(attr_id, name.to_string());
-        }
-    }
-    (field_names, attr_names)
 }
 
 fn expr_contains_relationship(expr: &crate::Expr) -> bool {
@@ -3590,24 +3495,10 @@ impl crate::AsyncPhysicalDataSource for EmbeddedPhysicalDataSource<'_> {
                 return Ok(Self::scans_to_stream(scans, Some(predicate)));
             }
 
-            let mut filtered_scans = Vec::with_capacity(scans.len());
-            for scan in scans {
-                let collection = self
-                    .catalog
-                    .collection_by_lid(scan.collection_id)
-                    .ok_or_else(|| {
-                        crate::CoreError::new(format!(
-                            "unknown collection {:?} during indexed residual filtering",
-                            scan.collection_id
-                        ))
-                    })?;
-                let rows = scan
-                    .rows
-                    .collect::<std::result::Result<Vec<_>, crate::CoreError>>()?;
-                filtered_scans.push(
-                    self.collection_scan_filtered_with_relationships(collection, rows, &predicate)?,
-                );
-            }
+            let filtered_scans = scans
+                .into_iter()
+                .map(|scan| self.filter_scan_with_relationships(scan, &predicate))
+                .collect::<crate::CoreResult<Vec<_>>>()?;
             Ok(Self::scans_to_stream(filtered_scans, None))
         })();
 
@@ -3674,12 +3565,7 @@ impl crate::AsyncPhysicalDataSource for EmbeddedPhysicalDataSource<'_> {
             let scan = self.materialize_ids(collection, ids.into_iter().collect())?;
             let scans = if let Some(predicate) = residual_predicate.clone() {
                 if expr_contains_relationship(&predicate) {
-                    let rows = scan
-                        .rows
-                        .collect::<std::result::Result<Vec<_>, crate::CoreError>>()?;
-                    vec![self.collection_scan_filtered_with_relationships(
-                        collection, rows, &predicate,
-                    )?]
+                    vec![self.filter_scan_with_relationships(scan, &predicate)?]
                 } else {
                     return Ok(Some(Self::scans_to_stream(vec![scan], Some(predicate))));
                 }
@@ -3965,8 +3851,6 @@ fn format_field_path(path: &FieldPath) -> String {
 mod tests {
     use std::collections::BTreeMap;
     use std::sync::Arc;
-    use std::sync::Mutex;
-    use std::sync::atomic::{AtomicUsize, Ordering as AtomicOrdering};
 
     use semantic_data::{
         expr::{CallExpr, Callee, Expr as SchemaExpr},
@@ -3999,16 +3883,43 @@ mod tests {
     use crate::{DbConfig, DbError, MigrationMismatchPolicy};
     use semantic_data::query::{BinaryOp, FieldFormat, JoinType, SortDirection};
 
-    use super::{EmbeddedDb, EmbeddedPhysicalDataSource, QueryPlan, RELATION_EDGES_COLLECTION};
-    use crate::embedded::storage::{EntityStorage, MemoryEntityStorage};
+    use super::{
+        EmbeddedDb, EmbeddedPhysicalDataSource, LocalRefResolver, QueryPlan,
+        RELATION_EDGES_COLLECTION,
+    };
+    use crate::embedded::storage::{CountingEntityStorage, EntityStorage};
 
-    fn physical_source(db: &EmbeddedDb<MemoryEntityStorage>) -> EmbeddedPhysicalDataSource<'_> {
+    fn physical_source<S: EntityStorage>(db: &EmbeddedDb<S>) -> EmbeddedPhysicalDataSource<'_> {
+        physical_source_with_local_refs(db, None)
+    }
+
+    fn physical_source_with_local_refs<S: EntityStorage>(
+        db: &EmbeddedDb<S>,
+        local_refs: Option<LocalRefResolver>,
+    ) -> EmbeddedPhysicalDataSource<'_> {
         EmbeddedPhysicalDataSource {
             reader: db.storage.snapshot().unwrap(),
             catalog: db.catalog(),
             default_collection: None,
-            local_ref_lookups: Mutex::new(BTreeMap::new()),
-            local_ref_lookup_builds: AtomicUsize::new(0),
+            local_refs,
+        }
+    }
+
+    fn string_object(fields: &[(&str, &str)]) -> Object {
+        let mut object = Object::new();
+        for (field, value) in fields {
+            object.insert(*field, Value::String((*value).to_string()));
+        }
+        object
+    }
+
+    fn field_projection(path: &[&str], alias: &str) -> QueryField {
+        QueryField {
+            expr: Box::new(Expr::Operand(Operand::Field(FieldPath::from_fields(
+                path.iter().copied(),
+            )))),
+            alias: Some(alias.to_string()),
+            wildcard: None,
         }
     }
 
@@ -4029,34 +3940,129 @@ mod tests {
     }
 
     #[test]
-    fn indexed_materialization_reuses_query_scoped_local_ref_lookup() {
-        let mut db = EmbeddedDb::in_memory();
+    fn indexed_materialization_resolves_local_refs_by_memoized_point_reads() {
+        let (storage, counts) = CountingEntityStorage::new();
+        let mut db = EmbeddedDb::new(storage);
         db.create_collection("cache_items", CollectionKind::Polymorphic)
             .unwrap();
-        for id in ["a", "b"] {
-            let mut object = Object::new();
-            object.insert("id", Value::String(id.to_string()));
-            db.insert("cache_items", id, object).unwrap();
+        db.insert(
+            "cache_items",
+            "a",
+            string_object(&[("id", "a"), ("title", "first")]),
+        )
+        .unwrap();
+        for id in ["b", "c"] {
+            db.insert(
+                "cache_items",
+                id,
+                string_object(&[("id", id), ("parent", "a")]),
+            )
+            .unwrap();
         }
         let catalog = db.catalog();
         let collection = catalog.collection_by_name("cache_items").unwrap();
-        let source = physical_source(&db);
+        let resolver = LocalRefResolver::new([FieldPath::from_fields(["parent", "title"])]);
+        let source = physical_source_with_local_refs(&db, resolver);
+        counts.reset();
 
         let first = source
-            .materialize_ids(collection, vec!["a".to_string()])
-            .unwrap();
-        let second = source
             .materialize_ids(collection, vec!["b".to_string()])
             .unwrap();
+        let second = source
+            .materialize_ids(collection, vec!["c".to_string()])
+            .unwrap();
 
-        assert!(Arc::ptr_eq(
-            &first.local_ref_lookup,
-            &second.local_ref_lookup
-        ));
-        assert_eq!(
-            source.local_ref_lookup_builds.load(AtomicOrdering::Relaxed),
-            1
+        let title = FieldPath::from_fields(["parent", "title"]);
+        for scan in [first, second] {
+            let views = scan.rows.collect::<Result<Vec<_>, _>>().unwrap();
+            assert_eq!(views.len(), 1);
+            assert_eq!(
+                crate::ObjectAccess::value_at_path_ref(&views[0], &title)
+                    .map(|value| value.into_owned()),
+                Some(Value::String("first".to_string()))
+            );
+        }
+        assert_eq!(counts.collection_scans(), 0);
+        // Two materialized rows plus one memoized read of the shared parent.
+        assert_eq!(counts.entity_gets(), 3);
+    }
+
+    #[test]
+    fn indexed_select_reads_matches_only_and_full_scan_reads_collection_once() {
+        let (storage, counts) = CountingEntityStorage::new();
+        let mut db = EmbeddedDb::new(storage);
+        let lid = db
+            .create_collection("bulk_items", CollectionKind::Polymorphic)
+            .unwrap();
+        db.create_index("bulk_items_by_kind", lid, "kind", false)
+            .unwrap();
+        let mut batch = Batch::new();
+        for index in 0..1000 {
+            let id = format!("item-{index:04}");
+            let kind = if index % 250 == 0 { "rare" } else { "common" };
+            let linked = format!("item-{:04}", (index + 1) % 1000);
+            batch = batch.with_op(BatchOperation::Upsert {
+                collection: "bulk_items".to_string(),
+                object: string_object(&[("id", &id), ("kind", kind), ("linked", &linked)]),
+                id,
+            });
+        }
+        db.transact(batch).unwrap();
+        let rare = || {
+            SelectQuery::new()
+                .with_collection("bulk_items")
+                .with_predicate(eq_predicate(
+                    FieldPath::from_fields(["kind"]),
+                    Value::String("rare".to_string()),
+                ))
+        };
+
+        counts.reset();
+        let rows = db
+            .select(rare().with_projection(vec![field_projection(&["id"], "id")]))
+            .unwrap();
+        assert_eq!(rows.len(), 4);
+        assert_eq!(counts.collection_scans(), 0);
+        assert_eq!(counts.entity_gets(), 4);
+        // Planner statistics count keys instead of scanning rows.
+        assert_eq!(counts.collection_counts(), 1);
+
+        // Following a local reference adds one point read per match.
+        counts.reset();
+        let rows = db
+            .select(
+                rare().with_projection(vec![field_projection(&["linked", "kind"], "linked_kind")]),
+            )
+            .unwrap();
+        assert_eq!(rows.len(), 4);
+        assert!(
+            rows.iter()
+                .all(|row| row.get("linked_kind") == Some(&Value::String("common".to_string())))
         );
+        assert_eq!(counts.collection_scans(), 0);
+        assert_eq!(counts.entity_gets(), 8);
+
+        counts.reset();
+        let rows = db
+            .select(SelectQuery::new().with_collection("bulk_items"))
+            .unwrap();
+        assert_eq!(rows.len(), 1000);
+        assert_eq!(counts.collection_scans(), 1);
+        assert_eq!(counts.entity_gets(), 0);
+
+        counts.reset();
+        let rows = db
+            .select(
+                SelectQuery::new()
+                    .with_collection("bulk_items")
+                    .with_predicate(eq_predicate(
+                        FieldPath::from_fields(["linked", "kind"]),
+                        Value::String("rare".to_string()),
+                    )),
+            )
+            .unwrap();
+        assert_eq!(rows.len(), 4);
+        assert_eq!(counts.collection_scans(), 1);
     }
 
     #[test]
@@ -4583,13 +4589,6 @@ mod tests {
             }]);
         let catalog = db.catalog();
         let collection = catalog.collection_by_name("ref_paths").unwrap();
-        let stored_rows = db.storage.scan_collection(collection.lid).unwrap();
-        let lookup = super::build_local_ref_lookup(
-            catalog.as_ref(),
-            collection,
-            stored_rows.into_iter().map(Ok),
-        )
-        .unwrap();
         let canonical = canonicalize_select_query(&query, catalog.as_ref(), collection).unwrap();
         let explain = db.explain_query(Query::Select(query.clone())).unwrap();
         let rows = db.select(query).unwrap();
@@ -4604,19 +4603,23 @@ mod tests {
         let resolved = super::resolve_path_with_local_refs(
             &stored_child.object,
             &FieldPath::from_fields(["local:core:parent", "title"]),
-            Some(lookup.as_ref()),
+            &mut |id| {
+                db.get("ref_paths", id)
+                    .unwrap()
+                    .map(|entity| Arc::new(entity.object))
+            },
         );
         assert_eq!(
             ids,
             vec!["ref-child".to_string()],
-            "canonical={:?}, explain={:?}, resolved={:?}, lookup_keys={:?}, parent={:?}, child={:?}",
+            "canonical={:?}, explain={:?}, resolved={:?}, parent={:?}, child={:?}",
             canonical,
             explain,
             resolved,
-            lookup.keys().cloned().collect::<Vec<_>>(),
             stored_parent.object,
             stored_child.object
         );
+        assert_eq!(resolved, Some(Value::String("abc".to_string())));
     }
 
     #[test]

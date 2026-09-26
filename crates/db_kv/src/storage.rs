@@ -738,6 +738,10 @@ impl<E: KvEngine> EntityStorage for EntityStore<E> {
         )?))
     }
 
+    fn count_collection_entities(&self, collection: LocalCollectionId) -> Result<u64, DbError> {
+        count_keys(self.engine.scan_prefix_stream(entity_prefix(collection))?)
+    }
+
     fn scan_collection_at_revision_stream(
         &self,
         collection: LocalCollectionId,
@@ -978,6 +982,10 @@ impl EntityReadSnapshot for KvEntitySnapshot<'_> {
         )))
     }
 
+    fn count_collection_entities(&self, collection: LocalCollectionId) -> Result<u64, DbError> {
+        count_keys(self.txn.scan_prefix_stream(entity_prefix(collection))?)
+    }
+
     fn scan_index_value_stream(
         &self,
         index: LocalIndexId,
@@ -1028,6 +1036,11 @@ impl EntityReadSnapshot for KvEntitySnapshot<'_> {
         Ok(self.txn.get(&index_marker_key(index))?.as_deref()
             != Some(index_format_value().as_slice()))
     }
+}
+
+/// Count the entries of a key scan without decoding their values.
+fn count_keys(mut scan: impl Iterator<Item = KvScanItem>) -> Result<u64, DbError> {
+    scan.try_fold(0u64, |count, entry| entry.map(|_| count + 1))
 }
 
 fn index_keys(
@@ -1255,6 +1268,38 @@ mod tests {
             .unwrap();
 
         assert_eq!(store.get_entity(collection, "one").unwrap(), None);
+    }
+
+    #[test]
+    fn counts_collection_entities_by_key() {
+        let mut store = EntityStore::new(MemoryKvEngine::new());
+        let entity = |collection: usize, id: &str| {
+            StorageWriteOp::PutEntity(StoredEntity {
+                id: id.to_string(),
+                collection,
+                kind: StoredEntityKind::Untyped,
+                object: Object::new(),
+            })
+        };
+        store
+            .apply_batch(&[entity(7, "a"), entity(7, "b"), entity(8, "c")])
+            .unwrap();
+
+        let count = |store: &EntityStore<MemoryKvEngine>, collection| {
+            let snapshot = EntityStorage::snapshot(store).unwrap();
+            let counted = snapshot
+                .count_collection_entities(LocalCollectionId(collection))
+                .unwrap();
+            assert_eq!(
+                EntityStorage::count_collection_entities(store, LocalCollectionId(collection))
+                    .unwrap(),
+                counted
+            );
+            counted
+        };
+        assert_eq!(count(&store, 7), 2);
+        assert_eq!(count(&store, 8), 1);
+        assert_eq!(count(&store, 9), 0);
     }
 
     #[test]
