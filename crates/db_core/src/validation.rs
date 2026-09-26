@@ -354,14 +354,12 @@ fn collect_ref_target_class_ids_inner(
     seen: &mut BTreeSet<String>,
 ) {
     match &ty.kind {
-        TypeKind::Ref(type_ref) => {
-            let class_ids = catalog.class_ids(&type_ref.name);
+        TypeKind::Ref(reference) => {
+            let Some(target) = reference.target_class() else {
+                return;
+            };
+            let class_ids = catalog.class_ids(target);
             if class_ids.len() != 1 {
-                if seen.insert(type_ref.name.clone())
-                    && let Some(def) = catalog.type_def_by_name(&type_ref.name)
-                {
-                    collect_ref_target_class_ids_inner(catalog, &def.type_def.ty, out, seen);
-                }
                 return;
             }
             let target_lid = class_ids[0];
@@ -374,6 +372,13 @@ fn collect_ref_target_class_ids_inner(
                 if class_lid != target_lid && class_reaches(catalog, class_lid, &target_id) {
                     out.insert(class.class.id.clone());
                 }
+            }
+        }
+        TypeKind::Named(type_ref) => {
+            if seen.insert(type_ref.name.clone())
+                && let Some(def) = catalog.type_def_by_name(&type_ref.name)
+            {
+                collect_ref_target_class_ids_inner(catalog, &def.type_def.ty, out, seen);
             }
         }
         TypeKind::Union(union) => {
@@ -824,6 +829,7 @@ fn type_matches_value(ty: &Type, value: &Value) -> bool {
         | TypeKind::Opaque(_)
         | TypeKind::Extension(_)
         | TypeKind::Attribute(_)
+        | TypeKind::Named(_)
         | TypeKind::Ref(_) => true,
     }
 }

@@ -17,8 +17,7 @@ use semantic_data::query::{
 use semantic_data::schema::{
     ClassAttribute, ClassType, Meta, Migration, MigrationCollectionKind, MigrationDdlOperation,
     MigrationIntegrityMode, MigrationOperation, Module, Package, RelationIndexingMode,
-    RelationMode, RelationType, StringType, Type, TypeDef, TypeKind, TypeRef, UIntWidth,
-    Visibility,
+    RelationMode, RelationType, StringType, Type, TypeDef, TypeKind, UIntWidth, Visibility,
     attribute::{attribute_ref::AttributeRef, attribute_type::AttributeType},
     primitives::{int_width::IntWidth, number_type::NumberType},
 };
@@ -2494,10 +2493,7 @@ async fn test_relationships_generic_embedded(db: &Db) {
                     id: "shared.rel.parent_ref".to_string(),
                     name: "parent_ref".to_string(),
                     ty: Type {
-                        kind: TypeKind::Ref(semantic_data::schema::core::type_ref::TypeRef {
-                            name: "id".to_string(),
-                            args: vec![],
-                        }),
+                        kind: TypeKind::Ref(semantic_data::schema::EntityRef::any()),
                         constraints: vec![],
                         annotations: vec![],
                     },
@@ -2522,10 +2518,7 @@ async fn test_relationships_generic_embedded(db: &Db) {
                     id: "shared.rel.secondary_ref".to_string(),
                     name: "secondary_ref".to_string(),
                     ty: Type {
-                        kind: TypeKind::Ref(semantic_data::schema::core::type_ref::TypeRef {
-                            name: "id".to_string(),
-                            args: vec![],
-                        }),
+                        kind: TypeKind::Ref(semantic_data::schema::EntityRef::any()),
                         constraints: vec![],
                         annotations: vec![],
                     },
@@ -2884,13 +2877,10 @@ async fn test_relationships_generic_external(db: &Db) {
     .await
     .expect("external relationship ddl should succeed");
 
-    db.create_collection("shared_suite_rel_docs_nodes", CollectionKind::Polymorphic)
-        .await
-        .expect("doc relationship node collection creation should succeed");
     for id in ["x", "y"] {
         let mut node = Object::new();
         node.insert("id", Value::String(id.to_string()));
-        db.insert("shared_suite_rel_docs_nodes", id, node)
+        db.insert("shared_suite_rel_docs", id, node)
             .await
             .expect("node insert for document relationship should succeed");
     }
@@ -2957,7 +2947,9 @@ async fn test_relationships_generic_external(db: &Db) {
                 attribute: AttributeType {
                     id: "shared.directory_node.from".to_string(),
                     name: "from".to_string(),
-                    ty: Type::new(TypeKind::Ref(TypeRef::new("shared.directory"))),
+                    ty: Type::new(TypeKind::Ref(semantic_data::schema::EntityRef::new(
+                        "shared.directory",
+                    ))),
                     constraints: vec![],
                     meta: Meta::default(),
                 },

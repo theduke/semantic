@@ -90,6 +90,7 @@ pub fn type_kind_key(kind: &TypeKind) -> &'static str {
         TypeKind::Stream(_) => "stream",
         TypeKind::Opaque(_) => "opaque",
         TypeKind::Extension(_) => "extension",
+        TypeKind::Named(_) => "named",
         TypeKind::Ref(_) => "ref",
     }
 }

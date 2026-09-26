@@ -122,7 +122,8 @@ pub struct Type {
 
 | Variant | Description |
 |---|---|
-| `Ref { name, args }` | Reference to a named type definition |
+| `Named { name, args }` | Application of a named type definition |
+| `Ref { target, on_delete }` | Stored entity-ID reference with foreign-key behavior |
 | `Extension { namespace, name, payload }` | External/plugin-backed type |
 
 ### TypeDef — a named type definition

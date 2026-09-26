@@ -11,7 +11,11 @@ use semantic_data::{
         class::class_attribute::ClassAttribute,
         class::class_type::ClassType,
         core::{
-            meta::Meta, type_def::TypeDef, type_kind::TypeKind, type_node::Type, type_ref::TypeRef,
+            entity_ref::{EntityRef, OnDelete},
+            meta::Meta,
+            type_def::TypeDef,
+            type_kind::TypeKind,
+            type_node::Type,
         },
         primitives::{
             any_type::AnyType, bool_type::BoolType, number_type::NumberType,
@@ -223,6 +227,7 @@ pub const ATTR_CORE_CATALOG_APPLIED_MIGRATIONS: &str = "semantic:db:applied_migr
 const CORE_SCHEMA_PACKAGE: &str = "semantic";
 const CORE_SCHEMA_MODULE: &str = "core";
 pub(crate) const CATALOG_ENTRY_IDS_MIGRATION: &str = "005_catalog_entry_ids";
+pub(crate) const REFERENCE_LIFECYCLE_MIGRATION: &str = "006_reference_lifecycle";
 
 pub fn core_catalog_schema_batch() -> DdlBatch {
     let mut attrs = std::collections::BTreeMap::new();
@@ -777,10 +782,7 @@ pub fn core_catalog_schema_batch() -> DdlBatch {
                 id: ATTR_PARENT.to_string(),
                 name: "parent".to_string(),
                 ty: Type {
-                    kind: TypeKind::Ref(TypeRef {
-                        name: ATTR_CORE_CATALOG_ID.to_string(),
-                        args: vec![],
-                    }),
+                    kind: TypeKind::Ref(EntityRef::any()),
                     constraints: vec![],
                     annotations: vec![],
                 },
@@ -809,10 +811,7 @@ pub fn core_catalog_schema_batch() -> DdlBatch {
                 id: ATTR_RELATION_FROM.to_string(),
                 name: "from".to_string(),
                 ty: Type {
-                    kind: TypeKind::Ref(TypeRef {
-                        name: ATTR_CORE_CATALOG_ID.to_string(),
-                        args: vec![],
-                    }),
+                    kind: TypeKind::Ref(EntityRef::any().with_on_delete(OnDelete::Cascade)),
                     constraints: vec![],
                     annotations: vec![],
                 },
@@ -825,10 +824,7 @@ pub fn core_catalog_schema_batch() -> DdlBatch {
                 id: ATTR_RELATION_TO.to_string(),
                 name: "to".to_string(),
                 ty: Type {
-                    kind: TypeKind::Ref(TypeRef {
-                        name: ATTR_CORE_CATALOG_ID.to_string(),
-                        args: vec![],
-                    }),
+                    kind: TypeKind::Ref(EntityRef::any().with_on_delete(OnDelete::Cascade)),
                     constraints: vec![],
                     annotations: vec![],
                 },
@@ -876,6 +872,15 @@ pub fn core_schema_migrations() -> Vec<Migration> {
                     if let DdlOperation::UpsertClass { class } = &mut operation {
                         class.creatable_in_ui = None;
                     }
+                    if let DdlOperation::UpsertAttribute { attribute } = &mut operation
+                        && matches!(
+                            attribute.id.as_str(),
+                            ATTR_PARENT | ATTR_RELATION_FROM | ATTR_RELATION_TO
+                        )
+                    {
+                        attribute.ty =
+                            Type::new(TypeKind::Ref(EntityRef::new(ATTR_CORE_CATALOG_ID)));
+                    }
                     MigrationOperation::Ddl(ddl_to_migration_ddl(operation))
                 })
                 .collect(),
@@ -912,7 +917,38 @@ pub fn core_schema_migrations() -> Vec<Migration> {
             operations: Vec::new(),
             meta: Meta::default(),
         },
+        reference_lifecycle_migration(),
     ]
+}
+
+fn reference_lifecycle_migration() -> Migration {
+    let operations = core_catalog_schema_batch()
+        .operations
+        .into_iter()
+        .filter_map(|operation| match operation {
+            DdlOperation::UpsertAttribute { attribute }
+                if matches!(
+                    attribute.id.as_str(),
+                    ATTR_PARENT | ATTR_RELATION_FROM | ATTR_RELATION_TO
+                ) =>
+            {
+                Some(MigrationOperation::Ddl(
+                    MigrationDdlOperation::UpsertAttribute { attribute },
+                ))
+            }
+            _ => None,
+        })
+        .collect();
+    Migration {
+        module: CORE_SCHEMA_MODULE.to_string(),
+        name: REFERENCE_LIFECYCLE_MIGRATION.to_string(),
+        description: Some(
+            "Make entity references intrinsic foreign keys and cascade relation endpoints."
+                .to_string(),
+        ),
+        operations,
+        meta: Meta::default(),
+    }
 }
 
 fn creatable_in_ui_migration() -> Migration {
@@ -1237,10 +1273,74 @@ mod tests {
     #[test]
     fn core_schema_migrations_are_idempotent() {
         let (catalog, first_run) = apply_core_schema_migrations(&Catalog::new()).unwrap();
-        assert_eq!(first_run.len(), 5);
+        assert_eq!(first_run.len(), 6);
+        for id in [ATTR_RELATION_FROM, ATTR_RELATION_TO] {
+            let attribute = catalog.attribute_by_id(id).unwrap();
+            let TypeKind::Ref(reference) = &attribute.attribute.ty.kind else {
+                panic!("relation endpoint should be an entity reference");
+            };
+            assert_eq!(reference.target_class(), None);
+            assert_eq!(reference.on_delete, OnDelete::Cascade);
+        }
 
         let (_, second_run) = apply_core_schema_migrations(&catalog).unwrap();
         assert!(second_run.is_empty());
+    }
+
+    #[test]
+    fn legacy_core_reference_shape_remains_migration_compatible() {
+        let (catalog, _) = apply_core_schema_migrations(&Catalog::new()).unwrap();
+        let mut snapshot = catalog.to_storage_snapshot();
+        snapshot
+            .applied_migrations
+            .retain(|item| item.applied.migration.name != REFERENCE_LIFECYCLE_MIGRATION);
+
+        let legacy_ref = || Type::new(TypeKind::Ref(EntityRef::new(ATTR_CORE_CATALOG_ID)));
+        for item in &mut snapshot.attributes {
+            if matches!(
+                item.attribute.id.as_str(),
+                ATTR_PARENT | ATTR_RELATION_FROM | ATTR_RELATION_TO
+            ) {
+                item.attribute.ty = legacy_ref();
+            }
+        }
+        for item in &mut snapshot.type_defs {
+            if matches!(
+                item.type_def.name.as_str(),
+                ATTR_PARENT | ATTR_RELATION_FROM | ATTR_RELATION_TO
+            ) && let TypeKind::Attribute(attribute) = &mut item.type_def.ty.kind
+            {
+                attribute.ty = legacy_ref();
+            }
+        }
+        let initial = snapshot
+            .applied_migrations
+            .iter_mut()
+            .find(|item| item.applied.migration.name == "001_core_catalog_schema")
+            .unwrap();
+        for operation in &mut initial.applied.migration.operations {
+            if let MigrationOperation::Ddl(MigrationDdlOperation::UpsertAttribute { attribute }) =
+                operation
+                && matches!(
+                    attribute.id.as_str(),
+                    ATTR_PARENT | ATTR_RELATION_FROM | ATTR_RELATION_TO
+                )
+            {
+                attribute.ty = legacy_ref();
+            }
+        }
+
+        let stored = Catalog::from_storage_snapshot(snapshot).unwrap();
+        let (upgraded, executed) = apply_core_schema_migrations(&stored).unwrap();
+        assert_eq!(executed.len(), 1);
+        assert_eq!(executed[0].migration.name, REFERENCE_LIFECYCLE_MIGRATION);
+        for id in [ATTR_RELATION_FROM, ATTR_RELATION_TO] {
+            let TypeKind::Ref(reference) = &upgraded.attribute_by_id(id).unwrap().attribute.ty.kind
+            else {
+                panic!("relation endpoint should be an entity reference");
+            };
+            assert_eq!(reference.on_delete, OnDelete::Cascade);
+        }
     }
 
     #[test]
@@ -1383,7 +1483,7 @@ mod tests {
             id: "suite.tree.payload".to_string(),
             name: "payload".to_string(),
             ty: Type {
-                kind: TypeKind::Ref(TypeRef {
+                kind: TypeKind::Named(semantic_data::schema::TypeRef {
                     name: "suite.tree.payload_type".to_string(),
                     args: vec![],
                 }),
@@ -1408,7 +1508,7 @@ mod tests {
                             ty: Type {
                                 kind: TypeKind::List(ListType {
                                     items: Box::new(Type {
-                                        kind: TypeKind::Ref(TypeRef {
+                                        kind: TypeKind::Named(semantic_data::schema::TypeRef {
                                             name: "suite.tree.payload_type".to_string(),
                                             args: vec![],
                                         }),

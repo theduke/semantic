@@ -20,7 +20,9 @@ pub(super) async fn test_compact_id_execution(db: &Db) {
                 attribute: AttributeType {
                     id: "test:compact_owner".into(),
                     name: "compact_owner".into(),
-                    ty: Type::new(TypeKind::Ref(TypeRef::new("test:compact_person"))),
+                    ty: Type::new(TypeKind::Ref(semantic_data::schema::EntityRef::new(
+                        "test:compact_person",
+                    ))),
                     constraints: vec![],
                     meta: Meta::default(),
                 },

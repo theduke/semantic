@@ -5,7 +5,7 @@ use dxform::{FieldSpec, FormOptions, FormRoot, SubformSpec, SubmitHandler};
 use semantic_data::{
     schema::{
         AttributeRef, AttributeType, BoolType, ClassAttribute, ClassRef, ClassType, Constraint,
-        LengthSpec, Meta, NumberType, OptionalType, StringType, Type, TypeKind, TypeRef, UIntWidth,
+        LengthSpec, Meta, NumberType, OptionalType, StringType, Type, TypeKind, UIntWidth,
         UnionType,
     },
     value::{Object, Value},
@@ -202,7 +202,9 @@ fn ref_autocomplete_class_filter_includes_subclasses_from_ref_type() {
     let person = class("person", "Person", BTreeMap::new());
     let employee = subclass("employee", "Employee", "person");
     let catalog = catalog_with(Vec::new(), vec![person, employee]);
-    let ty = Type::from(TypeKind::Ref(TypeRef::new("Person")));
+    let ty = Type::from(TypeKind::Ref(semantic_data::schema::EntityRef::new(
+        "Person",
+    )));
 
     let class_ids = semantic_ui_core::form::ref_autocomplete_class_ids(&catalog, &ty);
 
@@ -220,8 +222,12 @@ fn ref_autocomplete_class_filter_collects_optional_union_refs() {
     let ty = Type::from(TypeKind::Optional(OptionalType {
         inner: Box::new(Type::from(TypeKind::Union(UnionType {
             variants: vec![
-                Type::from(TypeKind::Ref(TypeRef::new("person"))),
-                Type::from(TypeKind::Ref(TypeRef::new("Organization"))),
+                Type::from(TypeKind::Ref(semantic_data::schema::EntityRef::new(
+                    "person",
+                ))),
+                Type::from(TypeKind::Ref(semantic_data::schema::EntityRef::new(
+                    "Organization",
+                ))),
             ],
         }))),
     }));

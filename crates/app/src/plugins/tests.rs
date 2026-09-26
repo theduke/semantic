@@ -710,7 +710,7 @@ async fn transitive_type_package_change_invalidates_export_from_another_package(
         "middle:Alias".into(),
         typedef(
             "middle:Alias",
-            Type::new(TypeKind::Ref(TypeRef::new("leaf:Value"))),
+            Type::new(TypeKind::Named(TypeRef::new("leaf:Value"))),
         ),
     );
     migrate_types(&mut middle, "001");
@@ -722,7 +722,7 @@ async fn transitive_type_package_change_invalidates_export_from_another_package(
                 name: "get".into(),
                 signature: FunctionType {
                     params: Vec::new(),
-                    results: vec![Type::new(TypeKind::Ref(TypeRef::new("middle:Alias")))],
+                    results: vec![Type::new(TypeKind::Named(TypeRef::new("middle:Alias")))],
                     throws: None,
                     async_fn: true,
                 },

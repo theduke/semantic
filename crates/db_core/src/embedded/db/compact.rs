@@ -289,9 +289,6 @@ pub(crate) fn validate_row<S: EntityStorage>(
         }
     }
     for (field, ty) in resolved_field_types_for_object(view.catalog, collection, object) {
-        if field == ATTR_RELATION_FROM || field == ATTR_RELATION_TO {
-            continue;
-        }
         if let Some(value) = object.get(&field) {
             validate_ref_value(
                 view.catalog,
@@ -302,6 +299,43 @@ pub(crate) fn validate_row<S: EntityStorage>(
                 value,
                 settings.validate_foreign_keys,
             )?;
+        }
+    }
+    Ok(())
+}
+
+fn expand_cascade_deletes<S: EntityStorage>(
+    view: &mut TxView<'_, S>,
+    stats: &mut crate::BatchStats,
+) -> Result<(), DbError> {
+    let mut pending = view
+        .changes()
+        .into_iter()
+        .filter_map(|(key, change)| {
+            (change.before.is_some() && change.after.is_none()).then_some(key)
+        })
+        .collect::<std::collections::VecDeque<_>>();
+    let mut visited = BTreeSet::new();
+
+    while let Some(target) = pending.pop_front() {
+        if !visited.insert(target.clone()) {
+            continue;
+        }
+        for (owner, path) in view.incoming(&target)? {
+            let Some(row) = view.get(&owner)? else {
+                continue;
+            };
+            let cascades = resolved_references(view.catalog, &owner, &row)
+                .into_iter()
+                .any(|reference| {
+                    reference.target == target
+                        && reference.path == path
+                        && reference.on_delete == semantic_data::schema::OnDelete::Cascade
+                });
+            if cascades && view.delete(owner.clone())? {
+                stats.deleted += 1;
+                pending.push_back(owner);
+            }
         }
     }
     Ok(())
@@ -531,6 +565,7 @@ impl<S: EntityStorage> EmbeddedDb<S> {
                 _ => unreachable!("predicate mutations use fallback"),
             }
         }
+        expand_cascade_deletes(&mut view, &mut stats)?;
         let changes = view.changes();
         if require_bounded {
             for (key, change) in &changes {
@@ -1056,6 +1091,23 @@ mod tests {
                 object,
             }
         };
+        let endpoint = |id: &str| BatchOperation::Upsert {
+            collection: DEFAULT_COLLECTION.into(),
+            id: id.into(),
+            object: Object::from_iter([("id".into(), Value::String(id.into()))]),
+        };
+        db.execute_batch_returning(
+            Batch::new()
+                .with_op(endpoint("a"))
+                .with_op(endpoint("b"))
+                .with_op(endpoint("c"))
+                .with_op(endpoint("d"))
+                .with_op(endpoint("x"))
+                .with_op(endpoint("y"))
+                .with_op(endpoint("z")),
+            BatchReturn::Stats,
+        )
+        .unwrap();
         let error = db
             .execute_batch_returning_bounded_with_settings(
                 Batch::new().with_op(relation("test.chain", "bounded", "x", "y")),

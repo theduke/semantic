@@ -1,5 +1,6 @@
 pub mod annotation;
 pub mod annotation_value;
+pub mod entity_ref;
 pub mod extension_type;
 pub mod meta;
 pub mod schema_doc;

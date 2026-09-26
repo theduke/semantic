@@ -45,5 +45,8 @@ pub enum TypeKind {
     Opaque(crate::schema::primitives::opaque_type::OpaqueType),
     Extension(crate::schema::core::extension_type::ExtensionType),
 
-    Ref(crate::schema::core::type_ref::TypeRef),
+    /// Application of a named schema type definition.
+    Named(crate::schema::core::type_ref::TypeRef),
+    /// A stored entity ID with foreign-key semantics.
+    Ref(crate::schema::core::entity_ref::EntityRef),
 }

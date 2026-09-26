@@ -452,7 +452,7 @@ mod tests {
 
     #[tokio::test]
     async fn both_export_formats_place_relations_after_regular_entities() {
-        use semantic_db_core::catalog::{ATTR_RELATION_FROM, ATTR_RELATION_TO, RELATION_CLASS_ID};
+        use semantic_data::attr::{ATTR_RELATION_FROM, ATTR_RELATION_TO, RELATION_CLASS_ID};
 
         let temp = tempfile::tempdir().unwrap();
         let source = context(&temp.path().join("source")).await;

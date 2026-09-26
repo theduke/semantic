@@ -89,7 +89,7 @@ pub fn validate_package_migrations_with_catalog(
         let definition = &dependency.type_def;
         if !declared.contains(&definition.name)
             && catalog.type_def_by_name(&definition.name).is_none()
-            && matches!(definition.ty.kind, TypeKind::Ref(_))
+            && matches!(definition.ty.kind, TypeKind::Named(_))
         {
             let mut alias = definition.clone();
             alias.module = None;
@@ -459,7 +459,15 @@ fn normalize_type(mut ty: Type, module: &str) -> Type {
             stream.end = stream.end.map(|end| Box::new(normalize_type(*end, module)));
             TypeKind::Stream(stream)
         }
-        TypeKind::Ref(type_ref) => TypeKind::Ref(normalize_type_ref(type_ref, module)),
+        TypeKind::Named(type_ref) => TypeKind::Named(normalize_type_ref(type_ref, module)),
+        TypeKind::Ref(mut reference) => {
+            if let Some(target) = &mut reference.target
+                && !matches!(target.as_str(), "id" | "semantic:id")
+            {
+                *target = nameset_for_identifier(target, Some(module)).qualified_name;
+            }
+            TypeKind::Ref(reference)
+        }
         kind => kind,
     };
     ty
@@ -672,8 +680,8 @@ mod tests {
     }
 
     #[test]
-    fn package_validation_resolves_installed_foreign_keys_without_reusing_owned_schema() {
-        use semantic_data::schema::{AttributeType, Constraint, ForeignKeyRef};
+    fn package_validation_resolves_installed_reference_targets_without_reusing_owned_schema() {
+        use semantic_data::schema::AttributeType;
 
         let mut catalog = fresh_catalog_with_core_schema().unwrap();
         let files = semantic_data::filestore::package();
@@ -694,13 +702,9 @@ mod tests {
         // Reopening an installed package must retain the same core baseline as
         // its original isolated validation, including shared metadata fields.
         validate_package_migrations_with_catalog(&files, &catalog).unwrap();
-        let mut ty = Type::new(TypeKind::Ref(TypeRef::new(
+        let ty = Type::new(TypeKind::Ref(semantic_data::schema::EntityRef::new(
             semantic_data::filestore::FILE_CLASS_ID,
         )));
-        ty.constraints.push(Constraint::ForeignKey(ForeignKeyRef {
-            to: TypeRef::new(semantic_data::filestore::FILE_CLASS_ID),
-            fields: vec!["id".into()],
-        }));
         let attribute = AttributeType {
             id: "consumer:file".into(),
             name: "file".into(),
@@ -796,7 +800,7 @@ mod tests {
         let TypeKind::Record(record) = &type_def.ty.kind else {
             panic!("expected record type");
         };
-        let TypeKind::Ref(type_ref) = &record.fields["item"].ty.kind else {
+        let TypeKind::Named(type_ref) = &record.fields["item"].ty.kind else {
             panic!("expected record field ref");
         };
         assert_eq!(type_ref.name, "local:inventory:Item");
@@ -804,7 +808,7 @@ mod tests {
         let TypeKind::Union(union) = &record.additional.as_ref().unwrap().kind else {
             panic!("expected additional union");
         };
-        let TypeKind::Ref(type_ref) = &union.variants[0].kind else {
+        let TypeKind::Named(type_ref) = &union.variants[0].kind else {
             panic!("expected union variant ref");
         };
         assert_eq!(type_ref.name, "local:inventory:Fallback");
@@ -841,7 +845,7 @@ mod tests {
             id: "suite.tree.payload".to_string(),
             name: "payload".to_string(),
             ty: Type {
-                kind: TypeKind::Ref(TypeRef {
+                kind: TypeKind::Named(TypeRef {
                     name: "suite.tree.payload_type".to_string(),
                     args: vec![],
                 }),
@@ -866,7 +870,7 @@ mod tests {
                             ty: Type {
                                 kind: TypeKind::List(ListType {
                                     items: Box::new(Type {
-                                        kind: TypeKind::Ref(TypeRef {
+                                        kind: TypeKind::Named(TypeRef {
                                             name: "suite.tree.payload_type".to_string(),
                                             args: vec![],
                                         }),
@@ -937,7 +941,7 @@ mod tests {
 
     fn ref_type(name: &str) -> Type {
         Type {
-            kind: TypeKind::Ref(TypeRef {
+            kind: TypeKind::Named(TypeRef {
                 name: name.to_string(),
                 args: vec![],
             }),

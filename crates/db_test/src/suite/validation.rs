@@ -1,5 +1,5 @@
 use super::*;
-use semantic_data::schema::{Constraint, ForeignKeyRef};
+use semantic_data::schema::EntityRef;
 use semantic_db_core::BatchReturn;
 
 /// Run on a fresh managed database: activation deliberately applies to the database.
@@ -18,14 +18,8 @@ pub async fn test_validation(db: &Db) {
     let attr = AttributeType {
         id: "validation:target".into(),
         name: "Target".into(),
-        ty: Type::new(TypeKind::String(StringType {
-            format: None,
-            normalization: None,
-        })),
-        constraints: vec![Constraint::ForeignKey(ForeignKeyRef {
-            to: TypeRef::new("validation:Person"),
-            fields: vec!["id".into()],
-        })],
+        ty: Type::new(TypeKind::Ref(EntityRef::new("validation:Person"))),
+        constraints: vec![],
         meta: Meta::default(),
     };
     db.execute_ddl(

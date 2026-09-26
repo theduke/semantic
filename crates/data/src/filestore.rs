@@ -2,9 +2,10 @@ use std::collections::BTreeMap;
 
 use crate::attr::{ATTR_DESCRIPTION, ATTR_PARENT, ATTR_TITLE};
 use crate::schema::{
-    AttributeRef, AttributeType, BoolType, ClassAttribute, ClassType, Constraint, EnumRepr,
-    EnumType, EnumVariant, FloatWidth, Meta, Migration, MigrationDdlOperation, MigrationOperation,
-    Module, NumberType, Package, StringType, TemporalType, Type, TypeKind, TypeRef, UIntWidth,
+    AttributeRef, AttributeType, BoolType, ClassAttribute, ClassType, Constraint, EntityRef,
+    EnumRepr, EnumType, EnumVariant, FloatWidth, Meta, Migration, MigrationDdlOperation,
+    MigrationOperation, Module, NumberType, Package, StringType, TemporalType, Type, TypeKind,
+    UIntWidth,
 };
 
 pub const PACKAGE_NAME: &str = "semantic.filestore";
@@ -81,6 +82,7 @@ pub fn package() -> Package {
             creatable_in_ui_migration(),
             filekind_index_and_pixel_titles_migration(),
             cleanup::migration(),
+            reference_types_migration(),
         ],
         version: None,
         meta: Meta::default(),
@@ -265,6 +267,20 @@ fn filekind_index_and_pixel_titles_migration() -> Migration {
                 class: file_class(),
             }),
         ],
+        meta: Meta::default(),
+    }
+}
+
+fn reference_types_migration() -> Migration {
+    Migration {
+        module: MODULE_NAME.to_string(),
+        name: "009_reference_types".to_string(),
+        description: Some("Use intrinsic entity-reference semantics for parent links.".to_string()),
+        operations: vec![MigrationOperation::Ddl(
+            MigrationDdlOperation::UpsertAttribute {
+                attribute: parent_attribute(),
+            },
+        )],
         meta: Meta::default(),
     }
 }
@@ -734,10 +750,7 @@ fn migration_datetime_type() -> Type {
 }
 
 fn migration_ref_type(name: &str) -> Type {
-    Type::new(TypeKind::Ref(TypeRef {
-        name: name.to_string(),
-        args: Vec::new(),
-    }))
+    Type::new(TypeKind::Ref(EntityRef::new(name)))
 }
 
 fn migration_filekind_type() -> Type {
@@ -870,11 +883,8 @@ fn enum_variant(name: &str) -> EnumVariant {
     }
 }
 
-fn ref_type(name: &str) -> Type {
-    Type::new(TypeKind::Ref(TypeRef {
-        name: name.to_string(),
-        args: Vec::new(),
-    }))
+fn ref_type(_name: &str) -> Type {
+    Type::new(TypeKind::Ref(EntityRef::any()))
 }
 
 fn meta_with_title(title: impl Into<String>) -> Meta {
@@ -942,7 +952,8 @@ mod tests {
         assert_eq!(package.name, PACKAGE_NAME);
         assert_eq!(package.root.name, MODULE_NAME);
         assert!(package.modules.is_empty());
-        assert_eq!(package.migrations.len(), 8);
+        assert_eq!(package.migrations.len(), 9);
+        assert_eq!(package.migrations[8].name, "009_reference_types");
         assert_eq!(package.migrations[7].name, "008_cleanup_intent");
         assert_eq!(
             package.migrations[6].name,

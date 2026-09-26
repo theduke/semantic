@@ -66,7 +66,7 @@ fn references(value: &serde_json::Value, output: &mut BTreeSet<String>) {
     match value {
         serde_json::Value::Object(object) => {
             if let Some(name) = object
-                .get("ref")
+                .get("named")
                 .and_then(|reference| reference.get("name"))
                 .and_then(|name| name.as_str())
             {

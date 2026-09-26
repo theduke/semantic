@@ -710,6 +710,7 @@ fn type_kind_label(kind: &TypeKind) -> &'static str {
         TypeKind::Stream(_) => "Stream",
         TypeKind::Opaque(_) => "Opaque",
         TypeKind::Extension(_) => "Extension",
+        TypeKind::Named(_) => "Named type",
         TypeKind::Ref(_) => "Reference",
     }
 }

@@ -108,7 +108,7 @@ mod tests {
 
     #[test]
     fn fingerprint_is_order_independent_and_follows_recursive_references() {
-        let reference = Type::new(TypeKind::Ref(TypeRef::new("test:Node")));
+        let reference = Type::new(TypeKind::Named(TypeRef::new("test:Node")));
         let definition = TypeDef {
             name: "Node".into(),
             module: Some("test".into()),

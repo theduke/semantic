@@ -1176,12 +1176,17 @@ impl<S: EntityStorage> EmbeddedDb<S> {
                 &batch,
                 read_revision,
             )?;
-            let out = Self::execute_batch_with_write_defaults(
+            let mut out = Self::execute_batch_with_write_defaults(
                 catalog_snapshot.catalog.as_ref(),
                 &dataset,
                 &batch,
                 self.validation_enabled()?,
             )?;
+            out.stats.deleted += expand_dataset_cascade_deletes(
+                catalog_snapshot.catalog.as_ref(),
+                &dataset,
+                &mut out.dataset,
+            );
 
             if returning != crate::BatchReturn::Dataset {
                 self.execution_counts.visited_rows +=
@@ -1856,6 +1861,8 @@ impl<S: EntityStorage> EmbeddedDb<S> {
             normalized_after.insert(collection_name.clone(), normalized_rows.clone());
         }
 
+        expand_dataset_cascade_deletes(catalog, before, &mut normalized_after);
+
         for (collection_name, normalized_rows) in &normalized_after {
             let collection_schema =
                 catalog.collection_by_name(collection_name).ok_or_else(|| {
@@ -2003,9 +2010,6 @@ impl<S: EntityStorage> EmbeddedDb<S> {
         for object in rows.values() {
             let field_types = resolved_field_types_for_object(catalog, collection, object);
             for (field, ty) in field_types {
-                if field == ATTR_RELATION_FROM || field == ATTR_RELATION_TO {
-                    continue;
-                }
                 let Some(value) = object.get(&field) else {
                     continue;
                 };
@@ -3287,6 +3291,52 @@ fn validate_batch_mutation_limits(batch: &Batch) -> std::result::Result<(), DbEr
     Ok(())
 }
 
+fn expand_dataset_cascade_deletes(
+    catalog: &Catalog,
+    before: &BTreeMap<String, BTreeMap<String, Object>>,
+    after: &mut BTreeMap<String, BTreeMap<String, Object>>,
+) -> usize {
+    let mut deleted = BTreeSet::new();
+    for (collection, rows) in before {
+        let surviving = after.get(collection);
+        for id in rows.keys() {
+            if surviving.is_none_or(|rows| !rows.contains_key(id)) {
+                deleted.insert((collection.clone(), id.clone()));
+            }
+        }
+    }
+
+    let mut count = 0;
+    loop {
+        let mut cascaded = BTreeSet::new();
+        for (collection, rows) in after.iter() {
+            for (id, row) in rows {
+                let owner = (collection.clone(), id.clone());
+                if crate::validation::stored_references(catalog, &owner, row)
+                    .into_iter()
+                    .any(|reference| {
+                        reference.on_delete == semantic_data::schema::OnDelete::Cascade
+                            && deleted.contains(&reference.target)
+                    })
+                {
+                    cascaded.insert(owner);
+                }
+            }
+        }
+        if cascaded.is_empty() {
+            break;
+        }
+        count += cascaded.len();
+        for (collection, id) in &cascaded {
+            if let Some(rows) = after.get_mut(collection) {
+                rows.remove(id);
+            }
+        }
+        deleted.extend(cascaded);
+    }
+    count
+}
+
 fn validate_ref_value(
     catalog: &Catalog,
     collection: &CollectionSchema,
@@ -3297,6 +3347,20 @@ fn validate_ref_value(
     validate_foreign_keys: bool,
 ) -> std::result::Result<(), DbError> {
     match &ty.kind {
+        TypeKind::Named(reference) => {
+            let definition = catalog.type_def_by_name(&reference.name).ok_or_else(|| {
+                DbError::InvalidQuery(format!("named type '{}' is not registered", reference.name))
+            })?;
+            validate_ref_value(
+                catalog,
+                collection,
+                target_rows,
+                field,
+                &definition.type_def.ty,
+                value,
+                validate_foreign_keys,
+            )
+        }
         TypeKind::Ref(_) => validate_one_ref(
             catalog,
             collection,
@@ -3326,7 +3390,7 @@ fn validate_ref_value(
                 return Ok(());
             }
             for variant in &union.variants {
-                if contains_ref_type(variant) {
+                if contains_ref_type(catalog, variant) {
                     return validate_ref_value(
                         catalog,
                         collection,
@@ -3340,7 +3404,7 @@ fn validate_ref_value(
             }
             Ok(())
         }
-        TypeKind::List(list) if contains_ref_type(&list.items) => {
+        TypeKind::List(list) if contains_ref_type(catalog, &list.items) => {
             let Value::List(items) = value else {
                 return Err(DbError::InvalidQuery(format!(
                     "ref field '{}' in collection '{}' must be a list of string ids",
@@ -3432,14 +3496,27 @@ fn validate_one_ref(
     )))
 }
 
-fn contains_ref_type(ty: &Type) -> bool {
-    match &ty.kind {
-        TypeKind::Ref(_) => true,
-        TypeKind::Optional(optional) => contains_ref_type(&optional.inner),
-        TypeKind::Union(union) => union.variants.iter().any(contains_ref_type),
-        TypeKind::List(list) => contains_ref_type(&list.items),
-        _ => false,
+fn contains_ref_type(catalog: &Catalog, ty: &Type) -> bool {
+    fn visit(catalog: &Catalog, ty: &Type, seen: &mut BTreeSet<String>) -> bool {
+        match &ty.kind {
+            TypeKind::Named(reference) => {
+                seen.insert(reference.name.clone())
+                    && catalog
+                        .type_def_by_name(&reference.name)
+                        .is_some_and(|definition| visit(catalog, &definition.type_def.ty, seen))
+            }
+            TypeKind::Ref(_) => true,
+            TypeKind::Optional(optional) => visit(catalog, &optional.inner, seen),
+            TypeKind::Union(union) => union
+                .variants
+                .iter()
+                .any(|variant| visit(catalog, variant, seen)),
+            TypeKind::List(list) => visit(catalog, &list.items, seen),
+            _ => false,
+        }
     }
+
+    visit(catalog, ty, &mut BTreeSet::new())
 }
 
 fn type_allows_nullish(ty: &Type) -> bool {
@@ -3892,7 +3969,7 @@ mod tests {
             class::class_ref::ClassRef,
             class::class_type::ClassType,
             collections::optional_type::OptionalType,
-            core::{meta::Meta, type_kind::TypeKind, type_node::Type, type_ref::TypeRef},
+            core::{meta::Meta, type_kind::TypeKind, type_node::Type},
             primitives::{
                 bool_type::BoolType, number_type::NumberType, string_type::StringType,
                 temporal_type::TemporalType, uint_width::UIntWidth,
@@ -4044,6 +4121,14 @@ mod tests {
             })
             .unwrap();
         }
+        for relation_id in ["canonical", "aliases", "legacy"] {
+            for suffix in ["source", "target"] {
+                let id = format!("{relation_id}-{suffix}");
+                let mut endpoint = Object::new();
+                endpoint.insert("id", Value::String(id.clone()));
+                db.insert(DEFAULT_COLLECTION, &id, endpoint).unwrap();
+            }
+        }
         // Untyped canonical attributes, typed aliases, and legacy rows all share
         // the collection. Distinct endpoints also detect accidental path mixing.
         for (id, relation, typed) in [
@@ -4139,10 +4224,10 @@ mod tests {
             object.insert("id", Value::String(id.to_string()));
             object.insert("kind", Value::String(kind.to_string()));
             if let Some(from) = from {
-                object.insert("from", Value::String(from.to_string()));
+                object.insert("parent_id", Value::String(from.to_string()));
             }
             if let Some(to) = to {
-                object.insert("to", Value::String(to.to_string()));
+                object.insert("child_id", Value::String(to.to_string()));
             }
             if let Some(order) = order {
                 object.insert("order", Value::U64(order));
@@ -4163,7 +4248,7 @@ mod tests {
                 join_type: JoinType::Inner,
                 condition: JoinCondition::OnExpr(Expr::Binary {
                     op: BinaryOp::Eq,
-                    left: Box::new(field(["n", "to"])),
+                    left: Box::new(field(["n", "child_id"])),
                     right: Box::new(field(["child", "id"])),
                 }),
                 predicate: None,
@@ -4172,7 +4257,7 @@ mod tests {
                 op: BinaryOp::And,
                 left: Box::new(Expr::Binary {
                     op: BinaryOp::Eq,
-                    left: Box::new(field(["n", "from"])),
+                    left: Box::new(field(["n", "parent_id"])),
                     right: Box::new(Expr::Operand(Operand::Literal(Value::String(
                         "root".to_string(),
                     )))),
@@ -5934,7 +6019,9 @@ mod tests {
     }
 
     pub(super) fn ref_ty(class_id: &str) -> Type {
-        ty(TypeKind::Ref(TypeRef::new(class_id)))
+        ty(TypeKind::Ref(semantic_data::schema::EntityRef::new(
+            class_id,
+        )))
     }
 
     fn ty(kind: TypeKind) -> Type {

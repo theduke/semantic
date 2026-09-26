@@ -41,6 +41,21 @@ pub(super) async fn test_incremental_writes(db: &Db) {
         id: id.into(),
         object: row(id, label),
     };
+    let endpoint = |id: &str| BatchOperation::Upsert {
+        collection: collection.into(),
+        id: id.into(),
+        object: Object::from_iter([
+            ("id".into(), Value::String(id.into())),
+            ("label".into(), Value::String(format!("endpoint-{id}"))),
+        ]),
+    };
+    db.execute_batch(
+        Batch::new()
+            .with_op(endpoint("incremental-source"))
+            .with_op(endpoint("incremental-target")),
+    )
+    .await
+    .unwrap();
     db.execute_batch(
         Batch::new()
             .with_op(upsert("one", "first"))

@@ -6,10 +6,10 @@ use crate::attr::{
 };
 use crate::builtin::DEFAULT_COLLECTION;
 use crate::schema::{
-    AttributeRef, AttributeType, ClassAttribute, ClassRef, ClassType, Constraint, Meta, Migration,
-    MigrationCollectionKind, MigrationDdlOperation, MigrationIntegrityMode, MigrationOperation,
-    NumberType, RelationIndexingMode, RelationMode, RelationType, StringType, TemporalType, Type,
-    TypeKind, TypeRef, UIntWidth,
+    AttributeRef, AttributeType, ClassAttribute, ClassRef, ClassType, Constraint, EntityRef, Meta,
+    Migration, MigrationCollectionKind, MigrationDdlOperation, MigrationIntegrityMode,
+    MigrationOperation, NumberType, RelationIndexingMode, RelationMode, RelationType, StringType,
+    TemporalType, Type, TypeKind, UIntWidth,
 };
 
 pub const MODULE_NAME: &str = "base";
@@ -349,10 +349,7 @@ fn migration_uint64_type() -> Type {
 }
 
 fn migration_ref_type(name: &str) -> Type {
-    Type::new(TypeKind::Ref(TypeRef {
-        name: name.to_string(),
-        args: Vec::new(),
-    }))
+    Type::new(TypeKind::Ref(EntityRef::new(name)))
 }
 
 fn attribute(id: &str, name: &str, ty: Type) -> AttributeType {
@@ -383,10 +380,7 @@ fn uint64_type() -> Type {
 }
 
 fn ref_type(name: &str) -> Type {
-    Type::new(TypeKind::Ref(TypeRef {
-        name: name.to_string(),
-        args: Vec::new(),
-    }))
+    Type::new(TypeKind::Ref(EntityRef::new(name)))
 }
 
 fn meta_with_title(title: impl Into<String>) -> Meta {
@@ -489,7 +483,7 @@ mod tests {
             panic!("directory node from attribute should be a ref");
         };
 
-        assert_eq!(type_ref.name, DIRECTORY_CLASS_ID);
+        assert_eq!(type_ref.target_class(), Some(DIRECTORY_CLASS_ID));
     }
 
     #[test]

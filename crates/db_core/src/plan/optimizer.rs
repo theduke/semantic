@@ -925,11 +925,7 @@ impl<'a> RefPathJoinLifter<'a> {
         };
 
         let mut target = source.clone();
-        let target_class = if self.context.catalog().class_id(&type_ref.name).is_some() {
-            Some(type_ref.name.clone())
-        } else {
-            None
-        };
+        let target_class = type_ref.target_class().map(str::to_owned);
         if target.collection_id.is_none()
             && let Some(name) = &target.source_name
         {

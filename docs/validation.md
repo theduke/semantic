@@ -10,14 +10,16 @@ The SDK exposes typed `commands.validationPreflight` and `commands.validationAct
 
 Active writes apply defaults and remove nullish optional stored fields before recursively checking required attributes, records/classes, enum/union alternatives, lists, fixed arrays, tuples, maps, and references. Required computed attributes need no stored value. Unions try every alternative; only successful alternatives contribute validated references. Conservative reverse-reference candidates ensure deleting or retyping a target revalidates surviving owners, including nested values. Same-batch forward references and coordinated deletion are validated against the final state.
 
-Enforced constraints are `Min`, `Max`, `Length`, `Pattern`, `Prefix`, `Suffix`, `MinItems`, `MaxItems`, `MinProperties`, `MaxProperties`, `RequiredFields`, and scalar `ForeignKey`. Literal/expression defaults and transport annotations retain their preparation/metadata roles. Other enforcement constraints, including multi-field expressions and declaration-level uniqueness, are explicitly unsupported; ordinary database unique indexes continue to operate independently.
+Enforced constraints are `Min`, `Max`, `Length`, `Pattern`, `Prefix`, `Suffix`, `MinItems`, `MaxItems`, `MinProperties`, `MaxProperties`, and `RequiredFields`. Literal/expression defaults and transport annotations retain their preparation/metadata roles. Other enforcement constraints, including multi-field expressions and declaration-level uniqueness, are explicitly unsupported; ordinary database unique indexes continue to operate independently.
 
-A scalar foreign key uses the existing declaration:
+Entity references are declared as types:
 
 ```json
-{"foreign_key":{"to":{"name":"example:Person","args":[]},"fields":["id"]}}
+{"ref":{"name":"example:Person","on_delete":"restrict"}}
 ```
 
-The target must resolve to a registered class or an alias to one. Only a single primary-ID field is supported; class subclasses are accepted. Declarations can live on the global attribute, a class attribute, or an inherited `ClassConstraint::Field`. Constraints on builtin relation `from`/`to` are enforced; unconstrained endpoints retain their existing behavior. No endpoint fields, cascade rules, or cardinality semantics are added to `RelationType`.
+Every `Ref` stores an entity's primary ID and enforces existence. A target, when present, must resolve directly to a registered class; subclasses are accepted. `target: null` accepts any entity class. `on_delete: restrict` rejects target deletion while a surviving owner refers to it. `on_delete: cascade` deletes the owner, transitively and atomically. Builtin relation `from` and `to` use an unrestricted target with cascade behavior, so deleting either endpoint deletes the relation row.
+
+`Named { name, args }` is separate: it applies a named schema `TypeDef` and does not store an entity ID.
 
 After activation, class/attribute updates and package migrations validate the final existing data under the new catalog and backfill reverse references atomically. A schema change that would invalidate stored rows is rejected; package migrations can repair affected rows in the same transaction. There is no implicit activation or automatic repair on reopen.

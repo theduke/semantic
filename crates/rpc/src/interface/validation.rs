@@ -237,7 +237,7 @@ fn resolve<'a>(
     definitions: &'a BTreeMap<String, TypeDef>,
 ) -> Result<&'a Type, InvocationError> {
     let mut visited = BTreeSet::new();
-    while let TypeKind::Ref(reference) = &ty.kind {
+    while let TypeKind::Named(reference) = &ty.kind {
         if !reference.args.is_empty() {
             return Err(incompatible("generic interface references are unsupported"));
         }
@@ -287,7 +287,7 @@ fn profile(
     }
     let mut child = |ty: &Type| profile(ty, false, definitions, visited).map(|_| ());
     match &ty.kind {
-        TypeKind::Ref(reference) => {
+        TypeKind::Named(reference) => {
             if !reference.args.is_empty() {
                 return Err(incompatible("generic interface references are unsupported"));
             }
@@ -418,6 +418,7 @@ fn profile(
         | TypeKind::IpAddr(_)
         | TypeKind::Temporal(_)
         | TypeKind::Json
+        | TypeKind::Ref(_)
         | TypeKind::Enum(_) => Ok(false),
         _ => Err(incompatible(
             "unsupported nested stream, handle, callable, or non-value interface type",
@@ -441,7 +442,7 @@ fn validate(
                 return Err(invalid(code, "value violates interface constraint"));
             }
         }
-        let TypeKind::Ref(reference) = &ty.kind else {
+        let TypeKind::Named(reference) = &ty.kind else {
             break;
         };
         if !reference.args.is_empty() || !visited.insert(&reference.name) {
@@ -458,6 +459,7 @@ fn validate(
         | (TypeKind::Bool(_), Value::Bool(_))
         | (TypeKind::Bytes(_), Value::Bytes(_))
         | (TypeKind::String(_), Value::String(_))
+        | (TypeKind::Ref(_), Value::String(_))
         | (TypeKind::Uuid, Value::Uuid(_))
         | (TypeKind::IpAddr(_), Value::IpAddr(_)) => true,
         (TypeKind::Char(_), Value::String(text)) => text.chars().count() == 1,
@@ -695,7 +697,7 @@ mod tests {
                 })
             }
         }
-        let reference = |name: &str| Type::new(TypeKind::Ref(TypeRef::new(name)));
+        let reference = |name: &str| Type::new(TypeKind::Named(TypeRef::new(name)));
         let mut outer = reference("middle");
         outer.constraints.push(Constraint::Prefix("a".into()));
         let mut middle = reference("base");

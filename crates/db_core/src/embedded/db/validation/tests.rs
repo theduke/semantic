@@ -1,10 +1,11 @@
 use super::*;
-use crate::{BatchReturn, embedded::MemoryEntityStorage};
+use crate::{BatchReply, BatchReturn, Expr, Operand, embedded::MemoryEntityStorage};
+use semantic_data::query::BinaryOp;
 use semantic_data::schema::attribute::attribute_ref::AttributeRef;
 use semantic_data::schema::{
-    ArrayType, AttributeType, ClassAttribute, ClassConstraint, ClassRef, ClassType, Constraint,
-    EnumRepr, EnumType, EnumVariant, Field, ForeignKeyRef, LengthSpec, MapType, Meta, RecordType,
-    StringType, TupleType, TypeDef, TypeRef, UnionType, Visibility,
+    ArrayType, AttributeType, ClassAttribute, ClassRef, ClassType, Constraint, EnumRepr, EnumType,
+    EnumVariant, Field, LengthSpec, MapType, Meta, RecordType, StringType, TupleType, TypeDef,
+    TypeRef, UnionType, Visibility,
 };
 
 fn class(id: &str) -> ClassType {
@@ -56,13 +57,10 @@ fn string() -> Type {
     }))
 }
 fn reference(name: &str) -> Type {
-    Type::new(TypeKind::Ref(TypeRef::new(name)))
+    Type::new(TypeKind::Ref(semantic_data::schema::EntityRef::new(name)))
 }
-fn fk() -> Constraint {
-    Constraint::ForeignKey(ForeignKeyRef {
-        to: TypeRef::new("v:PersonAlias"),
-        fields: vec!["id".into()],
-    })
+fn named(name: &str) -> Type {
+    Type::new(TypeKind::Named(TypeRef::new(name)))
 }
 fn schema(payload: Type) -> DdlBatch {
     let mut child = class("v:Child");
@@ -140,7 +138,7 @@ fn record_typedef_constraints_survive_reopen_without_package_registration() {
         required_order: None,
     }));
     ty.constraints.push(Constraint::MinProperties(1));
-    let mut ddl = schema(reference("v:Payload"));
+    let mut ddl = schema(named("v:Payload"));
     ddl.operations.insert(
         0,
         DdlOperation::UpsertTypeDef {
@@ -178,9 +176,7 @@ fn record_typedef_constraints_survive_reopen_without_package_registration() {
 
 #[test]
 fn activation_preflight_is_non_mutating_and_persists_with_reverse_refs() {
-    let mut scalar = string();
-    scalar.constraints.push(fk());
-    let mut db = db(scalar);
+    let mut db = db(reference("v:Person"));
     db.transact(Batch::new().with_op(upsert("legacy", "v:Holder", None)))
         .unwrap();
     let revision = db.storage.current_revision().unwrap();
@@ -232,7 +228,7 @@ fn activation_preflight_is_non_mutating_and_persists_with_reverse_refs() {
 #[test]
 fn recursive_array_tuple_map_union_references_and_atomic_failure() {
     let refs = Type::new(TypeKind::Union(UnionType {
-        variants: vec![reference("v:Other"), reference("v:PersonAlias")],
+        variants: vec![reference("v:Other"), named("v:PersonAlias")],
     }));
     let array = Type::new(TypeKind::Array(ArrayType {
         items: Box::new(refs),
@@ -399,26 +395,12 @@ fn required_nested_defaults_enum_and_constraints_are_pathful() {
 }
 
 #[test]
-fn builtin_endpoints_use_inherited_field_constraints_and_keep_unconstrained_behavior() {
+fn builtin_endpoints_are_references_and_cascade_relation_rows() {
     let mut db = db(string());
     let mut relation = class("v:Link");
     relation.inherits = Some(ClassRef {
         id: semantic_data::attr::RELATION_CLASS_ID.into(),
     });
-    relation.constraints = vec![
-        ClassConstraint::Field {
-            attribute: AttributeRef {
-                id: ATTR_RELATION_FROM.into(),
-            },
-            constraint: fk(),
-        },
-        ClassConstraint::Field {
-            attribute: AttributeRef {
-                id: ATTR_RELATION_TO.into(),
-            },
-            constraint: fk(),
-        },
-    ];
     db.transact_ddl(DdlBatch::new().with_op(DdlOperation::UpsertClass { class: relation }))
         .unwrap();
     db.activate_validation().unwrap();
@@ -434,16 +416,6 @@ fn builtin_endpoints_use_inherited_field_constraints_and_keep_unconstrained_beha
         }
     };
     db.execute_batch_returning(
-        Batch::new().with_op(relation(
-            "unconstrained",
-            semantic_data::attr::RELATION_CLASS_ID,
-            "missing",
-            "also_missing",
-        )),
-        BatchReturn::Stats,
-    )
-    .unwrap();
-    db.execute_batch_returning(
         Batch::new()
             .with_op(relation("link", "v:Link", "one", "two"))
             .with_op(upsert("one", "v:Person", None))
@@ -451,11 +423,37 @@ fn builtin_endpoints_use_inherited_field_constraints_and_keep_unconstrained_beha
         BatchReturn::Stats,
     )
     .unwrap();
-    let err = error(
-        db.execute_batch_returning(Batch::new().with_op(delete("two")), BatchReturn::Stats)
-            .unwrap_err(),
+    db.execute_batch_returning(Batch::new().with_op(delete("two")), BatchReturn::Stats)
+        .unwrap();
+    assert!(db.get(DEFAULT_COLLECTION, "link").unwrap().is_none());
+    db.execute_batch_returning(
+        Batch::new()
+            .with_op(upsert("two", "v:Child", None))
+            .with_op(relation("link-dataset", "v:Link", "one", "two")),
+        BatchReturn::Stats,
+    )
+    .unwrap();
+    let reply = db
+        .execute_batch_returning(
+            Batch::new().with_op(BatchOperation::Delete {
+                collection: DEFAULT_COLLECTION.into(),
+                query: DeleteQuery::new().with_predicate(Expr::Binary {
+                    op: BinaryOp::Eq,
+                    left: Box::new(Expr::Operand(Operand::Field(FieldPath::from_fields([
+                        "id",
+                    ])))),
+                    right: Box::new(Expr::Operand(Operand::Literal(Value::String("two".into())))),
+                }),
+            }),
+            BatchReturn::Stats,
+        )
+        .unwrap();
+    assert!(matches!(reply, BatchReply::Stats { stats } if stats.deleted == 2));
+    assert!(
+        db.get(DEFAULT_COLLECTION, "link-dataset")
+            .unwrap()
+            .is_none()
     );
-    assert_eq!(err.attribute, ATTR_RELATION_TO);
     let err = error(
         db.execute_batch_returning(
             Batch::new().with_op(relation("bad", "v:Link", "missing", "two")),
@@ -467,30 +465,14 @@ fn builtin_endpoints_use_inherited_field_constraints_and_keep_unconstrained_beha
 }
 
 #[test]
-fn registration_rejects_unknown_foreign_targets_and_non_primary_tuples() {
-    for foreign in [
-        ForeignKeyRef {
-            to: TypeRef::new("v:Missing"),
-            fields: vec!["id".into()],
-        },
-        ForeignKeyRef {
-            to: TypeRef::new("v:Person"),
-            fields: vec!["name".into()],
-        },
-        ForeignKeyRef {
-            to: TypeRef::new("v:Person"),
-            fields: vec!["id".into(), "name".into()],
-        },
-    ] {
-        let mut db = db(string());
-        let mut attribute = attribute("v:bad", string());
-        attribute.constraints.push(Constraint::ForeignKey(foreign));
-        assert!(
-            db.transact_ddl(DdlBatch::new().with_op(DdlOperation::UpsertAttribute { attribute }))
-                .is_err()
-        );
-        assert!(db.catalog().attribute_by_id("v:bad").is_none());
-    }
+fn registration_rejects_unknown_reference_targets() {
+    let mut db = db(string());
+    let attribute = attribute("v:bad", reference("v:Missing"));
+    assert!(
+        db.transact_ddl(DdlBatch::new().with_op(DdlOperation::UpsertAttribute { attribute }))
+            .is_err()
+    );
+    assert!(db.catalog().attribute_by_id("v:bad").is_none());
 }
 
 #[test]
@@ -553,7 +535,7 @@ fn required_stored_defaults_exclude_computed_and_reject_unsupported_constraints(
 }
 
 #[test]
-fn active_class_upsert_validates_existing_rows_and_backfills_new_foreign_keys() {
+fn active_attribute_upsert_validates_existing_rows_and_backfills_new_references() {
     let mut db = db(string());
     db.activate_validation().unwrap();
     db.execute_batch_returning(
@@ -567,18 +549,10 @@ fn active_class_upsert_validates_existing_rows_and_backfills_new_foreign_keys() 
         BatchReturn::Stats,
     )
     .unwrap();
-    let mut holder = class("v:Holder");
-    holder
-        .attributes
-        .insert("payload".into(), class_attr("v:payload", true));
-    holder.constraints.push(ClassConstraint::Field {
-        attribute: AttributeRef {
-            id: "payload".into(),
-        },
-        constraint: fk(),
-    });
-    db.transact_ddl(DdlBatch::new().with_op(DdlOperation::UpsertClass { class: holder }))
-        .unwrap();
+    db.transact_ddl(DdlBatch::new().with_op(DdlOperation::UpsertAttribute {
+        attribute: attribute("v:payload", reference("v:Person")),
+    }))
+    .unwrap();
     assert!(matches!(
         db.execute_batch_returning(Batch::new().with_op(delete("target")), BatchReturn::Stats),
         Err(DbError::Validation(_))
@@ -695,8 +669,7 @@ fn inline_classes_and_record_aliases_validate_nested_stored_values() {
         .attributes
         .insert("target".into(), class_attr("v:target", true));
     let mut db = db(Type::new(TypeKind::Class(nested)));
-    let mut target = attribute("v:target", string());
-    target.constraints.push(fk());
+    let target = attribute("v:target", reference("v:Person"));
     db.transact_ddl(DdlBatch::new().with_op(DdlOperation::UpsertAttribute { attribute: target }))
         .unwrap();
     db.activate_validation().unwrap();
@@ -717,18 +690,24 @@ fn inline_classes_and_record_aliases_validate_nested_stored_values() {
     );
     assert_eq!(err.path, FieldPath::from_fields(["v:payload", "v:target"]));
 
-    let mut alias = self::db(reference("v:Record"));
+    let mut alias = self::db(string());
     alias
-        .transact_ddl(DdlBatch::new().with_op(DdlOperation::UpsertRecordType {
-            id: "v:Record".into(),
-            name: "Record".into(),
-            record: RecordType {
-                fields: BTreeMap::from([("target".into(), field(reference("v:Person")))]),
-                open: false,
-                additional: None,
-                required_order: None,
-            },
-        }))
+        .transact_ddl(
+            DdlBatch::new()
+                .with_op(DdlOperation::UpsertRecordType {
+                    id: "v:Record".into(),
+                    name: "Record".into(),
+                    record: RecordType {
+                        fields: BTreeMap::from([("target".into(), field(reference("v:Person")))]),
+                        open: false,
+                        additional: None,
+                        required_order: None,
+                    },
+                })
+                .with_op(DdlOperation::UpsertAttribute {
+                    attribute: attribute("v:payload", named("v:Record")),
+                }),
+        )
         .unwrap();
     alias.activate_validation().unwrap();
     let nested = Value::Object(Object::from_iter([(
@@ -779,10 +758,9 @@ fn union_normalization_selects_structural_alternative_and_nullable_foreign_keys(
     assert!(
         matches!(row.object.get("v:payload"), Some(Value::Object(object)) if object.get("default") == Some(&Value::String("filled".into())))
     );
-    let mut optional = Type::new(TypeKind::Optional(semantic_data::schema::OptionalType {
-        inner: Box::new(string()),
+    let optional = Type::new(TypeKind::Optional(semantic_data::schema::OptionalType {
+        inner: Box::new(reference("v:Person")),
     }));
-    optional.constraints.push(fk());
     let mut db = self::db(optional);
     db.activate_validation().unwrap();
     db.execute_batch_returning(

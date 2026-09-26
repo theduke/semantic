@@ -11,7 +11,7 @@ use semantic_data::schema::primitives::any_type::AnyType;
 use semantic_data::schema::primitives::string_type::StringType;
 use semantic_data::schema::{
     AttributeRef, AttributeType, ClassAttribute, ClassConstraint, ClassType, IndexKind,
-    RelationIndexingMode, RelationMode, RelationType, TypeRef,
+    RelationIndexingMode, RelationMode, RelationType,
 };
 use semantic_data::value::Value;
 use semantic_db_core::DbError;
@@ -445,13 +445,10 @@ fn register_table(
         });
         let ty = if let Some(foreign_key) = foreign_key {
             Type {
-                kind: TypeKind::Ref(TypeRef {
-                    name: format!(
-                        "postgres:{}:{}",
-                        foreign_key.target_schema, foreign_key.target_table
-                    ),
-                    args: vec![],
-                }),
+                kind: TypeKind::Ref(semantic_data::schema::EntityRef::new(format!(
+                    "postgres:{}:{}",
+                    foreign_key.target_schema, foreign_key.target_table
+                ))),
                 constraints: vec![],
                 annotations: vec![],
             }

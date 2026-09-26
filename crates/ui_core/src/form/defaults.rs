@@ -188,9 +188,12 @@ fn collect_ref_autocomplete_class_ids(
 ) {
     match &ty.kind {
         TypeKind::Ref(type_ref) => {
+            let Some(target_ref) = type_ref.target_class() else {
+                return;
+            };
             let Some(target) = catalog
-                .class_by_id(&type_ref.name)
-                .or_else(|| catalog.class_by_name(&type_ref.name))
+                .class_by_id(target_ref)
+                .or_else(|| catalog.class_by_name(target_ref))
             else {
                 return;
             };

@@ -89,6 +89,12 @@ fn setup() -> (EmbeddedDb<EntityStore<ObservedEngine>>, Arc<Mutex<Probe>>) {
     (db, probe)
 }
 
+fn insert_endpoints(db: &mut EmbeddedDb<EntityStore<ObservedEngine>>, ids: &[&str]) {
+    for id in ids {
+        db.insert("items", *id, object(id, id)).unwrap();
+    }
+}
+
 #[test]
 fn startup_reopens_with_one_schema_scan_and_skips_unchanged_packages() {
     for size in [10, 1_000] {
@@ -196,6 +202,7 @@ fn compact_kv_failed_commit_and_reopen_preserve_objects_indexes_and_contributors
         meta: Default::default(),
     })
     .unwrap();
+    insert_endpoints(&mut db, &["source", "target"]);
     let relation_row = |id: &str| {
         let mut row = object(id, id);
         row.insert("from", "source".to_string());
@@ -354,6 +361,7 @@ fn incremental_duplicate_contributors_survive_reopen_and_failed_delete() {
         meta: Default::default(),
     })
     .unwrap();
+    insert_endpoints(&mut db, &["source", "target"]);
     for id in ["a", "b"] {
         let mut row = object(id, id);
         row.insert("from", Value::String("source".into()));
@@ -396,6 +404,7 @@ fn incremental_reopen_backfills_legacy_contributors_atomically() {
         meta: Default::default(),
     })
     .unwrap();
+    insert_endpoints(&mut db, &["source", "target"]);
     for id in ["a", "b"] {
         let mut row = object(id, id);
         row.insert("from", Value::String("source".into()));
@@ -449,6 +458,7 @@ fn incremental_transitive_depth_changes_leave_other_relations_untouched() {
         })
         .unwrap();
     }
+    insert_endpoints(&mut db, &["a", "b", "c", "x", "y"]);
     for (id, relation, source, target) in [
         ("first", "chain", "a", "b"),
         ("second", "chain", "b", "c"),

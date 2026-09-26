@@ -1,6 +1,6 @@
 use semantic_data::schema::{
-    AttributeRef, AttributeType, ClassAttribute, Constraint, ListType, Meta, StringType,
-    TemporalType, Type, TypeKind, TypeRef,
+    AttributeRef, AttributeType, ClassAttribute, Constraint, EntityRef, ListType, Meta, StringType,
+    TemporalType, Type, TypeKind,
 };
 
 pub fn string_type() -> Type {
@@ -21,10 +21,7 @@ pub fn list_type(items: Type) -> Type {
 }
 
 pub fn ref_type(name: &str) -> Type {
-    Type::new(TypeKind::Ref(TypeRef {
-        name: name.to_string(),
-        args: Vec::new(),
-    }))
+    Type::new(TypeKind::Ref(EntityRef::new(name)))
 }
 
 pub fn attribute(id: &str, name: &str, ty: Type) -> AttributeType {

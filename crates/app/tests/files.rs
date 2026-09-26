@@ -243,7 +243,7 @@ async fn explicit_delete_retains_shared_bytes_and_records_durable_cleanup() {
 
 #[tokio::test]
 async fn enforced_reference_blocks_native_delete_but_unlinking_retains_file() {
-    use semantic_data::schema::{AttributeType, Meta, Type, TypeKind, TypeRef};
+    use semantic_data::schema::{AttributeType, Meta, Type, TypeKind};
     use semantic_db_core::{DdlBatch, DdlOperation};
     let temp = tempfile::tempdir().unwrap();
     let (ctx, db) = setup(temp.path());
@@ -256,7 +256,7 @@ async fn enforced_reference_blocks_native_delete_but_unlinking_retains_file() {
         attribute: AttributeType {
             id: "test:file_ref".into(),
             name: "file_ref".into(),
-            ty: Type::new(TypeKind::Ref(TypeRef::new(
+            ty: Type::new(TypeKind::Ref(semantic_data::schema::EntityRef::new(
                 semantic_data::filestore::FILE_CLASS_ID,
             ))),
             constraints: Vec::new(),

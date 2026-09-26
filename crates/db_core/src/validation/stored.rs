@@ -2,8 +2,7 @@
 use super::*;
 use crate::{DbError, batch_return::EntityKey};
 use semantic_data::{
-    attr::{ATTR_RELATION_FROM, ATTR_RELATION_TO},
-    schema::{ClassConstraint, Constraint, EnumRepr, LengthSpec, NumberBound},
+    schema::{ClassConstraint, Constraint, EnumRepr, LengthSpec, NumberBound, OnDelete},
     value::{FieldPath, PathSegment},
 };
 
@@ -30,6 +29,7 @@ pub struct ResolvedReference {
     pub owner: EntityKey,
     pub path: FieldPath,
     pub target: EntityKey,
+    pub on_delete: OnDelete,
 }
 
 #[derive(Clone)]
@@ -206,6 +206,7 @@ impl<F: FnMut(&EntityKey) -> Result<Option<Object>, DbError>> Validator<'_, F> {
             owner: self.owner.clone(),
             path: path.clone(),
             target: target_key.clone(),
+            on_delete: reference_on_delete(ty),
         });
         if !self.validate_foreign_keys {
             return Ok(());
@@ -284,15 +285,16 @@ impl<F: FnMut(&EntityKey) -> Result<Option<Object>, DbError>> Validator<'_, F> {
                     return Ok(());
                 }
             }
-            TypeKind::Ref(reference) => {
-                if self.catalog.class_id(&reference.name).is_some() {
-                    if !skip_ref {
-                        self.reference(value, ty, path)?;
-                    }
-                } else if let Some(def) = self.catalog.type_def_by_name(&reference.name) {
+            TypeKind::Named(reference) => {
+                if let Some(def) = self.catalog.type_def_by_name(&reference.name) {
                     let resolved = def.type_def.ty.clone();
                     self.value(value, &resolved, path, depth + 1, skip_ref)?;
-                } else if !skip_ref {
+                } else {
+                    return self.fail(path, "named_type", &reference.name, "unresolved");
+                }
+            }
+            TypeKind::Ref(_) => {
+                if !skip_ref {
                     self.reference(value, ty, path)?;
                 }
             }
@@ -469,8 +471,7 @@ impl<F: FnMut(&EntityKey) -> Result<Option<Object>, DbError>> Validator<'_, F> {
             }
             let path = child(path, PathSegment::Field(name.clone()));
             if let Some(value) = object.get(&name) {
-                let endpoint = name == ATTR_RELATION_FROM || name == ATTR_RELATION_TO;
-                self.value(value, &field.ty, &path, depth, endpoint)?;
+                self.value(value, &field.ty, &path, depth, false)?;
             } else if field.required {
                 return self.fail(&path, "required", "stored value", "missing");
             }
@@ -548,10 +549,6 @@ impl<F: FnMut(&EntityKey) -> Result<Option<Object>, DbError>> Validator<'_, F> {
                     "required_fields",
                     matches!(value, Value::Object(object) if fields.iter().all(|name| object.contains_key(name))),
                 ),
-                Constraint::ForeignKey(fk) => {
-                    self.reference(value, &Type::new(TypeKind::Ref(fk.to.clone())), path)?;
-                    continue;
-                }
                 Constraint::DefaultValue { .. }
                 | Constraint::DefaultExpr { .. }
                 | Constraint::Transport { .. } => continue,
@@ -634,6 +631,7 @@ fn constraint_kind(constraint: &Constraint) -> &'static str {
         Constraint::Unique => "unique",
         Constraint::Distinct => "distinct",
         Constraint::PrimaryKey => "primary_key",
+        Constraint::LegacyForeignKey(_) => "legacy_foreign_key",
         Constraint::Index { .. } => "index",
         _ => "unknown",
     }
@@ -730,7 +728,6 @@ pub(crate) fn validate_enforcement_support(catalog: &Catalog) -> Result<(), DbEr
                 | Constraint::MinProperties(_)
                 | Constraint::MaxProperties(_)
                 | Constraint::RequiredFields(_)
-                | Constraint::ForeignKey(_)
                 | Constraint::DefaultValue { .. }
                 | Constraint::DefaultExpr { .. }
                 | Constraint::Transport { .. } => {}
@@ -810,10 +807,10 @@ pub(super) fn normalize_nested_values(
             return false;
         }
         match &ty.kind {
-            TypeKind::Ref(r) if catalog.class_id(&r.name).is_none() => catalog
+            TypeKind::Named(r) => catalog
                 .type_def_by_name(&r.name)
                 .map(|def| shape_matches(catalog, &def.type_def.ty, value, depth + 1))
-                .unwrap_or(matches!(value, Value::String(_))),
+                .unwrap_or(false),
             TypeKind::Ref(_) => matches!(value, Value::String(_)),
             TypeKind::Union(u) => u
                 .variants
@@ -837,7 +834,7 @@ pub(super) fn normalize_nested_values(
             return;
         }
         match &ty.kind {
-            TypeKind::Ref(r) if catalog.class_id(&r.name).is_none() => {
+            TypeKind::Named(r) => {
                 if let Some(def) = catalog.type_def_by_name(&r.name) {
                     normalize(catalog, value, &def.type_def.ty, defaults, depth + 1);
                 }
@@ -1008,23 +1005,13 @@ pub(crate) fn stored_references(
                     owner: owner.clone(),
                     path: path.clone(),
                     target: (owner.0.clone(), id.into()),
+                    on_delete: reference_on_delete(ty),
                 });
             }
         };
-        if ty
-            .constraints
-            .iter()
-            .any(|c| matches!(c, Constraint::ForeignKey(_)))
-        {
-            reference();
-        }
         match &ty.kind {
-            TypeKind::Ref(r) => {
-                if catalog.class_id(&r.name).is_some() {
-                    if !skip_ref {
-                        reference();
-                    }
-                } else if let Some(def) = catalog.type_def_by_name(&r.name) {
+            TypeKind::Named(r) => {
+                if let Some(def) = catalog.type_def_by_name(&r.name) {
                     visit(
                         catalog,
                         owner,
@@ -1035,7 +1022,10 @@ pub(crate) fn stored_references(
                         depth + 1,
                         skip_ref,
                     );
-                } else if !skip_ref {
+                }
+            }
+            TypeKind::Ref(_) => {
+                if !skip_ref {
                     reference();
                 }
             }
@@ -1174,7 +1164,6 @@ pub(crate) fn stored_references(
     for (name, field) in object_fields(catalog, collection, object) {
         if !field.computed {
             if let Some(value) = object.get(&name) {
-                let skip_ref = name == ATTR_RELATION_FROM || name == ATTR_RELATION_TO;
                 visit(
                     catalog,
                     owner,
@@ -1183,7 +1172,7 @@ pub(crate) fn stored_references(
                     FieldPath::from_fields([name]),
                     &mut refs,
                     0,
-                    skip_ref,
+                    false,
                 );
             }
         }
@@ -1191,4 +1180,11 @@ pub(crate) fn stored_references(
     refs.sort();
     refs.dedup();
     refs
+}
+
+fn reference_on_delete(ty: &Type) -> OnDelete {
+    match &ty.kind {
+        TypeKind::Ref(reference) => reference.on_delete,
+        _ => OnDelete::Restrict,
+    }
 }

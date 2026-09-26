@@ -9,8 +9,8 @@ use semantic_data::{
         class::class_type::ClassType,
         collections::key_path::KeyPath,
         core::{
-            meta::Meta, type_def::TypeDef, type_kind::TypeKind, type_node::Type,
-            type_param::TypeParam, type_ref::TypeRef, visibility::Visibility,
+            entity_ref::EntityRef, meta::Meta, type_def::TypeDef, type_kind::TypeKind,
+            type_node::Type, type_param::TypeParam, type_ref::TypeRef, visibility::Visibility,
         },
         lowered::{TypeResolver, lower_type_def},
         primitives::string_type::StringType,
@@ -695,10 +695,7 @@ impl Catalog {
                         relationship.id, attribute
                     ))
                 })?;
-                if !is_embedded_reference_type(
-                    &attr.attribute.ty,
-                    has_foreign_key(&attr.attribute.constraints),
-                ) {
+                if !is_embedded_reference_type(&attr.attribute.ty) {
                     return Err(CatalogError::InvalidSchema(format!(
                         "relationship '{}' requires embedded attribute '{}' to have a scalar reference type",
                         relationship.id, attribute
@@ -1016,19 +1013,70 @@ impl Catalog {
     }
 
     pub fn from_stored_rows(
-        attributes: Vec<StoredAttribute>,
-        type_defs: Vec<StoredTypeDef>,
-        record_types: Vec<StoredRecordType>,
+        mut attributes: Vec<StoredAttribute>,
+        mut type_defs: Vec<StoredTypeDef>,
+        mut record_types: Vec<StoredRecordType>,
         classes: Vec<StoredClass>,
         collections: Vec<StoredCollection>,
         indexes: Vec<StoredIndex>,
         relationships: Vec<StoredRelationship>,
-        packages: Vec<StoredPackage>,
-        applied_migrations: Vec<StoredAppliedMigration>,
+        mut packages: Vec<StoredPackage>,
+        mut applied_migrations: Vec<StoredAppliedMigration>,
         next_field_id: usize,
         auto_index_enabled: bool,
     ) -> Result<Self, CatalogError> {
         let mut catalog = Self::new();
+
+        let known_definitions = type_defs
+            .iter()
+            .map(|item| item.type_def.name.clone())
+            .chain(attributes.iter().map(|item| item.attribute.id.clone()))
+            .chain(record_types.iter().map(|item| item.id.clone()))
+            .chain(classes.iter().map(|item| item.class.id.clone()))
+            .collect::<BTreeSet<_>>();
+        let known_classes = classes
+            .iter()
+            .map(|item| item.class.id.clone())
+            .chain(type_defs.iter().filter_map(|item| {
+                matches!(item.type_def.ty.kind, TypeKind::Class(_))
+                    .then(|| item.type_def.name.clone())
+            }))
+            .collect::<BTreeSet<_>>();
+        for item in &mut type_defs {
+            upgrade_legacy_type_def_metadata(
+                &mut item.type_def,
+                &known_definitions,
+                &known_classes,
+            )?;
+        }
+        for item in &mut attributes {
+            upgrade_legacy_foreign_key_constraints(
+                &mut item.attribute.ty,
+                &mut item.attribute.constraints,
+            )?;
+            upgrade_legacy_foreign_keys(&mut item.attribute.ty)?;
+            upgrade_legacy_named_refs(&mut item.attribute.ty, &known_definitions, &known_classes);
+        }
+        for item in &mut record_types {
+            for field in item.record.fields.values_mut() {
+                upgrade_legacy_foreign_keys(&mut field.ty)?;
+                upgrade_legacy_named_refs(&mut field.ty, &known_definitions, &known_classes);
+            }
+            if let Some(additional) = &mut item.record.additional {
+                upgrade_legacy_foreign_keys(additional)?;
+                upgrade_legacy_named_refs(additional, &known_definitions, &known_classes);
+            }
+        }
+        for item in &mut packages {
+            upgrade_legacy_package(&mut item.package, &known_definitions, &known_classes)?;
+        }
+        for item in &mut applied_migrations {
+            upgrade_legacy_migration(
+                &mut item.applied.migration,
+                &known_definitions,
+                &known_classes,
+            )?;
+        }
 
         for item in type_defs {
             let key = item.type_def.name.clone();
@@ -1443,10 +1491,7 @@ impl Catalog {
         field_types
             .entry(PARENT_RELATION_FIELD.to_string())
             .or_insert_with(|| Type {
-                kind: TypeKind::Ref(TypeRef {
-                    name: PRIMARY_ID_FIELD.to_string(),
-                    args: vec![],
-                }),
+                kind: TypeKind::Ref(EntityRef::any()),
                 constraints: vec![],
                 annotations: vec![],
             });
@@ -1799,7 +1844,7 @@ impl Catalog {
         }
 
         for (_, type_def) in self.type_defs() {
-            validate_foreign_keys(self, &type_def.type_def.ty, 0)?;
+            validate_references(self, &type_def.type_def.ty, 0)?;
         }
         for (lid, class) in self.classes() {
             for constraint in &class.class.constraints {
@@ -1981,25 +2026,18 @@ fn normalize_class_type(mut class: ClassType, module: Option<&str>) -> ClassType
     for class_attr in class.attributes.values_mut() {
         class_attr.attribute.id =
             nameset_for_identifier(&class_attr.attribute.id, module).qualified_name;
-        normalize_constraints(&mut class_attr.constraints, module);
     }
     for constraint in &mut class.constraints {
-        if let semantic_data::schema::ClassConstraint::Field {
-            attribute,
-            constraint,
-        } = constraint
-        {
+        if let semantic_data::schema::ClassConstraint::Field { attribute, .. } = constraint {
             if let Some(field) = class.attributes.get(&attribute.id) {
                 attribute.id = field.attribute.id.clone();
             }
-            normalize_constraints(std::slice::from_mut(constraint), module);
         }
     }
     class
 }
 
 fn normalize_type(mut ty: Type, module: Option<&str>) -> Type {
-    normalize_constraints(&mut ty.constraints, module);
     ty.kind = match ty.kind {
         TypeKind::Optional(mut optional) => {
             optional.inner = Box::new(normalize_type(*optional.inner, module));
@@ -2043,7 +2081,6 @@ fn normalize_type(mut ty: Type, module: Option<&str>) -> Type {
             TypeKind::Record(record)
         }
         TypeKind::Attribute(mut attribute) => {
-            normalize_constraints(&mut attribute.constraints, module);
             attribute.ty = normalize_type(attribute.ty.clone(), module);
             TypeKind::Attribute(attribute)
         }
@@ -2093,48 +2130,421 @@ fn normalize_type(mut ty: Type, module: Option<&str>) -> Type {
             stream.end = stream.end.map(|end| Box::new(normalize_type(*end, module)));
             TypeKind::Stream(stream)
         }
-        TypeKind::Ref(type_ref) => TypeKind::Ref(normalize_type_ref(type_ref, module)),
+        TypeKind::Named(type_ref) => TypeKind::Named(normalize_type_ref(type_ref, module)),
+        TypeKind::Ref(mut reference) => {
+            if let Some(target) = &mut reference.target
+                && !matches!(target.as_str(), "id" | "semantic:id")
+            {
+                *target = nameset_for_identifier(target, module).qualified_name;
+            }
+            TypeKind::Ref(reference)
+        }
         kind => kind,
     };
     ty
 }
 
-fn normalize_constraints(
-    constraints: &mut [semantic_data::schema::Constraint],
-    module: Option<&str>,
-) {
-    for constraint in constraints {
-        if let semantic_data::schema::Constraint::ForeignKey(fk) = constraint {
-            fk.to = normalize_type_ref(fk.to.clone(), module);
+fn upgrade_legacy_foreign_key_constraints(
+    ty: &mut Type,
+    constraints: &mut Vec<semantic_data::schema::Constraint>,
+) -> Result<(), CatalogError> {
+    use semantic_data::schema::Constraint;
+    let foreign_keys = constraints
+        .iter()
+        .filter_map(|constraint| match constraint {
+            Constraint::LegacyForeignKey(reference) => Some(reference.clone()),
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+    if foreign_keys.is_empty() {
+        return Ok(());
+    }
+    if foreign_keys.len() != 1 {
+        return invalid_schema("legacy field has multiple foreign-key declarations".into());
+    }
+    let foreign_key = &foreign_keys[0];
+    if foreign_key.fields.as_slice() != ["id"] && foreign_key.fields.as_slice() != ["semantic:id"] {
+        return invalid_schema("legacy foreign key does not target the entity primary ID".into());
+    }
+    if !foreign_key.to.args.is_empty() {
+        return invalid_schema("legacy foreign key target has type arguments".into());
+    }
+    make_entity_reference(ty, &foreign_key.to.name)?;
+    constraints.retain(|constraint| !matches!(constraint, Constraint::LegacyForeignKey(_)));
+    Ok(())
+}
+
+fn make_entity_reference(ty: &mut Type, target: &str) -> Result<(), CatalogError> {
+    match &mut ty.kind {
+        TypeKind::String(_) | TypeKind::Ref(_) => {
+            ty.kind = TypeKind::Ref(EntityRef::new(target));
+            Ok(())
         }
+        TypeKind::Optional(optional) => make_entity_reference(&mut optional.inner, target),
+        TypeKind::Union(union) => {
+            let mut converted = false;
+            for variant in &mut union.variants {
+                if matches!(variant.kind, TypeKind::String(_) | TypeKind::Ref(_)) {
+                    make_entity_reference(variant, target)?;
+                    converted = true;
+                }
+            }
+            if converted {
+                Ok(())
+            } else {
+                invalid_schema("legacy foreign key is not attached to a scalar string type".into())
+            }
+        }
+        _ => invalid_schema("legacy foreign key is not attached to a scalar string type".into()),
     }
 }
 
-fn validate_foreign_keys(catalog: &Catalog, ty: &Type, depth: usize) -> Result<(), CatalogError> {
-    use semantic_data::schema::{ClassConstraint, Constraint};
-    if depth > 128 {
-        return invalid_schema("foreign key type recursion exceeds 128 levels".into());
+fn upgrade_legacy_foreign_keys(ty: &mut Type) -> Result<(), CatalogError> {
+    let mut constraints = std::mem::take(&mut ty.constraints);
+    upgrade_legacy_foreign_key_constraints(ty, &mut constraints)?;
+    ty.constraints = constraints;
+    match &mut ty.kind {
+        TypeKind::Optional(value) => upgrade_legacy_foreign_keys(&mut value.inner)?,
+        TypeKind::Array(value) => upgrade_legacy_foreign_keys(&mut value.items)?,
+        TypeKind::List(value) => upgrade_legacy_foreign_keys(&mut value.items)?,
+        TypeKind::Set(value) => upgrade_legacy_foreign_keys(&mut value.items)?,
+        TypeKind::Tuple(value) => {
+            for item in &mut value.items {
+                upgrade_legacy_foreign_keys(item)?;
+            }
+            if let Some(rest) = &mut value.rest {
+                upgrade_legacy_foreign_keys(rest)?;
+            }
+        }
+        TypeKind::Map(value) => {
+            upgrade_legacy_foreign_keys(&mut value.keys)?;
+            upgrade_legacy_foreign_keys(&mut value.values)?;
+        }
+        TypeKind::Record(value) => {
+            for field in value.fields.values_mut() {
+                upgrade_legacy_foreign_keys(&mut field.ty)?;
+            }
+            if let Some(additional) = &mut value.additional {
+                upgrade_legacy_foreign_keys(additional)?;
+            }
+        }
+        TypeKind::Attribute(value) => {
+            let mut constraints = std::mem::take(&mut value.constraints);
+            upgrade_legacy_foreign_key_constraints(&mut value.ty, &mut constraints)?;
+            value.constraints = constraints;
+            upgrade_legacy_foreign_keys(&mut value.ty)?;
+        }
+        TypeKind::Union(value) => {
+            for variant in &mut value.variants {
+                upgrade_legacy_foreign_keys(variant)?;
+            }
+        }
+        TypeKind::Intersection(value) => {
+            for variant in &mut value.variants {
+                upgrade_legacy_foreign_keys(variant)?;
+            }
+        }
+        TypeKind::Named(reference) => {
+            for arg in &mut reference.args {
+                upgrade_legacy_foreign_keys(arg)?;
+            }
+        }
+        TypeKind::Ref(reference) => {
+            for arg in &mut reference.legacy_args {
+                upgrade_legacy_foreign_keys(arg)?;
+            }
+        }
+        _ => {}
     }
-    let check = |constraints: &[Constraint]| -> Result<(), CatalogError> {
-        for constraint in constraints {
-            if let Constraint::ForeignKey(fk) = constraint {
-                if fk.fields.len() != 1
-                    || !matches!(fk.fields[0].as_str(), "id" | "semantic:id")
-                    || !fk.to.args.is_empty()
-                {
-                    return invalid_schema("scalar ForeignKey requires the target primary ID field [id] and no type arguments".into());
-                }
-                if !foreign_key_resolves_class(catalog, &fk.to.name, &mut BTreeSet::new()) {
-                    return invalid_schema(format!(
-                        "ForeignKey target '{}' does not resolve to a class",
-                        fk.to.name
-                    ));
+    Ok(())
+}
+
+fn upgrade_legacy_named_refs(
+    ty: &mut Type,
+    definitions: &BTreeSet<String>,
+    classes: &BTreeSet<String>,
+) {
+    let visit = |ty: &mut Type| upgrade_legacy_named_refs(ty, definitions, classes);
+    match &mut ty.kind {
+        TypeKind::Optional(value) => visit(&mut value.inner),
+        TypeKind::Array(value) => visit(&mut value.items),
+        TypeKind::List(value) => visit(&mut value.items),
+        TypeKind::Set(value) => visit(&mut value.items),
+        TypeKind::Tuple(value) => {
+            value.items.iter_mut().for_each(&visit);
+            if let Some(rest) = &mut value.rest {
+                visit(rest);
+            }
+        }
+        TypeKind::Map(value) => {
+            visit(&mut value.keys);
+            visit(&mut value.values);
+        }
+        TypeKind::Record(value) => {
+            for field in value.fields.values_mut() {
+                visit(&mut field.ty);
+            }
+            if let Some(additional) = &mut value.additional {
+                visit(additional);
+            }
+        }
+        TypeKind::Attribute(value) => visit(&mut value.ty),
+        TypeKind::Union(value) => value.variants.iter_mut().for_each(&visit),
+        TypeKind::Intersection(value) => value.variants.iter_mut().for_each(&visit),
+        TypeKind::Variant(value) => {
+            for case in &mut value.variants {
+                match &mut case.payload {
+                    VariantPayload::Unit => {}
+                    VariantPayload::Tuple(items) => items.iter_mut().for_each(&visit),
+                    VariantPayload::Record(record) => {
+                        for field in record.fields.values_mut() {
+                            visit(&mut field.ty);
+                        }
+                        if let Some(additional) = &mut record.additional {
+                            visit(additional);
+                        }
+                    }
+                    VariantPayload::Newtype(inner) => visit(inner),
                 }
             }
         }
-        Ok(())
+        TypeKind::Result(value) => {
+            visit(&mut value.ok);
+            visit(&mut value.err);
+        }
+        TypeKind::Function(value) => {
+            for param in &mut value.params {
+                visit(&mut param.ty);
+            }
+            value.results.iter_mut().for_each(&visit);
+            if let Some(throws) = &mut value.throws {
+                visit(throws);
+            }
+        }
+        TypeKind::Interface(value) => {
+            for method in &mut value.methods {
+                for param in &mut method.signature.params {
+                    visit(&mut param.ty);
+                }
+                method.signature.results.iter_mut().for_each(&visit);
+                if let Some(throws) = &mut method.signature.throws {
+                    visit(throws);
+                }
+            }
+        }
+        TypeKind::Stream(value) => {
+            visit(&mut value.element);
+            if let Some(end) = &mut value.end {
+                visit(end);
+            }
+        }
+        TypeKind::Named(reference) => reference.args.iter_mut().for_each(&visit),
+        TypeKind::Ref(reference) => reference.legacy_args.iter_mut().for_each(&visit),
+        _ => {}
+    }
+
+    let replacement = match &mut ty.kind {
+        TypeKind::Ref(reference) => reference.target.as_ref().and_then(|target| {
+            (definitions.contains(target)
+                && !classes.contains(target)
+                && !matches!(target.as_str(), "id" | "semantic:id"))
+            .then(|| {
+                TypeKind::Named(TypeRef {
+                    name: target.clone(),
+                    args: std::mem::take(&mut reference.legacy_args),
+                })
+            })
+        }),
+        _ => None,
     };
-    check(&ty.constraints)?;
+    if let Some(replacement) = replacement {
+        ty.kind = replacement;
+    }
+}
+
+fn upgrade_legacy_type_metadata(
+    ty: &mut Type,
+    definitions: &BTreeSet<String>,
+    classes: &BTreeSet<String>,
+) -> Result<(), CatalogError> {
+    upgrade_legacy_foreign_keys(ty)?;
+    upgrade_legacy_named_refs(ty, definitions, classes);
+    Ok(())
+}
+
+fn upgrade_legacy_type_def_metadata(
+    type_def: &mut TypeDef,
+    definitions: &BTreeSet<String>,
+    classes: &BTreeSet<String>,
+) -> Result<(), CatalogError> {
+    upgrade_legacy_type_metadata(&mut type_def.ty, definitions, classes)?;
+    for param in &mut type_def.params {
+        if let Some(default) = &mut param.default {
+            upgrade_legacy_type_metadata(default, definitions, classes)?;
+        }
+    }
+    Ok(())
+}
+
+fn upgrade_legacy_attribute_metadata(
+    attribute: &mut AttributeType,
+    definitions: &BTreeSet<String>,
+    classes: &BTreeSet<String>,
+) -> Result<(), CatalogError> {
+    upgrade_legacy_foreign_key_constraints(&mut attribute.ty, &mut attribute.constraints)?;
+    upgrade_legacy_type_metadata(&mut attribute.ty, definitions, classes)
+}
+
+fn upgrade_legacy_record_metadata(
+    record: &mut RecordType,
+    definitions: &BTreeSet<String>,
+    classes: &BTreeSet<String>,
+) -> Result<(), CatalogError> {
+    for field in record.fields.values_mut() {
+        upgrade_legacy_type_metadata(&mut field.ty, definitions, classes)?;
+    }
+    if let Some(additional) = &mut record.additional {
+        upgrade_legacy_type_metadata(additional, definitions, classes)?;
+    }
+    Ok(())
+}
+
+fn upgrade_legacy_function_metadata(
+    function: &mut semantic_data::schema::FunctionType,
+    definitions: &BTreeSet<String>,
+    classes: &BTreeSet<String>,
+) -> Result<(), CatalogError> {
+    for param in &mut function.params {
+        upgrade_legacy_type_metadata(&mut param.ty, definitions, classes)?;
+    }
+    for result in &mut function.results {
+        upgrade_legacy_type_metadata(result, definitions, classes)?;
+    }
+    if let Some(throws) = &mut function.throws {
+        upgrade_legacy_type_metadata(throws, definitions, classes)?;
+    }
+    Ok(())
+}
+
+fn upgrade_legacy_interface_metadata(
+    interface: &mut semantic_data::schema::InterfaceType,
+    definitions: &BTreeSet<String>,
+    classes: &BTreeSet<String>,
+) -> Result<(), CatalogError> {
+    for method in &mut interface.methods {
+        upgrade_legacy_function_metadata(&mut method.signature, definitions, classes)?;
+    }
+    Ok(())
+}
+
+fn upgrade_legacy_contract_metadata(
+    contract: &mut semantic_data::schema::Contract,
+    definitions: &BTreeSet<String>,
+    classes: &BTreeSet<String>,
+) -> Result<(), CatalogError> {
+    for constant in contract.constants.values_mut() {
+        upgrade_legacy_type_metadata(&mut constant.ty, definitions, classes)?;
+    }
+    for type_def in contract.types.values_mut() {
+        upgrade_legacy_type_def_metadata(type_def, definitions, classes)?;
+    }
+    for function in contract.functions.values_mut() {
+        upgrade_legacy_function_metadata(&mut function.signature, definitions, classes)?;
+    }
+    for attribute in contract.attributes.values_mut() {
+        upgrade_legacy_attribute_metadata(attribute, definitions, classes)?;
+    }
+    for interface in contract.interfaces.values_mut() {
+        upgrade_legacy_interface_metadata(&mut interface.interface, definitions, classes)?;
+    }
+    Ok(())
+}
+
+fn upgrade_legacy_module_metadata(
+    module: &mut semantic_data::schema::Module,
+    definitions: &BTreeSet<String>,
+    classes: &BTreeSet<String>,
+) -> Result<(), CatalogError> {
+    for constant in module.constants.values_mut() {
+        upgrade_legacy_type_metadata(&mut constant.ty, definitions, classes)?;
+    }
+    for type_def in module.types.values_mut() {
+        upgrade_legacy_type_def_metadata(type_def, definitions, classes)?;
+    }
+    for attribute in module.attributes.values_mut() {
+        upgrade_legacy_attribute_metadata(attribute, definitions, classes)?;
+    }
+    for interface in module.interfaces.values_mut() {
+        upgrade_legacy_interface_metadata(interface, definitions, classes)?;
+    }
+    for contract in module.contracts.values_mut() {
+        upgrade_legacy_contract_metadata(contract, definitions, classes)?;
+    }
+    Ok(())
+}
+
+fn upgrade_legacy_migration(
+    migration: &mut semantic_data::schema::Migration,
+    definitions: &BTreeSet<String>,
+    classes: &BTreeSet<String>,
+) -> Result<(), CatalogError> {
+    use semantic_data::schema::{MigrationDdlOperation, MigrationOperation};
+
+    for operation in &mut migration.operations {
+        let MigrationOperation::Ddl(operation) = operation else {
+            continue;
+        };
+        match operation {
+            MigrationDdlOperation::UpsertAttribute { attribute } => {
+                upgrade_legacy_attribute_metadata(attribute, definitions, classes)?;
+            }
+            MigrationDdlOperation::UpsertTypeDef { type_def } => {
+                upgrade_legacy_type_def_metadata(type_def, definitions, classes)?;
+            }
+            MigrationDdlOperation::UpsertRecordType { record, .. } => {
+                upgrade_legacy_record_metadata(record, definitions, classes)?;
+            }
+            _ => {}
+        }
+    }
+    Ok(())
+}
+
+fn upgrade_legacy_package(
+    package: &mut Package,
+    definitions: &BTreeSet<String>,
+    classes: &BTreeSet<String>,
+) -> Result<(), CatalogError> {
+    upgrade_legacy_module_metadata(&mut package.root, definitions, classes)?;
+    for module in package.modules.values_mut() {
+        upgrade_legacy_module_metadata(module, definitions, classes)?;
+    }
+    for migration in &mut package.migrations {
+        upgrade_legacy_migration(migration, definitions, classes)?;
+    }
+    Ok(())
+}
+
+fn validate_references(catalog: &Catalog, ty: &Type, depth: usize) -> Result<(), CatalogError> {
+    if depth > 128 {
+        return invalid_schema("reference type recursion exceeds 128 levels".into());
+    }
+    match &ty.kind {
+        TypeKind::Ref(reference) => {
+            if !reference.legacy_args.is_empty() {
+                return invalid_schema("entity reference has type arguments".into());
+            }
+            if let Some(target) = reference.target_class()
+                && catalog.class_ids(target).len() != 1
+            {
+                return invalid_schema(format!(
+                    "reference target '{}' does not resolve to exactly one class",
+                    target
+                ));
+            }
+        }
+        _ => {}
+    }
     let mut nested = Vec::new();
     match &ty.kind {
         TypeKind::Optional(t) => nested.push(t.inner.as_ref()),
@@ -2154,45 +2564,50 @@ fn validate_foreign_keys(catalog: &Catalog, ty: &Type, depth: usize) -> Result<(
             nested.extend(t.additional.as_deref());
         }
         TypeKind::Attribute(t) => {
-            check(&t.constraints)?;
             nested.push(&t.ty);
-        }
-        TypeKind::Class(t) => {
-            for attr in t.attributes.values() {
-                check(&attr.constraints)?;
-            }
-            for constraint in &t.constraints {
-                if let ClassConstraint::Field { constraint, .. } = constraint {
-                    check(std::slice::from_ref(constraint))?;
-                }
-            }
         }
         TypeKind::Union(t) => nested.extend(t.variants.iter()),
         TypeKind::Intersection(t) => nested.extend(t.variants.iter()),
+        TypeKind::Variant(t) => {
+            for case in &t.variants {
+                match &case.payload {
+                    VariantPayload::Unit => {}
+                    VariantPayload::Tuple(items) => nested.extend(items),
+                    VariantPayload::Record(record) => {
+                        nested.extend(record.fields.values().map(|field| &field.ty));
+                        nested.extend(record.additional.as_deref());
+                    }
+                    VariantPayload::Newtype(inner) => nested.push(inner),
+                }
+            }
+        }
+        TypeKind::Result(t) => {
+            nested.push(&t.ok);
+            nested.push(&t.err);
+        }
+        TypeKind::Function(t) => {
+            nested.extend(t.params.iter().map(|param| &param.ty));
+            nested.extend(t.results.iter());
+            nested.extend(t.throws.as_deref());
+        }
+        TypeKind::Interface(t) => {
+            for method in &t.methods {
+                nested.extend(method.signature.params.iter().map(|param| &param.ty));
+                nested.extend(method.signature.results.iter());
+                nested.extend(method.signature.throws.as_deref());
+            }
+        }
+        TypeKind::Stream(t) => {
+            nested.push(&t.element);
+            nested.extend(t.end.as_deref());
+        }
+        TypeKind::Named(t) => nested.extend(t.args.iter()),
         _ => {}
     }
     for ty in nested {
-        validate_foreign_keys(catalog, ty, depth + 1)?;
+        validate_references(catalog, ty, depth + 1)?;
     }
     Ok(())
-}
-
-fn foreign_key_resolves_class(catalog: &Catalog, name: &str, seen: &mut BTreeSet<String>) -> bool {
-    if !seen.insert(name.to_string()) {
-        return false;
-    }
-    if catalog.class_ids(name).len() == 1 {
-        return true;
-    }
-    match catalog
-        .type_def_by_name(name)
-        .map(|def| &def.type_def.ty.kind)
-    {
-        Some(TypeKind::Ref(reference)) if reference.args.is_empty() => {
-            foreign_key_resolves_class(catalog, &reference.name, seen)
-        }
-        _ => false,
-    }
 }
 
 fn normalize_type_param(mut param: TypeParam, module: Option<&str>) -> TypeParam {
@@ -2342,11 +2757,12 @@ fn validate_type_invariants(ty: &Type, context: &str) -> Result<(), CatalogError
                 validate_type_invariants(end, &format!("{context} stream end"))?;
             }
         }
-        TypeKind::Ref(type_ref) => {
+        TypeKind::Named(type_ref) => {
             for arg in &type_ref.args {
-                validate_type_invariants(arg, &format!("{context} ref arg"))?;
+                validate_type_invariants(arg, &format!("{context} named type arg"))?;
             }
         }
+        TypeKind::Ref(_) => {}
         TypeKind::Any(_)
         | TypeKind::Never(_)
         | TypeKind::Unknown(_)
@@ -2527,26 +2943,14 @@ fn validate_class_attribute_resolution(
     Ok(())
 }
 
-fn has_foreign_key(constraints: &[semantic_data::schema::Constraint]) -> bool {
-    constraints
-        .iter()
-        .any(|constraint| matches!(constraint, semantic_data::schema::Constraint::ForeignKey(_)))
-}
-
 /// Embedded edges extract one string identity. Nullability and a choice of target
-/// classes do not change that representation; lists and unconstrained strings do.
-fn is_embedded_reference_type(ty: &Type, inherited_foreign_key: bool) -> bool {
-    let foreign_key = inherited_foreign_key || has_foreign_key(&ty.constraints);
+/// classes do not change that representation.
+fn is_embedded_reference_type(ty: &Type) -> bool {
     match &ty.kind {
         TypeKind::Ref(_) => true,
-        TypeKind::String(_) => foreign_key,
-        TypeKind::Optional(optional) => is_embedded_reference_type(&optional.inner, foreign_key),
+        TypeKind::Optional(optional) => is_embedded_reference_type(&optional.inner),
         TypeKind::Union(union) => {
-            !union.variants.is_empty()
-                && union
-                    .variants
-                    .iter()
-                    .all(|variant| is_embedded_reference_type(variant, foreign_key))
+            !union.variants.is_empty() && union.variants.iter().all(is_embedded_reference_type)
         }
         _ => false,
     }
@@ -2845,25 +3249,10 @@ fn validate_constraints(
             Constraint::PrimaryKey => {
                 ensure_db_constraint_target(target, context, "PrimaryKey")?;
             }
-            Constraint::ForeignKey(foreign_key) => {
-                if let Some(ty) = target_value_type(target) {
-                    if !matches!(
-                        ty.kind,
-                        TypeKind::String(_)
-                            | TypeKind::Ref(_)
-                            | TypeKind::Optional(_)
-                            | TypeKind::Union(_)
-                    ) {
-                        return invalid_schema(format!(
-                            "{context} ForeignKey requires a scalar string ID attribute"
-                        ));
-                    }
-                }
-                if foreign_key.fields.is_empty() {
-                    return invalid_schema(format!(
-                        "{context} foreign key constraint has no fields"
-                    ));
-                }
+            Constraint::LegacyForeignKey(_) => {
+                return invalid_schema(format!(
+                    "{context} uses a legacy foreign-key constraint; declare a Ref type instead"
+                ));
             }
             Constraint::Index { fields, .. } => {
                 ensure_db_constraint_target(target, context, "Index")?;
@@ -3274,30 +3663,21 @@ mod tests {
     use super::*;
 
     #[test]
-    fn embedded_relationships_accept_nullable_and_constrained_scalar_references() {
-        use semantic_data::schema::{ForeignKeyRef, OptionalType, RelationIndexingMode};
+    fn embedded_relationships_accept_nullable_scalar_references() {
+        use semantic_data::schema::{OptionalType, RelationIndexingMode};
 
-        let foreign_key = Constraint::ForeignKey(ForeignKeyRef {
-            to: TypeRef {
-                name: "test:Person".into(),
-                args: vec![],
-            },
-            fields: vec!["id".into()],
-        });
-        let mut constrained = attribute("test:target").ty;
-        constrained.constraints.push(foreign_key.clone());
+        let constrained = entity_ref_type("test:Person");
         let optional = Type::new(TypeKind::Optional(OptionalType {
             inner: Box::new(constrained.clone()),
         }));
         let union = Type::new(TypeKind::Union(UnionType {
-            variants: vec![constrained.clone(), ref_type("test:Person")],
+            variants: vec![constrained.clone(), entity_ref_type("test:Person")],
         }));
         for (ty, constraints) in [
-            (ref_type("test:Person"), vec![]),
+            (entity_ref_type("test:Person"), vec![]),
             (constrained, vec![]),
             (optional, vec![]),
             (union, vec![]),
-            (attribute("test:target").ty, vec![foreign_key]),
         ] {
             let mut catalog = Catalog::new();
             catalog.upsert_attribute(AttributeType {
@@ -3336,10 +3716,10 @@ mod tests {
         for ty in [
             attribute("test:target").ty,
             Type::new(TypeKind::List(ListType {
-                items: Box::new(ref_type("test:Person")),
+                items: Box::new(entity_ref_type("test:Person")),
             })),
             Type::new(TypeKind::Union(UnionType {
-                variants: vec![ref_type("test:Person"), attribute("test:target").ty],
+                variants: vec![entity_ref_type("test:Person"), attribute("test:target").ty],
             })),
             Type::new(TypeKind::Union(UnionType { variants: vec![] })),
         ] {
@@ -3675,7 +4055,7 @@ mod tests {
         let TypeKind::Record(record) = &normalized.ty.kind else {
             panic!("expected record type");
         };
-        let TypeKind::Ref(type_ref) = &record.fields["item"].ty.kind else {
+        let TypeKind::Named(type_ref) = &record.fields["item"].ty.kind else {
             panic!("expected record field ref");
         };
         assert_eq!(type_ref.name, "local:inventory:Item");
@@ -3683,7 +4063,7 @@ mod tests {
         let TypeKind::Union(union) = &record.additional.as_ref().unwrap().kind else {
             panic!("expected additional union");
         };
-        let TypeKind::Ref(type_ref) = &union.variants[0].kind else {
+        let TypeKind::Named(type_ref) = &union.variants[0].kind else {
             panic!("expected union variant ref");
         };
         assert_eq!(type_ref.name, "local:inventory:Fallback");
@@ -4011,12 +4391,16 @@ mod tests {
 
     fn ref_type(name: &str) -> Type {
         Type {
-            kind: TypeKind::Ref(TypeRef {
+            kind: TypeKind::Named(TypeRef {
                 name: name.to_string(),
                 args: vec![],
             }),
             constraints: vec![],
             annotations: vec![],
         }
+    }
+
+    fn entity_ref_type(name: &str) -> Type {
+        Type::new(TypeKind::Ref(semantic_data::schema::EntityRef::new(name)))
     }
 }
