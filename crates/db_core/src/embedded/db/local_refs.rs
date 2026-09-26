@@ -4,23 +4,35 @@
 //! (`author = "a1"`); the embedded query source then treats the string as the
 //! id of a row in the same collection and continues the path on that row.
 //!
-//! Row views are handed to the executor as `'static` objects and cannot read
-//! from the query snapshot themselves. Instead, a [`LocalRefResolver`] walks
-//! the plan's candidate paths for each row while the snapshot is reachable,
-//! fetches the referenced rows by point reads (memoised per query), and
-//! attaches them to the row view as [`LocalRefTargets`]. Evaluation then
-//! follows the same walk against those targets.
+//! A [`LocalRefResolver`] is created per query only when the plan evaluates
+//! candidate paths: multi-segment paths with a field segment after the first
+//! (plus their suffixes, for binding-qualified paths). Per scanned collection,
+//! [`LocalRefResolver::scope`] keeps the candidates whose first segment may
+//! hold a reference by its declared type (a `Ref`, a string, an unknown or
+//! undeclared type, or any field of an untyped collection); paths through
+//! object, record or class values never follow references. Only those paths
+//! resolve references.
+//!
+//! Referenced rows are read by point reads with a per-query memo cache. When
+//! the storage provides an owned snapshot
+//! (`EntityStorage::owned_snapshot`), row views hold the scope and resolve
+//! references lazily when a path is evaluated, so scans stay streaming and
+//! rows whose values are objects never cause a read. Storages with only
+//! borrowed snapshots cannot be reached from the `'static` row views; for
+//! them references are prefetched when the view is created, which reads the
+//! scanned rows eagerly.
 //!
 //! Row ids equal their storage keys (writes validate that the canonical id
 //! field matches the row id), so a point read by the referenced id finds the
-//! row the previous full-collection lookup map found by its id field.
+//! row a lookup by id field would find.
 
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::sync::{Arc, Mutex};
 
+use semantic_data::schema::{core::type_kind::TypeKind, core::type_node::Type};
 use semantic_data::value::{FieldPath, Object, PathSegment, Value};
 
-use crate::catalog::LocalCollectionId;
+use crate::catalog::{Catalog, CollectionKind, CollectionSchema, LocalCollectionId};
 use crate::embedded::storage::EntityReadSnapshot;
 use crate::{CoreError, CoreResult};
 
@@ -31,6 +43,9 @@ pub(super) type LocalRefTargets = BTreeMap<String, Arc<Object>>;
 pub(super) struct LocalRefResolver {
     /// Paths the plan may evaluate that can step through a string id.
     paths: Vec<FieldPath>,
+    /// Owned query snapshot for on-demand reads; `None` when the storage
+    /// only has borrowed snapshots (references are then prefetched).
+    reader: Option<Arc<dyn EntityReadSnapshot>>,
     /// Point reads already performed by this query.
     rows: Mutex<HashMap<(LocalCollectionId, String), Option<Arc<Object>>>>,
 }
@@ -38,15 +53,21 @@ pub(super) struct LocalRefResolver {
 impl LocalRefResolver {
     /// A resolver for `plan`, or `None` when no expression of the plan can
     /// follow a string reference.
-    pub(super) fn for_plan(plan: &crate::PhysicalPlan) -> Option<Self> {
+    pub(super) fn for_plan(
+        plan: &crate::PhysicalPlan,
+        reader: Option<Arc<dyn EntityReadSnapshot>>,
+    ) -> Option<Arc<Self>> {
         let mut paths = BTreeSet::new();
         collect_plan_paths(plan, &mut paths);
-        Self::new(paths)
+        Self::new(paths, reader)
     }
 
     /// A resolver for the candidate `paths`, or `None` when none of them can
     /// follow a string reference.
-    pub(super) fn new(paths: impl IntoIterator<Item = FieldPath>) -> Option<Self> {
+    pub(super) fn new(
+        paths: impl IntoIterator<Item = FieldPath>,
+        reader: Option<Arc<dyn EntityReadSnapshot>>,
+    ) -> Option<Arc<Self>> {
         let mut candidates = BTreeSet::new();
         for path in paths {
             // Executors may evaluate a binding-qualified path (`t.author.name`)
@@ -60,47 +81,43 @@ impl LocalRefResolver {
                 }
             }
         }
-        (!candidates.is_empty()).then(|| Self {
-            paths: candidates.into_iter().collect(),
-            rows: Mutex::new(HashMap::new()),
+        (!candidates.is_empty()).then(|| {
+            Arc::new(Self {
+                paths: candidates.into_iter().collect(),
+                reader,
+                rows: Mutex::new(HashMap::new()),
+            })
         })
     }
 
-    /// Fetch the rows that evaluating the candidate paths on `object` steps
-    /// through.
-    pub(super) fn targets_for_row(
-        &self,
-        reader: &dyn EntityReadSnapshot,
-        collection: LocalCollectionId,
-        object: &Object,
-    ) -> CoreResult<Option<Arc<LocalRefTargets>>> {
-        let mut targets = LocalRefTargets::new();
-        let mut error = None;
-        for path in &self.paths {
-            if crate::ObjectAccess::value_at_path_ref(object, path).is_some() {
-                continue;
-            }
-            resolve_path_with_local_refs(object, path, &mut |id| {
-                if let Some(target) = targets.get(id) {
-                    return Some(target.clone());
-                }
-                match self.row(reader, collection, id) {
-                    Ok(target) => {
-                        let target = target?;
-                        targets.insert(id.to_string(), target.clone());
-                        Some(target)
-                    }
-                    Err(err) => {
-                        error.get_or_insert(err);
-                        None
-                    }
-                }
-            });
-            if let Some(err) = error.take() {
-                return Err(err);
-            }
-        }
-        Ok((!targets.is_empty()).then(|| Arc::new(targets)))
+    /// Reference resolution for rows of `collection`, or `None` when no
+    /// candidate path can follow a reference there.
+    pub(super) fn scope(
+        self: &Arc<Self>,
+        catalog: &Catalog,
+        collection: &CollectionSchema,
+    ) -> Option<Arc<LocalRefScope>> {
+        let mut first_segments = BTreeMap::new();
+        let paths = self
+            .paths
+            .iter()
+            .filter(|path| {
+                let Some(PathSegment::Field(first)) = path.segments().first() else {
+                    return false;
+                };
+                *first_segments
+                    .entry(first.as_str())
+                    .or_insert_with(|| field_may_hold_reference(catalog, collection, first))
+            })
+            .cloned()
+            .collect::<BTreeSet<_>>();
+        (!paths.is_empty()).then(|| {
+            Arc::new(LocalRefScope {
+                resolver: self.clone(),
+                collection: collection.lid,
+                paths,
+            })
+        })
     }
 
     fn row(
@@ -123,6 +140,145 @@ impl LocalRefResolver {
             .map(|entity| Arc::new(entity.object));
         rows.insert(key, row.clone());
         Ok(row)
+    }
+}
+
+/// Reference resolution of one query for the rows of one collection.
+pub(super) struct LocalRefScope {
+    resolver: Arc<LocalRefResolver>,
+    collection: LocalCollectionId,
+    /// Paths that resolve references for this collection.
+    paths: BTreeSet<FieldPath>,
+}
+
+impl LocalRefScope {
+    /// Whether row views resolve references on demand.
+    pub(super) fn is_lazy(&self) -> bool {
+        self.resolver.reader.is_some()
+    }
+
+    /// Prefetch the references of a row view through `reader`, for queries
+    /// without an owned snapshot.
+    pub(super) fn row_refs(
+        &self,
+        reader: &dyn EntityReadSnapshot,
+        object: &Object,
+    ) -> CoreResult<Option<RowLocalRefs>> {
+        Ok(self.prefetch(reader, object)?.map(RowLocalRefs::Prefetched))
+    }
+
+    /// Fetch the rows that evaluating the scope's paths on `object` steps
+    /// through.
+    fn prefetch(
+        &self,
+        reader: &dyn EntityReadSnapshot,
+        object: &Object,
+    ) -> CoreResult<Option<Arc<LocalRefTargets>>> {
+        let mut targets = LocalRefTargets::new();
+        let mut error = None;
+        for path in &self.paths {
+            if crate::ObjectAccess::value_at_path_ref(object, path).is_some() {
+                continue;
+            }
+            resolve_path_with_local_refs(object, path, &mut |id| {
+                if let Some(target) = targets.get(id) {
+                    return Some(target.clone());
+                }
+                match self.resolver.row(reader, self.collection, id) {
+                    Ok(target) => {
+                        let target = target?;
+                        targets.insert(id.to_string(), target.clone());
+                        Some(target)
+                    }
+                    Err(err) => {
+                        error.get_or_insert(err);
+                        None
+                    }
+                }
+            });
+            if let Some(err) = error.take() {
+                return Err(err);
+            }
+        }
+        Ok((!targets.is_empty()).then(|| Arc::new(targets)))
+    }
+
+    /// Evaluate `path` on `object`, reading referenced rows on demand.
+    ///
+    /// Row views cannot report errors, so a failed point read resolves to a
+    /// missing value.
+    fn resolve(&self, object: &Object, path: &FieldPath) -> Option<Value> {
+        let Some(reader) = self.resolver.reader.as_deref() else {
+            return resolve_path_with_local_refs(object, path, &mut |_| None);
+        };
+        if !self.paths.contains(path) {
+            return resolve_path_with_local_refs(object, path, &mut |_| None);
+        }
+        resolve_path_with_local_refs(object, path, &mut |id| {
+            self.resolver
+                .row(reader, self.collection, id)
+                .ok()
+                .flatten()
+        })
+    }
+}
+
+/// Referenced rows available to one row view.
+#[derive(Clone)]
+pub(super) enum RowLocalRefs {
+    /// Read on demand through the query's owned snapshot.
+    Lazy(Arc<LocalRefScope>),
+    /// Fetched when the view was created.
+    Prefetched(Arc<LocalRefTargets>),
+}
+
+impl RowLocalRefs {
+    /// Evaluate a multi-segment `path` on `object`, following references.
+    pub(super) fn resolve(&self, object: &Object, path: &FieldPath) -> Option<Value> {
+        match self {
+            Self::Lazy(scope) => scope.resolve(object, path),
+            Self::Prefetched(targets) => {
+                resolve_path_with_local_refs(object, path, &mut |id| targets.get(id).cloned())
+            }
+        }
+    }
+}
+
+/// Whether the first path segment `field` of `collection` may hold a
+/// reference: any field of an untyped collection, an undeclared field, or a
+/// field declared as a `Ref`, a string or an unknown type.
+fn field_may_hold_reference(catalog: &Catalog, collection: &CollectionSchema, field: &str) -> bool {
+    if collection.kind == CollectionKind::Untyped {
+        return true;
+    }
+    match collection.field_type(collection.canonical_field_name(field)) {
+        None => true,
+        Some(ty) => type_may_hold_reference(catalog, ty, &mut BTreeSet::new()),
+    }
+}
+
+fn type_may_hold_reference(catalog: &Catalog, ty: &Type, seen: &mut BTreeSet<String>) -> bool {
+    match &ty.kind {
+        TypeKind::Ref(_)
+        | TypeKind::String(_)
+        | TypeKind::Any(_)
+        | TypeKind::Unknown(_)
+        | TypeKind::Json => true,
+        TypeKind::Optional(optional) => type_may_hold_reference(catalog, &optional.inner, seen),
+        TypeKind::Union(union) => union
+            .variants
+            .iter()
+            .any(|variant| type_may_hold_reference(catalog, variant, seen)),
+        TypeKind::Attribute(attribute) => type_may_hold_reference(catalog, &attribute.ty, seen),
+        TypeKind::Named(type_ref) => {
+            if !seen.insert(type_ref.name.clone()) {
+                return false;
+            }
+            catalog
+                .type_def_by_name(&type_ref.name)
+                .is_none_or(|def| type_may_hold_reference(catalog, &def.type_def.ty, seen))
+        }
+        _ => false,
     }
 }
 
@@ -444,17 +600,21 @@ mod tests {
 
     #[test]
     fn only_paths_that_can_step_through_a_string_need_a_resolver() {
-        assert!(LocalRefResolver::new([FieldPath::from_fields(["title"])]).is_none());
+        assert!(LocalRefResolver::new([FieldPath::from_fields(["title"])], None).is_none());
         assert!(
-            LocalRefResolver::new([FieldPath(vec![
-                PathSegment::Field("tags".into()),
-                PathSegment::Index(0),
-            ])])
+            LocalRefResolver::new(
+                [FieldPath(vec![
+                    PathSegment::Field("tags".into()),
+                    PathSegment::Index(0),
+                ])],
+                None
+            )
             .is_none()
         );
 
         let resolver =
-            LocalRefResolver::new([FieldPath::from_fields(["t", "parent", "title"])]).unwrap();
+            LocalRefResolver::new([FieldPath::from_fields(["t", "parent", "title"])], None)
+                .unwrap();
         assert_eq!(
             resolver.paths,
             vec![
@@ -483,5 +643,77 @@ mod tests {
             &mut |id| rows.get(id).cloned(),
         );
         assert_eq!(resolved, Some(Value::String("root".into())));
+    }
+
+    fn ty(kind: TypeKind) -> Type {
+        Type {
+            kind,
+            constraints: vec![],
+            annotations: vec![],
+        }
+    }
+
+    fn collection(kind: CollectionKind, field_types: &[(&str, Type)]) -> CollectionSchema {
+        CollectionSchema::new(
+            LocalCollectionId(1),
+            "items".to_string(),
+            kind,
+            crate::catalog::IntegrityMode::Permissive,
+            false,
+            Default::default(),
+            field_types
+                .iter()
+                .map(|(name, ty)| (name.to_string(), ty.clone()))
+                .collect(),
+            Default::default(),
+            Default::default(),
+            Default::default(),
+            Default::default(),
+            false,
+        )
+    }
+
+    #[test]
+    fn only_first_segments_that_may_hold_a_reference_get_a_scope() {
+        use semantic_data::schema::{
+            EntityRef, collections::optional_type::OptionalType,
+            primitives::string_type::StringType, record::record_type::RecordType,
+        };
+
+        let catalog = Catalog::new();
+        let record = ty(TypeKind::Record(RecordType {
+            fields: BTreeMap::new(),
+            open: true,
+            additional: None,
+            required_order: None,
+        }));
+        let string = ty(TypeKind::String(StringType {
+            format: None,
+            normalization: None,
+        }));
+        let optional_ref = ty(TypeKind::Optional(OptionalType {
+            inner: Box::new(ty(TypeKind::Ref(EntityRef::new("person")))),
+        }));
+        let fields = [
+            ("address", record),
+            ("author", optional_ref),
+            ("slug", string),
+        ];
+        let path = |first: &str| FieldPath::from_fields([first, "name"]);
+        let resolver =
+            LocalRefResolver::new(["address", "author", "slug", "undeclared"].map(path), None)
+                .unwrap();
+
+        let typed = collection(CollectionKind::Polymorphic, &fields);
+        let scope = resolver.scope(&catalog, &typed).unwrap();
+        assert_eq!(
+            scope.paths,
+            BTreeSet::from(["author", "slug", "undeclared"].map(path))
+        );
+        let object_only = LocalRefResolver::new([path("address")], None).unwrap();
+        assert!(object_only.scope(&catalog, &typed).is_none());
+
+        let untyped = collection(CollectionKind::Untyped, &fields);
+        assert!(object_only.scope(&catalog, &untyped).is_some());
     }
 }

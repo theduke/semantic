@@ -145,6 +145,11 @@ impl<S: LogStore> KvEngine for LogEngine<S> {
         self.memory.begin_read()
     }
 
+    fn begin_read_owned(&self) -> std::result::Result<Option<Box<dyn KvReadTxn>>, DbError> {
+        self.ensure_healthy()?;
+        self.memory.begin_read_owned()
+    }
+
     fn tx_capabilities(&self) -> StorageTransactionCapabilities {
         self.memory.tx_capabilities()
     }

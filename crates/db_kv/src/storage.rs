@@ -1,5 +1,6 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::ops::Bound;
+use std::sync::Arc;
 
 use semantic_data::schema::IndexKind;
 use semantic_data::value::serde::typed::TypedValue;
@@ -246,6 +247,15 @@ pub trait KvEngine: KvMaintenance + std::fmt::Debug + Send + Sync + 'static {
             engine: self,
             revision: self.current_revision()?,
         }))
+    }
+
+    /// Open a read handle that does not borrow the engine, so it can be
+    /// shared with `'static` consumers such as query row views.
+    ///
+    /// Returns `None` when the engine only has borrowed read handles (the
+    /// default).
+    fn begin_read_owned(&self) -> Result<Option<Box<dyn KvReadTxn>>, DbError> {
+        Ok(None)
     }
 
     /// Run `f` in one write transaction and commit its writes.
@@ -842,6 +852,13 @@ impl<E: KvEngine> EntityStorage for EntityStore<E> {
         Ok(Box::new(KvEntitySnapshot::new(self.engine.begin_read()?)))
     }
 
+    fn owned_snapshot(&self) -> Result<Option<Arc<dyn EntityReadSnapshot>>, DbError> {
+        Ok(self
+            .engine
+            .begin_read_owned()?
+            .map(|txn| Arc::new(KvEntitySnapshot::new(txn)) as Arc<dyn EntityReadSnapshot>))
+    }
+
     fn apply_batch(&mut self, ops: &[StorageWriteOp]) -> std::result::Result<(), DbError> {
         match self.commit_ops(ops, None)? {
             StorageCommitOutcome::Committed { .. } => Ok(()),
@@ -1354,6 +1371,17 @@ mod tests {
         assert_eq!(count(&store, 7), 2);
         assert_eq!(count(&store, 8), 1);
         assert_eq!(count(&store, 9), 0);
+
+        // The memory engine provides owned snapshots isolated from writes.
+        let owned = EntityStorage::owned_snapshot(&store).unwrap().unwrap();
+        store.apply_batch(&[entity(7, "c")]).unwrap();
+        assert_eq!(
+            owned
+                .count_collection_entities(LocalCollectionId(7))
+                .unwrap(),
+            2
+        );
+        assert_eq!(count(&store, 7), 3);
     }
 
     #[test]

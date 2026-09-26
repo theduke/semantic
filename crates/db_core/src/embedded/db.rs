@@ -55,7 +55,7 @@ mod local_refs;
 mod validation;
 
 use local_refs::{
-    LocalRefResolver, LocalRefTargets, resolve_path_with_local_refs,
+    LocalRefResolver, RowLocalRefs, resolve_path_with_local_refs,
     value_from_object_with_alias_fallback,
 };
 
@@ -516,7 +516,7 @@ impl<S: EntityStorage> EmbeddedDb<S> {
 
     pub fn select(&self, query: SelectQuery) -> std::result::Result<Vec<Object>, DbError> {
         // Statistics and execution observe one storage state.
-        let reader = self.storage.snapshot()?;
+        let reader = self.query_reader()?;
         let collection_name = query.collection_or_default().to_string();
         let (query, stats, source) = if is_all_collection_alias(&collection_name) {
             (query, None, ALL_COLLECTION_ALIAS.to_string())
@@ -528,7 +528,7 @@ impl<S: EntityStorage> EmbeddedDb<S> {
                     name: collection_name.clone(),
                 })?;
             let query = canonicalize_select_query(&query, catalog.as_ref(), collection)?;
-            let stats = self.stats_for_query(reader.as_ref(), &query, collection)?;
+            let stats = self.stats_for_query(&*reader, &query, collection)?;
             (query, Some(stats), collection.name.clone())
         };
         let optimizer = crate::Optimizer::core();
@@ -539,7 +539,7 @@ impl<S: EntityStorage> EmbeddedDb<S> {
         let mut physical = optimizer
             .optimize_query(&query, Some(source.clone()), stats_provider, &context)
             .physical;
-        self.rewrite_count_fast_path(reader.as_ref(), &mut physical)?;
+        self.rewrite_count_fast_path(&*reader, &mut physical)?;
         let mut rows =
             self.execute_physical_plan_with_reader(reader, &physical, Some(source.as_str()))?;
         let catalog = self.catalog();
@@ -856,27 +856,37 @@ impl<S: EntityStorage> EmbeddedDb<S> {
         Ok(out)
     }
 
+    /// One read snapshot for a query: owned when the storage supports it,
+    /// so row views can read referenced rows on demand.
+    fn query_reader(&self) -> std::result::Result<QueryReader<'_>, DbError> {
+        Ok(match self.storage.owned_snapshot()? {
+            Some(snapshot) => QueryReader::Shared(snapshot),
+            None => QueryReader::Borrowed(self.storage.snapshot()?),
+        })
+    }
+
     pub fn execute_physical_plan(
         &self,
         plan: &crate::PhysicalPlan,
         default_collection: Option<&str>,
     ) -> std::result::Result<Vec<Object>, DbError> {
-        self.execute_physical_plan_with_reader(self.storage.snapshot()?, plan, default_collection)
+        self.execute_physical_plan_with_reader(self.query_reader()?, plan, default_collection)
     }
 
     /// Execute a plan with all reads served by `reader`.
     fn execute_physical_plan_with_reader(
         &self,
-        reader: Box<dyn EntityReadSnapshot + '_>,
+        reader: QueryReader<'_>,
         plan: &crate::PhysicalPlan,
         default_collection: Option<&str>,
     ) -> std::result::Result<Vec<Object>, DbError> {
         let context = self.query_context();
+        let local_refs = LocalRefResolver::for_plan(plan, reader.shared());
         let source = EmbeddedPhysicalDataSource {
             reader,
             catalog: self.catalog(),
             default_collection: default_collection.map(ToOwned::to_owned),
-            local_refs: LocalRefResolver::for_plan(plan),
+            local_refs,
         };
         crate::execute_physical_plan_with_source(plan, &source, &context)
             .map_err(|err| DbError::InvalidQuery(err.to_string()))
@@ -2583,14 +2593,42 @@ fn equality_expr(path: FieldPath, value: Value) -> crate::Expr {
     }
 }
 
+/// The read snapshot of one query.
+enum QueryReader<'a> {
+    /// Owned snapshot that row views may keep for on-demand reads.
+    Shared(Arc<dyn EntityReadSnapshot>),
+    /// Snapshot borrowing the storage.
+    Borrowed(Box<dyn EntityReadSnapshot + 'a>),
+}
+
+impl QueryReader<'_> {
+    fn shared(&self) -> Option<Arc<dyn EntityReadSnapshot>> {
+        match self {
+            Self::Shared(snapshot) => Some(snapshot.clone()),
+            Self::Borrowed(_) => None,
+        }
+    }
+}
+
+impl<'a> std::ops::Deref for QueryReader<'a> {
+    type Target = dyn EntityReadSnapshot + 'a;
+
+    fn deref(&self) -> &Self::Target {
+        match self {
+            Self::Shared(snapshot) => snapshot.as_ref(),
+            Self::Borrowed(snapshot) => snapshot.as_ref(),
+        }
+    }
+}
+
 /// Physical query source reading every row through one storage snapshot.
 struct EmbeddedPhysicalDataSource<'a> {
-    reader: Box<dyn EntityReadSnapshot + 'a>,
+    reader: QueryReader<'a>,
     catalog: std::sync::Arc<Catalog>,
     default_collection: Option<String>,
     /// Present only when the plan evaluates paths that can follow a string
     /// id to a same-collection row.
-    local_refs: Option<LocalRefResolver>,
+    local_refs: Option<Arc<LocalRefResolver>>,
 }
 
 /// Row views of one collection.
@@ -2602,9 +2640,9 @@ struct EmbeddedCollectionScan {
 impl EmbeddedPhysicalDataSource<'_> {
     /// Wrap stored rows of `collection` into row views.
     ///
-    /// Without a local reference resolver the rows stay lazy. With one, the
-    /// rows are read eagerly so that their references can be fetched from
-    /// the query snapshot, which the `'static` row views cannot reach.
+    /// Rows stay lazy unless the query resolves local references without an
+    /// owned snapshot: those references must be prefetched while the
+    /// borrowed snapshot is reachable, which reads the rows eagerly.
     fn row_views(
         &self,
         collection: &CollectionSchema,
@@ -2612,36 +2650,46 @@ impl EmbeddedPhysicalDataSource<'_> {
     ) -> crate::CoreResult<EmbeddedCollectionScan> {
         let collection_id = collection.lid;
         let fields = Arc::new(CollectionFieldMaps::new(collection));
-        let rows: Box<dyn Iterator<Item = crate::CoreResult<KvObjectView>> + Send> =
-            match &self.local_refs {
-                None => Box::new(rows.map(move |row| {
+        let scope = self
+            .local_refs
+            .as_ref()
+            .and_then(|resolver| resolver.scope(&self.catalog, collection));
+        let rows: Box<dyn Iterator<Item = crate::CoreResult<KvObjectView>> + Send> = match scope {
+            None => Box::new(rows.map(move |row| {
+                row.map(|row| KvObjectView {
+                    object: row.object,
+                    collection_id,
+                    fields: fields.clone(),
+                    local_refs: None,
+                })
+            })),
+            Some(scope) if scope.is_lazy() => {
+                let local_refs = RowLocalRefs::Lazy(scope);
+                Box::new(rows.map(move |row| {
                     row.map(|row| KvObjectView {
                         object: row.object,
                         collection_id,
                         fields: fields.clone(),
-                        local_refs: None,
+                        local_refs: Some(local_refs.clone()),
                     })
-                })),
-                Some(resolver) => {
-                    let views = rows
-                        .map(|row| {
-                            let row = row?;
-                            let local_refs = resolver.targets_for_row(
-                                self.reader.as_ref(),
-                                collection_id,
-                                &row.object,
-                            )?;
-                            Ok(KvObjectView {
-                                object: row.object,
-                                collection_id,
-                                fields: fields.clone(),
-                                local_refs,
-                            })
+                }))
+            }
+            Some(scope) => {
+                let views = rows
+                    .map(|row| {
+                        let row = row?;
+                        let local_refs = scope.row_refs(&*self.reader, &row.object)?;
+                        Ok(KvObjectView {
+                            object: row.object,
+                            collection_id,
+                            fields: fields.clone(),
+                            local_refs,
                         })
-                        .collect::<crate::CoreResult<Vec<_>>>()?;
-                    Box::new(views.into_iter().map(Ok))
-                }
-            };
+                    })
+                    .collect::<crate::CoreResult<Vec<_>>>()?;
+                Box::new(views.into_iter().map(Ok))
+            }
+        };
         Ok(EmbeddedCollectionScan {
             collection_id,
             rows,
@@ -3140,9 +3188,9 @@ struct KvObjectView {
     object: Object,
     collection_id: LocalCollectionId,
     fields: Arc<CollectionFieldMaps>,
-    /// Same-collection rows referenced through string ids by the plan's
-    /// paths, fetched when the view was created.
-    local_refs: Option<Arc<LocalRefTargets>>,
+    /// Resolution of same-collection references through string ids, when
+    /// the plan's paths may follow them for this collection.
+    local_refs: Option<RowLocalRefs>,
 }
 
 impl crate::ObjectAccess for KvObjectView {
@@ -3158,10 +3206,10 @@ impl crate::ObjectAccess for KvObjectView {
         if path.segments().len() < 2 {
             return None;
         }
-        let targets = self.local_refs.as_deref();
-        resolve_path_with_local_refs(&self.object, path, &mut |id| {
-            targets.and_then(|targets| targets.get(id)).cloned()
-        })
+        match &self.local_refs {
+            Some(local_refs) => local_refs.resolve(&self.object, path),
+            None => resolve_path_with_local_refs(&self.object, path, &mut |_| None),
+        }
         .map(ValueRef::Owned)
     }
 
@@ -4020,21 +4068,35 @@ mod tests {
     use semantic_data::query::{BinaryOp, FieldFormat, JoinType, SortDirection};
 
     use super::{
-        EmbeddedDb, EmbeddedPhysicalDataSource, LocalRefResolver, QueryPlan,
+        EmbeddedDb, EmbeddedPhysicalDataSource, LocalRefResolver, QueryPlan, QueryReader,
         RELATION_EDGES_COLLECTION,
     };
     use crate::embedded::storage::{CountingEntityStorage, EntityStorage};
 
     fn physical_source<S: EntityStorage>(db: &EmbeddedDb<S>) -> EmbeddedPhysicalDataSource<'_> {
-        physical_source_with_local_refs(db, None)
+        EmbeddedPhysicalDataSource {
+            reader: QueryReader::Borrowed(db.storage.snapshot().unwrap()),
+            catalog: db.catalog(),
+            default_collection: None,
+            local_refs: None,
+        }
     }
 
-    fn physical_source_with_local_refs<S: EntityStorage>(
-        db: &EmbeddedDb<S>,
-        local_refs: Option<LocalRefResolver>,
-    ) -> EmbeddedPhysicalDataSource<'_> {
+    /// A data source resolving local references along `paths`, lazily
+    /// through an owned snapshot or by prefetching through a borrowed one.
+    fn physical_source_with_local_refs<'a, S: EntityStorage>(
+        db: &'a EmbeddedDb<S>,
+        paths: &[FieldPath],
+        lazy: bool,
+    ) -> EmbeddedPhysicalDataSource<'a> {
+        let reader = if lazy {
+            QueryReader::Shared(db.storage.owned_snapshot().unwrap().unwrap())
+        } else {
+            QueryReader::Borrowed(db.storage.snapshot().unwrap())
+        };
+        let local_refs = LocalRefResolver::new(paths.iter().cloned(), reader.shared());
         EmbeddedPhysicalDataSource {
-            reader: db.storage.snapshot().unwrap(),
+            reader,
             catalog: db.catalog(),
             default_collection: None,
             local_refs,
@@ -4097,29 +4159,140 @@ mod tests {
         }
         let catalog = db.catalog();
         let collection = catalog.collection_by_name("cache_items").unwrap();
-        let resolver = LocalRefResolver::new([FieldPath::from_fields(["parent", "title"])]);
-        let source = physical_source_with_local_refs(&db, resolver);
-        counts.reset();
-
-        let first = source
-            .materialize_ids(collection, vec!["b".to_string()])
-            .unwrap();
-        let second = source
-            .materialize_ids(collection, vec!["c".to_string()])
-            .unwrap();
-
         let title = FieldPath::from_fields(["parent", "title"]);
-        for scan in [first, second] {
-            let views = scan.rows.collect::<Result<Vec<_>, _>>().unwrap();
-            assert_eq!(views.len(), 1);
-            assert_eq!(
-                crate::ObjectAccess::value_at_path_ref(&views[0], &title)
-                    .map(|value| value.into_owned()),
-                Some(Value::String("first".to_string()))
-            );
+        for lazy in [true, false] {
+            let source = physical_source_with_local_refs(&db, std::slice::from_ref(&title), lazy);
+            counts.reset();
+
+            let first = source
+                .materialize_ids(collection, vec!["b".to_string()])
+                .unwrap();
+            let second = source
+                .materialize_ids(collection, vec!["c".to_string()])
+                .unwrap();
+
+            for scan in [first, second] {
+                let views = scan.rows.collect::<Result<Vec<_>, _>>().unwrap();
+                assert_eq!(views.len(), 1);
+                for _ in 0..2 {
+                    assert_eq!(
+                        crate::ObjectAccess::value_at_path_ref(&views[0], &title)
+                            .map(|value| value.into_owned()),
+                        Some(Value::String("first".to_string()))
+                    );
+                }
+            }
+            assert_eq!(counts.collection_scans(), 0, "lazy={lazy}");
+            // Two materialized rows plus one memoized read of the shared parent.
+            assert_eq!(counts.entity_gets(), 3, "lazy={lazy}");
         }
-        assert_eq!(counts.collection_scans(), 0);
-        // Two materialized rows plus one memoized read of the shared parent.
+    }
+
+    #[test]
+    fn limited_scan_with_nested_object_path_streams_without_point_reads() {
+        let (storage, counts) = CountingEntityStorage::new();
+        let mut db = EmbeddedDb::new(storage);
+        db.create_collection("people", CollectionKind::Polymorphic)
+            .unwrap();
+        // Scans produce batches of `DEFAULT_EXECUTION_BATCH_SIZE` rows, so the
+        // collection is larger than one batch.
+        let total = 3 * crate::DEFAULT_EXECUTION_BATCH_SIZE;
+        let mut batch = Batch::new();
+        for index in 0..total {
+            let id = format!("person-{index:05}");
+            let mut object = string_object(&[("id", &id)]);
+            object.insert(
+                "address",
+                Value::Object(string_object(&[("city", &format!("city-{index}"))])),
+            );
+            batch = batch.with_op(BatchOperation::Upsert {
+                collection: "people".to_string(),
+                id,
+                object,
+            });
+        }
+        db.transact(batch).unwrap();
+
+        counts.reset();
+        let rows = db
+            .select(
+                SelectQuery::new()
+                    .with_collection("people")
+                    .with_projection(vec![field_projection(&["address", "city"], "city")])
+                    .with_limit(10usize),
+            )
+            .unwrap();
+        assert_eq!(rows.len(), 10);
+        assert!(rows.iter().all(|row| row.get("city").is_some()));
+        assert_eq!(counts.collection_scans(), 1);
+        assert_eq!(counts.entity_gets(), 0);
+        assert!(
+            counts.rows_yielded() < total,
+            "the scan must stop early, yielded {}",
+            counts.rows_yielded()
+        );
+    }
+
+    #[test]
+    fn ref_paths_resolve_lazily_with_one_point_read_per_distinct_target() {
+        let (storage, counts) = CountingEntityStorage::new();
+        let mut db = EmbeddedDb::new(storage);
+        register_ref_schema(&mut db, ref_ty("person"));
+        let mut batch = Batch::new();
+        for person in 0..3 {
+            let id = format!("person-{person}");
+            batch = batch.with_op(BatchOperation::Upsert {
+                collection: DEFAULT_COLLECTION.to_string(),
+                object: entity(
+                    &id,
+                    "local:person",
+                    [("name", Value::String(format!("Person {person}")))],
+                ),
+                id,
+            });
+        }
+        db.transact(batch).unwrap();
+        let mut batch = Batch::new();
+        for article in 0..12 {
+            let id = format!("article-{article:02}");
+            batch = batch.with_op(BatchOperation::Upsert {
+                collection: DEFAULT_COLLECTION.to_string(),
+                object: entity(
+                    &id,
+                    "local:article",
+                    [("author", Value::String(format!("person-{}", article % 3)))],
+                ),
+                id,
+            });
+        }
+        db.transact(batch).unwrap();
+
+        // Selects lift typed ref paths into index joins; this exercises the
+        // data source's own resolution of a `Ref`-declared first segment.
+        let catalog = db.catalog();
+        let collection = catalog.collection_by_name(DEFAULT_COLLECTION).unwrap();
+        let author = collection.canonical_field_name("author").to_string();
+        let path = FieldPath::from_fields([author.as_str(), "name"]);
+        let source = physical_source_with_local_refs(&db, std::slice::from_ref(&path), true);
+        counts.reset();
+        let views = source
+            .collection_scan(collection)
+            .unwrap()
+            .rows
+            .collect::<Result<Vec<_>, _>>()
+            .unwrap();
+        assert_eq!(counts.entity_gets(), 0, "references resolve on demand");
+        let names = views
+            .iter()
+            .filter_map(|view| {
+                let id = view.object.get("id")?.as_str()?.to_string();
+                let name = crate::ObjectAccess::value_at_path_ref(view, &path)?.into_owned();
+                Some((id, name))
+            })
+            .collect::<BTreeMap<_, _>>();
+        assert_eq!(names.len(), 12);
+        assert_eq!(names["article-04"], Value::String("Person 1".to_string()));
+        assert_eq!(counts.collection_scans(), 1);
         assert_eq!(counts.entity_gets(), 3);
     }
 
@@ -6118,10 +6291,7 @@ mod tests {
         }
     }
 
-    pub(super) fn register_ref_schema(
-        db: &mut EmbeddedDb<crate::embedded::storage::MemoryEntityStorage>,
-        author_ty: Type,
-    ) {
+    pub(super) fn register_ref_schema<S: EntityStorage>(db: &mut EmbeddedDb<S>, author_ty: Type) {
         db.transact_ddl(
             DdlBatch::new()
                 .with_op(DdlOperation::UpsertAttribute {

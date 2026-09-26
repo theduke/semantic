@@ -241,6 +241,10 @@ impl KvEngine for MemoryKvEngine {
         Ok(Box::new(self.read_snapshot()))
     }
 
+    fn begin_read_owned(&self) -> Result<Option<Box<dyn KvReadTxn>>, DbError> {
+        Ok(Some(Box::new(self.read_snapshot())))
+    }
+
     fn write_with<F>(
         &mut self,
         expected_revision: Option<u64>,

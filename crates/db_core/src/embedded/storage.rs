@@ -550,6 +550,16 @@ pub trait EntityStorage: std::fmt::Debug + Send + Sync + 'static {
         Ok(Box::new(ForwardingReadSnapshot::new(self)))
     }
 
+    /// Open a consistent read handle that does not borrow the storage.
+    ///
+    /// Owned handles can be shared with `'static` consumers, for example
+    /// query row views that read referenced rows on demand. Returns `None`
+    /// (the default) when the storage only has borrowed handles; callers
+    /// then use [`Self::snapshot`].
+    fn owned_snapshot(&self) -> Result<Option<std::sync::Arc<dyn EntityReadSnapshot>>, DbError> {
+        Ok(None)
+    }
+
     /// Compact the physical storage, reclaiming unused space.
     ///
     /// Returns whether any compaction was performed. The default reports the
@@ -610,6 +620,17 @@ struct IndexedEntity {
 impl MemoryEntityStorage {
     pub(crate) fn new() -> Self {
         Self::default()
+    }
+
+    /// Copy of the current state without historical snapshots.
+    fn frozen_copy(&self) -> Self {
+        Self {
+            entities: self.entities.clone(),
+            indexes: self.indexes.clone(),
+            initialized_indexes: self.initialized_indexes.clone(),
+            revision: self.revision,
+            snapshots: None,
+        }
     }
 
     pub(crate) fn corrupt_index(&mut self, index: LocalIndexId) {
@@ -870,6 +891,12 @@ impl EntityStorage for MemoryEntityStorage {
         Ok(Box::new(MemoryEntityReadSnapshot { storage: self }))
     }
 
+    fn owned_snapshot(&self) -> Result<Option<std::sync::Arc<dyn EntityReadSnapshot>>, DbError> {
+        Ok(Some(std::sync::Arc::new(OwnedStorageSnapshot(
+            self.frozen_copy(),
+        ))))
+    }
+
     fn tx_capabilities(&self) -> StorageTransactionCapabilities {
         StorageTransactionCapabilities {
             conflict_detection: true,
@@ -914,6 +941,8 @@ pub(crate) struct StorageReadCounts {
     pub(crate) collection_scans: std::sync::atomic::AtomicUsize,
     pub(crate) entity_gets: std::sync::atomic::AtomicUsize,
     pub(crate) collection_counts: std::sync::atomic::AtomicUsize,
+    /// Entities yielded by collection scans.
+    pub(crate) rows_yielded: std::sync::atomic::AtomicUsize,
     /// Report maintained row counts as unknown, forcing the key-count
     /// fallback.
     pub(crate) hide_row_counts: std::sync::atomic::AtomicBool,
@@ -927,6 +956,11 @@ impl StorageReadCounts {
         self.collection_scans.store(0, Ordering::Relaxed);
         self.entity_gets.store(0, Ordering::Relaxed);
         self.collection_counts.store(0, Ordering::Relaxed);
+        self.rows_yielded.store(0, Ordering::Relaxed);
+    }
+
+    pub(crate) fn rows_yielded(&self) -> usize {
+        self.rows_yielded.load(std::sync::atomic::Ordering::Relaxed)
     }
 
     pub(crate) fn collection_scans(&self) -> usize {
@@ -982,7 +1016,15 @@ impl EntityStorage for CountingEntityStorage {
         collection: LocalCollectionId,
     ) -> Result<BoxEntityScan, DbError> {
         Self::count(&self.counts.collection_scans);
-        self.inner.scan_collection_stream(collection)
+        let counts = self.counts.clone();
+        Ok(Box::new(
+            self.inner
+                .scan_collection_stream(collection)?
+                .map(move |entity| {
+                    Self::count(&counts.rows_yielded);
+                    entity
+                }),
+        ))
     }
 
     fn count_collection_entities(&self, collection: LocalCollectionId) -> Result<u64, DbError> {
@@ -1003,6 +1045,13 @@ impl EntityStorage for CountingEntityStorage {
 
     fn index_entry_count(&self, index: LocalIndexId) -> Result<Option<u64>, DbError> {
         self.inner.index_entry_count(index)
+    }
+
+    fn owned_snapshot(&self) -> Result<Option<std::sync::Arc<dyn EntityReadSnapshot>>, DbError> {
+        Ok(Some(std::sync::Arc::new(OwnedStorageSnapshot(Self {
+            inner: self.inner.frozen_copy(),
+            counts: self.counts.clone(),
+        }))))
     }
 
     fn scan_collection_at_revision_stream(
@@ -1066,6 +1115,80 @@ impl EntityStorage for CountingEntityStorage {
         expected_revision: Option<u64>,
     ) -> Result<StorageCommitOutcome, DbError> {
         self.inner.apply_batch_conditional(ops, expected_revision)
+    }
+}
+
+/// Owned read handle over a frozen test storage copy.
+#[cfg(test)]
+struct OwnedStorageSnapshot<S>(S);
+
+#[cfg(test)]
+impl<S: EntityStorage> EntityReadSnapshot for OwnedStorageSnapshot<S> {
+    fn revision(&self) -> Result<Option<u64>, DbError> {
+        self.0.current_revision()
+    }
+
+    fn is_consistent(&self) -> bool {
+        true
+    }
+
+    fn get_entity(
+        &self,
+        collection: LocalCollectionId,
+        id: &str,
+    ) -> Result<Option<StoredEntity>, DbError> {
+        self.0.get_entity(collection, id)
+    }
+
+    fn scan_collection_stream(
+        &self,
+        collection: LocalCollectionId,
+    ) -> Result<BoxEntityScan, DbError> {
+        self.0.scan_collection_stream(collection)
+    }
+
+    fn count_collection_entities(&self, collection: LocalCollectionId) -> Result<u64, DbError> {
+        self.0.count_collection_entities(collection)
+    }
+
+    fn collection_row_count(&self, collection: LocalCollectionId) -> Result<Option<u64>, DbError> {
+        self.0.collection_row_count(collection)
+    }
+
+    fn index_entry_count(&self, index: LocalIndexId) -> Result<Option<u64>, DbError> {
+        self.0.index_entry_count(index)
+    }
+
+    fn scan_index_value_stream(
+        &self,
+        index: LocalIndexId,
+        path: Option<&FieldPath>,
+        value: &Value,
+    ) -> Result<BoxEntityIdScan, DbError> {
+        self.0.scan_index_value_stream(index, path, value)
+    }
+
+    fn scan_index_range_stream(
+        &self,
+        index: LocalIndexId,
+        path: Option<&FieldPath>,
+        lower: Bound<&Value>,
+        upper: Bound<&Value>,
+    ) -> Result<BoxEntityIdScan, DbError> {
+        self.0.scan_index_range_stream(index, path, lower, upper)
+    }
+
+    fn scan_index_prefix_stream(
+        &self,
+        index: LocalIndexId,
+        path: Option<&FieldPath>,
+        prefix: &str,
+    ) -> Result<BoxEntityIdScan, DbError> {
+        self.0.scan_index_prefix_stream(index, path, prefix)
+    }
+
+    fn index_needs_rebuild(&self, index: LocalIndexId) -> Result<bool, DbError> {
+        self.0.index_needs_rebuild(index)
     }
 }
 

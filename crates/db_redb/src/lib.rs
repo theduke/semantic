@@ -301,6 +301,10 @@ impl KvEngine for RedbKvEngine {
         Ok(Box::new(self.read_txn()?))
     }
 
+    fn begin_read_owned(&self) -> Result<Option<Box<dyn KvReadTxn>>, DbError> {
+        Ok(Some(Box::new(self.read_txn()?)))
+    }
+
     fn scan_prefix(&self, prefix: &[u8]) -> Result<Vec<(Vec<u8>, Vec<u8>)>, DbError> {
         self.scan_prefix_stream(prefix.to_vec())?.collect()
     }
