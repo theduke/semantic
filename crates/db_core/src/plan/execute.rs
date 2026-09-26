@@ -114,6 +114,22 @@ pub trait AsyncPhysicalDataSource: Send + Sync {
         }
     }
 
+    /// [`Self::index_lookup_filtered_stream`] whose consumer reads at most
+    /// `limit_hint` rows (see [`PhysicalIndexScan::limit_hint`]), so the
+    /// source may stop reading once that many rows passed the residual
+    /// predicate. The default ignores the hint.
+    fn index_lookup_limited_stream(
+        &self,
+        source: SourceRef,
+        field: FieldRef,
+        value: Value,
+        residual_predicate: Option<Expr>,
+        limit_hint: Option<usize>,
+    ) -> SendableRecordBatchStream {
+        let _ = limit_hint;
+        self.index_lookup_filtered_stream(source, field, value, residual_predicate)
+    }
+
     fn index_lookup_many_stream(
         &self,
         source: SourceRef,
@@ -678,6 +694,7 @@ fn execute_source_stream<'a>(
             field,
             value,
             residual_predicate,
+            limit_hint,
         } => {
             if residual_predicate
                 .as_ref()
@@ -698,7 +715,13 @@ fn execute_source_stream<'a>(
                 .try_flatten()
                 .boxed()
             } else {
-                source.index_lookup_filtered_stream(source_ref, field, value, residual_predicate)
+                source.index_lookup_limited_stream(
+                    source_ref,
+                    field,
+                    value,
+                    residual_predicate,
+                    limit_hint,
+                )
             }
         }
         PhysicalSource::IndexRange(scan) => source.index_range_stream(scan),
@@ -1417,6 +1440,18 @@ impl AsyncPhysicalDataSource for BorrowedAsyncPhysicalDataSource<'_> {
 
     fn index_range_stream(&self, scan: PhysicalIndexScan) -> SendableRecordBatchStream {
         self.inner.index_range_stream(scan)
+    }
+
+    fn index_lookup_limited_stream(
+        &self,
+        source: SourceRef,
+        field: FieldRef,
+        value: Value,
+        residual_predicate: Option<Expr>,
+        limit_hint: Option<usize>,
+    ) -> SendableRecordBatchStream {
+        self.inner
+            .index_lookup_limited_stream(source, field, value, residual_predicate, limit_hint)
     }
 
     fn text_search_stream(&self, search: PhysicalTextSearch) -> SendableRecordBatchStream {
@@ -3378,6 +3413,7 @@ mod tests {
                 field: FieldRef::Path(FieldPath::from_fields(["id"])),
                 value: Value::I64(1),
                 residual_predicate: None,
+                limit_hint: None,
             }),
             source.clone(),
             QueryContext::default(),

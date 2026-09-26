@@ -16,7 +16,10 @@
 //! Every statement is atomic: a failing statement leaves the transaction as
 //! it was before the statement.
 
-use super::compact::{TxRead, TxState, TxView, apply_tx_operation, cascade_deletes_from};
+use super::compact::{
+    ExecutionCounts, PreparedCommit, TxRead, TxState, TxView, apply_tx_operation,
+    cascade_deletes_from, prepare_commit,
+};
 use super::overlay::OverlaySnapshot;
 use super::*;
 use crate::catalog::CatalogSnapshot;
@@ -309,18 +312,18 @@ impl EmbeddedTransaction {
     pub fn execute_batch(&mut self, batch: Batch) -> Result<BatchStats, DbError> {
         validate_batch_mutation_limits(&batch)?;
         let catalog = self.catalog.catalog.clone();
-        let batch = canonicalize_batch(&batch, &catalog)?;
+        let batch = canonicalize_batch(batch, &catalog)?;
         let ((), stats) = self.statement(|tx, stats| {
             let context = DefaultExpressionContext::now();
             let query_context = QueryContext::new(catalog.clone());
             let recursive_validation = tx.recursive_validation;
             let mut view = tx.view();
-            for operation in &batch.operations {
-                let operation = with_canonical_collection(&catalog, operation.clone());
+            for operation in batch.operations {
+                let operation = with_canonical_collection(&catalog, operation);
                 apply_tx_operation(
                     &mut view,
                     &query_context,
-                    &operation,
+                    operation,
                     stats,
                     &context,
                     recursive_validation,
@@ -408,6 +411,132 @@ impl EmbeddedTransaction {
     }
 }
 
+impl EmbeddedTransaction {
+    /// Whether [`Self::prepare`] may run without exclusive access to the
+    /// database: the transaction reads a consistent snapshot that does not
+    /// call back into a lock around the database.
+    pub(crate) fn prepares_without_lock(&self) -> bool {
+        self.reader.snapshot.is_consistent()
+    }
+
+    /// Validate the transaction and derive its storage writes against its
+    /// own snapshot, without touching the database (see
+    /// [`compact::prepare_commit`] for why this needs no lock). `reply` builds
+    /// the result from the validated changes. Commit the result with
+    /// [`EmbeddedDb::commit_prepared`].
+    fn prepare<R>(
+        self,
+        settings: crate::WriteSettings,
+        require_bounded: bool,
+        reply: impl FnOnce(
+            &TxView<'_>,
+            &crate::batch_return::ChangeSet,
+            &BatchStats,
+        ) -> Result<R, DbError>,
+    ) -> Result<PreparedTransaction<R>, DbError> {
+        let EmbeddedTransaction {
+            catalog,
+            reader,
+            mut state,
+            mut stats,
+            ..
+        } = self;
+        let commit = prepare_commit(
+            &mut TxView::new(&catalog.catalog, &reader, &mut state),
+            &mut stats,
+            settings,
+            require_bounded,
+            reply,
+        )?;
+        Ok(PreparedTransaction {
+            revision: reader.revision,
+            catalog_version: catalog.version,
+            commit,
+            stats,
+            counts: state.counts,
+        })
+    }
+
+    /// Prepare the transaction's commit (see [`EmbeddedDb::commit_transaction`]).
+    pub(crate) fn prepare_commit(self) -> Result<PreparedTransaction<()>, DbError> {
+        self.prepare(crate::WriteSettings::default(), false, |_, _, _| Ok(()))
+    }
+
+    /// Apply `batch` and prepare the transaction, replying in `returning`
+    /// mode (see [`EmbeddedDb::execute_batch_returning`]).
+    pub(crate) fn prepare_batch(
+        mut self,
+        batch: Batch,
+        returning: &crate::BatchReturn,
+        settings: crate::WriteSettings,
+        require_bounded: bool,
+    ) -> Result<PreparedTransaction<crate::BatchReply>, DbError> {
+        self.execute_batch(batch)?;
+        self.prepare(settings, require_bounded, |view, changes, stats| {
+            compact::batch_reply(view, changes, stats, returning)
+        })
+    }
+
+    /// Run `query` and prepare the transaction (see
+    /// [`EmbeddedDb::insert_query`]).
+    pub(crate) fn prepare_insert(
+        mut self,
+        query: InsertQuery,
+    ) -> Result<PreparedTransaction<crate::InsertResult>, DbError> {
+        let catalog = self.catalog.catalog.clone();
+        let plan = InsertPlan::new(&catalog, query, |select| self.select(select))?;
+        self.execute_batch(plan.batch.clone())?;
+        let returning = plan.reply_mode();
+        self.prepare(
+            crate::WriteSettings::default(),
+            false,
+            |view, changes, stats| match compact::batch_reply(view, changes, stats, &returning)? {
+                crate::BatchReply::Dataset(outcome) => plan.result(&catalog, &outcome.dataset),
+                _ => plan.result(&catalog, &crate::Dataset::new()),
+            },
+        )
+    }
+
+    /// Run `query` and prepare the transaction (see
+    /// [`EmbeddedDb::update_where_returning`]).
+    pub(crate) fn prepare_update(
+        mut self,
+        query: UpdateQuery,
+    ) -> Result<PreparedTransaction<crate::UpdateResult>, DbError> {
+        let result = self.update_where(query)?;
+        self.prepare(crate::WriteSettings::default(), false, |_, _, _| Ok(result))
+    }
+
+    /// Run `query` and prepare the transaction (see
+    /// [`EmbeddedDb::delete_where_returning`]).
+    pub(crate) fn prepare_delete(
+        mut self,
+        query: DeleteQuery,
+    ) -> Result<PreparedTransaction<crate::DeleteResult>, DbError> {
+        let result = self.delete_where(query)?;
+        self.prepare(crate::WriteSettings::default(), false, |_, _, _| Ok(result))
+    }
+}
+
+/// A validated transaction with its storage writes, ready to commit.
+pub(crate) struct PreparedTransaction<R> {
+    revision: Option<u64>,
+    catalog_version: u64,
+    commit: PreparedCommit<R>,
+    stats: BatchStats,
+    counts: ExecutionCounts,
+}
+
+/// Outcome of [`EmbeddedDb::commit_prepared`].
+pub(crate) struct CommittedTransaction<R> {
+    pub reply: R,
+    /// Revision the commit created (the read revision when nothing was
+    /// written).
+    pub revision: Option<u64>,
+    pub stats: BatchStats,
+    pub metrics: crate::WriteMetrics,
+}
+
 /// `operation` addressing its collection by the catalog's collection name,
 /// so every statement keys rows alike.
 fn with_canonical_collection(catalog: &Catalog, mut operation: BatchOperation) -> BatchOperation {
@@ -468,8 +597,11 @@ impl<S: EntityStorage> EmbeddedDb<S> {
         } else {
             self.storage.current_revision()?
         };
-        if let Some(reason) = self.compact_unsupported(&catalog.catalog, revision) {
+        if let Some(reason) = compact::optimistic_unsupported(&self.storage, revision) {
             return Err(interactive_unsupported(reason));
+        }
+        if compact::reverse_references_unavailable(&catalog.catalog) {
+            return Err(interactive_unsupported("reverse_references_unavailable"));
         }
         let storage = RevisionReader::new(&self.storage, revision)?;
         if compact::reverse_references_incomplete(&catalog.catalog, &storage)? {
@@ -537,18 +669,16 @@ impl<S: EntityStorage> EmbeddedDb<S> {
             ));
         }
         let reader = RevisionReader::for_isolation(&self.storage, revision, options.isolation)?;
-        let prepared = self.prepare_compact_commit(
+        let prepared = prepare_commit(
             &mut TxView::new(&catalog.catalog, &reader, &mut state),
             &mut stats,
             crate::WriteSettings::default(),
             false,
-            |_, _, _| Ok(CompactReply::Ready(())),
+            |_, _, _| Ok(()),
         );
         drop(reader);
         self.execution_counts = state.counts;
-        let CompactReply::Ready(prepared) = prepared? else {
-            unreachable!("interactive commits never fall back")
-        };
+        let prepared = prepared?;
         let revision = self.commit_compact_ops(
             revision,
             catalog.version,
@@ -557,6 +687,45 @@ impl<S: EntityStorage> EmbeddedDb<S> {
             prepared.changes,
         )?;
         Ok(TransactionCommit {
+            revision,
+            stats,
+            metrics: (&self.execution_counts).into(),
+        })
+    }
+
+    /// Commit a transaction prepared by [`EmbeddedTransaction::prepare`]:
+    /// the only step of an optimistic write that needs exclusive access.
+    ///
+    /// Commits only if the storage is still at the transaction's revision
+    /// and the catalog unchanged; otherwise fails with a (retryable)
+    /// [`DbError::TransactionConflict`]. Transactions that write nothing
+    /// commit nothing.
+    pub(crate) fn commit_prepared<R>(
+        &mut self,
+        prepared: PreparedTransaction<R>,
+        source: crate::ChangeSource,
+    ) -> Result<CommittedTransaction<R>, DbError> {
+        let PreparedTransaction {
+            revision,
+            catalog_version,
+            commit,
+            stats,
+            counts,
+        } = prepared;
+        self.execution_counts = counts;
+        let revision = if commit.ops.is_empty() && commit.changes.is_empty() {
+            revision
+        } else {
+            self.commit_compact_ops(
+                revision,
+                catalog_version,
+                &commit.ops,
+                source,
+                commit.changes,
+            )?
+        };
+        Ok(CommittedTransaction {
+            reply: commit.reply,
             revision,
             stats,
             metrics: (&self.execution_counts).into(),

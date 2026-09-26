@@ -718,11 +718,25 @@ impl Catalog {
         // Ensure builtin indexes are always present and flow through normal index machinery.
         let _ = self.upsert_index(PRIMARY_ID_INDEX_NAME, lid, PRIMARY_ID_FIELD, true)?;
         let _ = self.upsert_index(OBJECT_TYPE_INDEX_NAME, lid, OBJECT_TYPE_FIELD, false)?;
-        if self.auto_index_enabled {
+        if self.auto_index_enabled && !is_raw_system_collection(&name, internal) {
             let _ = self.upsert_path_index(lid)?;
         }
         let _ = self.upsert_builtin_parent_relationship(lid)?;
         Ok(lid)
+    }
+
+    /// Drop the automatic path index of a raw system collection (see
+    /// [`is_raw_system_collection`]) created by an older version. Returns
+    /// whether the catalog changed.
+    pub fn drop_raw_system_path_index(&mut self, name: &str) -> bool {
+        let Some(collection) = self.collection_by_name(name) else {
+            return false;
+        };
+        if !is_raw_system_collection(&collection.name, collection.internal) {
+            return false;
+        }
+        let lid = collection.lid;
+        self.delete_index(lid, AUTO_PATH_INDEX_NAME)
     }
 
     pub fn set_collection_internal(
@@ -739,7 +753,34 @@ impl Catalog {
                 "unknown collection '{name}'"
             )));
         };
+        if collection.internal == internal {
+            return Ok(());
+        }
         collection.internal = internal;
+        if is_raw_system_collection(name, internal) {
+            // Read by id and their own indexes only.
+            self.delete_index(lid, AUTO_PATH_INDEX_NAME);
+        }
+        if is_raw_system_collection(name, internal) || is_raw_system_collection(name, !internal) {
+            // Attribute aliases depend on the flag; rebuild the projection.
+            let schema = self.collections.get(lid).cloned().ok_or_else(|| {
+                CatalogError::InvalidSchema(format!("unknown collection '{name}'"))
+            })?;
+            let field_ids = schema
+                .fields()
+                .map(|(field_id, name)| (name.to_string(), field_id))
+                .collect::<FnvHashMap<_, _>>();
+            let rebuilt = self.build_collection_schema_for_lid(
+                lid,
+                schema.name.clone(),
+                schema.kind.clone(),
+                schema.integrity_mode,
+                internal,
+                Some(&field_ids),
+            )?;
+            self.collections
+                .insert_fixed(lid, verbatim_nameset(name), rebuilt);
+        }
         Ok(())
     }
 
@@ -1636,6 +1677,15 @@ impl Catalog {
             .map(|(collection_id, _)| collection_id)
             .collect::<Vec<_>>();
         for collection_id in collection_ids {
+            let raw = self
+                .collection_by_lid(collection_id)
+                .is_some_and(|schema| is_raw_system_collection(&schema.name, schema.internal));
+            if raw {
+                // Raw system collections have no path index; one left by an
+                // older version is dropped (with its entries) when the
+                // database marks the collection internal on open.
+                continue;
+            }
             if self.auto_index_enabled {
                 let _ = self.upsert_path_index(collection_id)?;
             } else {
@@ -1660,6 +1710,11 @@ impl Catalog {
         let schema_driven = matches!(kind, CollectionKind::Schema | CollectionKind::Polymorphic);
         let closed_fields =
             schema_driven && integrity_mode == IntegrityMode::StrictRegisteredSchema;
+        // Derived-data system collections store and read their rows
+        // verbatim: registered attributes must not alias their fields (an
+        // attribute named `target` would otherwise redirect the reverse
+        // reference index to another field).
+        let attribute_fields = schema_driven && !is_raw_system_collection(&name, internal);
 
         let mut field_ids = FnvHashMap::default();
         let mut field_names_by_id = FnvHashMap::default();
@@ -1686,7 +1741,7 @@ impl Catalog {
                 annotations: vec![],
             });
 
-        if schema_driven {
+        if attribute_fields {
             for (_, attr) in self.attributes() {
                 field_types
                     .entry(attr.attribute.id.clone())
@@ -3806,6 +3861,16 @@ fn default_expression_matches_type(expr_type: crate::DefaultExpressionType, ty: 
 
 fn invalid_schema<T>(message: String) -> Result<T, CatalogError> {
     Err(CatalogError::InvalidSchema(message))
+}
+
+/// Whether `name` is an internal system collection with the reserved `__`
+/// prefix. Such collections hold derived data (reverse references,
+/// relationship edges and counts, validation state) whose rows are written
+/// and read verbatim, so attribute names never alias their fields, and are
+/// read by id and their own indexes only, so they have no automatic path
+/// index.
+fn is_raw_system_collection(name: &str, internal: bool) -> bool {
+    internal && name.starts_with("__")
 }
 
 fn insert_field_alias_if_not_builtin_shadow(

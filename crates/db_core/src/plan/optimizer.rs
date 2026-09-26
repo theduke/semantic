@@ -1234,10 +1234,16 @@ impl PhysicalLoweringPass for CoreLoweringPass {
                     lower_ordered_limit(inner, offset, limit, stats, context)
                         .or_else(|| lower_top_n(inner, offset, limit, context, input))
                 })
-                .unwrap_or_else(|| PhysicalPlan::Limit {
-                    input: Box::new(input(inner)),
-                    offset: offset.clone(),
-                    limit: limit.clone(),
+                .unwrap_or_else(|| {
+                    let mut input = input(inner);
+                    if let Some(hint) = constant_limit_hint(offset, limit.as_ref()) {
+                        push_source_limit_hint(&mut input, hint);
+                    }
+                    PhysicalPlan::Limit {
+                        input: Box::new(input),
+                        offset: offset.clone(),
+                        limit: limit.clone(),
+                    }
                 }),
             LogicalPlan::Distinct { input: inner } => PhysicalPlan::Distinct {
                 input: Box::new(input(inner)),
@@ -1370,6 +1376,31 @@ fn lower_projection(
             .iter()
             .map(|item| to_projection_field(item, context))
             .collect(),
+    }
+}
+
+/// `OFFSET + LIMIT` when both are constant.
+fn constant_limit_hint(offset: &Expr, limit: Option<&Expr>) -> Option<usize> {
+    evaluate_usize_expr(offset)?.checked_add(evaluate_usize_expr(limit?)?)
+}
+
+/// Tell the index or text source below a `LIMIT` how many rows the limit
+/// reads at most, so it stops reading once they are produced.
+///
+/// Only projections (which map rows one to one) may sit between the limit
+/// and the source; below a sort, aggregate, distinct, join or filter every
+/// source row may be needed. Sources apply the hint after their residual
+/// predicate.
+fn push_source_limit_hint(plan: &mut PhysicalPlan, hint: usize) {
+    let tighten = |current: &mut Option<usize>| {
+        *current = Some(current.map_or(hint, |current| current.min(hint)));
+    };
+    match plan {
+        PhysicalPlan::Project { input, .. } => push_source_limit_hint(input, hint),
+        PhysicalPlan::Source(PhysicalSource::IndexRange(scan)) => tighten(&mut scan.limit_hint),
+        PhysicalPlan::Source(PhysicalSource::TextSearch(search)) => tighten(&mut search.limit_hint),
+        PhysicalPlan::Source(PhysicalSource::IndexLookup { limit_hint, .. }) => tighten(limit_hint),
+        _ => {}
     }
 }
 
@@ -1740,6 +1771,7 @@ fn choose_index_lookup(
             field: field_ref,
             value,
             residual_predicate: residual,
+            limit_hint: None,
         },
         comparable_cost,
     ))

@@ -158,17 +158,34 @@ pub struct WriteMetrics {
     pub index_reads: u64,
     /// Collection scans made by predicate mutations without an index.
     pub collection_scans: u64,
-    /// Times the point write path fell back to materializing collections.
+    /// Times the write fell back to materializing whole collections. The
+    /// embedded engine no longer materializes collections for data writes,
+    /// so it always reports zero.
     pub fallback_scans: u64,
     /// Rows visited by scans and materialized collections.
     pub visited_rows: u64,
     /// Storage write operations committed.
     pub storage_writes: u64,
+    /// Attempts the write took, including retried conflicts (zero when the
+    /// backend does not report them).
+    #[facet(default)]
+    pub attempts: u64,
+    /// Attempts that ended in a conflict with a concurrent commit and were
+    /// retried.
+    #[facet(default)]
+    pub conflicts: u64,
 }
 
 impl WriteMetrics {
     pub fn is_empty(&self) -> bool {
         *self == Self::default()
+    }
+
+    /// These counters with the attempts and conflicts of `transaction`.
+    pub fn with_transaction(mut self, transaction: crate::TransactionMetrics) -> Self {
+        self.attempts = u64::from(transaction.attempts);
+        self.conflicts = u64::from(transaction.conflicts);
+        self
     }
 }
 

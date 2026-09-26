@@ -4,7 +4,6 @@ use semantic_data::query::BinaryOp;
 
 use super::*;
 use crate::embedded::MemoryEntityStorage;
-use crate::embedded::db::compact::CompactReply;
 use crate::embedded::storage::{CountingEntityStorage, StorageReadCounts};
 use crate::{BatchReply, BatchReturn, Expr, Operand, QueryField};
 
@@ -211,8 +210,9 @@ fn batch_predicate_operations_see_earlier_operations() {
     );
 }
 
-/// A database whose point path is disabled by an incomplete reverse
-/// reference backfill, so mutations take the dataset path.
+/// A database whose reverse reference backfill is missing, so its first
+/// write rebuilds the reverse references before running on the point path
+/// (such writes used to materialize whole collections instead).
 fn dataset_db(rows: usize) -> EmbeddedDb<MemoryEntityStorage> {
     let mut db = EmbeddedDb::in_memory();
     populate(&mut db, rows);
@@ -228,7 +228,7 @@ fn dataset_db(rows: usize) -> EmbeddedDb<MemoryEntityStorage> {
 }
 
 #[test]
-fn predicate_mutations_match_the_dataset_path() {
+fn predicate_mutations_match_after_reverse_reference_rebuild() {
     let mut fast = EmbeddedDb::in_memory();
     populate(&mut fast, 1_000);
     let mut slow = dataset_db(1_000);
@@ -261,7 +261,7 @@ fn predicate_mutations_match_the_dataset_path() {
     ];
     for query in updates {
         let expected = slow.update_where_returning(query.clone());
-        assert_eq!(slow.execution_counts.fallback_scans, 1);
+        assert_eq!(slow.execution_counts.fallback_scans, 0);
         let actual = fast.update_where_returning(query);
         assert_eq!(fast.execution_counts.fallback_scans, 0);
         match (expected, actual) {
@@ -391,17 +391,12 @@ fn predicate_delete_cascades_on_both_paths() {
     assert!(matches!(reply, BatchReply::Stats { stats, .. } if stats.deleted == 3));
     assert_eq!(remaining_ids(&point), ["a3", "p2"]);
 
-    // The dataset path expands cascades once, before building its reply.
+    // Dataset replies expand cascades once, before building the reply, and
+    // hold no deleted rows.
     let mut dataset = cascade_db();
     let outcome = dataset.transact(Batch::new().with_op(delete())).unwrap();
     assert_eq!(outcome.stats.deleted, 3);
-    assert_eq!(
-        outcome.dataset[DEFAULT_COLLECTION]
-            .keys()
-            .map(String::as_str)
-            .collect::<Vec<_>>(),
-        ["a3", "p2"]
-    );
+    assert!(outcome.dataset[DEFAULT_COLLECTION].is_empty());
     assert_eq!(remaining_ids(&dataset), ["a3", "p2"]);
 
     // DELETE ... WHERE reports the directly deleted rows on both paths.
@@ -433,6 +428,7 @@ fn stale_snapshot_conflicts_on_predicate_reads() {
         compare(BinaryOp::NotEq, "flag", "no"),
     ] {
         let query = set_label(predicate);
+        let query_context = db.query_context();
         let result = db.run_compact(
             crate::embedded::db::TxScope::new(
                 &catalog,
@@ -442,17 +438,17 @@ fn stale_snapshot_conflicts_on_predicate_reads() {
             version,
             crate::WriteSettings::default(),
             false,
-            |db, view, _| {
+            |view, _| {
                 tx_update(
                     view,
-                    &db.query_context(),
+                    &query_context,
                     ITEMS,
                     &query,
                     &DefaultExpressionContext::now(),
                     false,
                 )
             },
-            |_, _, _, result| Ok(CompactReply::Ready(result)),
+            |_, _, _, result| Ok(result),
         );
         assert!(
             matches!(result, Err(DbError::TransactionConflict(_))),

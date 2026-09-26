@@ -177,6 +177,62 @@ fn range_scan_reads_only_the_range() {
     );
 }
 
+/// [`analyze`] on an owned reader, whose scans read rows lazily.
+fn analyze_owned(
+    db: &EmbeddedDb<crate::embedded::MemoryEntityStorage>,
+    sql: &str,
+) -> (Vec<Object>, QueryExplain) {
+    db.owned_reader()
+        .unwrap()
+        .expect("owned snapshots")
+        .select_analyzed(select(sql), true)
+        .unwrap()
+}
+
+#[test]
+fn unordered_limited_index_scans_stop_after_offset_plus_limit_rows() {
+    let db = populated_db(DbConfig::default());
+    // Range without residual: the scan reads offset + limit entries.
+    let (rows, explain) = analyze_owned(
+        &db,
+        &format!("SELECT * FROM {ITEMS} WHERE n >= 5 AND n < 300 LIMIT 10 OFFSET 5"),
+    );
+    assert_eq!(rows.len(), 10);
+    let range = metrics(&explain);
+    assert_eq!(range.rows_scanned, 0, "{}", explain.physical);
+    assert!(range.index_entries_read <= 15, "{range:?}");
+    assert!(range.point_reads <= 15, "{range:?}");
+
+    // Through a projection, with a residual predicate (the planner may probe
+    // either index): the scan stops once offset + limit rows passed it.
+    let (rows, explain) = analyze_owned(
+        &db,
+        &format!("SELECT id FROM {ITEMS} WHERE n >= 5 AND n < 300 AND owner = 'a' LIMIT 10"),
+    );
+    assert_eq!(rows.len(), 10);
+    let residual = metrics(&explain);
+    assert_eq!(residual.rows_scanned, 0, "{}", explain.physical);
+    assert!(residual.point_reads <= 31, "{residual:?}");
+
+    // Equality lookups read the matching ids, but only the rows taken.
+    let (rows, explain) = analyze_owned(
+        &db,
+        &format!("SELECT * FROM {ITEMS} WHERE code = 'code-7' LIMIT 1"),
+    );
+    assert_eq!(rows.len(), 1);
+    let lookup = metrics(&explain);
+    assert_eq!(lookup.rows_scanned, 0, "{}", explain.physical);
+    assert_eq!(lookup.point_reads, 1, "{lookup:?}");
+
+    // A sort between the limit and the scan needs every row.
+    let (rows, explain) = analyze_owned(
+        &db,
+        &format!("SELECT * FROM {ITEMS} WHERE n >= 5 AND n < 300 ORDER BY code LIMIT 10"),
+    );
+    assert_eq!(rows.len(), 10);
+    assert_eq!(metrics(&explain).point_reads, 295);
+}
+
 #[test]
 fn top_n_retains_only_offset_plus_limit_rows() {
     let db = populated_db(DbConfig::default());
@@ -389,7 +445,13 @@ fn batch_replies_carry_write_metrics() {
     }))
     .unwrap();
     assert!(outcome.metrics.storage_writes >= 1, "{:?}", outcome.metrics);
-    assert!(outcome.metrics.visited_rows >= ROWS as u64);
+    // Dataset replies hold the written rows only; no collection is loaded.
+    assert!(
+        outcome.metrics.visited_rows < ROWS as u64,
+        "{:?}",
+        outcome.metrics
+    );
+    assert_eq!(outcome.dataset[ITEMS].len(), 1);
 
     let commit = futures::executor::block_on(async {
         let tx = db

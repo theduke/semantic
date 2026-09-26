@@ -14,6 +14,8 @@ use futures::{SinkExt as _, StreamExt as _};
 use semantic_data::schema::{Package, RelationType};
 use semantic_data::value::{FieldPath, Object, Value};
 
+use crate::TransactionMetrics;
+use crate::embedded::db::{CommittedTransaction, PreparedTransaction};
 use crate::embedded::{
     BoxEntityIdScan, BoxEntityScan, BoxIndexEntryScan, DbReader, EmbeddedDb, EmbeddedTransaction,
     EntityReadSnapshot, EntityStorage, StoredEntity,
@@ -22,13 +24,21 @@ use crate::embedded::{
 /// [`Backend`] over an [`EmbeddedDb`] that runs blocking work on an
 /// [`AsyncRuntime`].
 ///
-/// Writes are serialized by the write side of a lock around the database.
-/// Reads hold the read side only while creating a [`DbReader`] over the
-/// current committed state and then run without the lock, so long reads and
-/// exports neither block writers nor observe their commits. Storages without
-/// owned snapshots ([`EntityStorage::owned_snapshot`]) fall back to running
-/// the whole read under the lock. Catalog reads use the shared catalog and
-/// never take the lock.
+/// Reads hold the read side of a lock around the database only while
+/// creating a [`DbReader`] over the current committed state and then run
+/// without the lock, so long reads and exports neither block writers nor
+/// observe their commits. Storages without owned snapshots
+/// ([`EntityStorage::owned_snapshot`]) fall back to running the whole read
+/// under the lock. Catalog reads use the shared catalog and never take the
+/// lock.
+///
+/// Data writes (inserts, deletes, batches and `INSERT`/`UPDATE`/`DELETE`
+/// queries) are optimistic, see [`Self::data_write`]: they are prepared on a
+/// snapshot without the lock and take its write side only for the
+/// revision-conditional commit, so readers can take snapshots while a write
+/// is being prepared. DDL, package migrations and maintenance mutate the
+/// catalog or whole collections and hold the write side for their whole
+/// duration.
 pub struct EmbeddedBackend<S: EntityStorage> {
     db: Arc<RwLock<EmbeddedDb<S>>>,
     catalog: SharedCatalog,
@@ -107,6 +117,46 @@ impl<S: EntityStorage> EmbeddedBackend<S> {
         })
     }
 
+    /// Run a data write optimistically.
+    ///
+    /// Each attempt begins a transaction at the current state (holding the
+    /// read side of the lock only to take the snapshot), applies the write
+    /// and validates it with `prepare` without any lock, then takes the write
+    /// side only to commit (see [`EmbeddedDb::commit_prepared`]). The commit
+    /// is conditional on the storage revision and catalog version the
+    /// attempt read: every concurrent commit moves the revision, so an
+    /// attempt whose reads (including its uniqueness and reference checks)
+    /// could be stale fails with a conflict and is retried from the start,
+    /// per [`TransactionOptions::default`]. Concurrent writers therefore
+    /// still serialize at the commit.
+    ///
+    /// `locked` runs the write with exclusive access (the pre-existing path)
+    /// when the storage cannot prepare writes without the lock (no owned
+    /// consistent snapshots or no revision-conditional commits), and as the
+    /// final attempt once the optimistic retries are exhausted, so in-process
+    /// contention never fails a write. It receives the metrics of the
+    /// optimistic attempts made so far.
+    fn data_write<T, R, P, F, L>(
+        &self,
+        prepare: P,
+        finish: F,
+        locked: L,
+    ) -> BoxFuture<'static, Result<R, DbError>>
+    where
+        T: Send + 'static,
+        R: Send + 'static,
+        P: FnMut(EmbeddedTransaction) -> Result<PreparedTransaction<T>, DbError> + Send + 'static,
+        F: FnOnce(CommittedTransaction<T>, TransactionMetrics) -> Result<R, DbError>
+            + Send
+            + 'static,
+        L: FnOnce(&mut EmbeddedDb<S>, TransactionMetrics) -> Result<R, DbError> + Send + 'static,
+    {
+        let db = Arc::clone(&self.db);
+        spawn_blocking_on(self.runtime.as_ref(), move || {
+            optimistic_write(&db, prepare, finish, locked)
+        })
+    }
+
     /// Run `op` with exclusive access to the database.
     fn write<R, F>(&self, op: F) -> BoxFuture<'static, Result<R, DbError>>
     where
@@ -119,6 +169,65 @@ impl<S: EntityStorage> EmbeddedBackend<S> {
             op(&mut db)
         })
     }
+}
+
+/// See [`EmbeddedBackend::data_write`].
+fn optimistic_write<S, T, R>(
+    db: &RwLock<EmbeddedDb<S>>,
+    mut prepare: impl FnMut(EmbeddedTransaction) -> Result<PreparedTransaction<T>, DbError>,
+    finish: impl FnOnce(CommittedTransaction<T>, TransactionMetrics) -> Result<R, DbError>,
+    locked: impl FnOnce(&mut EmbeddedDb<S>, TransactionMetrics) -> Result<R, DbError>,
+) -> Result<R, DbError>
+where
+    S: EntityStorage,
+{
+    let options = TransactionOptions::default();
+    let mut metrics = TransactionMetrics {
+        attempts: 0,
+        conflicts: 0,
+    };
+    let optimistic_attempts = match options.conflict_policy {
+        crate::ConflictPolicy::Retry => options.max_retries,
+        crate::ConflictPolicy::Fail => 0,
+    };
+    while metrics.attempts < optimistic_attempts {
+        let tx = {
+            let db = db.read().map_err(|_| lock_poisoned_error())?;
+            match db.begin(options) {
+                Ok(tx) => tx,
+                Err(error) if error.storage_kind() == Some(StorageErrorKind::Unsupported) => break,
+                Err(error) => return Err(error),
+            }
+        };
+        if !tx.prepares_without_lock() {
+            break;
+        }
+        metrics.attempts += 1;
+        let committed = prepare(tx).and_then(|prepared| {
+            let mut db = db.write().map_err(|_| lock_poisoned_error())?;
+            db.commit_prepared(prepared, crate::ChangeSource::Batch)
+        });
+        match committed {
+            Ok(committed) => return finish(committed, metrics),
+            Err(DbError::TransactionConflict(reason)) => {
+                tracing::debug!(%reason, attempt = metrics.attempts, "optimistic write conflicted");
+                metrics.conflicts += 1;
+            }
+            Err(error) => return Err(error),
+        }
+    }
+    // Release what the optimistic attempts hold before the final attempt.
+    drop(prepare);
+    let mut db = db.write().map_err(|_| lock_poisoned_error())?;
+    locked(&mut db, metrics)
+}
+
+/// `reply` with the attempts of `prior` optimistic attempts added.
+fn with_prior_attempts(reply: crate::BatchReply, prior: TransactionMetrics) -> crate::BatchReply {
+    let mut metrics = *reply.metrics();
+    metrics.attempts += u64::from(prior.attempts);
+    metrics.conflicts += u64::from(prior.conflicts);
+    reply.with_metrics(metrics)
 }
 
 /// What an entity export observes, announced before streaming.
@@ -237,8 +346,21 @@ impl<S: EntityStorage> TransactionHandle for EmbeddedTransactionHandle<S> {
                 .map_err(|_| lock_poisoned_error())?
                 .take()
                 .ok_or_else(transaction_finished_error)?;
+            if !tx.prepares_without_lock() {
+                // Reads call back into the database lock: validate under it.
+                let mut db = db.write().map_err(|_| lock_poisoned_error())?;
+                return db.commit_transaction(tx);
+            }
+            // Validate on the transaction's snapshot; only the conditional
+            // commit takes the lock.
+            let prepared = tx.prepare_commit()?;
             let mut db = db.write().map_err(|_| lock_poisoned_error())?;
-            db.commit_transaction(tx)
+            let committed = db.commit_prepared(prepared, crate::ChangeSource::Transaction)?;
+            Ok(TransactionCommit {
+                revision: committed.revision,
+                stats: committed.stats,
+                metrics: committed.metrics,
+            })
         })
         .await
     }
@@ -543,8 +665,19 @@ impl<S: EntityStorage> Backend for EmbeddedBackend<S> {
     }
 
     async fn insert(&self, collection: String, id: String, object: Object) -> Result<(), DbError> {
-        self.write(move |db| db.insert(&collection, id, object))
-            .await
+        let batch = Batch::new().with_op(crate::BatchOperation::Upsert {
+            collection,
+            id,
+            object,
+        });
+        self.batch_write(
+            batch,
+            crate::BatchReturn::Stats,
+            crate::WriteSettings::default(),
+            false,
+        )
+        .await?;
+        Ok(())
     }
 
     async fn get(&self, collection: String, id: String) -> Result<Option<EntityRecord>, DbError> {
@@ -552,7 +685,15 @@ impl<S: EntityStorage> Backend for EmbeddedBackend<S> {
     }
 
     async fn delete(&self, collection: String, id: String) -> Result<(), DbError> {
-        self.write(move |db| db.delete(&collection, &id)).await
+        let batch = Batch::new().with_op(crate::BatchOperation::DeleteById { collection, id });
+        self.batch_write(
+            batch,
+            crate::BatchReturn::Stats,
+            crate::WriteSettings::default(),
+            false,
+        )
+        .await?;
+        Ok(())
     }
 
     async fn query(&self, query: TextQueryInput) -> Result<QueryResult, DbError> {
@@ -568,7 +709,7 @@ impl<S: EntityStorage> Backend for EmbeddedBackend<S> {
                 self.read(move |reader| reader.select(query).map(QueryResult::Select))
                     .await
             }
-            query => self.write(move |db| db.query(query)).await,
+            query => self.write_query(query).await,
         }
     }
 
@@ -589,7 +730,7 @@ impl<S: EntityStorage> Backend for EmbeddedBackend<S> {
                 (QueryResult::Select(rows), metrics, Some(explain.physical))
             }
             query => (
-                self.write(move |db| db.query(query)).await?,
+                self.write_query(query).await?,
                 QueryMetrics::default(),
                 None,
             ),
@@ -622,15 +763,16 @@ impl<S: EntityStorage> Backend for EmbeddedBackend<S> {
     }
 
     async fn update_where(&self, query: UpdateQuery) -> Result<MutationStats, DbError> {
-        self.write(move |db| db.update_where(query)).await
+        Ok(self.update_query(query).await?.stats)
     }
 
     async fn delete_where(&self, query: DeleteQuery) -> Result<usize, DbError> {
-        self.write(move |db| db.delete_where(query)).await
+        Ok(self.delete_query(query).await?.deleted)
     }
 
     async fn execute_batch(&self, batch: Batch) -> Result<BatchOutcome, DbError> {
-        self.write(move |db| db.execute_batch(batch)).await
+        self.execute_batch_with_settings(batch, crate::WriteSettings::default())
+            .await
     }
 
     async fn execute_batch_with_settings(
@@ -638,8 +780,13 @@ impl<S: EntityStorage> Backend for EmbeddedBackend<S> {
         batch: Batch,
         settings: crate::WriteSettings,
     ) -> Result<BatchOutcome, DbError> {
-        self.write(move |db| db.execute_batch_with_settings(batch, settings))
-            .await
+        match self
+            .batch_write(batch, crate::BatchReturn::Dataset, settings, false)
+            .await?
+        {
+            crate::BatchReply::Dataset(outcome) => Ok(outcome),
+            _ => unreachable!("dataset returning requested"),
+        }
     }
 
     async fn execute_batch_returning(
@@ -647,7 +794,7 @@ impl<S: EntityStorage> Backend for EmbeddedBackend<S> {
         batch: Batch,
         returning: crate::BatchReturn,
     ) -> Result<crate::BatchReply, DbError> {
-        self.write(move |db| db.execute_batch_returning(batch, returning))
+        self.batch_write(batch, returning, crate::WriteSettings::default(), false)
             .await
     }
 
@@ -657,8 +804,7 @@ impl<S: EntityStorage> Backend for EmbeddedBackend<S> {
         returning: crate::BatchReturn,
         settings: crate::WriteSettings,
     ) -> Result<crate::BatchReply, DbError> {
-        self.write(move |db| db.execute_batch_returning_with_settings(batch, returning, settings))
-            .await
+        self.batch_write(batch, returning, settings, false).await
     }
 
     async fn execute_batch_returning_bounded_with_settings(
@@ -667,10 +813,92 @@ impl<S: EntityStorage> Backend for EmbeddedBackend<S> {
         returning: crate::BatchReturn,
         settings: crate::WriteSettings,
     ) -> Result<crate::BatchReply, DbError> {
-        self.write(move |db| {
-            db.execute_batch_returning_bounded_with_settings(batch, returning, settings)
-        })
-        .await
+        self.batch_write(batch, returning, settings, true).await
+    }
+}
+
+impl<S: EntityStorage> EmbeddedBackend<S> {
+    /// Execute `batch` as an optimistic data write.
+    fn batch_write(
+        &self,
+        batch: Batch,
+        returning: crate::BatchReturn,
+        settings: crate::WriteSettings,
+        require_bounded: bool,
+    ) -> BoxFuture<'static, Result<crate::BatchReply, DbError>> {
+        // Attempts copy the batch; the final locked attempt takes it.
+        let batch = Arc::new(batch);
+        let locked_batch = Arc::clone(&batch);
+        let locked_returning = returning.clone();
+        self.data_write(
+            move |tx| tx.prepare_batch((*batch).clone(), &returning, settings, require_bounded),
+            |committed, metrics| {
+                Ok(committed
+                    .reply
+                    .with_metrics(committed.metrics.with_transaction(metrics)))
+            },
+            move |db, prior| {
+                let locked_batch =
+                    Arc::try_unwrap(locked_batch).unwrap_or_else(|batch| (*batch).clone());
+                let reply = if require_bounded {
+                    db.execute_batch_returning_bounded_with_settings(
+                        locked_batch,
+                        locked_returning,
+                        settings,
+                    )
+                } else {
+                    db.execute_batch_returning_with_settings(
+                        locked_batch,
+                        locked_returning,
+                        settings,
+                    )
+                }?;
+                Ok(with_prior_attempts(reply, prior))
+            },
+        )
+    }
+
+    fn update_query(
+        &self,
+        query: UpdateQuery,
+    ) -> BoxFuture<'static, Result<crate::UpdateResult, DbError>> {
+        let locked = query.clone();
+        self.data_write(
+            move |tx| tx.prepare_update(query.clone()),
+            |committed, _| Ok(committed.reply),
+            move |db, _| db.update_where_returning(locked),
+        )
+    }
+
+    fn delete_query(
+        &self,
+        query: DeleteQuery,
+    ) -> BoxFuture<'static, Result<crate::DeleteResult, DbError>> {
+        let locked = query.clone();
+        self.data_write(
+            move |tx| tx.prepare_delete(query.clone()),
+            |committed, _| Ok(committed.reply),
+            move |db, _| db.delete_where_returning(locked),
+        )
+    }
+
+    /// Run a mutating query: data writes are optimistic, DDL holds the lock.
+    async fn write_query(&self, query: Query) -> Result<QueryResult, DbError> {
+        match query {
+            Query::Insert(query) => {
+                let locked = query.clone();
+                self.data_write(
+                    move |tx| tx.prepare_insert(query.clone()),
+                    |committed, _| Ok(committed.reply),
+                    move |db, _| db.insert_query(locked),
+                )
+                .await
+                .map(QueryResult::Insert)
+            }
+            Query::Update(query) => self.update_query(query).await.map(QueryResult::Update),
+            Query::Delete(query) => self.delete_query(query).await.map(QueryResult::Delete),
+            query => self.write(move |db| db.query(query)).await,
+        }
     }
 }
 

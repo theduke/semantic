@@ -27,12 +27,19 @@ const TIMEOUT: Duration = Duration::from_secs(5);
 #[derive(Debug, Default)]
 struct ScanControl {
     delay_micros: AtomicU64,
+    /// Delay of point reads, which optimistic writes prepare with.
+    get_delay_micros: AtomicU64,
     rows: AtomicUsize,
 }
 
 impl ScanControl {
     fn set_delay(&self, delay: Duration) {
         self.delay_micros
+            .store(delay.as_micros() as u64, Ordering::SeqCst);
+    }
+
+    fn set_get_delay(&self, delay: Duration) {
+        self.get_delay_micros
             .store(delay.as_micros() as u64, Ordering::SeqCst);
     }
 
@@ -74,6 +81,10 @@ impl KvReadTxn for SlowReadTxn {
     }
 
     fn get(&self, key: &[u8]) -> Result<Option<Vec<u8>>, DbError> {
+        let delay = self.control.get_delay_micros.load(Ordering::SeqCst);
+        if delay > 0 {
+            std::thread::sleep(Duration::from_micros(delay));
+        }
         self.inner.get(key)
     }
 
@@ -356,18 +367,34 @@ async fn concurrent_writers_all_commit<E: KvEngine>(fixture: Fixture<E>) {
     const PER_WRITER: usize = 200;
     let backend = fixture.backend;
     seed(&*backend, 1).await;
-    let writers = (0..2).map(|writer| {
-        let backend = Arc::clone(&backend);
-        tokio::spawn(async move {
-            for index in 0..PER_WRITER {
-                let id = format!("writer-{writer}-{index:03}");
-                backend
-                    .insert("items".into(), id.clone(), item(&id))
-                    .await
-                    .unwrap();
-            }
+    // Writes prepare on snapshots without the lock; slow point reads make
+    // the two writers' preparations overlap, so their commits conflict.
+    fixture.control.set_get_delay(Duration::from_micros(200));
+    let writers = (0..2)
+        .map(|writer| {
+            let backend = Arc::clone(&backend);
+            tokio::spawn(async move {
+                let mut metrics = semantic_db_core::WriteMetrics::default();
+                for index in 0..PER_WRITER {
+                    let id = format!("writer-{writer}-{index:03}");
+                    let reply = backend
+                        .execute_batch_returning(
+                            Batch::new().with_op(BatchOperation::Upsert {
+                                collection: "items".into(),
+                                object: item(&id),
+                                id,
+                            }),
+                            semantic_db_core::BatchReturn::Stats,
+                        )
+                        .await
+                        .unwrap();
+                    metrics.attempts += reply.metrics().attempts;
+                    metrics.conflicts += reply.metrics().conflicts;
+                }
+                metrics
+            })
         })
-    });
+        .collect::<Vec<_>>();
     let reader = tokio::spawn({
         let backend = Arc::clone(&backend);
         async move {
@@ -381,8 +408,19 @@ async fn concurrent_writers_all_commit<E: KvEngine>(fixture: Fixture<E>) {
         }
     });
     for writer in writers {
-        writer.await.unwrap();
+        let metrics = writer.await.unwrap();
+        // Every conflict was retried: one more attempt per conflict.
+        assert_eq!(
+            metrics.attempts,
+            PER_WRITER as u64 + metrics.conflicts,
+            "{metrics:?}"
+        );
+        assert!(
+            metrics.conflicts > 0,
+            "overlapping writers never conflicted"
+        );
     }
+    fixture.control.set_get_delay(Duration::ZERO);
     reader.await.unwrap();
     assert_eq!(
         select_items(&*backend).await.unwrap().len(),

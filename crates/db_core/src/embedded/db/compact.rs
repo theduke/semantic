@@ -30,18 +30,14 @@ impl From<&ExecutionCounts> for crate::WriteMetrics {
             fallback_scans: counts.fallback_scans as u64,
             visited_rows: counts.visited_rows as u64,
             storage_writes: counts.storage_writes as u64,
+            attempts: 0,
+            conflicts: 0,
         }
     }
 }
 
+use super::incremental::{push_row_change, push_row_delta};
 pub(crate) use crate::ResolvedReference;
-
-/// Result of building a point-path reply.
-pub(super) enum CompactReply<R> {
-    Ready(R),
-    /// The dataset path must execute the transaction, for the given reason.
-    Fallback(&'static str),
-}
 
 /// Revision-bound reads of one transaction.
 ///
@@ -262,41 +258,26 @@ impl<'a> TxView<'a> {
         Ok(exists)
     }
 
-    pub(crate) fn unique(
+    /// Ids of the rows of `collection` holding `value` in the unique
+    /// `index` in the transaction's final state: the stored holders the
+    /// transaction did not rewrite, plus the written rows holding it.
+    pub(crate) fn unique_with(
         &mut self,
+        written: &UniqueOverlay,
+        collection: &CollectionSchema,
         index: &crate::catalog::IndexSchema,
         value: &Value,
-    ) -> Result<Vec<EntityKey>, DbError> {
-        let collection = self
-            .catalog
-            .collection_by_lid(index.collection)
-            .ok_or_else(|| {
-                DbError::storage(StorageErrorKind::InvalidState, "index collection missing")
-            })?;
+    ) -> Result<Vec<String>, DbError> {
         self.state.counts.index_reads += 1;
-        let mut ids: BTreeSet<String> = self
-            .reader
-            .scan_index_value(index.lid, None, value)?
-            .into_iter()
-            .collect();
-        for ((name, id), object) in &self.state.overlay {
-            if name != &collection.name {
-                continue;
-            }
-            ids.remove(id);
-            if object
-                .as_ref()
-                .and_then(|object| index.key_value(object))
-                .as_ref()
-                == Some(value)
-            {
-                ids.insert(id.clone());
+        let mut ids = BTreeSet::new();
+        for id in self.reader.scan_index_value(index.lid, None, value)? {
+            let key = (collection.name.clone(), id);
+            if !self.state.overlay.contains_key(&key) {
+                ids.insert(key.1);
             }
         }
-        Ok(ids
-            .into_iter()
-            .map(|id| (collection.name.clone(), id))
-            .collect())
+        ids.extend(written.holders(index.lid, value).cloned());
+        Ok(ids.into_iter().collect())
     }
 
     pub(crate) fn incoming(
@@ -464,6 +445,55 @@ impl<'a> TxView<'a> {
     }
 }
 
+/// The unique index values held by the rows a transaction wrote, indexed
+/// once so unique checks do not rescan the overlay for every row.
+#[derive(Debug, Default)]
+pub(crate) struct UniqueOverlay {
+    holders: BTreeMap<(LocalIndexId, Value), BTreeSet<String>>,
+}
+
+impl UniqueOverlay {
+    pub(crate) fn new(catalog: &Catalog, state: &TxState) -> Self {
+        let mut holders = BTreeMap::<(LocalIndexId, Value), BTreeSet<String>>::new();
+        let mut indexes = BTreeMap::<&str, Vec<&crate::catalog::IndexSchema>>::new();
+        for ((collection, id), row) in &state.overlay {
+            let Some(row) = row else {
+                continue;
+            };
+            let unique = indexes.entry(collection.as_str()).or_insert_with(|| {
+                catalog
+                    .collection_by_name(collection)
+                    .map(|schema| {
+                        catalog
+                            .indexes_for_collection(schema.lid)
+                            .filter(|index| {
+                                index.schema.unique && index.schema.kind.is_value_index()
+                            })
+                            .collect()
+                    })
+                    .unwrap_or_default()
+            });
+            for index in unique.iter() {
+                if let Some(value) = index.key_value(row) {
+                    holders
+                        .entry((index.lid, value))
+                        .or_default()
+                        .insert(id.clone());
+                }
+            }
+        }
+        Self { holders }
+    }
+
+    fn holders(&self, index: LocalIndexId, value: &Value) -> impl Iterator<Item = &String> {
+        // Keyed lookups need an owned key; values are small.
+        self.holders
+            .get(&(index, value.clone()))
+            .into_iter()
+            .flatten()
+    }
+}
+
 fn entity_key(key: &EntityKey) -> String {
     format!("{}:{}{}:{}", key.0.len(), key.0, key.1.len(), key.1)
 }
@@ -605,7 +635,9 @@ pub(crate) fn validate_row(
             }
         }
     }
-    for (field, ty) in resolved_field_types_for_object(view.catalog, collection, object) {
+    for (field, ty) in
+        crate::validation::resolved_field_types_for_present_fields(view.catalog, collection, object)
+    {
         if let Some(value) = object.get(&field) {
             validate_ref_value(
                 view.catalog,
@@ -712,10 +744,7 @@ impl<S: EntityStorage> EmbeddedDb<S> {
         let Some(collection) = catalog.collection_by_name(REFERENCES) else {
             return Ok(());
         };
-        ops.push(StorageWriteOp::ClearCollection(collection.lid));
-        for index in catalog.indexes_for_collection(collection.lid) {
-            ops.push(StorageWriteOp::ResetIndex(index.lid));
-        }
+        super::incremental::push_reset_indexes(catalog, collection.lid, ops);
         let mut refs = Vec::new();
         for (_, schema) in catalog
             .collections()
@@ -741,52 +770,16 @@ impl<S: EntityStorage> EmbeddedDb<S> {
                 ));
             }
         }
-        self.push_row_delta(
-            catalog,
-            collection.lid,
-            &BTreeMap::new(),
-            &reference_rows(refs),
-            ops,
-        )?;
-        ops.push(StorageWriteOp::PutEntity(StoredEntity {
-            collection: collection.lid.0,
-            kind: StoredEntityKind::Untyped,
-            id: MARKER.into(),
-            object: Object::new(),
-        }));
+        let mut rows = reference_rows(refs);
+        rows.insert(MARKER.into(), Object::new());
+        push_row_delta(catalog, collection.lid, &BTreeMap::new(), &rows, ops);
         Ok(())
     }
 
-    pub(super) fn update_reverse_references(
-        &self,
-        catalog: &Catalog,
-        changes: &ChangeSet,
-        ops: &mut Vec<StorageWriteOp>,
-    ) -> Result<(), DbError> {
-        let Some(collection) = catalog.collection_by_name(REFERENCES) else {
-            return Ok(());
-        };
-        for (key, change) in changes {
-            let before = reference_rows(
-                change
-                    .before
-                    .as_ref()
-                    .map(|row| resolved_references(catalog, key, row))
-                    .unwrap_or_default(),
-            );
-            let after = reference_rows(
-                change
-                    .after
-                    .as_ref()
-                    .map(|row| resolved_references(catalog, key, row))
-                    .unwrap_or_default(),
-            );
-            self.push_row_delta(catalog, collection.lid, &before, &after, ops)?;
-        }
-        Ok(())
-    }
-
-    pub(super) fn try_compact_batch(
+    /// Run `batch` on the point write path in one attempt and build its
+    /// reply. `None` when the attempt must be rerun (see
+    /// [`Self::run_compact`]).
+    pub(super) fn compact_batch(
         &mut self,
         scope: TxScope<'_>,
         batch: &Batch,
@@ -795,21 +788,20 @@ impl<S: EntityStorage> EmbeddedDb<S> {
         settings: crate::WriteSettings,
         require_bounded: bool,
     ) -> Result<Option<crate::BatchReply>, DbError> {
-        let catalog = scope.catalog;
+        let context = DefaultExpressionContext::now();
+        let recursive_validation = self.validation_enabled()?;
+        let query_context = self.query_context();
         self.run_compact(
             scope,
             catalog_version,
             settings,
             require_bounded,
-            |db, view, stats| {
-                let context = DefaultExpressionContext::now();
-                let recursive_validation = db.validation_enabled()?;
-                let query_context = db.query_context();
+            |view, stats| {
                 for operation in &batch.operations {
                     apply_tx_operation(
                         view,
                         &query_context,
-                        operation,
+                        operation.clone(),
                         stats,
                         &context,
                         recursive_validation,
@@ -817,81 +809,43 @@ impl<S: EntityStorage> EmbeddedDb<S> {
                 }
                 Ok(())
             },
-            |view, changes, stats, ()| {
-                // Keep addressed no-op rows available for dynamic projection
-                // names, but derive output exclusively from the normalized
-                // committing changes.
-                let mut projection_before = crate::Dataset::new();
-                let mut projection_after = crate::Dataset::new();
-                let state = view.state();
-                for (key, row) in &state.overlay {
-                    let old = projection_before.entry(key.0.clone()).or_default();
-                    let new = projection_after.entry(key.0.clone()).or_default();
-                    if let Some(object) = state.snapshot.get(key).and_then(Option::as_ref) {
-                        old.insert(key.1.clone(), object.clone());
-                    }
-                    if let Some(object) = row {
-                        new.insert(key.1.clone(), object.clone());
-                    }
-                }
-                match crate::batch_return::compact_reply_from_changes(
-                    catalog,
-                    &projection_before,
-                    &projection_after,
-                    changes,
-                    stats,
-                    returning,
-                ) {
-                    Ok(reply) => Ok(CompactReply::Ready(reply.expect("compact returning mode"))),
-                    // Permissive collections can discover a dynamic field on
-                    // an untouched row. Preserve dataset projection resolution
-                    // when the addressed rows and catalog cannot establish its
-                    // name.
-                    Err(DbError::BatchReturn {
-                        reason: crate::BatchReturnErrorReason::UnknownField,
-                        ..
-                    }) => Ok(CompactReply::Fallback(
-                        "projection_field_requires_schema_scan",
-                    )),
-                    Err(error) => Err(error),
-                }
-            },
+            |view, changes, stats, ()| batch_reply(view, changes, stats, returning),
         )
     }
 
-    /// One point-path transaction attempt.
+    /// One point-path transaction attempt under exclusive access.
     ///
     /// `apply` stages the mutations in the transaction overlay; cascades,
-    /// final-state validation, index and relationship maintenance and the
-    /// revision-conditional commit are shared by every caller. `reply` builds
-    /// the result from the validated changes. Returns `None` (after recording
-    /// the reason) when the dataset path must execute the transaction instead.
+    /// final-state validation, index and relationship maintenance
+    /// ([`prepare_commit`]) and the revision-conditional commit are shared
+    /// by every caller. `reply` builds the result from the validated
+    /// changes.
+    ///
+    /// Returns `None` without running `apply` when the reverse references
+    /// the path validates with were missing or incomplete (a damaged or
+    /// partially restored storage): they are rebuilt first, and the caller
+    /// reruns the attempt under the new catalog and revision.
     pub(super) fn run_compact<T, R>(
         &mut self,
         scope: TxScope<'_>,
         catalog_version: u64,
         settings: crate::WriteSettings,
         require_bounded: bool,
-        apply: impl FnOnce(&Self, &mut TxView<'_>, &mut crate::BatchStats) -> Result<T, DbError>,
-        reply: impl FnOnce(
-            &TxView<'_>,
-            &ChangeSet,
-            &crate::BatchStats,
-            T,
-        ) -> Result<CompactReply<R>, DbError>,
+        apply: impl FnOnce(&mut TxView<'_>, &mut crate::BatchStats) -> Result<T, DbError>,
+        reply: impl FnOnce(&TxView<'_>, &ChangeSet, &crate::BatchStats, T) -> Result<R, DbError>,
     ) -> Result<Option<R>, DbError> {
         let TxScope {
             catalog, revision, ..
         } = scope;
         self.execution_counts = ExecutionCounts::default();
-        if let Some(reason) = self.compact_unsupported(catalog, revision) {
-            self.record_compact_fallback(reason);
+        if reverse_references_unavailable(catalog) {
+            self.initialize_reverse_references()?;
             return Ok(None);
         }
         let reader = scope.reader(&self.storage)?;
         if reverse_references_incomplete(catalog, &reader)? {
             drop(reader);
-            self.record_compact_fallback("reverse_reference_backfill_incomplete");
+            self.rebuild_incomplete_reverse_references(catalog)?;
             return Ok(None);
         }
         let mut state = TxState::default();
@@ -902,8 +856,8 @@ impl<S: EntityStorage> EmbeddedDb<S> {
         };
         let prepared = (|| {
             let mut view = TxView::new(catalog, &reader, &mut state);
-            let value = apply(self, &mut view, &mut stats)?;
-            self.prepare_compact_commit(
+            let value = apply(&mut view, &mut stats)?;
+            prepare_commit(
                 &mut view,
                 &mut stats,
                 settings,
@@ -913,13 +867,7 @@ impl<S: EntityStorage> EmbeddedDb<S> {
         })();
         drop(reader);
         self.execution_counts = state.counts;
-        let prepared = match prepared? {
-            CompactReply::Ready(prepared) => prepared,
-            CompactReply::Fallback(reason) => {
-                self.record_compact_fallback(reason);
-                return Ok(None);
-            }
-        };
+        let prepared = prepared?;
         self.commit_compact_ops(
             revision,
             catalog_version,
@@ -930,142 +878,19 @@ impl<S: EntityStorage> EmbeddedDb<S> {
         Ok(Some(prepared.reply))
     }
 
-    /// Why the point path cannot run at `revision` under `catalog`, or
-    /// `None` when it can: it needs commit-time conflict detection and
-    /// reverse references (whose backfill [`reverse_references_incomplete`]
-    /// checks in the snapshot).
-    pub(super) fn compact_unsupported(
-        &self,
-        catalog: &Catalog,
-        revision: Option<u64>,
-    ) -> Option<&'static str> {
-        if !self.storage.tx_capabilities().conflict_detection || revision.is_none() {
-            Some("backend_without_revision_conflicts")
-        } else if catalog
-            .collection_by_name(REFERENCES)
-            .is_none_or(|collection| {
-                catalog
-                    .find_equality_index(collection.lid, "target")
-                    .is_none()
-            })
-        {
-            Some("reverse_references_unavailable")
-        } else {
-            None
-        }
-    }
-
-    /// Validate the staged changes of `view` and derive their storage
-    /// writes.
-    ///
-    /// Expands cascade deletes, then checks primary ids, unique indexes and
-    /// references against the final state (including the incoming
-    /// references of deleted or retyped rows), and derives entity, index,
-    /// reverse reference and relationship edge writes. `reply` builds the
-    /// result from the validated changes.
-    pub(super) fn prepare_compact_commit<R>(
-        &self,
-        view: &mut TxView<'_>,
-        stats: &mut crate::BatchStats,
-        settings: crate::WriteSettings,
-        require_bounded: bool,
-        reply: impl FnOnce(
-            &TxView<'_>,
-            &ChangeSet,
-            &crate::BatchStats,
-        ) -> Result<CompactReply<R>, DbError>,
-    ) -> Result<CompactReply<PreparedCommit<R>>, DbError> {
-        let catalog = view.catalog;
-        expand_cascade_deletes(view, stats)?;
-        let changes = view.changes();
-        if require_bounded {
-            for (key, change) in &changes {
-                let collection = catalog.collection_by_name(&key.0).unwrap();
-                for (_, schema) in catalog.relationships() {
-                    let relationship = &schema.relationship;
-                    if relationship.source_collection != key.0
-                        || relationship.indexing_mode != RelationIndexingMode::Enabled
-                    {
-                        continue;
-                    }
-                    let contribution = |row: &Object| {
-                        Self::contribution(catalog, relationship, collection, &key.1, row)
-                    };
-                    if change.before.as_ref().and_then(contribution)
-                        != change.after.as_ref().and_then(contribution)
-                    {
-                        return Err(DbError::InvalidQuery(format!(
-                            "bounded batch execution cannot update indexed relationship '{}'",
-                            relationship.id
-                        )));
-                    }
-                }
-            }
-        }
-        let mut validate = BTreeSet::new();
-        for (key, change) in &changes {
-            if let Some(object) = &change.after {
-                let collection = catalog.collection_by_name(&key.0).unwrap();
-                self.validate_primary_id(collection, &key.1, object)?;
-                for index in catalog
-                    .indexes_for_collection(collection.lid)
-                    .filter(|index| index.schema.unique && index.schema.kind.is_value_index())
-                {
-                    if let Some(value) = index.key_value(object) {
-                        let ids = view.unique(index, &value)?;
-                        if ids.len() > 1 {
-                            return Err(unique_violation(
-                                collection, index, &value, &ids[0].1, &ids[1].1,
-                            ));
-                        }
-                    }
-                }
-                validate.insert(key.clone());
-            }
-            if settings.validate_foreign_keys
-                && change.before.is_some()
-                && (change.after.is_none()
-                    || change
-                        .before
-                        .as_ref()
-                        .and_then(|row| row.get(OBJECT_TYPE_FIELD))
-                        != change
-                            .after
-                            .as_ref()
-                            .and_then(|row| row.get(OBJECT_TYPE_FIELD)))
-            {
-                for (owner, _) in view.incoming(key)? {
-                    validate.insert(owner);
-                }
-            }
-        }
-        for key in validate {
-            if let Some(object) = view.get(&key)? {
-                validate_row(view, &key, &object, settings)?;
-            }
-        }
-        let reply = match reply(view, &changes, stats)? {
-            CompactReply::Ready(reply) => reply,
-            CompactReply::Fallback(reason) => return Ok(CompactReply::Fallback(reason)),
-        };
-        let (before, after) = change_datasets(&changes);
+    /// Rebuild the reverse references, whose backfill is missing or whose
+    /// index awaits a rebuild.
+    fn rebuild_incomplete_reverse_references(&mut self, catalog: &Catalog) -> Result<(), DbError> {
+        tracing::warn!("rebuilding incomplete reverse references before a write");
+        let revision = self.storage.current_revision()?;
         let mut ops = Vec::new();
-        for (name, rows) in &after {
-            self.push_row_delta(
-                catalog,
-                catalog.collection_by_name(name).unwrap().lid,
-                &before[name],
-                rows,
-                &mut ops,
-            )?;
+        self.rebuild_reverse_references(catalog, &BTreeMap::new(), &mut ops)?;
+        match self.storage.apply_batch_conditional(&ops, revision)? {
+            StorageCommitOutcome::Committed { .. } => Ok(()),
+            StorageCommitOutcome::Conflict { .. } => Err(DbError::TransactionConflict(
+                "reverse reference rebuild conflicted".into(),
+            )),
         }
-        self.update_reverse_references(catalog, &changes, &mut ops)?;
-        self.update_relationship_edges(catalog, &before, &after, &mut ops)?;
-        Ok(CompactReply::Ready(PreparedCommit {
-            ops,
-            changes,
-            reply,
-        }))
     }
 
     /// Commit `ops` if the storage is still at `revision` and the catalog at
@@ -1105,14 +930,230 @@ impl<S: EntityStorage> EmbeddedDb<S> {
             ))),
         }
     }
+}
 
-    fn record_compact_fallback(&mut self, reason: &'static str) {
-        self.execution_counts.fallback_scans += 1;
-        tracing::debug!(
-            reason,
-            fallback_scans = self.execution_counts.fallback_scans,
-            "compact batch scan fallback"
+/// Allow one rerun of a point-path attempt after [`EmbeddedDb::run_compact`]
+/// repaired the reverse references; a second request means the repair did
+/// not take effect.
+pub(super) fn repaired_once(repaired: &mut bool) -> Result<(), DbError> {
+    if std::mem::replace(repaired, true) {
+        return Err(DbError::storage(
+            StorageErrorKind::InvalidState,
+            "reverse references are unavailable after rebuilding them",
+        ));
+    }
+    Ok(())
+}
+
+/// The reply of a batch in `returning` mode, built from its validated
+/// changes. [`crate::BatchReturn::Dataset`] replies carry the final state of
+/// the rows the batch wrote (see [`crate::BatchOutcome::dataset`]).
+pub(super) fn batch_reply(
+    view: &TxView<'_>,
+    changes: &ChangeSet,
+    stats: &crate::BatchStats,
+    returning: &crate::BatchReturn,
+) -> Result<crate::BatchReply, DbError> {
+    let written = || {
+        // Addressed no-op rows count as written: they resolve dynamic
+        // projection names and appear in dataset replies.
+        let mut before = crate::Dataset::new();
+        let mut after = crate::Dataset::new();
+        let state = view.state();
+        for (key, row) in &state.overlay {
+            let old = before.entry(key.0.clone()).or_default();
+            let new = after.entry(key.0.clone()).or_default();
+            if let Some(object) = state.snapshot.get(key).and_then(Option::as_ref) {
+                old.insert(key.1.clone(), object.clone());
+            }
+            if let Some(object) = row {
+                new.insert(key.1.clone(), object.clone());
+            }
+        }
+        (before, after)
+    };
+    let (before, after) = match returning {
+        crate::BatchReturn::Dataset => {
+            return Ok(crate::BatchReply::Dataset(crate::BatchOutcome {
+                dataset: written().1,
+                stats: stats.clone(),
+                metrics: crate::WriteMetrics::default(),
+            }));
+        }
+        crate::BatchReturn::Projection { .. } => written(),
+        crate::BatchReturn::Stats | crate::BatchReturn::Changes => {
+            (crate::Dataset::new(), crate::Dataset::new())
+        }
+    };
+    Ok(crate::batch_return::compact_reply_from_changes(
+        view.catalog,
+        &before,
+        &after,
+        changes,
+        stats,
+        returning,
+    )?
+    .expect("compact returning mode"))
+}
+
+/// Why the point write path cannot run at `revision` without exclusive
+/// access to the storage, or `None` when it can: commits of prepared writes
+/// must be conditional on the read revision.
+pub(super) fn optimistic_unsupported<S: EntityStorage>(
+    storage: &S,
+    revision: Option<u64>,
+) -> Option<&'static str> {
+    (!storage.tx_capabilities().conflict_detection || revision.is_none())
+        .then_some("backend_without_revision_conflicts")
+}
+
+/// Whether `catalog` lacks the reverse references the point write path
+/// validates incoming references with.
+pub(super) fn reverse_references_unavailable(catalog: &Catalog) -> bool {
+    catalog
+        .collection_by_name(REFERENCES)
+        .is_none_or(|collection| {
+            catalog
+                .find_equality_index(collection.lid, "target")
+                .is_none()
+        })
+}
+
+/// Validate the staged changes of `view` and derive their storage writes.
+///
+/// Expands cascade deletes, then checks primary ids, unique indexes and
+/// references against the final state (including the incoming references
+/// of deleted or retyped rows), and derives entity, index, reverse
+/// reference and relationship writes. `reply` builds the result from the
+/// validated changes.
+///
+/// Every read goes through the view's reader at the transaction's read
+/// revision, so this runs without exclusive access: the checks hold for
+/// the state at that revision plus the overlay, and the commit
+/// ([`EmbeddedDb::commit_compact_ops`]) is conditional on the storage (and
+/// the catalog) still being at it. Any concurrent commit moves the revision
+/// and turns the commit into a conflict, so validation never has to be
+/// repeated under the writer lock.
+pub(super) fn prepare_commit<R>(
+    view: &mut TxView<'_>,
+    stats: &mut crate::BatchStats,
+    settings: crate::WriteSettings,
+    require_bounded: bool,
+    reply: impl FnOnce(&TxView<'_>, &ChangeSet, &crate::BatchStats) -> Result<R, DbError>,
+) -> Result<PreparedCommit<R>, DbError> {
+    let catalog = view.catalog;
+    expand_cascade_deletes(view, stats)?;
+    let changes = view.changes();
+    if require_bounded {
+        for (key, change) in &changes {
+            let collection = catalog.collection_by_name(&key.0).unwrap();
+            for (_, schema) in catalog.relationships() {
+                let relationship = &schema.relationship;
+                if relationship.source_collection != key.0
+                    || relationship.indexing_mode != RelationIndexingMode::Enabled
+                {
+                    continue;
+                }
+                let contribution = |row: &Object| {
+                    super::incremental::contribution(catalog, relationship, collection, &key.1, row)
+                };
+                if change.before.as_ref().and_then(contribution)
+                    != change.after.as_ref().and_then(contribution)
+                {
+                    return Err(DbError::InvalidQuery(format!(
+                        "bounded batch execution cannot update indexed relationship '{}'",
+                        relationship.id
+                    )));
+                }
+            }
+        }
+    }
+    let unique = UniqueOverlay::new(catalog, view.state());
+    let mut validate = BTreeSet::new();
+    for (key, change) in &changes {
+        if let Some(object) = &change.after {
+            let collection = catalog.collection_by_name(&key.0).unwrap();
+            validate_primary_id(collection, &key.1, object)?;
+            for index in catalog
+                .indexes_for_collection(collection.lid)
+                .filter(|index| index.schema.unique && index.schema.kind.is_value_index())
+            {
+                if let Some(value) = index.key_value(object) {
+                    let ids = view.unique_with(&unique, collection, index, &value)?;
+                    if ids.len() > 1 {
+                        return Err(unique_violation(
+                            collection, index, &value, &ids[0], &ids[1],
+                        ));
+                    }
+                }
+            }
+            validate.insert(key.clone());
+        }
+        if settings.validate_foreign_keys
+            && change.before.is_some()
+            && (change.after.is_none()
+                || change
+                    .before
+                    .as_ref()
+                    .and_then(|row| row.get(OBJECT_TYPE_FIELD))
+                    != change
+                        .after
+                        .as_ref()
+                        .and_then(|row| row.get(OBJECT_TYPE_FIELD)))
+        {
+            for (owner, _) in view.incoming(key)? {
+                validate.insert(owner);
+            }
+        }
+    }
+    for key in validate {
+        if let Some(object) = view.get(&key)? {
+            validate_row(view, &key, &object, settings)?;
+        }
+    }
+    let reply = reply(view, &changes, stats)?;
+    let mut ops = Vec::new();
+    for ((collection, id), change) in &changes {
+        push_row_change(
+            catalog,
+            catalog.collection_by_name(collection).unwrap().lid,
+            id,
+            change.before.as_ref(),
+            change.after.as_ref(),
+            &mut ops,
         );
+    }
+    update_reverse_references(catalog, &changes, &mut ops);
+    super::incremental::update_relationship_edges(catalog, view.reader(), &changes, &mut ops)?;
+    Ok(PreparedCommit {
+        ops,
+        changes,
+        reply,
+    })
+}
+
+/// Append the reverse reference writes of `changes`.
+pub(super) fn update_reverse_references(
+    catalog: &Catalog,
+    changes: &ChangeSet,
+    ops: &mut Vec<StorageWriteOp>,
+) {
+    let Some(collection) = catalog.collection_by_name(REFERENCES) else {
+        return;
+    };
+    for (key, change) in changes {
+        let references = |row: &Option<Object>| {
+            reference_rows(
+                row.as_ref()
+                    .map(|row| resolved_references(catalog, key, row))
+                    .unwrap_or_default(),
+            )
+        };
+        let (before, after) = (references(&change.before), references(&change.after));
+        if before.is_empty() && after.is_empty() {
+            continue;
+        }
+        push_row_delta(catalog, collection.lid, &before, &after, ops);
     }
 }
 
@@ -1128,55 +1169,58 @@ pub(super) struct PreparedCommit<R> {
 pub(crate) fn apply_tx_operation(
     view: &mut TxView<'_>,
     query_context: &QueryContext,
-    operation: &BatchOperation,
+    operation: BatchOperation,
     stats: &mut crate::BatchStats,
     context: &DefaultExpressionContext,
     recursive_validation: bool,
 ) -> Result<(), DbError> {
-    let catalog = view.catalog;
     match operation {
         BatchOperation::Upsert {
             collection,
             id,
             object,
+        } => {
+            put_row(
+                view,
+                collection,
+                id,
+                object,
+                false,
+                context,
+                recursive_validation,
+            )?;
+            stats.upserted += 1;
         }
-        | BatchOperation::Create {
+        BatchOperation::Create {
             collection,
             id,
             object,
         } => {
-            let key = (collection.clone(), id.clone());
-            if matches!(operation, BatchOperation::Create { .. }) && view.get(&key)?.is_some() {
-                return Err(DbError::EntityExists {
-                    collection: collection.clone(),
-                    id: id.clone(),
-                });
-            }
-            let schema = catalog.collection_by_name(collection).ok_or_else(|| {
-                DbError::UnknownCollectionByName {
-                    name: collection.clone(),
-                }
-            })?;
-            let mut object = object.clone();
-            prepare_row_for_write(catalog, schema, &mut object, context, recursive_validation)
-                .map_err(|err| DbError::InvalidQuery(err.to_string()))?;
-            view.put(key, object)?;
+            put_row(
+                view,
+                collection,
+                id,
+                object,
+                true,
+                context,
+                recursive_validation,
+            )?;
             stats.upserted += 1;
         }
         BatchOperation::DeleteById { collection, id } => {
-            stats.deleted += usize::from(view.delete((collection.clone(), id.clone()))?);
+            stats.deleted += usize::from(view.delete((collection, id))?);
         }
         BatchOperation::DeleteByIds { collection, ids } => {
             for id in ids {
-                stats.deleted += usize::from(view.delete((collection.clone(), id.clone()))?);
+                stats.deleted += usize::from(view.delete((collection.clone(), id))?);
             }
         }
         BatchOperation::Update { collection, query } => {
             let result = super::mutation::tx_update(
                 view,
                 query_context,
-                collection,
-                query,
+                &collection,
+                &query,
                 context,
                 recursive_validation,
             )?;
@@ -1184,15 +1228,44 @@ pub(crate) fn apply_tx_operation(
         }
         BatchOperation::Delete { collection, query } => {
             stats.deleted +=
-                super::mutation::tx_delete(view, query_context, collection, query)?.deleted;
+                super::mutation::tx_delete(view, query_context, &collection, &query)?.deleted;
         }
     }
     Ok(())
 }
 
+/// Stage the upsert (or, with `create`, the creation) of row `id`.
+fn put_row(
+    view: &mut TxView<'_>,
+    collection: String,
+    id: String,
+    mut object: Object,
+    create: bool,
+    context: &DefaultExpressionContext,
+    recursive_validation: bool,
+) -> Result<(), DbError> {
+    let catalog = view.catalog;
+    let key = (collection, id);
+    if create && view.get(&key)?.is_some() {
+        return Err(DbError::EntityExists {
+            collection: key.0,
+            id: key.1,
+        });
+    }
+    let schema =
+        catalog
+            .collection_by_name(&key.0)
+            .ok_or_else(|| DbError::UnknownCollectionByName {
+                name: key.0.clone(),
+            })?;
+    prepare_row_for_write(catalog, schema, &mut object, context, recursive_validation)
+        .map_err(|err| DbError::InvalidQuery(err.to_string()))?;
+    view.put(key, object)
+}
+
 /// Whether the reverse reference backfill is missing from `reader`'s
 /// snapshot. Requires reverse references in `catalog` (see
-/// [`EmbeddedDb::compact_unsupported`]).
+/// [`reverse_references_unavailable`]).
 pub(super) fn reverse_references_incomplete(
     catalog: &Catalog,
     reader: &dyn TxRead,
@@ -1203,22 +1276,6 @@ pub(super) fn reverse_references_incomplete(
         .unwrap();
     Ok(reader.get_entity(references.lid, MARKER)?.is_none()
         || reader.index_needs_rebuild(index.lid)?)
-}
-
-fn change_datasets(changes: &ChangeSet) -> (crate::Dataset, crate::Dataset) {
-    let mut before = crate::Dataset::new();
-    let mut after = crate::Dataset::new();
-    for ((collection, id), change) in changes {
-        let old = before.entry(collection.clone()).or_default();
-        let new = after.entry(collection.clone()).or_default();
-        if let Some(object) = &change.before {
-            old.insert(id.clone(), object.clone());
-        }
-        if let Some(object) = &change.after {
-            new.insert(id.clone(), object.clone());
-        }
-    }
-    (before, after)
 }
 
 #[cfg(test)]
@@ -1284,7 +1341,7 @@ mod tests {
     }
 
     #[test]
-    fn compact_matches_dataset_for_repeated_ids_swaps_and_errors() {
+    fn dataset_replies_match_changes_for_repeated_ids_swaps_and_errors() {
         let mut compact = db();
         let mut dataset = db();
         let batches = [
@@ -1314,27 +1371,33 @@ mod tests {
                 .with_op(upsert("one", "third")),
         ];
         for batch in batches {
-            let before = dataset
-                .collection_rows(dataset.catalog().collection_by_name("items").unwrap().lid)
-                .unwrap();
             let slow = dataset.execute_batch(batch.clone());
             let fast = compact.execute_batch_returning(batch, BatchReturn::Changes);
+            let stored = dataset
+                .collection_rows(dataset.catalog().collection_by_name("items").unwrap().lid)
+                .unwrap()
+                .into_iter()
+                .map(|row| (row.id, row.object))
+                .collect::<BTreeMap<_, _>>();
             match (slow, fast) {
-                (Ok(outcome), Ok(reply)) => {
-                    let before = BTreeMap::from([(
-                        "items".into(),
-                        before.into_iter().map(|row| (row.id, row.object)).collect(),
-                    )]);
-                    let expected = crate::batch_return::compact_reply(
-                        &dataset.catalog(),
-                        &before,
-                        &outcome,
-                        &BatchReturn::Changes,
-                    )
-                    .unwrap()
-                    .unwrap();
-                    // The paths do different work; compare results only.
-                    assert_eq!(reply.with_metrics(Default::default()), expected);
+                (Ok(outcome), Ok(BatchReply::Changes { stats, changes, .. })) => {
+                    assert_eq!(outcome.stats, stats);
+                    // The dataset reply holds exactly the final state of the
+                    // written rows: every upserted change, never a deletion.
+                    let written = outcome.dataset.get("items").cloned().unwrap_or_default();
+                    for change in &changes {
+                        match change.kind {
+                            crate::EntityChangeKind::Upsert => {
+                                assert_eq!(written.get(&change.id), stored.get(&change.id))
+                            }
+                            crate::EntityChangeKind::Delete => {
+                                assert!(!written.contains_key(&change.id))
+                            }
+                        }
+                    }
+                    for (id, row) in &written {
+                        assert_eq!(stored.get(id), Some(row));
+                    }
                 }
                 (Err(slow), Err(fast)) => assert_eq!(slow.to_string(), fast.to_string()),
                 (slow, fast) => panic!("executor mismatch: {slow:?} vs {fast:?}"),
@@ -1780,8 +1843,14 @@ mod tests {
             .indexes_for_collection(catalog.collection_by_name("items").unwrap().lid)
             .find(|index| index.schema.unique)
             .unwrap();
+        let collection = catalog.collection_by_name("items").unwrap();
         assert!(matches!(
-            view.unique(index, &Value::String("one".into())),
+            view.unique_with(
+                &UniqueOverlay::default(),
+                collection,
+                index,
+                &Value::String("one".into())
+            ),
             Err(DbError::TransactionConflict(_))
         ));
     }

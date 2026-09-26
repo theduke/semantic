@@ -108,13 +108,23 @@ fn definition_fields(
     }
 }
 
+/// The fields `object` is validated against. With `present_only`, the
+/// collection-level fields are restricted to those `object` holds: enough
+/// for every consumer that only inspects present values (validation and
+/// reference extraction), as collection-level fields are never required.
 fn object_fields(
     catalog: &Catalog,
     collection: &CollectionSchema,
     object: &Object,
+    present_only: bool,
 ) -> std::collections::BTreeMap<String, StoredField> {
     let mut fields = std::collections::BTreeMap::new();
-    for (name, mut ty) in resolved_field_types_for_object(catalog, collection, object) {
+    let types = if present_only {
+        crate::validation::resolved_field_types_for_present_fields(catalog, collection, object)
+    } else {
+        resolved_field_types_for_object(catalog, collection, object)
+    };
+    for (name, mut ty) in types {
         if let Some(attr) = catalog.attribute_by_id(&name) {
             ty.constraints.extend(attr.attribute.constraints.clone());
         }
@@ -610,7 +620,7 @@ pub fn validate_stored_object_with_settings<
     };
     validator.fields(
         object,
-        object_fields(catalog, collection, object),
+        object_fields(catalog, collection, object, true),
         &FieldPath::new(),
         0,
     )?;
@@ -973,7 +983,7 @@ pub(super) fn normalize_nested_values(
     normalize_fields(
         catalog,
         object,
-        object_fields(catalog, collection, object),
+        object_fields(catalog, collection, object, false),
         defaults,
         0,
     );
@@ -1161,7 +1171,7 @@ pub(crate) fn stored_references(
         return Vec::new();
     };
     let mut refs = Vec::new();
-    for (name, field) in object_fields(catalog, collection, object) {
+    for (name, field) in object_fields(catalog, collection, object, true) {
         if !field.computed {
             if let Some(value) = object.get(&name) {
                 visit(

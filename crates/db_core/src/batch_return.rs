@@ -498,7 +498,9 @@ mod tests {
     }
 }
 
-/// Prepare fallible output before committing; no post-commit reads are needed.
+/// The reply of a batch executed over a whole dataset (tests compare the
+/// point write path against it).
+#[cfg(test)]
 pub(crate) fn compact_reply(
     catalog: &Catalog,
     before: &Dataset,

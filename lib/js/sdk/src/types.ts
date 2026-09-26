@@ -661,6 +661,12 @@ export interface BatchStats {
   updated: number | bigint;
 }
 export interface BatchOutcome {
+  /**
+   * The rows the batch wrote, by collection and id: the final state of every
+   * row it created, replaced or updated. Deleted rows are absent (a
+   * collection touched only by deletes maps to an empty object); request
+   * `returning: "changes"` to list deletions. Not the whole collection.
+   */
   dataset: Record<string, Record<string, SemanticObject>>;
   stats: BatchStats;
 }

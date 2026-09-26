@@ -292,11 +292,42 @@ pub fn resolved_field_types_for_object(
     collection: &CollectionSchema,
     object: &Object,
 ) -> FnvHashMap<String, Type> {
+    resolved_field_types(catalog, collection, object, false)
+}
+
+/// [`resolved_field_types_for_object`] restricted to the collection fields
+/// `object` holds (the fields of its class are always included).
+///
+/// Collections of registered schemas know every registered attribute, so
+/// callers that only inspect the values of `object` avoid resolving (and
+/// cloning) the types of all of them.
+pub(crate) fn resolved_field_types_for_present_fields(
+    catalog: &Catalog,
+    collection: &CollectionSchema,
+    object: &Object,
+) -> FnvHashMap<String, Type> {
+    resolved_field_types(catalog, collection, object, true)
+}
+
+fn resolved_field_types(
+    catalog: &Catalog,
+    collection: &CollectionSchema,
+    object: &Object,
+    present_only: bool,
+) -> FnvHashMap<String, Type> {
     let mut field_types = FnvHashMap::default();
 
-    for (_, field_name) in collection.fields() {
-        if let Some(ty) = collection.field_type(field_name) {
-            field_types.insert(field_name.to_string(), ty.clone());
+    if present_only {
+        for field_name in object.keys() {
+            if let Some(ty) = collection.field_type(field_name) {
+                field_types.insert(field_name.to_string(), ty.clone());
+            }
+        }
+    } else {
+        for (_, field_name) in collection.fields() {
+            if let Some(ty) = collection.field_type(field_name) {
+                field_types.insert(field_name.to_string(), ty.clone());
+            }
         }
     }
 
@@ -315,6 +346,12 @@ pub fn resolved_field_types_for_object(
     }
 
     if let Some(class_lid) = class_ids.first().copied() {
+        // Class attributes are registered attributes, whose types the
+        // collection already resolved under the same (attribute id) names;
+        // with every present field resolved, the class adds nothing.
+        if present_only && object.keys().all(|key| field_types.contains_key(key)) {
+            return field_types;
+        }
         let mut class_aliases = FnvHashMap::default();
         let mut field_required = FnvHashMap::default();
         let mut field_default_exprs = FnvHashMap::default();

@@ -7,7 +7,9 @@ use std::collections::BTreeSet;
 use semantic_data::query::BinaryOp;
 use semantic_data::value::{FieldPath, Object, Value};
 use semantic_db_core::catalog::{CollectionKind, LocalCollectionId, LocalIndexId};
-use semantic_db_core::embedded::{EmbeddedDb, EntityStorage};
+use semantic_db_core::embedded::{
+    EmbeddedDb, EntityStorage, StorageWriteOp, StoredEntity, StoredEntityKind,
+};
 use semantic_db_core::{
     Expr, Operand, ReindexTarget, SelectQuery, VerifyOptions, VerifyProblemKind as Kind,
     VerifyReport,
@@ -271,4 +273,196 @@ fn rewrite_payloads_upgrades_legacy_rows_in_batches() {
         (again.scanned, again.rewritten, again.batches),
         (total, 0, 0)
     );
+}
+
+const CONTRIBUTORS: &str = "__semantic.relationship_contributors";
+const COUNTS: &str = "__semantic.relationship_counts";
+
+/// A database with an indexed external relationship `follows` over the
+/// default collection: a -> b -> c, then a -> c retargeted and b -> c
+/// removed, so contributors and counts were inserted, updated and deleted.
+fn relationship_db() -> Db {
+    use semantic_data::attr::{ATTR_RELATION_FROM, ATTR_RELATION_RELATION, ATTR_RELATION_TO};
+    use semantic_data::schema::{RelationIndexingMode, RelationMode, RelationType};
+    use semantic_db_core::DEFAULT_COLLECTION;
+
+    let mut db = EmbeddedDb::open(EntityStore::new(MemoryKvEngine::new())).unwrap();
+    db.upsert_relationship(RelationType {
+        id: "follows".into(),
+        name: "follows".into(),
+        source_collection: DEFAULT_COLLECTION.into(),
+        mode: RelationMode::External,
+        indexing_mode: RelationIndexingMode::Enabled,
+        meta: Default::default(),
+    })
+    .unwrap();
+    for id in ["a", "b", "c", "d"] {
+        db.insert(
+            DEFAULT_COLLECTION,
+            id,
+            Object::from_iter([("id".to_string(), Value::String(id.into()))]),
+        )
+        .unwrap();
+    }
+    let edge = |id: &str, from: &str, to: &str| {
+        Object::from_iter([
+            ("id".to_string(), Value::String(id.into())),
+            (ATTR_RELATION_FROM.to_string(), Value::String(from.into())),
+            (ATTR_RELATION_TO.to_string(), Value::String(to.into())),
+            (
+                ATTR_RELATION_RELATION.to_string(),
+                Value::String("follows".into()),
+            ),
+        ])
+    };
+    for (id, from, to) in [("ab", "a", "b"), ("bc", "b", "c"), ("ac", "a", "c")] {
+        db.insert(DEFAULT_COLLECTION, id, edge(id, from, to))
+            .unwrap();
+    }
+    db.insert(DEFAULT_COLLECTION, "ac", edge("ac", "a", "d"))
+        .unwrap();
+    db.delete(DEFAULT_COLLECTION, "bc").unwrap();
+    db
+}
+
+#[test]
+fn relationship_contributors_and_counts_maintain_their_indexes() {
+    let mut db = relationship_db();
+    let catalog = db.catalog();
+    let internal = [CONTRIBUTORS, COUNTS].map(|name| catalog.collection_by_name(name).unwrap().lid);
+    let internal_indexes = internal
+        .iter()
+        .flat_map(|lid| catalog.indexes_for_collection(*lid))
+        .map(|index| index.lid)
+        .collect::<Vec<_>>();
+    assert!(!internal_indexes.is_empty());
+    // Every contributor and count row has its primary key index entry.
+    for lid in internal {
+        let rows = db.storage().collection_row_count(lid).unwrap().unwrap();
+        let primary = catalog.find_equality_index(lid, "id").unwrap().lid;
+        assert!(rows > 0);
+        assert_eq!(db.storage().index_entry_count(primary).unwrap(), Some(rows));
+    }
+    let report = db.verify(&VerifyOptions::all()).unwrap();
+    assert!(report.is_ok(), "{report}");
+    assert!(
+        report
+            .skipped
+            .iter()
+            .all(|skipped| !skipped.contains("relationship")),
+        "{report}"
+    );
+
+    // Their indexes are checked: dropping the entries is reported.
+    let primary = catalog.find_equality_index(internal[0], "id").unwrap().lid;
+    let mut db = tamper(db, |store| {
+        store
+            .apply_batch(&[StorageWriteOp::ResetIndex(primary)])
+            .unwrap();
+    });
+    let report = db.verify(&VerifyOptions::all()).unwrap();
+    assert!(
+        kinds(&report).contains(&Kind::MissingIndexEntry),
+        "{report}"
+    );
+}
+
+#[test]
+fn relationship_rows_written_without_index_entries_are_rebuilt_on_open() {
+    let db = relationship_db();
+    let catalog = db.catalog();
+    let counts = catalog.collection_by_name(COUNTS).unwrap().lid;
+    let internal_indexes = [CONTRIBUTORS, COUNTS]
+        .into_iter()
+        .flat_map(|name| {
+            let lid = catalog.collection_by_name(name).unwrap().lid;
+            catalog.indexes_for_collection(lid).map(|index| index.lid)
+        })
+        .collect::<Vec<_>>();
+    // The previous format: rows stored without index entries, marked by the
+    // version 1 backfill marker.
+    let (_, mut store) = db.into_parts();
+    let mut ops = internal_indexes
+        .iter()
+        .map(|index| StorageWriteOp::ResetIndex(*index))
+        .collect::<Vec<_>>();
+    ops.push(StorageWriteOp::DeleteEntity {
+        collection: counts,
+        entity_id: "backfill:v2".into(),
+    });
+    ops.push(StorageWriteOp::PutEntity(StoredEntity {
+        collection: counts.0,
+        kind: StoredEntityKind::Untyped,
+        id: "backfill:v1".into(),
+        object: Object::from_iter([
+            ("id".to_string(), Value::String("backfill:v1".into())),
+            ("count".to_string(), Value::U64(1)),
+        ]),
+    }));
+    store.apply_batch(&ops).unwrap();
+
+    let mut db = EmbeddedDb::open(store).unwrap();
+    assert!(
+        db.storage()
+            .get_entity(counts, "backfill:v1")
+            .unwrap()
+            .is_none()
+    );
+    assert!(
+        db.storage()
+            .get_entity(counts, "backfill:v2")
+            .unwrap()
+            .is_some()
+    );
+    let primary = catalog.find_equality_index(counts, "id").unwrap().lid;
+    assert_eq!(
+        db.storage().index_entry_count(primary).unwrap(),
+        db.storage().collection_row_count(counts).unwrap()
+    );
+    let report = db.verify(&VerifyOptions::all()).unwrap();
+    assert!(report.is_ok(), "{report}");
+    assert_eq!(report.checked.relationship_edges, 2, "{report}");
+}
+
+#[test]
+fn legacy_path_indexes_of_system_collections_are_dropped_on_open() {
+    use semantic_data::schema::IndexKind;
+    use semantic_db_core::catalog::{AUTO_PATH_INDEX_FIELD, AUTO_PATH_INDEX_NAME};
+    use semantic_db_core::{DdlBatch, DdlOperation};
+
+    const REFERENCES: &str = "__semantic.reverse_references";
+    let mut db = relationship_db();
+    let references = db.catalog().collection_by_name(REFERENCES).unwrap().lid;
+    assert!(db.catalog().find_path_equality_index(references).is_none());
+    // Older versions kept an automatic path index on system collections.
+    db.transact_ddl(DdlBatch::new().with_op(DdlOperation::UpsertIndex {
+        name: AUTO_PATH_INDEX_NAME.into(),
+        collection: REFERENCES.into(),
+        field: AUTO_PATH_INDEX_FIELD.into(),
+        unique: false,
+        kind: IndexKind::PathEquality,
+        extra_fields: Vec::new(),
+        predicate: None,
+        analyzer: Default::default(),
+    }))
+    .unwrap();
+    let legacy = db
+        .catalog()
+        .find_path_equality_index(references)
+        .expect("legacy path index")
+        .lid;
+    assert!(db.storage().index_entry_count(legacy).unwrap().unwrap() > 0);
+
+    let (_, store) = db.into_parts();
+    let mut db = EmbeddedDb::open(store).unwrap();
+    assert!(db.catalog().find_path_equality_index(references).is_none());
+    assert!(
+        db.storage()
+            .scan_raw_prefix(&keys::index_prefix(legacy))
+            .unwrap()
+            .is_empty(),
+        "the dropped index left entries behind"
+    );
+    let report = db.verify(&VerifyOptions::all()).unwrap();
+    assert!(report.is_ok(), "{report}");
 }

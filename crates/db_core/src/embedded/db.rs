@@ -69,13 +69,13 @@ mod text_search;
 mod validation;
 
 pub use interactive::EmbeddedTransaction;
+pub(crate) use interactive::{CommittedTransaction, PreparedTransaction};
 pub use maintenance::write_backup;
 pub use reader::DbReader;
 use reader::QueryReader;
 
 use crate::embedded::storage::{RevisionReader, snapshot_isolation_unsupported};
 use commit::CommitIntent;
-use compact::CompactReply;
 use local_refs::{
     LocalRefResolver, RowLocalRefs, resolve_path_with_local_refs,
     value_from_object_with_alias_fallback,
@@ -228,7 +228,10 @@ impl<S: EntityStorage> EmbeddedDb<S> {
         if !mark_collection_internal(&mut catalog, name)? {
             return Ok(());
         }
-        let ops = catalog_write_ops(&self.storage, &catalog)?;
+        // Dropping the path index of a raw system collection clears its
+        // entries.
+        let mut ops = self.ddl_cleanup_ops(&snapshot.catalog, &catalog)?;
+        ops.extend(catalog_write_ops(&self.storage, &catalog)?);
         let revision = self.storage.current_revision()?;
         let intent = CommitIntent::with_catalog(
             crate::ChangeSource::Ddl,
@@ -606,12 +609,14 @@ impl<S: EntityStorage> EmbeddedDb<S> {
         id: impl Into<String>,
         object: Object,
     ) -> std::result::Result<(), DbError> {
-        let id = id.into();
-        self.execute_batch(Batch::new().with_op(BatchOperation::Upsert {
-            collection: collection.to_string(),
-            id,
-            object,
-        }))?;
+        self.execute_batch_returning(
+            Batch::new().with_op(BatchOperation::Upsert {
+                collection: collection.to_string(),
+                id: id.into(),
+                object,
+            }),
+            crate::BatchReturn::Stats,
+        )?;
         Ok(())
     }
 
@@ -624,10 +629,13 @@ impl<S: EntityStorage> EmbeddedDb<S> {
     }
 
     pub fn delete(&mut self, collection: &str, id: &str) -> std::result::Result<(), DbError> {
-        self.execute_batch(Batch::new().with_op(BatchOperation::DeleteById {
-            collection: collection.to_string(),
-            id: id.to_string(),
-        }))?;
+        self.execute_batch_returning(
+            Batch::new().with_op(BatchOperation::DeleteById {
+                collection: collection.to_string(),
+                id: id.to_string(),
+            }),
+            crate::BatchReturn::Stats,
+        )?;
         Ok(())
     }
 
@@ -657,189 +665,14 @@ impl<S: EntityStorage> EmbeddedDb<S> {
         &mut self,
         query: InsertQuery,
     ) -> std::result::Result<crate::InsertResult, DbError> {
-        let collection_name = query.collection_or_default().to_string();
         let catalog = self.catalog();
-        let collection = catalog
-            .collection_by_name(&collection_name)
-            .ok_or_else(|| DbError::UnknownCollectionByName {
-                name: collection_name.clone(),
-            })?
-            .clone();
-        let query = canonicalize_insert_query(&query, catalog.as_ref(), &collection)?;
-        let target_columns = query
-            .columns
-            .iter()
-            .map(|column| collection.canonical_field_name(column).to_string())
-            .collect::<Vec<_>>();
-        let InsertQuery {
-            source, returning, ..
-        } = query;
-        let rows = self.materialize_insert_rows(&collection, &target_columns, source)?;
-        if rows.is_empty() {
-            return Err(DbError::InvalidQuery(
-                "INSERT requires at least one row".to_string(),
-            ));
-        }
-        let inserted = rows.len();
-
-        let mut batch = Batch::new();
-        let mut inserted_ids = Vec::with_capacity(inserted);
-        for object in rows {
-            let id = self.extract_insert_id(&collection, &object)?;
-            inserted_ids.push(id.clone());
-            batch = batch.with_op(BatchOperation::Upsert {
-                collection: collection.name.clone(),
-                id,
-                object,
-            });
-        }
-
-        let outcome = self.execute_batch(batch)?;
-        let returning_rows = if returning.is_empty() {
-            Vec::new()
-        } else {
-            let stored_rows = outcome.dataset.get(&collection.name).ok_or_else(|| {
-                DbError::Storage(
-                    format!(
-                        "inserted collection '{}' missing from batch outcome",
-                        collection.name
-                    )
-                    .into(),
-                )
-            })?;
-            inserted_ids
-                .iter()
-                .map(|id| {
-                    stored_rows
-                        .get(id)
-                        .map(|object| crate::project_object(object, &returning))
-                        .ok_or_else(|| DbError::EntityNotFound {
-                            collection: collection.name.clone(),
-                            id: id.clone(),
-                        })
-                })
-                .collect::<std::result::Result<Vec<_>, _>>()?
+        let plan = InsertPlan::new(&catalog, query, |select| self.select(select))?;
+        let crate::BatchReply::Dataset(outcome) =
+            self.execute_batch_returning(plan.batch.clone(), plan.reply_mode())?
+        else {
+            unreachable!("dataset returning requested")
         };
-        Ok(crate::InsertResult {
-            inserted,
-            returning: self.format_output_rows(
-                catalog.as_ref(),
-                returning_rows,
-                query.field_format,
-            ),
-        })
-    }
-
-    fn materialize_insert_rows(
-        &self,
-        collection: &CollectionSchema,
-        target_columns: &[String],
-        source: InsertSource,
-    ) -> std::result::Result<Vec<Object>, DbError> {
-        match source {
-            InsertSource::Objects(rows) => {
-                if !target_columns.is_empty() {
-                    return Err(DbError::InvalidQuery(
-                        "column list is not supported with object insert source".to_string(),
-                    ));
-                }
-                Ok(rows)
-            }
-            InsertSource::Values(rows) => {
-                self.materialize_insert_value_rows(collection, target_columns, rows)
-            }
-            InsertSource::Select(select) => {
-                self.materialize_insert_select_rows(target_columns, select)
-            }
-        }
-    }
-
-    fn materialize_insert_value_rows(
-        &self,
-        collection: &CollectionSchema,
-        target_columns: &[String],
-        rows: Vec<Vec<crate::Expr>>,
-    ) -> std::result::Result<Vec<Object>, DbError> {
-        if target_columns.is_empty() {
-            return Err(DbError::InvalidQuery(format!(
-                "INSERT into '{}' with VALUES requires explicit target columns",
-                collection.name
-            )));
-        }
-        let mut out = Vec::with_capacity(rows.len());
-        for row in rows {
-            if row.len() != target_columns.len() {
-                return Err(DbError::InvalidQuery(format!(
-                    "VALUES row has {} expressions but INSERT specifies {} columns",
-                    row.len(),
-                    target_columns.len()
-                )));
-            }
-            let mut object = Object::new();
-            for (idx, expr) in row.iter().enumerate() {
-                let value = crate::evaluate_expr(&Object::new(), expr).ok_or_else(|| {
-                    DbError::InvalidQuery(format!(
-                        "failed to evaluate INSERT value expression for column '{}'",
-                        target_columns[idx]
-                    ))
-                })?;
-                object.insert(target_columns[idx].clone(), value);
-            }
-            out.push(object);
-        }
-        Ok(out)
-    }
-
-    fn materialize_insert_select_rows(
-        &self,
-        target_columns: &[String],
-        select: SelectQuery,
-    ) -> std::result::Result<Vec<Object>, DbError> {
-        let source_projection = select.projection.clone();
-        let source_rows = self.select(select)?;
-
-        if target_columns.is_empty() {
-            return Ok(source_rows);
-        }
-        if source_projection.is_empty() {
-            return Err(DbError::InvalidQuery(
-                "INSERT ... SELECT with target columns requires explicit SELECT projection"
-                    .to_string(),
-            ));
-        }
-        if source_projection.len() != target_columns.len() {
-            return Err(DbError::InvalidQuery(format!(
-                "INSERT has {} target columns but SELECT returns {} projected columns",
-                target_columns.len(),
-                source_projection.len()
-            )));
-        }
-
-        let source_keys = source_projection
-            .iter()
-            .map(|field| {
-                field
-                    .alias
-                    .clone()
-                    .unwrap_or_else(|| infer_project_key_for_insert(&field.expr))
-            })
-            .collect::<Vec<_>>();
-
-        let mut out = Vec::with_capacity(source_rows.len());
-        for row in source_rows {
-            let mut object = Object::new();
-            for (idx, source_key) in source_keys.iter().enumerate() {
-                let value = row.get(source_key).ok_or_else(|| {
-                    DbError::InvalidQuery(format!(
-                        "INSERT ... SELECT expected source column '{}' in SELECT row",
-                        source_key
-                    ))
-                })?;
-                object.insert(target_columns[idx].clone(), value.clone());
-            }
-            out.push(object);
-        }
-        Ok(out)
+        plan.result(&self.catalog(), &outcome.dataset)
     }
 
     pub fn execute_physical_plan(
@@ -877,105 +710,39 @@ impl<S: EntityStorage> EmbeddedDb<S> {
 
         let query = canonicalize_update_query(&query, catalog.as_ref(), &collection_schema)?;
         let collection_name = collection_schema.name.clone();
-        let touched = Batch::new().with_op(BatchOperation::Update {
-            collection: collection_name.clone(),
-            query: query.clone(),
-        });
         let txn_result = run_with_transaction_retries(TransactionOptions::default(), |_| {
-            let catalog_snapshot = self.catalog.snapshot();
-            let read_revision = self.storage.current_revision()?;
-            let scope = TxScope::new(
-                catalog_snapshot.catalog.as_ref(),
-                read_revision,
-                IsolationLevel::ReadCommitted,
-            );
-            if let Some(result) = self.run_compact(
-                scope,
-                catalog_snapshot.version,
-                crate::WriteSettings::default(),
-                false,
-                |db, view, _| {
-                    let context = DefaultExpressionContext::now();
-                    let recursive_validation = db.validation_enabled()?;
-                    mutation::tx_update(
-                        view,
-                        &db.query_context(),
-                        &collection_name,
-                        &query,
-                        &context,
-                        recursive_validation,
-                    )
-                },
-                |_, _, _, result| Ok(CompactReply::Ready(result)),
-            )? {
-                return Ok(result);
-            }
-            let before = self.load_dataset_for_batch(scope, &touched)?;
-            let mut after = before.clone();
-
-            let mut result = crate::UpdateResult {
-                stats: MutationStats {
-                    matched: 0,
-                    affected: 0,
-                },
-                returning: Vec::new(),
-            };
-            if let Some(coll) = after.get_mut(&collection_name) {
-                let mut entities = coll
-                    .iter()
-                    .map(|(id, object)| crate::Entity {
-                        id: id.clone(),
-                        collection: collection_name.clone(),
-                        object: object.clone(),
-                    })
-                    .collect::<Vec<_>>();
-                let default_context = DefaultExpressionContext::now();
+            let mut repaired = false;
+            loop {
+                let catalog_snapshot = self.catalog.snapshot();
+                let read_revision = self.storage.current_revision()?;
+                let scope = TxScope::new(
+                    catalog_snapshot.catalog.as_ref(),
+                    read_revision,
+                    IsolationLevel::ReadCommitted,
+                );
+                let context = DefaultExpressionContext::now();
                 let recursive_validation = self.validation_enabled()?;
-                result = crate::apply_update_with_returning_and_prepare(
-                    &query,
-                    &mut entities,
-                    |_, object| {
-                        prepare_row_for_write(
-                            catalog_snapshot.catalog.as_ref(),
-                            &collection_schema,
-                            object,
-                            &default_context,
+                let query_context = self.query_context();
+                if let Some(result) = self.run_compact(
+                    scope,
+                    catalog_snapshot.version,
+                    crate::WriteSettings::default(),
+                    false,
+                    |view, _| {
+                        mutation::tx_update(
+                            view,
+                            &query_context,
+                            &collection_name,
+                            &query,
+                            &context,
                             recursive_validation,
                         )
-                        .map_err(|err| CoreError::new(err.to_string()))
                     },
-                )
-                .map_err(|err| DbError::InvalidQuery(err.to_string()))?;
-                coll.clear();
-                for entity in entities {
-                    coll.insert(entity.id, entity.object);
+                    |_, _, _, result| Ok(result),
+                )? {
+                    return Ok::<_, DbError>(result);
                 }
-            }
-
-            if self.catalog.snapshot().version != catalog_snapshot.version {
-                return Err(DbError::TransactionConflict(
-                    "catalog changed during transaction".to_string(),
-                ));
-            }
-
-            expand_dataset_cascade_deletes(catalog_snapshot.catalog.as_ref(), &before, &mut after);
-            match self.persist_dataset_delta_with_settings(
-                scope,
-                &before,
-                &after,
-                &[],
-                crate::WriteSettings::default(),
-                DatasetWrite::Data,
-                CommitIntent::data(crate::ChangeSource::Batch),
-            )? {
-                StorageCommitOutcome::Committed { .. } => Ok(result),
-                StorageCommitOutcome::Conflict {
-                    expected_revision,
-                    actual_revision,
-                } => Err(DbError::TransactionConflict(format!(
-                    "expected revision {:?}, found {:?}",
-                    expected_revision, actual_revision
-                ))),
+                compact::repaired_once(&mut repaired)?;
             }
         })?;
         let mut value = txn_result.value;
@@ -1008,79 +775,28 @@ impl<S: EntityStorage> EmbeddedDb<S> {
 
         let query = canonicalize_delete_query(&query, catalog.as_ref(), &collection_schema)?;
         let collection_name = collection_schema.name.clone();
-        let touched = Batch::new().with_op(BatchOperation::Delete {
-            collection: collection_name.clone(),
-            query: query.clone(),
-        });
         let txn_result = run_with_transaction_retries(TransactionOptions::default(), |_| {
-            let catalog_snapshot = self.catalog.snapshot();
-            let read_revision = self.storage.current_revision()?;
-            let scope = TxScope::new(
-                catalog_snapshot.catalog.as_ref(),
-                read_revision,
-                IsolationLevel::ReadCommitted,
-            );
-            if let Some(result) = self.run_compact(
-                scope,
-                catalog_snapshot.version,
-                crate::WriteSettings::default(),
-                false,
-                |db, view, _| {
-                    mutation::tx_delete(view, &db.query_context(), &collection_name, &query)
-                },
-                |_, _, _, result| Ok(CompactReply::Ready(result)),
-            )? {
-                return Ok(result);
-            }
-            let before = self.load_dataset_for_batch(scope, &touched)?;
-            let mut after = before.clone();
-
-            let mut result = crate::DeleteResult {
-                deleted: 0,
-                returning: Vec::new(),
-            };
-            if let Some(coll) = after.get_mut(&collection_name) {
-                let entities = coll
-                    .iter()
-                    .map(|(id, object)| crate::Entity {
-                        id: id.clone(),
-                        collection: collection_name.clone(),
-                        object: object.clone(),
-                    })
-                    .collect::<Vec<_>>();
-                let (remaining, delete_result) =
-                    crate::apply_delete_with_remaining(&query, entities);
-                result = delete_result;
-                coll.clear();
-                for entity in remaining {
-                    coll.insert(entity.id, entity.object);
+            let mut repaired = false;
+            loop {
+                let catalog_snapshot = self.catalog.snapshot();
+                let read_revision = self.storage.current_revision()?;
+                let scope = TxScope::new(
+                    catalog_snapshot.catalog.as_ref(),
+                    read_revision,
+                    IsolationLevel::ReadCommitted,
+                );
+                let query_context = self.query_context();
+                if let Some(result) = self.run_compact(
+                    scope,
+                    catalog_snapshot.version,
+                    crate::WriteSettings::default(),
+                    false,
+                    |view, _| mutation::tx_delete(view, &query_context, &collection_name, &query),
+                    |_, _, _, result| Ok(result),
+                )? {
+                    return Ok::<_, DbError>(result);
                 }
-            }
-
-            if self.catalog.snapshot().version != catalog_snapshot.version {
-                return Err(DbError::TransactionConflict(
-                    "catalog changed during transaction".to_string(),
-                ));
-            }
-
-            expand_dataset_cascade_deletes(catalog_snapshot.catalog.as_ref(), &before, &mut after);
-            match self.persist_dataset_delta_with_settings(
-                scope,
-                &before,
-                &after,
-                &[],
-                crate::WriteSettings::default(),
-                DatasetWrite::Data,
-                CommitIntent::data(crate::ChangeSource::Batch),
-            )? {
-                StorageCommitOutcome::Committed { .. } => Ok(result),
-                StorageCommitOutcome::Conflict {
-                    expected_revision,
-                    actual_revision,
-                } => Err(DbError::TransactionConflict(format!(
-                    "expected revision {:?}, found {:?}",
-                    expected_revision, actual_revision
-                ))),
+                compact::repaired_once(&mut repaired)?;
             }
         })?;
         let mut value = txn_result.value;
@@ -1145,11 +861,6 @@ impl<S: EntityStorage> EmbeddedDb<S> {
         returning: crate::BatchReturn,
         settings: crate::WriteSettings,
     ) -> Result<crate::BatchReply, DbError> {
-        if returning == crate::BatchReturn::Dataset {
-            return Err(DbError::InvalidQuery(
-                "bounded batch execution requires compact returning".into(),
-            ));
-        }
         self.transact_returning(
             batch,
             TransactionOptions::default(),
@@ -1203,17 +914,17 @@ impl<S: EntityStorage> EmbeddedDb<S> {
         self.ensure_isolation_supported(options.isolation)?;
 
         let txn_result = run_with_transaction_retries(options, |_| {
-            self.execution_counts = compact::ExecutionCounts::default();
-            let catalog_snapshot = self.catalog.snapshot();
-            let batch = canonicalize_batch(&batch, catalog_snapshot.catalog.as_ref())?;
-            let read_revision = self.storage.current_revision()?;
-            let scope = TxScope::new(
-                catalog_snapshot.catalog.as_ref(),
-                read_revision,
-                options.isolation,
-            );
-            if returning != crate::BatchReturn::Dataset {
-                if let Some(reply) = self.try_compact_batch(
+            let mut repaired = false;
+            loop {
+                let catalog_snapshot = self.catalog.snapshot();
+                let batch = canonicalize_batch(batch.clone(), catalog_snapshot.catalog.as_ref())?;
+                let read_revision = self.storage.current_revision()?;
+                let scope = TxScope::new(
+                    catalog_snapshot.catalog.as_ref(),
+                    read_revision,
+                    options.isolation,
+                );
+                if let Some(reply) = self.compact_batch(
                     scope,
                     &batch,
                     &returning,
@@ -1221,74 +932,14 @@ impl<S: EntityStorage> EmbeddedDb<S> {
                     settings,
                     require_bounded,
                 )? {
-                    return Ok(reply);
+                    return Ok::<_, DbError>(reply);
                 }
-                if require_bounded {
-                    return Err(DbError::InvalidQuery(
-                        "batch cannot be executed without collection materialization".into(),
-                    ));
-                }
-            }
-            let dataset = self.load_dataset_for_batch(scope, &batch)?;
-            let mut out = Self::execute_batch_with_write_defaults(
-                catalog_snapshot.catalog.as_ref(),
-                &dataset,
-                &batch,
-                self.validation_enabled()?,
-            )?;
-            out.stats.deleted += expand_dataset_cascade_deletes(
-                catalog_snapshot.catalog.as_ref(),
-                &dataset,
-                &mut out.dataset,
-            );
-
-            self.execution_counts.visited_rows +=
-                dataset.values().map(BTreeMap::len).sum::<usize>();
-            if returning != crate::BatchReturn::Dataset {
-                tracing::debug!(
-                    fallback_scans = self.execution_counts.fallback_scans,
-                    visited_rows = self.execution_counts.visited_rows,
-                    "compact batch fallback loaded"
-                );
-            }
-
-            let reply = crate::batch_return::compact_reply(
-                catalog_snapshot.catalog.as_ref(),
-                &dataset,
-                &out,
-                &returning,
-            )?;
-
-            if self.catalog.snapshot().version != catalog_snapshot.version {
-                return Err(DbError::TransactionConflict(
-                    "catalog changed during transaction".to_string(),
-                ));
-            }
-
-            match self.persist_dataset_delta_with_settings(
-                scope,
-                &dataset,
-                &out.dataset,
-                &[],
-                settings,
-                DatasetWrite::Data,
-                CommitIntent::data(crate::ChangeSource::Batch),
-            )? {
-                StorageCommitOutcome::Committed { .. } => {
-                    Ok(reply.unwrap_or(crate::BatchReply::Dataset(out)))
-                }
-                StorageCommitOutcome::Conflict {
-                    expected_revision,
-                    actual_revision,
-                } => Err(DbError::TransactionConflict(format!(
-                    "expected revision {:?}, found {:?}",
-                    expected_revision, actual_revision
-                ))),
+                compact::repaired_once(&mut repaired)?;
             }
         })?;
-        Ok(txn_result
-            .value
-            .with_metrics((&self.execution_counts).into()))
+        let metrics =
+            crate::WriteMetrics::from(&self.execution_counts).with_transaction(txn_result.metrics);
+        Ok(txn_result.value.with_metrics(metrics))
     }
 
     pub fn execute_batch(&mut self, batch: Batch) -> std::result::Result<BatchOutcome, DbError> {
@@ -1553,7 +1204,7 @@ impl<S: EntityStorage> EmbeddedDb<S> {
         before: &mut BTreeMap<String, BTreeMap<String, Object>>,
         after: &mut BTreeMap<String, BTreeMap<String, Object>>,
     ) -> std::result::Result<(), DbError> {
-        let batch = canonicalize_batch(&batch, current_catalog)?;
+        let batch = canonicalize_batch(batch, current_catalog)?;
         let touched = touched_collections(&batch);
         for collection_name in &touched {
             if !before.contains_key(collection_name) {
@@ -1678,61 +1329,13 @@ impl<S: EntityStorage> EmbeddedDb<S> {
         self.storage.tx_capabilities()
     }
 
-    fn load_dataset_for_batch(
-        &self,
-        scope: TxScope<'_>,
-        batch: &Batch,
-    ) -> std::result::Result<BTreeMap<String, BTreeMap<String, Object>>, DbError> {
-        let TxScope {
-            catalog,
-            revision: read_revision,
-            isolation,
-        } = scope;
-        // Snapshot isolation reads every touched collection from one
-        // snapshot at the read revision.
-        let snapshot_reader = if isolation.requires_snapshot() {
-            Some(scope.reader(&self.storage)?)
-        } else {
-            None
-        };
-        let mut dataset = BTreeMap::new();
-        for collection_name in touched_collections(batch) {
-            let collection = catalog
-                .collection_by_name(&collection_name)
-                .ok_or_else(|| DbError::UnknownCollectionByName {
-                    name: collection_name.clone(),
-                })?;
-
-            let rows = if let Some(reader) = &snapshot_reader {
-                let mut rows = Vec::new();
-                reader.scan_collection(collection.lid, |row| {
-                    rows.push(row);
-                    Ok(())
-                })?;
-                rows
-            } else if self.storage.tx_capabilities().snapshot_reads {
-                if let Some(revision) = read_revision {
-                    self.storage
-                        .scan_collection_at_revision(collection.lid, revision)?
-                } else {
-                    self.storage.scan_collection(collection.lid)?
-                }
-            } else {
-                self.storage.scan_collection(collection.lid)?
-            };
-
-            let mut objects = BTreeMap::new();
-            for row in rows {
-                objects.insert(row.id, row.object);
-            }
-            dataset.insert(collection_name, objects);
-        }
-        Ok(dataset)
-    }
-
     /// Persist a package migration or DDL change: every row of `after` is
     /// re-normalized and re-validated under `catalog`, and cascade deletes
     /// are expanded.
+    ///
+    /// This is the only write path that materializes whole collections:
+    /// migrations may rewrite every row of a collection under a new
+    /// catalog. Data writes use the point write path ([`compact`]).
     fn persist_dataset_delta(
         &mut self,
         catalog: &Catalog,
@@ -1742,32 +1345,7 @@ impl<S: EntityStorage> EmbeddedDb<S> {
         prelude_ops: &[StorageWriteOp],
         intent: CommitIntent,
     ) -> std::result::Result<StorageCommitOutcome, DbError> {
-        self.persist_dataset_delta_with_settings(
-            TxScope::new(catalog, expected_revision, IsolationLevel::ReadCommitted),
-            before,
-            after,
-            prelude_ops,
-            crate::WriteSettings::default(),
-            DatasetWrite::Migration,
-            intent,
-        )
-    }
-
-    fn persist_dataset_delta_with_settings(
-        &mut self,
-        scope: TxScope<'_>,
-        before: &BTreeMap<String, BTreeMap<String, Object>>,
-        after: &BTreeMap<String, BTreeMap<String, Object>>,
-        prelude_ops: &[StorageWriteOp],
-        settings: crate::WriteSettings,
-        write: DatasetWrite,
-        intent: CommitIntent,
-    ) -> std::result::Result<StorageCommitOutcome, DbError> {
-        let TxScope {
-            catalog,
-            revision: expected_revision,
-            ..
-        } = scope;
+        let settings = crate::WriteSettings::default();
         let validation_enabled = self.validation_enabled()?;
         if validation_enabled {
             crate::validation::validate_enforcement_support(catalog)?;
@@ -1777,12 +1355,6 @@ impl<S: EntityStorage> EmbeddedDb<S> {
         // the post-migration dataset below must be the final source of index rows.
         let mut ops = prelude_ops.to_vec();
         let mut normalized_after = BTreeMap::<String, BTreeMap<String, Object>>::new();
-        // Rows normalized by this write, per collection.
-        let mut changed_rows = BTreeMap::<String, BTreeSet<String>>::new();
-        let reader = match write {
-            DatasetWrite::Migration => None,
-            DatasetWrite::Data => Some(scope.reader(&self.storage)?),
-        };
 
         for (collection_name, new_rows) in after {
             let collection_schema =
@@ -1791,18 +1363,8 @@ impl<S: EntityStorage> EmbeddedDb<S> {
                         name: collection_name.clone(),
                     }
                 })?;
-            let old_rows = before.get(collection_name);
-
             let mut normalized_rows = BTreeMap::<String, Object>::new();
-            let mut changed = BTreeSet::new();
             for (id, object) in new_rows {
-                if write == DatasetWrite::Data
-                    && old_rows.and_then(|rows| rows.get(id)) == Some(object)
-                {
-                    // Stored rows were normalized and validated when written.
-                    normalized_rows.insert(id.clone(), object.clone());
-                    continue;
-                }
                 let mut object = object.clone();
                 if validation_enabled {
                     crate::validation::normalize_for_recursive_validation(
@@ -1814,40 +1376,13 @@ impl<S: EntityStorage> EmbeddedDb<S> {
                 } else {
                     normalize_object_for_collection(catalog, collection_schema, &mut object)?;
                 }
-                self.validate_primary_id(collection_schema, id, &object)?;
+                validate_primary_id(collection_schema, id, &object)?;
                 normalized_rows.insert(id.clone(), object);
-                changed.insert(id.clone());
             }
-            match &reader {
-                None => {
-                    self.validate_unique_indexes(catalog, collection_schema, &normalized_rows)?
-                }
-                Some(reader) => validate_unique_changed_rows(
-                    reader,
-                    catalog,
-                    collection_schema,
-                    &normalized_rows,
-                    &changed,
-                )?,
-            }
+            self.validate_unique_indexes(catalog, collection_schema, &normalized_rows)?;
             normalized_after.insert(collection_name.clone(), normalized_rows);
-            changed_rows.insert(collection_name.clone(), changed);
         }
-        drop(reader);
-
-        let validate_rows = match write {
-            DatasetWrite::Migration => {
-                expand_dataset_cascade_deletes(catalog, before, &mut normalized_after);
-                None
-            }
-            DatasetWrite::Data => Some(rows_to_revalidate(
-                catalog,
-                before,
-                &normalized_after,
-                changed_rows,
-                settings,
-            )),
-        };
+        expand_dataset_cascade_deletes(catalog, before, &mut normalized_after);
 
         for (collection_name, normalized_rows) in &normalized_after {
             let collection_schema =
@@ -1856,54 +1391,39 @@ impl<S: EntityStorage> EmbeddedDb<S> {
                         name: collection_name.clone(),
                     }
                 })?;
-            match &validate_rows {
-                None => self.validate_ref_fields(
-                    catalog,
-                    collection_schema,
-                    normalized_rows,
-                    &normalized_after,
-                    settings,
-                )?,
-                Some(validate_rows) => self.validate_ref_fields(
-                    catalog,
-                    collection_schema,
-                    validate_rows
-                        .get(collection_name)
-                        .into_iter()
-                        .flatten()
-                        .filter_map(|id| normalized_rows.get_key_value(id)),
-                    &normalized_after,
-                    settings,
-                )?,
-            }
+            self.validate_ref_fields(
+                catalog,
+                collection_schema,
+                normalized_rows,
+                &normalized_after,
+                settings,
+            )?;
         }
 
         for (collection_name, normalized_rows) in &normalized_after {
-            let collection_schema = catalog
-                .collection_by_name(collection_name)
-                .ok_or_else(|| DbError::UnknownCollectionByName {
-                    name: collection_name.clone(),
-                })?
-                .clone();
-
+            let collection_schema =
+                catalog.collection_by_name(collection_name).ok_or_else(|| {
+                    DbError::UnknownCollectionByName {
+                        name: collection_name.clone(),
+                    }
+                })?;
             let old_rows = before.get(collection_name);
             if old_rows == Some(normalized_rows) {
                 continue;
             }
-
-            self.push_row_delta(
+            incremental::push_row_delta(
                 catalog,
                 collection_schema.lid,
                 old_rows.unwrap_or(&BTreeMap::new()),
                 normalized_rows,
                 &mut ops,
-            )?;
+            );
         }
 
         let changes = crate::batch_return::changes(before, &normalized_after);
         if !before.is_empty() || !normalized_after.is_empty() {
             self.update_relationship_edges(catalog, before, &normalized_after, &mut ops)?;
-            self.update_reverse_references(catalog, &changes, &mut ops)?;
+            compact::update_reverse_references(catalog, &changes, &mut ops);
         }
 
         self.commit_write(&ops, expected_revision, intent, changes)
@@ -2000,68 +1520,6 @@ impl<S: EntityStorage> EmbeddedDb<S> {
         Ok(())
     }
 
-    fn validate_primary_id(
-        &self,
-        collection: &CollectionSchema,
-        id: &str,
-        object: &Object,
-    ) -> std::result::Result<(), DbError> {
-        let canonical_id = collection.canonical_field_name("id").to_string();
-        let Some(value) = object.get(&canonical_id) else {
-            return Err(DbError::InvalidQuery(format!(
-                "collection '{}' requires primary key field '{}'",
-                collection.name, canonical_id
-            )));
-        };
-        let Some(object_id) = value.as_str() else {
-            return Err(DbError::InvalidQuery(format!(
-                "collection '{}' primary key field '{}' must be a string",
-                collection.name, canonical_id
-            )));
-        };
-        if object_id != id {
-            return Err(DbError::InvalidQuery(format!(
-                "primary key mismatch in collection '{}': object id '{}' does not match row id '{}'",
-                collection.name, object_id, id
-            )));
-        }
-        Ok(())
-    }
-
-    fn extract_insert_id(
-        &self,
-        collection: &CollectionSchema,
-        object: &Object,
-    ) -> std::result::Result<String, DbError> {
-        let canonical_id = collection.canonical_field_name("id");
-        let mut id_value = None;
-        for (field, value) in object {
-            if collection.canonical_field_name(field) == canonical_id {
-                if id_value.is_some() {
-                    return Err(DbError::InvalidQuery(format!(
-                        "insert row for collection '{}' provides multiple primary key aliases",
-                        collection.name
-                    )));
-                }
-                id_value = Some(value);
-            }
-        }
-
-        let Some(value) = id_value else {
-            return Err(DbError::InvalidQuery(format!(
-                "collection '{}' requires primary key field '{}'",
-                collection.name, canonical_id
-            )));
-        };
-        let Some(id) = value.as_str() else {
-            return Err(DbError::InvalidQuery(format!(
-                "collection '{}' primary key field '{}' must be a string",
-                collection.name, canonical_id
-            )));
-        };
-        Ok(id.to_string())
-    }
-
     fn rebuild_relationship_edges(
         &self,
         catalog: &Catalog,
@@ -2135,7 +1593,7 @@ impl<S: EntityStorage> EmbeddedDb<S> {
             let direct: Vec<_> = source_rows
                 .iter()
                 .filter_map(|(id, object)| {
-                    Self::contribution(catalog, relationship, source_collection, id, object)
+                    incremental::contribution(catalog, relationship, source_collection, id, object)
                 })
                 .collect();
             out.extend(Self::edges_from_direct(relationship, &direct));
@@ -2200,51 +1658,288 @@ impl<S: EntityStorage> EmbeddedDb<S> {
         shortest
             .into_iter()
             .map(|((source, target), depth)| {
-                Self::relationship_edge(&relationship.id, &source, &target, depth)
+                incremental::relationship_edge(&relationship.id, &source, &target, depth)
             })
             .collect()
     }
+}
 
-    fn external_relation_field_name(
+/// An `INSERT` lowered to a batch of upserts.
+pub(super) struct InsertPlan {
+    pub batch: Batch,
+    collection: String,
+    inserted_ids: Vec<String>,
+    returning: Vec<crate::QueryField>,
+    field_format: FieldFormat,
+}
+
+impl InsertPlan {
+    /// Lower `query` under `catalog`; `select` runs the source query of
+    /// `INSERT ... SELECT`.
+    pub(super) fn new(
         catalog: &Catalog,
-        source_collection: &CollectionSchema,
-        object: &Object,
-        alias: &str,
-        fallback_attr: &str,
-    ) -> String {
-        if let Some(object_type) = object.get(OBJECT_TYPE_FIELD).and_then(Value::as_str) {
-            let class_ids = catalog.class_ids(object_type);
-            if class_ids.len() == 1
-                && let Some(field) = catalog.class_field_for_alias(class_ids[0], alias)
-            {
-                return field;
-            }
+        query: InsertQuery,
+        select: impl FnOnce(SelectQuery) -> std::result::Result<Vec<Object>, DbError>,
+    ) -> std::result::Result<Self, DbError> {
+        let collection_name = query.collection_or_default().to_string();
+        let collection = catalog
+            .collection_by_name(&collection_name)
+            .ok_or_else(|| DbError::UnknownCollectionByName {
+                name: collection_name.clone(),
+            })?;
+        let query = canonicalize_insert_query(&query, catalog, collection)?;
+        let target_columns = query
+            .columns
+            .iter()
+            .map(|column| collection.canonical_field_name(column).to_string())
+            .collect::<Vec<_>>();
+        let field_format = query.field_format;
+        let InsertQuery {
+            source, returning, ..
+        } = query;
+        let rows = materialize_insert_rows(collection, &target_columns, source, select)?;
+        if rows.is_empty() {
+            return Err(DbError::InvalidQuery(
+                "INSERT requires at least one row".to_string(),
+            ));
         }
-
-        source_collection
-            .canonical_field_name(fallback_attr)
-            .to_string()
+        let mut batch = Batch::new();
+        let mut inserted_ids = Vec::with_capacity(rows.len());
+        for object in rows {
+            let id = extract_insert_id(collection, &object)?;
+            inserted_ids.push(id.clone());
+            batch = batch.with_op(BatchOperation::Upsert {
+                collection: collection.name.clone(),
+                id,
+                object,
+            });
+        }
+        Ok(Self {
+            batch,
+            collection: collection.name.clone(),
+            inserted_ids,
+            returning,
+            field_format,
+        })
     }
 
-    fn external_relation_field_value(
+    /// The reply the batch needs: the written rows only when the insert
+    /// returns a projection of them.
+    pub(super) fn reply_mode(&self) -> crate::BatchReturn {
+        if self.returning.is_empty() {
+            crate::BatchReturn::Stats
+        } else {
+            crate::BatchReturn::Dataset
+        }
+    }
+
+    /// The result of the insert, given the rows the batch wrote.
+    pub(super) fn result(
+        &self,
         catalog: &Catalog,
-        source_collection: &CollectionSchema,
-        object: &Object,
-        alias: &str,
-        fallback_attr: &str,
-    ) -> Option<String> {
-        let field = Self::external_relation_field_name(
-            catalog,
-            source_collection,
-            object,
-            alias,
-            fallback_attr,
-        );
-        object
-            .get(&field)
-            .and_then(Value::as_str)
-            .map(ToString::to_string)
+        written: &crate::Dataset,
+    ) -> std::result::Result<crate::InsertResult, DbError> {
+        let returning_rows = if self.returning.is_empty() {
+            Vec::new()
+        } else {
+            let stored_rows = written.get(&self.collection).ok_or_else(|| {
+                DbError::Storage(
+                    format!(
+                        "inserted collection '{}' missing from batch outcome",
+                        self.collection
+                    )
+                    .into(),
+                )
+            })?;
+            self.inserted_ids
+                .iter()
+                .map(|id| {
+                    stored_rows
+                        .get(id)
+                        .map(|object| crate::project_object(object, &self.returning))
+                        .ok_or_else(|| DbError::EntityNotFound {
+                            collection: self.collection.clone(),
+                            id: id.clone(),
+                        })
+                })
+                .collect::<std::result::Result<Vec<_>, _>>()?
+        };
+        Ok(crate::InsertResult {
+            inserted: self.inserted_ids.len(),
+            returning: crate::format_output_rows(catalog, returning_rows, self.field_format),
+        })
     }
+}
+
+fn materialize_insert_rows(
+    collection: &CollectionSchema,
+    target_columns: &[String],
+    source: InsertSource,
+    select: impl FnOnce(SelectQuery) -> std::result::Result<Vec<Object>, DbError>,
+) -> std::result::Result<Vec<Object>, DbError> {
+    match source {
+        InsertSource::Objects(rows) => {
+            if !target_columns.is_empty() {
+                return Err(DbError::InvalidQuery(
+                    "column list is not supported with object insert source".to_string(),
+                ));
+            }
+            Ok(rows)
+        }
+        InsertSource::Values(rows) => {
+            materialize_insert_value_rows(collection, target_columns, rows)
+        }
+        InsertSource::Select(query) => {
+            materialize_insert_select_rows(target_columns, query, select)
+        }
+    }
+}
+
+fn materialize_insert_value_rows(
+    collection: &CollectionSchema,
+    target_columns: &[String],
+    rows: Vec<Vec<crate::Expr>>,
+) -> std::result::Result<Vec<Object>, DbError> {
+    if target_columns.is_empty() {
+        return Err(DbError::InvalidQuery(format!(
+            "INSERT into '{}' with VALUES requires explicit target columns",
+            collection.name
+        )));
+    }
+    let mut out = Vec::with_capacity(rows.len());
+    for row in rows {
+        if row.len() != target_columns.len() {
+            return Err(DbError::InvalidQuery(format!(
+                "VALUES row has {} expressions but INSERT specifies {} columns",
+                row.len(),
+                target_columns.len()
+            )));
+        }
+        let mut object = Object::new();
+        for (idx, expr) in row.iter().enumerate() {
+            let value = crate::evaluate_expr(&Object::new(), expr).ok_or_else(|| {
+                DbError::InvalidQuery(format!(
+                    "failed to evaluate INSERT value expression for column '{}'",
+                    target_columns[idx]
+                ))
+            })?;
+            object.insert(target_columns[idx].clone(), value);
+        }
+        out.push(object);
+    }
+    Ok(out)
+}
+
+fn materialize_insert_select_rows(
+    target_columns: &[String],
+    query: SelectQuery,
+    select: impl FnOnce(SelectQuery) -> std::result::Result<Vec<Object>, DbError>,
+) -> std::result::Result<Vec<Object>, DbError> {
+    let source_projection = query.projection.clone();
+    let source_rows = select(query)?;
+
+    if target_columns.is_empty() {
+        return Ok(source_rows);
+    }
+    if source_projection.is_empty() {
+        return Err(DbError::InvalidQuery(
+            "INSERT ... SELECT with target columns requires explicit SELECT projection".to_string(),
+        ));
+    }
+    if source_projection.len() != target_columns.len() {
+        return Err(DbError::InvalidQuery(format!(
+            "INSERT has {} target columns but SELECT returns {} projected columns",
+            target_columns.len(),
+            source_projection.len()
+        )));
+    }
+
+    let source_keys = source_projection
+        .iter()
+        .map(|field| {
+            field
+                .alias
+                .clone()
+                .unwrap_or_else(|| infer_project_key_for_insert(&field.expr))
+        })
+        .collect::<Vec<_>>();
+
+    let mut out = Vec::with_capacity(source_rows.len());
+    for row in source_rows {
+        let mut object = Object::new();
+        for (idx, source_key) in source_keys.iter().enumerate() {
+            let value = row.get(source_key).ok_or_else(|| {
+                DbError::InvalidQuery(format!(
+                    "INSERT ... SELECT expected source column '{}' in SELECT row",
+                    source_key
+                ))
+            })?;
+            object.insert(target_columns[idx].clone(), value.clone());
+        }
+        out.push(object);
+    }
+    Ok(out)
+}
+
+fn extract_insert_id(
+    collection: &CollectionSchema,
+    object: &Object,
+) -> std::result::Result<String, DbError> {
+    let canonical_id = collection.canonical_field_name("id");
+    let mut id_value = None;
+    for (field, value) in object {
+        if collection.canonical_field_name(field) == canonical_id {
+            if id_value.is_some() {
+                return Err(DbError::InvalidQuery(format!(
+                    "insert row for collection '{}' provides multiple primary key aliases",
+                    collection.name
+                )));
+            }
+            id_value = Some(value);
+        }
+    }
+
+    let Some(value) = id_value else {
+        return Err(DbError::InvalidQuery(format!(
+            "collection '{}' requires primary key field '{}'",
+            collection.name, canonical_id
+        )));
+    };
+    let Some(id) = value.as_str() else {
+        return Err(DbError::InvalidQuery(format!(
+            "collection '{}' primary key field '{}' must be a string",
+            collection.name, canonical_id
+        )));
+    };
+    Ok(id.to_string())
+}
+
+/// Check that `object` carries `id` as its primary key.
+pub(super) fn validate_primary_id(
+    collection: &CollectionSchema,
+    id: &str,
+    object: &Object,
+) -> std::result::Result<(), DbError> {
+    let canonical_id = collection.canonical_field_name("id").to_string();
+    let Some(value) = object.get(&canonical_id) else {
+        return Err(DbError::InvalidQuery(format!(
+            "collection '{}' requires primary key field '{}'",
+            collection.name, canonical_id
+        )));
+    };
+    let Some(object_id) = value.as_str() else {
+        return Err(DbError::InvalidQuery(format!(
+            "collection '{}' primary key field '{}' must be a string",
+            collection.name, canonical_id
+        )));
+    };
+    if object_id != id {
+        return Err(DbError::InvalidQuery(format!(
+            "primary key mismatch in collection '{}': object id '{}' does not match row id '{}'",
+            collection.name, object_id, id
+        )));
+    }
+    Ok(())
 }
 
 /// Row count of `collection`: the maintained count when the storage keeps
@@ -2687,7 +2382,21 @@ impl EmbeddedPhysicalDataSource<'_> {
         scans: Vec<EmbeddedCollectionScan>,
         predicate: Option<crate::Expr>,
     ) -> crate::SendableRecordBatchStream {
-        let batch_size = crate::DEFAULT_EXECUTION_BATCH_SIZE;
+        Self::limited_scans_to_stream(scans, predicate, None)
+    }
+
+    /// Stream the rows of `scans` that match `predicate` in batches. With a
+    /// `limit_hint` (the rows the consumer reads at most), batches hold at
+    /// most that many rows, so a limit that is satisfied by the first batch
+    /// stops the scan after reading only the rows it needed.
+    fn limited_scans_to_stream(
+        scans: Vec<EmbeddedCollectionScan>,
+        predicate: Option<crate::Expr>,
+        limit_hint: Option<usize>,
+    ) -> crate::SendableRecordBatchStream {
+        let batch_size = limit_hint.map_or(crate::DEFAULT_EXECUTION_BATCH_SIZE, |limit| {
+            limit.clamp(1, crate::DEFAULT_EXECUTION_BATCH_SIZE)
+        });
         stream::unfold(
             (scans.into_iter(), None::<EmbeddedCollectionScan>, predicate),
             move |(mut scans, mut current, predicate)| async move {
@@ -2771,11 +2480,23 @@ impl EmbeddedPhysicalDataSource<'_> {
         Ok((scans, true))
     }
 
+    /// The rows with `ids`, read lazily when the reader owns its snapshot
+    /// (so a limited consumer reads only the rows it takes).
     fn materialize_ids(
         &self,
         collection: &CollectionSchema,
         ids: Vec<String>,
     ) -> crate::CoreResult<EmbeddedCollectionScan> {
+        if let Some(snapshot) = self.reader.shared() {
+            let lid = collection.lid;
+            let rows = ids.into_iter().filter_map(move |id| {
+                snapshot
+                    .get_entity(lid, &id)
+                    .map_err(|err| crate::CoreError::new(err.to_string()))
+                    .transpose()
+            });
+            return self.row_views(collection, rows);
+        }
         let mut rows = Vec::with_capacity(ids.len());
         for id in ids {
             if let Some(entity) = self
@@ -3117,7 +2838,7 @@ fn mark_collection_internal(
         return Ok(false);
     };
     if collection.internal {
-        return Ok(false);
+        return Ok(catalog.drop_raw_system_path_index(name));
     }
     catalog
         .set_collection_internal(name, true)
@@ -3128,11 +2849,11 @@ fn mark_collection_internal(
 /// Check that every operation of `batch` targets a known, mutable collection
 /// and canonicalize its predicate mutations.
 pub(super) fn canonicalize_batch(
-    batch: &Batch,
+    batch: Batch,
     catalog: &Catalog,
 ) -> std::result::Result<Batch, DbError> {
     let mut canonical_ops = Vec::with_capacity(batch.operations.len());
-    for op in batch.operations.iter().cloned() {
+    for op in batch.operations {
         match op {
             BatchOperation::Create {
                 collection,
@@ -3314,20 +3035,6 @@ impl<'c> TxScope<'c> {
     }
 }
 
-/// Kind of write persisted by the dataset path.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum DatasetWrite {
-    /// Package migration or DDL: the catalog may have changed, so every row
-    /// of `after` is re-normalized and re-validated, and cascade deletes are
-    /// expanded after normalization.
-    Migration,
-    /// Data mutation under the catalog the rows were stored with: only rows
-    /// that differ from `before` are normalized and validated, plus stored
-    /// rows referencing deleted or retyped rows. The caller has expanded
-    /// cascade deletes.
-    Data,
-}
-
 fn unique_indexes<'c>(
     catalog: &'c Catalog,
     collection: &CollectionSchema,
@@ -3357,106 +3064,6 @@ fn check_unique_index_rows(
         seen.insert(value, id);
     }
     Ok(())
-}
-
-/// Check the unique indexes of `collection` for the `changed` rows of its
-/// final state `rows`.
-///
-/// Each value written by a changed row is probed in the index at the read
-/// revision; stored holders count only while their final row still holds
-/// the value. Reports the same violation as [`check_unique_index_rows`]
-/// (the pair whose later id comes first), assuming the stored rows were
-/// unique. Indexes awaiting a rebuild are checked over all rows.
-fn validate_unique_changed_rows<S: EntityStorage>(
-    reader: &RevisionReader<'_, S>,
-    catalog: &Catalog,
-    collection: &CollectionSchema,
-    rows: &BTreeMap<String, Object>,
-    changed: &BTreeSet<String>,
-) -> std::result::Result<(), DbError> {
-    if changed.is_empty() {
-        return Ok(());
-    }
-    for index in unique_indexes(catalog, collection) {
-        if reader.index_needs_rebuild(index.lid)? {
-            check_unique_index_rows(collection, index, rows)?;
-            continue;
-        }
-        let mut holders = BTreeMap::<Value, BTreeSet<String>>::new();
-        for id in changed {
-            if let Some(value) = rows.get(id).and_then(|row| index.key_value(row)) {
-                holders.entry(value).or_default().insert(id.clone());
-            }
-        }
-        let mut violation = None::<(Value, String, String)>;
-        for (value, mut ids) in holders {
-            for id in reader.scan_index_value(index.lid, None, &value)? {
-                if rows.get(&id).and_then(|row| index.key_value(row)).as_ref() == Some(&value) {
-                    ids.insert(id);
-                }
-            }
-            let mut ids = ids.into_iter();
-            if let (Some(existing), Some(id)) = (ids.next(), ids.next())
-                && violation.as_ref().is_none_or(|(_, _, first)| id < *first)
-            {
-                violation = Some((value, existing, id));
-            }
-        }
-        if let Some((value, existing, id)) = violation {
-            return Err(compact::unique_violation(
-                collection, index, &value, &existing, &id,
-            ));
-        }
-    }
-    Ok(())
-}
-
-/// Rows of `after` whose references must be re-validated after a data
-/// write: the `changed` rows, plus (with foreign-key validation) every row
-/// referencing a row that was deleted or changed its type, as those are the
-/// only target properties validation reads.
-fn rows_to_revalidate(
-    catalog: &Catalog,
-    before: &BTreeMap<String, BTreeMap<String, Object>>,
-    after: &BTreeMap<String, BTreeMap<String, Object>>,
-    mut changed: BTreeMap<String, BTreeSet<String>>,
-    settings: crate::WriteSettings,
-) -> BTreeMap<String, BTreeSet<String>> {
-    if !settings.validate_foreign_keys {
-        return changed;
-    }
-    let mut affected = BTreeSet::<(String, String)>::new();
-    for (collection, rows) in before {
-        let remaining = after.get(collection);
-        for (id, row) in rows {
-            let retyped = match remaining.and_then(|rows| rows.get(id)) {
-                None => true,
-                Some(current) => current.get(OBJECT_TYPE_FIELD) != row.get(OBJECT_TYPE_FIELD),
-            };
-            if retyped {
-                affected.insert((collection.clone(), id.clone()));
-            }
-        }
-    }
-    if affected.is_empty() {
-        return changed;
-    }
-    for (collection, rows) in after {
-        let validate = changed.entry(collection.clone()).or_default();
-        for (id, row) in rows {
-            if validate.contains(id) {
-                continue;
-            }
-            let owner = (collection.clone(), id.clone());
-            if crate::validation::stored_references(catalog, &owner, row)
-                .iter()
-                .any(|reference| affected.contains(&reference.target))
-            {
-                validate.insert(id.clone());
-            }
-        }
-    }
-    changed
 }
 
 fn validate_ref_value(
@@ -3655,7 +3262,9 @@ impl crate::AsyncPhysicalDataSource for EmbeddedPhysicalDataSource<'_> {
         scan: crate::PhysicalIndexScan,
     ) -> crate::SendableRecordBatchStream {
         match self.index_range_scan(&scan) {
-            Ok(Some(rows)) => Self::scans_to_stream(vec![rows], scan.residual_predicate),
+            Ok(Some(rows)) => {
+                Self::limited_scans_to_stream(vec![rows], scan.residual_predicate, scan.limit_hint)
+            }
             Ok(None) => crate::index_range_fallback_stream(self, scan),
             Err(err) => stream::once(async move { Err(err) }).boxed(),
         }
@@ -3666,7 +3275,11 @@ impl crate::AsyncPhysicalDataSource for EmbeddedPhysicalDataSource<'_> {
         search: crate::PhysicalTextSearch,
     ) -> crate::SendableRecordBatchStream {
         match self.text_search_scan(&search) {
-            Ok(Some(rows)) => Self::scans_to_stream(vec![rows], search.residual_predicate),
+            Ok(Some(rows)) => Self::limited_scans_to_stream(
+                vec![rows],
+                search.residual_predicate,
+                search.limit_hint,
+            ),
             Ok(None) => match search.predicate {
                 Some(predicate) => self.scan_filtered_stream(search.source, predicate),
                 None => self.scan_stream(search.source),
@@ -3713,22 +3326,41 @@ impl crate::AsyncPhysicalDataSource for EmbeddedPhysicalDataSource<'_> {
         value: Value,
         residual_predicate: Option<crate::Expr>,
     ) -> crate::SendableRecordBatchStream {
+        self.index_lookup_limited_stream(source, field, value, residual_predicate, None)
+    }
+
+    fn index_lookup_limited_stream(
+        &self,
+        source: crate::SourceRef,
+        field: crate::FieldRef,
+        value: Value,
+        residual_predicate: Option<crate::Expr>,
+        limit_hint: Option<usize>,
+    ) -> crate::SendableRecordBatchStream {
         let result = (|| {
             let (scans, lookup_predicate) =
                 self.index_lookup_collections(&source, &field, &value)?;
             let predicate = combine_optional_predicates(lookup_predicate, residual_predicate);
             let Some(predicate) = predicate else {
-                return Ok(Self::scans_to_stream(scans, None));
+                return Ok(Self::limited_scans_to_stream(scans, None, limit_hint));
             };
             if !expr_contains_relationship(&predicate) {
-                return Ok(Self::scans_to_stream(scans, Some(predicate)));
+                return Ok(Self::limited_scans_to_stream(
+                    scans,
+                    Some(predicate),
+                    limit_hint,
+                ));
             }
 
             let filtered_scans = scans
                 .into_iter()
                 .map(|scan| self.filter_scan_with_relationships(scan, &predicate))
                 .collect::<crate::CoreResult<Vec<_>>>()?;
-            Ok(Self::scans_to_stream(filtered_scans, None))
+            Ok(Self::limited_scans_to_stream(
+                filtered_scans,
+                None,
+                limit_hint,
+            ))
         })();
 
         match result {

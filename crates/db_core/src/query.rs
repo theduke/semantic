@@ -1270,8 +1270,19 @@ impl Default for Batch {
     }
 }
 
+/// Result of a committed batch.
 #[derive(facet::Facet, Debug, Clone, PartialEq)]
 pub struct BatchOutcome {
+    /// The rows written by this batch, per collection: the final state of
+    /// every row the batch created, replaced or updated (including writes
+    /// that left a row unchanged). Rows the batch deleted (including cascade
+    /// deletes) are absent; a collection touched only by deletes maps to an
+    /// empty set. Use [`crate::BatchReturn::Changes`] to list deletions.
+    ///
+    /// The embedded engine builds this from the rows the batch touched, so
+    /// its cost is bounded by the batch, not by the collection size. The
+    /// in-memory [`crate::execute_batch`] helper, which operates on a whole
+    /// dataset, returns that complete dataset instead.
     pub dataset: Dataset,
     pub stats: BatchStats,
     /// Execution counters of the write (empty for backends that do not

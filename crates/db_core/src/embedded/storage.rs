@@ -66,11 +66,14 @@ pub enum StorageWriteOp {
     /// rely on `old` to know the previous state of the affected entries
     /// without reading them when the batch is committed conditionally on
     /// that revision.
+    ///
+    /// The objects are shared: one write reindexes a row in every index of
+    /// its collection with the same two objects.
     ReindexEntity {
         index: IndexSchema,
         entity_id: String,
-        old: Option<Object>,
-        new: Option<Object>,
+        old: Option<std::sync::Arc<Object>>,
+        new: Option<std::sync::Arc<Object>>,
     },
 }
 

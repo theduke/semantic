@@ -132,6 +132,7 @@ pub(crate) fn plan_text_search(
             .map(|column| FieldPath::from_fields([column]))
             .collect(),
         tokens: best.tokens.into_iter().collect(),
+        limit_hint: None,
         mode: best.mode,
         predicate: combine_conjuncts(request.conjuncts.iter().cloned()),
         residual_predicate: combine_conjuncts(

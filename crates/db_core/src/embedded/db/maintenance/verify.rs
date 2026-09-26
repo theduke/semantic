@@ -16,9 +16,6 @@
 //!   edges are derived from them like the write path does.
 //! - Maintained counters are compared with the counted rows and entries.
 //!
-//! The indexes of the relationship contributor and count collections are
-//! skipped: the write path stores those rows without index maintenance.
-//!
 //! Besides the report, the verifier produces a [`RepairPlan`] naming what a
 //! repair must rebuild.
 
@@ -185,12 +182,8 @@ impl<'r, S: EntityStorage> Verifier<'r, S> {
             return Ok(());
         }
         let catalog = self.catalog;
-        let unmaintained = unmaintained_index_collections(catalog);
         let mut supported = true;
         for (lid, index) in catalog.indexes() {
-            if unmaintained.contains(&index.collection) {
-                continue;
-            }
             if self.snapshot.index_needs_rebuild(lid)? {
                 if self.options.check_indexes {
                     self.index_problem(
@@ -422,7 +415,7 @@ impl<'r, S: EntityStorage> Verifier<'r, S> {
         entity: &StoredEntity,
     ) -> Result<(), DbError> {
         for relationship in relationships {
-            let Some((source, target)) = EmbeddedDb::<S>::contribution(
+            let Some((source, target)) = super::super::incremental::contribution(
                 self.catalog,
                 relationship,
                 collection,
@@ -619,7 +612,7 @@ impl<'r, S: EntityStorage> Verifier<'r, S> {
                         Some((relationship, collection)) => {
                             match snapshot.get_entity(collection.lid, id) {
                                 Ok(Some(entity)) => {
-                                    EmbeddedDb::<S>::contribution(
+                                    super::super::incremental::contribution(
                                         catalog,
                                         relationship,
                                         collection,
@@ -755,17 +748,6 @@ impl<'r, S: EntityStorage> Verifier<'r, S> {
         }
         Ok(())
     }
-}
-
-/// Internal collections whose rows are written without index maintenance
-/// (the relationship contributors and counts are only read by id), so their
-/// (built-in) indexes are not checked.
-fn unmaintained_index_collections(catalog: &Catalog) -> BTreeSet<LocalCollectionId> {
-    [CONTRIBUTORS, COUNTS]
-        .into_iter()
-        .filter_map(|name| catalog.collection_by_name(name))
-        .map(|collection| collection.lid)
-        .collect()
 }
 
 fn stored_count(object: &Object) -> Option<u64> {

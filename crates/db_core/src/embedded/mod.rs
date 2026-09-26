@@ -2,6 +2,8 @@ mod backend;
 pub mod db;
 mod schema_store;
 pub mod storage;
+#[cfg(test)]
+mod write_latency_tests;
 
 pub use backend::EmbeddedBackend;
 pub use db::{DbReader, EmbeddedDb, EmbeddedTransaction};

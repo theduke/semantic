@@ -43,12 +43,12 @@ Benchmark ids are `<workload>/<engine>[/<variant>]/<size>`.
 | `top_n_unindexed` | `ORDER BY price DESC LIMIT 10` (top-N over a full scan) |
 | `join_ref` | items of one kind joined to their owners via the `Ref` (composite index + index nested loop) |
 | `feed` | `WHERE kind = ? ORDER BY created_at DESC LIMIT 20` (composite index) |
-| `insert/<engine>/batch_N` | `Db::execute_batch` of N new rows (replies with a `Dataset`) |
+| `insert/<engine>/batch_N` | `Db::execute_batch` of N new rows (replies with the written rows) |
 | `insert_stats/<engine>/batch_N` | the same batch via `execute_batch_returning(.., BatchReturn::Stats)` |
 | `insert_immediate/redb/batch_100` | `insert_stats` with fsync on every commit |
 | `update_by_kind` | `UPDATE .. SET rating = ? WHERE kind = ?` (1 % of the rows) |
 | `update_by_id` | `UPDATE .. SET rating = ? WHERE id = ?` |
-| `delete_by_id` | `Db::delete` (replies with a `Dataset`) |
+| `delete_by_id` | `Db::delete` |
 | `delete_by_id_stats` | one `DeleteById` batch returning stats |
 | `delete_by_kind` | `DELETE .. WHERE kind = ?` (1 % of the rows) |
 | `transaction_10r_10w` | interactive transaction: 10 `get`s, 10 `upsert`s, commit |
@@ -108,10 +108,63 @@ machine, not counting the build.
 
 ## Reference numbers
 
-Indicative only: one `--quick` run with `SEMANTIC_BENCH_SIZES=10000`
-on 2026-09-26, AMD Ryzen 7 5800X (8 cores / 16 threads), 32 GiB RAM,
-NVMe SSD, Linux 7.2, rustc 1.96 (bench profile). Median time per
-iteration (criterion's middle estimate); 10,000 items + 1,000 owners.
+Indicative only: `--quick` runs with `SEMANTIC_BENCH_SIZES=10000` on
+2026-09-26, AMD Ryzen 7 5800X (8 cores / 16 threads), 32 GiB RAM, NVMe
+SSD, Linux 7.2, rustc 1.96 (bench profile). Median time per iteration
+(criterion's middle estimate); 10,000 items + 1,000 owners.
+
+### After `perf(db): cut write latency and writer lock hold time`
+
+Same machine and settings as the baseline below.
+
+| Benchmark | memory | redb |
+|-----------|-------:|-----:|
+| `point_get` | 9.6 µs | 11.6 µs |
+| `eq_select` (4 rows) | 47 µs | 50 µs |
+| `range_limit` (LIMIT 50) | 271 µs | 240 µs |
+| `ordered_index_scan` (LIMIT 50) | 261 µs | 236 µs |
+| `keyset_page` (LIMIT 50) | 267 µs | 237 µs |
+| `full_text` | 1.06 ms | 890 µs |
+| `full_scan_filter` | 18.8 ms | 17.5 ms |
+| `count` | 14.8 µs | 15.4 µs |
+| `top_n_unindexed` | 36.0 ms | 23.8 ms |
+| `join_ref` (100 items) | 1.11 ms | 855 µs |
+| `feed` (LIMIT 20) | 131 µs | 130 µs |
+| `insert` batch 100 (`execute_batch`) | 12.1 ms (8.3k rows/s) | 30.7 ms (3.3k rows/s) |
+| `insert` batch 1000 (`execute_batch`) | 134 ms (7.5k rows/s) | 198 ms (5.1k rows/s) |
+| `insert_stats` batch 100 | 11.8 ms (8.5k rows/s) | 31.1 ms (3.2k rows/s) |
+| `insert_stats` batch 1000 | 131 ms (7.6k rows/s) | 187 ms (5.4k rows/s) |
+| `insert_immediate` batch 100 | - | 30.1 ms (3.3k rows/s) |
+| `update_by_kind` (100 rows) | 10.3 ms | 12.1 ms |
+| `update_by_id` | 156 µs | 1.55 ms |
+| `delete_by_id` (`Db::delete`) | 129 µs | 2.52 ms |
+| `delete_by_id_stats` | 125 µs | 2.46 ms |
+| `delete_by_kind` (100 rows) | 9.8 ms | 43.4 ms |
+| `transaction_10r_10w` | 1.33 ms | 2.99 ms |
+| `concurrent_read` (4 readers, 1 writer) | 165 µs | 387 µs |
+
+What changed:
+
+- `Db::execute_batch`, `Db::insert` and `Db::delete` no longer load the
+  touched collections: `BatchOutcome::dataset` holds the rows the batch
+  wrote, and data writes never materialize collections. `delete_by_id`
+  dropped from about 670 ms to the cost of `delete_by_id_stats`, and
+  `insert` now costs the same as `insert_stats`.
+- Inserts cost about 190 µs (redb) and 130 µs (memory) per row, down from
+  390-410 µs (`insert_stats` batch 1000: 2.1x on redb, 3.1x on memory):
+  unique checks no longer rescan the batch per row, field types and
+  references are resolved for the fields a row holds rather than every
+  registered attribute, index maintenance shares one copy of each row,
+  the key-value lowering sorts one vector instead of filling two maps,
+  and system collections (reverse references, relationship data) have no
+  automatic path index.
+- `range_limit` stops after `OFFSET + LIMIT` rows (12x faster on redb,
+  20x on memory).
+- Writes are prepared without the writer lock, so readers take snapshots
+  while a write is in flight; `concurrent_read` on memory dropped from
+  14.5 ms to 165 µs. It stays noisy in short runs.
+
+### Baseline
 
 | Benchmark | memory | redb |
 |-----------|-------:|-----:|
@@ -139,7 +192,7 @@ iteration (criterion's middle estimate); 10,000 items + 1,000 owners.
 | `transaction_10r_10w` | 2.44 ms | 3.75 ms |
 | `concurrent_read` (4 readers, 1 writer) | 14.5 ms | 458 µs (24 ms in a rerun) |
 
-What these numbers show:
+What these (baseline) numbers showed:
 
 - `Db::execute_batch` and `Db::delete` reply with a `Dataset` of the
   touched collection, so they cost O(collection size) (about 190 ms at 10k

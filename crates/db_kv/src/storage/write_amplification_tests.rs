@@ -523,8 +523,8 @@ fn reindex(old: Option<&str>, new: Option<&str>) -> StorageWriteOp {
     StorageWriteOp::ReindexEntity {
         index: kind_index(),
         entity_id: "one".to_string(),
-        old: old.map(kind),
-        new: new.map(kind),
+        old: old.map(kind).map(std::sync::Arc::new),
+        new: new.map(kind).map(std::sync::Arc::new),
     }
 }
 

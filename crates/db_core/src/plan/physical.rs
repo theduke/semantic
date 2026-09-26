@@ -101,7 +101,9 @@ pub struct PhysicalIndexScan {
     /// replaced a sort by the key columns (ties by entity id).
     pub ordered: bool,
     /// Upper bound of the rows the consumer reads (`LIMIT` plus `OFFSET`),
-    /// when the scan serves an ordered, limited query.
+    /// when a `LIMIT` consumes the scan's rows one to one (possibly through
+    /// projections). The scan stops once that many rows passed its residual
+    /// predicate.
     pub limit_hint: Option<usize>,
     /// Serve rows from the index keys (key columns and id) without reading
     /// stored rows. Rows whose key does not decode losslessly are read.
@@ -150,6 +152,9 @@ pub struct PhysicalTextSearch {
     /// The conjuncts of `predicate` the probes do not guarantee, checked on
     /// every row read.
     pub residual_predicate: Option<Expr>,
+    /// Upper bound of the rows the consumer reads, see
+    /// [`PhysicalIndexScan::limit_hint`].
+    pub limit_hint: Option<usize>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -166,6 +171,9 @@ pub enum PhysicalSource {
         field: FieldRef,
         value: Value,
         residual_predicate: Option<Expr>,
+        /// Upper bound of the rows the consumer reads, see
+        /// [`PhysicalIndexScan::limit_hint`].
+        limit_hint: Option<usize>,
     },
     /// Ordered, range, prefix, multi-probe or index-only read of an
     /// equality or range index.

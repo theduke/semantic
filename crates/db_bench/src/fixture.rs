@@ -276,7 +276,7 @@ async fn write_stats(db: &Db, batch: Batch) -> Result<(), DbError> {
 /// How a write workload commits its batch.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum WritePath {
-    /// `Db::execute_batch` / `Db::delete`, which reply with a `Dataset`.
+    /// `Db::execute_batch` / `Db::delete` (dataset replies of the written rows).
     Dataset,
     /// `Db::execute_batch_returning(batch, BatchReturn::Stats)`.
     Stats,

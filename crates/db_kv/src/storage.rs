@@ -1102,29 +1102,25 @@ fn lower_final_values(
             _ => None,
         })
         .collect::<BTreeSet<_>>();
-    let mut lowered = Vec::new();
-    let mut known = BTreeMap::<Vec<u8>, bool>::new();
+    let mut lowered = LoweredWrites::default();
     let mut bases = BTreeMap::<Vec<u8>, u64>::new();
-    let mut clear_prefix = |lowered: &mut Vec<KvWriteOp>, prefix: Vec<u8>, counter: Vec<u8>| {
+    let mut clear_prefix = |lowered: &mut LoweredWrites, prefix: Vec<u8>, counter: Vec<u8>| {
         let existing = txn.scan_prefix(&prefix)?;
         bases.insert(counter, existing.len() as u64);
-        push_prefix_deletes(lowered, existing, &prefix);
+        lowered.delete_prefix(existing, &prefix);
         Ok::<_, DbError>(())
     };
     for operation in operations {
         match operation {
-            StorageWriteOp::PutEntity(entity) => lowered.push(KvWriteOp::Put {
-                key: entity_key(LocalCollectionId(entity.collection), &entity.id),
-                value: dictionaries.encode(txn, entity, format)?,
-            }),
+            StorageWriteOp::PutEntity(entity) => lowered.put(
+                entity_key(LocalCollectionId(entity.collection), &entity.id),
+                dictionaries.encode(txn, entity, format)?,
+                None,
+            ),
             StorageWriteOp::DeleteEntity {
                 collection,
                 entity_id,
-            } => {
-                lowered.push(KvWriteOp::Delete {
-                    key: entity_key(*collection, entity_id),
-                });
-            }
+            } => lowered.delete(entity_key(*collection, entity_id), None),
             StorageWriteOp::ClearCollection(collection) => {
                 clear_prefix(
                     &mut lowered,
@@ -1138,9 +1134,7 @@ fn lower_final_values(
                     index_prefix(*index),
                     index_entries_key(*index),
                 )?;
-                lowered.push(KvWriteOp::Delete {
-                    key: index_marker_key(*index),
-                });
+                lowered.delete(index_marker_key(*index), None);
             }
             StorageWriteOp::ResetIndex(index) => {
                 clear_prefix(
@@ -1148,10 +1142,7 @@ fn lower_final_values(
                     index_prefix(*index),
                     index_entries_key(*index),
                 )?;
-                lowered.push(KvWriteOp::Put {
-                    key: index_marker_key(*index),
-                    value: index_format_value(),
-                });
+                lowered.put(index_marker_key(*index), index_format_value(), None);
             }
             StorageWriteOp::IndexEntity {
                 index,
@@ -1159,10 +1150,7 @@ fn lower_final_values(
                 object,
             } => {
                 for key in index_keys(index, entity_id, object)? {
-                    lowered.push(KvWriteOp::Put {
-                        key,
-                        value: Vec::new(),
-                    });
+                    lowered.put(key, Vec::new(), None);
                 }
             }
             StorageWriteOp::UnindexEntity {
@@ -1171,7 +1159,7 @@ fn lower_final_values(
                 object,
             } => {
                 for key in index_keys(index, entity_id, object)? {
-                    lowered.push(KvWriteOp::Delete { key });
+                    lowered.delete(key, None);
                 }
             }
             StorageWriteOp::ReindexEntity {
@@ -1180,53 +1168,89 @@ fn lower_final_values(
                 old,
                 new,
             } => {
-                let keys = |object: &Option<Object>| match object {
+                let keys = |object: &Option<Arc<Object>>| match object {
                     Some(object) => index_keys(index, entity_id, object),
                     None => Ok(BTreeSet::new()),
                 };
-                let (old_keys, new_keys) = (keys(old)?, keys(new)?);
+                let (mut old_keys, mut new_keys) = (keys(old)?, keys(new)?);
+                // Entries in both states stay as they are.
+                if !old_keys.is_empty() && !new_keys.is_empty() {
+                    let common = old_keys
+                        .intersection(&new_keys)
+                        .cloned()
+                        .collect::<Vec<_>>();
+                    for key in &common {
+                        old_keys.remove(key);
+                        new_keys.remove(key);
+                    }
+                }
                 let known_keys = known_base && !reset_indexes.contains(&index.lid);
-                for key in old_keys.difference(&new_keys) {
-                    if known_keys {
-                        known.insert(key.clone(), true);
-                    }
-                    lowered.push(KvWriteOp::Delete { key: key.clone() });
+                for key in old_keys {
+                    lowered.delete(key, known_keys.then_some(true));
                 }
-                for key in new_keys.difference(&old_keys) {
-                    if known_keys {
-                        known.insert(key.clone(), false);
-                    }
-                    lowered.push(KvWriteOp::Put {
-                        key: key.clone(),
-                        value: Vec::new(),
-                    });
+                for key in new_keys {
+                    lowered.put(key, Vec::new(), known_keys.then_some(false));
                 }
             }
         }
     }
-    let mut final_values = BTreeMap::<Vec<u8>, FinalState>::new();
-    for operation in lowered {
-        let (key, value) = match operation {
-            KvWriteOp::Put { key, value } => (key, Some(value)),
-            KvWriteOp::Delete { key } => (key, None),
-        };
-        match final_values.entry(key) {
-            std::collections::btree_map::Entry::Vacant(entry) => {
-                let existed = known.get(entry.key()).copied();
-                entry.insert(FinalState { value, existed });
-            }
-            // No single operation vouches for the previous state of a key
-            // written more than once.
-            std::collections::btree_map::Entry::Occupied(mut entry) => {
-                *entry.get_mut() = FinalState::unknown(value);
-            }
-        }
-    }
-    Ok((final_values, bases))
+    Ok((lowered.finish(), bases))
 }
 
-/// Final key states of a lowered batch with its counter bases.
-type LoweredBatch = (BTreeMap<Vec<u8>, FinalState>, BTreeMap<Vec<u8>, u64>);
+/// Key writes of a batch in operation order, each with the previous
+/// existence of its key when the operation writing it knows it.
+#[derive(Default)]
+struct LoweredWrites {
+    writes: Vec<(Vec<u8>, Option<Vec<u8>>, Option<bool>)>,
+}
+
+impl LoweredWrites {
+    fn put(&mut self, key: Vec<u8>, value: Vec<u8>, existed: Option<bool>) {
+        self.writes.push((key, Some(value), existed));
+    }
+
+    fn delete(&mut self, key: Vec<u8>, existed: Option<bool>) {
+        self.writes.push((key, None, existed));
+    }
+
+    /// Delete every key under `prefix`: the `existing` ones and those the
+    /// batch wrote so far.
+    fn delete_prefix(&mut self, existing: Vec<(Vec<u8>, Vec<u8>)>, prefix: &[u8]) {
+        let mut keys = existing
+            .into_iter()
+            .map(|(key, _)| key)
+            .collect::<BTreeSet<_>>();
+        keys.extend(
+            self.writes
+                .iter()
+                .filter(|(key, value, _)| value.is_some() && key.starts_with(prefix))
+                .map(|(key, _, _)| key.clone()),
+        );
+        for key in keys {
+            self.delete(key, None);
+        }
+    }
+
+    /// The final state of every written key, in key order: the last write
+    /// wins, and no single operation vouches for the previous state of a
+    /// key written more than once.
+    fn finish(mut self) -> Vec<(Vec<u8>, FinalState)> {
+        // Stable: writes of one key keep their operation order.
+        self.writes.sort_by(|a, b| a.0.cmp(&b.0));
+        let mut out: Vec<(Vec<u8>, FinalState)> = Vec::with_capacity(self.writes.len());
+        for (key, value, existed) in self.writes {
+            match out.last_mut() {
+                Some((last, state)) if *last == key => *state = FinalState::unknown(value),
+                _ => out.push((key, FinalState { value, existed })),
+            }
+        }
+        out
+    }
+}
+
+/// Final key states of a lowered batch, in key order, with its counter
+/// bases.
+type LoweredBatch = (Vec<(Vec<u8>, FinalState)>, BTreeMap<Vec<u8>, u64>);
 
 /// Entity reads served by one engine read handle.
 pub struct KvEntitySnapshot<'a> {
@@ -1435,22 +1459,6 @@ fn index_keys(
         }
     }
     Ok(keys)
-}
-
-fn push_prefix_deletes(
-    operations: &mut Vec<KvWriteOp>,
-    existing: Vec<(Vec<u8>, Vec<u8>)>,
-    prefix: &[u8],
-) {
-    let mut keys = existing
-        .into_iter()
-        .map(|(key, _)| key)
-        .collect::<BTreeSet<_>>();
-    keys.extend(operations.iter().filter_map(|operation| match operation {
-        KvWriteOp::Put { key, .. } if key.starts_with(prefix) => Some(key.clone()),
-        _ => None,
-    }));
-    operations.extend(keys.into_iter().map(|key| KvWriteOp::Delete { key }));
 }
 
 pub(crate) fn index_format_value() -> Vec<u8> {
