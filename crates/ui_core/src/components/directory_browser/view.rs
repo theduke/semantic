@@ -1589,6 +1589,30 @@ pub fn DirectoryBrowser(props: DirectoryBrowserProps) -> Element {
                         },
                         Link { size: "1rem" }
                     }
+                    if let Some(copied) = clipboard() {
+                        dxcomp::Button {
+                            variant: dxcomp::ButtonVariant::Outline,
+                            size: dxcomp::ButtonSize::Sm,
+                            disabled: current_root().is_none() || !directory_membership_capable || busy.contains(&DirectoryOperation::Paste),
+                            onclick: {
+                                let current_root = current_root();
+                                let location_kind = location_kind();
+                                move |_| {
+                                    if let Some(directory_id) = current_root.clone() {
+                                        commands.send(DirectoryBrowserCommand::PasteInto(
+                                            DirectoryMembershipTarget { directory_id, location_kind },
+                                        ));
+                                    }
+                                }
+                            },
+                            ClipboardPaste { size: "1rem" }
+                            if copied.mode == DirectoryClipboardMode::Copy {
+                                if copied.item_ids.len() == 1 { "Add copied link here" } else { "Add copied links here" }
+                            } else {
+                                if copied.item_ids.len() == 1 { "Move cut item here" } else { "Move cut items here" }
+                            }
+                        }
+                    }
                     dxcomp::Button {
                         variant: dxcomp::ButtonVariant::Outline,
                         size: dxcomp::ButtonSize::IconSm,
@@ -1665,31 +1689,6 @@ pub fn DirectoryBrowser(props: DirectoryBrowserProps) -> Element {
                     onclick: move |_| commands.send(DirectoryBrowserCommand::CopySelected),
                     Copy { size: "1rem" }
                     "Copy link"
-                }
-                dxcomp::Button {
-                    variant: dxcomp::ButtonVariant::Outline,
-                    size: dxcomp::ButtonSize::Sm,
-                    disabled: clipboard().is_none() || current_root().is_none() || !directory_membership_capable || busy.contains(&DirectoryOperation::Paste),
-                    onclick: {
-                        let current_root = current_root();
-                        let location_kind = location_kind();
-                        move |_| {
-                            if let Some(parent) = current_root.clone() {
-                                commands.send(DirectoryBrowserCommand::PasteInto(
-                                    DirectoryMembershipTarget {
-                                        directory_id: parent,
-                                        location_kind,
-                                    },
-                                ));
-                            }
-                        }
-                    },
-                    ClipboardPaste { size: "1rem" }
-                    if clipboard().as_ref().is_some_and(|clipboard| clipboard.mode == DirectoryClipboardMode::Copy) {
-                        "Add link here"
-                    } else {
-                        "Move here"
-                    }
                 }
                 dxcomp::Button {
                     variant: dxcomp::ButtonVariant::Outline,

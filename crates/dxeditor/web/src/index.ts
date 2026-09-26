@@ -1985,9 +1985,11 @@ export const mount = (host: HTMLElement, options: MountOptions): EditorSession =
     tableControls.dataset.tableId = range.target.semanticId ?? ''
     tableRowControls.dataset.tableId = range.target.semanticId ?? ''
     const bounds = wrapper.getBoundingClientRect()
-    addBottomRowButton.style.left = `${rect.left - bounds.left}px`
+    const rowButtonLeft = Math.max(4, Math.min(rect.left - bounds.left, bounds.width - 28))
+    const rowButtonRight = Math.min(rect.right - bounds.left, bounds.width - 4)
+    addBottomRowButton.style.left = `${rowButtonLeft}px`
     addBottomRowButton.style.top = `${rect.bottom - bounds.top + 4}px`
-    addBottomRowButton.style.width = `${rect.width}px`
+    addBottomRowButton.style.width = `${Math.max(24, rowButtonRight - rowButtonLeft)}px`
     addRightColumnButton.style.left = `${Math.max(4, Math.min(rect.right - bounds.left + 4, bounds.width - (addRightColumnButton.offsetWidth || 24) - 4))}px`
     addRightColumnButton.style.top = `${rect.top - bounds.top}px`
     addRightColumnButton.style.height = `${rect.height}px`

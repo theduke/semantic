@@ -6618,7 +6618,6 @@ html:has(.semantic-note-form) {
   inset: calc(var(--semantic-header-height) + var(--semantic-safe-top)) 0 0;
   z-index: 40;
   width: 100vw;
-  height: 100dvh;
   border: 0;
   background: transparent;
   cursor: default;
@@ -6793,7 +6792,8 @@ html:has(.semantic-note-form) {
     left: 0;
     display: grid;
     width: min(310px, calc(100vw - 48px));
-    max-height: none;
+    height: calc(100dvh - var(--semantic-header-height) - var(--semantic-safe-top));
+    max-height: calc(100dvh - var(--semantic-header-height) - var(--semantic-safe-top));
     align-content: start;
     gap: var(--semantic-space-5);
     overflow-y: auto;

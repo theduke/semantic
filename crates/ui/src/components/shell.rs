@@ -103,6 +103,7 @@ enum NavItem {
 pub fn PrimaryNav(#[props(default)] mobile: bool) -> Element {
     let route = use_route::<Route>();
     let mut menu_open = use_signal(|| false);
+    let mut toggle = use_signal(|| None::<std::rc::Rc<MountedData>>);
 
     rsx! {
         if mobile {
@@ -112,6 +113,7 @@ pub fn PrimaryNav(#[props(default)] mobile: bool) -> Element {
                 aria_controls: MOBILE_NAV_ID,
                 aria_expanded: menu_open(),
                 aria_label: if menu_open() { "Close navigation" } else { "Open navigation" },
+                onmounted: move |event| toggle.set(Some(event.data())),
                 onclick: move |_| menu_open.toggle(),
                 span { aria_hidden: "true", if menu_open() { "×" } else { "☰" } }
                 span { "Menu" }
@@ -121,7 +123,10 @@ pub fn PrimaryNav(#[props(default)] mobile: bool) -> Element {
                     class: "semantic-primary-nav__scrim",
                     r#type: "button",
                     aria_label: "Close navigation",
-                    onclick: move |_| menu_open.set(false),
+                    onclick: move |_| {
+                        menu_open.set(false);
+                        restore_focus(toggle);
+                    },
                 }
             }
         }
@@ -130,9 +135,18 @@ pub fn PrimaryNav(#[props(default)] mobile: bool) -> Element {
                 id: if mobile { MOBILE_NAV_ID } else { "semantic-sidebar-navigation" },
                 class: if mobile { "semantic-primary-nav semantic-primary-nav--drawer" } else { "semantic-primary-nav semantic-primary-nav--sidebar" },
                 aria_label: "Primary navigation",
+                tabindex: if mobile { Some("-1") } else { None },
+                onmounted: move |event| async move {
+                    if mobile {
+                        let _ = event.set_focus(true).await;
+                    }
+                },
                 onkeydown: move |event| {
-                    if event.key() == Key::Escape {
+                    if mobile && event.key() == Key::Escape {
+                        event.prevent_default();
+                        event.stop_propagation();
                         menu_open.set(false);
+                        restore_focus(toggle);
                     }
                 },
                 NavGroup { label: "Workspace",
@@ -198,6 +212,7 @@ pub fn PrimaryNav(#[props(default)] mobile: bool) -> Element {
 fn NewMenu() -> Element {
     let route = use_route::<Route>();
     let mut open = use_signal(|| false);
+    let mut trigger = use_signal(|| None::<std::rc::Rc<MountedData>>);
     let active = [
         NavItem::CreateEntity,
         NavItem::Upload,
@@ -215,6 +230,7 @@ fn NewMenu() -> Element {
                 aria_controls: "semantic-new-menu-options",
                 aria_expanded: open(),
                 "data-active": active,
+                onmounted: move |event| trigger.set(Some(event.data())),
                 onclick: move |_| open.toggle(),
                 span { aria_hidden: "true", "+" }
                 "New"
@@ -224,14 +240,24 @@ fn NewMenu() -> Element {
                     class: "semantic-new-menu__scrim",
                     r#type: "button",
                     aria_label: "Close New menu",
-                    onclick: move |_| open.set(false),
+                    onclick: move |_| {
+                        open.set(false);
+                        restore_focus(trigger);
+                    },
                 }
                 nav {
                     id: "semantic-new-menu-options",
                     class: "semantic-new-menu__options",
                     aria_label: "Create",
+                    tabindex: "-1",
+                    onmounted: move |event| async move { let _ = event.set_focus(true).await; },
                     onkeydown: move |event| {
-                        if event.key() == Key::Escape { open.set(false); }
+                        if event.key() == Key::Escape {
+                            event.prevent_default();
+                            event.stop_propagation();
+                            open.set(false);
+                            restore_focus(trigger);
+                        }
                     },
                     Link { to: Route::CreateNotePage, onclick: move |_| open.set(false), "Note" }
                     Link { to: Route::CreateEntityPage, onclick: move |_| open.set(false), "Entity" }
@@ -242,6 +268,14 @@ fn NewMenu() -> Element {
             }
         }
     }
+}
+
+fn restore_focus(element: Signal<Option<std::rc::Rc<MountedData>>>) {
+    spawn(async move {
+        if let Some(element) = element.peek().clone() {
+            let _ = element.set_focus(true).await;
+        }
+    });
 }
 
 #[component]

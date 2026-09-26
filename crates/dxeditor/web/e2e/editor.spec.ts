@@ -139,12 +139,23 @@ test('keeps table and block actions reachable in a narrow document', async ({ pa
 
   const table = page.locator('.ProseMirror table')
   await table.hover()
+  const addRow = page.getByRole('toolbar', { name: 'Table actions' })
+    .getByRole('button', { name: 'Add row at bottom' })
   const addColumn = page.getByRole('toolbar', { name: 'Table actions' })
     .getByRole('button', { name: 'Add column at right' })
+  await expect(addRow).toBeVisible()
   await expect(addColumn).toBeVisible()
+  const rowBox = await addRow.boundingBox()
   const columnBox = await addColumn.boundingBox()
+  expect(rowBox).not.toBeNull()
   expect(columnBox).not.toBeNull()
+  expect(rowBox!.x).toBeGreaterThanOrEqual(0)
+  expect(rowBox!.x + rowBox!.width).toBeLessThanOrEqual(390)
   expect(columnBox!.x + columnBox!.width).toBeLessThanOrEqual(390)
+  expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(390)
+
+  await addRow.click()
+  await expect(table.locator('tr')).toHaveCount(4)
 
   await table.locator('th').first().click()
   const blockActions = page.getByRole('toolbar', { name: 'Current block' })
