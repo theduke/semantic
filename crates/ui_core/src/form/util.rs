@@ -173,7 +173,11 @@ pub fn DynamicValueForm(
             }
             {body}
             if options.show_actions {
-                DynamicFormActions { form: form.clone(), labels: action_labels }
+                DynamicFormActions {
+                    form: form.clone(),
+                    labels: action_labels,
+                    note_form: options.class.as_ref().is_some_and(|class| class.id == "semantic:base:note"),
+                }
             }
         }
     }
@@ -239,6 +243,7 @@ pub fn render_value_form_scope(ctx: ValueFormRenderContext) -> Element {
 pub fn DynamicFormActions(
     form: FormRoot<Value>,
     #[props(default)] labels: SemanticFormActionLabels,
+    #[props(default)] note_form: bool,
 ) -> Element {
     let meta = form.meta();
     let dirty = semantic_form_is_dirty(&meta);
@@ -274,8 +279,8 @@ pub fn DynamicFormActions(
                 }
                 span { "{status}" }
             }
-            SemanticFormErrors { errors: meta.errors }
-            SemanticFormErrors { errors: meta.submit_errors }
+            SemanticFormErrors { errors: action_errors(meta.errors, note_form) }
+            SemanticFormErrors { errors: action_errors(meta.submit_errors, note_form) }
         }
     }
 }
@@ -283,6 +288,20 @@ pub fn DynamicFormActions(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn note_content_validation_has_one_readable_message_at_the_field() {
+        let error = FormError::coded("note_content", "required", "required field");
+        assert_eq!(
+            display_error_message(&error),
+            "Add some content before saving this note."
+        );
+        assert!(action_errors(vec![error], true).is_empty());
+        assert_eq!(
+            action_errors(vec![FormError::new("Save failed")], true).len(),
+            1
+        );
+    }
 
     #[test]
     fn action_label_presets_express_route_intent() {
@@ -367,15 +386,45 @@ pub fn SemanticFormErrors(errors: Vec<FormError>, #[props(default)] id: Option<S
                 role: "alert",
                 for error in errors {
                     li { class: "semantic-form__error",
-                        if let Some(path) = &error.path {
+                        if let Some(path) = &error.path && !is_note_content_error(&error) {
                             code { "{path}" }
                             " "
                         }
-                        "{error.message}"
+                        "{display_error_message(&error)}"
                     }
                 }
             }
         }
+    }
+}
+
+fn is_note_content_error(error: &FormError) -> bool {
+    error.path.as_ref().is_some_and(|path| {
+        matches!(
+            path.as_str(),
+            "note_content" | "semantic:base:note:note_content"
+        )
+    })
+}
+
+fn display_error_message(error: &FormError) -> &str {
+    if is_note_content_error(error)
+        && (error.code.as_deref() == Some("required") || error.message == "required field")
+    {
+        "Add some content before saving this note."
+    } else {
+        &error.message
+    }
+}
+
+fn action_errors(errors: Vec<FormError>, note_form: bool) -> Vec<FormError> {
+    if note_form {
+        errors
+            .into_iter()
+            .filter(|error| !is_note_content_error(error))
+            .collect()
+    } else {
+        errors
     }
 }
 

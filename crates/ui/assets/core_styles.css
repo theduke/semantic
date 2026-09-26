@@ -4948,49 +4948,100 @@ pre {
   width: min(100%, var(--semantic-content-width));
 }
 
+.semantic-form-page__context:has(.semantic-edit-entity__identity-details) {
+  padding-block: var(--semantic-space-2);
+}
+
+.semantic-edit-entity__identity-details > summary {
+  cursor: pointer;
+  font-size: var(--semantic-font-size-label);
+  font-weight: 650;
+}
+
+.semantic-edit-entity__identity-details[open] > .semantic-edit-entity__identity {
+  margin-block-start: var(--semantic-space-3);
+}
+
 .semantic-note-form {
   display: grid;
   min-width: 0;
-  gap: var(--semantic-space-6);
-}
-
-.semantic-note-form__header,
-.semantic-note-form__section-header {
-  display: flex;
-  min-width: 0;
-  align-items: flex-start;
-  justify-content: space-between;
   gap: var(--semantic-space-4);
+  padding-block-end: clamp(96px, 14vh, 152px);
 }
 
-.semantic-note-form__header h2,
-.semantic-note-form__section-header h3,
-.semantic-note-form__header p,
-.semantic-note-form__section-header p {
-  margin: 0;
-}
-
-.semantic-note-form__header h2 {
-  font-size: var(--semantic-font-size-section-title);
-}
-
-.semantic-note-form__header p,
-.semantic-note-form__section-header p {
-  margin-block-start: var(--semantic-space-1);
-  color: var(--semantic-text-muted);
-  font-size: var(--semantic-font-size-label);
-  line-height: var(--semantic-line-height-body);
-}
-
-.semantic-note-form__format {
-  flex: 0 0 auto;
-  padding: 4px 9px;
-  border: 1px solid var(--semantic-border-soft);
-  border-radius: var(--semantic-radius-pill);
-  background: var(--semantic-surface-muted);
+.semantic-note-form__eyebrow {
+  display: flex;
+  gap: var(--semantic-space-2);
   color: var(--semantic-text-muted);
   font-size: var(--semantic-font-size-caption);
   font-weight: 650;
+}
+
+.semantic-note-form__title,
+.semantic-note-form__title-table-wrap {
+  min-width: 0;
+}
+
+.semantic-note-form__title-table-wrap {
+  border: 0;
+  background: transparent;
+  box-shadow: none;
+}
+
+.semantic-note-form__title-table,
+.semantic-note-form__title-table > tbody,
+.semantic-note-form__title-table > tbody > tr {
+  display: grid;
+  width: 100%;
+}
+
+.semantic-note-form__title-table th {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+}
+
+.semantic-note-form__title-table td {
+  width: 100%;
+  padding: 0;
+  border: 0;
+}
+
+.semantic-note-form__title-input.dx-input {
+  width: 100%;
+  min-width: 0;
+  height: auto;
+  padding: var(--semantic-space-2) 0;
+  border: 0;
+  background: transparent;
+  box-shadow: none;
+  font-size: clamp(2rem, 4.5vw, 3.25rem);
+  font-weight: 720;
+  line-height: 1.15;
+  letter-spacing: -0.035em;
+}
+
+.semantic-note-form__title-input.dx-input::placeholder {
+  color: var(--semantic-text-muted);
+  opacity: 0.72;
+}
+
+.semantic-note-form__title-input.dx-input:focus-visible {
+  border: 0;
+  box-shadow: none;
+  outline: none;
+}
+
+.semantic-note-form__writing-hint {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: space-between;
+  gap: var(--semantic-space-2);
+  color: var(--semantic-text-muted);
+  font-size: var(--semantic-font-size-label);
 }
 
 .semantic-note-form__document,
@@ -5001,6 +5052,7 @@ pre {
 }
 
 .semantic-note-form__content-table-wrap {
+  min-width: 0;
   overflow: visible;
   border-radius: var(--semantic-radius-lg);
   box-shadow: var(--semantic-shadow-1);
@@ -5032,7 +5084,47 @@ pre {
 .semantic-note-form__document .dxeditor,
 .semantic-note-form__document .semantic-form__auto-textarea.dx-textarea {
   width: 100%;
-  max-width: none;
+  max-width: 100%;
+}
+
+.semantic-note-form__document .semantic-form__auto-textarea.dx-textarea {
+  min-height: clamp(260px, 44vh, 520px);
+  padding: var(--semantic-space-5);
+  border: 0;
+  line-height: 1.7;
+}
+
+.semantic-note-form__document .dxeditor__document {
+  padding: var(--semantic-space-5) clamp(22px, 7vw, 72px);
+}
+
+.semantic-note-form__document .dxeditor-engine__content {
+  width: min(100%, 68ch);
+  margin-inline: auto;
+}
+
+.semantic-note-form__document .dxeditor-engine__content .tableWrapper {
+  width: 100%;
+  max-width: 100%;
+  overflow-x: auto;
+  overscroll-behavior-inline: contain;
+}
+
+.semantic-note-form__document .dxeditor-engine__block-menu::before {
+  display: block;
+  padding: 7px 10px 5px;
+  border-bottom: 1px solid var(--semantic-border-soft);
+  color: var(--semantic-text-muted);
+  content: "Actions affect the whole block";
+  font-size: var(--semantic-font-size-caption);
+}
+
+.semantic-note-form__document .dxeditor-engine__content > p:only-child:has(> br.ProseMirror-trailingBreak)::before {
+  float: left;
+  height: 0;
+  color: var(--semantic-text-muted);
+  content: "Write, or type / for blocks…";
+  pointer-events: none;
 }
 
 .semantic-note-form__document .dxeditor-engine__content:focus-visible {
@@ -5049,6 +5141,60 @@ pre {
   margin-inline: auto;
   padding-top: var(--semantic-space-2);
   border-top: 1px solid var(--semantic-border-soft);
+}
+
+.semantic-note-form__metadata-summary {
+  display: flex;
+  align-items: baseline;
+  gap: var(--semantic-space-3);
+  padding: var(--semantic-space-2) 0;
+  cursor: pointer;
+  font-weight: 650;
+}
+
+.semantic-note-form__metadata-summary-hint {
+  color: var(--semantic-text-muted);
+  font-size: var(--semantic-font-size-label);
+  font-weight: 400;
+}
+
+.semantic-note-form__metadata > .semantic-form {
+  padding-top: var(--semantic-space-3);
+}
+
+html:has(.semantic-note-form) {
+  scroll-padding-block-end: 180px;
+}
+
+.semantic-form-page:has(.semantic-note-form) :is(input, select, textarea, button, [tabindex], .dxeditor-engine__content) {
+  scroll-margin-block-end: 180px;
+}
+
+@media (max-width: 640px) {
+  .semantic-form-page__content:has(.semantic-note-form) {
+    display: flex;
+    flex-direction: column;
+  }
+
+  .semantic-form-page__content:has(.semantic-note-form) > .semantic-create-entity__context--embedded {
+    order: 2;
+  }
+
+  .semantic-form-page__content:has(.semantic-note-form) > .semantic-create-entity__form {
+    order: 1;
+  }
+
+  .semantic-note-form__document .dxeditor__document {
+    padding: 16px 32px;
+  }
+
+  .semantic-note-form__metadata-summary {
+    flex-wrap: wrap;
+  }
+
+  .semantic-note-form__metadata-summary-hint {
+    flex-basis: 100%;
+  }
 }
 
 .semantic-form-actions {

@@ -137,7 +137,11 @@ fn class_form_field_state(field: &ClassFormField, readonly: bool) -> Option<&'st
 
 fn field_errors(meta: &dxform::FieldMeta) -> Vec<dxform::FormError> {
     let mut errors = meta.errors.clone();
-    errors.extend(meta.submit_errors.clone());
+    for error in &meta.submit_errors {
+        if !errors.contains(error) {
+            errors.push(error.clone());
+        }
+    }
     errors
 }
 

@@ -249,6 +249,9 @@ fn EditEntityPageView(collection: Option<String>, id: String, scope_id: Option<S
         .as_ref()
         .and_then(|object| catalog.object_class(object.as_ref()).cloned());
     let class_name = class.as_ref().map(class_label);
+    let is_note = class
+        .as_ref()
+        .is_some_and(|class| class.id == "semantic:base:note");
     let status_message = edit_status_message(submitting(), dirty(), &submit_feedback.read());
     let form_key = edit_route_key(scope_id.as_deref(), collection.as_deref(), &id);
     let cancel_target = format!("entity details for `{id}`");
@@ -257,8 +260,8 @@ fn EditEntityPageView(collection: Option<String>, id: String, scope_id: Option<S
 
     rsx! {
         FormPage {
-            title: "Edit entity",
-            description: "Update schema-backed fields while keeping the entity identity fixed.",
+            title: if is_note { "Edit document" } else { "Edit entity" },
+            description: if is_note { None } else { Some("Update schema-backed fields while keeping the entity identity fixed.".to_string()) },
             busy: loading || submitting(),
             breadcrumbs: rsx! {
                 Link { to: return_route.clone(), "Entities" }
@@ -298,38 +301,26 @@ fn EditEntityPageView(collection: Option<String>, id: String, scope_id: Option<S
             },
             context_label: "Entity identity",
             context: rsx! {
-                div { class: "semantic-edit-entity__identity",
-                    dl {
-                                div {
-                                    dt { "Collection" }
-                                    dd {
-                                        Link {
-                                            to: return_route.clone(),
-                                            code { "{collection_label}" }
-                                        }
-                                    }
-                                }
-                                div {
-                                    dt { "ID" }
-                                    dd {
-                                        Link {
-                                            to: detail_route.clone(),
-                                            code { "{id}" }
-                                        }
-                                    }
-                                }
-                        if let Some(class_name) = class_name {
-                            div {
-                                dt { "Class" }
-                                dd { "{class_name}" }
-                            }
+                if is_note {
+                    details { class: "semantic-edit-entity__identity-details",
+                        summary { "Document location and identity" }
+                        EntityIdentity {
+                            collection_label: collection_label.clone(),
+                            id: id.clone(),
+                            class_name: class_name.clone(),
+                            return_route: return_route.clone(),
+                            detail_route: detail_route.clone(),
+                            status_message: status_message.clone(),
                         }
                     }
-                    p {
-                        class: "semantic-edit-entity__status",
-                        role: "status",
-                        aria_live: "polite",
-                        "{status_message}"
+                } else {
+                    EntityIdentity {
+                        collection_label: collection_label.clone(),
+                        id: id.clone(),
+                        class_name: class_name.clone(),
+                        return_route: return_route.clone(),
+                        detail_route: detail_route.clone(),
+                        status_message: status_message.clone(),
                     }
                 }
             },
@@ -500,6 +491,40 @@ pub async fn load_entity(
             _ => Err("get response missing object".to_string()),
         },
         _ => Err("get response must be an object or null".to_string()),
+    }
+}
+
+#[component]
+fn EntityIdentity(
+    collection_label: String,
+    id: String,
+    class_name: Option<String>,
+    return_route: Route,
+    detail_route: Route,
+    status_message: String,
+) -> Element {
+    rsx! {
+        div { class: "semantic-edit-entity__identity",
+            dl {
+                div {
+                    dt { "Collection" }
+                    dd { Link { to: return_route, code { "{collection_label}" } } }
+                }
+                div {
+                    dt { "ID" }
+                    dd { Link { to: detail_route, code { "{id}" } } }
+                }
+                if let Some(class_name) = class_name {
+                    div { dt { "Class" } dd { "{class_name}" } }
+                }
+            }
+            p {
+                class: "semantic-edit-entity__status",
+                role: "status",
+                aria_live: "polite",
+                "{status_message}"
+            }
+        }
     }
 }
 

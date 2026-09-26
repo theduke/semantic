@@ -16,6 +16,7 @@ const ATTR_NOTE_FORMAT: &str = "semantic:base:note:note_format";
 const ATTR_NOTE_CONTENT: &str = "semantic:base:note:note_content";
 const FIELD_NOTE_FORMAT: &str = "note_format";
 const FIELD_NOTE_CONTENT: &str = "note_content";
+const FIELD_TITLE: &str = "title";
 const FORMAT_TEXT: &str = "text";
 const FORMAT_MARKDOWN: &str = "markdown";
 
@@ -52,6 +53,13 @@ pub(crate) fn register_note_renderers(catalog: &mut UiCatalog) {
     catalog
         .form_registry_mut()
         .register_class_form_renderer(NOTE_CLASS_ID, Rc::new(render_note_class_form));
+    catalog
+        .form_registry_mut()
+        .register_class_field_form_renderer(
+            NOTE_CLASS_ID,
+            FIELD_TITLE,
+            Rc::new(render_note_title_form),
+        );
 
     catalog
         .form_registry_mut()
@@ -117,30 +125,48 @@ fn render_note_class_form(ctx: ClassFormRenderContext) -> Element {
     } else {
         "Text"
     };
-    let content_field = catalog
-        .class_form_fields(&ctx.class)
-        .into_iter()
-        .find(|field| {
-            field.field_name == FIELD_NOTE_CONTENT || field.storage_field_name == ATTR_NOTE_CONTENT
-        });
+    let fields = catalog.class_form_fields(&ctx.class);
+    let title_field = fields
+        .iter()
+        .find(|field| field.field_name == FIELD_TITLE)
+        .cloned();
+    let content_field = fields.into_iter().find(|field| {
+        field.field_name == FIELD_NOTE_CONTENT || field.storage_field_name == ATTR_NOTE_CONTENT
+    });
     let metadata_options = ClassFormRenderOptions::default()
         .show_header(false)
+        .exclude_field(FIELD_TITLE)
         .exclude_field(FIELD_NOTE_CONTENT);
 
     rsx! {
         div {
             class: "semantic-note-form",
             "data-format": "{format}",
-            header { class: "semantic-note-form__header",
-                div {
-                    h2 { "Note" }
-                    p { "Write the note first, then adjust its details below." }
+            div { class: "semantic-note-form__eyebrow",
+                span { "Document" }
+                if let Some(collection) = &ctx.collection {
+                    span { aria_hidden: "true", "·" }
+                    span { "{collection}" }
                 }
-                span { class: "semantic-note-form__format", "{format_label}" }
+            }
+            div { class: "semantic-note-form__title",
+                if let Some(title_field) = title_field {
+                    div { class: "semantic-table-wrap semantic-note-form__title-table-wrap",
+                        table { class: "semantic-field-table semantic-note-form__title-table",
+                            tbody { {render_class_form_field_row(&ctx, title_field)} }
+                        }
+                    }
+                }
             }
             section {
                 class: "semantic-note-form__document",
                 aria_label: "Note content",
+                div { class: "semantic-note-form__writing-hint",
+                    span { "Write your note" }
+                    if format == FORMAT_MARKDOWN {
+                        span { "Type / for blocks and formatting" }
+                    }
+                }
                 if let Some(content_field) = content_field {
                     div { class: "semantic-table-wrap semantic-note-form__content-table-wrap",
                         key: "{format}",
@@ -156,13 +182,32 @@ fn render_note_class_form(ctx: ClassFormRenderContext) -> Element {
                     }
                 }
             }
-            section { class: "semantic-note-form__metadata", aria_label: "Note details",
-                header { class: "semantic-note-form__section-header",
-                    h3 { "Note details" }
-                    p { "Format, timestamps, metadata, and other schema fields." }
+            details { class: "semantic-note-form__metadata",
+                summary { class: "semantic-note-form__metadata-summary",
+                    span { "Properties" }
+                    span { class: "semantic-note-form__metadata-summary-hint", "{format_label} · format, dates, and more" }
                 }
                 {render_class_form_body_with_options(ctx.clone(), metadata_options)}
             }
+        }
+    }
+}
+
+fn render_note_title_form(ctx: AttributeFormRenderContext) -> Element {
+    let field = ctx.field.clone();
+    let value = value_string(&field.value());
+    let input_field = field.clone();
+    let blur_field = field.clone();
+    rsx! {
+        dxcomp::Input {
+            class: "semantic-note-form__title-input",
+            r#type: "text",
+            value,
+            placeholder: "Untitled",
+            aria_label: "Document title",
+            oninput: move |event: FormEvent| input_field.set_value(Value::String(event.value())),
+            onblur: move |_event: FocusEvent| blur_field.set_focused(false),
+            onfocus: move |_event: FocusEvent| field.set_focused(true),
         }
     }
 }
@@ -200,6 +245,7 @@ fn render_note_content_form(ctx: AttributeFormRenderContext) -> Element {
         AutoExpandingTextarea {
             value,
             rows: 8,
+            placeholder: "Start writing…",
             oninput: move |value| input_field.set_value(Value::String(value)),
             onblur: move |_event: FocusEvent| blur_field.set_focused(false),
             onfocus: move |_event: FocusEvent| focus_field.set_focused(true),
