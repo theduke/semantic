@@ -55,6 +55,11 @@ impl<'a> DbReader<'a> {
         matches!(self.snapshot, QueryReader::Shared(_))
     }
 
+    /// The storage snapshot serving this reader.
+    pub(super) fn storage_snapshot(&self) -> &dyn EntityReadSnapshot {
+        &*self.snapshot
+    }
+
     fn query_context(&self) -> QueryContext {
         QueryContext::new(self.catalog.catalog.clone())
     }

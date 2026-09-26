@@ -59,10 +59,28 @@ pub enum StatsBackfill {
 }
 
 /// Net counter changes of one write transaction.
+///
+/// Counters of key spaces a batch clears (`ClearCollection`, `ClearIndex`,
+/// `ResetIndex`) have a *base*: the number of keys the space held before
+/// the batch, counted while lowering the clear. Their new value is the base
+/// plus the net delta, so such batches also correct counters that drifted
+/// (for example after keys were removed outside [`EntityStore`]).
 #[derive(Debug, Default)]
-pub(crate) struct CounterDeltas(BTreeMap<Vec<u8>, i64>);
+pub(crate) struct CounterDeltas {
+    deltas: BTreeMap<Vec<u8>, i64>,
+    bases: BTreeMap<Vec<u8>, u64>,
+}
 
 impl CounterDeltas {
+    /// Deltas over counters whose previous values are `bases` (counter key
+    /// to the key count before the batch) instead of their stored values.
+    pub(crate) fn with_bases(bases: BTreeMap<Vec<u8>, u64>) -> Self {
+        Self {
+            deltas: BTreeMap::new(),
+            bases,
+        }
+    }
+
     /// Record that `key` changes from existing (`existed`) to `exists`.
     pub(crate) fn record(&mut self, key: &[u8], existed: bool, exists: bool) {
         let delta = match (existed, exists) {
@@ -71,25 +89,94 @@ impl CounterDeltas {
             _ => return,
         };
         if let Some(counter) = keys::counter_key_for(key) {
-            *self.0.entry(counter).or_default() += delta;
+            *self.deltas.entry(counter).or_default() += delta;
         }
     }
 
     /// Apply the deltas to the counters, if counters are maintained.
     pub(crate) fn apply(self, txn: &mut dyn KvWriteTxn) -> Result<(), DbError> {
-        let deltas = self
-            .0
+        let Self { deltas, mut bases } = self;
+        let deltas = deltas
             .into_iter()
-            .filter(|(_, delta)| *delta != 0)
+            .filter(|(key, delta)| *delta != 0 || bases.contains_key(key))
+            .collect::<BTreeMap<_, _>>();
+        let based = bases
+            .keys()
+            .filter(|key| !deltas.contains_key(*key))
+            .cloned()
             .collect::<Vec<_>>();
-        if deltas.is_empty() || !is_maintained(txn.get(&keys::stats_version_key())?)? {
+        if (deltas.is_empty() && based.is_empty())
+            || !is_maintained(txn.get(&keys::stats_version_key())?)?
+        {
             return Ok(());
         }
-        for (key, delta) in deltas {
-            let current = decode_counter(txn.get(&key)?)?;
-            write_counter(txn, &key, current.saturating_add_signed(delta))?;
+        let updates = deltas
+            .into_iter()
+            .chain(based.into_iter().map(|key| (key, 0)));
+        for (key, delta) in updates {
+            let stored = decode_counter(txn.get(&key)?)?;
+            let current = bases.remove(&key).unwrap_or(stored);
+            let count = current.saturating_add_signed(delta);
+            if count != stored {
+                write_counter(txn, &key, count)?;
+            }
         }
         Ok(())
+    }
+}
+
+impl<E: KvEngine> EntityStore<E> {
+    /// Recount every maintained counter from the stored keys and replace
+    /// the stored counters, in one write transaction conditioned on the
+    /// revision the keys were counted at.
+    ///
+    /// Returns `false` without writing when counters are not maintained.
+    /// A concurrent write is reported as a transaction conflict.
+    pub fn rebuild_stats(&mut self) -> Result<bool, DbError> {
+        if !is_maintained(self.engine.get(&keys::stats_version_key())?)? {
+            return Ok(false);
+        }
+        let (revision, counters) = self.count_keys()?;
+        let committed = self.engine.write_with(revision, |txn| {
+            let mut stale = txn
+                .scan_prefix(&[keys::TAG_STATS])?
+                .into_iter()
+                .collect::<BTreeMap<_, _>>();
+            for (key, count) in &counters {
+                let current = stale
+                    .remove(key)
+                    .map(|value| decode_counter(Some(value)))
+                    .transpose()?;
+                if current != Some(*count) {
+                    write_counter(txn, key, *count)?;
+                }
+            }
+            for key in stale.into_keys() {
+                txn.delete(&key)?;
+            }
+            Ok(())
+        })?;
+        match committed {
+            StorageCommitOutcome::Committed { .. } => Ok(true),
+            StorageCommitOutcome::Conflict { .. } => Err(DbError::TransactionConflict(
+                "database changed while recounting stats".into(),
+            )),
+        }
+    }
+
+    /// Count the entity and index keys per counter through one read handle.
+    fn count_keys(&self) -> Result<(Option<u64>, BTreeMap<Vec<u8>, u64>), DbError> {
+        let txn = self.engine.begin_read()?;
+        let mut counters = BTreeMap::<Vec<u8>, u64>::new();
+        for tag in [keys::TAG_ENTITY, keys::TAG_INDEX] {
+            for entry in txn.scan_prefix_stream(vec![tag])? {
+                let (key, _) = entry?;
+                if let Some(counter) = keys::counter_key_for(&key) {
+                    *counters.entry(counter).or_default() += 1;
+                }
+            }
+        }
+        Ok((txn.revision(), counters))
     }
 }
 
@@ -112,19 +199,7 @@ impl<E: KvEngine> EntityStore<E> {
         if is_maintained(self.engine.get(&keys::stats_version_key())?)? {
             return Ok(StatsBackfill::UpToDate);
         }
-        let (revision, counters) = {
-            let txn = self.engine.begin_read()?;
-            let mut counters = BTreeMap::<Vec<u8>, u64>::new();
-            for tag in [keys::TAG_ENTITY, keys::TAG_INDEX] {
-                for entry in txn.scan_prefix_stream(vec![tag])? {
-                    let (key, _) = entry?;
-                    if let Some(counter) = keys::counter_key_for(&key) {
-                        *counters.entry(counter).or_default() += 1;
-                    }
-                }
-            }
-            (txn.revision(), counters)
-        };
+        let (revision, counters) = self.count_keys()?;
 
         let mut outcome = StatsBackfill::UpToDate;
         let committed = self.engine.write_with(revision, |txn| {

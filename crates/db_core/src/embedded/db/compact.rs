@@ -5,9 +5,9 @@ use crate::StorageErrorKind;
 use crate::batch_return::{ChangeSet, EntityKey, RowChange};
 use crate::embedded::storage::RevisionReader;
 
-const REFERENCES: &str = "__semantic.reverse_references";
+pub(super) const REFERENCES: &str = "__semantic.reverse_references";
 const TARGET_INDEX: &str = "__reverse_reference_target_idx";
-const MARKER: &str = "backfill:v1";
+pub(super) const MARKER: &str = "backfill:v1";
 
 #[derive(Debug, Default, Clone, PartialEq, Eq)]
 pub(crate) struct ExecutionCounts {
@@ -504,7 +504,7 @@ fn corrupt_reference(message: impl Into<String>) -> DbError {
     DbError::storage(StorageErrorKind::Corruption, message)
 }
 
-fn reference_rows(references: Vec<ResolvedReference>) -> BTreeMap<String, Object> {
+pub(super) fn reference_rows(references: Vec<ResolvedReference>) -> BTreeMap<String, Object> {
     references
         .into_iter()
         .map(|reference| {

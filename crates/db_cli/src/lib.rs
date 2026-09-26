@@ -41,6 +41,9 @@ pub enum Command {
     Delete(cmd::delete::DeleteArgs),
     Insert(cmd::insert::InsertArgs),
     Repl(cmd::repl::ReplArgs),
+    /// Database maintenance: reindex, verify, repair, compact, stats,
+    /// rewrite-payloads and backup.
+    Maintenance(cmd::maintenance::MaintenanceArgs),
 }
 
 pub async fn run() -> std::result::Result<(), CliError> {
@@ -50,6 +53,7 @@ pub async fn run() -> std::result::Result<(), CliError> {
         Command::Delete(args) => cmd::delete::run(args).await,
         Command::Insert(args) => cmd::insert::run(args).await,
         Command::Repl(args) => cmd::repl::run(args).await,
+        Command::Maintenance(args) => cmd::maintenance::run(args).await,
     }
 }
 

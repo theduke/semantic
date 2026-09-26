@@ -75,7 +75,7 @@ impl RedbTable {
         }
     }
 
-    const fn definition(self) -> KvTableDefinition {
+    pub(crate) const fn definition(self) -> KvTableDefinition {
         TableDefinition::new(self.name())
     }
 

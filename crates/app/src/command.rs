@@ -270,6 +270,7 @@ impl SemanticAppBuilder {
         self.registry.register(DbBatchCommand)?;
         self.registry.register(DbValidationPreflightCommand)?;
         self.registry.register(DbValidationActivateCommand)?;
+        crate::db_maintenance_commands::register(&mut self.registry)?;
         self.registry.register(FileAnalyzeCommand)?;
         crate::jobs::register_commands(&mut self.registry)?;
         crate::import_commands::register(&mut self.registry)?;
@@ -810,7 +811,7 @@ impl RpcCommand<AppRequestContext> for FileAnalyzeCommand {
     }
 }
 
-fn expect_object(value: Value) -> std::result::Result<Object, AppError> {
+pub(crate) fn expect_object(value: Value) -> std::result::Result<Object, AppError> {
     match value {
         Value::Object(object) => Ok(object),
         _ => Err(AppError::InvalidRequest(
@@ -1014,11 +1015,17 @@ fn required_string_list(
         .collect()
 }
 
-fn required_string(object: &Object, field: &str) -> std::result::Result<String, AppError> {
+pub(crate) fn required_string(
+    object: &Object,
+    field: &str,
+) -> std::result::Result<String, AppError> {
     optional_string(object, field)?.ok_or_else(|| missing_field(field))
 }
 
-fn optional_string(object: &Object, field: &str) -> std::result::Result<Option<String>, AppError> {
+pub(crate) fn optional_string(
+    object: &Object,
+    field: &str,
+) -> std::result::Result<Option<String>, AppError> {
     match object.get(field) {
         Some(Value::String(value)) => Ok(Some(value.clone())),
         Some(Value::Null) | Some(Value::Void) | None => Ok(None),
@@ -1028,7 +1035,10 @@ fn optional_string(object: &Object, field: &str) -> std::result::Result<Option<S
     }
 }
 
-fn optional_bool(object: &Object, field: &str) -> std::result::Result<Option<bool>, AppError> {
+pub(crate) fn optional_bool(
+    object: &Object,
+    field: &str,
+) -> std::result::Result<Option<bool>, AppError> {
     match object.get(field) {
         Some(Value::Bool(value)) => Ok(Some(*value)),
         Some(Value::Null) | Some(Value::Void) | None => Ok(None),

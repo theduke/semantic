@@ -329,6 +329,20 @@ pub fn index_entry_id(key: &[u8], value_offset: usize) -> Option<&str> {
     std::str::from_utf8(&value[len..]).ok()
 }
 
+/// Entity id of the entry `key` of `index`; path-equality entries
+/// (`path_token`) carry a path token before the value token.
+pub fn index_key_entity_id(key: &[u8], index: LocalIndexId, path_token: bool) -> Option<&str> {
+    let prefix = index_prefix(index);
+    if !key.starts_with(&prefix) {
+        return None;
+    }
+    let mut offset = prefix.len();
+    if path_token {
+        offset += memcmp::encoded_len(key.get(offset..)?).ok()?;
+    }
+    index_entry_id(key, offset)
+}
+
 /// Key of the format marker of `index`.
 pub fn index_marker_key(index: LocalIndexId) -> Vec<u8> {
     tagged_lid(TAG_INDEX_MARKER, index.0)

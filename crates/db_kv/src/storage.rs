@@ -6,7 +6,8 @@ use semantic_data::schema::IndexKind;
 use semantic_data::value::{FieldPath, Object, Value};
 use semantic_db_core::catalog::{LocalCollectionId, LocalIndexId};
 use semantic_db_core::embedded::{
-    BoxEntityIdScan, BoxEntityScan, EntityReadSnapshot, EntityStorage, StorageCommitOutcome,
+    BackupSource, BoxCheckedEntityScan, BoxEntityIdScan, BoxEntityScan, BoxIndexKeyScan,
+    EntityReadSnapshot, EntityStorage, IndexKeyEntry, PayloadRewriteBatch, StorageCommitOutcome,
     StorageStats, StorageTransactionCapabilities, StorageWriteOp, StoredEntity,
     unsupported_storage_maintenance,
 };
@@ -16,8 +17,8 @@ use serde::{Deserialize, Serialize};
 pub use crate::keys::parse_entity_key;
 use crate::keys::{
     collection_rows_key, entity_key, entity_prefix, index_entries_key, index_entry_id, index_key,
-    index_marker_key, index_path_prefix, index_prefix, index_range, index_string_prefix,
-    index_value_prefix,
+    index_key_entity_id, index_marker_key, index_path_prefix, index_prefix, index_range,
+    index_string_prefix, index_value_prefix,
 };
 
 pub mod entity_codec;
@@ -42,6 +43,8 @@ mod incremental_tests;
 mod index_range_tests;
 #[cfg(test)]
 mod layout_tests;
+#[cfg(test)]
+mod maintenance_tests;
 #[cfg(test)]
 mod stats_tests;
 #[cfg(test)]
@@ -405,6 +408,13 @@ pub trait KvEngine: std::fmt::Debug + Send + Sync + 'static {
     /// Physical storage statistics; unknown values are `None`.
     fn stats(&self) -> Result<KvEngineStats, DbError> {
         Ok(KvEngineStats::default())
+    }
+
+    /// Capture the current committed state for a backup: a consistent copy
+    /// of every stored key (including engine-private entries such as the
+    /// revision) written to a new database file.
+    fn backup_source(&self) -> Result<Box<dyn BackupSource>, DbError> {
+        Err(unsupported_storage_maintenance("backups"))
     }
 }
 
@@ -891,6 +901,22 @@ impl<E: KvEngine> EntityStorage for EntityStore<E> {
         self.engine.stats()
     }
 
+    fn rebuild_storage_stats(&mut self) -> Result<bool, DbError> {
+        self.rebuild_stats()
+    }
+
+    fn rewrite_payload_batch(
+        &mut self,
+        resume_after: Option<&[u8]>,
+        limit: usize,
+    ) -> Result<PayloadRewriteBatch, DbError> {
+        self.rewrite_entities_batch(resume_after, limit)
+    }
+
+    fn backup_source(&self) -> Result<Box<dyn BackupSource>, DbError> {
+        self.engine.backup_source()
+    }
+
     fn tx_capabilities(&self) -> StorageTransactionCapabilities {
         self.engine.tx_capabilities()
     }
@@ -952,9 +978,10 @@ impl<E: KvEngine> EntityStore<E> {
             // the old objects of `ReindexEntity` at, so the previous states
             // of their entries are known.
             let known_base = expected_revision.is_some();
-            let values = lower_final_values(operations, &*txn, &mut staging, format, known_base)?;
+            let (values, bases) =
+                lower_final_values(operations, &*txn, &mut staging, format, known_base)?;
             staging.write_additions(txn)?;
-            write_final_states(txn, values)
+            write_final_states(txn, values, CounterDeltas::with_bases(bases))
         })?;
         if matches!(outcome, StorageCommitOutcome::Committed { .. }) {
             staging.publish();
@@ -1002,6 +1029,7 @@ fn write_final_values(
         values
             .into_iter()
             .map(|(key, value)| (key, FinalState::unknown(value))),
+        CounterDeltas::default(),
     )
 }
 
@@ -1015,8 +1043,8 @@ fn write_final_values(
 fn write_final_states(
     txn: &mut dyn KvWriteTxn,
     values: impl IntoIterator<Item = (Vec<u8>, FinalState)>,
+    mut deltas: CounterDeltas,
 ) -> Result<(), DbError> {
-    let mut deltas = CounterDeltas::default();
     for (key, FinalState { value, existed }) in values {
         let existed = match existed {
             Some(existed) => {
@@ -1057,13 +1085,16 @@ fn write_final_states(
 /// keys skip the comparison read. That knowledge is dropped for keys another
 /// operation of the batch also writes and for indexes the batch clears or
 /// resets.
+///
+/// Also returns the counter bases of the key spaces the batch clears (see
+/// [`CounterDeltas`]): the number of keys each held before the batch.
 fn lower_final_values(
     operations: &[StorageWriteOp],
     txn: &dyn KvWriteTxn,
     dictionaries: &mut DictStaging<'_>,
     format: EntityPayloadFormat,
     known_base: bool,
-) -> Result<BTreeMap<Vec<u8>, FinalState>, DbError> {
+) -> Result<LoweredBatch, DbError> {
     let reset_indexes = operations
         .iter()
         .filter_map(|operation| match operation {
@@ -1073,6 +1104,13 @@ fn lower_final_values(
         .collect::<BTreeSet<_>>();
     let mut lowered = Vec::new();
     let mut known = BTreeMap::<Vec<u8>, bool>::new();
+    let mut bases = BTreeMap::<Vec<u8>, u64>::new();
+    let mut clear_prefix = |lowered: &mut Vec<KvWriteOp>, prefix: Vec<u8>, counter: Vec<u8>| {
+        let existing = txn.scan_prefix(&prefix)?;
+        bases.insert(counter, existing.len() as u64);
+        push_prefix_deletes(lowered, existing, &prefix);
+        Ok::<_, DbError>(())
+    };
     for operation in operations {
         match operation {
             StorageWriteOp::PutEntity(entity) => lowered.push(KvWriteOp::Put {
@@ -1088,19 +1126,28 @@ fn lower_final_values(
                 });
             }
             StorageWriteOp::ClearCollection(collection) => {
-                let prefix = entity_prefix(*collection);
-                push_prefix_deletes(&mut lowered, txn.scan_prefix(&prefix)?, &prefix);
+                clear_prefix(
+                    &mut lowered,
+                    entity_prefix(*collection),
+                    collection_rows_key(*collection),
+                )?;
             }
             StorageWriteOp::ClearIndex(index) => {
-                let prefix = index_prefix(*index);
-                push_prefix_deletes(&mut lowered, txn.scan_prefix(&prefix)?, &prefix);
+                clear_prefix(
+                    &mut lowered,
+                    index_prefix(*index),
+                    index_entries_key(*index),
+                )?;
                 lowered.push(KvWriteOp::Delete {
                     key: index_marker_key(*index),
                 });
             }
             StorageWriteOp::ResetIndex(index) => {
-                let prefix = index_prefix(*index);
-                push_prefix_deletes(&mut lowered, txn.scan_prefix(&prefix)?, &prefix);
+                clear_prefix(
+                    &mut lowered,
+                    index_prefix(*index),
+                    index_entries_key(*index),
+                )?;
                 lowered.push(KvWriteOp::Put {
                     key: index_marker_key(*index),
                     value: index_format_value(),
@@ -1175,8 +1222,11 @@ fn lower_final_values(
             }
         }
     }
-    Ok(final_values)
+    Ok((final_values, bases))
 }
+
+/// Final key states of a lowered batch with its counter bases.
+type LoweredBatch = (BTreeMap<Vec<u8>, FinalState>, BTreeMap<Vec<u8>, u64>);
 
 /// Entity reads served by one engine read handle.
 pub struct KvEntitySnapshot<'a> {
@@ -1301,6 +1351,58 @@ impl EntityReadSnapshot for KvEntitySnapshot<'_> {
     fn index_needs_rebuild(&self, index: LocalIndexId) -> Result<bool, DbError> {
         Ok(self.txn.get(&index_marker_key(index))?.as_deref()
             != Some(index_format_value().as_slice()))
+    }
+
+    fn scan_index_keys(
+        &self,
+        index: &semantic_db_core::catalog::IndexSchema,
+    ) -> Result<BoxIndexKeyScan, DbError> {
+        let lid = index.lid;
+        let path_token = index.schema.kind == IndexKind::PathEquality;
+        Ok(Box::new(
+            self.txn
+                .scan_prefix_stream(index_prefix(lid))?
+                .map(move |entry| {
+                    entry.map(|(key, _)| IndexKeyEntry {
+                        entity_id: index_key_entity_id(&key, lid, path_token).map(str::to_string),
+                        key,
+                    })
+                }),
+        ))
+    }
+
+    fn index_keys_for(
+        &self,
+        index: &semantic_db_core::catalog::IndexSchema,
+        entity_id: &str,
+        object: &Object,
+    ) -> Result<Vec<Vec<u8>>, DbError> {
+        Ok(index_keys(index, entity_id, object)?.into_iter().collect())
+    }
+
+    fn contains_index_key(&self, index: LocalIndexId, key: &[u8]) -> Result<bool, DbError> {
+        if !key.starts_with(&index_prefix(index)) {
+            return Ok(false);
+        }
+        Ok(self.txn.get(key)?.is_some())
+    }
+
+    fn scan_collection_checked(
+        &self,
+        collection: LocalCollectionId,
+    ) -> Result<BoxCheckedEntityScan, DbError> {
+        let prefix_len = entity_prefix(collection).len();
+        let mut decoder = self.scan_decoder(collection)?;
+        Ok(Box::new(
+            self.txn
+                .scan_prefix_stream(entity_prefix(collection))?
+                .map(move |entry| {
+                    let (key, payload) = entry?;
+                    let id = String::from_utf8_lossy(&key[prefix_len..]).into_owned();
+                    let entity = decoder.decode(&key, &payload);
+                    Ok((id, entity))
+                }),
+        ))
     }
 }
 

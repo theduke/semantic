@@ -90,6 +90,20 @@ impl<S: EntityStorage> EmbeddedBackend<S> {
         }
     }
 
+    /// Run `op` with shared access to the database, holding the read side
+    /// of the lock.
+    fn shared<R, F>(&self, op: F) -> BoxFuture<'static, Result<R, DbError>>
+    where
+        R: Send + 'static,
+        F: FnOnce(&EmbeddedDb<S>) -> Result<R, DbError> + Send + 'static,
+    {
+        let db = Arc::clone(&self.db);
+        spawn_blocking_on(self.runtime.as_ref(), move || {
+            let db = db.read().map_err(|_| lock_poisoned_error())?;
+            op(&db)
+        })
+    }
+
     /// Run `op` with exclusive access to the database.
     fn write<R, F>(&self, op: F) -> BoxFuture<'static, Result<R, DbError>>
     where
@@ -101,6 +115,30 @@ impl<S: EntityStorage> EmbeddedBackend<S> {
             let mut db = db.write().map_err(|_| lock_poisoned_error())?;
             op(&mut db)
         })
+    }
+}
+
+/// What an entity export observes, announced before streaming.
+struct ExportMeta {
+    revision: Option<u64>,
+    catalog_version: u64,
+    catalog: Arc<Catalog>,
+}
+
+impl ExportMeta {
+    /// Send the metadata of `reader` to the caller; `false` when the export
+    /// cannot proceed.
+    fn announce(
+        reader: &DbReader<'_>,
+        ready: futures::channel::oneshot::Sender<Result<ExportMeta, DbError>>,
+    ) -> bool {
+        let meta = reader.revision().map(|revision| ExportMeta {
+            revision,
+            catalog_version: reader.catalog_version(),
+            catalog: Arc::clone(reader.catalog()),
+        });
+        let ok = meta.is_ok();
+        ready.send(meta).is_ok() && ok
     }
 }
 
@@ -347,40 +385,48 @@ impl<S: EntityStorage> Backend for EmbeddedBackend<S> {
     }
 
     async fn scan_entities(&self) -> Result<crate::EntityStream, DbError> {
+        Ok(self.export_snapshot().await?.stream)
+    }
+
+    async fn export_snapshot(&self) -> Result<crate::ExportSnapshot, DbError> {
         const CHANNEL_CAPACITY: usize = 16;
         let db = Arc::clone(&self.db);
         let (mut sender, receiver) = futures::channel::mpsc::channel(CHANNEL_CAPACITY);
-        let (ready, snapshot_taken) = futures::channel::oneshot::channel::<()>();
+        let (ready, snapshot_taken) =
+            futures::channel::oneshot::channel::<Result<ExportMeta, DbError>>();
         std::thread::Builder::new()
             .name("semantic-entity-export".into())
             .spawn(move || {
-                let mut send = |item| futures::executor::block_on(sender.send(item)).is_ok();
+                let send = |item| futures::executor::block_on(sender.send(item)).is_ok();
                 let db = match db.read() {
                     Ok(db) => db,
                     Err(_) => {
-                        let _ = ready.send(());
-                        send(Err(lock_poisoned_error()));
+                        let _ = ready.send(Err(lock_poisoned_error()));
                         return;
                     }
                 };
-                let reader = db.owned_reader();
-                let _ = ready.send(());
-                match reader {
+                match db.owned_reader() {
                     // The owned snapshot keeps the export consistent without
                     // holding the lock while the consumer drains it.
                     Ok(Some(reader)) => {
                         drop(db);
-                        reader.scan_entities_with(send);
+                        if ExportMeta::announce(&reader, ready) {
+                            reader.scan_entities_with(send);
+                        }
                     }
                     // Borrowed snapshots keep the lock for the whole export.
                     Ok(None) => match db.reader() {
-                        Ok(reader) => reader.scan_entities_with(send),
+                        Ok(reader) => {
+                            if ExportMeta::announce(&reader, ready) {
+                                reader.scan_entities_with(send);
+                            }
+                        }
                         Err(error) => {
-                            send(Err(error));
+                            let _ = ready.send(Err(error));
                         }
                     },
                     Err(error) => {
-                        send(Err(error));
+                        let _ = ready.send(Err(error));
                     }
                 }
             })
@@ -388,8 +434,81 @@ impl<S: EntityStorage> Backend for EmbeddedBackend<S> {
                 DbError::Storage(format!("spawn entity export thread: {error}").into())
             })?;
         // The export observes the state at the time of this call.
-        let _ = snapshot_taken.await;
-        Ok(receiver.boxed())
+        let meta = snapshot_taken.await.map_err(|_| {
+            DbError::storage(
+                StorageErrorKind::InvalidState,
+                "entity export thread stopped before taking its snapshot",
+            )
+        })??;
+        Ok(crate::ExportSnapshot {
+            revision: meta.revision,
+            catalog_version: meta.catalog_version,
+            catalog: meta.catalog,
+            stream: receiver.boxed(),
+        })
+    }
+
+    async fn reindex(&self, target: crate::ReindexTarget) -> Result<crate::ReindexReport, DbError> {
+        self.write(move |db| db.reindex(&target)).await
+    }
+
+    async fn verify(&self, options: crate::VerifyOptions) -> Result<crate::VerifyReport, DbError> {
+        // The physical check needs exclusive access; the logical checks run
+        // on a snapshot without the lock.
+        let integrity = if options.check_storage_integrity {
+            Some(
+                self.write(|db| db.check_storage_integrity_for_verify())
+                    .await?,
+            )
+        } else {
+            None
+        };
+        self.read(move |reader| EmbeddedDb::<S>::verify_reader(reader, &options, integrity))
+            .await
+    }
+
+    async fn repair(&self, options: crate::VerifyOptions) -> Result<crate::RepairReport, DbError> {
+        self.write(move |db| db.repair(&options)).await
+    }
+
+    async fn compact_storage(&self) -> Result<crate::CompactReport, DbError> {
+        self.write(|db| db.compact_storage()).await
+    }
+
+    async fn storage_stats(&self) -> Result<crate::embedded::StorageStats, DbError> {
+        self.shared(|db| db.storage_stats()).await
+    }
+
+    async fn rewrite_payloads(&self, batch_size: usize) -> Result<crate::RewriteReport, DbError> {
+        // One lock acquisition per batch, so writers interleave with the
+        // rewrite.
+        let started = std::time::Instant::now();
+        let mut report = crate::RewriteReport::default();
+        let mut resume_after: Option<Vec<u8>> = None;
+        loop {
+            let resume = resume_after.take();
+            let batch = self
+                .write(move |db| db.rewrite_payload_batch(resume.as_deref(), batch_size))
+                .await?;
+            report.scanned += batch.scanned;
+            report.rewritten += batch.rewritten;
+            report.batches += u64::from(batch.rewritten > 0);
+            resume_after = batch.resume_after;
+            if resume_after.is_none() {
+                break;
+            }
+        }
+        report.duration = started.elapsed();
+        Ok(report)
+    }
+
+    async fn backup(&self, path: std::path::PathBuf) -> Result<crate::BackupReport, DbError> {
+        // Capture the state under the lock, copy it without.
+        let source = self.shared(|db| db.backup_source()).await?;
+        spawn_blocking_on(self.runtime.as_ref(), move || {
+            crate::embedded::db::write_backup(source, &path)
+        })
+        .await
     }
 
     async fn create_collection(

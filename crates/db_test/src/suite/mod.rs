@@ -8,11 +8,13 @@ mod compact;
 mod full_text;
 mod incremental;
 mod index_access;
+mod maintenance;
 mod transactions;
 mod validation;
 pub use change_feed::test_change_feed;
 pub use full_text::test_full_text;
 pub use index_access::test_index_access;
+pub use maintenance::test_maintenance;
 pub use transactions::test_transactions;
 pub use validation::test_validation;
 
@@ -92,6 +94,7 @@ pub async fn test_db(db: &Db) {
     test_strict_class_attributes(db).await;
     test_transactions(db).await;
     test_change_feed(db).await;
+    test_maintenance(db).await;
 }
 
 async fn test_schema_registration(db: &Db) {

@@ -27,6 +27,57 @@ pub trait SemanticDb: Send + Sync + 'static {
             "validation activation is unsupported".into(),
         ))
     }
+
+    // Maintenance (see `semantic_db_core::Backend`); unsupported by default.
+
+    async fn reindex(
+        &self,
+        target: semantic_db_core::ReindexTarget,
+    ) -> Result<semantic_db_core::ReindexReport, DbError> {
+        let _ = target;
+        Err(semantic_db_core::unsupported_maintenance("reindex"))
+    }
+    async fn verify(
+        &self,
+        options: semantic_db_core::VerifyOptions,
+    ) -> Result<semantic_db_core::VerifyReport, DbError> {
+        let _ = options;
+        Err(semantic_db_core::unsupported_maintenance("verify"))
+    }
+    async fn repair(
+        &self,
+        options: semantic_db_core::VerifyOptions,
+    ) -> Result<semantic_db_core::RepairReport, DbError> {
+        let _ = options;
+        Err(semantic_db_core::unsupported_maintenance("repair"))
+    }
+    async fn compact_storage(&self) -> Result<semantic_db_core::CompactReport, DbError> {
+        Err(semantic_db_core::unsupported_maintenance(
+            "storage compaction",
+        ))
+    }
+    async fn storage_stats(&self) -> Result<semantic_db_core::embedded::StorageStats, DbError> {
+        Err(semantic_db_core::unsupported_maintenance(
+            "storage statistics",
+        ))
+    }
+    async fn rewrite_payloads(
+        &self,
+        batch_size: usize,
+    ) -> Result<semantic_db_core::RewriteReport, DbError> {
+        let _ = batch_size;
+        Err(semantic_db_core::unsupported_maintenance(
+            "payload rewrites",
+        ))
+    }
+    async fn backup(
+        &self,
+        path: std::path::PathBuf,
+    ) -> Result<semantic_db_core::BackupReport, DbError> {
+        let _ = path;
+        Err(semantic_db_core::unsupported_maintenance("backups"))
+    }
+
     async fn catalog(&self) -> std::result::Result<Arc<Catalog>, DbError>;
     async fn scan_entities(&self) -> Result<EntityStream, DbError> {
         Err(DbError::InvalidQuery(
@@ -131,6 +182,42 @@ impl SemanticDb for Db {
     }
     async fn activate_validation(&self) -> Result<(), DbError> {
         Db::activate_validation(self).await
+    }
+    async fn reindex(
+        &self,
+        target: semantic_db_core::ReindexTarget,
+    ) -> Result<semantic_db_core::ReindexReport, DbError> {
+        Db::reindex(self, target).await
+    }
+    async fn verify(
+        &self,
+        options: semantic_db_core::VerifyOptions,
+    ) -> Result<semantic_db_core::VerifyReport, DbError> {
+        Db::verify(self, options).await
+    }
+    async fn repair(
+        &self,
+        options: semantic_db_core::VerifyOptions,
+    ) -> Result<semantic_db_core::RepairReport, DbError> {
+        Db::repair(self, options).await
+    }
+    async fn compact_storage(&self) -> Result<semantic_db_core::CompactReport, DbError> {
+        Db::compact_storage(self).await
+    }
+    async fn storage_stats(&self) -> Result<semantic_db_core::embedded::StorageStats, DbError> {
+        Db::storage_stats(self).await
+    }
+    async fn rewrite_payloads(
+        &self,
+        batch_size: usize,
+    ) -> Result<semantic_db_core::RewriteReport, DbError> {
+        Db::rewrite_payloads(self, batch_size).await
+    }
+    async fn backup(
+        &self,
+        path: std::path::PathBuf,
+    ) -> Result<semantic_db_core::BackupReport, DbError> {
+        Db::backup(self, path).await
     }
     async fn query_data(&self, query: public_query::QueryInput) -> Result<QueryResult, DbError> {
         self.query(query).await

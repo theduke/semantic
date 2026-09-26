@@ -129,6 +129,25 @@ pub type BoxEntityIdScan = Box<dyn Iterator<Item = EntityIdScanItem> + Send>;
 pub type IndexEntryScanItem = std::result::Result<crate::IndexEntry, DbError>;
 pub type BoxIndexEntryScan = Box<dyn Iterator<Item = IndexEntryScanItem> + Send>;
 
+/// One stored index entry, as the storage's raw key.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct IndexKeyEntry {
+    /// Storage-specific key of the entry (see
+    /// [`EntityReadSnapshot::index_keys_for`]).
+    pub key: Vec<u8>,
+    /// Entity the entry belongs to; `None` when the key is malformed.
+    pub entity_id: Option<String>,
+}
+
+pub type IndexKeyScanItem = std::result::Result<IndexKeyEntry, DbError>;
+pub type BoxIndexKeyScan = Box<dyn Iterator<Item = IndexKeyScanItem> + Send>;
+
+/// A stored entity whose payload may not decode: the entity id with the
+/// decoded entity or the decoding error.
+pub type CheckedEntity = (String, std::result::Result<StoredEntity, DbError>);
+pub type CheckedEntityScanItem = std::result::Result<CheckedEntity, DbError>;
+pub type BoxCheckedEntityScan = Box<dyn Iterator<Item = CheckedEntityScanItem> + Send>;
+
 /// A read handle over entity storage.
 ///
 /// Handles returned by [`EntityStorage::snapshot`] let one logical operation
@@ -244,6 +263,48 @@ pub trait EntityReadSnapshot: Send + Sync {
     }
 
     fn index_needs_rebuild(&self, index: LocalIndexId) -> Result<bool, DbError>;
+
+    // Maintenance reads (see `crate::maintenance`). Storages without them
+    // report the operation as unsupported and verification skips the
+    // checks needing them.
+
+    /// Every stored entry of `index` in key order, without decoding.
+    fn scan_index_keys(&self, index: &IndexSchema) -> Result<BoxIndexKeyScan, DbError> {
+        let _ = index;
+        Err(unsupported_storage_maintenance("index key scans"))
+    }
+
+    /// The keys of the entries `index` holds for entity `entity_id` with
+    /// `object`, in the encoding of [`Self::scan_index_keys`].
+    fn index_keys_for(
+        &self,
+        index: &IndexSchema,
+        entity_id: &str,
+        object: &Object,
+    ) -> Result<Vec<Vec<u8>>, DbError> {
+        let _ = (index, entity_id, object);
+        Err(unsupported_storage_maintenance("index key derivation"))
+    }
+
+    /// Whether `index` holds the entry `key` (see [`Self::index_keys_for`]).
+    fn contains_index_key(&self, index: LocalIndexId, key: &[u8]) -> Result<bool, DbError> {
+        let _ = (index, key);
+        Err(unsupported_storage_maintenance("index key lookups"))
+    }
+
+    /// Stream every entity of `collection`, reporting payloads that fail to
+    /// decode per entity instead of failing the scan.
+    ///
+    /// The default wraps [`Self::scan_collection_stream`], where decoding
+    /// failures cannot be attributed to an entity and end the scan.
+    fn scan_collection_checked(
+        &self,
+        collection: LocalCollectionId,
+    ) -> Result<BoxCheckedEntityScan, DbError> {
+        Ok(Box::new(self.scan_collection_stream(collection)?.map(
+            |entity| entity.map(|entity| (entity.id.clone(), Ok(entity))),
+        )))
+    }
 }
 
 /// Count the entities of a scan, stopping at the first error.
@@ -303,6 +364,41 @@ pub struct StorageStats {
 pub struct StorageTableStats {
     pub name: String,
     pub entries: u64,
+}
+
+/// Progress of one [`EntityStorage::rewrite_payload_batch`] call.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct PayloadRewriteBatch {
+    /// Stored payloads examined.
+    pub scanned: u64,
+    /// Payloads rewritten.
+    pub rewritten: u64,
+    /// Position to resume after, or `None` when every payload was examined.
+    pub resume_after: Option<Vec<u8>>,
+}
+
+/// Outcome of [`BackupSource::write_to`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct StorageBackup {
+    /// Revision of the copied state.
+    pub revision: Option<u64>,
+    /// Copied key-value entries.
+    pub entries: u64,
+}
+
+/// One committed storage state being copied to a backup.
+///
+/// The state is fixed when the source is created
+/// ([`EntityStorage::backup_source`]); writes committed afterwards are not
+/// part of the backup. Writing does not need access to the storage, so it
+/// can run without the database lock.
+pub trait BackupSource: Send {
+    /// Revision of the captured state.
+    fn revision(&self) -> Option<u64>;
+
+    /// Write the captured state to a new database at `path`, which must not
+    /// exist.
+    fn write_to(self: Box<Self>, path: &std::path::Path) -> Result<StorageBackup, DbError>;
 }
 
 /// Snapshot fallback for storages without native read transactions.
@@ -765,6 +861,36 @@ pub trait EntityStorage: std::fmt::Debug + Send + Sync + 'static {
     /// Physical storage statistics. The default reports nothing.
     fn storage_stats(&self) -> Result<StorageStats, DbError> {
         Ok(StorageStats::default())
+    }
+
+    /// Recount the maintained row and index entry counters from the stored
+    /// keys, replacing their current values.
+    ///
+    /// Returns `false` when the storage maintains no counters (the default).
+    fn rebuild_storage_stats(&mut self) -> Result<bool, DbError> {
+        Ok(false)
+    }
+
+    /// Rewrite up to `limit` stored payloads not in the storage's current
+    /// payload format, starting after the resume position `resume_after`
+    /// (`None` starts at the beginning), in one write transaction.
+    ///
+    /// Callers repeat with [`PayloadRewriteBatch::resume_after`] until it
+    /// is `None`. Payload rewrites do not change entity contents. The
+    /// default reports the operation as unsupported.
+    fn rewrite_payload_batch(
+        &mut self,
+        resume_after: Option<&[u8]>,
+        limit: usize,
+    ) -> Result<PayloadRewriteBatch, DbError> {
+        let _ = (resume_after, limit);
+        Err(unsupported_storage_maintenance("payload rewrites"))
+    }
+
+    /// Capture the current committed state for a backup (see
+    /// [`BackupSource`]). The default reports the operation as unsupported.
+    fn backup_source(&self) -> Result<Box<dyn BackupSource>, DbError> {
+        Err(unsupported_storage_maintenance("backups"))
     }
 
     fn tx_capabilities(&self) -> StorageTransactionCapabilities;

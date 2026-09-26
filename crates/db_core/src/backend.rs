@@ -258,6 +258,56 @@ pub trait Backend: Send + Sync {
             "validation activation requires a managed backend".into(),
         ))
     }
+
+    // Maintenance (see `crate::maintenance`). The defaults report the
+    // operations as unsupported.
+
+    /// Rebuild the indexes selected by `target` from the rows.
+    async fn reindex(&self, target: crate::ReindexTarget) -> Result<crate::ReindexReport, DbError> {
+        let _ = target;
+        Err(crate::unsupported_maintenance("reindex"))
+    }
+
+    /// Check the consistency of the stored data without writing.
+    async fn verify(&self, options: crate::VerifyOptions) -> Result<crate::VerifyReport, DbError> {
+        let _ = options;
+        Err(crate::unsupported_maintenance("verify"))
+    }
+
+    /// Verify, rebuild what the problems call for, and verify again.
+    async fn repair(&self, options: crate::VerifyOptions) -> Result<crate::RepairReport, DbError> {
+        let _ = options;
+        Err(crate::unsupported_maintenance("repair"))
+    }
+
+    /// Compact the physical storage.
+    async fn compact_storage(&self) -> Result<crate::CompactReport, DbError> {
+        Err(crate::unsupported_maintenance("storage compaction"))
+    }
+
+    /// Physical storage statistics.
+    async fn storage_stats(&self) -> Result<crate::embedded::StorageStats, DbError> {
+        Err(crate::unsupported_maintenance("storage statistics"))
+    }
+
+    /// Rewrite stored payloads in the current format, `batch_size` rows per
+    /// write transaction.
+    async fn rewrite_payloads(&self, batch_size: usize) -> Result<crate::RewriteReport, DbError> {
+        let _ = batch_size;
+        Err(crate::unsupported_maintenance("payload rewrites"))
+    }
+
+    /// Write a consistent copy of the database to a new file at `path`.
+    async fn backup(&self, path: std::path::PathBuf) -> Result<crate::BackupReport, DbError> {
+        let _ = path;
+        Err(crate::unsupported_maintenance("backups"))
+    }
+
+    /// Stream all portable entities at one revision, with the catalog they
+    /// were written under.
+    async fn export_snapshot(&self) -> Result<crate::ExportSnapshot, DbError> {
+        Err(crate::unsupported_maintenance("snapshot exports"))
+    }
     async fn catalog(&self) -> std::result::Result<Arc<Catalog>, DbError>;
 
     /// Scan all portable (non-internal) entities without collecting them.
@@ -467,6 +517,61 @@ impl Db {
 
     pub async fn activate_validation(&self) -> Result<(), DbError> {
         self.backend.activate_validation().await
+    }
+
+    /// See [`Backend::reindex`].
+    pub async fn reindex(
+        &self,
+        target: crate::ReindexTarget,
+    ) -> Result<crate::ReindexReport, DbError> {
+        self.backend.reindex(target).await
+    }
+
+    /// See [`Backend::verify`].
+    pub async fn verify(
+        &self,
+        options: crate::VerifyOptions,
+    ) -> Result<crate::VerifyReport, DbError> {
+        self.backend.verify(options).await
+    }
+
+    /// See [`Backend::repair`].
+    pub async fn repair(
+        &self,
+        options: crate::VerifyOptions,
+    ) -> Result<crate::RepairReport, DbError> {
+        self.backend.repair(options).await
+    }
+
+    /// See [`Backend::compact_storage`].
+    pub async fn compact_storage(&self) -> Result<crate::CompactReport, DbError> {
+        self.backend.compact_storage().await
+    }
+
+    /// See [`Backend::storage_stats`].
+    pub async fn storage_stats(&self) -> Result<crate::embedded::StorageStats, DbError> {
+        self.backend.storage_stats().await
+    }
+
+    /// See [`Backend::rewrite_payloads`].
+    pub async fn rewrite_payloads(
+        &self,
+        batch_size: usize,
+    ) -> Result<crate::RewriteReport, DbError> {
+        self.backend.rewrite_payloads(batch_size).await
+    }
+
+    /// See [`Backend::backup`].
+    pub async fn backup(
+        &self,
+        path: impl Into<std::path::PathBuf>,
+    ) -> Result<crate::BackupReport, DbError> {
+        self.backend.backup(path.into()).await
+    }
+
+    /// See [`Backend::export_snapshot`].
+    pub async fn export_snapshot(&self) -> Result<crate::ExportSnapshot, DbError> {
+        self.backend.export_snapshot().await
     }
     pub fn new(backend: impl Backend + 'static) -> Self {
         Self {

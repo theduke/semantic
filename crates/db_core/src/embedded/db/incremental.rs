@@ -1,14 +1,14 @@
 use super::*;
 
-const CONTRIBUTORS: &str = "__semantic.relationship_contributors";
-const COUNTS: &str = "__semantic.relationship_counts";
-const COMPLETION_MARKER: &str = "backfill:v1";
+pub(super) const CONTRIBUTORS: &str = "__semantic.relationship_contributors";
+pub(super) const COUNTS: &str = "__semantic.relationship_counts";
+pub(super) const COMPLETION_MARKER: &str = "backfill:v1";
 
 use crate::batch_return::changes;
 use crate::embedded::storage::index_entries_unchanged;
 
 // Length-prefix components because IDs and relation names may contain delimiters.
-fn key(parts: &[&str]) -> String {
+pub(super) fn key(parts: &[&str]) -> String {
     parts
         .iter()
         .map(|part| format!("{}:{part}", part.len()))
@@ -481,7 +481,7 @@ impl<S: EntityStorage> EmbeddedDb<S> {
     }
 }
 
-fn parse_key(value: &str, expected: usize) -> Option<Vec<String>> {
+pub(super) fn parse_key(value: &str, expected: usize) -> Option<Vec<String>> {
     let bytes = value.as_bytes();
     let mut offset = 0usize;
     let mut out = Vec::with_capacity(expected);

@@ -61,6 +61,7 @@ mod interactive_tests;
 #[cfg(test)]
 mod isolation_tests;
 mod local_refs;
+mod maintenance;
 mod mutation;
 mod overlay;
 mod reader;
@@ -68,6 +69,7 @@ mod text_search;
 mod validation;
 
 pub use interactive::EmbeddedTransaction;
+pub use maintenance::write_backup;
 pub use reader::DbReader;
 use reader::QueryReader;
 
@@ -2128,63 +2130,71 @@ impl<S: EntityStorage> EmbeddedDb<S> {
                     Self::contribution(catalog, relationship, source_collection, id, object)
                 })
                 .collect();
-            let mut shortest = BTreeMap::<(String, String), usize>::new();
-            if relationship.indexing_mode == RelationIndexingMode::Enabled {
-                let mut adjacency = BTreeMap::<String, Vec<String>>::new();
-                for (source, target) in &direct {
-                    adjacency
-                        .entry(source.clone())
-                        .or_default()
-                        .push(target.clone());
-                    let key = (source.clone(), target.clone());
-                    shortest
-                        .entry(key)
-                        .and_modify(|depth| *depth = (*depth).min(1))
-                        .or_insert(1);
-                }
-                for source in adjacency.keys() {
-                    let mut queue = std::collections::VecDeque::new();
-                    let mut seen = BTreeMap::<String, usize>::new();
-                    queue.push_back((source.clone(), 0usize));
-                    seen.insert(source.clone(), 0);
-                    while let Some((node, depth)) = queue.pop_front() {
-                        let Some(targets) = adjacency.get(&node) else {
-                            continue;
-                        };
-                        for next in targets {
-                            let next_depth = depth.saturating_add(1);
-                            let entry = seen.get(next).copied();
-                            if entry.is_none_or(|existing| next_depth < existing) {
-                                seen.insert(next.clone(), next_depth);
-                                queue.push_back((next.clone(), next_depth));
-                                let key = (source.clone(), next.clone());
-                                shortest
-                                    .entry(key)
-                                    .and_modify(|existing| *existing = (*existing).min(next_depth))
-                                    .or_insert(next_depth);
-                            }
+            out.extend(Self::edges_from_direct(relationship, &direct));
+        }
+        Ok(out)
+    }
+
+    /// The edges of `relationship` given its direct `(source, target)`
+    /// pairs: one edge per pair, plus, with indexing enabled, one edge per
+    /// transitively reachable pair at its shortest depth.
+    pub(super) fn edges_from_direct(
+        relationship: &RelationType,
+        direct: &[(String, String)],
+    ) -> Vec<(String, Object)> {
+        let mut shortest = BTreeMap::<(String, String), usize>::new();
+        if relationship.indexing_mode == RelationIndexingMode::Enabled {
+            let mut adjacency = BTreeMap::<String, Vec<String>>::new();
+            for (source, target) in direct {
+                adjacency
+                    .entry(source.clone())
+                    .or_default()
+                    .push(target.clone());
+                let key = (source.clone(), target.clone());
+                shortest
+                    .entry(key)
+                    .and_modify(|depth| *depth = (*depth).min(1))
+                    .or_insert(1);
+            }
+            for source in adjacency.keys() {
+                let mut queue = std::collections::VecDeque::new();
+                let mut seen = BTreeMap::<String, usize>::new();
+                queue.push_back((source.clone(), 0usize));
+                seen.insert(source.clone(), 0);
+                while let Some((node, depth)) = queue.pop_front() {
+                    let Some(targets) = adjacency.get(&node) else {
+                        continue;
+                    };
+                    for next in targets {
+                        let next_depth = depth.saturating_add(1);
+                        let entry = seen.get(next).copied();
+                        if entry.is_none_or(|existing| next_depth < existing) {
+                            seen.insert(next.clone(), next_depth);
+                            queue.push_back((next.clone(), next_depth));
+                            let key = (source.clone(), next.clone());
+                            shortest
+                                .entry(key)
+                                .and_modify(|existing| *existing = (*existing).min(next_depth))
+                                .or_insert(next_depth);
                         }
                     }
                 }
-            } else {
-                for (source, target) in &direct {
-                    let key = (source.clone(), target.clone());
-                    shortest
-                        .entry(key)
-                        .and_modify(|depth| *depth = (*depth).min(1))
-                        .or_insert(1);
-                }
             }
-            for ((source, target), depth) in shortest {
-                out.push(Self::relationship_edge(
-                    &relationship.id,
-                    &source,
-                    &target,
-                    depth,
-                ));
+        } else {
+            for (source, target) in direct {
+                let key = (source.clone(), target.clone());
+                shortest
+                    .entry(key)
+                    .and_modify(|depth| *depth = (*depth).min(1))
+                    .or_insert(1);
             }
         }
-        Ok(out)
+        shortest
+            .into_iter()
+            .map(|((source, target), depth)| {
+                Self::relationship_edge(&relationship.id, &source, &target, depth)
+            })
+            .collect()
     }
 
     fn external_relation_field_name(

@@ -8,7 +8,7 @@
 use redb::{ReadableTable, ReadableTableMetadata};
 use semantic_data::schema::DbOpenMode;
 use semantic_db_core::embedded::{
-    EmbeddedBackend, EmbeddedDb, StorageCommitOutcome, StorageTableStats,
+    BackupSource, EmbeddedBackend, EmbeddedDb, StorageCommitOutcome, StorageTableStats,
     StorageTransactionCapabilities,
 };
 use semantic_db_core::{DbConfig, DbError, StorageErrorKind};
@@ -19,6 +19,7 @@ use semantic_db_kv::{
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
+mod backup;
 mod options;
 pub mod tables;
 
@@ -411,7 +412,7 @@ impl KvEngine for RedbKvEngine {
     }
 
     fn current_revision(&self) -> Result<Option<u64>, DbError> {
-        Ok(self.read_txn()?.revision())
+        Ok(KvReadTxn::revision(&self.read_txn()?))
     }
 
     fn write_batch_conditional(
@@ -445,6 +446,12 @@ impl KvEngine for RedbKvEngine {
     /// revision counter in `meta`), redb page statistics, and the file size.
     ///
     /// Reading the page statistics briefly opens a write transaction.
+    /// Capture the committed state in a read transaction; see the `backup`
+    /// module.
+    fn backup_source(&self) -> Result<Box<dyn BackupSource>, DbError> {
+        Ok(Box::new(self.read_txn()?))
+    }
+
     fn stats(&self) -> Result<KvEngineStats, DbError> {
         let read = ReadTables::new(self.db.begin_read().map_err(storage_err)?);
         let mut tables = Vec::with_capacity(RedbTable::ALL.len());
@@ -539,6 +546,8 @@ mod concurrency_tests;
 mod engine_tests;
 #[cfg(test)]
 mod entity_format_tests;
+#[cfg(test)]
+mod maintenance_tests;
 
 #[cfg(test)]
 mod tests {

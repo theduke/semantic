@@ -29,7 +29,8 @@ use semantic_db_core::catalog::LocalCollectionId;
 use semantic_db_core::embedded::{StoredEntity, StoredEntityKind};
 use serde::{Deserialize, Serialize};
 
-use semantic_db_core::embedded::StorageCommitOutcome;
+use semantic_db_core::DEFAULT_REWRITE_BATCH_SIZE;
+use semantic_db_core::embedded::{PayloadRewriteBatch, StorageCommitOutcome};
 
 use super::field_dict::{DictStaging, FieldDict};
 use super::value_codec::{self, CodecError, FieldIds, FieldNames, Reader};
@@ -286,36 +287,96 @@ impl<E: KvEngine> EntityStore<E> {
     /// compact format) in the store's format.
     ///
     /// Rows are otherwise upgraded lazily when they are next written; this
-    /// explicit maintenance step upgrades all of them at once. It runs in one
-    /// engine write transaction, so it is atomic but holds every rewritten
-    /// payload in the transaction. Entity keys (and so the maintained row
-    /// counts) are unchanged. Returns the number of rewritten entities.
+    /// explicit maintenance step upgrades all of them. It runs in batches of
+    /// [`DEFAULT_REWRITE_BATCH_SIZE`] rewritten rows per write transaction
+    /// (see [`Self::rewrite_entities_batch`]), so it never holds more than
+    /// one batch of payloads. Entity keys (and so the maintained row counts)
+    /// are unchanged. Returns the number of rewritten entities.
     pub fn rewrite_all_entities_to_current_format(&mut self) -> Result<usize, DbError> {
+        let mut rewritten = 0;
+        let mut resume_after = None;
+        loop {
+            let batch =
+                self.rewrite_entities_batch(resume_after.as_deref(), DEFAULT_REWRITE_BATCH_SIZE)?;
+            rewritten += batch.rewritten as usize;
+            resume_after = batch.resume_after;
+            if resume_after.is_none() {
+                return Ok(rewritten);
+            }
+        }
+    }
+
+    /// Rewrite up to `limit` outdated entity payloads whose keys follow
+    /// `resume_after` (all keys when `None`) in one write transaction.
+    ///
+    /// Candidates are found through a read handle, keeping only their keys;
+    /// the write transaction re-reads each of them, so rows a concurrent
+    /// write already upgraded or deleted are skipped. The returned resume
+    /// position is the last examined key, or `None` once all entities were
+    /// examined.
+    pub fn rewrite_entities_batch(
+        &mut self,
+        resume_after: Option<&[u8]>,
+        limit: usize,
+    ) -> Result<PayloadRewriteBatch, DbError> {
         let format = self.payload_format;
+        let start = match resume_after {
+            // The smallest key after `resume_after`.
+            Some(key) => [key, &[0]].concat(),
+            None => vec![keys::TAG_ENTITY],
+        };
+        let end = super::prefix_range_end(&[keys::TAG_ENTITY]);
+        let mut scanned = 0;
+        let mut candidates = Vec::new();
+        let mut last = None;
+        let mut exhausted = true;
+        {
+            let txn = self.engine.begin_read()?;
+            for entry in txn.scan_range_stream(start, end)? {
+                if candidates.len() >= limit.max(1) {
+                    exhausted = false;
+                    break;
+                }
+                let (key, payload) = entry?;
+                scanned += 1;
+                if payload_version(&payload)? != format.version() {
+                    candidates.push(key.clone());
+                }
+                last = Some(key);
+            }
+        }
+
         let mut staging = DictStaging::new(&self.dictionaries);
         let mut rewritten = 0;
         let outcome = self.engine.write_with(None, |txn| {
             let mut values = Vec::new();
-            for (key, payload) in txn.scan_prefix(&[keys::TAG_ENTITY])? {
+            for key in &candidates {
+                let Some(payload) = txn.get(key)? else {
+                    continue;
+                };
                 if payload_version(&payload)? == format.version() {
                     continue;
                 }
-                let (collection, id) = keys::parse_entity_key(&key)
+                let (collection, id) = keys::parse_entity_key(key)
                     .ok_or_else(|| DbError::Deserialization("malformed entity key".to_string()))?;
                 let entity = decode_stored(collection, id, &payload, &mut |_| {
                     staging.dictionary(&*txn, collection)
                 })?;
                 let payload = staging.encode(&*txn, &entity, format)?;
-                values.push((key, Some(payload)));
+                values.push((key.clone(), Some(payload)));
             }
-            rewritten = values.len();
+            rewritten = values.len() as u64;
             staging.write_additions(txn)?;
             write_final_values(txn, values)
         })?;
         if matches!(outcome, StorageCommitOutcome::Committed { .. }) {
             staging.publish();
         }
-        Ok(rewritten)
+        Ok(PayloadRewriteBatch {
+            scanned,
+            rewritten,
+            resume_after: if exhausted { None } else { last },
+        })
     }
 }
 

@@ -4,7 +4,10 @@ Local database backups and restores are available under `semantic db`. They open
 the configured database in-process and support streaming typed JSONL as well as
 an uncompressed tar format containing the JSONL plus referenced blobs. See
 [`docs/import-export.md`](../../docs/import-export.md) for the format, validation
-behavior, and examples.
+behavior, and examples. Database maintenance (reindex, verify, repair,
+compaction, payload rewrites and redb file backups) is available through
+`db_cli maintenance` and the `semantic.db.maintenance.*` RPC commands; see
+[`docs/maintenance.md`](../../docs/maintenance.md).
 
 The `semantic_cli` crate provides the `semantic` command-line application.
 

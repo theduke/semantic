@@ -3,6 +3,7 @@ mod command;
 mod config;
 mod context;
 mod db;
+mod db_maintenance_commands;
 mod error;
 mod file;
 pub mod file_maintenance;
