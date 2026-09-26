@@ -344,7 +344,12 @@ mod tests {
                 .select(SelectQuery::new().with_collection("items"))
                 .unwrap();
             assert_eq!(out.len(), 1);
-            assert_eq!(out[0].get("name"), Some(&Value::String("n".into())));
+            // Polymorphic collections canonicalize `name` to the core `semantic:name`
+            // attribute, and select returns qualified field names by default.
+            assert_eq!(
+                out[0].get("semantic:name"),
+                Some(&Value::String("n".into()))
+            );
         }
     }
 
@@ -398,7 +403,10 @@ mod tests {
                 )
                 .unwrap();
             assert_eq!(by_id.len(), 1);
-            assert_eq!(by_id[0].get("name"), Some(&Value::String("first".into())));
+            assert_eq!(
+                by_id[0].get("semantic:name"),
+                Some(&Value::String("first".into()))
+            );
 
             let by_type = db
                 .select(
