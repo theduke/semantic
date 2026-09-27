@@ -12,6 +12,7 @@ use semantic_ui_core::{
 };
 
 const CORE_STYLES: Asset = asset!("/assets/core_styles.css");
+const FAVICON: Asset = asset!("/assets/favicon.svg");
 
 use crate::views::Route;
 
@@ -131,6 +132,7 @@ pub fn AppRoot(props: AppRootProps) -> Element {
     rsx! {
         dxcomp::Stylesheet {}
         document::Stylesheet { href: CORE_STYLES }
+        document::Link { rel: "icon", href: FAVICON }
         UiCatalogProvider {
             render_settings,
             configure_catalog: configure_ui_catalog,
