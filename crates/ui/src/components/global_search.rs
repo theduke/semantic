@@ -41,7 +41,7 @@ struct SearchResponse {
 }
 
 #[component]
-pub fn GlobalSearch() -> Element {
+pub fn GlobalSearch(#[props(default)] expanded: bool) -> Element {
     let client = use_rpc_client();
     let scope_id = use_active_scope_id();
     let catalog = use_ui_catalog();
@@ -101,6 +101,10 @@ pub fn GlobalSearch() -> Element {
             size: IconButtonSize::Small,
             on_click: move |_| open.set(true),
             Search { width: 18, height: 18 }
+            if expanded {
+                span { "Search" }
+                kbd { "Ctrl K" }
+            }
         }
 
         if open() {

@@ -81,7 +81,7 @@
   --semantic-content-width: 1180px;
   --semantic-content-width-narrow: 760px;
   --semantic-header-height: 68px;
-  --semantic-sidebar-width: 240px;
+  --semantic-sidebar-width: 218px;
   --semantic-safe-top: env(safe-area-inset-top, 0px);
   --semantic-safe-right: env(safe-area-inset-right, 0px);
   --semantic-safe-bottom: env(safe-area-inset-bottom, 0px);
@@ -6550,12 +6550,12 @@ html:has(.semantic-note-form) {
 
 .semantic-ui__sidebar {
   position: sticky;
-  top: calc(var(--semantic-header-height) + var(--semantic-safe-top));
-  height: calc(100dvh - var(--semantic-header-height) - var(--semantic-safe-top));
+  top: 0;
+  height: 100dvh;
   overflow-y: auto;
-  padding: var(--semantic-space-5) var(--semantic-space-3);
+  padding: 148px var(--semantic-space-3) var(--semantic-space-4);
   border-right: 1px solid var(--semantic-border-soft);
-  background: var(--semantic-surface);
+  background: color-mix(in srgb, var(--semantic-surface) 94%, var(--semantic-bg));
 }
 
 .semantic-ui__sidebar .semantic-primary-nav,
@@ -6565,19 +6565,45 @@ html:has(.semantic-note-form) {
 }
 
 .semantic-ui__sidebar .semantic-primary-nav {
-  gap: var(--semantic-space-6);
+  gap: 0;
 }
 
 .semantic-ui__sidebar .semantic-primary-nav__link {
   width: 100%;
-  min-height: 42px;
+  min-height: 34px;
+  justify-content: flex-start;
+  gap: 10px;
+  padding: 6px 9px;
+  border: 1px solid transparent;
+  border-radius: 8px;
+  color: var(--semantic-text-muted);
+  font-size: var(--semantic-font-size-label);
+  font-weight: 560;
+  line-height: 1.2;
+}
+
+.semantic-ui__sidebar .semantic-primary-nav__items {
+  gap: 2px;
+}
+
+.semantic-primary-nav__icon {
+  display: inline-grid;
+  flex: 0 0 18px;
+  place-items: center;
+  color: var(--semantic-color-text-subtle);
+}
+
+.semantic-primary-nav__link:hover .semantic-primary-nav__icon,
+.semantic-primary-nav__link[aria-current="page"] .semantic-primary-nav__icon {
+  color: currentcolor;
 }
 
 .semantic-ui__sidebar .semantic-primary-nav__link[aria-current="page"],
 .semantic-primary-nav--drawer .semantic-primary-nav__link[aria-current="page"] {
   background: var(--semantic-color-selected);
   color: var(--semantic-accent);
-  box-shadow: inset 3px 0 0 var(--semantic-accent);
+  border-color: color-mix(in srgb, var(--semantic-accent) 12%, var(--semantic-border-soft));
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, white 20%, transparent);
 }
 
 .semantic-ui__header-actions {
@@ -6626,6 +6652,11 @@ html:has(.semantic-note-form) {
 .semantic-new-menu__trigger span {
   font-size: 1.3em;
   line-height: 1;
+}
+
+.semantic-ui__header .semantic-icon-button > span,
+.semantic-ui__header .semantic-icon-button > kbd {
+  display: none;
 }
 
 .semantic-primary-nav__scrim {
@@ -6853,6 +6884,88 @@ html:has(.semantic-note-form) {
 }
 
 @media (min-width: 861px) {
+  .semantic-ui > .semantic-ui__header {
+    position: fixed;
+    z-index: 30;
+    top: 0;
+    left: 0;
+    display: grid;
+    width: var(--semantic-sidebar-width);
+    min-height: 0;
+    height: 148px;
+    align-content: start;
+    gap: var(--semantic-space-2);
+    padding: var(--semantic-space-3);
+    border-right: 1px solid var(--semantic-border-soft);
+    border-bottom: 0;
+    background: color-mix(in srgb, var(--semantic-surface) 94%, var(--semantic-bg));
+    box-shadow: none;
+  }
+
+  .semantic-ui > .semantic-ui__header .semantic-ui__identity {
+    display: grid;
+    width: 100%;
+    gap: var(--semantic-space-2);
+  }
+
+  .semantic-ui > .semantic-ui__header .semantic-ui__brand {
+    min-height: 34px;
+    padding: 2px 4px;
+    font-size: 15px;
+  }
+
+  .semantic-ui > .semantic-ui__header .semantic-ui__brand-mark {
+    width: 28px;
+    height: 28px;
+    border-radius: 8px;
+    box-shadow: 0 2px 8px color-mix(in srgb, var(--semantic-accent) 20%, transparent);
+    font-size: 13px;
+  }
+
+  .semantic-ui > .semantic-ui__header .semantic-icon-button {
+    width: 100%;
+    min-width: 0;
+    min-height: 34px;
+    justify-content: flex-start;
+    gap: 9px;
+    padding: 0 9px;
+    border-color: var(--semantic-border-soft);
+    background: color-mix(in srgb, var(--semantic-surface) 70%, transparent);
+    color: var(--semantic-text-muted);
+    font-size: var(--semantic-font-size-label);
+  }
+
+  .semantic-ui > .semantic-ui__header .semantic-icon-button > span,
+  .semantic-ui > .semantic-ui__header .semantic-icon-button > kbd {
+    display: inline;
+  }
+
+  .semantic-ui > .semantic-ui__header .semantic-icon-button > kbd {
+    margin-left: auto;
+    color: var(--semantic-color-text-subtle);
+    font-size: 10px;
+    font-weight: 500;
+  }
+
+  .semantic-ui > .semantic-ui__header .semantic-ui__header-actions,
+  .semantic-ui > .semantic-ui__header .semantic-new-menu,
+  .semantic-ui > .semantic-ui__header .semantic-new-menu__trigger {
+    width: 100%;
+  }
+
+  .semantic-ui > .semantic-ui__header .semantic-new-menu__trigger {
+    min-height: 34px;
+    justify-content: center;
+    padding-inline: 10px;
+    font-size: var(--semantic-font-size-label);
+  }
+
+  .semantic-ui > .semantic-ui__header .semantic-new-menu__options {
+    right: auto;
+    left: 0;
+    width: 100%;
+  }
+
   .semantic-player-shell .semantic-ui__header .semantic-primary-nav__toggle {
     display: inline-flex;
   }

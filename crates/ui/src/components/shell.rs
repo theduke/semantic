@@ -1,4 +1,5 @@
 use dioxus::prelude::*;
+use dioxus_icons::lucide::{CirclePlay, Database, FolderTree, House, LayoutGrid, ListTodo, Tags};
 
 use super::GlobalSearch;
 use crate::views::Route;
@@ -30,7 +31,7 @@ pub fn AppFrame(#[props(default)] variant: AppFrameVariant, children: Element) -
             AppFrameHeader {}
             if variant == AppFrameVariant::Standard {
                 div { class: "semantic-ui__layout",
-                    aside { class: "semantic-ui__sidebar", aria_label: "Workspace",
+                    aside { class: "semantic-ui__sidebar", aria_label: "Primary navigation",
                         PrimaryNav { mobile: false }
                     }
                     main { id: MAIN_CONTENT_ID, class: main_class, tabindex: "-1", {children} }
@@ -61,19 +62,26 @@ fn AppFrameHeader() -> Element {
     rsx! {
         header { class: "semantic-ui__header",
             div { class: "semantic-ui__identity",
-                Link {
-                    to: Route::HomePage,
-                    class: "semantic-ui__brand",
-                    aria_label: "Semantic home",
-                    span { aria_hidden: "true", class: "semantic-ui__brand-mark", "S" }
-                    span { class: "semantic-ui__brand-name", "Semantic" }
-                }
-                GlobalSearch {}
+                SemanticBrand {}
+                GlobalSearch { expanded: true }
             }
             div { class: "semantic-ui__header-actions",
                 NewMenu {}
                 PrimaryNav { mobile: true }
             }
+        }
+    }
+}
+
+#[component]
+fn SemanticBrand() -> Element {
+    rsx! {
+        Link {
+            to: Route::HomePage,
+            class: "semantic-ui__brand",
+            aria_label: "Semantic home",
+            span { aria_hidden: "true", class: "semantic-ui__brand-mark", "S" }
+            span { class: "semantic-ui__brand-name", "Semantic" }
         }
     }
 }
@@ -149,10 +157,11 @@ pub fn PrimaryNav(#[props(default)] mobile: bool) -> Element {
                         restore_focus(toggle);
                     }
                 },
-                NavGroup { label: "Workspace",
+                ul { class: "semantic-primary-nav__items",
                     PrimaryNavLink {
                         to: Route::HomePage,
                         label: "Home",
+                        icon: rsx! { House { width: 17, height: 17 } },
                         active: nav_item_is_active(&route, NavItem::Home),
                         on_navigate: move |_| menu_open.set(false),
                     }
@@ -167,38 +176,42 @@ pub fn PrimaryNav(#[props(default)] mobile: bool) -> Element {
                         sql: None,
                     },
                     label: "Browse",
+                    icon: rsx! { LayoutGrid { width: 17, height: 17 } },
                     active: nav_item_is_active(&route, NavItem::Browse),
                     on_navigate: move |_| menu_open.set(false),
                 }
                 PrimaryNavLink {
                     to: Route::TreePage { root: None, hierarchy: None, kind: None },
                     label: "Tree",
+                    icon: rsx! { FolderTree { width: 17, height: 17 } },
                     active: nav_item_is_active(&route, NavItem::Tree),
                     on_navigate: move |_| menu_open.set(false),
                 }
                 PrimaryNavLink {
                     to: Route::LabelsPage,
                     label: "Labels",
+                    icon: rsx! { Tags { width: 17, height: 17 } },
                     active: nav_item_is_active(&route, NavItem::Labels),
                     on_navigate: move |_| menu_open.set(false),
                 }
-                }
-                NavGroup { label: "Tools",
                 PrimaryNavLink {
                     to: Route::PlayPage,
                     label: "Player",
+                    icon: rsx! { CirclePlay { width: 17, height: 17 } },
                     active: nav_item_is_active(&route, NavItem::Player),
                     on_navigate: move |_| menu_open.set(false),
                 }
                 PrimaryNavLink {
                     to: Route::JobsPage,
                     label: "Jobs",
+                    icon: rsx! { ListTodo { width: 17, height: 17 } },
                     active: nav_item_is_active(&route, NavItem::Jobs),
                     on_navigate: move |_| menu_open.set(false),
                 }
                 PrimaryNavLink {
                     to: Route::DataPage,
                     label: "Data",
+                    icon: rsx! { Database { width: 17, height: 17 } },
                     active: nav_item_is_active(&route, NavItem::Data),
                     on_navigate: move |_| menu_open.set(false),
                 }
@@ -266,21 +279,10 @@ fn restore_focus(element: Signal<Option<std::rc::Rc<MountedData>>>) {
 }
 
 #[component]
-fn NavGroup(label: &'static str, children: Element) -> Element {
-    rsx! {
-        div { class: "semantic-primary-nav__group", role: "group", aria_label: label,
-            span { class: "semantic-primary-nav__group-label", "{label}" }
-            ul { class: "semantic-primary-nav__items",
-                {children}
-            }
-        }
-    }
-}
-
-#[component]
 fn PrimaryNavLink(
     to: Route,
     label: &'static str,
+    icon: Element,
     active: bool,
     on_navigate: EventHandler<()>,
 ) -> Element {
@@ -294,7 +296,8 @@ fn PrimaryNavLink(
                 "data-active": active,
                 aria_current: active.then_some("page"),
                 onclick: move |_| on_navigate.call(()),
-                "{label}"
+                span { class: "semantic-primary-nav__icon", aria_hidden: "true", {icon} }
+                span { "{label}" }
             }
         }
     }
