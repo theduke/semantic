@@ -486,12 +486,25 @@ mod tests {
     fn query_uses_case_insensitive_regex_for_id_and_available_title_fields() {
         let collection = SearchCollection {
             name: "people".to_string(),
-            title_fields: vec!["semantic:title".to_string(), "display_name".to_string()],
+            title_fields: vec![
+                "semantic:title".to_string(),
+                semantic_data::filestore::ATTR_FILE_FILENAME.to_string(),
+                "display_name".to_string(),
+            ],
         };
 
         assert_eq!(
             search_query(&collection, "^Ada('s)?$"),
-            "SELECT * FROM \"people\" WHERE (\"id\" ~* '^Ada(''s)?$' OR \"semantic:title\" ~* '^Ada(''s)?$' OR \"display_name\" ~* '^Ada(''s)?$') LIMIT 12"
+            "SELECT * FROM \"people\" WHERE (\"id\" ~* '^Ada(''s)?$' OR \"semantic:title\" ~* '^Ada(''s)?$' OR \"semantic:filestore:file:filename\" ~* '^Ada(''s)?$' OR \"display_name\" ~* '^Ada(''s)?$') LIMIT 12"
+        );
+    }
+
+    #[test]
+    fn shared_title_fields_include_the_canonical_filename_after_semantic_title() {
+        assert_eq!(ENTITY_TITLE_FIELDS[0], "semantic:title");
+        assert!(
+            ENTITY_TITLE_FIELDS.contains(&semantic_data::filestore::ATTR_FILE_FILENAME),
+            "global search derives its searchable title fields from this shared list"
         );
     }
 

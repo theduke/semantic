@@ -13,9 +13,10 @@ use crate::ui_catalog::{
 };
 
 /// Object fields considered, in priority order, when deriving an entity title.
-pub const ENTITY_TITLE_FIELDS: [&str; 8] = [
-    "semantic:base:label:name",
+pub const ENTITY_TITLE_FIELDS: [&str; 9] = [
     "semantic:title",
+    "semantic:base:label:name",
+    ATTR_FILE_FILENAME,
     "title",
     "name",
     "display_name",
@@ -497,12 +498,6 @@ fn object_id(object: &Object) -> Option<String> {
 }
 
 pub fn entity_title(object: &Object, id: Option<&str>, class_name: Option<&str>) -> String {
-    if object.get("type").and_then(Value::as_str) == Some(FILE_CLASS_ID)
-        && let Some(filename) = object.get(ATTR_FILE_FILENAME).and_then(Value::as_str)
-        && !filename.trim().is_empty()
-    {
-        return filename.to_string();
-    }
     for field in ENTITY_TITLE_FIELDS {
         if let Some(title) = object.get(field).and_then(Value::as_str)
             && !title.trim().is_empty()
@@ -576,10 +571,28 @@ mod tests {
     }
 
     #[test]
-    fn file_title_prefers_the_canonical_filename_attribute() {
+    fn file_title_prefers_explicit_semantic_title_over_canonical_filename() {
         let mut object = Object::new();
         object.insert("type", Value::String(FILE_CLASS_ID.to_string()));
-        object.insert("title", Value::String("Untitled file".to_string()));
+        object.insert(
+            "semantic:title",
+            Value::String("Recorded interview".to_string()),
+        );
+        object.insert(
+            ATTR_FILE_FILENAME,
+            Value::String("recording.wav".to_string()),
+        );
+
+        assert_eq!(
+            entity_title(&object, Some("file-id"), Some("File")),
+            "Recorded interview"
+        );
+    }
+
+    #[test]
+    fn file_title_falls_back_to_the_canonical_filename_attribute() {
+        let mut object = Object::new();
+        object.insert("type", Value::String(FILE_CLASS_ID.to_string()));
         object.insert(
             ATTR_FILE_FILENAME,
             Value::String("recording.wav".to_string()),
