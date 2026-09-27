@@ -17,3 +17,10 @@
 
 - Implement the plugin/import system according to its revised [design](docs/plans/2026-09-09-plugin-system/design.md) and [phased plan](docs/plans/2026-09-09-plugin-system/implementation-plan.md).
 - When generic entity versioning exists, allow importer configuration and individual imports to request it by delegating to that system. Until then, imports use normal upsert/replace for matching source identities. Never implement importer-specific revision entities or manual version chains.
+
+## UI
+
+* editor
+  - nested bullet points have no offset
+  - entering "- [ ]" does not turn it into a checkbox
+  - using '*' or '**' in the editor for bold/italic
