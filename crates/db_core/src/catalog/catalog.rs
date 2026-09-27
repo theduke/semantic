@@ -612,6 +612,11 @@ impl Catalog {
         self.classes.get(lid)
     }
 
+    #[cfg(test)]
+    pub(crate) fn remove_class_projection_for_test(&mut self, name: &str) {
+        self.classes.remove_key(name);
+    }
+
     pub fn class_field_for_alias(&self, class_lid: LocalClassId, alias: &str) -> Option<String> {
         fn visit(
             catalog: &Catalog,

@@ -1335,6 +1335,9 @@ pub(crate) struct StorageReadCounts {
     pub(crate) collection_counts: std::sync::atomic::AtomicUsize,
     /// Ordered index scans (`scan_index_entries`).
     pub(crate) index_entry_scans: std::sync::atomic::AtomicUsize,
+    pub(crate) index_value_scans: std::sync::atomic::AtomicUsize,
+    pub(crate) commit_calls: std::sync::atomic::AtomicUsize,
+    pub(crate) submitted_ops: std::sync::atomic::AtomicUsize,
     /// Entities yielded by collection scans.
     pub(crate) rows_yielded: std::sync::atomic::AtomicUsize,
     /// Report maintained row counts as unknown, forcing the key-count
@@ -1343,6 +1346,8 @@ pub(crate) struct StorageReadCounts {
     /// Number of upcoming conditional commits to fail with a conflict, as
     /// if another writer committed first.
     pub(crate) inject_conflicts: std::sync::atomic::AtomicUsize,
+    /// Force revision-fence conflicts, including read-only registration.
+    pub(crate) inject_revision_conflicts: std::sync::atomic::AtomicUsize,
     /// Entities put or deleted by committed batches, as (collection, id).
     pub(crate) entity_writes: std::sync::Mutex<Vec<(usize, String)>>,
 }
@@ -1356,6 +1361,9 @@ impl StorageReadCounts {
         self.entity_gets.store(0, Ordering::Relaxed);
         self.collection_counts.store(0, Ordering::Relaxed);
         self.index_entry_scans.store(0, Ordering::Relaxed);
+        self.index_value_scans.store(0, Ordering::Relaxed);
+        self.commit_calls.store(0, Ordering::Relaxed);
+        self.submitted_ops.store(0, Ordering::Relaxed);
         self.rows_yielded.store(0, Ordering::Relaxed);
         self.entity_writes.lock().unwrap().clear();
     }
@@ -1435,6 +1443,24 @@ impl CountingEntityStorage {
 
 #[cfg(test)]
 impl EntityStorage for CountingEntityStorage {
+    fn ensure_revision(&self, expected: Option<u64>) -> Result<(), DbError> {
+        if self
+            .counts
+            .inject_revision_conflicts
+            .fetch_update(
+                std::sync::atomic::Ordering::Relaxed,
+                std::sync::atomic::Ordering::Relaxed,
+                |pending| pending.checked_sub(1),
+            )
+            .is_ok()
+        {
+            return Err(DbError::TransactionConflict(
+                "injected registration revision conflict".into(),
+            ));
+        }
+        self.inner.ensure_revision(expected)
+    }
+
     fn get_entity(
         &self,
         collection: LocalCollectionId,
@@ -1503,6 +1529,7 @@ impl EntityStorage for CountingEntityStorage {
         path: Option<&FieldPath>,
         value: &Value,
     ) -> Result<BoxEntityIdScan, DbError> {
+        Self::count(&self.counts.index_value_scans);
         self.inner.scan_index_value_stream(index, path, value)
     }
 
@@ -1513,6 +1540,7 @@ impl EntityStorage for CountingEntityStorage {
         lower: Bound<&Value>,
         upper: Bound<&Value>,
     ) -> Result<BoxEntityIdScan, DbError> {
+        Self::count(&self.counts.index_value_scans);
         self.inner
             .scan_index_range_stream(index, path, lower, upper)
     }
@@ -1523,6 +1551,7 @@ impl EntityStorage for CountingEntityStorage {
         path: Option<&FieldPath>,
         prefix: &str,
     ) -> Result<BoxEntityIdScan, DbError> {
+        Self::count(&self.counts.index_value_scans);
         self.inner.scan_index_prefix_stream(index, path, prefix)
     }
 
@@ -1548,6 +1577,10 @@ impl EntityStorage for CountingEntityStorage {
     }
 
     fn apply_batch(&mut self, ops: &[StorageWriteOp]) -> Result<(), DbError> {
+        Self::count(&self.counts.commit_calls);
+        self.counts
+            .submitted_ops
+            .fetch_add(ops.len(), std::sync::atomic::Ordering::Relaxed);
         self.inner.apply_batch(ops)?;
         self.record_writes(ops);
         Ok(())
@@ -1558,6 +1591,10 @@ impl EntityStorage for CountingEntityStorage {
         ops: &[StorageWriteOp],
         expected_revision: Option<u64>,
     ) -> Result<StorageCommitOutcome, DbError> {
+        Self::count(&self.counts.commit_calls);
+        self.counts
+            .submitted_ops
+            .fetch_add(ops.len(), std::sync::atomic::Ordering::Relaxed);
         if self
             .counts
             .inject_conflicts
@@ -1783,6 +1820,47 @@ mod tests {
         let mut object = Object::new();
         object.insert("kind", Value::String(kind.to_string()));
         object
+    }
+
+    #[test]
+    fn counting_storage_covers_borrowed_and_owned_snapshot_scans() {
+        use std::sync::atomic::Ordering;
+
+        let (storage, counts) = CountingEntityStorage::new();
+        let borrowed = storage.snapshot().unwrap();
+        let owned = storage.owned_snapshot().unwrap().unwrap();
+        for snapshot in [borrowed.as_ref(), owned.as_ref()] {
+            snapshot.scan_collection(LocalCollectionId(0)).unwrap();
+            snapshot
+                .scan_collection_stream(LocalCollectionId(0))
+                .unwrap()
+                .collect::<Result<Vec<_>, _>>()
+                .unwrap();
+            snapshot
+                .get_entity(LocalCollectionId(0), "missing")
+                .unwrap();
+            snapshot
+                .scan_index_value(LocalIndexId(0), None, &Value::Null)
+                .unwrap();
+            snapshot
+                .scan_index_value_stream(LocalIndexId(0), None, &Value::Null)
+                .unwrap()
+                .collect::<Result<Vec<_>, _>>()
+                .unwrap();
+            snapshot
+                .scan_index_range_stream(LocalIndexId(0), None, Bound::Unbounded, Bound::Unbounded)
+                .unwrap()
+                .collect::<Result<Vec<_>, _>>()
+                .unwrap();
+            snapshot
+                .scan_index_prefix_stream(LocalIndexId(0), None, "")
+                .unwrap()
+                .collect::<Result<Vec<_>, _>>()
+                .unwrap();
+        }
+        assert_eq!(counts.collection_scans(), 4);
+        assert_eq!(counts.entity_gets(), 2);
+        assert_eq!(counts.index_value_scans.load(Ordering::Relaxed), 8);
     }
 
     #[test]

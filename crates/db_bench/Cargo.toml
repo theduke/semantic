@@ -19,6 +19,7 @@ semantic_data = { workspace = true }
 semantic_db_core = { path = "../db_core", features = ["tokio"] }
 semantic_db_kv = { path = "../db_kv" }
 semantic_db_redb = { path = "../db_redb" }
+semantic_base = { path = "../base" }
 tempfile = "3.26.0"
 time = { workspace = true }
 tokio = { workspace = true, features = ["rt-multi-thread", "sync", "time"] }
@@ -28,4 +29,8 @@ criterion = { version = "0.8.2", default-features = false, features = ["cargo_be
 
 [[bench]]
 name = "db"
+harness = false
+
+[[bench]]
+name = "package_registration"
 harness = false

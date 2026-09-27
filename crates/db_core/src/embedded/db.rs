@@ -65,6 +65,9 @@ mod local_refs;
 mod maintenance;
 mod mutation;
 mod overlay;
+mod package_registration;
+#[cfg(test)]
+mod package_registration_tests;
 mod reader;
 mod text_search;
 mod validation;
@@ -645,35 +648,75 @@ impl<S: EntityStorage> EmbeddedDb<S> {
             package = package_name,
             "Package registration started"
         );
-        let package = normalize_package_definition(&package)
-            .map_err(|err| DbError::InvalidQuery(err.to_string()))?;
+        let package = match normalize_package_definition(&package) {
+            Ok(package) => package,
+            Err(error) => {
+                tracing::debug!(operation = "package_registration", package = package_name,
+                    elapsed = ?started.elapsed(), error = %error, "Package registration failed");
+                return Err(DbError::InvalidQuery(error.to_string()));
+            }
+        };
+        tracing::debug!(
+            operation = "package_registration",
+            package = package_name,
+            phase = "normalization",
+            elapsed = ?started.elapsed(),
+        );
 
-        let txn_result = run_with_transaction_retries(TransactionOptions::default(), |_| {
+        let txn_result = run_with_transaction_retries(TransactionOptions::default(), |attempt| {
             let catalog_snapshot = self.catalog.snapshot();
+            let phase_started = Instant::now();
             validate_package_migrations_with_catalog(&package, catalog_snapshot.catalog.as_ref())
                 .map_err(|err| DbError::InvalidQuery(err.to_string()))?;
+            tracing::debug!(
+                operation = "package_registration",
+                package = package_name,
+                attempt,
+                phase = "full_validation",
+                elapsed = ?phase_started.elapsed(),
+            );
             let read_revision = self.storage.current_revision()?;
+            let phase_started = Instant::now();
             let (next_catalog, before, after, executed_migrations) = self.apply_package_update(
                 catalog_snapshot.catalog.as_ref(),
                 read_revision,
                 &package,
             )?;
+            tracing::debug!(
+                operation = "package_registration",
+                package = package_name,
+                attempt,
+                phase = "reconciliation",
+                elapsed = ?phase_started.elapsed(),
+                migrations_executed = executed_migrations.len(),
+            );
             let next_catalog = Arc::new(next_catalog);
             // Reconcile applied migrations before checking for a no-op: older
             // catalogs may need repairs, including behavioral typedef constraints.
+            let (catalog_changed, registration_path) = package_registration::compare_catalogs(
+                &catalog_snapshot.catalog,
+                &next_catalog,
+                &package_name,
+                attempt,
+                executed_migrations.len(),
+            );
             if executed_migrations.is_empty()
                 && before.is_empty()
                 && after.is_empty()
-                && next_catalog.to_storage_snapshot()
-                    == catalog_snapshot.catalog.to_storage_snapshot()
+                && !catalog_changed
             {
                 self.storage.ensure_revision(read_revision)?;
-                return Ok(PackageRegistrationOutcome {
-                    executed_migrations,
-                });
+                return Ok((
+                    PackageRegistrationOutcome {
+                        executed_migrations,
+                    },
+                    "unchanged_reconciled",
+                    false,
+                ));
             }
             let mut extra_ops =
                 self.ddl_cleanup_ops(catalog_snapshot.catalog.as_ref(), &next_catalog)?;
+            let phase_started = Instant::now();
             self.backfill_new_indexes(
                 catalog_snapshot.catalog.as_ref(),
                 &next_catalog,
@@ -683,12 +726,26 @@ impl<S: EntityStorage> EmbeddedDb<S> {
                     rewritten: Some(&after),
                 },
             )?;
+            tracing::debug!(operation = "package_registration", package = package_name, attempt,
+                phase = "index_backfill", elapsed = ?phase_started.elapsed());
+            let phase_started = Instant::now();
+            let before_encoding = extra_ops.len();
             extra_ops.extend(catalog_write_ops(&self.storage, &next_catalog)?);
+            tracing::debug!(operation = "package_registration", package = package_name, attempt,
+                phase = "catalog_encoding", elapsed = ?phase_started.elapsed(), writes = extra_ops.len() - before_encoding);
+            let phase_started = Instant::now();
             self.rebuild_reverse_references(&next_catalog, &after, &mut extra_ops)?;
+            tracing::debug!(operation = "package_registration", package = package_name, attempt,
+                phase = "reverse_reference_rebuild", elapsed = ?phase_started.elapsed());
+            let phase_started = Instant::now();
             if self.validation_enabled()? {
                 self.validate_catalog_rows(&next_catalog, &after)?;
             }
+            tracing::debug!(operation = "package_registration", package = package_name, attempt,
+                phase = "row_validation", elapsed = ?phase_started.elapsed());
 
+            let phase_started = Instant::now();
+            let before_writes = self.execution_counts.storage_writes;
             match self.persist_dataset_delta(
                 &next_catalog,
                 &before,
@@ -701,9 +758,18 @@ impl<S: EntityStorage> EmbeddedDb<S> {
                     Arc::clone(&next_catalog),
                 ),
             )? {
-                StorageCommitOutcome::Committed { .. } => Ok(PackageRegistrationOutcome {
-                    executed_migrations,
-                }),
+                StorageCommitOutcome::Committed { .. } => {
+                    tracing::debug!(operation = "package_registration", package = package_name, attempt,
+                        phase = "commit", elapsed = ?phase_started.elapsed(),
+                        writes = self.execution_counts.storage_writes - before_writes);
+                    Ok((
+                        PackageRegistrationOutcome {
+                            executed_migrations,
+                        },
+                        registration_path,
+                        catalog_changed,
+                    ))
+                }
                 StorageCommitOutcome::Conflict {
                     expected_revision,
                     actual_revision,
@@ -712,18 +778,29 @@ impl<S: EntityStorage> EmbeddedDb<S> {
                     expected_revision, actual_revision
                 ))),
             }
-        })?;
+        });
+
+        let txn_result = match txn_result {
+            Ok(result) => result,
+            Err(error) => {
+                tracing::debug!(operation = "package_registration", package = package_name,
+                    elapsed = ?started.elapsed(), error = %error, "Package registration failed");
+                return Err(error);
+            }
+        };
 
         tracing::debug!(
             operation = "package_registration",
             package = package_name,
             elapsed = ?started.elapsed(),
-            migrations_executed = txn_result.value.executed_migrations.len(),
+            migrations_executed = txn_result.value.0.executed_migrations.len(),
+            registration_path = txn_result.value.1,
+            catalog_changed = txn_result.value.2,
             attempts = txn_result.metrics.attempts,
             conflicts = txn_result.metrics.conflicts,
             "Package registration completed"
         );
-        Ok(txn_result.value)
+        Ok(txn_result.value.0)
     }
 
     pub fn auto_index_enabled(&self) -> bool {
@@ -4903,9 +4980,15 @@ mod tests {
 
         let mut changed = package;
         changed.migrations[0].description = Some("Changed migration.".to_string());
-        let outcome = db.upsert_package(changed).unwrap();
+        let outcome = db.upsert_package(changed.clone()).unwrap();
 
         assert!(outcome.executed_migrations.is_empty());
+        assert!(db.catalog().class_id("shared.test.note").is_some());
+        db.transact_ddl(DdlBatch::new().with_op(DdlOperation::DeleteClass {
+            id: "shared.test.note".into(),
+        }))
+        .unwrap();
+        db.upsert_package(changed).unwrap();
         assert!(db.catalog().class_id("shared.test.note").is_some());
     }
 
@@ -6350,7 +6433,7 @@ mod tests {
         );
     }
 
-    fn simple_schema_package(description: &str) -> Package {
+    pub(super) fn simple_schema_package(description: &str) -> Package {
         let attr = AttributeType {
             id: "shared.test.title".to_string(),
             name: "title".to_string(),
