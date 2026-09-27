@@ -1795,6 +1795,8 @@ pre {
 }
 
 .semantic-table-wrap {
+  width: 100%;
+  min-width: 0;
   max-width: 100%;
   overflow-x: auto;
   border: 1px solid var(--semantic-border);
@@ -1808,6 +1810,8 @@ pre {
 
 .semantic-field-table {
   width: 100%;
+  min-width: 0;
+  table-layout: fixed;
   border-collapse: separate;
   border-spacing: 0;
 }
@@ -1825,17 +1829,32 @@ pre {
 }
 
 .semantic-field-table th {
-  width: 1%;
+  width: 32%;
   max-width: 260px;
   color: var(--semantic-text-muted);
   font-weight: 600;
   text-align: left;
   overflow-wrap: anywhere;
-  white-space: nowrap;
+  word-break: break-word;
+  white-space: normal;
 }
 
 .semantic-field-table td {
   min-width: 0;
+  max-width: 0;
+  overflow-wrap: anywhere;
+  word-break: break-word;
+}
+
+.semantic-field-table td > * {
+  max-width: 100%;
+}
+
+.semantic-field-table :is(pre, code) {
+  max-width: 100%;
+  overflow-wrap: anywhere;
+  word-break: break-word;
+  white-space: pre-wrap;
 }
 
 .semantic-field-table td .semantic-table-wrap {
@@ -1868,7 +1887,11 @@ pre {
 }
 
 .semantic-value--raw {
+  max-width: 100%;
   margin: 0;
+  overflow: auto;
+  overflow-wrap: anywhere;
+  word-break: break-word;
   white-space: pre-wrap;
 }
 
