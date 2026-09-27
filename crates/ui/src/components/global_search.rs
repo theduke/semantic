@@ -1,7 +1,7 @@
 use std::{collections::BTreeSet, time::Duration};
 
 use dioxus::prelude::*;
-use dioxus_icons::lucide::Search;
+use dioxus_icons::lucide::{Search, X};
 use futures::future::join_all;
 use regex::RegexBuilder;
 use semantic_data::{
@@ -112,15 +112,20 @@ pub fn GlobalSearch() -> Element {
                         close_dialog();
                     }
                 },
-                div { class: "semantic-global-search__heading",
+                        div { class: "semantic-global-search__heading",
                     div {
                         dxcomp::DialogTitle { "Search entities" }
                         dxcomp::DialogDescription {
                             "Find an entity in any collection by ID or title."
                         }
                     }
-                    kbd { class: "semantic-global-search__shortcut", "Ctrl K" }
-                }
+                            div { class: "semantic-global-search__heading-actions",
+                                kbd { class: "semantic-global-search__shortcut", "Ctrl K" }
+                                dxcomp::DialogClose { aria_label: "Close search",
+                                    X { width: 18, height: 18 }
+                                }
+                            }
+                        }
 
                 div { class: "semantic-global-search__input-wrap",
                     Search { width: 20, height: 20 }

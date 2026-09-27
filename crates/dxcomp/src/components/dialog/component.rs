@@ -1,25 +1,16 @@
 use dioxus::prelude::*;
-use dioxus_primitives::dialog::{self, DialogDescriptionProps, DialogRootProps, DialogTitleProps};
+use dioxus_primitives::dialog::{
+    self, DialogCtx, DialogDescriptionProps, DialogRootProps, DialogTitleProps,
+};
 use dioxus_primitives::{dioxus_attributes::attributes, merge_attributes, use_controlled};
 
 #[component]
 pub fn Dialog(props: DialogRootProps) -> Element {
     let (open, set_open) = use_controlled(props.open, props.default_open, props.on_open_change);
-    // The primitive uses a document-wide outside listener. Keep it controlled here so the
-    // backdrop is the single, exact light-dismiss boundary for modal dialogs.
     let backdrop = attributes!(div {
         class: "dx-dialog-backdrop",
-        onpointerdown: move |_| set_open.call(false),
     });
-    let content = attributes!(div {
-        class: "dx-dialog",
-        onpointerdown: move |event| event.stop_propagation(),
-        onkeydown: move |event: KeyboardEvent| {
-            if event.key() == Key::Escape {
-                set_open.call(false);
-            }
-        },
-    });
+    let content = attributes!(div { class: "dx-dialog" });
     let content = merge_attributes(vec![props.attributes, content]);
 
     rsx! {
@@ -27,13 +18,40 @@ pub fn Dialog(props: DialogRootProps) -> Element {
             id: props.id,
             is_modal: props.is_modal,
             open: open(),
-            on_open_change: move |_| {},
+            on_open_change: move |next_open| set_open.call(next_open),
             attributes: backdrop,
             dialog::DialogContent {
                 class: None,
                 attributes: content,
                 {props.children}
             }
+        }
+    }
+}
+
+/// A close button connected to its nearest [`Dialog`].
+///
+/// Keeping dismissal in the dialog context means callers do not need to duplicate
+/// state-reset logic for pointer, keyboard, and explicit close interactions.
+#[component]
+pub fn DialogClose(
+    #[props(extends = GlobalAttributes)] attributes: Vec<Attribute>,
+    r#as: Option<Callback<Vec<Attribute>, Element>>,
+    children: Element,
+) -> Element {
+    let ctx: DialogCtx = use_context();
+    let base = attributes!(button {
+        class: "dx-dialog-close",
+        r#type: "button",
+        onclick: move |_| ctx.set_open(false),
+    });
+    let merged = merge_attributes(vec![base, attributes]);
+
+    if let Some(dynamic) = r#as {
+        dynamic.call(merged)
+    } else {
+        rsx! {
+            button { ..merged, {children} }
         }
     }
 }

@@ -965,9 +965,8 @@ pre {
     var(--semantic-space-3)
     calc(var(--semantic-page-gutter) + var(--semantic-safe-left));
   border-bottom: 1px solid color-mix(in srgb, var(--semantic-border) 82%, transparent);
-  background: color-mix(in srgb, var(--semantic-surface) 92%, transparent);
+  background: color-mix(in srgb, var(--semantic-surface) 97%, var(--semantic-bg));
   box-shadow: 0 1px 0 rgb(23 32 51 / 2%), 0 5px 18px rgb(23 32 51 / 4%);
-  backdrop-filter: blur(16px) saturate(1.25);
 }
 
 .semantic-ui__header h1 {
@@ -1080,6 +1079,23 @@ pre {
   justify-content: space-between;
   gap: var(--semantic-space-4);
   padding: var(--semantic-space-5) var(--semantic-space-5) var(--semantic-space-3);
+}
+
+.semantic-global-search__heading-actions {
+  display: flex;
+  flex: 0 0 auto;
+  align-items: center;
+  gap: var(--semantic-space-2);
+}
+
+.semantic-global-search__heading-actions .dx-dialog-close {
+  position: static;
+  color: var(--semantic-text-muted);
+}
+
+.semantic-global-search__heading-actions .dx-dialog-close:hover {
+  background: var(--semantic-color-hover);
+  color: var(--semantic-text);
 }
 
 .semantic-global-search__heading > div {
