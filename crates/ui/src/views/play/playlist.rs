@@ -132,6 +132,7 @@ pub fn PlayerPlaylist(
                             &failed_occurrences,
                             on_select,
                             on_remove,
+                            false,
                         )}
                     }
                 }
@@ -152,6 +153,7 @@ pub fn PlayerPlaylist(
                         &virtual_failed_occurrences,
                         on_select,
                         on_remove,
+                        true,
                     )
                 }
             }
@@ -319,6 +321,7 @@ fn playlist_row(
     failed_occurrences: &BTreeSet<u64>,
     on_select: EventHandler<usize>,
     on_remove: EventHandler<usize>,
+    wrapped_by_virtualizer: bool,
 ) -> Element {
     let Some(entry) = entries.get(index).cloned() else {
         return rsx! {};
@@ -329,6 +332,7 @@ fn playlist_row(
     rsx! {
         div {
             key: "{entry.occurrence_id}",
+            role: playlist_row_role(wrapped_by_virtualizer),
             class: if failed { "semantic-player__playlist-row semantic-player__playlist-row--failed" } else if active { "semantic-player__playlist-row semantic-player__playlist-row--active" } else { "semantic-player__playlist-row" },
             button {
                 class: "semantic-player__playlist-select",
@@ -356,6 +360,10 @@ fn playlist_row(
             }
         }
     }
+}
+
+fn playlist_row_role(wrapped_by_virtualizer: bool) -> Option<&'static str> {
+    (!wrapped_by_virtualizer).then_some("listitem")
 }
 
 #[derive(Debug, PartialEq, Eq)]
@@ -451,5 +459,11 @@ mod tests {
             presentation.action_label,
             "Select queue item 3: Opening theme, audio/mpeg, 2:05"
         );
+    }
+
+    #[test]
+    fn queue_rows_supply_listitem_semantics_only_without_a_virtualizer_wrapper() {
+        assert_eq!(playlist_row_role(false), Some("listitem"));
+        assert_eq!(playlist_row_role(true), None);
     }
 }
