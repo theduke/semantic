@@ -157,21 +157,27 @@ fn FileDetailView(object: Object, id: Option<String>, mode: RenderMode) -> Eleme
 
 #[component]
 fn FileDataView(object: Object, mode: RenderMode) -> Element {
+    let catalog = use_ui_catalog();
     rsx! {
         div { class: "semantic-table-wrap semantic-file-detail__data",
             table { class: "semantic-field-table semantic-field-table--object",
                 tbody {
-                    for (key, value) in object.iter() {
-                        tr {
-                            th { scope: "row", "{key}" }
-                            td {
-                                ValueView {
-                                    value: value.clone(),
-                                    type_hint: None,
-                                    mode,
+                for (key, value) in object.iter() {
+                    {
+                        let label = catalog.attribute_title(key);
+                        rsx! {
+                            tr {
+                                th { scope: "row", title: "{key}", "{label}" }
+                                td {
+                                    ValueView {
+                                        value: value.clone(),
+                                        type_hint: None,
+                                        mode,
+                                    }
                                 }
                             }
                         }
+                    }
                     }
                 }
             }

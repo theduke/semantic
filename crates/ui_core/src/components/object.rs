@@ -22,8 +22,11 @@ pub fn ObjectView(object: Object, mode: RenderMode) -> Element {
                             }
                         }
                         for (key, value) in object.iter() {
+                            {
+                                let label = catalog.attribute_title(key);
+                                rsx! {
                             tr {
-                                th { scope: "row", "{key}" }
+                                th { scope: "row", title: "{key}", "{label}" }
                                 td {
                                     if let Some(renderer) = catalog.render_registry().attribute_renderer(key) {
                                         {
@@ -54,6 +57,8 @@ pub fn ObjectView(object: Object, mode: RenderMode) -> Element {
                                             mode
                                         }
                                     }
+                                }
+                            }
                                 }
                             }
                         }

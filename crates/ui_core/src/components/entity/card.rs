@@ -451,9 +451,16 @@ fn entity_action_order(action_id: &str) -> u8 {
 
 #[component]
 fn EntityPreviewBody(object: Object) -> Element {
+    let catalog = use_ui_catalog();
     let fields = object
         .iter()
-        .map(|(key, value)| (key.clone(), value_preview(value)))
+        .map(|(key, value)| {
+            (
+                key.clone(),
+                catalog.attribute_title(key),
+                value_preview(value),
+            )
+        })
         .collect::<Vec<_>>();
 
     rsx! {
@@ -463,10 +470,10 @@ fn EntityPreviewBody(object: Object) -> Element {
             div { class: "semantic-table-wrap semantic-entity-card__field-table-wrap",
                 table { class: "semantic-field-table semantic-entity-card__field-table",
                     tbody {
-                        for (key, value) in fields {
-                            tr {
-                                th { scope: "row", "{key}" }
-                                td { "{value}" }
+                    for (key, label, value) in fields {
+                        tr {
+                            th { scope: "row", title: "{key}", "{label}" }
+                            td { "{value}" }
                             }
                         }
                     }

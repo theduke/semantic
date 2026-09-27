@@ -127,18 +127,23 @@ pub fn ClassView(
                                     }
                                 }
                             }
-                        }
-                        for (key, value) in extra_fields {
-                            tr {
-                                th { scope: "row", class: "semantic-class__extra-field", "{key}" }
-                                td {
-                                    ValueView {
-                                        value,
-                                        type_hint: None,
-                                        mode
-                                    }
                                 }
-                            }
+                                for (key, value) in extra_fields {
+                                    {
+                                        let label = catalog.attribute_title(&key);
+                                        rsx! {
+                                            tr {
+                                                th { scope: "row", class: "semantic-class__extra-field", title: "{key}", "{label}" }
+                                                td {
+                                                    ValueView {
+                                                        value,
+                                                        type_hint: None,
+                                                        mode
+                                                    }
+                                                }
+                                            }
+                                        }
+                                    }
                         }
                     }
                 }
