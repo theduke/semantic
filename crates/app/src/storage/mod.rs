@@ -11,6 +11,7 @@ mod redb;
 
 #[cfg(feature = "storage-logfs")]
 use std::sync::Arc;
+use std::time::Instant;
 
 use objstore::ObjStoreBuilder;
 use semantic_data::schema::DbOpenMode;
@@ -147,6 +148,24 @@ pub async fn open_app(
     app_config: AppConfig,
     storage: ResolvedStorageConfig,
 ) -> Result<SemanticApp, AppError> {
+    let open_started = Instant::now();
+    let db_backend = storage
+        .db_uri
+        .split_once(':')
+        .map_or("unknown", |(scheme, _)| scheme)
+        .to_string();
+    let blob_backend = storage
+        .blob_uri
+        .split_once(':')
+        .map_or("unknown", |(scheme, _)| scheme)
+        .to_string();
+    tracing::debug!(
+        operation = "application_open",
+        db_backend,
+        blob_backend,
+        mode = ?storage.mode,
+        "Application startup started"
+    );
     if storage.blob_password.is_some() && !is_logfs_blob_uri(&storage.blob_uri) {
         return Err(AppError::InvalidRequest(
             "blob-store passwords are only supported for logfs".into(),
@@ -168,6 +187,13 @@ pub async fn open_app(
         ));
     }
 
+    let phase_started = Instant::now();
+    tracing::debug!(
+        operation = "application_open",
+        phase = "blob_store",
+        backend = blob_backend,
+        "Application startup phase started"
+    );
     let mut stores = ObjStoreBuilder::new();
     stores.register_provider(objstore_fs::FsProvider::new());
     #[cfg(feature = "storage-logfs")]
@@ -177,6 +203,13 @@ pub async fn open_app(
         .await
         .map_err(|err| AppError::InvalidRequest(format!("object store open task failed: {err}")))?
         .map_err(AppError::from)?;
+    tracing::debug!(
+        operation = "application_open",
+        phase = "blob_store",
+        backend = blob_backend,
+        elapsed = ?phase_started.elapsed(),
+        "Application startup phase completed"
+    );
 
     let scope_id = DbScopeId::new("default");
     let builder = SemanticApp::builder().with_config(app_config);
@@ -197,6 +230,12 @@ pub async fn open_app(
             (builder, blob_store)
         };
 
+    let phase_started = Instant::now();
+    tracing::debug!(
+        operation = "application_open",
+        phase = "build",
+        "Application startup phase started"
+    );
     let app = builder
         .with_default_scope_request(
             scope_id.clone(),
@@ -208,9 +247,36 @@ pub async fn open_app(
         .with_default_file_store(scope_id, blob_store)
         .register_builtin_commands()?
         .build()?;
+    tracing::debug!(
+        operation = "application_open",
+        phase = "build",
+        elapsed = ?phase_started.elapsed(),
+        "Application startup phase completed"
+    );
+    let phase_started = Instant::now();
+    tracing::debug!(
+        operation = "application_open",
+        phase = "default_scope",
+        db_backend,
+        "Application startup phase started"
+    );
     app.scopes()
         .resolve_scope(&Principal::system(), None, None)
         .await?;
+    tracing::debug!(
+        operation = "application_open",
+        phase = "default_scope",
+        db_backend,
+        elapsed = ?phase_started.elapsed(),
+        "Application startup phase completed"
+    );
+    tracing::debug!(
+        operation = "application_open",
+        db_backend,
+        blob_backend,
+        elapsed = ?open_started.elapsed(),
+        "Application startup completed"
+    );
     Ok(app)
 }
 

@@ -51,6 +51,7 @@ thiserror = "2.0.17"
 time = { workspace = true }
 tokio = { workspace = true, features = ["fs", "io-util", "rt", "sync", "time"] }
 tokio-util = { version = "0.7.17", features = ["io"] }
+tracing = { workspace = true }
 url = "2.5.7"
 uuid = { workspace = true, features = ["v4"] }
 

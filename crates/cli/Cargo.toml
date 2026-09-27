@@ -39,4 +39,5 @@ thiserror = "2.0.17"
 tempfile = "3.26.0"
 tokio = { workspace = true, features = ["fs", "io-std", "macros", "net", "rt-multi-thread", "signal"] }
 tokio-util = { version = "0.7.17", features = ["io"] }
+tracing-subscriber = { workspace = true }
 uuid = { workspace = true, features = ["v4"] }

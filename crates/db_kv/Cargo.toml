@@ -24,6 +24,7 @@ serde = { workspace = true, features = ["derive"] }
 semantic_data = { workspace = true }
 semantic_db_core = { path = "../db_core" }
 time = { workspace = true }
+tracing = { workspace = true }
 uuid = { workspace = true }
 
 [dev-dependencies]

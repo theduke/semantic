@@ -1,6 +1,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::ops::Bound;
 use std::sync::Arc;
+use std::time::Instant;
 
 use semantic_data::schema::IndexKind;
 use semantic_data::value::{FieldPath, Object, Value};
@@ -884,8 +885,35 @@ impl<E: KvEngine> EntityStorage for EntityStore<E> {
     }
 
     fn prepare_open(&mut self) -> Result<(), DbError> {
-        self.migrate_layout()?;
-        self.ensure_stats()?;
+        let started = Instant::now();
+        tracing::debug!(
+            operation = "database_open",
+            phase = "kv_layout_migration",
+            "Database startup phase started"
+        );
+        let outcome = self.migrate_layout()?;
+        tracing::debug!(
+            operation = "database_open",
+            phase = "kv_layout_migration",
+            elapsed = ?started.elapsed(),
+            outcome = ?outcome,
+            "Database startup phase completed"
+        );
+
+        let started = Instant::now();
+        tracing::debug!(
+            operation = "database_open",
+            phase = "kv_statistics",
+            "Database startup phase started"
+        );
+        let outcome = self.ensure_stats()?;
+        tracing::debug!(
+            operation = "database_open",
+            phase = "kv_statistics",
+            elapsed = ?started.elapsed(),
+            outcome = ?outcome,
+            "Database startup phase completed"
+        );
         Ok(())
     }
 

@@ -720,9 +720,16 @@ impl<S: EntityStorage> EmbeddedDb<S> {
         let catalog = self.catalog();
         let collection = catalog.collection_by_name(REFERENCES).unwrap();
         if self.storage.get_entity(collection.lid, MARKER)?.is_none() {
+            let started = Instant::now();
+            tracing::debug!(
+                operation = "database_open",
+                phase = "reverse_reference_backfill",
+                "Database startup backfill started"
+            );
             let revision = self.storage.current_revision()?;
             let mut ops = Vec::new();
             self.rebuild_reverse_references(&catalog, &BTreeMap::new(), &mut ops)?;
+            let write_operations = ops.len();
             match self.storage.apply_batch_conditional(&ops, revision)? {
                 StorageCommitOutcome::Committed { .. } => {}
                 StorageCommitOutcome::Conflict { .. } => {
@@ -731,6 +738,13 @@ impl<S: EntityStorage> EmbeddedDb<S> {
                     ));
                 }
             }
+            tracing::debug!(
+                operation = "database_open",
+                phase = "reverse_reference_backfill",
+                elapsed = ?started.elapsed(),
+                write_operations,
+                "Database startup backfill completed"
+            );
         }
         Ok(())
     }

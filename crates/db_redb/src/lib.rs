@@ -18,6 +18,7 @@ use semantic_db_kv::{
 };
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
+use std::time::Instant;
 
 mod backup;
 mod options;
@@ -64,6 +65,14 @@ impl RedbKvEngine {
         options: RedbOptions,
     ) -> Result<Self, DbError> {
         let path = path.as_ref();
+        let open_started = Instant::now();
+        tracing::debug!(
+            operation = "database_open",
+            phase = "redb_file",
+            path = %path.display(),
+            mode = ?mode,
+            "Database startup phase started"
+        );
         let builder = options.builder();
         let db = match mode {
             DbOpenMode::OpenExisting => builder.open(path).map_err(storage_err)?,
@@ -81,7 +90,30 @@ impl RedbKvEngine {
                 }
             }
         };
+        tracing::debug!(
+            operation = "database_open",
+            phase = "redb_file",
+            path = %path.display(),
+            mode = ?mode,
+            elapsed = ?open_started.elapsed(),
+            "Database startup phase completed"
+        );
+
+        let tables_started = Instant::now();
+        tracing::debug!(
+            operation = "database_open",
+            phase = "redb_tables",
+            path = %path.display(),
+            "Database startup phase started"
+        );
         tables::prepare_tables(&db)?;
+        tracing::debug!(
+            operation = "database_open",
+            phase = "redb_tables",
+            path = %path.display(),
+            elapsed = ?tables_started.elapsed(),
+            "Database startup phase completed"
+        );
         Ok(Self {
             db,
             path: path.to_path_buf(),

@@ -1,5 +1,6 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
+use std::time::Instant;
 
 use crate::{
     ALL_COLLECTION_ALIAS, AccessPath, AppliedMigration, Batch, BatchOperation, BatchOutcome,
@@ -119,17 +120,54 @@ impl<S: EntityStorage> EmbeddedDb<S> {
     }
 
     pub fn open_with_config(engine: S, config: DbConfig) -> std::result::Result<Self, DbError> {
+        let open_started = Instant::now();
+        tracing::debug!(operation = "database_open", "Database startup started");
+
         let mut storage = engine;
+        let phase_started = Instant::now();
+        tracing::debug!(
+            operation = "database_open",
+            phase = "storage_prepare",
+            "Database startup phase started"
+        );
         storage.prepare_open()?;
+        tracing::debug!(
+            operation = "database_open",
+            phase = "storage_prepare",
+            elapsed = ?phase_started.elapsed(),
+            "Database startup phase completed"
+        );
+
+        let phase_started = Instant::now();
+        tracing::debug!(
+            operation = "database_open",
+            phase = "catalog_load",
+            "Database startup phase started"
+        );
         let bootstrap_catalog = fresh_catalog_with_core_schema()
             .map_err(|err| DbError::InvalidQuery(err.to_string()))?;
-        let loaded_catalog = if let Some(catalog) = load_catalog(&storage, &bootstrap_catalog)? {
-            catalog
-        } else {
-            let ops = catalog_write_ops(&storage, &bootstrap_catalog)?;
-            storage.apply_batch(&ops)?;
-            bootstrap_catalog
-        };
+        let (loaded_catalog, catalog_initialized) =
+            if let Some(catalog) = load_catalog(&storage, &bootstrap_catalog)? {
+                (catalog, false)
+            } else {
+                let ops = catalog_write_ops(&storage, &bootstrap_catalog)?;
+                storage.apply_batch(&ops)?;
+                (bootstrap_catalog, true)
+            };
+        tracing::debug!(
+            operation = "database_open",
+            phase = "catalog_load",
+            elapsed = ?phase_started.elapsed(),
+            catalog_initialized,
+            "Database startup phase completed"
+        );
+
+        let phase_started = Instant::now();
+        tracing::debug!(
+            operation = "database_open",
+            phase = "core_schema",
+            "Database startup phase started"
+        );
         let core_schema_was_internal = loaded_catalog
             .collection_by_name(CORE_CATALOG_SCHEMA_COLLECTION)
             .is_some_and(|collection| collection.internal);
@@ -145,6 +183,21 @@ impl<S: EntityStorage> EmbeddedDb<S> {
             let ops = catalog_write_ops(&storage, &catalog)?;
             storage.apply_batch(&ops)?;
         }
+        tracing::debug!(
+            operation = "database_open",
+            phase = "core_schema",
+            elapsed = ?phase_started.elapsed(),
+            migrations_executed = executed_core_migrations.len(),
+            catalog_changed,
+            "Database startup phase completed"
+        );
+
+        let phase_started = Instant::now();
+        tracing::debug!(
+            operation = "database_open",
+            phase = "builtin_schema",
+            "Database startup phase started"
+        );
         let mut db = Self {
             catalog: SharedCatalog::new(catalog),
             storage,
@@ -197,6 +250,19 @@ impl<S: EntityStorage> EmbeddedDb<S> {
                 )?;
             }
         }
+        tracing::debug!(
+            operation = "database_open",
+            phase = "builtin_schema",
+            elapsed = ?phase_started.elapsed(),
+            "Database startup phase completed"
+        );
+
+        let phase_started = Instant::now();
+        tracing::debug!(
+            operation = "database_open",
+            phase = "index_backfill",
+            "Database startup phase started"
+        );
         let mut index_ops = Vec::new();
         // Range and full-text indexes registered before they were maintained
         // have no entries; rebuild them once, when the migration introducing
@@ -217,8 +283,47 @@ impl<S: EntityStorage> EmbeddedDb<S> {
         if !index_ops.is_empty() {
             db.storage.apply_batch(&index_ops)?;
         }
+        tracing::debug!(
+            operation = "database_open",
+            phase = "index_backfill",
+            elapsed = ?phase_started.elapsed(),
+            index_kinds = rebuild_kinds.len(),
+            write_operations = index_ops.len(),
+            "Database startup phase completed"
+        );
+
+        let phase_started = Instant::now();
+        tracing::debug!(
+            operation = "database_open",
+            phase = "relationship_contributors",
+            "Database startup phase started"
+        );
         db.initialize_relationship_contributors()?;
+        tracing::debug!(
+            operation = "database_open",
+            phase = "relationship_contributors",
+            elapsed = ?phase_started.elapsed(),
+            "Database startup phase completed"
+        );
+
+        let phase_started = Instant::now();
+        tracing::debug!(
+            operation = "database_open",
+            phase = "reverse_references",
+            "Database startup phase started"
+        );
         db.initialize_reverse_references()?;
+        tracing::debug!(
+            operation = "database_open",
+            phase = "reverse_references",
+            elapsed = ?phase_started.elapsed(),
+            "Database startup phase completed"
+        );
+        tracing::debug!(
+            operation = "database_open",
+            elapsed = ?open_started.elapsed(),
+            "Database startup completed"
+        );
         Ok(db)
     }
 
@@ -533,6 +638,13 @@ impl<S: EntityStorage> EmbeddedDb<S> {
         &mut self,
         package: Package,
     ) -> std::result::Result<PackageRegistrationOutcome, DbError> {
+        let started = Instant::now();
+        let package_name = package.name.clone();
+        tracing::debug!(
+            operation = "package_registration",
+            package = package_name,
+            "Package registration started"
+        );
         let package = normalize_package_definition(&package)
             .map_err(|err| DbError::InvalidQuery(err.to_string()))?;
 
@@ -602,6 +714,15 @@ impl<S: EntityStorage> EmbeddedDb<S> {
             }
         })?;
 
+        tracing::debug!(
+            operation = "package_registration",
+            package = package_name,
+            elapsed = ?started.elapsed(),
+            migrations_executed = txn_result.value.executed_migrations.len(),
+            attempts = txn_result.metrics.attempts,
+            conflicts = txn_result.metrics.conflicts,
+            "Package registration completed"
+        );
         Ok(txn_result.value)
     }
 
