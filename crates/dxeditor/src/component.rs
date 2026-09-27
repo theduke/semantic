@@ -215,7 +215,7 @@ const DXEDITOR_STYLE: &str = r#"
 .dxeditor[data-engine="tiptap-prosemirror"] .dxeditor__document {
   display: block;
   min-height: 260px;
-  padding: 22px 64px;
+  padding: 22px clamp(16px, 3vw, 28px) 22px 36px;
 }
 
 .dxeditor-engine__content {
@@ -529,11 +529,19 @@ const DXEDITOR_STYLE: &str = r#"
 }
 
 .dxeditor-engine__block-controls {
+  flex-direction: column;
   align-items: flex-start;
+  gap: 2px;
   border: 0;
   background: transparent;
   box-shadow: none;
   padding: 0;
+}
+
+.dxeditor-engine__block-controls[data-placement="inline"] {
+  border-radius: 5px;
+  background: rgb(255 255 255 / 92%);
+  box-shadow: 0 1px 6px rgb(23 32 42 / 14%);
 }
 
 .dxeditor-engine__block-controls::after,
@@ -546,10 +554,10 @@ const DXEDITOR_STYLE: &str = r#"
 }
 
 .dxeditor-engine__block-controls .dxeditor-engine__button {
-  width: 26px;
-  height: 26px;
-  min-width: 26px;
-  min-height: 26px;
+  width: 22px;
+  height: 22px;
+  min-width: 22px;
+  min-height: 22px;
   padding: 0;
   font-size: 16px;
   line-height: 1;
@@ -624,7 +632,15 @@ const DXEDITOR_STYLE: &str = r#"
 
 @media (max-width: 640px) {
   .dxeditor[data-engine="tiptap-prosemirror"] .dxeditor__document {
-    padding: 18px 56px;
+    padding: 18px 14px 18px 32px;
+  }
+
+  .dxeditor-engine__block-controls .dxeditor-engine__button {
+    width: 20px;
+    height: 20px;
+    min-width: 20px;
+    min-height: 20px;
+    font-size: 14px;
   }
 }
 "#;

@@ -128,7 +128,7 @@ test('keeps table and block actions reachable in a narrow document', async ({ pa
   await page.setViewportSize({ width: 390, height: 844 })
   await page.addStyleTag({ content: `
     .dxeditor { width: calc(100vw - 32px); margin: 16px; }
-    [data-dxeditor-host] { padding: 16px 48px; }
+    [data-dxeditor-host] { padding: 16px 24px 16px 32px; }
     .ProseMirror .tableWrapper { max-width: 100%; overflow-x: auto; }
     .ProseMirror table { min-width: 340px; }
   ` })
@@ -160,6 +160,7 @@ test('keeps table and block actions reachable in a narrow document', async ({ pa
   await table.locator('th').first().click()
   const blockActions = page.getByRole('toolbar', { name: 'Current block' })
   await expect(blockActions).toBeVisible()
+  await expect(blockActions).toHaveAttribute('data-placement', 'inline')
   const blockBox = await blockActions.boundingBox()
   expect(blockBox).not.toBeNull()
   expect(blockBox!.x).toBeGreaterThanOrEqual(0)
@@ -270,6 +271,8 @@ test('targets each hovered block from a stable left gutter', async ({ page }) =>
   expect(geometry[0]).not.toBeNull()
   expect(geometry[1]).not.toBeNull()
   expect(geometry[0]!.x + geometry[0]!.width).toBeLessThan(geometry[1]!.x)
+  await expect(controls).toHaveAttribute('data-placement', 'gutter')
+  expect(geometry[1]!.x - (geometry[0]!.x + geometry[0]!.width)).toBeLessThanOrEqual(8)
   expect(Math.abs(geometry[0]!.y - geometry[1]!.y)).toBeLessThan(2)
 
   // The visual gap is an invisible hover bridge, so crossing it cannot retarget

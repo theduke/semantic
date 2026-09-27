@@ -1917,8 +1917,15 @@ export const mount = (host: HTMLElement, options: MountOptions): EditorSession =
     blockControls.hidden = false
     const bounds = wrapper.getBoundingClientRect()
     const tableRowGutter = editor.state.doc.child(range.index).type.name === 'table' ? 34 : 0
-    blockControls.style.left = `${Math.max(4, rect.left - bounds.left - blockControls.offsetWidth - 6 - tableRowGutter)}px`
-    blockControls.style.top = `${rect.top - bounds.top}px`
+    const gutterLeft = rect.left - bounds.left - blockControls.offsetWidth - 6 - tableRowGutter
+    const fitsGutter = gutterLeft >= 4
+    blockControls.dataset.placement = fitsGutter ? 'gutter' : 'inline'
+    const inlineLeft = Math.min(
+      Math.max(4, rect.right - bounds.left - blockControls.offsetWidth - 4),
+      Math.max(4, bounds.width - blockControls.offsetWidth - 4),
+    )
+    blockControls.style.left = `${fitsGutter ? gutterLeft : inlineLeft}px`
+    blockControls.style.top = `${rect.top - bounds.top + (fitsGutter ? 0 : 4)}px`
     blockControls.dataset.blockId = range.target.semanticId ?? ''
   }
 
