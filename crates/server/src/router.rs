@@ -1,7 +1,7 @@
 use std::collections::BTreeMap;
 use std::sync::Arc;
 
-use axum::extract::{Query, State};
+use axum::extract::{DefaultBodyLimit, Query, State};
 use axum::routing::{get, post};
 use axum::{Json, Router};
 use http::HeaderMap;
@@ -53,7 +53,10 @@ impl SemanticServer {
         };
         let file_get_path = format!("{}/{{id}}", self.config.file_api_prefix);
         let router = Router::new()
-            .route(&self.config.rpc_path, post(rpc_http_handler))
+            .route(
+                &self.config.rpc_path,
+                post(rpc_http_handler).layer(DefaultBodyLimit::max(self.config.max_rpc_request_size)),
+            )
             .route(
                 &semantic_rpc_core::interface_protocol::interface_ws_path(&self.config.rpc_path),
                 get(crate::interface::handler),

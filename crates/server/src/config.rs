@@ -3,6 +3,7 @@ use http::HeaderName;
 pub const DEFAULT_INTERFACE: &str = "127.0.0.1";
 pub const DEFAULT_PORT: u16 = 8888;
 pub const DEFAULT_MAX_FILE_UPLOAD_SIZE: u64 = 100 * 1024 * 1024 * 1024;
+pub const DEFAULT_MAX_RPC_REQUEST_SIZE: usize = 1024 * 1024 * 1024;
 
 #[derive(Clone, Debug)]
 pub struct ServerConfig {
@@ -16,6 +17,7 @@ pub struct ServerConfig {
     pub file_filename_header: HeaderName,
     pub file_id_header: HeaderName,
     pub max_file_upload_size: u64,
+    pub max_rpc_request_size: usize,
 }
 
 impl ServerConfig {
@@ -35,6 +37,12 @@ impl ServerConfig {
                 .to_string_lossy()
                 .parse()
                 .map_err(|err| format!("invalid SEMANTIC_MAX_FILE_UPLOAD_SIZE: {err}"))?;
+        }
+        if let Some(size) = std::env::var_os("SEMANTIC_MAX_RPC_REQUEST_SIZE") {
+            config.max_rpc_request_size = size
+                .to_string_lossy()
+                .parse()
+                .map_err(|err| format!("invalid SEMANTIC_MAX_RPC_REQUEST_SIZE: {err}"))?;
         }
         Ok(config)
     }
@@ -57,6 +65,7 @@ impl Default for ServerConfig {
             file_filename_header: HeaderName::from_static("x-semantic-filename"),
             file_id_header: HeaderName::from_static("x-semantic-file-id"),
             max_file_upload_size: DEFAULT_MAX_FILE_UPLOAD_SIZE,
+            max_rpc_request_size: DEFAULT_MAX_RPC_REQUEST_SIZE,
         }
     }
 }
