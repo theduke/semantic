@@ -2,7 +2,8 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use dioxus::logger::tracing::info;
 use semantic_data::attr::{
-    ATTR_CREATED_AT, ATTR_RELATION_RELATION, ATTR_RELATION_TO, ATTR_TITLE, ATTR_UPDATED_AT,
+    ATTR_CREATED_AT, ATTR_RELATION_FROM, ATTR_RELATION_RELATION, ATTR_RELATION_TO, ATTR_TITLE,
+    ATTR_UPDATED_AT,
 };
 use semantic_data::bundles::directory::{
     ATTR_DIRECTORY_NODE_FROM, ATTR_DIRECTORY_NODE_ORDER, DIRECTORY_CLASS_ID,
@@ -1175,6 +1176,7 @@ fn directory_node_object(parent_id: &str, child_id: &str, order: u64) -> Object 
         ATTR_RELATION_RELATION,
         Value::String(DIRECTORY_NODE_RELATION_ID.to_string()),
     );
+    object.insert(ATTR_RELATION_FROM, Value::String(parent_id.to_string()));
     object.insert(
         ATTR_DIRECTORY_NODE_FROM,
         Value::String(parent_id.to_string()),
@@ -1528,6 +1530,9 @@ fn value_as_usize(value: &Value) -> Option<usize> {
 #[cfg(test)]
 mod tests {
     use semantic_data::bundles::directory::DIRECTORY_CLASS_ID;
+    use semantic_data::query::{Batch, BatchOperation};
+    use semantic_db_core::Db;
+    use semantic_db_kv::{MemoryBackend, open_memory};
 
     use super::*;
 
@@ -1602,6 +1607,10 @@ mod tests {
             panic!("link operation must contain the directory node");
         };
         assert_eq!(
+            link.get(ATTR_RELATION_FROM),
+            Some(&Value::String("directory-1".to_string()))
+        );
+        assert_eq!(
             link.get(ATTR_DIRECTORY_NODE_FROM),
             Some(&Value::String("directory-1".to_string()))
         );
@@ -1610,5 +1619,34 @@ mod tests {
             Some(&Value::String("entity-1".to_string()))
         );
         assert_eq!(link.get(ATTR_DIRECTORY_NODE_ORDER), Some(&Value::U64(7)));
+    }
+
+    #[tokio::test]
+    async fn nested_directory_node_passes_database_validation() {
+        let db = Db::new(MemoryBackend::new(open_memory().unwrap()));
+        db.upsert_package(semantic_base::package())
+            .await
+            .expect("base package should register");
+
+        for (id, title) in [("parent", "Parent"), ("child", "Child")] {
+            let mut directory = Object::new();
+            directory.insert("id", Value::String(id.to_string()));
+            directory.insert("type", Value::String(DIRECTORY_CLASS_ID.to_string()));
+            directory.insert(ATTR_TITLE, Value::String(title.to_string()));
+            db.insert(ENTITIES_COLLECTION, id, directory)
+                .await
+                .expect("directory should insert");
+        }
+
+        let node = directory_node_object("parent", "child", 0);
+        let batch = Batch::new().with_op(BatchOperation::Upsert {
+            collection: ENTITIES_COLLECTION.to_string(),
+            id: directory_node_id("parent", "child"),
+            object: node,
+        });
+
+        db.execute_batch(batch)
+            .await
+            .expect("nested directory link should satisfy relation validation");
     }
 }
