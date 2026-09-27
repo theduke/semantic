@@ -6,7 +6,7 @@ use semantic_data::filestore::{ATTR_FILE_FILENAME, FILE_CLASS_ID};
 use semantic_data::schema::ClassType;
 use semantic_data::value::{Object, Value};
 
-use crate::components::ClassView;
+use crate::components::{ClassView, ImageLightbox};
 use crate::ui_catalog::{
     EntityActionContext, EntityActionPlacement, EntityTarget, MediaKind, RenderMode,
     media_kind_for_object, use_ui_catalog,
@@ -172,7 +172,12 @@ fn EntitySummary(object: Object, id: Option<String>, title: String) -> Element {
         div { class: "semantic-entity-card__summary",
             if let Some(source) = media_source {
                 if file_kind == Some(MediaKind::Image) {
-                    img { class: "semantic-entity-card__thumbnail", src: source, alt: "", loading: "lazy" }
+                    ImageLightbox {
+                        source,
+                        title: title.clone(),
+                        preview_class: "semantic-entity-card__thumbnail".to_string(),
+                        trigger_class: "semantic-entity-card__thumbnail-button".to_string(),
+                    }
                 } else {
                     audio {
                         class: "semantic-entity-card__audio",

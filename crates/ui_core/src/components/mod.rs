@@ -7,6 +7,7 @@ mod entity;
 mod entity_autocomplete;
 mod error;
 mod feedback;
+mod image_lightbox;
 mod loading;
 mod media;
 mod notice;
@@ -28,6 +29,7 @@ pub use entity::{
 pub use entity_autocomplete::{EntityAutocomplete, EntityAutocompleteProps};
 pub use error::{ErrorState, ErrorView};
 pub use feedback::AsyncState;
+pub(crate) use image_lightbox::ImageLightbox;
 pub use loading::{LoadingSkeleton, LoadingView, RefreshingIndicator};
 pub use media::{MediaPlaybackView, MediaView, register_default_playback_renderers};
 pub use notice::{InlineNotice, NoticeLiveRegion, NoticeVariant};

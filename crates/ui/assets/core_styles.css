@@ -1883,10 +1883,17 @@ pre {
 }
 
 .semantic-file--image {
+  padding: 0;
   border: 1px solid var(--semantic-border-soft);
   border-radius: var(--semantic-radius);
   background: var(--semantic-surface);
   overflow: hidden;
+}
+
+.semantic-image-lightbox__trigger {
+  color: inherit;
+  font: inherit;
+  cursor: zoom-in;
 }
 
 .semantic-file__image {
@@ -1978,33 +1985,50 @@ pre {
   min-height: 3rem;
 }
 
-.dx-dialog.semantic-file-detail__image-dialog {
-  width: min(96vw, 1200px);
-  max-width: min(96vw, 1200px);
-  max-height: 94vh;
-  text-align: left;
+.dx-dialog.semantic-image-lightbox {
+  width: auto;
+  max-width: calc(100vw - var(--semantic-space-4));
+  max-height: calc(100dvh - var(--semantic-space-4));
+  padding: var(--semantic-space-2);
+  border-color: color-mix(in srgb, var(--semantic-border) 72%, transparent);
+  background: var(--semantic-color-media-stage);
+  gap: 0;
+  overflow: visible;
 }
 
-.semantic-file-detail__image-dialog-body {
-  display: grid;
-  min-width: 0;
-  min-height: 0;
-  flex: 1 1 auto;
-  place-items: center;
-  overflow: auto;
-}
-
-.semantic-file-detail__image-full {
+.semantic-image-lightbox__image {
   display: block;
   width: auto;
   height: auto;
-  max-width: 100%;
-  max-height: calc(94vh - 9rem);
+  max-width: calc(100vw - var(--semantic-space-8));
+  max-height: calc(100dvh - var(--semantic-space-8));
   object-fit: contain;
 }
 
-.semantic-file-detail__dialog-actions {
-  justify-content: flex-end;
+.semantic-image-lightbox__close {
+  position: absolute;
+  z-index: 1;
+  top: var(--semantic-space-3);
+  right: var(--semantic-space-3);
+  display: grid;
+  width: 2rem;
+  height: 2rem;
+  padding: 0;
+  border: 1px solid rgb(255 255 255 / 35%);
+  border-radius: var(--semantic-radius-pill);
+  background: rgb(10 12 16 / 75%);
+  color: white;
+  cursor: pointer;
+  place-items: center;
+}
+
+.semantic-image-lightbox__close:hover {
+  background: rgb(10 12 16 / 92%);
+}
+
+.semantic-image-lightbox__close:focus-visible {
+  outline: 2px solid white;
+  outline-offset: 2px;
 }
 
 .semantic-note {
@@ -6754,6 +6778,14 @@ html:has(.semantic-note-form) {
   margin-bottom: var(--semantic-space-3);
   border-radius: var(--semantic-radius-md);
   object-fit: cover;
+}
+
+.semantic-entity-card__thumbnail-button {
+  display: block;
+  width: 100%;
+  padding: 0;
+  border: 0;
+  background: transparent;
 }
 
 .semantic-entity-card__file-fallback {

@@ -9,7 +9,7 @@ use semantic_data::filestore::{
 use semantic_data::value::{Object, Value};
 use tracing::{info, warn};
 
-use crate::components::{EntityDeleteButton, EntityOpenButton};
+use crate::components::{EntityDeleteButton, EntityOpenButton, ImageLightbox};
 use crate::ui_catalog::{
     EntityActionContext, EntityActionPlacement, EntityActionRegistration, RenderCtx, RenderMode,
     UiCatalog, ValueRenderContext,
@@ -83,25 +83,20 @@ pub fn register_defaults(catalog: &mut UiCatalog) {
             .unwrap_or(file_id);
         if ctx.settings.show_media && mime_type.starts_with("image/") {
             info!(
-                target: "semantic_ui::file_render",
-                file_id,
-                href,
-                mime_type,
-                filename,
-                mode = ?ctx.mode,
-                "rendering file attribute as image"
-            );
+            target: "semantic_ui::file_render",
+            file_id,
+            href,
+            mime_type,
+            filename,
+            mode = ?ctx.mode,
+            "rendering file attribute as image"
+                );
             rsx! {
-                a {
-                    class: "semantic-file semantic-file--image",
-                    href: "{href}",
-                    target: "_blank",
-                    rel: "noopener noreferrer",
-                    img {
-                        class: "semantic-file__image",
-                        src: "{href}",
-                        alt: "{filename}"
-                    }
+                ImageLightbox {
+                    source: href,
+                    title: filename.to_string(),
+                    preview_class: "semantic-file__image".to_string(),
+                    trigger_class: "semantic-file semantic-file--image".to_string(),
                 }
             }
         } else {

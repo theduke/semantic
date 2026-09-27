@@ -6,7 +6,7 @@ use semantic_data::builtin::ATTR_ID;
 use semantic_data::filestore::{ATTR_FILE_CONTENT_HASH_SHA256, ATTR_FILE_FILENAME, FILE_CLASS_ID};
 use semantic_data::value::{Object, Value};
 
-use crate::components::ValueView;
+use crate::components::{ImageLightbox, ValueView};
 use crate::ui_catalog::{
     ClassRenderContext, MediaKind, RenderMode, UiCatalog, media_kind_for_object, use_ui_catalog,
 };
@@ -118,7 +118,12 @@ fn FileDetailView(object: Object, id: Option<String>, mode: RenderMode) -> Eleme
                 if let Some(source) = source {
                     match media_kind {
                         MediaKind::Image => rsx! {
-                            FileImageView { source, title: title.clone() }
+                            ImageLightbox {
+                                source,
+                                title: title.clone(),
+                                preview_class: "semantic-file-detail__image".to_string(),
+                                trigger_class: "semantic-file-detail__image-button".to_string(),
+                            }
                         },
                         MediaKind::Video => rsx! {
                             video {
@@ -145,45 +150,6 @@ fn FileDetailView(object: Object, id: Option<String>, mode: RenderMode) -> Eleme
                 }
             } else {
                 FileDataView { object: object.clone(), mode }
-            }
-        }
-    }
-}
-
-#[component]
-fn FileImageView(source: String, title: String) -> Element {
-    let mut dialog_open = use_signal(|| false);
-    let preview_source = source.clone();
-    rsx! {
-        button {
-            class: "semantic-file-detail__image-button",
-            r#type: "button",
-            aria_label: "View {title} at full size",
-            onclick: move |_| dialog_open.set(true),
-            img {
-                class: "semantic-file-detail__image",
-                src: preview_source,
-                alt: "{title}",
-            }
-        }
-        dxcomp::Dialog {
-            class: "semantic-file-detail__image-dialog",
-            open: dialog_open(),
-            on_open_change: move |open: bool| dialog_open.set(open),
-            dxcomp::DialogTitle { "{title}" }
-            div { class: "semantic-file-detail__image-dialog-body",
-                img {
-                    class: "semantic-file-detail__image-full",
-                    src: source,
-                    alt: "{title}",
-                }
-            }
-            div { class: "semantic-file-detail__dialog-actions",
-                dxcomp::Button {
-                    variant: dxcomp::ButtonVariant::Outline,
-                    onclick: move |_| dialog_open.set(false),
-                    "Close"
-                }
             }
         }
     }
