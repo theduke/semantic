@@ -112,14 +112,19 @@ pub fn PlayerPlaylist(
                     oninput: move |event: FormEvent| search.set(event.value()),
                 }
             }
-            if entry_count == 0 && !entries.is_empty() {
-                p { class: "semantic-player__playlist-no-results", role: "status", "No queue items match this search." }
-            }
-            if entry_count <= VIRTUALIZATION_THRESHOLD {
-                div {
-                    id: "semantic-player-virtual-list",
-                    class: "semantic-player__playlist-scroll",
-                    for visible_index in 0..entry_count {
+                    if entry_count == 0 && !entries.is_empty() {
+                        p { class: "semantic-player__playlist-no-results", role: "status", "No queue items match this search." }
+                    } else if entries.is_empty() {
+                        p { class: "semantic-player__playlist-no-results", role: "status", "The queue is empty." }
+                    }
+                    if entry_count <= VIRTUALIZATION_THRESHOLD {
+                        div {
+                            id: "semantic-player-virtual-list",
+                            "data-player-queue-scroll": "true",
+                            class: "semantic-player__playlist-scroll",
+                            role: "list",
+                            aria_label: "Queued media",
+                            for visible_index in 0..entry_count {
                         {playlist_row(
                             visible_indices[visible_index],
                             &entries,
@@ -130,11 +135,14 @@ pub fn PlayerPlaylist(
                         )}
                     }
                 }
-            } else {
-                dxcomp::VirtualList {
-                    id: "semantic-player-virtual-list",
-                    class: "semantic-player__virtual-list",
-                    count: virtual_count,
+                    } else {
+                        dxcomp::VirtualList {
+                            // The primitive owns its ID for viewport measurement. Overriding it
+                            // prevents the virtualizer from finding its scroll container.
+                            "data-player-queue-scroll": "true",
+                            class: "semantic-player__virtual-list",
+                            aria_label: "Queued media",
+                            count: virtual_count,
                     buffer: 8_usize,
                     estimate_size: move |_| ROW_HEIGHT,
                     render_item: move |visible_index: usize| playlist_row(
@@ -317,8 +325,7 @@ fn playlist_row(
     };
     let active = active_index == Some(index);
     let failed = failed_occurrences.contains(&entry.occurrence_id);
-    let kind = format!("{:?}", entry.media_kind);
-    let duration = entry.known_duration_seconds.map(format_duration);
+    let presentation = queue_item_presentation(&entry, index);
     rsx! {
         div {
             key: "{entry.occurrence_id}",
@@ -326,13 +333,17 @@ fn playlist_row(
             button {
                 class: "semantic-player__playlist-select",
                 aria_current: active.then_some("true"),
-                aria_label: "Play {entry.title}",
+                aria_pressed: active,
+                aria_label: "{presentation.action_label}",
                 onclick: move |_| on_select.call(index),
                 span { class: "semantic-player__playlist-number", "{index + 1}" }
                 span { class: "semantic-player__playlist-title", title: "{entry.title}", "{entry.title}" }
-                span { class: "semantic-player__playlist-kind", "{kind}" }
-                if let Some(duration) = duration { span { "{duration}" } }
-                if failed { span { class: "semantic-player__playlist-failed", title: "Playback failed", "Failed" } }
+                span { class: "semantic-player__playlist-kind", title: "{presentation.media_title}", "{presentation.media_label}" }
+                if let Some(duration) = presentation.duration { span { class: "semantic-player__playlist-duration", "{duration}" } }
+                span { class: "semantic-player__playlist-status",
+                    if active { span { class: "semantic-player__playlist-current", "Current" } }
+                    if failed { span { class: "semantic-player__playlist-failed", title: "Playback failed", "Failed" } }
+                }
             }
             div { class: "semantic-player__playlist-row-actions",
                 crate::components::IconButton {
@@ -347,12 +358,48 @@ fn playlist_row(
     }
 }
 
+#[derive(Debug, PartialEq, Eq)]
+struct QueueItemPresentation {
+    action_label: String,
+    media_label: String,
+    media_title: String,
+    duration: Option<String>,
+}
+
+fn queue_item_presentation(entry: &QueueEntry, index: usize) -> QueueItemPresentation {
+    let kind = match entry.media_kind {
+        semantic_ui_core::MediaKind::Image => "Image",
+        semantic_ui_core::MediaKind::Audio => "Audio",
+        semantic_ui_core::MediaKind::Video => "Video",
+        semantic_ui_core::MediaKind::File => "File",
+        semantic_ui_core::MediaKind::Unknown => "Media",
+    };
+    let media_title = entry.mime_type.clone().unwrap_or_else(|| kind.to_string());
+    let duration = entry.known_duration_seconds.map(format_duration);
+    let metadata = duration.as_deref().map_or_else(
+        || media_title.clone(),
+        |duration| format!("{media_title}, {duration}"),
+    );
+
+    QueueItemPresentation {
+        action_label: format!(
+            "Select queue item {}: {}, {}",
+            index + 1,
+            entry.title,
+            metadata
+        ),
+        media_label: kind.to_string(),
+        media_title,
+        duration,
+    }
+}
+
 pub fn scroll_to_index(index: usize) {
     spawn(async move {
         let eval = document::eval(
             r#"
             const index = await dioxus.recv();
-            const element = document.getElementById('semantic-player-virtual-list');
+            const element = document.querySelector('[data-player-queue-scroll="true"]');
             if (!element) return;
 
             const rowHeight = 64;
@@ -375,4 +422,34 @@ pub fn scroll_to_index(index: usize) {
 fn format_duration(seconds: f64) -> String {
     let seconds = seconds.max(0.0) as u64;
     format!("{}:{:02}", seconds / 60, seconds % 60)
+}
+
+#[cfg(test)]
+mod tests {
+    use semantic_ui_core::{EntityTarget, MediaKind};
+
+    use super::*;
+
+    #[test]
+    fn queue_item_presentation_includes_title_media_metadata_and_position() {
+        let entry = QueueEntry {
+            occurrence_id: 1,
+            target: EntityTarget::new(None, "track-id"),
+            title: "Opening theme".to_string(),
+            class_id: None,
+            media_kind: MediaKind::Audio,
+            mime_type: Some("audio/mpeg".to_string()),
+            known_duration_seconds: Some(125.0),
+        };
+
+        let presentation = queue_item_presentation(&entry, 2);
+
+        assert_eq!(presentation.media_label, "Audio");
+        assert_eq!(presentation.media_title, "audio/mpeg");
+        assert_eq!(presentation.duration.as_deref(), Some("2:05"));
+        assert_eq!(
+            presentation.action_label,
+            "Select queue item 3: Opening theme, audio/mpeg, 2:05"
+        );
+    }
 }
