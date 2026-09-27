@@ -1960,6 +1960,24 @@ pre {
   background: var(--semantic-color-media-stage);
 }
 
+.semantic-file-detail__audio,
+.semantic-entity-card__audio {
+  display: block;
+  width: min(100%, 34rem);
+  max-width: 100%;
+}
+
+.semantic-file-detail__audio {
+  padding: var(--semantic-space-3);
+  border: 1px solid var(--semantic-border-soft);
+  border-radius: var(--semantic-radius);
+  background: var(--semantic-surface-muted);
+}
+
+.semantic-entity-card__audio {
+  min-height: 3rem;
+}
+
 .dx-dialog.semantic-file-detail__image-dialog {
   width: min(96vw, 1200px);
   max-width: min(96vw, 1200px);

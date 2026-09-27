@@ -152,7 +152,7 @@ fn EntitySummary(object: Object, id: Option<String>, title: String) -> Element {
     let catalog = use_ui_catalog();
     let file_kind = (object.get("type").and_then(Value::as_str) == Some(FILE_CLASS_ID))
         .then(|| media_kind_for_object(&object));
-    let image_source = (file_kind == Some(MediaKind::Image))
+    let media_source = matches!(file_kind, Some(MediaKind::Image | MediaKind::Audio))
         .then(|| {
             id.as_deref().map(|id| {
                 format!(
@@ -170,8 +170,18 @@ fn EntitySummary(object: Object, id: Option<String>, title: String) -> Element {
 
     rsx! {
         div { class: "semantic-entity-card__summary",
-            if let Some(source) = image_source {
-                img { class: "semantic-entity-card__thumbnail", src: source, alt: "", loading: "lazy" }
+            if let Some(source) = media_source {
+                if file_kind == Some(MediaKind::Image) {
+                    img { class: "semantic-entity-card__thumbnail", src: source, alt: "", loading: "lazy" }
+                } else {
+                    audio {
+                        class: "semantic-entity-card__audio",
+                        src: source,
+                        controls: true,
+                        preload: "metadata",
+                        aria_label: "Audio: {title}",
+                    }
+                }
             } else if file_kind == Some(MediaKind::File) {
                 div { class: "semantic-entity-card__file-fallback",
                     File { size: "1.5rem" }

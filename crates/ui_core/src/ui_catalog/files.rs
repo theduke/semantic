@@ -45,15 +45,18 @@ fn FileDetailView(object: Object, id: Option<String>, mode: RenderMode) -> Eleme
     .unwrap_or("File")
     .to_string();
     let media_kind = media_kind_for_object(&object);
-    let is_visual_media = matches!(media_kind, MediaKind::Image | MediaKind::Video);
-    let can_show_data = is_visual_media && has_blob_hash(&object);
-    let initial_mode = if is_visual_media {
+    let is_inline_media = matches!(
+        media_kind,
+        MediaKind::Image | MediaKind::Audio | MediaKind::Video
+    );
+    let can_show_data = is_inline_media && has_blob_hash(&object);
+    let initial_mode = if is_inline_media {
         FileViewMode::Media
     } else {
         FileViewMode::Data
     };
     let mut view_mode = use_signal(move || initial_mode);
-    let show_media = is_visual_media && (!can_show_data || view_mode() == FileViewMode::Media);
+    let show_media = is_inline_media && (!can_show_data || view_mode() == FileViewMode::Media);
     let source = file_id.map(|id| {
         format!(
             "{}/{}",
@@ -124,6 +127,15 @@ fn FileDetailView(object: Object, id: Option<String>, mode: RenderMode) -> Eleme
                                 controls: true,
                                 preload: "metadata",
                                 aria_label: "Video: {title}",
+                            }
+                        },
+                        MediaKind::Audio => rsx! {
+                            audio {
+                                class: "semantic-file-detail__audio",
+                                src: source,
+                                controls: true,
+                                preload: "metadata",
+                                aria_label: "Audio: {title}",
                             }
                         },
                         _ => rsx! {},
