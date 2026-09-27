@@ -20,6 +20,7 @@ use crate::app::entity_route;
 const SEARCH_RESULT_LIMIT: usize = 12;
 const SEARCH_DEBOUNCE: Duration = Duration::from_millis(180);
 const RESULTS_ID: &str = "semantic-global-search-results";
+const SEARCH_INPUT_ID: &str = "semantic-global-search-input";
 const SEARCH_TRIGGER_ID: &str = "semantic-global-search-trigger";
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -32,6 +33,7 @@ enum SearchFocusOrigin {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 struct SearchOpenTransition {
     reset_search: bool,
+    focus_query: bool,
     restore_focus: Option<SearchFocusOrigin>,
 }
 
@@ -154,12 +156,12 @@ pub fn GlobalSearch(#[props(default)] expanded: bool) -> Element {
             div { class: "semantic-global-search__input-wrap",
                 Search { width: 20, height: 20 }
                 input {
+                    id: SEARCH_INPUT_ID,
                     class: "semantic-global-search__input",
                     r#type: "search",
                     value: query(),
                     placeholder: "Search by ID or title…",
                     autocomplete: "off",
-                    autofocus: true,
                     role: "combobox",
                     aria_label: "Search entities by ID or title",
                     aria_autocomplete: "list",
@@ -167,6 +169,11 @@ pub fn GlobalSearch(#[props(default)] expanded: bool) -> Element {
                     aria_expanded: !results.is_empty(),
                     aria_activedescendant: active_descendant,
                     aria_describedby: "semantic-global-search-help semantic-global-search-status",
+                    onmounted: move |event| async move {
+                        if open() {
+                            let _ = event.set_focus(true).await;
+                        }
+                    },
                     oninput: move |event: FormEvent| {
                         query.set(event.value());
                         active_index.set(0);
@@ -325,6 +332,9 @@ fn set_global_search_open(
         query.set(String::new());
         active_index.set(0);
     }
+    if transition.focus_query {
+        focus_global_search_input();
+    }
     if let Some(origin) = transition.restore_focus {
         restore_global_search_focus(origin);
     }
@@ -337,14 +347,42 @@ fn search_open_transition(
 ) -> Option<SearchOpenTransition> {
     (current_open != next_open).then_some(SearchOpenTransition {
         reset_search: !next_open,
+        focus_query: next_open,
         restore_focus: (!next_open).then_some(focus_origin),
     })
+}
+
+fn focus_global_search_input() {
+    _ = document::eval(
+        r#"
+        const request = (window.__semanticGlobalSearchFocusRequest ?? 0) + 1;
+        window.__semanticGlobalSearchFocusRequest = request;
+        let attempts = 0;
+        const focusQuery = () => {
+            if (window.__semanticGlobalSearchFocusRequest !== request) return;
+            const dialog = document.querySelector('.dx-dialog-backdrop[data-state="open"] .semantic-global-search');
+            const input = document.getElementById('semantic-global-search-input');
+            if (!dialog || !input) {
+                if (++attempts < 8) requestAnimationFrame(focusQuery);
+                return;
+            }
+            input.focus({ preventScroll: true });
+            requestAnimationFrame(() => {
+                if (window.__semanticGlobalSearchFocusRequest === request && dialog.isConnected && dialog.closest('[data-state]')?.dataset.state === 'open') {
+                    input.focus({ preventScroll: true });
+                }
+            });
+        };
+        requestAnimationFrame(focusQuery);
+        "#,
+    );
 }
 
 fn restore_global_search_focus(origin: SearchFocusOrigin) {
     let script = match origin {
         SearchFocusOrigin::Trigger => {
             r#"
+            window.__semanticGlobalSearchFocusRequest = (window.__semanticGlobalSearchFocusRequest ?? 0) + 1;
             window.__semanticGlobalSearchReturnFocus = null;
             requestAnimationFrame(() => {
                 document.getElementById('semantic-global-search-trigger')?.focus({ preventScroll: true });
@@ -353,6 +391,7 @@ fn restore_global_search_focus(origin: SearchFocusOrigin) {
         }
         SearchFocusOrigin::Shortcut => {
             r#"
+            window.__semanticGlobalSearchFocusRequest = (window.__semanticGlobalSearchFocusRequest ?? 0) + 1;
             const previous = window.__semanticGlobalSearchReturnFocus;
             window.__semanticGlobalSearchReturnFocus = null;
             requestAnimationFrame(() => {
@@ -397,9 +436,10 @@ fn use_global_search_shortcut(on_trigger: EventHandler<()>) {
     use_drop(|| {
         _ = document::eval(
             r#"
-                window.removeEventListener('keydown', window.__semanticGlobalSearchKeyHandler);
-                delete window.__semanticGlobalSearchKeyHandler;
-                window.__semanticGlobalSearchReturnFocus = null;
+            window.removeEventListener('keydown', window.__semanticGlobalSearchKeyHandler);
+            delete window.__semanticGlobalSearchKeyHandler;
+            window.__semanticGlobalSearchFocusRequest = (window.__semanticGlobalSearchFocusRequest ?? 0) + 1;
+            window.__semanticGlobalSearchReturnFocus = null;
         "#,
         );
     });
@@ -630,6 +670,7 @@ mod tests {
                 search_open_transition(true, false, origin),
                 Some(SearchOpenTransition {
                     reset_search: true,
+                    focus_query: false,
                     restore_focus: Some(origin),
                 })
             );
@@ -640,6 +681,17 @@ mod tests {
             search_open_transition(false, true, SearchFocusOrigin::Shortcut),
             Some(SearchOpenTransition {
                 reset_search: false,
+                focus_query: true,
+                restore_focus: None,
+            })
+        );
+
+        // A fully closed dialog must request query focus again on every reopen.
+        assert_eq!(
+            search_open_transition(false, true, SearchFocusOrigin::Trigger),
+            Some(SearchOpenTransition {
+                reset_search: false,
+                focus_query: true,
                 restore_focus: None,
             })
         );
