@@ -20,6 +20,20 @@ use crate::app::entity_route;
 const SEARCH_RESULT_LIMIT: usize = 12;
 const SEARCH_DEBOUNCE: Duration = Duration::from_millis(180);
 const RESULTS_ID: &str = "semantic-global-search-results";
+const SEARCH_TRIGGER_ID: &str = "semantic-global-search-trigger";
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+enum SearchFocusOrigin {
+    #[default]
+    Trigger,
+    Shortcut,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct SearchOpenTransition {
+    reset_search: bool,
+    restore_focus: Option<SearchFocusOrigin>,
+}
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 struct SearchCollection {
@@ -46,11 +60,15 @@ pub fn GlobalSearch(#[props(default)] expanded: bool) -> Element {
     let scope_id = use_active_scope_id();
     let catalog = use_ui_catalog();
     let navigator = use_navigator();
-    let mut open = use_signal(|| false);
+    let open = use_signal(|| false);
     let mut query = use_signal(String::new);
     let mut active_index = use_signal(|| 0_usize);
+    let mut focus_origin = use_signal(SearchFocusOrigin::default);
 
-    use_global_search_shortcut(EventHandler::new(move |_| open.set(true)));
+    use_global_search_shortcut(EventHandler::new(move |_| {
+        focus_origin.set(SearchFocusOrigin::Shortcut);
+        set_global_search_open(open(), true, open, query, active_index, focus_origin);
+    }));
 
     let collections = search_collections(&catalog);
     let search_catalog = catalog.clone();
@@ -88,175 +106,190 @@ pub fn GlobalSearch(#[props(default)] expanded: bool) -> Element {
     let selected_index = active_index().min(results.len().saturating_sub(1));
     let active_descendant = (!results.is_empty()).then(|| result_dom_id(selected_index));
 
-    let mut close_dialog = move || {
-        open.set(false);
-        query.set(String::new());
-        active_index.set(0);
-    };
-
     rsx! {
-        IconButton {
-            label: "Search entities".to_string(),
-            tooltip: Some("Search entities (Ctrl+K)".to_string()),
-            size: IconButtonSize::Small,
-            on_click: move |_| open.set(true),
-            Search { width: 18, height: 18 }
-            if expanded {
-                span { "Search" }
-                kbd { "Ctrl K" }
+    IconButton {
+        id: SEARCH_TRIGGER_ID.to_string(),
+        label: "Search entities".to_string(),
+        tooltip: Some("Search entities (Ctrl+K)".to_string()),
+        size: IconButtonSize::Small,
+        on_click: move |_| {
+            focus_origin.set(SearchFocusOrigin::Trigger);
+            set_global_search_open(open(), true, open, query, active_index, focus_origin);
+        },
+        Search { width: 18, height: 18 }
+        if expanded {
+            span { "Search" }
+            kbd { "Ctrl K" }
+        }
+    }
+
+    dxcomp::Dialog {
+        class: "semantic-global-search",
+        open: open(),
+        on_open_change: move |next_open: bool| {
+            set_global_search_open(
+                open(),
+                next_open,
+                open,
+                query,
+                active_index,
+                focus_origin,
+            );
+        },
+        div { class: "semantic-global-search__heading",
+            div {
+                dxcomp::DialogTitle { "Search entities" }
+                dxcomp::DialogDescription {
+                    "Find an entity in any collection by ID or title."
+                }
+            }
+            div { class: "semantic-global-search__heading-actions",
+                kbd { class: "semantic-global-search__shortcut", "Ctrl K" }
+                dxcomp::DialogClose { aria_label: "Close search",
+                    X { width: 18, height: 18 }
+                }
             }
         }
 
-        if open() {
-            dxcomp::Dialog {
-                class: "semantic-global-search",
-                open: true,
-                on_open_change: move |next_open: bool| {
-                    if !next_open {
-                        close_dialog();
-                    }
-                },
-                        div { class: "semantic-global-search__heading",
-                    div {
-                        dxcomp::DialogTitle { "Search entities" }
-                        dxcomp::DialogDescription {
-                            "Find an entity in any collection by ID or title."
-                        }
-                    }
-                            div { class: "semantic-global-search__heading-actions",
-                                kbd { class: "semantic-global-search__shortcut", "Ctrl K" }
-                                dxcomp::DialogClose { aria_label: "Close search",
-                                    X { width: 18, height: 18 }
-                                }
+            div { class: "semantic-global-search__input-wrap",
+                Search { width: 20, height: 20 }
+                input {
+                    class: "semantic-global-search__input",
+                    r#type: "search",
+                    value: query(),
+                    placeholder: "Search by ID or title…",
+                    autocomplete: "off",
+                    autofocus: true,
+                    role: "combobox",
+                    aria_label: "Search entities by ID or title",
+                    aria_autocomplete: "list",
+                    aria_controls: RESULTS_ID,
+                    aria_expanded: !results.is_empty(),
+                    aria_activedescendant: active_descendant,
+                    aria_describedby: "semantic-global-search-help semantic-global-search-status",
+                    oninput: move |event: FormEvent| {
+                        query.set(event.value());
+                        active_index.set(0);
+                    },
+                    onkeydown: move |event: KeyboardEvent| {
+                        let key = event.key();
+                        let key_text = key.to_string();
+                        let ctrl = event.modifiers().ctrl();
+                        let move_next = key == Key::ArrowDown
+                            || (ctrl && matches!(key_text.as_str(), "n" | "N"));
+                        let move_previous = key == Key::ArrowUp
+                            || (ctrl && matches!(key_text.as_str(), "p" | "P"));
+
+                        if move_next {
+                            event.prevent_default();
+                            if !results.is_empty() {
+                                active_index.set((active_index() + 1).min(results.len() - 1));
                             }
-                        }
-
-                div { class: "semantic-global-search__input-wrap",
-                    Search { width: 20, height: 20 }
-                    input {
-                        class: "semantic-global-search__input",
-                        r#type: "search",
-                        value: query(),
-                        placeholder: "Search by ID or title…",
-                        autocomplete: "off",
-                        autofocus: true,
-                        role: "combobox",
-                        aria_label: "Search entities by ID or title",
-                        aria_autocomplete: "list",
-                        aria_controls: RESULTS_ID,
-                        aria_expanded: !results.is_empty(),
-                        aria_activedescendant: active_descendant,
-                        aria_describedby: "semantic-global-search-help semantic-global-search-status",
-                        oninput: move |event: FormEvent| {
-                            query.set(event.value());
-                            active_index.set(0);
-                        },
-                        onkeydown: move |event: KeyboardEvent| {
-                            let key = event.key();
-                            let key_text = key.to_string();
-                            let ctrl = event.modifiers().ctrl();
-                            let move_next = key == Key::ArrowDown
-                                || (ctrl && matches!(key_text.as_str(), "n" | "N"));
-                            let move_previous = key == Key::ArrowUp
-                                || (ctrl && matches!(key_text.as_str(), "p" | "P"));
-
-                            if move_next {
-                                event.prevent_default();
-                                if !results.is_empty() {
-                                    active_index.set((active_index() + 1).min(results.len() - 1));
-                                }
-                            } else if move_previous {
-                                event.prevent_default();
-                                if !results.is_empty() {
-                                    active_index.set(active_index().saturating_sub(1));
-                                }
-                            } else if key == Key::Enter && !results.is_empty() {
-                                event.prevent_default();
-                                let route = entity_route(&results[selected_index].target);
-                                close_dialog();
-                                navigator.push(route);
+                        } else if move_previous {
+                            event.prevent_default();
+                            if !results.is_empty() {
+                                active_index.set(active_index().saturating_sub(1));
                             }
-                        },
-                    }
-                    if loading {
-                        span {
-                            class: "semantic-global-search__spinner",
-                            aria_label: "Searching",
+                        } else if key == Key::Enter && !results.is_empty() {
+                            event.prevent_default();
+                            let route = entity_route(&results[selected_index].target);
+                            set_global_search_open(
+                                open(),
+                                false,
+                                open,
+                                query,
+                                active_index,
+                                focus_origin,
+                            );
+                            navigator.push(route);
                         }
+                    },
+                }
+                if loading {
+                    span {
+                        class: "semantic-global-search__spinner",
+                        aria_label: "Searching",
                     }
                 }
+            }
 
-                p {
-                    id: "semantic-global-search-help",
-                    class: "semantic-global-search__help",
-                    "Case-insensitive regular expressions are supported."
+            p {
+                id: "semantic-global-search-help",
+                class: "semantic-global-search__help",
+                "Case-insensitive regular expressions are supported."
+            }
+            p {
+                id: "semantic-global-search-status",
+                class: "semantic-visually-hidden",
+                role: "status",
+                aria_live: "polite",
+                if loading {
+                    "Searching"
+                } else if error.is_some() {
+                    "Search failed"
+                } else if current_query.is_empty() {
+                    "Enter a search pattern"
+                } else {
+                    "{results.len()} results"
                 }
-                p {
-                    id: "semantic-global-search-status",
-                    class: "semantic-visually-hidden",
-                    role: "status",
-                    aria_live: "polite",
-                    if loading {
-                        "Searching"
-                    } else if error.is_some() {
-                        "Search failed"
-                    } else if current_query.is_empty() {
-                        "Enter a search pattern"
-                    } else {
-                        "{results.len()} results"
-                    }
-                }
+            }
 
-                div { class: "semantic-global-search__body",
-                    if let Some(error) = error {
-                        div { class: "semantic-global-search__message", role: "alert",
-                            strong { "Search unavailable" }
-                            span { "{error}" }
-                        }
-                    } else if current_query.is_empty() {
-                        div { class: "semantic-global-search__message",
-                            strong { "Search across your workspace" }
-                            span { "Try a title, an entity ID, or a regular expression such as " code { "^note-" } "." }
-                        }
-                    } else if !loading && results.is_empty() {
-                        div { class: "semantic-global-search__message",
-                            strong { "No matching entities" }
-                            span { "Try a broader pattern or check the expression syntax." }
-                        }
-                    } else {
-                        ul {
-                            id: RESULTS_ID,
-                            class: "semantic-global-search__results",
-                            role: "listbox",
-                            aria_label: "Entity search results",
-                            for (index, result) in results.iter().enumerate() {
-                                li {
-                                    id: result_dom_id(index),
-                                    key: "{result.target.collection_or_default()}:{result.target.id}",
-                                    role: "option",
-                                    aria_selected: index == selected_index,
-                                    button {
-                                        r#type: "button",
-                                        class: "semantic-global-search__result",
-                                        onmouseenter: move |_| active_index.set(index),
-                                        onclick: {
-                                            let target = result.target.clone();
-                                            move |_| {
-                                                let route = entity_route(&target);
-                                                close_dialog();
-                                                navigator.push(route);
-                                            }
-                                        },
-                                        span { class: "semantic-global-search__result-main",
-                                            strong { title: result.title.clone(), "{result.title}" }
-                                            span { class: "semantic-global-search__class", "{result.class_name}" }
+            div { class: "semantic-global-search__body",
+                if let Some(error) = error {
+                    div { class: "semantic-global-search__message", role: "alert",
+                        strong { "Search unavailable" }
+                        span { "{error}" }
+                    }
+                } else if current_query.is_empty() {
+                    div { class: "semantic-global-search__message",
+                        strong { "Search across your workspace" }
+                        span { "Try a title, an entity ID, or a regular expression such as " code { "^note-" } "." }
+                    }
+                } else if !loading && results.is_empty() {
+                    div { class: "semantic-global-search__message",
+                        strong { "No matching entities" }
+                        span { "Try a broader pattern or check the expression syntax." }
+                    }
+                } else {
+                    ul {
+                        id: RESULTS_ID,
+                        class: "semantic-global-search__results",
+                        role: "listbox",
+                        aria_label: "Entity search results",
+                        for (index, result) in results.iter().enumerate() {
+                            li {
+                                id: result_dom_id(index),
+                                key: "{result.target.collection_or_default()}:{result.target.id}",
+                                role: "option",
+                                aria_selected: index == selected_index,
+                                button {
+                                    r#type: "button",
+                                    class: "semantic-global-search__result",
+                                    onmouseenter: move |_| active_index.set(index),
+                                    onclick: {
+                                        let target = result.target.clone();
+                                        move |_| {
+                                            let route = entity_route(&target);
+                                            set_global_search_open(
+                                                open(),
+                                                false,
+                                                open,
+                                                query,
+                                                active_index,
+                                                focus_origin,
+                                            );
+                                            navigator.push(route);
                                         }
-                                        span { class: "semantic-global-search__result-meta",
-                                            code { title: result.target.id.clone(), "{result.target.id}" }
-                                            if !result.target.is_default_collection() {
-                                                span { aria_hidden: "true", "·" }
-                                                span { "{result.target.collection_or_default()}" }
-                                            }
+                                    },
+                                    span { class: "semantic-global-search__result-main",
+                                        strong { title: result.title.clone(), "{result.title}" }
+                                        span { class: "semantic-global-search__class", "{result.class_name}" }
+                                    }
+                                    span { class: "semantic-global-search__result-meta",
+                                        code { title: result.target.id.clone(), "{result.target.id}" }
+                                        if !result.target.is_default_collection() {
+                                            span { aria_hidden: "true", "·" }
+                                            span { "{result.target.collection_or_default()}" }
                                         }
                                     }
                                 }
@@ -264,15 +297,76 @@ pub fn GlobalSearch(#[props(default)] expanded: bool) -> Element {
                         }
                     }
                 }
+            }
 
-                div { class: "semantic-global-search__footer", aria_hidden: "true",
-                    span { kbd { "↑" } kbd { "↓" } " / " kbd { "Ctrl N" } kbd { "Ctrl P" } " navigate" }
-                    span { kbd { "Enter" } " open" }
-                    span { kbd { "Esc" } " close" }
-                }
+            div { class: "semantic-global-search__footer", aria_hidden: "true",
+                span { kbd { "↑" } kbd { "↓" } " / " kbd { "Ctrl N" } kbd { "Ctrl P" } " navigate" }
+                span { kbd { "Enter" } " open" }
+                span { kbd { "Esc" } " close" }
             }
         }
     }
+}
+
+fn set_global_search_open(
+    current_open: bool,
+    next_open: bool,
+    mut open: Signal<bool>,
+    mut query: Signal<String>,
+    mut active_index: Signal<usize>,
+    focus_origin: Signal<SearchFocusOrigin>,
+) {
+    let Some(transition) = search_open_transition(current_open, next_open, focus_origin()) else {
+        return;
+    };
+
+    open.set(next_open);
+    if transition.reset_search {
+        query.set(String::new());
+        active_index.set(0);
+    }
+    if let Some(origin) = transition.restore_focus {
+        restore_global_search_focus(origin);
+    }
+}
+
+fn search_open_transition(
+    current_open: bool,
+    next_open: bool,
+    focus_origin: SearchFocusOrigin,
+) -> Option<SearchOpenTransition> {
+    (current_open != next_open).then_some(SearchOpenTransition {
+        reset_search: !next_open,
+        restore_focus: (!next_open).then_some(focus_origin),
+    })
+}
+
+fn restore_global_search_focus(origin: SearchFocusOrigin) {
+    let script = match origin {
+        SearchFocusOrigin::Trigger => {
+            r#"
+            window.__semanticGlobalSearchReturnFocus = null;
+            requestAnimationFrame(() => {
+                document.getElementById('semantic-global-search-trigger')?.focus({ preventScroll: true });
+            });
+            "#
+        }
+        SearchFocusOrigin::Shortcut => {
+            r#"
+            const previous = window.__semanticGlobalSearchReturnFocus;
+            window.__semanticGlobalSearchReturnFocus = null;
+            requestAnimationFrame(() => {
+                const fallback = document.getElementById('semantic-global-search-trigger');
+                const target = previous?.isConnected ? previous : fallback;
+                target?.focus({ preventScroll: true });
+                if (target !== fallback && document.activeElement !== target) {
+                    fallback?.focus({ preventScroll: true });
+                }
+            });
+            "#
+        }
+    };
+    _ = document::eval(script);
 }
 
 fn use_global_search_shortcut(on_trigger: EventHandler<()>) {
@@ -283,10 +377,14 @@ fn use_global_search_shortcut(on_trigger: EventHandler<()>) {
                 if (window.__semanticGlobalSearchKeyHandler) {
                     window.removeEventListener('keydown', window.__semanticGlobalSearchKeyHandler);
                 }
-                window.__semanticGlobalSearchKeyHandler = (event) => {
-                    if (event.defaultPrevented || event.repeat || event.isComposing || !(event.ctrlKey || event.metaKey) || event.altKey || event.key.toLowerCase() !== 'k') return;
-                    event.preventDefault();
-                    dioxus.send('open');
+                    window.__semanticGlobalSearchKeyHandler = (event) => {
+                        if (event.defaultPrevented || event.repeat || event.isComposing || !(event.ctrlKey || event.metaKey) || event.altKey || event.key.toLowerCase() !== 'k') return;
+                        if (document.querySelector('.dx-dialog-backdrop[data-state="open"] .semantic-global-search')) return;
+                        event.preventDefault();
+                        const trigger = document.getElementById('semantic-global-search-trigger');
+                        const active = document.activeElement;
+                        window.__semanticGlobalSearchReturnFocus = active instanceof HTMLElement && active !== document.body ? active : trigger;
+                        dioxus.send('open');
                 };
                 window.addEventListener('keydown', window.__semanticGlobalSearchKeyHandler);
             "#,
@@ -299,8 +397,9 @@ fn use_global_search_shortcut(on_trigger: EventHandler<()>) {
     use_drop(|| {
         _ = document::eval(
             r#"
-            window.removeEventListener('keydown', window.__semanticGlobalSearchKeyHandler);
-            delete window.__semanticGlobalSearchKeyHandler;
+                window.removeEventListener('keydown', window.__semanticGlobalSearchKeyHandler);
+                delete window.__semanticGlobalSearchKeyHandler;
+                window.__semanticGlobalSearchReturnFocus = null;
         "#,
         );
     });
@@ -522,5 +621,27 @@ mod tests {
         };
 
         assert!(search_rank(&id_match, "ada") < search_rank(&title_match, "ada"));
+    }
+
+    #[test]
+    fn close_transition_restores_the_recorded_focus_origin_once() {
+        for origin in [SearchFocusOrigin::Trigger, SearchFocusOrigin::Shortcut] {
+            assert_eq!(
+                search_open_transition(true, false, origin),
+                Some(SearchOpenTransition {
+                    reset_search: true,
+                    restore_focus: Some(origin),
+                })
+            );
+            assert_eq!(search_open_transition(false, false, origin), None);
+        }
+
+        assert_eq!(
+            search_open_transition(false, true, SearchFocusOrigin::Shortcut),
+            Some(SearchOpenTransition {
+                reset_search: false,
+                restore_focus: None,
+            })
+        );
     }
 }

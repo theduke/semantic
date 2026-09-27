@@ -67,6 +67,7 @@ impl IconButtonSize {
 pub fn IconButton(
     label: String,
     children: Element,
+    #[props(default)] id: Option<String>,
     #[props(default)] tooltip: Option<String>,
     #[props(default)] variant: IconButtonVariant,
     #[props(default)] size: IconButtonSize,
@@ -76,6 +77,7 @@ pub fn IconButton(
 ) -> Element {
     rsx! {
         dxcomp::Button {
+            id,
             class: "semantic-icon-button",
             "data-icon-variant": variant.class(),
             "data-icon-size": size.class(),
