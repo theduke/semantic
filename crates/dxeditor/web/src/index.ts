@@ -876,6 +876,7 @@ export const mount = (host: HTMLElement, options: MountOptions): EditorSession =
 	  let previewEntityId: string | null = null
 	  let selectedListbox: HTMLElement | null = null
 	  let activeOptionIndex = 0
+	  let slashQueryKey: string | null = null
 	  let dismissedSlash: string | null = null
 	  let dismissedMention: string | null = null
 	  let documentMetadata = options.document.metadata ?? {}
@@ -1523,10 +1524,11 @@ export const mount = (host: HTMLElement, options: MountOptions): EditorSession =
   const addBlockButton = button('+', 'Add a block', () => {
     slashBlockTarget = activeBlockTarget
     slashInsertionMode = true
+    slashQueryKey = null
+    slash.querySelectorAll<HTMLButtonElement>('button[role="option"]').forEach(item => { item.hidden = false })
     slash.hidden = false
     positionAdjacentSurface(slash, blockControls.getBoundingClientRect(), wrapper)
-    syncListbox(slash, true)
-    slash.querySelector<HTMLButtonElement>('button')?.focus()
+    syncListbox(slash, { reset: true, scrollActive: true, focusActive: true })
   })
   const blockActionsButton = button('⋮', 'Block actions', () => {
     menuBlockTarget = activeBlockTarget
@@ -1715,6 +1717,7 @@ export const mount = (host: HTMLElement, options: MountOptions): EditorSession =
 
 	  const closeListbox = (surface: HTMLElement): void => {
 	    surface.hidden = true
+	    if (surface === slash) slashQueryKey = null
 	    surface.querySelectorAll<HTMLButtonElement>('button[role="option"]')
 	      .forEach(item => item.setAttribute('aria-selected', 'false'))
 	    if (selectedListbox !== surface) return
@@ -1723,28 +1726,89 @@ export const mount = (host: HTMLElement, options: MountOptions): EditorSession =
 	    clearEditorListboxState()
 	  }
 
-	  const syncListbox = (surface: HTMLElement, reset = false): void => {
-	    const items = Array.from(surface.querySelectorAll<HTMLButtonElement>('button[role="option"]'))
-	      .filter(item => !item.hidden && !item.disabled)
+	  const syncListbox = (
+	    surface: HTMLElement,
+	    options: { reset?: boolean; scrollActive?: boolean; focusActive?: boolean } = {},
+	  ): HTMLButtonElement | undefined => {
+	    const allItems = Array.from(surface.querySelectorAll<HTMLButtonElement>('button[role="option"]'))
+	    const items = allItems.filter(item => !item.hidden && !item.disabled)
+	    const reset = options.reset || selectedListbox !== surface
 	    if (selectedListbox !== surface) {
 	      selectedListbox?.querySelectorAll<HTMLButtonElement>('button[role="option"]')
 	        .forEach(item => item.setAttribute('aria-selected', 'false'))
 	      selectedListbox = surface
-	      reset = true
 	    }
 	    if (reset) activeOptionIndex = 0
 	    activeOptionIndex = Math.max(0, Math.min(activeOptionIndex, Math.max(0, items.length - 1)))
-	    items.forEach((item, index) => {
+	    allItems.forEach((item, index) => {
 	      item.id ||= `${surface.id}-option-${index}`
 	      item.tabIndex = -1
-	      item.setAttribute('aria-selected', String(index === activeOptionIndex))
+	      item.setAttribute('aria-selected', 'false')
 	    })
 	    editor.view.dom.setAttribute('aria-expanded', String(items.length > 0))
 	    editor.view.dom.setAttribute('aria-controls', surface.id)
 	    const active = items[activeOptionIndex]
-	    if (active) editor.view.dom.setAttribute('aria-activedescendant', active.id)
-	    else editor.view.dom.removeAttribute('aria-activedescendant')
+	    if (active) {
+	      active.setAttribute('aria-selected', 'true')
+	      editor.view.dom.setAttribute('aria-activedescendant', active.id)
+	      if (options.focusActive) active.focus({ preventScroll: true })
+	      if (options.scrollActive) active.scrollIntoView?.({ block: 'nearest' })
+	    } else editor.view.dom.removeAttribute('aria-activedescendant')
+	    return active
 	  }
+
+	  const dismissSlashMenu = (): void => {
+	    const restoreAddButton = slashInsertionMode
+	    if (!slashInsertionMode) {
+	      const { $from } = editor.state.selection
+	      const before = $from.parent.textBetween(0, $from.parentOffset, undefined, '\ufffc')
+	      const slashMatch = /(?:^|\s)\/([^\s/]*)$/.exec(before)
+	      if (slashMatch) dismissedSlash = `${$from.pos}:${slashMatch[1]}`
+	    }
+	    closeListbox(slash)
+	    slashInsertionMode = false
+	    slashBlockTarget = null
+	    if (restoreAddButton) addBlockButton.focus()
+	    else editor.commands.focus()
+	  }
+
+	  const handleListboxKeydown = (surface: HTMLElement, event: KeyboardEvent): boolean => {
+	    if (event.isComposing || event.key === 'Process') return false
+	    const items = Array.from(surface.querySelectorAll<HTMLButtonElement>('button[role="option"]'))
+	      .filter(item => !item.hidden && !item.disabled)
+	    if (items.length && ['ArrowDown', 'ArrowUp', 'Home', 'End'].includes(event.key)) {
+	      event.preventDefault()
+	      event.stopPropagation()
+	      if (event.key === 'Home') activeOptionIndex = 0
+	      else if (event.key === 'End') activeOptionIndex = items.length - 1
+	      else activeOptionIndex = (activeOptionIndex + (event.key === 'ArrowDown' ? 1 : -1) + items.length) % items.length
+	      syncListbox(surface, {
+	        scrollActive: true,
+	        focusActive: surface.contains(window.document.activeElement),
+	      })
+	      return true
+	    }
+	    if (items.length && event.key === 'Enter') {
+	      event.preventDefault()
+	      event.stopPropagation()
+	      items[activeOptionIndex]?.click()
+	      return true
+	    }
+	    if (event.key !== 'Escape') return false
+	    event.preventDefault()
+	    event.stopPropagation()
+	    if (surface === slash) dismissSlashMenu()
+	    else {
+	      const mention = currentMention()
+	      if (mention) dismissedMention = mentionKey(mention)
+	      closeMentions()
+	      editor.commands.focus()
+	    }
+	    return true
+	  }
+
+	  slash.addEventListener('keydown', event => { handleListboxKeydown(slash, event) })
+	  mentions.addEventListener('keydown', event => { handleListboxKeydown(mentions, event) })
 
   const closeMentions = (): void => {
     window.clearTimeout(mentionTimer)
@@ -1799,7 +1863,7 @@ export const mount = (host: HTMLElement, options: MountOptions): EditorSession =
           empty.setAttribute('role', 'status')
           mentions.append(empty)
         }
-	        syncListbox(mentions, true)
+	        syncListbox(mentions, { reset: true })
       } catch (error) {
         if (request.signal.aborted) return
         mentions.replaceChildren()
@@ -2119,7 +2183,9 @@ export const mount = (host: HTMLElement, options: MountOptions): EditorSession =
     const parent = value.state.selection.$from.parent
     const textBefore = parent.textBetween(0, value.state.selection.$from.parentOffset, undefined, '\ufffc')
     const slashMatch = /(?:^|\s)\/([^\s/]*)$/.exec(textBefore)
-    if (slashMatch && empty) {
+    if (slashInsertionMode) {
+      positionAdjacentSurface(slash, blockControls.getBoundingClientRect(), wrapper)
+    } else if (slashMatch && empty) {
 	      const slashKey = `${from}:${slashMatch[1]}`
 	      if (dismissedSlash === slashKey) {
 	        closeListbox(slash)
@@ -2133,7 +2199,9 @@ export const mount = (host: HTMLElement, options: MountOptions): EditorSession =
       positionSurface(slash, new DOMRect(caret.left, caret.bottom, 1, 1), wrapper)
       const query = slashMatch[1].toLocaleLowerCase()
       slash.querySelectorAll<HTMLButtonElement>('button').forEach(item => { item.hidden = !item.textContent?.toLocaleLowerCase().includes(query) })
-	      syncListbox(slash, true)
+	      const queryChanged = slashQueryKey !== slashKey
+	      slashQueryKey = slashKey
+	      syncListbox(slash, { reset: queryChanged })
     } else if (!slashInsertionMode && window.document.activeElement && !slash.contains(window.document.activeElement)) {
       closeListbox(slash)
     }
@@ -2239,32 +2307,10 @@ export const mount = (host: HTMLElement, options: MountOptions): EditorSession =
 	  const geometryObserver = typeof ResizeObserver === 'undefined' ? null : new ResizeObserver(refreshGeometry)
 	  geometryObserver?.observe(editor.view.dom)
 	  const editorKeydown = (event: KeyboardEvent): void => {
+	    if (event.isComposing || event.key === 'Process') return
 	    const activeListbox = !mentions.hidden ? mentions : !slash.hidden ? slash : null
-	    const items = activeListbox
-	      ? Array.from(activeListbox.querySelectorAll<HTMLButtonElement>('button[role="option"]')).filter(item => !item.hidden && !item.disabled)
-	      : []
-	    if (activeListbox && items.length && ['ArrowDown', 'ArrowUp', 'Home', 'End'].includes(event.key)) {
-	      event.preventDefault()
-	      event.stopPropagation()
-	      if (event.key === 'Home') activeOptionIndex = 0
-	      else if (event.key === 'End') activeOptionIndex = items.length - 1
-	      else activeOptionIndex = (activeOptionIndex + (event.key === 'ArrowDown' ? 1 : -1) + items.length) % items.length
-	      syncListbox(activeListbox)
-	      return
-	    }
-	    if (activeListbox && items.length && event.key === 'Enter' && !event.isComposing) {
-	      event.preventDefault()
-	      event.stopPropagation()
-	      items[activeOptionIndex]?.click()
-	      return
-	    }
+	    if (activeListbox && handleListboxKeydown(activeListbox, event)) return
     if (event.key === 'Escape') {
-	      const mention = currentMention()
-	      if (!mentions.hidden && mention) dismissedMention = mentionKey(mention)
-	      const { $from } = editor.state.selection
-	      const before = $from.parent.textBetween(0, $from.parentOffset, undefined, '\ufffc')
-	      const slashMatch = /(?:^|\s)\/([^\s/]*)$/.exec(before)
-	      if (!slash.hidden && slashMatch) dismissedSlash = `${$from.pos}:${slashMatch[1]}`
 	      closeListbox(slash); slashBlockTarget = null; blockMenu.hidden = true; menuBlockTarget = null; linkPopover.hidden = true; mediaPopover.hidden = true
       bubble.hidden = true; hideTableControls(); closeTableRowMenu(false); clearTableRowDrag(); pendingImageInsertAt = null; closeMentions(); closeEntityPopover(); closeEntityPreview(); editor.commands.focus()
 	      clearEditorListboxState()
