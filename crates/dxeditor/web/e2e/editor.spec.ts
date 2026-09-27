@@ -529,6 +529,59 @@ test('resets slash filtering and handles keys from the add-block menu', async ({
   await expect(slashMenu.locator('[aria-selected="true"]')).toHaveCount(0)
 })
 
+test('starts typed slash commands after cancelling an add-block entity handoff', async ({ page }) => {
+  const editor = page.locator('.ProseMirror')
+  await editor.focus()
+  await page.keyboard.press('End')
+
+  const addBlock = page.getByRole('toolbar', { name: 'Current block' })
+    .getByRole('button', { name: 'Add a block' })
+  await addBlock.focus()
+  await page.keyboard.press('Enter')
+  await page.keyboard.press('End')
+  await page.keyboard.press('Enter')
+
+  const entityDialog = page.getByRole('dialog', { name: 'Link to entity' })
+  await expect(entityDialog.getByLabel('Search entities')).toBeFocused()
+  await page.keyboard.press('Escape')
+  await expect(entityDialog).toBeHidden()
+  await expect(editor).toBeFocused()
+
+  await page.keyboard.type(' /hea')
+  const slashMenu = page.getByRole('listbox', { name: 'Insert block' })
+  await expect(slashMenu.getByRole('option', { name: 'Insert Heading 1' })).toBeVisible()
+  await page.keyboard.press('Enter')
+  await expect(editor.locator('h1')).toBeVisible()
+})
+
+test('starts typed slash commands after completing an add-block entity handoff', async ({ page }) => {
+  const editor = page.locator('.ProseMirror')
+  await editor.focus()
+  await page.keyboard.press('End')
+
+  const addBlock = page.getByRole('toolbar', { name: 'Current block' })
+    .getByRole('button', { name: 'Add a block' })
+  await addBlock.focus()
+  await page.keyboard.press('Enter')
+  await page.keyboard.press('End')
+  await page.keyboard.press('Enter')
+
+  const entitySearch = page.getByRole('dialog', { name: 'Link to entity' })
+    .getByLabel('Search entities')
+  await expect(entitySearch).toBeFocused()
+  await page.keyboard.type('Ada')
+  await expect(page.getByRole('option', { name: /Ada Lovelace/ })).toBeVisible()
+  await page.keyboard.press('Enter')
+  await expect(editor.locator('[data-semantic-mention="entity-ada"]')).toHaveText('@Ada Lovelace')
+  await expect(editor).toBeFocused()
+
+  await page.keyboard.type('/hea')
+  const slashMenu = page.getByRole('listbox', { name: 'Insert block' })
+  await expect(slashMenu.getByRole('option', { name: 'Insert Heading 1' })).toBeVisible()
+  await page.keyboard.press('Enter')
+  await expect(editor.locator('h1')).toBeVisible()
+})
+
 test('writes validated internal clipboard data with interoperable fallbacks', async ({ page }) => {
   const editor = page.locator('.ProseMirror')
   await editor.click()

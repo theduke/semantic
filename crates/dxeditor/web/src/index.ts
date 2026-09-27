@@ -853,6 +853,10 @@ export const mount = (host: HTMLElement, options: MountOptions): EditorSession =
   let suppressUpdate = false
   let slashInsertionMode = false
   let slashBlockTarget: TopLevelBlockTarget | null = null
+  const endSlashInsertionSession = (): void => {
+    slashInsertionMode = false
+    slashBlockTarget = null
+  }
   let activeBlockTarget: TopLevelBlockTarget | null = null
   let blockTargetHovered = false
   let menuBlockTarget: TopLevelBlockTarget | null = null
@@ -1495,6 +1499,7 @@ export const mount = (host: HTMLElement, options: MountOptions): EditorSession =
     }, 120)
   }
   const openEntityPopover = (): void => {
+    endSlashInsertionSession()
     removeSlashTrigger()
     entityInsertAt = editor.state.selection.from
     entitySearch.value = ''
@@ -1576,8 +1581,7 @@ export const mount = (host: HTMLElement, options: MountOptions): EditorSession =
       } else if (slashInsertionMode) insertBlockAfter(command, attrs, slashBlockTarget)
       else { removeSlashTrigger(); run(command, attrs) }
       closeListbox(slash)
-      slashInsertionMode = false
-      slashBlockTarget = null
+      endSlashInsertionSession()
     })
     item.setAttribute('role', 'option')
     slash.append(item)
@@ -1766,8 +1770,7 @@ export const mount = (host: HTMLElement, options: MountOptions): EditorSession =
 	      if (slashMatch) dismissedSlash = `${$from.pos}:${slashMatch[1]}`
 	    }
 	    closeListbox(slash)
-	    slashInsertionMode = false
-	    slashBlockTarget = null
+	    endSlashInsertionSession()
 	    if (restoreAddButton) addBlockButton.focus()
 	    else editor.commands.focus()
 	  }
@@ -2192,8 +2195,8 @@ export const mount = (host: HTMLElement, options: MountOptions): EditorSession =
 	        updateMentions()
 	        return
 	      }
-	      if (dismissedSlash) dismissedSlash = null
-      slashInsertionMode = false
+      if (dismissedSlash) dismissedSlash = null
+      endSlashInsertionSession()
       slash.hidden = false
       const caret = value.view.coordsAtPos(from)
       positionSurface(slash, new DOMRect(caret.left, caret.bottom, 1, 1), wrapper)
@@ -2278,8 +2281,7 @@ export const mount = (host: HTMLElement, options: MountOptions): EditorSession =
     const target = event.target as globalThis.Node
     if (![bubble, slash, blockControls, blockMenu, linkPopover, tableControls, tableRowControls, tableRowMenu, mediaPopover, mentions, entityPopover, entityPreview].some(surface => surface.contains(target))) {
       closeListbox(slash)
-      slashInsertionMode = false
-      slashBlockTarget = null
+      endSlashInsertionSession()
       blockMenu.hidden = true
       menuBlockTarget = null
       closeTableRowMenu(false)
@@ -2311,7 +2313,7 @@ export const mount = (host: HTMLElement, options: MountOptions): EditorSession =
 	    const activeListbox = !mentions.hidden ? mentions : !slash.hidden ? slash : null
 	    if (activeListbox && handleListboxKeydown(activeListbox, event)) return
     if (event.key === 'Escape') {
-	      closeListbox(slash); slashBlockTarget = null; blockMenu.hidden = true; menuBlockTarget = null; linkPopover.hidden = true; mediaPopover.hidden = true
+      closeListbox(slash); endSlashInsertionSession(); blockMenu.hidden = true; menuBlockTarget = null; linkPopover.hidden = true; mediaPopover.hidden = true
       bubble.hidden = true; hideTableControls(); closeTableRowMenu(false); clearTableRowDrag(); pendingImageInsertAt = null; closeMentions(); closeEntityPopover(); closeEntityPreview(); editor.commands.focus()
 	      clearEditorListboxState()
     }
