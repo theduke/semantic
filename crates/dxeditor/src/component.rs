@@ -378,7 +378,8 @@ const DXEDITOR_STYLE: &str = r#"
 }
 
 .dxeditor-engine__button:hover,
-.dxeditor-engine__button:focus-visible {
+.dxeditor-engine__button:focus-visible,
+.dxeditor-engine__button[role="option"][aria-selected="true"] {
   background: #eef2f6;
   outline: 2px solid transparent;
 }

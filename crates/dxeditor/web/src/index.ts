@@ -874,6 +874,7 @@ export const mount = (host: HTMLElement, options: MountOptions): EditorSession =
 	  let entityInsertAt: number | null = null
 	  let entityPreviewRequest: AbortController | null = null
 	  let previewEntityId: string | null = null
+	  let selectedListbox: HTMLElement | null = null
 	  let activeOptionIndex = 0
 	  let dismissedSlash: string | null = null
 	  let dismissedMention: string | null = null
@@ -1497,7 +1498,7 @@ export const mount = (host: HTMLElement, options: MountOptions): EditorSession =
     entityInsertAt = editor.state.selection.from
     entitySearch.value = ''
     entityPopover.hidden = false
-    slash.hidden = true
+    closeListbox(slash)
     const caret = editor.view.coordsAtPos(entityInsertAt)
     positionSurface(entityPopover, new DOMRect(caret.left, caret.bottom, 1, 1), wrapper)
     entitySearch.focus()
@@ -1524,6 +1525,7 @@ export const mount = (host: HTMLElement, options: MountOptions): EditorSession =
     slashInsertionMode = true
     slash.hidden = false
     positionAdjacentSurface(slash, blockControls.getBoundingClientRect(), wrapper)
+    syncListbox(slash, true)
     slash.querySelector<HTMLButtonElement>('button')?.focus()
   })
   const blockActionsButton = button('⋮', 'Block actions', () => {
@@ -1571,7 +1573,7 @@ export const mount = (host: HTMLElement, options: MountOptions): EditorSession =
         openMediaPopover(position)
       } else if (slashInsertionMode) insertBlockAfter(command, attrs, slashBlockTarget)
       else { removeSlashTrigger(); run(command, attrs) }
-      slash.hidden = true
+      closeListbox(slash)
       slashInsertionMode = false
       slashBlockTarget = null
     })
@@ -1705,9 +1707,31 @@ export const mount = (host: HTMLElement, options: MountOptions): EditorSession =
 	  const mentionKey = (range: { from: number; to: number; query: string }): string =>
 	    `${range.from}:${range.to}:${range.query}`
 
+	  const clearEditorListboxState = (): void => {
+	    editor.view.dom.setAttribute('aria-expanded', 'false')
+	    editor.view.dom.removeAttribute('aria-controls')
+	    editor.view.dom.removeAttribute('aria-activedescendant')
+	  }
+
+	  const closeListbox = (surface: HTMLElement): void => {
+	    surface.hidden = true
+	    surface.querySelectorAll<HTMLButtonElement>('button[role="option"]')
+	      .forEach(item => item.setAttribute('aria-selected', 'false'))
+	    if (selectedListbox !== surface) return
+	    selectedListbox = null
+	    activeOptionIndex = 0
+	    clearEditorListboxState()
+	  }
+
 	  const syncListbox = (surface: HTMLElement, reset = false): void => {
 	    const items = Array.from(surface.querySelectorAll<HTMLButtonElement>('button[role="option"]'))
 	      .filter(item => !item.hidden && !item.disabled)
+	    if (selectedListbox !== surface) {
+	      selectedListbox?.querySelectorAll<HTMLButtonElement>('button[role="option"]')
+	        .forEach(item => item.setAttribute('aria-selected', 'false'))
+	      selectedListbox = surface
+	      reset = true
+	    }
 	    if (reset) activeOptionIndex = 0
 	    activeOptionIndex = Math.max(0, Math.min(activeOptionIndex, Math.max(0, items.length - 1)))
 	    items.forEach((item, index) => {
@@ -1727,7 +1751,7 @@ export const mount = (host: HTMLElement, options: MountOptions): EditorSession =
     mentionRequest?.abort()
     mentionRequest = null
     mentionQuery = null
-    mentions.hidden = true
+    closeListbox(mentions)
     mentions.replaceChildren()
   }
 
@@ -2091,7 +2115,7 @@ export const mount = (host: HTMLElement, options: MountOptions): EditorSession =
     if (slashMatch && empty) {
 	      const slashKey = `${from}:${slashMatch[1]}`
 	      if (dismissedSlash === slashKey) {
-	        slash.hidden = true
+	        closeListbox(slash)
 	        updateMentions()
 	        return
 	      }
@@ -2104,7 +2128,7 @@ export const mount = (host: HTMLElement, options: MountOptions): EditorSession =
       slash.querySelectorAll<HTMLButtonElement>('button').forEach(item => { item.hidden = !item.textContent?.toLocaleLowerCase().includes(query) })
 	      syncListbox(slash, true)
     } else if (!slashInsertionMode && window.document.activeElement && !slash.contains(window.document.activeElement)) {
-      slash.hidden = true
+      closeListbox(slash)
     }
     updateMentions()
   }
@@ -2178,7 +2202,7 @@ export const mount = (host: HTMLElement, options: MountOptions): EditorSession =
   const outside = (event: PointerEvent) => {
     const target = event.target as globalThis.Node
     if (![bubble, slash, blockControls, blockMenu, linkPopover, tableControls, tableRowControls, tableRowMenu, mediaPopover, mentions, entityPopover, entityPreview].some(surface => surface.contains(target))) {
-      slash.hidden = true
+      closeListbox(slash)
       slashInsertionMode = false
       slashBlockTarget = null
       blockMenu.hidden = true
@@ -2234,10 +2258,9 @@ export const mount = (host: HTMLElement, options: MountOptions): EditorSession =
 	      const before = $from.parent.textBetween(0, $from.parentOffset, undefined, '\ufffc')
 	      const slashMatch = /(?:^|\s)\/([^\s/]*)$/.exec(before)
 	      if (!slash.hidden && slashMatch) dismissedSlash = `${$from.pos}:${slashMatch[1]}`
-      slash.hidden = true; slashBlockTarget = null; blockMenu.hidden = true; menuBlockTarget = null; linkPopover.hidden = true; mediaPopover.hidden = true
+	      closeListbox(slash); slashBlockTarget = null; blockMenu.hidden = true; menuBlockTarget = null; linkPopover.hidden = true; mediaPopover.hidden = true
       bubble.hidden = true; hideTableControls(); closeTableRowMenu(false); clearTableRowDrag(); pendingImageInsertAt = null; closeMentions(); closeEntityPopover(); closeEntityPreview(); editor.commands.focus()
-	      editor.view.dom.setAttribute('aria-expanded', 'false')
-	      editor.view.dom.removeAttribute('aria-activedescendant')
+	      clearEditorListboxState()
     }
 	  }
 	  editor.view.dom.addEventListener('keydown', editorKeydown, true)
