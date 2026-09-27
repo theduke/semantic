@@ -401,23 +401,32 @@ fn EntityActions(
     let mut actions = catalog.entity_actions_for(&ctx);
     actions.retain(|action| !excluded_action_ids.contains(&action.id));
     actions.sort_by_key(|action| entity_action_order(&action.id));
+    let placement_class = match placement {
+        EntityActionPlacement::Card => "card",
+        EntityActionPlacement::Detail => "detail",
+        EntityActionPlacement::BrowseRow => "row",
+    };
     rsx! {
         dxcomp::Toolbar {
-            class: "semantic-entity-actions",
+            class: "semantic-entity-actions semantic-entity-actions--{placement_class}",
             aria_label: "Entity actions",
             dxcomp::ToolbarGroup {
                 for action in actions {
-                    if action.id == "edit" {
-                        if let Some(on_edit) = on_edit {
-                            EntityEditButton {
-                                target: ctx.target.clone(),
-                                on_edit,
+                    div {
+                        class: "semantic-entity-actions__item",
+                        "data-action-id": action.id.clone(),
+                        if action.id == "edit" {
+                            if let Some(on_edit) = on_edit {
+                                EntityEditButton {
+                                    target: ctx.target.clone(),
+                                    on_edit,
+                                }
+                            } else {
+                                {(action.render)(ctx.clone())}
                             }
                         } else {
                             {(action.render)(ctx.clone())}
                         }
-                    } else {
-                        {(action.render)(ctx.clone())}
                     }
                 }
             }
