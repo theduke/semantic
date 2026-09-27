@@ -6738,6 +6738,38 @@ html:has(.semantic-note-form) {
   object-fit: cover;
 }
 
+.semantic-entity-card__file-fallback {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  gap: var(--semantic-space-3);
+  padding: var(--semantic-space-3);
+  border: 1px solid var(--semantic-border-soft);
+  border-radius: var(--semantic-radius);
+  background: var(--semantic-surface-muted);
+  color: var(--semantic-text-muted);
+}
+
+.semantic-entity-card__file-fallback > svg {
+  flex: 0 0 auto;
+}
+
+.semantic-entity-card__file-fallback > div {
+  display: grid;
+  min-width: 0;
+  gap: 2px;
+}
+
+.semantic-entity-card__file-fallback strong {
+  color: var(--semantic-text);
+  font-size: var(--semantic-font-size-label);
+  overflow-wrap: anywhere;
+}
+
+.semantic-entity-card__file-fallback span {
+  font-size: var(--semantic-font-size-caption);
+}
+
 .semantic-entity-page .semantic-entity-card__body :is(
   .semantic-class > header,
   .semantic-note__header,

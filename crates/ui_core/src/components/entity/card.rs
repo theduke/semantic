@@ -1,8 +1,8 @@
 use std::rc::Rc;
 
 use dioxus::prelude::*;
-use dioxus_icons::lucide::Pencil;
-use semantic_data::filestore::FILE_CLASS_ID;
+use dioxus_icons::lucide::{File, Pencil};
+use semantic_data::filestore::{ATTR_FILE_FILENAME, FILE_CLASS_ID};
 use semantic_data::schema::ClassType;
 use semantic_data::value::{Object, Value};
 
@@ -150,9 +150,9 @@ pub fn EntityCard(
 #[component]
 fn EntitySummary(object: Object, id: Option<String>, title: String) -> Element {
     let catalog = use_ui_catalog();
-    let is_image = object.get("type").and_then(Value::as_str) == Some(FILE_CLASS_ID)
-        && media_kind_for_object(&object) == MediaKind::Image;
-    let image_source = is_image
+    let file_kind = (object.get("type").and_then(Value::as_str) == Some(FILE_CLASS_ID))
+        .then(|| media_kind_for_object(&object));
+    let image_source = (file_kind == Some(MediaKind::Image))
         .then(|| {
             id.as_deref().map(|id| {
                 format!(
@@ -172,6 +172,14 @@ fn EntitySummary(object: Object, id: Option<String>, title: String) -> Element {
         div { class: "semantic-entity-card__summary",
             if let Some(source) = image_source {
                 img { class: "semantic-entity-card__thumbnail", src: source, alt: "", loading: "lazy" }
+            } else if file_kind == Some(MediaKind::File) {
+                div { class: "semantic-entity-card__file-fallback",
+                    File { size: "1.5rem" }
+                    div {
+                        strong { "{title}" }
+                        span { "File" }
+                    }
+                }
             }
             if let Some(excerpt) = excerpt {
                 p { class: "semantic-entity-card__excerpt", "{excerpt}" }
@@ -458,6 +466,12 @@ fn object_id(object: &Object) -> Option<String> {
 }
 
 pub fn entity_title(object: &Object, id: Option<&str>, class_name: Option<&str>) -> String {
+    if object.get("type").and_then(Value::as_str) == Some(FILE_CLASS_ID)
+        && let Some(filename) = object.get(ATTR_FILE_FILENAME).and_then(Value::as_str)
+        && !filename.trim().is_empty()
+    {
+        return filename.to_string();
+    }
     for field in ENTITY_TITLE_FIELDS {
         if let Some(title) = object.get(field).and_then(Value::as_str)
             && !title.trim().is_empty()
@@ -491,7 +505,10 @@ fn value_preview(value: &Value) -> String {
 
 #[cfg(test)]
 mod tests {
-    use semantic_data::value::{Object, Value};
+    use semantic_data::{
+        filestore::{ATTR_FILE_FILENAME, FILE_CLASS_ID},
+        value::{Object, Value},
+    };
 
     use super::{entity_excerpt, entity_title};
 
@@ -525,5 +542,21 @@ mod tests {
         );
         object.insert("note_content", Value::Null);
         assert_eq!(entity_excerpt(&object, "Roadmap"), None);
+    }
+
+    #[test]
+    fn file_title_prefers_the_canonical_filename_attribute() {
+        let mut object = Object::new();
+        object.insert("type", Value::String(FILE_CLASS_ID.to_string()));
+        object.insert("title", Value::String("Untitled file".to_string()));
+        object.insert(
+            ATTR_FILE_FILENAME,
+            Value::String("recording.wav".to_string()),
+        );
+
+        assert_eq!(
+            entity_title(&object, Some("file-id"), Some("File")),
+            "recording.wav"
+        );
     }
 }
