@@ -211,8 +211,7 @@ pub fn PrimaryNav(#[props(default)] mobile: bool) -> Element {
 #[component]
 fn NewMenu() -> Element {
     let route = use_route::<Route>();
-    let mut open = use_signal(|| false);
-    let mut trigger = use_signal(|| None::<std::rc::Rc<MountedData>>);
+    let navigator = use_navigator();
     let active = [
         NavItem::CreateEntity,
         NavItem::Upload,
@@ -223,47 +222,35 @@ fn NewMenu() -> Element {
     .any(|item| nav_item_is_active(&route, item));
 
     rsx! {
-        div { class: "semantic-new-menu",
-            button {
+        dxcomp::DropdownMenu { class: "semantic-new-menu",
+            dxcomp::DropdownMenuTrigger {
                 class: "semantic-new-menu__trigger",
-                r#type: "button",
-                aria_controls: "semantic-new-menu-options",
-                aria_expanded: open(),
                 "data-active": active,
-                onmounted: move |event| trigger.set(Some(event.data())),
-                onclick: move |_| open.toggle(),
+                aria_haspopup: "menu",
                 span { aria_hidden: "true", "+" }
                 "New"
             }
-            if open() {
-                button {
-                    class: "semantic-new-menu__scrim",
-                    r#type: "button",
-                    aria_label: "Close New menu",
-                    onclick: move |_| {
-                        open.set(false);
-                        restore_focus(trigger);
-                    },
-                }
-                nav {
-                    id: "semantic-new-menu-options",
-                    class: "semantic-new-menu__options",
-                    aria_label: "Create",
-                    tabindex: "-1",
-                    onmounted: move |event| async move { let _ = event.set_focus(true).await; },
-                    onkeydown: move |event| {
-                        if event.key() == Key::Escape {
-                            event.prevent_default();
-                            event.stop_propagation();
-                            open.set(false);
-                            restore_focus(trigger);
-                        }
-                    },
-                    Link { to: Route::CreateNotePage, onclick: move |_| open.set(false), "Note" }
-                    Link { to: Route::CreateEntityPage, onclick: move |_| open.set(false), "Entity" }
-                    Link { to: Route::UploadPage, onclick: move |_| open.set(false), "Upload files" }
-                    Link { to: Route::RecordPage, onclick: move |_| open.set(false), "Record media" }
-                    Link { to: Route::ImportPage, onclick: move |_| open.set(false), "Import URL" }
+            dxcomp::DropdownMenuContent {
+                id: "semantic-new-menu-options",
+                class: "semantic-new-menu__options",
+                role: "menu",
+                aria_label: "Create new",
+                for (index, (label, target)) in [
+                    ("Note", Route::CreateNotePage),
+                    ("Entity", Route::CreateEntityPage),
+                    ("Upload files", Route::UploadPage),
+                    ("Record media", Route::RecordPage),
+                    ("Import URL", Route::ImportPage),
+                ].into_iter().enumerate() {
+                    dxcomp::DropdownMenuItem::<Route> {
+                        value: target,
+                        index,
+                        role: "menuitem",
+                        on_select: move |target: Route| {
+                            navigator.push(target);
+                        },
+                        "{label}"
+                    }
                 }
             }
         }

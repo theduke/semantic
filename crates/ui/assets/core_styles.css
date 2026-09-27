@@ -6628,7 +6628,6 @@ html:has(.semantic-note-form) {
   line-height: 1;
 }
 
-.semantic-new-menu__scrim,
 .semantic-primary-nav__scrim {
   position: fixed;
   inset: calc(var(--semantic-header-height) + var(--semantic-safe-top)) 0 0;
@@ -6644,6 +6643,7 @@ html:has(.semantic-note-form) {
   z-index: 41;
   top: calc(100% + 9px);
   right: 0;
+  left: auto;
   display: grid !important;
   width: min(240px, calc(100vw - 32px));
   padding: 6px;
@@ -6653,7 +6653,7 @@ html:has(.semantic-note-form) {
   box-shadow: var(--semantic-shadow-2);
 }
 
-.semantic-new-menu__options a {
+.semantic-new-menu__options .dx-dropdown-menu-item {
   display: block;
   padding: 10px 12px;
   border-radius: var(--semantic-radius-md);
@@ -6662,8 +6662,8 @@ html:has(.semantic-note-form) {
   white-space: nowrap;
 }
 
-.semantic-new-menu__options a:hover,
-.semantic-new-menu__options a:focus-visible {
+.semantic-new-menu__options .dx-dropdown-menu-item:hover,
+.semantic-new-menu__options .dx-dropdown-menu-item:focus-visible {
   background: var(--semantic-color-selected);
   color: var(--semantic-accent);
 }
