@@ -55,7 +55,8 @@ impl SemanticServer {
         let router = Router::new()
             .route(
                 &self.config.rpc_path,
-                post(rpc_http_handler).layer(DefaultBodyLimit::max(self.config.max_rpc_request_size)),
+                post(rpc_http_handler)
+                    .layer(DefaultBodyLimit::max(self.config.max_rpc_request_size)),
             )
             .route(
                 &semantic_rpc_core::interface_protocol::interface_ws_path(&self.config.rpc_path),
