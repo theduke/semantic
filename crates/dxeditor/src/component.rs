@@ -214,14 +214,14 @@ const DXEDITOR_STYLE: &str = r#"
 
 .dxeditor[data-engine="tiptap-prosemirror"] .dxeditor__document {
   display: block;
-  min-height: 260px;
-  padding: 22px clamp(16px, 3vw, 28px) 22px 36px;
+  min-height: 160px;
+  padding: 16px 20px 16px 36px;
 }
 
 .dxeditor-engine__content {
   min-width: 0;
   max-width: 100%;
-  min-height: 216px;
+  min-height: 128px;
   outline: none;
   line-height: 1.62;
   overflow-wrap: anywhere;
@@ -231,10 +231,28 @@ const DXEDITOR_STYLE: &str = r#"
   margin: 0.2rem 0;
 }
 
+.dxeditor-engine__content ul,
+.dxeditor-engine__content ol {
+  padding-inline-start: 1.5rem;
+  list-style-position: outside;
+}
+
+.dxeditor-engine__content ul {
+  list-style-type: disc;
+}
+
+.dxeditor-engine__content ol {
+  list-style-type: decimal;
+}
+
+.dxeditor-engine__content li > p {
+  margin: 0;
+}
+
 .dxeditor-engine__content ul[data-type="taskList"],
 .dxeditor__task-list {
-  margin-left: 0;
-  padding-left: 0;
+  margin-inline-start: 0;
+  padding-inline-start: 0;
   list-style: none;
 }
 
@@ -632,7 +650,7 @@ const DXEDITOR_STYLE: &str = r#"
 
 @media (max-width: 640px) {
   .dxeditor[data-engine="tiptap-prosemirror"] .dxeditor__document {
-    padding: 18px 14px 18px 32px;
+    padding: 12px 14px 12px 32px;
   }
 
   .dxeditor-engine__block-controls .dxeditor-engine__button {

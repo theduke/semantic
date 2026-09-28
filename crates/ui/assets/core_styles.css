@@ -5441,12 +5441,11 @@ pre {
 }
 
 .semantic-note-form__document .dxeditor__document {
-  padding: var(--semantic-space-5) clamp(22px, 7vw, 72px);
+  padding: 16px 20px 16px 36px;
 }
 
 .semantic-note-form__document .dxeditor-engine__content {
-  width: min(100%, 68ch);
-  margin-inline: auto;
+  width: 100%;
 }
 
 .semantic-note-form__document .dxeditor-engine__content .tableWrapper {
@@ -5465,7 +5464,7 @@ pre {
   font-size: var(--semantic-font-size-caption);
 }
 
-.semantic-note-form__document .dxeditor-engine__content > p:only-child:has(> br.ProseMirror-trailingBreak)::before {
+.semantic-note-form__document .dxeditor-engine__content[data-empty="true"][contenteditable="true"] > p:only-child::before {
   float: left;
   height: 0;
   color: var(--semantic-text-muted);
@@ -5476,10 +5475,6 @@ pre {
 .semantic-note-form__document .dxeditor-engine__content:focus-visible {
   box-shadow: none;
   outline: none;
-}
-
-.semantic-note-form[data-format="markdown"] .dxeditor__document {
-  min-height: clamp(360px, 52vh, 620px);
 }
 
 .semantic-note-form__metadata {
@@ -5531,7 +5526,7 @@ html:has(.semantic-note-form) {
   }
 
   .semantic-note-form__document .dxeditor__document {
-    padding: 16px 32px;
+    padding: 12px 14px 12px 32px;
   }
 
   .semantic-note-form__metadata-summary {

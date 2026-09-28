@@ -2151,7 +2151,14 @@ export const mount = (host: HTMLElement, options: MountOptions): EditorSession =
   }
 
   function updateSurfaces(value: Editor): void {
-    if (destroyed || options.readonly || value.view.composing) return
+    if (destroyed) return
+    // A trailing DOM break can also follow text or a hard break. Only the
+    // document model reliably identifies the empty paragraph placeholder.
+    const doc = value.state.doc
+    value.view.dom.dataset.empty = String(doc.childCount === 1
+      && doc.firstChild?.type.name === 'paragraph'
+      && doc.firstChild.content.size === 0)
+    if (options.readonly || value.view.composing) return
     const { from, to, empty } = value.state.selection
     const cellSelection = value.state.selection instanceof CellSelection
     const imageActive = value.isActive('image')
