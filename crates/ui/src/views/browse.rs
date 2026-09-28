@@ -4,7 +4,10 @@ use std::rc::Rc;
 
 use dioxus::prelude::*;
 use semantic_data::value::{Object, Value};
-use semantic_data::{attr::RELATION_CLASS_ID, builtin::DEFAULT_COLLECTION};
+use semantic_data::{
+    attr::{ATTR_CREATED_AT, RELATION_CLASS_ID},
+    builtin::DEFAULT_COLLECTION,
+};
 use semantic_ui_core::{
     EntityDisplayMode, EntityDisplayRenderer,
     components::{EmptyState, InlineNotice, LoadingSkeleton, NoticeVariant, RefreshingIndicator},
@@ -362,6 +365,8 @@ pub fn BrowsePage(
                     })
                 } else if *advanced_open.read() {
                     Some(rsx! { QueryEditor {
+                        title: "Raw SQL query",
+                        description: "Run one read-only SELECT statement. SQL replaces filters and controls ordering and limits.",
                         draft: sql_input.read().clone(),
                         error: sql_error.read().clone(),
                         non_portable: non_portable_sql,
@@ -634,9 +639,10 @@ fn collection_query(
     };
 
     format!(
-        "SELECT * FROM {}{} LIMIT {} OFFSET {}",
+        "SELECT * FROM {}{} ORDER BY {} DESC, id ASC LIMIT {} OFFSET {}",
         sql_ident(collection),
         where_clause,
+        sql_ident(ATTR_CREATED_AT),
         clamp_page_size(page_size),
         clamp_page(page).saturating_mul(clamp_page_size(page_size))
     )
@@ -861,7 +867,7 @@ mod tests {
     fn default_entities_query_excludes_relation_entities() {
         assert_eq!(
             default_query(DEFAULT_COLLECTION, 50, 2),
-            "SELECT * FROM \"entities\" WHERE type != 'semantic:relation' LIMIT 50 OFFSET 100"
+            "SELECT * FROM \"entities\" WHERE type != 'semantic:relation' ORDER BY \"semantic:created_at\" DESC, id ASC LIMIT 50 OFFSET 100"
         );
     }
 
@@ -869,7 +875,7 @@ mod tests {
     fn default_non_entities_query_does_not_add_entity_type_filter() {
         assert_eq!(
             default_query("events", 25, 1),
-            "SELECT * FROM \"events\" LIMIT 25 OFFSET 25"
+            "SELECT * FROM \"events\" ORDER BY \"semantic:created_at\" DESC, id ASC LIMIT 25 OFFSET 25"
         );
     }
 
@@ -927,6 +933,7 @@ mod tests {
             .unwrap();
         assert!(query.contains("type != 'semantic:relation'"));
         assert!(query.contains("(\"score\" > 7)"));
+        assert!(query.contains("ORDER BY \"semantic:created_at\" DESC, id ASC"));
         assert!(query.ends_with("LIMIT 25 OFFSET 50"));
     }
 }

@@ -5,7 +5,7 @@
 //! rows can be consumed consistently across native and web clients.
 
 use semantic_data::{
-    attr::{ATTR_RELATION_RELATION, ATTR_RELATION_TO, ATTR_TITLE},
+    attr::{ATTR_CREATED_AT, ATTR_RELATION_RELATION, ATTR_RELATION_TO, ATTR_TITLE},
     builtin::DEFAULT_COLLECTION,
     bundles::directory::{
         ATTR_DIRECTORY_NODE_FROM, ATTR_DIRECTORY_NODE_ORDER, DIRECTORY_CLASS_ID,
@@ -223,7 +223,7 @@ fn child_order_by(sort: DirectorySort) -> String {
         DirectorySort::TitleDesc => "child.title DESC, child.id ASC".to_string(),
         DirectorySort::TypeAsc => "child.type ASC, child.title ASC, child.id ASC".to_string(),
         DirectorySort::CreatedAtDesc => {
-            "child.created_at DESC, child.title ASC, child.id ASC".to_string()
+            format!("child.{} DESC, child.id ASC", sql_ident(ATTR_CREATED_AT))
         }
         DirectorySort::UpdatedAtDesc => {
             "child.updated_at DESC, child.title ASC, child.id ASC".to_string()

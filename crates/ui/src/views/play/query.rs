@@ -1,4 +1,4 @@
-use semantic_data::{builtin::DEFAULT_COLLECTION, filestore::FILE_CLASS_ID};
+use semantic_data::{attr::ATTR_CREATED_AT, builtin::DEFAULT_COLLECTION, filestore::FILE_CLASS_ID};
 
 use crate::components::StructuredQuery;
 
@@ -77,9 +77,10 @@ pub fn playlist_query(
         .map(|predicate| format!(" AND ({predicate})"))
         .unwrap_or_default();
     Ok(format!(
-        "SELECT e.id AS id, e.type AS type, e.title AS title, e.mime_type AS mime_type, e.media_duration AS media_duration FROM {collection} AS e WHERE e.type IN ({file_class}) AND ({mime_predicate}){search_predicate}{structured_predicate} ORDER BY e.title ASC, e.id ASC LIMIT {PAGE_SIZE} OFFSET {offset}",
+        "SELECT e.id AS id, e.type AS type, e.title AS title, e.mime_type AS mime_type, e.media_duration AS media_duration FROM {collection} AS e WHERE e.type IN ({file_class}) AND ({mime_predicate}){search_predicate}{structured_predicate} ORDER BY e.{created_at} DESC, e.id ASC LIMIT {PAGE_SIZE} OFFSET {offset}",
         collection = sql_ident(&filter.collection),
         file_class = sql_string(FILE_CLASS_ID),
+        created_at = sql_ident(ATTR_CREATED_AT),
     ))
 }
 
@@ -89,9 +90,10 @@ pub fn page_size() -> usize {
 
 fn default_raw_query(collection: &str) -> String {
     format!(
-        "SELECT * FROM {} WHERE type IN ({}) ORDER BY id ASC LIMIT 100000",
+        "SELECT * FROM {} WHERE type IN ({}) ORDER BY {} DESC, id ASC LIMIT 100000",
         sql_ident(collection),
         sql_string(FILE_CLASS_ID),
+        sql_ident(ATTR_CREATED_AT),
     )
 }
 
@@ -129,8 +131,13 @@ mod tests {
         assert!(query.contains("image/%"));
         assert!(query.contains("audio/%"));
         assert!(query.contains("video/%"));
-        assert!(query.contains("ORDER BY e.title ASC, e.id ASC"));
+        assert!(query.contains("ORDER BY e.\"semantic:created_at\" DESC, e.id ASC"));
         assert!(query.ends_with("LIMIT 1000 OFFSET 2000"));
+        assert!(
+            PlaylistFilter::default()
+                .sql
+                .contains("ORDER BY \"semantic:created_at\" DESC, id ASC")
+        );
     }
 
     #[test]

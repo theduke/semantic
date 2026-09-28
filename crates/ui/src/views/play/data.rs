@@ -176,7 +176,7 @@ fn directory_children_query(parent_id: &str, limit: usize, offset: usize) -> Str
     build_directory_children_query(
         parent_id,
         DirectoryChildFilter::All,
-        DirectorySort::Order,
+        DirectorySort::CreatedAtDesc,
         DirectoryQueryPage::new(limit, offset),
     )
 }
@@ -261,9 +261,7 @@ mod tests {
     #[test]
     fn directory_expansion_query_is_stable_and_paged() {
         let query = directory_children_query("a'b", 500, 1000);
-        assert!(query.contains(
-            "ORDER BY n.\"semantic:base:directory_node:order\" ASC, child.title ASC, child.id ASC"
-        ));
+        assert!(query.contains("ORDER BY child.\"semantic:created_at\" DESC, child.id ASC"));
         assert!(query.contains("'a''b'"));
         assert!(query.contains("LIMIT 500 OFFSET 1000"));
     }

@@ -106,17 +106,30 @@ pub fn DataToolbar(
                 }
             }
 
-            if show_filters {
-                dxcomp::Button {
-                    size: dxcomp::ButtonSize::Sm,
-                    variant: if filters_open || active_filter_count > 0 { dxcomp::ButtonVariant::Primary } else { dxcomp::ButtonVariant::Outline },
-                    aria_pressed: filters_open,
-                    onclick: move |_| {
-                        if let Some(handler) = on_filters_open_change {
-                            handler.call(!filters_open);
+            if show_filters || show_advanced {
+                div { class: "semantic-data-toolbar__group", role: "group", aria_label: "Query controls",
+                    if show_filters {
+                        dxcomp::Button {
+                            size: dxcomp::ButtonSize::Sm,
+                            variant: if filters_open || active_filter_count > 0 { dxcomp::ButtonVariant::Primary } else { dxcomp::ButtonVariant::Outline },
+                            aria_pressed: filters_open,
+                            onclick: move |_| {
+                                if let Some(handler) = on_filters_open_change {
+                                    handler.call(!filters_open);
+                                }
+                            },
+                            if active_filter_count > 0 { "Filters ({active_filter_count})" } else { "Filters" }
                         }
-                    },
-                    if active_filter_count > 0 { "Filters ({active_filter_count})" } else { "Filters" }
+                    }
+                    if show_advanced {
+                        dxcomp::Button {
+                            size: dxcomp::ButtonSize::Sm,
+                            variant: if advanced_open || custom_query { dxcomp::ButtonVariant::Primary } else { dxcomp::ButtonVariant::Outline },
+                            aria_pressed: advanced_open,
+                            onclick: move |_| on_advanced_open_change.call(!advanced_open),
+                            if custom_query { "Edit SQL" } else { "Raw SQL" }
+                        }
+                    }
                 }
             }
 
@@ -168,15 +181,6 @@ pub fn DataToolbar(
                             },
                             option { value: "comfortable", "Comfortable" }
                             option { value: "compact", "Compact" }
-                        }
-                    }
-                    if show_advanced {
-                        dxcomp::Button {
-                            size: dxcomp::ButtonSize::Sm,
-                            variant: if advanced_open || custom_query { dxcomp::ButtonVariant::Primary } else { dxcomp::ButtonVariant::Outline },
-                            aria_pressed: advanced_open,
-                            onclick: move |_| on_advanced_open_change.call(!advanced_open),
-                            if custom_query { "Edit SQL query" } else { "Advanced SQL" }
                         }
                     }
                 }
