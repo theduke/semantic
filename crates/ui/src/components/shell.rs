@@ -1,7 +1,10 @@
 use dioxus::prelude::*;
 use dioxus_icons::lucide::{CirclePlay, Database, FolderTree, House, LayoutGrid, ListTodo, Tags};
 
-use super::GlobalSearch;
+use super::{
+    GlobalSearch,
+    sidebar::{SIDEBAR_NAV_ID, SidebarToggle, use_sidebar_state},
+};
 use crate::{navigation_guard::NavigationGuardPrompt, views::Route};
 
 const MAIN_CONTENT_ID: &str = "semantic-main-content";
@@ -24,12 +27,17 @@ pub fn AppFrame(#[props(default)] variant: AppFrameVariant, children: Element) -
         AppFrameVariant::Standard => ("semantic-ui", "semantic-ui__main"),
         AppFrameVariant::Immersive => ("semantic-player-shell", "semantic-player-shell__main"),
     };
+    let sidebar = use_sidebar_state();
+    let standard = variant == AppFrameVariant::Standard;
 
     rsx! {
-        div { class: frame_class,
+        div {
+            class: frame_class,
+            "data-sidebar": standard.then_some(sidebar.data_state()),
+            "data-sidebar-animate": (standard && sidebar.animate).then_some("true"),
             a { class: "semantic-skip-link", href: "#{MAIN_CONTENT_ID}", "Skip to main content" }
-            AppFrameHeader {}
-            if variant == AppFrameVariant::Standard {
+            AppFrameHeader { sidebar_toggle: standard }
+            if standard {
                 div { class: "semantic-ui__layout",
                     aside { class: "semantic-ui__sidebar", aria_label: "Primary navigation",
                         PrimaryNav { mobile: false }
@@ -59,11 +67,16 @@ pub fn PlayerShell() -> Element {
 }
 
 #[component]
-fn AppFrameHeader() -> Element {
+fn AppFrameHeader(sidebar_toggle: bool) -> Element {
     rsx! {
         header { class: "semantic-ui__header",
             div { class: "semantic-ui__identity",
-                SemanticBrand {}
+                div { class: "semantic-ui__brand-row",
+                    SemanticBrand {}
+                    if sidebar_toggle {
+                        SidebarToggle {}
+                    }
+                }
                 GlobalSearch { expanded: true }
             }
             div { class: "semantic-ui__header-actions",
@@ -141,7 +154,7 @@ pub fn PrimaryNav(#[props(default)] mobile: bool) -> Element {
         }
         if !mobile || menu_open() {
             nav {
-                id: if mobile { MOBILE_NAV_ID } else { "semantic-sidebar-navigation" },
+                id: if mobile { MOBILE_NAV_ID } else { SIDEBAR_NAV_ID },
                 class: if mobile { "semantic-primary-nav semantic-primary-nav--drawer" } else { "semantic-primary-nav semantic-primary-nav--sidebar" },
                 aria_label: "Primary navigation",
                 tabindex: if mobile { Some("-1") } else { None },
@@ -240,9 +253,10 @@ fn NewMenu() -> Element {
             dxcomp::DropdownMenuTrigger {
                 class: "semantic-new-menu__trigger",
                 "data-active": active,
+                "data-tooltip": "New",
                 aria_haspopup: "menu",
                 span { aria_hidden: "true", "+" }
-                "New"
+                span { class: "semantic-new-menu__label", "New" }
             }
             dxcomp::DropdownMenuContent {
                 id: "semantic-new-menu-options",
@@ -295,10 +309,11 @@ fn PrimaryNavLink(
                 "data-style": "ghost",
                 "data-size": "default",
                 "data-active": active,
+                "data-tooltip": label,
                 aria_current: active.then_some("page"),
                 onclick: move |_| on_navigate.call(()),
                 span { class: "semantic-primary-nav__icon", aria_hidden: "true", {icon} }
-                span { "{label}" }
+                span { class: "semantic-primary-nav__label", "{label}" }
             }
         }
     }

@@ -8,6 +8,7 @@ mod global_search;
 mod page_header;
 mod query_builder;
 mod shell;
+mod sidebar;
 mod upload_primitives;
 
 pub use action_primitives::{

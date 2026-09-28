@@ -82,6 +82,8 @@
   --semantic-content-width-narrow: 760px;
   --semantic-header-height: 68px;
   --semantic-sidebar-width: 218px;
+  --semantic-sidebar-rail-width: 60px;
+  --semantic-sidebar-transition: 200ms var(--semantic-transition-easing);
   --semantic-safe-top: env(safe-area-inset-top, 0px);
   --semantic-safe-right: env(safe-area-inset-right, 0px);
   --semantic-safe-bottom: env(safe-area-inset-bottom, 0px);
@@ -7284,5 +7286,232 @@ html:has(.semantic-note-form) {
     border-radius: var(--semantic-radius-lg);
     background: var(--semantic-surface);
     box-shadow: var(--semantic-shadow-2);
+  }
+}
+
+
+/* Collapsible desktop sidebar. Below the desktop breakpoint navigation lives
+   in the header drawer, so the toggle and the collapsed rail are desktop-only. */
+.semantic-ui__brand-row {
+  display: contents;
+}
+
+.semantic-sidebar-toggle {
+  display: none;
+}
+
+@media (min-width: 861px) {
+  .semantic-ui[data-sidebar="collapsed"] {
+    --semantic-sidebar-width: var(--semantic-sidebar-rail-width);
+  }
+
+  .semantic-ui > .semantic-ui__header .semantic-ui__brand-row {
+    display: flex;
+    min-width: 0;
+    align-items: center;
+    gap: var(--semantic-space-1);
+  }
+
+  .semantic-ui > .semantic-ui__header .semantic-ui__brand {
+    flex: 1 1 auto;
+    min-width: 0;
+  }
+
+  .semantic-ui > .semantic-ui__header .semantic-ui__brand-name {
+    min-width: 0;
+    overflow: hidden;
+    white-space: nowrap;
+  }
+
+  .semantic-sidebar-toggle {
+    position: relative;
+    display: inline-grid;
+    flex: 0 0 auto;
+    width: 30px;
+    height: 30px;
+    place-items: center;
+    padding: 0;
+    border: 0;
+    border-radius: 8px;
+    background: transparent;
+    color: var(--semantic-color-text-subtle);
+    cursor: pointer;
+    transition:
+      background var(--semantic-transition-fast),
+      color var(--semantic-transition-fast),
+      opacity var(--semantic-transition-fast);
+  }
+
+  .semantic-sidebar-toggle:hover {
+    background: var(--semantic-color-hover);
+    color: var(--semantic-text);
+  }
+
+  .semantic-sidebar-toggle:focus-visible {
+    outline: none;
+    box-shadow: var(--semantic-focus-ring);
+    color: var(--semantic-text);
+  }
+
+  .semantic-ui__sidebar .semantic-primary-nav__link,
+  .semantic-ui > .semantic-ui__header .semantic-icon-button,
+  .semantic-ui > .semantic-ui__header .semantic-new-menu__trigger {
+    white-space: nowrap;
+  }
+
+  .semantic-ui__sidebar {
+    overflow-x: hidden;
+  }
+
+  /* Width changes only animate after an explicit toggle, so restoring the
+     stored preference on load does not replay the transition. */
+  .semantic-ui[data-sidebar-animate] > .semantic-ui__layout {
+    transition: grid-template-columns var(--semantic-sidebar-transition);
+  }
+
+  .semantic-ui[data-sidebar-animate] > .semantic-ui__header {
+    transition: width var(--semantic-sidebar-transition);
+  }
+
+  .semantic-ui[data-sidebar-animate][data-sidebar="expanded"] :is(.semantic-ui__header, .semantic-ui__sidebar) :is(
+    .semantic-ui__brand-name,
+    .semantic-sidebar-toggle,
+    .semantic-icon-button > span,
+    .semantic-icon-button > kbd,
+    .semantic-new-menu__label,
+    .semantic-primary-nav__label
+  ) {
+    animation: semantic-sidebar-label-in var(--semantic-sidebar-transition) 90ms both;
+  }
+
+  /* Collapsed icon rail. Labels stay available to assistive technology. */
+  .semantic-ui[data-sidebar="collapsed"] > .semantic-ui__header .semantic-ui__brand-row {
+    display: grid;
+    place-items: center;
+  }
+
+  .semantic-ui[data-sidebar="collapsed"] > .semantic-ui__header .semantic-ui__brand-row > * {
+    grid-area: 1 / 1;
+  }
+
+  .semantic-ui[data-sidebar="collapsed"] > .semantic-ui__header .semantic-ui__brand {
+    transition: opacity var(--semantic-transition-fast);
+  }
+
+  .semantic-ui[data-sidebar="collapsed"] .semantic-ui__brand-name,
+  .semantic-ui[data-sidebar="collapsed"] > .semantic-ui__header .semantic-icon-button > :is(span, kbd) {
+    display: none;
+  }
+
+  /* The expand control replaces the brand mark on hover or keyboard focus. */
+  .semantic-ui[data-sidebar="collapsed"] .semantic-sidebar-toggle {
+    z-index: 1;
+    width: 34px;
+    height: 34px;
+    background: var(--semantic-color-hover);
+    color: var(--semantic-text);
+    opacity: 0;
+  }
+
+  .semantic-ui[data-sidebar="collapsed"] .semantic-ui__brand-row:hover .semantic-sidebar-toggle,
+  .semantic-ui[data-sidebar="collapsed"] .semantic-sidebar-toggle:focus-visible {
+    opacity: 1;
+  }
+
+  .semantic-ui[data-sidebar="collapsed"] .semantic-ui__brand-row:hover .semantic-ui__brand,
+  .semantic-ui[data-sidebar="collapsed"] .semantic-ui__brand-row:has(.semantic-sidebar-toggle:focus-visible) .semantic-ui__brand {
+    opacity: 0;
+  }
+
+  .semantic-ui[data-sidebar="collapsed"] > .semantic-ui__header .semantic-icon-button {
+    justify-content: center;
+    padding-inline: 0;
+  }
+
+  .semantic-ui[data-sidebar="collapsed"] > .semantic-ui__header .semantic-new-menu__trigger {
+    padding-inline: 0;
+    font-size: 18px;
+  }
+
+  .semantic-ui[data-sidebar="collapsed"] > .semantic-ui__header .semantic-new-menu__options {
+    width: max-content;
+    min-width: 200px;
+  }
+
+  .semantic-ui[data-sidebar="collapsed"] .semantic-ui__sidebar {
+    z-index: 25;
+    overflow: visible;
+  }
+
+  .semantic-ui[data-sidebar="collapsed"] .semantic-ui__sidebar .semantic-primary-nav__link {
+    padding-inline: 8px;
+  }
+
+  .semantic-ui[data-sidebar="collapsed"] :is(.semantic-primary-nav__label, .semantic-new-menu__label) {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    margin: -1px;
+    overflow: hidden;
+    clip: rect(0 0 0 0);
+    white-space: nowrap;
+  }
+
+  /* Tooltips name icon-only controls. Hover waits briefly so sweeping the
+     pointer across the rail stays quiet; keyboard focus shows immediately. */
+  .semantic-ui[data-sidebar="collapsed"] .semantic-ui__sidebar .semantic-primary-nav__link,
+  .semantic-ui[data-sidebar="collapsed"] > .semantic-ui__header .semantic-new-menu__trigger {
+    position: relative;
+  }
+
+  .semantic-sidebar-toggle::after,
+  .semantic-ui[data-sidebar="collapsed"] .semantic-ui__sidebar .semantic-primary-nav__link::after,
+  .semantic-ui[data-sidebar="collapsed"] > .semantic-ui__header .semantic-new-menu__trigger::after {
+    content: attr(data-tooltip);
+    position: absolute;
+    z-index: 50;
+    top: 50%;
+    left: calc(100% + 16px);
+    padding: 5px 8px;
+    border-radius: 6px;
+    background: var(--semantic-text);
+    box-shadow: var(--semantic-shadow-2);
+    color: var(--semantic-surface);
+    font-size: var(--semantic-font-size-caption);
+    font-weight: 560;
+    line-height: 1.3;
+    white-space: nowrap;
+    opacity: 0;
+    pointer-events: none;
+    transform: translate(-4px, -50%);
+    transition:
+      opacity var(--semantic-transition-fast),
+      transform var(--semantic-transition-fast);
+  }
+
+  .semantic-sidebar-toggle:hover::after,
+  .semantic-ui[data-sidebar="collapsed"] .semantic-ui__sidebar .semantic-primary-nav__link:hover::after,
+  .semantic-ui[data-sidebar="collapsed"] > .semantic-ui__header .semantic-new-menu__trigger:hover::after {
+    opacity: 1;
+    transform: translate(0, -50%);
+    transition-delay: 400ms;
+  }
+
+  .semantic-sidebar-toggle:focus-visible::after,
+  .semantic-ui[data-sidebar="collapsed"] .semantic-ui__sidebar .semantic-primary-nav__link:focus-visible::after,
+  .semantic-ui[data-sidebar="collapsed"] > .semantic-ui__header .semantic-new-menu__trigger:focus-visible::after {
+    opacity: 1;
+    transform: translate(0, -50%);
+    transition-delay: 0ms;
+  }
+}
+
+@keyframes semantic-sidebar-label-in {
+  from {
+    opacity: 0;
+  }
+
+  to {
+    opacity: 1;
   }
 }
