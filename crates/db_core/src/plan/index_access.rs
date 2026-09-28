@@ -6,7 +6,8 @@
 //!
 //! - comparisons (`<`, `<=`, `>`, `>=`, `BETWEEN`) and string prefixes
 //!   (`LIKE 'abc%'`, `~ '^abc'`) on range indexes,
-//! - `IN` lists (one probe per value) on equality and range indexes,
+//! - `IN` lists and same-field equality disjunctions (one probe per distinct
+//!   value) on equality and range indexes,
 //! - composite indexes: equality on leading columns, optionally followed by
 //!   one range column,
 //! - partial indexes, when the query's conjuncts contain every conjunct of
@@ -248,8 +249,58 @@ fn regex_prefix(pattern: &str) -> Option<String> {
     (!prefix.is_empty()).then_some(prefix)
 }
 
+/// Extract a complete equality disjunction as an access constraint. Keeping
+/// the original expression avoids changing missing-value semantics under
+/// `NOT`, `IS NULL`, or in projections by rewriting it into an `IN` expression.
+fn equality_disjunction(conjunct: &Expr) -> Option<Sarg> {
+    let mut pending = vec![conjunct];
+    let mut field = None;
+    let mut values = BTreeSet::new();
+    while let Some(expr) = pending.pop() {
+        match expr {
+            Expr::Binary {
+                op: BinaryOp::Or,
+                left,
+                right,
+            } => {
+                pending.push(right.as_ref());
+                pending.push(left.as_ref());
+            }
+            Expr::Binary {
+                op: BinaryOp::Eq,
+                left,
+                right,
+            } => {
+                let (next_field, value) = match (top_level_field(left), literal(right)) {
+                    (Some(field), Some(value)) => (field, value),
+                    _ => (top_level_field(right)?, literal(left)?),
+                };
+                if field.is_some_and(|field| field != next_field) {
+                    return None;
+                }
+                field = Some(next_field);
+                values.insert(value);
+                // Count distinct values, so repeated branches do not use up
+                // the probe budget. Never plan only part of a disjunction.
+                if values.len() > MAX_PROBES {
+                    return None;
+                }
+            }
+            _ => return None,
+        }
+    }
+    Some(Sarg {
+        field: field?.to_string(),
+        exact: values.iter().all(|value| is_exact_value(value)),
+        term: in_term(values.into_iter().cloned().collect()),
+    })
+}
+
 fn sargable(conjunct: &Expr) -> Option<Sarg> {
     match conjunct {
+        Expr::Binary {
+            op: BinaryOp::Or, ..
+        } => equality_disjunction(conjunct),
         Expr::Binary { op, left, right } => {
             let (field, op, value) = match (top_level_field(left), literal(right)) {
                 (Some(field), Some(value)) => (field, *op, value),
@@ -654,7 +705,11 @@ impl Candidate<'_> {
 
     /// Estimated cost of reading the matching entries and their rows.
     fn cost(&self) -> f64 {
-        self.entries * self.selectivity + (self.entries + 1.0).log2()
+        self.entries * self.selectivity + self.seek_cost()
+    }
+
+    fn seek_cost(&self) -> f64 {
+        self.prefixes.len() as f64 * (self.entries + 1.0).log2()
     }
 
     fn ranges(&self) -> Vec<IndexScanRange> {
@@ -748,7 +803,7 @@ fn best_unordered<'a>(request: &AccessRequest<'a>) -> Option<Candidate<'a>> {
         .candidates()
         .into_iter()
         .filter(|candidate| candidate.constrains_first_column())
-        .filter(|candidate| !is_plain_lookup(candidate))
+        .filter(|candidate| !is_plain_lookup(candidate, &request.conjuncts))
         .min_by(|a, b| {
             a.cost()
                 .total_cmp(&b.cost())
@@ -758,11 +813,22 @@ fn best_unordered<'a>(request: &AccessRequest<'a>) -> Option<Candidate<'a>> {
 }
 
 /// A single equality on a simple equality index, served by `IndexLookup`.
-fn is_plain_lookup(candidate: &Candidate<'_>) -> bool {
+fn is_plain_lookup(candidate: &Candidate<'_>, conjuncts: &[Expr]) -> bool {
     candidate.index.schema.kind == IndexKind::Equality
         && candidate.index.is_simple()
         && candidate.prefixes.len() == 1
         && candidate.range.is_none()
+        // The lookup extractor only understands ordinary equality conjuncts.
+        // An OR or IN deduplicated to one value still needs this scan path.
+        && candidate.consumed.iter().all(|position| {
+            matches!(
+                conjuncts[*position],
+                Expr::Binary {
+                    op: BinaryOp::Eq,
+                    ..
+                }
+            )
+        })
 }
 
 /// Choose an index scan producing the rows of `source` matching `predicate`
@@ -815,7 +881,7 @@ pub(crate) fn plan_ordered_index_scan(
             let residual = request.residual_count(&candidate) as i32;
             let hit_rate = RESIDUAL_SELECTIVITY.powi(residual).max(0.001);
             let read = (limit as f64 / hit_rate).min(candidate.entries * candidate.selectivity);
-            let cost = read + (candidate.entries + 1.0).log2();
+            let cost = read + candidate.seek_cost();
             (cost <= unordered_cost).then_some((candidate, direction, cost))
         })
         .min_by(|a, b| a.2.total_cmp(&b.2))
@@ -968,6 +1034,46 @@ fn is_lossless_key_type(kind: &semantic_data::schema::core::type_kind::TypeKind)
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn disjunction(values: impl IntoIterator<Item = Value>) -> Expr {
+        values
+            .into_iter()
+            .map(|value| Expr::Binary {
+                op: BinaryOp::Eq,
+                left: Box::new(Expr::Operand(Operand::Field(FieldPath::from_fields(["n"])))),
+                right: Box::new(Expr::Operand(Operand::Literal(value))),
+            })
+            .reduce(|left, right| Expr::Binary {
+                op: BinaryOp::Or,
+                left: Box::new(left),
+                right: Box::new(right),
+            })
+            .unwrap()
+    }
+
+    #[test]
+    fn equality_disjunction_probe_budget_counts_distinct_values() {
+        let values = (0..MAX_PROBES).map(|value| Value::U64(value as u64));
+        let expr = disjunction(values.clone().chain(values.clone()));
+        let sarg = sargable(&expr).unwrap();
+        assert!(sarg.exact);
+        assert!(matches!(sarg.term, Term::In(actual) if actual == values.collect::<Vec<_>>()));
+
+        let expr = disjunction((0..=MAX_PROBES).map(|value| Value::U64(value as u64)));
+        assert!(sargable(&expr).is_none());
+
+        let expr = disjunction(std::iter::repeat_n(Value::U64(7), MAX_PROBES + 1));
+        assert!(matches!(
+            sargable(&expr).unwrap().term,
+            Term::Eq(Value::U64(7))
+        ));
+    }
+
+    #[test]
+    fn equality_disjunction_with_void_is_not_exact() {
+        let expr = disjunction([Value::Void, Value::I64(7)]);
+        assert!(!sargable(&expr).unwrap().exact);
+    }
 
     #[test]
     fn like_prefixes_stop_at_wildcards() {

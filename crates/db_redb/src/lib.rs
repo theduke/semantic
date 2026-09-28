@@ -982,6 +982,74 @@ mod tests {
         }
     }
 
+    #[test]
+    fn redb_type_disjunction_uses_builtin_index_after_reopen() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("or-index-db");
+        {
+            let engine = RedbKvEngine::open(&path, DbOpenMode::AutoCreate).unwrap();
+            let mut db = RedbDatabase::open(semantic_db_kv::EntityStore::new(engine)).unwrap();
+            db.create_collection("entities", CollectionKind::Polymorphic)
+                .unwrap();
+            db.transact(semantic_db_core::Batch {
+                operations: (0..100)
+                    .map(|index| {
+                        let id = format!("item-{index:03}");
+                        let ty = match index {
+                            3 => "semantic:test:first",
+                            7 => "semantic:test:second",
+                            _ => "semantic:test:unrelated",
+                        };
+                        semantic_db_core::BatchOperation::Upsert {
+                            collection: "entities".into(),
+                            id: id.clone(),
+                            object: Object::from_iter([
+                                ("id".into(), Value::String(id)),
+                                ("type".into(), Value::String(ty.into())),
+                            ]),
+                        }
+                    })
+                    .collect(),
+            })
+            .unwrap();
+        }
+        let engine = RedbKvEngine::open(&path, DbOpenMode::OpenExisting).unwrap();
+        let db = RedbDatabase::open(semantic_db_kv::EntityStore::new(engine)).unwrap();
+        for (predicate, expected_ids) in [
+            (
+                "type = 'semantic:test:first' OR type = 'semantic:test:second' OR type = 'semantic:test:first'",
+                vec!["item-003", "item-007"],
+            ),
+            (
+                "type = 'semantic:test:missing' OR type = 'semantic:test:absent'",
+                vec![],
+            ),
+        ] {
+            let query = semantic_db_core::sql::parse_sql_query(
+                &format!("SELECT * FROM entities WHERE {predicate} FORMAT QUALIFIED"),
+                Default::default(),
+            )
+            .unwrap()
+            .query;
+            let semantic_db_core::Query::Select(query) = query else {
+                panic!("expected SELECT");
+            };
+            let (rows, explain) = db.reader().unwrap().select_analyzed(query, true).unwrap();
+            let mut ids = rows
+                .iter()
+                .map(|row| row.get("id").unwrap().as_str().unwrap())
+                .collect::<Vec<_>>();
+            ids.sort();
+            assert_eq!(ids, expected_ids);
+            let metrics = &explain.analyze.unwrap().metrics;
+            assert_eq!(metrics.rows_scanned, 0, "{}", explain.physical);
+            assert_eq!(metrics.index_probes, 2);
+            assert_eq!(metrics.index_entries_read, rows.len() as u64);
+            assert_eq!(metrics.point_reads, rows.len() as u64);
+            assert_eq!(metrics.rows_decoded, rows.len() as u64);
+        }
+    }
+
     fn eq_predicate(field: &str, value: &str) -> Expr {
         Expr::Binary {
             op: BinaryOp::Eq,

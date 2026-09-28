@@ -148,6 +148,76 @@ fn indexed_lookup_reads_matches_by_id() {
 }
 
 #[test]
+fn type_disjunction_probes_only_distinct_types() {
+    let mut db = EmbeddedDb::in_memory();
+    db.create_collection("entities", CollectionKind::Polymorphic)
+        .unwrap();
+    db.transact(Batch {
+        operations: (0..ROWS)
+            .map(|index| {
+                let mut object = item(index);
+                object.insert("type", Value::String("semantic:test:unrelated".into()));
+                BatchOperation::Upsert {
+                    collection: "entities".into(),
+                    id: format!("item-{index:04}"),
+                    object,
+                }
+            })
+            .collect(),
+    })
+    .unwrap();
+    let query = "SELECT * FROM entities WHERE type = 'semantic:base:label' \
+                 OR type = 'semantic:base:label_group' FORMAT QUALIFIED";
+    let (rows, explain) = analyze(&db, query);
+    assert!(rows.is_empty());
+    let empty = metrics(&explain);
+    assert_eq!(empty.rows_emitted, 0);
+    assert_eq!(empty.rows_scanned, 0, "{}", explain.physical);
+    assert_eq!(empty.rows_decoded, 0);
+    assert_eq!(empty.point_reads, 0);
+    assert_eq!(empty.index_probes, 2);
+    assert_eq!(empty.index_entries_read, 0);
+
+    for (id, ty) in [
+        ("label", "semantic:base:label"),
+        ("group", "semantic:base:label_group"),
+    ] {
+        db.insert(
+            "entities",
+            id,
+            Object::from_iter([
+                ("id".into(), Value::String(id.into())),
+                ("type".into(), Value::String(ty.into())),
+            ]),
+        )
+        .unwrap();
+    }
+    for (query, expected_ids, probes) in [
+        (query, vec!["group", "label"], 2),
+        (
+            "SELECT * FROM entities AS e WHERE e.type = 'semantic:base:label' \
+             OR 'semantic:base:label' = e.type FORMAT QUALIFIED",
+            vec!["label"],
+            1,
+        ),
+    ] {
+        let (rows, explain) = analyze(&db, query);
+        let mut ids = rows
+            .iter()
+            .map(|row| row.get("id").unwrap().as_str().unwrap())
+            .collect::<Vec<_>>();
+        ids.sort();
+        assert_eq!(ids, expected_ids);
+        let matches = metrics(&explain);
+        assert_eq!(matches.rows_scanned, 0, "{}", explain.physical);
+        assert_eq!(matches.index_probes, probes);
+        assert_eq!(matches.index_entries_read, rows.len() as u64);
+        assert_eq!(matches.point_reads, rows.len() as u64);
+        assert_eq!(matches.rows_decoded, rows.len() as u64);
+    }
+}
+
+#[test]
 fn range_scan_reads_only_the_range() {
     let db = populated_db(DbConfig::default());
     let (rows, explain) = analyze(
@@ -223,6 +293,22 @@ fn unordered_limited_index_scans_stop_after_offset_plus_limit_rows() {
     let lookup = metrics(&explain);
     assert_eq!(lookup.rows_scanned, 0, "{}", explain.physical);
     assert_eq!(lookup.point_reads, 1, "{lookup:?}");
+
+    // A disjunction uses multiple probes but still stops after enough rows
+    // pass the residual predicate to satisfy offset + limit.
+    let (rows, explain) = analyze_owned(
+        &db,
+        &format!(
+            "SELECT * FROM {ITEMS} WHERE (code = 'code-7' OR code = 'code-8') \
+             AND owner <> 'a' AND owner <> 'c' LIMIT 1 OFFSET 1"
+        ),
+    );
+    assert_eq!(rows.len(), 1);
+    assert_eq!(rows[0].get("n"), Some(&Value::I64(307)));
+    let disjunction = metrics(&explain);
+    assert_eq!(disjunction.rows_scanned, 0, "{}", explain.physical);
+    assert_eq!(disjunction.point_reads, 4, "{disjunction:?}");
+    assert_eq!(disjunction.index_entries_read, 4, "{disjunction:?}");
 
     // A sort between the limit and the scan needs every row.
     let (rows, explain) = analyze_owned(

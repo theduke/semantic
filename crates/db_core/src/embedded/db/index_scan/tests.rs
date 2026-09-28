@@ -250,6 +250,220 @@ fn range_prefix_and_probe_scans_read_no_collection() {
 }
 
 #[test]
+fn equality_disjunctions_use_ranges_and_preserve_residuals() {
+    let (mut db, counts) = counting_db(300);
+    let lid = db.catalog().collection_by_name(ITEMS).unwrap().lid;
+    db.create_index_definition(IndexDefinition {
+        predicate: Some(semantic_data::query::Expr::Binary {
+            op: BinaryOp::And,
+            left: Box::new(eq_expr("status", Value::String("open".into()))),
+            right: Box::new(eq_expr("owner", Value::String("a".into()))),
+        }),
+        ..definition(lid, "open_a_by_n", &["n"], IndexKind::Range)
+    })
+    .unwrap();
+    let cases = [
+        (
+            "SELECT * FROM $T WHERE (n = 7 OR 3 = n) OR (n = 250 OR n = 7)",
+            "by_n",
+            3,
+            vec![3, 7, 250],
+        ),
+        (
+            "SELECT * FROM $T WHERE status = 'open' OR status = 'missing'",
+            "by_status",
+            2,
+            (0..300).step_by(4).collect(),
+        ),
+        (
+            "SELECT * FROM $T WHERE status = 'open' OR status = 'open'",
+            "by_status",
+            1,
+            (0..300).step_by(4).collect(),
+        ),
+        (
+            "SELECT * FROM $T WHERE status IN ('open', 'open')",
+            "by_status",
+            1,
+            (0..300).step_by(4).collect(),
+        ),
+        (
+            "SELECT * FROM $T WHERE (n = 3 OR n = 7 OR n = 250) AND owner <> 'a'",
+            "by_n",
+            3,
+            vec![7, 250],
+        ),
+        (
+            "SELECT * FROM $T WHERE (owner = 'a' OR owner = 'b') AND n < 7",
+            "by_owner_n",
+            2,
+            vec![0, 1, 3, 4, 6],
+        ),
+        (
+            "SELECT * FROM $T WHERE status = 'open' AND owner = 'a' AND (n = 276 OR n = 288)",
+            "open_a_by_n",
+            2,
+            vec![276, 288],
+        ),
+        (
+            "SELECT * FROM $T WHERE n = 280 OR n = 284",
+            "by_n",
+            2,
+            vec![280, 284],
+        ),
+    ];
+    for (query, expected_index, expected_ranges, expected) in cases {
+        let path = access(&db, query);
+        assert!(
+            matches!(&path, AccessPath::IndexRange { index_name, ranges, .. }
+                if index_name == expected_index && *ranges == expected_ranges),
+            "{query}: {path:?}"
+        );
+        counts.reset();
+        let mut actual = ids(&db.select(select(query)).unwrap());
+        actual.sort();
+        assert_eq!(
+            actual,
+            expected.into_iter().map(item_id).collect::<Vec<_>>()
+        );
+        assert_eq!(counts.collection_scans(), 0, "{query}");
+    }
+}
+
+#[test]
+fn equality_disjunctions_bind_parameters_before_planning() {
+    let (db, counts) = counting_db(100);
+    let query = crate::sql::parse_sql_query_with_params(
+        &format!("SELECT * FROM {ITEMS} AS i WHERE i.n = :a OR :b = i.n OR i.n = :a"),
+        Default::default(),
+        &BTreeMap::from([("a".into(), Value::I64(7)), ("b".into(), Value::I64(3))]),
+    )
+    .unwrap()
+    .query;
+    let path = db.explain_query(query.clone()).unwrap().access_path;
+    assert!(matches!(path, AccessPath::IndexRange { ranges: 2, .. }));
+    let Query::Select(query) = query else {
+        panic!("expected SELECT");
+    };
+    counts.reset();
+    let mut actual = ids(&db.select(query).unwrap());
+    actual.sort();
+    assert_eq!(actual, [item_id(3), item_id(7)]);
+    assert_eq!(counts.collection_scans(), 0);
+    assert_eq!(counts.entity_gets(), 2);
+}
+
+#[test]
+fn equality_disjunctions_resolve_field_aliases_before_planning() {
+    let (mut db, counts) = counting_db(100);
+    let lid = db.catalog().collection_by_name(ITEMS).unwrap().lid;
+    db.create_index_definition(definition(lid, "by_name", &["name"], IndexKind::Equality))
+        .unwrap();
+    for (index, name) in [(3, "first"), (7, "second")] {
+        let mut object = item(index);
+        object.insert("name", Value::String(name.into()));
+        db.insert(ITEMS, &item_id(index), object).unwrap();
+    }
+    let query = "SELECT * FROM $T WHERE name = 'first' OR \"semantic:name\" = 'second'";
+    let path = access(&db, query);
+    assert_eq!(index_name(&path), Some("by_name"), "{path:?}");
+    counts.reset();
+    let mut actual = ids(&db.select(select(query)).unwrap());
+    actual.sort();
+    assert_eq!(actual, [item_id(3), item_id(7)]);
+    assert_eq!(counts.collection_scans(), 0);
+    assert_eq!(counts.entity_gets(), 2);
+}
+
+#[test]
+fn equality_disjunctions_preserve_filter_semantics() {
+    let (mut db, counts) = counting_db(100);
+    // Exercise absent and explicit null fields as well as ordinary values.
+    for (index, value) in [(100, None), (101, Some(Value::Null))] {
+        let mut object = item(index);
+        object.remove("n");
+        if let Some(value) = value {
+            object.insert("n", value);
+        }
+        db.insert(ITEMS, &item_id(index), object).unwrap();
+    }
+    let all_rows = db.select(select("SELECT * FROM $T")).unwrap();
+    for (predicate, indexed) in [
+        ("n = 3 OR n = 7", true),
+        ("n = NULL OR n = 7", true),
+        ("n = 3 OR owner = 'b'", false),
+        ("n = 3 OR n > 97", false),
+        ("n = 3 OR n = n", false),
+        ("n = 3 OR (n = 7 AND owner = 'b')", false),
+        ("NOT (n = 3 OR n = 7)", false),
+        ("(n = 3 OR n = 7) IS NULL", false),
+    ] {
+        let query = select(&format!("SELECT * FROM $T WHERE {predicate}"));
+        let predicate_expr = query.predicate.as_ref().unwrap();
+        let mut expected = ids(&all_rows
+            .iter()
+            .filter(|row| crate::query::evaluate_filter_expr(*row, predicate_expr))
+            .cloned()
+            .collect::<Vec<_>>());
+        expected.sort();
+        counts.reset();
+        let mut actual = ids(&db.select(query).unwrap());
+        actual.sort();
+        assert_eq!(actual, expected, "{predicate}");
+        assert_eq!(counts.collection_scans() == 0, indexed, "{predicate}");
+    }
+    // Projection evaluation must retain the original OR semantics too.
+    let projected = db
+        .select(select(
+            "SELECT id, (n = 3 OR n = 7) AS matched FROM $T ORDER BY id",
+        ))
+        .unwrap();
+    let expr = select("SELECT * FROM $T WHERE n = 3 OR n = 7")
+        .predicate
+        .unwrap();
+    for row in projected {
+        let original = all_rows
+            .iter()
+            .find(|original| original.get("id") == row.get("id"))
+            .unwrap();
+        let expected = crate::query::evaluate_expr(original, &expr);
+        assert_eq!(row.get("matched"), expected.as_ref());
+    }
+}
+
+#[test]
+fn equality_disjunction_ordering_respects_composite_prefixes() {
+    let (db, _) = counting_db(300);
+    for (order, ordered) in [("owner, n", true), ("n", false)] {
+        let query = format!(
+            "SELECT * FROM $T WHERE (owner = 'b' OR owner = 'a') AND n < 7 ORDER BY {order}"
+        );
+        let path = access(&db, &query);
+        assert!(
+            matches!(&path, AccessPath::IndexRange { ordered: actual, index_name, .. }
+                if *actual == ordered && index_name == "by_owner_n"),
+            "{query}: {path:?}"
+        );
+        let expected = if ordered {
+            vec![0, 3, 6, 1, 4]
+        } else {
+            vec![0, 1, 3, 4, 6]
+        };
+        assert_eq!(
+            ids(&db.select(select(&query)).unwrap()),
+            expected.into_iter().map(item_id).collect::<Vec<_>>()
+        );
+    }
+    let rows = db
+        .select(select(
+            "SELECT * FROM $T WHERE (owner = 'a' OR owner = 'b') AND n < 7 \
+             ORDER BY owner DESC, n DESC LIMIT 3 OFFSET 1",
+        ))
+        .unwrap();
+    assert_eq!(ids(&rows), [1, 6, 3].map(item_id));
+}
+
+#[test]
 fn ordered_scans_replace_the_sort_and_stop_at_the_limit() {
     let (db, counts) = counting_db(500);
     let query = "SELECT * FROM $T ORDER BY n DESC LIMIT 3";
@@ -450,6 +664,23 @@ fn predicate_mutations_locate_rows_through_ranges() {
     );
     let rows = db.select(select("SELECT * FROM $T WHERE n > 490")).unwrap();
     assert_eq!(rows.len(), 4);
+
+    counts.reset();
+    let deleted = db
+        .delete_where(
+            DeleteQuery::new().with_collection(ITEMS).with_predicate(
+                select("SELECT * FROM $T WHERE n = 491 OR n = 494 OR n = 491")
+                    .predicate
+                    .unwrap(),
+            ),
+        )
+        .unwrap();
+    assert_eq!(deleted, 2);
+    assert_eq!(counts.collection_scans(), 0);
+    assert_eq!(
+        ids(&db.select(select("SELECT * FROM $T WHERE n > 490")).unwrap()),
+        [item_id(492), item_id(493)]
+    );
 }
 
 #[test]
