@@ -3,13 +3,17 @@ use semantic_data::schema::{Meta, Migration, MigrationDdlOperation, MigrationOpe
 
 use crate::{
     bundle::MODULE_NAME,
-    schema::{common, notes, web_bookmark},
+    schema::{common, web_bookmark},
 };
+
+mod notes_v1;
+mod notes_v2;
 
 pub const INIT_MIGRATION_NAME: &str = "001_init";
 pub const NOTES_MIGRATION_NAME: &str = "003_notes";
 pub const WEB_BOOKMARK_MIGRATION_NAME: &str = "004_web_bookmark";
 pub const WEB_BOOKMARK_TITLE_MIGRATION_NAME: &str = "005_web_bookmark_title";
+pub const NOTE_MARKDOWN_DEFAULT_MIGRATION_NAME: &str = "011_note_markdown_default";
 
 pub fn web_bookmark_migration() -> Migration {
     // Preserve the definition already recorded by existing databases.
@@ -61,7 +65,22 @@ pub fn all() -> Vec<Migration> {
     migrations.push(creatable_in_ui_migration());
     migrations.push(label_creatable_in_ui_migration());
     migrations.push(semantic_data::bundles::shared::migration_v1());
+    migrations.push(note_markdown_default_migration());
     migrations
+}
+
+pub fn note_markdown_default_migration() -> Migration {
+    Migration {
+        module: MODULE_NAME.to_string(),
+        name: NOTE_MARKDOWN_DEFAULT_MIGRATION_NAME.to_string(),
+        description: Some("Default new notes to Markdown format.".to_string()),
+        operations: vec![MigrationOperation::Ddl(
+            MigrationDdlOperation::UpsertClass {
+                class: notes_v2::class(),
+            },
+        )],
+        meta: Meta::default(),
+    }
 }
 
 pub fn web_bookmark_title_migration() -> Migration {
@@ -81,7 +100,7 @@ pub fn web_bookmark_title_migration() -> Migration {
 pub fn notes_migration() -> Migration {
     let mut operations = Vec::new();
 
-    for attribute in notes::attributes() {
+    for attribute in notes_v1::attributes() {
         operations.push(MigrationOperation::Ddl(
             MigrationDdlOperation::UpsertAttribute { attribute },
         ));
@@ -89,7 +108,7 @@ pub fn notes_migration() -> Migration {
 
     operations.push(MigrationOperation::Ddl(
         MigrationDdlOperation::UpsertClass {
-            class: notes::class(),
+            class: notes_v1::class(),
         },
     ));
 

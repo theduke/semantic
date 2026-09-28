@@ -18,7 +18,6 @@ use super::{ConfirmActionRequest, UnsavedChangesPrompt};
 
 static ENTITY_CREATE_ID_SEQUENCE: AtomicU32 = AtomicU32::new(0);
 const NOTE_CLASS_ID: &str = "semantic:base:note";
-const NOTE_FORMAT_ATTRIBUTE_ID: &str = "semantic:base:note:note_format";
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct EntityCreateFailure {
@@ -238,7 +237,6 @@ pub fn EntityCreateForm(
                     Value::Object(object) => object,
                     _ => Object::new(),
                 };
-                initialize_note_format(&class.id, &mut object);
                 object.insert("type", Value::String(class.id.clone()));
                 object.insert(primary_id_field.clone(), Value::String(draft_id()));
                 let outcome_collection = collection.clone();
@@ -326,44 +324,6 @@ pub fn EntityCreateForm(
                 request.complete(Ok(()));
             },
         }
-    }
-}
-
-fn initialize_note_format(class_id: &str, object: &mut Object) {
-    if class_id == NOTE_CLASS_ID
-        && !matches!(object.get(NOTE_FORMAT_ATTRIBUTE_ID), Some(Value::String(value)) if !value.is_empty())
-    {
-        object.insert(NOTE_FORMAT_ATTRIBUTE_ID, Value::String("text".to_string()));
-    }
-}
-
-#[cfg(test)]
-mod note_tests {
-    use super::*;
-
-    #[test]
-    fn note_draft_starts_with_the_format_shown_by_its_selector() {
-        let mut note = Object::new();
-        note.insert(NOTE_FORMAT_ATTRIBUTE_ID, Value::Null);
-        initialize_note_format(NOTE_CLASS_ID, &mut note);
-        assert_eq!(
-            note.get(NOTE_FORMAT_ATTRIBUTE_ID),
-            Some(&Value::String("text".to_string()))
-        );
-
-        note.insert(
-            NOTE_FORMAT_ATTRIBUTE_ID,
-            Value::String("markdown".to_string()),
-        );
-        initialize_note_format(NOTE_CLASS_ID, &mut note);
-        assert_eq!(
-            note.get(NOTE_FORMAT_ATTRIBUTE_ID),
-            Some(&Value::String("markdown".to_string()))
-        );
-
-        let mut other = Object::new();
-        initialize_note_format("semantic:base:other", &mut other);
-        assert!(!other.contains_key(NOTE_FORMAT_ATTRIBUTE_ID));
     }
 }
 

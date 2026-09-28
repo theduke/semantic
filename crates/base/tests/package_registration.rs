@@ -47,6 +47,24 @@ fn legacy_default_packages_upgrade_shared_ownership_once() {
         let mut legacy = current.clone();
         legacy.modules.clear();
         legacy.migrations.truncate(9);
+        if current.name == semantic_base::PACKAGE_NAME {
+            let old_note_class = legacy.migrations[2]
+                .operations
+                .iter()
+                .find_map(|operation| match operation {
+                    MigrationOperation::Ddl(MigrationDdlOperation::UpsertClass { class })
+                        if class.id == semantic_base::schema::notes::CLASS_ID =>
+                    {
+                        Some(class.clone())
+                    }
+                    _ => None,
+                })
+                .expect("legacy Note migration defines the Note class");
+            legacy
+                .root
+                .classes
+                .insert(old_note_class.id.clone(), old_note_class);
+        }
         for operation in legacy
             .migrations
             .iter()
@@ -68,10 +86,17 @@ fn legacy_default_packages_upgrade_shared_ownership_once() {
     let mut db = EmbeddedDb::open(storage).unwrap();
     for current in &packages {
         let outcome = db.upsert_package(current.clone()).unwrap();
-        assert_eq!(outcome.executed_migrations.len(), 1);
+        let mut expected = vec![semantic_data::bundles::shared::migration_v1()];
+        if current.name == semantic_base::PACKAGE_NAME {
+            expected.push(semantic_base::migrations::note_markdown_default_migration());
+        }
         assert_eq!(
-            outcome.executed_migrations[0].migration,
-            semantic_data::bundles::shared::migration_v1()
+            outcome
+                .executed_migrations
+                .iter()
+                .map(|entry| entry.migration.clone())
+                .collect::<Vec<_>>(),
+            expected
         );
     }
     let (_, storage) = db.into_parts();

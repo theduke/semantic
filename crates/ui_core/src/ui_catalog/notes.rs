@@ -218,13 +218,14 @@ fn render_note_format_form(ctx: AttributeFormRenderContext) -> Element {
         Value::String(value) if value == FORMAT_MARKDOWN => FORMAT_MARKDOWN.to_string(),
         _ => FORMAT_TEXT.to_string(),
     };
+    let markdown_selected = value == FORMAT_MARKDOWN;
     rsx! {
         select {
             class: "semantic-form__select",
             value,
             onchange: move |event| field.set_value(Value::String(event.value())),
-            option { value: FORMAT_TEXT, "Text" }
-            option { value: FORMAT_MARKDOWN, "Markdown" }
+            option { value: FORMAT_TEXT, selected: !markdown_selected, "Text" }
+            option { value: FORMAT_MARKDOWN, selected: markdown_selected, "Markdown" }
         }
     }
 }

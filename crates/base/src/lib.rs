@@ -37,7 +37,7 @@ mod tests {
         assert_eq!(package.root.name, bundle::MODULE_NAME);
         let shared = &package.modules[semantic_data::bundles::shared::MODULE_NAME];
         assert_eq!(package.modules.len(), 1);
-        assert_eq!(package.migrations.len(), 10);
+        assert_eq!(package.migrations.len(), 11);
         assert_eq!(package.migrations[0].name, migrations::INIT_MIGRATION_NAME);
         assert_eq!(package.migrations[2].name, migrations::NOTES_MIGRATION_NAME);
 
@@ -101,6 +101,39 @@ mod tests {
     #[test]
     fn migrations_validate_against_package_schema() {
         semantic_db_core::validate_package_migrations(&bundle::package()).unwrap();
+    }
+
+    #[test]
+    fn note_markdown_default_is_a_forward_migration() {
+        let original = migrations::notes_migration();
+        let MigrationOperation::Ddl(MigrationDdlOperation::UpsertClass { class: old_class }) =
+            original.operations.last().unwrap()
+        else {
+            panic!("expected original Note class");
+        };
+        assert_eq!(old_class.attributes["note_format"].default, None);
+        assert_eq!(
+            old_class.attributes["note_format"].attribute.id,
+            notes::ATTR_NOTE_FORMAT
+        );
+
+        let updated = migrations::note_markdown_default_migration();
+        assert_eq!(
+            updated.name,
+            migrations::NOTE_MARKDOWN_DEFAULT_MIGRATION_NAME
+        );
+        assert_eq!(
+            updated.operations,
+            vec![MigrationOperation::Ddl(
+                MigrationDdlOperation::UpsertClass {
+                    class: notes::class()
+                }
+            )]
+        );
+        assert_eq!(
+            crate::package().migrations.last().unwrap().name,
+            migrations::NOTE_MARKDOWN_DEFAULT_MIGRATION_NAME
+        );
     }
 
     #[test]

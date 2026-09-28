@@ -6,7 +6,8 @@ use semantic_data::schema::{
 };
 use semantic_data::{
     attr::{ATTR_CREATED_AT, ATTR_TITLE, ATTR_UPDATED_AT},
-    expr::{CallExpr, Callee, Expr},
+    expr::{CallExpr, Callee, Expr, LiteralExpr},
+    value::Value,
 };
 
 use super::common::helpers;
@@ -35,10 +36,7 @@ pub fn class() -> ClassType {
         creatable_in_ui: None,
         attributes: BTreeMap::from([
             ("title".to_string(), class_attribute(ATTR_TITLE, false, 5)),
-            (
-                "note_format".to_string(),
-                class_attribute(ATTR_NOTE_FORMAT, true, 10),
-            ),
+            ("note_format".to_string(), note_format_class_attribute()),
             (
                 "note_content".to_string(),
                 class_attribute(ATTR_NOTE_CONTENT, true, 20),
@@ -55,6 +53,14 @@ pub fn class() -> ClassType {
         constraints: Vec::new(),
         meta: helpers::meta_with_title("Note"),
     }
+}
+
+fn note_format_class_attribute() -> ClassAttribute {
+    let mut field = class_attribute(ATTR_NOTE_FORMAT, true, 10);
+    field.default = Some(Expr::Literal(LiteralExpr {
+        value: Value::String(FORMAT_MARKDOWN.to_string()),
+    }));
+    field
 }
 
 pub fn note_format_attribute() -> AttributeType {
@@ -126,8 +132,11 @@ fn enum_variant(name: &str) -> EnumVariant {
 
 #[cfg(test)]
 mod tests {
-    use semantic_data::expr::{Callee, Expr};
     use semantic_data::schema::{EnumRepr, TypeKind};
+    use semantic_data::{
+        expr::{Callee, Expr},
+        value::Value,
+    };
 
     use super::{
         ATTR_CREATED_AT, ATTR_NOTE_CONTENT, ATTR_NOTE_FORMAT, ATTR_TITLE, ATTR_UPDATED_AT,
@@ -166,6 +175,12 @@ mod tests {
             ATTR_NOTE_CONTENT
         );
         assert!(class.attributes["note_format"].required);
+        assert_eq!(
+            class.attributes["note_format"].default,
+            Some(Expr::Literal(semantic_data::expr::LiteralExpr {
+                value: Value::String(FORMAT_MARKDOWN.to_string()),
+            }))
+        );
         assert!(class.attributes["note_content"].required);
         assert!(!class.attributes["title"].required);
 
