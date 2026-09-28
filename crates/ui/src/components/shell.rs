@@ -2,7 +2,7 @@ use dioxus::prelude::*;
 use dioxus_icons::lucide::{CirclePlay, Database, FolderTree, House, LayoutGrid, ListTodo, Tags};
 
 use super::GlobalSearch;
-use crate::views::Route;
+use crate::{navigation_guard::NavigationGuardPrompt, views::Route};
 
 const MAIN_CONTENT_ID: &str = "semantic-main-content";
 const MOBILE_NAV_ID: &str = "semantic-mobile-navigation";
@@ -40,6 +40,7 @@ pub fn AppFrame(#[props(default)] variant: AppFrameVariant, children: Element) -
                 main { id: MAIN_CONTENT_ID, class: main_class, tabindex: "-1", {children} }
             }
         }
+        NavigationGuardPrompt {}
     }
 }
 

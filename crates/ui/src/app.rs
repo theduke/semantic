@@ -14,7 +14,7 @@ use semantic_ui_core::{
 const CORE_STYLES: Asset = asset!("/assets/core_styles.css");
 const FAVICON: Asset = asset!("/assets/favicon.svg");
 
-use crate::views::Route;
+use crate::{navigation_guard::use_navigation_guard_provider, views::Route};
 
 thread_local! {
     static BOOT: RefCell<Option<AppRootProps>> = const { RefCell::new(None) };
@@ -120,6 +120,7 @@ fn boot_app() -> Element {
 pub fn AppRoot(props: AppRootProps) -> Element {
     provide_rpc_client(props.client);
     provide_ui_scope_context(props.initial_scope_id);
+    use_navigation_guard_provider();
     let detail_return_target = use_signal(|| None);
     use_context_provider(|| EntityEditNavigation {
         detail_return_target,

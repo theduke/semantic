@@ -99,10 +99,18 @@ pub fn DynamicValueForm(
     #[props(default)] on_submitting_change: Option<EventHandler<bool>>,
     #[props(default)] on_submit_success: Option<EventHandler<SemanticFormSubmitOutcome>>,
     #[props(default)] on_submit_failure: Option<EventHandler<SemanticFormSubmitFailure>>,
+    /// Receives the form handle once on mount, e.g. to submit it from outside the form.
+    #[props(default)]
+    on_form_ready: Option<EventHandler<FormRoot<Value>>>,
 ) -> Element {
     let catalog = use_ui_catalog();
     let form_options = build_value_form_options(&options);
     let form = use_form_with_options(move || form_options);
+    use_hook(|| {
+        if let Some(on_form_ready) = on_form_ready {
+            on_form_ready.call(form.clone());
+        }
+    });
     let scope = use_form_scope_from_root(form.clone());
     provide_semantic_form_root(form.clone());
     provide_semantic_form_scope(scope.clone());

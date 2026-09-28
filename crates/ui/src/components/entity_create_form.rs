@@ -7,7 +7,7 @@ use semantic_data::{
     value::{Object, Value},
 };
 use semantic_ui_core::{
-    DynamicClassForm, SemanticFormMode, SemanticFormSubmit, UiCatalog,
+    DynamicClassForm, FormRoot, SemanticFormMode, SemanticFormSubmit, UiCatalog,
     components::{EmptyState, LoadingSkeleton},
     default_value_for_class,
     form::{SemanticFormActionLabels, SemanticFormSubmitFailure, SemanticFormSubmitOutcome},
@@ -48,6 +48,7 @@ pub fn EntityCreateForm(
     #[props(default)] on_submitting_change: Option<EventHandler<bool>>,
     #[props(default)] on_collection_change: Option<EventHandler<String>>,
     #[props(default)] on_failure: Option<EventHandler<EntityCreateFailure>>,
+    #[props(default)] on_form_ready: Option<EventHandler<FormRoot<Value>>>,
 ) -> Element {
     let scope_id = use_active_scope_id();
     let catalog = use_ui_catalog();
@@ -259,6 +260,7 @@ pub fn EntityCreateForm(
                             scope_id,
                             submit: Some(submit),
                             action_labels,
+                            on_form_ready,
                             on_dirty_change: move |next_dirty| {
                                 dirty.set(next_dirty);
                                 if let Some(on_dirty_change) = on_dirty_change {

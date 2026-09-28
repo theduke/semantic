@@ -2,6 +2,7 @@ pub mod app;
 #[cfg(feature = "standalone")]
 pub mod backend;
 pub mod components;
+mod navigation_guard;
 pub mod views;
 
 #[cfg(feature = "desktop")]

@@ -2,7 +2,7 @@ use std::collections::BTreeSet;
 
 use dioxus::prelude::*;
 use dioxus_icons::lucide::{Plus, Search, X};
-use dxform::{FormScope, use_field};
+use dxform::{FormRoot, FormScope, use_field};
 use semantic_data::{
     builtin::{ATTR_ID, ATTR_TYPE},
     schema::{
@@ -170,6 +170,7 @@ pub fn DynamicClassForm(
     #[props(default)] on_submitting_change: Option<EventHandler<bool>>,
     #[props(default)] on_submit_success: Option<EventHandler<SemanticFormSubmitOutcome>>,
     #[props(default)] on_submit_failure: Option<EventHandler<SemanticFormSubmitFailure>>,
+    #[props(default)] on_form_ready: Option<EventHandler<FormRoot<Value>>>,
 ) -> Element {
     let options = build_class_form_options(class, object, mode, collection, id, scope_id, submit);
     rsx! {
@@ -180,6 +181,7 @@ pub fn DynamicClassForm(
             on_submitting_change,
             on_submit_success,
             on_submit_failure,
+            on_form_ready,
         }
     }
 }

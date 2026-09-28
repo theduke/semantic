@@ -8,7 +8,7 @@ use semantic_data::{
     value::{Object, Value},
 };
 use semantic_ui_core::{
-    DynamicClassForm, EntityTarget, SemanticFormMode, SemanticFormSubmit, SubmitError,
+    DynamicClassForm, EntityTarget, FormRoot, SemanticFormMode, SemanticFormSubmit, SubmitError,
     components::{
         EmptyState, ErrorState, InlineNotice, LoadingSkeleton, NoticeVariant, RefreshingIndicator,
     },
@@ -20,9 +20,8 @@ use semantic_ui_core::{
 
 use crate::{
     app::use_entity_edit_navigation,
-    components::{
-        ConfirmActionRequest, EntityCreateForm, EntityCreateOutcome, FormPage, UnsavedChangesPrompt,
-    },
+    components::{EntityCreateFailure, EntityCreateForm, EntityCreateOutcome, FormPage},
+    navigation_guard::{PageNavigationGuard, use_page_navigation_guard},
     views::Route,
 };
 
@@ -58,7 +57,8 @@ pub fn CreateEntityPage(#[props(default)] initial_class: Option<String>) -> Elem
     let mut dirty = use_signal(|| false);
     let mut submitting = use_signal(|| false);
     let mut selected_collection = use_signal(String::new);
-    let mut cancel_confirm_open = use_signal(|| false);
+    let page_guard = use_page_navigation_guard();
+    let form_handle = use_guarded_form_save(page_guard);
     let submit = SemanticFormSubmit::async_(move |ctx| {
         let client = client.clone();
         let scope_id = scope_id.clone();
@@ -108,11 +108,7 @@ pub fn CreateEntityPage(#[props(default)] initial_class: Option<String>) -> Elem
                     r#type: "button",
                     disabled: submitting(),
                     onclick: move |_| {
-                        if dirty() {
-                            cancel_confirm_open.set(true);
-                        } else {
-                            navigator.push(cancel_destination(&selected_collection()));
-                        }
+                        navigator.push(cancel_destination(&selected_collection()));
                     },
                     "Cancel"
                 }
@@ -121,27 +117,23 @@ pub fn CreateEntityPage(#[props(default)] initial_class: Option<String>) -> Elem
                 submit,
                 initial_class,
                 on_collection_change: move |collection| selected_collection.set(collection),
-                on_dirty_change: move |next| dirty.set(next),
+                on_dirty_change: move |next| {
+                    dirty.set(next);
+                    page_guard.set_dirty(next);
+                },
                 on_submitting_change: move |next| submitting.set(next),
+                on_form_ready: form_handle,
                 on_created: move |outcome: EntityCreateOutcome| {
                     dirty.set(false);
                     toast.show(
                         Toast::success("The entity is ready to view.").title("Entity created"),
                     );
-                    navigator.push(entity_destination(&outcome.collection, &outcome.id));
+                    if !page_guard.finish_save() {
+                        navigator.push(entity_destination(&outcome.collection, &outcome.id));
+                    }
                 },
+                on_failure: move |_failure: EntityCreateFailure| page_guard.save_failed(),
             }
-        }
-        UnsavedChangesPrompt {
-            open: cancel_confirm_open(),
-            target: "entity list",
-            body: "Leaving this page will discard the current entity draft.",
-            on_open_change: move |open| cancel_confirm_open.set(open),
-            on_discard: move |request: ConfirmActionRequest| {
-                cancel_confirm_open.set(false);
-                navigator.push(cancel_destination(&selected_collection()));
-                request.complete(Ok(()));
-            },
         }
     }
 }
@@ -249,7 +241,8 @@ fn EditEntityPageView(collection: Option<String>, id: String, scope_id: Option<S
     let mut dirty = use_signal(|| false);
     let mut submitting = use_signal(|| false);
     let mut submit_feedback = use_signal(EditSubmitFeedback::default);
-    let mut pending_cancel = use_signal(|| false);
+    let page_guard = use_page_navigation_guard();
+    let form_handle = use_guarded_form_save(page_guard);
     let navigator = use_navigator();
     let toast = use_toast_dispatcher();
     let class = object
@@ -261,9 +254,7 @@ fn EditEntityPageView(collection: Option<String>, id: String, scope_id: Option<S
         .is_some_and(|class| class.id == "semantic:base:note");
     let status_message = edit_status_message(submitting(), dirty(), &submit_feedback.read());
     let form_key = edit_route_key(scope_id.as_deref(), collection.as_deref(), &id);
-    let cancel_target = format!("entity details for `{id}`");
-    let cancel_collection = collection.clone();
-    let cancel_id = id.clone();
+    let cancel_route = detail_route.clone();
 
     rsx! {
         FormPage {
@@ -290,17 +281,10 @@ fn EditEntityPageView(collection: Option<String>, id: String, scope_id: Option<S
                     r#type: "button",
                     disabled: submitting(),
                     onclick: move |_| {
-                        let (destination, confirm) = edit_cancel_action(
-                            cancel_collection.as_deref(),
-                            &cancel_id,
-                            dirty(),
-                        );
-                        if confirm {
-                            pending_cancel.set(true);
-                        } else if return_to_previous_detail() {
+                        if return_to_previous_detail() {
                             navigator.go_back();
                         } else {
-                            navigator.push(destination);
+                            navigator.push(cancel_route.clone());
                         }
                     },
                     "Cancel"
@@ -397,7 +381,11 @@ fn EditEntityPageView(collection: Option<String>, id: String, scope_id: Option<S
                                         primary_id_field,
                                     )),
                                     action_labels: SemanticFormActionLabels::save_changes(),
-                                    on_dirty_change: move |next_dirty| dirty.set(next_dirty),
+                                    on_dirty_change: move |next_dirty| {
+                                        dirty.set(next_dirty);
+                                        page_guard.set_dirty(next_dirty);
+                                    },
+                                    on_form_ready: form_handle,
                                     on_submitting_change: move |next_submitting| {
                                         submitting.set(next_submitting);
                                         if next_submitting {
@@ -411,6 +399,9 @@ fn EditEntityPageView(collection: Option<String>, id: String, scope_id: Option<S
                                             Toast::success("The saved entity is ready to view.")
                                                 .title("Changes saved"),
                                         );
+                                        if page_guard.finish_save() {
+                                            return;
+                                        }
                                         if return_to_previous_detail() {
                                             navigator.go_back();
                                         } else {
@@ -426,6 +417,7 @@ fn EditEntityPageView(collection: Option<String>, id: String, scope_id: Option<S
                                                 "Changes could not be saved. Review the form and retry.".to_string()
                                             });
                                         submit_feedback.set(EditSubmitFeedback::Failed(message));
+                                        page_guard.save_failed();
                                     },
                                 }
                             }
@@ -455,22 +447,22 @@ fn EditEntityPageView(collection: Option<String>, id: String, scope_id: Option<S
                 }
             }
         }
-        UnsavedChangesPrompt {
-            open: pending_cancel(),
-            target: cancel_target,
-            body: "Leaving this edit form will discard the changes you have made.",
-            on_open_change: move |open: bool| pending_cancel.set(open),
-            on_discard: move |request: ConfirmActionRequest| {
-                pending_cancel.set(false);
-                if return_to_previous_detail() {
-                    navigator.go_back();
-                } else {
-                    navigator.push(edit_entity_destination(collection.as_deref(), &id));
-                }
-                request.complete(Ok(()));
-            },
-        }
     }
+}
+
+/// Lets the navigation guard prompt save the page's form. Returns the handler
+/// to pass as the form's `on_form_ready`.
+fn use_guarded_form_save(page_guard: PageNavigationGuard) -> EventHandler<FormRoot<Value>> {
+    let mut form = use_signal(|| None::<FormRoot<Value>>);
+    let save = use_callback(move |()| {
+        if let Some(form) = form.peek().clone() {
+            spawn(async move {
+                let _ = form.submit().await;
+            });
+        }
+    });
+    use_hook(|| page_guard.set_save_handler(save));
+    EventHandler::new(move |next: FormRoot<Value>| form.set(Some(next)))
 }
 
 pub async fn load_entity(
@@ -579,10 +571,6 @@ fn edit_return_destination(collection: Option<&str>) -> Route {
             sql: None,
         },
     }
-}
-
-fn edit_cancel_action(collection: Option<&str>, id: &str, dirty: bool) -> (Route, bool) {
-    (edit_entity_destination(collection, id), dirty)
 }
 
 fn edit_route_key(scope_id: Option<&str>, collection: Option<&str>, id: &str) -> String {
@@ -725,29 +713,6 @@ mod tests {
             edit_return_destination(Some(DEFAULT_COLLECTION)),
             Route::CollectionPage {
                 collection: DEFAULT_COLLECTION.to_string(),
-            }
-        );
-    }
-
-    #[test]
-    fn edit_cancel_preserves_a_deterministic_detail_fallback() {
-        let (clean_destination, clean_confirm) = edit_cancel_action(None, "entity-1", false);
-        assert!(!clean_confirm);
-        assert_eq!(
-            clean_destination,
-            Route::DefaultEntityPage {
-                id: "entity-1".to_string(),
-            }
-        );
-
-        let (dirty_destination, dirty_confirm) =
-            edit_cancel_action(Some("notes"), "entity-2", true);
-        assert!(dirty_confirm);
-        assert_eq!(
-            dirty_destination,
-            Route::CollectionEntityPage {
-                collection: "notes".to_string(),
-                id: "entity-2".to_string(),
             }
         );
     }
