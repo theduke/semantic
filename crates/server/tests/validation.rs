@@ -98,6 +98,7 @@ async fn http_validation_preflight_activation_and_structured_nested_errors() {
                             required: true,
                             ui_order: None,
                             computed: None,
+                            default: None,
                             constraints: vec![],
                             meta: Meta::default(),
                         },

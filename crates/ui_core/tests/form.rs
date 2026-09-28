@@ -3,6 +3,7 @@ use std::{cell::RefCell, collections::BTreeMap, rc::Rc};
 use dioxus::prelude::*;
 use dxform::{FieldSpec, FormOptions, FormRoot, SubformSpec, SubmitHandler};
 use semantic_data::{
+    expr::{Expr, LiteralExpr, RefExpr},
     schema::{
         AttributeRef, AttributeType, BoolType, ClassAttribute, ClassRef, ClassType, Constraint,
         LengthSpec, Meta, NumberType, OptionalType, StringType, Type, TypeKind, UIntWidth,
@@ -87,6 +88,7 @@ fn class_attr(id: &str, required: bool) -> ClassAttribute {
         required,
         ui_order: None,
         computed: None,
+        default: None,
         constraints: Vec::new(),
         meta: Meta::default(),
     }
@@ -260,6 +262,81 @@ fn default_class_value_sets_type_and_required_fields() {
     assert_eq!(object.get("attr.name"), Some(&Value::Null));
     assert_eq!(object.get("name"), None);
     assert_eq!(object.get("active"), None);
+}
+
+#[test]
+fn class_field_literal_default_initializes_canonical_storage_field() {
+    let mut name = attr("attr.name", "name", string_type());
+    name.constraints.push(Constraint::DefaultValue {
+        value: Value::String("attribute default".to_string()),
+    });
+    let mut field = class_attr("attr.name", false);
+    field.default = Some(Expr::Literal(LiteralExpr {
+        value: Value::String("class default".to_string()),
+    }));
+    let class = class(
+        "person",
+        "Person",
+        BTreeMap::from([("name".to_string(), field)]),
+    );
+    let catalog = catalog_with(vec![name], vec![class.clone()]);
+
+    let Value::Object(object) = default_value_for_class(&class, &catalog) else {
+        panic!("expected object default");
+    };
+    assert_eq!(
+        object.get("attr.name"),
+        Some(&Value::String("class default".to_string()))
+    );
+    assert!(!object.contains_key("name"));
+}
+
+#[test]
+fn inherited_literal_defaults_apply_but_nonliteral_and_computed_defaults_do_not() {
+    let title = attr("attr.title", "title", string_type());
+    let description = attr("attr.description", "description", string_type());
+    let computed = attr("attr.computed", "computed", string_type());
+    let mut title_field = class_attr("attr.title", true);
+    title_field.default = Some(Expr::Literal(LiteralExpr {
+        value: Value::String("Inherited".to_string()),
+    }));
+    let base = class(
+        "base",
+        "Base",
+        BTreeMap::from([("title".to_string(), title_field)]),
+    );
+    let mut description_field = class_attr("attr.description", true);
+    description_field.default = Some(Expr::Ref(RefExpr::Identifier("source".to_string())));
+    let mut computed_field = class_attr("attr.computed", false);
+    computed_field.computed = Some(Expr::Ref(RefExpr::Identifier("source".to_string())));
+    computed_field.default = Some(Expr::Literal(LiteralExpr {
+        value: Value::String("ignored".to_string()),
+    }));
+    let mut child = class(
+        "child",
+        "Child",
+        BTreeMap::from([
+            ("description".to_string(), description_field),
+            ("computed".to_string(), computed_field),
+        ]),
+    );
+    child.inherits = Some(ClassRef {
+        id: "base".to_string(),
+    });
+    let catalog = catalog_with(
+        vec![title, description, computed],
+        vec![base, child.clone()],
+    );
+
+    let Value::Object(object) = default_value_for_class(&child, &catalog) else {
+        panic!("expected object default");
+    };
+    assert_eq!(
+        object.get("attr.title"),
+        Some(&Value::String("Inherited".to_string()))
+    );
+    assert_eq!(object.get("attr.description"), Some(&Value::Null));
+    assert!(!object.contains_key("attr.computed"));
 }
 
 #[test]

@@ -839,6 +839,7 @@ fn class_attribute_with_ui_order_and_title(
         required,
         ui_order,
         computed: None,
+        default: None,
         constraints: Vec::new(),
         meta: meta_with_title(title),
     }

@@ -3184,6 +3184,14 @@ fn validate_class_attribute_resolution(
             &ConstraintTarget::Attribute(&attr.attribute.ty),
             &format!("class '{}' attribute '{alias}'", class.id),
         )?;
+        if let Some(semantic_data::expr::Expr::Literal(literal)) = &class_attr.default
+            && !literal_matches_type(&literal.value, &attr.attribute.ty)
+        {
+            return invalid_schema(format!(
+                "class '{}' attribute '{alias}' default does not match its type",
+                class.id
+            ));
+        }
         for candidate in [
             alias.as_str(),
             class_attr.attribute.id.as_str(),
@@ -4469,6 +4477,65 @@ mod tests {
     }
 
     #[test]
+    fn class_field_defaults_accept_expressions_and_check_literal_types() {
+        use semantic_data::{
+            expr::{Expr, LiteralExpr, RefExpr},
+            value::Value,
+        };
+
+        let mut title = class_attribute("Title");
+        title.default = Some(Expr::Literal(LiteralExpr {
+            value: Value::String("Draft".to_string()),
+        }));
+        let mut summary = class_attribute("Summary");
+        summary.default = Some(Expr::Ref(RefExpr::Identifier("source".to_string())));
+        let mut class = ClassType {
+            id: "Article".to_string(),
+            name: "Article".to_string(),
+            inherits: None,
+            extends: vec![],
+            strict_schema: false,
+            creatable_in_ui: None,
+            attributes: BTreeMap::from([
+                ("title".to_string(), title),
+                ("summary".to_string(), summary),
+            ]),
+            constraints: vec![],
+            meta: Meta::default(),
+        };
+        let mut catalog = Catalog::new();
+        catalog
+            .apply_batch(&[
+                CatalogBatchOperation::UpsertAttribute {
+                    attribute: attribute("Title"),
+                    module: Some("test".to_string()),
+                },
+                CatalogBatchOperation::UpsertAttribute {
+                    attribute: attribute("Summary"),
+                    module: Some("test".to_string()),
+                },
+                CatalogBatchOperation::UpsertClass {
+                    class: class.clone(),
+                    module: Some("test".to_string()),
+                },
+            ])
+            .unwrap();
+
+        class.attributes.get_mut("title").unwrap().default = Some(Expr::Literal(LiteralExpr {
+            value: Value::Bool(true),
+        }));
+        let err = catalog
+            .apply_batch(&[CatalogBatchOperation::UpsertClass {
+                class,
+                module: Some("test".to_string()),
+            }])
+            .unwrap_err();
+        assert!(
+            matches!(err, CatalogError::InvalidSchema(message) if message.contains("default does not match its type"))
+        );
+    }
+
+    #[test]
     fn apply_batch_rejects_numeric_constraint_on_string() {
         let mut catalog = Catalog::new();
         let err = catalog
@@ -4656,6 +4723,7 @@ mod tests {
             required: false,
             ui_order: None,
             computed: None,
+            default: None,
             constraints: vec![],
             meta: Meta::default(),
         }

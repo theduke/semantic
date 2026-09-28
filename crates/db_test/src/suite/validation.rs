@@ -37,6 +37,7 @@ pub async fn test_validation(db: &Db) {
                             required: true,
                             ui_order: None,
                             computed: None,
+                            default: None,
                             constraints: vec![],
                             meta: Meta::default(),
                         },

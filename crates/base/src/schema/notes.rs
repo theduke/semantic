@@ -85,6 +85,7 @@ fn class_attribute(attribute_id: &str, required: bool, ui_order: u32) -> ClassAt
         required,
         ui_order: Some(ui_order),
         computed: None,
+        default: None,
         constraints: match attribute_id {
             ATTR_CREATED_AT | ATTR_UPDATED_AT => vec![now_default_constraint()],
             _ => Vec::new(),

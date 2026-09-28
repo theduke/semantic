@@ -144,6 +144,7 @@ fn class(id: &str, name: &str, attributes: &[(&str, bool)]) -> ClassType {
                         required: *required,
                         ui_order: None,
                         computed: None,
+                        default: None,
                         constraints: Vec::new(),
                         meta: Meta::default(),
                     },

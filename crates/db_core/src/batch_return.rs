@@ -440,6 +440,7 @@ mod tests {
                         required: false,
                         ui_order: None,
                         computed: None,
+                        default: None,
                         constraints: vec![],
                         meta: Meta::default(),
                     },

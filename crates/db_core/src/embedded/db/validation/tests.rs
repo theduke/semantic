@@ -46,6 +46,7 @@ fn class_attr(id: &str, required: bool) -> ClassAttribute {
         required,
         ui_order: None,
         computed: None,
+        default: None,
         constraints: vec![],
         meta: Meta::default(),
     }

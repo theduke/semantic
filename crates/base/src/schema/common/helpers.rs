@@ -46,6 +46,7 @@ pub fn class_attribute_with_ui_order(
         required,
         ui_order,
         computed: None,
+        default: None,
         constraints: Vec::new(),
         meta: meta_with_title(title_from_attribute_id(attribute_id)),
     }

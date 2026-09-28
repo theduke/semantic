@@ -328,6 +328,7 @@ fn migration_class_attribute(
         required,
         ui_order,
         computed: None,
+        default: None,
         constraints: Vec::new(),
         meta: meta_with_title(title),
     }
@@ -370,6 +371,7 @@ fn class_attribute(attribute_id: &str, required: bool, ui_order: Option<u32>) ->
         required,
         ui_order,
         computed: None,
+        default: None,
         constraints: Vec::new(),
         meta: meta_with_title(title_from_attribute_id(attribute_id)),
     }

@@ -565,6 +565,7 @@ async fn test_relational_managed_strict_projection_and_reopen() {
                             required: true,
                             ui_order: None,
                             computed: None,
+                            default: None,
                             constraints: vec![],
                             meta: Meta::default(),
                         },

@@ -1,4 +1,5 @@
 use semantic_data::{
+    expr::Expr,
     schema::{ClassType, Constraint, Field, NumberType, RecordType, Type, TypeKind, UIntWidth},
     value::{Map, Object, Value},
 };
@@ -49,11 +50,18 @@ pub fn default_value_for_class(class: &ClassType, catalog: &UiCatalog) -> Value 
             object.remove(&field.field_name);
         }
         if let Some(default) = field
-            .attribute
-            .constraints
-            .iter()
-            .chain(field.class_attribute.constraints.iter())
-            .find_map(default_constraint_value)
+            .class_attribute
+            .default
+            .as_ref()
+            .and_then(literal_default_value)
+            .or_else(|| {
+                field
+                    .attribute
+                    .constraints
+                    .iter()
+                    .chain(field.class_attribute.constraints.iter())
+                    .find_map(default_constraint_value)
+            })
         {
             object.insert(field.storage_field_name, default);
         } else if field.class_attribute.required && !object.contains_key(&field.storage_field_name)
@@ -114,9 +122,15 @@ fn default_value_for_class_without_catalog(class: &ClassType) -> Value {
             continue;
         }
         if let Some(default) = class_attribute
-            .constraints
-            .iter()
-            .find_map(default_constraint_value)
+            .default
+            .as_ref()
+            .and_then(literal_default_value)
+            .or_else(|| {
+                class_attribute
+                    .constraints
+                    .iter()
+                    .find_map(default_constraint_value)
+            })
         {
             object.insert(field_name.clone(), default);
         } else if class_attribute.required {
@@ -144,6 +158,13 @@ fn default_value_for_field(field: &Field) -> Value {
         .as_ref()
         .cloned()
         .unwrap_or_else(|| default_value_for_type(&field.ty))
+}
+
+fn literal_default_value(expression: &Expr) -> Option<Value> {
+    match expression {
+        Expr::Literal(literal) => Some(literal.value.clone()),
+        _ => None,
+    }
 }
 
 fn default_number_value(number: &NumberType) -> Value {

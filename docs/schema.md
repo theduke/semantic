@@ -234,10 +234,15 @@ pub struct ClassAttribute {
     pub required: bool,
     pub ui_order: Option<u32>,     // optional generated UI ordering hint
     pub computed: Option<Expr>,    // computed at read time from other attrs
+    pub default: Option<Expr>,     // per-class field default expression
     pub constraints: Vec<Constraint>,
     pub meta: Meta,
 }
 ```
+
+The entity create form initializes fields from literal `default` expressions.
+Other expressions remain part of the class schema for consumers that can
+evaluate them.
 
 ### Relations
 

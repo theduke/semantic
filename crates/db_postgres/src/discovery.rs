@@ -512,6 +512,7 @@ fn register_table(
                 required: !col.is_nullable,
                 ui_order: None,
                 computed: None,
+                default: None,
                 constraints: vec![],
                 meta: Meta::default(),
             },
@@ -689,6 +690,7 @@ fn build_synthetic_id_attr(
         required: true,
         ui_order: None,
         computed: Some(stringify_call),
+        default: None,
         constraints: vec![],
         meta: Meta::default(),
     }

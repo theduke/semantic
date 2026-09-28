@@ -48,6 +48,7 @@ pub(super) async fn test_compact_id_execution(db: &Db) {
                             required: false,
                             ui_order: None,
                             computed: None,
+                            default: None,
                             constraints: vec![],
                             meta: Meta::default(),
                         },

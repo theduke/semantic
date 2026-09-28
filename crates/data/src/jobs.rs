@@ -878,6 +878,7 @@ pub fn package() -> Package {
                         required: *required,
                         ui_order: None,
                         computed: None,
+                        default: None,
                         constraints: vec![],
                         meta: Meta::default(),
                     },

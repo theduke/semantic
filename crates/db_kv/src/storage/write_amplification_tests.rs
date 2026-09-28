@@ -183,6 +183,7 @@ fn class_attribute(id: &str) -> ClassAttribute {
         required: false,
         ui_order: None,
         computed: None,
+        default: None,
         constraints: vec![],
         meta: Meta::default(),
     }
