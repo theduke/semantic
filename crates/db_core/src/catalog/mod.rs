@@ -10,6 +10,9 @@ mod schema;
 mod shared;
 mod snapshot;
 
+#[cfg(test)]
+pub(crate) use catalog::take_storage_snapshot_count;
+
 pub use catalog::{
     AUTO_PATH_INDEX_FIELD, AUTO_PATH_INDEX_NAME, Catalog, CatalogBatchOperation, IndexDefinition,
     OBJECT_TYPE_FIELD, OBJECT_TYPE_INDEX_NAME, PARENT_RELATION_FIELD, PRIMARY_ID_FIELD,

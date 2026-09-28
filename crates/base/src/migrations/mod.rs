@@ -60,6 +60,7 @@ pub fn all() -> Vec<Migration> {
     migrations.push(crate::schema::labels::group_migration());
     migrations.push(creatable_in_ui_migration());
     migrations.push(label_creatable_in_ui_migration());
+    migrations.push(semantic_data::bundles::shared::migration_v1());
     migrations
 }
 

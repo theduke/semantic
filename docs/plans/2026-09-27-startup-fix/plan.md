@@ -1,5 +1,8 @@
 # Fast registration of an unchanged package
 
+Follow-up: [durable certificate implementation](implementation.md) supersedes the
+withdrawn design below after authorization to add persisted bookkeeping.
+
 Date: 2026-09-27. Status: implementation reviewed; the unsafe shortcut was
 withdrawn. Diagnostics, regression tests, and baseline benchmarks remain. See
 [the implementation review](review.md) for the blocking evidence and validation.

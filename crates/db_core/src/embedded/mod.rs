@@ -1,5 +1,6 @@
 mod backend;
 pub mod db;
+mod registration_proof;
 mod schema_store;
 pub mod storage;
 #[cfg(test)]

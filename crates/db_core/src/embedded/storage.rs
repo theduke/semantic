@@ -1348,6 +1348,10 @@ pub(crate) struct StorageReadCounts {
     pub(crate) inject_conflicts: std::sync::atomic::AtomicUsize,
     /// Force revision-fence conflicts, including read-only registration.
     pub(crate) inject_revision_conflicts: std::sync::atomic::AtomicUsize,
+    /// Replace the catalog during the next revision fence, simulating an
+    /// independently held SharedCatalog handle racing with registration.
+    pub(crate) replace_catalog_at_fence:
+        std::sync::Mutex<Option<(crate::catalog::SharedCatalog, crate::catalog::Catalog)>>,
     /// Entities put or deleted by committed batches, as (collection, id).
     pub(crate) entity_writes: std::sync::Mutex<Vec<(usize, String)>>,
 }
@@ -1444,6 +1448,10 @@ impl CountingEntityStorage {
 #[cfg(test)]
 impl EntityStorage for CountingEntityStorage {
     fn ensure_revision(&self, expected: Option<u64>) -> Result<(), DbError> {
+        if let Some((shared, catalog)) = self.counts.replace_catalog_at_fence.lock().unwrap().take()
+        {
+            shared.replace(catalog);
+        }
         if self
             .counts
             .inject_revision_conflicts

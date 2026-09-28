@@ -30,3 +30,4 @@ sqlparser = { version = "0.61.0", optional = true }
 prqlc = { version = "0.13", optional = true }
 tokio = { workspace = true, optional = true, features = ["rt", "sync"] }
 tracing = { workspace = true }
+sha2 = { workspace = true }

@@ -65,14 +65,20 @@ impl<S: EntityStorage> EmbeddedDb<S> {
         self.execution_counts.storage_writes += ops.len();
         let catalog_changed = intent.catalog.is_some();
         if let Some((expected_version, catalog)) = intent.catalog {
-            self.catalog
-                .compare_and_swap_arc(expected_version, catalog)
+            let version = self
+                .catalog
+                .compare_and_swap_arc(expected_version, Arc::clone(&catalog))
                 .map_err(|mismatch| {
                     DbError::TransactionConflict(format!(
                         "catalog version changed: expected {}, actual {}",
                         mismatch.expected, mismatch.actual
                     ))
                 })?;
+            let proofs = proofs_from_write_ops(&catalog, ops);
+            self.registration_proofs = BoundRegistrationProofs::new(
+                &crate::catalog::CatalogSnapshot { version, catalog },
+                proofs,
+            );
         }
         self.publish_changes(
             revision.unwrap_or_default(),

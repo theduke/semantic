@@ -8854,11 +8854,13 @@ dependencies = [
 name = "semantic_base"
 version = "0.0.1"
 dependencies = [
+ "facet-json",
  "futures",
  "semantic_data",
  "semantic_db_core",
  "semantic_db_kv",
  "semantic_rpc_core",
+ "sha2 0.10.9",
  "tokio",
  "tracing",
  "tracing-subscriber",
@@ -8960,6 +8962,7 @@ dependencies = [
  "prqlc",
  "regex",
  "semantic_data",
+ "sha2 0.10.9",
  "sqlparser 0.61.0",
  "thiserror 2.0.18",
  "tokio",

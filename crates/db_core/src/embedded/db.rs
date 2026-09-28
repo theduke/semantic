@@ -28,7 +28,8 @@ use crate::catalog::{
     LocalFieldId, LocalIndexId, OBJECT_TYPE_FIELD, SharedCatalog,
 };
 use crate::embedded::{
-    schema_store::{catalog_write_ops, load_catalog},
+    registration_proof::{self, BoundRegistrationProofs},
+    schema_store::{catalog_write_ops, load_catalog_with_proofs, proofs_from_write_ops},
     storage::{
         EntityReadSnapshot, EntityStorage, StorageCommitOutcome, StorageTransactionCapabilities,
         StorageWriteOp, StoredEntity, StoredEntityKind,
@@ -78,6 +79,8 @@ pub use maintenance::write_backup;
 pub use reader::DbReader;
 use reader::QueryReader;
 
+#[cfg(test)]
+use crate::embedded::schema_store::load_catalog;
 use crate::embedded::storage::{RevisionReader, snapshot_isolation_unsupported};
 use commit::CommitIntent;
 use local_refs::{
@@ -92,6 +95,9 @@ pub struct EmbeddedDb<S: EntityStorage> {
     config: DbConfig,
     execution_counts: compact::ExecutionCounts,
     change_feed: crate::ChangeFeed,
+    registration_proofs: BoundRegistrationProofs,
+    #[cfg(test)]
+    full_registration_attempts: usize,
 }
 
 #[cfg(test)]
@@ -149,13 +155,15 @@ impl<S: EntityStorage> EmbeddedDb<S> {
         );
         let bootstrap_catalog = fresh_catalog_with_core_schema()
             .map_err(|err| DbError::InvalidQuery(err.to_string()))?;
-        let (loaded_catalog, catalog_initialized) =
-            if let Some(catalog) = load_catalog(&storage, &bootstrap_catalog)? {
-                (catalog, false)
+        let loaded = load_catalog_with_proofs(&storage, &bootstrap_catalog)?;
+        let (loaded_catalog, mut registration_proofs, catalog_initialized) =
+            if let Some((catalog, proofs)) = loaded {
+                (catalog, proofs, false)
             } else {
                 let ops = catalog_write_ops(&storage, &bootstrap_catalog)?;
                 storage.apply_batch(&ops)?;
-                (bootstrap_catalog, true)
+                let proofs = proofs_from_write_ops(&bootstrap_catalog, &ops);
+                (bootstrap_catalog, proofs, true)
             };
         tracing::debug!(
             operation = "database_open",
@@ -185,6 +193,9 @@ impl<S: EntityStorage> EmbeddedDb<S> {
         if catalog_changed {
             let ops = catalog_write_ops(&storage, &catalog)?;
             storage.apply_batch(&ops)?;
+            registration_proofs = proofs_from_write_ops(&catalog, &ops);
+        } else {
+            registration_proofs = registration_proofs.and_then(|proofs| proofs.verify(&catalog));
         }
         tracing::debug!(
             operation = "database_open",
@@ -207,7 +218,12 @@ impl<S: EntityStorage> EmbeddedDb<S> {
             config,
             execution_counts: compact::ExecutionCounts::default(),
             change_feed: crate::ChangeFeed::default(),
+            registration_proofs: BoundRegistrationProofs::default(),
+            #[cfg(test)]
+            full_registration_attempts: 0,
         };
+        db.registration_proofs =
+            BoundRegistrationProofs::new(&db.catalog.snapshot(), registration_proofs);
         if db
             .catalog()
             .collection_by_name(DEFAULT_COLLECTION)
@@ -663,9 +679,46 @@ impl<S: EntityStorage> EmbeddedDb<S> {
             elapsed = ?started.elapsed(),
         );
 
+        // Exact normalized package identity includes descriptions, metadata and
+        // every migration operation. It is independent of unrelated catalog size.
+        let package_digest = registration_proof::digest(&package).ok();
         let txn_result = run_with_transaction_retries(TransactionOptions::default(), |attempt| {
             let catalog_snapshot = self.catalog.snapshot();
             let phase_started = Instant::now();
+            if package_digest.as_deref().is_some_and(|digest| {
+                self.registration_proofs
+                    .permits(&catalog_snapshot, &package_name, digest)
+            }) {
+                let read_revision = self.storage.current_revision()?;
+                self.storage.ensure_revision(read_revision)?;
+                let current = self.catalog.snapshot();
+                if current.version != catalog_snapshot.version
+                    || !Arc::ptr_eq(&current.catalog, &catalog_snapshot.catalog)
+                {
+                    return Err(DbError::TransactionConflict(
+                        "catalog changed during registration proof".into(),
+                    ));
+                }
+                tracing::debug!(operation = "package_registration", package = package_name, attempt,
+                    phase = "certificate", elapsed = ?phase_started.elapsed());
+                return Ok((
+                    PackageRegistrationOutcome {
+                        executed_migrations: Vec::new(),
+                    },
+                    "unchanged_certified",
+                    false,
+                ));
+            }
+            tracing::debug!(
+                operation = "package_registration",
+                package = package_name,
+                attempt,
+                fallback_reason = "uncertified_catalog_or_package"
+            );
+            #[cfg(test)]
+            {
+                self.full_registration_attempts += 1;
+            }
             validate_package_migrations_with_catalog(&package, catalog_snapshot.catalog.as_ref())
                 .map_err(|err| DbError::InvalidQuery(err.to_string()))?;
             tracing::debug!(
@@ -1421,20 +1474,7 @@ impl<S: EntityStorage> EmbeddedDb<S> {
         catalog: &mut Catalog,
         migration: &Migration,
     ) -> std::result::Result<(), DbError> {
-        apply_migration_ddl_batch(
-            catalog,
-            &migration.module,
-            migration
-                .operations
-                .iter()
-                .filter_map(|operation| match operation {
-                    MigrationOperation::Ddl(operation) => Some(operation),
-                    MigrationOperation::Insert { .. }
-                    | MigrationOperation::Update { .. }
-                    | MigrationOperation::Delete { .. } => None,
-                }),
-        )
-        .map_err(|err| DbError::InvalidQuery(err.to_string()))
+        registration_proof::reconcile_migration(catalog, migration)
     }
 
     fn apply_package_data_batch(

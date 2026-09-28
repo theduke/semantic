@@ -12,6 +12,7 @@ use crate::{
 };
 use semantic_data::value::{Object, Value};
 
+use super::registration_proof::{self, RegistrationProofs};
 use crate::embedded::storage::{EntityStorage, StorageWriteOp, StoredEntity, StoredEntityKind};
 
 const META_ROW_ID: &str = "__catalog_meta__";
@@ -90,10 +91,18 @@ fn encode_entity_base(
     }
 }
 
+#[cfg(test)]
 pub fn load_catalog<S: EntityStorage>(
     store: &S,
     bootstrap_catalog: &Catalog,
 ) -> std::result::Result<Option<Catalog>, DbError> {
+    Ok(load_catalog_with_proofs(store, bootstrap_catalog)?.map(|(catalog, _)| catalog))
+}
+
+pub(super) fn load_catalog_with_proofs<S: EntityStorage>(
+    store: &S,
+    bootstrap_catalog: &Catalog,
+) -> Result<Option<(Catalog, Option<RegistrationProofs>)>, DbError> {
     let core = core_collection_ids(bootstrap_catalog)?;
     // Decode the schema collection once; all catalog entry types share it.
     let mut rows_by_type = std::collections::BTreeMap::<String, Vec<StoredEntity>>::new();
@@ -227,6 +236,7 @@ pub fn load_catalog<S: EntityStorage>(
     let mut relationships = Vec::<StoredRelationship>::new();
     let mut packages = Vec::<StoredPackage>::new();
     let mut applied_migrations = Vec::<StoredAppliedMigration>::new();
+    let mut proofs = None;
     for row in &meta_rows {
         if row.id == META_ROW_ID || row.id == catalog_entry_id(ENTRY_TYPE_META, META_ROW_ID) {
             next_field_id = object_usize_field(&row.object, NEXT_FIELD_ID_FIELD)?;
@@ -237,6 +247,11 @@ pub fn load_catalog<S: EntityStorage>(
             packages = object_json_field_default(&row.object, PACKAGES_FIELD, Vec::new())?;
             applied_migrations =
                 object_json_field_default(&row.object, APPLIED_MIGRATIONS_FIELD, Vec::new())?;
+            proofs = row
+                .object
+                .get(registration_proof::FIELD)
+                .and_then(Value::as_str)
+                .and_then(|encoded| facet_json::from_str::<RegistrationProofs>(encoded).ok());
             break;
         }
     }
@@ -255,7 +270,35 @@ pub fn load_catalog<S: EntityStorage>(
         auto_index_enabled,
     )
     .map_err(DbError::from)?;
-    Ok(Some(catalog))
+    // The opener verifies these against its final catalog, after core startup
+    // reconciliation (which can also reconstruct missing built-in collections).
+    Ok(Some((catalog, proofs)))
+}
+
+/// Certificates are carried by the same atomic catalog write. Only install
+/// them in memory after its conditional commit and catalog CAS have succeeded.
+pub(super) fn proofs_from_write_ops(
+    catalog: &Catalog,
+    ops: &[StorageWriteOp],
+) -> Option<RegistrationProofs> {
+    let schema = catalog
+        .collection_by_name(CORE_CATALOG_SCHEMA_COLLECTION)?
+        .lid;
+    ops.iter().rev().find_map(|operation| {
+        let StorageWriteOp::PutEntity(entity) = operation else {
+            return None;
+        };
+        if entity.collection != schema.0
+            || entity.id != catalog_entry_id(ENTRY_TYPE_META, META_ROW_ID)
+        {
+            return None;
+        }
+        entity
+            .object
+            .get(registration_proof::FIELD)
+            .and_then(Value::as_str)
+            .and_then(|encoded| facet_json::from_str(encoded).ok())
+    })
 }
 
 pub fn catalog_write_ops<S: EntityStorage>(
@@ -483,6 +526,23 @@ pub fn catalog_write_ops<S: EntityStorage>(
                 .map_err(|err| DbError::Serialization(err.to_string()))?,
         ),
     );
+    if catalog
+        .applied_migration(
+            "semantic",
+            "core",
+            crate::ddl::REGISTRATION_PROOFS_MIGRATION,
+        )
+        .is_some()
+    {
+        let proofs = RegistrationProofs::certify(catalog)?;
+        meta_entity.object.insert(
+            registration_proof::FIELD.to_string(),
+            Value::String(
+                facet_json::to_string(&proofs)
+                    .map_err(|error| DbError::Serialization(error.to_string()))?,
+            ),
+        );
+    }
     push_entity_with_indexes(catalog, &meta_entity, &mut ops)?;
 
     Ok(ops)

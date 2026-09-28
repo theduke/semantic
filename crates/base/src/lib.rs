@@ -35,8 +35,9 @@ mod tests {
 
         assert_eq!(package.name, bundle::PACKAGE_NAME);
         assert_eq!(package.root.name, bundle::MODULE_NAME);
-        assert!(package.modules.is_empty());
-        assert_eq!(package.migrations.len(), 9);
+        let shared = &package.modules[semantic_data::bundles::shared::MODULE_NAME];
+        assert_eq!(package.modules.len(), 1);
+        assert_eq!(package.migrations.len(), 10);
         assert_eq!(package.migrations[0].name, migrations::INIT_MIGRATION_NAME);
         assert_eq!(package.migrations[2].name, migrations::NOTES_MIGRATION_NAME);
 
@@ -58,18 +59,23 @@ mod tests {
             migrations::WEB_BOOKMARK_MIGRATION_NAME
         );
         assert!(
-            package
-                .root
+            shared
                 .attributes
                 .contains_key(semantic_data::attr::ATTR_PARENT)
         );
         assert_eq!(semantic_data::attr::ATTR_PARENT, "semantic:parent");
 
         for attribute in common::person::attributes() {
-            assert!(package.root.attributes.contains_key(&attribute.id));
+            assert!(
+                package.root.attributes.contains_key(&attribute.id)
+                    || shared.attributes.contains_key(&attribute.id)
+            );
         }
         for attribute in notes::attributes() {
-            assert!(package.root.attributes.contains_key(&attribute.id));
+            assert!(
+                package.root.attributes.contains_key(&attribute.id)
+                    || shared.attributes.contains_key(&attribute.id)
+            );
         }
     }
 

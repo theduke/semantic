@@ -1,5 +1,8 @@
 # Startup registration implementation review
 
+Follow-up: see the [durable certificate implementation](implementation.md) for
+the replacement design addressing all three blockers recorded below.
+
 Date: 2026-09-27.
 
 The proposed fast return does not satisfy the plan's correctness gate. It was

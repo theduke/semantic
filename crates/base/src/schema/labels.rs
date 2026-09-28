@@ -220,6 +220,23 @@ mod tests {
     use super::*;
     use semantic_data::value::{Object, Value};
 
+    fn restore_legacy_attribute_snapshot(package: &mut semantic_data::schema::Package) {
+        // Match the truncated history, before shared attributes moved out of
+        // the root module. Never derive an old fixture from current definitions.
+        package.modules.clear();
+        package.root.attributes = package
+            .migrations
+            .iter()
+            .flat_map(|migration| &migration.operations)
+            .filter_map(|operation| match operation {
+                MigrationOperation::Ddl(MigrationDdlOperation::UpsertAttribute { attribute }) => {
+                    Some((attribute.id.clone(), attribute.clone()))
+                }
+                _ => None,
+            })
+            .collect();
+    }
+
     #[test]
     fn group_schema_keeps_metadata_optional_and_old_migrations_unchanged() {
         let original = migration();
@@ -298,6 +315,7 @@ mod tests {
             .position(|migration| migration.name == "009_label_creatable_in_ui")
             .unwrap();
         old_package.migrations.truncate(label_ui_index);
+        restore_legacy_attribute_snapshot(&mut old_package);
         old_package.root.classes = old_package
             .migrations
             .iter()
@@ -326,6 +344,7 @@ mod tests {
             .position(|migration| migration.name == "007_label_groups")
             .unwrap();
         original.migrations.truncate(group_index);
+        restore_legacy_attribute_snapshot(&mut original);
         // Reconstruct the pre-group classes from their recorded definitions so
         // later, unrelated package migrations cannot change this upgrade fixture.
         original.root.classes = original

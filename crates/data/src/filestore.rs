@@ -72,7 +72,10 @@ pub fn package() -> Package {
     Package {
         name: PACKAGE_NAME.to_string(),
         root: root_module(),
-        modules: BTreeMap::new(),
+        modules: BTreeMap::from([(
+            crate::bundles::shared::MODULE_NAME.into(),
+            crate::bundles::shared::module(),
+        )]),
         migrations: vec![
             init_migration(),
             generic_metadata_migration(),
@@ -83,6 +86,7 @@ pub fn package() -> Package {
             filekind_index_and_pixel_titles_migration(),
             cleanup::migration(),
             reference_types_migration(),
+            crate::bundles::shared::migration_v1(),
         ],
         version: None,
         meta: Meta::default(),
@@ -93,6 +97,7 @@ pub fn root_module() -> Module {
     let attributes = file_attributes()
         .into_iter()
         .chain(cleanup::attributes())
+        .filter(|attribute| !crate::bundles::shared::ATTRIBUTE_IDS.contains(&attribute.id.as_str()))
         .map(|attribute| (attribute.id.clone(), attribute))
         .collect();
     let file = file_class();
@@ -955,8 +960,9 @@ mod tests {
 
         assert_eq!(package.name, PACKAGE_NAME);
         assert_eq!(package.root.name, MODULE_NAME);
-        assert!(package.modules.is_empty());
-        assert_eq!(package.migrations.len(), 9);
+        let shared = &package.modules[crate::bundles::shared::MODULE_NAME];
+        assert_eq!(package.modules.len(), 1);
+        assert_eq!(package.migrations.len(), 10);
         assert_eq!(package.migrations[8].name, "009_reference_types");
         assert_eq!(package.migrations[7].name, "008_cleanup_intent");
         assert_eq!(
@@ -969,8 +975,8 @@ mod tests {
         assert_eq!(package.migrations[3].name, MEDIA_METADATA_MIGRATION_NAME);
         assert_eq!(package.migrations[4].name, UPLOADED_AT_MIGRATION_NAME);
         assert!(package.root.classes.contains_key(FILE_CLASS_ID));
-        assert!(package.root.attributes.contains_key(ATTR_TITLE));
-        assert!(package.root.attributes.contains_key(ATTR_PARENT));
+        assert!(shared.attributes.contains_key(ATTR_TITLE));
+        assert!(shared.attributes.contains_key(ATTR_PARENT));
         assert_eq!(ATTR_PARENT, "semantic:parent");
         assert!(
             package

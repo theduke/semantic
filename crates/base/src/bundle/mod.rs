@@ -22,6 +22,8 @@ pub fn root_module() -> Module {
     for attribute in notes::attributes().into_iter().chain(labels::attributes()) {
         attributes.insert(attribute.id.clone(), attribute);
     }
+    attributes
+        .retain(|id, _| !semantic_data::bundles::shared::ATTRIBUTE_IDS.contains(&id.as_str()));
 
     let bookmark_class = web_bookmark::class();
     let person_class = common::person::class();
@@ -52,7 +54,10 @@ pub fn package() -> Package {
     Package {
         name: PACKAGE_NAME.to_string(),
         root: root_module(),
-        modules: BTreeMap::new(),
+        modules: BTreeMap::from([(
+            semantic_data::bundles::shared::MODULE_NAME.into(),
+            semantic_data::bundles::shared::module(),
+        )]),
         migrations: migrations::all(),
         version: None,
         meta: Meta::default(),

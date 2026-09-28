@@ -1,4 +1,4 @@
-//! Registration invariants and differential regressions for the proposed shortcut.
+//! Registration certificate invariants and differential replay regressions.
 
 use futures::FutureExt as _;
 use semantic_data::schema::{
@@ -40,13 +40,19 @@ fn unchanged_filestore_registration_after_reopen_does_no_storage_work() {
         .unwrap();
     let revision = reopened.storage().current_revision().unwrap();
     let catalog_version = reopened.catalog.snapshot().version;
+    let full_attempts = reopened.full_registration_attempts;
     let mut changes = reopened.subscribe_changes(crate::ChangeSubscriptionOptions::default());
     counts.reset();
+    crate::catalog::take_storage_snapshot_count();
+    registration_proof::take_replay_count();
 
     let outcome = reopened.upsert_package(package).unwrap();
     assert!(outcome.executed_migrations.is_empty());
     assert_eq!(reopened.storage().current_revision().unwrap(), revision);
     assert_eq!(reopened.catalog.snapshot().version, catalog_version);
+    assert_eq!(reopened.full_registration_attempts, full_attempts);
+    assert_eq!(crate::catalog::take_storage_snapshot_count(), 0);
+    assert_eq!(registration_proof::take_replay_count(), 0);
     assert_eq!(counts.collection_scans(), 0);
     assert_eq!(counts.index_entry_scans(), 0);
     assert_eq!(counts.index_value_scans.load(Ordering::Relaxed), 0);
@@ -80,6 +86,7 @@ fn reopened_invalid_foreign_class_preserves_registration_error() {
         .unwrap();
     let (_, storage) = db.into_parts();
     let mut reopened = EmbeddedDb::open(storage).unwrap();
+    assert!(!is_certified(&reopened, &package));
     let normalized = normalize_package_definition(&package).unwrap();
     assert!(
         reopened
@@ -114,6 +121,7 @@ fn collection_kind_history_preserves_full_reconciliation() {
             ));
     }
     db.upsert_package(package.clone()).unwrap();
+    assert!(!is_certified(&db, &package));
     let normalized = normalize_package_definition(&package).unwrap();
     let installed = db.catalog();
     let (reconciled, before, after, executed) = db
@@ -250,6 +258,7 @@ fn unchanged_registration_retries_revision_fence_conflict() {
     let revision = db.storage().current_revision().unwrap();
     counts.reset();
     counts.inject_revision_conflicts.store(1, Ordering::Relaxed);
+    let full_attempts = db.full_registration_attempts;
 
     assert!(
         db.upsert_package(package)
@@ -260,6 +269,474 @@ fn unchanged_registration_retries_revision_fence_conflict() {
     assert_eq!(counts.inject_revision_conflicts.load(Ordering::Relaxed), 0);
     assert_eq!(db.storage().current_revision().unwrap(), revision);
     assert_eq!(counts.commit_calls.load(Ordering::Relaxed), 0);
+    assert_eq!(db.full_registration_attempts, full_attempts);
+}
+
+fn is_certified<S: EntityStorage>(db: &EmbeddedDb<S>, package: &Package) -> bool {
+    let package = normalize_package_definition(package).unwrap();
+    db.registration_proofs.permits(
+        &db.catalog.snapshot(),
+        &package.name,
+        &registration_proof::digest(&package).unwrap(),
+    )
+}
+
+#[test]
+fn user_rows_with_catalog_metadata_ids_cannot_supply_certificates() {
+    let mut db = EmbeddedDb::in_memory();
+    let package = simple_schema_package("Original migration.");
+    db.upsert_package(package.clone()).unwrap();
+    let schema = db
+        .catalog()
+        .collection_by_name(CORE_CATALOG_SCHEMA_COLLECTION)
+        .unwrap()
+        .lid;
+    let mut impersonator = db
+        .storage
+        .get_entity(schema, "semantic:entry:meta/__catalog_meta__")
+        .unwrap()
+        .unwrap();
+    impersonator.collection = db
+        .catalog()
+        .collection_by_name(DEFAULT_COLLECTION)
+        .unwrap()
+        .lid
+        .0;
+    let mut changed = (*db.catalog()).clone();
+    changed.delete_class("shared.test.note");
+    let mut ops = catalog_write_ops(&db.storage, &changed).unwrap();
+    // Data operations follow the catalog prelude in package commits. A user
+    // entity with the same ID must not replace the freshly computed evidence.
+    ops.push(StorageWriteOp::PutEntity(impersonator));
+    let proofs = proofs_from_write_ops(&changed, &ops);
+    let snapshot = crate::catalog::CatalogSnapshot {
+        version: 0,
+        catalog: Arc::new(changed),
+    };
+    let bound = BoundRegistrationProofs::new(&snapshot, proofs);
+    let package = normalize_package_definition(&package).unwrap();
+    assert!(!bound.permits(
+        &snapshot,
+        &package.name,
+        &registration_proof::digest(&package).unwrap()
+    ));
+}
+
+#[test]
+fn implicit_core_startup_repairs_do_not_inherit_loaded_certificates() {
+    let mut db = EmbeddedDb::in_memory();
+    let package = simple_schema_package("Original migration.");
+    db.upsert_package(package.clone()).unwrap();
+    db.transact_ddl(DdlBatch::new().with_op(DdlOperation::DeleteCollection {
+        name: DEFAULT_COLLECTION.into(),
+    }))
+    .unwrap();
+    assert!(is_certified(&db, &package));
+    let (_, storage) = db.into_parts();
+    let mut reopened = EmbeddedDb::open(storage).unwrap();
+    assert!(
+        reopened
+            .catalog()
+            .collection_by_name(DEFAULT_COLLECTION)
+            .is_some()
+    );
+    assert!(!is_certified(&reopened, &package));
+    reopened.upsert_package(package).unwrap();
+    assert_eq!(reopened.full_registration_attempts, 1);
+}
+
+#[test]
+fn generated_collection_histories_match_full_replay_before_and_after_reopen() {
+    use semantic_data::schema::{MigrationCollectionKind, MigrationIntegrityMode};
+
+    let mut accepted = 0;
+    let mut declined = 0;
+    for history in 0..8 {
+        let mut package = simple_schema_package("Generated collection history.");
+        for step in 0..3 {
+            let kind = if history & (1 << step) == 0 {
+                MigrationCollectionKind::Schema
+            } else {
+                MigrationCollectionKind::Untyped
+            };
+            package.migrations[0]
+                .operations
+                .push(MigrationOperation::Ddl(
+                    MigrationDdlOperation::UpsertCollection {
+                        name: "generated".into(),
+                        kind,
+                        integrity_mode: MigrationIntegrityMode::Permissive,
+                    },
+                ));
+        }
+        let mut db = EmbeddedDb::in_memory();
+        db.upsert_package(package.clone()).unwrap();
+        let normalized = normalize_package_definition(&package).unwrap();
+        for _ in 0..2 {
+            let before = db.catalog().to_storage_snapshot();
+            let (oracle, data_before, data_after, executed) = db
+                .apply_package_update(
+                    &db.catalog(),
+                    db.storage().current_revision().unwrap(),
+                    &normalized,
+                )
+                .unwrap();
+            assert!(data_before.is_empty() && data_after.is_empty() && executed.is_empty());
+            let expected = oracle.to_storage_snapshot();
+            let certified = is_certified(&db, &package);
+            if certified {
+                accepted += 1;
+                assert_eq!(before, expected);
+            } else {
+                declined += 1;
+            }
+            let full_attempts = db.full_registration_attempts;
+            db.upsert_package(package.clone()).unwrap();
+            assert_eq!(db.catalog().to_storage_snapshot(), expected);
+            assert_eq!(
+                db.full_registration_attempts - full_attempts,
+                usize::from(!certified)
+            );
+            let (_, storage) = db.into_parts();
+            db = EmbeddedDb::open(storage).unwrap();
+        }
+    }
+    assert!(accepted > 0 && declined > 0);
+}
+
+#[test]
+fn catalog_replacement_during_fast_fence_retries_and_repairs() {
+    let (storage, counts) = CountingEntityStorage::new();
+    let mut db = EmbeddedDb::new(storage);
+    let package = simple_schema_package("Original migration.");
+    db.upsert_package(package.clone()).unwrap();
+    assert!(is_certified(&db, &package));
+    let mut changed = (*db.catalog()).clone();
+    changed.delete_class("shared.test.note");
+    *counts.replace_catalog_at_fence.lock().unwrap() = Some((db.shared_catalog().clone(), changed));
+    let full_attempts = db.full_registration_attempts;
+    db.upsert_package(package.clone()).unwrap();
+    assert_eq!(db.full_registration_attempts, full_attempts + 1);
+    assert!(db.catalog().class_id("shared.test.note").is_some());
+    assert!(is_certified(&db, &package));
+}
+
+#[test]
+fn certificates_and_new_migrations_never_reexecute_applied_data_operations() {
+    let mut db = EmbeddedDb::in_memory();
+    let mut package = simple_schema_package("Historical data.");
+    let historical = [("id".to_string(), Value::String("historical".into()))]
+        .into_iter()
+        .collect();
+    package.migrations[0]
+        .operations
+        .push(MigrationOperation::Insert {
+            collection: DEFAULT_COLLECTION.into(),
+            id: "historical".into(),
+            object: historical,
+        });
+    db.upsert_package(package.clone()).unwrap();
+    assert!(is_certified(&db, &package));
+    let collection = db
+        .catalog()
+        .collection_by_name(DEFAULT_COLLECTION)
+        .unwrap()
+        .lid;
+    db.transact(Batch::new().with_op(BatchOperation::DeleteById {
+        collection: DEFAULT_COLLECTION.into(),
+        id: "historical".into(),
+    }))
+    .unwrap();
+    db.upsert_package(package.clone()).unwrap();
+    assert!(
+        db.storage
+            .get_entity(collection, "historical")
+            .unwrap()
+            .is_none()
+    );
+    package.migrations.push(Migration {
+        module: "test".into(),
+        name: "002_next".into(),
+        description: None,
+        operations: vec![MigrationOperation::Insert {
+            collection: DEFAULT_COLLECTION.into(),
+            id: "new".into(),
+            object: [("id".to_string(), Value::String("new".into()))]
+                .into_iter()
+                .collect(),
+        }],
+        meta: Meta::default(),
+    });
+    let outcome = db.upsert_package(package.clone()).unwrap();
+    assert_eq!(outcome.executed_migrations.len(), 1);
+    assert!(
+        db.storage
+            .get_entity(collection, "historical")
+            .unwrap()
+            .is_none()
+    );
+    assert!(db.storage.get_entity(collection, "new").unwrap().is_some());
+    assert!(is_certified(&db, &package));
+}
+
+#[test]
+fn missing_malformed_and_obsolete_certificates_fall_back_without_mutation() {
+    for replacement in [None, Some("invalid"), Some("version"), Some("digest")] {
+        let mut db = EmbeddedDb::in_memory();
+        let package = semantic_data::filestore::package();
+        db.upsert_package(package.clone()).unwrap();
+        let collection = db
+            .catalog()
+            .collection_by_name(CORE_CATALOG_SCHEMA_COLLECTION)
+            .unwrap()
+            .lid;
+        let mut meta = db
+            .storage
+            .get_entity(collection, "semantic:entry:meta/__catalog_meta__")
+            .unwrap()
+            .unwrap();
+        let original = meta
+            .object
+            .get(registration_proof::FIELD)
+            .unwrap()
+            .as_str()
+            .unwrap()
+            .to_string();
+        match replacement {
+            None => {
+                meta.object.remove(registration_proof::FIELD);
+            }
+            Some("invalid") => {
+                meta.object
+                    .insert(registration_proof::FIELD, Value::String("not json".into()));
+            }
+            Some("version") => {
+                meta.object.insert(
+                    registration_proof::FIELD,
+                    Value::String(original.replace("\"version\":1", "\"version\":999")),
+                );
+            }
+            Some("digest") => {
+                meta.object.insert(
+                    registration_proof::FIELD,
+                    Value::String(
+                        original.replace("catalog_digest\":\"", "catalog_digest\":\"wrong"),
+                    ),
+                );
+            }
+            _ => unreachable!(),
+        }
+        db.storage
+            .apply_batch(&[StorageWriteOp::PutEntity(meta)])
+            .unwrap();
+        let (_, storage) = db.into_parts();
+        let mut reopened = EmbeddedDb::open(storage).unwrap();
+        assert!(!is_certified(&reopened, &package), "{replacement:?}");
+        let revision = reopened.storage().current_revision().unwrap();
+        reopened.upsert_package(package).unwrap();
+        assert_eq!(reopened.full_registration_attempts, 1);
+        assert_eq!(reopened.storage().current_revision().unwrap(), revision);
+    }
+}
+
+#[test]
+fn stale_persisted_certificate_cannot_hide_catalog_drift() {
+    let mut db = EmbeddedDb::in_memory();
+    let package = simple_schema_package("Original migration.");
+    db.upsert_package(package.clone()).unwrap();
+    let collection = db
+        .catalog()
+        .collection_by_name(CORE_CATALOG_SCHEMA_COLLECTION)
+        .unwrap()
+        .lid;
+    let meta = db
+        .storage
+        .get_entity(collection, "semantic:entry:meta/__catalog_meta__")
+        .unwrap()
+        .unwrap();
+    let old_proof = meta.object.get(registration_proof::FIELD).unwrap().clone();
+    let mut changed = (*db.catalog()).clone();
+    changed.delete_class("shared.test.note");
+    let mut ops = catalog_write_ops(&db.storage, &changed).unwrap();
+    for op in &mut ops {
+        if let StorageWriteOp::PutEntity(entity) = op
+            && entity.id == meta.id
+        {
+            entity
+                .object
+                .insert(registration_proof::FIELD, old_proof.clone());
+        }
+    }
+    db.storage.apply_batch(&ops).unwrap();
+    let (_, storage) = db.into_parts();
+    let mut reopened = EmbeddedDb::open(storage).unwrap();
+    assert!(!is_certified(&reopened, &package));
+    assert!(reopened.catalog().class_id("shared.test.note").is_none());
+    reopened.upsert_package(package.clone()).unwrap();
+    assert!(reopened.catalog().class_id("shared.test.note").is_some());
+    assert!(is_certified(&reopened, &package));
+}
+
+#[test]
+fn forward_core_migration_certifies_legacy_catalog_without_replaying_data() {
+    let mut db = EmbeddedDb::in_memory();
+    let package = semantic_data::filestore::package();
+    db.upsert_package(package.clone()).unwrap();
+    let mut snapshot = db.catalog().to_storage_snapshot();
+    snapshot.applied_migrations.retain(|applied| {
+        applied.applied.migration.name != crate::ddl::REGISTRATION_PROOFS_MIGRATION
+    });
+    let mut legacy = Catalog::from_storage_snapshot(snapshot).unwrap();
+    legacy.delete_attribute("semantic:db:registration_proofs");
+    db.storage
+        .apply_batch(&catalog_write_ops(&db.storage, &legacy).unwrap())
+        .unwrap();
+    let (_, storage) = db.into_parts();
+    let mut reopened = EmbeddedDb::open(storage).unwrap();
+    assert!(is_certified(&reopened, &package));
+    let revision = reopened.storage().current_revision().unwrap();
+    reopened.upsert_package(package).unwrap();
+    assert_eq!(reopened.full_registration_attempts, 0);
+    assert_eq!(reopened.storage().current_revision().unwrap(), revision);
+}
+
+#[test]
+fn data_writes_preserve_certificates_and_external_catalog_cas_invalidates_them() {
+    let mut db = EmbeddedDb::in_memory();
+    let package = simple_schema_package("Original migration.");
+    db.upsert_package(package.clone()).unwrap();
+    assert!(is_certified(&db, &package));
+    db.transact(
+        Batch::new().with_op(BatchOperation::Upsert {
+            collection: DEFAULT_COLLECTION.into(),
+            id: "unrelated".into(),
+            object: [("id".to_string(), Value::String("unrelated".into()))]
+                .into_iter()
+                .collect(),
+        }),
+    )
+    .unwrap();
+    let full_attempts = db.full_registration_attempts;
+    db.upsert_package(package.clone()).unwrap();
+    assert_eq!(db.full_registration_attempts, full_attempts);
+
+    // Public SharedCatalog replacement is available independently of EmbeddedDb.
+    // Even reinstalling the same Arc must invalidate the version-bound proof.
+    let snapshot = db.catalog.snapshot();
+    db.shared_catalog()
+        .compare_and_swap_arc(snapshot.version, snapshot.catalog)
+        .unwrap();
+    assert!(!is_certified(&db, &package));
+    let revision = db.storage().current_revision().unwrap();
+    db.upsert_package(package).unwrap();
+    assert_eq!(db.full_registration_attempts, full_attempts + 1);
+    assert_eq!(db.storage().current_revision().unwrap(), revision);
+}
+
+#[test]
+fn failed_catalog_commit_does_not_install_candidate_certificates() {
+    use std::sync::atomic::Ordering;
+
+    let (storage, counts) = CountingEntityStorage::new();
+    let mut db = EmbeddedDb::new(storage);
+    let original = simple_schema_package("Original migration.");
+    db.upsert_package(original.clone()).unwrap();
+    let mut updated = original.clone();
+    updated.meta.description = Some("changed package metadata".into());
+    let before = db.catalog().to_storage_snapshot();
+    let revision = db.storage().current_revision().unwrap();
+    let mut changes = db.subscribe_changes(crate::ChangeSubscriptionOptions::default());
+    counts.inject_conflicts.store(4, Ordering::Relaxed);
+    assert!(matches!(
+        db.upsert_package(updated.clone()),
+        Err(DbError::TransactionConflict(_))
+    ));
+    assert_eq!(db.catalog().to_storage_snapshot(), before);
+    assert_eq!(db.storage().current_revision().unwrap(), revision);
+    assert!(is_certified(&db, &original));
+    assert!(!is_certified(&db, &updated));
+    assert!(changes.next().now_or_never().is_none());
+
+    let (_, storage) = db.into_parts();
+    let reopened = EmbeddedDb::open(storage).unwrap();
+    assert!(is_certified(&reopened, &original));
+    assert!(!is_certified(&reopened, &updated));
+}
+
+#[test]
+fn certified_registration_exhausts_revision_conflicts_without_writes() {
+    use std::sync::atomic::Ordering;
+
+    let (storage, counts) = CountingEntityStorage::new();
+    let mut db = EmbeddedDb::new(storage);
+    let package = simple_schema_package("Original migration.");
+    db.upsert_package(package.clone()).unwrap();
+    counts.reset();
+    counts.inject_revision_conflicts.store(4, Ordering::Relaxed);
+    let full_attempts = db.full_registration_attempts;
+    assert!(matches!(
+        db.upsert_package(package),
+        Err(DbError::TransactionConflict(_))
+    ));
+    assert_eq!(db.full_registration_attempts, full_attempts);
+    assert_eq!(counts.inject_revision_conflicts.load(Ordering::Relaxed), 0);
+    assert_eq!(counts.commit_calls.load(Ordering::Relaxed), 0);
+}
+
+#[test]
+fn failed_repair_preserves_catalog_revision_and_change_feed() {
+    let mut db = EmbeddedDb::in_memory();
+    let package = simple_schema_package("Original migration.");
+    db.upsert_package(package.clone()).unwrap();
+    db.activate_validation().unwrap();
+    let class_id = db
+        .catalog()
+        .class_by_lid(db.catalog().class_id("shared.test.note").unwrap())
+        .unwrap()
+        .class
+        .id
+        .clone();
+    let attribute_id = db
+        .catalog()
+        .attribute_by_id("shared.test.title")
+        .unwrap()
+        .attribute
+        .id
+        .clone();
+    db.transact_ddl(DdlBatch::new().with_op(DdlOperation::DeleteClass {
+        id: "shared.test.note".into(),
+    }))
+    .unwrap();
+    assert!(!is_certified(&db, &package));
+    let collection = db
+        .catalog()
+        .collection_by_name(DEFAULT_COLLECTION)
+        .unwrap()
+        .lid;
+    // Controlled invalid legacy data: reintroducing the class must still run
+    // ordinary row validation and atomically reject this wrong-typed attribute.
+    db.storage
+        .apply_batch(&[StorageWriteOp::PutEntity(StoredEntity {
+            collection: collection.0,
+            kind: StoredEntityKind::Class,
+            id: "invalid".into(),
+            object: [
+                ("id".into(), Value::String("invalid".into())),
+                ("type".into(), Value::String(class_id)),
+                (attribute_id, Value::Bool(true)),
+            ]
+            .into_iter()
+            .collect(),
+        })])
+        .unwrap();
+    let revision = db.storage().current_revision().unwrap();
+    let before = db.catalog().to_storage_snapshot();
+    let mut changes = db.subscribe_changes(crate::ChangeSubscriptionOptions::default());
+    assert!(db.upsert_package(package.clone()).is_err());
+    assert_eq!(db.storage().current_revision().unwrap(), revision);
+    assert_eq!(db.catalog().to_storage_snapshot(), before);
+    assert!(!is_certified(&db, &package));
+    assert!(changes.next().now_or_never().is_none());
 }
 
 #[test]

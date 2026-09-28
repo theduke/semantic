@@ -47,6 +47,16 @@ pub struct Catalog {
     auto_index_enabled: bool,
 }
 
+#[cfg(test)]
+thread_local! {
+    static STORAGE_SNAPSHOT_COUNT: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+#[cfg(test)]
+pub(crate) fn take_storage_snapshot_count() -> usize {
+    STORAGE_SNAPSHOT_COUNT.with(|count| count.replace(0))
+}
+
 pub const PRIMARY_ID_FIELD: &str = semantic_data::builtin::ATTR_ID;
 pub const OBJECT_TYPE_FIELD: &str = semantic_data::builtin::ATTR_TYPE;
 pub const PARENT_RELATION_FIELD: &str = "parent";
@@ -1140,6 +1150,8 @@ impl Catalog {
     }
 
     pub fn to_storage_snapshot(&self) -> CatalogStorageSnapshot {
+        #[cfg(test)]
+        STORAGE_SNAPSHOT_COUNT.with(|count| count.set(count.get() + 1));
         CatalogStorageSnapshot {
             attributes: self
                 .attributes()

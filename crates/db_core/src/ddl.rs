@@ -257,6 +257,7 @@ pub(crate) const INDEX_DEFINITIONS_MIGRATION: &str = "007_index_definitions";
 /// database that applies it rebuilds its full-text indexes, which earlier
 /// versions registered without maintaining entries.
 pub(crate) const FULL_TEXT_INDEXES_MIGRATION: &str = "008_full_text_indexes";
+pub(crate) const REGISTRATION_PROOFS_MIGRATION: &str = "009_registration_proofs";
 
 pub fn core_catalog_schema_batch() -> DdlBatch {
     let mut attrs = std::collections::BTreeMap::new();
@@ -953,7 +954,33 @@ pub fn core_schema_migrations() -> Vec<Migration> {
         reference_lifecycle_migration(),
         index_definitions_migration(),
         full_text_indexes_migration(),
+        registration_proofs_migration(),
     ]
+}
+
+fn registration_proofs_migration() -> Migration {
+    Migration {
+        module: CORE_SCHEMA_MODULE.to_string(),
+        name: REGISTRATION_PROOFS_MIGRATION.to_string(),
+        description: Some(
+            "Record versioned catalog reconciliation certificates on catalog metadata.".to_string(),
+        ),
+        operations: vec![MigrationOperation::Ddl(
+            MigrationDdlOperation::UpsertAttribute {
+                attribute: AttributeType {
+                    id: "semantic:db:registration_proofs".to_string(),
+                    name: "registration_proofs".to_string(),
+                    ty: Type::new(TypeKind::String(StringType {
+                        format: None,
+                        normalization: None,
+                    })),
+                    constraints: Vec::new(),
+                    meta: Meta::default(),
+                },
+            },
+        )],
+        meta: Meta::default(),
+    }
 }
 
 fn index_definitions_migration() -> Migration {
@@ -1446,7 +1473,7 @@ mod tests {
     #[test]
     fn core_schema_migrations_are_idempotent() {
         let (catalog, first_run) = apply_core_schema_migrations(&Catalog::new()).unwrap();
-        assert_eq!(first_run.len(), 8);
+        assert_eq!(first_run.len(), 9);
         for id in [ATTR_RELATION_FROM, ATTR_RELATION_TO] {
             let attribute = catalog.attribute_by_id(id).unwrap();
             let TypeKind::Ref(reference) = &attribute.attribute.ty.kind else {
