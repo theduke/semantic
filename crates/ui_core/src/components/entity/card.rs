@@ -69,14 +69,6 @@ pub fn EntityCard(
             .unwrap_or_else(|| class.name.clone())
     });
     let title = entity_title(&object, id.as_deref(), class_name.as_deref());
-    let title = if compact_preview && id.as_deref() == Some(title.as_str()) {
-        format!(
-            "Untitled {}",
-            class_name.as_deref().unwrap_or("entity").to_lowercase()
-        )
-    } else {
-        title
-    };
     let show_id = !compact_preview && id.as_deref().is_some_and(|id| id != title);
     let target = id
         .clone()
