@@ -12,6 +12,8 @@ use crate::ui_catalog::{
     media_kind_for_object, use_ui_catalog,
 };
 
+use super::associations::EntityAssociations;
+
 /// Object fields considered, in priority order, when deriving an entity title.
 pub const ENTITY_TITLE_FIELDS: [&str; 9] = [
     "semantic:title",
@@ -139,6 +141,11 @@ pub fn EntityCard(
                                 id: id.clone(),
                                 renderer: options.renderer,
                                 mode,
+                            }
+                        }
+                        if !options.preview && !compact_preview {
+                            if let Some(target) = target.clone() {
+                                EntityAssociations { key: "{target.collection_or_default()}/{target.id}", target }
                             }
                         }
                     }
@@ -364,7 +371,7 @@ pub fn EntityList(
 }
 
 #[component]
-fn EntityLink(target: EntityTarget, text: String) -> Element {
+pub(super) fn EntityLink(target: EntityTarget, text: String) -> Element {
     let catalog = use_ui_catalog();
     let content = rsx! { span { "{text}" } };
     if let Some(renderer) = catalog.entity_navigation().link_renderer.as_ref() {
