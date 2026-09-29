@@ -149,6 +149,35 @@ macro_rules! attr {
     };
 }
 
+/// Declares several attribute markers at once. Each `;`-terminated entry takes
+/// the same arguments as [`attr!`].
+///
+/// ```
+/// semantic_data::attrs! {
+///     /// A score.
+///     pub Score, "test:scoring:score", u32;
+///     pub Label, "test:label:name", String, name = "label";
+/// }
+/// ```
+#[macro_export]
+macro_rules! attrs {
+    ($(
+        $(#[$meta:meta])*
+        $vis:vis $marker:ident, $id:expr, $value:ty
+        $(, name = $name:expr)?
+        $(, schema = $schema:expr)?
+    );* $(;)?) => {
+        $(
+            $crate::attr!(
+                $(#[$meta])*
+                $vis $marker, $id, $value
+                $(, name = $name)?
+                $(, schema = $schema)?
+            );
+        )*
+    };
+}
+
 /// The last `:` segment of an attribute id.
 #[doc(hidden)]
 pub const fn plain_name(id: &'static str) -> &'static str {
@@ -175,23 +204,19 @@ pub fn attr_schema<A: AttrDescriptorConst>() -> AttributeType {
     }
 }
 
-crate::attr!(
+crate::attrs! {
     /// The built-in entity id.
-    pub AttrId, crate::builtin::ATTR_ID, String
-);
-crate::attr!(
+    pub AttrId, crate::builtin::ATTR_ID, String;
     /// The built-in entity type: the class id.
-    pub AttrType, crate::builtin::ATTR_TYPE, String
-);
-crate::attr!(pub AttrTitle, ATTR_TITLE, String, schema = title_attribute());
-crate::attr!(pub AttrDescription, ATTR_DESCRIPTION, String, schema = description_attribute());
-crate::attr!(pub AttrCreatedAt, ATTR_CREATED_AT, DateTime, schema = created_at_attribute());
-crate::attr!(pub AttrUpdatedAt, ATTR_UPDATED_AT, DateTime, schema = updated_at_attribute());
-crate::attr!(pub AttrUrl, ATTR_URL, String, schema = url_attribute());
-crate::attr!(
+    pub AttrType, crate::builtin::ATTR_TYPE, String;
+    pub AttrTitle, ATTR_TITLE, String, schema = title_attribute();
+    pub AttrDescription, ATTR_DESCRIPTION, String, schema = description_attribute();
+    pub AttrCreatedAt, ATTR_CREATED_AT, DateTime, schema = created_at_attribute();
+    pub AttrUpdatedAt, ATTR_UPDATED_AT, DateTime, schema = updated_at_attribute();
+    pub AttrUrl, ATTR_URL, String, schema = url_attribute();
     /// The parent entity id.
-    pub AttrParent, ATTR_PARENT, String, schema = parent_attribute()
-);
+    pub AttrParent, ATTR_PARENT, String, schema = parent_attribute();
+}
 
 /// The shared parent attribute, as last defined by the shared bundle.
 fn parent_attribute() -> AttributeType {

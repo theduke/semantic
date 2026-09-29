@@ -9,11 +9,11 @@ use semantic_data::schema::{
 };
 use semantic_data::value::{DateTime, FromValue, IntoValue, Object, SemanticType, Value};
 
-semantic_data::attr!(
+semantic_data::attrs! {
     /// A score.
-    Score, "test:scoring:score", u32
-);
-semantic_data::attr!(Label, "test:label:name", String, name = "label");
+    Score, "test:scoring:score", u32;
+    Label, "test:label:name", String, name = "label";
+}
 
 #[derive(SemanticType, IntoValue, FromValue, Debug, Clone, PartialEq, Eq, Default)]
 #[semantic(rename_all = "snake_case")]
