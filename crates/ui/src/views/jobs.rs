@@ -1,5 +1,9 @@
 use dioxus::prelude::*;
-use semantic_data::{Object, Value, jobs::*};
+use semantic_data::{
+    Object, Value,
+    jobs::*,
+    value::{FromValue, IntoValue},
+};
 use semantic_ui_core::{use_active_scope_id, use_rpc_client};
 use std::time::Duration;
 
@@ -59,15 +63,12 @@ fn JobsView(scope: Option<String>) -> Element {
                 );
             }
             loop {
-                let mut payload = query.to_object();
-                if let Some(scope) = &scope {
+                let mut payload = query.clone().into_value();
+                if let (Some(scope), Value::Object(payload)) = (&scope, &mut payload) {
                     payload.insert("scope_id", scope.clone());
                 }
-                match rpc
-                    .invoke_value("semantic.jobs.list", Value::Object(payload))
-                    .await
-                {
-                    Ok(value) => match JobListPage::from_value(&value) {
+                match rpc.invoke_value("semantic.jobs.list", payload).await {
+                    Ok(value) => match decode_page(value) {
                         Ok(value) => {
                             page.set(value);
                             error.set(None);
@@ -146,4 +147,11 @@ fn progress_text(progress: &JobProgress) -> String {
 }
 fn timestamp(value: semantic_data::DateTime) -> String {
     time::OffsetDateTime::from(value).to_string()
+}
+
+/// Decode a jobs page, rejecting inconsistent job records.
+fn decode_page(value: Value) -> Result<JobListPage, String> {
+    let page = JobListPage::from_value(value).map_err(|err| err.to_string())?;
+    page.records.iter().try_for_each(JobRecord::validate)?;
+    Ok(page)
 }

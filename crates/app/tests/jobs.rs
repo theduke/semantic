@@ -302,7 +302,7 @@ async fn app_single_coordinator_close_and_commands() {
             semantic_rpc_core::RpcRequest {
                 id: 1,
                 command: "semantic.jobs.list".into(),
-                payload: semantic_data::Value::Object(JobListQuery::default().to_object()),
+                payload: semantic_data::value::IntoValue::into_value(JobListQuery::default()),
             },
         )
         .await;

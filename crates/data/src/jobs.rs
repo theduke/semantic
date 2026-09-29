@@ -2,24 +2,49 @@
 use std::collections::BTreeMap;
 
 use crate::schema::*;
-use crate::value::{DateTime, Object, Value};
+use crate::value::{DateTime, FromValue, IntoValue, Object, SemanticType, Value};
 
 pub const PACKAGE_NAME: &str = "semantic.jobs";
 pub const COLLECTION: &str = "semantic_jobs";
 pub const CLASS_ID: &str = "semantic:jobs:job";
 pub const PREFIX: &str = "semantic:jobs:job:";
 
-#[derive(facet::Facet, Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
+#[derive(
+    facet::Facet,
+    SemanticType,
+    IntoValue,
+    FromValue,
+    Clone,
+    Debug,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Hash,
+)]
 #[facet(transparent)]
 pub struct JobId(pub String);
 
-#[derive(facet::Facet, Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
+#[derive(
+    facet::Facet,
+    SemanticType,
+    IntoValue,
+    FromValue,
+    Clone,
+    Debug,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Hash,
+)]
 #[facet(transparent)]
 pub struct JobKindId(pub String);
 
-#[derive(facet::Facet, Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(facet::Facet, SemanticType, IntoValue, FromValue, Clone, Copy, Debug, PartialEq, Eq)]
 #[repr(C)]
 #[facet(rename_all = "snake_case")]
+#[semantic(rename_all = "snake_case")]
 pub enum JobStatus {
     Queued,
     Running,
@@ -62,15 +87,22 @@ impl JobStatus {
     }
 }
 
-#[derive(facet::Facet, Clone, Debug, Default, PartialEq, Eq)]
+// The RPC types always encode optional fields, as null, matching the exported Facet types.
+
+#[derive(
+    facet::Facet, SemanticType, IntoValue, FromValue, Clone, Debug, Default, PartialEq, Eq,
+)]
 pub struct JobProgress {
     pub completed: u64,
+    #[semantic(required)]
     pub total: Option<u64>,
+    #[semantic(required)]
     pub unit: Option<String>,
+    #[semantic(required)]
     pub phase: Option<String>,
 }
 
-#[derive(facet::Facet, Clone, Debug, PartialEq, Eq)]
+#[derive(facet::Facet, SemanticType, IntoValue, FromValue, Clone, Debug, PartialEq, Eq)]
 pub struct JobError {
     pub code: String,
     pub message: String,
@@ -91,39 +123,49 @@ impl std::fmt::Display for JobError {
 }
 impl std::error::Error for JobError {}
 
-#[derive(facet::Facet, Clone, Debug, PartialEq, Eq)]
+#[derive(facet::Facet, SemanticType, IntoValue, FromValue, Clone, Debug, PartialEq, Eq)]
 pub struct JobKindDescriptor {
     pub id: JobKindId,
     pub title: String,
+    #[semantic(required)]
     pub description: Option<String>,
 }
 
-#[derive(facet::Facet, Clone, Debug, PartialEq, Eq)]
+/// Portable RPC representation; storage attribute names never cross this boundary.
+#[derive(facet::Facet, SemanticType, IntoValue, FromValue, Clone, Debug, PartialEq, Eq)]
 pub struct JobRecord {
     pub id: JobId,
     pub kind: JobKindId,
     pub status: JobStatus,
     pub progress: JobProgress,
+    #[semantic(required)]
     pub error: Option<JobError>,
     pub created_at: DateTime,
+    #[semantic(required)]
     pub started_at: Option<DateTime>,
     pub updated_at: DateTime,
+    #[semantic(required)]
     pub finished_at: Option<DateTime>,
     pub snapshot_seq: u64,
 }
 
-#[derive(facet::Facet, Clone, Debug, PartialEq, Eq)]
+#[derive(facet::Facet, SemanticType, IntoValue, FromValue, Clone, Debug, PartialEq, Eq)]
 pub struct JobListCursor {
     pub created_at: DateTime,
     pub id: JobId,
 }
 
-#[derive(facet::Facet, Clone, Debug, PartialEq, Eq)]
+/// Missing fields take their [`Default`] values.
+#[derive(facet::Facet, SemanticType, IntoValue, FromValue, Clone, Debug, PartialEq, Eq)]
 pub struct JobListQuery {
+    #[semantic(default)]
     pub statuses: Vec<JobStatus>,
     pub kind: Option<JobKindId>,
+    #[semantic(default)]
     pub oldest_first: bool,
     pub cursor: Option<JobListCursor>,
+    /// A positive page size.
+    #[semantic(default = "JobListQuery::default_limit")]
     pub limit: u32,
 }
 impl Default for JobListQuery {
@@ -133,240 +175,32 @@ impl Default for JobListQuery {
             kind: None,
             oldest_first: false,
             cursor: None,
-            limit: 50,
+            limit: Self::default_limit(),
         }
     }
 }
 
 impl JobListQuery {
-    pub fn to_object(&self) -> Object {
-        let mut object = Object::new();
-        object.insert(
-            "statuses",
-            Value::List(
-                self.statuses
-                    .iter()
-                    .map(|s| Value::String(s.as_str().into()))
-                    .collect(),
-            ),
-        );
-        object.insert(
-            "kind",
-            self.kind
-                .as_ref()
-                .map(|v| Value::String(v.0.clone()))
-                .unwrap_or(Value::Null),
-        );
-        object.insert("oldest_first", self.oldest_first);
-        object.insert("limit", self.limit as u64);
-        object.insert(
-            "cursor",
-            self.cursor
-                .as_ref()
-                .map(|v| Value::Object(v.to_object()))
-                .unwrap_or(Value::Null),
-        );
-        object
-    }
-    pub fn from_object(object: &Object) -> Result<Self, String> {
-        let statuses = match object.get("statuses") {
-            None => Vec::new(),
-            Some(Value::List(values)) => values
-                .iter()
-                .map(|v| {
-                    v.as_str()
-                        .and_then(JobStatus::parse)
-                        .ok_or_else(|| "invalid job status filter".to_string())
-                })
-                .collect::<Result<Vec<_>, _>>()?,
-            _ => return Err("invalid statuses".into()),
-        };
-        let kind = match object.get("kind") {
-            None | Some(Value::Null) => None,
-            Some(Value::String(v)) => Some(JobKindId(v.clone())),
-            _ => return Err("invalid kind".into()),
-        };
-        let oldest_first = match object.get("oldest_first") {
-            None => false,
-            Some(Value::Bool(v)) => *v,
-            _ => return Err("invalid oldest_first".into()),
-        };
-        let limit = match object.get("limit") {
-            None => 50,
-            Some(v) => u32::try_from(uint(Some(v))?).map_err(|_| "invalid limit")?,
-        };
-        if limit == 0 {
-            return Err("limit must be positive".into());
-        }
-        let cursor = match object.get("cursor") {
-            None | Some(Value::Null) => None,
-            Some(Value::Object(v)) => Some(JobListCursor::from_object(v)?),
-            _ => return Err("invalid cursor".into()),
-        };
-        Ok(Self {
-            statuses,
-            kind,
-            oldest_first,
-            limit,
-            cursor,
-        })
-    }
-}
-impl JobListCursor {
-    fn to_object(&self) -> Object {
-        let mut object = Object::new();
-        object.insert("id", self.id.0.clone());
-        object.insert("created_at", Value::DateTime(self.created_at));
-        object
-    }
-    fn from_object(object: &Object) -> Result<Self, String> {
-        Ok(Self {
-            id: JobId(
-                object
-                    .get("id")
-                    .and_then(Value::as_str)
-                    .ok_or("invalid cursor id")?
-                    .into(),
-            ),
-            created_at: match object.get("created_at") {
-                Some(Value::DateTime(v)) => *v,
-                _ => return Err("invalid cursor created_at".into()),
-            },
-        })
+    fn default_limit() -> u32 {
+        50
     }
 }
 
-#[derive(facet::Facet, Clone, Debug, PartialEq, Eq)]
+#[derive(facet::Facet, SemanticType, IntoValue, FromValue, Clone, Debug, PartialEq, Eq)]
 pub struct JobListPage {
     pub records: Vec<JobRecord>,
+    #[semantic(required)]
     pub next_cursor: Option<JobListCursor>,
 }
 
-impl JobListPage {
-    pub fn to_value(&self) -> Value {
-        let mut object = Object::new();
-        object.insert(
-            "records",
-            Value::List(
-                self.records
-                    .iter()
-                    .map(|r| Value::Object(r.to_rpc_object()))
-                    .collect(),
-            ),
-        );
-        object.insert(
-            "next_cursor",
-            self.next_cursor
-                .as_ref()
-                .map(|c| Value::Object(c.to_object()))
-                .unwrap_or(Value::Null),
-        );
-        Value::Object(object)
-    }
-    pub fn from_value(value: &Value) -> Result<Self, String> {
-        let Value::Object(object) = value else {
-            return Err("invalid jobs page".into());
-        };
-        let Some(Value::List(rows)) = object.get("records") else {
-            return Err("missing jobs records".into());
-        };
-        let records = rows
-            .iter()
-            .map(|v| {
-                let Value::Object(row) = v else {
-                    return Err("invalid job row".into());
-                };
-                JobRecord::from_rpc_object(row)
-            })
-            .collect::<Result<Vec<_>, String>>()?;
-        let next_cursor = match object.get("next_cursor") {
-            None | Some(Value::Null) => None,
-            Some(Value::Object(v)) => Some(JobListCursor::from_object(v)?),
-            _ => return Err("invalid next cursor".into()),
-        };
-        Ok(Self {
-            records,
-            next_cursor,
-        })
-    }
-}
-
-#[derive(facet::Facet, Clone, Debug, Default, PartialEq, Eq)]
+#[derive(
+    facet::Facet, SemanticType, IntoValue, FromValue, Clone, Debug, Default, PartialEq, Eq,
+)]
 pub struct ClearCompletedResult {
     pub deleted: u64,
 }
 
 impl JobRecord {
-    /// Portable RPC representation; storage attribute names never cross this boundary.
-    /// Optional fields are present with null values, matching the exported Facet types.
-    pub fn to_rpc_object(&self) -> Object {
-        let storage = self.to_object();
-        let mut object = Object::new();
-        object.insert("id", self.id.0.clone());
-        for name in [
-            "kind",
-            "status",
-            "progress",
-            "error",
-            "created_at",
-            "started_at",
-            "updated_at",
-            "finished_at",
-            "snapshot_seq",
-        ] {
-            let mut value = storage
-                .get(&format!("{PREFIX}{name}"))
-                .cloned()
-                .unwrap_or(Value::Null);
-            if let Value::Object(progress) = &mut value {
-                if name == "progress" {
-                    for field in ["total", "unit", "phase"] {
-                        if !progress.contains_key(field) {
-                            progress.insert(field, Value::Null);
-                        }
-                    }
-                }
-            }
-            object.insert(name, value);
-        }
-        object
-    }
-
-    pub fn from_rpc_object(object: &Object) -> Result<Self, String> {
-        let id = JobId(
-            object
-                .get("id")
-                .and_then(Value::as_str)
-                .ok_or("missing job id")?
-                .into(),
-        );
-        let mut storage = Object::new();
-        storage.insert(crate::builtin::ATTR_ID, id.0.clone());
-        storage.insert(crate::builtin::ATTR_TYPE, CLASS_ID.to_string());
-        for (name, value) in object.iter() {
-            if name == "id" {
-                continue;
-            }
-            if matches!(name.as_str(), "error" | "started_at" | "finished_at")
-                && matches!(value, Value::Null)
-            {
-                continue;
-            }
-            let mut value = value.clone();
-            if name == "progress" {
-                if let Value::Object(progress) = &mut value {
-                    for field in ["total", "unit", "phase"] {
-                        if matches!(progress.get(field), Some(Value::Null)) {
-                            progress.remove(field);
-                        }
-                    }
-                }
-            }
-            storage.insert(format!("{PREFIX}{name}"), value);
-        }
-        Self::from_object(id, &storage)
-    }
-
     pub fn validate(&self) -> Result<(), String> {
         if self.id.0.is_empty() || self.kind.0.is_empty() {
             return Err("empty job identity/kind".into());
@@ -579,7 +413,9 @@ mod tests {
                 snapshot_seq: 1,
             };
             let object = record.to_object();
-            let wire = record.to_rpc_object();
+            let Value::Object(wire) = record.clone().into_value() else {
+                panic!("record object")
+            };
             assert_eq!(wire.keys().count(), 10);
             assert!(wire.keys().all(|key| !key.contains(':')));
             assert_eq!(
@@ -593,7 +429,10 @@ mod tests {
             };
             assert_eq!(progress.get("completed"), Some(&Value::U64(u64::MAX)));
             assert_eq!(progress.get("unit"), Some(&Value::Null));
-            assert_eq!(JobRecord::from_rpc_object(&wire).unwrap(), record);
+            assert_eq!(
+                JobRecord::from_value(Value::Object(wire.clone())).unwrap(),
+                record
+            );
             let tagged = crate::value::serde::typed::TypedValue(Value::Object(wire.clone()));
             let json = serde_json::to_string(&tagged).unwrap();
             assert!(json.contains("\"u64\":18446744073709551615"));
@@ -636,151 +475,48 @@ mod tests {
                     created_at: now,
                 }),
             };
-            assert_eq!(page, JobListPage::from_value(&page.to_value()).unwrap());
+            assert_eq!(
+                page,
+                JobListPage::from_value(page.clone().into_value()).unwrap()
+            );
         }
     }
 
     #[test]
-    fn rpc_query_nulls_and_signatures_match_the_contract() {
+    fn rpc_query_defaults_and_types_match_the_contract() {
         let query = JobListQuery::default();
         assert_eq!(
-            JobListQuery::from_object(&query.to_object()).unwrap(),
+            JobListQuery::from_value(query.clone().into_value()).unwrap(),
             query
         );
-        assert_eq!(query.to_object().get("kind"), Some(&Value::Null));
-        for command in ["list", "get", "cancel", "clear_completed", "kinds"] {
-            let (input, _output) = command_types(&format!("semantic.jobs.{command}")).unwrap();
-            let TypeKind::Record(payload) = &input.kind else {
-                panic!("object payload")
-            };
-            assert!(!payload.fields["scope_id"].required);
-            if matches!(command, "get" | "cancel") {
-                assert!(payload.fields["id"].required);
-            }
-        }
-    }
-}
-
-/// Portable command `(input, output)` types, independent of qualified database attributes.
-pub fn command_types(name: &str) -> Option<(Type, Type)> {
-    fn string() -> Type {
-        Type::new(TypeKind::String(StringType {
-            format: None,
-            normalization: None,
-        }))
-    }
-    fn optional(ty: Type) -> Type {
-        Type::new(TypeKind::Optional(OptionalType {
-            inner: Box::new(ty),
-        }))
-    }
-    fn list(ty: Type) -> Type {
-        Type::new(TypeKind::List(ListType {
-            items: Box::new(ty),
-        }))
-    }
-    fn record(fields: Vec<(&str, Type, bool)>) -> Type {
-        Type::new(TypeKind::Record(RecordType {
-            fields: fields
-                .into_iter()
-                .map(|(name, ty, required)| {
-                    (
-                        name.into(),
-                        Field {
-                            ty,
-                            required,
-                            readonly: false,
-                            writeonly: false,
-                            default: None,
-                            meta: Meta::default(),
-                        },
-                    )
-                })
-                .collect(),
-            open: false,
-            additional: None,
-            required_order: None,
-        }))
-    }
-    let uint = || Type::new(TypeKind::Number(NumberType::UInt(UIntWidth::U64)));
-    let date = || Type::new(TypeKind::Temporal(TemporalType::DateTime));
-    let status = Type::new(TypeKind::Enum(EnumType {
-        repr: EnumRepr::String,
-        variants: JobStatus::ALL
-            .into_iter()
-            .map(|status| EnumVariant {
-                name: status.as_str().into(),
-                symbol: Some(status.as_str().into()),
-                value: None,
-                meta: Meta::default(),
+        assert_eq!(
+            JobListQuery::from_value(Value::Object(Object::new())).unwrap(),
+            query
+        );
+        let mut nulls = Object::new();
+        nulls.insert("kind", Value::Null);
+        nulls.insert("cursor", Value::Null);
+        assert_eq!(
+            JobListQuery::from_value(Value::Object(nulls)).unwrap(),
+            query
+        );
+        let TypeKind::Record(record) = JobListQuery::semantic_type().kind else {
+            panic!("object query")
+        };
+        assert!(record.fields.values().all(|field| !field.required));
+        assert_eq!(record.fields["limit"].default, Some(Value::U32(50)));
+        let TypeKind::Record(record) = JobRecord::semantic_type().kind else {
+            panic!("object record")
+        };
+        assert!(record.fields.values().all(|field| field.required));
+        assert!(matches!(
+            record.fields["status"].ty.kind,
+            TypeKind::Enum(EnumType {
+                repr: EnumRepr::String,
+                ..
             })
-            .collect(),
-    }));
-    let cursor = record(vec![("id", string(), true), ("created_at", date(), true)]);
-    let job = record(vec![
-        ("id", string(), true),
-        ("kind", string(), true),
-        ("status", status.clone(), true),
-        (
-            "progress",
-            record(vec![
-                ("completed", uint(), true),
-                ("total", optional(uint()), true),
-                ("unit", optional(string()), true),
-                ("phase", optional(string()), true),
-            ]),
-            true,
-        ),
-        (
-            "error",
-            optional(record(vec![
-                ("code", string(), true),
-                ("message", string(), true),
-            ])),
-            true,
-        ),
-        ("created_at", date(), true),
-        ("started_at", optional(date()), true),
-        ("updated_at", date(), true),
-        ("finished_at", optional(date()), true),
-        ("snapshot_seq", uint(), true),
-    ]);
-    let mut params = vec![("scope_id", optional(string()), false)];
-    let result = match name {
-        "semantic.jobs.list" => {
-            params.extend([
-                ("statuses", list(status), false),
-                ("kind", optional(string()), false),
-                ("oldest_first", Type::new_bool(), false),
-                ("cursor", optional(cursor.clone()), false),
-                (
-                    "limit",
-                    Type::new(TypeKind::Number(NumberType::UInt(UIntWidth::U32))),
-                    false,
-                ),
-            ]);
-            record(vec![
-                ("records", list(job), true),
-                ("next_cursor", optional(cursor), true),
-            ])
-        }
-        "semantic.jobs.get" | "semantic.jobs.cancel" => {
-            params.push(("id", string(), true));
-            if name == "semantic.jobs.get" {
-                optional(job)
-            } else {
-                job
-            }
-        }
-        "semantic.jobs.clear_completed" => record(vec![("deleted", uint(), true)]),
-        "semantic.jobs.kinds" => list(record(vec![
-            ("id", string(), true),
-            ("title", string(), true),
-            ("description", optional(string()), true),
-        ])),
-        _ => return None,
-    };
-    Some((record(params), result))
+        ));
+    }
 }
 
 pub fn package() -> Package {

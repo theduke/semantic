@@ -1,10 +1,11 @@
 //! Unary discovery, submission and plugin administration. Content uses interface streams.
+use crate::command::ScopeParams;
 use crate::{AppError, AppRequestContext, DbScopeId};
 use semantic_data::{
     Object, Value,
     import::{Operation, ProbeResult, SourceRequest},
     plugin::PluginActivation,
-    schema::*,
+    value::{FromValue, IntoValue, Null, SemanticType},
 };
 use semantic_rpc::RpcRegistry;
 use semantic_rpc_core::{CommandDef, RpcCommand, RpcCommandSpec};
@@ -48,41 +49,23 @@ fn explicit(payload: &Object) -> Result<Option<(&str, &str)>, AppError> {
     }
 }
 
-fn definition(name: &str) -> CommandDef {
-    let method = match name {
-        "semantic.import.candidates" => Some("list_candidates"),
-        "semantic.import.start_source" => Some("start_import_source"),
-        _ => None,
-    };
-    if let Some(method) = method {
-        let mut signature = semantic_data::import::package().root.interfaces["Application"]
-            .methods
-            .iter()
-            .find(|m| m.name == method)
-            .expect("canonical import method")
-            .signature
-            .clone();
-        let input = signature.params.remove(0).ty;
-        let output = signature.results.remove(0);
-        return CommandDef::new(name, input, output);
-    }
-    let object = Type::new(TypeKind::Record(RecordType {
-        fields: Default::default(),
-        open: true,
-        additional: None,
-        required_order: None,
-    }));
-    let result = if name == "semantic.plugin.list" {
-        Type::new(TypeKind::List(ListType {
-            items: Box::new(object.clone()),
-        }))
-    } else {
-        Type::new(TypeKind::Null(NullType))
-    };
-    CommandDef::new(name, object, result)
+/// The import commands implement methods of the canonical import `Application`
+/// interface, so their types are the interface's method signature; the
+/// payloads are decoded by the interface codecs (e.g. [`SourceRequest`]).
+fn definition(name: &str, method: &str) -> CommandDef {
+    let mut signature = semantic_data::import::package().root.interfaces["Application"]
+        .methods
+        .iter()
+        .find(|m| m.name == method)
+        .expect("canonical import method")
+        .signature
+        .clone();
+    let input = signature.params.remove(0).ty;
+    let output = signature.results.remove(0);
+    CommandDef::new(name, input, output)
 }
 macro_rules! command {
-    ($type:ident,$name:literal,$ctx:ident,$payload:ident,$body:block) => {
+    ($type:ident,$name:literal,$method:literal,$ctx:ident,$payload:ident,$body:block) => {
         struct $type;
         impl RpcCommandSpec for $type {
             type Payload = Value;
@@ -90,7 +73,7 @@ macro_rules! command {
             type Error = AppError;
             const NAME: &'static str = $name;
             fn definition(&self) -> CommandDef {
-                definition($name)
+                definition($name, $method)
             }
         }
         impl RpcCommand<AppRequestContext> for $type {
@@ -132,93 +115,175 @@ pub(crate) fn candidate_value(candidate: semantic_import::SourceCandidate) -> Va
     object.insert("reason", reason.map(Value::String).unwrap_or(Value::Null));
     Value::Object(object)
 }
-command!(Candidates, "semantic.import.candidates", ctx, payload, {
-    let request = SourceRequest::from_value(Value::Object(payload.clone())).map_err(error)?;
-    let operation =
-        Operation::parse(optional_string(&payload, "operation")?.unwrap_or("import_source"))
-            .map_err(error)?;
-    let candidates = ctx
-        .import_candidates(scope(&payload)?, &request, operation)
-        .await?;
-    Ok(Value::List(
-        candidates.into_iter().map(candidate_value).collect(),
-    ))
-});
-command!(StartSource, "semantic.import.start_source", ctx, payload, {
-    let request = SourceRequest::from_value(Value::Object(payload.clone())).map_err(error)?;
-    let choice = explicit(&payload)?;
-    let generation = match payload.get("generation") {
-        None | Some(Value::Null) => None,
-        Some(Value::U64(value)) => Some(*value),
-        _ => return Err(error("invalid generation")),
-    };
-    if generation.is_some() && choice.is_none() {
-        return Err(error("generation requires explicit selection"));
+command!(
+    Candidates,
+    "semantic.import.candidates",
+    "list_candidates",
+    ctx,
+    payload,
+    {
+        let request = SourceRequest::from_value(Value::Object(payload.clone())).map_err(error)?;
+        let operation =
+            Operation::parse(optional_string(&payload, "operation")?.unwrap_or("import_source"))
+                .map_err(error)?;
+        let candidates = ctx
+            .import_candidates(scope(&payload)?, &request, operation)
+            .await?;
+        Ok(Value::List(
+            candidates.into_iter().map(candidate_value).collect(),
+        ))
     }
-    let ticket = ctx
-        .start_import_source_checked(scope(&payload)?, request, choice, generation)
-        .await?;
-    let mut output = Object::new();
-    output.insert("id", ticket.id.0);
-    Ok(Value::Object(output))
-});
-command!(Plugins, "semantic.plugin.list", ctx, payload, {
-    let scope = ctx.resolve_scope_id(scope(&payload)?).await?;
-    let plugins = ctx.app.plugins(&ctx.principal, scope).await?;
-    let states = plugins.runtime.states().await;
-    Ok(Value::List(
-        plugins
-            .list()
-            .await?
-            .iter()
-            .map(|activation| {
-                let Value::Object(mut object) = activation.to_value() else {
-                    unreachable!("activation object")
-                };
-                if let Some((_, state, error)) =
-                    states.iter().find(|(id, _, _)| id == &activation.id)
-                {
-                    object.insert("state", state.as_str().to_owned());
-                    object.insert(
-                        "error",
-                        error
-                            .as_ref()
-                            .map(|e| {
-                                let mut error = Object::new();
-                                error.insert("code", e.code.clone());
-                                error.insert("message", e.message.clone());
-                                Value::Object(error)
-                            })
-                            .unwrap_or(Value::Null),
-                    );
-                }
-                Value::Object(object)
-            })
-            .collect(),
-    ))
-});
-command!(Configure, "semantic.plugin.configure", ctx, payload, {
-    let activation = PluginActivation::from_value(
-        payload
-            .get("activation")
-            .ok_or_else(|| error("activation required"))?,
-    )
-    .map_err(error)?;
-    let scope = ctx.resolve_scope_id(scope(&payload)?).await?;
-    ctx.app
-        .plugins(&ctx.principal, scope)
-        .await?
-        .configure(activation)
-        .await?;
-    Ok(Value::Null)
-});
-command!(Uninstall, "semantic.plugin.uninstall", ctx, payload, {
-    let id = optional_string(&payload, "id")?.ok_or_else(|| error("plugin id required"))?;
-    let scope = ctx.resolve_scope_id(scope(&payload)?).await?;
-    ctx.app
-        .plugins(&ctx.principal, scope)
-        .await?
-        .uninstall(id)
-        .await?;
-    Ok(Value::Null)
-});
+);
+command!(
+    StartSource,
+    "semantic.import.start_source",
+    "start_import_source",
+    ctx,
+    payload,
+    {
+        let request = SourceRequest::from_value(Value::Object(payload.clone())).map_err(error)?;
+        let choice = explicit(&payload)?;
+        let generation = match payload.get("generation") {
+            None | Some(Value::Null) => None,
+            Some(Value::U64(value)) => Some(*value),
+            _ => return Err(error("invalid generation")),
+        };
+        if generation.is_some() && choice.is_none() {
+            return Err(error("generation requires explicit selection"));
+        }
+        let ticket = ctx
+            .start_import_source_checked(scope(&payload)?, request, choice, generation)
+            .await?;
+        let mut output = Object::new();
+        output.insert("id", ticket.id.0);
+        Ok(Value::Object(output))
+    }
+);
+
+struct Plugins;
+struct Configure;
+struct Uninstall;
+
+#[derive(SemanticType, IntoValue, FromValue)]
+struct ConfigurePayload {
+    scope_id: Option<String>,
+    /// The plugin activation, in the `PluginActivation` value encoding.
+    activation: Value,
+}
+
+#[derive(SemanticType, IntoValue, FromValue)]
+struct UninstallPayload {
+    scope_id: Option<String>,
+    /// The plugin id.
+    id: String,
+}
+
+type CommandFuture<'a, T> = Pin<Box<dyn Future<Output = Result<T, AppError>> + Send + 'a>>;
+
+impl RpcCommandSpec for Plugins {
+    /// Null and void are accepted as an empty payload.
+    type Payload = Option<ScopeParams>;
+    /// Plugin activations with their runtime `state` and `error`.
+    type Output = Vec<Object>;
+    type Error = AppError;
+    const NAME: &'static str = "semantic.plugin.list";
+}
+
+impl RpcCommand<AppRequestContext> for Plugins {
+    fn call<'a>(
+        &'a self,
+        ctx: &'a AppRequestContext,
+        payload: Option<ScopeParams>,
+    ) -> CommandFuture<'a, Vec<Object>> {
+        Box::pin(async move {
+            let scope = ctx
+                .resolve_scope_id(payload.unwrap_or_default().scope_id())
+                .await?;
+            let plugins = ctx.app.plugins(&ctx.principal, scope).await?;
+            let states = plugins.runtime.states().await;
+            Ok(plugins
+                .list()
+                .await?
+                .iter()
+                .map(|activation| {
+                    let Value::Object(mut object) = activation.to_value() else {
+                        unreachable!("activation object")
+                    };
+                    if let Some((_, state, error)) =
+                        states.iter().find(|(id, _, _)| id == &activation.id)
+                    {
+                        object.insert("state", state.as_str().to_owned());
+                        object.insert(
+                            "error",
+                            error
+                                .as_ref()
+                                .map(|e| {
+                                    let mut error = Object::new();
+                                    error.insert("code", e.code.clone());
+                                    error.insert("message", e.message.clone());
+                                    Value::Object(error)
+                                })
+                                .unwrap_or(Value::Null),
+                        );
+                    }
+                    object
+                })
+                .collect())
+        })
+    }
+}
+
+impl RpcCommandSpec for Configure {
+    type Payload = ConfigurePayload;
+    type Output = Null;
+    type Error = AppError;
+    const NAME: &'static str = "semantic.plugin.configure";
+}
+
+impl RpcCommand<AppRequestContext> for Configure {
+    fn call<'a>(
+        &'a self,
+        ctx: &'a AppRequestContext,
+        payload: ConfigurePayload,
+    ) -> CommandFuture<'a, Null> {
+        Box::pin(async move {
+            let activation = PluginActivation::from_value(&payload.activation).map_err(error)?;
+            let scope = ctx
+                .resolve_scope_id(payload.scope_id.map(DbScopeId::new))
+                .await?;
+            ctx.app
+                .plugins(&ctx.principal, scope)
+                .await?
+                .configure(activation)
+                .await?;
+            Ok(Null)
+        })
+    }
+}
+
+impl RpcCommandSpec for Uninstall {
+    type Payload = UninstallPayload;
+    type Output = Null;
+    type Error = AppError;
+    const NAME: &'static str = "semantic.plugin.uninstall";
+}
+
+impl RpcCommand<AppRequestContext> for Uninstall {
+    fn call<'a>(
+        &'a self,
+        ctx: &'a AppRequestContext,
+        payload: UninstallPayload,
+    ) -> CommandFuture<'a, Null> {
+        Box::pin(async move {
+            let scope = ctx
+                .resolve_scope_id(payload.scope_id.map(DbScopeId::new))
+                .await?;
+            ctx.app
+                .plugins(&ctx.principal, scope)
+                .await?
+                .uninstall(&payload.id)
+                .await?;
+            Ok(Null)
+        })
+    }
+}

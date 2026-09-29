@@ -1,7 +1,9 @@
+use crate::command::ScopeParams;
 use crate::{AppError, AppRequestContext, DbScopeId};
-use semantic_data::{Object, Value, jobs::*};
+use semantic_data::jobs::*;
+use semantic_data::value::{FromValue, IntoValue, SemanticType};
 use semantic_rpc::RpcRegistry;
-use semantic_rpc_core::{CommandDef, RpcCommand, RpcCommandSpec};
+use semantic_rpc_core::{RpcCommand, RpcCommandSpec};
 use std::{future::Future, pin::Pin};
 
 pub(crate) fn register(
@@ -14,99 +16,73 @@ pub(crate) fn register(
     registry.register(Kinds)?;
     Ok(())
 }
+
+#[derive(SemanticType, IntoValue, FromValue, Default)]
+struct ListPayload {
+    scope_id: Option<String>,
+    #[semantic(flatten)]
+    query: JobListQuery,
+}
+
+#[derive(SemanticType, IntoValue, FromValue)]
+struct IdPayload {
+    scope_id: Option<String>,
+    id: JobId,
+}
+
+/// Jobs commands accept null or void as an empty payload.
 macro_rules! command {
-    ($type:ident, $name:literal, $ctx:ident, $payload:ident, $body:block) => {
+    ($type:ident, $name:literal, $payload_ty:ty => $output:ty, |$ctx:ident, $payload:ident| $body:block) => {
         struct $type;
         impl RpcCommandSpec for $type {
-            type Payload = Value;
-            type Output = Value;
+            type Payload = Option<$payload_ty>;
+            type Output = $output;
             type Error = AppError;
             const NAME: &'static str = $name;
-            fn definition(&self) -> CommandDef {
-                let (input, output) = command_types($name).expect("registered jobs command");
-                CommandDef::new($name, input, output)
-            }
         }
         impl RpcCommand<AppRequestContext> for $type {
             fn call<'a>(
                 &'a self,
                 $ctx: &'a AppRequestContext,
-                value: Value,
-            ) -> Pin<Box<dyn Future<Output = Result<Value, AppError>> + Send + 'a>> {
+                payload: Option<$payload_ty>,
+            ) -> Pin<Box<dyn Future<Output = Result<$output, AppError>> + Send + 'a>> {
                 Box::pin(async move {
-                    let $payload = match value {
-                        Value::Object(v) => v,
-                        Value::Void | Value::Null => Object::new(),
-                        _ => return Err(super::error("expected object")),
-                    };
+                    let $payload = payload;
                     $body
                 })
             }
         }
     };
 }
-fn scope(object: &Object) -> Result<Option<DbScopeId>, AppError> {
-    match object.get("scope_id") {
-        None | Some(Value::Null) => Ok(None),
-        Some(Value::String(v)) => Ok(Some(v.clone().into())),
-        _ => Err(super::error("invalid scope_id")),
+
+fn required(payload: Option<IdPayload>) -> Result<IdPayload, AppError> {
+    payload.ok_or_else(|| super::error("job id required"))
+}
+
+command!(List, "semantic.jobs.list", ListPayload => JobListPage, |ctx, payload| {
+    let ListPayload { scope_id, query } = payload.unwrap_or_default();
+    if query.limit == 0 {
+        return Err(super::error("limit must be positive"));
     }
-}
-fn id(object: &Object) -> Result<JobId, AppError> {
-    object
-        .get("id")
-        .and_then(Value::as_str)
-        .map(|v| JobId(v.into()))
-        .ok_or_else(|| super::error("job id required"))
-}
-command!(List, "semantic.jobs.list", ctx, payload, {
-    let query = JobListQuery::from_object(&payload).map_err(super::error)?;
     Ok(ctx
-        .jobs(scope(&payload)?)
+        .jobs(scope_id.map(DbScopeId::new))
         .await?
         .list(query)
-        .await?
-        .to_value())
+        .await?)
 });
-command!(Get, "semantic.jobs.get", ctx, payload, {
-    Ok(ctx
-        .jobs(scope(&payload)?)
-        .await?
-        .get(id(&payload)?)
-        .await?
-        .map(|r| Value::Object(r.to_rpc_object()))
-        .unwrap_or(Value::Null))
+command!(Get, "semantic.jobs.get", IdPayload => Option<JobRecord>, |ctx, payload| {
+    let IdPayload { scope_id, id } = required(payload)?;
+    Ok(ctx.jobs(scope_id.map(DbScopeId::new)).await?.get(id).await?)
 });
-command!(Cancel, "semantic.jobs.cancel", ctx, payload, {
-    Ok(Value::Object(
-        ctx.jobs(scope(&payload)?)
-            .await?
-            .cancel(id(&payload)?)
-            .await?
-            .to_rpc_object(),
-    ))
+command!(Cancel, "semantic.jobs.cancel", IdPayload => JobRecord, |ctx, payload| {
+    let IdPayload { scope_id, id } = required(payload)?;
+    Ok(ctx.jobs(scope_id.map(DbScopeId::new)).await?.cancel(id).await?)
 });
-command!(Clear, "semantic.jobs.clear_completed", ctx, payload, {
-    let result = ctx.jobs(scope(&payload)?).await?.clear_completed().await?;
-    let mut object = Object::new();
-    object.insert("deleted", result.deleted);
-    Ok(Value::Object(object))
+command!(Clear, "semantic.jobs.clear_completed", ScopeParams => ClearCompletedResult, |ctx, payload| {
+    let scope_id = payload.unwrap_or_default().scope_id();
+    Ok(ctx.jobs(scope_id).await?.clear_completed().await?)
 });
-command!(Kinds, "semantic.jobs.kinds", ctx, payload, {
-    let kinds = ctx.jobs(scope(&payload)?).await?.kinds();
-    Ok(Value::List(
-        kinds
-            .into_iter()
-            .map(|kind| {
-                let mut object = Object::new();
-                object.insert("id", kind.id.0);
-                object.insert("title", kind.title);
-                object.insert(
-                    "description",
-                    kind.description.map(Value::String).unwrap_or(Value::Null),
-                );
-                Value::Object(object)
-            })
-            .collect(),
-    ))
+command!(Kinds, "semantic.jobs.kinds", ScopeParams => Vec<JobKindDescriptor>, |ctx, payload| {
+    let scope_id = payload.unwrap_or_default().scope_id();
+    Ok(ctx.jobs(scope_id).await?.kinds())
 });
